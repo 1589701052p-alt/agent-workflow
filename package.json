@@ -1,0 +1,34 @@
+{
+  "name": "agent-workflow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-first orchestration platform that drives multiple opencode CLI processes as collaborating agents",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter '*' build",
+    "lint": "bun run --filter '*' lint",
+    "lint:fix": "bun run --filter '*' lint:fix",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"packages/**/*.{ts,tsx,json,md}\"",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/bun": "latest",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "packageManager": "bun@1.1.0"
+}

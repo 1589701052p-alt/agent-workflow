@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.idea/
+.vscode/
+!.vscode/settings.example.json
+
+# test / coverage
+coverage/
+.nyc_output/
+
+# bun
+bun.lockb
+
+# local app data should never be committed; only here as defense-in-depth
+.agent-workflow/
