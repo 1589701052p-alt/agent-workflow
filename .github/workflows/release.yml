@@ -1,0 +1,67 @@
+name: Release
+
+# P-5-06: cut a GitHub Release whenever a tag matching `v*` is pushed.
+#
+# Per OS in the matrix we run the same `bun run build:binary` pipeline the CI
+# job uses, then upload the resulting executable as a release asset.
+# - macos-latest  -> dist/agent-workflow-macos-arm64
+# - ubuntu-latest -> dist/agent-workflow-linux-x86_64
+#
+# Cutting a release:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Re-runs are idempotent — softprops/action-gh-release creates the release on
+# first run and appends assets on subsequent runs for the same tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.x'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build single-binary
+        run: bun run build:binary
+
+      - name: Show artifact size
+        run: ls -lh dist/
+
+      # Stage uploads per-OS so the next step's glob is unambiguous.
+      - name: Stage binary
+        id: stage
+        run: |
+          set -euo pipefail
+          file=$(ls dist/agent-workflow-* | head -n 1)
+          echo "asset=$file" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$file")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.stage.outputs.asset }}
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
