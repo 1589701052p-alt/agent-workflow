@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-2-01 完成后，M1 全部完成 + M2 校验器开张）
+**最近更新**：2026-05-14（P-2-02 完成后，校验器 + WS 双向推送上线）
 
 ---
 
@@ -17,7 +17,7 @@
 ```
 M0 准备       [5/5   ✅]
 M1 骨架       [18/18 ✅]  ← M1 完成
-M2 编辑器     [1/16 🚧]   ← 当前位置（P-2-01 校验器；下一步 P-2-02 WS / P-2-03 xyflow）
+M2 编辑器     [2/16 🚧]   ← 当前位置（校验器 + WS；下一步 P-2-03 xyflow 画布）
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
 M5 打磨       [0/12]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（24 个）
+## 已完成 issue（25 个）
 
 ### M0 全部完成（5/5）
 
@@ -37,10 +37,11 @@ M5 打磨       [0/12]
 | P-0-04 | ESLint + Prettier | `eslint.config.js` flat config + 跨包 import 边界规则（backend↮frontend 互斥） |
 | P-0-05 | Drizzle schema | 8 张表完整定义 + WAL/NORMAL/busy_timeout + 启动时自动 migrate + in-memory 测试辅助 |
 
-### M2 进行中（1/16）
+### M2 进行中（2/16）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-2-02 | WS 框架 + 三频道骨架 | `ws/broadcaster.ts` typed pub/sub（`taskBroadcaster / tasksListBroadcaster / workflowsBroadcaster`，每个 broadcaster 独立 channelKey set）+ `ws/server.ts` Bun.serve 适配器（`tryUpgrade(req, srv)` 返回 `true / false / Response` 三态，`websocket: { open, close, message }`）。三频道：`/ws/tasks/{id}`（含 `?since=N` 从 `node_run_events` JOIN `node_runs` 重放、`hello` 控制帧带 since）/ `/ws/tasks` / `/ws/workflows`。Token 走 `?token=` 常时比较。Wired calls：`createWorkflow/updateWorkflow/deleteWorkflow` 发 `workflow.{created,updated,deleted}`；`startTask` 发 `task.created`、scheduler/cancel 走新 helper `emitTaskStatus` 双频道一起发（`task.status` + `task.done` 终态）；scheduler 在每个 node insert / 结束时发 `node.status`。shared `schemas/ws.ts` 定义 `TaskWsMessage / TasksListWsMessage / WorkflowsWsMessage / WsControlMessage`。tests 7 case（404 / 401 / 各频道 hello / workflow created/updated/deleted / task.status+task.done / since 重放仅吐 id>since 的事件）|
 | P-2-01 | Workflow 静态校验 5 项 | `services/workflow.validator.ts`：`validateWorkflowDef(def, {agents, skills})` 纯函数 + `validateWorkflowById(db, id)` 包装。5 项规则代码：`edge-source-node-missing / edge-source-port-missing / edge-target-port-missing / topology-cycle / wrapper-empty / wrapper-loop-max-iterations / wrapper-loop-exit-condition / agent-not-found / skill-not-found / agent-multi-source-port-missing / binding-{node,port}-missing / input-key-duplicate / prompt-template-unresolved`。port 集合：input.outputs={inputKey}、output.inputs={ports[].name}、agent.outputs=agent.outputs+(`errors` if agent-multi)、wrapper-git.outputs={`git_diff`}、wrapper-loop.outputs={outputBindings[].name}；agent-input 边的 portName 不约束（runner 暴露为 prompt var）；wrappers 不接受入边。topology：DFS 检测环、wrapper-loop 内 nodeIds 互通的边被剔除。prompt template：`{{ name }}` regex + 一组 builtin（`__repo_path__ / __base_branch__ / __task_id__ / __node_id__ / __iteration__ / __shard_key__`），其余必须匹配该节点的入边 target.portName（agent-multi 额外接受 sourcePort.portName）。tests 18 case（每项规则 valid + invalid）|
 
 ### M1 已完成（18/18）
@@ -70,7 +71,7 @@ M5 打磨       [0/12]
 
 ## 测试积累
 
-后端测试 **225 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **42 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **232 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **42 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
@@ -157,9 +158,9 @@ M1 验收已 ready：`agent-workflow start` → 浏览器登 token → 创 agent
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| P-2-02 | WS 框架 + 三频道骨架（`/ws/tasks/{id}` + 列表 + workflows） | P-1-02、P-1-14 | L |
 | P-2-03 | Workflow 编辑器：xyflow 画布骨架 | P-1-16 | L |
 | P-2-04 | 节点 / wrapper / IO 元数据库 + 侧栏 | P-2-03 | M |
+| P-2-05 | 节点抽屉 + i18n | P-2-03 | M |
 
 M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workflow → 启 task → 看 opencode 子进程跑完 → 输出 envelope 解析为 ports`。
 

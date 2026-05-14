@@ -18,7 +18,9 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
+import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
+import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 export interface RunTaskOptions {
   taskId: string
@@ -62,6 +64,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
 
   // 3. Mark running.
   await db.update(tasks).set({ status: 'running' }).where(eq(tasks.id, taskId))
+  await emitStatus(db, taskId)
 
   // 4. Validate node kinds (M1 subset).
   for (const node of definition.nodes) {
@@ -112,6 +115,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
       const value = inputsMap[inputKey] ?? ''
       const nrId = await insertNodeRun(db, taskId, node.id, 'done')
       await db.insert(nodeRunOutputs).values({ nodeRunId: nrId, portName: 'out', content: value })
+      broadcastNodeStatus(taskId, nrId, node.id, 'done')
       continue
     }
 
@@ -144,6 +148,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
 
     const nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending')
+    broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
     let result: RunResult
     try {
       result = await runNode({
@@ -171,6 +176,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
       return
     }
 
+    broadcastNodeStatus(taskId, nodeRunId, node.id, result.status)
     if (result.status === 'canceled') {
       await cancelTaskRow(db, taskId, node.id)
       return
@@ -189,7 +195,36 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
 
   // 7. All nodes done → task done.
   await db.update(tasks).set({ status: 'done', finishedAt: Date.now() }).where(eq(tasks.id, taskId))
+  await emitStatus(db, taskId)
   log.info('task done', { taskId })
+}
+
+async function emitStatus(db: DbClient, taskId: string): Promise<void> {
+  const t = await getTask(db, taskId)
+  if (t !== null) emitTaskStatus(t)
+}
+
+function broadcastNodeStatus(
+  taskId: string,
+  nodeRunId: string,
+  nodeId: string,
+  status:
+    | 'pending'
+    | 'running'
+    | 'done'
+    | 'failed'
+    | 'canceled'
+    | 'interrupted'
+    | 'skipped'
+    | 'exhausted',
+): void {
+  taskBroadcaster.broadcast(TASK_CHANNEL(taskId), {
+    id: -1,
+    type: 'node.status',
+    nodeRunId,
+    nodeId,
+    status,
+  })
 }
 
 // -----------------------------------------------------------------------------
@@ -230,6 +265,7 @@ async function failTask(
   }
   if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
   await db.update(tasks).set(set).where(eq(tasks.id, taskId))
+  await emitStatus(db, taskId)
 }
 
 async function cancelTaskRow(db: DbClient, taskId: string, failedNodeId?: string): Promise<void> {
@@ -241,6 +277,7 @@ async function cancelTaskRow(db: DbClient, taskId: string, failedNodeId?: string
   }
   if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
   await db.update(tasks).set(set).where(eq(tasks.id, taskId))
+  await emitStatus(db, taskId)
 }
 
 async function loadAgent(db: DbClient, name: string): Promise<Agent | null> {

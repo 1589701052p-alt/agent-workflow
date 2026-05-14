@@ -19,6 +19,12 @@ import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree, worktreeDiff } from '@/util/git'
 import { ConflictError, DomainError, NotFoundError } from '@/util/errors'
+import {
+  TASK_CHANNEL,
+  TASKS_LIST_CHANNEL,
+  taskBroadcaster,
+  tasksListBroadcaster,
+} from '@/ws/broadcaster'
 import { runTask } from './scheduler'
 import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
@@ -102,6 +108,19 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
 
   const task = (await getTask(deps.db, taskId)) as Task
 
+  tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+    type: 'task.created',
+    task: {
+      id: task.id,
+      workflowId: task.workflowId,
+      repoPath: task.repoPath,
+      status: task.status,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      errorSummary: task.errorSummary,
+    },
+  })
+
   if (earlyError !== null) {
     return task
   }
@@ -178,7 +197,39 @@ export async function cancelTask(db: DbClient, id: string): Promise<Task> {
       errorMessage: 'no active scheduler at cancel time',
     })
     .where(eq(tasks.id, id))
-  return (await getTask(db, id)) as Task
+  const final = (await getTask(db, id)) as Task
+  emitTaskStatus(final)
+  return final
+}
+
+/**
+ * Push a task-status update onto both broadcaster channels at once.
+ * Scheduler + cancel path both call this after each state change.
+ */
+export function emitTaskStatus(t: Task): void {
+  tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+    type: 'task.status',
+    taskId: t.id,
+    status: t.status,
+  })
+  taskBroadcaster.broadcast(TASK_CHANNEL(t.id), {
+    id: -1,
+    type: 'task.status',
+    status: t.status,
+    ...(t.errorSummary !== null ? { errorSummary: t.errorSummary } : {}),
+  })
+  if (
+    t.status === 'done' ||
+    t.status === 'failed' ||
+    t.status === 'canceled' ||
+    t.status === 'interrupted'
+  ) {
+    taskBroadcaster.broadcast(TASK_CHANNEL(t.id), {
+      id: -1,
+      type: 'task.done',
+      status: t.status,
+    })
+  }
 }
 
 export async function getTask(db: DbClient, id: string): Promise<Task | null> {

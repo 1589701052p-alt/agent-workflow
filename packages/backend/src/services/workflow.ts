@@ -17,6 +17,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { tasks, workflows } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
+import { WORKFLOWS_CHANNEL, workflowsBroadcaster } from '@/ws/broadcaster'
 import { validateWorkflowById } from './workflow.validator'
 
 type WorkflowRow = typeof workflows.$inferSelect
@@ -46,6 +47,12 @@ export async function createWorkflow(db: DbClient, input: CreateWorkflow): Promi
   })
   const created = await getWorkflow(db, id)
   if (created === null) throw new Error('workflow disappeared right after insert')
+  workflowsBroadcaster.broadcast(WORKFLOWS_CHANNEL, {
+    type: 'workflow.created',
+    workflowId: created.id,
+    name: created.name,
+    version: created.version,
+  })
   return created
 }
 
@@ -70,6 +77,12 @@ export async function updateWorkflow(
   await db.update(workflows).set(set).where(eq(workflows.id, id))
   const updated = await getWorkflow(db, id)
   if (updated === null) throw new Error('workflow disappeared after update')
+  workflowsBroadcaster.broadcast(WORKFLOWS_CHANNEL, {
+    type: 'workflow.updated',
+    workflowId: updated.id,
+    version: updated.version,
+    updatedAt: updated.updatedAt,
+  })
   return updated
 }
 
@@ -91,6 +104,10 @@ export async function deleteWorkflow(db: DbClient, id: string): Promise<void> {
     )
   }
   await db.delete(workflows).where(eq(workflows.id, id))
+  workflowsBroadcaster.broadcast(WORKFLOWS_CHANNEL, {
+    type: 'workflow.deleted',
+    workflowId: id,
+  })
 }
 
 /**

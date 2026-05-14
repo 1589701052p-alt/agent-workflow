@@ -8,6 +8,7 @@ import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
+import { buildWebSocketAdapter } from '@/ws/server'
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 
 export interface StartOptions {
@@ -95,10 +96,17 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
 
   const bindHost = opts.host ?? config.bindHost
   const bindPort = opts.port ?? config.bindPort ?? 0
+  const ws = buildWebSocketAdapter({ token, db })
   const server = Bun.serve({
     port: bindPort,
     hostname: bindHost,
-    fetch: app.fetch,
+    fetch(req, srv) {
+      const upgraded = ws.tryUpgrade(req, srv)
+      if (upgraded === true) return undefined as unknown as Response
+      if (upgraded !== false) return upgraded
+      return app.fetch(req)
+    },
+    websocket: ws.handlers,
   })
 
   const baseUrl = `http://${server.hostname}:${server.port}/`
