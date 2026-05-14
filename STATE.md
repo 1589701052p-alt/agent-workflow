@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-2-10 stage 2 完成后，M2 全部 16 个 issue 闭合 🎉）
+**最近更新**：2026-05-14（M3 全部 14 个 issue 闭合 🎉 fan-out / 重试 / resume / git wrapper / 状态画布等齐了）
 
 ---
 
@@ -18,14 +18,14 @@
 M0 准备       [5/5   ✅]
 M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
-M3 编排核心   [0/14]      ← 下一站
-M4 高级编排   [0/11]
+M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
+M4 高级编排   [0/11]      ← 下一站
 M5 打磨       [0/12]
 ```
 
 ---
 
-## 已完成 issue（39 个）
+## 已完成 issue（53 个）
 
 ### M0 全部完成（5/5）
 
@@ -36,6 +36,25 @@ M5 打磨       [0/12]
 | P-0-03 | CI skeleton | `.github/workflows/ci.yml`（matrix: ubuntu+macos，跑 format/lint/typecheck/test） |
 | P-0-04 | ESLint + Prettier | `eslint.config.js` flat config + 跨包 import 边界规则（backend↮frontend 互斥） |
 | P-0-05 | Drizzle schema | 8 张表完整定义 + WAL/NORMAL/busy_timeout + 启动时自动 migrate + in-memory 测试辅助 |
+
+### M3 完成（14/14）
+
+| ID | 标题 | 关键产出 |
+| --- | --- | --- |
+| P-3-01 | gitDiff snapshot + 3 sharding strategies | `util/git.ts` 拆 `gitDiffSnapshot(wt, fromCommit)` 返回 tracked+untracked 拼接 diff（无 cap，供分片用）；`worktreeDiff` 走它的 1 MiB 上限变种用于 HTTP。`util/diffSplit.ts` `parseDiff() / splitDiffPerFile() / splitDiffPerNFiles(n) / splitDiffPerDirectory(depth=1)` + rename 单 shard、binary 不进 shard 内容但 list 附加在 `binary files: …` 注释，shardKey = 桶内字典最小路径 |
+| P-3-02 | agent-multi fan-out | 调度器新分支 `runFanOutNode`：等 sourcePort latest run.output → 选 shardingStrategy 切片 → 每 shard 起 child node_run (`parent_node_run_id` + `shard_key`) 走独立 `subprocessSem`（默认 4）；每 declared port 按 shardKey 字典序拼接 `\n`，自动 `errors` port 列出失败 shard。空 diff 直接 done 写空 ports；全 shard 失败 → 父 failed。`buildUpstreamMap` 把 sourcePort.nodeId 算作 upstream dep，否则 audit 会在 src 之前就绪 |
+| P-3-03 | wrapper-git 节点 | 调度器执行 wrapper-git：`buildUpstreamMap` 把 `nodeIds[]` 设为 upstream → 所有内层 done 后才执行。取 baseline = `git rev-parse HEAD`，调 `gitDiffSnapshot(wt, baseline)` 写 `git_diff` port。空 nodeIds → wrapper-empty failed |
+| P-3-04 | wrapper UI 组合 / 解组 | Canvas 右键菜单加 "Wrap in git wrapper / Wrap in loop wrapper / Decompose wrapper"。Compose 把当前 selection 包成 wrapper 节点（id=`wrap_git_<6>` / `wrap_loop_<6>` via ulid，position 比子节点左上角再左上偏 30，loop 默认 maxIterations=3 + exitCondition.kind=port-empty 让 validator 满意）。Decompose 删 wrapper 节点，子节点保留并自动 selection |
+| P-3-05 | 写串行 / 只读并发 semaphore | `util/semaphore.ts` FIFO `Semaphore(capacity).acquire/release/run<T>(fn)`；scheduler 拆 strict for-loop 成 level-parallel：每轮收集 upstream done 的 ready batch → `Promise.all(runOneNode)`。每节点 acquire globalSem（cap maxConcurrentNodes，默认 4）+ writeSem（cap 1，仅 readonly=false 占用）+ subprocessSem（仅 fan-out 子进程）。tests 2 case（两 read 同 level 并发 < 550ms，两 write 串行 > 450ms）|
+| P-3-06 | 节点 retries | scheduler runOneNode 内嵌重试循环：失败 + retry_index<retries 时 rollback 到当前 run.preSnapshot → 插新 node_run（retry_index+1）→ 重跑。每次拿同一组 semaphore 槽（write 不释放避免被其它 writer 插队）。tests 2 case（retries=2 fail→fail→done；retries=1 → 全失败 → task failed）|
+| P-3-07 | 写节点 pre-snapshot | `util/git.ts` `gitStashSnapshot(wt)` 用 `git stash create`（不入 stash list，跨 task 安全）；`rollbackToSnapshot(wt, sha)` = reset --hard HEAD + clean -fd + stash apply --index；空 sha 走 reset+clean only。Scheduler 在每个非 readonly node start 前调 snapshot 写 `node_runs.pre_snapshot`。tests 6 case（clean / modified / 多次 stash / 回滚 / 空 sha / 错误 sha）|
+| P-3-08 | Resume from failed/interrupted | `resumeTask(db, id, deps)`：遍历 latest 非 done 的 node_runs，对每个调 `rollbackToSnapshot(wt, preSnapshot)`，清 task error 字段、置 pending → 启动 scheduler。scheduler 主循环开头 pre-scan：把已 done 的 nodeId 放进 `completed` 集合并从 `remaining` 删，保证 done 节点不重跑。`POST /api/tasks/:id/resume`（终态 task 才允；其它 409 task-not-resumable） |
+| P-3-09 | Single-node retry | `retryNode(db, taskId, nodeRunId, {cascade, deps})`：cascade=true（默认）走 edges DFS 找下游 + 仅自身；rollback + 给每个目标 insert 一个 failed row at retry_index max+1（scheduler 看到它会再次执行）；task → pending 启动 scheduler。`POST /api/tasks/:id/nodes/:nodeRunId/retry?cascade=true|false`，running task → 409 task-still-running |
+| P-3-10 | 节点详情 4 tab — retries + 子进程 | `NodeDetailDrawer` 新增 `<SubProcessList>` 在 tabs 下渲染 fan-out 的子 node_run（按 shardKey 字典排序，每行 status chip + shardKey + tok），点击切换抽屉到该 child（通过新 prop `onSelectRun`）；`StatsTab` 末尾追加 Retries 列表（同 nodeId、不同 retry_index 的 parent runs），点击切换到对应 attempt |
+| P-3-11 | prompt 模板内置变量扩展 | `shared/src/prompt.ts` BUILTIN_VARS 加 `__node_id__ / __iteration__ / __shard_key__`；scheduler 在 templateMeta 总是塞 `nodeId`，fan-out 子调用塞 `shardKey`；缺值时替换成空字符串（不报错）。tests +2 case |
+| P-3-12 | per-node timeout | `RunTaskOptions.defaultPerNodeTimeoutMs` + node.timeoutMs passthrough；runOneNode 算出有效值传给 runner。runner 已有 timeout/SIGTERM + `node-timeout: exceeded Nms` 实现（P-1-13） |
+| P-3-13 | stderr + raw stdout endpoint | stderr 持久化 runner 已经做了（kind=stderr 写 node_run_events）。新 service `getNodeRunStdout(db, taskId, nrId)` 串接非 stderr events.payload → 新 endpoint `GET /api/tasks/:id/nodes/:nodeRunId/stdout` 返回 text/plain。1 MiB 溢出到 logs/{taskId}/{nrId}.jsonl 推迟到 M5 |
+| P-3-14 | Task 失败 UI 概述 + Jump | Task 已有 errorSummary/errorMessage/failedNodeId 列。TaskDetail 顶部红色横幅：summary 一句话 + 详情 `<details>` + 失败节点跳转按钮（取 failedNodeId 最新 node_run 写到 selectedNodeRunId → 抽屉自动打开）|
 
 ### M2 完成（16/16）
 
@@ -85,7 +104,7 @@ M5 打磨       [0/12]
 
 ## 测试积累
 
-后端测试 **234 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **103 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **270 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **103 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
