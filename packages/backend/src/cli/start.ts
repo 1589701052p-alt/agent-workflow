@@ -201,7 +201,17 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   process.on('SIGINT', () => {
     void shutdown('SIGINT')
   })
-  process.on('exit', () => lock.release())
+  // Belt-and-suspenders: ensure runtime info file is removed even if the
+  // async shutdown handler above is interrupted before unlinkSync runs.
+  // The on('exit') hook is synchronous and runs on every termination path.
+  process.on('exit', () => {
+    try {
+      unlinkSync(Paths.daemonInfo)
+    } catch {
+      // already removed or never written
+    }
+    lock.release()
+  })
 
   await new Promise<void>(() => {
     /* never resolves */
