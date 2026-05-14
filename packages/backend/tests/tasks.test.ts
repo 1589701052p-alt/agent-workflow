@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { tasks, workflows } from '../src/db/schema'
+import { nodeRunEvents, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createApp } from '../src/server'
 import { runGit } from '../src/util/git'
 
@@ -379,5 +379,95 @@ describe('task HTTP routes', () => {
     const res = await req(h.app, `/api/tasks/${id}/diff`)
     expect(res.status).toBe(410)
     expect(((await res.json()) as { code: string }).code).toBe('task-worktree-missing')
+  })
+
+  test('GET /:id/node-runs/:nodeRunId/events paginates with ?since', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const taskId = ulid()
+    await h.db.insert(tasks).values({
+      id: taskId,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt',
+      baseBranch: 'main',
+      branch: `agent-workflow/${taskId}`,
+      status: 'running',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    const nrId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: nrId,
+      taskId,
+      nodeId: 'n1',
+      status: 'running',
+      startedAt: Date.now(),
+    })
+    for (let i = 0; i < 5; i++) {
+      await h.db.insert(nodeRunEvents).values({
+        nodeRunId: nrId,
+        ts: Date.now() + i,
+        kind: 'text',
+        payload: JSON.stringify({ chunk: i }),
+      })
+    }
+
+    // First batch — no since cursor, expect all 5.
+    const r1 = await req(h.app, `/api/tasks/${taskId}/node-runs/${nrId}/events`)
+    expect(r1.status).toBe(200)
+    const body1 = (await r1.json()) as { events: Array<{ id: number }>; cursor: number | null }
+    expect(body1.events.length).toBe(5)
+    expect(body1.cursor).toBe(body1.events[4]?.id ?? null)
+
+    // Second batch — since=mid, expect tail.
+    const mid = body1.events[2]?.id ?? 0
+    const r2 = await req(h.app, `/api/tasks/${taskId}/node-runs/${nrId}/events?since=${mid}`)
+    const body2 = (await r2.json()) as { events: Array<{ id: number }> }
+    expect(body2.events.length).toBe(2)
+    expect(body2.events[0]?.id).toBe(body1.events[3]?.id)
+  })
+
+  test('GET node-runs events refuses a node_run that belongs to a different task -> 404', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const idA = ulid()
+    const idB = ulid()
+    await h.db.insert(tasks).values([
+      {
+        id: idA,
+        workflowId: wfId,
+        workflowSnapshot: '{}',
+        repoPath: h.repoPath,
+        worktreePath: '/tmp/a',
+        baseBranch: 'main',
+        branch: `agent-workflow/${idA}`,
+        status: 'running',
+        inputs: '{}',
+        startedAt: Date.now(),
+      },
+      {
+        id: idB,
+        workflowId: wfId,
+        workflowSnapshot: '{}',
+        repoPath: h.repoPath,
+        worktreePath: '/tmp/b',
+        baseBranch: 'main',
+        branch: `agent-workflow/${idB}`,
+        status: 'running',
+        inputs: '{}',
+        startedAt: Date.now(),
+      },
+    ])
+    const nrA = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: nrA,
+      taskId: idA,
+      nodeId: 'n1',
+      status: 'running',
+      startedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${idB}/node-runs/${nrA}/events`)
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as { code: string }).code).toBe('node-run-not-found')
   })
 })

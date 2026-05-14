@@ -105,9 +105,13 @@ export const NodeRunSchema = z.object({
   pid: z.number().int().nullable(),
   exitCode: z.number().int().nullable(),
   errorMessage: z.string().nullable(),
+  /** User prompt sent to opencode (populated after runner builds it). */
+  promptText: z.string().nullable(),
   tokInput: z.number().int().nullable(),
   tokOutput: z.number().int().nullable(),
   tokTotal: z.number().int().nullable(),
+  tokCacheCreate: z.number().int().nullable(),
+  tokCacheRead: z.number().int().nullable(),
 })
 export type NodeRun = z.infer<typeof NodeRunSchema>
 
@@ -125,6 +129,35 @@ export const TaskNodeRunsSchema = z.object({
   outputs: z.array(NodeRunOutputSchema),
 })
 export type TaskNodeRuns = z.infer<typeof TaskNodeRunsSchema>
+
+/** Response shape of GET /api/tasks/:id/node-runs/:nodeRunId/events. */
+
+export const NODE_EVENT_KIND = [
+  'tool_use',
+  'text',
+  'reasoning',
+  'permission_asked',
+  'error',
+  'step_start',
+  'step_finish',
+  'stderr',
+] as const
+
+export const NodeRunEventSchema = z.object({
+  id: z.number().int(),
+  nodeRunId: z.string(),
+  ts: z.number().int(),
+  kind: z.enum(NODE_EVENT_KIND),
+  payload: z.unknown(),
+})
+export type NodeRunEvent = z.infer<typeof NodeRunEventSchema>
+
+export const NodeRunEventsResponseSchema = z.object({
+  events: z.array(NodeRunEventSchema),
+  /** Highest event id in this batch (or null when empty). */
+  cursor: z.number().int().nullable(),
+})
+export type NodeRunEventsResponse = z.infer<typeof NodeRunEventsResponseSchema>
 
 /** Response shape of GET /api/tasks/:id/diff. */
 export const TaskDiffSchema = z.object({

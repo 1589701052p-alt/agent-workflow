@@ -3,6 +3,8 @@
 
 import type {
   NodeRun,
+  NodeRunEvent,
+  NodeRunEventsResponse,
   NodeRunOutput,
   StartTask,
   Task,
@@ -10,11 +12,11 @@ import type {
   TaskNodeRuns,
   TaskSummary,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
 import { existsSync } from 'node:fs'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
+import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree, worktreeDiff } from '@/util/git'
@@ -299,9 +301,12 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     pid: r.pid,
     exitCode: r.exitCode,
     errorMessage: r.errorMessage,
+    promptText: r.promptText,
     tokInput: r.tokInput,
     tokOutput: r.tokOutput,
     tokTotal: r.tokTotal,
+    tokCacheCreate: r.tokCacheCreate,
+    tokCacheRead: r.tokCacheRead,
   }))
 
   let outputs: NodeRunOutput[] = []
@@ -318,6 +323,59 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     }))
   }
   return { runs, outputs }
+}
+
+/**
+ * Page events for one node_run. `since` is the event id cursor (exclusive);
+ * returns up to `limit` events ordered by id ascending plus the new cursor.
+ *
+ * Caller is responsible for asserting that the task owns the node_run; we
+ * just verify the node_run belongs to the task to avoid cross-task leakage.
+ */
+export async function getNodeRunEvents(
+  db: DbClient,
+  taskId: string,
+  nodeRunId: string,
+  opts: { since?: number; limit?: number } = {},
+): Promise<NodeRunEventsResponse> {
+  const ownerRows = await db
+    .select({ taskId: nodeRuns.taskId })
+    .from(nodeRuns)
+    .where(eq(nodeRuns.id, nodeRunId))
+    .limit(1)
+  const owner = ownerRows[0]
+  if (owner === undefined || owner.taskId !== taskId) {
+    throw new NotFoundError(
+      'node-run-not-found',
+      `node_run '${nodeRunId}' not found under task '${taskId}'`,
+    )
+  }
+  const limit = Math.min(opts.limit ?? 500, 1000)
+  const since = opts.since ?? 0
+  const rows = await db
+    .select()
+    .from(nodeRunEvents)
+    .where(and(eq(nodeRunEvents.nodeRunId, nodeRunId), gt(nodeRunEvents.id, since)))
+    .orderBy(asc(nodeRunEvents.id))
+    .limit(limit)
+
+  const events: NodeRunEvent[] = rows.map((r) => {
+    let payload: unknown
+    try {
+      payload = JSON.parse(r.payload)
+    } catch {
+      payload = r.payload
+    }
+    return {
+      id: r.id,
+      nodeRunId: r.nodeRunId,
+      ts: r.ts,
+      kind: r.kind,
+      payload,
+    }
+  })
+  const cursor = events.length > 0 ? (events[events.length - 1]?.id ?? null) : null
+  return { events, cursor }
 }
 
 /**

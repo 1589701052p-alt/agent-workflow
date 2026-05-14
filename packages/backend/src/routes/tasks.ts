@@ -12,6 +12,7 @@ import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
 import {
   cancelTask,
+  getNodeRunEvents,
   getTask,
   getTaskDiff,
   getTaskNodeRuns,
@@ -76,6 +77,29 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/tasks/:id/diff', async (c) => {
     return c.json(await getTaskDiff(deps.db, c.req.param('id')))
+  })
+
+  app.get('/api/tasks/:id/node-runs/:nodeRunId/events', async (c) => {
+    const sinceRaw = c.req.query('since')
+    const limitRaw = c.req.query('limit')
+    const opts: { since?: number; limit?: number } = {}
+    if (sinceRaw !== undefined) {
+      const n = Number(sinceRaw)
+      if (!Number.isFinite(n) || n < 0) {
+        throw new ValidationError('events-since-invalid', `since must be a non-negative number`)
+      }
+      opts.since = n
+    }
+    if (limitRaw !== undefined) {
+      const n = Number(limitRaw)
+      if (!Number.isFinite(n) || n <= 0) {
+        throw new ValidationError('events-limit-invalid', `limit must be a positive number`)
+      }
+      opts.limit = n
+    }
+    return c.json(
+      await getNodeRunEvents(deps.db, c.req.param('id'), c.req.param('nodeRunId'), opts),
+    )
   })
 }
 

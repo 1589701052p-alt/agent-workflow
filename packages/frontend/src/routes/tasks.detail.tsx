@@ -17,10 +17,11 @@ import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { DiffViewer } from '@/components/DiffViewer'
+import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { useTaskSync } from '@/hooks/useTaskSync'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -33,6 +34,7 @@ function TaskDetailPage() {
   const { id } = Route.useParams()
   const qc = useQueryClient()
   useTaskSync(id)
+  const [selectedNodeRunId, setSelectedNodeRunId] = useState<string | null>(null)
 
   const task = useQuery<Task>({
     queryKey: ['tasks', id],
@@ -131,7 +133,22 @@ function TaskDetailPage() {
 
       <section className="page__section">
         <h2>Workflow status</h2>
-        <TaskStatusCanvas task={t} runs={nodeRuns.data?.runs ?? []} />
+        <div className="task-canvas-layout">
+          <TaskStatusCanvas
+            task={t}
+            runs={nodeRuns.data?.runs ?? []}
+            onSelectNodeRun={setSelectedNodeRunId}
+          />
+          {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
+            <NodeDetailDrawer
+              taskId={id}
+              nodeRunId={selectedNodeRunId}
+              runs={nodeRuns.data.runs}
+              outputs={nodeRuns.data.outputs}
+              onClose={() => setSelectedNodeRunId(null)}
+            />
+          )}
+        </div>
       </section>
 
       <section className="page__section">
@@ -159,7 +176,15 @@ function TaskDetailPage() {
   )
 }
 
-function TaskStatusCanvas({ task, runs }: { task: Task; runs: NodeRun[] }) {
+function TaskStatusCanvas({
+  task,
+  runs,
+  onSelectNodeRun,
+}: {
+  task: Task
+  runs: NodeRun[]
+  onSelectNodeRun: (id: string | null) => void
+}) {
   const definition = useMemo<WorkflowDefinition | null>(() => {
     const snap = task.workflowSnapshot
     if (typeof snap !== 'object' || snap === null) return null
@@ -188,6 +213,19 @@ function TaskStatusCanvas({ task, runs }: { task: Task; runs: NodeRun[] }) {
     return out
   }, [runs])
 
+  const latestRunByNode = useMemo(() => {
+    const m = new Map<string, NodeRun>()
+    for (const r of runs) {
+      const prev = m.get(r.nodeId)
+      if (prev === undefined || (r.startedAt ?? 0) >= (prev.startedAt ?? 0)) {
+        m.set(r.nodeId, r)
+      }
+    }
+    const idMap = new Map<string, string>()
+    for (const [nodeId, r] of m) idMap.set(nodeId, r.id)
+    return idMap
+  }, [runs])
+
   if (definition === null) {
     return <div className="muted">No workflow snapshot available.</div>
   }
@@ -198,6 +236,14 @@ function TaskStatusCanvas({ task, runs }: { task: Task; runs: NodeRun[] }) {
         definition={definition}
         agents={agents.data ?? []}
         nodeStatuses={statuses}
+        onSelect={(nodeId) => {
+          if (nodeId === null) {
+            onSelectNodeRun(null)
+            return
+          }
+          const runId = latestRunByNode.get(nodeId)
+          onSelectNodeRun(runId ?? null)
+        }}
         readOnly
       />
     </div>
