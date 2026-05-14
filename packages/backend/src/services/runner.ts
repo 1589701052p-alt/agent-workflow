@@ -1,0 +1,485 @@
+// Runner: spawn ONE opencode subprocess for one node_run, stream its output
+// into the DB, persist the parsed envelope, and clean up.
+//
+// Process isolation (design/proposal.md §6.1):
+//   * cwd = task worktree
+//   * OPENCODE_CONFIG_DIR -> per-run dir for framework-managed skills
+//   * OPENCODE_CONFIG_CONTENT -> inline JSON of the agent definition
+//     (highest precedence in opencode's merge order; beats repo and $HOME)
+//   * No DISABLE flags so repo .opencode/skills + $HOME/.opencode/* still load
+//
+// Lifecycle:
+//   pending -> running    (node_runs row updated with pid + startedAt + prompt)
+//   running -> done       (envelope parsed, outputs persisted)
+//   running -> failed     (non-zero exit / missing envelope / timeout)
+//   running -> canceled   (AbortSignal aborted)
+//
+// Caller (scheduler / tests) is responsible for INSERT-ing the node_runs row
+// in 'pending' state before calling runNode().
+
+import type { Agent } from '@agent-workflow/shared'
+import { eq } from 'drizzle-orm'
+import { cpSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import type { DbClient } from '@/db/client'
+import { nodeRunEvents, nodeRunOutputs, nodeRuns } from '@/db/schema'
+import { createLogger, type Logger } from '@/util/log'
+import { extractLastEnvelope, parseEnvelope } from './envelope'
+import { renderUserPrompt } from './protocol'
+
+export type SkillSource = 'managed' | 'external' | 'project'
+
+export interface ResolvedSkill {
+  name: string
+  sourceKind: SkillSource
+  /** Absolute path for managed/external. Unused for project. */
+  sourcePath?: string
+}
+
+export interface AgentOverrides {
+  model?: string
+  variant?: string
+  temperature?: number
+}
+
+export interface RunNodeOptions {
+  taskId: string
+  /** ULID of a pre-existing node_runs row in 'pending' state. */
+  nodeRunId: string
+  agent: Agent
+  /** Resolved upstream port values (already concatenated by the scheduler). */
+  inputs: Record<string, string>
+  overrides?: AgentOverrides
+  /** opencode subprocess cwd = task worktree. */
+  worktreePath: string
+  /** Template variable substitutions for {{__repo_path__}} etc. */
+  templateMeta: {
+    repoPath: string
+    baseBranch: string
+    taskId: string
+  }
+  promptTemplate?: string
+  /** Skills used by this agent. */
+  skills: ResolvedSkill[]
+  /** Default true. */
+  dangerouslySkipPermissions?: boolean
+  /** Wall-clock timeout in ms. Undefined = no limit. */
+  timeoutMs?: number
+  /** App home dir (parent of runs/, snapshots/, worktrees/, ...). */
+  appHome: string
+  /**
+   * Command to spawn instead of `['opencode']`. Tests pass
+   * `['bun', 'run', /path/to/mock-opencode.ts]`.
+   */
+  opencodeCmd?: string[]
+  db: DbClient
+  log?: Logger
+  /** When aborted, runner SIGTERMs the child and returns status='canceled'. */
+  signal?: AbortSignal
+}
+
+export type RunFinalStatus = 'done' | 'failed' | 'canceled'
+
+export interface RunResult {
+  status: RunFinalStatus
+  exitCode: number | null
+  /** Resolved declared port values (missing ones present as ""). */
+  outputs: Record<string, string>
+  tokenUsage: {
+    input: number
+    output: number
+    cacheCreate: number
+    cacheRead: number
+    total: number
+  }
+  errorMessage?: string
+  /** The exact user prompt sent to opencode (also written to node_runs.promptText). */
+  prompt: string
+  /** opencode sessionID first seen in stdout events, if any. */
+  sessionId?: string
+}
+
+export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
+  const log = opts.log ?? createLogger('runner')
+  const runRoot = join(opts.appHome, 'runs', opts.taskId, opts.nodeRunId)
+  const runDir = join(runRoot, '.opencode')
+
+  // 1. Prepare per-run config dir and inject skills.
+  prepareSkills(runDir, opts.skills, log)
+
+  // 2. Build OPENCODE_CONFIG_CONTENT inline agent JSON.
+  const inlineConfig = buildInlineConfig(opts.agent, opts.overrides)
+
+  // 3. Render the user prompt.
+  const prompt = renderUserPrompt({
+    promptTemplate: opts.promptTemplate,
+    inputs: opts.inputs,
+    meta: opts.templateMeta,
+    agentOutputs: opts.agent.outputs,
+  })
+
+  await opts.db
+    .update(nodeRuns)
+    .set({
+      promptText: prompt,
+      status: 'running',
+      startedAt: Date.now(),
+    })
+    .where(eq(nodeRuns.id, opts.nodeRunId))
+
+  // 4. Spawn opencode.
+  const cmd = buildCommand(opts, prompt)
+  log.info('spawning opencode', {
+    bin: cmd[0],
+    agent: opts.agent.name,
+    cwd: opts.worktreePath,
+    nodeRunId: opts.nodeRunId,
+  })
+
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    OPENCODE_CONFIG_DIR: runDir,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(inlineConfig),
+  }
+
+  const child = Bun.spawn({
+    cmd,
+    cwd: opts.worktreePath,
+    env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+  })
+
+  if (typeof child.pid === 'number') {
+    await opts.db.update(nodeRuns).set({ pid: child.pid }).where(eq(nodeRuns.id, opts.nodeRunId))
+  }
+
+  // 5. Wire up cancellation + timeout.
+  let aborted = false
+  let timedOut = false
+
+  const onAbort = (): void => {
+    aborted = true
+    safeKill(child, 'SIGTERM')
+  }
+  if (opts.signal) {
+    if (opts.signal.aborted) onAbort()
+    else opts.signal.addEventListener('abort', onAbort)
+  }
+
+  const timeoutHandle =
+    opts.timeoutMs !== undefined
+      ? setTimeout(() => {
+          timedOut = true
+          safeKill(child, 'SIGTERM')
+        }, opts.timeoutMs)
+      : null
+
+  // 6. Stream stdout + stderr into node_run_events.
+  //    `--format json` makes opencode emit one JSON event per line; the
+  //    agent's text reply (which carries the <workflow-output> envelope)
+  //    is inside the `part.text` field of `text` events. We accumulate
+  //    text-event payloads here and parse the envelope from that buffer.
+  const agentText: string[] = []
+  const tokenUsage: RunResult['tokenUsage'] = {
+    input: 0,
+    output: 0,
+    cacheCreate: 0,
+    cacheRead: 0,
+    total: 0,
+  }
+  let sessionId: string | undefined
+
+  const stdoutPump = pumpLines(child.stdout, async (line) => {
+    let evt: Record<string, unknown> | null = null
+    try {
+      evt = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      // non-JSON line — store as text and ignore
+    }
+    if (evt) {
+      if (typeof evt.sessionID === 'string' && sessionId === undefined) {
+        sessionId = evt.sessionID
+      }
+      accumulateTokens(evt, tokenUsage)
+      const text = extractTextFromEvent(evt)
+      if (text !== null) agentText.push(text)
+      const kind = inferEventKind(evt)
+      const ts = typeof evt.timestamp === 'number' ? evt.timestamp : Date.now()
+      await opts.db
+        .insert(nodeRunEvents)
+        .values({ nodeRunId: opts.nodeRunId, ts, kind, payload: line })
+    } else {
+      // Non-JSON stdout lines shouldn't happen with --format json, but record
+      // them as kind=text for debugging.
+      await opts.db.insert(nodeRunEvents).values({
+        nodeRunId: opts.nodeRunId,
+        ts: Date.now(),
+        kind: 'text',
+        payload: line,
+      })
+      agentText.push(line)
+    }
+  })
+
+  const stderrPump = pumpLines(child.stderr, async (line) => {
+    await opts.db.insert(nodeRunEvents).values({
+      nodeRunId: opts.nodeRunId,
+      ts: Date.now(),
+      kind: 'stderr',
+      payload: line,
+    })
+  })
+
+  // 7. Wait for exit + drain streams.
+  const exitCode = await child.exited
+  await Promise.all([stdoutPump, stderrPump])
+  if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
+  if (timeoutHandle !== null) clearTimeout(timeoutHandle)
+
+  // 8. Resolve final status.
+  let status: RunFinalStatus
+  let errorMessage: string | undefined
+  if (aborted) {
+    status = 'canceled'
+    errorMessage = 'aborted by signal'
+  } else if (timedOut) {
+    status = 'failed'
+    errorMessage = `node-timeout: exceeded ${opts.timeoutMs ?? 0}ms`
+  } else if (exitCode !== 0) {
+    status = 'failed'
+    errorMessage = `opencode exited with code ${exitCode}`
+  } else {
+    status = 'done'
+  }
+
+  // 9. Parse envelope on clean exit.
+  let outputs: Record<string, string> = {}
+  if (status === 'done') {
+    const accumulatedText = agentText.join('\n')
+    const envelope = extractLastEnvelope(accumulatedText)
+    if (envelope === null) {
+      status = 'failed'
+      errorMessage = 'no <workflow-output> envelope found in stdout'
+    } else {
+      const parsed = parseEnvelope(envelope, opts.agent.outputs)
+      outputs = Object.fromEntries(parsed.ports)
+      for (const [name, content] of parsed.ports) {
+        await opts.db
+          .insert(nodeRunOutputs)
+          .values({ nodeRunId: opts.nodeRunId, portName: name, content })
+          .onConflictDoUpdate({
+            target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
+            set: { content },
+          })
+      }
+      if (parsed.missingDeclared.length > 0) {
+        log.warn('agent omitted declared ports', {
+          missing: parsed.missingDeclared,
+          nodeRunId: opts.nodeRunId,
+        })
+      }
+      if (parsed.undeclared.length > 0) {
+        log.warn('agent emitted undeclared ports', {
+          undeclared: parsed.undeclared.map((u) => u.name),
+          nodeRunId: opts.nodeRunId,
+        })
+      }
+    }
+  }
+
+  // 10. Update node_runs final state.
+  await opts.db
+    .update(nodeRuns)
+    .set({
+      status,
+      finishedAt: Date.now(),
+      exitCode: exitCode ?? null,
+      errorMessage: errorMessage ?? null,
+      tokInput: tokenUsage.input,
+      tokOutput: tokenUsage.output,
+      tokCacheCreate: tokenUsage.cacheCreate,
+      tokCacheRead: tokenUsage.cacheRead,
+      tokTotal: tokenUsage.total,
+    })
+    .where(eq(nodeRuns.id, opts.nodeRunId))
+
+  // 11. Clean up run dir (best-effort).
+  try {
+    rmSync(runRoot, { recursive: true, force: true })
+  } catch {
+    // Logged but non-fatal.
+  }
+
+  const result: RunResult = { status, exitCode, outputs, tokenUsage, prompt }
+  if (errorMessage !== undefined) result.errorMessage = errorMessage
+  if (sessionId !== undefined) result.sessionId = sessionId
+  return result
+}
+
+// -----------------------------------------------------------------------------
+// helpers
+// -----------------------------------------------------------------------------
+
+function prepareSkills(runDir: string, skills: ResolvedSkill[], log: Logger): void {
+  const skillsDir = join(runDir, 'skills')
+  mkdirSync(skillsDir, { recursive: true })
+  for (const skill of skills) {
+    if (skill.sourceKind === 'project') continue
+    if (skill.sourcePath === undefined) {
+      log.warn('skill missing sourcePath; skipping injection', { name: skill.name })
+      continue
+    }
+    const dst = join(skillsDir, skill.name)
+    // Ensure parent exists (skillsDir already does, but defensive).
+    mkdirSync(dirname(dst), { recursive: true })
+    if (skill.sourceKind === 'managed') {
+      cpSync(skill.sourcePath, dst, { recursive: true })
+    } else {
+      // external -> symlink for IO economy
+      symlinkSync(skill.sourcePath, dst, 'dir')
+    }
+  }
+}
+
+function buildInlineConfig(
+  agent: Agent,
+  overrides?: AgentOverrides,
+): { agent: Record<string, Record<string, unknown>> } {
+  const ov = overrides ?? {}
+  const inlineAgent: Record<string, unknown> = {
+    prompt: agent.bodyMd,
+    description: agent.description,
+    permission: agent.permission,
+    // Platform-only fields live under `options` so opencode passes them through
+    // without trying to parse. The runner doesn't read these back; they exist
+    // for observability when an operator dumps `opencode debug agent`.
+    options: { outputs: agent.outputs, readonly: agent.readonly },
+  }
+  const model = ov.model ?? agent.model
+  if (model !== undefined) inlineAgent.model = model
+  const variant = ov.variant ?? agent.variant
+  if (variant !== undefined) inlineAgent.variant = variant
+  const temperature = ov.temperature ?? agent.temperature
+  if (temperature !== undefined) inlineAgent.temperature = temperature
+  if (agent.steps !== undefined) inlineAgent.steps = agent.steps
+
+  return { agent: { [agent.name]: inlineAgent } }
+}
+
+function buildCommand(opts: RunNodeOptions, prompt: string): string[] {
+  const head = opts.opencodeCmd ?? ['opencode']
+  const cmd = [...head, 'run', prompt, '--agent', opts.agent.name, '--format', 'json']
+  if (opts.dangerouslySkipPermissions ?? true) cmd.push('--dangerously-skip-permissions')
+  return cmd
+}
+
+function safeKill(child: Bun.Subprocess, signal: 'SIGTERM' | 'SIGKILL'): void {
+  try {
+    child.kill(signal)
+  } catch {
+    // already exited
+  }
+}
+
+/**
+ * Drain a ReadableStream of UTF-8 bytes, calling `onLine` for each complete
+ * line. Awaits each callback so the caller's DB writes serialize naturally.
+ */
+async function pumpLines(
+  stream: ReadableStream<Uint8Array>,
+  onLine: (line: string) => Promise<void> | void,
+): Promise<void> {
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 1)
+        if (line.length > 0) await onLine(line)
+      }
+    }
+    // Flush remaining tail (process emitted a line without trailing newline).
+    if (buffer.length > 0) await onLine(buffer)
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/**
+ * Pull out the agent's text contribution from one opencode event, if any.
+ * Different opencode versions / part kinds put it in different shapes; we
+ * tolerate the common ones.
+ */
+function extractTextFromEvent(evt: Record<string, unknown>): string | null {
+  const part = evt.part as Record<string, unknown> | undefined
+  // shape: { type: 'text', part: { type: 'text', text: '...' } }
+  if (part && typeof part === 'object') {
+    const ptype = part.type
+    const ptext = part.text
+    if (ptype === 'text' && typeof ptext === 'string') return ptext
+  }
+  // shape: { type: 'text', text: '...' }  (older / synthetic)
+  if (evt.type === 'text' && typeof evt.text === 'string') return evt.text
+  return null
+}
+
+/** Map an opencode JSON event to one of our enum kinds. */
+function inferEventKind(
+  evt: Record<string, unknown>,
+): 'tool_use' | 'text' | 'reasoning' | 'permission_asked' | 'error' | 'step_start' | 'step_finish' {
+  const t = evt.type
+  if (typeof t === 'string') {
+    if (t === 'tool_use') return 'tool_use'
+    if (t === 'text') return 'text'
+    if (t === 'reasoning') return 'reasoning'
+    if (t === 'permission.asked' || t === 'permission_asked') return 'permission_asked'
+    if (t === 'error') return 'error'
+    if (t === 'step_start') return 'step_start'
+    if (t === 'step_finish') return 'step_finish'
+  }
+  return 'text'
+}
+
+/** Best-effort token accumulation. M4 P-4-05 will replace this. */
+function accumulateTokens(evt: Record<string, unknown>, acc: RunResult['tokenUsage']): void {
+  const candidates: Array<Record<string, unknown> | undefined> = [
+    evt as Record<string, unknown>,
+    evt.part as Record<string, unknown> | undefined,
+    evt.usage as Record<string, unknown> | undefined,
+  ]
+  const tokens = pickTokens(candidates)
+  if (!tokens) return
+  const input = numOrZero(tokens.input)
+  const output = numOrZero(tokens.output)
+  const cacheCreate = numOrZero(tokens.cache_creation ?? tokens.cacheCreation)
+  const cacheRead = numOrZero(tokens.cache_read ?? tokens.cacheRead)
+  acc.input += input
+  acc.output += output
+  acc.cacheCreate += cacheCreate
+  acc.cacheRead += cacheRead
+  acc.total = acc.input + acc.output + acc.cacheCreate + acc.cacheRead
+}
+
+function pickTokens(
+  candidates: Array<Record<string, unknown> | undefined>,
+): Record<string, unknown> | null {
+  for (const c of candidates) {
+    if (!c) continue
+    const t = c.tokens
+    if (t && typeof t === 'object') return t as Record<string, unknown>
+  }
+  return null
+}
+
+function numOrZero(v: unknown): number {
+  const n = Number(v ?? 0)
+  return Number.isFinite(n) ? n : 0
+}
