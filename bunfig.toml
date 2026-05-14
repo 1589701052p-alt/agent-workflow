@@ -1,3 +1,8 @@
 [install]
 # Use exact versions in lockfile by default; allow caret in package.json.
 exact = false
+
+[test]
+# bun test runs backend + shared only. Frontend tests use vitest with
+# happy-dom + browser-shaped globals (separate runtime).
+root = "packages/backend/tests"

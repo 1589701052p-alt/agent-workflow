@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-1-15 完成后，含 cancel task）
+**最近更新**：2026-05-14（P-1-16 完成后，前端骨架就绪）
 
 ---
 
@@ -16,7 +16,7 @@
 
 ```
 M0 准备       [5/5   ✅]
-M1 骨架       [15/18 🚧]  ← 当前位置（后端核心闭环完成；剩前端 3 个 issue）
+M1 骨架       [16/18 🚧]  ← 当前位置（后端核心闭环 + 前端骨架完成；剩 P-1-17 / P-1-18）
 M2 编辑器     [0/16]
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（20 个）
+## 已完成 issue（21 个）
 
 ### M0 全部完成（5/5）
 
@@ -37,7 +37,7 @@ M5 打磨       [0/12]
 | P-0-04 | ESLint + Prettier | `eslint.config.js` flat config + 跨包 import 边界规则（backend↮frontend 互斥） |
 | P-0-05 | Drizzle schema | 8 张表完整定义 + WAL/NORMAL/busy_timeout + 启动时自动 migrate + in-memory 测试辅助 |
 
-### M1 已完成（11/18）
+### M1 已完成（16/18）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
@@ -56,12 +56,13 @@ M5 打磨       [0/12]
 | P-1-13 | opencode runner | `services/{envelope,protocol,runner}.ts` 三件套：envelope 解析（last-wins / 单双引号 / 缺失补空）+ user prompt 拼接（`{{port}}` + 内置 `{{__var__}}` + 章节追加 + 英文协议块）+ runner（OPENCODE_CONFIG_CONTENT 注入 agent / OPENCODE_CONFIG_DIR 注入 skill / 流式写 events 表 / accumulate text events 提取 envelope / AbortSignal + timeout / 清理 runDir）；mock-opencode 端到端 9 case |
 | P-1-14 | Task 启动 + 线性 DAG 调度 | `services/{scheduler,task}.ts` + `routes/tasks.ts`：Kahn 拓扑排序 / input 节点物化为虚拟 node_run / agent-single 调 runNode / output 节点跳过 / multi-process+wrapper+loop 拒绝 / 多入边到同 port 自动拼接（`---` 分隔）/ 失败节点 halt task；POST/GET endpoint，HTTP 创建后 scheduler 后台跑；tests 14 case |
 | P-1-15 | Cancel task | `POST /api/tasks/:id/cancel` + service 层 `activeTasks: Map<taskId, AbortController>` + scheduler/runner 全链路 signal 传递；终态 task → 409 `task-not-cancelable`；无 controller 的孤儿（如 daemon 重启后）也能 flip 到 canceled；tests 5 case |
+| P-1-16 | 前端骨架：路由 / Layout / API client | Vite + React 19 + TanStack Router (code-based) + TanStack Query；侧栏 `Agents/Skills/Workflows/Tasks/Settings`；`/auth` token 录入页 + 401 自动 clearToken；`api/client.ts` fetch wrapper (token + query + body 序列化 + DomainError → ApiError 映射)；`stores/auth.ts` localStorage + subscribe；vitest+happy-dom (root `bunfig.toml [test] root` 把 `bun test` 限定到 backend；CI 跑 frontend vitest 步骤独立)；frontend 16 case |
 
 ---
 
 ## 测试积累
 
-后端测试 **200 个 case**，全部用 `bun test` 跑（in-memory SQLite，每 case <100ms）。daemon 启动相关测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **200 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **16 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
@@ -140,14 +141,12 @@ packages/backend/src/
 
 ---
 
-## 下一步：M1 剩余 3 个 issue（全部前端）
+## 下一步：M1 剩余 2 个 issue（全部前端）
 
-后端核心闭环 + cancel 全部完成。剩下的 3 个 issue 都是前端：
+前端骨架 + 鉴权 + API client 就绪。剩下的 2 个 issue：
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| P-1-15 | Cancel task | P-1-14 | S |
-| P-1-16 | 前端骨架：路由 / Layout / API client | P-0-02 | M |
 | P-1-17 | 前端 Agents / Skills 列表 + 编辑界面 | P-1-08, P-1-09, P-1-16 | L |
 | P-1-18 | 前端 Tasks 简化版（无编辑器） | P-1-14, P-1-16 | M |
 
@@ -165,6 +164,7 @@ M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workfl
 
 ### 工程
 - **CI bun 版本**：CI 锁 `1.3.x`、`package.json` 锁 `bun@1.3.13`、`engines.bun >= 1.3.0`。Bun 1.2+ 改了 lockfile 格式，本地若升级到不同主线版本要同步更新这三处。
+- **前端 localStorage shim**：`packages/frontend/tests/setup.ts` 注入 in-memory `Storage` 实现到 `globalThis.localStorage` / `globalThis.window.localStorage`。Node 25 + vitest 3 + happy-dom 15 组合下默认 storage 是空 `{}`（Node 的 `--localstorage-file` 被 vitest 不带路径地塞进来）；如果升 vitest 4+ 或换 jsdom，可以重新尝试去掉 shim。
 
 1. **opencode 最低版本** 现在保守地写为 1.14.0（P-0-01 仅在 1.14.25 实测过）。如需放宽，下沉到更老版本 bisect 即可（design.md §18 #1）。
 2. **drizzle-orm 0.36.4 的 extraConfig 用对象形式**（`(t) => ({...})`）；如果未来升 ≥0.39，数组形式才支持，schema.ts 需要回看。
@@ -172,7 +172,7 @@ M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workfl
 4. **路由 `mountSkillRoutes` 在 mount 时捕获 `Paths.root`**，所以测试里改 `AGENT_WORKFLOW_HOME` 必须在 `createApp` 之前。如果未来要支持 daemon 运行中修改 home（不会），需要把它放到 AppDeps。
 5. **没装 `Bun.Subprocess` 类型注解**（一些测试里）— Bun 类型签名版本敏感，让 TS 推断更稳。
 6. **Skill 文件全是 utf-8** — v1 不支持二进制；plan.md §18 #8 已记录。
-7. **eslint-plugin-react 在 flat config 下的 plugin recommended 没用**（仅手动添加 hooks 规则）—— frontend 实质工作开始（P-1-16）时再回看。
+7. **eslint-plugin-react 在 flat config 下的 plugin recommended 没用**（仅手动添加 hooks 规则）—— P-1-17 前再补 recommended preset 即可。
 
 ---
 

@@ -51,5 +51,8 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
+      - name: Test (backend + shared, bun:test)
         run: bun test
+
+      - name: Test (frontend, vitest)
+        run: bun run --filter @agent-workflow/frontend test
