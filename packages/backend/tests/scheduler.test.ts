@@ -405,4 +405,99 @@ describe('runTask: linear DAG (M1)', () => {
     expect(aRun?.promptText).toContain('BBB')
     expect(aRun?.promptText).toContain('---')
   })
+
+  test('two read-only agents at the same level run in parallel under the global semaphore', async () => {
+    // No edges between r1 and r2 → same level → eligible for parallel.
+    await seedReadonlyAgent(h.db, 'r1', ['summary'], true)
+    await seedReadonlyAgent(h.db, 'r2', ['summary'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'r1', kind: 'agent-single', agentName: 'r1' },
+        { id: 'r2', kind: 'agent-single', agentName: 'r2' },
+      ],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const t0 = Date.now()
+    await withEnv(
+      {
+        MOCK_OPENCODE_DELAY_MS: '300',
+        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'ok' }),
+      },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          maxConcurrentNodes: 2,
+        }),
+    )
+    const elapsed = Date.now() - t0
+    // Two 300ms read-only nodes running in parallel should finish closer to
+    // 300ms than 600ms. Give the runtime + Bun.spawn some slack.
+    expect(elapsed).toBeLessThan(550)
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+  })
+
+  test('two write agents at the same level serialize through the write semaphore', async () => {
+    await seedReadonlyAgent(h.db, 'w1', ['summary'], false)
+    await seedReadonlyAgent(h.db, 'w2', ['summary'], false)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'w1', kind: 'agent-single', agentName: 'w1' },
+        { id: 'w2', kind: 'agent-single', agentName: 'w2' },
+      ],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const t0 = Date.now()
+    await withEnv(
+      {
+        MOCK_OPENCODE_DELAY_MS: '250',
+        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'ok' }),
+      },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          maxConcurrentNodes: 4,
+        }),
+    )
+    const elapsed = Date.now() - t0
+    // Two 250ms writers must serialize → at least ~500ms wall clock.
+    expect(elapsed).toBeGreaterThan(450)
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+  })
 })
+
+async function seedReadonlyAgent(
+  db: DbClient,
+  name: string,
+  outputs: string[],
+  readonly: boolean,
+): Promise<string> {
+  const id = ulid()
+  await db.insert(agents).values({
+    id,
+    name,
+    description: 'test',
+    outputs: JSON.stringify(outputs),
+    readonly,
+    permission: '{}',
+    skills: '[]',
+    frontmatterExtra: '{}',
+    bodyMd: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  return id
+}

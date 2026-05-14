@@ -20,6 +20,7 @@ import { agents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
+import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 export interface RunTaskOptions {
@@ -36,6 +37,8 @@ export interface RunTaskOptions {
   signal?: AbortSignal
   /** Default per-node timeout in ms (from settings); node-level override wins. */
   defaultPerNodeTimeoutMs?: number
+  /** Global concurrency limit for agent nodes within this task. Default 4. */
+  maxConcurrentNodes?: number
 }
 
 /**
@@ -101,103 +104,77 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     }
   })()
 
-  for (const node of order) {
+  // 6. Run nodes level-parallel under semaphores (P-3-05):
+  //    - global semaphore caps concurrent agent nodes (config: maxConcurrentNodes)
+  //    - write semaphore (capacity 1) serializes non-readonly agents
+  //    - input/output nodes bypass both
+  //
+  //    Each iteration pulls every node whose upstreams are all done and
+  //    kicks them off in parallel. The batch settles before we look at
+  //    failures or the abort signal, so an in-flight write isn't stranded.
+  const globalSem = new Semaphore(opts.maxConcurrentNodes ?? 4)
+  const writeSem = new Semaphore(1)
+  const upstreamsOf = buildUpstreamMap(definition)
+  const remaining = new Map(order.map((n) => [n.id, n]))
+  const completed = new Set<string>()
+  let halt: 'failed' | 'canceled' | null = null
+  let haltDetail: { summary: string; message: string; nodeId?: string } | null = null
+
+  while (remaining.size > 0 && halt === null) {
     if (opts.signal?.aborted === true) {
-      await cancelTaskRow(db, taskId, node.id)
-      return
+      halt = 'canceled'
+      break
     }
-    if (node.kind === 'output') continue
-
-    if (node.kind === 'input') {
-      const inputKey = pickString(node, 'inputKey')
-      if (inputKey === null) {
-        await failTask(db, taskId, `input node ${node.id} missing inputKey`, 'invalid', node.id)
-        return
-      }
-      const value = inputsMap[inputKey] ?? ''
-      const nrId = await insertNodeRun(db, taskId, node.id, 'done')
-      await db.insert(nodeRunOutputs).values({ nodeRunId: nrId, portName: 'out', content: value })
-      broadcastNodeStatus(taskId, nrId, node.id, 'done')
-      continue
+    const ready: WorkflowNode[] = []
+    for (const n of remaining.values()) {
+      const ups = upstreamsOf.get(n.id) ?? []
+      if (ups.every((u) => completed.has(u))) ready.push(n)
     }
-
-    // agent-single
-    const agentName = pickString(node, 'agentName')
-    if (agentName === null) {
-      await failTask(
-        db,
-        taskId,
-        `node ${node.id} missing agentName`,
-        'invalid agent-single node',
-        node.id,
-      )
-      return
+    if (ready.length === 0) {
+      // No progress possible — bug or schedule held by halted batch.
+      halt = 'failed'
+      haltDetail = { summary: 'scheduler stalled', message: 'no ready nodes' }
+      break
     }
-    const agent = await loadAgent(db, agentName)
-    if (agent === null) {
-      await failTask(db, taskId, `agent '${agentName}' not found`, 'agent-not-found', node.id)
-      return
-    }
+    for (const n of ready) remaining.delete(n.id)
 
-    // Gather upstream inputs by walking incoming edges. When several edges
-    // hit the same target port name, concatenate the contents with a
-    // separator (per design.md §4.2.2).
-    const upstreamInputs = await resolveUpstreamInputs(db, taskId, definition.edges, node.id, log)
-
-    // Resolve skills referenced by this agent.
-    const resolvedSkills = await resolveSkills(db, opts.appHome, agent.skills)
-
-    const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
-
-    // Per-node timeout: node-level override wins over settings default.
-    const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
-
-    const nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending')
-    broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
-    let result: RunResult
-    try {
-      result = await runNode({
-        taskId,
-        nodeRunId,
-        agent,
-        inputs: upstreamInputs,
-        worktreePath: task.worktreePath,
-        templateMeta: {
-          repoPath: task.repoPath,
-          baseBranch: task.baseBranch,
+    const results = await Promise.all(
+      ready.map((node) =>
+        runOneNode({
+          node,
+          definition,
+          task,
           taskId,
-          nodeId: node.id,
-        },
-        ...(promptTemplate !== undefined ? { promptTemplate } : {}),
-        ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-        skills: resolvedSkills,
-        appHome: opts.appHome,
-        ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
-        db,
-        log: log.child('run'),
-        ...(opts.signal ? { signal: opts.signal } : {}),
-      })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      await failTask(db, taskId, `node ${node.id} threw: ${msg}`, msg, node.id)
-      return
+          db,
+          opts,
+          inputsMap,
+          globalSem,
+          writeSem,
+          log,
+        }),
+      ),
+    )
+    for (let i = 0; i < ready.length; i++) {
+      const node = ready[i]!
+      const r = results[i]!
+      if (r.kind === 'ok') {
+        completed.add(node.id)
+        continue
+      }
+      if (halt === null) {
+        halt = r.kind
+        haltDetail = { summary: r.summary, message: r.message, nodeId: node.id }
+      }
     }
+  }
 
-    broadcastNodeStatus(taskId, nodeRunId, node.id, result.status)
-    if (result.status === 'canceled') {
-      await cancelTaskRow(db, taskId, node.id)
-      return
-    }
-    if (result.status !== 'done') {
-      await failTask(
-        db,
-        taskId,
-        result.errorMessage ?? `node ${node.id} ${result.status}`,
-        result.errorMessage ?? result.status,
-        node.id,
-      )
-      return
-    }
+  if (halt === 'failed' && haltDetail !== null) {
+    await failTask(db, taskId, haltDetail.summary, haltDetail.message, haltDetail.nodeId)
+    return
+  }
+  if (halt === 'canceled') {
+    await cancelTaskRow(db, taskId, haltDetail?.nodeId)
+    return
   }
 
   // 7. All nodes done → task done.
@@ -430,4 +407,135 @@ function pickString(node: WorkflowNode, key: string): string | null {
 function pickNumber(node: WorkflowNode, key: string): number | undefined {
   const v = (node as Record<string, unknown>)[key]
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/** nodeId → list of upstream nodeIds (deduped). */
+function buildUpstreamMap(definition: WorkflowDefinition): Map<string, string[]> {
+  const m = new Map<string, string[]>()
+  for (const n of definition.nodes) m.set(n.id, [])
+  for (const e of definition.edges) {
+    const list = m.get(e.target.nodeId)
+    if (list === undefined) continue
+    if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
+  }
+  return m
+}
+
+interface OneNodeResult {
+  kind: 'ok' | 'failed' | 'canceled'
+  summary: string
+  message: string
+}
+
+interface OneNodeContext {
+  node: WorkflowNode
+  definition: WorkflowDefinition
+  task: typeof tasks.$inferSelect
+  taskId: string
+  db: DbClient
+  opts: RunTaskOptions
+  inputsMap: Record<string, string>
+  globalSem: Semaphore
+  writeSem: Semaphore
+  log: Logger
+}
+
+async function runOneNode(ctx: OneNodeContext): Promise<OneNodeResult> {
+  const { node, definition, task, taskId, db, opts, inputsMap, globalSem, writeSem, log } = ctx
+  if (opts.signal?.aborted === true) {
+    return { kind: 'canceled', summary: 'task canceled', message: 'signal aborted' }
+  }
+  if (node.kind === 'output') return { kind: 'ok', summary: '', message: '' }
+
+  if (node.kind === 'input') {
+    const inputKey = pickString(node, 'inputKey')
+    if (inputKey === null) {
+      return {
+        kind: 'failed',
+        summary: `input node ${node.id} missing inputKey`,
+        message: 'invalid',
+      }
+    }
+    const value = inputsMap[inputKey] ?? ''
+    const nrId = await insertNodeRun(db, taskId, node.id, 'done')
+    await db.insert(nodeRunOutputs).values({ nodeRunId: nrId, portName: 'out', content: value })
+    broadcastNodeStatus(taskId, nrId, node.id, 'done')
+    return { kind: 'ok', summary: '', message: '' }
+  }
+
+  // agent-single (multi-process lands in P-3-02).
+  const agentName = pickString(node, 'agentName')
+  if (agentName === null) {
+    return {
+      kind: 'failed',
+      summary: `node ${node.id} missing agentName`,
+      message: 'invalid agent-single node',
+    }
+  }
+  const agent = await loadAgent(db, agentName)
+  if (agent === null) {
+    return { kind: 'failed', summary: `agent '${agentName}' not found`, message: 'agent-not-found' }
+  }
+
+  const upstreamInputs = await resolveUpstreamInputs(db, taskId, definition.edges, node.id, log)
+  const resolvedSkills = await resolveSkills(db, opts.appHome, agent.skills)
+  const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
+  const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
+
+  const nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending')
+  broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
+
+  // Acquire semaphores. Order matters: global → write so a write node can't
+  // hold the write slot while waiting for its global slot.
+  const releaseGlobal = await globalSem.acquire()
+  const releaseWrite = agent.readonly ? null : await writeSem.acquire()
+
+  let result: RunResult
+  try {
+    result = await runNode({
+      taskId,
+      nodeRunId,
+      agent,
+      inputs: upstreamInputs,
+      worktreePath: task.worktreePath,
+      templateMeta: {
+        repoPath: task.repoPath,
+        baseBranch: task.baseBranch,
+        taskId,
+        nodeId: node.id,
+      },
+      ...(promptTemplate !== undefined ? { promptTemplate } : {}),
+      ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
+      skills: resolvedSkills,
+      appHome: opts.appHome,
+      ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
+      db,
+      log: log.child('run'),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    })
+  } catch (err) {
+    releaseWrite?.()
+    releaseGlobal()
+    const msg = err instanceof Error ? err.message : String(err)
+    return { kind: 'failed', summary: `node ${node.id} threw: ${msg}`, message: msg }
+  }
+  releaseWrite?.()
+  releaseGlobal()
+
+  broadcastNodeStatus(taskId, nodeRunId, node.id, result.status)
+  if (result.status === 'canceled') {
+    return {
+      kind: 'canceled',
+      summary: 'node canceled',
+      message: result.errorMessage ?? 'canceled',
+    }
+  }
+  if (result.status !== 'done') {
+    return {
+      kind: 'failed',
+      summary: result.errorMessage ?? `node ${node.id} ${result.status}`,
+      message: result.errorMessage ?? result.status,
+    }
+  }
+  return { kind: 'ok', summary: '', message: '' }
 }

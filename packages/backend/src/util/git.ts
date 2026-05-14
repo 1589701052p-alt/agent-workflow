@@ -187,16 +187,13 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Creat
  * Cumulative diff between the worktree and `fromCommit`, including uncommitted
  * changes and untracked files. Empty string when nothing has changed.
  *
- * We use `git -c core.quotepath=false diff --binary <fromCommit> --` plus
- * `git ls-files --others --exclude-standard` for untracked files (composed as
- * pseudo-diff entries to keep the response self-contained).
+ * Internally uses `git -c core.quotepath=false diff --binary <fromCommit> --`
+ * plus `git ls-files --others --exclude-standard` for untracked files
+ * (each rendered as a synthetic add diff via `git diff --no-index /dev/null
+ * <path>`). The combined output is a self-contained unified diff that
+ * `parseDiff()` in `util/diffSplit.ts` can shard.
  */
-export async function worktreeDiff(
-  worktreePath: string,
-  fromCommit: string,
-): Promise<{ diff: string; truncated: boolean }> {
-  const MAX_BYTES = 1024 * 1024 // 1 MiB
-
+export async function gitDiffSnapshot(worktreePath: string, fromCommit: string): Promise<string> {
   const tracked = await runGit(worktreePath, [
     '-c',
     'core.quotepath=false',
@@ -215,8 +212,6 @@ export async function worktreeDiff(
 
   let untrackedDiff = ''
   for (const name of untrackedNames) {
-    // Render each untracked file as a synthetic addition diff. `--no-index`
-    // against /dev/null produces a real patch including binary detection.
     const one = await runGit(worktreePath, [
       '-c',
       'core.quotepath=false',
@@ -231,13 +226,24 @@ export async function worktreeDiff(
     untrackedDiff += one.stdout
   }
 
-  let combined = tracked.stdout
-  if (untrackedDiff !== '') combined += `\n${untrackedDiff}`
+  return untrackedDiff === '' ? tracked.stdout : tracked.stdout + `\n${untrackedDiff}`
+}
 
-  if (combined.length > MAX_BYTES) {
-    return { diff: combined.slice(0, MAX_BYTES), truncated: true }
+/**
+ * Capped variant of `gitDiffSnapshot` for the HTTP response in
+ * `GET /api/tasks/:id/diff`. v1 caps at 1 MiB to keep the network round-trip
+ * predictable; multi-process sharding uses the uncapped form.
+ */
+export async function worktreeDiff(
+  worktreePath: string,
+  fromCommit: string,
+): Promise<{ diff: string; truncated: boolean }> {
+  const MAX_BYTES = 1024 * 1024 // 1 MiB
+  const diff = await gitDiffSnapshot(worktreePath, fromCommit)
+  if (diff.length > MAX_BYTES) {
+    return { diff: diff.slice(0, MAX_BYTES), truncated: true }
   }
-  return { diff: combined, truncated: false }
+  return { diff, truncated: false }
 }
 
 export interface RemoveWorktreeOptions {
