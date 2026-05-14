@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-1-18 完成后，M1 全部完成 🎉）
+**最近更新**：2026-05-14（P-2-01 完成后，M1 全部完成 + M2 校验器开张）
 
 ---
 
@@ -17,7 +17,7 @@
 ```
 M0 准备       [5/5   ✅]
 M1 骨架       [18/18 ✅]  ← M1 完成
-M2 编辑器     [0/16]      ← 下一站
+M2 编辑器     [1/16 🚧]   ← 当前位置（P-2-01 校验器；下一步 P-2-02 WS / P-2-03 xyflow）
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
 M5 打磨       [0/12]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（23 个）
+## 已完成 issue（24 个）
 
 ### M0 全部完成（5/5）
 
@@ -36,6 +36,12 @@ M5 打磨       [0/12]
 | P-0-03 | CI skeleton | `.github/workflows/ci.yml`（matrix: ubuntu+macos，跑 format/lint/typecheck/test） |
 | P-0-04 | ESLint + Prettier | `eslint.config.js` flat config + 跨包 import 边界规则（backend↮frontend 互斥） |
 | P-0-05 | Drizzle schema | 8 张表完整定义 + WAL/NORMAL/busy_timeout + 启动时自动 migrate + in-memory 测试辅助 |
+
+### M2 进行中（1/16）
+
+| ID | 标题 | 关键产出 |
+| --- | --- | --- |
+| P-2-01 | Workflow 静态校验 5 项 | `services/workflow.validator.ts`：`validateWorkflowDef(def, {agents, skills})` 纯函数 + `validateWorkflowById(db, id)` 包装。5 项规则代码：`edge-source-node-missing / edge-source-port-missing / edge-target-port-missing / topology-cycle / wrapper-empty / wrapper-loop-max-iterations / wrapper-loop-exit-condition / agent-not-found / skill-not-found / agent-multi-source-port-missing / binding-{node,port}-missing / input-key-duplicate / prompt-template-unresolved`。port 集合：input.outputs={inputKey}、output.inputs={ports[].name}、agent.outputs=agent.outputs+(`errors` if agent-multi)、wrapper-git.outputs={`git_diff`}、wrapper-loop.outputs={outputBindings[].name}；agent-input 边的 portName 不约束（runner 暴露为 prompt var）；wrappers 不接受入边。topology：DFS 检测环、wrapper-loop 内 nodeIds 互通的边被剔除。prompt template：`{{ name }}` regex + 一组 builtin（`__repo_path__ / __base_branch__ / __task_id__ / __node_id__ / __iteration__ / __shard_key__`），其余必须匹配该节点的入边 target.portName（agent-multi 额外接受 sourcePort.portName）。tests 18 case（每项规则 valid + invalid）|
 
 ### M1 已完成（18/18）
 
@@ -64,7 +70,7 @@ M5 打磨       [0/12]
 
 ## 测试积累
 
-后端测试 **206 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **42 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **225 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **42 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
@@ -151,9 +157,9 @@ M1 验收已 ready：`agent-workflow start` → 浏览器登 token → 创 agent
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| P-2-01 | Workflow definition 校验（5 项规则替换 stub）| P-1-11 | M |
-| P-2-02 | xyflow canvas 骨架 | P-1-16 | L |
-| P-2-03 | 节点 / wrapper / IO 元数据库 + 侧栏 | P-2-02 | M |
+| P-2-02 | WS 框架 + 三频道骨架（`/ws/tasks/{id}` + 列表 + workflows） | P-1-02、P-1-14 | L |
+| P-2-03 | Workflow 编辑器：xyflow 画布骨架 | P-1-16 | L |
+| P-2-04 | 节点 / wrapper / IO 元数据库 + 侧栏 | P-2-03 | M |
 
 M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workflow → 启 task → 看 opencode 子进程跑完 → 输出 envelope 解析为 ports`。
 

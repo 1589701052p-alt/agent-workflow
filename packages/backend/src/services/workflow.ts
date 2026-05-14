@@ -17,6 +17,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { tasks, workflows } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
+import { validateWorkflowById } from './workflow.validator'
 
 type WorkflowRow = typeof workflows.$inferSelect
 
@@ -93,23 +94,15 @@ export async function deleteWorkflow(db: DbClient, id: string): Promise<void> {
 }
 
 /**
- * M1 stub. P-2-01 fleshes this out to the full 5-item static check:
- *   1. edge port existence
- *   2. topology legality (cycles only inside loop wrappers)
- *   3. wrapper required fields (max_iterations / exit_condition; ≥1 inner)
- *   4. reference resolution (agent / skill names; sourcePort; bindings)
- *   5. node prompt template {{port_name}} references resolve
+ * Static validation — see `workflow.validator.ts` for the 5 rules. Thin
+ * wrapper kept here so existing routes can keep importing `validateWorkflow`
+ * without a churny rename.
  */
 export async function validateWorkflow(
   db: DbClient,
   id: string,
 ): Promise<WorkflowValidationResult> {
-  const wf = await getWorkflow(db, id)
-  if (wf === null) {
-    throw new NotFoundError('workflow-not-found', `workflow '${id}' not found`)
-  }
-  // M1 stub — always ok.
-  return { ok: true, issues: [] }
+  return validateWorkflowById(db, id)
 }
 
 // --- helpers ---

@@ -160,14 +160,31 @@ describe('workflow service', () => {
     await expect(deleteWorkflow(db, wf.id)).rejects.toBeInstanceOf(ConflictError)
   })
 
-  test('validate stub returns { ok:true, issues:[] }', async () => {
+  test('validate on empty workflow definition returns ok', async () => {
+    // Rule coverage lives in workflow-validator.test.ts; this test pins down
+    // the service-level wiring (workflow lookup + ok-shape).
+    const wf = await createWorkflow(db, {
+      name: 'wf',
+      description: '',
+      definition: { $schema_version: 1, inputs: [], nodes: [], edges: [] },
+    })
+    const result = await validateWorkflow(db, wf.id)
+    expect(result).toEqual({ ok: true, issues: [] })
+  })
+
+  test('validate surfaces concrete issues when references do not resolve', async () => {
     const wf = await createWorkflow(db, {
       name: 'wf',
       description: '',
       definition: sampleDefinition(),
     })
     const result = await validateWorkflow(db, wf.id)
-    expect(result).toEqual({ ok: true, issues: [] })
+    expect(result.ok).toBe(false)
+    const codes = result.issues.map((i) => i.code)
+    // sampleDefinition references agent 'code-worker' (not seeded) and edges
+    // an `out` port that doesn't exist on the input node.
+    expect(codes).toContain('agent-not-found')
+    expect(codes).toContain('edge-source-port-missing')
   })
 })
 
@@ -261,14 +278,14 @@ describe('workflow HTTP routes', () => {
     expect(again.status).toBe(404)
   })
 
-  test('POST /:id/validate returns stub response', async () => {
+  test('POST /:id/validate returns ok for an empty workflow', async () => {
     const created = (await (
       await req(app, '/api/workflows', {
         method: 'POST',
         body: JSON.stringify({
           name: 'wf',
           description: '',
-          definition: sampleDefinition(),
+          definition: { $schema_version: 1, inputs: [], nodes: [], edges: [] },
         }),
       })
     ).json()) as { id: string }
