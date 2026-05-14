@@ -5,6 +5,7 @@
 import { Hono } from 'hono'
 import { tokenAuth } from '@/auth/token'
 import type { DbClient } from '@/db/client'
+import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
 import { mountBackupRoutes } from '@/routes/backup'
 import { mountConfigRoutes } from '@/routes/config'
@@ -60,9 +61,46 @@ export function createApp(deps: AppDeps): Hono {
   mountBackupRoutes(app, deps)
 
   app.onError(errorHandler)
+
+  // P-5-05: When running as the compiled single-binary, the daemon also
+  // serves the frontend SPA from its embedded asset table. /, /index.html,
+  // and any /assets/* path map directly; unknown non-/api paths fall back
+  // to index.html so TanStack Router can handle client-side routes after
+  // a hard refresh. In dev mode IS_EMBEDDED=false and these handlers are
+  // no-ops, letting the vite dev server serve the SPA on its own port.
+  if (IS_EMBEDDED) {
+    app.get('*', async (c) => {
+      if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/ws/')) {
+        return c.json(
+          { ok: false, code: 'route-not-found', message: `no route for ${c.req.path}` },
+          404,
+        )
+      }
+      const direct = await getEmbeddedAsset(stripLeadingSlash(c.req.path))
+      if (direct !== null) {
+        return new Response(direct.body, { headers: { 'content-type': direct.contentType } })
+      }
+      // SPA fallback.
+      const indexHtml = await getEmbeddedAsset('index.html')
+      if (indexHtml !== null) {
+        return new Response(indexHtml.body, {
+          headers: { 'content-type': indexHtml.contentType },
+        })
+      }
+      return c.json(
+        { ok: false, code: 'route-not-found', message: `no route for ${c.req.path}` },
+        404,
+      )
+    })
+  }
+
   app.notFound((c) =>
     c.json({ ok: false, code: 'route-not-found', message: `no route for ${c.req.path}` }, 404),
   )
 
   return app
+}
+
+function stripLeadingSlash(p: string): string {
+  return p.startsWith('/') ? p.slice(1) : p
 }

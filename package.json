@@ -14,7 +14,8 @@
     "format": "prettier --write \"packages/**/*.{ts,tsx,json,md}\"",
     "format:check": "prettier --check \"packages/**/*.{ts,tsx,json,md}\"",
     "typecheck": "bun run --filter '*' typecheck",
-    "test": "bun test"
+    "test": "bun test",
+    "build:binary": "bun run scripts/build-binary.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

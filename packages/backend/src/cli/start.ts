@@ -3,6 +3,7 @@
 import { ensureTokenFile } from '@/auth/token'
 import { loadConfig } from '@/config'
 import { openDb } from '@/db/client'
+import { extractMigrationsTo, IS_EMBEDDED } from '@/embed'
 import { createApp } from '@/server'
 import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
@@ -14,6 +15,7 @@ import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
 import { buildWebSocketAdapter } from '@/ws/server'
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 export interface StartOptions {
   port?: number
@@ -79,9 +81,20 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // 5. DB — open + apply migrations. dbVersion = number of SQL files in the
   // bundled migrations folder (== the highest version we've applied, since
   // openDb() applies all pending migrations on startup).
-  const db = openDb({ path: Paths.db, migrationsFolder: Paths.migrationsDir })
-  const dbVersion = existsSync(Paths.migrationsDir)
-    ? readdirSync(Paths.migrationsDir).filter((f) => f.endsWith('.sql')).length
+  //
+  // P-5-05: in the compiled single-binary, the .sql files + meta/_journal.json
+  // live inside the executable. drizzle's migrator needs a filesystem path,
+  // so we extract them once per start into ~/.agent-workflow/runtime/migrations
+  // and point the migrator there.
+  let migrationsFolder = Paths.migrationsDir
+  if (IS_EMBEDDED) {
+    migrationsFolder = join(Paths.root, 'runtime', 'migrations')
+    const extracted = await extractMigrationsTo(migrationsFolder)
+    log.info('extracted embedded migrations', { count: extracted, dir: migrationsFolder })
+  }
+  const db = openDb({ path: Paths.db, migrationsFolder })
+  const dbVersion = existsSync(migrationsFolder)
+    ? readdirSync(migrationsFolder).filter((f) => f.endsWith('.sql')).length
     : 0
   log.info('db ready', { path: Paths.db, dbVersion })
 
