@@ -3,12 +3,7 @@
 // strings in the DB and (un)marshaled at this boundary. Routes upstream see
 // pure JS objects.
 
-import type {
-  Agent,
-  CreateAgent,
-  RenameAgent,
-  UpdateAgent,
-} from '@agent-workflow/shared'
+import type { Agent, CreateAgent, RenameAgent, UpdateAgent } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -60,11 +55,7 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
   return created
 }
 
-export async function updateAgent(
-  db: DbClient,
-  name: string,
-  patch: UpdateAgent,
-): Promise<Agent> {
+export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent): Promise<Agent> {
   const existing = await getAgent(db, name)
   if (existing === null) {
     throw new NotFoundError('agent-not-found', `agent '${name}' not found`)

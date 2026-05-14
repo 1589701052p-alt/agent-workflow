@@ -140,9 +140,7 @@
       "indexes": {
         "agents_name_unique": {
           "name": "agents_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -193,10 +191,7 @@
       "indexes": {
         "idx_events_node": {
           "name": "idx_events_node",
-          "columns": [
-            "node_run_id",
-            "id"
-          ],
+          "columns": ["node_run_id", "id"],
           "isUnique": false
         }
       },
@@ -205,12 +200,8 @@
           "name": "node_run_events_node_run_id_node_runs_id_fk",
           "tableFrom": "node_run_events",
           "tableTo": "node_runs",
-          "columnsFrom": [
-            "node_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["node_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -250,22 +241,15 @@
           "name": "node_run_outputs_node_run_id_node_runs_id_fk",
           "tableFrom": "node_run_outputs",
           "tableTo": "node_runs",
-          "columnsFrom": [
-            "node_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["node_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "node_run_outputs_node_run_id_port_name_pk": {
-          "columns": [
-            "node_run_id",
-            "port_name"
-          ],
+          "columns": ["node_run_id", "port_name"],
           "name": "node_run_outputs_node_run_id_port_name_pk"
         }
       },
@@ -421,19 +405,12 @@
       "indexes": {
         "idx_node_runs_task": {
           "name": "idx_node_runs_task",
-          "columns": [
-            "task_id",
-            "node_id",
-            "iteration",
-            "retry_index"
-          ],
+          "columns": ["task_id", "node_id", "iteration", "retry_index"],
           "isUnique": false
         },
         "idx_node_runs_parent": {
           "name": "idx_node_runs_parent",
-          "columns": [
-            "parent_node_run_id"
-          ],
+          "columns": ["parent_node_run_id"],
           "isUnique": false
         }
       },
@@ -442,12 +419,8 @@
           "name": "node_runs_task_id_tasks_id_fk",
           "tableFrom": "node_runs",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -561,9 +534,7 @@
       "indexes": {
         "skills_name_unique": {
           "name": "skills_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -713,18 +684,12 @@
       "indexes": {
         "idx_tasks_status": {
           "name": "idx_tasks_status",
-          "columns": [
-            "status",
-            "started_at"
-          ],
+          "columns": ["status", "started_at"],
           "isUnique": false
         },
         "idx_tasks_workflow": {
           "name": "idx_tasks_workflow",
-          "columns": [
-            "workflow_id",
-            "started_at"
-          ],
+          "columns": ["workflow_id", "started_at"],
           "isUnique": false
         }
       },
@@ -733,12 +698,8 @@
           "name": "tasks_workflow_id_workflows_id_fk",
           "tableFrom": "tasks",
           "tableTo": "workflows",
-          "columnsFrom": [
-            "workflow_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workflow_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }

@@ -27,8 +27,12 @@ export const agents = sqliteTable('agents', {
   frontmatterExtra: text('frontmatter_extra').notNull().default('{}'), // JSON for advanced fields
   bodyMd: text('body_md').notNull().default(''), // system prompt; may be empty
   schemaVersion: integer('schema_version').notNull().default(1),
-  createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
-  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
 })
 
 // -----------------------------------------------------------------------------
@@ -43,8 +47,12 @@ export const skills = sqliteTable('skills', {
   managedPath: text('managed_path'), // e.g. 'skills/{name}/files/' relative to app dir
   externalPath: text('external_path'), // absolute path
   schemaVersion: integer('schema_version').notNull().default(1),
-  createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
-  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
 })
 
 // -----------------------------------------------------------------------------
@@ -57,8 +65,12 @@ export const workflows = sqliteTable('workflows', {
   definition: text('definition').notNull(), // JSON: { $schema_version, nodes, edges, inputs, outputs }
   version: integer('version').notNull().default(1), // bumps on each PUT
   schemaVersion: integer('schema_version').notNull().default(1),
-  createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
-  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
 })
 
 // -----------------------------------------------------------------------------

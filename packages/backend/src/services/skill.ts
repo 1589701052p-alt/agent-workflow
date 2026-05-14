@@ -162,11 +162,7 @@ export async function updateSkill(db: DbClient, name: string, patch: UpdateSkill
   return updated
 }
 
-export async function deleteSkill(
-  db: DbClient,
-  opts: SkillFsOptions,
-  name: string,
-): Promise<void> {
+export async function deleteSkill(db: DbClient, opts: SkillFsOptions, name: string): Promise<void> {
   const existing = await getSkill(db, name)
   if (existing === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
 
@@ -189,7 +185,9 @@ async function findAgentsUsingSkill(
   db: DbClient,
   skillName: string,
 ): Promise<Array<{ id: string; name: string }>> {
-  const rows = await db.select({ id: agents.id, name: agents.name, skills: agents.skills }).from(agents)
+  const rows = await db
+    .select({ id: agents.id, name: agents.name, skills: agents.skills })
+    .from(agents)
   const out: Array<{ id: string; name: string }> = []
   for (const row of rows) {
     try {
@@ -322,7 +320,10 @@ export async function readSkillFile(
   const root = skillRoot(skill, opts)
   const abs = safeJoin(root, relPath)
   if (!existsSync(abs)) {
-    throw new NotFoundError('skill-file-not-found', `file '${relPath}' not found in skill '${name}'`)
+    throw new NotFoundError(
+      'skill-file-not-found',
+      `file '${relPath}' not found in skill '${name}'`,
+    )
   }
   if (statSync(abs).isDirectory()) {
     throw new ValidationError('skill-file-is-dir', `'${relPath}' is a directory`)
@@ -378,7 +379,10 @@ export async function deleteSkillFile(
   const root = skillRoot(skill, opts)
   const abs = safeJoin(root, relPath)
   if (!existsSync(abs)) {
-    throw new NotFoundError('skill-file-not-found', `file '${relPath}' not found in skill '${name}'`)
+    throw new NotFoundError(
+      'skill-file-not-found',
+      `file '${relPath}' not found in skill '${name}'`,
+    )
   }
   const st = statSync(abs)
   if (st.isDirectory()) {

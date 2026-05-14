@@ -105,7 +105,10 @@ function mergePatch(current: Config, patch: ConfigPatch): Config {
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) continue
     if (k === 'worktreeAutoGc' && typeof v === 'object' && v !== null) {
-      next.worktreeAutoGc = { ...current.worktreeAutoGc, ...(v as Record<string, unknown>) } as Config['worktreeAutoGc']
+      next.worktreeAutoGc = {
+        ...current.worktreeAutoGc,
+        ...(v as Record<string, unknown>),
+      } as Config['worktreeAutoGc']
     } else if (k === 'eventsArchiveThresholds' && typeof v === 'object' && v !== null) {
       next.eventsArchiveThresholds = {
         ...current.eventsArchiveThresholds,

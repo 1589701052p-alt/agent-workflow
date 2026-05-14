@@ -3,12 +3,7 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { loadConfig } from '@/config'
-import {
-  compareSemver,
-  extractVersion,
-  MIN_OPENCODE_VERSION,
-  probeOpencode,
-} from '@/util/opencode'
+import { compareSemver, extractVersion, MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
 
 export interface CheckResult {
@@ -80,7 +75,8 @@ async function checkGit(): Promise<CheckResult> {
       return { name: 'git', ok: false, message: 'git --version failed' }
     }
     const v = extractVersion(out)
-    if (v === null) return { name: 'git', ok: false, message: `unparseable git output: ${out.trim()}` }
+    if (v === null)
+      return { name: 'git', ok: false, message: `unparseable git output: ${out.trim()}` }
     if (compareSemver(v, '2.5.0') < 0) {
       return { name: 'git version', ok: false, message: `${v} is older than required 2.5.0` }
     }

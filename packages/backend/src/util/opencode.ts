@@ -35,10 +35,7 @@ export async function probeOpencode(opencodePath?: string): Promise<OpencodeProb
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const [out, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      proc.exited,
-    ])
+    const [out, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
     if (exitCode === 0) {
       version = extractVersion(out)
     } else {

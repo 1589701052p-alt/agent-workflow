@@ -57,13 +57,19 @@ export async function listBranches(repoPath: string): Promise<string[]> {
     'refs/remotes',
   ])
   if (r.exitCode !== 0) return []
-  return r.stdout.split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
 }
 
 export async function listTags(repoPath: string): Promise<string[]> {
   const r = await runGit(repoPath, ['for-each-ref', '--format=%(refname:short)', 'refs/tags'])
   if (r.exitCode !== 0) return []
-  return r.stdout.split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
 }
 
 export async function recentCommits(repoPath: string, count = 50): Promise<GitRef[]> {

@@ -38,11 +38,7 @@ export async function upsertRecentRepo(db: DbClient, path: string): Promise<Rece
   const branch = await defaultBranch(path)
   const now = Date.now()
 
-  const existing = await db
-    .select()
-    .from(recentRepos)
-    .where(eq(recentRepos.path, path))
-    .limit(1)
+  const existing = await db.select().from(recentRepos).where(eq(recentRepos.path, path)).limit(1)
   if (existing.length > 0) {
     await db
       .update(recentRepos)

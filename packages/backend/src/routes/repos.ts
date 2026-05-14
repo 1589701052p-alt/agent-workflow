@@ -6,12 +6,7 @@
 import { UpsertRecentRepoSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
-import {
-  getRepoFiles,
-  getRepoRefs,
-  listRecentRepos,
-  upsertRecentRepo,
-} from '@/services/repo'
+import { getRepoFiles, getRepoRefs, listRecentRepos, upsertRecentRepo } from '@/services/repo'
 import { ValidationError } from '@/util/errors'
 
 export function mountRepoRoutes(app: Hono, deps: AppDeps): void {

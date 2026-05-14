@@ -4,14 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
@@ -222,9 +215,7 @@ describe('skill service', () => {
     expect(await readSkillFile(h.db, fsOpts, 'foo', 'templates/a.txt')).toBe('aaa')
 
     await deleteSkillFile(h.db, fsOpts, 'foo', 'templates/a.txt')
-    expect(
-      existsSync(join(h.appHome, 'skills', 'foo', 'files', 'templates', 'a.txt')),
-    ).toBe(false)
+    expect(existsSync(join(h.appHome, 'skills', 'foo', 'files', 'templates', 'a.txt'))).toBe(false)
 
     // deleting SKILL.md is refused
     await expect(deleteSkillFile(h.db, fsOpts, 'foo', 'SKILL.md')).rejects.toBeInstanceOf(
@@ -239,12 +230,12 @@ describe('skill service', () => {
       bodyMd: '',
       frontmatterExtra: {},
     })
-    await expect(
-      writeSkillFile(h.db, fsOpts, 'foo', '../escape.txt', 'x'),
-    ).rejects.toBeInstanceOf(ValidationError)
-    await expect(
-      writeSkillFile(h.db, fsOpts, 'foo', '/etc/passwd', 'x'),
-    ).rejects.toBeInstanceOf(ValidationError)
+    await expect(writeSkillFile(h.db, fsOpts, 'foo', '../escape.txt', 'x')).rejects.toBeInstanceOf(
+      ValidationError,
+    )
+    await expect(writeSkillFile(h.db, fsOpts, 'foo', '/etc/passwd', 'x')).rejects.toBeInstanceOf(
+      ValidationError,
+    )
     await expect(readSkillFile(h.db, fsOpts, 'foo', '../../etc/hosts')).rejects.toBeInstanceOf(
       ValidationError,
     )

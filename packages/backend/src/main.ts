@@ -117,9 +117,13 @@ async function main(): Promise<void> {
       console.log('  version                           print version')
       console.log('  doctor                            run health checks (does not start daemon)')
       console.log('  config get [key]                  print full config or a single key')
-      console.log('  config set <key> <value>          update a config field; value is parsed as JSON if possible')
+      console.log(
+        '  config set <key> <value>          update a config field; value is parsed as JSON if possible',
+      )
       console.log('  migrate                           apply pending DB migrations')
-      console.log('  backup                            (M5) export ~/.agent-workflow into a tarball')
+      console.log(
+        '  backup                            (M5) export ~/.agent-workflow into a tarball',
+      )
       if (sub !== 'help' && sub !== '--help' && sub !== '-h') {
         console.error(`unknown subcommand: ${sub}`)
         process.exit(2)
