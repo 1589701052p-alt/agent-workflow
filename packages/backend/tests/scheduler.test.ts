@@ -767,9 +767,7 @@ describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
           nodeIds: ['audit'],
           maxIterations: 3,
           exitCondition: { kind: 'port-empty', nodeId: 'audit', portName: 'findings' },
-          outputBindings: [
-            { name: 'final', bind: { nodeId: 'audit', portName: 'findings' } },
-          ],
+          outputBindings: [{ name: 'final', bind: { nodeId: 'audit', portName: 'findings' } }],
         },
       ] as unknown as WorkflowDefinition['nodes'],
       edges: [],
@@ -799,9 +797,7 @@ describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
       await h.db
         .select()
         .from(nodeRunOutputs)
-        .where(
-          and(eq(nodeRunOutputs.nodeRunId, loopRun!.id), eq(nodeRunOutputs.portName, 'final')),
-        )
+        .where(and(eq(nodeRunOutputs.nodeRunId, loopRun!.id), eq(nodeRunOutputs.portName, 'final')))
     )[0]
     expect(finalOut?.content).toBe('')
     // Inner ran exactly once (iteration=0).
@@ -832,15 +828,13 @@ describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
       edges: [],
     }
     const { taskId } = await seedWorkflowAndTask(h, def)
-    await withEnv(
-      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: 'still failing' }) },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: 'still failing' }) }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
     )
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('failed')
@@ -930,15 +924,13 @@ describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
       edges: [],
     }
     const { taskId } = await seedWorkflowAndTask(h, def)
-    await withEnv(
-      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ decision: 'OK' }) },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ decision: 'OK' }) }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
     )
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')
@@ -975,15 +967,13 @@ describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
       edges: [],
     }
     const { taskId } = await seedWorkflowAndTask(h, def)
-    await withEnv(
-      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: '' }) },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: '' }) }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
     )
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')

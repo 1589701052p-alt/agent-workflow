@@ -211,9 +211,7 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
   const { scopeIds, iteration, log } = args
 
   // Filter scope nodes (exclude output sinks — they don't run).
-  const scopeNodes = definition.nodes.filter(
-    (n) => scopeIds.has(n.id) && n.kind !== 'output',
-  )
+  const scopeNodes = definition.nodes.filter((n) => scopeIds.has(n.id) && n.kind !== 'output')
   // Upstream map restricted to in-scope sources.
   const upstreamsOf = buildScopeUpstreams(scopeNodes, definition.edges)
   const remaining = new Map(scopeNodes.map((n) => [n.id, n]))
@@ -376,9 +374,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     retryIndex = pendingExisting.retryIndex
   } else {
     retryIndex =
-      sameNodeIterRuns.length === 0
-        ? 0
-        : Math.max(...sameNodeIterRuns.map((r) => r.retryIndex)) + 1
+      sameNodeIterRuns.length === 0 ? 0 : Math.max(...sameNodeIterRuns.map((r) => r.retryIndex)) + 1
     nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', retryIndex, iteration)
   }
   broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
@@ -491,7 +487,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
 // wrapper-loop (P-4-01)
 // -----------------------------------------------------------------------------
 
-async function runLoopWrapperNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
+async function runLoopWrapperNode(
+  state: SchedulerState,
+  args: OneNodeArgs,
+): Promise<OneNodeResult> {
   const { db, taskId } = state
   const { node, iteration: parentIteration } = args
   const inner = pickStringArray(node, 'nodeIds')
@@ -596,10 +595,7 @@ async function runLoopWrapperNode(state: SchedulerState, args: OneNodeArgs): Pro
 // contain a wrapper-loop).
 // -----------------------------------------------------------------------------
 
-async function runGitWrapperNode(
-  state: SchedulerState,
-  args: OneNodeArgs,
-): Promise<OneNodeResult> {
+async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
   const { db, task, taskId } = state
   const { node, iteration } = args
   const inner = pickStringArray(node, 'nodeIds')
@@ -701,12 +697,7 @@ async function runFanOutNode(
 
   // Latest source-node run not narrower than current iteration; prefer in-iter
   // run, otherwise fall back to most recent run from a prior iteration.
-  const sourceRun = await pickLatestSourceRun(
-    db,
-    taskId,
-    sourcePort.nodeId as string,
-    iteration,
-  )
+  const sourceRun = await pickLatestSourceRun(db, taskId, sourcePort.nodeId as string, iteration)
   if (sourceRun === null) {
     return {
       kind: 'failed',
@@ -1084,7 +1075,7 @@ async function pickLatestSourceRun(
   taskId: string,
   nodeId: string,
   iteration: number,
-): Promise<(typeof nodeRuns.$inferSelect) | null> {
+): Promise<typeof nodeRuns.$inferSelect | null> {
   const rows = await db
     .select()
     .from(nodeRuns)

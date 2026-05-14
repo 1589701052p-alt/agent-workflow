@@ -33,10 +33,7 @@ describe('accumulateTokens', () => {
 
   test('nested under part', () => {
     const a = emptyAcc()
-    accumulateTokens(
-      { type: 'text', part: { type: 'text', tokens: { input: 20, output: 30 } } },
-      a,
-    )
+    accumulateTokens({ type: 'text', part: { type: 'text', tokens: { input: 20, output: 30 } } }, a)
     expect(a.total).toBe(50)
   })
 
@@ -51,10 +48,7 @@ describe('accumulateTokens', () => {
 
   test('Anthropic-style usage with snake_case (prompt_tokens / completion_tokens)', () => {
     const a = emptyAcc()
-    accumulateTokens(
-      { usage: { prompt_tokens: 42, completion_tokens: 13 } },
-      a,
-    )
+    accumulateTokens({ usage: { prompt_tokens: 42, completion_tokens: 13 } }, a)
     expect(a.input).toBe(42)
     expect(a.output).toBe(13)
   })

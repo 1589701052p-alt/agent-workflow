@@ -88,7 +88,9 @@ export async function importWorkflowYaml(
   const onConflict = opts.onConflict ?? 'fail'
 
   if (preview.id !== null && onConflict !== 'new') {
-    const existing = (await db.select().from(workflows).where(eq(workflows.id, preview.id)).limit(1))[0]
+    const existing = (
+      await db.select().from(workflows).where(eq(workflows.id, preview.id)).limit(1)
+    )[0]
     if (existing !== undefined) {
       if (onConflict === 'fail') {
         throw new ConflictError(
@@ -122,6 +124,9 @@ function safeParse(yamlText: string): unknown {
   try {
     return parseYaml(yamlText)
   } catch (err) {
-    throw new ValidationError('workflow-yaml-invalid', `YAML parse error: ${(err as Error).message}`)
+    throw new ValidationError(
+      'workflow-yaml-invalid',
+      `YAML parse error: ${(err as Error).message}`,
+    )
   }
 }

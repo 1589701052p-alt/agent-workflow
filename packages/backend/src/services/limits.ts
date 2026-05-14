@@ -97,10 +97,7 @@ async function sumTaskTokens(db: DbClient, taskId: string): Promise<number> {
  * db, returning a stopper. The daemon wires this in main.ts; tests call
  * enforceLimits directly.
  */
-export function startLimitsTicker(
-  db: DbClient,
-  intervalMs: number = 1000,
-): { stop: () => void } {
+export function startLimitsTicker(db: DbClient, intervalMs: number = 1000): { stop: () => void } {
   let running = false
   const handle = setInterval(() => {
     if (running) return

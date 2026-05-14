@@ -217,8 +217,7 @@ function EditForm({ node, agents, definition, onPatch }: EditProps) {
       const exitPortName = typeof exitCondRaw.portName === 'string' ? exitCondRaw.portName : ''
       const exitValue = typeof exitCondRaw.value === 'string' ? exitCondRaw.value : ''
       const exitN = typeof exitCondRaw.n === 'number' ? exitCondRaw.n : 1
-      const exitSeparator =
-        typeof exitCondRaw.separator === 'string' ? exitCondRaw.separator : ''
+      const exitSeparator = typeof exitCondRaw.separator === 'string' ? exitCondRaw.separator : ''
       const bindings = Array.isArray(rec.outputBindings)
         ? (rec.outputBindings as Array<{
             name: string
@@ -242,8 +241,8 @@ function EditForm({ node, agents, definition, onPatch }: EditProps) {
       return (
         <div className="form-grid">
           <div className="info-box info-box--muted">
-            Cross-iteration state lives in worktree files only. v1 has no feedback ports —
-            agents communicate across iterations by reading/writing files.
+            Cross-iteration state lives in worktree files only. v1 has no feedback ports — agents
+            communicate across iterations by reading/writing files.
           </div>
           <Field label="Max iterations" required>
             <NumberInput

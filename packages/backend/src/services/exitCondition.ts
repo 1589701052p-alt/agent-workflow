@@ -25,7 +25,11 @@ export type ExitCondition =
 export function parseExitCondition(raw: unknown): ExitCondition | null {
   if (typeof raw !== 'object' || raw === null) return null
   const r = raw as Record<string, unknown>
-  if (typeof r.kind !== 'string' || typeof r.nodeId !== 'string' || typeof r.portName !== 'string') {
+  if (
+    typeof r.kind !== 'string' ||
+    typeof r.nodeId !== 'string' ||
+    typeof r.portName !== 'string'
+  ) {
     return null
   }
   if (r.kind === 'port-empty') {

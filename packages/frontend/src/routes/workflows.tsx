@@ -44,7 +44,9 @@ function WorkflowsPage() {
         )
         if (choice === 'overwrite' || choice === 'new') {
           await postYaml(yaml, choice)
-          setImportMsg(choice === 'overwrite' ? 'Workflow overwritten.' : 'Imported as new workflow.')
+          setImportMsg(
+            choice === 'overwrite' ? 'Workflow overwritten.' : 'Imported as new workflow.',
+          )
           void qc.invalidateQueries({ queryKey: ['workflows'] })
         } else {
           setImportMsg('Import canceled.')
@@ -76,11 +78,7 @@ function WorkflowsPage() {
               e.target.value = ''
             }}
           />
-          <button
-            type="button"
-            className="btn"
-            onClick={() => fileRef.current?.click()}
-          >
+          <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
             Import YAML
           </button>
           <Link to="/workflows/new" className="btn btn--primary">
@@ -149,8 +147,13 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
   if (token !== null) headers.Authorization = `Bearer ${token}`
   const res = await fetch(url.toString(), { method: 'POST', headers, body: yaml })
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: { code: string; message: string } } | null
-    const err = body?.error ?? { code: `http-${res.status}`, message: res.statusText || 'request failed' }
+    const body = (await res.json().catch(() => null)) as {
+      error?: { code: string; message: string }
+    } | null
+    const err = body?.error ?? {
+      code: `http-${res.status}`,
+      message: res.statusText || 'request failed',
+    }
     throw new ApiError(res.status, err.code, err.message)
   }
 }

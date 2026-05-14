@@ -82,14 +82,13 @@ export async function runWorktreeGc(
   return result
 }
 
-async function isMerged(worktreePath: string, baseBranch: string, branch: string): Promise<boolean> {
+async function isMerged(
+  worktreePath: string,
+  baseBranch: string,
+  branch: string,
+): Promise<boolean> {
   try {
-    const r = await runGit(worktreePath, [
-      'merge-base',
-      '--is-ancestor',
-      branch,
-      baseBranch,
-    ])
+    const r = await runGit(worktreePath, ['merge-base', '--is-ancestor', branch, baseBranch])
     return r.exitCode === 0
   } catch {
     return false

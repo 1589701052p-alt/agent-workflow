@@ -158,8 +158,8 @@ function TaskDetailPage() {
       {(t.status === 'canceled' || t.status === 'interrupted') && t.worktreePath !== '' && (
         <div className="info-box info-box--muted">
           <span>
-            Worktree preserved at <code>{t.worktreePath}</code>. You can inspect it manually, or
-            run <code>git worktree remove</code> when done.
+            Worktree preserved at <code>{t.worktreePath}</code>. You can inspect it manually, or run{' '}
+            <code>git worktree remove</code> when done.
           </span>
         </div>
       )}
