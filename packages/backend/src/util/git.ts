@@ -246,6 +246,55 @@ export async function worktreeDiff(
   return { diff, truncated: false }
 }
 
+/**
+ * Capture the worktree state as a git stash entry without committing it
+ * (P-3-07). Returns the stash sha — caller persists it in
+ * `node_runs.pre_snapshot` for later rollback on retry/resume.
+ *
+ * `git stash create` produces a commit object referenced only by the
+ * returned sha; it does NOT push to the stash list, so concurrent stashes
+ * across tasks don't fight over reflog ordering. Empty trees return ''.
+ */
+export async function gitStashSnapshot(worktreePath: string): Promise<string> {
+  const r = await runGit(worktreePath, ['stash', 'create'])
+  if (r.exitCode !== 0) {
+    throw new DomainError('worktree-snapshot-failed', `git stash create: ${r.stderr.trim()}`, 500)
+  }
+  return r.stdout.trim()
+}
+
+/**
+ * Roll the worktree back to a previously-captured snapshot sha
+ * (P-3-07). Used before a single-node retry or `POST /tasks/:id/resume`
+ * so writes from the prior attempt don't compound.
+ *
+ * Implementation:
+ *   - `git reset --hard HEAD` (drop staged + tracked working-tree changes)
+ *   - `git clean -fd` (drop untracked files + dirs)
+ *   - `git stash apply <sha> --index` (restore the snapshot tree)
+ *
+ * When `snapshotSha` is empty (no captured snapshot — e.g. read-only
+ * node, or the worktree was clean at snapshot time), the function still
+ * does reset+clean so any partial bad write outside the snapshot window
+ * is cleared.
+ */
+export async function rollbackToSnapshot(worktreePath: string, snapshotSha: string): Promise<void> {
+  const reset = await runGit(worktreePath, ['reset', '--hard', 'HEAD'])
+  if (reset.exitCode !== 0) {
+    throw new DomainError('worktree-reset-failed', `git reset: ${reset.stderr.trim()}`, 500)
+  }
+  const clean = await runGit(worktreePath, ['clean', '-fd'])
+  if (clean.exitCode !== 0) {
+    throw new DomainError('worktree-clean-failed', `git clean: ${clean.stderr.trim()}`, 500)
+  }
+  if (snapshotSha !== '') {
+    const apply = await runGit(worktreePath, ['stash', 'apply', '--index', snapshotSha])
+    if (apply.exitCode !== 0) {
+      throw new DomainError('worktree-apply-failed', `git stash apply: ${apply.stderr.trim()}`, 500)
+    }
+  }
+}
+
 export interface RemoveWorktreeOptions {
   repoPath: string
   worktreePath: string

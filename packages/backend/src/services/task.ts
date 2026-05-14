@@ -19,7 +19,7 @@ import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
-import { createWorktree, worktreeDiff } from '@/util/git'
+import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
 import { ConflictError, DomainError, NotFoundError } from '@/util/errors'
 import {
   TASK_CHANNEL,
@@ -207,6 +207,250 @@ export async function cancelTask(db: DbClient, id: string): Promise<Task> {
   const final = (await getTask(db, id)) as Task
   emitTaskStatus(final)
   return final
+}
+
+/**
+ * Resume a failed or interrupted task (P-3-08).
+ *
+ * Walks all node_runs in failed/interrupted state, rolls the worktree back
+ * to each one's pre_snapshot (write nodes only — readers leave the
+ * worktree alone), flips the surviving runs back to `pending`, then kicks
+ * the scheduler. Done node_runs stay untouched so the resumed task picks
+ * up where it left off.
+ */
+export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps): Promise<Task> {
+  const task = await getTask(db, id)
+  if (task === null) {
+    throw new NotFoundError('task-not-found', `task '${id}' not found`)
+  }
+  if (task.status !== 'failed' && task.status !== 'interrupted') {
+    throw new ConflictError(
+      'task-not-resumable',
+      `task '${id}' is ${task.status}; only failed/interrupted tasks can resume`,
+    )
+  }
+
+  // Collect the latest non-done run per nodeId — those are the ones that
+  // need rollback + a fresh attempt.
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, id))
+  const latestPerNode = new Map<string, (typeof runs)[number]>()
+  for (const r of runs) {
+    const prev = latestPerNode.get(r.nodeId)
+    if (prev === undefined || r.retryIndex > prev.retryIndex) latestPerNode.set(r.nodeId, r)
+  }
+  const toRollback = [...latestPerNode.values()].filter(
+    (r) => r.status === 'failed' || r.status === 'interrupted',
+  )
+
+  for (const r of toRollback) {
+    if (r.preSnapshot !== null && r.preSnapshot !== '' && task.worktreePath !== '') {
+      try {
+        await rollbackToSnapshot(task.worktreePath, r.preSnapshot)
+      } catch (err) {
+        log.warn('resume rollback failed', {
+          nodeRunId: r.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    // The scheduler creates a new node_run with retry_index = max+1 on its
+    // own when it sees no pending run for the node, so we just leave the
+    // failed row as historical and clear errors on the task.
+  }
+
+  await db
+    .update(tasks)
+    .set({
+      status: 'pending',
+      finishedAt: null,
+      errorSummary: null,
+      errorMessage: null,
+      failedNodeId: null,
+    })
+    .where(eq(tasks.id, id))
+
+  const next = (await getTask(db, id)) as Task
+  emitTaskStatus(next)
+
+  // Kick the scheduler — same plumbing as startTask but without re-creating
+  // the worktree.
+  const controller = new AbortController()
+  activeTasks.set(id, controller)
+  void runTask({
+    taskId: id,
+    db,
+    appHome: deps.appHome ?? Paths.root,
+    ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
+    ...(deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
+    log,
+    signal: controller.signal,
+  })
+    .catch((err) => {
+      log.error('runTask threw on resume', {
+        taskId: id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    .finally(() => {
+      activeTasks.delete(id)
+    })
+  return next
+}
+
+/**
+ * Retry one node_run, optionally cascading to all downstream nodes that
+ * depended on it (P-3-09). The retry happens by:
+ *
+ *   - rolling the worktree back to the node_run's `pre_snapshot`
+ *   - marking the target run + (cascaded) downstream runs as failed so the
+ *     scheduler picks them up on the next runTask() invocation
+ *   - flipping task.status back to pending
+ *   - kicking the scheduler
+ */
+export async function retryNode(
+  db: DbClient,
+  taskId: string,
+  nodeRunId: string,
+  opts: { cascade?: boolean; deps: StartTaskDeps },
+): Promise<Task> {
+  const cascade = opts.cascade !== false
+  const task = await getTask(db, taskId)
+  if (task === null) {
+    throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
+  }
+  if (task.status === 'pending' || task.status === 'running') {
+    throw new ConflictError(
+      'task-still-running',
+      `task '${taskId}' is ${task.status}; cancel it first before retrying a node`,
+    )
+  }
+  const runRow = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1))[0]
+  if (runRow === undefined || runRow.taskId !== taskId) {
+    throw new NotFoundError(
+      'node-run-not-found',
+      `node_run '${nodeRunId}' not found under task '${taskId}'`,
+    )
+  }
+
+  // Identify downstream nodeIds from the workflow snapshot's edges.
+  const downstream = new Set<string>()
+  if (cascade) {
+    const snap = parseSnapshot(task.workflowSnapshot)
+    const edges = Array.isArray(snap?.edges) ? snap.edges : []
+    const adj = new Map<string, string[]>()
+    for (const e of edges as Array<{
+      source?: { nodeId?: string }
+      target?: { nodeId?: string }
+    }>) {
+      const s = e?.source?.nodeId
+      const t = e?.target?.nodeId
+      if (typeof s !== 'string' || typeof t !== 'string') continue
+      const list = adj.get(s) ?? []
+      if (!list.includes(t)) list.push(t)
+      adj.set(s, list)
+    }
+    const stack: string[] = [runRow.nodeId]
+    while (stack.length > 0) {
+      const cur = stack.pop()!
+      for (const next of adj.get(cur) ?? []) {
+        if (downstream.has(next)) continue
+        downstream.add(next)
+        stack.push(next)
+      }
+    }
+  }
+
+  // Rollback to the snapshot before the node_run started. The single-node
+  // retry uses THIS run's snapshot (not the latest, since the user picked
+  // this specific historical attempt).
+  if (runRow.preSnapshot !== null && runRow.preSnapshot !== '' && task.worktreePath !== '') {
+    try {
+      await rollbackToSnapshot(task.worktreePath, runRow.preSnapshot)
+    } catch (err) {
+      log.warn('node retry rollback failed', {
+        nodeRunId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  // Flip target + downstream node_runs from done → failed so the resumer
+  // re-runs them. We do this by inserting a fresh failed row at retry_index
+  // max+1, so the scheduler treats it as the "latest" and starts attempt+1.
+  const targets = new Set<string>([runRow.nodeId])
+  for (const id of downstream) targets.add(id)
+  for (const nodeId of targets) {
+    const existing = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
+      .orderBy(desc(nodeRuns.retryIndex))
+      .limit(1)
+    const prev = existing[0]
+    const nextRetry = prev === undefined ? 0 : prev.retryIndex + 1
+    const newId = ulid()
+    await db.insert(nodeRuns).values({
+      id: newId,
+      taskId,
+      nodeId,
+      status: 'failed',
+      retryIndex: nextRetry,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      errorMessage: 'queued for retry',
+    })
+  }
+
+  await db
+    .update(tasks)
+    .set({
+      status: 'pending',
+      finishedAt: null,
+      errorSummary: null,
+      errorMessage: null,
+      failedNodeId: null,
+    })
+    .where(eq(tasks.id, taskId))
+  const next = (await getTask(db, taskId)) as Task
+  emitTaskStatus(next)
+
+  const controller = new AbortController()
+  activeTasks.set(taskId, controller)
+  void runTask({
+    taskId,
+    db,
+    appHome: opts.deps.appHome ?? Paths.root,
+    ...(opts.deps.opencodeCmd ? { opencodeCmd: opts.deps.opencodeCmd } : {}),
+    ...(opts.deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: opts.deps.defaultPerNodeTimeoutMs }
+      : {}),
+    log,
+    signal: controller.signal,
+  })
+    .catch((err) => {
+      log.error('runTask threw on node retry', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    .finally(() => {
+      activeTasks.delete(taskId)
+    })
+  return next
+}
+
+function parseSnapshot(v: unknown): Record<string, unknown> | null {
+  if (typeof v === 'object' && v !== null) return v as Record<string, unknown>
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 /**

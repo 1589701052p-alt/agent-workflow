@@ -470,4 +470,92 @@ describe('task HTTP routes', () => {
     expect(res.status).toBe(404)
     expect(((await res.json()) as { code: string }).code).toBe('node-run-not-found')
   })
+
+  test('POST /:id/resume on a non-failed task → 409', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt',
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      status: 'done',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/resume`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('task-not-resumable')
+  })
+
+  test('POST /:id/nodes/:nrId/retry while task is running → 409', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt',
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      status: 'running',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    const nrId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: nrId,
+      taskId: id,
+      nodeId: 'n1',
+      status: 'failed',
+      startedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/nodes/${nrId}/retry`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('task-still-running')
+  })
+
+  test('POST /:id/nodes/:nrId/retry on a failed task flips status → pending', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: JSON.stringify({
+        $schema_version: 1,
+        inputs: [],
+        nodes: [{ id: 'n1', kind: 'agent-single' }],
+        edges: [],
+      }),
+      repoPath: h.repoPath,
+      worktreePath: '', // empty so retry skips rollback
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      status: 'failed',
+      inputs: '{}',
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      errorSummary: 'boom',
+    })
+    const nrId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: nrId,
+      taskId: id,
+      nodeId: 'n1',
+      status: 'failed',
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/nodes/${nrId}/retry?cascade=false`, {
+      method: 'POST',
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { status: string; errorSummary: string | null }
+    expect(body.status).toBe('pending')
+    expect(body.errorSummary).toBeNull()
+  })
 })

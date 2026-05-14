@@ -443,6 +443,89 @@ describe('runTask: linear DAG (M1)', () => {
     expect(t?.status).toBe('done')
   })
 
+  test('node with retries=2 fails twice then succeeds', async () => {
+    await seedReadonlyAgent(h.db, 'flaky', ['summary'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        {
+          id: 'a1',
+          kind: 'agent-single',
+          agentName: 'flaky',
+          retries: 2,
+        } as unknown as WorkflowDefinition['nodes'][number],
+      ],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const counter = join(h.appHome, 'retry-counter')
+    await withEnv(
+      {
+        MOCK_OPENCODE_FAIL_COUNTER: counter,
+        MOCK_OPENCODE_FAIL_UNTIL: '2',
+        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'done' }),
+      },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+    // We should have 3 node_runs: retry_index 0,1 failed; 2 done.
+    const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const a1runs = runs.filter((r) => r.nodeId === 'a1').sort((a, b) => a.retryIndex - b.retryIndex)
+    expect(a1runs.length).toBe(3)
+    expect(a1runs[0]?.status).toBe('failed')
+    expect(a1runs[1]?.status).toBe('failed')
+    expect(a1runs[2]?.status).toBe('done')
+  })
+
+  test('node with retries=1 exhausts retries → task fails', async () => {
+    await seedReadonlyAgent(h.db, 'persistent', ['summary'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        {
+          id: 'a1',
+          kind: 'agent-single',
+          agentName: 'persistent',
+          retries: 1,
+        } as unknown as WorkflowDefinition['nodes'][number],
+      ],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const counter = join(h.appHome, 'persistent-counter')
+    await withEnv(
+      {
+        MOCK_OPENCODE_FAIL_COUNTER: counter,
+        MOCK_OPENCODE_FAIL_UNTIL: '99', // never succeeds
+      },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('failed')
+    expect(t?.failedNodeId).toBe('a1')
+    const runs = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === 'a1',
+    )
+    // retries=1 → 2 attempts total.
+    expect(runs.length).toBe(2)
+    expect(runs.every((r) => r.status === 'failed')).toBe(true)
+  })
+
   test('two write agents at the same level serialize through the write semaphore', async () => {
     await seedReadonlyAgent(h.db, 'w1', ['summary'], false)
     await seedReadonlyAgent(h.db, 'w2', ['summary'], false)

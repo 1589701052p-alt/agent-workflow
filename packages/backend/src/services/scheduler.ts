@@ -13,13 +13,14 @@
 
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
 import { WorkflowDefinitionSchema } from '@agent-workflow/shared'
-import { eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
+import { gitStashSnapshot, rollbackToSnapshot } from '@/util/git'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -117,6 +118,23 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
   const upstreamsOf = buildUpstreamMap(definition)
   const remaining = new Map(order.map((n) => [n.id, n]))
   const completed = new Set<string>()
+
+  // P-3-08: resume support — nodes whose latest run is `done` are already
+  // complete and should be skipped on a second runTask() call. Pending /
+  // failed / interrupted runs flow back through the executor (the runOneNode
+  // body picks up the existing pending row when present).
+  const priorRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const latestPerNode = new Map<string, (typeof priorRuns)[number]>()
+  for (const r of priorRuns) {
+    const prev = latestPerNode.get(r.nodeId)
+    if (prev === undefined || r.retryIndex > prev.retryIndex) latestPerNode.set(r.nodeId, r)
+  }
+  for (const [nodeId, r] of latestPerNode) {
+    if (r.status === 'done') {
+      completed.add(nodeId)
+      remaining.delete(nodeId)
+    }
+  }
   let halt: 'failed' | 'canceled' | null = null
   let haltDetail: { summary: string; message: string; nodeId?: string } | null = null
 
@@ -220,6 +238,7 @@ async function insertNodeRun(
   taskId: string,
   nodeId: string,
   status: 'pending' | 'done',
+  retryIndex: number = 0,
 ): Promise<string> {
   const id = ulid()
   const now = Date.now()
@@ -228,6 +247,7 @@ async function insertNodeRun(
     taskId,
     nodeId,
     status,
+    retryIndex,
     startedAt: now,
     finishedAt: status === 'done' ? now : null,
   })
@@ -409,6 +429,21 @@ function pickNumber(node: WorkflowNode, key: string): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
+/** Latest node_run.preSnapshot for `nodeId` on this task (highest retry_index). */
+async function readSnapshotForLatestRun(
+  db: DbClient,
+  taskId: string,
+  nodeId: string,
+): Promise<string> {
+  const rows = await db
+    .select()
+    .from(nodeRuns)
+    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
+    .orderBy(desc(nodeRuns.retryIndex))
+    .limit(1)
+  return rows[0]?.preSnapshot ?? ''
+}
+
 /** nodeId → list of upstream nodeIds (deduped). */
 function buildUpstreamMap(definition: WorkflowDefinition): Map<string, string[]> {
   const m = new Map<string, string[]>()
@@ -481,8 +516,28 @@ async function runOneNode(ctx: OneNodeContext): Promise<OneNodeResult> {
   const resolvedSkills = await resolveSkills(db, opts.appHome, agent.skills)
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
+  const maxRetries = pickNumber(node, 'retries') ?? 0
 
-  const nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending')
+  // Pick up an existing pending node_run if the scheduler is resuming this
+  // node (P-3-08 set them back to pending). Otherwise create a new run with
+  // retry_index = max existing + 1 — or 0 if this is the first attempt.
+  const existing = await db
+    .select()
+    .from(nodeRuns)
+    .where(eq(nodeRuns.taskId, taskId))
+    .orderBy(asc(nodeRuns.startedAt))
+  const sameNodeRuns = existing.filter((r) => r.nodeId === node.id)
+  let retryIndex = 0
+  let nodeRunId: string
+  const pendingExisting = sameNodeRuns.find((r) => r.status === 'pending')
+  if (pendingExisting !== undefined) {
+    nodeRunId = pendingExisting.id
+    retryIndex = pendingExisting.retryIndex
+  } else {
+    retryIndex =
+      sameNodeRuns.length === 0 ? 0 : Math.max(...sameNodeRuns.map((r) => r.retryIndex)) + 1
+    nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', retryIndex)
+  }
   broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
 
   // Acquire semaphores. Order matters: global → write so a write node can't
@@ -490,51 +545,108 @@ async function runOneNode(ctx: OneNodeContext): Promise<OneNodeResult> {
   const releaseGlobal = await globalSem.acquire()
   const releaseWrite = agent.readonly ? null : await writeSem.acquire()
 
-  let result: RunResult
+  let lastResult: RunResult | null = null
+  let lastError: string | null = null
+
   try {
-    result = await runNode({
-      taskId,
-      nodeRunId,
-      agent,
-      inputs: upstreamInputs,
-      worktreePath: task.worktreePath,
-      templateMeta: {
-        repoPath: task.repoPath,
-        baseBranch: task.baseBranch,
-        taskId,
-        nodeId: node.id,
-      },
-      ...(promptTemplate !== undefined ? { promptTemplate } : {}),
-      ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-      skills: resolvedSkills,
-      appHome: opts.appHome,
-      ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
-      db,
-      log: log.child('run'),
-      ...(opts.signal ? { signal: opts.signal } : {}),
-    })
-  } catch (err) {
+    // Retry loop (P-3-06). retry_index tracks the attempt; the very first
+    // attempt is 0. We always run at least once. Read-only nodes don't
+    // rollback because they didn't snapshot.
+    for (let attempt = retryIndex; attempt <= retryIndex + maxRetries; attempt++) {
+      if (attempt > retryIndex) {
+        // Rollback before retry (write nodes only) using THIS node_run's
+        // snapshot before the previous attempt.
+        const snap = await readSnapshotForLatestRun(db, taskId, node.id)
+        if (!agent.readonly && snap !== '') {
+          try {
+            await rollbackToSnapshot(task.worktreePath, snap)
+          } catch (err) {
+            log.warn('retry rollback failed', {
+              nodeId: node.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', attempt)
+        broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
+      }
+
+      // P-3-07: snapshot the worktree before a non-readonly node.
+      if (!agent.readonly) {
+        try {
+          const sha = await gitStashSnapshot(task.worktreePath)
+          await db.update(nodeRuns).set({ preSnapshot: sha }).where(eq(nodeRuns.id, nodeRunId))
+        } catch (err) {
+          log.warn('pre-snapshot failed', {
+            nodeRunId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+
+      try {
+        lastResult = await runNode({
+          taskId,
+          nodeRunId,
+          agent,
+          inputs: upstreamInputs,
+          worktreePath: task.worktreePath,
+          templateMeta: {
+            repoPath: task.repoPath,
+            baseBranch: task.baseBranch,
+            taskId,
+            nodeId: node.id,
+          },
+          ...(promptTemplate !== undefined ? { promptTemplate } : {}),
+          ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
+          skills: resolvedSkills,
+          appHome: opts.appHome,
+          ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
+          db,
+          log: log.child('run'),
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        lastResult = {
+          status: 'failed',
+          exitCode: null,
+          outputs: {},
+          tokenUsage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+          prompt: '',
+          errorMessage: `node ${node.id} threw: ${msg}`,
+        }
+        lastError = msg
+      }
+
+      broadcastNodeStatus(taskId, nodeRunId, node.id, lastResult.status)
+      if (lastResult.status === 'done' || lastResult.status === 'canceled') break
+      // Otherwise loop — caps at retryIndex + maxRetries inclusive.
+    }
+  } finally {
     releaseWrite?.()
     releaseGlobal()
-    const msg = err instanceof Error ? err.message : String(err)
-    return { kind: 'failed', summary: `node ${node.id} threw: ${msg}`, message: msg }
   }
-  releaseWrite?.()
-  releaseGlobal()
 
-  broadcastNodeStatus(taskId, nodeRunId, node.id, result.status)
-  if (result.status === 'canceled') {
+  if (lastResult === null) {
+    return {
+      kind: 'failed',
+      summary: 'node produced no result',
+      message: lastError ?? 'unknown',
+    }
+  }
+  if (lastResult.status === 'canceled') {
     return {
       kind: 'canceled',
       summary: 'node canceled',
-      message: result.errorMessage ?? 'canceled',
+      message: lastResult.errorMessage ?? 'canceled',
     }
   }
-  if (result.status !== 'done') {
+  if (lastResult.status !== 'done') {
     return {
       kind: 'failed',
-      summary: result.errorMessage ?? `node ${node.id} ${result.status}`,
-      message: result.errorMessage ?? result.status,
+      summary: lastResult.errorMessage ?? `node ${node.id} ${lastResult.status}`,
+      message: lastResult.errorMessage ?? lastResult.status,
     }
   }
   return { kind: 'ok', summary: '', message: '' }

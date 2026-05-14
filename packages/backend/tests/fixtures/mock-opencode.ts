@@ -10,8 +10,11 @@
 //   MOCK_OPENCODE_DELAY_MS       sleep this long before exiting (for timeout tests)
 //   MOCK_OPENCODE_STDERR         emit this string on stderr (line by line)
 //   MOCK_OPENCODE_REQUIRE_TOKEN  '1' to assert OPENCODE_CONFIG_CONTENT contains a marker
+//   MOCK_OPENCODE_FAIL_COUNTER   path to a file holding an integer attempt counter
+//   MOCK_OPENCODE_FAIL_UNTIL     fail (exit 1, skip envelope) while counter < this number
 
 import process from 'node:process'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 function fail(msg: string, code = 2): never {
   process.stderr.write(`mock-opencode: ${msg}\n`)
@@ -46,6 +49,21 @@ if (env.MOCK_OPENCODE_REQUIRE_TOKEN === '1') {
   }
 }
 
+// Fail-N-times-then-succeed: increment a counter on disk; exit non-zero
+// without emitting the envelope while counter <= MOCK_OPENCODE_FAIL_UNTIL.
+let forceFail = false
+const counterFile = env.MOCK_OPENCODE_FAIL_COUNTER
+const failUntil = Number(env.MOCK_OPENCODE_FAIL_UNTIL ?? '0')
+if (counterFile !== undefined && Number.isFinite(failUntil) && failUntil > 0) {
+  let n = 0
+  if (existsSync(counterFile)) {
+    n = Number(readFileSync(counterFile, 'utf-8').trim()) || 0
+  }
+  n += 1
+  writeFileSync(counterFile, String(n))
+  if (n <= failUntil) forceFail = true
+}
+
 // Emit stdout events.
 try {
   const events = JSON.parse(env.MOCK_OPENCODE_EVENTS ?? '[]') as unknown[]
@@ -69,7 +87,7 @@ if (stderr) {
 // Real opencode with `--format json` puts the agent's text reply (which
 // carries the <workflow-output> envelope) inside a `text` event's
 // `part.text` field. Mirror that shape so the runner can find it.
-if (env.MOCK_OPENCODE_SKIP_ENVELOPE !== '1') {
+if (env.MOCK_OPENCODE_SKIP_ENVELOPE !== '1' && !forceFail) {
   let outputs: Record<string, string> = {}
   try {
     outputs = JSON.parse(env.MOCK_OPENCODE_OUTPUTS ?? '{}') as Record<string, string>
@@ -95,5 +113,5 @@ if (Number.isFinite(delay) && delay > 0) {
   await Bun.sleep(delay)
 }
 
-const exitCode = Number(env.MOCK_OPENCODE_EXIT_CODE ?? '0')
+const exitCode = forceFail ? 1 : Number(env.MOCK_OPENCODE_EXIT_CODE ?? '0')
 process.exit(Number.isFinite(exitCode) ? exitCode : 0)

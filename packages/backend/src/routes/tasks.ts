@@ -17,6 +17,8 @@ import {
   getTaskDiff,
   getTaskNodeRuns,
   listTasks,
+  resumeTask,
+  retryNode,
   startTask,
 } from '@/services/task'
 import { NotFoundError, ValidationError } from '@/util/errors'
@@ -77,6 +79,21 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/tasks/:id/diff', async (c) => {
     return c.json(await getTaskDiff(deps.db, c.req.param('id')))
+  })
+
+  app.post('/api/tasks/:id/resume', async (c) => {
+    const task = await resumeTask(deps.db, c.req.param('id'), { db: deps.db })
+    return c.json(task)
+  })
+
+  app.post('/api/tasks/:id/nodes/:nodeRunId/retry', async (c) => {
+    const cascadeRaw = c.req.query('cascade')
+    const cascade = cascadeRaw === undefined ? true : cascadeRaw !== 'false'
+    const task = await retryNode(deps.db, c.req.param('id'), c.req.param('nodeRunId'), {
+      cascade,
+      deps: { db: deps.db },
+    })
+    return c.json(task)
   })
 
   app.get('/api/tasks/:id/node-runs/:nodeRunId/events', async (c) => {
