@@ -170,6 +170,19 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   //   - poll for ~30s; any task still in 'running' after the budget is
   //     flipped to 'interrupted' so the next daemon start surfaces it as
   //     daemon-restart instead of leaving stale rows.
+  // Sync cleanup of .daemon.info — must happen before any await in the
+  // signal path. CI on macOS flaked when this was buried behind
+  // `await import(...) + await gracefulShutdown(...)`: if the daemon was
+  // killed before the awaits resolved, the file outlived the process and
+  // the cli.test.ts existsSync assertion failed.
+  const removeDaemonInfo = (): void => {
+    try {
+      unlinkSync(Paths.daemonInfo)
+    } catch {
+      // already removed or never written
+    }
+  }
+
   let shuttingDown = false
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return
@@ -178,6 +191,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     limitsTicker.stop()
     gcTicker.stop()
     archiveTicker.stop()
+    removeDaemonInfo()
     server.stop(true)
     try {
       const { gracefulShutdown } = await import('@/services/shutdown')
@@ -187,29 +201,24 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
         error: err instanceof Error ? err.message : String(err),
       })
     }
-    try {
-      unlinkSync(Paths.daemonInfo)
-    } catch {
-      // best-effort
-    }
     lock.release()
     process.exit(0)
   }
   process.on('SIGTERM', () => {
+    // unlink synchronously the instant the signal fires; the async shutdown
+    // continues in the background.
+    removeDaemonInfo()
     void shutdown('SIGTERM')
   })
   process.on('SIGINT', () => {
+    removeDaemonInfo()
     void shutdown('SIGINT')
   })
-  // Belt-and-suspenders: ensure runtime info file is removed even if the
-  // async shutdown handler above is interrupted before unlinkSync runs.
-  // The on('exit') hook is synchronous and runs on every termination path.
+  // Belt-and-suspenders for paths the signal handlers can't reach (uncaught
+  // exception, explicit process.exit elsewhere). on('exit') is synchronous
+  // and runs on every normal termination path.
   process.on('exit', () => {
-    try {
-      unlinkSync(Paths.daemonInfo)
-    } catch {
-      // already removed or never written
-    }
+    removeDaemonInfo()
     lock.release()
   })
 
