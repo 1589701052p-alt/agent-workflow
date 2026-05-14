@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-1-10 + P-1-12 完成后）
+**最近更新**：2026-05-14（P-1-11 完成 + CI 修复后）
 
 ---
 
@@ -16,7 +16,7 @@
 
 ```
 M0 准备       [5/5   ✅]
-M1 骨架       [11/18 🚧]  ← 当前位置
+M1 骨架       [12/18 🚧]  ← 当前位置
 M2 编辑器     [0/16]
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（16 个）
+## 已完成 issue（17 个）
 
 ### M0 全部完成（5/5）
 
@@ -51,13 +51,14 @@ M5 打磨       [0/12]
 | P-1-08 | Agents CRUD | 6 个 endpoint；DB 是真值源；frontmatter 字段拆 DB 列；JSON 字段在 service 层 marshal；删除/重命名引用拒绝 |
 | P-1-09 | Skills CRUD + 文件树 | fs 真值源；managed + external 两种 source；SKILL.md frontmatter 通过 `yaml` 包解析；safeJoin 路径遍历防御；引用拒绝；12 个 endpoint |
 | P-1-10 | 仓最近列表 + refs/files endpoint | `recent_repos` 表 upsert（含 defaultBranch 探测）；GET/POST `/api/repos/recent` + GET `/api/repos/{refs,files}?path=`；非 git 仓 422、路径不存在 404 |
+| P-1-11 | Workflow CRUD | 6 个 endpoint（list/get/create/update/delete/validate-stub）；ULID URL；version+1；删除时**任何 task 引用都拒绝**（严于 design.md 文本，遵 round-18 答复）；validateWorkflow 是 stub（P-2-01 实装 5 项校验） |
 | P-1-12 | Worktree helper（util/git.ts） | `runGit` / `requireGitRepo` / `repoSlug = sha1(8)+basename` / `createWorktree`（`agent-workflow/{taskId}` 分支，返 baseCommit）/ `removeWorktree`；并发 task 拿独立 worktree 验证 |
 
 ---
 
 ## 测试积累
 
-后端测试 ~118 个 case，全部用 `bun test` 跑（in-memory SQLite，每 case <100ms）。daemon 启动相关测试 spawn 子进程，~1-2s 每 case。git util / repos 测试初始化真实 git 仓 fixture。
+后端测试 **150 个 case**，全部用 `bun test` 跑（in-memory SQLite，每 case <100ms）。daemon 启动相关测试 spawn 子进程，~1-2s 每 case。git util / repos / 部分 workflow 测试初始化真实 git 仓 fixture。
 
 测试文件：
 ```
@@ -75,7 +76,8 @@ packages/backend/tests/
 ├── opencode-version.test.ts (4 case)
 ├── repos.test.ts           (12 case)
 ├── skills.test.ts          (22 case)
-└── smoke.test.ts           (1 case)
+├── smoke.test.ts           (1 case)
+└── workflows.test.ts       (15 case)
 ```
 
 ---
@@ -103,11 +105,13 @@ packages/backend/src/
 │   ├── config.ts
 │   ├── agents.ts
 │   ├── repos.ts            # /api/repos/{recent,refs,files}
-│   └── skills.ts
+│   ├── skills.ts
+│   └── workflows.ts        # /api/workflows + /:id + /:id/validate (stub)
 ├── services/
 │   ├── agent.ts            # Agents CRUD
 │   ├── repo.ts             # recent_repos upsert + getRepoRefs / getRepoFiles
-│   └── skill.ts            # Skills CRUD + 文件树 + frontmatter
+│   ├── skill.ts            # Skills CRUD + 文件树 + frontmatter
+│   └── workflow.ts         # Workflow CRUD + validate stub
 └── util/
     ├── errors.ts           # DomainError 家族 + Hono onError handler
     ├── frontmatter.ts      # YAML frontmatter 解析（用 yaml 包）
@@ -121,14 +125,13 @@ packages/backend/src/
 
 ---
 
-## 下一步：M1 剩余 7 个 issue
+## 下一步：M1 剩余 6 个 issue
 
-按 `design/plan.md` 依赖顺序，**下一轮做 P-1-11（Workflow CRUD）**，是 runner+scheduler 主线的前置：
+按 `design/plan.md` 依赖顺序，**下一轮做 P-1-13（runner）**，这是 M1 的核心难点；做完后 P-1-14（scheduler）就能跑通端到端 task：
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| **P-1-11** | Workflow CRUD（基础，不含 5 项校验） | P-0-05, P-1-07 | M |
-| P-1-13 | opencode 子进程 spawn + envelope 解析（runner） | P-0-05, P-1-09, P-1-12 | L |
+| **P-1-13** | opencode 子进程 spawn + envelope 解析（runner） | P-0-05, P-1-09, P-1-12 | L |
 | P-1-14 | Task 启动 + DAG 调度（线性版本） | P-1-08, P-1-11, P-1-12, P-1-13 | L |
 | P-1-15 | Cancel task | P-1-14 | S |
 | P-1-16 | 前端骨架：路由 / Layout / API client | P-0-02 | M |
@@ -140,6 +143,15 @@ M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workfl
 ---
 
 ## 已知 caveat / 后续 tech debt
+
+> 这一列每次会增长，下次清理时一并 reconcile。
+
+### 设计/实现偏差
+
+- **Workflow 删除语义**：实装是"任何 task 引用都拒绝"（round-18 答复），但 `design.md` §4.2.2 / `plan.md` P-1-11 文本写的是"仅运行中 task 引用拒绝"。下次更新文档时把文本改严即可；或后续如要放开，需要把 `tasks.workflowId` 改为 nullable + `ON DELETE SET NULL`，附带 migration。
+
+### 工程
+- **CI bun 版本**：CI 锁 `1.3.x`、`package.json` 锁 `bun@1.3.13`、`engines.bun >= 1.3.0`。Bun 1.2+ 改了 lockfile 格式，本地若升级到不同主线版本要同步更新这三处。
 
 1. **opencode 最低版本** 现在保守地写为 1.14.0（P-0-01 仅在 1.14.25 实测过）。如需放宽，下沉到更老版本 bisect 即可（design.md §18 #1）。
 2. **drizzle-orm 0.36.4 的 extraConfig 用对象形式**（`(t) => ({...})`）；如果未来升 ≥0.39，数组形式才支持，schema.ts 需要回看。
