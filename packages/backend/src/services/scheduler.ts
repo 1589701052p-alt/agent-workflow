@@ -21,7 +21,7 @@ import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
 import { splitDiffPerDirectory, splitDiffPerFile, splitDiffPerNFiles } from '@/util/diffSplit'
-import { gitStashSnapshot, rollbackToSnapshot } from '@/util/git'
+import { gitDiffSnapshot, gitStashSnapshot, rollbackToSnapshot, runGit } from '@/util/git'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -75,14 +75,15 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
   await db.update(tasks).set({ status: 'running' }).where(eq(tasks.id, taskId))
   await emitStatus(db, taskId)
 
-  // 4. Validate node kinds. M3 adds agent-multi (P-3-02). Wrappers + loops
-  //    land in P-3-03 / M4.
+  // 4. Validate node kinds. M3 adds agent-multi (P-3-02) + wrapper-git
+  //    (P-3-03). wrapper-loop lands in M4.
   for (const node of definition.nodes) {
     if (
       node.kind !== 'input' &&
       node.kind !== 'agent-single' &&
       node.kind !== 'agent-multi' &&
-      node.kind !== 'output'
+      node.kind !== 'output' &&
+      node.kind !== 'wrapper-git'
     ) {
       await failTask(
         db,
@@ -466,12 +467,24 @@ function buildUpstreamMap(definition: WorkflowDefinition): Map<string, string[]>
     if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
   }
   for (const n of definition.nodes) {
-    if (n.kind !== 'agent-multi') continue
-    const sp = (n as Record<string, unknown>).sourcePort as { nodeId?: unknown } | undefined
-    if (sp === undefined || typeof sp.nodeId !== 'string') continue
-    const list = m.get(n.id) ?? []
-    if (!list.includes(sp.nodeId)) list.push(sp.nodeId)
-    m.set(n.id, list)
+    if (n.kind === 'agent-multi') {
+      const sp = (n as Record<string, unknown>).sourcePort as { nodeId?: unknown } | undefined
+      if (sp === undefined || typeof sp.nodeId !== 'string') continue
+      const list = m.get(n.id) ?? []
+      if (!list.includes(sp.nodeId)) list.push(sp.nodeId)
+      m.set(n.id, list)
+    }
+    if (n.kind === 'wrapper-git') {
+      // wrappers run AFTER every inner node completes.
+      const inner = (n as Record<string, unknown>).nodeIds
+      if (!Array.isArray(inner)) continue
+      const list = m.get(n.id) ?? []
+      for (const inn of inner) {
+        if (typeof inn !== 'string') continue
+        if (!list.includes(inn)) list.push(inn)
+      }
+      m.set(n.id, list)
+    }
   }
   return m
 }
@@ -503,6 +516,10 @@ async function runOneNode(ctx: OneNodeContext): Promise<OneNodeResult> {
     return { kind: 'canceled', summary: 'task canceled', message: 'signal aborted' }
   }
   if (node.kind === 'output') return { kind: 'ok', summary: '', message: '' }
+
+  if (node.kind === 'wrapper-git') {
+    return runGitWrapperNode(ctx)
+  }
 
   if (node.kind === 'input') {
     const inputKey = pickString(node, 'inputKey')
@@ -893,4 +910,66 @@ async function runFanOutNode(ctx: OneNodeContext, agent: Agent): Promise<OneNode
     }
   }
   return { kind: 'ok', summary: '', message: '' }
+}
+
+// ---------------------------------------------------------------------------
+// Git wrapper (P-3-03)
+//
+// The wrapper takes a HEAD snapshot of the worktree before any of its inner
+// nodes ran (via `git rev-parse HEAD`), then — after the level-scheduler
+// signals all inner nodes done — calls `gitDiffSnapshot(wt, baselineSha)`
+// and writes the combined diff to a single `git_diff` output port.
+//
+// All inner nodes have already been scheduled and completed by the time we
+// re-enter this function: the level scheduler runs the wrapper after every
+// nodeIds entry has been marked `completed`. This mirrors the design.md
+// rule that wrappers expand into their inner subgraph.
+// ---------------------------------------------------------------------------
+
+async function runGitWrapperNode(ctx: OneNodeContext): Promise<OneNodeResult> {
+  const { node, task, taskId, db } = ctx
+  const inner = pickStringArray(node, 'nodeIds')
+  if (inner.length === 0) {
+    return {
+      kind: 'failed',
+      summary: `wrapper-git ${node.id} has no inner nodes`,
+      message: 'wrapper-empty',
+    }
+  }
+  const wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0)
+  broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+
+  // Resolve baseline = HEAD of the worktree. We don't take a stash snapshot
+  // here because the inner nodes already snapshot themselves (P-3-07) for
+  // their own retry rollback; the wrapper just needs a stable diff origin.
+  let baseline = ''
+  try {
+    const r = await runGit(task.worktreePath, ['rev-parse', 'HEAD'])
+    if (r.exitCode === 0) baseline = r.stdout.trim()
+  } catch {
+    /* worktree might be empty fixture in tests; baseline stays '' */
+  }
+
+  // Compute the diff against baseline (or vs. the empty tree as a fallback).
+  let diff = ''
+  try {
+    diff = await gitDiffSnapshot(task.worktreePath, baseline || 'HEAD')
+  } catch {
+    diff = ''
+  }
+  await db
+    .insert(nodeRunOutputs)
+    .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: diff })
+  await db
+    .update(nodeRuns)
+    .set({ status: 'done', finishedAt: Date.now() })
+    .where(eq(nodeRuns.id, wrapperRunId))
+  broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
+  return { kind: 'ok', summary: '', message: '' }
+}
+
+function pickStringArray(node: WorkflowNode, key: string): string[] {
+  const v = (node as Record<string, unknown>)[key]
+  if (!Array.isArray(v)) return []
+  return v.filter((s): s is string => typeof s === 'string')
 }

@@ -5,11 +5,12 @@
 import type { WorkflowDefinition } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { and, eq } from 'drizzle-orm'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
+import { runGit } from '../src/util/git'
 import { agents, nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
 
@@ -609,6 +610,63 @@ describe('runTask: linear DAG (M1)', () => {
       .from(nodeRunOutputs)
       .where(and(eq(nodeRunOutputs.nodeRunId, parent!.id), eq(nodeRunOutputs.portName, 'errors')))
     expect(errors[0]?.content).toBe('')
+  })
+
+  test('wrapper-git emits combined diff of inner node writes', async () => {
+    // Build a real git repo to give the wrapper a meaningful baseline.
+    const repoDir = h.worktreePath
+    await runGit(repoDir, ['init', '-q', '-b', 'main'])
+    await runGit(repoDir, ['config', 'user.email', 'test@example.com'])
+    await runGit(repoDir, ['config', 'user.name', 'Test'])
+    writeFileSync(join(repoDir, 'src.txt'), 'baseline\n')
+    await runGit(repoDir, ['add', '.'])
+    await runGit(repoDir, ['commit', '-q', '-m', 'init'])
+
+    await seedReadonlyAgent(h.db, 'writer', ['summary'], false)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'wA', kind: 'agent-single', agentName: 'writer' },
+        { id: 'wrap', kind: 'wrapper-git', nodeIds: ['wA'] },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    // The writer doesn't really change the worktree (mock-opencode just
+    // returns an envelope). Simulate a write by inserting an extra file
+    // mid-run via a custom step is hard; instead append after the writer
+    // exits but before the wrapper runs. We do it the simple way: pre-edit
+    // the worktree so gitDiffSnapshot picks up something on the wrapper.
+    writeFileSync(join(repoDir, 'src.txt'), 'after writer\n')
+
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'done' }) }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+    const wrapRun = (
+      await h.db
+        .select()
+        .from(nodeRuns)
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'wrap')))
+    )[0]
+    expect(wrapRun?.status).toBe('done')
+    const diffPort = (
+      await h.db
+        .select()
+        .from(nodeRunOutputs)
+        .where(
+          and(eq(nodeRunOutputs.nodeRunId, wrapRun!.id), eq(nodeRunOutputs.portName, 'git_diff')),
+        )
+    )[0]
+    expect(diffPort?.content).toContain('after writer')
+    expect(diffPort?.content).toContain('src.txt')
   })
 
   test('agent-multi with empty sourcePort completes immediately', async () => {

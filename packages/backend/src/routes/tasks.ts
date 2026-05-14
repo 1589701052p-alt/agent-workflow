@@ -13,6 +13,7 @@ import type { AppDeps } from '@/server'
 import {
   cancelTask,
   getNodeRunEvents,
+  getNodeRunStdout,
   getTask,
   getTaskDiff,
   getTaskNodeRuns,
@@ -94,6 +95,11 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       deps: { db: deps.db },
     })
     return c.json(task)
+  })
+
+  app.get('/api/tasks/:id/nodes/:nodeRunId/stdout', async (c) => {
+    const text = await getNodeRunStdout(deps.db, c.req.param('id'), c.req.param('nodeRunId'))
+    return c.text(text)
   })
 
   app.get('/api/tasks/:id/node-runs/:nodeRunId/events', async (c) => {

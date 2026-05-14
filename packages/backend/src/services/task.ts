@@ -628,6 +628,39 @@ export async function getNodeRunEvents(
 }
 
 /**
+ * Concatenated stdout for one node_run (P-3-13). Returns every event's
+ * raw `payload` ordered by id ascending, joined with `\n`. Stderr events
+ * are excluded — those live on the Events tab.
+ */
+export async function getNodeRunStdout(
+  db: DbClient,
+  taskId: string,
+  nodeRunId: string,
+): Promise<string> {
+  const ownerRows = await db
+    .select({ taskId: nodeRuns.taskId })
+    .from(nodeRuns)
+    .where(eq(nodeRuns.id, nodeRunId))
+    .limit(1)
+  const owner = ownerRows[0]
+  if (owner === undefined || owner.taskId !== taskId) {
+    throw new NotFoundError(
+      'node-run-not-found',
+      `node_run '${nodeRunId}' not found under task '${taskId}'`,
+    )
+  }
+  const rows = await db
+    .select({ payload: nodeRunEvents.payload, kind: nodeRunEvents.kind })
+    .from(nodeRunEvents)
+    .where(eq(nodeRunEvents.nodeRunId, nodeRunId))
+    .orderBy(asc(nodeRunEvents.id))
+  return rows
+    .filter((r) => r.kind !== 'stderr')
+    .map((r) => r.payload)
+    .join('\n')
+}
+
+/**
  * Cumulative diff in the worktree since the task started.
  *
  * Throws ValidationError if baseCommit wasn't captured (task failed before
