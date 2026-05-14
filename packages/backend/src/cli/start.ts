@@ -132,29 +132,6 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const baseUrl = `http://${server.hostname}:${server.port}/`
   log.info('listening', { url: baseUrl })
 
-  // Write runtime info file for `status` / `stop` subcommands to discover us.
-  writeFileSync(
-    Paths.daemonInfo,
-    JSON.stringify(
-      {
-        pid: lock.pid,
-        host: server.hostname,
-        port: server.port,
-        url: baseUrl,
-        startedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-  )
-
-  // Browser-facing URL with token included; printed exactly once on stdout
-  // and never written to the persistent log (per design.md §10.2).
-  const browserUrl = `${baseUrl}?token=${token}`
-  process.stdout.write(
-    `\nagent-workflow ready — open this URL in your browser:\n  ${browserUrl}\n\n`,
-  )
-
   // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC + P-5-01 events archival).
   const limitsTicker = startLimitsTicker(db)
   const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config))
@@ -170,11 +147,11 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   //   - poll for ~30s; any task still in 'running' after the budget is
   //     flipped to 'interrupted' so the next daemon start surfaces it as
   //     daemon-restart instead of leaving stale rows.
-  // Sync cleanup of .daemon.info — must happen before any await in the
-  // signal path. CI on macOS flaked when this was buried behind
-  // `await import(...) + await gracefulShutdown(...)`: if the daemon was
-  // killed before the awaits resolved, the file outlived the process and
-  // the cli.test.ts existsSync assertion failed.
+  //
+  // CRITICAL: signal handlers must be installed BEFORE the "ready" line is
+  // printed to stdout. The test/launcher races: it reads the URL from stdout
+  // and immediately sends SIGTERM — if the handler hasn't been registered
+  // yet, Node's default terminate runs and `.daemon.info` outlives us.
   const removeDaemonInfo = (): void => {
     try {
       unlinkSync(Paths.daemonInfo)
@@ -221,6 +198,31 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     removeDaemonInfo()
     lock.release()
   })
+
+  // Write runtime info file for `status` / `stop` subcommands to discover us.
+  // Must be AFTER signal handlers so a racing SIGTERM never leaves the file
+  // behind.
+  writeFileSync(
+    Paths.daemonInfo,
+    JSON.stringify(
+      {
+        pid: lock.pid,
+        host: server.hostname,
+        port: server.port,
+        url: baseUrl,
+        startedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  )
+
+  // Browser-facing URL with token included; printed exactly once on stdout
+  // and never written to the persistent log (per design.md §10.2).
+  const browserUrl = `${baseUrl}?token=${token}`
+  process.stdout.write(
+    `\nagent-workflow ready — open this URL in your browser:\n  ${browserUrl}\n\n`,
+  )
 
   await new Promise<void>(() => {
     /* never resolves */
