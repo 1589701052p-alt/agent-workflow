@@ -8,9 +8,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Config, ConfigPatch } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { Field, NumberInput, Switch, TextInput } from '@/components/Form'
+import { describeApiError } from '@/i18n'
 import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
 import { Route as RootRoute } from './__root'
 
@@ -24,6 +26,7 @@ type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'connection'
 
 function SettingsPage() {
   const [tab, setTab] = useState<Tab>('runtime')
+  const { t } = useTranslation()
   const config = useQuery<Config>({
     queryKey: ['config'],
     queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
@@ -32,22 +35,24 @@ function SettingsPage() {
   return (
     <div className="page">
       <header className="page__header">
-        <h1>Settings</h1>
+        <h1>{t('settings.title')}</h1>
         <p className="page__hint">
-          Backed by <code>~/.agent-workflow/config.json</code>. Patches via{' '}
-          <code>PUT /api/config</code>. Fields marked <em>restart</em> only apply on the next daemon
-          start.
+          {t('settings.hintBacked')}
+          <code>~/.agent-workflow/config.json</code>
+          {t('settings.hintPatched')}
+          <code>PUT /api/config</code>
+          {t('settings.hintRestart')}
         </p>
       </header>
 
       <div className="tabs">
         {(
           [
-            ['runtime', 'Runtime'],
-            ['limits', 'Limits'],
-            ['gc', 'GC'],
-            ['network', 'Network'],
-            ['connection', 'Connection'],
+            ['runtime', t('settings.tabRuntime')],
+            ['limits', t('settings.tabLimits')],
+            ['gc', t('settings.tabGc')],
+            ['network', t('settings.tabNetwork')],
+            ['connection', t('settings.tabConnection')],
           ] as Array<[Tab, string]>
         ).map(([k, label]) => (
           <button
@@ -61,7 +66,7 @@ function SettingsPage() {
         ))}
       </div>
 
-      {config.isLoading && <div className="muted">Loading…</div>}
+      {config.isLoading && <div className="muted">{t('settings.loading')}</div>}
       {config.error !== null && config.error !== undefined && (
         <div className="error-box">{describeError(config.error)}</div>
       )}
@@ -294,6 +299,7 @@ function GcTab({ config }: TabProps) {
 }
 
 function BackupCard() {
+  const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ path: string; sizeBytes: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -305,24 +311,22 @@ function BackupCard() {
       const r = await api.post<{ path: string; sizeBytes: number }>('/api/backup', {})
       setResult({ path: r.path, sizeBytes: r.sizeBytes })
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(describeApiError(err))
     } finally {
       setBusy(false)
     }
   }
   return (
     <div className="info-box-muted" style={{ marginTop: 16 }}>
-      <strong>Export backup</strong>
-      <p style={{ marginTop: 4, marginBottom: 8, fontSize: 13 }}>
-        Bundles db.sqlite + config.json + skills/ + workflows YAML into a tarball under{' '}
-        <code>~/.agent-workflow/backups/</code>. Excludes worktrees, runs, logs, token.
-      </p>
+      <strong>{t('settings.backupTitle')}</strong>
+      <p style={{ marginTop: 4, marginBottom: 8, fontSize: 13 }}>{t('settings.backupHint')}</p>
       <button type="button" className="btn" onClick={runBackup} disabled={busy}>
-        {busy ? 'Creating backup…' : 'Create backup'}
+        {busy ? t('settings.backupRunning') : t('settings.backupCreate')}
       </button>
       {result !== null && (
         <p style={{ marginTop: 8, fontSize: 13 }} className="muted">
-          Saved <code>{result.path}</code> ({(result.sizeBytes / 1024 / 1024).toFixed(2)} MB)
+          {t('settings.backupSavedAs')}
+          <code>{result.path}</code> ({(result.sizeBytes / 1024 / 1024).toFixed(2)} MB)
         </p>
       )}
       {error !== null && (

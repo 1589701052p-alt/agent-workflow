@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（M5 进行中 — P-5-01 events archival + P-5-02 backup CLI/API/UI）
+**最近更新**：2026-05-14（M5 进行中 — P-5-01 events archival + P-5-02 backup + P-5-03 stage 1 i18n scaffold）
 
 ---
 
@@ -20,17 +20,18 @@ M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
 M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
 M4 高级编排   [11/11 ✅]  loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg
-M5 打磨       [2/12]      ← 进行中（P-5-01 events archival + P-5-02 backup）
+M5 打磨       [2.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1）
 ```
 
 ---
 
 ## 已完成 issue（66 个）
 
-### M5 进行中（2/12）
+### M5 进行中（2.5/12）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-5-03 (stage 1) | i18n 脚手架 + zh-CN/en-US bundle | `packages/frontend/src/i18n/{index.ts, zh-CN.ts, en-US.ts}`：i18next + react-i18next + i18next-browser-languagedetector，detector 顺序 `localStorage('aw-language') → navigator`，fallbackLng=zh-CN。`Resources` interface 把两个 bundle 锁成同一结构（nav / auth / settings / errors × 错误码→i18n key 映射）。`describeApiError(err)` 检测 `errors.{code}` 存在则吐 zh-CN 文案，否则 `'{fallback}: {raw message}'`。`main.tsx` `import './i18n'` side-effect 初始化。Stage 1 已迁文案：`routes/__root.tsx`（侧栏 brand + 5 个 nav）/ `routes/auth.tsx`（标题 + hint + url/token label + verifying/connect 按钮 + 错误用 describeApiError）/ `routes/settings.tsx`（页头三段 hint + 5 个 tab label + loading + BackupCard 全部 4 文案）。**Stage 2 未迁**（追加进列表）：agents/skills/workflows/tasks 列表 + detail + 编辑、launcher、所有 canvas 组件（NodeInspector / WorkflowCanvas / EditorSidebar）、forms (ChipsInput / JsonField / MarkdownEditor)、抽屉 tabs（NodeDetailDrawer 4 tab）、所有 task 详情 (TaskOutputPanel / DiffViewer / TaskStatusChip / TaskStatusCanvas)、settings Limits/GC/Network/Connection tab 内的 field labels + hints。tests +5 case（zh-CN default / en-US bundle reachable / 已知错误码本地化 / 未知错误码 fallback 拼接 / 非 ApiError stringify）|
 | P-5-01 | events 表归档后台任务 | `services/eventsArchive.ts`：`archiveEvents(db, config, logsDir)` 两阶段扫描——先按 `nodeRunId` group，超 `perNodeRunRows` 的把最旧的 (n − threshold) 行 dump 到 `logsDir/{taskId}/{nodeRunId}.jsonl`（append + JSON.stringify 每行含 id/ts/kind/payload）→ 删 DB；再做全局 pass，循环找全表最旧的 event，按其 nodeRunId 一次砍最多 own 行直到 total ≤ `globalRows`。Orphan nodeRun 事件直接删（不写文件）。`startEventsArchiver(db, loadConfig, logsDir, intervalMs=1h)` 每 tick 重读 config，挂在 `cli/start.ts` 8 步背景 tickers，shutdown 时 stop。`readArchivedEvents(logsDir, taskId, nodeRunId, since, limit)` 流式 line-scan 返回 `{id, ts, kind, payload:string}` 列表（payload 保持 raw 不解析）。`getNodeRunEvents` 现签名加 `logsDir?` —— 先 read archive (id > since 取 limit) → 再 DB `id > max(archived_id || since)` 补齐 remainder；`getNodeRunStdout` 同理拼 archive + DB（stderr 两侧都 drop）。tests 7 case（无需归档 / per-group 归档+DB 剩余 / 全局阈值 / endpoint since=0 含 archived / endpoint since=mid 跨边界 / stdout 拼接顺序 / readArchive 无文件返 []）|
 | P-5-02 | 备份 / 恢复 CLI + Settings 按钮 | `services/backup.ts` `createBackup({db, appHome?, now?})`：在 `{appHome}/backups/.staging-{stamp}/` 拼出 (1) `db.sqlite` —— `(db.$client as Database).exec("VACUUM INTO …")` 直接走 SQLite 一致性快照（对 in-memory & 文件库均生效）(2) `config.json` (3) `skills/` 整树 cpSync (4) `workflows/{id}.yaml` 复用 `exportWorkflowYaml`。然后 `tar -czf` 到 `agent-workflow-{stamp}.tar.gz`，finally 删 staging。stamp 用 ISO 时间去 `:.`。**不含**：worktrees / runs / logs / token。返回 `{path, sizeBytes, contents:{workflows, skills, config, db}}`。`cli/backup.ts` `backupCommand()` 打开 DB → createBackup → 打印 MB + 计数；`main.ts` 接入 `agent-workflow backup` 子命令。`routes/backup.ts` `POST /api/backup`（token 鉴权）。`routes/settings.tsx` GC tab 末尾插 `<BackupCard />`：信息文案 + 按钮 → POST /api/backup → 显示绝对路径 + MB。tests 6 case（layout 含 db.sqlite/config/skills/yaml × 2 workflows / 排除 worktrees+runs+logs+token / sqlite dump 可重新打开且 workflows 行数对 / 首次运行无 config 无 skills / staging 清理 / HTTP endpoint 完整 round-trip）|
 
@@ -127,7 +128,7 @@ M5 打磨       [2/12]      ← 进行中（P-5-01 events archival + P-5-02 back
 
 ## 测试积累
 
-后端测试 **313 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **103 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **313 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **108 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 M4 新增测试：scheduler 5 case（loop exit-immediate / exhausted / port-count-lt / port-equals / git-in-loop）+ limits 5 + orphans 2 + gc 3 + shutdown 2 + tokens 6 + workflow-yaml 7 = +30 case。
 
@@ -210,8 +211,9 @@ packages/backend/src/
 
 ## 下一步：M5 续
 
-P-5-01 events archival + P-5-02 backup 闭合。M5 剩 10 个 issue（按 `design/plan.md` §7）：
-- P-5-03 i18n + 中文 locale（L）— 下一个
+P-5-01 + P-5-02 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
+- **P-5-03 stage 2**：把 stage 1 列表里"未迁"的所有路由/组件 hardcoded 英文外提到 i18n 键，覆盖剩余 ~38 个 .tsx（estimate L）
+- P-5-04 暗色主题（M）
 - P-5-04 暗色主题（M）
 - P-5-05 Bun build 单二进制（M）
 - P-5-06 GitHub Releases pipeline（S）— deps P-5-05

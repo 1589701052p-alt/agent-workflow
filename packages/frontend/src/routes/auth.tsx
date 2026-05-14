@@ -3,7 +3,9 @@
 
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
-import { api, ApiError } from '@/api/client'
+import { useTranslation } from 'react-i18next'
+import { api } from '@/api/client'
+import { describeApiError } from '@/i18n'
 import { AUTH_DEFAULT_BASE_URL, getBaseUrl, setBaseUrl, setToken } from '@/stores/auth'
 import { Route as RootRoute } from './__root'
 
@@ -25,6 +27,7 @@ export const Route = createRoute({
 function AuthPage() {
   const navigate = useNavigate()
   const { redirect } = useSearch({ from: Route.id }) as AuthSearch
+  const { t } = useTranslation()
   const [tokenInput, setTokenInput] = useState('')
   const [baseInput, setBaseInput] = useState(getBaseUrl())
   const [error, setError] = useState<string | null>(null)
@@ -40,11 +43,7 @@ function AuthPage() {
       await api.get('/api/health')
       navigate({ to: (redirect as '/agents' | undefined) ?? '/agents' })
     } catch (e) {
-      if (e instanceof ApiError) {
-        setError(`${e.code}: ${e.message}`)
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
+      setError(describeApiError(e))
     } finally {
       setBusy(false)
     }
@@ -52,13 +51,15 @@ function AuthPage() {
 
   return (
     <div className="auth-page">
-      <h1>Connect to daemon</h1>
+      <h1>{t('auth.title')}</h1>
       <p className="auth-page__hint">
-        Run <code>agent-workflow start</code>; copy the token it prints on stdout and paste below.
+        {t('auth.hint')}
+        <code>{t('auth.hintCmd')}</code>
+        {t('auth.hintAfter')}
       </p>
       <form onSubmit={handleSubmit} className="auth-form">
         <label>
-          Daemon URL
+          {t('auth.daemonUrl')}
           <input
             type="url"
             value={baseInput}
@@ -68,19 +69,19 @@ function AuthPage() {
           />
         </label>
         <label>
-          Token
+          {t('auth.token')}
           <input
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="64-char hex"
+            placeholder={t('auth.tokenPlaceholder')}
             required
             autoFocus
           />
         </label>
         {error !== null && <div className="auth-form__error">{error}</div>}
         <button type="submit" disabled={busy}>
-          {busy ? 'Verifying…' : 'Connect'}
+          {busy ? t('auth.verifying') : t('auth.connect')}
         </button>
       </form>
     </div>

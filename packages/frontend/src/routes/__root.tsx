@@ -6,14 +6,15 @@
 
 import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { getToken, subscribeAuth } from '@/stores/auth'
 
-const NAV: { to: string; label: string }[] = [
-  { to: '/agents', label: 'Agents' },
-  { to: '/skills', label: 'Skills' },
-  { to: '/workflows', label: 'Workflows' },
-  { to: '/tasks', label: 'Tasks' },
-  { to: '/settings', label: 'Settings' },
+const NAV: { to: string; key: 'agents' | 'skills' | 'workflows' | 'tasks' | 'settings' }[] = [
+  { to: '/agents', key: 'agents' },
+  { to: '/skills', key: 'skills' },
+  { to: '/workflows', key: 'workflows' },
+  { to: '/tasks', key: 'tasks' },
+  { to: '/settings', key: 'settings' },
 ]
 
 export const Route = createRootRoute({
@@ -33,6 +34,7 @@ function useAuthToken(): string | null {
 function RootComponent() {
   const token = useAuthToken()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const { t } = useTranslation()
 
   if (pathname === '/auth' || token === null) {
     return (
@@ -45,7 +47,7 @@ function RootComponent() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar__brand">Agent Workflow</div>
+        <div className="sidebar__brand">{t('nav.brand')}</div>
         <nav className="sidebar__nav">
           {NAV.map((item) => (
             <Link
@@ -54,7 +56,7 @@ function RootComponent() {
               className="sidebar__link"
               activeProps={{ className: 'sidebar__link sidebar__link--active' }}
             >
-              {item.label}
+              {t(`nav.${item.key}`)}
             </Link>
           ))}
         </nav>
