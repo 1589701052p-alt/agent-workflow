@@ -7,6 +7,7 @@
 
 import {
   Background,
+  type Connection,
   Controls,
   type Edge,
   MiniMap,
@@ -20,6 +21,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
+import { ulid } from 'ulid'
 import { AgentNode } from './nodes/AgentNode'
 import { InputNode } from './nodes/InputNode'
 import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
@@ -112,6 +114,16 @@ function CanvasInner({ definition, agents, onChange, onSelect, readOnly }: Workf
 
   const deleteKeyCodes = useMemo(() => ['Backspace', 'Delete'], [])
 
+  const handleConnect = useCallback(
+    (conn: Connection) => {
+      if (readOnly === true || onChange === undefined) return
+      const built = buildEdgeFromConnection(definition, conn)
+      if (built === null) return
+      onChange({ ...definition, edges: [...definition.edges, built] })
+    },
+    [definition, onChange, readOnly],
+  )
+
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
     if (readOnly === true) return
     if (
@@ -145,6 +157,7 @@ function CanvasInner({ definition, agents, onChange, onSelect, readOnly }: Workf
         nodeTypes={NODE_TYPES}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
+        onConnect={handleConnect}
         onSelectionChange={
           onSelect === undefined
             ? undefined
@@ -155,7 +168,7 @@ function CanvasInner({ definition, agents, onChange, onSelect, readOnly }: Workf
         }
         nodesDraggable={readOnly !== true}
         edgesFocusable={readOnly !== true}
-        nodesConnectable={false /* connection editor lands in P-2-07 */}
+        nodesConnectable={readOnly !== true}
         deleteKeyCode={readOnly === true ? null : deleteKeyCodes}
         fitView
         minZoom={0.2}
@@ -310,6 +323,46 @@ function toDefinition(
     ...prev,
     nodes: nextNodes,
     edges: nextEdges,
+  }
+}
+
+/**
+ * Validate an xyflow Connection event against the current definition and
+ * convert it to a WorkflowEdge. Returns null when:
+ *   - either side is missing nodeId or handle/port
+ *   - it's a self-loop (target.nodeId === source.nodeId)
+ *   - an identical edge already exists (same source+target port pair)
+ *
+ * Port name correctness is left to P-2-01's validator; the canvas just
+ * captures the wire and lets save-time validation surface mismatches.
+ */
+export function buildEdgeFromConnection(
+  def: WorkflowDefinition,
+  conn: {
+    source?: string | null
+    target?: string | null
+    sourceHandle?: string | null
+    targetHandle?: string | null
+  },
+): WorkflowEdge | null {
+  const source = conn.source ?? ''
+  const target = conn.target ?? ''
+  const sourcePort = conn.sourceHandle ?? ''
+  const targetPort = conn.targetHandle ?? ''
+  if (source === '' || target === '' || sourcePort === '' || targetPort === '') return null
+  if (source === target) return null
+  const duplicate = def.edges.some(
+    (e) =>
+      e.source.nodeId === source &&
+      e.source.portName === sourcePort &&
+      e.target.nodeId === target &&
+      e.target.portName === targetPort,
+  )
+  if (duplicate) return null
+  return {
+    id: `edge_${ulid().slice(-6).toLowerCase()}`,
+    source: { nodeId: source, portName: sourcePort },
+    target: { nodeId: target, portName: targetPort },
   }
 }
 

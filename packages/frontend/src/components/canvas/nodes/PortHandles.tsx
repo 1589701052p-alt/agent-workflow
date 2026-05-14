@@ -28,13 +28,7 @@ export function PortHandles({ side, ports }: Props) {
             className={`canvas-node__port canvas-node__port--${side}`}
             style={{ top: `${top}%` }}
           >
-            <Handle
-              type={type}
-              position={position}
-              id={p}
-              isConnectable={false}
-              className="canvas-node__handle"
-            />
+            <Handle type={type} position={position} id={p} className="canvas-node__handle" />
             <span className="canvas-node__port-label">{p}</span>
           </div>
         )
