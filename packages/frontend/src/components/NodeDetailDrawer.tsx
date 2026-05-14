@@ -21,17 +21,33 @@ interface Props {
   runs: NodeRun[]
   outputs: NodeRunOutput[]
   onClose: () => void
+  /** Allows the drawer to navigate between sibling/child runs. */
+  onSelectRun?: (nodeRunId: string) => void
 }
 
 type Tab = 'prompt' | 'events' | 'output' | 'stats'
 
-export function NodeDetailDrawer({ taskId, nodeRunId, runs, outputs, onClose }: Props) {
+export function NodeDetailDrawer({
+  taskId,
+  nodeRunId,
+  runs,
+  outputs,
+  onClose,
+  onSelectRun,
+}: Props) {
   const [tab, setTab] = useState<Tab>('prompt')
 
   if (nodeRunId === null) return null
   const run = runs.find((r) => r.id === nodeRunId)
   if (run === undefined) return null
   const nodeOutputs = outputs.filter((o) => o.nodeRunId === nodeRunId)
+
+  // P-3-10: sibling fan-out children, if this run is a multi-process parent.
+  const children = runs.filter((r) => r.parentNodeRunId === nodeRunId)
+  // P-3-10: previous retries on this node id.
+  const retries = runs
+    .filter((r) => r.nodeId === run.nodeId && r.id !== run.id && r.parentNodeRunId === null)
+    .sort((a, b) => a.retryIndex - b.retryIndex)
 
   return (
     <aside className="inspector">
@@ -65,14 +81,68 @@ export function NodeDetailDrawer({ taskId, nodeRunId, runs, outputs, onClose }: 
           </button>
         ))}
       </div>
+      {children.length > 0 && <SubProcessList children={children} onPick={onSelectRun} />}
       <div className="inspector__body">
         {tab === 'prompt' && <PromptTab run={run} />}
         {tab === 'events' && <EventsTab taskId={taskId} nodeRunId={nodeRunId} />}
         {tab === 'output' && <OutputTab outputs={nodeOutputs} />}
-        {tab === 'stats' && <StatsTab run={run} />}
+        {tab === 'stats' && <StatsTab run={run} retries={retries} onPickRetry={onSelectRun} />}
       </div>
     </aside>
   )
+}
+
+// ---------------------------------------------------------------------------
+
+function SubProcessList({
+  children,
+  onPick,
+}: {
+  children: NodeRun[]
+  onPick?: (id: string) => void
+}) {
+  return (
+    <div className="subprocess-list">
+      <div className="subprocess-list__title">{children.length} shard(s)</div>
+      <ul>
+        {children
+          .sort((a, b) => (a.shardKey ?? '').localeCompare(b.shardKey ?? ''))
+          .map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                className="subprocess-list__item"
+                onClick={() => onPick?.(c.id)}
+              >
+                <span className={`status-chip status-chip--${noderunTone(c.status)}`}>
+                  {c.status}
+                </span>
+                <code className="subprocess-list__shard">{c.shardKey ?? '(no key)'}</code>
+                <span className="muted">tok {c.tokTotal ?? 0}</span>
+              </button>
+            </li>
+          ))}
+      </ul>
+    </div>
+  )
+}
+
+function noderunTone(s: NodeRun['status']): string {
+  switch (s) {
+    case 'running':
+      return 'blue'
+    case 'done':
+      return 'green'
+    case 'failed':
+    case 'exhausted':
+      return 'red'
+    case 'canceled':
+    case 'interrupted':
+      return 'gray'
+    case 'pending':
+    case 'skipped':
+      return 'gray'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +175,15 @@ function OutputTab({ outputs }: { outputs: NodeRunOutput[] }) {
   )
 }
 
-function StatsTab({ run }: { run: NodeRun }) {
+function StatsTab({
+  run,
+  retries,
+  onPickRetry,
+}: {
+  run: NodeRun
+  retries: NodeRun[]
+  onPickRetry?: (id: string) => void
+}) {
   const duration =
     run.startedAt !== null && run.finishedAt !== null
       ? `${((run.finishedAt - run.startedAt) / 1000).toFixed(2)}s`
@@ -140,6 +218,32 @@ function StatsTab({ run }: { run: NodeRun }) {
         <>
           <dt>Error</dt>
           <dd className="task-meta__error">{run.errorMessage}</dd>
+        </>
+      )}
+      {retries.length > 0 && (
+        <>
+          <dt>Retries</dt>
+          <dd>
+            <ul className="retries-history">
+              {retries.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    className="retries-history__item"
+                    onClick={() => onPickRetry?.(r.id)}
+                  >
+                    <code>attempt {r.retryIndex}</code>{' '}
+                    <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
+                      {r.status}
+                    </span>
+                    {r.startedAt !== null && (
+                      <span className="muted">{new Date(r.startedAt).toLocaleTimeString()}</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </dd>
         </>
       )}
     </dl>

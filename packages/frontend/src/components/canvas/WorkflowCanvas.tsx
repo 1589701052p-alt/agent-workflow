@@ -236,6 +236,64 @@ function CanvasInner({
     [definition, onChange, readOnly],
   )
 
+  // P-3-04: wrap the current selection in a new wrapper-git / wrapper-loop
+  // node. The wrapper's position is just behind the topmost-leftmost
+  // selected node so it visually overlaps the group it owns.
+  const wrapSelection = useCallback(
+    (kind: 'wrapper-git' | 'wrapper-loop') => {
+      if (onChange === undefined || readOnly === true) return
+      const inner = selection.nodes
+      if (inner.length === 0) return
+      const innerSet = new Set(inner)
+      const innerNodes = definition.nodes.filter((n) => innerSet.has(n.id))
+      let minX = Number.POSITIVE_INFINITY
+      let minY = Number.POSITIVE_INFINITY
+      for (const n of innerNodes) {
+        const p = n.position ?? { x: 0, y: 0 }
+        if (p.x < minX) minX = p.x
+        if (p.y < minY) minY = p.y
+      }
+      if (!Number.isFinite(minX)) minX = 0
+      if (!Number.isFinite(minY)) minY = 0
+      const wrapperId = `${kind.replace('wrapper-', 'wrap_')}_${ulid().slice(-6).toLowerCase()}`
+      const base = {
+        id: wrapperId,
+        kind,
+        position: { x: Math.round(minX - 30), y: Math.round(minY - 30) },
+        nodeIds: inner,
+      }
+      const wrapper =
+        kind === 'wrapper-loop'
+          ? { ...base, maxIterations: 3, exitCondition: { kind: 'port-empty' } }
+          : base
+      onChange({
+        ...definition,
+        nodes: [...definition.nodes, wrapper as WorkflowNode],
+      })
+      setSelection({ nodes: [wrapperId], edges: [] })
+    },
+    [definition, onChange, readOnly, selection.nodes],
+  )
+
+  const decomposeWrapper = useCallback(
+    (wrapperId: string) => {
+      if (onChange === undefined || readOnly === true) return
+      const node = definition.nodes.find((n) => n.id === wrapperId)
+      if (node === undefined) return
+      if (node.kind !== 'wrapper-git' && node.kind !== 'wrapper-loop') return
+      const inner = (node as Record<string, unknown>).nodeIds
+      const innerIds = Array.isArray(inner)
+        ? inner.filter((s): s is string => typeof s === 'string')
+        : []
+      onChange({
+        ...definition,
+        nodes: definition.nodes.filter((n) => n.id !== wrapperId),
+      })
+      setSelection({ nodes: innerIds, edges: [] })
+    },
+    [definition, onChange, readOnly],
+  )
+
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
     if (readOnly === true) return
     if (
@@ -309,10 +367,29 @@ function CanvasInner({
         onSelect: () => menu.nodeId !== null && duplicateNode(menu.nodeId),
       },
       { label: 'Copy', onSelect: copySelection, disabled: selection.nodes.length === 0 },
+      {
+        label: 'Wrap in git wrapper',
+        disabled: selection.nodes.length === 0,
+        onSelect: () => wrapSelection('wrapper-git'),
+      },
+      // wrapper-loop is M4 territory; we still expose it so users can
+      // pre-author workflows but the scheduler will reject runs.
+      {
+        label: 'Wrap in loop wrapper',
+        disabled: selection.nodes.length === 0,
+        onSelect: () => wrapSelection('wrapper-loop'),
+      },
+      {
+        label: 'Decompose wrapper',
+        disabled: !isWrapperNode(definition, menu.nodeId),
+        onSelect: () => menu.nodeId !== null && decomposeWrapper(menu.nodeId),
+      },
       { label: 'Delete', danger: true, onSelect: deleteSelected },
     ]
   }, [
     copySelection,
+    decomposeWrapper,
+    definition,
     deleteSelected,
     duplicateNode,
     menu,
@@ -320,6 +397,7 @@ function CanvasInner({
     rf,
     selectAll,
     selection.nodes.length,
+    wrapSelection,
   ])
 
   return (
@@ -568,6 +646,12 @@ export function buildEdgeFromConnection(
     source: { nodeId: source, portName: sourcePort },
     target: { nodeId: target, portName: targetPort },
   }
+}
+
+function isWrapperNode(def: WorkflowDefinition, nodeId: string | null): boolean {
+  if (nodeId === null) return false
+  const n = def.nodes.find((x) => x.id === nodeId)
+  return n !== undefined && (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop')
 }
 
 // Test helpers (exported but underscored).

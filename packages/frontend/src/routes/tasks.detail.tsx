@@ -174,6 +174,7 @@ function TaskDetailPage() {
               runs={nodeRuns.data.runs}
               outputs={nodeRuns.data.outputs}
               onClose={() => setSelectedNodeRunId(null)}
+              onSelectRun={setSelectedNodeRunId}
             />
           )}
         </div>
