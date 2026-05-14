@@ -40,7 +40,8 @@ function AuthPage() {
     setBaseUrl(baseInput)
     setToken(tokenInput)
     try {
-      await api.get('/api/health')
+      // /api/whoami is auth-gated; /health is public and would pass even with a bad token.
+      await api.get('/api/whoami')
       navigate({ to: (redirect as '/agents' | undefined) ?? '/agents' })
     } catch (e) {
       setError(describeApiError(e))
