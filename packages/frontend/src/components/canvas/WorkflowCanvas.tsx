@@ -15,12 +15,14 @@ import {
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
+  useReactFlow,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
 import { AgentNode } from './nodes/AgentNode'
 import { InputNode } from './nodes/InputNode'
+import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
 import type { CanvasNodeData } from './nodes/types'
 import { GitWrapperNode, LoopWrapperNode } from './nodes/WrapperNodes'
@@ -56,6 +58,7 @@ function CanvasInner({ definition, agents, onChange, readOnly }: WorkflowCanvasP
     for (const a of agents ?? []) m.set(a.name, a)
     return m
   }, [agents])
+  const rf = useReactFlow()
 
   const [nodes, setNodes] = useState<Node[]>(() => toFlowNodes(definition, agentByName))
   const [edges, setEdges] = useState<Edge[]>(() => toFlowEdges(definition.edges))
@@ -107,8 +110,33 @@ function CanvasInner({ definition, agents, onChange, readOnly }: WorkflowCanvasP
 
   const deleteKeyCodes = useMemo(() => ['Backspace', 'Delete'], [])
 
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (readOnly === true) return
+    if (
+      e.dataTransfer.types.includes(PALETTE_MIME) ||
+      e.dataTransfer.types.includes('text/plain')
+    ) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    if (readOnly === true) return
+    if (onChange === undefined) return
+    const raw = e.dataTransfer.getData(PALETTE_MIME) || e.dataTransfer.getData('text/plain')
+    if (raw === '') return
+    const item = deserialize(raw)
+    if (item === null) return
+    e.preventDefault()
+    const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    const existingIds = new Set(definition.nodes.map((n) => n.id))
+    const newNode = makeNode(item, pos, { agents, existingIds })
+    onChange({ ...definition, nodes: [...definition.nodes, newNode] })
+  }
+
   return (
-    <div className="workflow-canvas">
+    <div className="workflow-canvas" onDragOver={handleDragOver} onDrop={handleDrop}>
       <ReactFlow
         nodes={nodes}
         edges={edges}

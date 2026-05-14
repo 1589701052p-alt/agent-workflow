@@ -859,13 +859,100 @@ code {
   gap: 12px;
 }
 
-.canvas-frame {
+.editor-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 12px;
   flex: 1;
   min-height: 520px;
+}
+
+.canvas-frame {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
   overflow: hidden;
+  min-height: 520px;
+}
+
+.editor-sidebar {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-sidebar__filter {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.form-input--sm {
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.editor-sidebar__sections {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+.editor-sidebar__section + .editor-sidebar__section {
+  margin-top: 14px;
+}
+
+.editor-sidebar__title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 4px 4px;
+}
+
+.editor-sidebar__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.editor-sidebar__item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: grab;
+  background: var(--bg);
+  transition: border-color 0.1s;
+}
+
+.editor-sidebar__item:hover {
+  border-color: var(--accent);
+}
+
+.editor-sidebar__item:active {
+  cursor: grabbing;
+}
+
+.editor-sidebar__item-label {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.editor-sidebar__item-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.editor-sidebar__empty {
+  padding: 12px;
+  text-align: center;
 }
 
 .workflow-canvas,

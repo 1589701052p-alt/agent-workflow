@@ -1,0 +1,181 @@
+// Catalog of "things you can drag onto the canvas" plus a factory that
+// turns a palette item into a fresh WorkflowNode (used by P-2-05).
+// Lives outside the React tree so the sidebar and the canvas can both
+// reach it without a context provider.
+
+import type { Agent, WorkflowNode } from '@agent-workflow/shared'
+import { ulid } from 'ulid'
+
+export type PaletteItem =
+  | { kind: 'agent-single'; agentName: string }
+  | { kind: 'agent-multi'; agentName: string }
+  | { kind: 'input' }
+  | { kind: 'output' }
+  | { kind: 'wrapper-git' }
+  | { kind: 'wrapper-loop' }
+
+/** mime carried in HTML5 dataTransfer. Custom to avoid colliding with files. */
+export const PALETTE_MIME = 'application/x-agent-workflow-node'
+
+export function serialize(item: PaletteItem): string {
+  return JSON.stringify(item)
+}
+
+export function deserialize(raw: string): PaletteItem | null {
+  try {
+    const v = JSON.parse(raw) as unknown
+    if (typeof v !== 'object' || v === null) return null
+    const rec = v as Record<string, unknown>
+    if (typeof rec.kind !== 'string') return null
+    switch (rec.kind) {
+      case 'agent-single':
+      case 'agent-multi':
+        return typeof rec.agentName === 'string'
+          ? ({ kind: rec.kind, agentName: rec.agentName } as PaletteItem)
+          : null
+      case 'input':
+      case 'output':
+      case 'wrapper-git':
+      case 'wrapper-loop':
+        return { kind: rec.kind } as PaletteItem
+      default:
+        return null
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Default field values for new nodes, keyed by kind. */
+export function makeNode(
+  item: PaletteItem,
+  position: { x: number; y: number },
+  ctx: { agents?: Agent[]; existingIds: Set<string> } = { existingIds: new Set() },
+): WorkflowNode {
+  const id = nextId(item.kind, ctx.existingIds)
+  const pos = { x: Math.round(position.x), y: Math.round(position.y) }
+  switch (item.kind) {
+    case 'agent-single':
+    case 'agent-multi': {
+      const node: WorkflowNode = {
+        id,
+        kind: item.kind,
+        position: pos,
+      }
+      ;(node as Record<string, unknown>).agentName = item.agentName
+      return node
+    }
+    case 'input':
+      return {
+        id,
+        kind: 'input',
+        position: pos,
+        // Use a unique default key so duplicate input nodes don't collide
+        // with rule 4 (input-key-duplicate).
+        inputKey: uniqueInputKey(ctx.existingIds),
+      } as WorkflowNode
+    case 'output':
+      return { id, kind: 'output', position: pos, ports: [] } as WorkflowNode
+    case 'wrapper-git':
+      return { id, kind: 'wrapper-git', position: pos, nodeIds: [] } as WorkflowNode
+    case 'wrapper-loop':
+      return {
+        id,
+        kind: 'wrapper-loop',
+        position: pos,
+        nodeIds: [],
+        maxIterations: 3,
+        exitCondition: { kind: 'port-empty' },
+      } as WorkflowNode
+  }
+}
+
+function nextId(kind: PaletteItem['kind'], existing: Set<string>): string {
+  // Short stable prefix per kind + ULID tail so multi drops don't collide
+  // even within the same millisecond.
+  const prefix = SHORT[kind]
+  const candidate = `${prefix}_${ulid().slice(-6).toLowerCase()}`
+  if (!existing.has(candidate)) return candidate
+  // Extremely unlikely collision; suffix-bump.
+  let i = 2
+  while (existing.has(`${candidate}-${i}`)) i++
+  return `${candidate}-${i}`
+}
+
+const SHORT: Record<PaletteItem['kind'], string> = {
+  'agent-single': 'agent',
+  'agent-multi': 'fan',
+  input: 'in',
+  output: 'out',
+  'wrapper-git': 'wrap_git',
+  'wrapper-loop': 'wrap_loop',
+}
+
+function uniqueInputKey(existing: Set<string>): string {
+  // existing here is node ids, not input keys — fall back to a numeric
+  // suffix from the id set (best-effort).
+  let i = 1
+  while (existing.has(`requirement_${i}`)) i++
+  return i === 1 ? 'requirement' : `requirement_${i}`
+}
+
+/** A flat list of palette entries used by the sidebar UI. */
+export interface PaletteSection {
+  label: string
+  items: Array<{
+    item: PaletteItem
+    label: string
+    description: string
+  }>
+}
+
+export function buildPalette(agents: Agent[]): PaletteSection[] {
+  return [
+    {
+      label: 'Agents',
+      items: agents.map((a) => ({
+        item: { kind: 'agent-single', agentName: a.name } as PaletteItem,
+        label: a.name,
+        description: a.description || 'agent',
+      })),
+    },
+    {
+      label: 'Fan-out',
+      items: agents.map((a) => ({
+        item: { kind: 'agent-multi', agentName: a.name } as PaletteItem,
+        label: `🔀 ${a.name}`,
+        description: 'multi-process (shards sourcePort)',
+      })),
+    },
+    {
+      label: 'Wrappers',
+      items: [
+        {
+          item: { kind: 'wrapper-git' } as PaletteItem,
+          label: 'git wrapper',
+          description: 'snapshot diff before+after children',
+        },
+        {
+          item: { kind: 'wrapper-loop' } as PaletteItem,
+          label: 'loop wrapper',
+          description: 'rerun children until exit condition',
+        },
+      ],
+    },
+    {
+      label: 'IO',
+      items: [
+        {
+          item: { kind: 'input' } as PaletteItem,
+          label: 'input',
+          description: 'launcher form value',
+        },
+        {
+          item: { kind: 'output' } as PaletteItem,
+          label: 'output',
+          description: 'task-detail outputs panel',
+        },
+      ],
+    },
+  ]
+}

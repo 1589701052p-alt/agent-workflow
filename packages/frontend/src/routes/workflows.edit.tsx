@@ -7,6 +7,7 @@ import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Agent, Workflow, WorkflowDefinition } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { EditorSidebar } from '@/components/canvas/EditorSidebar'
 import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
@@ -73,12 +74,15 @@ function WorkflowNewPage() {
       {create.error !== null && create.error !== undefined && (
         <div className="error-box">{describeError(create.error)}</div>
       )}
-      <div className="canvas-frame">
-        <WorkflowCanvas
-          definition={definition}
-          onChange={setDefinition}
-          agents={agents.data ?? []}
-        />
+      <div className="editor-layout">
+        <EditorSidebar agents={agents.data ?? []} />
+        <div className="canvas-frame">
+          <WorkflowCanvas
+            definition={definition}
+            onChange={setDefinition}
+            agents={agents.data ?? []}
+          />
+        </div>
       </div>
     </div>
   )
@@ -237,15 +241,18 @@ function WorkflowEditPage() {
         <ValidationPanel result={validate.data} />
       )}
 
-      <div className="canvas-frame">
-        <WorkflowCanvas
-          definition={draft}
-          agents={agents.data ?? []}
-          onChange={(next) => {
-            setDraft(next)
-            setDirty(true)
-          }}
-        />
+      <div className="editor-layout">
+        <EditorSidebar agents={agents.data ?? []} />
+        <div className="canvas-frame">
+          <WorkflowCanvas
+            definition={draft}
+            agents={agents.data ?? []}
+            onChange={(next) => {
+              setDraft(next)
+              setDirty(true)
+            }}
+          />
+        </div>
       </div>
     </div>
   )
