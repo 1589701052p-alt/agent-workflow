@@ -867,6 +867,126 @@ code {
   min-height: 520px;
 }
 
+.editor-layout--with-inspector {
+  grid-template-columns: 240px 1fr 480px;
+}
+
+/* ---- Node inspector ---- */
+
+.inspector {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 520px;
+}
+
+.inspector__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.inspector__kind {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.inspector__id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.inspector__close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.inspector__tabs {
+  margin: 0 12px;
+}
+
+.inspector__body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.inspector__output-ports {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.inspector__port-refs {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+/* ---- Prompt preview ---- */
+
+.prompt-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prompt-preview__inputs,
+.prompt-preview__output {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+
+.prompt-preview__title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.prompt-preview__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.prompt-preview__port-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.prompt-preview__pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 380px;
+  overflow: auto;
+}
+
 .canvas-frame {
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Agent, Workflow, WorkflowDefinition } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { EditorSidebar } from '@/components/canvas/EditorSidebar'
+import { NodeInspector } from '@/components/canvas/NodeInspector'
 import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
@@ -34,6 +35,7 @@ function WorkflowNewPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [definition, setDefinition] = useState<WorkflowDefinition>(EMPTY_DEF)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const agents = useQuery<Agent[]>({
     queryKey: ['agents'],
     queryFn: ({ signal }) => api.get('/api/agents', undefined, signal),
@@ -74,15 +76,23 @@ function WorkflowNewPage() {
       {create.error !== null && create.error !== undefined && (
         <div className="error-box">{describeError(create.error)}</div>
       )}
-      <div className="editor-layout">
+      <div className="editor-layout editor-layout--with-inspector">
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas
             definition={definition}
             onChange={setDefinition}
+            onSelect={setSelectedId}
             agents={agents.data ?? []}
           />
         </div>
+        <NodeInspector
+          definition={definition}
+          selectedNodeId={selectedId}
+          agents={agents.data ?? []}
+          onChange={setDefinition}
+          onClose={() => setSelectedId(null)}
+        />
       </div>
     </div>
   )
@@ -104,6 +114,7 @@ function WorkflowEditPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const lastSaved = useRef<{
     name: string
     description: string
@@ -241,18 +252,29 @@ function WorkflowEditPage() {
         <ValidationPanel result={validate.data} />
       )}
 
-      <div className="editor-layout">
+      <div className="editor-layout editor-layout--with-inspector">
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas
             definition={draft}
             agents={agents.data ?? []}
+            onSelect={setSelectedId}
             onChange={(next) => {
               setDraft(next)
               setDirty(true)
             }}
           />
         </div>
+        <NodeInspector
+          definition={draft}
+          selectedNodeId={selectedId}
+          agents={agents.data ?? []}
+          onChange={(next) => {
+            setDraft(next)
+            setDirty(true)
+          }}
+          onClose={() => setSelectedId(null)}
+        />
       </div>
     </div>
   )

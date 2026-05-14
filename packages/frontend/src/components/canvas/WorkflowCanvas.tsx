@@ -41,6 +41,8 @@ export interface WorkflowCanvasProps {
   /** Used to look up agent.outputs when rendering agent nodes. Optional. */
   agents?: Agent[]
   onChange?: (next: WorkflowDefinition) => void
+  /** Receives the currently-selected node id or null when nothing is selected. */
+  onSelect?: (nodeId: string | null) => void
   readOnly?: boolean
 }
 
@@ -52,7 +54,7 @@ export function WorkflowCanvas(props: WorkflowCanvasProps) {
   )
 }
 
-function CanvasInner({ definition, agents, onChange, readOnly }: WorkflowCanvasProps) {
+function CanvasInner({ definition, agents, onChange, onSelect, readOnly }: WorkflowCanvasProps) {
   const agentByName = useMemo(() => {
     const m = new Map<string, Agent>()
     for (const a of agents ?? []) m.set(a.name, a)
@@ -143,6 +145,14 @@ function CanvasInner({ definition, agents, onChange, readOnly }: WorkflowCanvasP
         nodeTypes={NODE_TYPES}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
+        onSelectionChange={
+          onSelect === undefined
+            ? undefined
+            : (s) => {
+                const first = s.nodes[0]?.id ?? null
+                onSelect(first)
+              }
+        }
         nodesDraggable={readOnly !== true}
         edgesFocusable={readOnly !== true}
         nodesConnectable={false /* connection editor lands in P-2-07 */}

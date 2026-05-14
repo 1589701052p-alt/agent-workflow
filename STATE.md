@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-2-04 完成后，节点自定义渲染上线）
+**最近更新**：2026-05-14（P-2-06 完成后，编辑器三栏 + 节点抽屉就绪）
 
 ---
 
@@ -17,7 +17,7 @@
 ```
 M0 准备       [5/5   ✅]
 M1 骨架       [18/18 ✅]  ← M1 完成
-M2 编辑器     [4/16 🚧]   ← 当前位置（校验器 + WS + 画布 + 自定义节点；下一步 P-2-05 拖拽源 / P-2-06 抽屉）
+M2 编辑器     [6/16 🚧]   ← 当前位置（校验器/WS/画布/自定义节点/拖拽源/抽屉；下一步 P-2-07 右键多选）
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
 M5 打磨       [0/12]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（27 个）
+## 已完成 issue（29 个）
 
 ### M0 全部完成（5/5）
 
@@ -37,10 +37,12 @@ M5 打磨       [0/12]
 | P-0-04 | ESLint + Prettier | `eslint.config.js` flat config + 跨包 import 边界规则（backend↮frontend 互斥） |
 | P-0-05 | Drizzle schema | 8 张表完整定义 + WAL/NORMAL/busy_timeout + 启动时自动 migrate + in-memory 测试辅助 |
 
-### M2 进行中（4/16）
+### M2 进行中（6/16）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-2-06 | 节点抽屉 Edit + Preview | `components/canvas/{NodeInspector,PromptPreview}.tsx`：右侧 480px 三栏（左 sidebar / 中画布 / 右 inspector）。Edit 表单按 kind 分支：agent 节点（agent selector、promptTemplate、retries、timeoutMs、model/variant/temperature overrides，agent-multi 多 sourcePort 字段）；input 节点（inputKey）；output 节点（端口列表显示 bind 来源）；wrapper-loop（maxIterations + exitCondition.kind）。Preview tab 调 `@agent-workflow/shared/prompt.ts` 的 `renderUserPrompt`（搬迁自 `backend/services/protocol.ts`，后者改为薄 re-export，保持 backend tests 不动）+ 用户编辑 mock port 值，实时拼接含协议块的 prompt。canvas 新增 `onSelect(nodeId|null)` prop。tests +5 case（template substitution、内置 meta、未引用 port section、协议块、缺失 port）|
+| P-2-05 | 编辑器侧栏（拖拽创建源） | `components/canvas/{EditorSidebar,nodePalette}.tsx`：240px 左 sidebar 顶部 filter + 四组 (Agents / Fan-out / Wrappers / IO)，HTML5 draggable item via `PALETTE_MIME = application/x-agent-workflow-node`。canvas 上 `onDragOver/onDrop` 用 `useReactFlow().screenToFlowPosition` 转坐标，`makeNode(item, pos, {agents, existingIds})` 派生 kind 默认值（id 用短前缀 + ulid 尾部 6 位避免碰撞；wrapper-loop 默认 maxIterations=3 + exitCondition=port-empty 让 validator 一开就过）。tests 13 case（dataTransfer 格式 round-trip + 各 kind 默认值 + id 碰撞 fallback + buildPalette 结构）|
 | P-2-04 | 节点类型自定义渲染 | `components/canvas/nodes/{AgentNode,InputNode,OutputNode,WrapperNodes,PortHandles,types}.tsx`：每种 kind 单独组件，xyflow `nodeTypes` 注册 `agent-single / agent-multi → AgentNode`、`input → InputNode`、`output → OutputNode`、`wrapper-git / wrapper-loop → 占位 wrapper`。`computePorts` 派生端口（input=输出 `inputKey`；output=输入 `ports[].name`；agent=`agent.outputs`，agent-multi 自动加 `errors`；wrapper-git→`git_diff`；wrapper-loop→`outputBindings[].name`；输入侧统一从入边汇聚）。`PortHandles` 在节点左右两侧均匀分布 `<Handle>` 圆点 + 端口名 chip；`canvas-node[data-status=...]` 留好状态色 hook（M2 编辑器仅默认色，task 详情画布在 M3 复用）。Editor 路由 `/workflows/new + /$id` 拉 `/api/agents` 喂给 canvas。tests 17 case（new +7：`computePorts` 各 kind + `toFlowNodes` 落 `type` / 端口 / wrapper innerCount）|
 | P-2-03 | Workflow 编辑器 xyflow 画布骨架 | `components/canvas/WorkflowCanvas.tsx`（xyflow v12 + `ReactFlowProvider`，pan/zoom/minimap/Controls，`deleteKeyCode=['Backspace','Delete']`，nodesDraggable + edgesFocusable，`nodesConnectable=false` 因为连线编辑器在 P-2-07）。`toFlowNodes/toFlowEdges/toDefinition` 双向转换（落地坐标四舍五入；缺位置时按 4×N 方阵布局；删除节点级联清理引用边）。新路由 `/workflows/new`（创建后 redirect 到 detail）+ `/workflows/$id`（800ms 防抖自动保存 name/description/definition + “Validate” 按钮调 stub validate endpoint + Delete 确认；dirty/saved/saving 三态指示）。Workflows 列表页改成 DataTable + 行内 Open/Delete + “+ New workflow” 按钮。tests 10 case（位置/标签/边删/round-trip 等）|
 | P-2-02 | WS 框架 + 三频道骨架 | `ws/broadcaster.ts` typed pub/sub（`taskBroadcaster / tasksListBroadcaster / workflowsBroadcaster`，每个 broadcaster 独立 channelKey set）+ `ws/server.ts` Bun.serve 适配器（`tryUpgrade(req, srv)` 返回 `true / false / Response` 三态，`websocket: { open, close, message }`）。三频道：`/ws/tasks/{id}`（含 `?since=N` 从 `node_run_events` JOIN `node_runs` 重放、`hello` 控制帧带 since）/ `/ws/tasks` / `/ws/workflows`。Token 走 `?token=` 常时比较。Wired calls：`createWorkflow/updateWorkflow/deleteWorkflow` 发 `workflow.{created,updated,deleted}`；`startTask` 发 `task.created`、scheduler/cancel 走新 helper `emitTaskStatus` 双频道一起发（`task.status` + `task.done` 终态）；scheduler 在每个 node insert / 结束时发 `node.status`。shared `schemas/ws.ts` 定义 `TaskWsMessage / TasksListWsMessage / WorkflowsWsMessage / WsControlMessage`。tests 7 case（404 / 401 / 各频道 hello / workflow created/updated/deleted / task.status+task.done / since 重放仅吐 id>since 的事件）|
@@ -73,7 +75,7 @@ M5 打磨       [0/12]
 
 ## 测试积累
 
-后端测试 **232 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **59 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **232 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **77 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
@@ -160,9 +162,9 @@ M1 验收已 ready：`agent-workflow start` → 浏览器登 token → 创 agent
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| P-2-05 | 编辑器侧栏（拖拽创建源） | P-2-03、P-2-04 | M |
-| P-2-06 | 节点抽屉（Edit / Preview 双 tab） | P-2-03、P-1-08 | L |
 | P-2-07 | 右键菜单 + 多选 + 复制粘贴 | P-2-03 | M |
+| P-2-08 | 边连线 + 端口可视化 | P-2-03、P-2-04 | M |
+| P-2-09 | Loop wrapper 退出条件编辑器 | P-2-06 | S |
 
 M1 验收：跑通 `创 agent → 创 skill → 通过 API/curl 创线性 workflow → 启 task → 看 opencode 子进程跑完 → 输出 envelope 解析为 ports`。
 
