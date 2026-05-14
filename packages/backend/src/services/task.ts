@@ -1,15 +1,24 @@
 // Task service — start / list / get.
 // Cancel/resume/retry land in P-1-15 + M3 (P-3-08, P-3-09).
 
-import type { StartTask, Task, TaskSummary } from '@agent-workflow/shared'
-import { and, desc, eq } from 'drizzle-orm'
+import type {
+  NodeRun,
+  NodeRunOutput,
+  StartTask,
+  Task,
+  TaskDiff,
+  TaskNodeRuns,
+  TaskSummary,
+} from '@agent-workflow/shared'
+import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { existsSync } from 'node:fs'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { tasks } from '@/db/schema'
+import { nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
-import { createWorktree } from '@/util/git'
-import { ConflictError, NotFoundError } from '@/util/errors'
+import { createWorktree, worktreeDiff } from '@/util/git'
+import { ConflictError, DomainError, NotFoundError } from '@/util/errors'
 import { runTask } from './scheduler'
 import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
@@ -50,6 +59,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   // the user sees why their click did nothing (per design.md §6.4).
   let worktreePath = ''
   let branch = ''
+  let baseCommit: string | null = null
   let earlyError: string | null = null
   try {
     const wt = await createWorktree({
@@ -60,6 +70,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     })
     worktreePath = wt.worktreePath
     branch = wt.branch
+    baseCommit = wt.baseCommit
   } catch (err) {
     earlyError = err instanceof Error ? err.message : String(err)
   }
@@ -73,6 +84,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     worktreePath,
     baseBranch: input.baseBranch,
     branch: branch !== '' ? branch : `agent-workflow/${taskId}`,
+    baseCommit,
     status: earlyError === null ? 'pending' : 'failed',
     inputs: JSON.stringify(input.inputs),
     maxDurationMs: input.maxDurationMs ?? null,
@@ -205,6 +217,87 @@ export async function listTasks(
   return rows.map(rowToSummary)
 }
 
+/**
+ * Returns all node_runs rows for a task plus their captured port outputs.
+ * Ordering: started_at ascending so the frontend can render them as a
+ * timeline. node_runs that haven't started yet (`pending`) tail the list
+ * sorted by id.
+ */
+export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<TaskNodeRuns> {
+  const task = await getTask(db, taskId)
+  if (task === null) {
+    throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
+  }
+  const runRows = await db
+    .select()
+    .from(nodeRuns)
+    .where(eq(nodeRuns.taskId, taskId))
+    .orderBy(asc(nodeRuns.startedAt), asc(nodeRuns.id))
+
+  const runs: NodeRun[] = runRows.map((r) => ({
+    id: r.id,
+    taskId: r.taskId,
+    nodeId: r.nodeId,
+    parentNodeRunId: r.parentNodeRunId,
+    iteration: r.iteration,
+    shardKey: r.shardKey,
+    retryIndex: r.retryIndex,
+    status: r.status,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    pid: r.pid,
+    exitCode: r.exitCode,
+    errorMessage: r.errorMessage,
+    tokInput: r.tokInput,
+    tokOutput: r.tokOutput,
+    tokTotal: r.tokTotal,
+  }))
+
+  let outputs: NodeRunOutput[] = []
+  if (runs.length > 0) {
+    const runIds = runs.map((r) => r.id)
+    const outRows = await db
+      .select()
+      .from(nodeRunOutputs)
+      .where(inArray(nodeRunOutputs.nodeRunId, runIds))
+    outputs = outRows.map((o) => ({
+      nodeRunId: o.nodeRunId,
+      port: o.portName,
+      value: o.content,
+    }))
+  }
+  return { runs, outputs }
+}
+
+/**
+ * Cumulative diff in the worktree since the task started.
+ *
+ * Throws ValidationError if baseCommit wasn't captured (task failed before
+ * worktree creation) or if the worktree directory has been removed.
+ */
+export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDiff> {
+  const task = await getTask(db, taskId)
+  if (task === null) {
+    throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
+  }
+  if (task.baseCommit === null) {
+    throw new DomainError(
+      'task-no-base-commit',
+      `task '${taskId}' has no base commit recorded; cannot compute diff`,
+      409,
+    )
+  }
+  if (!existsSync(task.worktreePath)) {
+    throw new DomainError(
+      'task-worktree-missing',
+      `worktree '${task.worktreePath}' does not exist; cannot compute diff`,
+      410,
+    )
+  }
+  const { diff, truncated } = await worktreeDiff(task.worktreePath, task.baseCommit)
+  return { diff, baseCommit: task.baseCommit, truncated }
+}
+
 function rowToTask(row: typeof tasks.$inferSelect): Task {
   let snapshot: unknown
   try {
@@ -226,6 +319,7 @@ function rowToTask(row: typeof tasks.$inferSelect): Task {
     worktreePath: row.worktreePath,
     baseBranch: row.baseBranch,
     branch: row.branch,
+    baseCommit: row.baseCommit,
     status: row.status,
     inputs,
     maxDurationMs: row.maxDurationMs,

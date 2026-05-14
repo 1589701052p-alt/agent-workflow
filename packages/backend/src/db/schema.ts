@@ -97,6 +97,7 @@ export const tasks = sqliteTable(
     worktreePath: text('worktree_path').notNull(),
     baseBranch: text('base_branch').notNull(),
     branch: text('branch').notNull(), // 'agent-workflow/{task-id}'
+    baseCommit: text('base_commit'), // resolved commit SHA of base_branch at task start; basis for diff view
     status: text('status', {
       enum: ['pending', 'running', 'done', 'failed', 'canceled', 'interrupted'],
     }).notNull(),

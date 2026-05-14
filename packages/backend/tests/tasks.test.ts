@@ -256,4 +256,128 @@ describe('task HTTP routes', () => {
   test('all /api/tasks/* require token', async () => {
     expect((await h.app.request('/api/tasks')).status).toBe(401)
   })
+
+  test('GET /:id/node-runs returns empty for a freshly-started task', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const post = await req(h.app, '/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflowId: wfId,
+        repoPath: h.repoPath,
+        baseBranch: 'main',
+        inputs: {},
+      }),
+    })
+    const { id } = (await post.json()) as { id: string }
+    const res = await req(h.app, `/api/tasks/${id}/node-runs`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { runs: unknown[]; outputs: unknown[] }
+    expect(Array.isArray(body.runs)).toBe(true)
+    expect(Array.isArray(body.outputs)).toBe(true)
+    // Empty workflow → scheduler may have inserted 0 runs by the time we
+    // check; either way the shape is valid.
+    expect(body.outputs.length).toBe(0)
+  })
+
+  test('GET /:id/node-runs on unknown task -> 404', async () => {
+    const res = await req(h.app, '/api/tasks/01HFAKEFAKE/node-runs')
+    expect(res.status).toBe(404)
+  })
+
+  test('GET /:id/diff returns the worktree diff vs baseCommit', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const post = await req(h.app, '/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflowId: wfId,
+        repoPath: h.repoPath,
+        baseBranch: 'main',
+        inputs: {},
+      }),
+    })
+    const { id, worktreePath } = (await post.json()) as {
+      id: string
+      worktreePath: string
+    }
+
+    // Modify a tracked file in the worktree to produce a real diff.
+    writeFileSync(join(worktreePath, 'README.md'), '# changed\n')
+
+    const res = await req(h.app, `/api/tasks/${id}/diff`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      diff: string
+      baseCommit: string | null
+      truncated: boolean
+    }
+    expect(body.baseCommit).toMatch(/^[a-f0-9]{40}$/)
+    expect(body.truncated).toBe(false)
+    expect(body.diff).toContain('README.md')
+    expect(body.diff).toContain('# changed')
+  })
+
+  test('GET /:id/diff includes untracked files', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const post = await req(h.app, '/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflowId: wfId,
+        repoPath: h.repoPath,
+        baseBranch: 'main',
+        inputs: {},
+      }),
+    })
+    const { id, worktreePath } = (await post.json()) as { id: string; worktreePath: string }
+    writeFileSync(join(worktreePath, 'NEWFILE.md'), 'fresh\n')
+
+    const res = await req(h.app, `/api/tasks/${id}/diff`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { diff: string }
+    expect(body.diff).toContain('NEWFILE.md')
+    expect(body.diff).toContain('fresh')
+  })
+
+  test('GET /:id/diff on a task without baseCommit -> 409', async () => {
+    // Simulate the early-error path where startTask couldn't even create the
+    // worktree (repo missing, base ref invalid, etc.).
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '',
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      baseCommit: null,
+      status: 'failed',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/diff`)
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('task-no-base-commit')
+  })
+
+  test('GET /:id/diff when worktree dir is missing -> 410', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/aw-nope-' + id,
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      baseCommit: 'deadbeef'.repeat(5),
+      status: 'failed',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/diff`)
+    expect(res.status).toBe(410)
+    expect(((await res.json()) as { code: string }).code).toBe('task-worktree-missing')
+  })
 })

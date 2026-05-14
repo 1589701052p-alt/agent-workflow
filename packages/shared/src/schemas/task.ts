@@ -23,6 +23,7 @@ export const TaskSchema = z.object({
   worktreePath: z.string(),
   baseBranch: z.string(),
   branch: z.string(),
+  baseCommit: z.string().nullable(),
   status: TaskStatusSchema,
   inputs: z.record(z.string(), z.string()),
   maxDurationMs: z.number().int().nonnegative().nullable(),
@@ -70,3 +71,68 @@ export const ListTasksQuerySchema = z.object({
   limit: z.number().int().positive().max(500).default(100),
 })
 export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>
+
+// -----------------------------------------------------------------------------
+// node_runs — per-node execution rows. Loop iterations + multi-process fan-out
+// + retries all produce additional rows of the same shape. The frontend
+// detail view (P-1-18) flattens them into a status table.
+// -----------------------------------------------------------------------------
+
+export const NODE_RUN_STATUS = [
+  'pending',
+  'running',
+  'done',
+  'failed',
+  'canceled',
+  'interrupted',
+  'skipped',
+  'exhausted',
+] as const
+export const NodeRunStatusSchema = z.enum(NODE_RUN_STATUS)
+export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>
+
+export const NodeRunSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  nodeId: z.string(),
+  parentNodeRunId: z.string().nullable(),
+  iteration: z.number().int().nonnegative(),
+  shardKey: z.string().nullable(),
+  retryIndex: z.number().int().nonnegative(),
+  status: NodeRunStatusSchema,
+  startedAt: z.number().int().nullable(),
+  finishedAt: z.number().int().nullable(),
+  pid: z.number().int().nullable(),
+  exitCode: z.number().int().nullable(),
+  errorMessage: z.string().nullable(),
+  tokInput: z.number().int().nullable(),
+  tokOutput: z.number().int().nullable(),
+  tokTotal: z.number().int().nullable(),
+})
+export type NodeRun = z.infer<typeof NodeRunSchema>
+
+/** Output ports captured from an envelope. */
+export const NodeRunOutputSchema = z.object({
+  nodeRunId: z.string(),
+  port: z.string(),
+  value: z.string(),
+})
+export type NodeRunOutput = z.infer<typeof NodeRunOutputSchema>
+
+/** Response shape of GET /api/tasks/:id/node-runs. */
+export const TaskNodeRunsSchema = z.object({
+  runs: z.array(NodeRunSchema),
+  outputs: z.array(NodeRunOutputSchema),
+})
+export type TaskNodeRuns = z.infer<typeof TaskNodeRunsSchema>
+
+/** Response shape of GET /api/tasks/:id/diff. */
+export const TaskDiffSchema = z.object({
+  /** Empty string when nothing has changed since the worktree was created. */
+  diff: z.string(),
+  /** baseCommit used; null when the task failed before worktree creation. */
+  baseCommit: z.string().nullable(),
+  /** True when diff was truncated for transport. v1 caps at 1 MiB. */
+  truncated: z.boolean(),
+})
+export type TaskDiff = z.infer<typeof TaskDiffSchema>

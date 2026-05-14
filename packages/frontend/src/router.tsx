@@ -13,6 +13,7 @@ import { Route as skillsRoute } from '@/routes/skills'
 import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
 import { Route as tasksRoute } from '@/routes/tasks'
+import { Route as taskDetailRoute } from '@/routes/tasks.detail'
 import { Route as workflowsRoute } from '@/routes/workflows'
 
 const routeTree = rootRoute.addChildren([
@@ -26,6 +27,7 @@ const routeTree = rootRoute.addChildren([
   skillDetailRoute,
   skillsRoute,
   workflowsRoute,
+  taskDetailRoute,
   tasksRoute,
   settingsRoute,
 ])

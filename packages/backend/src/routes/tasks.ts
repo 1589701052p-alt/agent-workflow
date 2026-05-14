@@ -1,14 +1,23 @@
-// GET    /api/tasks                  list (filters via query)
-// POST   /api/tasks                  start task; scheduler kicks off in background
-// GET    /api/tasks/:id               full task incl. workflowSnapshot + inputs
+// GET    /api/tasks                       list (filters via query)
+// POST   /api/tasks                       start task; scheduler kicks off in background
+// GET    /api/tasks/:id                    full task incl. workflowSnapshot + inputs
+// POST   /api/tasks/:id/cancel             abort in-flight task
+// GET    /api/tasks/:id/node-runs          per-node run rows + captured outputs
+// GET    /api/tasks/:id/diff               cumulative git diff in the worktree
 //
-// Cancel / resume / single-node retry / detail with node-run drill-in land
-// in subsequent issues (P-1-15, P-3-08, P-3-09, P-2-12).
+// Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
 import { StartTaskSchema, TaskStatusSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
-import { cancelTask, getTask, listTasks, startTask } from '@/services/task'
+import {
+  cancelTask,
+  getTask,
+  getTaskDiff,
+  getTaskNodeRuns,
+  listTasks,
+  startTask,
+} from '@/services/task'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
@@ -59,6 +68,14 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.post('/api/tasks/:id/cancel', async (c) => {
     const task = await cancelTask(deps.db, c.req.param('id'))
     return c.json(task)
+  })
+
+  app.get('/api/tasks/:id/node-runs', async (c) => {
+    return c.json(await getTaskNodeRuns(deps.db, c.req.param('id')))
+  })
+
+  app.get('/api/tasks/:id/diff', async (c) => {
+    return c.json(await getTaskDiff(deps.db, c.req.param('id')))
   })
 }
 

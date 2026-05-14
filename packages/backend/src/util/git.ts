@@ -183,6 +183,63 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Creat
   return { worktreePath, branch, baseCommit }
 }
 
+/**
+ * Cumulative diff between the worktree and `fromCommit`, including uncommitted
+ * changes and untracked files. Empty string when nothing has changed.
+ *
+ * We use `git -c core.quotepath=false diff --binary <fromCommit> --` plus
+ * `git ls-files --others --exclude-standard` for untracked files (composed as
+ * pseudo-diff entries to keep the response self-contained).
+ */
+export async function worktreeDiff(
+  worktreePath: string,
+  fromCommit: string,
+): Promise<{ diff: string; truncated: boolean }> {
+  const MAX_BYTES = 1024 * 1024 // 1 MiB
+
+  const tracked = await runGit(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'diff',
+    fromCommit,
+    '--',
+  ])
+  if (tracked.exitCode !== 0) {
+    throw new DomainError('worktree-diff-failed', `git diff failed: ${tracked.stderr.trim()}`, 500)
+  }
+  const untrackedList = await runGit(worktreePath, ['ls-files', '--others', '--exclude-standard'])
+  const untrackedNames = untrackedList.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+
+  let untrackedDiff = ''
+  for (const name of untrackedNames) {
+    // Render each untracked file as a synthetic addition diff. `--no-index`
+    // against /dev/null produces a real patch including binary detection.
+    const one = await runGit(worktreePath, [
+      '-c',
+      'core.quotepath=false',
+      'diff',
+      '--no-index',
+      '--binary',
+      '--',
+      '/dev/null',
+      name,
+    ])
+    // git diff --no-index exits 1 when diffs exist; that's expected.
+    untrackedDiff += one.stdout
+  }
+
+  let combined = tracked.stdout
+  if (untrackedDiff !== '') combined += `\n${untrackedDiff}`
+
+  if (combined.length > MAX_BYTES) {
+    return { diff: combined.slice(0, MAX_BYTES), truncated: true }
+  }
+  return { diff: combined, truncated: false }
+}
+
 export interface RemoveWorktreeOptions {
   repoPath: string
   worktreePath: string
