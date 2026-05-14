@@ -2,8 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
+import { useRef, useState } from 'react'
 import type { Workflow } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Route as RootRoute } from './__root'
 
@@ -25,6 +27,34 @@ function WorkflowsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
   })
 
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
+  async function handleImport(file: File) {
+    setImportMsg(null)
+    const yaml = await file.text()
+    try {
+      await postYaml(yaml, 'fail')
+      setImportMsg('Imported as new workflow.')
+      void qc.invalidateQueries({ queryKey: ['workflows'] })
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'workflow-import-conflict') {
+        const choice = window.prompt(
+          `Workflow id collides. Type "overwrite" to replace, or "new" to import as a new workflow.`,
+          'new',
+        )
+        if (choice === 'overwrite' || choice === 'new') {
+          await postYaml(yaml, choice)
+          setImportMsg(choice === 'overwrite' ? 'Workflow overwritten.' : 'Imported as new workflow.')
+          void qc.invalidateQueries({ queryKey: ['workflows'] })
+        } else {
+          setImportMsg('Import canceled.')
+        }
+      } else {
+        setImportMsg(err instanceof Error ? err.message : String(err))
+      }
+    }
+  }
+
   return (
     <div className="page">
       <header className="page__header page__header--row">
@@ -34,10 +64,31 @@ function WorkflowsPage() {
             DAG of agents + wrappers. Each task snapshots the definition at launch time.
           </p>
         </div>
-        <Link to="/workflows/new" className="btn btn--primary">
-          + New workflow
-        </Link>
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".yaml,.yml,application/yaml,text/yaml"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void handleImport(file)
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            className="btn"
+            onClick={() => fileRef.current?.click()}
+          >
+            Import YAML
+          </button>
+          <Link to="/workflows/new" className="btn btn--primary">
+            + New workflow
+          </Link>
+        </div>
       </header>
+      {importMsg !== null && <div className="info-box info-box--muted">{importMsg}</div>}
 
       {isLoading && <div className="muted">Loading…</div>}
       {error !== null && error !== undefined && <ErrorBanner error={error} />}
@@ -87,6 +138,21 @@ function WorkflowsPage() {
       )}
     </div>
   )
+}
+
+async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'): Promise<void> {
+  const base = getBaseUrl()
+  const token = getToken()
+  const url = new URL('/api/workflows/import', base)
+  url.searchParams.set('onConflict', onConflict)
+  const headers: Record<string, string> = { 'content-type': 'text/yaml' }
+  if (token !== null) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(url.toString(), { method: 'POST', headers, body: yaml })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: { code: string; message: string } } | null
+    const err = body?.error ?? { code: `http-${res.status}`, message: res.statusText || 'request failed' }
+    throw new ApiError(res.status, err.code, err.message)
+  }
 }
 
 function ErrorBanner({ error }: { error: unknown }) {

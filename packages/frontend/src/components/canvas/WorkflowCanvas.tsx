@@ -527,6 +527,12 @@ function toFlowNodes(
   agentByName: Map<string, Agent>,
   statuses?: Record<string, CanvasNodeData['status'] | undefined>,
 ): Node[] {
+  const loopBodyIds = new Set<string>()
+  for (const n of definition.nodes) {
+    if (n.kind !== 'wrapper-loop') continue
+    const inner = (n as unknown as { nodeIds?: string[] }).nodeIds
+    if (Array.isArray(inner)) for (const id of inner) loopBodyIds.add(id)
+  }
   return definition.nodes.map((n, idx) => {
     const pos = n.position
     const ports = computePorts(n, agentByName, definition)
@@ -541,6 +547,7 @@ function toFlowNodes(
       const s = statuses[n.id]
       if (s !== undefined) data.status = s
     }
+    if (loopBodyIds.has(n.id)) data.loopBody = true
     if (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop') {
       const inner = (n as unknown as { nodeIds?: string[] }).nodeIds
       ;(data as CanvasNodeData & { innerCount?: number }).innerCount = inner?.length ?? 0

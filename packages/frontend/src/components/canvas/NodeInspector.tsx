@@ -200,49 +200,175 @@ function EditForm({ node, agents, definition, onPatch }: EditProps) {
     case 'wrapper-loop': {
       const inner = Array.isArray(rec.nodeIds) ? (rec.nodeIds as string[]) : []
       const isLoop = node.kind === 'wrapper-loop'
+      if (!isLoop) {
+        return (
+          <div className="form-grid">
+            <Field label="Inner node ids" hint="Edit by composing nodes via the canvas menu.">
+              <div className="muted">
+                {inner.length === 0 ? 'none' : inner.map((i) => <code key={i}>{i} </code>)}
+              </div>
+            </Field>
+          </div>
+        )
+      }
+      const exitCondRaw = (rec.exitCondition as Record<string, unknown> | undefined) ?? {}
+      const exitKind = typeof exitCondRaw.kind === 'string' ? exitCondRaw.kind : 'port-empty'
+      const exitNodeId = typeof exitCondRaw.nodeId === 'string' ? exitCondRaw.nodeId : ''
+      const exitPortName = typeof exitCondRaw.portName === 'string' ? exitCondRaw.portName : ''
+      const exitValue = typeof exitCondRaw.value === 'string' ? exitCondRaw.value : ''
+      const exitN = typeof exitCondRaw.n === 'number' ? exitCondRaw.n : 1
+      const exitSeparator =
+        typeof exitCondRaw.separator === 'string' ? exitCondRaw.separator : ''
+      const bindings = Array.isArray(rec.outputBindings)
+        ? (rec.outputBindings as Array<{
+            name: string
+            bind: { nodeId: string; portName: string }
+          }>)
+        : []
+      function update(patch: Record<string, unknown>) {
+        onPatch({
+          ...(node as Record<string, unknown>),
+          ...patch,
+        } as unknown as WorkflowNode)
+      }
+      function updateExit(patch: Record<string, unknown>) {
+        update({
+          exitCondition: { ...exitCondRaw, ...patch },
+        })
+      }
+      function setBindings(next: typeof bindings) {
+        update({ outputBindings: next })
+      }
       return (
         <div className="form-grid">
-          {isLoop && (
+          <div className="info-box info-box--muted">
+            Cross-iteration state lives in worktree files only. v1 has no feedback ports —
+            agents communicate across iterations by reading/writing files.
+          </div>
+          <Field label="Max iterations" required>
+            <NumberInput
+              value={typeof rec.maxIterations === 'number' ? rec.maxIterations : undefined}
+              onChange={(v) => update({ maxIterations: v ?? 1 })}
+              min={1}
+              step={1}
+            />
+          </Field>
+          <Field
+            label="Exit condition kind"
+            hint="port-empty: trimmed value empty · port-equals: exact match · port-count-lt: count < n"
+          >
+            <select
+              className="form-input"
+              value={exitKind}
+              onChange={(e) => updateExit({ kind: e.target.value })}
+            >
+              <option value="port-empty">port-empty</option>
+              <option value="port-equals">port-equals</option>
+              <option value="port-count-lt">port-count-lt</option>
+            </select>
+          </Field>
+          <Field label="Exit condition target" hint="(nodeId, portName) probed each iteration">
+            <div className="form-grid form-grid--two">
+              <TextInput
+                value={exitNodeId}
+                onChange={(v) => updateExit({ nodeId: v })}
+                placeholder="inner nodeId"
+              />
+              <TextInput
+                value={exitPortName}
+                onChange={(v) => updateExit({ portName: v })}
+                placeholder="port"
+              />
+            </div>
+          </Field>
+          {exitKind === 'port-equals' && (
+            <Field label="Equals value">
+              <TextInput value={exitValue} onChange={(v) => updateExit({ value: v })} />
+            </Field>
+          )}
+          {exitKind === 'port-count-lt' && (
             <>
-              <Field label="Max iterations" required>
+              <Field label="n">
                 <NumberInput
-                  value={typeof rec.maxIterations === 'number' ? rec.maxIterations : undefined}
-                  onChange={(v) =>
-                    onPatch({
-                      ...(node as Record<string, unknown>),
-                      maxIterations: v ?? 1,
-                    } as unknown as WorkflowNode)
-                  }
+                  value={exitN}
+                  onChange={(v) => updateExit({ n: v ?? 1 })}
                   min={1}
                   step={1}
                 />
               </Field>
-              <Field
-                label="Exit condition kind"
-                hint="port-empty / port-equals / port-count-lt (full editor in P-2-09)"
-              >
+              <Field label="Separator (default '\\n')">
                 <TextInput
-                  value={
-                    typeof rec.exitCondition === 'object' &&
-                    rec.exitCondition !== null &&
-                    typeof (rec.exitCondition as Record<string, unknown>).kind === 'string'
-                      ? ((rec.exitCondition as Record<string, unknown>).kind as string)
-                      : 'port-empty'
-                  }
-                  onChange={(v) =>
-                    onPatch({
-                      ...(node as Record<string, unknown>),
-                      exitCondition: {
-                        ...((rec.exitCondition as Record<string, unknown>) ?? {}),
-                        kind: v,
-                      },
-                    } as unknown as WorkflowNode)
-                  }
+                  value={exitSeparator}
+                  onChange={(v) => updateExit({ separator: v })}
+                  placeholder="\\n"
                 />
               </Field>
             </>
           )}
-          <Field label="Inner node ids" hint="Edit by dragging nodes inside the wrapper (M3).">
+          <Field
+            label="Output bindings"
+            hint="Each binding exposes an inner port as a wrapper output port."
+          >
+            <ul className="inspector__output-ports">
+              {bindings.map((b, i) => (
+                <li key={i} className="inspector__output-port-row">
+                  <input
+                    className="form-input"
+                    value={b.name}
+                    onChange={(e) => {
+                      const copy = [...bindings]
+                      copy[i] = { ...b, name: e.target.value }
+                      setBindings(copy)
+                    }}
+                    placeholder="output name"
+                  />
+                  <input
+                    className="form-input form-input--mono"
+                    value={b.bind.nodeId}
+                    onChange={(e) => {
+                      const copy = [...bindings]
+                      copy[i] = { ...b, bind: { ...b.bind, nodeId: e.target.value } }
+                      setBindings(copy)
+                    }}
+                    placeholder="inner nodeId"
+                  />
+                  <input
+                    className="form-input form-input--mono"
+                    value={b.bind.portName}
+                    onChange={(e) => {
+                      const copy = [...bindings]
+                      copy[i] = { ...b, bind: { ...b.bind, portName: e.target.value } }
+                      setBindings(copy)
+                    }}
+                    placeholder="port"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => setBindings(bindings.filter((_, j) => j !== i))}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() =>
+                setBindings([
+                  ...bindings,
+                  {
+                    name: `out_${bindings.length + 1}`,
+                    bind: { nodeId: '', portName: '' },
+                  },
+                ])
+              }
+            >
+              + Add binding
+            </button>
+          </Field>
+          <Field label="Inner node ids" hint="Edit by composing nodes via the canvas menu.">
             <div className="muted">
               {inner.length === 0 ? 'none' : inner.map((i) => <code key={i}>{i} </code>)}
             </div>

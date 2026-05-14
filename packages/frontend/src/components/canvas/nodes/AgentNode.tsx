@@ -16,6 +16,7 @@ export function AgentNode({ data, selected }: Props) {
     <div
       className={`canvas-node canvas-node--agent ${multi ? 'canvas-node--multi' : ''} ${selected ? 'canvas-node--selected' : ''}`}
       data-status={data.status ?? 'default'}
+      data-loop-body={data.loopBody ? 'true' : undefined}
     >
       <div className="canvas-node__header">
         <span className="canvas-node__kind">{multi ? '🔀 agent-multi' : 'agent'}</span>

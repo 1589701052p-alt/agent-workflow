@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（M3 全部 14 个 issue 闭合 🎉 fan-out / 重试 / resume / git wrapper / 状态画布等齐了）
+**最近更新**：2026-05-14（M4 全部 11 个 issue 闭合 🎉 loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg）
 
 ---
 
@@ -19,13 +19,29 @@ M0 准备       [5/5   ✅]
 M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
 M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
-M4 高级编排   [0/11]      ← 下一站
-M5 打磨       [0/12]
+M4 高级编排   [11/11 ✅]  loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg
+M5 打磨       [0/12]      ← 下一站
 ```
 
 ---
 
-## 已完成 issue（53 个）
+## 已完成 issue（64 个）
+
+### M4 完成（11/11）
+
+| ID | 标题 | 关键产出 |
+| --- | --- | --- |
+| P-4-01 | Loop wrapper 调度 | `services/exitCondition.ts` 三种内置（port-empty / port-equals / port-count-lt）。scheduler.ts 重构成 **递归 scope 执行**：`runTask` 计算 `containerOf: nodeId→wrapper-id`，top-level 节点跑 `runScope`；wrapper-loop 在 parent scope 中作为节点，进 inner scope 后按 `maxIterations` 循环跑 → 每轮 `runScope(innerIds, iter=i)` → 求值 exitCondition → 满足则把 outputBindings 复制到 wrapper 输出 + done；超 max 标 `exhausted`，task=failed。每个内层 node_run 写 `iteration=i`。`resolveUpstreamInputs` 按 `iteration ≤ current` 选最新（top-level iter=0 自动可见）|
+| P-4-02 | Loop wrapper UI | NodeInspector 中 `wrapper-loop` 整体重写：muted info-box 提示 "v1 无跨轮反馈 / 状态走 worktree 文件"；maxIterations / exitCondition.kind 下拉 / 目标 (nodeId, portName) / 按 kind 显示 value 或 n+separator；outputBindings 增删行（name + bind.nodeId + bind.portName）；inner ids 只读展示。`styles.css` 加 `data-status='exhausted/canceled/interrupted'` 边框色 + `data-loop-body='true'` 蓝色边。`WorkflowCanvas.toFlowNodes` 把 loop 内层节点标 `data.loopBody=true`，AgentNode/WrapperNodes 渲染 `data-loop-body` attribute |
+| P-4-03 | Wrapper 任意嵌套 | scheduler.ts 的 `buildContainerMap` 多轮处理，innermost 拿到 containerOf；nested wrapper（git-in-loop / loop-in-git / loop-in-loop / git-in-git）通过递归 `runScope` 自然生效。`runGitWrapperNode` 现在自己 recurse inner scope 一次（baseline = HEAD before inner, diff = HEAD after inner）；wrapper-git 不再依赖 inner-as-top-level-upstream。tests 新增 git-in-loop case |
+| P-4-04 | 资源限额 1Hz 后台 tick | `services/limits.ts` `enforceLimits(db)` 扫 `tasks.status='running'`，超 `maxDurationMs` → cancel + errorSummary=`task-time-limit-exceeded`；`sum(node_runs.tok_total) > maxTotalTokens` → cancel + errorSummary=`task-token-limit-exceeded`。`startLimitsTicker(db, intervalMs)` 1Hz interval（防 reentrant），daemon 启动时挂上，关闭时 stop。tests 5 case（空/duration/safe/tokens/disabled-with-0）|
+| P-4-05 | Token aggregation | runner.ts `accumulateTokens` 扩展支持五种 candidate path（evt 顶层 / evt.part / evt.usage / evt.step / evt.message），字段支持 `input/output/cache_creation/cache_read`（snake_case 和 camelCase）、`input_tokens/output_tokens`（Bedrock）、`prompt_tokens/completion_tokens`（Anthropic 风）。scheduler.ts fan-out 父 `runFanOutNode` 完成时 `sumChildTokens(parentRunId)` 把子 node_runs 的 tok_* 累加写回父行（resource-limit + UI 同时受益）。`accumulateTokens` 导出，tests 6 case |
+| P-4-06 | Graceful shutdown 30s | `services/shutdown.ts` `gracefulShutdown(db, budgetMs=30000)`：调 `abortAllActiveTasks()`（task.ts 新 export，遍历 activeTasks Map 触发 controller.abort）→ 轮询 DB 直到没 running task 或 deadline → 仍在 running 的 flip 到 `interrupted` + errorSummary=`daemon-shutdown`。`cli/start.ts` SIGTERM/SIGINT handler 调它（之前是直接 process.exit）。tests 2 case |
+| P-4-07 | Orphan scan on restart | `services/orphans.ts` `reapOrphanRuns(db)` 在 daemon start 时跑：把所有 `tasks.status='running'` 标 `interrupted` + errorSummary=`daemon-restart`；把所有 `node_runs.status in ['running','pending']` 标 `interrupted`。挂在 `cli/start.ts` step 5b，DB 打开后立刻跑。tests 2 case |
+| P-4-08 | YAML 导入导出 | `services/workflow.yaml.ts`：`exportWorkflowYaml(db, id)` 用 `yaml` 包 stringify {id, name, description, definition}；`importWorkflowYaml(db, yamlText, {onConflict: 'fail'\|'overwrite'\|'new'})` 校验后按策略落盘（fail → 409 `workflow-import-conflict` + details）；`previewWorkflowYaml` 纯函数。新 endpoint `GET /api/workflows/:id/export`（YAML body + Content-Disposition）/ `POST /api/workflows/import?onConflict=...`（text/yaml body）。前端 `workflows.tsx` 加 "Import YAML" file picker（409 时弹 prompt overwrite/new），`workflows.edit.tsx` 加 "Export YAML" 链接（query token auth）。tests 7 case |
+| P-4-09 | Worktree GC | `services/gc.ts` `runWorktreeGc(db, config)` 扫 `tasks.status in [done,failed,canceled,interrupted]`，按 `worktreeAutoGc.{enabled, olderThanDays, onlyMerged}` 决定是否删 worktree（保留 task 行）；`onlyMerged` 用 `git merge-base --is-ancestor`。`startWorktreeGc(db, loadConfig, intervalMs=1h)` 每 tick 重新读 config。挂在 daemon。tests 3 case |
+| P-4-10 | Task detail cancel + 启动失败 UI | startTask 早已在 worktree 创建失败时落库 status=failed + 返回 task 行（design.md §6.4）。tasks.detail 加 cancel/interrupt 状态下的 worktree-path 提示横幅 |
+| P-4-11 | Loop 反馈语义文档化 | NodeInspector loop config 顶部 info-box-muted "v1 无跨轮反馈端口；状态完全靠 worktree 文件"；design/proposal.md 已有 §280/§683 callout |
 
 ### M0 全部完成（5/5）
 
@@ -104,7 +120,9 @@ M5 打磨       [0/12]
 
 ## 测试积累
 
-后端测试 **270 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **103 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **300 个 case**（`bun test` — 由 `bunfig.toml [test] root` 限定到 `packages/backend/tests`）；前端测试 **103 个 case**（`bun run --filter @agent-workflow/frontend test` → vitest + happy-dom + 自写 localStorage shim，因为 vitest 3 / happy-dom 15 在 node 25 下默认 storage 为空 `{}`）。后端 daemon 启动测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+
+M4 新增测试：scheduler 5 case（loop exit-immediate / exhausted / port-count-lt / port-equals / git-in-loop）+ limits 5 + orphans 2 + gc 3 + shutdown 2 + tokens 6 + workflow-yaml 7 = +30 case。
 
 测试文件：
 ```
@@ -183,7 +201,13 @@ packages/backend/src/
 
 ---
 
-## 下一步：M2（编辑器 + 启动器）
+## 下一步：M5（打磨）
+
+M4 验收已 ready：loop wrapper / 嵌套（git-in-loop tested e2e）/ 资源限额 / orphan / GC / shutdown / YAML import-export / token aggregation 全套就绪。M5 共 12 个 issue（packaging / backup CLI / large output spill / events archival / GitHub release pipeline 等），按 `design/plan.md` §7 顺序。
+
+---
+
+## 历史下一步：M2（编辑器 + 启动器）
 
 M1 验收已 ready：`agent-workflow start` → 浏览器登 token → 创 agent + skill → curl 拼 workflow → 启 task → 看 task 详情节点 + diff → cancel 也跑通。M2 共 16 个 issue，按 `design/plan.md` §6 顺序。
 

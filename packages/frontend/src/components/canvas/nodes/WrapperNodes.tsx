@@ -14,6 +14,8 @@ export function GitWrapperNode({ data, selected }: Props) {
   return (
     <div
       className={`canvas-node canvas-node--wrapper canvas-node--wrapper-git ${selected ? 'canvas-node--selected' : ''}`}
+      data-status={data.status ?? 'default'}
+      data-loop-body={data.loopBody ? 'true' : undefined}
     >
       <div className="canvas-node__header">
         <span className="canvas-node__kind">⎈ git wrapper</span>
@@ -29,6 +31,7 @@ export function LoopWrapperNode({ data, selected }: Props) {
   return (
     <div
       className={`canvas-node canvas-node--wrapper canvas-node--wrapper-loop ${selected ? 'canvas-node--selected' : ''}`}
+      data-status={data.status ?? 'default'}
     >
       <div className="canvas-node__header">
         <span className="canvas-node__kind">⟳ loop wrapper</span>

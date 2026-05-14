@@ -4,6 +4,9 @@ import { ensureTokenFile } from '@/auth/token'
 import { loadConfig } from '@/config'
 import { openDb } from '@/db/client'
 import { createApp } from '@/server'
+import { startLimitsTicker } from '@/services/limits'
+import { reapOrphanRuns } from '@/services/orphans'
+import { startWorktreeGc } from '@/services/gc'
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
@@ -81,6 +84,22 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     : 0
   log.info('db ready', { path: Paths.db, dbVersion })
 
+  // 5b. P-4-07: reap orphan runs from the previous (crashed/SIGKILLed) daemon
+  // process. Any task/node_run left in 'running' is flipped to 'interrupted'
+  // with task.error_message = 'daemon-restart' so the UI surfaces what
+  // happened.
+  try {
+    const reap = await reapOrphanRuns(db)
+    if (reap.tasks > 0 || reap.runs > 0) {
+      log.warn('reaped orphan runs from previous daemon', {
+        tasks: reap.tasks,
+        runs: reap.runs,
+      })
+    }
+  } catch (err) {
+    log.warn('orphan reap failed', { error: err instanceof Error ? err.message : String(err) })
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })
@@ -135,13 +154,36 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     `\nagent-workflow ready — open this URL in your browser:\n  ${browserUrl}\n\n`,
   )
 
-  // 8. Graceful shutdown.
+  // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC).
+  const limitsTicker = startLimitsTicker(db)
+  const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config))
+
+  // 9. Graceful shutdown (P-4-06).
+  //
+  // SIGTERM/SIGINT:
+  //   - stop accepting new HTTP requests
+  //   - abort all running tasks (their AbortControllers SIGTERM their child
+  //     opencode processes via runner.ts; the scheduler then marks rows
+  //     canceled/interrupted)
+  //   - poll for ~30s; any task still in 'running' after the budget is
+  //     flipped to 'interrupted' so the next daemon start surfaces it as
+  //     daemon-restart instead of leaving stale rows.
   let shuttingDown = false
-  const shutdown = (signal: string): void => {
+  const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
     log.info('shutting down', { signal })
+    limitsTicker.stop()
+    gcTicker.stop()
     server.stop(true)
+    try {
+      const { gracefulShutdown } = await import('@/services/shutdown')
+      await gracefulShutdown(db, 30_000)
+    } catch (err) {
+      log.warn('graceful shutdown error', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     try {
       unlinkSync(Paths.daemonInfo)
     } catch {
@@ -150,8 +192,12 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     lock.release()
     process.exit(0)
   }
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
-  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM')
+  })
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT')
+  })
   process.on('exit', () => lock.release())
 
   await new Promise<void>(() => {

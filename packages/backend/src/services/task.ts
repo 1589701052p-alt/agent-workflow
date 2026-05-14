@@ -43,6 +43,17 @@ const log = createLogger('task')
  */
 const activeTasks = new Map<string, AbortController>()
 
+/**
+ * P-4-06: abort every in-flight task. Used by daemon shutdown. The runner
+ * SIGTERMs each opencode child via the controller's signal; the scheduler
+ * then marks rows canceled/interrupted in the normal flow.
+ */
+export function abortAllActiveTasks(): string[] {
+  const ids = [...activeTasks.keys()]
+  for (const id of ids) activeTasks.get(id)?.abort()
+  return ids
+}
+
 export interface StartTaskDeps {
   db: DbClient
   /** Override app home (tests). Defaults to `Paths.root`. */

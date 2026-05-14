@@ -18,6 +18,7 @@ import {
   updateWorkflow,
   validateWorkflow,
 } from '@/services/workflow'
+import { exportWorkflowYaml, importWorkflowYaml } from '@/services/workflow.yaml'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
 export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
@@ -62,6 +63,29 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
   app.post('/api/workflows/:id/validate', async (c) =>
     c.json(await validateWorkflow(deps.db, c.req.param('id'))),
   )
+
+  // P-4-08: YAML export / import.
+  app.get('/api/workflows/:id/export', async (c) => {
+    const yaml = await exportWorkflowYaml(deps.db, c.req.param('id'))
+    return c.body(yaml, 200, {
+      'content-type': 'application/yaml; charset=utf-8',
+      'content-disposition': `attachment; filename="${c.req.param('id')}.yaml"`,
+    })
+  })
+
+  app.post('/api/workflows/import', async (c) => {
+    const body = await c.req.text()
+    if (body.length === 0) {
+      throw new ValidationError('workflow-yaml-empty', 'empty YAML body')
+    }
+    const onConflictRaw = c.req.query('onConflict')
+    const onConflict =
+      onConflictRaw === 'overwrite' || onConflictRaw === 'new' || onConflictRaw === 'fail'
+        ? onConflictRaw
+        : 'fail'
+    const wf = await importWorkflowYaml(deps.db, body, { onConflict })
+    return c.json(wf, 201)
+  })
 }
 
 async function safeJson(req: Request): Promise<unknown> {

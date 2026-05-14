@@ -7,6 +7,7 @@ import { Link, createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Agent, Workflow, WorkflowDefinition } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { getBaseUrl, getToken } from '@/stores/auth'
 import { EditorSidebar } from '@/components/canvas/EditorSidebar'
 import { NodeInspector } from '@/components/canvas/NodeInspector'
 import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
@@ -14,6 +15,14 @@ import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
 import { useWorkflowSync } from '@/hooks/useWorkflowSync'
 import { Route as RootRoute } from './__root'
+
+function exportUrl(id: string): string {
+  const base = getBaseUrl()
+  const token = getToken()
+  const url = new URL(`/api/workflows/${encodeURIComponent(id)}/export`, base)
+  if (token !== null) url.searchParams.set('token', token)
+  return url.toString()
+}
 
 const EMPTY_DEF: WorkflowDefinition = {
   $schema_version: 1,
@@ -209,6 +218,15 @@ function WorkflowEditPage() {
         >
           {validate.isPending ? 'Validating…' : 'Validate'}
         </button>
+        <a
+          href={exportUrl(id)}
+          target="_blank"
+          rel="noreferrer"
+          className="btn btn--sm"
+          title="Download workflow as YAML"
+        >
+          Export YAML
+        </a>
         <ConfirmButton
           label="Delete"
           onConfirm={() => del.mutateAsync()}

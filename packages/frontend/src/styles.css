@@ -194,6 +194,18 @@ code {
   gap: 12px;
 }
 
+.info-box--muted {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.form-grid--two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .info-box__action {
   background: none;
   border: none;
@@ -1513,6 +1525,20 @@ code {
 }
 .canvas-node[data-status='failed'] {
   border-color: var(--danger);
+}
+.canvas-node[data-status='exhausted'] {
+  border-color: #b45309;
+}
+.canvas-node[data-status='canceled'] {
+  border-color: var(--muted);
+}
+.canvas-node[data-status='interrupted'] {
+  border-color: #b45309;
+  border-style: dotted;
+}
+/* Loop body styling — blue when contained in a loop wrapper. */
+.canvas-node[data-loop-body='true'] {
+  border-color: #1d4ed8;
 }
 
 /* Port handles + labels rendered alongside <Handle>. */

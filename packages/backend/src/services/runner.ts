@@ -451,17 +451,31 @@ function inferEventKind(
   return 'text'
 }
 
-/** Best-effort token accumulation. M4 P-4-05 will replace this. */
-function accumulateTokens(evt: Record<string, unknown>, acc: RunResult['tokenUsage']): void {
-  const candidates: Array<Record<string, unknown> | undefined> = [
-    evt as Record<string, unknown>,
+/**
+ * P-4-05: token accumulation across opencode `--format json` events.
+ *
+ * opencode emits step-finish events with token usage at several possible
+ * paths. We probe in priority order:
+ *   evt.tokens              top-level (test fixtures, some old shapes)
+ *   evt.part.tokens         inside a text/step event part
+ *   evt.usage               inside a step-finish summary
+ *   evt.step.tokens         inside a step event
+ *   evt.message.usage       message-style assistant turn
+ * and within each, accept both snake_case (`input/output/cache_creation/
+ * cache_read`) and camelCase. The first event with token fields wins per
+ * field — we don't double-count if multiple shapes appear in one event.
+ */
+export function accumulateTokens(evt: Record<string, unknown>, acc: RunResult['tokenUsage']): void {
+  const tokens = pickTokens([
+    evt,
     evt.part as Record<string, unknown> | undefined,
     evt.usage as Record<string, unknown> | undefined,
-  ]
-  const tokens = pickTokens(candidates)
+    evt.step as Record<string, unknown> | undefined,
+    evt.message as Record<string, unknown> | undefined,
+  ])
   if (!tokens) return
-  const input = numOrZero(tokens.input)
-  const output = numOrZero(tokens.output)
+  const input = numOrZero(tokens.input ?? tokens.input_tokens ?? tokens.prompt_tokens)
+  const output = numOrZero(tokens.output ?? tokens.output_tokens ?? tokens.completion_tokens)
   const cacheCreate = numOrZero(tokens.cache_creation ?? tokens.cacheCreation)
   const cacheRead = numOrZero(tokens.cache_read ?? tokens.cacheRead)
   acc.input += input
@@ -475,9 +489,32 @@ function pickTokens(
   candidates: Array<Record<string, unknown> | undefined>,
 ): Record<string, unknown> | null {
   for (const c of candidates) {
-    if (!c) continue
+    if (!c || typeof c !== 'object') continue
+    // Direct token-bearing object.
     const t = c.tokens
     if (t && typeof t === 'object') return t as Record<string, unknown>
+    // Some shapes inline input/output at the object level.
+    if (
+      typeof c.input_tokens === 'number' ||
+      typeof c.output_tokens === 'number' ||
+      typeof c.prompt_tokens === 'number' ||
+      typeof c.completion_tokens === 'number'
+    ) {
+      return c
+    }
+    // Some shapes inline usage directly.
+    const usage = c.usage
+    if (usage && typeof usage === 'object') {
+      const u = usage as Record<string, unknown>
+      if (
+        typeof u.input === 'number' ||
+        typeof u.output === 'number' ||
+        typeof u.input_tokens === 'number' ||
+        typeof u.output_tokens === 'number'
+      ) {
+        return u
+      }
+    }
   }
   return null
 }

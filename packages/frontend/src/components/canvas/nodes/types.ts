@@ -21,5 +21,15 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * Status color hint — populated by the task-detail canvas later. v1
    * editor leaves this `undefined` for the neutral default.
    */
-  status?: 'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'skipped'
+  status?:
+    | 'pending'
+    | 'running'
+    | 'done'
+    | 'failed'
+    | 'canceled'
+    | 'skipped'
+    | 'interrupted'
+    | 'exhausted'
+  /** True when this node sits inside a wrapper-loop body (blue accent). */
+  loopBody?: boolean
 }

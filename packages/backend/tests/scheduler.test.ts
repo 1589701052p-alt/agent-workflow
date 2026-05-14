@@ -747,6 +747,257 @@ describe('runTask: linear DAG (M1)', () => {
   })
 })
 
+describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
+  let h: Harness
+  beforeEach(() => {
+    h = buildHarness()
+  })
+  afterEach(() => h.cleanup())
+
+  test('loop exits on iteration 0 when port-empty satisfied', async () => {
+    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'audit', kind: 'agent-single', agentName: 'auditor' },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['audit'],
+          maxIterations: 3,
+          exitCondition: { kind: 'port-empty', nodeId: 'audit', portName: 'findings' },
+          outputBindings: [
+            { name: 'final', bind: { nodeId: 'audit', portName: 'findings' } },
+          ],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    await withEnv(
+      // empty findings → exit condition met on iteration 0
+      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: '' }) },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+    const loopRun = (
+      await h.db
+        .select()
+        .from(nodeRuns)
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'loop')))
+    )[0]
+    expect(loopRun?.status).toBe('done')
+    const finalOut = (
+      await h.db
+        .select()
+        .from(nodeRunOutputs)
+        .where(
+          and(eq(nodeRunOutputs.nodeRunId, loopRun!.id), eq(nodeRunOutputs.portName, 'final')),
+        )
+    )[0]
+    expect(finalOut?.content).toBe('')
+    // Inner ran exactly once (iteration=0).
+    const auditRuns = await h.db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'audit')))
+    expect(auditRuns.length).toBe(1)
+    expect(auditRuns[0]?.iteration).toBe(0)
+  })
+
+  test('loop exhausted when exit condition never satisfied', async () => {
+    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'audit', kind: 'agent-single', agentName: 'auditor' },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['audit'],
+          maxIterations: 2,
+          exitCondition: { kind: 'port-empty', nodeId: 'audit', portName: 'findings' },
+          outputBindings: [],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    await withEnv(
+      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: 'still failing' }) },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('failed')
+    expect(t?.errorMessage).toContain('wrapper-loop-exhausted')
+    const loopRun = (
+      await h.db
+        .select()
+        .from(nodeRuns)
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'loop')))
+    )[0]
+    expect(loopRun?.status).toBe('exhausted')
+    // Inner ran twice — once per iteration.
+    const auditRuns = await h.db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'audit')))
+    expect(auditRuns.length).toBe(2)
+    expect(new Set(auditRuns.map((r) => r.iteration))).toEqual(new Set([0, 1]))
+  })
+
+  test('port-count-lt exit condition triggers when token count is below n', async () => {
+    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'audit', kind: 'agent-single', agentName: 'auditor' },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['audit'],
+          maxIterations: 3,
+          exitCondition: {
+            kind: 'port-count-lt',
+            nodeId: 'audit',
+            portName: 'findings',
+            n: 5,
+          },
+          outputBindings: [],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    await withEnv(
+      // 3 newline-separated tokens, less than n=5 → exit on iter 0
+      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: 'a\nb\nc' }) },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+    const auditRuns = await h.db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'audit')))
+    // Single iteration since exit condition met immediately.
+    expect(auditRuns.length).toBe(1)
+  })
+
+  test('port-equals exit condition matches exact value', async () => {
+    await seedReadonlyAgent(h.db, 'auditor', ['decision'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'audit', kind: 'agent-single', agentName: 'auditor' },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['audit'],
+          maxIterations: 3,
+          exitCondition: {
+            kind: 'port-equals',
+            nodeId: 'audit',
+            portName: 'decision',
+            value: 'OK',
+          },
+          outputBindings: [],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    await withEnv(
+      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ decision: 'OK' }) },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+  })
+
+  test('nested wrapper-git inside wrapper-loop runs per iteration', async () => {
+    // git-in-loop: inner wrapper-git is the only inner of the loop. Each
+    // iteration runs the wrapper-git which runs its inner agent. We verify
+    // both wrappers complete and the loop exits via the agent's output.
+    const repoDir = h.worktreePath
+    await runGit(repoDir, ['init', '-q', '-b', 'main'])
+    await runGit(repoDir, ['config', 'user.email', 'test@example.com'])
+    await runGit(repoDir, ['config', 'user.name', 'Test'])
+    writeFileSync(join(repoDir, 'src.txt'), 'baseline\n')
+    await runGit(repoDir, ['add', '.'])
+    await runGit(repoDir, ['commit', '-q', '-m', 'init'])
+
+    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [
+        { id: 'audit', kind: 'agent-single', agentName: 'auditor' },
+        { id: 'wg', kind: 'wrapper-git', nodeIds: ['audit'] },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['wg'],
+          maxIterations: 2,
+          exitCondition: { kind: 'port-empty', nodeId: 'audit', portName: 'findings' },
+          outputBindings: [],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    await withEnv(
+      { MOCK_OPENCODE_OUTPUTS: JSON.stringify({ findings: '' }) },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('done')
+    // Loop done after iter 0; wrapper-git ran once.
+    const wgRuns = await h.db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'wg')))
+    expect(wgRuns.length).toBe(1)
+    expect(wgRuns[0]?.status).toBe('done')
+    expect(wgRuns[0]?.iteration).toBe(0)
+  })
+})
+
 async function seedReadonlyAgent(
   db: DbClient,
   name: string,
