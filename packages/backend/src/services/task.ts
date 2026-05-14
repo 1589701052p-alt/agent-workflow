@@ -47,6 +47,8 @@ export interface StartTaskDeps {
   db: DbClient
   /** Override app home (tests). Defaults to `Paths.root`. */
   appHome?: string
+  /** Default per-node timeout (ms). Defaults from settings; tests can pin. */
+  defaultPerNodeTimeoutMs?: number
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -135,6 +137,9 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     db: deps.db,
     appHome,
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
+    ...(deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
     log,
     signal: controller.signal,
   })

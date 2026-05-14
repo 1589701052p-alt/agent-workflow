@@ -57,6 +57,9 @@ export interface RunNodeOptions {
     repoPath: string
     baseBranch: string
     taskId: string
+    nodeId?: string
+    iteration?: number
+    shardKey?: string
   }
   promptTemplate?: string
   /** Skills used by this agent. */

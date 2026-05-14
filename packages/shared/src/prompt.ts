@@ -12,6 +12,12 @@ export interface RenderPromptInput {
     repoPath: string
     baseBranch: string
     taskId: string
+    /** Workflow node id (always available at run time). */
+    nodeId?: string
+    /** Loop wrapper iteration (0-based). Only present inside a loop. */
+    iteration?: number
+    /** Shard key for multi-process nodes. Only present in child runs. */
+    shardKey?: string
   }
   /** Declared outputs for the protocol block instructions. */
   agentOutputs: string[]
@@ -19,7 +25,14 @@ export interface RenderPromptInput {
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
 
-const BUILTIN_VARS = new Set(['__repo_path__', '__base_branch__', '__task_id__'])
+const BUILTIN_VARS = new Set([
+  '__repo_path__',
+  '__base_branch__',
+  '__task_id__',
+  '__node_id__',
+  '__iteration__',
+  '__shard_key__',
+])
 
 /**
  * Compose the user-prompt string sent to opencode for one node invocation:
@@ -43,6 +56,12 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return input.meta.baseBranch
         case '__task_id__':
           return input.meta.taskId
+        case '__node_id__':
+          return input.meta.nodeId ?? ''
+        case '__iteration__':
+          return input.meta.iteration !== undefined ? String(input.meta.iteration) : ''
+        case '__shard_key__':
+          return input.meta.shardKey ?? ''
       }
     }
     const v = input.inputs[name]

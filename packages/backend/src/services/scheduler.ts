@@ -34,6 +34,8 @@ export interface RunTaskOptions {
    * task transitions to status=canceled. Subsequent nodes are not started.
    */
   signal?: AbortSignal
+  /** Default per-node timeout in ms (from settings); node-level override wins. */
+  defaultPerNodeTimeoutMs?: number
 }
 
 /**
@@ -147,6 +149,9 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
 
     const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
 
+    // Per-node timeout: node-level override wins over settings default.
+    const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
+
     const nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending')
     broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
     let result: RunResult
@@ -161,8 +166,10 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
           repoPath: task.repoPath,
           baseBranch: task.baseBranch,
           taskId,
+          nodeId: node.id,
         },
         ...(promptTemplate !== undefined ? { promptTemplate } : {}),
+        ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
         skills: resolvedSkills,
         appHome: opts.appHome,
         ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
@@ -418,4 +425,9 @@ function topologicalOrder(def: WorkflowDefinition, _log: Logger): WorkflowNode[]
 function pickString(node: WorkflowNode, key: string): string | null {
   const v = (node as Record<string, unknown>)[key]
   return typeof v === 'string' && v.length > 0 ? v : null
+}
+
+function pickNumber(node: WorkflowNode, key: string): number | undefined {
+  const v = (node as Record<string, unknown>)[key]
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }

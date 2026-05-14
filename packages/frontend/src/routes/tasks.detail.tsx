@@ -127,6 +127,34 @@ function TaskDetailPage() {
         <div className="error-box">{describeError(cancel.error)}</div>
       )}
 
+      {t.status === 'failed' && t.errorSummary !== null && (
+        <div className="task-error-banner">
+          <div>
+            <strong>Task failed.</strong> <span>{t.errorSummary}</span>
+            {t.errorMessage !== null && t.errorMessage !== t.errorSummary && (
+              <details className="task-error-banner__details">
+                <summary>Details</summary>
+                <pre>{t.errorMessage}</pre>
+              </details>
+            )}
+          </div>
+          {t.failedNodeId !== null && nodeRuns.data !== undefined && (
+            <button
+              type="button"
+              className="btn btn--sm btn--danger"
+              onClick={() => {
+                // Walk node-runs for the failedNodeId and pick the latest.
+                const candidates = nodeRuns.data!.runs.filter((r) => r.nodeId === t.failedNodeId)
+                const target = candidates.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
+                if (target !== undefined) setSelectedNodeRunId(target.id)
+              }}
+            >
+              Jump to failed node ({t.failedNodeId})
+            </button>
+          )}
+        </div>
+      )}
+
       {nodeRuns.data !== undefined && (
         <TaskOutputPanel task={t} runs={nodeRuns.data.runs} outputs={nodeRuns.data.outputs} />
       )}

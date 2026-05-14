@@ -49,6 +49,30 @@ describe('renderUserPrompt — template substitution', () => {
     expect(out).toContain(`task=${META.taskId}`)
   })
 
+  test('extended builtins: __node_id__ / __iteration__ / __shard_key__', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'node={{__node_id__}} iter={{__iteration__}} shard={{__shard_key__}}',
+      inputs: {},
+      meta: { ...META, nodeId: 'a1', iteration: 2, shardKey: 'src/x.ts' },
+      agentOutputs: [],
+    })
+    expect(out).toContain('node=a1')
+    expect(out).toContain('iter=2')
+    expect(out).toContain('shard=src/x.ts')
+  })
+
+  test('extended builtins resolve to empty string when meta omits them', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'node=[{{__node_id__}}] iter=[{{__iteration__}}] shard=[{{__shard_key__}}]',
+      inputs: {},
+      meta: META,
+      agentOutputs: [],
+    })
+    expect(out).toContain('node=[]')
+    expect(out).toContain('iter=[]')
+    expect(out).toContain('shard=[]')
+  })
+
   test('unknown {{x}} substitutes empty string (caller does static check elsewhere)', () => {
     const out = renderUserPrompt({
       promptTemplate: 'before [{{nope}}] after',

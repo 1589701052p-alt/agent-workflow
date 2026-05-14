@@ -203,6 +203,34 @@ code {
   font: inherit;
 }
 
+.task-error-banner {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 12px 14px;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.task-error-banner__details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.task-error-banner__details > summary {
+  cursor: pointer;
+}
+
+.task-error-banner__details > pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ---- Settings ---- */
 
 .settings-grid {
