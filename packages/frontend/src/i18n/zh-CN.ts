@@ -35,6 +35,7 @@ export interface Resources {
     tabGc: string
     tabNetwork: string
     tabConnection: string
+    tabAppearance: string
     loading: string
     saving: string
     saved: string
@@ -44,6 +45,11 @@ export interface Resources {
     backupCreate: string
     backupRunning: string
     backupSavedAs: string
+    themeLabel: string
+    themeHint: string
+    themeSystem: string
+    themeLight: string
+    themeDark: string
   }
   errors: Record<string, string>
 }
@@ -78,6 +84,7 @@ export const zhCN: Resources = {
     tabGc: 'GC',
     tabNetwork: '网络',
     tabConnection: '连接',
+    tabAppearance: '外观',
     loading: '加载中…',
     saving: '保存中…',
     saved: '已保存',
@@ -88,6 +95,11 @@ export const zhCN: Resources = {
     backupCreate: '创建备份',
     backupRunning: '正在创建备份…',
     backupSavedAs: '已保存 ',
+    themeLabel: '主题',
+    themeHint: '系统：跟随操作系统的浅色 / 深色偏好。',
+    themeSystem: '跟随系统',
+    themeLight: '浅色',
+    themeDark: '深色',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {

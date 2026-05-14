@@ -22,7 +22,7 @@ export const Route = createRoute({
   component: SettingsPage,
 })
 
-type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'connection'
+type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'appearance' | 'connection'
 
 function SettingsPage() {
   const [tab, setTab] = useState<Tab>('runtime')
@@ -52,6 +52,7 @@ function SettingsPage() {
             ['limits', t('settings.tabLimits')],
             ['gc', t('settings.tabGc')],
             ['network', t('settings.tabNetwork')],
+            ['appearance', t('settings.tabAppearance')],
             ['connection', t('settings.tabConnection')],
           ] as Array<[Tab, string]>
         ).map(([k, label]) => (
@@ -76,6 +77,7 @@ function SettingsPage() {
           {tab === 'limits' && <LimitsTab config={config.data} />}
           {tab === 'gc' && <GcTab config={config.data} />}
           {tab === 'network' && <NetworkTab config={config.data} />}
+          {tab === 'appearance' && <AppearanceTab config={config.data} />}
           {tab === 'connection' && <ConnectionTab />}
         </>
       )}
@@ -364,6 +366,31 @@ function NetworkTab({ config }: TabProps) {
           min={0}
           max={65535}
         />
+      </Field>
+    </SectionForm>
+  )
+}
+
+function AppearanceTab({ config }: TabProps) {
+  const { t } = useTranslation()
+  const { state, setState, save } = useTabState(config, ['theme'])
+  return (
+    <SectionForm
+      onSave={save.mutate}
+      busy={save.isPending}
+      error={save.error}
+      success={save.isSuccess && save.error === null ? 'saved' : null}
+    >
+      <Field label={t('settings.themeLabel')} hint={t('settings.themeHint')}>
+        <select
+          className="form-input"
+          value={state.theme ?? 'system'}
+          onChange={(e) => setState({ ...state, theme: e.target.value as Config['theme'] })}
+        >
+          <option value="system">{t('settings.themeSystem')}</option>
+          <option value="light">{t('settings.themeLight')}</option>
+          <option value="dark">{t('settings.themeDark')}</option>
+        </select>
       </Field>
     </SectionForm>
   )

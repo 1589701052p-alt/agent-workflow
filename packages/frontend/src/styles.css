@@ -10,8 +10,29 @@
   --danger: #d12c2c;
 }
 
+/* P-5-04 dark theme — applied when the resolved theme is dark, which the
+   useTheme hook writes to <html data-theme="dark|light">. We do the resolution
+   in JS (config.theme = system|light|dark, "system" follows
+   matchMedia('(prefers-color-scheme: dark)') live) so we never have to fight
+   @media specificity. The plain @media fallback below covers the brief moment
+   before the hook mounts and the /auth page where there is no config yet. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #15181d;
+  --panel: #1c2028;
+  --border: #2a2f38;
+  --text: #e6e7ea;
+  --muted: #95a0b3;
+  --accent: #6aa3ff;
+  --danger: #ff6b6b;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #15181d;
     --panel: #1c2028;
     --border: #2a2f38;

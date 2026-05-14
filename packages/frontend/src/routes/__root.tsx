@@ -7,6 +7,7 @@
 import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useApplyTheme } from '@/hooks/useTheme'
 import { getToken, subscribeAuth } from '@/stores/auth'
 
 const NAV: { to: string; key: 'agents' | 'skills' | 'workflows' | 'tasks' | 'settings' }[] = [
@@ -35,6 +36,7 @@ function RootComponent() {
   const token = useAuthToken()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { t } = useTranslation()
+  useApplyTheme()
 
   if (pathname === '/auth' || token === null) {
     return (
