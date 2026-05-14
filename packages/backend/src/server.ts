@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { tokenAuth } from '@/auth/token'
 import type { DbClient } from '@/db/client'
 import { mountAgentRoutes } from '@/routes/agents'
+import { mountBackupRoutes } from '@/routes/backup'
 import { mountConfigRoutes } from '@/routes/config'
 import { mountHealthRoutes } from '@/routes/health'
 import { mountRepoRoutes } from '@/routes/repos'
@@ -56,6 +57,7 @@ export function createApp(deps: AppDeps): Hono {
   mountRepoRoutes(app, deps)
   mountWorkflowRoutes(app, deps)
   mountTaskRoutes(app, deps)
+  mountBackupRoutes(app, deps)
 
   app.onError(errorHandler)
   app.notFound((c) =>

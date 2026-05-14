@@ -6,6 +6,7 @@ import { openDb } from '@/db/client'
 import { createApp } from '@/server'
 import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
+import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
@@ -154,9 +155,10 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     `\nagent-workflow ready — open this URL in your browser:\n  ${browserUrl}\n\n`,
   )
 
-  // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC).
+  // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC + P-5-01 events archival).
   const limitsTicker = startLimitsTicker(db)
   const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config))
+  const archiveTicker = startEventsArchiver(db, () => loadConfig(Paths.config), Paths.logsDir)
 
   // 9. Graceful shutdown (P-4-06).
   //
@@ -175,6 +177,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     log.info('shutting down', { signal })
     limitsTicker.stop()
     gcTicker.stop()
+    archiveTicker.stop()
     server.stop(true)
     try {
       const { gracefulShutdown } = await import('@/services/shutdown')

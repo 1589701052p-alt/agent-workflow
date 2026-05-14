@@ -288,7 +288,49 @@ function GcTab({ config }: TabProps) {
           min={10_000}
         />
       </Field>
+      <BackupCard />
     </SectionForm>
+  )
+}
+
+function BackupCard() {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ path: string; sizeBytes: number } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const runBackup = async () => {
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    try {
+      const r = await api.post<{ path: string; sizeBytes: number }>('/api/backup', {})
+      setResult({ path: r.path, sizeBytes: r.sizeBytes })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="info-box-muted" style={{ marginTop: 16 }}>
+      <strong>Export backup</strong>
+      <p style={{ marginTop: 4, marginBottom: 8, fontSize: 13 }}>
+        Bundles db.sqlite + config.json + skills/ + workflows YAML into a tarball under{' '}
+        <code>~/.agent-workflow/backups/</code>. Excludes worktrees, runs, logs, token.
+      </p>
+      <button type="button" className="btn" onClick={runBackup} disabled={busy}>
+        {busy ? 'Creating backup…' : 'Create backup'}
+      </button>
+      {result !== null && (
+        <p style={{ marginTop: 8, fontSize: 13 }} className="muted">
+          Saved <code>{result.path}</code> ({(result.sizeBytes / 1024 / 1024).toFixed(2)} MB)
+        </p>
+      )}
+      {error !== null && (
+        <p style={{ marginTop: 8, fontSize: 13 }} className="error-box">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }
 

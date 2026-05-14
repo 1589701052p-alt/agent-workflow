@@ -21,6 +21,7 @@ import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
 import { ConflictError, DomainError, NotFoundError } from '@/util/errors'
+import { readArchivedEvents } from '@/services/eventsArchive'
 import {
   TASK_CHANNEL,
   TASKS_LIST_CHANNEL,
@@ -596,7 +597,7 @@ export async function getNodeRunEvents(
   db: DbClient,
   taskId: string,
   nodeRunId: string,
-  opts: { since?: number; limit?: number } = {},
+  opts: { since?: number; limit?: number; logsDir?: string } = {},
 ): Promise<NodeRunEventsResponse> {
   const ownerRows = await db
     .select({ taskId: nodeRuns.taskId })
@@ -612,28 +613,54 @@ export async function getNodeRunEvents(
   }
   const limit = Math.min(opts.limit ?? 500, 1000)
   const since = opts.since ?? 0
-  const rows = await db
-    .select()
-    .from(nodeRunEvents)
-    .where(and(eq(nodeRunEvents.nodeRunId, nodeRunId), gt(nodeRunEvents.id, since)))
-    .orderBy(asc(nodeRunEvents.id))
-    .limit(limit)
+  const logsDir = opts.logsDir ?? Paths.logsDir
 
-  const events: NodeRunEvent[] = rows.map((r) => {
+  // P-5-01: archived events (oldest) come first; live DB rows fill the
+  // remainder up to `limit`. Skipping the archive read when since is past
+  // the highest archived id is handled implicitly by `readArchivedEvents`
+  // returning [] when nothing matches.
+  const archived = await readArchivedEvents(logsDir, taskId, nodeRunId, since, limit)
+  const events: NodeRunEvent[] = archived.map((a) => {
     let payload: unknown
     try {
-      payload = JSON.parse(r.payload)
+      payload = JSON.parse(a.payload)
     } catch {
-      payload = r.payload
+      payload = a.payload
     }
     return {
-      id: r.id,
-      nodeRunId: r.nodeRunId,
-      ts: r.ts,
-      kind: r.kind,
+      id: a.id,
+      nodeRunId,
+      ts: a.ts,
+      kind: a.kind as NodeRunEvent['kind'],
       payload,
     }
   })
+
+  const remaining = limit - events.length
+  if (remaining > 0) {
+    const dbLowerBound = events.length > 0 ? events[events.length - 1]!.id : since
+    const rows = await db
+      .select()
+      .from(nodeRunEvents)
+      .where(and(eq(nodeRunEvents.nodeRunId, nodeRunId), gt(nodeRunEvents.id, dbLowerBound)))
+      .orderBy(asc(nodeRunEvents.id))
+      .limit(remaining)
+    for (const r of rows) {
+      let payload: unknown
+      try {
+        payload = JSON.parse(r.payload)
+      } catch {
+        payload = r.payload
+      }
+      events.push({
+        id: r.id,
+        nodeRunId: r.nodeRunId,
+        ts: r.ts,
+        kind: r.kind,
+        payload,
+      })
+    }
+  }
   const cursor = events.length > 0 ? (events[events.length - 1]?.id ?? null) : null
   return { events, cursor }
 }
@@ -647,6 +674,7 @@ export async function getNodeRunStdout(
   db: DbClient,
   taskId: string,
   nodeRunId: string,
+  opts: { logsDir?: string } = {},
 ): Promise<string> {
   const ownerRows = await db
     .select({ taskId: nodeRuns.taskId })
@@ -660,15 +688,18 @@ export async function getNodeRunStdout(
       `node_run '${nodeRunId}' not found under task '${taskId}'`,
     )
   }
+  // Archived (oldest) lines come first, live DB rows last. Stderr is dropped
+  // from both sides — that channel lives on the Events tab.
+  const logsDir = opts.logsDir ?? Paths.logsDir
+  const archived = await readArchivedEvents(logsDir, taskId, nodeRunId, 0, Number.MAX_SAFE_INTEGER)
+  const archivedTexts = archived.filter((a) => a.kind !== 'stderr').map((a) => a.payload)
   const rows = await db
     .select({ payload: nodeRunEvents.payload, kind: nodeRunEvents.kind })
     .from(nodeRunEvents)
     .where(eq(nodeRunEvents.nodeRunId, nodeRunId))
     .orderBy(asc(nodeRunEvents.id))
-  return rows
-    .filter((r) => r.kind !== 'stderr')
-    .map((r) => r.payload)
-    .join('\n')
+  const dbTexts = rows.filter((r) => r.kind !== 'stderr').map((r) => r.payload)
+  return [...archivedTexts, ...dbTexts].join('\n')
 }
 
 /**

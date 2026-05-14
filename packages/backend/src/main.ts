@@ -9,6 +9,7 @@
 //   migrate  P-1-05 ✓
 //   backup   P-5-02
 
+import { backupCommand } from './cli/backup'
 import { configGetCommand, configSetCommand } from './cli/config-cli'
 import { doctorCommand, formatDoctor } from './cli/doctor'
 import { migrateCommand } from './cli/migrate'
@@ -99,10 +100,12 @@ async function main(): Promise<void> {
       console.log('agent-workflow 0.0.0 (M1, P-1-01..P-1-05)')
       break
 
-    case 'backup':
-      console.error("'backup' subcommand lands in M5 (P-5-02)")
-      process.exit(2)
+    case 'backup': {
+      const result = await backupCommand()
+      process.stdout.write(result.output)
+      if (result.status !== 'ok') process.exit(1)
       break
+    }
 
     case 'help':
     case '--help':
@@ -122,7 +125,7 @@ async function main(): Promise<void> {
       )
       console.log('  migrate                           apply pending DB migrations')
       console.log(
-        '  backup                            (M5) export ~/.agent-workflow into a tarball',
+        '  backup                            write a tar.gz snapshot under ~/.agent-workflow/backups/',
       )
       if (sub !== 'help' && sub !== '--help' && sub !== '-h') {
         console.error(`unknown subcommand: ${sub}`)
