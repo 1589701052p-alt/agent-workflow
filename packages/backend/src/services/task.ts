@@ -9,12 +9,22 @@ import { tasks } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree } from '@/util/git'
-import { NotFoundError } from '@/util/errors'
+import { ConflictError, NotFoundError } from '@/util/errors'
 import { runTask } from './scheduler'
 import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('task')
+
+/**
+ * Process-local registry of in-flight task AbortControllers. Used by
+ * cancelTask to interrupt the running scheduler/runner pipeline.
+ *
+ * Survives only within this daemon process. On daemon restart, in-flight
+ * tasks are reconciled by the startup orphan scan (P-4-07) — out of scope
+ * for M1.
+ */
+const activeTasks = new Map<string, AbortController>()
 
 export interface StartTaskDeps {
   db: DbClient
@@ -85,21 +95,78 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   }
 
   // Kick the scheduler. HTTP route returns immediately; tests can await.
+  const controller = new AbortController()
+  activeTasks.set(taskId, controller)
   const schedulerPromise = runTask({
     taskId,
     db: deps.db,
     appHome,
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     log,
-  }).catch((err) => {
-    log.error('runTask threw', { taskId, error: err instanceof Error ? err.message : String(err) })
+    signal: controller.signal,
   })
+    .catch((err) => {
+      log.error('runTask threw', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    .finally(() => {
+      activeTasks.delete(taskId)
+    })
 
   if (deps.awaitScheduler === true) {
     await schedulerPromise
     return (await getTask(deps.db, taskId)) as Task
   }
   return task
+}
+
+/**
+ * Cancel an in-flight task. Aborts the in-process controller (runner SIGTERMs
+ * the opencode child), then waits briefly for the scheduler to settle.
+ *
+ * Rejects if the task is already terminal.
+ */
+export async function cancelTask(db: DbClient, id: string): Promise<Task> {
+  const task = await getTask(db, id)
+  if (task === null) {
+    throw new NotFoundError('task-not-found', `task '${id}' not found`)
+  }
+  if (task.status !== 'pending' && task.status !== 'running') {
+    throw new ConflictError(
+      'task-not-cancelable',
+      `task '${id}' is already ${task.status}; nothing to cancel`,
+    )
+  }
+
+  const controller = activeTasks.get(id)
+  if (controller !== undefined) {
+    controller.abort()
+    // Wait for the scheduler to record the canceled state (best-effort 5s
+    // poll). If the daemon was restarted, no controller exists; we just mark
+    // the row canceled directly.
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      const reread = await getTask(db, id)
+      if (reread !== null && reread.status !== 'pending' && reread.status !== 'running') {
+        return reread
+      }
+      await Bun.sleep(50)
+    }
+  }
+
+  // Fallback: scheduler didn't notice or no controller — flip the row.
+  await db
+    .update(tasks)
+    .set({
+      status: 'canceled',
+      finishedAt: Date.now(),
+      errorSummary: 'canceled by user',
+      errorMessage: 'no active scheduler at cancel time',
+    })
+    .where(eq(tasks.id, id))
+  return (await getTask(db, id)) as Task
 }
 
 export async function getTask(db: DbClient, id: string): Promise<Task | null> {

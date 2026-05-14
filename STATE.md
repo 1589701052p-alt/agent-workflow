@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-14（P-1-14 完成后，含 scheduler + tasks endpoint）
+**最近更新**：2026-05-14（P-1-15 完成后，含 cancel task）
 
 ---
 
@@ -16,7 +16,7 @@
 
 ```
 M0 准备       [5/5   ✅]
-M1 骨架       [14/18 🚧]  ← 当前位置
+M1 骨架       [15/18 🚧]  ← 当前位置（后端核心闭环完成；剩前端 3 个 issue）
 M2 编辑器     [0/16]
 M3 编排核心   [0/14]
 M4 高级编排   [0/11]
@@ -25,7 +25,7 @@ M5 打磨       [0/12]
 
 ---
 
-## 已完成 issue（19 个）
+## 已完成 issue（20 个）
 
 ### M0 全部完成（5/5）
 
@@ -55,12 +55,13 @@ M5 打磨       [0/12]
 | P-1-12 | Worktree helper（util/git.ts） | `runGit` / `requireGitRepo` / `repoSlug = sha1(8)+basename` / `createWorktree`（`agent-workflow/{taskId}` 分支，返 baseCommit）/ `removeWorktree`；并发 task 拿独立 worktree 验证 |
 | P-1-13 | opencode runner | `services/{envelope,protocol,runner}.ts` 三件套：envelope 解析（last-wins / 单双引号 / 缺失补空）+ user prompt 拼接（`{{port}}` + 内置 `{{__var__}}` + 章节追加 + 英文协议块）+ runner（OPENCODE_CONFIG_CONTENT 注入 agent / OPENCODE_CONFIG_DIR 注入 skill / 流式写 events 表 / accumulate text events 提取 envelope / AbortSignal + timeout / 清理 runDir）；mock-opencode 端到端 9 case |
 | P-1-14 | Task 启动 + 线性 DAG 调度 | `services/{scheduler,task}.ts` + `routes/tasks.ts`：Kahn 拓扑排序 / input 节点物化为虚拟 node_run / agent-single 调 runNode / output 节点跳过 / multi-process+wrapper+loop 拒绝 / 多入边到同 port 自动拼接（`---` 分隔）/ 失败节点 halt task；POST/GET endpoint，HTTP 创建后 scheduler 后台跑；tests 14 case |
+| P-1-15 | Cancel task | `POST /api/tasks/:id/cancel` + service 层 `activeTasks: Map<taskId, AbortController>` + scheduler/runner 全链路 signal 传递；终态 task → 409 `task-not-cancelable`；无 controller 的孤儿（如 daemon 重启后）也能 flip 到 canceled；tests 5 case |
 
 ---
 
 ## 测试积累
 
-后端测试 **195 个 case**，全部用 `bun test` 跑（in-memory SQLite，每 case <100ms）。daemon 启动相关测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
+后端测试 **200 个 case**，全部用 `bun test` 跑（in-memory SQLite，每 case <100ms）。daemon 启动相关测试 spawn 子进程，~1-2s 每 case。git util / repos / tasks / 部分 workflow 测试初始化真实 git 仓 fixture。Runner / scheduler 测试用 mock-opencode 子进程脚本代替真 opencode。
 
 测试文件：
 ```
@@ -81,10 +82,10 @@ packages/backend/tests/
 ├── protocol.test.ts        (9 case)
 ├── repos.test.ts           (12 case)
 ├── runner.test.ts          (9 case，spawn mock-opencode + 检验 DB 写入)
-├── scheduler.test.ts       (7 case，end-to-end runTask 含拓扑/拒绝/级联失败)
+├── scheduler.test.ts       (9 case，end-to-end runTask 含拓扑/拒绝/级联失败/cancel signal)
 ├── skills.test.ts          (22 case)
 ├── smoke.test.ts           (1 case)
-├── tasks.test.ts           (7 case，HTTP 层 + 真 git fixture)
+├── tasks.test.ts           (10 case，HTTP 层 + 真 git fixture + cancel API)
 └── workflows.test.ts       (15 case)
 ```
 
@@ -139,13 +140,12 @@ packages/backend/src/
 
 ---
 
-## 下一步：M1 剩余 4 个 issue
+## 下一步：M1 剩余 3 个 issue（全部前端）
 
-P-1-14 跑通后，M1 的后端核心闭环已完成（创 agent / skill / workflow → 启 task → opencode 子进程跑出 outputs）。剩下的 4 个 issue 主要是 cancel + 前端：
+后端核心闭环 + cancel 全部完成。剩下的 3 个 issue 都是前端：
 
 | ID | 标题 | 依赖 | 复杂度 |
 | --- | --- | --- | --- |
-| **P-1-15** | Cancel task | P-1-14 | S |
 | P-1-15 | Cancel task | P-1-14 | S |
 | P-1-16 | 前端骨架：路由 / Layout / API client | P-0-02 | M |
 | P-1-17 | 前端 Agents / Skills 列表 + 编辑界面 | P-1-08, P-1-09, P-1-16 | L |

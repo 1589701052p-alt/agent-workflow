@@ -202,6 +202,57 @@ describe('task HTTP routes', () => {
     expect(((await res.json()) as { code: string }).code).toBe('task-invalid')
   })
 
+  test('POST /:id/cancel on a completed task -> 409 task-not-cancelable', async () => {
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt',
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      status: 'done',
+      inputs: '{}',
+      startedAt: Date.now() - 1000,
+      finishedAt: Date.now(),
+    })
+    const res = await req(h.app, `/api/tasks/${id}/cancel`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('task-not-cancelable')
+  })
+
+  test('POST /:id/cancel on an unknown task -> 404', async () => {
+    const res = await req(h.app, '/api/tasks/01HFAKEFAKE/cancel', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  test('POST /:id/cancel on a stuck-running task (no active controller) flips to canceled', async () => {
+    // Simulate a row left in 'running' state without an in-process controller
+    // (e.g. after daemon restart). The cancel endpoint should still mark it
+    // canceled rather than block forever.
+    const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+    const id = ulid()
+    await h.db.insert(tasks).values({
+      id,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt',
+      baseBranch: 'main',
+      branch: `agent-workflow/${id}`,
+      status: 'running',
+      inputs: '{}',
+      startedAt: Date.now() - 1000,
+    })
+    const res = await req(h.app, `/api/tasks/${id}/cancel`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const task = (await res.json()) as { status: string; errorSummary: string }
+    expect(task.status).toBe('canceled')
+    expect(task.errorSummary).toContain('canceled')
+  })
+
   test('all /api/tasks/* require token', async () => {
     expect((await h.app.request('/api/tasks')).status).toBe(401)
   })

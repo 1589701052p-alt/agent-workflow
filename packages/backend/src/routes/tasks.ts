@@ -8,7 +8,7 @@
 import { StartTaskSchema, TaskStatusSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
-import { getTask, listTasks, startTask } from '@/services/task'
+import { cancelTask, getTask, listTasks, startTask } from '@/services/task'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
@@ -54,6 +54,11 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     }
     const task = await startTask(parsed.data, { db: deps.db })
     return c.json(task, 201)
+  })
+
+  app.post('/api/tasks/:id/cancel', async (c) => {
+    const task = await cancelTask(deps.db, c.req.param('id'))
+    return c.json(task)
   })
 }
 

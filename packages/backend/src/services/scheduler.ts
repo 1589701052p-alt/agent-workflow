@@ -27,6 +27,11 @@ export interface RunTaskOptions {
   /** Override opencode binary command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   log?: Logger
+  /**
+   * When aborted, any node currently running is SIGTERMed via runNode and the
+   * task transitions to status=canceled. Subsequent nodes are not started.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -92,6 +97,10 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
   })()
 
   for (const node of order) {
+    if (opts.signal?.aborted === true) {
+      await cancelTaskRow(db, taskId, node.id)
+      return
+    }
     if (node.kind === 'output') continue
 
     if (node.kind === 'input') {
@@ -154,6 +163,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
         ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
         db,
         log: log.child('run'),
+        ...(opts.signal ? { signal: opts.signal } : {}),
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -161,6 +171,10 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
       return
     }
 
+    if (result.status === 'canceled') {
+      await cancelTaskRow(db, taskId, node.id)
+      return
+    }
     if (result.status !== 'done') {
       await failTask(
         db,
@@ -213,6 +227,17 @@ async function failTask(
     finishedAt: Date.now(),
     errorSummary,
     errorMessage,
+  }
+  if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
+  await db.update(tasks).set(set).where(eq(tasks.id, taskId))
+}
+
+async function cancelTaskRow(db: DbClient, taskId: string, failedNodeId?: string): Promise<void> {
+  const set: Record<string, unknown> = {
+    status: 'canceled',
+    finishedAt: Date.now(),
+    errorSummary: 'canceled by user',
+    errorMessage: 'aborted by signal',
   }
   if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
   await db.update(tasks).set(set).where(eq(tasks.id, taskId))

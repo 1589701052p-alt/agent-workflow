@@ -300,6 +300,58 @@ describe('runTask: linear DAG (M1)', () => {
     expect(runs.find((r) => r.nodeId === 'a')?.status).toBe('done')
   })
 
+  test('signal aborted before scheduling -> task status=canceled', async () => {
+    await seedAgent(h.db, 'a', ['summary'])
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [{ id: 'a', kind: 'agent-single', agentName: 'a' }],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const controller = new AbortController()
+    controller.abort()
+    await runTask({
+      taskId,
+      db: h.db,
+      appHome: h.appHome,
+      opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      signal: controller.signal,
+    })
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('canceled')
+    expect(t?.errorSummary).toContain('canceled')
+  })
+
+  test('signal aborted mid-run -> runner result=canceled propagates', async () => {
+    await seedAgent(h.db, 'slow', ['summary'])
+    const def: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [{ id: 'a', kind: 'agent-single', agentName: 'slow' }],
+      edges: [],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def)
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+    await withEnv(
+      {
+        MOCK_OPENCODE_DELAY_MS: '2000',
+        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'never' }),
+      },
+      () =>
+        runTask({
+          taskId,
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          signal: controller.signal,
+        }),
+    )
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(t?.status).toBe('canceled')
+  })
+
   test('multiple edges to same target port are concatenated', async () => {
     // Two input nodes both feed agent.requirement port. Scheduler should
     // concatenate them with the standard separator.
