@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/09 闭合）
+**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/09/11 闭合，文档齐备）
 
 ---
 
@@ -20,17 +20,18 @@ M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
 M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
 M4 高级编排   [11/11 ✅]  loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg
-M5 打磨       [6.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-09）
+M5 打磨       [7.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-09 + P-5-11）
 ```
 
 ---
 
-## 已完成 issue（70 个）
+## 已完成 issue（71 个）
 
-### M5 进行中（6.5/12）
+### M5 进行中（7.5/12）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-5-11 | README + 用户文档 | `README.md` 整体重写，从 M0 脚手架介绍换成 v1 上手文档：requirements 表（opencode 1.14.0+ / git 2.5+ / macOS+Linux）、单二进制 curl 安装一行命令（macos-arm64 + linux-x86_64）、quick start（`./agent-workflow start` → 点链接 → 建 agent / skill / workflow / launch task）、`~/.agent-workflow/` 文件树、完整 CLI 列表、所有可编辑 config 字段表（标 restart-required）、build-from-source。新增 `docs/`：(1) `architecture.md` ASCII 进程图 + 8 张表数据模型 + 任务生命周期 + fan-out 详解 + wrapper 嵌套语义 + 进程隔离 + token 鉴权；(2) `agent.md` frontmatter 字段表 + readonly 与三套 semaphore 的并发模型 + prompt 模板变量（`{{port}}` + 6 个 builtin）+ CRUD endpoint 表；(3) `skill.md` managed vs external 源类型 + 目录布局 + SKILL.md frontmatter + 两种 source 的 per-run staging（copy vs symlink）+ CRUD endpoint 表；(4) `workflow-yaml.md` top-level shape + 4 种 launcher input kind + 6 种 node kind 全例子 + edges 多入边 `---` 拼接规则 + 13 条校验规则；(5) `troubleshooting.md` 8 个常见问题（stale lock / opencode 版本 / worktree 错误 / 远程访问 / 卡死任务 / daemon crash resume / events 归档 / 备份），README 末尾的 docs 链接全部对齐 |
 | P-5-09 | Settings 修改后 restart 提示 | `routes/settings.tsx` 加 `RESTART_REQUIRED_KEYS = {bindHost, bindPort}` + 纯函数 `hasRestartRequiredChange(keys, before, after)`。`useTabState` 多导出一个 `restartRequired: boolean`：mutation `onMutate` 重置为 false，`onSuccess(next)` 用 helper 比较 pre-save 的 `config` snapshot 与服务器返回的 next，命中就置 true（避免单纯保存触发误报）。`SectionForm` 新 prop `restartRequired?: boolean`；为 true 时在 Save 行下方 12px 渲染 `<div className="info-box" role="status" aria-live="polite">`，标题 + 一句话说明（i18n key `settings.restartRequiredTitle` + `settings.restartRequiredHint`，中英文均提示先 `agent-workflow stop` 再 `agent-workflow start`）。NetworkTab 把 `restartRequired` 透传；其它 tab 不传，banner 永远不出。tests +6 case（bindPort 触发 / bindHost 触发 / 同值不触发 / 非 restart key 不触发 / 不持有 restart key 的 tab 不触发 / 导出集合内容验证）|
 | P-5-06 | GitHub Releases 自动发布 | `.github/workflows/release.yml`：`on: push tags v*` → ubuntu + macos matrix → `bun install --frozen-lockfile` → `bun run build:binary` → `softprops/action-gh-release@v2` 上传 `dist/agent-workflow-*` 单文件资产到对应 tag 的 Release。`prerelease: contains(github.ref_name, '-')` —— `v0.1.0-rc.1` 类带连字符 tag 标为 prerelease，纯 semver `v0.1.0` 标为正式版。`generate_release_notes: true` 自动从 commit / PR 拼 release notes。`permissions: contents: write` 让 GITHUB_TOKEN 能写 Release。同一 tag 重跑时 action 是幂等 append（首跑创建 release，后续 push 新 asset）。本地未实跑（需真 tag），逻辑沿用 build-binary CI job 已验证的同一脚本。|
 | P-5-05 | Bun build 单二进制 + 嵌入前端 dist + 嵌入 drizzle migrations | `scripts/build-binary.ts`：1) `bun run --filter @agent-workflow/frontend build` → `packages/frontend/dist/`；2) walk frontend/dist + `packages/backend/db/migrations` 两棵树，把 `packages/backend/src/embed.generated.ts` 改写成每个文件一行 `import xx from '…' with { type: 'file' }`（identifier 用 `prefix_${rel-with-non-alnum-stripped}_${hashCode-base36}` 避免碰撞）+ 导出 `FRONTEND_FILES`/`MIGRATION_FILES` 路径表 + `IS_EMBEDDED = true`；3) `bun build packages/backend/src/main.ts --compile --target=bun --minify --outfile=dist/agent-workflow-<macos\|linux>-<arm64\|x86_64>`；4) finally 还原 stub 文件（dev 时 `IS_EMBEDDED=false` + 两个空 map），防止污染 working tree；5) 跑 `<binary> version` 烟雾测试。`packages/backend/src/embed.ts`：runtime helpers — `getEmbeddedAsset(urlPath)` 异步取 `Bun.file(filePath).arrayBuffer()` + 派生 mime（html/js/css/json/svg/png/woff2 等），`extractMigrationsTo(targetDir)` 同步重建目录树写每个 .sql + meta/_journal.json（drizzle migrator 需要文件系统路径，没法直接走 buffer）。`server.ts`：仅在 `IS_EMBEDDED=true` 时挂 `*` catch-all 路由，`/api/*` 和 `/ws/*` 仍然 404 走原 schema，其它路径先查 FRONTEND_FILES → 命中则回静态资源，未命中回 `index.html`（SPA 路由 hard-refresh 不会 404）。`cli/start.ts`：daemon 启动到 step 5 时，`IS_EMBEDDED=true` 就把 migrations 抽到 `~/.agent-workflow/runtime/migrations/` 再交给 drizzle，否则继续读 `Paths.migrationsDir`。`.github/workflows/ci.yml`：新 `build-binary` job，`needs: check`，ubuntu + macos matrix，跑 `bun run build:binary` → `actions/upload-artifact@v4` 把 `dist/agent-workflow-*` 上传（解锁 P-5-06）。`.gitignore` `dist/` 早就有，无需改。stub `embed.generated.ts` 已 commit，dev 不需要任何额外操作。本地实测：61 MiB 二进制，`/health` 正确、`/` 吐 index.html（467B）、`/assets/*.css` 吐真实 CSS（39 KiB），migrations 抽出 5 文件 + dbVersion=2，SIGTERM 干净退出。tests +4 case（IS_EMBEDDED stub 检查、空 frontend list、`getEmbeddedAsset` null、`extractMigrationsTo` 0 文件幂等）|
@@ -215,7 +216,7 @@ packages/backend/src/
 
 ## 下一步：M5 续
 
-P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-09 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
+P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-09 + P-5-11 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
 - **P-5-03 stage 2**：把 stage 1 列表里"未迁"的所有路由/组件 hardcoded 英文外提到 i18n 键，覆盖剩余 ~38 个 .tsx（estimate L）
 - P-5-06 GitHub Releases pipeline（S）— deps P-5-05
 - P-5-07 Playwright e2e（M）
