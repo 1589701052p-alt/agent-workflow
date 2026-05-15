@@ -1,0 +1,269 @@
+// NodeInspector edit-form tests: each node kind owns a small patch surface;
+// these confirm that user edits flow through `onChange` as a fully-formed
+// WorkflowDefinition with the right node updated.
+
+import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import type { Agent, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
+import { NodeInspector } from '../src/components/canvas/NodeInspector'
+
+const CODER: Agent = {
+  id: 'agent-coder',
+  name: 'coder',
+  description: '',
+  outputs: ['code'],
+  readonly: false,
+  permission: {},
+  skills: [],
+  frontmatterExtra: {},
+  bodyMd: '',
+  schemaVersion: 1,
+  createdAt: 0,
+  updatedAt: 0,
+}
+
+function makeDef(nodes: WorkflowNode[]): WorkflowDefinition {
+  return { $schema_version: 1, inputs: [], nodes, edges: [] }
+}
+
+// Stateful harness — mirrors what the editor route does so that subsequent
+// edits in the inspector see prior state (sourcePort field needs this).
+function Host({
+  initial,
+  agents,
+  onChangeSpy,
+  onCloseSpy,
+}: {
+  initial: WorkflowNode
+  agents: Agent[]
+  onChangeSpy: (def: WorkflowDefinition) => void
+  onCloseSpy: () => void
+}) {
+  const [def, setDef] = useState<WorkflowDefinition>(makeDef([initial]))
+  return (
+    <NodeInspector
+      definition={def}
+      selectedNodeId={initial.id}
+      agents={agents}
+      onChange={(next) => {
+        setDef(next)
+        onChangeSpy(next)
+      }}
+      onClose={onCloseSpy}
+    />
+  )
+}
+
+function setup(node: WorkflowNode, agents: Agent[] = [CODER]) {
+  const onChange = vi.fn()
+  const onClose = vi.fn()
+  render(
+    <Host initial={node} agents={agents} onChangeSpy={onChange} onCloseSpy={onClose} />,
+  )
+  return { onChange, onClose }
+}
+
+function lastPatchedNode(onChange: ReturnType<typeof vi.fn>): WorkflowNode {
+  const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as WorkflowDefinition
+  return lastCall.nodes[0]!
+}
+
+afterEach(() => {
+  document.body.innerHTML = ''
+})
+
+describe('NodeInspector', () => {
+  test('renders nothing when no node is selected', () => {
+    const { container } = render(
+      <NodeInspector
+        definition={makeDef([])}
+        selectedNodeId={null}
+        agents={[]}
+        onChange={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(container.querySelector('.inspector')).toBeNull()
+  })
+
+  test('renders nothing when selected node id is unknown', () => {
+    const { container } = render(
+      <NodeInspector
+        definition={makeDef([])}
+        selectedNodeId="ghost"
+        agents={[]}
+        onChange={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(container.querySelector('.inspector')).toBeNull()
+  })
+
+  test('Close button calls onClose', () => {
+    const onClose = vi.fn()
+    render(
+      <NodeInspector
+        definition={makeDef([{ id: 'i1', kind: 'input', inputKey: 'req' }])}
+        selectedNodeId="i1"
+        agents={[]}
+        onChange={() => {}}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('Close'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  test('input node: editing the Input key patches inputKey', () => {
+    const { onChange } = setup({ id: 'i1', kind: 'input', inputKey: 'req' })
+    const input = screen.getByDisplayValue('req') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'spec' } })
+    const next = lastPatchedNode(onChange) as unknown as { inputKey: string }
+    expect(next.inputKey).toBe('spec')
+  })
+
+  test('output node: + Add port appends an empty binding', () => {
+    const { onChange } = setup({
+      id: 'o1',
+      kind: 'output',
+      ports: [{ name: 'final', bind: { nodeId: 'a1', portName: 'code' } }],
+    })
+    fireEvent.click(screen.getByText('+ Add port'))
+    const next = lastPatchedNode(onChange) as unknown as {
+      ports: Array<{ name: string; bind: { nodeId: string; portName: string } }>
+    }
+    expect(next.ports).toHaveLength(2)
+    expect(next.ports[1]).toEqual({ name: 'port_2', bind: { nodeId: '', portName: '' } })
+  })
+
+  test('output node: Remove drops the matching row', () => {
+    const { onChange } = setup({
+      id: 'o1',
+      kind: 'output',
+      ports: [
+        { name: 'a', bind: { nodeId: 'x', portName: 'p' } },
+        { name: 'b', bind: { nodeId: 'y', portName: 'q' } },
+      ],
+    })
+    // There are two Remove buttons (one per row); click the first.
+    fireEvent.click(screen.getAllByText('Remove')[0]!)
+    const next = lastPatchedNode(onChange) as unknown as {
+      ports: Array<{ name: string }>
+    }
+    expect(next.ports.map((p) => p.name)).toEqual(['b'])
+  })
+
+  test('wrapper-git: inner ids list is read-only (no form inputs)', () => {
+    setup({ id: 'wg', kind: 'wrapper-git', nodeIds: ['a', 'b'] })
+    // No editable form inputs in the body — just inner-id chips.
+    const inputs = document.querySelectorAll('.inspector__body input, .inspector__body select')
+    expect(inputs.length).toBe(0)
+    expect(screen.getByText('a')).toBeTruthy()
+    expect(screen.getByText('b')).toBeTruthy()
+  })
+
+  test('wrapper-loop: changing exitCondition kind keeps prior fields and switches the visible inputs', () => {
+    const { onChange } = setup({
+      id: 'wl',
+      kind: 'wrapper-loop',
+      nodeIds: ['a'],
+      maxIterations: 3,
+      exitCondition: { kind: 'port-empty', nodeId: 'a', portName: 'p' },
+      outputBindings: [],
+    })
+    fireEvent.change(screen.getByDisplayValue('port-empty'), { target: { value: 'port-equals' } })
+    const after = lastPatchedNode(onChange) as unknown as {
+      exitCondition: { kind: string; nodeId: string; portName: string }
+    }
+    expect(after.exitCondition.kind).toBe('port-equals')
+    expect(after.exitCondition.nodeId).toBe('a')
+    expect(after.exitCondition.portName).toBe('p')
+  })
+
+  test('wrapper-loop: + Add binding appends an empty output binding', () => {
+    const { onChange } = setup({
+      id: 'wl',
+      kind: 'wrapper-loop',
+      nodeIds: ['a'],
+      maxIterations: 3,
+      exitCondition: { kind: 'port-empty' },
+      outputBindings: [],
+    })
+    fireEvent.click(screen.getByText('+ Add binding'))
+    const after = lastPatchedNode(onChange) as unknown as {
+      outputBindings: Array<{ name: string; bind: { nodeId: string; portName: string } }>
+    }
+    expect(after.outputBindings).toEqual([
+      { name: 'out_1', bind: { nodeId: '', portName: '' } },
+    ])
+  })
+
+  test('agent-single: selecting an agent patches agentName', () => {
+    const { onChange } = setup({
+      id: 'a1',
+      kind: 'agent-single',
+      agentName: '',
+      promptTemplate: '',
+    })
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'coder' } })
+    const after = lastPatchedNode(onChange) as unknown as { agentName: string }
+    expect(after.agentName).toBe('coder')
+  })
+
+  test('agent-single: editing the prompt template patches promptTemplate', () => {
+    const { onChange } = setup({
+      id: 'a1',
+      kind: 'agent-single',
+      agentName: 'coder',
+      promptTemplate: 'old',
+    })
+    const ta = screen.getByDisplayValue('old') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'fix {{req}}' } })
+    const after = lastPatchedNode(onChange) as unknown as { promptTemplate: string }
+    expect(after.promptTemplate).toBe('fix {{req}}')
+  })
+
+  test('agent-multi: the sourcePort field is exposed and patches sourcePort', () => {
+    const { onChange } = setup({
+      id: 'm1',
+      kind: 'agent-multi',
+      agentName: 'coder',
+      sourcePort: { nodeId: '', portName: '' },
+      promptTemplate: '',
+    })
+    fireEvent.change(screen.getByPlaceholderText('upstream node id'), {
+      target: { value: 'wg' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('port name'), { target: { value: 'git_diff' } })
+    const after = lastPatchedNode(onChange) as unknown as {
+      sourcePort: { nodeId: string; portName: string }
+    }
+    expect(after.sourcePort).toEqual({ nodeId: 'wg', portName: 'git_diff' })
+  })
+
+  test('Preview tab is disabled for non-agent kinds and enabled for agents', () => {
+    const { unmount } = render(
+      <NodeInspector
+        definition={makeDef([{ id: 'i1', kind: 'input', inputKey: 'req' }])}
+        selectedNodeId="i1"
+        agents={[]}
+        onChange={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect((screen.getByText('Preview') as HTMLButtonElement).disabled).toBe(true)
+    unmount()
+    render(
+      <NodeInspector
+        definition={makeDef([{ id: 'a1', kind: 'agent-single', agentName: 'coder' }])}
+        selectedNodeId="a1"
+        agents={[CODER]}
+        onChange={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect((screen.getByText('Preview') as HTMLButtonElement).disabled).toBe(false)
+  })
+})

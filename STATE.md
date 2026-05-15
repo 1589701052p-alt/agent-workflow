@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/09/11 闭合，文档齐备）
+**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/08/09/11 闭合，文档齐备）
 
 ---
 
@@ -20,17 +20,18 @@ M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
 M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
 M4 高级编排   [11/11 ✅]  loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg
-M5 打磨       [7.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-09 + P-5-11）
+M5 打磨       [8.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-11）
 ```
 
 ---
 
 ## 已完成 issue（71 个）
 
-### M5 进行中（7.5/12）
+### M5 进行中（8.5/12）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-5-08 | 前端关键组件 vitest | 新增 4 个 spec 共 +29 case，覆盖编辑器/启动器交互密集组件：(1) `tests/enum-picker.test.tsx` 6 case — single 出裸串 / multi 出 JSON array / toggle 移除 / 解析坏 JSON / allowOther Add 按钮 / 空白时 Add 禁用；(2) `tests/git-picker.test.tsx` 5 case — commit-range 双 input 出 `{kind,from,to}` / 现有 JSON round-trip / pr 数字 / branch 用 `setQueryData(['repos','refs','/repo'])` 预热缓存（staleTime Infinity 防止 fetch 重试发起真请求）/ 坏 JSON 不崩；(3) `tests/files-picker.test.tsx` 5 case — newline-joined value 派生 selected / 勾选发 newline join / maxCount 阻挡新增但允许减少 / 客户端 filter 收窄 / `repoPath=''` 显示 Pick a repo first；(4) `tests/node-inspector.test.tsx` 13 case — null/ghost selection 不渲染 / Close → onClose / input inputKey patch / output + Add port 默认 `port_{N+1}` / Remove 删行 / wrapper-git inputs=0（read-only inner ids）/ wrapper-loop 换 exitCondition.kind 保留 nodeId+portName / wrapper-loop + Add binding / agent-single select 派 agentName / promptTemplate / agent-multi sourcePort（用 `Host` 状态化 wrapper 让两次 fireEvent 之间真重渲，否则第二次 onChange 读到陈旧 props）/ Preview tab 只对 agent kind enable。前端 test 总数 117 → 146 |
 | P-5-11 | README + 用户文档 | `README.md` 整体重写，从 M0 脚手架介绍换成 v1 上手文档：requirements 表（opencode 1.14.0+ / git 2.5+ / macOS+Linux）、单二进制 curl 安装一行命令（macos-arm64 + linux-x86_64）、quick start（`./agent-workflow start` → 点链接 → 建 agent / skill / workflow / launch task）、`~/.agent-workflow/` 文件树、完整 CLI 列表、所有可编辑 config 字段表（标 restart-required）、build-from-source。新增 `docs/`：(1) `architecture.md` ASCII 进程图 + 8 张表数据模型 + 任务生命周期 + fan-out 详解 + wrapper 嵌套语义 + 进程隔离 + token 鉴权；(2) `agent.md` frontmatter 字段表 + readonly 与三套 semaphore 的并发模型 + prompt 模板变量（`{{port}}` + 6 个 builtin）+ CRUD endpoint 表；(3) `skill.md` managed vs external 源类型 + 目录布局 + SKILL.md frontmatter + 两种 source 的 per-run staging（copy vs symlink）+ CRUD endpoint 表；(4) `workflow-yaml.md` top-level shape + 4 种 launcher input kind + 6 种 node kind 全例子 + edges 多入边 `---` 拼接规则 + 13 条校验规则；(5) `troubleshooting.md` 8 个常见问题（stale lock / opencode 版本 / worktree 错误 / 远程访问 / 卡死任务 / daemon crash resume / events 归档 / 备份），README 末尾的 docs 链接全部对齐 |
 | P-5-09 | Settings 修改后 restart 提示 | `routes/settings.tsx` 加 `RESTART_REQUIRED_KEYS = {bindHost, bindPort}` + 纯函数 `hasRestartRequiredChange(keys, before, after)`。`useTabState` 多导出一个 `restartRequired: boolean`：mutation `onMutate` 重置为 false，`onSuccess(next)` 用 helper 比较 pre-save 的 `config` snapshot 与服务器返回的 next，命中就置 true（避免单纯保存触发误报）。`SectionForm` 新 prop `restartRequired?: boolean`；为 true 时在 Save 行下方 12px 渲染 `<div className="info-box" role="status" aria-live="polite">`，标题 + 一句话说明（i18n key `settings.restartRequiredTitle` + `settings.restartRequiredHint`，中英文均提示先 `agent-workflow stop` 再 `agent-workflow start`）。NetworkTab 把 `restartRequired` 透传；其它 tab 不传，banner 永远不出。tests +6 case（bindPort 触发 / bindHost 触发 / 同值不触发 / 非 restart key 不触发 / 不持有 restart key 的 tab 不触发 / 导出集合内容验证）|
 | P-5-06 | GitHub Releases 自动发布 | `.github/workflows/release.yml`：`on: push tags v*` → ubuntu + macos matrix → `bun install --frozen-lockfile` → `bun run build:binary` → `softprops/action-gh-release@v2` 上传 `dist/agent-workflow-*` 单文件资产到对应 tag 的 Release。`prerelease: contains(github.ref_name, '-')` —— `v0.1.0-rc.1` 类带连字符 tag 标为 prerelease，纯 semver `v0.1.0` 标为正式版。`generate_release_notes: true` 自动从 commit / PR 拼 release notes。`permissions: contents: write` 让 GITHUB_TOKEN 能写 Release。同一 tag 重跑时 action 是幂等 append（首跑创建 release，后续 push 新 asset）。本地未实跑（需真 tag），逻辑沿用 build-binary CI job 已验证的同一脚本。|
@@ -216,14 +217,10 @@ packages/backend/src/
 
 ## 下一步：M5 续
 
-P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-09 + P-5-11 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
+P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-11 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
 - **P-5-03 stage 2**：把 stage 1 列表里"未迁"的所有路由/组件 hardcoded 英文外提到 i18n 键，覆盖剩余 ~38 个 .tsx（estimate L）
-- P-5-06 GitHub Releases pipeline（S）— deps P-5-05
 - P-5-07 Playwright e2e（M）
-- P-5-08 vitest 前端关键组件单元（M）
-- P-5-09 Settings restart-required toast（S）
 - P-5-10 first-run onboarding（M）
-- P-5-11 README + 用户文档（M）
 - P-5-12 性能 + 稳定性 sweep（M）
 
 ---
