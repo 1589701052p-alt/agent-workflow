@@ -34,6 +34,7 @@ export const enUS: Resources = {
     tabNetwork: 'Network',
     tabConnection: 'Connection',
     tabAppearance: 'Appearance',
+    tabRendering: 'Rendering',
     loading: 'Loading…',
     saving: 'Saving…',
     saved: 'Saved',
@@ -52,6 +53,19 @@ export const enUS: Resources = {
     restartRequiredTitle: 'Daemon restart required',
     restartRequiredHint:
       'The new value was written to config.json, but bind host / bind port only apply on the next agent-workflow start. Run `agent-workflow stop` and then `agent-workflow start` in your terminal.',
+    renderingPlantumlEndpointLabel: 'PlantUML render endpoint',
+    renderingPlantumlEndpointHint:
+      'A configurable kroki-compatible HTTP service (kroki.io, self-hosted kroki, plantuml-server). When empty, plantuml fenced blocks on the review page fall back to source-code rendering with a muted hint.',
+    renderingPlantumlEndpointPlaceholder: 'https://kroki.io',
+    renderingPlantumlAuthLabel: 'PlantUML Authorization header',
+    renderingPlantumlAuthHint:
+      'Optional. Self-hosted kroki behind basic / bearer auth: fill in `Bearer xxx` or `Basic xxx`.',
+    renderingPlantumlAuthPlaceholder: 'Bearer xxx',
+    renderingTestButton: 'Test endpoint',
+    renderingTestRunning: 'Rendering test diagram…',
+    renderingTestSuccess: 'Endpoint returned an SVG — looks good.',
+    renderingTestFailure: 'Render failed: ',
+    renderingTestEmptyEndpoint: 'Fill in an endpoint URL first.',
   },
   onboarding: {
     title: 'Welcome to Agent Workflow',

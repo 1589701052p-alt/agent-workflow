@@ -24,7 +24,7 @@ export const Route = createRoute({
   component: SettingsPage,
 })
 
-type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'appearance' | 'connection'
+type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'appearance' | 'connection' | 'rendering'
 
 function SettingsPage() {
   const [tab, setTab] = useState<Tab>('runtime')
@@ -55,6 +55,7 @@ function SettingsPage() {
             ['gc', t('settings.tabGc')],
             ['network', t('settings.tabNetwork')],
             ['appearance', t('settings.tabAppearance')],
+            ['rendering', t('settings.tabRendering')],
             ['connection', t('settings.tabConnection')],
           ] as Array<[Tab, string]>
         ).map(([k, label]) => (
@@ -80,6 +81,7 @@ function SettingsPage() {
           {tab === 'gc' && <GcTab config={config.data} />}
           {tab === 'network' && <NetworkTab config={config.data} />}
           {tab === 'appearance' && <AppearanceTab config={config.data} />}
+          {tab === 'rendering' && <RenderingTab config={config.data} />}
           {tab === 'connection' && <ConnectionTab />}
         </>
       )}
@@ -437,6 +439,97 @@ function AppearanceTab({ config }: TabProps) {
           <option value="dark">{t('settings.themeDark')}</option>
         </select>
       </Field>
+    </SectionForm>
+  )
+}
+
+function RenderingTab({ config }: TabProps) {
+  const { t } = useTranslation()
+  const { state, setState, save } = useTabState(config, ['plantumlEndpoint', 'plantumlAuthHeader'])
+  const [testState, setTestState] = useState<{
+    kind: 'idle' | 'running' | 'success' | 'failure'
+    msg?: string
+  }>({ kind: 'idle' })
+
+  async function runConnectivityTest() {
+    const endpoint = (state.plantumlEndpoint ?? '').trim()
+    if (endpoint.length === 0) {
+      setTestState({ kind: 'failure', msg: t('settings.renderingTestEmptyEndpoint') })
+      return
+    }
+    setTestState({ kind: 'running' })
+    const { PlantUmlBlock } = await import('@/components/review/PlantUmlBlock')
+    const mount = document.createElement('div')
+    PlantUmlBlock.render(mount, '@startuml\nA -> B\n@enduml', endpoint, state.plantumlAuthHeader)
+    // The PlantUmlBlock helper hands off to fetch + DOM mutation. Watch the
+    // mount node for a state change for up to 10s.
+    const deadline = Date.now() + 10000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250))
+      if (mount.querySelector('.review-diagram__svg') !== null) {
+        setTestState({ kind: 'success', msg: t('settings.renderingTestSuccess') })
+        return
+      }
+      if (mount.querySelector('.review-diagram__error') !== null) {
+        const errText = mount.querySelector('.review-diagram__error')?.textContent ?? 'unknown'
+        setTestState({ kind: 'failure', msg: t('settings.renderingTestFailure') + errText })
+        return
+      }
+    }
+    setTestState({ kind: 'failure', msg: t('settings.renderingTestFailure') + 'timeout' })
+  }
+
+  return (
+    <SectionForm
+      onSave={save.mutate}
+      busy={save.isPending}
+      error={save.error}
+      success={save.isSuccess && save.error === null ? 'saved' : null}
+    >
+      <Field
+        label={t('settings.renderingPlantumlEndpointLabel')}
+        hint={t('settings.renderingPlantumlEndpointHint')}
+      >
+        <TextInput
+          value={state.plantumlEndpoint ?? ''}
+          onChange={(v) => setState({ ...state, plantumlEndpoint: v })}
+          placeholder={t('settings.renderingPlantumlEndpointPlaceholder')}
+        />
+      </Field>
+      <Field
+        label={t('settings.renderingPlantumlAuthLabel')}
+        hint={t('settings.renderingPlantumlAuthHint')}
+      >
+        <TextInput
+          value={state.plantumlAuthHeader ?? ''}
+          onChange={(v) => setState({ ...state, plantumlAuthHeader: v })}
+          placeholder={t('settings.renderingPlantumlAuthPlaceholder')}
+        />
+      </Field>
+      <div>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => {
+            void runConnectivityTest()
+          }}
+          disabled={testState.kind === 'running'}
+        >
+          {testState.kind === 'running'
+            ? t('settings.renderingTestRunning')
+            : t('settings.renderingTestButton')}
+        </button>
+        {testState.kind === 'success' && (
+          <div className="muted" role="status" aria-live="polite">
+            {testState.msg}
+          </div>
+        )}
+        {testState.kind === 'failure' && (
+          <div className="error-box" role="alert">
+            {testState.msg}
+          </div>
+        )}
+      </div>
     </SectionForm>
   )
 }

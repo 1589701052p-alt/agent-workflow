@@ -36,6 +36,7 @@ export interface Resources {
     tabNetwork: string
     tabConnection: string
     tabAppearance: string
+    tabRendering: string
     loading: string
     saving: string
     saved: string
@@ -52,6 +53,17 @@ export interface Resources {
     themeDark: string
     restartRequiredTitle: string
     restartRequiredHint: string
+    renderingPlantumlEndpointLabel: string
+    renderingPlantumlEndpointHint: string
+    renderingPlantumlEndpointPlaceholder: string
+    renderingPlantumlAuthLabel: string
+    renderingPlantumlAuthHint: string
+    renderingPlantumlAuthPlaceholder: string
+    renderingTestButton: string
+    renderingTestRunning: string
+    renderingTestSuccess: string
+    renderingTestFailure: string
+    renderingTestEmptyEndpoint: string
   }
   onboarding: {
     title: string
@@ -501,6 +513,7 @@ export const zhCN: Resources = {
     tabNetwork: '网络',
     tabConnection: '连接',
     tabAppearance: '外观',
+    tabRendering: '渲染',
     loading: '加载中…',
     saving: '保存中…',
     saved: '已保存',
@@ -519,6 +532,18 @@ export const zhCN: Resources = {
     restartRequiredTitle: '需要重启守护进程',
     restartRequiredHint:
       '新值已写入 config.json，但 bind host / bind port 仅在下次 agent-workflow start 时生效。请在终端先 agent-workflow stop，再 agent-workflow start。',
+    renderingPlantumlEndpointLabel: 'PlantUML 渲染端点',
+    renderingPlantumlEndpointHint:
+      '可配置的 kroki 风格 HTTP 服务（kroki.io / 自托管 kroki / plantuml-server 均兼容）；留空时评审页的 plantuml 代码块退化为源码 + 提示。',
+    renderingPlantumlEndpointPlaceholder: 'https://kroki.io',
+    renderingPlantumlAuthLabel: 'PlantUML Authorization 头',
+    renderingPlantumlAuthHint: '可选；自托管 kroki 走基础鉴权时填 `Bearer xxx` 或 `Basic xxx`。',
+    renderingPlantumlAuthPlaceholder: 'Bearer xxx',
+    renderingTestButton: '测试连通性',
+    renderingTestRunning: '渲染测试中…',
+    renderingTestSuccess: '已返回 svg，端点可用。',
+    renderingTestFailure: '渲染失败：',
+    renderingTestEmptyEndpoint: '请先填写端点 URL。',
   },
   onboarding: {
     title: '欢迎使用 Agent Workflow',
