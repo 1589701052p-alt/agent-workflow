@@ -221,22 +221,137 @@ describe('NodeInspector', () => {
     expect(after.promptTemplate).toBe('fix {{req}}')
   })
 
-  test('agent-multi: the sourcePort field is exposed and patches sourcePort', () => {
-    const { onChange } = setup({
-      id: 'm1',
-      kind: 'agent-multi',
-      agentName: 'coder',
-      sourcePort: { nodeId: '', portName: '' },
-      promptTemplate: '',
-    })
-    fireEvent.change(screen.getByPlaceholderText('upstream node id'), {
-      target: { value: 'wg' },
-    })
-    fireEvent.change(screen.getByPlaceholderText('port name'), { target: { value: 'git_diff' } })
-    const after = lastPatchedNode(onChange) as unknown as {
+  test('agent-multi: sourcePort dropdowns let user pick an upstream node + its output port', () => {
+    // The SourcePortField needs siblings to offer as options — render a
+    // workflow with a wrapper-git ahead of the agent-multi.
+    const onChange = vi.fn()
+    function MultiHost() {
+      const [def, setDef] = useState<WorkflowDefinition>({
+        $schema_version: 1,
+        inputs: [],
+        nodes: [
+          { id: 'wg', kind: 'wrapper-git', nodeIds: [] } as WorkflowNode,
+          {
+            id: 'm1',
+            kind: 'agent-multi',
+            agentName: 'coder',
+            sourcePort: { nodeId: '', portName: '' },
+            promptTemplate: '',
+          } as WorkflowNode,
+        ],
+        edges: [],
+      })
+      return (
+        <NodeInspector
+          definition={def}
+          selectedNodeId="m1"
+          agents={[CODER]}
+          onChange={(next) => {
+            setDef(next)
+            onChange(next)
+          }}
+          onClose={() => {}}
+        />
+      )
+    }
+    render(<MultiHost />)
+    const selects = screen.getAllByRole('combobox') as HTMLSelectElement[]
+    // selects[0] = agent picker, selects[1] = node id, selects[2] = port name
+    expect(selects.length).toBeGreaterThanOrEqual(3)
+    const nodeSel = selects[1]!
+    const portSel = selects[2]!
+    // Port dropdown is disabled until a node is picked.
+    expect(portSel.disabled).toBe(true)
+    fireEvent.change(nodeSel, { target: { value: 'wg' } })
+    fireEvent.change(portSel, { target: { value: 'git_diff' } })
+    const after = (
+      onChange.mock.calls[onChange.mock.calls.length - 1]![0] as WorkflowDefinition
+    ).nodes.find((n) => n.id === 'm1') as unknown as {
       sourcePort: { nodeId: string; portName: string }
     }
     expect(after.sourcePort).toEqual({ nodeId: 'wg', portName: 'git_diff' })
+  })
+
+  test('agent-multi: changing node clears a now-invalid port name', () => {
+    // wg exposes `git_diff`; coder agent (used by `a1`) exposes `code`.
+    // Starting state points at wg.git_diff; switching to a1 must drop
+    // the carried-over port because a1 doesn't expose `git_diff`.
+    const onChange = vi.fn()
+    function MultiHost() {
+      const [def, setDef] = useState<WorkflowDefinition>({
+        $schema_version: 1,
+        inputs: [],
+        nodes: [
+          { id: 'wg', kind: 'wrapper-git', nodeIds: [] } as WorkflowNode,
+          { id: 'a1', kind: 'agent-single', agentName: 'coder' } as WorkflowNode,
+          {
+            id: 'm1',
+            kind: 'agent-multi',
+            agentName: 'coder',
+            sourcePort: { nodeId: 'wg', portName: 'git_diff' },
+            promptTemplate: '',
+          } as WorkflowNode,
+        ],
+        edges: [],
+      })
+      return (
+        <NodeInspector
+          definition={def}
+          selectedNodeId="m1"
+          agents={[CODER]}
+          onChange={(next) => {
+            setDef(next)
+            onChange(next)
+          }}
+          onClose={() => {}}
+        />
+      )
+    }
+    render(<MultiHost />)
+    const selects = screen.getAllByRole('combobox') as HTMLSelectElement[]
+    fireEvent.change(selects[1]!, { target: { value: 'a1' } })
+    const after = (onChange.mock.calls[0]![0] as WorkflowDefinition).nodes.find(
+      (n) => n.id === 'm1',
+    ) as unknown as {
+      sourcePort: { nodeId: string; portName: string }
+    }
+    expect(after.sourcePort).toEqual({ nodeId: 'a1', portName: '' })
+  })
+
+  test('agent-multi: a stale sourcePort.nodeId is still shown as a "(missing)" option so the user can see the bad value', () => {
+    function MultiHost() {
+      const [def] = useState<WorkflowDefinition>({
+        $schema_version: 1,
+        inputs: [],
+        nodes: [
+          {
+            id: 'm1',
+            kind: 'agent-multi',
+            agentName: 'coder',
+            sourcePort: { nodeId: 'diff', portName: '' },
+            promptTemplate: '',
+          } as WorkflowNode,
+        ],
+        edges: [],
+      })
+      return (
+        <NodeInspector
+          definition={def}
+          selectedNodeId="m1"
+          agents={[CODER]}
+          onChange={() => {}}
+          onClose={() => {}}
+        />
+      )
+    }
+    render(<MultiHost />)
+    const selects = screen.getAllByRole('combobox') as HTMLSelectElement[]
+    const nodeSel = selects[1]!
+    expect(nodeSel.value).toBe('diff')
+    // The orphan option carries the saved id and a stable marker class:
+    // we just match on visible text via the option list.
+    const optionLabels = Array.from(nodeSel.options).map((o) => o.textContent ?? '')
+    expect(optionLabels.some((l) => l.includes('diff'))).toBe(true)
   })
 
   test('Preview tab is disabled for non-agent kinds and enabled for agents', () => {

@@ -310,6 +310,7 @@ export interface Resources {
     fieldTemperatureOverride: string
     sourcePortNodePlaceholder: string
     sourcePortPlaceholder: string
+    sourcePortMissingSuffix: string
     edgeTitle: string
     edgeSourceLabel: string
     edgeTargetLabel: string
@@ -764,8 +765,9 @@ export const zhCN: Resources = {
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
     fieldVariant: 'Variant',
     fieldTemperatureOverride: 'Temperature 覆盖',
-    sourcePortNodePlaceholder: '上游 node id',
-    sourcePortPlaceholder: '端口名',
+    sourcePortNodePlaceholder: '— 选上游节点 —',
+    sourcePortPlaceholder: '— 选输出端口 —',
+    sourcePortMissingSuffix: '（已失效）',
     edgeTitle: '边设置',
     edgeSourceLabel: '源',
     edgeTargetLabel: '目标节点',
