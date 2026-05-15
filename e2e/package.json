@@ -1,0 +1,5 @@
+{
+  "name": "agent-workflow-e2e",
+  "private": true,
+  "type": "module"
+}

@@ -24,9 +24,17 @@ Thumbs.db
 .vscode/
 !.vscode/settings.example.json
 
+# Claude Code per-user local settings (permissions, scheduled task locks)
+.claude/
+
 # test / coverage
 coverage/
 .nyc_output/
+
+# playwright
+test-results/
+playwright-report/
+.playwright/
 
 # bun
 # Note: bun.lock (text) IS committed for reproducible installs;

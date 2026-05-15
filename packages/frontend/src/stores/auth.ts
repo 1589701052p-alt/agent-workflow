@@ -6,7 +6,16 @@
 
 const TOKEN_KEY = 'agent-workflow.token'
 const BASE_URL_KEY = 'agent-workflow.baseUrl'
-const DEFAULT_BASE_URL = 'http://127.0.0.1:7456'
+
+// Default to the page's own origin so:
+//   - Production (user opens the daemon URL directly): API calls hit the daemon.
+//   - Dev (`bun dev` opens Vite at :5174): API calls go through Vite's proxy,
+//     which forwards to the daemon's actual port (read from .daemon.info).
+// Stored override (BASE_URL_KEY) still wins for remote-daemon setups.
+function defaultBaseUrl(): string {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:7456'
+  return window.location.origin
+}
 
 type Listener = () => void
 const listeners = new Set<Listener>()
@@ -44,12 +53,12 @@ export function clearToken(): void {
 }
 
 export function getBaseUrl(): string {
-  return safeStorage()?.getItem(BASE_URL_KEY) ?? DEFAULT_BASE_URL
+  return safeStorage()?.getItem(BASE_URL_KEY) ?? defaultBaseUrl()
 }
 
 export function setBaseUrl(url: string): void {
   const trimmed = url.trim().replace(/\/$/, '')
-  if (trimmed === '' || trimmed === DEFAULT_BASE_URL) {
+  if (trimmed === '' || trimmed === defaultBaseUrl()) {
     safeStorage()?.removeItem(BASE_URL_KEY)
   } else {
     safeStorage()?.setItem(BASE_URL_KEY, trimmed)
@@ -64,4 +73,4 @@ export function subscribeAuth(listener: Listener): () => void {
   }
 }
 
-export const AUTH_DEFAULT_BASE_URL = DEFAULT_BASE_URL
+export const AUTH_DEFAULT_BASE_URL = defaultBaseUrl()

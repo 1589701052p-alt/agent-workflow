@@ -15,10 +15,13 @@
     "format:check": "prettier --check \"packages/**/*.{ts,tsx,json,md}\"",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",
-    "build:binary": "bun run scripts/build-binary.ts"
+    "build:binary": "bun run scripts/build-binary.ts",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install --with-deps chromium"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.50.0",
     "@types/bun": "latest",
     "eslint": "^9.17.0",
     "eslint-plugin-react": "^7.37.0",

@@ -9,6 +9,7 @@
 
 import { StartTaskSchema, TaskStatusSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
+import { loadConfig } from '@/config'
 import type { AppDeps } from '@/server'
 import {
   cancelTask,
@@ -23,6 +24,24 @@ import {
   startTask,
 } from '@/services/task'
 import { NotFoundError, ValidationError } from '@/util/errors'
+
+/**
+ * Resolve the opencode subprocess command for the current config. When the
+ * user sets `opencodePath` we pass it through to the runner so tasks spawn
+ * the exact binary that was probed at daemon start. Without it, the runner
+ * keeps falling back to a bare `['opencode']` PATH lookup.
+ */
+function resolveOpencodeCmd(configPath: string): string[] | undefined {
+  try {
+    const cfg = loadConfig(configPath)
+    if (typeof cfg.opencodePath === 'string' && cfg.opencodePath.length > 0) {
+      return [cfg.opencodePath]
+    }
+  } catch {
+    // config unreadable — fall back to default PATH lookup
+  }
+  return undefined
+}
 
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {
@@ -65,7 +84,11 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const task = await startTask(parsed.data, { db: deps.db })
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const task = await startTask(parsed.data, {
+      db: deps.db,
+      ...(opencodeCmd ? { opencodeCmd } : {}),
+    })
     return c.json(task, 201)
   })
 
@@ -83,16 +106,24 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.post('/api/tasks/:id/resume', async (c) => {
-    const task = await resumeTask(deps.db, c.req.param('id'), { db: deps.db })
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const task = await resumeTask(deps.db, c.req.param('id'), {
+      db: deps.db,
+      ...(opencodeCmd ? { opencodeCmd } : {}),
+    })
     return c.json(task)
   })
 
   app.post('/api/tasks/:id/nodes/:nodeRunId/retry', async (c) => {
     const cascadeRaw = c.req.query('cascade')
     const cascade = cascadeRaw === undefined ? true : cascadeRaw !== 'false'
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
     const task = await retryNode(deps.db, c.req.param('id'), c.req.param('nodeRunId'), {
       cascade,
-      deps: { db: deps.db },
+      deps: {
+        db: deps.db,
+        ...(opencodeCmd ? { opencodeCmd } : {}),
+      },
     })
     return c.json(task)
   })
