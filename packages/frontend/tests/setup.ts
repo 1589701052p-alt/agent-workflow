@@ -37,6 +37,13 @@ if (typeof globalThis.window !== 'undefined') {
 // Boot i18next so components that call useTranslation() get real strings.
 // Without this they render raw keys (e.g. 'onboarding.title'), which makes
 // queryByText selectors fragile in render tests.
-import('../src/i18n')
+//
+// MUST be top-level-awaited — a fire-and-forget dynamic import was racing
+// with the first render() on slower CI runners (e.g. ubuntu-latest), where
+// the test would query for translated text (`Add`, `Other (custom)…`) while
+// the rendered DOM still carried raw keys (`enumPicker.add`,
+// `enumPicker.otherPlaceholder`). vitest setup is an ES module, so
+// top-level await is supported here.
+await import('../src/i18n')
 
 export {}
