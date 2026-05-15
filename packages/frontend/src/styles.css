@@ -158,11 +158,11 @@ code {
 /* ---- Pages ---- */
 
 .page {
-  max-width: 960px;
+  width: 100%;
 }
 
 .page--wide {
-  max-width: 1200px;
+  width: 100%;
 }
 
 .page__header {
@@ -1965,6 +1965,10 @@ code {
 }
 
 /* ---- Onboarding (P-5-10) ---- */
+
+.onboarding {
+  max-width: 720px;
+}
 
 .onboarding__steps {
   list-style: none;
