@@ -317,14 +317,24 @@ function ReviewDetailPage() {
 
   const data = detail.data
   const isAwaiting = data.summary.awaitingReview
+  const hasTitle = data.summary.title !== '' && data.summary.title !== data.summary.reviewNodeId
 
   return (
     <div className="page review-detail">
       <header className="page__header">
         <h1>
-          {data.summary.workflowName} / <code>{data.summary.reviewNodeId}</code>
+          {data.summary.workflowName} /{' '}
+          {hasTitle ? data.summary.title : <code>{data.summary.reviewNodeId}</code>}
           <span className="muted"> · v{data.currentVersion.versionIndex}</span>
         </h1>
+        {hasTitle && (
+          <div className="muted">
+            <code>{data.summary.reviewNodeId}</code>
+          </div>
+        )}
+        {data.summary.description !== '' && (
+          <p className="page__hint review-detail__description">{data.summary.description}</p>
+        )}
         <p className="page__hint">
           {t('reviews.detailHint', {
             iteration: data.summary.reviewIteration,
@@ -432,7 +442,7 @@ function ReviewDetailPage() {
           disabled={!isAwaiting || submitDecision.isPending}
           onClick={() => void onApprove()}
         >
-          {t('reviews.approveButton')} <kbd>A</kbd>
+          {t('reviews.approveButton')}
         </button>
         <button
           type="button"
@@ -440,7 +450,7 @@ function ReviewDetailPage() {
           disabled={!isAwaiting || submitDecision.isPending}
           onClick={() => void onIterate()}
         >
-          {t('reviews.iterateButton')} <kbd>I</kbd>
+          {t('reviews.iterateButton')}
         </button>
         <button
           type="button"
@@ -448,7 +458,7 @@ function ReviewDetailPage() {
           disabled={!isAwaiting || submitDecision.isPending}
           onClick={() => void onReject()}
         >
-          {t('reviews.rejectButton')} <kbd>R</kbd>
+          {t('reviews.rejectButton')}
         </button>
         {submitDecision.error !== null && submitDecision.error !== undefined && (
           <div className="error-box">{(submitDecision.error as Error).message}</div>

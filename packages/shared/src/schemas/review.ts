@@ -220,6 +220,7 @@ export const ReviewSummarySchema = z.object({
   workflowName: z.string(),
   reviewNodeId: z.string(),
   title: z.string(),
+  description: z.string(),
   currentVersionIndex: z.number().int().positive(),
   reviewIteration: z.number().int().nonnegative(),
   decision: DocVersionDecisionSchema,

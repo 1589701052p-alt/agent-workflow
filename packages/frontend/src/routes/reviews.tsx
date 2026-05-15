@@ -87,42 +87,54 @@ function ReviewsListPage() {
               </tr>
             </thead>
             <tbody>
-              {g.items.map((r) => (
-                <tr key={r.nodeRunId}>
-                  <td>
-                    <code>{r.reviewNodeId}</code>
-                    {r.title !== '' && r.title !== r.reviewNodeId && ` — ${r.title}`}
-                  </td>
-                  <td>
-                    <span
-                      className={`status-chip status-chip--${
-                        r.awaitingReview
-                          ? 'amber'
-                          : r.decision === 'approved'
-                            ? 'green'
-                            : r.decision === 'rejected'
-                              ? 'red'
-                              : r.decision === 'iterated'
-                                ? 'blue'
-                                : 'gray'
-                      }`}
-                    >
-                      {r.awaitingReview ? t('reviews.statusAwaiting') : r.decision}
-                    </span>
-                  </td>
-                  <td>v{r.currentVersionIndex}</td>
-                  <td className="muted">{formatTimestamp(r.createdAt)}</td>
-                  <td>
-                    <Link
-                      to="/reviews/$nodeRunId"
-                      params={{ nodeRunId: r.nodeRunId }}
-                      className="btn btn--sm"
-                    >
-                      {t('reviews.openButton')}
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+              {g.items.map((r) => {
+                const hasTitle = r.title !== '' && r.title !== r.reviewNodeId
+                return (
+                  <tr key={r.nodeRunId}>
+                    <td>
+                      {hasTitle ? (
+                        <>
+                          <div className="reviews-row__title">{r.title}</div>
+                          <code className="muted reviews-row__nodeid">{r.reviewNodeId}</code>
+                        </>
+                      ) : (
+                        <code>{r.reviewNodeId}</code>
+                      )}
+                      {r.description !== '' && (
+                        <div className="muted reviews-row__desc">{r.description}</div>
+                      )}
+                    </td>
+                    <td>
+                      <span
+                        className={`status-chip status-chip--${
+                          r.awaitingReview
+                            ? 'amber'
+                            : r.decision === 'approved'
+                              ? 'green'
+                              : r.decision === 'rejected'
+                                ? 'red'
+                                : r.decision === 'iterated'
+                                  ? 'blue'
+                                  : 'gray'
+                        }`}
+                      >
+                        {r.awaitingReview ? t('reviews.statusAwaiting') : r.decision}
+                      </span>
+                    </td>
+                    <td>v{r.currentVersionIndex}</td>
+                    <td className="muted">{formatTimestamp(r.createdAt)}</td>
+                    <td>
+                      <Link
+                        to="/reviews/$nodeRunId"
+                        params={{ nodeRunId: r.nodeRunId }}
+                        className="btn btn--sm"
+                      >
+                        {t('reviews.openButton')}
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </section>

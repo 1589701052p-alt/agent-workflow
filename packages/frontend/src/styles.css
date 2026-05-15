@@ -768,6 +768,48 @@ code {
   font-size: 12px;
 }
 
+/* ---- Outputs editor (per-port name + kind select) ---- */
+
+.outputs-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.outputs-editor__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.outputs-editor__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.outputs-editor__name {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.outputs-editor__kind {
+  flex: 0 0 auto;
+  min-width: 140px;
+}
+
+.outputs-editor__remove {
+  flex: 0 0 auto;
+}
+
 /* ---- JSON field ---- */
 
 .json-field__error {
@@ -1962,4 +2004,71 @@ code {
 .onboarding__skip {
   margin-top: 24px;
   font-size: 13px;
+}
+
+/* ---- Reviews list rows ---- */
+
+.reviews-row__title {
+  font-weight: 500;
+}
+
+.reviews-row__nodeid {
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.reviews-row__desc {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+/* ---- Review detail (RFC-005) ---- */
+
+.review-detail__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+  gap: 24px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.review-detail__body {
+  min-width: 0;
+}
+
+.review-detail__sidebar {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 128px);
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding-left: 16px;
+}
+
+.review-detail__sidebar > h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+}
+
+.review-detail__footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 720px) {
+  .review-detail__layout {
+    grid-template-columns: 1fr;
+  }
+  .review-detail__sidebar {
+    position: static;
+    border-left: none;
+    padding-left: 0;
+    max-height: none;
+  }
 }

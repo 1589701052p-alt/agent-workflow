@@ -580,6 +580,30 @@ export async function listReviewSummaries(
   const wfRowsAll = await db.select().from(workflows)
   const wfById = new Map(wfRowsAll.filter((r) => workflowIds.includes(r.id)).map((r) => [r.id, r]))
 
+  // Parse each task's workflowSnapshot once to extract the per-review-node
+  // human-readable title/description set in the workflow editor. Falls back
+  // to {} on corrupt JSON; the per-row lookup then degrades to nodeId/empty.
+  const reviewNodeMetaByTask = new Map<
+    string,
+    Map<string, { title: string; description: string }>
+  >()
+  for (const task of taskById.values()) {
+    const meta = new Map<string, { title: string; description: string }>()
+    try {
+      const def = JSON.parse(task.workflowSnapshot) as WorkflowDefinition
+      for (const node of def.nodes ?? []) {
+        if ((node as { kind?: string }).kind !== 'review') continue
+        const n = node as Record<string, unknown>
+        const title = typeof n.title === 'string' ? n.title : ''
+        const description = typeof n.description === 'string' ? n.description : ''
+        meta.set(node.id, { title, description })
+      }
+    } catch {
+      // corrupt snapshot — leave meta empty, callers fall back to nodeId.
+    }
+    reviewNodeMetaByTask.set(task.id, meta)
+  }
+
   // Pick only the latest doc_version per (reviewNodeRunId, sourcePortName);
   // historical pending=false versions live in the history dropdown not the
   // pending inbox.
@@ -607,13 +631,16 @@ export async function listReviewSummaries(
     }
     if (filter.taskId !== undefined && filter.taskId !== task.id) continue
     if (filter.workflowId !== undefined && filter.workflowId !== task.workflowId) continue
+    const nodeMeta = reviewNodeMetaByTask.get(task.id)?.get(dv.reviewNodeId)
+    const titleTrimmed = nodeMeta?.title.trim() ?? ''
     out.push({
       nodeRunId: dv.reviewNodeRunId,
       taskId: dv.taskId,
       workflowId: task.workflowId,
       workflowName: wf.name,
       reviewNodeId: dv.reviewNodeId,
-      title: dv.reviewNodeId,
+      title: titleTrimmed !== '' ? nodeMeta!.title : dv.reviewNodeId,
+      description: nodeMeta?.description ?? '',
       currentVersionIndex: dv.versionIndex,
       reviewIteration: run.reviewIteration,
       decision: dv.decision as DocVersionDecision,
