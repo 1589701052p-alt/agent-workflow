@@ -33,6 +33,14 @@ export const RepoRefsResponseSchema = z.object({
   currentBranch: z.string().nullable(),
   /** Default branch heuristic — origin/HEAD if set, else main/master if present. */
   defaultBranch: z.string().nullable(),
+  /**
+   * `true` once the repo has at least one commit. `git init -b main` alone
+   * leaves the unborn `main` ref unresolvable, so the launcher uses this
+   * flag to refuse a doomed task launch with a clear inline message
+   * (instead of letting `git worktree add` blow up post-submit with
+   * `cannot resolve base ref 'main'`).
+   */
+  hasCommits: z.boolean(),
 })
 export type RepoRefsResponse = z.infer<typeof RepoRefsResponseSchema>
 

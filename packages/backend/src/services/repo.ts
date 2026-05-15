@@ -70,6 +70,7 @@ export async function getRepoRefs(repoPath: string, commitCount = 50): Promise<R
     recentCommits: commits,
     currentBranch: current,
     defaultBranch: def,
+    hasCommits: commits.length > 0,
   }
 }
 

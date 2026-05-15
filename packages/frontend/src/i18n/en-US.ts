@@ -268,6 +268,8 @@ export const enUS: Resources = {
     noInputs: 'This workflow declares no inputs.',
     start: 'Start task',
     starting: 'Starting…',
+    repoNoCommits:
+      "This repo has no commits yet — make an initial commit before launching, otherwise the worktree can't be created.",
   },
   inspector: {
     closeAria: 'Close',

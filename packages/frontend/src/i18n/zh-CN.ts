@@ -261,6 +261,7 @@ export interface Resources {
     noInputs: string
     start: string
     starting: string
+    repoNoCommits: string
   }
   inspector: {
     closeAria: string
@@ -717,6 +718,7 @@ export const zhCN: Resources = {
     noInputs: '该工作流没有声明 inputs。',
     start: '启动任务',
     starting: '启动中…',
+    repoNoCommits: '该仓库还没有任何提交 —— 先做一次初始提交再启动任务，否则 worktree 无法创建。',
   },
   inspector: {
     closeAria: '关闭',

@@ -152,6 +152,7 @@ describe('repo HTTP routes', () => {
       recentCommits: Array<{ sha: string; subject: string }>
       currentBranch: string | null
       defaultBranch: string | null
+      hasCommits: boolean
     }
     expect(body.branches).toContain('main')
     expect(body.tags).toEqual(['v1.0'])
@@ -159,6 +160,36 @@ describe('repo HTTP routes', () => {
     expect(body.recentCommits[0]?.subject).toBe('init')
     expect(body.currentBranch).toBe('main')
     expect(body.defaultBranch).toBe('main')
+    expect(body.hasCommits).toBe(true)
+  })
+
+  // Regression: `git init -b main` alone leaves the unborn `main`
+  // unresolvable, but the API used to pretend the repo was launchable
+  // (returned an empty branches list, no other signal). The launcher
+  // then queued a task that died at `git worktree add` with
+  // `cannot resolve base ref 'main'`. /api/repos/refs must surface
+  // `hasCommits: false` so the launcher can refuse the launch up front.
+  test('GET /api/repos/refs on a freshly-init repo with no commits reports hasCommits=false', async () => {
+    const empty = mkdtempSync(join(baseTmp, 'emptyrepo-'))
+    try {
+      await runGit(empty, ['init', '-q', '-b', 'main'])
+      const res = await req(`/api/repos/refs?path=${encodeURIComponent(empty)}`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        branches: string[]
+        recentCommits: unknown[]
+        hasCommits: boolean
+        currentBranch: string | null
+        defaultBranch: string | null
+      }
+      expect(body.hasCommits).toBe(false)
+      expect(body.branches).toEqual([])
+      expect(body.recentCommits).toEqual([])
+      // currentBranch + defaultBranch are best-effort — we don't pin
+      // their values here, only the launch-blocking signal.
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
   })
 
   test('GET /api/repos/refs requires ?path=', async () => {

@@ -87,7 +87,13 @@ function LaunchPage() {
   const missingRequired = inputDefs.some(
     (def) => def.required === true && (inputs[def.key] ?? '').trim() === '',
   )
-  const canSubmit = repoPath !== '' && baseBranch !== '' && !missingRequired && !start.isPending
+  const repoIssue = repoLaunchIssue(refs.data ?? null)
+  const canSubmit =
+    repoPath !== '' &&
+    baseBranch !== '' &&
+    !missingRequired &&
+    repoIssue === null &&
+    !start.isPending
 
   return (
     <div className="page">
@@ -104,6 +110,8 @@ function LaunchPage() {
           {t('launch.backToEditor')}
         </Link>
       </header>
+
+      {repoIssue === 'no-commits' && <div className="error-box">{t('launch.repoNoCommits')}</div>}
 
       <div className="form-grid">
         <Field label={t('launch.fieldRepo')} required hint={t('launch.fieldRepoHint')}>
@@ -225,6 +233,27 @@ function DynamicInput({
     return <GitPicker def={def} repoPath={repoPath} value={value} onChange={onChange} />
   }
   return <TextInput value={value} onChange={onChange} placeholder={`raw ${def.kind} value`} />
+}
+
+/**
+ * Pre-launch validation of the chosen repo. Returns a stable issue code
+ * the UI uses to render an inline banner AND disable Start.
+ *
+ * Today the only blocking case is `no-commits`: `git init -b main` alone
+ * leaves the unborn `main` ref unresolvable, so `git worktree add` later
+ * fails with `cannot resolve base ref 'main'`. We want to refuse the
+ * launch up front rather than queue a doomed task.
+ *
+ * Returns `null` when refs haven't loaded yet OR the repo is launchable —
+ * the caller folds the `null` case into its other gating predicates
+ * (e.g. missingRequired, repoPath !== '').
+ *
+ * Exported for unit tests.
+ */
+export function repoLaunchIssue(refs: { hasCommits: boolean } | null): 'no-commits' | null {
+  if (refs === null) return null
+  if (refs.hasCommits === false) return 'no-commits'
+  return null
 }
 
 function describeError(e: unknown): string {
