@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Local-first orchestration platform that drives multiple opencode CLI processes as collaborating agents",
+  "license": "Apache-2.0",
   "workspaces": [
     "packages/*"
   ],
