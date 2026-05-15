@@ -7,11 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { OpencodeModel, RuntimeModelsResponse } from '@agent-workflow/shared'
-import {
-  groupByProvider,
-  isCustomValue,
-  ModelSelect,
-} from '../src/components/ModelSelect'
+import { groupByProvider, isCustomValue, ModelSelect } from '../src/components/ModelSelect'
 import { setBaseUrl, setToken } from '../src/stores/auth'
 
 function wrap(node: React.ReactElement) {
@@ -90,9 +86,7 @@ describe('ModelSelect render', () => {
     const payload: RuntimeModelsResponse = {
       binary: 'opencode',
       cached: false,
-      models: [
-        { id: 'anthropic/sonnet', provider: 'anthropic', modelID: 'sonnet' },
-      ],
+      models: [{ id: 'anthropic/sonnet', provider: 'anthropic', modelID: 'sonnet' }],
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(payload), {

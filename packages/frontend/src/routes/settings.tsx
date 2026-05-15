@@ -173,9 +173,7 @@ function RuntimeTab({ config }: TabProps) {
           <select
             className="form-input"
             value={state.logLevel}
-            onChange={(e) =>
-              setState({ ...state, logLevel: e.target.value as Config['logLevel'] })
-            }
+            onChange={(e) => setState({ ...state, logLevel: e.target.value as Config['logLevel'] })}
           >
             <option value="debug">debug</option>
             <option value="info">info</option>

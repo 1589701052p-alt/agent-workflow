@@ -37,8 +37,7 @@ export function ModelSelect({ value, onChange }: Props) {
     retry: false,
   })
   const refresh = useMutation({
-    mutationFn: () =>
-      api.get<RuntimeModelsResponse>('/api/runtime/models', { refresh: '1' }),
+    mutationFn: () => api.get<RuntimeModelsResponse>('/api/runtime/models', { refresh: '1' }),
     onSuccess: (next) => {
       qc.setQueryData(RUNTIME_MODELS_QUERY_KEY, next)
     },
@@ -63,11 +62,7 @@ export function ModelSelect({ value, onChange }: Props) {
           onChange={(v) => onChange(v === '' ? undefined : v)}
           placeholder="anthropic/claude-sonnet-4-6"
         />
-        <p
-          style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }}
-          className="muted"
-          role="alert"
-        >
+        <p style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }} className="muted" role="alert">
           {t('settingsForm.modelLoadFailed')}
         </p>
       </div>
@@ -97,7 +92,9 @@ export function ModelSelect({ value, onChange }: Props) {
           }}
           style={{ flex: 1 }}
         >
-          <option value="">{list.isLoading ? t('settingsForm.modelLoading') : t('settingsForm.modelEmpty')}</option>
+          <option value="">
+            {list.isLoading ? t('settingsForm.modelLoading') : t('settingsForm.modelEmpty')}
+          </option>
           {grouped.map(([provider, models]) => (
             <optgroup key={provider} label={provider}>
               {models.map((m) => (

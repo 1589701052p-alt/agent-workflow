@@ -24,7 +24,12 @@ describe('parseModelsOutput', () => {
       '}',
     ].join('\n')
     expect(parseModelsOutput(out)).toEqual([
-      { id: 'anthropic/claude-sonnet-4-6', provider: 'anthropic', modelID: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+      {
+        id: 'anthropic/claude-sonnet-4-6',
+        provider: 'anthropic',
+        modelID: 'claude-sonnet-4-6',
+        name: 'Claude Sonnet 4.6',
+      },
       { id: 'openai/gpt-5', provider: 'openai', modelID: 'gpt-5', name: 'GPT-5' },
     ])
   })
