@@ -33,12 +33,7 @@ describe('GitPicker', () => {
   test('commit-range emits {kind, from, to} JSON', () => {
     const onChange = vi.fn()
     wrap(
-      <GitPicker
-        def={def({ gitKind: 'commit-range' })}
-        repoPath=""
-        value=""
-        onChange={onChange}
-      />,
+      <GitPicker def={def({ gitKind: 'commit-range' })} repoPath="" value="" onChange={onChange} />,
     )
     fireEvent.change(screen.getByPlaceholderText('origin/main'), { target: { value: 'abc' } })
     expect(onChange).toHaveBeenLastCalledWith(

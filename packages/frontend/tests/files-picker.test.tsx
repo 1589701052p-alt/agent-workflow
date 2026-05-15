@@ -32,12 +32,7 @@ afterEach(() => {
 describe('FilesPicker', () => {
   test('derives selected set from newline-joined value', () => {
     wrap(
-      <FilesPicker
-        def={def()}
-        repoPath="/repo"
-        value={'src/a.ts\nsrc/b.ts'}
-        onChange={() => {}}
-      />,
+      <FilesPicker def={def()} repoPath="/repo" value={'src/a.ts\nsrc/b.ts'} onChange={() => {}} />,
       ['src/a.ts', 'src/b.ts', 'src/c.ts'],
     )
     const cb = screen.getAllByRole('checkbox') as HTMLInputElement[]
@@ -47,10 +42,10 @@ describe('FilesPicker', () => {
 
   test('toggling a row emits a newline-joined string', () => {
     const onChange = vi.fn()
-    wrap(
-      <FilesPicker def={def()} repoPath="/repo" value="" onChange={onChange} />,
-      ['x.ts', 'y.ts'],
-    )
+    wrap(<FilesPicker def={def()} repoPath="/repo" value="" onChange={onChange} />, [
+      'x.ts',
+      'y.ts',
+    ])
     fireEvent.click(screen.getAllByRole('checkbox')[0]!)
     expect(onChange).toHaveBeenLastCalledWith('x.ts')
   })
@@ -58,12 +53,7 @@ describe('FilesPicker', () => {
   test('respects maxCount — toggling past the cap is a no-op', () => {
     const onChange = vi.fn()
     wrap(
-      <FilesPicker
-        def={def({ maxCount: 1 })}
-        repoPath="/repo"
-        value="x.ts"
-        onChange={onChange}
-      />,
+      <FilesPicker def={def({ maxCount: 1 })} repoPath="/repo" value="x.ts" onChange={onChange} />,
       ['x.ts', 'y.ts'],
     )
     // Adding y.ts would push selected to 2 → ignored.
@@ -75,14 +65,13 @@ describe('FilesPicker', () => {
   })
 
   test('filter narrows the visible list', () => {
-    wrap(
-      <FilesPicker def={def()} repoPath="/repo" value="" onChange={() => {}} />,
-      ['alpha.ts', 'beta.ts', 'gamma.ts'],
-    )
+    wrap(<FilesPicker def={def()} repoPath="/repo" value="" onChange={() => {}} />, [
+      'alpha.ts',
+      'beta.ts',
+      'gamma.ts',
+    ])
     fireEvent.change(screen.getByPlaceholderText('Filter paths…'), { target: { value: 'be' } })
-    const labels = screen
-      .getAllByRole('checkbox')
-      .map((cb) => cb.parentElement?.textContent ?? '')
+    const labels = screen.getAllByRole('checkbox').map((cb) => cb.parentElement?.textContent ?? '')
     expect(labels).toEqual(['beta.ts'])
   })
 

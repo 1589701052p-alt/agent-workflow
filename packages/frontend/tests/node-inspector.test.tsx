@@ -58,9 +58,7 @@ function Host({
 function setup(node: WorkflowNode, agents: Agent[] = [CODER]) {
   const onChange = vi.fn()
   const onClose = vi.fn()
-  render(
-    <Host initial={node} agents={agents} onChangeSpy={onChange} onCloseSpy={onClose} />,
-  )
+  render(<Host initial={node} agents={agents} onChangeSpy={onChange} onCloseSpy={onClose} />)
   return { onChange, onClose }
 }
 
@@ -194,9 +192,7 @@ describe('NodeInspector', () => {
     const after = lastPatchedNode(onChange) as unknown as {
       outputBindings: Array<{ name: string; bind: { nodeId: string; portName: string } }>
     }
-    expect(after.outputBindings).toEqual([
-      { name: 'out_1', bind: { nodeId: '', portName: '' } },
-    ])
+    expect(after.outputBindings).toEqual([{ name: 'out_1', bind: { nodeId: '', portName: '' } }])
   })
 
   test('agent-single: selecting an agent patches agentName', () => {

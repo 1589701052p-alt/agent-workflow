@@ -107,11 +107,7 @@ describe('EnumPicker', () => {
 
   test('Add button disabled when other input is blank/whitespace', () => {
     render(
-      <EnumPicker
-        def={def({ choices: ['a'], allowOther: true })}
-        value=""
-        onChange={() => {}}
-      />,
+      <EnumPicker def={def({ choices: ['a'], allowOther: true })} value="" onChange={() => {}} />,
     )
     const addBtn = screen.getByText('Add') as HTMLButtonElement
     expect(addBtn.disabled).toBe(true)
