@@ -1766,3 +1766,45 @@ code {
   border-radius: 6px;
   font-size: 13px;
 }
+
+/* ---- Onboarding (P-5-10) ---- */
+
+.onboarding__steps {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.onboarding__step {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.onboarding__step > h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.onboarding__step > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.onboarding__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.onboarding__skip {
+  margin-top: 24px;
+  font-size: 13px;
+}

@@ -34,4 +34,9 @@ if (typeof globalThis.window !== 'undefined') {
   Object.defineProperty(globalThis.window, 'localStorage', { value: shim, configurable: true })
 }
 
+// Boot i18next so components that call useTranslation() get real strings.
+// Without this they render raw keys (e.g. 'onboarding.title'), which makes
+// queryByText selectors fragile in render tests.
+import('../src/i18n')
+
 export {}

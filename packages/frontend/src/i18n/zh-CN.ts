@@ -53,6 +53,26 @@ export interface Resources {
     restartRequiredTitle: string
     restartRequiredHint: string
   }
+  onboarding: {
+    title: string
+    intro: string
+    step1Title: string
+    step1Body: string
+    step1Cta: string
+    step2Title: string
+    step2Body: string
+    step2Cta: string
+    step3Title: string
+    step3Body: string
+    step3Import: string
+    step3ImportRunning: string
+    step3Manual: string
+    step4Title: string
+    step4Body: string
+    step4Cta: string
+    importedHint: string
+    skipLink: string
+  }
   errors: Record<string, string>
 }
 
@@ -105,6 +125,30 @@ export const zhCN: Resources = {
     restartRequiredTitle: '需要重启守护进程',
     restartRequiredHint:
       '新值已写入 config.json，但 bind host / bind port 仅在下次 agent-workflow start 时生效。请在终端先 agent-workflow stop，再 agent-workflow start。',
+  },
+  onboarding: {
+    title: '欢迎使用 Agent Workflow',
+    intro: '看起来这是新仓 — 还没有任何 agent 或 workflow。跟着下面四步建一条最小流水线。',
+    step1Title: '1. 创建第一个 agent',
+    step1Body:
+      '取名为 coder，把 outputs 设为 [code]，readonly 关闭，把 prompt body 留空或粘一段简单的指令即可。',
+    step1Cta: '创建 agent →',
+    step2Title: '2. （可选）添加 skill',
+    step2Body:
+      'Skill 是按需注入的 .md 文件 / 目录，常用于注入 prompt 模板或参考文档；本步骤不是必需的。',
+    step2Cta: '管理 skill →',
+    step3Title: '3. 创建 workflow',
+    step3Body:
+      '点下面按钮一键导入 demo（input → coder agent → output 的三节点流水线），或从空白开始自己拼。',
+    step3Import: '导入 demo workflow',
+    step3ImportRunning: '正在导入…',
+    step3Manual: '或者新建空白 workflow →',
+    step4Title: '4. 启动任务',
+    step4Body:
+      '到 workflows 列表点 Launch，选一个本地 git 仓 + 分支，填好 inputs，提交。任务详情页会显示节点状态、prompt、产物和 diff。',
+    step4Cta: '前往 workflow 列表 →',
+    importedHint: '已导入；继续前往 workflow 列表去 Launch。',
+    skipLink: '跳过引导，直接打开 agent 列表 →',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {

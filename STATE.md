@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/08/09/11 闭合，文档齐备）
+**最近更新**：2026-05-15（M5 进行中 — P-5-01/02/03-s1/04/05/06/08/09/10/11 闭合，文档齐备）
 
 ---
 
@@ -20,17 +20,18 @@ M1 骨架       [18/18 ✅]  ← M1 完成
 M2 编辑器     [16/16 ✅]  M2 收官 — 编辑器 / launcher / settings / task 详情全套就绪
 M3 编排核心   [14/14 ✅]  fan-out / 重试 / resume / git wrapper / 状态画布 / 抽屉增强
 M4 高级编排   [11/11 ✅]  loop wrapper / 嵌套 / 资源限额 / orphan / GC / shutdown / YAML / token agg
-M5 打磨       [8.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-11）
+M5 打磨       [9.5/12]    ← 进行中（P-5-01 + P-5-02 + P-5-03 stage 1 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-10 + P-5-11）
 ```
 
 ---
 
 ## 已完成 issue（71 个）
 
-### M5 进行中（8.5/12）
+### M5 进行中（9.5/12）
 
 | ID | 标题 | 关键产出 |
 | --- | --- | --- |
+| P-5-10 | First-run onboarding | `routes/index.tsx` 由 beforeLoad redirect 改成渲染组件：拉取 `/api/agents` + `/api/workflows` 走 react-query（缓存让后续 `/agents` 复用同一份数据，不会再 refetch），两者均为空数组 → 渲染 `<Onboarding>`，否则 `<Navigate to='/agents' replace>`。`components/Onboarding.tsx` 暴露纯函数 `computeIsFirstRun({agents, workflows, isLoading, error})` 把判定从 hook 中抽出便于单测，再加 `useOnboardingProbe` 把 react-query 状态喂进去。卡片含四步（建 agent → 建 skill → 建 workflow → launch task），第三步同时给一键 "Import demo workflow" 按钮 + "or start from a blank workflow" 链接；底部 "Skip onboarding" 跳到 `/agents`。Demo workflow YAML 抽到 `src/fixtures/demo-workflow.ts`（input → coder agent (`outputs: [code]`) → output 三节点 + 一条边，name 用连字符 "Demo - code..." 避免 YAML 解析 `name: Demo: ...` 时把第二个冒号当映射符），i18n 加 `onboarding` section 18 条 key（zh/en 同步）。Import 按钮 mutation 用裸 `fetch` 走 `text/yaml` content-type + Bearer token 直接 POST `/api/workflows/import?onConflict=new`（沿用 `workflows.tsx` 已有的 postYaml 模式，因为 `api.post` 默认 JSON 序列化）。`styles.css` 加 `.onboarding__steps / __step / __actions / __skip` 一组卡片样式。tests +10：前端 `tests/onboarding.test.tsx` 8 case（loading/error 不算 first-run / 双空 true / 任一非空 false / undefined 不 first-run × 5 pure + 三步标题渲染 / Import 按钮发对 URL+headers+body 并显示成功提示 / 422 错误把 `workflow-yaml-invalid` 渲染到 `role=alert`，用 `vi.mock('@tanstack/react-router')` 把 `<Link>` stub 成裸 `<a>` 避免 RouterProvider），后端 `tests/onboarding-demo.test.ts` 2 case（直接读 fixture 文件正则抽出 YAML 字符串 → `previewWorkflowYaml` 校验 3 个 kind 一致 / `importWorkflowYaml(db, …, {onConflict:'new'})` 实际入库），CI 任何 schema 漂移让 demo 不可导入会被这两个 case 拦下来。`tests/setup.ts` 加 `import('../src/i18n')` 副作用，让 `useTranslation()` 在测试里能拿到真实文案（之前缺这个，第一版 onboarding render 测试都 querByText 命中的是裸 key）。前端 test 146 → 154，后端 317 → 319 |
 | P-5-08 | 前端关键组件 vitest | 新增 4 个 spec 共 +29 case，覆盖编辑器/启动器交互密集组件：(1) `tests/enum-picker.test.tsx` 6 case — single 出裸串 / multi 出 JSON array / toggle 移除 / 解析坏 JSON / allowOther Add 按钮 / 空白时 Add 禁用；(2) `tests/git-picker.test.tsx` 5 case — commit-range 双 input 出 `{kind,from,to}` / 现有 JSON round-trip / pr 数字 / branch 用 `setQueryData(['repos','refs','/repo'])` 预热缓存（staleTime Infinity 防止 fetch 重试发起真请求）/ 坏 JSON 不崩；(3) `tests/files-picker.test.tsx` 5 case — newline-joined value 派生 selected / 勾选发 newline join / maxCount 阻挡新增但允许减少 / 客户端 filter 收窄 / `repoPath=''` 显示 Pick a repo first；(4) `tests/node-inspector.test.tsx` 13 case — null/ghost selection 不渲染 / Close → onClose / input inputKey patch / output + Add port 默认 `port_{N+1}` / Remove 删行 / wrapper-git inputs=0（read-only inner ids）/ wrapper-loop 换 exitCondition.kind 保留 nodeId+portName / wrapper-loop + Add binding / agent-single select 派 agentName / promptTemplate / agent-multi sourcePort（用 `Host` 状态化 wrapper 让两次 fireEvent 之间真重渲，否则第二次 onChange 读到陈旧 props）/ Preview tab 只对 agent kind enable。前端 test 总数 117 → 146 |
 | P-5-11 | README + 用户文档 | `README.md` 整体重写，从 M0 脚手架介绍换成 v1 上手文档：requirements 表（opencode 1.14.0+ / git 2.5+ / macOS+Linux）、单二进制 curl 安装一行命令（macos-arm64 + linux-x86_64）、quick start（`./agent-workflow start` → 点链接 → 建 agent / skill / workflow / launch task）、`~/.agent-workflow/` 文件树、完整 CLI 列表、所有可编辑 config 字段表（标 restart-required）、build-from-source。新增 `docs/`：(1) `architecture.md` ASCII 进程图 + 8 张表数据模型 + 任务生命周期 + fan-out 详解 + wrapper 嵌套语义 + 进程隔离 + token 鉴权；(2) `agent.md` frontmatter 字段表 + readonly 与三套 semaphore 的并发模型 + prompt 模板变量（`{{port}}` + 6 个 builtin）+ CRUD endpoint 表；(3) `skill.md` managed vs external 源类型 + 目录布局 + SKILL.md frontmatter + 两种 source 的 per-run staging（copy vs symlink）+ CRUD endpoint 表；(4) `workflow-yaml.md` top-level shape + 4 种 launcher input kind + 6 种 node kind 全例子 + edges 多入边 `---` 拼接规则 + 13 条校验规则；(5) `troubleshooting.md` 8 个常见问题（stale lock / opencode 版本 / worktree 错误 / 远程访问 / 卡死任务 / daemon crash resume / events 归档 / 备份），README 末尾的 docs 链接全部对齐 |
 | P-5-09 | Settings 修改后 restart 提示 | `routes/settings.tsx` 加 `RESTART_REQUIRED_KEYS = {bindHost, bindPort}` + 纯函数 `hasRestartRequiredChange(keys, before, after)`。`useTabState` 多导出一个 `restartRequired: boolean`：mutation `onMutate` 重置为 false，`onSuccess(next)` 用 helper 比较 pre-save 的 `config` snapshot 与服务器返回的 next，命中就置 true（避免单纯保存触发误报）。`SectionForm` 新 prop `restartRequired?: boolean`；为 true 时在 Save 行下方 12px 渲染 `<div className="info-box" role="status" aria-live="polite">`，标题 + 一句话说明（i18n key `settings.restartRequiredTitle` + `settings.restartRequiredHint`，中英文均提示先 `agent-workflow stop` 再 `agent-workflow start`）。NetworkTab 把 `restartRequired` 透传；其它 tab 不传，banner 永远不出。tests +6 case（bindPort 触发 / bindHost 触发 / 同值不触发 / 非 restart key 不触发 / 不持有 restart key 的 tab 不触发 / 导出集合内容验证）|
@@ -217,10 +218,9 @@ packages/backend/src/
 
 ## 下一步：M5 续
 
-P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-11 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
+P-5-01 + P-5-02 + P-5-04 + P-5-05 + P-5-06 + P-5-08 + P-5-09 + P-5-10 + P-5-11 闭合，P-5-03 stage 1 完成（脚手架 + nav/auth/settings）。后续工作：
 - **P-5-03 stage 2**：把 stage 1 列表里"未迁"的所有路由/组件 hardcoded 英文外提到 i18n 键，覆盖剩余 ~38 个 .tsx（estimate L）
 - P-5-07 Playwright e2e（M）
-- P-5-10 first-run onboarding（M）
 - P-5-12 性能 + 稳定性 sweep（M）
 
 ---
