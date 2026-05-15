@@ -62,7 +62,7 @@ describe('groupByProvider', () => {
     ]
     const grouped = groupByProvider(models)
     expect(grouped.map(([p]) => p)).toEqual(['opencode', 'anthropic', 'openai'])
-    expect(grouped[1][1]).toHaveLength(2)
+    expect(grouped[1]?.[1]).toHaveLength(2)
   })
 
   test('empty input → empty output', () => {
