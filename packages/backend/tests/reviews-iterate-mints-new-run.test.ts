@@ -8,7 +8,7 @@
 // If this goes red, services/review.ts:submitReviewDecision iterate/reject
 // branch is out of lock-step with RFC-011 design §3.1.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
