@@ -160,10 +160,7 @@ function CanvasInner({
         const next = applyEdgeChanges(changes, prev)
         // Only the structural mutations need to round-trip into the
         // persisted WorkflowDefinition; selection-only ticks stay local.
-        if (
-          onChange !== undefined &&
-          changes.some((c) => c.type === 'remove' || c.type === 'add' || c.type === 'replace')
-        ) {
+        if (onChange !== undefined && affectsEdgeDefinition(changes)) {
           onChange(toDefinition(definition, nodes, next))
         }
         return next
@@ -658,6 +655,20 @@ function affectsDefinition(changes: NodeChange[]): boolean {
   return changes.some(
     (c) => c.type === 'position' || c.type === 'add' || c.type === 'remove' || c.type === 'replace',
   )
+}
+
+/**
+ * Edge equivalent of {@link affectsDefinition}. xyflow fires `select`
+ * (and other UI-only) changes on every edge interaction; only structural
+ * mutations should round-trip into the persisted WorkflowDefinition.
+ *
+ * Regression: the prior `handleEdgesChange` filtered for `'remove'`-only
+ * and silently dropped `select` — edges never got `selected: true`, the
+ * EdgeInspector entry point was unreachable. Tests in
+ * `tests/canvas-edge-changes.test.ts` lock this behavior in.
+ */
+export function affectsEdgeDefinition(changes: EdgeChange[]): boolean {
+  return changes.some((c) => c.type === 'remove' || c.type === 'add' || c.type === 'replace')
 }
 
 /**
