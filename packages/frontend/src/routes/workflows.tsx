@@ -65,7 +65,7 @@ function WorkflowsPage() {
           <h1>{t('workflows.title')}</h1>
           <p className="page__hint">{t('workflows.hint')}</p>
         </div>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="page__actions">
           <input
             ref={fileRef}
             type="file"

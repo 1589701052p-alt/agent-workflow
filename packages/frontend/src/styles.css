@@ -288,6 +288,8 @@ code {
   border-radius: 6px;
   padding: 8px 14px;
   color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .btn:hover {
