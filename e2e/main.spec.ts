@@ -237,6 +237,16 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   expect(answerOutput?.value).toBe('stub e2e output')
 
   // 7. The UI eventually mirrors that: status chip + output panel value.
+  //
+  // The frontend polls /api/tasks/:id/node-runs every 3s and refreshes on
+  // WebSocket task-update events. Under CI load the page sometimes lands on
+  // /tasks/:id after the daemon has already finished and the WS event
+  // arrived; we then depend on the polling fallback, which can leave the
+  // outputs panel un-rendered for up to two intervals. Force a fresh fetch
+  // by reloading the page now that step 6 confirmed the outputs are in the
+  // API — this turns a previously-flaky timing race into a deterministic
+  // assertion (RFC-004 CI run 25915917054 caught the prior 1-flaky case).
+  await page.reload()
   await expect(page.locator('.status-chip', { hasText: /^done$/ }).first()).toBeVisible({
     timeout: 15_000,
   })
