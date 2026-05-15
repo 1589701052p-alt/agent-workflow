@@ -4,6 +4,21 @@
 // these schemas describe the response/request shape after marshaling.
 
 import { z } from 'zod'
+import { AgentOutputKindSchema } from './review'
+
+/**
+ * Sidecar map declaring the "shape" of selected output ports.
+ *
+ * Carried alongside the legacy `outputs: string[]` array so all 17 existing
+ * call sites (`agent.outputs.includes(port)`, `agent.outputs.map(...)`) keep
+ * working unchanged. Consumers that care about kind (envelope parser,
+ * review-node validator) look up `agent.outputKinds?.[portName] ?? 'string'`.
+ *
+ * Only ports also declared in `outputs` may appear here; the validator drops
+ * orphan keys. RFC-005 PR-A T1.
+ */
+export const AgentOutputKindsMapSchema = z.record(z.string(), AgentOutputKindSchema)
+export type AgentOutputKindsMap = z.infer<typeof AgentOutputKindsMapSchema>
 
 /** Permitted characters in agent name (URL-safe; matches /agents/:name). */
 export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/
@@ -24,6 +39,7 @@ export const AgentSchema = z.object({
   name: AgentNameSchema,
   description: z.string(),
   outputs: z.array(z.string()),
+  outputKinds: AgentOutputKindsMapSchema.optional(),
   readonly: z.boolean(),
   model: z.string().optional(),
   variant: z.string().optional(),
@@ -45,6 +61,7 @@ export const CreateAgentSchema = z.object({
   name: AgentNameSchema,
   description: z.string().default(''),
   outputs: z.array(z.string()).default([]),
+  outputKinds: AgentOutputKindsMapSchema.optional(),
   readonly: z.boolean().default(false),
   model: z.string().min(1).optional(),
   variant: z.string().min(1).optional(),

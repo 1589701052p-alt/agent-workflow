@@ -155,6 +155,16 @@ export function validateWorkflowDef(
         for (const b of bindings) outs.add(b.name)
         break
       }
+      case 'review': {
+        // RFC-005: review nodes publish two ports downstream after approve —
+        // the source doc passes through, plus a metadata blob.
+        outs.add('approved_doc')
+        outs.add('approval_meta')
+        // The input is the (sourceNode, sourcePort) declared on the review
+        // node itself; review nodes don't accept inbound edges via the regular
+        // edge graph in v1 (validated below).
+        break
+      }
     }
     outputPorts.set(node.id, outs)
     inputPorts.set(node.id, ins)
@@ -391,6 +401,115 @@ export function validateWorkflowDef(
     }
   }
 
+  // 4b. review (RFC-005) -----------------------------------------------------
+  // - inputSource must reference an existing (node, port).
+  // - sourcePort must be declared kind ∈ {markdown, markdown_file} on the
+  //   producing agent (only agents declare outputKinds; wrappers/input/output
+  //   are explicitly not eligible upstreams in v1).
+  // - rerunnableOnReject / rerunnableOnIterate must be subsets of the set of
+  //   nodes reachable upstream from the review's input node (BFS along
+  //   reversed edges).
+  // - rerunnableOnReject empty → warning (default is non-empty; user-set
+  //   empty likely is a misconfiguration).
+  {
+    const reverseAdj = new Map<string, string[]>()
+    for (const e of edges) {
+      const list = reverseAdj.get(e.target.nodeId) ?? []
+      list.push(e.source.nodeId)
+      reverseAdj.set(e.target.nodeId, list)
+    }
+    for (const node of nodes) {
+      if (node.kind !== 'review') continue
+      const inputSource = (node as Record<string, unknown>).inputSource
+      if (
+        inputSource === undefined ||
+        inputSource === null ||
+        typeof inputSource !== 'object' ||
+        typeof (inputSource as Record<string, unknown>).nodeId !== 'string' ||
+        typeof (inputSource as Record<string, unknown>).portName !== 'string'
+      ) {
+        issues.push({
+          code: 'review-input-source-missing',
+          message: `review node '${node.id}' missing or malformed inputSource`,
+          pointer: node.id,
+        })
+        continue
+      }
+      const srcNodeId = (inputSource as Record<string, unknown>).nodeId as string
+      const srcPort = (inputSource as Record<string, unknown>).portName as string
+      const src = nodeById.get(srcNodeId)
+      if (src === undefined) {
+        issues.push({
+          code: 'review-input-source-missing',
+          message: `review node '${node.id}' inputSource references unknown node '${srcNodeId}'`,
+          pointer: node.id,
+        })
+        continue
+      }
+      const outs = outputPorts.get(src.id) ?? new Set()
+      if (!outs.has(srcPort)) {
+        issues.push({
+          code: 'review-input-source-missing',
+          message: `review node '${node.id}' inputSource references unknown port '${srcPort}' on '${srcNodeId}'`,
+          pointer: node.id,
+        })
+        continue
+      }
+      // markdown kind enforcement — only agent nodes carry outputKinds.
+      if (src.kind === 'agent-single' || src.kind === 'agent-multi') {
+        const agentName = readString(src, 'agentName') ?? ''
+        const agent = agentByName.get(agentName)
+        const kind = agent?.outputKinds?.[srcPort]
+        if (kind !== 'markdown' && kind !== 'markdown_file') {
+          issues.push({
+            code: 'review-input-source-not-markdown',
+            message: `review node '${node.id}' inputSource '${srcNodeId}.${srcPort}' must be declared kind: markdown | markdown_file on agent '${agentName}'`,
+            pointer: node.id,
+          })
+        }
+      } else {
+        // Non-agent upstream — we don't model markdown kind on these in v1.
+        issues.push({
+          code: 'review-input-source-not-markdown',
+          message: `review node '${node.id}' inputSource must come from an agent node (got kind '${src.kind}')`,
+          pointer: node.id,
+        })
+      }
+      // rerunnable subsets must be reachable upstream of inputSource.
+      const reachable = collectReachableUpstream(srcNodeId, reverseAdj)
+      // The direct upstream itself is always rerunnable; include it.
+      reachable.add(srcNodeId)
+      const rerunReject = readStringArray(node, 'rerunnableOnReject')
+      const rerunIter = readStringArray(node, 'rerunnableOnIterate')
+      for (const id of rerunReject) {
+        if (!reachable.has(id)) {
+          issues.push({
+            code: 'review-rerunnable-out-of-scope',
+            message: `review node '${node.id}' rerunnableOnReject id '${id}' is not in the reachable upstream of inputSource '${srcNodeId}'`,
+            pointer: node.id,
+          })
+        }
+      }
+      for (const id of rerunIter) {
+        if (!reachable.has(id)) {
+          issues.push({
+            code: 'review-rerunnable-out-of-scope',
+            message: `review node '${node.id}' rerunnableOnIterate id '${id}' is not in the reachable upstream of inputSource '${srcNodeId}'`,
+            pointer: node.id,
+          })
+        }
+      }
+      if (rerunReject.length === 0) {
+        issues.push({
+          code: 'review-rerunnable-empty-on-reject',
+          message: `review node '${node.id}' rerunnableOnReject is empty — reject will have nothing to re-run`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+    }
+  }
+
   // 5. prompt-template --------------------------------------------------------
   for (const node of nodes) {
     if (node.kind !== 'agent-single' && node.kind !== 'agent-multi') continue
@@ -479,6 +598,26 @@ function buildLoopMembership(nodes: WorkflowDefinition['nodes']): Map<string, st
     }
   }
   return map
+}
+
+/**
+ * Returns every ancestor node id reachable from `start` by walking reversed
+ * edges (i.e. "who feeds into start, transitively"). Excludes `start` itself.
+ * Used by RFC-005 review-rerunnable-out-of-scope check.
+ */
+function collectReachableUpstream(start: string, reverseAdj: Map<string, string[]>): Set<string> {
+  const out = new Set<string>()
+  const stack: string[] = [...(reverseAdj.get(start) ?? [])]
+  while (stack.length > 0) {
+    const next = stack.pop()
+    if (next === undefined) break
+    if (out.has(next)) continue
+    out.add(next)
+    for (const parent of reverseAdj.get(next) ?? []) {
+      if (!out.has(parent)) stack.push(parent)
+    }
+  }
+  return out
 }
 
 /** Standard DFS-based cycle detection. */

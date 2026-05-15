@@ -9,6 +9,9 @@ export const TASK_STATUS = [
   'failed',
   'canceled',
   'interrupted',
+  // RFC-005: at least one review node in the task is waiting on human decision.
+  // Derived from node_runs; does NOT count against maxConcurrentNodes (idle).
+  'awaiting_review',
 ] as const
 export const TaskStatusSchema = z.enum(TASK_STATUS)
 export type TaskStatus = z.infer<typeof TaskStatusSchema>
@@ -87,6 +90,8 @@ export const NODE_RUN_STATUS = [
   'interrupted',
   'skipped',
   'exhausted',
+  // RFC-005: review nodes sit here until the user approves/rejects/iterates.
+  'awaiting_review',
 ] as const
 export const NodeRunStatusSchema = z.enum(NODE_RUN_STATUS)
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>
@@ -99,6 +104,12 @@ export const NodeRunSchema = z.object({
   iteration: z.number().int().nonnegative(),
   shardKey: z.string().nullable(),
   retryIndex: z.number().int().nonnegative(),
+  /**
+   * RFC-005: bumped each time a review decision (reject/iterate) triggers a
+   * regeneration of this node's upstream — decoupled from retryIndex (which
+   * counts purely technical retries like process crashes).
+   */
+  reviewIteration: z.number().int().nonnegative().default(0),
   status: NodeRunStatusSchema,
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),

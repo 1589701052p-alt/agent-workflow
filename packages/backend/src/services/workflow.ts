@@ -11,7 +11,7 @@ import type {
   WorkflowDefinition,
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
-import { WorkflowDefinitionSchema } from '@agent-workflow/shared'
+import { WORKFLOW_SCHEMA_VERSION, WorkflowDefinitionSchema } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -36,11 +36,14 @@ export async function getWorkflow(db: DbClient, id: string): Promise<Workflow | 
 export async function createWorkflow(db: DbClient, input: CreateWorkflow): Promise<Workflow> {
   const id = ulid()
   const now = Date.now()
+  // Normalize incoming v1 → v2 (RFC-005) so new rows always land at the
+  // latest schema version. Older clients can still post v1 — they get upgraded.
+  const normalized = migrateDefinitionToLatest(input.definition)
   await db.insert(workflows).values({
     id,
     name: input.name,
     description: input.description,
-    definition: JSON.stringify(input.definition),
+    definition: JSON.stringify(normalized),
     version: 1,
     createdAt: now,
     updatedAt: now,
@@ -72,7 +75,8 @@ export async function updateWorkflow(
   }
   if (patch.name !== undefined) set.name = patch.name
   if (patch.description !== undefined) set.description = patch.description
-  if (patch.definition !== undefined) set.definition = JSON.stringify(patch.definition)
+  if (patch.definition !== undefined)
+    set.definition = JSON.stringify(migrateDefinitionToLatest(patch.definition))
 
   await db.update(workflows).set(set).where(eq(workflows.id, id))
   const updated = await getWorkflow(db, id)
@@ -148,7 +152,7 @@ function rowToWorkflow(row: WorkflowRow): Workflow {
         issues: parsed.error.issues,
       })
     }
-    definition = parsed.data
+    definition = migrateDefinitionToLatest(parsed.data)
   } catch (err) {
     if (err instanceof ValidationError) throw err
     throw new ValidationError('workflow-definition-corrupt', 'stored definition is not JSON', {
@@ -166,4 +170,27 @@ function rowToWorkflow(row: WorkflowRow): Workflow {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
+}
+
+/**
+ * Transparently upgrade a stored definition to the latest schema version.
+ *
+ * v1 → v2 (RFC-005):
+ *   v1 docs predate the `review` node kind, so by construction they contain
+ *   no review nodes — the upgrade is a pure version-number bump. The result
+ *   is identical in shape to v1 with `$schema_version: 2`.
+ *
+ * The upgrade only changes the in-memory representation returned by GET;
+ * the next PUT (auto-save in the editor, YAML re-import, programmatic update)
+ * flushes the bumped version back to the DB. This mirrors the RFC-004
+ * "heal-on-edit" pattern — no daemon-startup scan.
+ *
+ * Exported pure helper so it can be tested without DB plumbing.
+ */
+export function migrateDefinitionToLatest(def: WorkflowDefinition): WorkflowDefinition {
+  if (def.$schema_version === WORKFLOW_SCHEMA_VERSION) return def
+  if (def.$schema_version === 1) {
+    return { ...def, $schema_version: 2 }
+  }
+  return def
 }

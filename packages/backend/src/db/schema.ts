@@ -99,7 +99,15 @@ export const tasks = sqliteTable(
     branch: text('branch').notNull(), // 'agent-workflow/{task-id}'
     baseCommit: text('base_commit'), // resolved commit SHA of base_branch at task start; basis for diff view
     status: text('status', {
-      enum: ['pending', 'running', 'done', 'failed', 'canceled', 'interrupted'],
+      enum: [
+        'pending',
+        'running',
+        'done',
+        'failed',
+        'canceled',
+        'interrupted',
+        'awaiting_review', // RFC-005
+      ],
     }).notNull(),
     inputs: text('inputs').notNull(), // JSON: launcher form values
     // resource limits (copied from settings / workflow / launcher overrides at start time)
@@ -139,6 +147,11 @@ export const nodeRuns = sqliteTable(
     iteration: integer('iteration').notNull().default(0), // loop iteration index
     shardKey: text('shard_key'), // multi-process shard identifier (e.g. file path)
     retryIndex: integer('retry_index').notNull().default(0), // 0 = first attempt
+    /**
+     * RFC-005: counts review-decision-triggered regenerations (reject/iterate);
+     * orthogonal to retryIndex (technical retries from process crash / timeout).
+     */
+    reviewIteration: integer('review_iteration').notNull().default(0),
     status: text('status', {
       enum: [
         'pending',
@@ -149,6 +162,7 @@ export const nodeRuns = sqliteTable(
         'interrupted',
         'skipped',
         'exhausted',
+        'awaiting_review', // RFC-005
       ],
     }).notNull(),
     startedAt: integer('started_at'),
@@ -194,6 +208,86 @@ export const nodeRunOutputs = sqliteTable(
 // id is auto-increment and serves as the WS reconnect since-id cursor.
 // Hourly background task archives old rows to logs/{taskId}/{nodeRunId}.jsonl.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// doc_versions — RFC-005 review history.
+//
+// One row per (review node run, version_index). Each reject / iterate decision
+// archives the current version and starts a new one. `body_path` points at a
+// file under ~/.agent-workflow/runs/{taskId}/review/{nodeId}/{port}/v{n}.md;
+// the DB stays small and the markdown stays grep-able / OS-backupable.
+// -----------------------------------------------------------------------------
+export const docVersions = sqliteTable(
+  'doc_versions',
+  {
+    id: text('id').primaryKey(), // ULID
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    reviewNodeId: text('review_node_id').notNull(), // workflow node id
+    reviewNodeRunId: text('review_node_run_id')
+      .notNull()
+      .references(() => nodeRuns.id, { onDelete: 'cascade' }),
+    sourceNodeId: text('source_node_id').notNull(),
+    sourcePortName: text('source_port_name').notNull(),
+    versionIndex: integer('version_index').notNull(), // 1-based
+    reviewIteration: integer('review_iteration').notNull(), // matches node_runs.review_iteration at archive
+    bodyPath: text('body_path').notNull(), // relative to app home
+    commentsJson: text('comments_json').notNull().default('[]'), // ReviewComment[] frozen at decision time
+    decision: text('decision', {
+      enum: ['pending', 'approved', 'rejected', 'iterated'],
+    })
+      .notNull()
+      .default('pending'),
+    decisionReason: text('decision_reason'),
+    promptSnapshot: text('prompt_snapshot'), // user prompt sent when generating this version
+    agentSnapshot: text('agent_snapshot'), // JSON: {model, variant, temperature}
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    decidedAt: integer('decided_at'),
+    decidedBy: text('decided_by'), // v1 always 'local'; reserved
+  },
+  (t) => ({
+    reviewIdx: index('idx_doc_versions_review_run').on(t.reviewNodeRunId, t.versionIndex),
+    taskIdx: index('idx_doc_versions_task').on(t.taskId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// review_comments — RFC-005 evidence pinned to a doc_version.
+//
+// Composite anchor (section path + paragraph idx + char offsets + selectedText
+// + before/after context + occurrence_index) makes the comment unambiguous
+// even when the same text appears multiple times. occurrence_index is
+// recomputed server-side from the doc body to defeat client-side forgery
+// (RFC-005-T10).
+// -----------------------------------------------------------------------------
+export const reviewComments = sqliteTable(
+  'review_comments',
+  {
+    id: text('id').primaryKey(),
+    docVersionId: text('doc_version_id')
+      .notNull()
+      .references(() => docVersions.id, { onDelete: 'cascade' }),
+    anchorSectionPath: text('anchor_section_path').notNull(),
+    anchorParagraphIdx: integer('anchor_paragraph_idx').notNull(),
+    anchorOffsetStart: integer('anchor_offset_start').notNull(),
+    anchorOffsetEnd: integer('anchor_offset_end').notNull(),
+    selectedText: text('selected_text').notNull(),
+    contextBefore: text('context_before').notNull(),
+    contextAfter: text('context_after').notNull(),
+    occurrenceIndex: integer('occurrence_index').notNull(),
+    commentText: text('comment_text').notNull(),
+    author: text('author').notNull().default('local'),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    versionIdx: index('idx_review_comments_version').on(t.docVersionId, t.anchorSectionPath),
+  }),
+)
+
 export const nodeRunEvents = sqliteTable(
   'node_run_events',
   {

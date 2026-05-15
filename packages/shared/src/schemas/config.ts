@@ -66,6 +66,26 @@ export const ConfigSchema = z.object({
 
   // --- Logging ---
   logLevel: LogLevelSchema,
+
+  // --- Rendering (RFC-005) ---
+  /**
+   * External PlantUML rendering endpoint (kroki-compatible).
+   *
+   * Empty / unset → ```plantuml fenced blocks fall back to a `<pre>` source
+   * dump with a muted hint to configure this. Otherwise the frontend tries
+   * `GET {endpoint}/plantuml/svg/{deflate-base64}` first, then falls back to
+   * `POST {endpoint}/plantuml/svg` with `text/plain` raw source.
+   *
+   * Examples: `https://kroki.io`, `http://localhost:8081`, `https://plantuml.your.lan/`.
+   * Trailing slash is normalized client-side.
+   */
+  plantumlEndpoint: z.string().optional(),
+  /**
+   * Optional Authorization header value, e.g. `Bearer xxx` or `Basic …`.
+   * Sent to the plantuml endpoint when present. Stored verbatim; users with
+   * self-hosted kroki behind auth fill this in.
+   */
+  plantumlAuthHeader: z.string().optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

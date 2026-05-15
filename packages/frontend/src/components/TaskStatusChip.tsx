@@ -10,6 +10,7 @@ const TONES: Record<TaskStatus, string> = {
   failed: 'red',
   canceled: 'gray',
   interrupted: 'amber',
+  awaiting_review: 'amber',
 }
 
 export function TaskStatusChip({ status }: { status: TaskStatus }) {

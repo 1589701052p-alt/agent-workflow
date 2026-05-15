@@ -6,6 +6,7 @@
 
 **进行中 RFC**：
 - [RFC-006](./design/RFC-006-node-port-ux-cleanup/proposal.md) — 节点端口呈现重构（消除标签溢出节点 + 行内布局 + 长名 ellipsis + tooltip 兜底；编辑器 + task 详情画布共享同一 PortHandles 一次性修两面；纯前端渲染层零后端 / DB / API / YAML 改动；规划单 PR ~150 行 frontend diff + 80 行测试），Draft 等用户审。
+- [RFC-005](./design/RFC-005-human-review/proposal.md) — 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分；**PR-A schema+migration+validator 已落** — workflow $schema_version v1↔v2 透明上提 + NODE_KIND 加 `review` + agent `outputKinds` 旁路 + tasks/node_runs 状态枚举加 `awaiting_review` + node_runs 加 `review_iteration` 字段 + 新表 `doc_versions` / `review_comments` + drizzle 0002 migration + 4 条 review-* validator 规则；backend +65 case / 0 frontend 退化；PR-B 即将开 — runtime: scheduler review dispatch + prompt 模板槽位 + envelope kind 解析 + review service + REST + WS events）。
 
 ---
 

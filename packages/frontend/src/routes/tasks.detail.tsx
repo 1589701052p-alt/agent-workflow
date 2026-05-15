@@ -341,6 +341,10 @@ function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
       return 'pending'
     case 'skipped':
       return 'skipped'
+    // RFC-005: review nodes get their own canvas visual in PR-D. For now,
+    // map to pending so the existing color palette doesn't crash.
+    case 'awaiting_review':
+      return 'pending'
   }
 }
 
@@ -405,6 +409,7 @@ function noderunTone(status: NodeRun['status']): string {
     case 'exhausted':
       return 'red'
     case 'interrupted':
+    case 'awaiting_review':
       return 'amber'
     case 'canceled':
       return 'gray'

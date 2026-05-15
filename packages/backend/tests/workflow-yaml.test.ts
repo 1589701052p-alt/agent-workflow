@@ -71,7 +71,9 @@ describe('GET /api/workflows/:id/export', () => {
     expect(parsed.id).toBe(id)
     expect(parsed.name).toBe('Audit Pipeline')
     const def = parsed.definition as Record<string, unknown>
-    expect(def.$schema_version).toBe(1)
+    // RFC-005: createWorkflow normalizes incoming v1 to v2 on write, so the
+    // YAML export reflects the latest schema even when the fixture posted v1.
+    expect(def.$schema_version).toBe(2)
   })
 
   test('404 for unknown workflow', async () => {

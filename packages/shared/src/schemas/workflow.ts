@@ -1,11 +1,18 @@
-// Workflow schemas. Mirrors design/design.md §5.
+// Workflow schemas. Mirrors design/design.md §5 + design/RFC-005-human-review/.
 //
 // M1 (P-1-11): permissive shape — minimum needed for CRUD round-trip.
 // Strict topology / port-connection validation lands in P-2-01.
+//
+// RFC-005: $schema_version bumped from 1 to 2 to mark the addition of the
+// 'review' node kind. v1 documents stay readable; the transparent v1→v2
+// upgrade lives in the workflow GET path (see backend service.workflow).
 
 import { z } from 'zod'
 
-export const WORKFLOW_SCHEMA_VERSION = 1
+/** Currently-written schema version. New writes always set this value. */
+export const WORKFLOW_SCHEMA_VERSION = 2
+/** Set of versions GET can return; v1 is read-only and auto-upgraded on access. */
+export const WORKFLOW_SCHEMA_VERSIONS = [1, 2] as const
 
 // --- enums shared across multiple shapes ---
 
@@ -16,6 +23,7 @@ export const NODE_KIND = [
   'output',
   'wrapper-git',
   'wrapper-loop',
+  'review', // RFC-005: human-in-the-loop review gate
 ] as const
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
@@ -74,7 +82,12 @@ export type WorkflowOutputBinding = z.infer<typeof WorkflowOutputBindingSchema>
 // --- the definition object stored as JSON in workflows.definition ---
 
 export const WorkflowDefinitionSchema = z.object({
-  $schema_version: z.literal(WORKFLOW_SCHEMA_VERSION),
+  /**
+   * Both v1 (pre-RFC-005) and v2 (RFC-005+) are accepted on read. New writes
+   * always set 2 — the GET path transparently upgrades v1 docs (see backend
+   * services/workflow.ts).
+   */
+  $schema_version: z.union([z.literal(1), z.literal(2)]),
   inputs: z.array(WorkflowInputSchema).default([]),
   nodes: z.array(WorkflowNodeSchema).default([]),
   edges: z.array(WorkflowEdgeSchema).default([]),

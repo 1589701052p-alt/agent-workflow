@@ -30,6 +30,7 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-003](./RFC-003-canvas-input-port-wiring/proposal.md) | Canvas 输入端口连边可达性：catch-all 左侧 handle + onConnect 默认 portName=source + EdgeInspector 改名 | Done |
 | [RFC-004](./RFC-004-input-port-contract/proposal.md) | Input 节点端口契约统一：scheduler portName=inputKey + 编辑器同步 `definition.inputs[]` + validator 新规则 | Done |
 | [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md) | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享） | Draft |
+| [RFC-005](./RFC-005-human-review/proposal.md) | 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分） | In Progress |
 
 ---
 

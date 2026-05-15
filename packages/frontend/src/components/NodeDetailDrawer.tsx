@@ -195,6 +195,8 @@ function noderunTone(s: NodeRun['status']): string {
     case 'pending':
     case 'skipped':
       return 'gray'
+    case 'awaiting_review':
+      return 'amber'
   }
 }
 

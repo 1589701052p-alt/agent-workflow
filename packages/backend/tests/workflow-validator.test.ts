@@ -451,6 +451,285 @@ describe('RFC-004: input-node ↔ workflow.inputs[] bijection', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Rule 4b — review node (RFC-005)
+// ---------------------------------------------------------------------------
+
+describe('rule 4b: review node (RFC-005)', () => {
+  function agentWithKinds(
+    name: string,
+    outputs: string[],
+    outputKinds: Record<string, 'string' | 'markdown' | 'markdown_file'>,
+  ): Agent {
+    return { ...agent(name, outputs), outputKinds }
+  }
+
+  test('valid: review inputSource → agent.markdown port, rerunnable subset of upstream', () => {
+    const designer = agentWithKinds('designer', ['design', 'plan'], {
+      design: 'markdown',
+      plan: 'markdown_file',
+    })
+    const def = makeDef({
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 'topic' }],
+      nodes: [
+        { id: 'in_1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: ['designer', 'in_1'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in_1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+      ],
+    })
+    const res = validateWorkflowDef(def, { agents: [designer], skills: [] })
+    expect(res.ok).toBe(true)
+  })
+
+  test('invalid: inputSource missing entirely → review-input-source-missing', () => {
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [{ id: 'rev_1', kind: 'review', rerunnableOnReject: [], rerunnableOnIterate: [] }],
+    })
+    const codes = validateWorkflowDef(def, EMPTY_CTX).issues.map((i) => i.code)
+    expect(codes).toContain('review-input-source-missing')
+  })
+
+  test('invalid: inputSource points at unknown node → review-input-source-missing', () => {
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'ghost', portName: 'design' },
+          rerunnableOnReject: [],
+          rerunnableOnIterate: [],
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, EMPTY_CTX).issues.map((i) => i.code)
+    expect(codes).toContain('review-input-source-missing')
+  })
+
+  test('invalid: inputSource port not declared on source node', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'absent_port' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).toContain('review-input-source-missing')
+  })
+
+  test('invalid: agent port not declared as markdown[_file] → review-input-source-not-markdown', () => {
+    const designer = agentWithKinds('designer', ['notes'], { notes: 'string' })
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'notes' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).toContain('review-input-source-not-markdown')
+  })
+
+  test('invalid: source is a wrapper-git (non-agent) → review-input-source-not-markdown', () => {
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'g1', kind: 'wrapper-git', nodeIds: ['inner_a'] },
+        { id: 'inner_a', kind: 'agent-single', agentName: 'x', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'g1', portName: 'git_diff' },
+          rerunnableOnReject: ['g1'],
+          rerunnableOnIterate: ['g1'],
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [agent('x', [])], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).toContain('review-input-source-not-markdown')
+  })
+
+  test('invalid: rerunnableOnReject id not in reachable upstream → review-rerunnable-out-of-scope', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const sibling = agent('sibling', ['unrelated'])
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'in_1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        { id: 'sibling', kind: 'agent-single', agentName: 'sibling', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          // 'sibling' is NOT upstream of designer → out of scope.
+          rerunnableOnReject: ['designer', 'sibling'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+      inputs: [{ kind: 'text', key: 'topic', label: 'topic' }],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in_1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer, sibling], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).toContain('review-rerunnable-out-of-scope')
+  })
+
+  test('invalid: rerunnableOnIterate same out-of-scope check', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer', 'ghost_node'],
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).toContain('review-rerunnable-out-of-scope')
+  })
+
+  test('warning: rerunnableOnReject empty (default would have been non-empty)', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: [],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+    })
+    const res = validateWorkflowDef(def, { agents: [designer], skills: [] })
+    const empty = res.issues.find((i) => i.code === 'review-rerunnable-empty-on-reject')
+    expect(empty).toBeDefined()
+    expect(empty?.severity).toBe('warning')
+    // Warning alone does not flip ok to false.
+    expect(res.ok).toBe(true)
+  })
+
+  test('rerunnable subset can include transitive upstream (input → designer → review)', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const def = makeDef({
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 'topic' }],
+      nodes: [
+        { id: 'in_1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          // 'in_1' is transitively upstream of designer — should be allowed.
+          rerunnableOnReject: ['designer', 'in_1'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in_1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] })
+      .issues.filter((i) => (i.severity ?? 'error') === 'error')
+      .map((i) => i.code)
+    expect(codes).not.toContain('review-rerunnable-out-of-scope')
+  })
+
+  test('review node publishes approved_doc + approval_meta as output ports (edges can reference them)', () => {
+    const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
+    const def = makeDef({
+      $schema_version: 2,
+      nodes: [
+        { id: 'designer', kind: 'agent-single', agentName: 'designer', promptTemplate: '' },
+        {
+          id: 'rev_1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer'],
+        },
+        {
+          id: 'out_1',
+          kind: 'output',
+          ports: [
+            { name: 'final', bind: { nodeId: 'rev_1', portName: 'approved_doc' } },
+            { name: 'audit', bind: { nodeId: 'rev_1', portName: 'approval_meta' } },
+          ],
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'rev_1', portName: 'approved_doc' },
+          target: { nodeId: 'out_1', portName: 'final' },
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] })
+      .issues.filter((i) => (i.severity ?? 'error') === 'error')
+      .map((i) => i.code)
+    expect(codes).not.toContain('edge-source-port-missing')
+    expect(codes).not.toContain('binding-port-missing')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // extractTemplateVars unit
 // ---------------------------------------------------------------------------
 

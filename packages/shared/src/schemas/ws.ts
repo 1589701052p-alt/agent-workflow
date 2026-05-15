@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { TaskStatusSchema, TaskSummarySchema } from './task'
 import { NodeRunStatusSchema } from './task'
+import { DocVersionDecisionSchema, ReviewCommentSchema, ReviewDecisionKindSchema } from './review'
 
 // -----------------------------------------------------------------------------
 // /ws/tasks/{taskId}
@@ -58,6 +59,43 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     id: z.number().int(),
     type: z.literal('task.done'),
     status: z.enum(['done', 'failed', 'canceled', 'interrupted']),
+  }),
+  // -------------------------------------------------------------------------
+  // RFC-005 review events. Delivered on the per-task /ws/tasks/{taskId}
+  // channel — global Reviews tab uses polling + invalidation on its own.
+  // -------------------------------------------------------------------------
+  z.object({
+    id: z.number().int(),
+    type: z.literal('review.created'),
+    nodeRunId: z.string(),
+    reviewNodeId: z.string(),
+    docVersionId: z.string(),
+    versionIndex: z.number().int().positive(),
+    reviewIteration: z.number().int().nonnegative(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('review.decision_made'),
+    nodeRunId: z.string(),
+    decision: ReviewDecisionKindSchema,
+    /** New iteration index after this decision (post-bump). */
+    reviewIteration: z.number().int().nonnegative(),
+    /** Mirrors doc_versions.decision so listeners can refresh in one round-trip. */
+    docVersionDecision: DocVersionDecisionSchema,
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('review.comment_added'),
+    nodeRunId: z.string(),
+    docVersionId: z.string(),
+    comment: ReviewCommentSchema,
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('review.comment_deleted'),
+    nodeRunId: z.string(),
+    docVersionId: z.string(),
+    commentId: z.string(),
   }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>
