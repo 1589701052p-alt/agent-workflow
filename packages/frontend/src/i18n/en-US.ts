@@ -57,6 +57,7 @@ export const enUS: Resources = {
     popoverSubmit: 'Submit',
     popoverCancel: 'Cancel',
     diffToggle: 'Compare with prior version',
+    diffOff: 'Source',
     diffGranularityWord: 'Word',
     diffGranularityLine: 'Line',
     diffGranularityBlock: 'Block',

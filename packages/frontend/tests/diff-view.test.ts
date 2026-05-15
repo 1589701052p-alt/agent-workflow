@@ -1,105 +1,52 @@
-// DiffView pure helpers — RFC-005 PR-E T34.
+// DiffView source-level lock — RFC-010.
 //
-// We test the internal helpers (computeDiff, changesToSegments,
-// headingSlug, splitForWordDiff) rather than DOM rendering — the
-// rendering path is straightforward and exercised end-to-end by the
-// review.spec.ts e2e test in PR-E.
+// RFC-010 把三种 granularity（word / line / block）全部 delegate 到
+// MarkdownDiffView，并删掉了原来的左右源码 pane + 滚动同步 + 一系列
+// _internal helper。这套断言锁定那次重构：
+//   - 不允许 DiffView 重新出现 useEffect / useRef / pane 渲染（一旦有人
+//     "回退"到旧的源码红绿块实现，本测试立刻红）
+//   - 必须把 granularity 透传给 MarkdownDiffView（不能硬编码某种 mode）
+//   - import 链必须保留 MarkdownDiffView
+//
+// 历史：旧版本（RFC-005 PR-E T34）测试的是 _internal 辅助函数
+// （changesToSegments / headingSlug / slugify / computeDiff），那些函数
+// 在 RFC-010 中已删除，对应测试也一并删除。
 
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { _internal } from '@/components/review/DiffView'
 
-const { computeDiff, changesToSegments, headingSlug, slugify, splitForWordDiff } = _internal
+const source = fs.readFileSync(
+  path.resolve(__dirname, '../src/components/review/DiffView.tsx'),
+  'utf8',
+)
 
-describe('headingSlug', () => {
-  test('extracts slug from h1-h6 lines', () => {
-    expect(headingSlug('# Design')).toBe('design')
-    expect(headingSlug('### POST endpoints')).toBe('post-endpoints')
-    expect(headingSlug('  ##   Multi word title  ')).toBe('multi-word-title')
+describe('RFC-010 — DiffView 是 MarkdownDiffView 的薄壳', () => {
+  test('imports MarkdownDiffView', () => {
+    expect(source).toMatch(
+      /import\s+\{\s*MarkdownDiffView\s*\}\s+from\s+['"]\.\/MarkdownDiffView['"]/,
+    )
   })
 
-  test('returns null for non-heading lines', () => {
-    expect(headingSlug('some paragraph')).toBeNull()
-    expect(headingSlug('')).toBeNull()
-    expect(headingSlug('####### too many hashes')).toBeNull()
-  })
-})
-
-describe('slugify', () => {
-  test('lowercases + replaces non-alnum with dash', () => {
-    expect(slugify('Hello, World!')).toBe('hello-world')
-    expect(slugify('  Leading & trailing  ')).toBe('leading-trailing')
+  test('granularity 必须透传给 MarkdownDiffView（不能硬编码）', () => {
+    expect(source).toMatch(/<MarkdownDiffView[^/>]*granularity=\{granularity\}/)
   })
 
-  test('preserves CJK characters', () => {
-    expect(slugify('数据模型')).toBe('数据模型')
-  })
-})
-
-describe('computeDiff @ word granularity', () => {
-  test('captures inserted + deleted words', () => {
-    const changes = computeDiff('the order_status enum', 'the order_status field', 'word')
-    const hasInsert = changes.some((c) => c.added === true && c.value.includes('field'))
-    const hasDelete = changes.some((c) => c.removed === true && c.value.includes('enum'))
-    expect(hasInsert).toBe(true)
-    expect(hasDelete).toBe(true)
+  test('left / right 直接转发给 MarkdownDiffView', () => {
+    expect(source).toMatch(/<MarkdownDiffView[^/>]*left=\{left\}/)
+    expect(source).toMatch(/<MarkdownDiffView[^/>]*right=\{right\}/)
   })
 
-  test('handles identical input → all context, no add / remove', () => {
-    const changes = computeDiff('same content here', 'same content here', 'word')
-    expect(changes.some((c) => c.added === true)).toBe(false)
-    expect(changes.some((c) => c.removed === true)).toBe(false)
-  })
-})
-
-describe('computeDiff @ line granularity', () => {
-  test('line-level changes counted independently', () => {
-    const left = 'one\ntwo\nthree'
-    const right = 'one\nTWO\nthree'
-    const changes = computeDiff(left, right, 'line')
-    expect(changes.some((c) => c.added === true)).toBe(true)
-    expect(changes.some((c) => c.removed === true)).toBe(true)
-  })
-})
-
-describe('computeDiff @ block granularity', () => {
-  test('treats blank-line-separated blocks as atomic units', () => {
-    const left = 'first block\n\nsecond block'
-    const right = 'first block\n\nsecond block changed'
-    const changes = computeDiff(left, right, 'block')
-    // The second block changes wholesale; the first stays as context.
-    const contextValues = changes.filter((c) => c.added !== true && c.removed !== true)
-    expect(contextValues.some((c) => c.value.includes('first block'))).toBe(true)
-  })
-})
-
-describe('changesToSegments', () => {
-  test('routes added → right pane only; removed → left pane only', () => {
-    const { left, right } = changesToSegments([
-      { value: 'a', added: undefined, removed: undefined } as never,
-      { value: 'b-added', added: true, removed: undefined } as never,
-      { value: 'b-removed', added: undefined, removed: true } as never,
-    ])
-    expect(left.map((s) => s.text).join('')).toBe('ab-removed')
-    expect(right.map((s) => s.text).join('')).toBe('ab-added')
-    expect(left.find((s) => s.text === 'b-removed')?.kind).toBe('delete')
-    expect(right.find((s) => s.text === 'b-added')?.kind).toBe('insert')
-  })
-})
-
-describe('splitForWordDiff CJK widening', () => {
-  test('passes through pure ASCII unchanged', () => {
-    const s = 'simple english text'
-    expect(splitForWordDiff(s)).toBe(s)
+  test('外层 wrapper 带 data-granularity，便于样式 / 调试探针', () => {
+    expect(source).toMatch(/data-granularity=\{granularity\}/)
   })
 
-  test('injects zero-width separator between CJK graphemes (when Intl.Segmenter present)', () => {
-    const s = '订单状态'
-    const out = splitForWordDiff(s)
-    // In environments with Intl.Segmenter we expect some widening; in
-    // happy-dom it may or may not be installed — the test just asserts
-    // we don't lose chars (output >= input length).
-    expect(out.length).toBeGreaterThanOrEqual(s.length)
-    // The actual chars survive.
-    for (const ch of s) expect(out).toContain(ch)
+  test('不再含 useEffect / useRef / 旧 pane 渲染（防止回退到 side-by-side 源码）', () => {
+    expect(source).not.toMatch(/useEffect|useRef/)
+    expect(source).not.toMatch(/diff-view__pane|renderPane|changesToSegments|headingSlug/)
+  })
+
+  test('公开类型 DiffGranularity 仍导出（reviews.detail 依赖）', () => {
+    expect(source).toMatch(/export type DiffGranularity/)
   })
 })

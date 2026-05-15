@@ -57,6 +57,7 @@ export interface Resources {
     popoverSubmit: string
     popoverCancel: string
     diffToggle: string
+    diffOff: string
     diffGranularityWord: string
     diffGranularityLine: string
     diffGranularityBlock: string
@@ -635,6 +636,7 @@ export const zhCN: Resources = {
     popoverSubmit: '提交',
     popoverCancel: '取消',
     diffToggle: '对比上一版',
+    diffOff: '原文',
     diffGranularityWord: '词',
     diffGranularityLine: '行',
     diffGranularityBlock: '段',

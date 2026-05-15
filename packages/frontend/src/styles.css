@@ -2459,3 +2459,77 @@ mark.comment-anchor[data-active='true'] {
     margin-bottom: 8px;
   }
 }
+
+/* RFC-010 — Markdown 渲染态内联 diff 高亮（仅作用于 MarkdownDiffView 容器内）。 */
+.markdown-diff-view .diff-ins {
+  background: #d4f8d4;
+  color: #064a06;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.markdown-diff-view .diff-del {
+  background: #fadbdb;
+  color: #6a0a0a;
+  text-decoration: line-through;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.diff-view--inline {
+  display: block;
+}
+.diff-view__inline-labels {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  .markdown-diff-view .diff-ins {
+    background: #16401a;
+    color: #aef0a8;
+  }
+  .markdown-diff-view .diff-del {
+    background: #3a1414;
+    color: #f4a4a4;
+  }
+}
+
+/* RFC-010 follow-up — review 详情页的 diff 模式选择器（segmented pill）。
+   合并旧的"勾选框 + 三按钮"成单个 4 段控件：原文 / 词 / 行 / 段。 */
+.diff-mode-segmented {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+}
+.diff-mode-segmented__btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  border-radius: 999px;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+  white-space: nowrap;
+}
+.diff-mode-segmented__btn:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.diff-mode-segmented__btn--active,
+.diff-mode-segmented__btn--active:hover {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.diff-mode-segmented__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

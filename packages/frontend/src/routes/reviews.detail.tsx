@@ -678,29 +678,40 @@ function ReviewDetailPage() {
 
       {data.currentVersion.versionIndex > 1 && (
         <div className="review-detail__diff-toolbar">
-          <label className="diff-view__toggle">
-            <input
-              type="checkbox"
-              checked={diffMode}
-              onChange={(e) => setDiffMode(e.target.checked)}
-            />
-            <span>{t('reviews.diffToggle')}</span>
-          </label>
-          {diffMode && (
-            <div className="diff-view__granularity">
-              {(['word', 'line', 'block'] as const).map((g, idx) => (
+          {/* RFC-010 follow-up：把"勾选框 + 三按钮"合并成一个 4 段 pill
+              segmented control。选 "原文" 等价于关闭 diff 模式；其它三段
+              等价于开启 diff + 设置 granularity。视觉更紧凑、状态更明确，
+              用户少一次"先勾选才出现按钮"的两步操作。 */}
+          <div className="diff-mode-segmented" role="tablist" aria-label={t('reviews.diffToggle')}>
+            {(['off', 'word', 'line', 'block'] as const).map((m) => {
+              const active = m === 'off' ? !diffMode : diffMode && diffGranularity === m
+              const label =
+                m === 'off'
+                  ? t('reviews.diffOff')
+                  : t(`reviews.diffGranularity${m.charAt(0).toUpperCase()}${m.slice(1)}` as const)
+              return (
                 <button
-                  key={g}
+                  key={m}
                   type="button"
-                  className={'btn btn--sm' + (diffGranularity === g ? ' btn--primary' : '')}
-                  onClick={() => setDiffGranularity(g)}
+                  role="tab"
+                  aria-selected={active}
+                  className={
+                    'diff-mode-segmented__btn' + (active ? ' diff-mode-segmented__btn--active' : '')
+                  }
+                  onClick={() => {
+                    if (m === 'off') {
+                      setDiffMode(false)
+                    } else {
+                      setDiffMode(true)
+                      setDiffGranularity(m)
+                    }
+                  }}
                 >
-                  {t(`reviews.diffGranularity${g.charAt(0).toUpperCase()}${g.slice(1)}` as const)}{' '}
-                  <kbd>⌘{idx + 1}</kbd>
+                  {label}
                 </button>
-              ))}
-            </div>
-          )}
+              )
+            })}
+          </div>
         </div>
       )}
 
