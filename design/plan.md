@@ -7,15 +7,15 @@
 
 ## 总览
 
-| 里程碑 | 目标 | 大致周期 (单人专注) | issue 数 |
-| --- | --- | --- | --- |
-| **M0** 准备 | 仓初始化 / opencode 兼容性验证 / CI 雏形 | 2–3 天 | 5 |
-| **M1** 骨架 | 单 daemon + 鉴权 + Agents/Skills CRUD + 单节点线性 workflow + 端到端跑通一次 task | 2–3 周 | 18 |
-| **M2** 编辑器 | xyflow 编辑器 + 启动表单 + 任务状态视图 + WS 三频道 + 静态校验 | 3 周 | 16 |
-| **M3** 编排核心 | 多进程节点 + git wrapper + retry/resume + 节点 4 tab + 流式 events | 3 周 | 14 |
-| **M4** 高级编排 | loop wrapper + 嵌套 + 资源限额 + interrupted 状态 + YAML 导入导出 + worktree GC | 2 周 | 11 |
-| **M5** 打磨 | 事件归档 + 备份恢复 + i18n / 暗色 + e2e + 单二进制 + Release | 2 周 | 12 |
-| **跨阶段** | 文档 / DX / 维护 | 持续 | 5 |
+| 里程碑          | 目标                                                                              | 大致周期 (单人专注) | issue 数 |
+| --------------- | --------------------------------------------------------------------------------- | ------------------- | -------- |
+| **M0** 准备     | 仓初始化 / opencode 兼容性验证 / CI 雏形                                          | 2–3 天              | 5        |
+| **M1** 骨架     | 单 daemon + 鉴权 + Agents/Skills CRUD + 单节点线性 workflow + 端到端跑通一次 task | 2–3 周              | 18       |
+| **M2** 编辑器   | xyflow 编辑器 + 启动表单 + 任务状态视图 + WS 三频道 + 静态校验                    | 3 周                | 16       |
+| **M3** 编排核心 | 多进程节点 + git wrapper + retry/resume + 节点 4 tab + 流式 events                | 3 周                | 14       |
+| **M4** 高级编排 | loop wrapper + 嵌套 + 资源限额 + interrupted 状态 + YAML 导入导出 + worktree GC   | 2 周                | 11       |
+| **M5** 打磨     | 事件归档 + 备份恢复 + i18n / 暗色 + e2e + 单二进制 + Release                      | 2 周                | 12       |
+| **跨阶段**      | 文档 / DX / 维护                                                                  | 持续                | 5        |
 
 合计 **81 个 issue**，单人全职 ~13 周完成 v1（含测试）。多人并行可压缩。
 
@@ -23,14 +23,14 @@
 
 v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/` 子目录下，每个 RFC 含 `proposal.md` / `design.md` / `plan.md` 三文件。RFC 编号独立于 P-X-XX issue 编号。
 
-| 编号 | 标题 | 状态 |
-| --- | --- | --- |
-| [RFC-001](./RFC-001-runtime-status-and-model-select/proposal.md) | Settings → Runtime 状态卡片 + Model 下拉选择 | Done |
-| [RFC-002](./RFC-002-agent-defaults-from-runtime/proposal.md) | Add Agent 表单：从 Runtime 默认值快照 + Skills 下拉选已有（含 Settings 新增 defaultSteps / defaultMaxSteps） | Done |
-| [RFC-003](./RFC-003-canvas-input-port-wiring/proposal.md) | Canvas 输入端口连边可达性：catch-all 左侧 handle + onConnect 默认 portName=source + EdgeInspector 改名 | Done |
-| [RFC-004](./RFC-004-input-port-contract/proposal.md) | Input 节点端口契约统一：scheduler portName=inputKey + 编辑器同步 `definition.inputs[]` + validator 新规则 | Done |
-| [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md) | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享） | Draft |
-| [RFC-005](./RFC-005-human-review/proposal.md) | 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分） | In Progress |
+| 编号                                                             | 标题                                                                                                         | 状态        |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------- |
+| [RFC-001](./RFC-001-runtime-status-and-model-select/proposal.md) | Settings → Runtime 状态卡片 + Model 下拉选择                                                                 | Done        |
+| [RFC-002](./RFC-002-agent-defaults-from-runtime/proposal.md)     | Add Agent 表单：从 Runtime 默认值快照 + Skills 下拉选已有（含 Settings 新增 defaultSteps / defaultMaxSteps） | Done        |
+| [RFC-003](./RFC-003-canvas-input-port-wiring/proposal.md)        | Canvas 输入端口连边可达性：catch-all 左侧 handle + onConnect 默认 portName=source + EdgeInspector 改名       | Done        |
+| [RFC-004](./RFC-004-input-port-contract/proposal.md)             | Input 节点端口契约统一：scheduler portName=inputKey + 编辑器同步 `definition.inputs[]` + validator 新规则    | Done        |
+| [RFC-005](./RFC-005-human-review/proposal.md)                    | 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分）                                   | In Progress |
+| [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md)            | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享）            | Done        |
 
 ---
 
@@ -298,6 +298,7 @@ packages/frontend/
 ### M1 验收
 
 跑通：
+
 1. `agent-workflow start` 启动成功，stdout 打印 URL + token
 2. 浏览器打开 → 创 1 个 agent（如 "echo-agent"，prompt 让它原样回 input → 输出 envelope）+ 1 个 skill
 3. 通过 API（M1 不做编辑器，所以用 curl 或 prebuilt fixture）创一个 2 节点线性 workflow
@@ -614,7 +615,7 @@ packages/frontend/
 
 #### P-4-05 Token 数据从 events 提取
 
-- **What**：opencode JSON event 里有 token 字段（part.time + tokens 在 step-finish 等 event 中）。runner 在解析 event 时累加到 node_run.tok_*。父 multi-process 节点 token = 子 shard 之和。
+- **What**：opencode JSON event 里有 token 字段（part.time + tokens 在 step-finish 等 event 中）。runner 在解析 event 时累加到 node*run.tok*\*。父 multi-process 节点 token = 子 shard 之和。
 - **Files**：`src/services/runner.ts` 增 token 累加、`src/services/tokenAggregate.ts`
 - **Tests**：fixture event stream → 验证 tok 字段累加正确。
 - **Size**：M
@@ -852,7 +853,7 @@ M5 打磨 ── 单二进制 + Release
 ### 单人专注 v 多人并行
 
 - 单人专注：M0~M5 顺序做，~13 周
-- 双人：M2 与 M3 之间有相对独立的前后端工作可并行（P-2-* UI 与 P-3-* 后端可有 1-2 周重叠）；e2e 在 M5 才需上手
+- 双人：M2 与 M3 之间有相对独立的前后端工作可并行（P-2-_ UI 与 P-3-_ 后端可有 1-2 周重叠）；e2e 在 M5 才需上手
 - 三人+：每个里程碑内部多 issue 可并领，节省 ~30%
 
 ---
