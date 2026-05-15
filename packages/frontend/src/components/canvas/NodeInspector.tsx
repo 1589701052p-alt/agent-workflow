@@ -523,13 +523,7 @@ export function extractMissingRefs(template: string, inputPorts: string[]): stri
   return [...refs].filter((r) => !have.has(r))
 }
 
-function MissingRefList({
-  template,
-  inputPorts,
-}: {
-  template: string
-  inputPorts: string[]
-}) {
+function MissingRefList({ template, inputPorts }: { template: string; inputPorts: string[] }) {
   const { t } = useTranslation()
   const missing = extractMissingRefs(template, inputPorts)
   if (missing.length === 0) return null

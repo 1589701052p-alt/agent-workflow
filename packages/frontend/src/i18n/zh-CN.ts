@@ -773,8 +773,7 @@ export const zhCN: Resources = {
     edgeConflictMsg: '已存在同源同目标端口的边，请先删除冲突边。',
     edgeDeleteBtn: '删除该边',
     missingRefsLabel: '模板引用但未连入：',
-    missingRefsHint:
-      '这些端口名出现在 prompt 模板里但还没有上游边；启动 task 时会被静态校验拦下。',
+    missingRefsHint: '这些端口名出现在 prompt 模板里但还没有上游边；启动 task 时会被静态校验拦下。',
   },
   promptPreview: {
     mockTitle: '模拟端口值',

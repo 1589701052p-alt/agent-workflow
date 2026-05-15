@@ -82,9 +82,7 @@ export function EdgeInspector({ edge, definition, onChange, onClose }: Props) {
             </code>
           </Field>
           <Field label={t('inspector.edgeTargetLabel')}>
-            <code className="form-input form-input--mono">
-              {edge.target.nodeId}
-            </code>
+            <code className="form-input form-input--mono">{edge.target.nodeId}</code>
           </Field>
           <Field label={t('inspector.edgePortNameLabel')}>
             <input
@@ -122,11 +120,7 @@ export function EdgeInspector({ edge, definition, onChange, onClose }: Props) {
  *
  * Exported for unit tests.
  */
-export function hasConflict(
-  def: WorkflowDefinition,
-  edge: WorkflowEdge,
-  next: string,
-): boolean {
+export function hasConflict(def: WorkflowDefinition, edge: WorkflowEdge, next: string): boolean {
   return def.edges.some(
     (e) =>
       e.id !== edge.id &&

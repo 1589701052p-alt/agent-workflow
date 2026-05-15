@@ -29,11 +29,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
 import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
-import {
-  INBOUND_HANDLE_ID,
-  type CanvasNodeData,
-  type CanvasSelection,
-} from './nodes/types'
+import { INBOUND_HANDLE_ID, type CanvasNodeData, type CanvasSelection } from './nodes/types'
 import { GitWrapperNode, LoopWrapperNode } from './nodes/WrapperNodes'
 
 const NODE_TYPES = {

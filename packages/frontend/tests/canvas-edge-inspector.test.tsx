@@ -58,7 +58,9 @@ describe('EdgeInspector', () => {
   test('renames target.portName on blur → onChange fires with updated edge', () => {
     const onChange = vi.fn()
     render(<Host initialDef={makeDef()} onChangeSpy={onChange} />)
-    const input = screen.getAllByRole('textbox').find((i) => (i as HTMLInputElement).value === 'out')!
+    const input = screen
+      .getAllByRole('textbox')
+      .find((i) => (i as HTMLInputElement).value === 'out')!
     fireEvent.change(input, { target: { value: 'requirement' } })
     fireEvent.blur(input)
     expect(onChange).toHaveBeenCalledTimes(1)
@@ -75,28 +77,37 @@ describe('EdgeInspector', () => {
       target: { nodeId: 'agent1', portName: 'requirement' },
     })
     const onChange = vi.fn()
-    render(<Host initialDef={def} onChangeSpy={onChange} />)
-    const input = screen.getAllByRole('textbox').find((i) => (i as HTMLInputElement).value === 'out')!
+    const { container } = render(<Host initialDef={def} onChangeSpy={onChange} />)
+    const input = screen
+      .getAllByRole('textbox')
+      .find((i) => (i as HTMLInputElement).value === 'out')!
     fireEvent.change(input, { target: { value: 'requirement' } })
     fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
-    expect(screen.queryByText(/already exists/i)).toBeTruthy()
+    // Asserted via class instead of text so the i18n race in test setup
+    // doesn't matter (the conflict box renders <div class="error-box">).
+    expect(container.querySelector('.error-box')).not.toBeNull()
   })
 
   test('renaming to empty / unchanged → no-op (no onChange, no error)', () => {
     const onChange = vi.fn()
-    render(<Host initialDef={makeDef()} onChangeSpy={onChange} />)
-    const input = screen.getAllByRole('textbox').find((i) => (i as HTMLInputElement).value === 'out')!
+    const { container } = render(<Host initialDef={makeDef()} onChangeSpy={onChange} />)
+    const input = screen
+      .getAllByRole('textbox')
+      .find((i) => (i as HTMLInputElement).value === 'out')!
     fireEvent.change(input, { target: { value: '   ' } })
     fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
-    expect(screen.queryByText(/already exists/i)).toBeNull()
+    expect(container.querySelector('.error-box')).toBeNull()
   })
 
   test('delete button removes the edge from definition', () => {
     const onChange = vi.fn()
-    render(<Host initialDef={makeDef()} onChangeSpy={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: /delete edge/i }))
+    const { container } = render(<Host initialDef={makeDef()} onChangeSpy={onChange} />)
+    // Match by class to avoid i18n race on button label.
+    const btn = container.querySelector('.btn--danger') as HTMLButtonElement | null
+    expect(btn).not.toBeNull()
+    fireEvent.click(btn!)
     expect(onChange).toHaveBeenCalledTimes(1)
     const next = onChange.mock.calls[0]![0] as WorkflowDefinition
     expect(next.edges.find((e) => e.id === 'e1')).toBeUndefined()
