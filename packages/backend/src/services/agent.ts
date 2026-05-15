@@ -31,6 +31,11 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
 
   const id = ulid()
   const now = Date.now()
+  // RFC-005: outputKinds is a sidecar map ported through `frontmatter_extra`
+  // (under reserved key `outputKinds`) until a dedicated column is needed.
+  // services/review.ts:loadUpstreamPortKind reads from the same place.
+  const fmExtra = { ...input.frontmatterExtra } as Record<string, unknown>
+  if (input.outputKinds !== undefined) fmExtra.outputKinds = input.outputKinds
   await db.insert(agents).values({
     id,
     name: input.name,
@@ -44,7 +49,7 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
     steps: input.steps ?? null,
     maxSteps: input.maxSteps ?? null,
     skills: JSON.stringify(input.skills),
-    frontmatterExtra: JSON.stringify(input.frontmatterExtra),
+    frontmatterExtra: JSON.stringify(fmExtra),
     bodyMd: input.bodyMd,
     createdAt: now,
     updatedAt: now,
@@ -72,8 +77,28 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   if (patch.steps !== undefined) set.steps = patch.steps
   if (patch.maxSteps !== undefined) set.maxSteps = patch.maxSteps
   if (patch.skills !== undefined) set.skills = JSON.stringify(patch.skills)
-  if (patch.frontmatterExtra !== undefined) {
-    set.frontmatterExtra = JSON.stringify(patch.frontmatterExtra)
+  // RFC-005: merge outputKinds into frontmatter_extra alongside the explicit
+  // patch (if any). Tests that PATCH only outputKinds preserve the rest of
+  // frontmatter_extra; tests that PATCH only frontmatterExtra drop outputKinds
+  // only if the caller passes a fresh object without that key (existing
+  // overwrite semantics).
+  if (patch.frontmatterExtra !== undefined || patch.outputKinds !== undefined) {
+    const baseFm =
+      patch.frontmatterExtra !== undefined
+        ? { ...patch.frontmatterExtra }
+        : ((JSON.parse(existing.frontmatterExtra !== undefined ? '{}' : '{}') as Record<
+            string,
+            unknown
+          >) ?? {})
+    if (patch.frontmatterExtra === undefined) {
+      // Caller patched only outputKinds — start from current row state.
+      const fresh = await getAgent(db, name)
+      if (fresh !== null) Object.assign(baseFm, fresh.frontmatterExtra)
+    }
+    if (patch.outputKinds !== undefined) {
+      ;(baseFm as Record<string, unknown>).outputKinds = patch.outputKinds
+    }
+    set.frontmatterExtra = JSON.stringify(baseFm)
   }
   if (patch.bodyMd !== undefined) set.bodyMd = patch.bodyMd
 
@@ -160,6 +185,26 @@ async function findWorkflowsUsingAgent(
 }
 
 function rowToAgent(row: AgentRow): Agent {
+  const fmExtra = JSON.parse(row.frontmatterExtra) as Record<string, unknown>
+  // RFC-005: lift outputKinds back out of frontmatter_extra into a top-level
+  // property on the Agent DTO so consumers (review validator, scheduler,
+  // frontend AgentForm) see it without poking into nested JSON.
+  let outputKinds: Agent['outputKinds'] | undefined
+  if (
+    fmExtra.outputKinds !== undefined &&
+    fmExtra.outputKinds !== null &&
+    typeof fmExtra.outputKinds === 'object'
+  ) {
+    outputKinds = {} as Agent['outputKinds']
+    for (const [port, kind] of Object.entries(fmExtra.outputKinds as Record<string, unknown>)) {
+      if (kind === 'string' || kind === 'markdown' || kind === 'markdown_file') {
+        ;(outputKinds as Record<string, typeof kind>)[port] = kind
+      }
+    }
+  }
+  const exposedFm = { ...fmExtra }
+  delete (exposedFm as Record<string, unknown>).outputKinds
+
   const agent: Agent = {
     id: row.id,
     name: row.name,
@@ -168,12 +213,13 @@ function rowToAgent(row: AgentRow): Agent {
     readonly: row.readonly,
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],
-    frontmatterExtra: JSON.parse(row.frontmatterExtra) as Record<string, unknown>,
+    frontmatterExtra: exposedFm,
     bodyMd: row.bodyMd,
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
+  if (outputKinds !== undefined) agent.outputKinds = outputKinds
   if (row.model !== null) agent.model = row.model
   if (row.variant !== null) agent.variant = row.variant
   if (row.temperature !== null) agent.temperature = row.temperature

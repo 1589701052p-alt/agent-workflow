@@ -20,6 +20,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
+import { dispatchReviewNode } from '@/services/review'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
@@ -57,6 +58,7 @@ type NodeStatus =
   | 'interrupted'
   | 'skipped'
   | 'exhausted'
+  | 'awaiting_review'
 
 interface SchedulerState {
   db: DbClient
@@ -113,7 +115,8 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
       node.kind !== 'agent-multi' &&
       node.kind !== 'output' &&
       node.kind !== 'wrapper-git' &&
-      node.kind !== 'wrapper-loop'
+      node.kind !== 'wrapper-loop' &&
+      node.kind !== 'review' // RFC-005
     ) {
       await failTask(
         db,
@@ -184,6 +187,14 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     await cancelTaskRow(db, taskId, result.detail?.nodeId)
     return
   }
+  if (result.kind === 'awaiting_review') {
+    // RFC-005: task pauses with status=awaiting_review until a decision lands
+    // via REST. Decision handler will call resumeTask which re-enters here.
+    await db.update(tasks).set({ status: 'awaiting_review' }).where(eq(tasks.id, taskId))
+    await emitStatus(db, taskId)
+    log.info('task awaiting human review', { taskId })
+    return
+  }
 
   // 9. Done.
   await db.update(tasks).set({ status: 'done', finishedAt: Date.now() }).where(eq(tasks.id, taskId))
@@ -196,7 +207,7 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
 // -----------------------------------------------------------------------------
 
 interface ScopeResult {
-  kind: 'ok' | 'failed' | 'canceled'
+  kind: 'ok' | 'failed' | 'canceled' | 'awaiting_review'
   detail?: { summary: string; message: string; nodeId?: string }
 }
 
@@ -256,6 +267,8 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     const results = await Promise.all(
       ready.map((node) => runOneNode(state, { node, iteration, log })),
     )
+    let anyAwaitingReview = false
+    let awaitingDetail: { summary: string; message: string; nodeId?: string } | undefined
     for (let i = 0; i < ready.length; i++) {
       const node = ready[i]!
       const r = results[i]!
@@ -263,10 +276,23 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
         completed.add(node.id)
         continue
       }
+      if (r.kind === 'awaiting_review') {
+        // RFC-005: review node paused waiting for human decision. Don't add
+        // to `completed` (downstream stays blocked) and don't fail. Keep
+        // surveying other ready nodes in this batch — they may complete
+        // independently. After the batch, bubble awaiting_review up so the
+        // task-level loop knows to pause cleanly.
+        anyAwaitingReview = true
+        awaitingDetail = { summary: r.summary, message: r.message, nodeId: node.id }
+        continue
+      }
       return {
         kind: r.kind,
         detail: { summary: r.summary, message: r.message, nodeId: node.id },
       }
+    }
+    if (anyAwaitingReview) {
+      return { kind: 'awaiting_review', detail: awaitingDetail }
     }
   }
 
@@ -278,7 +304,7 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
 // -----------------------------------------------------------------------------
 
 interface OneNodeResult {
-  kind: 'ok' | 'failed' | 'canceled'
+  kind: 'ok' | 'failed' | 'canceled' | 'awaiting_review'
   summary: string
   message: string
 }
@@ -303,6 +329,22 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   }
   if (node.kind === 'wrapper-loop') {
     return runLoopWrapperNode(state, args)
+  }
+
+  if (node.kind === 'review') {
+    // RFC-005: review node dispatch. Reads upstream port, archives current
+    // version to doc_versions (file + DB row), parks the node in
+    // status=awaiting_review. The review service module owns the lifecycle;
+    // scheduler only routes here so dispatch stays per-kind.
+    return dispatchReviewNode({
+      db,
+      taskId,
+      task,
+      appHome: opts.appHome,
+      definition,
+      node,
+      iteration,
+    })
   }
 
   if (node.kind === 'input') {
@@ -923,7 +965,7 @@ async function insertNodeRun(
   db: DbClient,
   taskId: string,
   nodeId: string,
-  status: 'pending' | 'done',
+  status: 'pending' | 'done' | 'awaiting_review',
   retryIndex: number = 0,
   iteration: number = 0,
 ): Promise<string> {
@@ -1268,6 +1310,17 @@ function buildScopeUpstreams(
       if (!ids.has(sp.nodeId)) continue
       const list = m.get(n.id) ?? []
       if (!list.includes(sp.nodeId)) list.push(sp.nodeId)
+      m.set(n.id, list)
+    }
+    // RFC-005: review.inputSource.nodeId is an implicit upstream dep — it
+    // isn't an edge in the user-authored graph, but the scheduler must wait
+    // for the source node before parking the review at awaiting_review.
+    if (n.kind === 'review') {
+      const inp = (n as Record<string, unknown>).inputSource as { nodeId?: unknown } | undefined
+      if (inp === undefined || typeof inp.nodeId !== 'string') continue
+      if (!ids.has(inp.nodeId)) continue
+      const list = m.get(n.id) ?? []
+      if (!list.includes(inp.nodeId)) list.push(inp.nodeId)
       m.set(n.id, list)
     }
   }
