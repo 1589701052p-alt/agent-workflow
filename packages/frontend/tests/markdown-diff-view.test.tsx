@@ -227,3 +227,66 @@ describe('MarkdownDiffView — block granularity', () => {
     expect(allText).toContain('new()')
   })
 })
+
+// RFC-012：word 模式表格保留。把"列数 / 表头不一致"和"段落↔表互换"渲染
+// 出真正的 `<table>`，不允许整张表降级成 `<p>` + 裸 `|---|---|`。
+describe('MarkdownDiffView — RFC-012 table preservation (word)', () => {
+  const PIPE_DASHES_RE = /\|---/
+
+  test('header rename + 列数 / 分隔符宽度不一致 → 两张独立 <table>，分隔符行 0 markdown 漏出', () => {
+    // 浏览器实测样本（见 RFC-012 proposal §背景）。
+    const left = `| 项目名称 | 坦克大战游戏 |\n|---------|------------|\n| 文档版本 | V1.0 |\n| 创建日期 | 2026-05-16 |\n| 文档状态 | 初稿 |\n`
+    const right = `| 项目 | 内容 |\n|------|------|\n| 项目名称 | 坦克大战游戏 |\n| 文档版本 | v1.0 |\n| 创建日期 | 2026-05-16 |\n| 文档状态 | 正式发布 |\n`
+    const { container } = render(<MarkdownDiffView left={left} right={right} granularity="word" />)
+    const tables = container.querySelectorAll('table')
+    expect(tables.length).toBeGreaterThanOrEqual(2)
+    // 任何 `<p>` 都不允许包含 `|---` 子串（说明表降级为段落了）
+    const badPs = Array.from(container.querySelectorAll('p')).filter((p) =>
+      PIPE_DASHES_RE.test(p.textContent ?? ''),
+    )
+    expect(badPs.length).toBe(0)
+    // 每张表至少有一个 .diff-ins / .diff-del cell，否则颜色就丢了
+    const insCells = container.querySelectorAll('table th .diff-ins, table td .diff-ins')
+    const delCells = container.querySelectorAll('table th .diff-del, table td .diff-del')
+    expect(insCells.length).toBeGreaterThan(0)
+    expect(delCells.length).toBeGreaterThan(0)
+  })
+
+  test('段落 → 表格：渲染含一个 <table> + 段落各自带 del / ins', () => {
+    const left = '项目名称：坦克大战游戏\n'
+    const right = '| 项目 | 内容 |\n|---|---|\n| 项目名称 | 坦克大战游戏 |\n'
+    const { container } = render(<MarkdownDiffView left={left} right={right} granularity="word" />)
+    expect(container.querySelector('table')).not.toBeNull()
+    expect(container.querySelector('.diff-del')).not.toBeNull()
+    expect(container.querySelector('.diff-ins')).not.toBeNull()
+    const badPs = Array.from(container.querySelectorAll('p')).filter((p) =>
+      PIPE_DASHES_RE.test(p.textContent ?? ''),
+    )
+    expect(badPs.length).toBe(0)
+  })
+
+  test('line 模式回归：同一对 left/right 切到 line 仍渲染表格、不带 PUA 漏文本', () => {
+    const left = `| 项目名称 | 坦克大战游戏 |\n|---------|------------|\n`
+    const right = `| 项目 | 内容 |\n|------|------|\n`
+    const { container } = render(<MarkdownDiffView left={left} right={right} granularity="line" />)
+    // line 模式既有行为：每张表整行被 ins/del 包，但行结构保持
+    const tables = container.querySelectorAll('table')
+    expect(tables.length).toBeGreaterThanOrEqual(1)
+    const badPs = Array.from(container.querySelectorAll('p')).filter((p) =>
+      PIPE_DASHES_RE.test(p.textContent ?? ''),
+    )
+    expect(badPs.length).toBe(0)
+  })
+
+  test('block 模式回归：同一对 left/right 切到 block 仍渲染表格', () => {
+    const left = `| 项目名称 | 坦克大战游戏 |\n|---------|------------|\n`
+    const right = `| 项目 | 内容 |\n|------|------|\n`
+    const { container } = render(<MarkdownDiffView left={left} right={right} granularity="block" />)
+    const tables = container.querySelectorAll('table')
+    expect(tables.length).toBeGreaterThanOrEqual(1)
+    const badPs = Array.from(container.querySelectorAll('p')).filter((p) =>
+      PIPE_DASHES_RE.test(p.textContent ?? ''),
+    )
+    expect(badPs.length).toBe(0)
+  })
+})

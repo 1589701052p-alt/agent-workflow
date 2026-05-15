@@ -293,3 +293,31 @@ describe('splitForWordDiff', () => {
     for (const ch of '你好世界') expect(out).toContain(ch)
   })
 })
+
+// RFC-012 — 源码层断言锁住 word 路径上的表格保护内部 helper 在 _internal
+// 里被 export。一旦未来误删 / 改名，build 测试一并红，提示这是 word 模式
+// 表格保留契约的一部分。
+describe('_internal exports — RFC-012 table preservation contract', () => {
+  test('_internal 暴露 findTableBlocks / pretreatTablesForWordDiff / restoreTablePlaceholders', () => {
+    expect(typeof _internal.findTableBlocks).toBe('function')
+    expect(typeof _internal.pretreatTablesForWordDiff).toBe('function')
+    expect(typeof _internal.restoreTablePlaceholders).toBe('function')
+  })
+
+  test('_internal.TABLE_PLACEHOLDER_BASE 与 MARKERS PUA 区间不重叠', () => {
+    const base = _internal.TABLE_PLACEHOLDER_BASE as number
+    const end = _internal.TABLE_PLACEHOLDER_END as number
+    const markerCps = [INS_OPEN, INS_CLOSE, DEL_OPEN, DEL_CLOSE].map((c) => c.codePointAt(0)!)
+    for (const cp of markerCps) {
+      expect(cp).toBeLessThan(base)
+    }
+    expect(end).toBeGreaterThan(base)
+  })
+
+  test('TABLE_SEP_RE 严格匹配 GFM 分隔符行，不误伤普通段落', () => {
+    expect(_internal.TABLE_SEP_RE.test('|---|---|')).toBe(true)
+    expect(_internal.TABLE_SEP_RE.test('| :---: | ---: |')).toBe(true)
+    expect(_internal.TABLE_SEP_RE.test('| 项目 | 内容 |')).toBe(false)
+    expect(_internal.TABLE_SEP_RE.test('正常段落')).toBe(false)
+  })
+})

@@ -1,0 +1,168 @@
+# RFC-012 — 技术设计
+
+## 总览
+
+本 RFC 修改 `packages/frontend/src/lib/review/markdownDiff.ts` 的 **word 路径**——在 `computeChanges` 调 `diffWordsWithSpace` **之前**插入一个"结构性保护"步骤：把每张 markdown 表格识别为一段连续的"表格块"，用一个 **1-codepoint PUA 占位符**替换整段表格块（占位符独占一行，前后保留原 `\n` 行边界），让 jsdiff 把每张表格当成单个原子 token 对齐。diff 算完之后，遍历 changes，**把占位符还原成原始表格块文本**：
+
+- 占位符出现在 `c.added` change 里 → 还原为右侧原表，整体走 wrapLines INS 包裹。
+- 占位符出现在 `c.removed` change 里 → 还原为左侧原表，wrapLines DEL 包裹。
+- 占位符出现在 `unchanged` change 里 → 还原为原表（左右内容字节相等才会落到这一档），不包 marker。
+
+`wrapLines` 需要两处增量（落地实现里同步加好，测试已锁）：
+
+1. **table 分隔符行直接 passthrough**：`|---|---|` 类的行携带任何 PUA marker 会让 GFM 表分隔符正则匹配失败，整张表降级为 `<p>`。整张表已是单一 ins/del/unchanged change，分隔符不带 marker 不会丢 diff 语义（颜色由 header/body 行 cell 内的 marker 提供）。
+2. **table header / body 行按 cell 逐个包 marker**：一行内 open/close 不能跨 `|`——markdown 把 `|` 当 cell 边界，跨界的 open 与 close 落在不同 `<td>` 里、各自变成孤儿 marker，被 remarkDiffMarkers 吞掉，diff 颜色丢失。按未转义 `|` 切 cell、对每个非空 cell 包一对 open/close 即可。
+
+**关键不变量两条**：(a) jsdiff 不在 `|---|---|` 内部塞 ins/del 边界；(b) marker 不跨 cell 边界。
+
+实现策略选择见 §备选方案对比，选定方案是 **A（占位符法 + wrapLines 表格感知）**。
+
+## 数据流（word 路径）
+
+```
+left, right
+  ↓
+pretreatTablesForWordDiff(left, right) →
+  { lTokens, rTokens, lookup: Map<placeholderChar, tableContent> }
+  ↓ splitForWordDiff (RFC-010 既有 CJK ZWSP 注入；占位符是单 PUA 字符，
+    splitForWordDiff 看到的非表内容才会被分词)
+  ↓
+diffWordsWithSpace(L_tokens, R_tokens) → Change[]
+  ↓
+restoreTablePlaceholders(changes, lookup) → Change[]
+  ↓
+buildMergedMarkdown 余下流程（wrapLines + 拼接 + 剥 ZWSP）保持不变；
+wrapLines 内含 RFC-012 表格感知：分隔符行 passthrough、header / body 行按 cell 包 marker
+```
+
+`line` / `block` 路径完全不走这条新管线——它们已经按行 / 按块切，表格行各自原子。
+
+## 占位符设计
+
+- 占位符使用 PUA 区间 **U+E010-U+EFFF**（4080 个 codepoint），与 INS/DEL marker `U+E000-U+E003` 之间留 12 字隔离带防漂移。
+- **每张表分配一个唯一 codepoint**——不用 "PUA + decimal-ASCII ID 后缀" 那种编码：数字 `0-9` 是 jsdiff word 分词的 `\w` 单词字符，PUA + 数字会被拆成两个 token，"整张表 = 1 atom" 的不变量丢失。每个 codepoint 单独当 ID 用即可。
+- **左右映射策略**：按位置 + 内容相等性分配。左侧第 i 块与右侧第 i 块**内容字节完全相等**时分配同一 codepoint（jsdiff 把它们识别为 unchanged）；否则两侧各分配独立 codepoint（jsdiff emit removed + added，渲染成两张表）。位置错位（左 3 块、右 4 块、中间插入）会让对齐位偏移，结果是更多 del/ins 噪声但不会渲染崩，可接受。
+- 极端兜底：表数超过 4080 张时退回原 word-diff 路径（不抛错，行为退回 RFC-010 现状）。
+- 占位符在 token 串里独占一行（替换原 N 行表为 1 行 placeholder），周边 `\n` 行边界保持不变；jsdiff 看到的就是"占位符位于原段落边界"。还原阶段再补 `\n\n` 防止 del/ins 相邻表挤到同一物理行（见 §还原阶段）。
+
+## 表格块识别
+
+最小可行的"markdown 表格块"识别：
+
+- **起点**：一行匹配 `TABLE_ROW_RE`（行首 0-3 空格 + `|`），且**下一行**匹配 `TABLE_SEP_RE`（GFM 表分隔符）。
+- **延续**：从起点往下，所有连续以 `|` 开头的行（含 leading 0-3 空格）。
+- **终止**：碰到空行 / 非 `|` 开头行 / EOF。
+- 不识别"loose pipe table"（无分隔符的伪表）——commonmark + remark-gfm 都不会把它渲染成表，无需保护。
+- 不识别 indented（4 空格缩进）的"表"——它们会被 commonmark 当代码块，本就不渲染成表。
+
+落到内部 helper：
+
+```ts
+const TABLE_ROW_RE = /^ {0,3}\|/
+const TABLE_SEP_RE = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/
+
+function findTableBlocks(text: string): Array<{ start: number; end: number; content: string }>
+function pretreatTablesForWordDiff(
+  left: string,
+  right: string,
+): { lTokens: string; rTokens: string; lookup: Map<string, string> }
+function restoreTablePlaceholders(changes: Change[], lookup: Map<string, string>): Change[]
+```
+
+`pretreatTablesForWordDiff` 内含位置 + 内容相等性的对齐策略（见 §占位符设计）；`lookup` 把每个 placeholder codepoint 映射回它代表的原表文本，左右共用同一 placeholder 时只存一份。
+
+## 还原阶段
+
+`computeChanges` 内 word 路径变为：
+
+```ts
+const pre = pretreatTablesForWordDiff(left, right)
+const raw = diffWordsWithSpace(splitForWordDiff(pre.lTokens), splitForWordDiff(pre.rTokens))
+return restoreTablePlaceholders(raw, pre.lookup)
+```
+
+`restoreTablePlaceholders` 行为：
+
+- 遍历 changes；对每条 `Change`，把 `value` 里所有 PUA placeholder 字符通过 `lookup` 替换回原表文本。
+- **替换时在表前后强制补 `\n\n`**：当 jsdiff emit 相邻的 removed + added 两条 change 时，word 模式 `buildMergedMarkdown` 用 `separator=''` 把它们拼到同一物理行——会得到 `| 文档状态 | 初稿 |[DEL_CLOSE]| 项目 | 内容 |[INS_CLOSE]` 这种"上一段表的最后一行紧接下一段表的第一行"，markdown 把它们当一张表的多行解析，分隔符就错位了。补 `\n\n` 保证每张表独立成段；wrapLines 看到的空白行原样保留，不会插入 marker。
+- 替换路径对所有 PUA placeholder 字符都生效；left / right 共用 codepoint 的 unchanged 表 → 还原成 lookup 里那一份内容（与 left/right 任一份字节相等）。
+
+## 与 wrapLines 的交互
+
+`wrapLines` 既有逻辑（RFC-010）：
+
+1. fence 跳过 ✓
+2. 空行不包 ✓
+3. 行首结构前缀保留（`| `、`# `、`- ` 等）✓
+
+**RFC-012 在 wrapLines 加两条增量**：
+
+1. **分隔符行（TABLE_SEP_RE 匹配）整行 passthrough**：不抽前缀、不包 marker，原样 push。否则 marker 落进 `:?-+:?` 字符之间、GFM 表分隔符正则失配。
+2. **表格 header / body 行（TABLE_ROW_RE 匹配且非 separator）走 `wrapTableRowCells`**：按未转义 `|` 切成 cells，对每个非空 cell 包一对 open/close（leading / trailing 空白保留在 marker 外侧）。这样每个 cell 在渲染态各自得到 `<span class="diff-ins/del">`，且 marker 不跨 cell 边界。前后哑 cell（leading / trailing `|` 之外的空 segment）不包。
+
+未命中表格的行回到 RFC-010 原始 `prefix + open + body + close` 路径不变。
+
+## 备选方案对比
+
+| 方案                                                                                    | 优点                                                                                                                | 缺点                                                                                                         | 决定       |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------- |
+| **A. 占位符法 + wrapLines 表格感知（本 RFC 选定）**                                     | 改动局部、复杂度集中在 pre/post + wrapLines 两条增量上；表内 cell 级 word-diff 退化为 "整表 del + 整表 ins"，可接受 | wrapLines 增加两条分支；TABLE_SEP_RE / TABLE_ROW_RE 需要与 GFM 保持一致                                      | ✅ 选      |
+| B. 仅 wrapLines 内识别分隔符行并跳过包 marker                                           | 实现最简                                                                                                            | 只解决"分隔符行被打 marker"一个症状；不解决"jsdiff 跨行对齐导致单元格内容碎裂"的根因；列数变化时仍渲染为段落 | ❌         |
+| C. 把每张表拆成 N 行，用 line-diff 算单独子结果再合并                                   | 能保留 cell 级别细粒度高亮                                                                                          | 需要在 word 主路径里嵌一个 line-diff，复杂度高；列数不一致时 cell 对齐仍是难题，常退化成整行 ins/del         | ❌         |
+| D. 整体改 word 模式为"先 line-diff 找差异块，再在差异块内做 word-diff"（参考 git diff） | 理论最优                                                                                                            | 重写整个 word 路径，超出"补 RFC-010 盲点"的范围；适合下一个大 RFC                                            | ❌（推迟） |
+
+## 性能
+
+- `findTableBlocks` 是单次 O(lines) 扫描；`pretreatTablesForWordDiff` 在 `findTableBlocks` 基础上做 O(min(L,R)) 的位置 + 内容相等性对齐；`restoreTablePlaceholders` 是 O(changes) 扫描 + 每条 change 内一次 regex replace。整体复杂度增量与 jsdiff word 主调用相比可忽略。
+- 占位符让 jsdiff 输入显著缩短（每张表压缩为 1 codepoint），实际还能轻微加快 word-diff（O(n·m)）。
+- `wrapTableRowCells` 每个表格行做一次 `split(/(?<!\\)\|/)` + cell-wise wrap，常数级开销。
+
+## 失败模式
+
+- **没识别出某张表**（例如缺分隔符行的伪表）：placeholder 不会替换，走原 word-diff 路径——回归到 RFC-010 现状，不会变得比现在更糟。
+- **占位符冲突**：input 自身就含 U+E010-U+EFFF 区间的字面量（PUA Use Area，几乎不可能在 markdown 文档里出现）——若出现，会被当作正常字符 word-diff；表格保护对该输入失效但渲染不会崩。已在测试里加一条 fixture 锁这个边界。
+- **wrap 后的表落进 `<span>`**：react-markdown 把 PUA marker 在 mdast 阶段转为 `diffMark` 节点（hName=span）；GFM 表解析在 mdast 阶段，cell 内 text 节点里的 PUA 才会被 remarkDiffMarkers 切成 `<span>`；wrapLines 已经把 marker 限制在 cell **内部**，所以最终 mdast 看到的是 `<th>` / `<td>` 内含 marker 的 text 节点 → 转 `<span>` 后落在 cell 内，不破坏 `<table>` 结构。happy-dom 集成测试锁住。
+- **左右表位置错位**：左 3 张表 vs 右 4 张表（中间插了一张）——位置对齐法会让从插入点起的所有表都被判为"内容不等"，emit 成 del + ins 双张。视觉上比"识别到插入"略噪一些，但渲染不崩，PR 接受。
+- **大表数超过 4080**：哑兜底（不抛错），走原 word-diff 路径。日常 review 文档不会触发。
+
+## 测试策略
+
+### 单测（`packages/frontend/tests/markdown-diff-table-word.test.ts`）
+
+1. **identical table**：左右两份相同的简单表 → 输出无 marker，merged markdown 含一张完整表。
+2. **header rename, same column count**：`| 项目名称 | 坦克大战游戏 |` vs `| 项目 | 内容 |`，下面 separator 同宽——分隔符行无任何 marker（关键不变量）；header / body 行带 ins/del。
+3. **column count change**：左 2 列 vs 右 3 列、分隔符宽度不同（本 RFC 背景的真实样本）——分隔符行无 marker；两张表中间有 `\n\n` 段落边界。
+4. **table ↔ paragraph 互转**：左纯段落、右是表（反之亦然）——段落 / 表分别落在 del / ins change 里。
+5. **连续两张表 + 中间段落**：占位符 ID 对齐正确（左侧表 0 → 左表 / 右侧表 0 → 右表）。
+6. **placeholder 字符碰撞**：input 自身含 `U+E010` 字面量——表格保护对该输入不命中，但不抛错；输出含字面量。
+7. **fence + 表混排**：fence 仍正确跳过、表正确还原。
+
+### 集成测（`packages/frontend/tests/markdown-diff-view.test.tsx` 扩展）
+
+8. **render 集成（word）**：用样本 3 的 left / right 渲染 `<MarkdownDiffView>`，断言：
+   - `getAllByRole('table')` 长度 ≥ 2
+   - 不存在 `<p>` 节点其 textContent 包含 `|---` 子串
+   - 至少一个 table 的 cell 含 `class="diff-del"`，至少一个含 `class="diff-ins"`
+9. **段落 → 表互转的 word 模式渲染**：渲染含一个 `<table>` + 一个段落，且段落 / 表各自带 del / ins。
+10. **render 集成（line / block）**：用样本 3 的同一对 left / right 切到 line / block，断言现有行为不变（表格仍渲染、无 `|---` 漏出）。
+
+### 源码层断言（`packages/frontend/tests/markdown-diff-build.test.ts` 扩展）
+
+11. `markdownDiff.ts` 必须 export `_internal.findTableBlocks` / `_internal.pretreatTablesForWordDiff` / `_internal.restoreTablePlaceholders` / `_internal.TABLE_SEP_RE` / `_internal.TABLE_PLACEHOLDER_BASE`；并断言 PUA placeholder 区间与 MARKERS 不重叠。
+
+### 回归矩阵
+
+| 模式  | RFC-010 现有用例 | 本 RFC 新增                                       |
+| ----- | ---------------- | ------------------------------------------------- |
+| word  | 全部保持绿       | + 12 个新用例（7 主用例 + 5 内部 helper）         |
+| line  | 全部保持绿       | + 1 个回归（样本 3 line 模式表现）                |
+| block | 全部保持绿       | + 1 个回归（样本 3 block 模式表现）               |
+| 集成  | 全部保持绿       | + 2 个集成（word 渲染 `<table>` + 段落 / 表互转） |
+
+## 不做的事
+
+- 不动 `remarkDiffMarkers.ts`（与本 RFC 无关）。
+- 不动 `MarkdownDiffView.tsx`（管线入口不变）。
+- 不动 `DiffView.tsx`（公共 prop 不变）。
+- 不引入新 css class（已有 `diff-ins` / `diff-del` 足够）。
+- 不为 cell 级 word-diff 留接口（参考 §备选 C / D；未来若需要，再立 RFC）。
