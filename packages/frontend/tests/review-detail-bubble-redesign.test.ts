@@ -32,7 +32,10 @@ describe('review-detail bubble redesign', () => {
     expect(src).not.toContain('comment-list__selection')
     expect(src).not.toContain('comment-list__body')
     // The wrapping <aside class="review-detail__sidebar"> is also gone.
-    expect(src).not.toContain('review-detail__sidebar')
+    // Negative-lookahead suffix so RFC-009's family of related classes
+    // (review-detail__sidebar-header / -toggle / -resizer / -count, all
+    // genuinely new names) does not trip this assertion.
+    expect(src).not.toMatch(/\breview-detail__sidebar(?![-\w])/)
   })
 
   test('reviews.detail.tsx renders the bubble column with bubble articles', () => {
