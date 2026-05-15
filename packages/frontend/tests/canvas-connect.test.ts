@@ -8,6 +8,7 @@ import { describe, expect, test } from 'vitest'
 import {
   buildEdgeFromConnection,
   deriveSelection,
+  selectionSig,
   translateInboundConnection,
 } from '../src/components/canvas/WorkflowCanvas'
 import { INBOUND_HANDLE_ID } from '../src/components/canvas/nodes/types'
@@ -119,5 +120,34 @@ describe('deriveSelection', () => {
     expect(deriveSelection(['n1', 'n2'], [])).toBeNull()
     expect(deriveSelection([], ['e1', 'e2'])).toBeNull()
     expect(deriveSelection(['n1'], ['e1'])).toBeNull()
+  })
+})
+
+// Regression: clicking a node tripped React's "Maximum update depth
+// exceeded" because deriveSelection always returned a fresh object,
+// parent re-rendered, xyflow's StoreUpdater re-fired onSelectionChange,
+// and the loop never terminated. The dedupe in WorkflowCanvas keys off
+// selectionSig — same-content selections collapse to the same string and
+// the parent callback only fires when the signature changes.
+describe('selectionSig (StoreUpdater loop guard)', () => {
+  test('null selection has its own stable sig', () => {
+    expect(selectionSig(null)).toBe('null')
+  })
+
+  test('same kind + id → same string regardless of object identity', () => {
+    expect(selectionSig({ kind: 'node', id: 'n1' })).toBe('node:n1')
+    expect(selectionSig({ kind: 'node', id: 'n1' })).toBe(selectionSig({ kind: 'node', id: 'n1' }))
+  })
+
+  test('different kind for same id → distinct sigs', () => {
+    expect(selectionSig({ kind: 'node', id: 'x' })).not.toBe(
+      selectionSig({ kind: 'edge', id: 'x' }),
+    )
+  })
+
+  test('different ids → distinct sigs', () => {
+    expect(selectionSig({ kind: 'node', id: 'a' })).not.toBe(
+      selectionSig({ kind: 'node', id: 'b' }),
+    )
   })
 })

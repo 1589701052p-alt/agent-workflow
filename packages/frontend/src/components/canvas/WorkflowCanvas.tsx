@@ -94,6 +94,13 @@ function CanvasInner({
     nodeId: string | null
   } | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+  // Cached signature of the last selection emitted to the parent. Without
+  // this guard we'd hand the parent a fresh `{kind, id}` object on every
+  // xyflow tick, the parent re-renders, xyflow's StoreUpdater notices new
+  // store refs and re-fires onSelectionChange — infinite loop and React's
+  // "Maximum update depth exceeded". String equality on the signature
+  // matches the same-content case via `Object.is`.
+  const lastEmittedSelectionSig = useRef<string>('null')
 
   const [nodes, setNodes] = useState<Node[]>(() =>
     toFlowNodes(definition, agentByName, nodeStatuses),
@@ -444,7 +451,12 @@ function CanvasInner({
           setSelection((prev) =>
             sameIds(prev.nodes, ns) && sameIds(prev.edges, es) ? prev : { nodes: ns, edges: es },
           )
-          if (onSelect !== undefined) onSelect(deriveSelection(ns, es))
+          const sel = deriveSelection(ns, es)
+          const sig = selectionSig(sel)
+          if (sig !== lastEmittedSelectionSig.current) {
+            lastEmittedSelectionSig.current = sig
+            if (onSelect !== undefined) onSelect(sel)
+          }
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -638,6 +650,20 @@ export function translateInboundConnection(conn: Connection): Connection {
     return { ...conn, targetHandle: conn.sourceHandle ?? null }
   }
   return conn
+}
+
+/**
+ * Stable string fingerprint of a CanvasSelection. Two selections with the
+ * same kind+id produce the same string so we can dedupe parent re-renders
+ * without comparing object references — see the `lastEmittedSelectionSig`
+ * guard in onSelectionChange (regression: clicking a node used to trip
+ * "Maximum update depth exceeded" because xyflow's StoreUpdater re-fired
+ * onSelectionChange after every parent re-render).
+ *
+ * Exported for unit tests.
+ */
+export function selectionSig(sel: CanvasSelection | null): string {
+  return sel === null ? 'null' : `${sel.kind}:${sel.id}`
 }
 
 /**
