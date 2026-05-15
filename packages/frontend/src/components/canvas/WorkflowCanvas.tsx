@@ -181,6 +181,16 @@ function CanvasInner({
   const [edges, setEdges] = useState<Edge[]>(() => toFlowEdges(definition.edges))
   const externalDefRef = useRef(definition)
   const externalStatusesRef = useRef(nodeStatuses)
+  // Track the last agentByName ref we rebuilt against. The canvas is often
+  // mounted on the task-detail page before the `useQuery(['agents'])` call
+  // resolves; on first render `agents` is `[]`, so agent-node `outputPorts`
+  // come out empty and no output Handles render. When the query then
+  // resolves, the definition reference hasn't changed — so without this
+  // ref the rebuild gate below would skip, leaving us permanently stuck
+  // with handle-less agent nodes (and xyflow drops every edge whose
+  // source/target handle id can't be found — the visible symptom is
+  // "coder→review edges missing").
+  const externalAgentsRef = useRef(agentByName)
   // Read-only mirror of `selection` for the def-sync useEffect below — we
   // need the current selection at rebuild time but we don't want to add it
   // to the deps (every selection change would re-rebuild every node from
@@ -193,9 +203,11 @@ function CanvasInner({
   useEffect(() => {
     const defChanged = definition !== externalDefRef.current
     const statusChanged = nodeStatuses !== externalStatusesRef.current
-    if (defChanged || statusChanged) {
+    const agentsChanged = agentByName !== externalAgentsRef.current
+    if (defChanged || statusChanged || agentsChanged) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
+      externalAgentsRef.current = agentByName
       // Preserve `selected: true` across the rebuild. Without this, an
       // inspector edit (which mints a new `definition` reference) wipes
       // the selected flag, xyflow sees a phantom deselect and fires
