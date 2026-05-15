@@ -15,7 +15,9 @@ import {
   type NodeChange,
   ReactFlow,
   ReactFlowProvider,
+  applyEdgeChanges,
   applyNodeChanges,
+  type EdgeChange,
   useReactFlow,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -148,17 +150,22 @@ function CanvasInner({
   )
 
   const handleEdgesChange = useCallback(
-    (changes: Array<{ type: string; id?: string }>) => {
+    (changes: EdgeChange[]) => {
       if (readOnly === true) return
       setEdges((prev) => {
-        const removed = new Set(
-          changes
-            .filter((c) => c.type === 'remove' && typeof c.id === 'string')
-            .map((c) => c.id as string),
-        )
-        if (removed.size === 0) return prev
-        const next = prev.filter((e) => !removed.has(e.id))
-        if (onChange !== undefined) onChange(toDefinition(definition, nodes, next))
+        // Apply ALL change types (select / remove / replace / etc) via
+        // xyflow's helper. Previous version only handled `remove`, which
+        // silently swallowed `select` changes — edges never got
+        // `selected: true`, the EdgeInspector entry point was unreachable.
+        const next = applyEdgeChanges(changes, prev)
+        // Only the structural mutations need to round-trip into the
+        // persisted WorkflowDefinition; selection-only ticks stay local.
+        if (
+          onChange !== undefined &&
+          changes.some((c) => c.type === 'remove' || c.type === 'add' || c.type === 'replace')
+        ) {
+          onChange(toDefinition(definition, nodes, next))
+        }
         return next
       })
     },
@@ -458,6 +465,18 @@ function CanvasInner({
             if (onSelect !== undefined) onSelect(sel)
           }
         }}
+        onEdgeClick={(_, edge) => {
+          // Explicit edge-selection emit. xyflow's onSelectionChange path
+          // sometimes does not fire for plain edge clicks (selectionOnDrag
+          // + panOnDrag interplay), so we wire onEdgeClick directly to
+          // open the EdgeInspector. Dedupe via lastEmittedSelectionSig so
+          // we don't loop with onSelectionChange when both fire.
+          const sig = `edge:${edge.id}`
+          if (sig === lastEmittedSelectionSig.current) return
+          lastEmittedSelectionSig.current = sig
+          setSelection({ nodes: [], edges: [edge.id] })
+          if (onSelect !== undefined) onSelect({ kind: 'edge', id: edge.id })
+        }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
         nodesDraggable={readOnly !== true}
@@ -465,7 +484,12 @@ function CanvasInner({
         nodesConnectable={readOnly !== true}
         deleteKeyCode={readOnly === true ? null : deleteKeyCodes}
         multiSelectionKeyCode={['Shift', 'Meta']}
-        selectionOnDrag={readOnly !== true}
+        // Pan on middle / right button drag only. Left button is reserved
+        // for click selection on nodes / edges (RFC-003 EdgeInspector
+        // requires reachable edge clicks). Shift+drag lassos via xyflow
+        // default `selectionKeyCode='Shift'`. We deliberately do NOT enable
+        // `selectionOnDrag` — it intercepts every left click into a
+        // zero-distance lasso and silently swallows edge clicks.
         panOnDrag={readOnly === true ? true : [1, 2]}
         fitView
         minZoom={0.2}

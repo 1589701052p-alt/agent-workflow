@@ -1663,6 +1663,16 @@ code {
   z-index: 1;
 }
 
+/* xyflow ships `.react-flow__edge { pointer-events: visibleStroke }` and
+ * renders the wide invisible interaction layer with `stroke-opacity:0`
+ * and no explicit `stroke` color. `visibleStroke` then refuses to hit
+ * the 20px hit zone — only the 1px visible line is clickable, which is
+ * effectively impossible. Force `pointer-events: stroke` so the entire
+ * interaction strip catches clicks (RFC-003 EdgeInspector entry point). */
+.workflow-canvas .react-flow__edge-interaction {
+  pointer-events: stroke;
+}
+
 /* Invisible 12px wide target strip covering the node's left edge. Lets
  * the first edge into a fresh agent / wrapper-loop node land somewhere
  * (RFC-003). Named handles sit on top via z-index so fan-in drops still
