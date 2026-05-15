@@ -20,7 +20,7 @@
 // resolution + traversal hardening before the content lands in
 // node_run_outputs.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve, sep } from 'node:path'
 import type { AgentOutputKind } from '@agent-workflow/shared'
 import { ValidationError } from '@/util/errors'
@@ -117,7 +117,16 @@ export interface ResolvePortContentOptions {
  */
 export function resolvePortContent(opts: ResolvePortContentOptions): string {
   const { rawContent, kind, worktreePath } = opts
-  if (kind !== 'markdown_file') return rawContent
+  if (kind !== 'markdown_file') {
+    // Forgiveness path: when an agent emits a single-line `.md` path on a
+    // port whose `outputKinds` was never declared as `markdown_file`, the
+    // review/audit/fix downstream still wants the file body, not the path
+    // string itself. We auto-promote ONLY when the candidate resolves to a
+    // real file safely contained inside the task worktree (lexical +
+    // realpath checks). Any failure mode → return rawContent unchanged so
+    // legitimate string ports that happen to look path-shaped don't crash.
+    return tryReadInWorktreeMarkdownPath(rawContent, worktreePath)
+  }
 
   const trimmed = rawContent.trim()
   if (trimmed.length === 0) {
@@ -155,5 +164,46 @@ export function resolvePortContent(opts: ResolvePortContentOptions): string {
       'markdown-file-read-failed',
       `markdown_file '${trimmed}': ${(err as Error).message}`,
     )
+  }
+}
+
+/**
+ * Heuristic auto-promote: when a port's `outputKinds` was NOT declared as
+ * `markdown_file` but its content is a single-line `.md` path safely
+ * resolving to a real file inside the task worktree, return the file body.
+ * Otherwise pass the raw content through verbatim — multi-line markdown,
+ * non-`.md` text, non-existent paths, and anything outside the worktree all
+ * keep the legacy passthrough contract.
+ *
+ * This is a forgiveness path for agents that emit a markdown_file path
+ * without declaring the kind in their frontmatter; the review detail page
+ * was rendering the literal path string before this existed (see commit
+ * referenced in tests/envelope-resolve-port-md-path.test.ts).
+ */
+function tryReadInWorktreeMarkdownPath(rawContent: string, worktreePath: string): string {
+  const trimmed = rawContent.trim()
+  if (trimmed.length === 0 || trimmed.length >= 4096) return rawContent
+  if (trimmed.includes('\n') || trimmed.includes('\r')) return rawContent
+  if (!trimmed.toLowerCase().endsWith('.md')) return rawContent
+
+  const rootAbs = resolve(worktreePath)
+  const targetAbs = isAbsolute(trimmed) ? resolve(trimmed) : resolve(rootAbs, trimmed)
+  if (!(targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep))) return rawContent
+
+  let rootReal: string
+  let targetReal: string
+  try {
+    rootReal = realpathSync(rootAbs)
+    targetReal = realpathSync(targetAbs)
+  } catch {
+    return rawContent
+  }
+  if (!(targetReal === rootReal || targetReal.startsWith(rootReal + sep))) return rawContent
+
+  try {
+    if (!statSync(targetReal).isFile()) return rawContent
+    return readFileSync(targetReal, 'utf8')
+  } catch {
+    return rawContent
   }
 }
