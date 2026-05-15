@@ -158,4 +158,3 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
     throw new ApiError(res.status, err.code, err.message)
   }
 }
-
