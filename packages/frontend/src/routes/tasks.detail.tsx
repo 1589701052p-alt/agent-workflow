@@ -14,7 +14,7 @@ import type {
   WorkflowDefinition,
 } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
-import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
+import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { DiffViewer } from '@/components/DiffViewer'
@@ -22,7 +22,7 @@ import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { useTaskSync } from '@/hooks/useTaskSync'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -37,6 +37,16 @@ function TaskDetailPage() {
   const qc = useQueryClient()
   useTaskSync(id)
   const [selectedNodeRunId, setSelectedNodeRunId] = useState<string | null>(null)
+  // Same shape as the editor route: the drawer ✕ must drive xyflow's
+  // selection clear, otherwise the underlying node stays highlighted and
+  // a re-click on it is swallowed by xyflow's `handleNodeClick`. See
+  // `WorkflowCanvas.clearSelection` for the canonical
+  // `unselectNodesAndEdges` path this delegates to.
+  const canvasRef = useRef<WorkflowCanvasHandle | null>(null)
+  const closeNodeDrawer = () => {
+    canvasRef.current?.clearSelection()
+    setSelectedNodeRunId(null)
+  }
 
   const task = useQuery<Task>({
     queryKey: ['tasks', id],
@@ -207,6 +217,7 @@ function TaskDetailPage() {
         <h2>{t('tasks.sectionWorkflowStatus')}</h2>
         <div className={taskCanvasLayoutClass(selectedNodeRunId)}>
           <TaskStatusCanvas
+            canvasRef={canvasRef}
             task={tk}
             runs={nodeRuns.data?.runs ?? []}
             onSelectNodeRun={setSelectedNodeRunId}
@@ -218,7 +229,7 @@ function TaskDetailPage() {
               nodeRunId={selectedNodeRunId}
               runs={nodeRuns.data.runs}
               outputs={nodeRuns.data.outputs}
-              onClose={() => setSelectedNodeRunId(null)}
+              onClose={closeNodeDrawer}
               onSelectRun={setSelectedNodeRunId}
             />
           )}
@@ -251,10 +262,12 @@ function TaskDetailPage() {
 }
 
 function TaskStatusCanvas({
+  canvasRef,
   task,
   runs,
   onSelectNodeRun,
 }: {
+  canvasRef?: React.Ref<WorkflowCanvasHandle>
   task: Task
   runs: NodeRun[]
   onSelectNodeRun: (id: string | null) => void
@@ -308,6 +321,7 @@ function TaskStatusCanvas({
   return (
     <div className="canvas-frame canvas-frame--task">
       <WorkflowCanvas
+        ref={canvasRef}
         definition={definition}
         agents={agents.data ?? []}
         nodeStatuses={statuses}

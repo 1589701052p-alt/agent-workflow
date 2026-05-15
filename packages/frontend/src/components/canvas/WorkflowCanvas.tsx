@@ -19,6 +19,7 @@ import {
   applyNodeChanges,
   type EdgeChange,
   useReactFlow,
+  useStoreApi,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
@@ -114,6 +115,16 @@ function CanvasInner({
     return m
   }, [agents])
   const rf = useReactFlow()
+  // Direct handle on xyflow's internal store. Used by `clearSelection`
+  // below so we go through `unselectNodesAndEdges`, which synchronously
+  // mutates `nodeLookup[id].selected = false` AND fires the corresponding
+  // `select:false` change events. The previous `setNodes(clearFlowSelection)`
+  // path only flipped the React-side `selected` flag; xyflow's internal
+  // `handleNodeClick` reads `nodeLookup.get(id).selected`, so a stale
+  // `true` there made the next click on the same node a no-op
+  // (selected && !multiSelectActive → neither branch fires) and the
+  // inspector never reopened.
+  const storeApi = useStoreApi()
   // RFC-004: every definition commit funnels through `commitChange`, which
   // reconciles `definition.inputs[]` with input-node inputKeys. Adding /
   // patching / deleting input nodes therefore keeps the launcher form
@@ -489,21 +500,23 @@ function CanvasInner({
   // the EdgeInspector / NodeInspector ✕ buttons. Just nulling the parent's
   // selection state leaves xyflow's edge.selected/node.selected true AND
   // pins `lastEmittedSelectionSig`, so the dedupe in `onEdgeClick` swallows
-  // the next click on the same edge. See `clearFlowSelection` for the pure
-  // shape transformation that this delegates to.
+  // the next click on the same edge AND the next click on the same node
+  // (xyflow's `handleNodeClick` no-ops when `nodeLookup[id].selected` is
+  // still true and multi-select isn't active). Drive xyflow's canonical
+  // `unselectNodesAndEdges` action so internal `nodeLookup` and the React
+  // `nodes`/`edges` state stay in lock-step.
   useImperativeHandle(
     handleRef,
     () => ({
       clearSelection: () => {
-        setNodes((prev) => clearFlowSelection(prev))
-        setEdges((prev) => clearFlowSelection(prev))
+        storeApi.getState().unselectNodesAndEdges()
         setSelection((prev) =>
           prev.nodes.length === 0 && prev.edges.length === 0 ? prev : { nodes: [], edges: [] },
         )
         lastEmittedSelectionSig.current = 'null'
       },
     }),
-    [],
+    [storeApi],
   )
 
   return (
