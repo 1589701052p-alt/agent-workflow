@@ -11,8 +11,40 @@ export interface Resources {
     skills: string
     workflows: string
     tasks: string
+    reviews: string
     settings: string
     brand: string
+  }
+  reviews: {
+    title: string
+    hint: string
+    emptyList: string
+    filterPending: string
+    filterAll: string
+    filterApproved: string
+    filterRejected: string
+    filterIterated: string
+    colNode: string
+    colStatus: string
+    colVersion: string
+    colCreated: string
+    openButton: string
+    statusAwaiting: string
+    sidebarTitle: string
+    sidebarEmpty: string
+    approveButton: string
+    rejectButton: string
+    iterateButton: string
+    detailHint: string
+    rejectPrompt: string
+    rejectReasonRequired: string
+    iterateConfirm: string
+    iterateNoCommentsWarning: string
+    approveDraftWarning: string
+    approveDraftConfirm: string
+    popoverPlaceholder: string
+    popoverSubmit: string
+    popoverCancel: string
   }
   auth: {
     title: string
@@ -488,8 +520,41 @@ export const zhCN: Resources = {
     skills: '技能',
     workflows: '工作流',
     tasks: '任务',
+    reviews: '评审',
     settings: '设置',
     brand: 'Agent Workflow',
+  },
+  reviews: {
+    title: '评审',
+    hint: '人工评审节点产出的设计文档；选词写意见，三个按钮决定下一步。',
+    emptyList: '没有评审项。',
+    filterPending: '待评审',
+    filterAll: '全部',
+    filterApproved: '已通过',
+    filterRejected: '已退回',
+    filterIterated: '已迭代',
+    colNode: '节点',
+    colStatus: '状态',
+    colVersion: '版本',
+    colCreated: '创建时间',
+    openButton: '打开',
+    statusAwaiting: '待评审',
+    sidebarTitle: '评审意见',
+    sidebarEmpty: '暂无评审意见。在正文里拖选一段文本即可添加。',
+    approveButton: '通过',
+    rejectButton: '退回',
+    iterateButton: '迭代',
+    detailHint: '当前版本 · 已迭代 {{iteration}} 轮 · 决策：{{decision}}',
+    rejectPrompt: '请输入退回原因（提交后将回滚并重跑：{{willRerun}}）：',
+    rejectReasonRequired: '退回必须填写原因。',
+    iterateConfirm: '将基于上方评审意见重跑：{{willRerun}}。继续？',
+    iterateNoCommentsWarning:
+      '当前未提交任何评审意见。继续迭代会让 agent 收到空意见列表 — 仍然继续吗？',
+    approveDraftWarning: '还有 {{count}} 条未提交评审意见。',
+    approveDraftConfirm: 'Approve 将丢弃这些草稿。确定继续吗？',
+    popoverPlaceholder: '写下你的评审意见…',
+    popoverSubmit: '提交',
+    popoverCancel: '取消',
   },
   auth: {
     title: '连接到守护进程',

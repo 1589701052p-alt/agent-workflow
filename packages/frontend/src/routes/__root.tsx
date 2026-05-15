@@ -4,17 +4,22 @@
 // to /auth so the user can paste the daemon token. The daemon prints it at
 // startup.
 
+import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { ReviewPendingCount } from '@agent-workflow/shared'
+import { api } from '@/api/client'
 import { useApplyTheme } from '@/hooks/useTheme'
 import { getToken, subscribeAuth } from '@/stores/auth'
 
-const NAV: { to: string; key: 'agents' | 'skills' | 'workflows' | 'tasks' | 'settings' }[] = [
+type NavKey = 'agents' | 'skills' | 'workflows' | 'tasks' | 'reviews' | 'settings'
+const NAV: { to: string; key: NavKey }[] = [
   { to: '/agents', key: 'agents' },
   { to: '/skills', key: 'skills' },
   { to: '/workflows', key: 'workflows' },
   { to: '/tasks', key: 'tasks' },
+  { to: '/reviews', key: 'reviews' },
   { to: '/settings', key: 'settings' },
 ]
 
@@ -37,6 +42,15 @@ function RootComponent() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { t } = useTranslation()
   useApplyTheme()
+  // RFC-005: Reviews nav badge — periodically poll the pending-count endpoint.
+  // Disabled when not signed in to avoid 401 spam.
+  const pending = useQuery<ReviewPendingCount>({
+    queryKey: ['reviews', 'pending-count'],
+    queryFn: ({ signal }) => api.get('/api/reviews/pending-count', undefined, signal),
+    enabled: token !== null,
+    refetchInterval: 15000,
+  })
+  const pendingCount = pending.data?.count ?? 0
 
   if (pathname === '/auth' || token === null) {
     return (
@@ -59,6 +73,11 @@ function RootComponent() {
               activeProps={{ className: 'sidebar__link sidebar__link--active' }}
             >
               {t(`nav.${item.key}`)}
+              {item.key === 'reviews' && pendingCount > 0 && (
+                <span className="sidebar__badge" aria-label={`${pendingCount} pending reviews`}>
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
             </Link>
           ))}
         </nav>

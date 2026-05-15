@@ -14,6 +14,8 @@ import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
 import { Route as tasksRoute } from '@/routes/tasks'
 import { Route as taskDetailRoute } from '@/routes/tasks.detail'
+import { Route as reviewsRoute } from '@/routes/reviews'
+import { Route as reviewDetailRoute } from '@/routes/reviews.detail'
 import { Route as workflowsRoute } from '@/routes/workflows'
 import {
   EditRoute as workflowEditRoute,
@@ -37,6 +39,9 @@ const routeTree = rootRoute.addChildren([
   workflowsRoute,
   taskDetailRoute,
   tasksRoute,
+  // '/reviews/$nodeRunId' must come before '/reviews' so the literal wins.
+  reviewDetailRoute,
+  reviewsRoute,
   settingsRoute,
 ])
 
