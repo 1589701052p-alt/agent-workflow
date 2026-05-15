@@ -8,7 +8,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute } from '@tanstack/react-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   Config,
@@ -23,7 +23,10 @@ import { MarkdownView } from '@/components/review/MarkdownView'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
 import { deleteDraft, getDraft, listDrafts, setDraft } from '@/lib/review/draftStore'
+import { wrapAnchorsInDom } from '@/lib/review/wrapAnchorsInDom'
 import { Route as RootRoute } from './__root'
+
+const BUBBLE_GAP_PX = 8
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -83,6 +86,7 @@ function ReviewDetailPage() {
   })
 
   const markdownRef = useRef<HTMLDivElement>(null)
+  const bubblesRef = useRef<HTMLDivElement>(null)
   const [popover, setPopover] = useState<{
     anchor: ReviewCommentAnchor
     draft: string
@@ -93,11 +97,37 @@ function ReviewDetailPage() {
   // currently the topmost in view.
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
 
+  // Bubble vertical positions, keyed by comment id. Computed off the
+  // anchor element rects in the rendered markdown; recomputed whenever
+  // comments or rendered body change, on window resize, and on any
+  // ResizeObserver tick from the markdown body (diagrams hydrating, images
+  // loading, font swap, etc.).
+  const [bubbleTops, setBubbleTops] = useState<Map<string, number>>(new Map())
+  const [bubblesMinHeight, setBubblesMinHeight] = useState<number>(0)
+
   const commentsByOccurrence = useMemo(() => {
     if (detail.data === undefined) return new Map<string, ReviewComment>()
     const m = new Map<string, ReviewComment>()
     for (const c of detail.data.comments) m.set(anchorKey(c.anchor), c)
     return m
+  }, [detail.data])
+
+  // Comments rendered in the order they appear in the reviewed text, not
+  // in the API's creation order. The bubble layout positions each card at
+  // its anchor's vertical offset, so visual order is *usually* doc order
+  // anyway — but if measurement fails for any reason (orphan anchor, slow
+  // diagram hydration during the first measure pass, etc.), bubbles fall
+  // back to their DOM source-order stacking and we want THAT to be doc
+  // order too. Sort key: source-markdown char offset, then occurrenceIndex
+  // as a stable tiebreaker for two comments anchored to the same span.
+  const sortedComments = useMemo<ReviewComment[]>(() => {
+    if (detail.data === undefined) return []
+    return [...detail.data.comments].sort((a, b) => {
+      if (a.anchor.offsetStart !== b.anchor.offsetStart) {
+        return a.anchor.offsetStart - b.anchor.offsetStart
+      }
+      return a.anchor.occurrenceIndex - b.anchor.occurrenceIndex
+    })
   }, [detail.data])
 
   // Mouse-up handler on the markdown area: capture selection → build anchor → open popover.
@@ -224,6 +254,131 @@ function ReviewDetailPage() {
     })
   }, [detail.data, submitDecision, t])
 
+  // Wrap each comment's selectedText in <mark data-comment-id> inside the
+  // rendered markdown DOM. Diff mode renders a different component so we
+  // only wrap when in regular review mode. Re-runs on every change to
+  // comments / body / diff toggle.
+  useLayoutEffect(() => {
+    if (markdownRef.current === null) return
+    if (diffMode) return
+    wrapAnchorsInDom(
+      markdownRef.current,
+      sortedComments.map((c) => ({
+        commentId: c.id,
+        selectedText: c.anchor.selectedText,
+        occurrenceIndex: c.anchor.occurrenceIndex,
+      })),
+    )
+  }, [sortedComments, diffMode])
+
+  // Measure each bubble's vertical position from its anchor's rect. Walks
+  // comments in DOM order and bumps any bubble down if it would overlap
+  // the previous one (gap = BUBBLE_GAP_PX). Recomputes on resize, on body
+  // mutations (ResizeObserver), and on every comments/body change.
+  useLayoutEffect(() => {
+    if (markdownRef.current === null || bubblesRef.current === null) return
+    if (diffMode) return
+
+    const measure = (): void => {
+      const root = markdownRef.current
+      const col = bubblesRef.current
+      if (root === null || col === null) return
+      const colTop = col.getBoundingClientRect().top
+      // Split comments into "located" (anchor found in DOM) and
+      // "orphaned" (anchor text missing — e.g. body changed since the
+      // comment was created, or the wrap helper failed to find the
+      // n-th occurrence). Located bubbles are positioned at their
+      // anchor; orphans get stacked at the bottom of the column so they
+      // remain visible. Without this, an orphan bubble would have no
+      // inline top and collapse to the static-position 0, overlapping
+      // every located bubble and producing the "only one comment
+      // renders" symptom users hit when several anchors stack up.
+      const located: { id: string; top: number; height: number }[] = []
+      const orphans: { id: string; height: number }[] = []
+      for (const c of sortedComments) {
+        const bubble = col.querySelector<HTMLElement>(`.comment-bubble[data-comment-id="${c.id}"]`)
+        const h = bubble?.getBoundingClientRect().height ?? 0
+        const el = root.querySelector<HTMLElement>(`mark.comment-anchor[data-comment-id="${c.id}"]`)
+        if (el === null) {
+          orphans.push({ id: c.id, height: h })
+          continue
+        }
+        const rect = el.getBoundingClientRect()
+        located.push({ id: c.id, top: rect.top - colTop, height: h })
+      }
+      // sortedComments is already in anchor.offsetStart order, but the
+      // *visual* position of those anchors can differ slightly if the
+      // markdown renderer reorders content (rare, but possible with
+      // custom block plugins). Re-sort defensively by measured top.
+      located.sort((a, b) => a.top - b.top)
+      const next = new Map<string, number>()
+      let cursor = 0
+      for (const item of located) {
+        const top = Math.max(item.top, cursor)
+        next.set(item.id, top)
+        cursor = top + item.height + BUBBLE_GAP_PX
+      }
+      for (const item of orphans) {
+        next.set(item.id, cursor)
+        cursor = cursor + item.height + BUBBLE_GAP_PX
+      }
+      setBubbleTops(next)
+      setBubblesMinHeight(Math.max(cursor, root.getBoundingClientRect().height))
+    }
+
+    measure()
+
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(markdownRef.current)
+    // Also observe the bubbles column itself — bubble heights change as
+    // text wraps with column width.
+    ro.observe(bubblesRef.current)
+    const onResize = (): void => measure()
+    window.addEventListener('resize', onResize)
+    // Scroll listener (capture phase, since scroll events don't bubble).
+    // The anchor/bubble math (anchor.top - col.top) is invariant under
+    // scroll *only* when both elements live in the same scroll container.
+    // Adding a scroll-triggered remeasure makes the layout robust even if
+    // a future container introduces its own overflow — bubbles stay
+    // pinned to their anchors as the user drags the scrollbar.
+    const onScroll = (): void => measure()
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [sortedComments, diffMode])
+
+  // When the active comment changes (click bubble, J/K jump, scroll-spy),
+  // toggle a data-active attribute on the matching <mark.comment-anchor>
+  // in the rendered markdown so CSS can paint it with a stronger
+  // highlight. Re-applied whenever the wrap effect re-runs (since wrap
+  // strips and recreates every mark, otherwise the active state would be
+  // lost after a comments refetch).
+  useEffect(() => {
+    if (markdownRef.current === null) return
+    const root = markdownRef.current
+    root.querySelectorAll<HTMLElement>('mark.comment-anchor[data-active]').forEach((m) => {
+      m.removeAttribute('data-active')
+    })
+    if (activeCommentId === null) return
+    const el = root.querySelector<HTMLElement>(
+      `mark.comment-anchor[data-comment-id="${activeCommentId}"]`,
+    )
+    if (el !== null) el.setAttribute('data-active', 'true')
+  }, [activeCommentId, sortedComments, diffMode])
+
+  const onBubbleClick = useCallback((commentId: string) => {
+    setActiveCommentId(commentId)
+    const el = markdownRef.current?.querySelector<HTMLElement>(
+      `mark.comment-anchor[data-comment-id="${commentId}"]`,
+    )
+    if (el !== null && el !== undefined) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [])
+
   // Scroll-spy: hook IntersectionObserver to the rendered DOM after each
   // markdown rerender. Currently a simple "top visible anchor in viewport"
   // heuristic — keeps the sidebar tracking the user's reading position.
@@ -286,9 +441,11 @@ function ReviewDetailPage() {
       if (k === 'a') void onApprove()
       else if (k === 'r') void onReject()
       else if (k === 'i') void onIterate()
-      else if ((k === 'j' || k === 'k') && detail.data !== undefined) {
-        // Jump to next / prev comment by anchor order.
-        const comments = detail.data.comments
+      else if (k === 'j' || k === 'k') {
+        // Jump to next / prev comment in doc order (sortedComments is
+        // already sorted by anchor.offsetStart, matching the bubble
+        // column's visual order).
+        const comments = sortedComments
         if (comments.length === 0) return
         const currentIdx =
           activeCommentId === null ? -1 : comments.findIndex((c) => c.id === activeCommentId)
@@ -297,7 +454,9 @@ function ReviewDetailPage() {
         const target = comments[nextIdx]
         if (target !== undefined) {
           setActiveCommentId(target.id)
-          const el = markdownRef.current?.querySelector(`[data-comment-id="${target.id}"]`)
+          const el = markdownRef.current?.querySelector(
+            `mark.comment-anchor[data-comment-id="${target.id}"]`,
+          )
           if (el !== null && el !== undefined) {
             ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
           }
@@ -306,7 +465,7 @@ function ReviewDetailPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popover, onApprove, onReject, onIterate, detail.data, activeCommentId, diffMode])
+  }, [popover, onApprove, onReject, onIterate, sortedComments, activeCommentId, diffMode])
 
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {
@@ -401,38 +560,51 @@ function ReviewDetailPage() {
             />
           </div>
         )}
-        <aside className="review-detail__sidebar">
-          <h3>{t('reviews.sidebarTitle')}</h3>
-          {data.comments.length === 0 ? (
-            <div className="muted">{t('reviews.sidebarEmpty')}</div>
+        <div
+          className="review-detail__bubbles"
+          ref={bubblesRef}
+          style={bubblesMinHeight > 0 ? { minHeight: `${bubblesMinHeight}px` } : undefined}
+          aria-label={t('reviews.sidebarTitle')}
+        >
+          {sortedComments.length === 0 ? (
+            <div className="review-detail__bubbles-empty muted">{t('reviews.sidebarEmpty')}</div>
           ) : (
-            <ul className="comment-list">
-              {data.comments.map((c) => (
-                <li
+            sortedComments.map((c) => {
+              const top = bubbleTops.get(c.id)
+              const isActive = activeCommentId === c.id
+              return (
+                <article
                   key={c.id}
-                  className={
-                    'comment-list__item' +
-                    (activeCommentId === c.id ? ' comment-list__item--active' : '')
-                  }
+                  className={'comment-bubble' + (isActive ? ' comment-bubble--active' : '')}
+                  data-comment-id={c.id}
+                  style={top !== undefined ? { top: `${top}px` } : undefined}
+                  onClick={() => onBubbleClick(c.id)}
                 >
-                  <div className="comment-list__section">{c.anchor.sectionPath}</div>
-                  <blockquote className="comment-list__selection">
+                  <header className="comment-bubble__section" title={c.anchor.sectionPath}>
+                    {c.anchor.sectionPath || t('reviews.sidebarTitle')}
+                  </header>
+                  <blockquote className="comment-bubble__quote" title={c.anchor.selectedText}>
                     {c.anchor.selectedText}
                   </blockquote>
-                  <div className="comment-list__body">{c.commentText}</div>
+                  <p className="comment-bubble__body">{c.commentText}</p>
                   <button
                     type="button"
-                    className="btn btn--sm btn--ghost"
-                    onClick={() => deleteComment.mutate(c.id)}
+                    className="comment-bubble__delete"
+                    aria-label={t('common.delete')}
+                    title={t('common.delete')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteComment.mutate(c.id)
+                    }}
                     disabled={!isAwaiting}
                   >
-                    {t('common.delete')}
+                    ×
                   </button>
-                </li>
-              ))}
-            </ul>
+                </article>
+              )
+            })
           )}
-        </aside>
+        </div>
       </div>
 
       <footer className="review-detail__footer">

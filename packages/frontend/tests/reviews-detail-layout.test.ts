@@ -1,7 +1,10 @@
 // Locks in the review detail page layout fixes reported on
 // /reviews/01KRPE30VQT3R4G24PV3ZAG82D:
-//   1. <aside class="review-detail__sidebar"> must sit on the right via a
-//      grid layout in styles.css.
+//   1. The comment column must sit on the right via a grid layout in
+//      styles.css. (Originally an <aside class="review-detail__sidebar">;
+//      after the May 2026 bubble-redesign feedback it became
+//      <div class="review-detail__bubbles"> — see review-detail-bubble-
+//      redesign.test.ts for the bubble-specific locks.)
 //   2. The three footer buttons must be spaced via `.review-detail__footer`
 //      flex rules.
 //   3. Buttons must NOT carry inline `<kbd>A|I|R</kbd>` keyboard hints —
@@ -27,10 +30,15 @@ describe('review detail layout — Issue: sidebar position + footer spacing + no
     expect(css).toMatch(/\.review-detail__layout\s*\{[^}]*grid-template-columns:[^}]*1fr[^}]*\d+px/)
   })
 
-  test('styles.css declares .review-detail__sidebar as a sticky right panel', () => {
+  test('styles.css declares the right comment column as a relative positioning context', () => {
+    // Originally `.review-detail__sidebar` was sticky with a left border.
+    // The bubble-redesign turned the column into a relative container so
+    // absolutely-positioned bubbles can ride the document scroll. The
+    // bubble-specific locks live in review-detail-bubble-redesign.test.ts;
+    // here we just guard that *some* relative-positioned right column
+    // exists.
     const css = readFileSync(STYLES_CSS, 'utf8')
-    expect(css).toMatch(/\.review-detail__sidebar\s*\{[^}]*position:\s*sticky/)
-    expect(css).toMatch(/\.review-detail__sidebar\s*\{[^}]*border-left:/)
+    expect(css).toMatch(/\.review-detail__bubbles\s*\{[^}]*position:\s*relative/)
   })
 
   test('styles.css declares .review-detail__footer with flex gap (no longer collapsed)', () => {
