@@ -1,8 +1,12 @@
-// Output node — only input handles, one per declared port.
+// Output node — one named target handle per declared port, PLUS a catch-all
+// left strip (RFC-007) so a freshly-dropped output node (`ports: []`) still
+// has somewhere to land an inbound edge. Drops on the catch-all auto-create
+// a new port named after the upstream output port; see
+// `applyConnectionForReviewOutput` in components/canvas/connectionSync.ts.
 
 import type { NodeProps } from '@xyflow/react'
 import { PortHandles } from './PortHandles'
-import type { CanvasNodeData } from './types'
+import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
   data: CanvasNodeData
@@ -18,7 +22,7 @@ export function OutputNode({ data, selected }: Props) {
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>
-      <PortHandles side="left" ports={data.inputPorts} />
+      <PortHandles side="left" ports={data.inputPorts} catchAll={{ id: INBOUND_HANDLE_ID }} />
     </div>
   )
 }

@@ -1534,6 +1534,50 @@ code {
   box-shadow: none;
 }
 
+/* xyflow's default Controls / MiniMap are hard-coded to white-on-light, so
+ * in dark mode the bottom-left zoom strip jumps out like a brick. Re-bind
+ * them to our theme tokens — works in both modes because --panel /
+ * --border / --text resolve correctly per data-theme. */
+.workflow-canvas .react-flow__controls {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+.workflow-canvas .react-flow__controls-button {
+  background: var(--panel);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  fill: var(--text);
+  width: 26px;
+  height: 26px;
+}
+.workflow-canvas .react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+.workflow-canvas .react-flow__controls-button:hover {
+  background: var(--bg);
+}
+.workflow-canvas .react-flow__controls-button svg {
+  fill: var(--text);
+  max-width: 14px;
+  max-height: 14px;
+}
+
+.workflow-canvas .react-flow__minimap {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.workflow-canvas .react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.25);
+}
+:root[data-theme='dark'] .workflow-canvas .react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.5);
+}
+
 /* ---- Context menu ---- */
 
 .context-menu {
@@ -2068,6 +2112,96 @@ code {
   font-size: 13px;
 }
 
+/* RFC-009: sticky header at the top of the bubble column shows the comment
+   count and the collapse toggle. position: sticky keeps it visible while
+   the user scrolls the document; z-index sits above the bubbles. */
+.review-detail__sidebar-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.review-detail__sidebar-count {
+  font-variant-numeric: tabular-nums;
+}
+.review-detail__sidebar-toggle {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.review-detail__sidebar-toggle:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* RFC-009: 4px resizer pinned to the left edge of the bubble column. We
+   render it inside .review-detail__bubbles so its absolute positioning
+   anchors to that column. Hover / active state widens the visual cue. */
+.review-detail__sidebar-resizer {
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 3;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.review-detail__sidebar-resizer:hover,
+.review-detail__sidebar-resizer[data-dragging='true'] {
+  background: var(--accent);
+}
+
+/* RFC-009: collapsed-state rail replaces the full bubble column when the
+   user clicks the toggle. Fixed 32px wide so the main document gets the
+   reclaimed width back. */
+.comments-collapsed-rail {
+  width: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.comments-collapsed-rail__count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.comments-collapsed-rail__toggle {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 16px;
+  padding: 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.comments-collapsed-rail__toggle:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
 .comment-bubble {
   position: absolute;
   left: 0;
@@ -2162,6 +2296,90 @@ code {
 .comment-bubble__delete:disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+
+/* RFC-009 — line-ref chip rendered next to the section path.
+   Tabular-nums keeps "Line 12" / "Line 100" the same width so the row
+   doesn't jump as comments scroll past. */
+.comment-bubble__line-ref {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* RFC-009 — action toolbar (edit / copy / delete). Hidden by default so
+   the bubble stays clean; revealed on hover or when the bubble is the
+   active scroll-spy target. Sits to the right of the delete button — but
+   the delete button is part of this row visually, so we leave its old
+   absolute position untouched and add edit / copy beside it. */
+.comment-bubble__actions {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.comment-bubble:hover .comment-bubble__actions,
+.comment-bubble--active .comment-bubble__actions,
+.comment-bubble--editing .comment-bubble__actions {
+  opacity: 1;
+}
+.comment-bubble__action {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.comment-bubble__action:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+.comment-bubble__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.comment-bubble__action[data-copied='true'] {
+  color: var(--accent);
+}
+
+/* RFC-009 — inline edit form replaces the body paragraph when the user
+   clicks the edit action. Cmd/Ctrl+Enter saves, Esc cancels (handled in
+   the route's keydown). */
+.comment-bubble__edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.comment-bubble__edit-form textarea {
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.comment-bubble__edit-form-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 /* In-document anchor highlight. Subtle by default; the bubble's active

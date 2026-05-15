@@ -36,6 +36,7 @@ import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@age
 import { ulid } from 'ulid'
 import { AgentNode } from './nodes/AgentNode'
 import { applyPaste, buildSlice, getClipboard, setClipboard } from './canvasClipboard'
+import { applyConnectionForReviewOutput, applyDisconnectForReviewOutput } from './connectionSync'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
 import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
@@ -73,6 +74,14 @@ export interface WorkflowCanvasProps {
    * Used by the task-detail status view (P-2-12).
    */
   nodeStatuses?: Record<string, CanvasNodeData['status'] | undefined>
+  /**
+   * RFC-007: task-detail canvas can pass per-review iteration counters so
+   * we reject drag-rebinding the inputs of a review that has already gone
+   * through one or more iterate/reject rounds (changing the input upstream
+   * would invalidate the existing doc_versions; see RFC-005 design §9).
+   * Editor canvas leaves this undefined → no lock.
+   */
+  taskContext?: { reviewIteration: Record<string, number> }
 }
 
 /**
@@ -104,6 +113,7 @@ function CanvasInner({
   onSelect,
   readOnly,
   nodeStatuses,
+  taskContext,
   handleRef,
 }: WorkflowCanvasProps & {
   handleRef?: React.ForwardedRef<WorkflowCanvasHandle>
@@ -129,13 +139,23 @@ function CanvasInner({
   // reconciles `definition.inputs[]` with input-node inputKeys. Adding /
   // patching / deleting input nodes therefore keeps the launcher form
   // declaration in lock-step automatically.
+  //
+  // RFC-007: the same chokepoint detects edges that were present in the
+  // prior `definition` but are missing from `next`, and clears the matching
+  // `inputSource` / `port.bind` field on review / output nodes. This
+  // covers all three deletion paths (Delete key, EdgeInspector remove,
+  // node-removal cascade) without each callsite having to opt in.
   const commitChange = useCallback(
     (next: WorkflowDefinition) => {
       if (onChange === undefined) return
-      const synced = syncInputDefs(next.inputs ?? [], next.nodes)
-      onChange(synced === (next.inputs ?? []) ? next : { ...next, inputs: synced })
+      const nextEdgeIds = new Set(next.edges.map((e) => e.id))
+      const deleted = definition.edges.filter((e) => !nextEdgeIds.has(e.id))
+      let staged = deleted.length === 0 ? next : applyDisconnectForReviewOutput(next, deleted)
+      const synced = syncInputDefs(staged.inputs ?? [], staged.nodes)
+      if (synced !== (staged.inputs ?? [])) staged = { ...staged, inputs: synced }
+      onChange(staged)
     },
-    [onChange],
+    [definition.edges, onChange],
   )
   const [selection, setSelection] = useState<{ nodes: string[]; edges: string[] }>({
     nodes: [],
@@ -239,11 +259,40 @@ function CanvasInner({
   const handleConnect = useCallback(
     (conn: Connection) => {
       if (readOnly === true || onChange === undefined) return
+      // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
+      // on a specific named handle" BEFORE translateInboundConnection rewrites
+      // targetHandle. Output's catch-all path always appends a new port (with
+      // disambiguating `_2` / `_3` suffix on name collisions) so a single
+      // output node can collect many independent upstreams; named-handle
+      // drops keep the explicit single-port rebind semantics.
+      const viaCatchAll = conn.targetHandle === INBOUND_HANDLE_ID
       const built = buildEdgeFromConnection(definition, translateInboundConnection(conn))
       if (built === null) return
-      commitChange({ ...definition, edges: [...definition.edges, built] })
+      const withEdge = { ...definition, edges: [...definition.edges, built] }
+      const synced = applyConnectionForReviewOutput(withEdge, built, { viaCatchAll })
+      commitChange(synced)
     },
     [commitChange, definition, onChange, readOnly],
+  )
+
+  /**
+   * RFC-007 task-detail iterate lock. Editor canvas leaves taskContext
+   * undefined → every connection is allowed (the lock is meaningful only
+   * for live tasks). Read-only props on the task-detail canvas already
+   * prevent connection attempts in practice; this is the belt-and-suspenders
+   * guard for the case where read-only is bypassed and the user tries to
+   * rewire a review whose iteration count is already non-zero.
+   */
+  const isValidConnection = useCallback(
+    (conn: { target: string | null }) => {
+      if (taskContext === undefined) return true
+      if (conn.target === null) return true
+      const node = definition.nodes.find((n) => n.id === conn.target)
+      if (node === undefined || node.kind !== 'review') return true
+      const iter = taskContext.reviewIteration[conn.target] ?? 0
+      return iter === 0
+    },
+    [definition.nodes, taskContext],
   )
 
   // ---- Clipboard / shortcuts (P-2-07) ----
@@ -534,33 +583,65 @@ function CanvasInner({
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
+        isValidConnection={isValidConnection}
         onSelectionChange={(s) => {
           const ns = s.nodes.map((n) => n.id)
           const es = s.edges.map((e) => e.id)
           // xyflow re-fires onSelectionChange after every node/edge update
           // even when the selected set is unchanged. Bail when nothing
           // actually changed so we don't loop on a fresh object reference.
+          //
+          // Keep internal selection state up to date so clipboard / Delete
+          // shortcuts and the right-click context menu see the right thing.
+          // We intentionally DO NOT emit onSelect here — xyflow flips a
+          // node's `selected` flag at mousedown (before a drag has even
+          // started), and emitting through this path would pop the
+          // inspector open every time the user grabs a node to move it.
+          // Open the inspector from explicit `onNodeClick` / `onEdgeClick`
+          // / `onPaneClick` below instead; xyflow only fires those for
+          // genuine clicks (no drag motion past the threshold).
           setSelection((prev) =>
             sameIds(prev.nodes, ns) && sameIds(prev.edges, es) ? prev : { nodes: ns, edges: es },
           )
-          const sel = deriveSelection(ns, es)
-          const sig = selectionSig(sel)
-          if (sig !== lastEmittedSelectionSig.current) {
-            lastEmittedSelectionSig.current = sig
-            if (onSelect !== undefined) onSelect(sel)
-          }
+        }}
+        onNodeClick={(_, node) => {
+          // Click-only path; xyflow does not fire this when the gesture
+          // becomes a drag. Dedupe via lastEmittedSelectionSig so a second
+          // click on the same node doesn't re-emit and re-render.
+          const sig = `node:${node.id}`
+          if (sig === lastEmittedSelectionSig.current) return
+          lastEmittedSelectionSig.current = sig
+          if (onSelect !== undefined) onSelect({ kind: 'node', id: node.id })
         }}
         onEdgeClick={(_, edge) => {
           // Explicit edge-selection emit. xyflow's onSelectionChange path
           // sometimes does not fire for plain edge clicks (selectionOnDrag
           // + panOnDrag interplay), so we wire onEdgeClick directly to
           // open the EdgeInspector. Dedupe via lastEmittedSelectionSig so
-          // we don't loop with onSelectionChange when both fire.
+          // we don't loop when both this and onSelectionChange fire.
           const sig = `edge:${edge.id}`
           if (sig === lastEmittedSelectionSig.current) return
           lastEmittedSelectionSig.current = sig
           setSelection({ nodes: [], edges: [edge.id] })
           if (onSelect !== undefined) onSelect({ kind: 'edge', id: edge.id })
+        }}
+        onPaneClick={() => {
+          // Clicking empty canvas dismisses any open inspector. Without
+          // this the inspector stayed open after pane clicks because
+          // onSelectionChange no longer drives onSelect.
+          if (lastEmittedSelectionSig.current === 'null') return
+          lastEmittedSelectionSig.current = 'null'
+          if (onSelect !== undefined) onSelect(null)
+        }}
+        onNodeDragStop={(_evt, _node, draggedNodes) => {
+          // Commit final positions once when the drag ends, instead of on
+          // every position change. `affectsDefinition` excludes 'position'
+          // for the same reason — see its docstring. We send the FULL
+          // current `nodes`/`edges` snapshot (not just the dragged ones)
+          // because toDefinition computes a complete next-state.
+          if (readOnly === true || onChange === undefined) return
+          if (draggedNodes.length === 0) return
+          commitChange(toDefinition(definition, nodes, edges))
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -704,6 +785,19 @@ function toFlowNodes(
       const inner = (n as unknown as { nodeIds?: string[] }).nodeIds
       ;(data as CanvasNodeData & { innerCount?: number }).innerCount = inner?.length ?? 0
     }
+    if (n.kind === 'review') {
+      // RFC-007: surface inputSource onto node data so ReviewNode can show
+      // the configured upstream `node.port` summary inside the card body.
+      const raw = (n as unknown as { inputSource?: { nodeId?: unknown; portName?: unknown } })
+        .inputSource
+      if (raw !== undefined) {
+        const nodeId = typeof raw.nodeId === 'string' ? raw.nodeId : ''
+        const portName = typeof raw.portName === 'string' ? raw.portName : ''
+        ;(
+          data as CanvasNodeData & { inputSource?: { nodeId: string; portName: string } }
+        ).inputSource = { nodeId, portName }
+      }
+    }
     return {
       id: n.id,
       type: n.kind,
@@ -737,18 +831,23 @@ function toFlowEdges(defEdges: WorkflowDefinition['edges']): Edge[] {
 
 /**
  * Returns true when at least one of the xyflow NodeChanges modifies the
- * persisted WorkflowDefinition (position / add / remove / replace).
+ * persisted WorkflowDefinition in a way we want to round-trip through the
+ * parent immediately.
  *
- * `select` and `dimensions` are pure xyflow UI state. If we let them
- * propagate to the parent's onChange we mint a new definition reference,
- * the def-sync useEffect rebuilds the local nodes array, which retriggers
- * onNodesChange → React eventually trips its "Maximum update depth
- * exceeded" guard. See the comment in `handleNodesChange` for context.
+ * Excluded:
+ * - `select` / `dimensions`: pure xyflow UI state. Propagating them mints a
+ *   new definition reference, the def-sync useEffect rebuilds the local
+ *   nodes array, which retriggers onNodesChange → React eventually trips
+ *   "Maximum update depth exceeded".
+ * - `position`: xyflow fires this on every drag tick (≈60Hz). If we
+ *   commitChange on each tick the def-sync useEffect immediately overwrites
+ *   the locally-updated node positions with `toDefinition`'s rounded copy,
+ *   which (a) fights xyflow's sub-pixel drag state and (b) causes a visible
+ *   flicker — the whole canvas re-renders mid-drag. Drag-end positions are
+ *   committed once via `onNodeDragStop` instead.
  */
 function affectsDefinition(changes: NodeChange[]): boolean {
-  return changes.some(
-    (c) => c.type === 'position' || c.type === 'add' || c.type === 'remove' || c.type === 'replace',
-  )
+  return changes.some((c) => c.type === 'add' || c.type === 'remove' || c.type === 'replace')
 }
 
 /**

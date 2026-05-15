@@ -8,6 +8,7 @@
 
 - [RFC-007](./design/RFC-007-canvas-review-output-drag/proposal.md) Canvas review / output 节点支持拖拽连线（Draft 三件套已落档；待用户批准后开实现 PR）
 - [RFC-008](./design/RFC-008-markdown-prose-premium/proposal.md) Premium Markdown 渲染（实施完成 — 待提 PR；plan.md 原拆 3 PR，单 session 合并为单 PR 实现 T1+T2+T3+ 字体接入；index/STATE 同步等 PR 合并后改 Done）
+- [RFC-009](./design/RFC-009-review-sidebar-enhancement/proposal.md) Review 评论侧栏功能增强（借鉴 md-review 的内联编辑 / 复制 / 数量 badge / 折叠 / 拖宽 / 行号；保留 d9072c6 滚动跟随气泡架构；三件套已落档，开始实施）
 
 ---
 

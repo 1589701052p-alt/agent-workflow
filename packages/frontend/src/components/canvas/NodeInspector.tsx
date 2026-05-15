@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { ChipsInput } from '@/components/ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
 import { computePorts } from './WorkflowCanvas'
+import { REVIEW_INPUT_HANDLE_ID, syncEdgeFromFormField } from './connectionSync'
 import { patchInputDef, renameInputKey } from './syncInputDefs'
 import { PromptPreview } from './PromptPreview'
 
@@ -200,11 +201,37 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
       const ports = Array.isArray(rec.ports)
         ? (rec.ports as Array<{ name: string; bind: { nodeId: string; portName: string } }>)
         : []
+      // RFC-007: setPorts now mirrors the bind / rename / add / remove
+      // operations into definition.edges via syncEdgeFromFormField, so
+      // typing into the bind fields produces the same canvas edge that a
+      // drag-to-connect would have.
       function setPorts(next: typeof ports) {
-        onPatch({
-          ...(node as Record<string, unknown>),
-          ports: next,
-        } as unknown as WorkflowNode)
+        const nodes = definition.nodes.map((n) =>
+          n.id === node.id
+            ? ({
+                ...(n as Record<string, unknown>),
+                ports: next,
+              } as unknown as WorkflowNode)
+            : n,
+        )
+        let def: WorkflowDefinition = { ...definition, nodes }
+        const prevByName = new Map(ports.map((p) => [p.name, p]))
+        const nextByName = new Map(next.map((p) => [p.name, p]))
+        // Removed / renamed-away ports → drop their edge.
+        for (const [name, p] of prevByName) {
+          if (!nextByName.has(name)) {
+            def = syncEdgeFromFormField(def, { nodeId: node.id, portName: name }, p.bind, null)
+          }
+        }
+        // Reconcile bind on every surviving / new port.
+        for (const [name, p] of nextByName) {
+          const prev = prevByName.get(name)
+          const prevBind = prev?.bind ?? null
+          const nextBindEmpty = p.bind.nodeId === '' && p.bind.portName === ''
+          const nextBind = nextBindEmpty ? null : p.bind
+          def = syncEdgeFromFormField(def, { nodeId: node.id, portName: name }, prevBind, nextBind)
+        }
+        onCommitDef(def)
       }
       return (
         <div className="form-grid">
@@ -489,6 +516,33 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
           ...delta,
         } as unknown as WorkflowNode)
 
+      /**
+       * RFC-007: changing inputSource via the form must keep the canvas
+       * edge in lock-step. We rebuild the node + recompute edges in one
+       * commit so the auto-save sees a consistent definition.
+       */
+      const patchReviewInputSource = (nextSource: { nodeId: string; portName: string }): void => {
+        const prevSource = {
+          nodeId: inputSource.nodeId ?? '',
+          portName: inputSource.portName ?? '',
+        }
+        const nodes = definition.nodes.map((n) =>
+          n.id === node.id
+            ? ({
+                ...(n as Record<string, unknown>),
+                inputSource: nextSource,
+              } as unknown as WorkflowNode)
+            : n,
+        )
+        const nextDef = syncEdgeFromFormField(
+          { ...definition, nodes },
+          { nodeId: node.id, portName: REVIEW_INPUT_HANDLE_ID },
+          prevSource,
+          nextSource,
+        )
+        onCommitDef(nextDef)
+      }
+
       return (
         <div className="form-grid">
           <Field label={t('inspector.fieldReviewTitle')} hint={t('inspector.fieldReviewTitleHint')}>
@@ -513,8 +567,9 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               className="form-input"
               value={inputSource.nodeId ?? ''}
               onChange={(e) =>
-                patchReview({
-                  inputSource: { nodeId: e.target.value, portName: inputSource.portName ?? '' },
+                patchReviewInputSource({
+                  nodeId: e.target.value,
+                  portName: inputSource.portName ?? '',
                 })
               }
             >
@@ -534,9 +589,7 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             <TextInput
               value={inputSource.portName ?? ''}
               onChange={(v) =>
-                patchReview({
-                  inputSource: { nodeId: inputSource.nodeId ?? '', portName: v },
-                })
+                patchReviewInputSource({ nodeId: inputSource.nodeId ?? '', portName: v })
               }
               placeholder="design"
             />

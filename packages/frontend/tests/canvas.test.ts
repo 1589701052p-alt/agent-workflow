@@ -229,11 +229,17 @@ describe('affectsDefinition', () => {
     expect(affectsDefinition(changes)).toBe(false)
   })
 
-  test('a position change (drag) DOES affect the def', () => {
+  test('position-only changes do NOT propagate (committed at onNodeDragStop)', () => {
+    // Per-tick position propagation caused a visible canvas flicker during
+    // drag because the def-sync useEffect rebuilt the whole nodes array
+    // from the freshly-committed definition (round-tripped through
+    // toDefinition with `Math.round`) on every mousemove. Drag-end
+    // positions are committed once via onNodeDragStop instead — see
+    // affectsDefinition's docstring.
     const changes: NodeChange[] = [
       { id: 'a1', type: 'position', position: { x: 100, y: 200 }, dragging: false },
     ]
-    expect(affectsDefinition(changes)).toBe(true)
+    expect(affectsDefinition(changes)).toBe(false)
   })
 
   test('add / remove changes affect the def', () => {
@@ -245,12 +251,14 @@ describe('affectsDefinition', () => {
     expect(affectsDefinition(rm)).toBe(true)
   })
 
-  test('a position change mixed in with a select still propagates', () => {
+  test('a position change mixed in with a select still does not propagate', () => {
+    // Both ignored: position is committed at drag stop, select is local
+    // UI state. Neither is a structural change to the persisted def.
     const changes: NodeChange[] = [
       { id: 'a1', type: 'select', selected: true },
       { id: 'a2', type: 'position', position: { x: 5, y: 5 }, dragging: false },
     ]
-    expect(affectsDefinition(changes)).toBe(true)
+    expect(affectsDefinition(changes)).toBe(false)
   })
 
   test('empty change list is a no-op', () => {

@@ -1,14 +1,20 @@
-// Review node — RFC-005 PR-D T29.
+// Review node — RFC-005 PR-D T29; left-side input handle added in RFC-007.
 //
 // Visually similar to InputNode + OutputNode (the "IO" family) but in the
 // "Human" category: shows the title, the id, the configured input source
 // `nodeId.portName`, and the two output ports (`approved_doc`,
-// `approval_meta`) on the right. Catch-all inbound strip is intentionally
-// off — the review's input is configured explicitly on the node, not
-// routed through edges (RFC-005 design.md §A1).
+// `approval_meta`) on the right.
+//
+// RFC-007: a single named target Handle (id = `__review_input__`) is
+// rendered on the left so the review's evaluation target can be wired by
+// drag instead of forcing the user into the inspector. The connect
+// handler in WorkflowCanvas writes both the edge AND `inputSource`
+// atomically, so the schema-level "explicit upstream reference" guarantee
+// (see review.ts ReviewNodeSchema.inputSource) is preserved.
 
-import type { NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { PortHandles } from './PortHandles'
+import { REVIEW_INPUT_HANDLE_ID } from '../connectionSync'
 import type { CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
@@ -21,6 +27,13 @@ export function ReviewNode({ data, selected }: Props) {
     null
   return (
     <div className={'canvas-node canvas-node--review' + (selected ? ' canvas-node--selected' : '')}>
+      <Handle
+        type="target"
+        position={Position.Left}
+        id={REVIEW_INPUT_HANDLE_ID}
+        className="canvas-node__handle canvas-node__handle--review-input"
+        aria-label="review-input"
+      />
       <div className="canvas-node__header">
         <span className="canvas-node__kind">⚖ review</span>
         <span className="canvas-node__title">{data.title || data.nodeId}</span>

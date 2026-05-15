@@ -33,6 +33,7 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md)            | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享）            | Done        |
 | [RFC-007](./RFC-007-canvas-review-output-drag/proposal.md)       | Canvas review / output 节点支持拖拽连线：与 agent 节点对齐 + 字段 / 边双向同步 + iterate 锁                  | Draft       |
 | [RFC-008](./RFC-008-markdown-prose-premium/proposal.md)          | Premium Markdown 渲染（react-markdown + shiki + KaTeX + Callout + 锚点 + 字体）替换 review + 编辑器两套渲染器 | In Progress |
+| [RFC-009](./RFC-009-review-sidebar-enhancement/proposal.md)      | Review 评论侧栏功能增强：内联编辑 + 复制 + 数量 badge + 折叠 + 拖宽 + 行号（借鉴 md-review）                  | In Progress |
 
 ---
 

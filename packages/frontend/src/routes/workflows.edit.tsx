@@ -12,6 +12,7 @@ import { getBaseUrl, getToken } from '@/stores/auth'
 import { EditorSidebar } from '@/components/canvas/EditorSidebar'
 import { EdgeInspector } from '@/components/canvas/EdgeInspector'
 import { NodeInspector } from '@/components/canvas/NodeInspector'
+import { healFieldEdgeConsistency } from '@/components/canvas/connectionSync'
 import { syncInputDefs } from '@/components/canvas/syncInputDefs'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasSelection } from '@/components/canvas/nodes/types'
@@ -54,12 +55,20 @@ export function editorLayoutClass(selectedNodeId: string | null): string {
  * inputs[] back into the draft; the existing 1s auto-save then writes it
  * back to the daemon. No backend migration needed.
  *
+ * RFC-007: also reconcile review.inputSource / output.ports[].bind against
+ * the canvas edges. Pre-RFC-007 these were authored only through the form;
+ * opening such a workflow once materializes the visual edges (and writes
+ * back fields for YAML-imported edges that lacked field values). Both
+ * passes return the input reference unchanged when there's nothing to fix,
+ * so the auto-save useEffect only fires when work was actually done.
+ *
  * Exported pure for testing — see tests/canvas-edit-old-workflow.test.tsx.
  */
 export function healLoadedDefinition(def: WorkflowDefinition): WorkflowDefinition {
   const synced = syncInputDefs(def.inputs ?? [], def.nodes)
-  if (synced === (def.inputs ?? [])) return def
-  return { ...def, inputs: synced }
+  const afterInputs =
+    synced === (def.inputs ?? []) ? def : ({ ...def, inputs: synced } as WorkflowDefinition)
+  return healFieldEdgeConsistency(afterInputs)
 }
 
 // /workflows/new ------------------------------------------------------------
@@ -261,12 +270,16 @@ function WorkflowEditPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty, name, description, draft])
 
-  // Toast banner state for remote edits (other tabs / clients).
+  // Toast banner state for remote workflow deletion. Remote *update*
+  // notifications used to surface a toast here too, but they fired on
+  // every auto-save's own WS echo (the broadcaster re-delivers our save
+  // back to us as a "remote" update). Re-fetch handling already updates
+  // the view via react-query; suppress the noisy toast and keep the
+  // delete-elsewhere signal which is genuinely user-actionable.
   const [remoteToast, setRemoteToast] = useState<string | null>(null)
   useWorkflowSync({
     workflowId: id,
     currentVersion: query.data?.version ?? null,
-    onRemoteUpdate: (v) => setRemoteToast(t('editor.remoteUpdated', { version: v })),
     onRemoteDelete: () => setRemoteToast(t('editor.remoteDeleted')),
   })
 

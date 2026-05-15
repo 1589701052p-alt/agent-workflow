@@ -42,10 +42,13 @@ export const ReviewNodeSchema = z
     position: z.object({ x: z.number(), y: z.number() }).optional(),
 
     /**
-     * The upstream (nodeId, portName) being reviewed. Catch-all edges in
-     * canvas (RFC-003) feed the input, but the review node still needs an
-     * explicit reference so the runtime knows which port to snapshot into
-     * doc_versions and which port is the iterate-merge target.
+     * The upstream (nodeId, portName) being reviewed. RFC-007: the canvas
+     * exposes a single named target Handle (`__review_input__`) so the user
+     * can wire this by drag; the connect / disconnect / form-edit paths all
+     * keep `inputSource` and the matching `definition.edges[]` entry in
+     * lock-step. The runtime still reads from this field (scheduler /
+     * dispatchReviewNode) — it's what tells the engine which port to
+     * snapshot into doc_versions and which port is the iterate-merge target.
      */
     inputSource: PortRefSchema,
 
@@ -201,6 +204,12 @@ export const SubmitReviewCommentSchema = z.object({
   commentText: z.string().min(1),
 })
 export type SubmitReviewComment = z.infer<typeof SubmitReviewCommentSchema>
+
+/** PATCH /api/reviews/:nodeRunId/comments/:commentId — RFC-009. */
+export const UpdateReviewCommentBodySchema = z.object({
+  commentText: z.string().min(1),
+})
+export type UpdateReviewCommentBody = z.infer<typeof UpdateReviewCommentBodySchema>
 
 /** GET /api/reviews — list filter. */
 export const REVIEW_LIST_STATUS = ['pending', 'all', 'approved', 'rejected', 'iterated'] as const

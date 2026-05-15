@@ -10,6 +10,7 @@ import type { WorkflowDefinition, WorkflowEdge } from '@agent-workflow/shared'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Field } from '@/components/Form'
+import { applyDisconnectForReviewOutput } from './connectionSync'
 
 interface Props {
   edge: WorkflowEdge
@@ -49,10 +50,18 @@ export function EdgeInspector({ edge, definition, onChange, onClose }: Props) {
   }
 
   function remove() {
-    onChange({
-      ...definition,
-      edges: definition.edges.filter((e) => e.id !== edge.id),
-    })
+    // RFC-007: dropping the edge alone leaves a stale `review.inputSource`
+    // or `output.ports[].bind` behind. The next `healLoadedDefinition` pass
+    // (triggered by qc.invalidateQueries after auto-save) would see "field
+    // has value but no matching edge" and re-materialize the edge — the
+    // edge would visibly disappear and then ~2s later reappear. Run the
+    // same disconnect sync the canvas-driven removal paths already use so
+    // the field and the edge clear atomically.
+    const next = applyDisconnectForReviewOutput(
+      { ...definition, edges: definition.edges.filter((e) => e.id !== edge.id) },
+      [edge],
+    )
+    onChange(next)
     onClose()
   }
 
