@@ -299,28 +299,17 @@ test('review cycle: awaiting → reject → awaiting → iterate → awaiting �
   const final = await pollTaskStatus(daemon, taskId, (t) => t.status === 'done', 30_000)
   expect(final.status).toBe('done')
 
-  // 9. The review node's docPort should carry the stub's emitted markdown.
-  const nodeRunsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
-    headers: { Authorization: `Bearer ${daemon.token}` },
-  })
-  expectOk(nodeRunsRes, 'list node runs')
-  const nodeRunsBody = (await nodeRunsRes.json()) as {
-    runs: { id: string; nodeId: string; status: string }[]
-    outputs: { nodeRunId: string; port: string; value: string }[]
-  }
-  const reviewRun = nodeRunsBody.runs.find((r) => r.nodeId === 'review_1' && r.status === 'done')
-  expect(reviewRun).toBeDefined()
-  const docOutput = nodeRunsBody.outputs.find(
-    (o) => o.nodeRunId === reviewRun?.id && o.port === 'doc',
-  )
-  expect(docOutput?.value).toContain('stub e2e output')
-
-  // 10. doc_versions table records all three iterations (iteration 0/1/2).
-  const versionsRes = await fetch(`${daemon.baseUrl}/api/reviews/${reviewRun?.id}/versions`, {
+  // 9. The review node persists per-decision markdown via doc_versions
+  // (NOT via node_run_outputs — the review service writes body files under
+  // ~/.agent-workflow/runs/... and surfaces them through the reviews API).
+  // The same review node_run is reused across all three decisions.
+  const reviewNodeRunId = third.nodeRunId
+  const versionsRes = await fetch(`${daemon.baseUrl}/api/reviews/${reviewNodeRunId}/versions`, {
     headers: { Authorization: `Bearer ${daemon.token}` },
   })
   expectOk(versionsRes, 'list doc versions')
   const versions = (await versionsRes.json()) as {
+    id: string
     reviewIteration: number
     decision: string | null
   }[]
@@ -329,4 +318,16 @@ test('review cycle: awaiting → reject → awaiting → iterate → awaiting �
   expect(byIter.get(0)).toBe('rejected')
   expect(byIter.get(1)).toBe('iterated')
   expect(byIter.get(2)).toBe('approved')
+
+  // 10. The approved version's body must carry the stub's emitted markdown
+  // (proves the upstream port → doc_version capture path works end-to-end).
+  const approvedVersion = versions.find((v) => v.decision === 'approved')
+  expect(approvedVersion).toBeDefined()
+  const bodyRes = await fetch(
+    `${daemon.baseUrl}/api/reviews/${reviewNodeRunId}/versions/${approvedVersion?.id}`,
+    { headers: { Authorization: `Bearer ${daemon.token}` } },
+  )
+  expectOk(bodyRes, 'fetch approved doc body')
+  const bodyJson = (await bodyRes.json()) as { body: string }
+  expect(bodyJson.body).toContain('stub e2e output')
 })
