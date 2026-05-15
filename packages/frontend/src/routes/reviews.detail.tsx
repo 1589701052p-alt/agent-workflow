@@ -332,7 +332,7 @@ function ReviewDetailPage() {
             <code>{data.summary.reviewNodeId}</code>
           </div>
         )}
-        {data.summary.description !== '' && (
+        {data.summary.description !== '' && data.summary.description !== data.summary.title && (
           <p className="page__hint review-detail__description">{data.summary.description}</p>
         )}
         <p className="page__hint">

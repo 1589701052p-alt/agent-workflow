@@ -100,7 +100,7 @@ function ReviewsListPage() {
                       ) : (
                         <code>{r.reviewNodeId}</code>
                       )}
-                      {r.description !== '' && (
+                      {r.description !== '' && r.description !== r.title && (
                         <div className="muted reviews-row__desc">{r.description}</div>
                       )}
                     </td>

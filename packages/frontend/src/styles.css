@@ -2006,6 +2006,32 @@ code {
   font-size: 13px;
 }
 
+/* ---- Reviews list group heading ---- */
+
+.reviews-group {
+  margin-top: 24px;
+}
+
+.reviews-group:first-of-type {
+  margin-top: 0;
+}
+
+.reviews-group__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+.reviews-group__taskid {
+  font-size: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 /* ---- Reviews list rows ---- */
 
 .reviews-row__title {
