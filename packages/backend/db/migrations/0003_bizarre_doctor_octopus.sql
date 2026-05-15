@@ -1,0 +1,1 @@
+ALTER TABLE `doc_versions` ADD `source_file_path` text;

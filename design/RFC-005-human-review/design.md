@@ -381,6 +381,8 @@ function resolvePortContent(rawContent: string, kind: AgentOutputKind, worktreeP
 
 `kind = 'string'` 或 `'markdown'` 时直接用 envelope 内容；只有 `'markdown_file'` 走 read-file 分支。
 
+**Followup（已落地）：源文件路径上行至 doc_versions + iterate prompt。** `dispatchReviewNode` 现在调用 `resolvePortContentDetailed`，同时拿到 body 与 worktree 相对的源文件路径；后者写入 `doc_versions.source_file_path`（migration `0003_bizarre_doctor_octopus.sql` 增的 nullable 列）。`submitReviewDecision` iterate 分支把它传给 `renderCommentsForPrompt`，渲染成 `**File**: \`<path>\`` 一行置于 `### Comment 1` 之前，最终随 `{{__review_comments__}}` 进入上游节点的迭代提示词，让 agent 知道要改哪个文件。`markdown` / 内联 body 端口列保持 NULL，渲染器跳过该 header。同时把绝对路径放宽（`isAbsolute(trimmed)` 不再硬拒，只要 containment check 通过即可）以匹配 agent cwd 即 worktree 时输出的绝对路径。
+
 envelope 解析本身**不需要改**（K2）：md 里出现伪 `<port>` 不会破坏外层 `<workflow-output>` 解析，因为代码块里的 `<port>` 不会出现在 envelope 之外的根层。RFC-005 不动这条逻辑，但加测试矩阵：
 
 ```ts

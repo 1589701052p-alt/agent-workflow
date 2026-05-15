@@ -20,7 +20,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
-import { dispatchReviewNode } from '@/services/review'
+import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
@@ -397,6 +397,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const maxRetries = pickNumber(node, 'retries') ?? 0
 
+  // RFC-005: when this node is being re-run because a downstream review node
+  // was rejected/iterated, surface the rendered comments / rejection reason
+  // through the {{__review_comments__}} / {{__review_rejection__}} tokens.
+  // Returns undefined for first runs and for runs whose latest downstream
+  // decision is approve/pending — see buildReviewPromptContext.
+  const reviewContext = await buildReviewPromptContext(db, node.id, taskId, iteration)
+
   // Pick up an existing pending node_run at this iteration; otherwise create
   // a fresh run with retry_index = max-existing-in-iter + 1 (or 0).
   const sameNodeIterRuns = await db
@@ -477,6 +484,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           },
           ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
+          ...(reviewContext !== undefined ? { reviewContext } : {}),
           skills: resolvedSkills,
           appHome: opts.appHome,
           ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
@@ -815,6 +823,11 @@ async function runFanOutNode(
   const resolvedSkills = await resolveSkills(db, opts.appHome, agent.skills)
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
+  // RFC-005 review-driven re-run context — same plumbing as the single-agent
+  // path. Each shard child inherits the parent fan-out node's review context
+  // so an iterate decision pinned to the aggregator's port re-feeds review
+  // comments to every spawned child on the next pass.
+  const reviewContext = await buildReviewPromptContext(db, node.id, taskId, iteration)
 
   interface ChildResult {
     shardKey: string
@@ -862,6 +875,7 @@ async function runFanOutNode(
             },
             ...(promptTemplate !== undefined ? { promptTemplate } : {}),
             ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
+            ...(reviewContext !== undefined ? { reviewContext } : {}),
             skills: resolvedSkills,
             appHome: opts.appHome,
             ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),

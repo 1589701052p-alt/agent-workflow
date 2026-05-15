@@ -49,7 +49,7 @@ import {
   tasks,
   workflows,
 } from '@/db/schema'
-import { resolvePortContent } from '@/services/envelope'
+import { resolvePortContentDetailed } from '@/services/envelope'
 import { rollbackToSnapshot } from '@/util/git'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
@@ -355,12 +355,15 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
 
   const upstreamKind = await loadUpstreamPortKind(db, definition, sourceNodeId, sourcePortName)
   let resolvedBody: string
+  let resolvedSourcePath: string | undefined
   try {
-    resolvedBody = resolvePortContent({
+    const resolved = resolvePortContentDetailed({
       rawContent: portRow.content,
       kind: upstreamKind,
       worktreePath: task.worktreePath,
     })
+    resolvedBody = resolved.body
+    resolvedSourcePath = resolved.sourcePath
   } catch (err) {
     return {
       kind: 'failed',
@@ -436,6 +439,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
       sourcePortName,
       reviewIteration,
       body: resolvedBody,
+      ...(resolvedSourcePath !== undefined ? { sourceFilePath: resolvedSourcePath } : {}),
     })
   }
 
@@ -465,6 +469,13 @@ export interface CreateDocVersionArgs {
   promptSnapshot?: string
   /** Optional JSON snapshot of {model, variant, temperature}. */
   agentSnapshot?: string
+  /**
+   * Worktree-relative path the body was read from, when the upstream port
+   * resolved as a markdown_file (or the forgiveness branch silently read a
+   * `.md` file). Surfaced in the iterate re-run prompt so the agent knows
+   * which file the comments target. Undefined when the source was inline.
+   */
+  sourceFilePath?: string
 }
 
 async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion> {
@@ -493,6 +504,7 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
 
   const id = ulid()
   const now = Date.now()
+  const sourceFilePath = args.sourceFilePath ?? null
   await args.db.insert(docVersions).values({
     id,
     taskId: args.taskId,
@@ -508,6 +520,7 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
     decisionReason: null,
     promptSnapshot: args.promptSnapshot ?? null,
     agentSnapshot: args.agentSnapshot ?? null,
+    sourceFilePath,
     decidedAt: null,
     decidedBy: null,
     createdAt: now,
@@ -528,6 +541,7 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
     decisionReason: null,
     promptSnapshot: args.promptSnapshot ?? null,
     agentSnapshot: args.agentSnapshot ?? null,
+    sourceFilePath,
     decidedAt: null,
     decidedBy: null,
     createdAt: now,
@@ -973,7 +987,9 @@ export async function submitReviewDecision(
         args.decision === 'rejected'
           ? (args.rejectReason ?? null)
           : args.decision === 'iterated'
-            ? renderCommentsForPrompt(commentsArr)
+            ? renderCommentsForPrompt(commentsArr, {
+                ...(dv.sourceFilePath ? { sourceFilePath: dv.sourceFilePath } : {}),
+              })
             : null,
       decidedAt: Date.now(),
       decidedBy: args.author ?? 'local',
@@ -1181,15 +1197,39 @@ async function cascadeSiblingReviews(args: CascadeSiblingArgs): Promise<void> {
 // Prompt rendering for {{__review_comments__}}.
 // ---------------------------------------------------------------------------
 
+export interface RenderCommentsForPromptOptions {
+  /**
+   * Worktree-relative path the reviewed document was read from. When set,
+   * the renderer prepends a single `**File**: \`<path>\`` line so the
+   * iterate re-run prompt cites which file the agent should modify.
+   * Captured at dispatch time on `doc_versions.source_file_path` for
+   * markdown_file ports (and the forgiveness branch).
+   */
+  sourceFilePath?: string
+}
+
 /**
  * Render an array of review comments into a markdown bullet list suitable
  * for passing through `{{__review_comments__}}`. Each item carries the
  * breadcrumb path, the literal selection (with occurrence index to
  * disambiguate same-string repeats), surrounding context, and the comment.
+ *
+ * When `opts.sourceFilePath` is set, a single `**File**: \`<path>\`` header
+ * line is emitted before the comments — without it, agents have no reliable
+ * way to know which file the comments target (port content has been
+ * resolved to body text by the time the iterate prompt is built).
  */
-export function renderCommentsForPrompt(comments: readonly ReviewComment[]): string {
+export function renderCommentsForPrompt(
+  comments: readonly ReviewComment[],
+  opts?: RenderCommentsForPromptOptions,
+): string {
   if (comments.length === 0) return ''
   const lines: string[] = []
+  const sourceFilePath = opts?.sourceFilePath?.trim()
+  if (sourceFilePath !== undefined && sourceFilePath.length > 0) {
+    lines.push(`**File**: \`${sourceFilePath}\``)
+    lines.push('')
+  }
   comments.forEach((c, idx) => {
     lines.push(`### Comment ${idx + 1}`)
     lines.push(`**Location**: ${c.anchor.sectionPath}, paragraph ${c.anchor.paragraphIdx}`)
@@ -1343,6 +1383,7 @@ function rowToDocVersion(row: typeof docVersions.$inferSelect): DocVersion {
     decisionReason: row.decisionReason,
     promptSnapshot: row.promptSnapshot,
     agentSnapshot: row.agentSnapshot,
+    sourceFilePath: row.sourceFilePath,
     createdAt: row.createdAt,
     decidedAt: row.decidedAt,
     decidedBy: row.decidedBy,

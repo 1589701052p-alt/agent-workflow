@@ -17,7 +17,7 @@
 // Caller (scheduler / tests) is responsible for INSERT-ing the node_runs row
 // in 'pending' state before calling runNode().
 
-import type { Agent } from '@agent-workflow/shared'
+import type { Agent, ReviewPromptContext } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { cpSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -62,6 +62,16 @@ export interface RunNodeOptions {
     shardKey?: string
   }
   promptTemplate?: string
+  /**
+   * RFC-005 review-driven re-run context. When the scheduler is re-running an
+   * upstream node after a downstream review's reject/iterate decision, this
+   * carries the rendered comments / rejection reason / iterate target port
+   * so {{__review_rejection__}} / {{__review_comments__}} /
+   * {{__iterate_target_port__}} substitute and the auto-appended sections
+   * fire. Absent on first runs and on runs that aren't downstream of a
+   * decided review. Built by services/review.ts:buildReviewPromptContext.
+   */
+  reviewContext?: ReviewPromptContext
   /** Skills used by this agent. */
   skills: ResolvedSkill[]
   /** Default true. */
@@ -119,6 +129,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     inputs: opts.inputs,
     meta: opts.templateMeta,
     agentOutputs: opts.agent.outputs,
+    ...(opts.reviewContext !== undefined ? { reviewContext: opts.reviewContext } : {}),
   })
 
   await opts.db

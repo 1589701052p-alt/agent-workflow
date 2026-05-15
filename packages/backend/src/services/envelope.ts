@@ -21,7 +21,7 @@
 // node_run_outputs.
 
 import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { AgentOutputKind } from '@agent-workflow/shared'
 import { ValidationError } from '@/util/errors'
 
@@ -104,18 +104,26 @@ export interface ResolvePortContentOptions {
 }
 
 /**
- * Resolve the on-the-wire content of a port to the value downstream nodes
- * actually consume.
+ * Detailed variant of {@link resolvePortContent} that ALSO reports the
+ * worktree-relative path the body was read from, when one was used. Callers
+ * that just want the body should keep using `resolvePortContent`; callers
+ * that need to remember the source file path (e.g. dispatchReviewNode
+ * snapshotting onto doc_versions for the iterate prompt) use this.
  *
- * - `string` / undefined / `markdown` → pass `rawContent` through unchanged.
- * - `markdown_file` → treat `rawContent` as a worktree-relative path,
- *   verify it stays under `worktreePath` (defeats `../etc/passwd`,
- *   `/etc/passwd`, symlinks pointing outside), then read the file as UTF-8.
+ * `sourcePath` is set when:
+ *   - kind === 'markdown_file' (always — the strict branch reads a file).
+ *   - kind is anything else and the forgiveness branch silently read a `.md`
+ *     file inside the worktree.
+ * `sourcePath` is undefined when the body was passed through verbatim
+ * (inline markdown, path-shaped strings that did not resolve, etc.).
  *
- * Used by the runner post-`parseEnvelope` and by the review service when
- * snapshotting a port into doc_versions.
+ * The path is always normalized to be worktree-relative, even when the agent
+ * emitted an absolute path inside the worktree.
  */
-export function resolvePortContent(opts: ResolvePortContentOptions): string {
+export function resolvePortContentDetailed(opts: ResolvePortContentOptions): {
+  body: string
+  sourcePath?: string
+} {
   const { rawContent, kind, worktreePath } = opts
   if (kind !== 'markdown_file') {
     // Forgiveness path: when an agent emits a single-line `.md` path on a
@@ -135,17 +143,16 @@ export function resolvePortContent(opts: ResolvePortContentOptions): string {
       'markdown_file port content must be a worktree-relative path, got empty string',
     )
   }
-  // Reject absolute paths up-front — the only legal form is relative to the
-  // worktree root.
-  if (isAbsolute(trimmed)) {
-    throw new ValidationError(
-      'markdown-file-absolute-path',
-      `markdown_file port content '${trimmed}' must be a relative path, not absolute`,
-    )
-  }
 
+  // Both relative and absolute paths are accepted, but absolute paths must
+  // still resolve inside the worktree. Agents naturally emit absolute paths
+  // because the opencode process's cwd IS the task worktree (e.g. `pwd`/`find`
+  // output is absolute), so requiring relative-only caused real review
+  // failures in the field. The containment check below is the actual security
+  // boundary; whether the path was absolute or relative on the wire is
+  // incidental.
   const rootAbs = resolve(worktreePath)
-  const targetAbs = resolve(rootAbs, trimmed)
+  const targetAbs = isAbsolute(trimmed) ? resolve(trimmed) : resolve(rootAbs, trimmed)
   // realpath-after-resolve guarantees we land inside the worktree. We do not
   // follow symlinks (readFileSync follows them, but the containment check
   // must use the lexical absolute path so a symlinked file inside the
@@ -158,13 +165,32 @@ export function resolvePortContent(opts: ResolvePortContentOptions): string {
   }
 
   try {
-    return readFileSync(targetAbs, 'utf8')
+    const body = readFileSync(targetAbs, 'utf8')
+    const sourcePath = relative(rootAbs, targetAbs)
+    return { body, sourcePath }
   } catch (err) {
     throw new ValidationError(
       'markdown-file-read-failed',
       `markdown_file '${trimmed}': ${(err as Error).message}`,
     )
   }
+}
+
+/**
+ * Resolve the on-the-wire content of a port to the value downstream nodes
+ * actually consume.
+ *
+ * - `string` / undefined / `markdown` → pass `rawContent` through unchanged.
+ * - `markdown_file` → treat `rawContent` as a worktree-relative path,
+ *   verify it stays under `worktreePath` (defeats `../etc/passwd`,
+ *   `/etc/passwd`, symlinks pointing outside), then read the file as UTF-8.
+ *
+ * Used by the runner post-`parseEnvelope` and by the review service when
+ * snapshotting a port into doc_versions. Thin wrapper over
+ * {@link resolvePortContentDetailed} that drops the source-path metadata.
+ */
+export function resolvePortContent(opts: ResolvePortContentOptions): string {
+  return resolvePortContentDetailed(opts).body
 }
 
 /**
@@ -180,15 +206,18 @@ export function resolvePortContent(opts: ResolvePortContentOptions): string {
  * was rendering the literal path string before this existed (see commit
  * referenced in tests/envelope-resolve-port-md-path.test.ts).
  */
-function tryReadInWorktreeMarkdownPath(rawContent: string, worktreePath: string): string {
+function tryReadInWorktreeMarkdownPath(
+  rawContent: string,
+  worktreePath: string,
+): { body: string; sourcePath?: string } {
   const trimmed = rawContent.trim()
-  if (trimmed.length === 0 || trimmed.length >= 4096) return rawContent
-  if (trimmed.includes('\n') || trimmed.includes('\r')) return rawContent
-  if (!trimmed.toLowerCase().endsWith('.md')) return rawContent
+  if (trimmed.length === 0 || trimmed.length >= 4096) return { body: rawContent }
+  if (trimmed.includes('\n') || trimmed.includes('\r')) return { body: rawContent }
+  if (!trimmed.toLowerCase().endsWith('.md')) return { body: rawContent }
 
   const rootAbs = resolve(worktreePath)
   const targetAbs = isAbsolute(trimmed) ? resolve(trimmed) : resolve(rootAbs, trimmed)
-  if (!(targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep))) return rawContent
+  if (!(targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep))) return { body: rawContent }
 
   let rootReal: string
   let targetReal: string
@@ -196,14 +225,21 @@ function tryReadInWorktreeMarkdownPath(rawContent: string, worktreePath: string)
     rootReal = realpathSync(rootAbs)
     targetReal = realpathSync(targetAbs)
   } catch {
-    return rawContent
+    return { body: rawContent }
   }
-  if (!(targetReal === rootReal || targetReal.startsWith(rootReal + sep))) return rawContent
+  if (!(targetReal === rootReal || targetReal.startsWith(rootReal + sep))) {
+    return { body: rawContent }
+  }
 
   try {
-    if (!statSync(targetReal).isFile()) return rawContent
-    return readFileSync(targetReal, 'utf8')
+    if (!statSync(targetReal).isFile()) return { body: rawContent }
+    const body = readFileSync(targetReal, 'utf8')
+    // Report the path the caller pointed us at (lexical, pre-realpath) so
+    // the iterate prompt cites the exact filename the agent emitted, not the
+    // symlink target. relative() handles both forms (relative-in / abs-in).
+    const sourcePath = isAbsolute(trimmed) ? relative(rootAbs, targetAbs) : trimmed
+    return { body, sourcePath }
   } catch {
-    return rawContent
+    return { body: rawContent }
   }
 }

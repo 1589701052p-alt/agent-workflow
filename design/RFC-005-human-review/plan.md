@@ -182,6 +182,12 @@ PR-E 内部线性。
 | PR-D / PR-E 切到 main 时 PR-B / PR-C 已合，但 schema 漂移 | PR 间合并是顺序的；每个 PR 拉新 branch 时 rebase 最新 main | 单 PR revert |
 | GPL 风险（PlantUML） | RFC-005 不内嵌 jar；只调外部端点；端点是用户自配（自托管 / kroki.io / plantuml-server）；产品 binary 完全 GPL-free | 无需 |
 
+## 5b. Followup（已落地，inline，不另开 RFC）
+
+- [x] **F1** envelope `markdown_file` 严格分支放宽：绝对路径在 worktree 内即可（agent cwd = worktree，`pwd` 自然产出绝对路径）。仅 `markdown-file-escapes-worktree` 仍抛 ValidationError。Tests: `envelope-resolve-port-md-path.test.ts` 翻面 + 增加 absolute-outside-worktree 兜底。
+- [x] **F2** `runner.ts` + `scheduler.ts` 把 `buildReviewPromptContext` 接进 `renderUserPrompt`：`RunNodeOptions.reviewContext` 新增字段；scheduler agent-single 与 agent-multi 两路在调用 `runNode` 之前都查一遍。修复"评审意见持久化但从未进入迭代提示词"的断链。Test: `review-iterate-comments-in-prompt.test.ts`。
+- [x] **F3** review comments 块增加 `**File**: \`<worktree-relative path>\`` 头：`doc_versions` 增 `source_file_path` 列（migration `0003_bizarre_doctor_octopus.sql`），`dispatchReviewNode` 通过新的 `resolvePortContentDetailed` 同时拿到 body + 路径并写入；`renderCommentsForPrompt(comments, { sourceFilePath })` 在 markdown_file 端口下渲染单行 header。Tests: `envelope-resolve-port-detailed.test.ts` + `review-render-comments-with-file-path.test.ts` + `review-iterate-file-path-in-prompt.test.ts`，并在 `review-state-machine.test.ts` 锁 inline-markdown 端口"无 header"的反向不退化。
+
 ## 6. 完工后
 
 - `STATE.md`（T38）：把"进行中 RFC"行删；"已完成 RFC"表追加 RFC-005 行，关键产出列写：(a) shared schema bump v2 + agent outputs.kind + ReviewNodeSchema 等；(b) DB 加 awaiting_review status + review_iteration 字段 + doc_versions / review_comments 两表；(c) review service 全套（decision / doc_version / sibling cascade / iterate partial merge）；(d) MarkdownView + 外部 PlantUML 端点 + Settings Rendering tab；(e) /reviews 全局 + 详情页 + 评审侧栏 + 选词 popover + 草稿 IndexedDB；(f) DiffView 三档 + 标题锚滚动联动；(g) e2e/review.spec.ts 全链路 reject/iterate/approve 三路径覆盖；(h) backend +25 test、frontend +34 test、e2e +1 spec；(i) 5 个 PR 合并完成。

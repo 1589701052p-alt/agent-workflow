@@ -399,6 +399,13 @@ describe('RFC-005 review state machine — dispatch + decisions', () => {
       .where(eq(docVersions.reviewNodeRunId, h.reviewNodeRunId))
     expect(dvs[0]?.decision).toBe('iterated')
     expect(dvs[0]?.decisionReason).toContain('include pending_payment')
+    // Designer agent here declares outputKinds: { design: 'markdown' }
+    // (inline body), so doc_versions.source_file_path stays null and the
+    // renderer must NOT emit a **File**: header. The markdown_file path is
+    // covered separately by review-iterate-file-path-in-prompt.test.ts —
+    // both cases together pin the conditional-header contract.
+    expect(dvs[0]?.sourceFilePath).toBeNull()
+    expect(dvs[0]?.decisionReason).not.toContain('**File**:')
   })
 
   test('optimistic-lock guard: stale reviewIteration → conflict', async () => {

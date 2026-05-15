@@ -126,12 +126,29 @@ describe('resolvePortContent forgiveness path (kind=undefined + in-worktree .md)
     expect(resolvePortContent({ rawContent: '', worktreePath: worktree })).toBe('')
   })
 
-  test('kind=markdown_file + absolute path → STILL throws (strict branch unchanged)', () => {
+  test('kind=markdown_file + absolute path INSIDE worktree → reads file body', () => {
+    // Regression for "review-source-resolve-failed" reported on task
+    // 058c4a9c-demo / node rev_crqa2g where the upstream designer agent
+    // emitted an absolute path inside the task worktree (its own cwd) and
+    // dispatchReviewNode rejected it with markdown-file-absolute-path. The
+    // containment check is the real security boundary; absolute-vs-relative
+    // on the wire is incidental.
     mkdirSync(join(worktree, 'docs'), { recursive: true })
     writeFileSync(join(worktree, 'docs', 'design.md'), '# Spec')
-    expect(() =>
+    expect(
       resolvePortContent({
         rawContent: join(worktree, 'docs', 'design.md'),
+        kind: 'markdown_file',
+        worktreePath: worktree,
+      }),
+    ).toBe('# Spec')
+  })
+
+  test('kind=markdown_file + absolute path OUTSIDE worktree → ValidationError', () => {
+    writeFileSync(join(outside, 'secrets.md'), 'TOP SECRET')
+    expect(() =>
+      resolvePortContent({
+        rawContent: join(outside, 'secrets.md'),
         kind: 'markdown_file',
         worktreePath: worktree,
       }),

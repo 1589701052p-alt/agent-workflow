@@ -241,6 +241,12 @@ export const docVersions = sqliteTable(
     decisionReason: text('decision_reason'),
     promptSnapshot: text('prompt_snapshot'), // user prompt sent when generating this version
     agentSnapshot: text('agent_snapshot'), // JSON: {model, variant, temperature}
+    // Worktree-relative path captured at dispatch time when the upstream port
+    // resolved as a markdown_file (or the forgiveness branch silently read a
+    // .md file). Carried through into renderCommentsForPrompt so the iterate
+    // re-run prompt cites which file the comments target. NULL when the
+    // source was inline markdown / a non-file string.
+    sourceFilePath: text('source_file_path'),
     createdAt: integer('created_at')
       .notNull()
       .default(sql`(unixepoch() * 1000)`),

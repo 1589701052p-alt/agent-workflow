@@ -25,7 +25,7 @@ import { drizzle } from 'drizzle-orm/bun-sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { ulid } from 'ulid'
 import * as schema from '../src/db/schema'
-import { docVersions, nodeRuns, reviewComments, tasks, workflows } from '../src/db/schema'
+import { nodeRuns, tasks, workflows } from '../src/db/schema'
 
 const ROOT_MIGRATIONS = resolve(import.meta.dirname, '..', 'db', 'migrations')
 const JOURNAL_RAW = JSON.parse(readFileSync(join(ROOT_MIGRATIONS, 'meta', '_journal.json'), 'utf8'))
@@ -203,57 +203,64 @@ describe('RFC-005 0002 migration — data integrity + new schema', () => {
     expect(nr[0]?.status).toBe('done')
 
     // 5. Can insert into doc_versions + review_comments.
+    //
+    // NOTE: raw SQL on purpose — same reason as the v1 seed above. Future
+    // migrations (e.g. 0003 added `source_file_path`) introduce new columns
+    // in `schema.ts`. Drizzle's typed insert lists every schema-known column
+    // in the SQL, but the DB at this stage only has the 0002 schema. Raw
+    // INSERT lets us touch only the columns 0002 actually created, so this
+    // test stays a true 0002-boundary check across future schema bumps.
     const docVersionId = ulid()
-    db.insert(docVersions)
-      .values({
-        id: docVersionId,
-        taskId: seededIds.taskId,
-        reviewNodeId: 'rev_1',
-        reviewNodeRunId: seededIds.nodeRunId,
-        sourceNodeId: 'designer',
-        sourcePortName: 'design',
-        versionIndex: 1,
-        reviewIteration: 0,
-        bodyPath: 'runs/x/review/rev_1/design/v1.md',
-        commentsJson: '[]',
-        decision: 'pending',
-        decisionReason: null,
-        promptSnapshot: null,
-        agentSnapshot: null,
-        decidedAt: null,
-        decidedBy: null,
-      })
-      .run()
-    const dvRows = db.select().from(docVersions).where(eq(docVersions.id, docVersionId)).all()
+    sqlite
+      .prepare(
+        `INSERT INTO doc_versions
+          (id, task_id, review_node_id, review_node_run_id, source_node_id,
+           source_port_name, version_index, review_iteration, body_path,
+           comments_json, decision, decision_reason, prompt_snapshot,
+           agent_snapshot, decided_at, decided_by)
+         VALUES (?, ?, 'rev_1', ?, 'designer', 'design', 1, 0,
+                 'runs/x/review/rev_1/design/v1.md', '[]', 'pending',
+                 NULL, NULL, NULL, NULL, NULL)`,
+      )
+      .run(docVersionId, seededIds.taskId, seededIds.nodeRunId)
+    const dvRows = sqlite
+      .prepare(
+        `SELECT id, version_index, decision, comments_json
+         FROM doc_versions WHERE id = ?`,
+      )
+      .all(docVersionId) as {
+      id: string
+      version_index: number
+      decision: string
+      comments_json: string
+    }[]
     expect(dvRows.length).toBe(1)
-    expect(dvRows[0]?.versionIndex).toBe(1)
+    expect(dvRows[0]?.version_index).toBe(1)
     expect(dvRows[0]?.decision).toBe('pending')
-    expect(dvRows[0]?.commentsJson).toBe('[]')
+    expect(dvRows[0]?.comments_json).toBe('[]')
 
     const commentId = ulid()
-    db.insert(reviewComments)
-      .values({
-        id: commentId,
-        docVersionId,
-        anchorSectionPath: '## Design',
-        anchorParagraphIdx: 0,
-        anchorOffsetStart: 0,
-        anchorOffsetEnd: 5,
-        selectedText: 'hello',
-        contextBefore: '',
-        contextAfter: '',
-        occurrenceIndex: 1,
-        commentText: 'looks wrong',
-      })
-      .run()
-    const cRows = db.select().from(reviewComments).where(eq(reviewComments.id, commentId)).all()
+    sqlite
+      .prepare(
+        `INSERT INTO review_comments
+          (id, doc_version_id, anchor_section_path, anchor_paragraph_idx,
+           anchor_offset_start, anchor_offset_end, selected_text,
+           context_before, context_after, occurrence_index, comment_text)
+         VALUES (?, ?, '## Design', 0, 0, 5, 'hello', '', '', 1, 'looks wrong')`,
+      )
+      .run(commentId, docVersionId)
+    const cRows = sqlite
+      .prepare(`SELECT id, comment_text, author FROM review_comments WHERE id = ?`)
+      .all(commentId) as { id: string; comment_text: string; author: string }[]
     expect(cRows.length).toBe(1)
-    expect(cRows[0]?.commentText).toBe('looks wrong')
+    expect(cRows[0]?.comment_text).toBe('looks wrong')
     expect(cRows[0]?.author).toBe('local') // default
 
     // 6. FK cascade: delete the docVersion → review_comments row gone.
-    db.delete(docVersions).where(eq(docVersions.id, docVersionId)).run()
-    const cAfter = db.select().from(reviewComments).where(eq(reviewComments.id, commentId)).all()
+    sqlite.prepare(`DELETE FROM doc_versions WHERE id = ?`).run(docVersionId)
+    const cAfter = sqlite.prepare(`SELECT id FROM review_comments WHERE id = ?`).all(commentId) as {
+      id: string
+    }[]
     expect(cAfter.length).toBe(0)
 
     sqlite.close()

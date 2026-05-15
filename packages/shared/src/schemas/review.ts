@@ -128,6 +128,14 @@ export const DocVersionSchema = z.object({
   promptSnapshot: z.string().nullable(),
   /** JSON: {model, variant, temperature} at generation time. */
   agentSnapshot: z.string().nullable(),
+  /**
+   * Worktree-relative file path captured when this version was generated, if
+   * the upstream port resolved as a `markdown_file` (or the forgiveness path
+   * silently read a `.md` file). NULL when the source was inline markdown.
+   * Surfaced in the iterate re-run prompt so the agent knows which file the
+   * comments target.
+   */
+  sourceFilePath: z.string().nullable().optional(),
   createdAt: z.number().int(),
   decidedAt: z.number().int().nullable(),
   decidedBy: z.string().nullable(),
