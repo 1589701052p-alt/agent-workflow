@@ -18,6 +18,12 @@ export function useTaskSync(taskId: string | null): void {
       if (msg.type === 'task.status' || msg.type === 'task.done') {
         void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'diff'] })
+        // Also re-fetch node-runs/outputs on terminal transitions: the
+        // per-node status/output events may interleave with task.done in
+        // either order (or drop on slower runners), so without this the
+        // panel can stay stuck on "pending…" after the task heading shows
+        // "done". Caught by the macOS Playwright e2e at main.spec.ts:243.
+        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
       }
       if (msg.type === 'node.status') {
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
