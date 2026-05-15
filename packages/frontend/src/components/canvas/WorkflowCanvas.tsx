@@ -135,6 +135,14 @@ function CanvasInner({
   const [edges, setEdges] = useState<Edge[]>(() => toFlowEdges(definition.edges))
   const externalDefRef = useRef(definition)
   const externalStatusesRef = useRef(nodeStatuses)
+  // Read-only mirror of `selection` for the def-sync useEffect below — we
+  // need the current selection at rebuild time but we don't want to add it
+  // to the deps (every selection change would re-rebuild every node from
+  // the definition).
+  const selectionRef = useRef(selection)
+  useEffect(() => {
+    selectionRef.current = selection
+  }, [selection])
 
   useEffect(() => {
     const defChanged = definition !== externalDefRef.current
@@ -142,8 +150,14 @@ function CanvasInner({
     if (defChanged || statusChanged) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
-      setNodes(toFlowNodes(definition, agentByName, nodeStatuses))
-      if (defChanged) setEdges(toFlowEdges(definition.edges))
+      // Preserve `selected: true` across the rebuild. Without this, an
+      // inspector edit (which mints a new `definition` reference) wipes
+      // the selected flag, xyflow sees a phantom deselect and fires
+      // onSelectionChange with `[]` — our handler then calls
+      // `onSelect(null)` and the inspector unmounts mid-keystroke.
+      const sel = selectionRef.current
+      setNodes(applySelection(toFlowNodes(definition, agentByName, nodeStatuses), sel.nodes))
+      if (defChanged) setEdges(applySelection(toFlowEdges(definition.edges), sel.edges))
     }
   }, [definition, agentByName, nodeStatuses])
 
@@ -747,6 +761,32 @@ export function translateInboundConnection(conn: Connection): Connection {
 export function clearFlowSelection<T extends { selected?: boolean }>(items: T[]): T[] {
   if (!items.some((it) => it.selected === true)) return items
   return items.map((it) => (it.selected === true ? { ...it, selected: false } : it))
+}
+
+/**
+ * Returns a new array with `selected: true` applied to every item whose
+ * id is in `selectedIds`. Used by the def-sync useEffect to preserve the
+ * xyflow `selected` flag when rebuilding nodes/edges from a new
+ * definition reference. Without this, any inspector edit (which mints a
+ * new definition) wiped the selected flag, xyflow saw the node go from
+ * selected to not-selected, fired onSelectionChange with empty arrays,
+ * and the inspector closed on every keystroke.
+ *
+ * Reference-stable when no item needs flipping — same rationale as
+ * {@link clearFlowSelection}.
+ *
+ * Exported for unit tests.
+ */
+export function applySelection<T extends { id: string; selected?: boolean }>(
+  items: T[],
+  selectedIds: string[],
+): T[] {
+  if (selectedIds.length === 0) return items
+  const sel = new Set(selectedIds)
+  if (!items.some((it) => sel.has(it.id) && it.selected !== true)) return items
+  return items.map((it) =>
+    sel.has(it.id) && it.selected !== true ? { ...it, selected: true } : it,
+  )
 }
 
 /**

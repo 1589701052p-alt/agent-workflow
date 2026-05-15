@@ -5,7 +5,11 @@
 
 import { describe, expect, test } from 'vitest'
 import { applyEdgeChanges, type Edge, type EdgeChange } from '@xyflow/react'
-import { affectsEdgeDefinition, clearFlowSelection } from '../src/components/canvas/WorkflowCanvas'
+import {
+  affectsEdgeDefinition,
+  applySelection,
+  clearFlowSelection,
+} from '../src/components/canvas/WorkflowCanvas'
 
 // --- Bug 1: handleEdgesChange used to filter ONLY for `remove`. xyflow
 // reports edge selection via a `select` change; if we drop that the edge
@@ -123,6 +127,21 @@ describe('WorkflowCanvas does not enable selectionOnDrag', () => {
     const code = src.replace(/^\s*\/\/.*$/gm, '')
     expect(code).not.toMatch(/selectionOnDrag\s*=/)
   })
+
+  test('WorkflowCanvas threads applySelection through the def-sync rebuild', async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const here = path.dirname(new URL(import.meta.url).pathname)
+    const src = await fs.readFile(
+      path.join(here, '../src/components/canvas/WorkflowCanvas.tsx'),
+      'utf8',
+    )
+    // The def-sync useEffect MUST wrap toFlowNodes/toFlowEdges in
+    // applySelection — bug 5 regresses (inspector closes on every
+    // keystroke) if either rebuild loses the `selected` flag.
+    expect(src).toMatch(/setNodes\(\s*applySelection\(toFlowNodes\(/)
+    expect(src).toMatch(/setEdges\(\s*applySelection\(toFlowEdges\(/)
+  })
 })
 
 // --- Bug 4: clicking the EdgeInspector ✕ used to call only
@@ -181,6 +200,60 @@ describe('clearFlowSelection (EdgeInspector close → reclick reachability)', ()
 // step is hard to simulate in JSDOM (xyflow needs ResizeObserver +
 // layout), so we mirror the existing `selectionOnDrag` style and pin
 // the wiring textually.
+
+// --- Bug 5: editing any field in the NodeInspector closed the inspector
+// on every keystroke. Root cause: NodeInspector's onChange minted a new
+// `definition` reference; the def-sync useEffect rebuilt nodes/edges via
+// `toFlowNodes` / `toFlowEdges` which DON'T carry `selected: true`; xyflow
+// saw the selected node go from selected to not-selected and fired
+// onSelectionChange with empty arrays; our handler routed that through
+// onSelect(null) and the parent unmounted the inspector. Fix: restore
+// `selected:true` on the rebuild path via `applySelection`.
+
+describe('applySelection (def-sync rebuild keeps the selected flag)', () => {
+  test('flips selected:true on items whose id is in the set', () => {
+    const before: Array<{ id: string; selected?: boolean }> = [
+      { id: 'a' },
+      { id: 'b' },
+      { id: 'c' },
+    ]
+    const after = applySelection(before, ['b'])
+    expect(after).not.toBe(before)
+    expect(after.find((i) => i.id === 'b')?.selected).toBe(true)
+    expect(after.find((i) => i.id === 'a')?.selected).toBeUndefined()
+    expect(after.find((i) => i.id === 'c')?.selected).toBeUndefined()
+  })
+
+  test('no-op (reference-stable) when the matched item is already selected', () => {
+    const before = [{ id: 'a', selected: true }, { id: 'b' }]
+    const after = applySelection(before, ['a'])
+    // Critical: returning a fresh array would mint new xyflow node refs on
+    // every keystroke, retriggering def-sync via the parent's onChange
+    // and ultimately the same render storm we already guard against.
+    expect(after).toBe(before)
+  })
+
+  test('no-op when the selected id is not in the items', () => {
+    const before = [{ id: 'a' }]
+    expect(applySelection(before, ['missing'])).toBe(before)
+  })
+
+  test('empty selectedIds → identity', () => {
+    const before = [{ id: 'a' }, { id: 'b' }]
+    expect(applySelection(before, [])).toBe(before)
+  })
+
+  test('mixed selection: only the matching item gets cloned', () => {
+    const before = [{ id: 'a' }, { id: 'b', selected: true }, { id: 'c' }]
+    const after = applySelection(before, ['a', 'b'])
+    expect(after).not.toBe(before)
+    expect(after[0]).not.toBe(before[0])
+    expect(after[0]?.selected).toBe(true)
+    // b was already selected — same ref preserved when we walked it.
+    expect(after[1]).toBe(before[1])
+    expect(after[2]).toBe(before[2])
+  })
+})
 
 describe('workflows.edit.tsx wires clearSelection into inspector close', () => {
   test('route source calls canvasRef.current?.clearSelection() and uses it on both Edge + Node onClose', async () => {
