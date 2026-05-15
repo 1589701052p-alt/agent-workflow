@@ -5,11 +5,11 @@
 import { useTranslation } from 'react-i18next'
 import type { CreateAgent } from '@agent-workflow/shared'
 import { AGENT_NAME_RE } from '@agent-workflow/shared'
-import { ChipsInput } from './ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from './Form'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
 import { ModelSelect } from './ModelSelect'
+import { OutputsEditor } from './OutputsEditor'
 import { SkillsPicker } from './SkillsPicker'
 
 export interface AgentFormProps {
@@ -63,11 +63,11 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
         </Field>
 
         <Field label={t('agentForm.fieldOutputs')} hint={t('agentForm.fieldOutputsHint')}>
-          <ChipsInput
-            value={value.outputs ?? []}
-            onChange={(v) => patch('outputs', v)}
+          <OutputsEditor
+            outputs={value.outputs ?? []}
+            outputKinds={value.outputKinds}
+            onChange={(outputs, outputKinds) => onChange({ ...value, outputs, outputKinds })}
             placeholder={t('agentForm.fieldOutputsPlaceholder')}
-            validate={(s) => (/^[a-z][a-z0-9_]*$/.test(s) ? null : t('agentForm.outputsValidate'))}
           />
         </Field>
 

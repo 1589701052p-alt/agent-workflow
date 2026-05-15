@@ -419,6 +419,10 @@ export interface Resources {
     fieldOutputsHint: string
     fieldOutputsPlaceholder: string
     outputsValidate: string
+    outputKindLabel: string
+    outputKind_string: string
+    outputKind_markdown: string
+    outputKind_markdown_file: string
     fieldSkills: string
     fieldSkillsHint: string
     fieldSkillsPlaceholder: string
@@ -965,9 +969,14 @@ export const zhCN: Resources = {
     fieldDescription: '描述',
     fieldDescriptionPlaceholder: '一行简介，会显示在列表中',
     fieldOutputs: '输出端口',
-    fieldOutputsHint: '在 <port> envelope 中声明的端口名。',
+    fieldOutputsHint:
+      '在 <port> envelope 中声明的端口名。可为每个端口选择类型：markdown_file 表示端口内容是 worktree 内的 .md 相对路径，框架会自动读取文件内容。',
     fieldOutputsPlaceholder: '输入端口名后按 Enter',
     outputsValidate: '只允许小写字母 + 下划线',
+    outputKindLabel: '{{port}} 的输出类型',
+    outputKind_string: '字符串',
+    outputKind_markdown: 'Markdown 正文',
+    outputKind_markdown_file: 'Markdown 文件路径',
     fieldSkills: '技能',
     fieldSkillsHint: '框架运行时注入的技能名。',
     fieldSkillsPlaceholder: '输入技能名后按 Enter',
