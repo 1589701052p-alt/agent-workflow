@@ -1,0 +1,514 @@
+/* Self-hosted fonts (no external CDN). Each @fontsource entry registers
+ * one @font-face with `font-display: swap` so initial paint can use the
+ * system fallback while the woff2 streams in. Latin subset only — CJK
+ * stays on system-ui via the var(--font-prose) fallback chain. */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+/* KaTeX styles (math rendering). Imported at the top so the prose rules
+ * can override layout-affecting bits (line-height, font-size) below. */
+@import 'katex/dist/katex.min.css';
+
+/* RFC-008 — Premium markdown prose styles.
+ *
+ * Selector convention: every rule is scoped under `.prose`. Both
+ * `<Prose>` (review detail + editor preview) and any other future
+ * consumer wrapping content in `.prose` gets identical typography.
+ *
+ * Design tokens (--bg/--panel/--border/--text/--muted/--accent) come
+ * from styles.css; we layer prose-specific tokens on top.
+ */
+
+:root {
+  --font-prose:
+    'Inter', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --prose-code-bg: color-mix(in srgb, var(--muted) 12%, transparent);
+  --prose-pre-bg: var(--panel);
+  --prose-table-stripe: color-mix(in srgb, var(--muted) 6%, transparent);
+  --prose-table-head-bg: color-mix(in srgb, var(--accent) 8%, transparent);
+  --prose-quote-bar: color-mix(in srgb, var(--muted) 45%, transparent);
+  --prose-quote-text: var(--muted);
+  --prose-anchor: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+/* -------- base container -------- */
+
+.prose {
+  color: var(--text);
+  font-family: var(--font-prose);
+  font-size: 14.5px;
+  line-height: 1.7;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.prose > *:first-child {
+  margin-top: 0;
+}
+
+.prose > *:last-child {
+  margin-bottom: 0;
+}
+
+/* -------- headings -------- */
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+  scroll-margin-top: 80px;
+}
+
+.prose h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose h3 {
+  font-size: 1.2em;
+}
+
+.prose h4 {
+  font-size: 1.05em;
+}
+
+.prose h5 {
+  font-size: 0.95em;
+  color: var(--muted);
+}
+
+.prose h6 {
+  font-size: 0.9em;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* heading anchor (`#`) added by rehype-autolink-headings */
+.prose .prose__anchor {
+  display: inline-block;
+  margin-left: 0.4em;
+  color: var(--prose-anchor);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.prose h1:hover .prose__anchor,
+.prose h2:hover .prose__anchor,
+.prose h3:hover .prose__anchor,
+.prose h4:hover .prose__anchor,
+.prose h5:hover .prose__anchor,
+.prose h6:hover .prose__anchor,
+.prose .prose__anchor:focus {
+  opacity: 1;
+}
+
+/* -------- paragraphs / spacing -------- */
+
+.prose p {
+  margin: 0.8em 0;
+}
+
+.prose hr {
+  height: 1px;
+  background: var(--border);
+  border: 0;
+  margin: 2em 0;
+}
+
+/* -------- inline emphasis -------- */
+
+.prose strong {
+  font-weight: 600;
+}
+
+.prose em {
+  font-style: italic;
+}
+
+.prose del,
+.prose s {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* -------- links -------- */
+
+.prose a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+
+.prose a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* External-link icon injected by rehype-external-links */
+.prose .prose__external-icon {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-left: 0.2em;
+  vertical-align: -1px;
+  background-color: currentColor;
+  -webkit-mask:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M14 4h6v6M10 14L20 4M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6'/></svg>")
+    no-repeat center / contain;
+  mask:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M14 4h6v6M10 14L20 4M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6'/></svg>")
+    no-repeat center / contain;
+  opacity: 0.6;
+}
+
+/* -------- lists -------- */
+
+.prose ul,
+.prose ol {
+  padding-left: 1.6em;
+  margin: 0.7em 0;
+}
+
+.prose li {
+  margin: 0.25em 0;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin: 0.25em 0;
+}
+
+.prose li > p {
+  margin: 0.3em 0;
+}
+
+/* GFM task list — remark-gfm emits <input type=checkbox> inside <li> */
+.prose li input[type='checkbox'] {
+  margin: 0 0.5em 0 -1.3em;
+  vertical-align: middle;
+  transform: scale(1.05);
+  accent-color: var(--accent);
+}
+
+.prose .contains-task-list {
+  list-style: none;
+  padding-left: 0.6em;
+}
+
+/* -------- blockquote -------- */
+
+.prose blockquote {
+  margin: 1em 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--prose-quote-bar);
+  color: var(--prose-quote-text);
+  background: color-mix(in srgb, var(--muted) 4%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+
+.prose blockquote > :first-child {
+  margin-top: 0;
+}
+
+.prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* -------- tables -------- */
+
+.prose table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.95em;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose thead th {
+  background: var(--prose-table-head-bg);
+  font-weight: 600;
+}
+
+.prose tbody tr:nth-child(even) {
+  background: var(--prose-table-stripe);
+}
+
+/* -------- images -------- */
+
+.prose .prose__image,
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+  margin: 0.6em 0;
+}
+
+/* -------- inline code -------- */
+
+.prose code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--prose-code-bg);
+  border: 0;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: inherit;
+}
+
+/* -------- code blocks (rehype-pretty-code + shiki) -------- */
+
+.prose [data-rehype-pretty-code-figure] {
+  margin: 1em 0;
+  position: relative;
+}
+
+.prose [data-rehype-pretty-code-title] {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  padding: 4px 10px;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.prose [data-rehype-pretty-code-title] + pre {
+  border-top-left-radius: 0;
+  margin-top: 0;
+}
+
+.prose pre {
+  background: var(--prose-pre-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.prose pre > code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: grid;
+  font-family: var(--font-mono);
+}
+
+/* shiki dual-theme: each token has style="--shiki-light:#x;--shiki-dark:#y;
+   --shiki-light-bg:#a;--shiki-dark-bg:#b". Default = light; override under
+   data-theme=dark and prefers-color-scheme=dark. */
+.prose pre [style*='--shiki-light'] {
+  color: var(--shiki-light);
+}
+
+.prose pre[style*='--shiki-light-bg'] {
+  background-color: var(--shiki-light-bg);
+}
+
+:root[data-theme='dark'] .prose pre [style*='--shiki-dark'] {
+  color: var(--shiki-dark);
+}
+
+:root[data-theme='dark'] .prose pre[style*='--shiki-dark-bg'] {
+  background-color: var(--shiki-dark-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .prose pre [style*='--shiki-dark'] {
+    color: var(--shiki-dark);
+  }
+  :root:not([data-theme]) .prose pre[style*='--shiki-dark-bg'] {
+    background-color: var(--shiki-dark-bg);
+  }
+}
+
+/* rehype-pretty-code line transformers */
+.prose [data-line] {
+  padding-left: 0;
+  padding-right: 12px;
+}
+
+.prose [data-highlighted-line] {
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.prose [data-line].diff.add {
+  background-color: color-mix(in srgb, #1aa66a 18%, transparent);
+  box-shadow: inset 2px 0 0 #1aa66a;
+}
+
+.prose [data-line].diff.remove {
+  background-color: color-mix(in srgb, #d12c2c 18%, transparent);
+  box-shadow: inset 2px 0 0 #d12c2c;
+}
+
+.prose [data-line].has-focus,
+.prose:has([data-line].has-focus) [data-line]:not(.has-focus) {
+  opacity: 0.5;
+  filter: blur(0.025rem);
+  transition:
+    opacity 0.2s,
+    filter 0.2s;
+}
+
+.prose [data-line].has-focus {
+  opacity: 1;
+  filter: none;
+}
+
+/* -------- diagrams (mermaid / plantuml) ride the diagram class -------- */
+
+.prose .prose__diagram {
+  margin: 1em 0;
+  text-align: center;
+}
+
+.prose .prose__diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* -------- GitHub-style alerts (remark-github-blockquote-alert) -------- */
+
+.prose .markdown-alert {
+  margin: 1.2em 0;
+  padding: 8px 14px;
+  border-left: 4px solid var(--border);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+}
+
+.prose .markdown-alert > :first-child {
+  margin-top: 0;
+}
+
+.prose .markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
+.prose .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  text-transform: capitalize;
+}
+
+.prose .markdown-alert-title svg {
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+  fill: currentColor;
+}
+
+/* Five GitHub-style colors. Tinted on top of the project token palette so
+ * dark mode stays consistent. */
+.prose .markdown-alert-note {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.prose .markdown-alert-note .markdown-alert-title {
+  color: var(--accent);
+}
+
+.prose .markdown-alert-tip {
+  border-left-color: #1aa66a;
+  background: color-mix(in srgb, #1aa66a 10%, transparent);
+}
+.prose .markdown-alert-tip .markdown-alert-title {
+  color: #1aa66a;
+}
+
+.prose .markdown-alert-important {
+  border-left-color: #8a63d2;
+  background: color-mix(in srgb, #8a63d2 10%, transparent);
+}
+.prose .markdown-alert-important .markdown-alert-title {
+  color: #8a63d2;
+}
+
+.prose .markdown-alert-warning {
+  border-left-color: #d4910a;
+  background: color-mix(in srgb, #d4910a 10%, transparent);
+}
+.prose .markdown-alert-warning .markdown-alert-title {
+  color: #d4910a;
+}
+
+.prose .markdown-alert-caution {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.prose .markdown-alert-caution .markdown-alert-title {
+  color: var(--danger);
+}
+
+/* -------- KaTeX tweaks -------- */
+
+.prose .katex {
+  font-size: 1.05em;
+}
+
+/* Block-level math (KaTeX `display: block`) — center, allow horizontal
+ * overflow so wide equations scroll instead of squishing. */
+.prose .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+.prose .katex-display > .katex {
+  white-space: nowrap;
+}
+
+/* -------- medium-zoom overlay tone -------- */
+
+.medium-zoom-overlay {
+  background: rgba(0, 0, 0, 0.85) !important;
+}
+
+/* -------- defensive: drop any iframe/object/embed slipping through -------- */
+
+.prose iframe,
+.prose object,
+.prose embed {
+  display: none;
+}

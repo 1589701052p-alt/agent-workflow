@@ -843,27 +843,15 @@ code {
   letter-spacing: 0.04em;
 }
 
+/* Container chrome for the editor preview pane. Typography (headings,
+ * lists, code, tables, callouts, etc.) is owned by prose.css now that
+ * the preview renders via <Prose>. */
 .md-editor__preview {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel);
   padding: 10px 14px;
-  font-size: 14px;
-  line-height: 1.5;
   min-height: 200px;
-  overflow: auto;
-}
-
-.md-editor__preview h1,
-.md-editor__preview h2,
-.md-editor__preview h3 {
-  margin: 12px 0 6px;
-}
-
-.md-editor__preview pre {
-  background: var(--bg);
-  padding: 8px 10px;
-  border-radius: 4px;
   overflow: auto;
 }
 

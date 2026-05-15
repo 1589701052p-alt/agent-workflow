@@ -31,6 +31,8 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-004](./RFC-004-input-port-contract/proposal.md)             | Input 节点端口契约统一：scheduler portName=inputKey + 编辑器同步 `definition.inputs[]` + validator 新规则    | Done        |
 | [RFC-005](./RFC-005-human-review/proposal.md)                    | 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分）                                   | Done        |
 | [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md)            | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享）            | Done        |
+| [RFC-007](./RFC-007-canvas-review-output-drag/proposal.md)       | Canvas review / output 节点支持拖拽连线：与 agent 节点对齐 + 字段 / 边双向同步 + iterate 锁                  | Draft       |
+| [RFC-008](./RFC-008-markdown-prose-premium/proposal.md)          | Premium Markdown 渲染（react-markdown + shiki + KaTeX + Callout + 锚点 + 字体）替换 review + 编辑器两套渲染器 | In Progress |
 
 ---
 

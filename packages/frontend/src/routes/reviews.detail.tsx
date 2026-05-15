@@ -19,7 +19,7 @@ import type {
 import type { DocVersion } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
-import { MarkdownView } from '@/components/review/MarkdownView'
+import { Prose } from '@/components/prose/Prose'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
 import { deleteDraft, getDraft, listDrafts, setDraft } from '@/lib/review/draftStore'
@@ -552,7 +552,7 @@ function ReviewDetailPage() {
             ref={markdownRef}
             onMouseUp={() => void onMouseUpInDoc()}
           >
-            <MarkdownView
+            <Prose
               body={data.currentBody}
               taskId={data.summary.taskId}
               plantumlEndpoint={config.data?.plantumlEndpoint}

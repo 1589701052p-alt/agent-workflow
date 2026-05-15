@@ -34,6 +34,19 @@ if (typeof globalThis.window !== 'undefined') {
   Object.defineProperty(globalThis.window, 'localStorage', { value: shim, configurable: true })
 }
 
+// React 19's concurrent scheduler defers some render work to `setImmediate`.
+// When a test renders async-side-effect components (e.g. `<Prose>` lazy-loading
+// shiki / mermaid / plantuml), the work can be queued just as the test ends,
+// then fires after happy-dom has torn `window` down — producing "ReferenceError:
+// window is not defined" inside react-dom's scheduler. Draining one
+// macrotask + microtask cycle after each test gives React a chance to finish.
+import { afterEach } from 'vitest'
+import { cleanup } from '@testing-library/react'
+afterEach(async () => {
+  cleanup()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+})
+
 // Boot i18next so components that call useTranslation() get real strings.
 // Without this they render raw keys (e.g. 'onboarding.title'), which makes
 // queryByText selectors fragile in render tests.

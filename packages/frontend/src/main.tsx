@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { router } from './router'
 import './i18n' // side-effect: initialize i18next before any component mounts
 import './styles.css'
+import './components/prose/prose.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {
