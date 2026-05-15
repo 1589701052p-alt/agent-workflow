@@ -310,6 +310,14 @@ export interface Resources {
     fieldTemperatureOverride: string
     sourcePortNodePlaceholder: string
     sourcePortPlaceholder: string
+    edgeTitle: string
+    edgeSourceLabel: string
+    edgeTargetLabel: string
+    edgePortNameLabel: string
+    edgeConflictMsg: string
+    edgeDeleteBtn: string
+    missingRefsLabel: string
+    missingRefsHint: string
   }
   promptPreview: {
     mockTitle: string
@@ -758,6 +766,15 @@ export const zhCN: Resources = {
     fieldTemperatureOverride: 'Temperature 覆盖',
     sourcePortNodePlaceholder: '上游 node id',
     sourcePortPlaceholder: '端口名',
+    edgeTitle: '边设置',
+    edgeSourceLabel: '源',
+    edgeTargetLabel: '目标节点',
+    edgePortNameLabel: '目标端口名',
+    edgeConflictMsg: '已存在同源同目标端口的边，请先删除冲突边。',
+    edgeDeleteBtn: '删除该边',
+    missingRefsLabel: '模板引用但未连入：',
+    missingRefsHint:
+      '这些端口名出现在 prompt 模板里但还没有上游边；启动 task 时会被静态校验拦下。',
   },
   promptPreview: {
     mockTitle: '模拟端口值',

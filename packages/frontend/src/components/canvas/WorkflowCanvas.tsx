@@ -29,7 +29,11 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
 import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
-import type { CanvasNodeData } from './nodes/types'
+import {
+  INBOUND_HANDLE_ID,
+  type CanvasNodeData,
+  type CanvasSelection,
+} from './nodes/types'
 import { GitWrapperNode, LoopWrapperNode } from './nodes/WrapperNodes'
 
 const NODE_TYPES = {
@@ -46,8 +50,12 @@ export interface WorkflowCanvasProps {
   /** Used to look up agent.outputs when rendering agent nodes. Optional. */
   agents?: Agent[]
   onChange?: (next: WorkflowDefinition) => void
-  /** Receives the currently-selected node id or null when nothing is selected. */
-  onSelect?: (nodeId: string | null) => void
+  /**
+   * Receives the currently-selected node or edge, or null when nothing
+   * (or a multi-selection) is active. Edge selection lets the editor
+   * route render an EdgeInspector instead of a NodeInspector (RFC-003).
+   */
+  onSelect?: (sel: CanvasSelection | null) => void
   readOnly?: boolean
   /**
    * Map of nodeId → status. Wired into the per-kind renderers'
@@ -159,7 +167,7 @@ function CanvasInner({
   const handleConnect = useCallback(
     (conn: Connection) => {
       if (readOnly === true || onChange === undefined) return
-      const built = buildEdgeFromConnection(definition, conn)
+      const built = buildEdgeFromConnection(definition, translateInboundConnection(conn))
       if (built === null) return
       onChange({ ...definition, edges: [...definition.edges, built] })
     },
@@ -440,7 +448,7 @@ function CanvasInner({
           setSelection((prev) =>
             sameIds(prev.nodes, ns) && sameIds(prev.edges, es) ? prev : { nodes: ns, edges: es },
           )
-          if (onSelect !== undefined) onSelect(ns[0] ?? null)
+          if (onSelect !== undefined) onSelect(deriveSelection(ns, es))
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -618,6 +626,38 @@ function affectsDefinition(changes: NodeChange[]): boolean {
   return changes.some(
     (c) => c.type === 'position' || c.type === 'add' || c.type === 'remove' || c.type === 'replace',
   )
+}
+
+/**
+ * Translate an xyflow Connection landing on the catch-all left handle
+ * (RFC-003) into a regular connection: target portName defaults to the
+ * source portName, matching design proposal §3.5 "input port defaults to
+ * the upstream output port name". Connections to a specific named handle
+ * pass through untouched.
+ *
+ * Exported for unit tests.
+ */
+export function translateInboundConnection(conn: Connection): Connection {
+  if (conn.targetHandle === INBOUND_HANDLE_ID) {
+    return { ...conn, targetHandle: conn.sourceHandle ?? null }
+  }
+  return conn
+}
+
+/**
+ * Map a canvas selection (one node, or one edge, or anything else) to the
+ * `CanvasSelection` shape consumed by the editor route. Multi-selections
+ * and empty selections both collapse to `null` — the inspector drawer
+ * only meaningfully works on a single subject.
+ */
+export function deriveSelection(nodeIds: string[], edgeIds: string[]): CanvasSelection | null {
+  if (nodeIds.length === 1 && edgeIds.length === 0 && nodeIds[0] !== undefined) {
+    return { kind: 'node', id: nodeIds[0] }
+  }
+  if (nodeIds.length === 0 && edgeIds.length === 1 && edgeIds[0] !== undefined) {
+    return { kind: 'edge', id: edgeIds[0] }
+  }
+  return null
 }
 
 /**

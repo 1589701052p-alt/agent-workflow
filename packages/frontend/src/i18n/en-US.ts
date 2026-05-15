@@ -319,6 +319,16 @@ export const enUS: Resources = {
     fieldTemperatureOverride: 'Temperature override',
     sourcePortNodePlaceholder: 'upstream node id',
     sourcePortPlaceholder: 'port name',
+    edgeTitle: 'Edge',
+    edgeSourceLabel: 'Source',
+    edgeTargetLabel: 'Target node',
+    edgePortNameLabel: 'Target port name',
+    edgeConflictMsg:
+      'An edge with the same source and target port already exists; remove it first.',
+    edgeDeleteBtn: 'Delete edge',
+    missingRefsLabel: 'Template refs without inbound edge:',
+    missingRefsHint:
+      'These names appear in the prompt template but have no inbound edge; task launch will fail static validation.',
   },
   promptPreview: {
     mockTitle: 'Mock port values',

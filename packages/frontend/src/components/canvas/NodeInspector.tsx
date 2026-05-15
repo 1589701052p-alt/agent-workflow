@@ -445,6 +445,7 @@ function EditForm({ node, agents, definition, onPatch }: EditProps) {
               monospace
             />
             <PortRefList ports={ports.inputs} />
+            <MissingRefList template={promptTemplate} inputPorts={ports.inputs} />
           </Field>
 
           <div className="form-grid form-grid--cols-2">
@@ -496,6 +497,51 @@ function EditForm({ node, agents, definition, onPatch }: EditProps) {
       )
     }
   }
+}
+
+/**
+ * Lists `{{xxx}}` placeholders in the prompt template that don't have a
+ * matching input port (i.e., no inbound edge with that target.portName).
+ * Mirror of the P-2-01 backend validator's "template ref missing" rule,
+ * surfaced at edit time so users can self-debug before launching.
+ *
+ * Built-in meta tokens (e.g., `__repo_path__`) are always available at
+ * runtime, so we exclude any name starting with `__`.
+ *
+ * Exported for unit tests.
+ */
+export function extractMissingRefs(template: string, inputPorts: string[]): string[] {
+  const re = /\{\{(\w+)\}\}/g
+  const refs = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = re.exec(template)) !== null) {
+    const name = m[1]
+    if (name === undefined || name.startsWith('__')) continue
+    refs.add(name)
+  }
+  const have = new Set(inputPorts)
+  return [...refs].filter((r) => !have.has(r))
+}
+
+function MissingRefList({
+  template,
+  inputPorts,
+}: {
+  template: string
+  inputPorts: string[]
+}) {
+  const { t } = useTranslation()
+  const missing = extractMissingRefs(template, inputPorts)
+  if (missing.length === 0) return null
+  return (
+    <div className="inspector__port-refs inspector__port-refs--missing">
+      <span className="muted">{t('inspector.missingRefsLabel')}</span>{' '}
+      <ChipsInput value={missing} onChange={() => {}} placeholder="" />
+      <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {t('inspector.missingRefsHint')}
+      </p>
+    </div>
+  )
 }
 
 function PortRefList({ ports }: { ports: string[] }) {

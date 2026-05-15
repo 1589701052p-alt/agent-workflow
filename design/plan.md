@@ -27,6 +27,7 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | --- | --- | --- |
 | [RFC-001](./RFC-001-runtime-status-and-model-select/proposal.md) | Settings → Runtime 状态卡片 + Model 下拉选择 | Done |
 | [RFC-002](./RFC-002-agent-defaults-from-runtime/proposal.md) | Add Agent 表单：从 Runtime 默认值快照 + Skills 下拉选已有（含 Settings 新增 defaultSteps / defaultMaxSteps） | Done |
+| [RFC-003](./RFC-003-canvas-input-port-wiring/proposal.md) | Canvas 输入端口连边可达性：catch-all 左侧 handle + onConnect 默认 portName=source + EdgeInspector 改名 | Done |
 
 ---
 

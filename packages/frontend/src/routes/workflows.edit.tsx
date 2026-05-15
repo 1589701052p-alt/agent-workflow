@@ -10,8 +10,10 @@ import type { Agent, Workflow, WorkflowDefinition } from '@agent-workflow/shared
 import { api, ApiError } from '@/api/client'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { EditorSidebar } from '@/components/canvas/EditorSidebar'
+import { EdgeInspector } from '@/components/canvas/EdgeInspector'
 import { NodeInspector } from '@/components/canvas/NodeInspector'
 import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
+import type { CanvasSelection } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
 import { useWorkflowSync } from '@/hooks/useWorkflowSync'
@@ -59,7 +61,12 @@ function WorkflowNewPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [definition, setDefinition] = useState<WorkflowDefinition>(EMPTY_DEF)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selection, setSelection] = useState<CanvasSelection | null>(null)
+  const selectedNodeId = selection?.kind === 'node' ? selection.id : null
+  const selectedEdge =
+    selection?.kind === 'edge'
+      ? (definition.edges.find((e) => e.id === selection.id) ?? null)
+      : null
   const agents = useQuery<Agent[]>({
     queryKey: ['agents'],
     queryFn: ({ signal }) => api.get('/api/agents', undefined, signal),
@@ -100,23 +107,32 @@ function WorkflowNewPage() {
       {create.error !== null && create.error !== undefined && (
         <div className="error-box">{describeError(create.error)}</div>
       )}
-      <div className={editorLayoutClass(selectedId)}>
+      <div className={editorLayoutClass(selection?.id ?? null)}>
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas
             definition={definition}
             onChange={setDefinition}
-            onSelect={setSelectedId}
+            onSelect={setSelection}
             agents={agents.data ?? []}
           />
         </div>
-        <NodeInspector
-          definition={definition}
-          selectedNodeId={selectedId}
-          agents={agents.data ?? []}
-          onChange={setDefinition}
-          onClose={() => setSelectedId(null)}
-        />
+        {selectedEdge !== null ? (
+          <EdgeInspector
+            edge={selectedEdge}
+            definition={definition}
+            onChange={setDefinition}
+            onClose={() => setSelection(null)}
+          />
+        ) : (
+          <NodeInspector
+            definition={definition}
+            selectedNodeId={selectedNodeId}
+            agents={agents.data ?? []}
+            onChange={setDefinition}
+            onClose={() => setSelection(null)}
+          />
+        )}
       </div>
     </div>
   )
@@ -139,7 +155,12 @@ function WorkflowEditPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [dirty, setDirty] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selection, setSelection] = useState<CanvasSelection | null>(null)
+  const selectedNodeId = selection?.kind === 'node' ? selection.id : null
+  const selectedEdge =
+    selection?.kind === 'edge' && draft !== null
+      ? (draft.edges.find((e) => e.id === selection.id) ?? null)
+      : null
   const lastSaved = useRef<{
     name: string
     description: string
@@ -311,29 +332,41 @@ function WorkflowEditPage() {
         <ValidationPanel result={validate.data} />
       )}
 
-      <div className={editorLayoutClass(selectedId)}>
+      <div className={editorLayoutClass(selection?.id ?? null)}>
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas
             definition={draft}
             agents={agents.data ?? []}
-            onSelect={setSelectedId}
+            onSelect={setSelection}
             onChange={(next) => {
               setDraft(next)
               setDirty(true)
             }}
           />
         </div>
-        <NodeInspector
-          definition={draft}
-          selectedNodeId={selectedId}
-          agents={agents.data ?? []}
-          onChange={(next) => {
-            setDraft(next)
-            setDirty(true)
-          }}
-          onClose={() => setSelectedId(null)}
-        />
+        {selectedEdge !== null ? (
+          <EdgeInspector
+            edge={selectedEdge}
+            definition={draft}
+            onChange={(next) => {
+              setDraft(next)
+              setDirty(true)
+            }}
+            onClose={() => setSelection(null)}
+          />
+        ) : (
+          <NodeInspector
+            definition={draft}
+            selectedNodeId={selectedNodeId}
+            agents={agents.data ?? []}
+            onChange={(next) => {
+              setDraft(next)
+              setDirty(true)
+            }}
+            onClose={() => setSelection(null)}
+          />
+        )}
       </div>
     </div>
   )

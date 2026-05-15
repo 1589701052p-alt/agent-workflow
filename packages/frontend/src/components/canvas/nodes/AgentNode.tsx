@@ -4,7 +4,7 @@
 
 import type { NodeProps } from '@xyflow/react'
 import { PortHandles } from './PortHandles'
-import type { CanvasNodeData } from './types'
+import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
   data: CanvasNodeData
@@ -23,7 +23,11 @@ export function AgentNode({ data, selected }: Props) {
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>
-      <PortHandles side="left" ports={data.inputPorts} />
+      <PortHandles
+        side="left"
+        ports={data.inputPorts}
+        catchAll={{ id: INBOUND_HANDLE_ID }}
+      />
       <PortHandles side="right" ports={data.outputPorts} />
     </div>
   )

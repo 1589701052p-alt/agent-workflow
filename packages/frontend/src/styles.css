@@ -1660,6 +1660,24 @@ code {
   width: 8px !important;
   height: 8px !important;
   border: 2px solid var(--panel) !important;
+  z-index: 1;
+}
+
+/* Invisible 12px wide target strip covering the node's left edge. Lets
+ * the first edge into a fresh agent / wrapper-loop node land somewhere
+ * (RFC-003). Named handles sit on top via z-index so fan-in drops still
+ * hit the precise port. */
+.canvas-node__handle--catchall {
+  position: absolute !important;
+  top: 0 !important;
+  left: -6px !important;
+  width: 12px !important;
+  height: 100% !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  transform: none !important;
+  z-index: 0;
 }
 
 /* ---- Task output panel ---- */

@@ -4,6 +4,18 @@
 
 import type { NodeKind } from '@agent-workflow/shared'
 
+/** Catch-all left-side handle id. WorkflowCanvas.handleConnect translates
+ * a connection landing here into target.portName = source.portName, which
+ * is the design default (proposal §3.5). Named handles still take hit
+ * priority for fan-in drops; the catch-all just lets the first edge into
+ * a fresh node land somewhere. */
+export const INBOUND_HANDLE_ID = '__inbound__'
+
+/** Discriminated selection emitted by WorkflowCanvas.onSelect. RFC-003. */
+export type CanvasSelection =
+  | { kind: 'node'; id: string }
+  | { kind: 'edge'; id: string }
+
 export interface CanvasNodeData extends Record<string, unknown> {
   /** Workflow node id (mirrors xyflow node.id). */
   nodeId: string

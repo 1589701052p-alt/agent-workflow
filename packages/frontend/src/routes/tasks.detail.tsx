@@ -279,12 +279,12 @@ function TaskStatusCanvas({
         definition={definition}
         agents={agents.data ?? []}
         nodeStatuses={statuses}
-        onSelect={(nodeId) => {
-          if (nodeId === null) {
+        onSelect={(sel) => {
+          if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)
             return
           }
-          const runId = latestRunByNode.get(nodeId)
+          const runId = latestRunByNode.get(sel.id)
           onSelectNodeRun(runId ?? null)
         }}
         readOnly

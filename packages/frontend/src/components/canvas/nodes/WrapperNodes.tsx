@@ -5,7 +5,7 @@
 import type { NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
-import type { CanvasNodeData } from './types'
+import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
   data: CanvasNodeData & { innerCount?: number }
@@ -45,7 +45,11 @@ export function LoopWrapperNode({ data, selected }: Props) {
       <div className="canvas-node__id">
         {t('wrapperNode.innerNodes', { n: data.innerCount ?? 0 })}
       </div>
-      <PortHandles side="left" ports={data.inputPorts} />
+      <PortHandles
+        side="left"
+        ports={data.inputPorts}
+        catchAll={{ id: INBOUND_HANDLE_ID }}
+      />
       <PortHandles side="right" ports={data.outputPorts} />
     </div>
   )
