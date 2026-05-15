@@ -20,6 +20,12 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>
 export const TaskSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
+  /**
+   * Display name of the referenced workflow, joined at query time. Null
+   * when the workflow row was deleted (the task still survives via
+   * workflowSnapshot, but we have no name to render).
+   */
+  workflowName: z.string().nullable(),
   /** Snapshotted workflow definition; survives later workflow edits. */
   workflowSnapshot: z.unknown(),
   repoPath: z.string(),
@@ -46,6 +52,8 @@ export type Task = z.infer<typeof TaskSchema>
 export const TaskSummarySchema = z.object({
   id: z.string(),
   workflowId: z.string(),
+  /** Joined display name (null when the workflow row no longer exists). */
+  workflowName: z.string().nullable(),
   repoPath: z.string(),
   status: TaskStatusSchema,
   startedAt: z.number().int(),

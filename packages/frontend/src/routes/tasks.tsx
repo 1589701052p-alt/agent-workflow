@@ -82,6 +82,7 @@ function TasksPage() {
           <thead>
             <tr>
               <th>{t('tasks.colId')}</th>
+              <th>{t('tasks.colWorkflow')}</th>
               <th>{t('tasks.colStatus')}</th>
               <th>{t('tasks.colStarted')}</th>
               <th>{t('tasks.colRepo')}</th>
@@ -99,6 +100,15 @@ function TasksPage() {
                     className="data-table__link data-table__id"
                   >
                     <code>{row.id.slice(-10)}</code>
+                  </Link>
+                </td>
+                <td>
+                  <Link
+                    to="/workflows/$id"
+                    params={{ id: row.workflowId }}
+                    className="data-table__link"
+                  >
+                    {row.workflowName ?? row.workflowId}
                   </Link>
                 </td>
                 <td>

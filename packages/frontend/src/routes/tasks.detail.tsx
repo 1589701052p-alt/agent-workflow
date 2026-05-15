@@ -108,7 +108,17 @@ function TaskDetailPage() {
           <dl className="task-meta">
             <dt>{t('tasks.metaWorkflow')}</dt>
             <dd>
-              <code>{tk.workflowId}</code>
+              <Link to="/workflows/$id" params={{ id: tk.workflowId }} className="data-table__link">
+                {tk.workflowName ?? tk.workflowId}
+              </Link>
+              {tk.workflowName !== null && (
+                <>
+                  {' '}
+                  <span className="data-table__muted">
+                    (<code>{tk.workflowId}</code>)
+                  </span>
+                </>
+              )}
             </dd>
             <dt>{t('tasks.metaRepo')}</dt>
             <dd>
@@ -227,6 +237,11 @@ function TaskDetailPage() {
               taskId={id}
               taskStatus={tk.status}
               nodeRunId={selectedNodeRunId}
+              nodeId={resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId)}
+              workflowNodeKind={resolveNodeKindFromSnapshot(
+                tk.workflowSnapshot,
+                resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
+              )}
               runs={nodeRuns.data.runs}
               outputs={nodeRuns.data.outputs}
               onClose={closeNodeDrawer}
@@ -480,4 +495,39 @@ function describeError(e: unknown): string {
   if (e instanceof ApiError) return `${e.code}: ${e.message}`
   if (e instanceof Error) return e.message
   return String(e)
+}
+
+/**
+ * RFC-011: map a selected `node_run.id` back to the workflow `node.id` so
+ * the drawer's Prompt-tab attempts switcher can list every node_run that
+ * shares the same workflow node id.
+ *
+ * Exported for unit tests.
+ */
+export function resolveNodeIdFromRuns(runs: NodeRun[], nodeRunId: string | null): string | null {
+  if (nodeRunId === null) return null
+  return runs.find((r) => r.id === nodeRunId)?.nodeId ?? null
+}
+
+/**
+ * RFC-011: pluck the workflow node kind from the task's frozen snapshot
+ * (kind tells the Prompt tab whether to render the attempts switcher or an
+ * "N/A — no opencode prompt" hint).
+ *
+ * Exported for unit tests.
+ */
+export function resolveNodeKindFromSnapshot(
+  snapshot: unknown,
+  nodeId: string | null,
+): string | null {
+  if (nodeId === null) return null
+  if (typeof snapshot !== 'object' || snapshot === null) return null
+  const nodes = (snapshot as { nodes?: unknown }).nodes
+  if (!Array.isArray(nodes)) return null
+  for (const n of nodes) {
+    if (typeof n !== 'object' || n === null) continue
+    const node = n as { id?: unknown; kind?: unknown }
+    if (node.id === nodeId && typeof node.kind === 'string') return node.kind
+  }
+  return null
 }

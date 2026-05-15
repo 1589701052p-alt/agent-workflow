@@ -216,6 +216,7 @@ describe('WebSocket channels', () => {
     emitTaskStatus({
       id: t.id,
       workflowId: t.workflowId,
+      workflowName: null,
       workflowSnapshot: {},
       repoPath: t.repoPath,
       worktreePath: t.worktreePath,

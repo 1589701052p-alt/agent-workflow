@@ -16,7 +16,7 @@ import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
 import { existsSync } from 'node:fs'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
+import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks, workflows } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
@@ -129,6 +129,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     task: {
       id: task.id,
       workflowId: task.workflowId,
+      workflowName: task.workflowName,
       repoPath: task.repoPath,
       status: task.status,
       startedAt: task.startedAt,
@@ -500,9 +501,14 @@ export function emitTaskStatus(t: Task): void {
 }
 
 export async function getTask(db: DbClient, id: string): Promise<Task | null> {
-  const rows = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1)
+  const rows = await db
+    .select({ task: tasks, workflowName: workflows.name })
+    .from(tasks)
+    .leftJoin(workflows, eq(workflows.id, tasks.workflowId))
+    .where(eq(tasks.id, id))
+    .limit(1)
   const row = rows[0]
-  return row ? rowToTask(row) : null
+  return row ? rowToTask(row.task, row.workflowName) : null
 }
 
 export interface ListTasksFilters {
@@ -527,12 +533,13 @@ export async function listTasks(
         ? conditions[0]
         : and(...conditions)
   const rows = await db
-    .select()
+    .select({ task: tasks, workflowName: workflows.name })
     .from(tasks)
+    .leftJoin(workflows, eq(workflows.id, tasks.workflowId))
     .where(where)
     .orderBy(desc(tasks.startedAt))
     .limit(filters.limit ?? 100)
-  return rows.map(rowToSummary)
+  return rows.map((r) => rowToSummary(r.task, r.workflowName))
 }
 
 /**
@@ -736,7 +743,7 @@ export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDif
   return { diff, baseCommit: task.baseCommit, truncated }
 }
 
-function rowToTask(row: typeof tasks.$inferSelect): Task {
+function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null): Task {
   let snapshot: unknown
   try {
     snapshot = JSON.parse(row.workflowSnapshot)
@@ -752,6 +759,7 @@ function rowToTask(row: typeof tasks.$inferSelect): Task {
   return {
     id: row.id,
     workflowId: row.workflowId,
+    workflowName,
     workflowSnapshot: snapshot,
     repoPath: row.repoPath,
     worktreePath: row.worktreePath,
@@ -773,10 +781,11 @@ function rowToTask(row: typeof tasks.$inferSelect): Task {
   }
 }
 
-function rowToSummary(row: typeof tasks.$inferSelect): TaskSummary {
+function rowToSummary(row: typeof tasks.$inferSelect, workflowName: string | null): TaskSummary {
   return {
     id: row.id,
     workflowId: row.workflowId,
+    workflowName,
     repoPath: row.repoPath,
     status: row.status,
     startedAt: row.startedAt,

@@ -229,6 +229,7 @@ export interface Resources {
     filterAll: string
     emptyList: string
     colId: string
+    colWorkflow: string
     colStatus: string
     colStarted: string
     colRepo: string
@@ -489,6 +490,13 @@ export interface Resources {
     retryButton: string
     retrying: string
     retryCascadeLabel: string
+    promptAttemptLabel: string
+    promptAttemptEntry: string
+    promptAttemptShard: string
+    promptAttemptParent: string
+    promptFanoutParent: string
+    promptNotApplicable: string
+    promptEmpty: string
   }
   taskOutputs: {
     section: string
@@ -788,6 +796,7 @@ export const zhCN: Resources = {
     filterAll: '全部',
     emptyList: '没有匹配当前过滤的任务。',
     colId: 'ID',
+    colWorkflow: '工作流',
     colStatus: '状态',
     colStarted: '开始',
     colRepo: '仓库',
@@ -1055,6 +1064,13 @@ export const zhCN: Resources = {
     retryButton: '重试节点',
     retrying: '重试中…',
     retryCascadeLabel: '同时重跑下游节点',
+    promptAttemptLabel: '执行',
+    promptAttemptEntry: '轮次={{iter}} 重试={{retry}} · {{status}} · {{time}}',
+    promptAttemptShard: '轮次={{iter}} 重试={{retry}} · shard={{shard}} · {{status}} · {{time}}',
+    promptAttemptParent: '轮次={{iter}} 重试={{retry}} · 多进程父节点 · {{status}} · {{time}}',
+    promptFanoutParent: '多进程父节点本身没有 prompt — 请选一个 shard。',
+    promptNotApplicable: '该节点种类不发起 opencode prompt。',
+    promptEmpty: '本次执行尚未记录 prompt。',
   },
   taskOutputs: {
     section: '产出',

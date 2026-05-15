@@ -193,6 +193,49 @@ describe('task HTTP routes', () => {
     expect(((await res.json()) as { code: string }).code).toBe('task-not-found')
   })
 
+  // Locks in the joined workflowName surfaces in both list + detail responses.
+  // Without the join, the tasks page can only render the opaque ULID — users
+  // can't tell at a glance which workflow a task came from.
+  test('GET / and /:id include the joined workflow name', async () => {
+    const wfId = ulid()
+    const wfName = 'design-pipeline'
+    await h.db.insert(workflows).values({
+      id: wfId,
+      name: wfName,
+      definition: JSON.stringify(EMPTY_DEF),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    const taskId = ulid()
+    await h.db.insert(tasks).values({
+      id: taskId,
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: h.repoPath,
+      worktreePath: '/tmp/wt-named',
+      baseBranch: 'main',
+      branch: 'agent-workflow/named',
+      status: 'done',
+      inputs: '{}',
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+    })
+
+    const list = (await (await req(h.app, '/api/tasks')).json()) as Array<{
+      id: string
+      workflowId: string
+      workflowName: string | null
+    }>
+    const row = list.find((r) => r.id === taskId)
+    expect(row).toBeDefined()
+    expect(row?.workflowName).toBe(wfName)
+
+    const detail = (await (await req(h.app, `/api/tasks/${taskId}`)).json()) as {
+      workflowName: string | null
+    }
+    expect(detail.workflowName).toBe(wfName)
+  })
+
   test('POST invalid body returns 422', async () => {
     const res = await req(h.app, '/api/tasks', {
       method: 'POST',
