@@ -1419,6 +1419,33 @@ code {
   height: 100%;
 }
 
+/* xyflow's default stylesheet decorates `.react-flow__node-input` and
+ * `.react-flow__node-output` (border / padding / background / width:150px)
+ * because those are its built-in node types. Our custom `input`/`output`
+ * node types collide with that selector and end up double-framed. Strip
+ * the built-in chrome so only `.canvas-node--io` styling shows. */
+.workflow-canvas .react-flow__node-input,
+.workflow-canvas .react-flow__node-output {
+  padding: 0;
+  width: auto;
+  border: none;
+  background: none;
+  border-radius: 0;
+  text-align: left;
+  color: inherit;
+  font-size: inherit;
+}
+.workflow-canvas .react-flow__node-input.selectable:hover,
+.workflow-canvas .react-flow__node-output.selectable:hover,
+.workflow-canvas .react-flow__node-input.selectable.selected,
+.workflow-canvas .react-flow__node-output.selectable.selected,
+.workflow-canvas .react-flow__node-input.selectable:focus,
+.workflow-canvas .react-flow__node-output.selectable:focus,
+.workflow-canvas .react-flow__node-input.selectable:focus-visible,
+.workflow-canvas .react-flow__node-output.selectable:focus-visible {
+  box-shadow: none;
+}
+
 /* ---- Context menu ---- */
 
 .context-menu {
