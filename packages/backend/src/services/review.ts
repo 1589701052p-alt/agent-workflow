@@ -798,6 +798,74 @@ export async function addReviewComment(args: AddReviewCommentArgs): Promise<Revi
   return comment
 }
 
+// RFC-009-T1: edit an existing review comment's body. Only allowed while the
+// review is still awaiting a decision (pending doc_version exists for this
+// nodeRunId AND the comment belongs to that pending doc_version). We do not
+// touch the anchor or createdAt — only commentText changes, and a 409 is the
+// outcome once the review has been approved/rejected/iterated.
+export async function updateReviewCommentText(
+  db: DbClient,
+  nodeRunId: string,
+  commentId: string,
+  commentText: string,
+): Promise<ReviewComment> {
+  const rows = await db
+    .select()
+    .from(reviewComments)
+    .where(eq(reviewComments.id, commentId))
+    .limit(1)
+  if (rows.length === 0) {
+    throw new NotFoundError('review-comment-not-found', `review_comment ${commentId} not found`)
+  }
+  const row = rows[0]!
+  // Confirm the comment belongs to a pending doc_version on this nodeRunId.
+  const dvRows = await db
+    .select()
+    .from(docVersions)
+    .where(eq(docVersions.id, row.docVersionId))
+    .limit(1)
+  if (dvRows.length === 0) {
+    throw new NotFoundError(
+      'review-comment-not-found',
+      `review_comment ${commentId} has no doc_version`,
+    )
+  }
+  const dv = rowToDocVersion(dvRows[0]!)
+  if (dv.reviewNodeRunId !== nodeRunId) {
+    throw new NotFoundError(
+      'review-comment-not-found',
+      `review_comment ${commentId} does not belong to review ${nodeRunId}`,
+    )
+  }
+  if (dv.decision !== 'pending') {
+    throw new ConflictError(
+      'review-not-awaiting',
+      `review ${nodeRunId} is not awaiting a decision; comments are immutable`,
+    )
+  }
+  await db.update(reviewComments).set({ commentText }).where(eq(reviewComments.id, commentId))
+
+  const updated: ReviewComment = {
+    id: row.id,
+    docVersionId: row.docVersionId,
+    anchor: {
+      sectionPath: row.anchorSectionPath,
+      paragraphIdx: row.anchorParagraphIdx,
+      offsetStart: row.anchorOffsetStart,
+      offsetEnd: row.anchorOffsetEnd,
+      selectedText: row.selectedText,
+      contextBefore: row.contextBefore,
+      contextAfter: row.contextAfter,
+      occurrenceIndex: row.occurrenceIndex,
+    },
+    commentText,
+    author: row.author,
+    createdAt: row.createdAt,
+  }
+  emitReviewCommentUpdatedEvent(dv.taskId, nodeRunId, dv.id, updated)
+  return updated
+}
+
 export async function deleteReviewComment(
   db: DbClient,
   nodeRunId: string,
@@ -1203,6 +1271,21 @@ export function emitReviewCommentDeletedEvent(
     nodeRunId,
     docVersionId,
     commentId,
+  })
+}
+
+export function emitReviewCommentUpdatedEvent(
+  taskId: string,
+  nodeRunId: string,
+  docVersionId: string,
+  comment: ReviewComment,
+): void {
+  taskBroadcaster.broadcast(TASK_CHANNEL(taskId), {
+    id: -1,
+    type: 'review.comment_updated',
+    nodeRunId,
+    docVersionId,
+    comment,
   })
 }
 

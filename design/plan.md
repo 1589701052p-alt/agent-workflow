@@ -34,6 +34,7 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-007](./RFC-007-canvas-review-output-drag/proposal.md)       | Canvas review / output 节点支持拖拽连线：与 agent 节点对齐 + 字段 / 边双向同步 + iterate 锁                  | Draft       |
 | [RFC-008](./RFC-008-markdown-prose-premium/proposal.md)          | Premium Markdown 渲染（react-markdown + shiki + KaTeX + Callout + 锚点 + 字体）替换 review + 编辑器两套渲染器 | In Progress |
 | [RFC-009](./RFC-009-review-sidebar-enhancement/proposal.md)      | Review 评论侧栏功能增强：内联编辑 + 复制 + 数量 badge + 折叠 + 拖宽 + 行号（借鉴 md-review）                  | In Progress |
+| [RFC-010](./RFC-010-markdown-rendered-diff/proposal.md)          | Markdown 渲染态内联 Diff：替换 review word 模式（参考 markdown-diff，PUA marker + remark 插件，绕开 rehype-raw） | In Progress |
 
 ---
 

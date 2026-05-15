@@ -32,6 +32,17 @@ export interface Resources {
     statusAwaiting: string
     sidebarTitle: string
     sidebarEmpty: string
+    sidebarCountLabel: string
+    sidebarCollapse: string
+    sidebarExpand: string
+    commentEdit: string
+    commentCopy: string
+    commentCopied: string
+    commentCopyFailed: string
+    commentSave: string
+    commentEditCancel: string
+    lineRef: string
+    lineRefRange: string
     approveButton: string
     rejectButton: string
     iterateButton: string
@@ -572,6 +583,17 @@ export const zhCN: Resources = {
     statusAwaiting: '待评审',
     sidebarTitle: '评审意见',
     sidebarEmpty: '暂无评审意见。在正文里拖选一段文本即可添加。',
+    sidebarCountLabel: '评审意见 · {{count}}',
+    sidebarCollapse: '折叠侧栏',
+    sidebarExpand: '展开侧栏',
+    commentEdit: '编辑',
+    commentCopy: '复制',
+    commentCopied: '已复制',
+    commentCopyFailed: '复制失败',
+    commentSave: '保存',
+    commentEditCancel: '取消',
+    lineRef: '第 {{n}} 行',
+    lineRefRange: '第 {{start}}–{{end}} 行',
     approveButton: '通过',
     rejectButton: '退回',
     iterateButton: '迭代',

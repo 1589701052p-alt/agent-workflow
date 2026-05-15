@@ -5,6 +5,7 @@
 // GET    /api/reviews/:nodeRunId/versions/:vid    one historical version (body + meta)
 // POST   /api/reviews/:nodeRunId/decision         approve / reject / iterate
 // POST   /api/reviews/:nodeRunId/comments         add review comment
+// PATCH  /api/reviews/:nodeRunId/comments/:id     edit comment body (RFC-009)
 // DELETE /api/reviews/:nodeRunId/comments/:id     delete review comment
 //
 // RFC-005 PR-B T11 + T12. After decision lands, resumeTask re-enters the
@@ -14,6 +15,7 @@ import {
   ListReviewsQuerySchema,
   SubmitReviewCommentSchema,
   SubmitReviewDecisionSchema,
+  UpdateReviewCommentBodySchema,
 } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { loadConfig } from '@/config'
@@ -29,6 +31,7 @@ import {
   listReviewSummaries,
   readDocVersionBody,
   submitReviewDecision,
+  updateReviewCommentText,
 } from '@/services/review'
 import { NotFoundError, ValidationError } from '@/util/errors'
 import { Paths } from '@/util/paths'
@@ -154,6 +157,25 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
       commentText: parsed.data.commentText,
     })
     return c.json(comment, 201)
+  })
+
+  app.patch('/api/reviews/:nodeRunId/comments/:commentId', async (c) => {
+    const nodeRunId = c.req.param('nodeRunId')
+    const commentId = c.req.param('commentId')
+    const raw: unknown = await c.req.json().catch(() => null)
+    const parsed = UpdateReviewCommentBodySchema.safeParse(raw)
+    if (!parsed.success) {
+      throw new ValidationError('review-comment-invalid', 'invalid review comment body', {
+        issues: parsed.error.issues,
+      })
+    }
+    const updated = await updateReviewCommentText(
+      deps.db,
+      nodeRunId,
+      commentId,
+      parsed.data.commentText,
+    )
+    return c.json(updated)
   })
 
   app.delete('/api/reviews/:nodeRunId/comments/:commentId', async (c) => {

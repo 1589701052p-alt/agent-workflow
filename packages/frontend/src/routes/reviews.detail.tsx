@@ -20,13 +20,34 @@ import type { DocVersion } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
 import { Prose } from '@/components/prose/Prose'
+import { useResizable } from '@/hooks/useResizable'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
 import { deleteDraft, getDraft, listDrafts, setDraft } from '@/lib/review/draftStore'
+import { computeLineRange } from '@/lib/review/lineRange'
 import { wrapAnchorsInDom } from '@/lib/review/wrapAnchorsInDom'
 import { Route as RootRoute } from './__root'
 
 const BUBBLE_GAP_PX = 8
+
+// RFC-009-T2: sidebar width persistence + bounds. The min keeps the bubble
+// quote+body readable; the max prevents the user from squeezing the doc
+// area to nothing on a wide monitor.
+const SIDEBAR_WIDTH_KEY = 'agw-review-sidebar-width'
+const SIDEBAR_COLLAPSED_KEY = 'agw-review-sidebar-collapsed'
+const SIDEBAR_WIDTH_DEFAULT = 280
+const SIDEBAR_WIDTH_MIN = 240
+const SIDEBAR_WIDTH_MAX = 520
+const SIDEBAR_COLLAPSED_PX = 32
+
+function readCollapsedInit(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -96,6 +117,42 @@ function ReviewDetailPage() {
   // Sidebar scroll-spy: highlight the comment whose anchor element is
   // currently the topmost in view.
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
+
+  // RFC-009-T2: collapsible / resizable sidebar (width persisted to
+  // localStorage; collapsed state persisted under a separate key so the
+  // user's last preference survives between sessions and across tasks).
+  const {
+    width: sidebarWidth,
+    onResizerPointerDown,
+    dragging: resizing,
+  } = useResizable({
+    storageKey: SIDEBAR_WIDTH_KEY,
+    initial: SIDEBAR_WIDTH_DEFAULT,
+    min: SIDEBAR_WIDTH_MIN,
+    max: SIDEBAR_WIDTH_MAX,
+  })
+  const [collapsed, setCollapsed] = useState<boolean>(readCollapsedInit)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [collapsed])
+
+  // RFC-009-T3: inline edit. editingId selects which comment the user is
+  // currently editing; editDraft holds the in-flight textarea value so the
+  // user can Esc out without losing the saved row.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState<string>('')
+
+  // RFC-009-T4: copy-to-clipboard transient state. copiedId is the comment
+  // whose copy button was last clicked; copyFailedId mirrors it for the
+  // failure path (no clipboard permission, etc.). Both auto-clear after
+  // ~1.5s so the button label flicks back.
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [copyFailedId, setCopyFailedId] = useState<string | null>(null)
 
   // Bubble vertical positions, keyed by comment id. Computed off the
   // anchor element rects in the rendered markdown; recomputed whenever
@@ -183,6 +240,74 @@ function ReviewDetailPage() {
       await qc.invalidateQueries({ queryKey: ['reviews', 'detail', nodeRunId] })
     },
   })
+
+  // RFC-009-T3: PATCH the comment body. Backend rejects 409 when the
+  // review is no longer awaiting; the UI keeps the editor open so the user
+  // can either retry or copy out their text.
+  const updateComment = useMutation({
+    mutationFn: async (input: { commentId: string; commentText: string }) => {
+      await api.patch(`/api/reviews/${nodeRunId}/comments/${input.commentId}`, {
+        commentText: input.commentText,
+      })
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['reviews', 'detail', nodeRunId] })
+      setEditingId(null)
+      setEditDraft('')
+    },
+  })
+
+  // RFC-009-T5: derive line ranges (1-based) for each comment so the
+  // bubble can render a "Line N" chip without changing the anchor schema.
+  // Memoized over [body, comments] so the O(N·docLen) scan only re-runs
+  // when comments are added/removed or the doc body changes.
+  const lineRanges = useMemo<Map<string, { start: number; end: number }>>(() => {
+    const m = new Map<string, { start: number; end: number }>()
+    if (detail.data === undefined) return m
+    const body = detail.data.currentBody
+    for (const c of detail.data.comments) {
+      m.set(c.id, computeLineRange(body, c.anchor.offsetStart, c.anchor.offsetEnd))
+    }
+    return m
+  }, [detail.data])
+
+  // RFC-009-T4: clipboard helper. We don't need to expose this as a
+  // mutation because there's no server round-trip — just an optimistic
+  // transient state.
+  const onCopy = useCallback((commentId: string, text: string) => {
+    if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+      setCopyFailedId(commentId)
+      setTimeout(() => setCopyFailedId(null), 1500)
+      return
+    }
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopiedId(commentId)
+        setTimeout(() => setCopiedId(null), 1500)
+      },
+      () => {
+        setCopyFailedId(commentId)
+        setTimeout(() => setCopyFailedId(null), 1500)
+      },
+    )
+  }, [])
+
+  const onStartEdit = useCallback((c: ReviewComment) => {
+    setEditingId(c.id)
+    setEditDraft(c.commentText)
+  }, [])
+  const onCancelEdit = useCallback(() => {
+    setEditingId(null)
+    setEditDraft('')
+  }, [])
+  const onSaveEdit = useCallback(
+    async (commentId: string) => {
+      const text = editDraft.trim()
+      if (text.length === 0) return
+      await updateComment.mutateAsync({ commentId, commentText: text })
+    },
+    [editDraft, updateComment],
+  )
 
   const submitDecision = useMutation({
     mutationFn: async (input: {
@@ -278,12 +403,27 @@ function ReviewDetailPage() {
   useLayoutEffect(() => {
     if (markdownRef.current === null || bubblesRef.current === null) return
     if (diffMode) return
+    // RFC-009-T2: bubble column is hidden (display: none via collapsed
+    // branch) when the sidebar is collapsed; measuring against a 0-height
+    // container would just pin every bubble at top=0 and then thrash on
+    // expand. Bail out cleanly.
+    if (collapsed) return
 
     const measure = (): void => {
       const root = markdownRef.current
       const col = bubblesRef.current
       if (root === null || col === null) return
       const colTop = col.getBoundingClientRect().top
+      // RFC-009 hot-fix: the sticky sidebar header is the first child of the
+      // bubble column. Bubbles are position: absolute (so they ignore the
+      // header in normal flow) and the first bubble's measured top can be
+      // 0 / very small when its anchor sits near the top of the doc —
+      // which would slide it under the header. Compute the header's offset
+      // height once per pass and use that as the floor for the bubble
+      // cursor below. offsetHeight is layout-final and includes
+      // margin-bottom: 0 / padding / borders so it's the right number.
+      const headerEl = col.querySelector<HTMLElement>('.review-detail__sidebar-header')
+      const headerFloor = headerEl !== null ? headerEl.offsetHeight + BUBBLE_GAP_PX : 0
       // Split comments into "located" (anchor found in DOM) and
       // "orphaned" (anchor text missing — e.g. body changed since the
       // comment was created, or the wrap helper failed to find the
@@ -312,7 +452,11 @@ function ReviewDetailPage() {
       // custom block plugins). Re-sort defensively by measured top.
       located.sort((a, b) => a.top - b.top)
       const next = new Map<string, number>()
-      let cursor = 0
+      // RFC-009 hot-fix: start the cursor below the sticky header so the
+      // first bubble can never sit under it. Subsequent bubbles either
+      // sit at their anchor's measured top or get bumped down by the
+      // cumulative max (existing collision-avoidance logic).
+      let cursor = headerFloor
       for (const item of located) {
         const top = Math.max(item.top, cursor)
         next.set(item.id, top)
@@ -333,6 +477,16 @@ function ReviewDetailPage() {
     // Also observe the bubbles column itself — bubble heights change as
     // text wraps with column width.
     ro.observe(bubblesRef.current)
+    // RFC-009 hot-fix: when the user opens / closes inline edit on a
+    // middle bubble, that bubble grows (textarea + Save/Cancel actions)
+    // or shrinks back — but the column's own size doesn't change since
+    // we pin a minHeight on it. Observe each bubble individually so any
+    // height change (inline edit toggle, manual textarea resize, body
+    // text wrap on width change) triggers a remeasure and pushes the
+    // bubbles below back down.
+    bubblesRef.current
+      .querySelectorAll<HTMLElement>('.comment-bubble')
+      .forEach((b) => ro.observe(b))
     const onResize = (): void => measure()
     window.addEventListener('resize', onResize)
     // Scroll listener (capture phase, since scroll events don't bubble).
@@ -348,7 +502,10 @@ function ReviewDetailPage() {
       window.removeEventListener('resize', onResize)
       window.removeEventListener('scroll', onScroll, true)
     }
-  }, [sortedComments, diffMode])
+    // editingId is in deps so opening / closing the inline editor
+    // immediately re-measures even before the per-bubble ResizeObserver
+    // fires its first callback (avoids a one-frame overlap flash).
+  }, [sortedComments, diffMode, collapsed, sidebarWidth, editingId])
 
   // When the active comment changes (click bubble, J/K jump, scroll-spy),
   // toggle a data-active attribute on the matching <mark.comment-anchor>
@@ -410,6 +567,14 @@ function ReviewDetailPage() {
         }
         return
       }
+      // RFC-009-T3: while the user is editing a comment, all single-key
+      // shortcuts are off — `j` / `k` need to type into the textarea, and
+      // `a` / `r` / `i` would steal the keystroke too. We still process
+      // Cmd/Ctrl+Enter / Escape in the textarea's own onKeyDown, so this
+      // early return is safe.
+      if (editingId !== null) {
+        return
+      }
       // Don't hijack typing inside form fields.
       if (
         document.activeElement !== null &&
@@ -465,7 +630,16 @@ function ReviewDetailPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popover, onApprove, onReject, onIterate, sortedComments, activeCommentId, diffMode])
+  }, [
+    popover,
+    onApprove,
+    onReject,
+    onIterate,
+    sortedComments,
+    activeCommentId,
+    diffMode,
+    editingId,
+  ])
 
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {
@@ -530,7 +704,12 @@ function ReviewDetailPage() {
         </div>
       )}
 
-      <div className="review-detail__layout">
+      <div
+        className="review-detail__layout"
+        style={{
+          gridTemplateColumns: `minmax(0, 1fr) ${collapsed ? SIDEBAR_COLLAPSED_PX : sidebarWidth}px`,
+        }}
+      >
         {diffMode && priorBody.data !== undefined ? (
           <div className="review-detail__body">
             <DiffView
@@ -560,51 +739,189 @@ function ReviewDetailPage() {
             />
           </div>
         )}
-        <div
-          className="review-detail__bubbles"
-          ref={bubblesRef}
-          style={bubblesMinHeight > 0 ? { minHeight: `${bubblesMinHeight}px` } : undefined}
-          aria-label={t('reviews.sidebarTitle')}
-        >
-          {sortedComments.length === 0 ? (
-            <div className="review-detail__bubbles-empty muted">{t('reviews.sidebarEmpty')}</div>
-          ) : (
-            sortedComments.map((c) => {
-              const top = bubbleTops.get(c.id)
-              const isActive = activeCommentId === c.id
-              return (
-                <article
-                  key={c.id}
-                  className={'comment-bubble' + (isActive ? ' comment-bubble--active' : '')}
-                  data-comment-id={c.id}
-                  style={top !== undefined ? { top: `${top}px` } : undefined}
-                  onClick={() => onBubbleClick(c.id)}
-                >
-                  <header className="comment-bubble__section" title={c.anchor.sectionPath}>
-                    {c.anchor.sectionPath || t('reviews.sidebarTitle')}
-                  </header>
-                  <blockquote className="comment-bubble__quote" title={c.anchor.selectedText}>
-                    {c.anchor.selectedText}
-                  </blockquote>
-                  <p className="comment-bubble__body">{c.commentText}</p>
-                  <button
-                    type="button"
-                    className="comment-bubble__delete"
-                    aria-label={t('common.delete')}
-                    title={t('common.delete')}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      deleteComment.mutate(c.id)
-                    }}
-                    disabled={!isAwaiting}
+        {collapsed ? (
+          <div className="comments-collapsed-rail" aria-label={t('reviews.sidebarTitle')}>
+            <button
+              type="button"
+              className="comments-collapsed-rail__toggle"
+              aria-label={t('reviews.sidebarExpand')}
+              title={t('reviews.sidebarExpand')}
+              onClick={() => setCollapsed(false)}
+            >
+              ‹
+            </button>
+            <span className="comments-collapsed-rail__count" aria-hidden="true">
+              {sortedComments.length}
+            </span>
+          </div>
+        ) : (
+          <div
+            className="review-detail__bubbles"
+            ref={bubblesRef}
+            style={bubblesMinHeight > 0 ? { minHeight: `${bubblesMinHeight}px` } : undefined}
+            aria-label={t('reviews.sidebarTitle')}
+          >
+            {/* RFC-009-T2: drag handle on the left edge of the column. */}
+            <div
+              className="review-detail__sidebar-resizer"
+              data-dragging={resizing ? 'true' : 'false'}
+              onPointerDown={onResizerPointerDown}
+              role="separator"
+              aria-orientation="vertical"
+            />
+            {/* RFC-009-T5: sticky header — count + collapse toggle. */}
+            <header className="review-detail__sidebar-header">
+              <span className="review-detail__sidebar-count">
+                {t('reviews.sidebarCountLabel', { count: sortedComments.length })}
+              </span>
+              <button
+                type="button"
+                className="review-detail__sidebar-toggle"
+                aria-label={t('reviews.sidebarCollapse')}
+                title={t('reviews.sidebarCollapse')}
+                onClick={() => setCollapsed(true)}
+              >
+                ›
+              </button>
+            </header>
+            {sortedComments.length === 0 ? (
+              <div className="review-detail__bubbles-empty muted">{t('reviews.sidebarEmpty')}</div>
+            ) : (
+              sortedComments.map((c) => {
+                const top = bubbleTops.get(c.id)
+                const isActive = activeCommentId === c.id
+                const isEditing = editingId === c.id
+                const range = lineRanges.get(c.id)
+                const lineLabel =
+                  range === undefined
+                    ? ''
+                    : range.start === range.end
+                      ? t('reviews.lineRef', { n: range.start })
+                      : t('reviews.lineRefRange', { start: range.start, end: range.end })
+                const copyLabel =
+                  copiedId === c.id
+                    ? t('reviews.commentCopied')
+                    : copyFailedId === c.id
+                      ? t('reviews.commentCopyFailed')
+                      : t('reviews.commentCopy')
+                return (
+                  <article
+                    key={c.id}
+                    className={
+                      'comment-bubble' +
+                      (isActive ? ' comment-bubble--active' : '') +
+                      (isEditing ? ' comment-bubble--editing' : '')
+                    }
+                    data-comment-id={c.id}
+                    style={top !== undefined ? { top: `${top}px` } : undefined}
+                    onClick={() => onBubbleClick(c.id)}
                   >
-                    ×
-                  </button>
-                </article>
-              )
-            })
-          )}
-        </div>
+                    {!isEditing && (
+                      <div className="comment-bubble__actions">
+                        <button
+                          type="button"
+                          className="comment-bubble__action"
+                          aria-label={t('reviews.commentEdit')}
+                          title={t('reviews.commentEdit')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onStartEdit(c)
+                          }}
+                          disabled={!isAwaiting}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          className="comment-bubble__action"
+                          aria-label={copyLabel}
+                          title={copyLabel}
+                          data-copied={copiedId === c.id ? 'true' : 'false'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onCopy(c.id, c.commentText)
+                          }}
+                        >
+                          ⧉
+                        </button>
+                        <button
+                          type="button"
+                          className="comment-bubble__action comment-bubble__delete"
+                          aria-label={t('common.delete')}
+                          title={t('common.delete')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            deleteComment.mutate(c.id)
+                          }}
+                          disabled={!isAwaiting}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+                    <header className="comment-bubble__section" title={c.anchor.sectionPath}>
+                      {c.anchor.sectionPath || t('reviews.sidebarTitle')}
+                      {lineLabel !== '' && (
+                        <span className="comment-bubble__line-ref">{lineLabel}</span>
+                      )}
+                    </header>
+                    <blockquote className="comment-bubble__quote" title={c.anchor.selectedText}>
+                      {c.anchor.selectedText}
+                    </blockquote>
+                    {isEditing ? (
+                      <div
+                        className="comment-bubble__edit-form"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <textarea
+                          autoFocus
+                          rows={3}
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                              e.preventDefault()
+                              void onSaveEdit(c.id)
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault()
+                              onCancelEdit()
+                            }
+                          }}
+                        />
+                        <div className="comment-bubble__edit-form-actions">
+                          <button
+                            type="button"
+                            className="btn btn--sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onCancelEdit()
+                            }}
+                          >
+                            {t('reviews.commentEditCancel')}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn--sm btn--primary"
+                            disabled={editDraft.trim().length === 0 || updateComment.isPending}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void onSaveEdit(c.id)
+                            }}
+                          >
+                            {t('reviews.commentSave')}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="comment-bubble__body">{c.commentText}</p>
+                    )}
+                  </article>
+                )
+              })
+            )}
+          </div>
+        )}
       </div>
 
       <footer className="review-detail__footer">

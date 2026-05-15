@@ -2209,7 +2209,10 @@ code {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 10px 28px 10px 12px;
+  /* RFC-009: actions are now an in-flow row at the top of the bubble, so
+     padding is symmetric again and the body/quote text uses the full
+     bubble width. */
+  padding: 6px 12px 10px 12px;
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.08),
     0 1px 2px rgba(0, 0, 0, 0.04);
@@ -2266,36 +2269,14 @@ code {
   word-break: break-word;
 }
 
-.comment-bubble__delete {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  color: var(--muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
-}
-
+/* RFC-009: the delete button is now an action variant inside
+   .comment-bubble__actions (flex row), not a free-floating absolute child.
+   We keep the .comment-bubble__delete class for backwards compatibility
+   with the source-text regression test from d9072c6 and to give the
+   button its danger hover color. The .comment-bubble__action rules below
+   provide layout; this rule layers a danger-colored hover on top. */
 .comment-bubble__delete:hover:not(:disabled) {
-  background: var(--border);
   color: var(--danger);
-}
-
-.comment-bubble__delete:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
 }
 
 /* RFC-009 — line-ref chip rendered next to the section path.
@@ -2308,24 +2289,17 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-/* RFC-009 — action toolbar (edit / copy / delete). Hidden by default so
-   the bubble stays clean; revealed on hover or when the bubble is the
-   active scroll-spy target. Sits to the right of the delete button — but
-   the delete button is part of this row visually, so we leave its old
-   absolute position untouched and add edit / copy beside it. */
+/* RFC-009 — action toolbar (edit / copy / delete) lives as a static-flow
+   row right above the section header. In-flow (not absolute) so it
+   doesn't push the bubble width to reserve right padding; the row's
+   height is what flows out, and the section / quote / body below use
+   the full bubble width. Always visible — buttons are subtle muted icons
+   so they don't compete visually. */
 .comment-bubble__actions {
-  position: absolute;
-  top: 4px;
-  right: 6px;
   display: flex;
+  justify-content: flex-end;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.comment-bubble:hover .comment-bubble__actions,
-.comment-bubble--active .comment-bubble__actions,
-.comment-bubble--editing .comment-bubble__actions {
-  opacity: 1;
+  margin-bottom: 2px;
 }
 .comment-bubble__action {
   width: 22px;

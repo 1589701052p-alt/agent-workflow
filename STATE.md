@@ -2,13 +2,14 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**最近更新**：2026-05-16（RFC-008 Premium Markdown 渲染单 session 实施完成 — react-markdown@10 + remark-gfm + remark-github-blockquote-alert + remark-math/rehype-katex + 手滚 shiki dual theme + rehype-slug/autolink/external-links + medium-zoom 图片放大 + 自托管 Inter / JetBrains Mono；review 详情 + AgentForm + skills.detail 三处编辑器预览统一走 `<Prose>`；旧 `MarkdownView.tsx` / `MarkdownEditor` 极简渲染器 / 旧 `markdown-view.test.tsx` + `markdown.test.ts` 全部删除；frontend 74/74 文件 508/508 测试绿、typecheck + format 全绿、vite build 成功 — 待提 PR + CI；本地 e2e 未跑，依赖 CI 上 Playwright 验 reviews 流程；同期 RFC-007 Canvas review/output drag 仍 Draft 待批）
+**最近更新**：2026-05-16（RFC-009 评审右边栏增强实施完成 — 借鉴 md-review 的功能层、保留 d9072c6 滚动跟随气泡架构；新增后端 PATCH `/api/reviews/:nodeRunId/comments/:commentId` + ws 事件 `review.comment_updated`；前端 `useResizable` hook + 折叠/拖宽（localStorage 持久化）+ 内联编辑（Cmd+Enter / Esc）+ 复制按钮 + 行号 chip + sticky 数量 badge；新增 5 处 i18n + computeLineRange 纯函数；测试 6 后端 + 7 行号 + 11 源码层断言，全套 498/498 + typecheck + format 全绿；e2e 未扩；待提 PR + CI；同期 RFC-007 Draft 待批，RFC-008 待提 PR）
 
 **进行中 RFC**：
 
 - [RFC-007](./design/RFC-007-canvas-review-output-drag/proposal.md) Canvas review / output 节点支持拖拽连线（Draft 三件套已落档；待用户批准后开实现 PR）
 - [RFC-008](./design/RFC-008-markdown-prose-premium/proposal.md) Premium Markdown 渲染（实施完成 — 待提 PR；plan.md 原拆 3 PR，单 session 合并为单 PR 实现 T1+T2+T3+ 字体接入；index/STATE 同步等 PR 合并后改 Done）
-- [RFC-009](./design/RFC-009-review-sidebar-enhancement/proposal.md) Review 评论侧栏功能增强（借鉴 md-review 的内联编辑 / 复制 / 数量 badge / 折叠 / 拖宽 / 行号；保留 d9072c6 滚动跟随气泡架构；三件套已落档，开始实施）
+- [RFC-009](./design/RFC-009-review-sidebar-enhancement/proposal.md) Review 评论侧栏功能增强（实施完成 — 待提 PR；T1 后端 PATCH + ws + T2 useResizable + 折叠/拖宽 + T3 内联编辑 mutation + T4 复制按钮 + T5 行号 + 数量 badge 全部落地；后端 6 测 + 前端 7 行号 + 11 源码层断言全绿；e2e 未扩，依赖 CI Playwright；index/STATE 待 PR 合并后改 Done）
+- [RFC-010](./design/RFC-010-markdown-rendered-diff/proposal.md) Markdown 渲染态内联 Diff（三件套已落档；目标：把 DiffView 的 word 模式从源码红绿块换成 Prose 内联高亮，使用 PUA marker + remark 插件，绕开 rehype-raw；line/block 模式不动；单 PR 实施 T1–T6）
 
 ---
 

@@ -97,6 +97,15 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     docVersionId: z.string(),
     commentId: z.string(),
   }),
+  // RFC-009-T1: PATCH on an existing comment broadcasts the updated row so
+  // other tabs can replace it in place without re-fetching the full review.
+  z.object({
+    id: z.number().int(),
+    type: z.literal('review.comment_updated'),
+    nodeRunId: z.string(),
+    docVersionId: z.string(),
+    comment: ReviewCommentSchema,
+  }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>
 
