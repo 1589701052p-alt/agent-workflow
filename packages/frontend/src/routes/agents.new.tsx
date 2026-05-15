@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Agent } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { AgentForm, emptyAgent } from '@/components/AgentForm'
@@ -15,6 +16,7 @@ export const Route = createRoute({
 })
 
 function AgentCreatePage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [draft, setDraft] = useState(emptyAgent)
@@ -30,8 +32,8 @@ function AgentCreatePage() {
   return (
     <div className="page">
       <header className="page__header">
-        <h1>New agent</h1>
-        <p className="page__hint">DB is the source of truth; this is not a file path.</p>
+        <h1>{t('agents.newTitle')}</h1>
+        <p className="page__hint">{t('agents.newHint')}</p>
       </header>
       <AgentForm value={draft} onChange={setDraft} />
       <div className="form-actions">
@@ -41,7 +43,7 @@ function AgentCreatePage() {
           disabled={create.isPending || draft.name === ''}
           onClick={() => create.mutate()}
         >
-          {create.isPending ? 'Creating…' : 'Create agent'}
+          {create.isPending ? t('common.creating') : t('agents.createButton')}
         </button>
         {create.error !== null && create.error !== undefined && (
           <span className="form-actions__error">{describeError(create.error)}</span>

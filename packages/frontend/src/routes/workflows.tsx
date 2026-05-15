@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Workflow } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { getBaseUrl, getToken } from '@/stores/auth'
@@ -16,6 +17,7 @@ export const Route = createRoute({
 })
 
 function WorkflowsPage() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery<Workflow[]>({
     queryKey: ['workflows'],
@@ -34,22 +36,21 @@ function WorkflowsPage() {
     const yaml = await file.text()
     try {
       await postYaml(yaml, 'fail')
-      setImportMsg('Imported as new workflow.')
+      setImportMsg(t('workflows.importedAsNew'))
       void qc.invalidateQueries({ queryKey: ['workflows'] })
     } catch (err) {
       if (err instanceof ApiError && err.code === 'workflow-import-conflict') {
-        const choice = window.prompt(
-          `Workflow id collides. Type "overwrite" to replace, or "new" to import as a new workflow.`,
-          'new',
-        )
+        const choice = window.prompt(t('workflows.conflictPrompt'), 'new')
         if (choice === 'overwrite' || choice === 'new') {
           await postYaml(yaml, choice)
           setImportMsg(
-            choice === 'overwrite' ? 'Workflow overwritten.' : 'Imported as new workflow.',
+            choice === 'overwrite'
+              ? t('workflows.workflowOverwritten')
+              : t('workflows.importedAsNew'),
           )
           void qc.invalidateQueries({ queryKey: ['workflows'] })
         } else {
-          setImportMsg('Import canceled.')
+          setImportMsg(t('workflows.importCanceled'))
         }
       } else {
         setImportMsg(err instanceof Error ? err.message : String(err))
@@ -61,10 +62,8 @@ function WorkflowsPage() {
     <div className="page">
       <header className="page__header page__header--row">
         <div>
-          <h1>Workflows</h1>
-          <p className="page__hint">
-            DAG of agents + wrappers. Each task snapshots the definition at launch time.
-          </p>
+          <h1>{t('workflows.title')}</h1>
+          <p className="page__hint">{t('workflows.hint')}</p>
         </div>
         <div className="row" style={{ gap: 8 }}>
           <input
@@ -79,30 +78,30 @@ function WorkflowsPage() {
             }}
           />
           <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
-            Import YAML
+            {t('workflows.importButton')}
           </button>
           <Link to="/workflows/new" className="btn btn--primary">
-            + New workflow
+            {t('workflows.newButton')}
           </Link>
         </div>
       </header>
       {importMsg !== null && <div className="info-box info-box--muted">{importMsg}</div>}
 
-      {isLoading && <div className="muted">Loading…</div>}
+      {isLoading && <div className="muted">{t('common.loading')}</div>}
       {error !== null && error !== undefined && <ErrorBanner error={error} />}
       {del.error !== null && <ErrorBanner error={del.error} />}
 
       {!isLoading && data !== undefined && data.length === 0 && (
-        <div className="muted">No workflows yet.</div>
+        <div className="muted">{t('workflows.emptyList')}</div>
       )}
 
       {data !== undefined && data.length > 0 && (
         <table className="data-table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Version</th>
-              <th>ID</th>
+              <th>{t('workflows.colName')}</th>
+              <th>{t('workflows.colVersion')}</th>
+              <th>{t('workflows.colId')}</th>
               <th aria-label="actions" />
             </tr>
           </thead>
@@ -120,10 +119,10 @@ function WorkflowsPage() {
                 </td>
                 <td className="data-table__actions">
                   <Link to="/workflows/$id" params={{ id: w.id }} className="btn btn--sm">
-                    Open
+                    {t('common.open')}
                   </Link>
                   <ConfirmButton
-                    label="Delete"
+                    label={t('common.delete')}
                     onConfirm={() => del.mutateAsync(w.id)}
                     danger
                     disabled={del.isPending}
@@ -159,7 +158,8 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
 }
 
 function ErrorBanner({ error }: { error: unknown }) {
-  let msg = 'Unknown error'
+  const { t } = useTranslation()
+  let msg = t('common.unknownError')
   if (error instanceof ApiError) msg = `${error.code}: ${error.message}`
   else if (error instanceof Error) msg = error.message
   return <div className="error-box">⚠ {msg}</div>

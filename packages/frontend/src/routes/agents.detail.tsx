@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Agent, CreateAgent } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { AgentForm, emptyAgent } from '@/components/AgentForm'
@@ -19,6 +20,7 @@ export const Route = createRoute({
 })
 
 function AgentDetailPage() {
+  const { t } = useTranslation()
   const { name } = Route.useParams()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -56,7 +58,7 @@ function AgentDetailPage() {
     },
   })
 
-  if (query.isLoading) return <div className="page muted">Loading agent…</div>
+  if (query.isLoading) return <div className="page muted">{t('agents.loadingAgent')}</div>
   if (query.error !== null && query.error !== undefined)
     return <div className="page error-box">{describeError(query.error)}</div>
 
@@ -65,11 +67,11 @@ function AgentDetailPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{name}</h1>
-          <p className="page__hint">Agent definition; updates write to the DB.</p>
+          <p className="page__hint">{t('agents.detailHint')}</p>
         </div>
         <div className="page__actions">
           <ConfirmButton
-            label="Delete"
+            label={t('common.delete')}
             onConfirm={() => del.mutateAsync()}
             danger
             disabled={del.isPending}
@@ -84,9 +86,11 @@ function AgentDetailPage() {
           disabled={save.isPending || !loaded}
           onClick={() => save.mutate()}
         >
-          {save.isPending ? 'Saving…' : 'Save changes'}
+          {save.isPending ? t('common.saving') : t('agents.saveButton')}
         </button>
-        {save.isSuccess && save.error === null && <span className="form-actions__ok">Saved.</span>}
+        {save.isSuccess && save.error === null && (
+          <span className="form-actions__ok">{t('common.saved')}</span>
+        )}
         {save.error !== null && save.error !== undefined && (
           <span className="form-actions__error">{describeError(save.error)}</span>
         )}

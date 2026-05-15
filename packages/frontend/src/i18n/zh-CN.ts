@@ -73,6 +73,127 @@ export interface Resources {
     importedHint: string
     skipLink: string
   }
+  common: {
+    loading: string
+    open: string
+    delete: string
+    save: string
+    saved: string
+    saving: string
+    creating: string
+    unknownError: string
+    yes: string
+    no: string
+    details: string
+    emDash: string
+  }
+  agents: {
+    title: string
+    hint: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colDescription: string
+    colOutputs: string
+    colReadonly: string
+    loadingAgent: string
+    detailHint: string
+    saveButton: string
+    newTitle: string
+    newHint: string
+    createButton: string
+  }
+  skills: {
+    title: string
+    hintBefore: string
+    hintManaged: string
+    hintMid: string
+    hintManagedPath: string
+    hintBetween: string
+    hintExternal: string
+    hintAfter: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colSource: string
+    colDescription: string
+    colPath: string
+    newTitle: string
+    newHintBefore: string
+    newHintManaged: string
+    newHintMid: string
+    newHintExternal: string
+    newHintAfter: string
+    tabManaged: string
+    tabExternal: string
+    fieldName: string
+    fieldNameHint: string
+    fieldDescription: string
+    fieldBody: string
+    fieldExternalPath: string
+    fieldExternalPathHint: string
+    externalPathPlaceholder: string
+    createButton: string
+    deleteButton: string
+    saveDescription: string
+    saveBody: string
+    emptyBody: string
+    bodySection: string
+    filesSection: string
+    descHintManaged: string
+    descHintExternal: string
+  }
+  workflows: {
+    title: string
+    hint: string
+    newButton: string
+    importButton: string
+    emptyList: string
+    importedAsNew: string
+    workflowOverwritten: string
+    importCanceled: string
+    conflictPrompt: string
+    colName: string
+    colVersion: string
+    colId: string
+  }
+  tasks: {
+    title: string
+    hint: string
+    filterAll: string
+    emptyList: string
+    colId: string
+    colStatus: string
+    colStarted: string
+    colRepo: string
+    colError: string
+    loadingTask: string
+    metaWorkflow: string
+    metaRepo: string
+    metaWorktree: string
+    metaBranch: string
+    metaStarted: string
+    metaFinished: string
+    metaError: string
+    cancelButton: string
+    failedBanner: string
+    jumpToFailed: string
+    worktreePreserved: string
+    sectionWorkflowStatus: string
+    sectionNodeRuns: string
+    sectionWorktreeDiff: string
+    noWorkflowSnapshot: string
+    noBaseCommit: string
+    loadingDiff: string
+    noNodeRuns: string
+    colNode: string
+    colIteration: string
+    colRetry: string
+    colDuration: string
+    secondsAgo: string
+    minutesAgo: string
+    hoursAgo: string
+  }
   errors: Record<string, string>
 }
 
@@ -149,6 +270,128 @@ export const zhCN: Resources = {
     step4Cta: '前往 workflow 列表 →',
     importedHint: '已导入；继续前往 workflow 列表去 Launch。',
     skipLink: '跳过引导，直接打开 agent 列表 →',
+  },
+  common: {
+    loading: '加载中…',
+    open: '打开',
+    delete: '删除',
+    save: '保存',
+    saved: '已保存',
+    saving: '保存中…',
+    creating: '创建中…',
+    unknownError: '未知错误',
+    yes: '是',
+    no: '否',
+    details: '详情',
+    emDash: '—',
+  },
+  agents: {
+    title: '代理',
+    hint: '虚拟代理；通过 OPENCODE_CONFIG_CONTENT 在 per-run 注入。',
+    newButton: '+ 新建代理',
+    emptyList: '还没有代理。创建一个开始吧。',
+    colName: '名称',
+    colDescription: '描述',
+    colOutputs: '输出端口',
+    colReadonly: '只读',
+    loadingAgent: '加载代理中…',
+    detailHint: '代理定义；保存会写入数据库。',
+    saveButton: '保存修改',
+    newTitle: '新建代理',
+    newHint: '数据库是唯一真值源；这不是文件路径。',
+    createButton: '创建代理',
+  },
+  skills: {
+    title: '技能',
+    hintBefore: '文件系统是真值源。',
+    hintManaged: 'managed',
+    hintMid: ' 类型存放于 ',
+    hintManagedPath: '~/.agent-workflow/skills/',
+    hintBetween: '；',
+    hintExternal: 'external',
+    hintAfter: ' 类型按 task 运行时 symlink 进来。',
+    newButton: '+ 新建技能',
+    emptyList: '还没有技能。',
+    colName: '名称',
+    colSource: '来源',
+    colDescription: '描述',
+    colPath: '路径',
+    newTitle: '新建技能',
+    newHintBefore: '选 ',
+    newHintManaged: 'managed',
+    newHintMid: ' 让框架完整托管，或选 ',
+    newHintExternal: 'external',
+    newHintAfter: ' 注册一个已存在的技能目录。',
+    tabManaged: '托管',
+    tabExternal: '外部',
+    fieldName: '名称',
+    fieldNameHint: 'kebab-case；用于 /skills/:name URL。',
+    fieldDescription: '描述',
+    fieldBody: 'SKILL.md 正文 (Markdown)',
+    fieldExternalPath: '外部路径',
+    fieldExternalPathHint: '指向一个已存在的技能目录的绝对路径。',
+    externalPathPlaceholder: '/abs/path/to/skill-dir',
+    createButton: '创建技能',
+    deleteButton: '删除技能',
+    saveDescription: '保存描述',
+    saveBody: '保存正文',
+    emptyBody: '（空）',
+    bodySection: 'SKILL.md 正文',
+    filesSection: '文件',
+    descHintManaged: '可编辑；写入 SKILL.md frontmatter。',
+    descHintExternal: '外部技能描述（仅写库）。',
+  },
+  workflows: {
+    title: '工作流',
+    hint: '由 agents 与 wrapper 构成的 DAG。每次启动 task 会快照当前 definition。',
+    newButton: '+ 新建工作流',
+    importButton: '导入 YAML',
+    emptyList: '还没有工作流。',
+    importedAsNew: '已作为新工作流导入。',
+    workflowOverwritten: '工作流已覆盖。',
+    importCanceled: '导入已取消。',
+    conflictPrompt: 'Workflow id 冲突。输入 "overwrite" 覆盖，或 "new" 作为新工作流导入。',
+    colName: '名称',
+    colVersion: '版本',
+    colId: 'ID',
+  },
+  tasks: {
+    title: '任务',
+    hint: '任务在隔离的 git worktree 中运行。点击行查看节点状态与 worktree diff。',
+    filterAll: '全部',
+    emptyList: '没有匹配当前过滤的任务。',
+    colId: 'ID',
+    colStatus: '状态',
+    colStarted: '开始',
+    colRepo: '仓库',
+    colError: '错误',
+    loadingTask: '加载任务中…',
+    metaWorkflow: '工作流',
+    metaRepo: '仓库',
+    metaWorktree: 'Worktree',
+    metaBranch: '分支',
+    metaStarted: '开始',
+    metaFinished: '完成',
+    metaError: '错误',
+    cancelButton: '取消任务',
+    failedBanner: '任务失败。',
+    jumpToFailed: '跳到失败节点 ({{nodeId}})',
+    worktreePreserved:
+      'Worktree 仍保留在 {{path}}。可手动检查；结束后执行 git worktree remove 清理。',
+    sectionWorkflowStatus: '工作流状态',
+    sectionNodeRuns: '节点运行',
+    sectionWorktreeDiff: 'Worktree diff',
+    noWorkflowSnapshot: '没有工作流快照。',
+    noBaseCommit: '未记录 base commit；diff 不可用。',
+    loadingDiff: '加载 diff 中…',
+    noNodeRuns: '还没有节点运行；调度器还未触达任何节点。',
+    colNode: '节点',
+    colIteration: '轮次',
+    colRetry: '重试',
+    colDuration: '耗时',
+    secondsAgo: '{{n}} 秒前',
+    minutesAgo: '{{n}} 分钟前',
+    hoursAgo: '{{n}} 小时前',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {

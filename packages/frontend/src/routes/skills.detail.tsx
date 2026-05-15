@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Skill, SkillContent } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -18,6 +19,7 @@ export const Route = createRoute({
 })
 
 function SkillDetailPage() {
+  const { t } = useTranslation()
   const { name } = Route.useParams()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -68,7 +70,8 @@ function SkillDetailPage() {
     },
   })
 
-  if (meta.isLoading || content.isLoading) return <div className="page muted">Loading…</div>
+  if (meta.isLoading || content.isLoading)
+    return <div className="page muted">{t('common.loading')}</div>
   if (meta.error !== null && meta.error !== undefined)
     return <div className="page error-box">{describeError(meta.error)}</div>
   if (content.error !== null && content.error !== undefined)
@@ -89,7 +92,7 @@ function SkillDetailPage() {
         </div>
         <div className="page__actions">
           <ConfirmButton
-            label="Delete skill"
+            label={t('skills.deleteButton')}
             onConfirm={() => del.mutateAsync()}
             danger
             disabled={del.isPending}
@@ -99,12 +102,8 @@ function SkillDetailPage() {
 
       <section className="form-grid">
         <Field
-          label="Description"
-          hint={
-            isManaged
-              ? 'Editable; persisted into SKILL.md frontmatter.'
-              : 'External skill description (DB only).'
-          }
+          label={t('skills.fieldDescription')}
+          hint={isManaged ? t('skills.descHintManaged') : t('skills.descHintExternal')}
         >
           <TextInput value={description} onChange={setDescription} />
         </Field>
@@ -115,7 +114,7 @@ function SkillDetailPage() {
             disabled={saveMeta.isPending || !loaded}
             onClick={() => saveMeta.mutate()}
           >
-            {saveMeta.isPending ? 'Saving…' : 'Save description'}
+            {saveMeta.isPending ? t('common.saving') : t('skills.saveDescription')}
           </button>
           {saveMeta.error !== null && saveMeta.error !== undefined && (
             <span className="form-actions__error">{describeError(saveMeta.error)}</span>
@@ -124,7 +123,7 @@ function SkillDetailPage() {
       </section>
 
       <section className="page__section">
-        <h2>SKILL.md body</h2>
+        <h2>{t('skills.bodySection')}</h2>
         {isManaged ? (
           <>
             <MarkdownEditor value={bodyMd} onChange={setBodyMd} rows={16} />
@@ -135,7 +134,7 @@ function SkillDetailPage() {
                 disabled={saveContent.isPending || !loaded}
                 onClick={() => saveContent.mutate()}
               >
-                {saveContent.isPending ? 'Saving…' : 'Save body'}
+                {saveContent.isPending ? t('common.saving') : t('skills.saveBody')}
               </button>
               {saveContent.error !== null && saveContent.error !== undefined && (
                 <span className="form-actions__error">{describeError(saveContent.error)}</span>
@@ -143,12 +142,12 @@ function SkillDetailPage() {
             </div>
           </>
         ) : (
-          <pre className="readonly-pre">{bodyMd || '(empty)'}</pre>
+          <pre className="readonly-pre">{bodyMd || t('skills.emptyBody')}</pre>
         )}
       </section>
 
       <section className="page__section">
-        <h2>Files</h2>
+        <h2>{t('skills.filesSection')}</h2>
         <SkillFileTree skillName={name} readonly={!isManaged} />
       </section>
     </div>

@@ -5,6 +5,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Skill } from '@agent-workflow/shared'
 import { SKILL_NAME_RE } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
@@ -20,6 +21,7 @@ export const Route = createRoute({
 type Tab = 'managed' | 'external'
 
 function SkillCreatePage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('managed')
@@ -50,10 +52,13 @@ function SkillCreatePage() {
   return (
     <div className="page">
       <header className="page__header">
-        <h1>New skill</h1>
+        <h1>{t('skills.newTitle')}</h1>
         <p className="page__hint">
-          Pick <code>managed</code> for skills the framework owns end-to-end, or{' '}
-          <code>external</code> to register an existing on-disk skill directory.
+          {t('skills.newHintBefore')}
+          <code>{t('skills.newHintManaged')}</code>
+          {t('skills.newHintMid')}
+          <code>{t('skills.newHintExternal')}</code>
+          {t('skills.newHintAfter')}
         </p>
       </header>
 
@@ -63,38 +68,38 @@ function SkillCreatePage() {
           className={`tabs__tab ${tab === 'managed' ? 'tabs__tab--active' : ''}`}
           onClick={() => setTab('managed')}
         >
-          Managed
+          {t('skills.tabManaged')}
         </button>
         <button
           type="button"
           className={`tabs__tab ${tab === 'external' ? 'tabs__tab--active' : ''}`}
           onClick={() => setTab('external')}
         >
-          External
+          {t('skills.tabExternal')}
         </button>
       </div>
 
       <div className="form-grid">
-        <Field label="Name" required hint="kebab-case; matches /skills/:name URL.">
+        <Field label={t('skills.fieldName')} required hint={t('skills.fieldNameHint')}>
           <TextInput value={name} onChange={setName} required pattern={SKILL_NAME_RE.source} />
         </Field>
-        <Field label="Description">
+        <Field label={t('skills.fieldDescription')}>
           <TextInput value={description} onChange={setDescription} />
         </Field>
         {tab === 'managed' ? (
-          <Field label="SKILL.md body (Markdown)">
+          <Field label={t('skills.fieldBody')}>
             <TextArea value={bodyMd} onChange={setBodyMd} rows={10} monospace />
           </Field>
         ) : (
           <Field
-            label="External path"
+            label={t('skills.fieldExternalPath')}
             required
-            hint="Absolute path to an existing skill directory."
+            hint={t('skills.fieldExternalPathHint')}
           >
             <TextInput
               value={externalPath}
               onChange={setExternalPath}
-              placeholder="/abs/path/to/skill-dir"
+              placeholder={t('skills.externalPathPlaceholder')}
               required
             />
           </Field>
@@ -108,7 +113,7 @@ function SkillCreatePage() {
           onClick={() => create.mutate()}
           disabled={disabled}
         >
-          {create.isPending ? 'Creating…' : 'Create skill'}
+          {create.isPending ? t('common.creating') : t('skills.createButton')}
         </button>
         {create.error !== null && create.error !== undefined && (
           <span className="form-actions__error">{describeError(create.error)}</span>

@@ -4,6 +4,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import type {
   Agent,
   NodeRun,
@@ -31,6 +32,7 @@ export const Route = createRoute({
 })
 
 function TaskDetailPage() {
+  const { t } = useTranslation()
   const { id } = Route.useParams()
   const qc = useQueryClient()
   useTaskSync(id)
@@ -62,52 +64,57 @@ function TaskDetailPage() {
 
   const cancel = useMutation({
     mutationFn: () => api.post<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`),
-    onSuccess: (t) => {
-      qc.setQueryData(['tasks', id], t)
+    onSuccess: (tk) => {
+      qc.setQueryData(['tasks', id], tk)
       void qc.invalidateQueries({ queryKey: ['tasks'] })
     },
   })
 
-  if (task.isLoading) return <div className="page muted">Loading task…</div>
+  if (task.isLoading) return <div className="page muted">{t('tasks.loadingTask')}</div>
   if (task.error !== null && task.error !== undefined)
     return <div className="page error-box">{describeError(task.error)}</div>
   if (task.data === undefined) return null
 
-  const t = task.data
-  const cancelable = t.status === 'pending' || t.status === 'running'
+  const tk = task.data
+  const cancelable = tk.status === 'pending' || tk.status === 'running'
 
   return (
     <div className="page page--wide">
       <header className="page__header page__header--row">
         <div>
           <h1>
-            <code>{t.id}</code> <TaskStatusChip status={t.status} />
+            <code>{tk.id}</code> <TaskStatusChip status={tk.status} />
           </h1>
           <dl className="task-meta">
-            <dt>Workflow</dt>
+            <dt>{t('tasks.metaWorkflow')}</dt>
             <dd>
-              <code>{t.workflowId}</code>
+              <code>{tk.workflowId}</code>
             </dd>
-            <dt>Repo</dt>
+            <dt>{t('tasks.metaRepo')}</dt>
             <dd>
-              <code>{t.repoPath}</code>
+              <code>{tk.repoPath}</code>
             </dd>
-            <dt>Worktree</dt>
+            <dt>{t('tasks.metaWorktree')}</dt>
             <dd>
-              <code>{t.worktreePath || '—'}</code>
+              <code>{tk.worktreePath || t('common.emDash')}</code>
             </dd>
-            <dt>Branch</dt>
+            <dt>{t('tasks.metaBranch')}</dt>
             <dd>
-              <code>{t.branch}</code> @ <code>{(t.baseCommit ?? '').slice(0, 12) || '—'}</code>
+              <code>{tk.branch}</code> @{' '}
+              <code>{(tk.baseCommit ?? '').slice(0, 12) || t('common.emDash')}</code>
             </dd>
-            <dt>Started</dt>
-            <dd>{new Date(t.startedAt).toLocaleString()}</dd>
-            <dt>Finished</dt>
-            <dd>{t.finishedAt === null ? '—' : new Date(t.finishedAt).toLocaleString()}</dd>
-            {t.errorSummary !== null && (
+            <dt>{t('tasks.metaStarted')}</dt>
+            <dd>{new Date(tk.startedAt).toLocaleString()}</dd>
+            <dt>{t('tasks.metaFinished')}</dt>
+            <dd>
+              {tk.finishedAt === null
+                ? t('common.emDash')
+                : new Date(tk.finishedAt).toLocaleString()}
+            </dd>
+            {tk.errorSummary !== null && (
               <>
-                <dt>Error</dt>
-                <dd className="task-meta__error">{t.errorSummary}</dd>
+                <dt>{t('tasks.metaError')}</dt>
+                <dd className="task-meta__error">{tk.errorSummary}</dd>
               </>
             )}
           </dl>
@@ -115,7 +122,7 @@ function TaskDetailPage() {
         <div className="page__actions">
           {cancelable && (
             <ConfirmButton
-              label="Cancel task"
+              label={t('tasks.cancelButton')}
               onConfirm={() => cancel.mutateAsync()}
               danger
               disabled={cancel.isPending}
@@ -127,52 +134,49 @@ function TaskDetailPage() {
         <div className="error-box">{describeError(cancel.error)}</div>
       )}
 
-      {t.status === 'failed' && t.errorSummary !== null && (
+      {tk.status === 'failed' && tk.errorSummary !== null && (
         <div className="task-error-banner">
           <div>
-            <strong>Task failed.</strong> <span>{t.errorSummary}</span>
-            {t.errorMessage !== null && t.errorMessage !== t.errorSummary && (
+            <strong>{t('tasks.failedBanner')}</strong> <span>{tk.errorSummary}</span>
+            {tk.errorMessage !== null && tk.errorMessage !== tk.errorSummary && (
               <details className="task-error-banner__details">
-                <summary>Details</summary>
-                <pre>{t.errorMessage}</pre>
+                <summary>{t('common.details')}</summary>
+                <pre>{tk.errorMessage}</pre>
               </details>
             )}
           </div>
-          {t.failedNodeId !== null && nodeRuns.data !== undefined && (
+          {tk.failedNodeId !== null && nodeRuns.data !== undefined && (
             <button
               type="button"
               className="btn btn--sm btn--danger"
               onClick={() => {
                 // Walk node-runs for the failedNodeId and pick the latest.
-                const candidates = nodeRuns.data!.runs.filter((r) => r.nodeId === t.failedNodeId)
+                const candidates = nodeRuns.data!.runs.filter((r) => r.nodeId === tk.failedNodeId)
                 const target = candidates.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
                 if (target !== undefined) setSelectedNodeRunId(target.id)
               }}
             >
-              Jump to failed node ({t.failedNodeId})
+              {t('tasks.jumpToFailed', { nodeId: tk.failedNodeId })}
             </button>
           )}
         </div>
       )}
 
-      {(t.status === 'canceled' || t.status === 'interrupted') && t.worktreePath !== '' && (
+      {(tk.status === 'canceled' || tk.status === 'interrupted') && tk.worktreePath !== '' && (
         <div className="info-box info-box--muted">
-          <span>
-            Worktree preserved at <code>{t.worktreePath}</code>. You can inspect it manually, or run{' '}
-            <code>git worktree remove</code> when done.
-          </span>
+          <span>{t('tasks.worktreePreserved', { path: tk.worktreePath })}</span>
         </div>
       )}
 
       {nodeRuns.data !== undefined && (
-        <TaskOutputPanel task={t} runs={nodeRuns.data.runs} outputs={nodeRuns.data.outputs} />
+        <TaskOutputPanel task={tk} runs={nodeRuns.data.runs} outputs={nodeRuns.data.outputs} />
       )}
 
       <section className="page__section">
-        <h2>Workflow status</h2>
+        <h2>{t('tasks.sectionWorkflowStatus')}</h2>
         <div className="task-canvas-layout">
           <TaskStatusCanvas
-            task={t}
+            task={tk}
             runs={nodeRuns.data?.runs ?? []}
             onSelectNodeRun={setSelectedNodeRunId}
           />
@@ -190,8 +194,8 @@ function TaskDetailPage() {
       </section>
 
       <section className="page__section">
-        <h2>Node runs</h2>
-        {nodeRuns.isLoading && <div className="muted">Loading…</div>}
+        <h2>{t('tasks.sectionNodeRuns')}</h2>
+        {nodeRuns.isLoading && <div className="muted">{t('common.loading')}</div>}
         {nodeRuns.error !== null && nodeRuns.error !== undefined && (
           <div className="error-box">{describeError(nodeRuns.error)}</div>
         )}
@@ -199,11 +203,11 @@ function TaskDetailPage() {
       </section>
 
       <section className="page__section">
-        <h2>Worktree diff</h2>
-        {t.baseCommit === null ? (
-          <div className="muted">No base commit recorded; diff is unavailable.</div>
+        <h2>{t('tasks.sectionWorktreeDiff')}</h2>
+        {tk.baseCommit === null ? (
+          <div className="muted">{t('tasks.noBaseCommit')}</div>
         ) : diff.isLoading ? (
-          <div className="muted">Loading diff…</div>
+          <div className="muted">{t('tasks.loadingDiff')}</div>
         ) : diff.error !== null && diff.error !== undefined ? (
           <div className="error-box">{describeError(diff.error)}</div>
         ) : diff.data !== undefined ? (
@@ -223,6 +227,7 @@ function TaskStatusCanvas({
   runs: NodeRun[]
   onSelectNodeRun: (id: string | null) => void
 }) {
+  const { t } = useTranslation()
   const definition = useMemo<WorkflowDefinition | null>(() => {
     const snap = task.workflowSnapshot
     if (typeof snap !== 'object' || snap === null) return null
@@ -265,7 +270,7 @@ function TaskStatusCanvas({
   }, [runs])
 
   if (definition === null) {
-    return <div className="muted">No workflow snapshot available.</div>
+    return <div className="muted">{t('tasks.noWorkflowSnapshot')}</div>
   }
 
   return (
@@ -308,19 +313,19 @@ function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
 }
 
 function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
-  if (runs.length === 0)
-    return <div className="muted">No node runs yet; scheduler hasn't reached any nodes.</div>
+  const { t } = useTranslation()
+  if (runs.length === 0) return <div className="muted">{t('tasks.noNodeRuns')}</div>
   return (
     <table className="data-table">
       <thead>
         <tr>
-          <th>Node</th>
-          <th>Status</th>
-          <th>Iteration</th>
-          <th>Retry</th>
-          <th>Started</th>
-          <th>Duration</th>
-          <th>Error</th>
+          <th>{t('tasks.colNode')}</th>
+          <th>{t('tasks.colStatus')}</th>
+          <th>{t('tasks.colIteration')}</th>
+          <th>{t('tasks.colRetry')}</th>
+          <th>{t('tasks.colStarted')}</th>
+          <th>{t('tasks.colDuration')}</th>
+          <th>{t('tasks.colError')}</th>
         </tr>
       </thead>
       <tbody>
@@ -338,14 +343,16 @@ function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
             <td className="data-table__muted">{r.iteration}</td>
             <td className="data-table__muted">{r.retryIndex}</td>
             <td className="data-table__muted">
-              {r.startedAt === null ? '—' : new Date(r.startedAt).toLocaleTimeString()}
+              {r.startedAt === null
+                ? t('common.emDash')
+                : new Date(r.startedAt).toLocaleTimeString()}
             </td>
             <td className="data-table__muted">
               {r.startedAt === null || r.finishedAt === null
-                ? '—'
+                ? t('common.emDash')
                 : `${Math.round((r.finishedAt - r.startedAt) / 100) / 10}s`}
             </td>
-            <td className="data-table__muted">{r.errorMessage ?? '—'}</td>
+            <td className="data-table__muted">{r.errorMessage ?? t('common.emDash')}</td>
           </tr>
         ))}
       </tbody>

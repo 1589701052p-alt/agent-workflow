@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import type { Skill } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -14,6 +15,7 @@ export const Route = createRoute({
 })
 
 function SkillsPage() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery<Skill[]>({
     queryKey: ['skills'],
@@ -29,34 +31,38 @@ function SkillsPage() {
     <div className="page">
       <header className="page__header page__header--row">
         <div>
-          <h1>Skills</h1>
+          <h1>{t('skills.title')}</h1>
           <p className="page__hint">
-            File system is the source of truth. <code>managed</code> skills live under
-            <code> ~/.agent-workflow/skills/</code>; <code>external</code> skills are symlinked at
-            run time.
+            {t('skills.hintBefore')}
+            <code>{t('skills.hintManaged')}</code>
+            {t('skills.hintMid')}
+            <code>{t('skills.hintManagedPath')}</code>
+            {t('skills.hintBetween')}
+            <code>{t('skills.hintExternal')}</code>
+            {t('skills.hintAfter')}
           </p>
         </div>
         <Link to="/skills/new" className="btn btn--primary">
-          + New skill
+          {t('skills.newButton')}
         </Link>
       </header>
 
-      {isLoading && <div className="muted">Loading…</div>}
+      {isLoading && <div className="muted">{t('common.loading')}</div>}
       {error !== null && error !== undefined && <ErrorBanner error={error} />}
       {del.error !== null && <ErrorBanner error={del.error} />}
 
       {!isLoading && data !== undefined && data.length === 0 && (
-        <div className="muted">No skills yet.</div>
+        <div className="muted">{t('skills.emptyList')}</div>
       )}
 
       {data !== undefined && data.length > 0 && (
         <table className="data-table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Source</th>
-              <th>Description</th>
-              <th>Path</th>
+              <th>{t('skills.colName')}</th>
+              <th>{t('skills.colSource')}</th>
+              <th>{t('skills.colDescription')}</th>
+              <th>{t('skills.colPath')}</th>
               <th aria-label="actions" />
             </tr>
           </thead>
@@ -71,16 +77,16 @@ function SkillsPage() {
                 <td>
                   <span className={`chip chip--tight chip--${s.sourceKind}`}>{s.sourceKind}</span>
                 </td>
-                <td className="data-table__muted">{s.description || '—'}</td>
+                <td className="data-table__muted">{s.description || t('common.emDash')}</td>
                 <td className="data-table__muted">
-                  <code>{s.managedPath ?? s.externalPath ?? '—'}</code>
+                  <code>{s.managedPath ?? s.externalPath ?? t('common.emDash')}</code>
                 </td>
                 <td className="data-table__actions">
                   <Link to="/skills/$name" params={{ name: s.name }} className="btn btn--sm">
-                    Open
+                    {t('common.open')}
                   </Link>
                   <ConfirmButton
-                    label="Delete"
+                    label={t('common.delete')}
                     onConfirm={() => del.mutateAsync(s.name)}
                     danger
                     disabled={del.isPending}
@@ -96,7 +102,8 @@ function SkillsPage() {
 }
 
 function ErrorBanner({ error }: { error: unknown }) {
-  let msg = 'Unknown error'
+  const { t } = useTranslation()
+  let msg = t('common.unknownError')
   if (error instanceof ApiError) msg = `${error.code}: ${error.message}`
   else if (error instanceof Error) msg = error.message
   return <div className="error-box">⚠ {msg}</div>
