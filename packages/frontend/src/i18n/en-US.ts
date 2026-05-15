@@ -338,6 +338,10 @@ export const enUS: Resources = {
     fieldSkills: 'Skills',
     fieldSkillsHint: 'Skill names the framework should inject.',
     fieldSkillsPlaceholder: 'add a skill name then Enter',
+    skillsPickerLabel: 'Pick from existing skills…',
+    skillsPickerLoading: 'Loading…',
+    skillsPickerEmpty: 'No skills available (all added or repo empty)',
+    skillsPickerLoadFailed: 'Failed to load skill list; you can still type names below.',
     fieldReadonly: 'Read-only',
     fieldReadonlyHint: 'Read-only agents can run concurrently in the same task; writers serialize.',
     fieldModel: 'Model',
@@ -396,6 +400,12 @@ export const enUS: Resources = {
     defaultModelHint: 'Used by agents without an explicit `model`.',
     defaultVariant: 'Default variant',
     defaultTemperature: 'Default temperature',
+    defaultSteps: 'Default steps',
+    defaultStepsHint:
+      "Pre-filled when creating a new agent; leave blank to fall back to opencode's built-in default.",
+    defaultMaxSteps: 'Default max steps',
+    defaultMaxStepsHint:
+      "Pre-filled when creating a new agent; leave blank to fall back to opencode's built-in default.",
     maxConcurrentNodes: 'Max concurrent nodes',
     multiProcessConc: 'Multi-process subprocess concurrency',
     logLevel: 'Log level',

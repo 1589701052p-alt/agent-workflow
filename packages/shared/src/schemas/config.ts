@@ -31,6 +31,14 @@ export const ConfigSchema = z.object({
   defaultModel: z.string().min(1).optional(),
   defaultVariant: z.string().min(1).optional(),
   defaultTemperature: z.number().min(0).max(2).optional(),
+  /**
+   * Default agent steps / max-steps surfaced on the Add Agent form. Pure UX:
+   * the value is snapshotted into the new agent row at creation time, after
+   * which the agent row is authoritative (changing these later does not
+   * propagate). See design/RFC-002-agent-defaults-from-runtime/.
+   */
+  defaultSteps: z.number().int().positive().optional(),
+  defaultMaxSteps: z.number().int().positive().optional(),
   /** Global semaphore capacity. design.md §11 default = 4. */
   maxConcurrentNodes: z.number().int().positive(),
   /** Independent sub-process pool capacity inside a multi-process node. */

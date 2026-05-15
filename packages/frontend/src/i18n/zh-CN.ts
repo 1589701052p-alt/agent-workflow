@@ -329,6 +329,10 @@ export interface Resources {
     fieldSkills: string
     fieldSkillsHint: string
     fieldSkillsPlaceholder: string
+    skillsPickerLabel: string
+    skillsPickerLoading: string
+    skillsPickerEmpty: string
+    skillsPickerLoadFailed: string
     fieldReadonly: string
     fieldReadonlyHint: string
     fieldModel: string
@@ -386,6 +390,10 @@ export interface Resources {
     defaultModelHint: string
     defaultVariant: string
     defaultTemperature: string
+    defaultSteps: string
+    defaultStepsHint: string
+    defaultMaxSteps: string
+    defaultMaxStepsHint: string
     maxConcurrentNodes: string
     multiProcessConc: string
     logLevel: string
@@ -769,6 +777,10 @@ export const zhCN: Resources = {
     fieldSkills: '技能',
     fieldSkillsHint: '框架运行时注入的技能名。',
     fieldSkillsPlaceholder: '输入技能名后按 Enter',
+    skillsPickerLabel: '从已有技能中选择…',
+    skillsPickerLoading: '加载中…',
+    skillsPickerEmpty: '暂无可选技能（已全部添加 / 仓库为空）',
+    skillsPickerLoadFailed: '加载技能列表失败；仍可在下方手动输入。',
     fieldReadonly: '只读',
     fieldReadonlyHint: '只读 agent 可在同一 task 中并发；可写 agent 会串行。',
     fieldModel: 'Model',
@@ -827,6 +839,10 @@ export const zhCN: Resources = {
     defaultModelHint: '没声明 model 的 agent 使用。',
     defaultVariant: '默认 variant',
     defaultTemperature: '默认 temperature',
+    defaultSteps: '默认 steps',
+    defaultStepsHint: '新建代理时默认填入此值；留空走 opencode 内置默认。',
+    defaultMaxSteps: '默认 max steps',
+    defaultMaxStepsHint: '新建代理时默认填入此值；留空走 opencode 内置默认。',
     maxConcurrentNodes: '最大并发节点数',
     multiProcessConc: 'Multi-process 子进程并发',
     logLevel: '日志级别',

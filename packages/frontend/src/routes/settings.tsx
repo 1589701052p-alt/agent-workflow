@@ -105,6 +105,8 @@ function RuntimeTab({ config }: TabProps) {
       'defaultModel',
       'defaultVariant',
       'defaultTemperature',
+      'defaultSteps',
+      'defaultMaxSteps',
       'maxConcurrentNodes',
       'multiProcessSubprocessConcurrency',
       'logLevel',
@@ -153,6 +155,25 @@ function RuntimeTab({ config }: TabProps) {
             step={0.1}
           />
         </Field>
+        <div className="form-grid form-grid--cols-2">
+          <Field label={t('settingsForm.defaultSteps')} hint={t('settingsForm.defaultStepsHint')}>
+            <NumberInput
+              value={state.defaultSteps}
+              onChange={(v) => setState({ ...state, defaultSteps: v })}
+              min={1}
+            />
+          </Field>
+          <Field
+            label={t('settingsForm.defaultMaxSteps')}
+            hint={t('settingsForm.defaultMaxStepsHint')}
+          >
+            <NumberInput
+              value={state.defaultMaxSteps}
+              onChange={(v) => setState({ ...state, defaultMaxSteps: v })}
+              min={1}
+            />
+          </Field>
+        </div>
         <div className="form-grid form-grid--cols-2">
           <Field label={t('settingsForm.maxConcurrentNodes')} required>
             <NumberInput

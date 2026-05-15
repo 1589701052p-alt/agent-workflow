@@ -9,6 +9,8 @@ import { ChipsInput } from './ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from './Form'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
+import { ModelSelect } from './ModelSelect'
+import { SkillsPicker } from './SkillsPicker'
 
 export interface AgentFormProps {
   value: CreateAgent
@@ -70,7 +72,7 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
         </Field>
 
         <Field label={t('agentForm.fieldSkills')} hint={t('agentForm.fieldSkillsHint')}>
-          <ChipsInput
+          <SkillsPicker
             value={value.skills ?? []}
             onChange={(v) => patch('skills', v)}
             placeholder={t('agentForm.fieldSkillsPlaceholder')}
@@ -86,11 +88,7 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
 
         <div className="form-grid form-grid--cols-3">
           <Field label={t('agentForm.fieldModel')}>
-            <TextInput
-              value={value.model ?? ''}
-              onChange={(v) => patch('model', v === '' ? undefined : v)}
-              placeholder={t('agentForm.modelPlaceholder')}
-            />
+            <ModelSelect value={value.model} onChange={(v) => patch('model', v)} />
           </Field>
           <Field label={t('agentForm.fieldVariant')}>
             <TextInput

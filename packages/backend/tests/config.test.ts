@@ -105,4 +105,29 @@ describe('config load/save', () => {
     const updated = applyConfigPatch(path, { $schema_version: 999 })
     expect(updated.$schema_version).toBe(1)
   })
+
+  test('RFC-002 defaultSteps / defaultMaxSteps round-trip', () => {
+    loadConfig(path)
+    const updated = applyConfigPatch(path, { defaultSteps: 12, defaultMaxSteps: 48 })
+    expect(updated.defaultSteps).toBe(12)
+    expect(updated.defaultMaxSteps).toBe(48)
+    const reread = loadConfig(path)
+    expect(reread.defaultSteps).toBe(12)
+    expect(reread.defaultMaxSteps).toBe(48)
+  })
+
+  test('RFC-002 defaultSteps must be a positive integer', () => {
+    loadConfig(path)
+    expect(() => applyConfigPatch(path, { defaultSteps: 0 })).toThrow(ValidationError)
+    expect(() => applyConfigPatch(path, { defaultSteps: -1 })).toThrow(ValidationError)
+    expect(() => applyConfigPatch(path, { defaultMaxSteps: 1.5 })).toThrow(ValidationError)
+  })
+
+  test('RFC-002 legacy config (missing new fields) loads with undefined', () => {
+    writeFileSync(path, JSON.stringify({ $schema_version: 1, maxConcurrentNodes: 6 }))
+    const cfg = loadConfig(path)
+    expect(cfg.defaultSteps).toBeUndefined()
+    expect(cfg.defaultMaxSteps).toBeUndefined()
+    expect(cfg.maxConcurrentNodes).toBe(6)
+  })
 })
