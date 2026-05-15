@@ -13,6 +13,7 @@ export type PaletteItem =
   | { kind: 'output' }
   | { kind: 'wrapper-git' }
   | { kind: 'wrapper-loop' }
+  | { kind: 'review' }
 
 /** mime carried in HTML5 dataTransfer. Custom to avoid colliding with files. */
 export const PALETTE_MIME = 'application/x-agent-workflow-node'
@@ -37,6 +38,7 @@ export function deserialize(raw: string): PaletteItem | null {
       case 'output':
       case 'wrapper-git':
       case 'wrapper-loop':
+      case 'review':
         return { kind: rec.kind } as PaletteItem
       default:
         return null
@@ -87,6 +89,22 @@ export function makeNode(
         maxIterations: 3,
         exitCondition: { kind: 'port-empty' },
       } as WorkflowNode
+    case 'review':
+      return {
+        id,
+        kind: 'review',
+        position: pos,
+        // inputSource is unset on drop — the user wires it up in
+        // NodeInspector. Validator catches the missing-inputSource case
+        // before Launch.
+        inputSource: { nodeId: '', portName: '' },
+        title: '',
+        description: '',
+        rerunnableOnReject: [],
+        rerunnableOnIterate: [],
+        rollbackFilesOnReject: true,
+        rollbackFilesOnIterate: false,
+      } as unknown as WorkflowNode
   }
 }
 
@@ -109,6 +127,7 @@ const SHORT: Record<PaletteItem['kind'], string> = {
   output: 'out',
   'wrapper-git': 'wrap_git',
   'wrapper-loop': 'wrap_loop',
+  review: 'rev',
 }
 
 function uniqueInputKey(existing: Set<string>): string {
@@ -182,6 +201,16 @@ export function buildPalette(agents: Agent[], t: PaletteTranslator): PaletteSect
           item: { kind: 'output' } as PaletteItem,
           label: t('editor.paletteOutputLabel'),
           description: t('editor.paletteOutputDesc'),
+        },
+      ],
+    },
+    {
+      label: t('editor.paletteHuman'),
+      items: [
+        {
+          item: { kind: 'review' } as PaletteItem,
+          label: t('editor.paletteReviewLabel'),
+          description: t('editor.paletteReviewDesc'),
         },
       ],
     },

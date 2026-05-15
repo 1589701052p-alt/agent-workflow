@@ -60,7 +60,7 @@ describe('buildPalette with real i18n', () => {
     setLanguage('en-US')
     const t = i18n.t.bind(i18n)
     const sections = buildPalette([], t)
-    expect(sections.map((s) => s.label)).toEqual(['Agents', 'Fan-out', 'Wrappers', 'IO'])
+    expect(sections.map((s) => s.label)).toEqual(['Agents', 'Fan-out', 'Wrappers', 'IO', 'Human'])
     // Built-in wrapper + IO labels come through too.
     const ioItems = sections[3]?.items.map((i) => i.label) ?? []
     expect(ioItems).toContain('input')

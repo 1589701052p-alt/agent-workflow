@@ -297,6 +297,10 @@ export const enUS: Resources = {
     paletteInputDesc: 'launcher form value',
     paletteOutputLabel: 'output',
     paletteOutputDesc: 'task-detail outputs panel',
+    paletteHuman: 'Human',
+    paletteReviewLabel: '⚖ Review node',
+    paletteReviewDesc:
+      'Sits downstream of a markdown port and pauses the workflow until a human decides.',
     menuPaste: 'Paste',
     menuSelectAll: 'Select all',
     menuDuplicate: 'Duplicate',
@@ -342,6 +346,29 @@ export const enUS: Resources = {
     fieldInputRequired: 'Required',
     fieldInputDescription: 'Description',
     fieldInputDescriptionHint: 'Optional helper text rendered under the launcher field.',
+    fieldReviewTitle: 'Review title',
+    fieldReviewTitleHint:
+      'Shown in the Reviews list + detail header. Falls back to the node id when empty.',
+    fieldReviewDescription: 'Review description',
+    fieldReviewDescriptionHint: 'Optional context shown to reviewers.',
+    fieldReviewInputSourceNode: 'Source node',
+    fieldReviewInputSourceNodeHint: 'Upstream node id whose markdown output this review covers.',
+    fieldReviewInputSourcePort: 'Source port',
+    fieldReviewInputSourcePortHint:
+      'Port name on the source node (agent.outputKinds must declare it markdown).',
+    fieldReviewRerunReject: 'Reject re-runs',
+    fieldReviewRerunRejectHint:
+      'Comma-separated node ids. Default = source node + all its reachable upstreams.',
+    fieldReviewRerunIterate: 'Iterate re-runs',
+    fieldReviewRerunIterateHint: 'Comma-separated node ids. Default = direct source node only.',
+    fieldReviewRollbackReject: 'Rollback files on reject',
+    fieldReviewRollbackRejectLabel: 'Restore worktree to pre-snapshot when rejecting',
+    fieldReviewRollbackIterate: 'Rollback files on iterate',
+    fieldReviewRollbackIterateLabel:
+      'Restore worktree to pre-snapshot when iterating (default off — iterate is a tweak)',
+    fieldReviewCommentTemplate: 'Comment inject template (advanced)',
+    fieldReviewCommentTemplateHint:
+      'Optional override of how {{__review_comments__}} is rendered. Empty = framework default.',
     fieldOutputPorts: 'Output ports',
     fieldOutputPortsHint: 'Each port = a card on the task detail page; bind to (nodeId, portName).',
     portNamePlaceholder: 'port name',

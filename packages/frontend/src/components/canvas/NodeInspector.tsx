@@ -451,6 +451,158 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
         </div>
       )
     }
+    case 'review': {
+      // RFC-005: human review node config. inputSource is the (upstream, port)
+      // we'll snapshot into doc_versions; rerunnable lists are subsets of
+      // reachable upstream node ids (validator enforces). Comma-separated
+      // text input keeps the inspector light — we could swap to a multi-select
+      // chip picker in a polish pass.
+      const inputSource = (rec.inputSource ?? {}) as Record<string, unknown> as {
+        nodeId?: string
+        portName?: string
+      }
+      const title = typeof rec.title === 'string' ? rec.title : ''
+      const description = typeof rec.description === 'string' ? rec.description : ''
+      const rerunnableOnReject = Array.isArray(rec.rerunnableOnReject)
+        ? (rec.rerunnableOnReject as string[])
+        : []
+      const rerunnableOnIterate = Array.isArray(rec.rerunnableOnIterate)
+        ? (rec.rerunnableOnIterate as string[])
+        : []
+      const rollbackFilesOnReject =
+        typeof rec.rollbackFilesOnReject === 'boolean' ? rec.rollbackFilesOnReject : true
+      const rollbackFilesOnIterate =
+        typeof rec.rollbackFilesOnIterate === 'boolean' ? rec.rollbackFilesOnIterate : false
+      const commentInjectTemplate =
+        typeof rec.commentInjectTemplate === 'string' ? rec.commentInjectTemplate : ''
+
+      // Candidate upstream node ids = every node in the workflow except this
+      // one and any output sink. Validator enforces "subset of reachable
+      // upstreams" — this dropdown is the friendly version.
+      const upstreamCandidates = definition.nodes
+        .filter((n) => n.id !== node.id && n.kind !== 'output')
+        .map((n) => n.id)
+
+      const patchReview = (delta: Record<string, unknown>): void =>
+        onPatch({
+          ...(node as Record<string, unknown>),
+          ...delta,
+        } as unknown as WorkflowNode)
+
+      return (
+        <div className="form-grid">
+          <Field label={t('inspector.fieldReviewTitle')} hint={t('inspector.fieldReviewTitleHint')}>
+            <TextInput value={title} onChange={(v) => patchReview({ title: v })} />
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewDescription')}
+            hint={t('inspector.fieldReviewDescriptionHint')}
+          >
+            <TextArea
+              value={description}
+              rows={2}
+              onChange={(v) => patchReview({ description: v })}
+            />
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewInputSourceNode')}
+            hint={t('inspector.fieldReviewInputSourceNodeHint')}
+            required
+          >
+            <select
+              className="form-input"
+              value={inputSource.nodeId ?? ''}
+              onChange={(e) =>
+                patchReview({
+                  inputSource: { nodeId: e.target.value, portName: inputSource.portName ?? '' },
+                })
+              }
+            >
+              <option value="">—</option>
+              {upstreamCandidates.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewInputSourcePort')}
+            hint={t('inspector.fieldReviewInputSourcePortHint')}
+            required
+          >
+            <TextInput
+              value={inputSource.portName ?? ''}
+              onChange={(v) =>
+                patchReview({
+                  inputSource: { nodeId: inputSource.nodeId ?? '', portName: v },
+                })
+              }
+              placeholder="design"
+            />
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewRerunReject')}
+            hint={t('inspector.fieldReviewRerunRejectHint')}
+          >
+            <TextInput
+              value={rerunnableOnReject.join(', ')}
+              onChange={(v) =>
+                patchReview({
+                  rerunnableOnReject: v
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0),
+                })
+              }
+              placeholder={inputSource.nodeId ?? ''}
+            />
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewRerunIterate')}
+            hint={t('inspector.fieldReviewRerunIterateHint')}
+          >
+            <TextInput
+              value={rerunnableOnIterate.join(', ')}
+              onChange={(v) =>
+                patchReview({
+                  rerunnableOnIterate: v
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0),
+                })
+              }
+              placeholder={inputSource.nodeId ?? ''}
+            />
+          </Field>
+          <Field label={t('inspector.fieldReviewRollbackReject')}>
+            <Switch
+              checked={rollbackFilesOnReject}
+              onChange={(c) => patchReview({ rollbackFilesOnReject: c })}
+              label={t('inspector.fieldReviewRollbackRejectLabel')}
+            />
+          </Field>
+          <Field label={t('inspector.fieldReviewRollbackIterate')}>
+            <Switch
+              checked={rollbackFilesOnIterate}
+              onChange={(c) => patchReview({ rollbackFilesOnIterate: c })}
+              label={t('inspector.fieldReviewRollbackIterateLabel')}
+            />
+          </Field>
+          <Field
+            label={t('inspector.fieldReviewCommentTemplate')}
+            hint={t('inspector.fieldReviewCommentTemplateHint')}
+          >
+            <TextArea
+              value={commentInjectTemplate}
+              rows={3}
+              onChange={(v) => patchReview({ commentInjectTemplate: v })}
+              placeholder=""
+            />
+          </Field>
+        </div>
+      )
+    }
     case 'agent-single':
     case 'agent-multi': {
       const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''

@@ -285,6 +285,9 @@ export interface Resources {
     paletteInputDesc: string
     paletteOutputLabel: string
     paletteOutputDesc: string
+    paletteHuman: string
+    paletteReviewLabel: string
+    paletteReviewDesc: string
     menuPaste: string
     menuSelectAll: string
     menuDuplicate: string
@@ -327,6 +330,24 @@ export interface Resources {
     fieldInputRequired: string
     fieldInputDescription: string
     fieldInputDescriptionHint: string
+    fieldReviewTitle: string
+    fieldReviewTitleHint: string
+    fieldReviewDescription: string
+    fieldReviewDescriptionHint: string
+    fieldReviewInputSourceNode: string
+    fieldReviewInputSourceNodeHint: string
+    fieldReviewInputSourcePort: string
+    fieldReviewInputSourcePortHint: string
+    fieldReviewRerunReject: string
+    fieldReviewRerunRejectHint: string
+    fieldReviewRerunIterate: string
+    fieldReviewRerunIterateHint: string
+    fieldReviewRollbackReject: string
+    fieldReviewRollbackRejectLabel: string
+    fieldReviewRollbackIterate: string
+    fieldReviewRollbackIterateLabel: string
+    fieldReviewCommentTemplate: string
+    fieldReviewCommentTemplateHint: string
     fieldOutputPorts: string
     fieldOutputPortsHint: string
     portNamePlaceholder: string
@@ -804,6 +825,9 @@ export const zhCN: Resources = {
     paletteInputDesc: 'launcher 表单值',
     paletteOutputLabel: 'output',
     paletteOutputDesc: '任务详情页输出面板',
+    paletteHuman: '人工',
+    paletteReviewLabel: '⚖ 评审节点',
+    paletteReviewDesc: '挂在 markdown port 下游，让人评审后再继续。',
     menuPaste: '粘贴',
     menuSelectAll: '全选',
     menuDuplicate: '复制为新节点',
@@ -847,6 +871,25 @@ export const zhCN: Resources = {
     fieldInputRequired: '必填',
     fieldInputDescription: '说明',
     fieldInputDescriptionHint: 'launcher 字段下方的额外说明，可空。',
+    fieldReviewTitle: '评审标题',
+    fieldReviewTitleHint: '展示在评审列表与详情头部；可为空，会回退到节点 id。',
+    fieldReviewDescription: '评审说明',
+    fieldReviewDescriptionHint: '可选 — 给评审者的上下文。',
+    fieldReviewInputSourceNode: '上游节点',
+    fieldReviewInputSourceNodeHint: '产出待评 markdown 的上游节点 id。',
+    fieldReviewInputSourcePort: '上游端口',
+    fieldReviewInputSourcePortHint:
+      '该节点产出的 markdown 端口名（agent.outputKinds 必须声明为 markdown）。',
+    fieldReviewRerunReject: 'reject 时重跑节点',
+    fieldReviewRerunRejectHint: '逗号分隔的节点 id；默认 = 上游节点 + 其所有可达上游。',
+    fieldReviewRerunIterate: 'iterate 时重跑节点',
+    fieldReviewRerunIterateHint: '逗号分隔的节点 id；默认 = 仅上游节点。',
+    fieldReviewRollbackReject: '退回时回滚文件',
+    fieldReviewRollbackRejectLabel: '回滚上游节点对 worktree 的修改',
+    fieldReviewRollbackIterate: '迭代时回滚文件',
+    fieldReviewRollbackIterateLabel: '回滚上游节点对 worktree 的修改（默认不回滚 — 迭代是微调）',
+    fieldReviewCommentTemplate: '评审意见注入模板（高级）',
+    fieldReviewCommentTemplateHint: '可选 — 覆盖 {{__review_comments__}} 渲染。留空走框架默认。',
     fieldOutputPorts: '输出端口',
     fieldOutputPortsHint: '每个端口 = 任务详情页的一张卡片；绑定到 (nodeId, portName)。',
     portNamePlaceholder: '端口名',

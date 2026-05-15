@@ -34,6 +34,25 @@ export function useTaskSync(taskId: string | null): void {
         // token usage etc. up to date.
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
       }
+      // RFC-005: review.* events. Invalidate the per-review detail (if
+      // any tab has that page open) + the list + pending-count so the
+      // sidebar badge updates without waiting for the 15s poll.
+      if (
+        msg.type === 'review.created' ||
+        msg.type === 'review.decision_made' ||
+        msg.type === 'review.comment_added' ||
+        msg.type === 'review.comment_deleted'
+      ) {
+        void qc.invalidateQueries({ queryKey: ['reviews', 'detail', msg.nodeRunId] })
+        void qc.invalidateQueries({ queryKey: ['reviews', 'list'] })
+        void qc.invalidateQueries({ queryKey: ['reviews', 'pending-count'] })
+        // The decision flip also moves the host task between statuses
+        // (awaiting_review ↔ running ↔ done), so refresh that too.
+        if (msg.type === 'review.decision_made') {
+          void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
+          void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
+        }
+      }
     },
   })
 }

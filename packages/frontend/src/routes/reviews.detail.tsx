@@ -18,6 +18,7 @@ import type {
 } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { MarkdownView } from '@/components/review/MarkdownView'
+import { useTaskSync } from '@/hooks/useTaskSync'
 import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
 import { deleteDraft, getDraft, listDrafts, setDraft } from '@/lib/review/draftStore'
 import { Route as RootRoute } from './__root'
@@ -38,6 +39,11 @@ function ReviewDetailPage() {
     queryFn: ({ signal }) => api.get(`/api/reviews/${nodeRunId}`, undefined, signal),
     refetchInterval: 8000,
   })
+
+  // RFC-005 PR-D T30: subscribe to /ws/tasks/{taskId} once detail resolves;
+  // useTaskSync invalidates review queries on review.* events as well, so
+  // the page stays live across multi-tab edits.
+  useTaskSync(detail.data?.summary.taskId ?? null)
 
   // Config needed for plantuml endpoint passthrough.
   const config = useQuery<Config>({
@@ -209,7 +215,7 @@ function ReviewDetailPage() {
     return () => observer.disconnect()
   }, [detail.data])
 
-  // Keyboard shortcuts: A/R/I + Esc.
+  // Keyboard shortcuts: A/R/I + J/K (cross-comment jump) + Esc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (popover !== null) {
@@ -225,13 +231,31 @@ function ReviewDetailPage() {
       ) {
         return
       }
-      if (e.key.toLowerCase() === 'a') void onApprove()
-      else if (e.key.toLowerCase() === 'r') void onReject()
-      else if (e.key.toLowerCase() === 'i') void onIterate()
+      const k = e.key.toLowerCase()
+      if (k === 'a') void onApprove()
+      else if (k === 'r') void onReject()
+      else if (k === 'i') void onIterate()
+      else if ((k === 'j' || k === 'k') && detail.data !== undefined) {
+        // Jump to next / prev comment by anchor order.
+        const comments = detail.data.comments
+        if (comments.length === 0) return
+        const currentIdx =
+          activeCommentId === null ? -1 : comments.findIndex((c) => c.id === activeCommentId)
+        const nextIdx =
+          k === 'j' ? Math.min(currentIdx + 1, comments.length - 1) : Math.max(currentIdx - 1, 0)
+        const target = comments[nextIdx]
+        if (target !== undefined) {
+          setActiveCommentId(target.id)
+          const el = markdownRef.current?.querySelector(`[data-comment-id="${target.id}"]`)
+          if (el !== null && el !== undefined) {
+            ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popover, onApprove, onReject, onIterate])
+  }, [popover, onApprove, onReject, onIterate, detail.data, activeCommentId])
 
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {

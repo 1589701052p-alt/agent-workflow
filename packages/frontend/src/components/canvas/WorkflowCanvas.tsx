@@ -39,6 +39,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
 import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
+import { ReviewNode } from './nodes/ReviewNode'
 import { INBOUND_HANDLE_ID, type CanvasNodeData, type CanvasSelection } from './nodes/types'
 import { syncInputDefs } from './syncInputDefs'
 import { GitWrapperNode, LoopWrapperNode } from './nodes/WrapperNodes'
@@ -50,6 +51,7 @@ const NODE_TYPES = {
   output: OutputNode,
   'wrapper-git': GitWrapperNode,
   'wrapper-loop': LoopWrapperNode,
+  review: ReviewNode,
 }
 
 export interface WorkflowCanvasProps {
@@ -647,6 +649,12 @@ export function computePorts(
       for (const b of bindings) {
         if (typeof b.name === 'string') outputs.push(b.name)
       }
+      break
+    }
+    case 'review': {
+      // RFC-005: review nodes publish two ports downstream after approve.
+      outputs.push('approved_doc')
+      outputs.push('approval_meta')
       break
     }
   }

@@ -139,6 +139,7 @@ describe('buildPalette', () => {
       'editor.paletteFanOut',
       'editor.paletteWrappers',
       'editor.paletteIo',
+      'editor.paletteHuman',
     ])
     expect(sections[0]?.items[0]?.item).toEqual({ kind: 'agent-single', agentName: 'coder' })
     expect(sections[1]?.items[0]?.item).toEqual({ kind: 'agent-multi', agentName: 'coder' })
