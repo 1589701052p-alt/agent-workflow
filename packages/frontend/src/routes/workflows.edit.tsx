@@ -32,6 +32,18 @@ const EMPTY_DEF: WorkflowDefinition = {
   edges: [],
 }
 
+/**
+ * Class list for the editor's grid container. The `--with-inspector`
+ * variant locks a 480px third column for the inspector drawer; we only
+ * apply it when a node is actually selected, otherwise the empty grid
+ * track squeezes the canvas down to ~0px on narrow viewports.
+ *
+ * Exported for unit testing — see tests/canvas-editor-layout.test.ts.
+ */
+export function editorLayoutClass(selectedNodeId: string | null): string {
+  return selectedNodeId !== null ? 'editor-layout editor-layout--with-inspector' : 'editor-layout'
+}
+
 // /workflows/new ------------------------------------------------------------
 
 export const NewRoute = createRoute({
@@ -88,7 +100,7 @@ function WorkflowNewPage() {
       {create.error !== null && create.error !== undefined && (
         <div className="error-box">{describeError(create.error)}</div>
       )}
-      <div className="editor-layout editor-layout--with-inspector">
+      <div className={editorLayoutClass(selectedId)}>
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas
@@ -299,7 +311,7 @@ function WorkflowEditPage() {
         <ValidationPanel result={validate.data} />
       )}
 
-      <div className="editor-layout editor-layout--with-inspector">
+      <div className={editorLayoutClass(selectedId)}>
         <EditorSidebar agents={agents.data ?? []} />
         <div className="canvas-frame">
           <WorkflowCanvas

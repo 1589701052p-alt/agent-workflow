@@ -2,8 +2,11 @@
 
 import { describe, expect, test } from 'vitest'
 import type { Agent, WorkflowDefinition } from '@agent-workflow/shared'
+import type { NodeChange } from '@xyflow/react'
 import {
+  __testAffectsDefinition as affectsDefinition,
   __testComputePorts as computePorts,
+  __testSameIds as sameIds,
   __testToDefinition as toDefinition,
   __testToFlowEdges as toFlowEdges,
   __testToFlowNodes as toFlowNodes,
@@ -196,5 +199,88 @@ describe('toDefinition', () => {
     const next = toDefinition(DEF, flow, toFlowEdges(DEF.edges))
     expect(next.$schema_version).toBe(1)
     expect(next.inputs).toEqual(DEF.inputs)
+  })
+})
+
+// Regression: handleNodesChange used to propagate ALL xyflow NodeChanges
+// to the parent, which (combined with the def-sync useEffect rebuilding
+// nodes from the new definition reference) created a feedback loop —
+// xyflow re-fired select/dimensions changes after every render and React
+// hit "Maximum update depth exceeded". The predicate here gates the
+// propagation so only data-affecting changes round-trip.
+describe('affectsDefinition', () => {
+  test('select-only changes are local UI state, do not affect the def', () => {
+    const changes: NodeChange[] = [{ id: 'a1', type: 'select', selected: true }]
+    expect(affectsDefinition(changes)).toBe(false)
+  })
+
+  test('dimensions-only changes (xyflow auto-measure) are local too', () => {
+    const changes: NodeChange[] = [
+      { id: 'a1', type: 'dimensions', dimensions: { width: 200, height: 80 } },
+    ]
+    expect(affectsDefinition(changes)).toBe(false)
+  })
+
+  test('mixed select + dimensions still does not affect the def', () => {
+    const changes: NodeChange[] = [
+      { id: 'a1', type: 'select', selected: false },
+      { id: 'a1', type: 'dimensions', dimensions: { width: 200, height: 80 } },
+    ]
+    expect(affectsDefinition(changes)).toBe(false)
+  })
+
+  test('a position change (drag) DOES affect the def', () => {
+    const changes: NodeChange[] = [
+      { id: 'a1', type: 'position', position: { x: 100, y: 200 }, dragging: false },
+    ]
+    expect(affectsDefinition(changes)).toBe(true)
+  })
+
+  test('add / remove changes affect the def', () => {
+    const add: NodeChange[] = [
+      { type: 'add', item: { id: 'new', position: { x: 0, y: 0 }, data: {} } as never },
+    ]
+    const rm: NodeChange[] = [{ type: 'remove', id: 'old' }]
+    expect(affectsDefinition(add)).toBe(true)
+    expect(affectsDefinition(rm)).toBe(true)
+  })
+
+  test('a position change mixed in with a select still propagates', () => {
+    const changes: NodeChange[] = [
+      { id: 'a1', type: 'select', selected: true },
+      { id: 'a2', type: 'position', position: { x: 5, y: 5 }, dragging: false },
+    ]
+    expect(affectsDefinition(changes)).toBe(true)
+  })
+
+  test('empty change list is a no-op', () => {
+    expect(affectsDefinition([])).toBe(false)
+  })
+})
+
+// Regression: onSelectionChange used to mint a fresh `{nodes, edges}`
+// object on every xyflow callback, even when the actual selected ids
+// were unchanged. Combined with the canvas re-render after definition
+// changes that produced an unbounded setState loop. The handler now
+// uses sameIds inside a functional setState updater.
+describe('sameIds', () => {
+  test('two empty arrays', () => {
+    expect(sameIds([], [])).toBe(true)
+  })
+
+  test('same ids in same order', () => {
+    expect(sameIds(['a', 'b', 'c'], ['a', 'b', 'c'])).toBe(true)
+  })
+
+  test('different lengths', () => {
+    expect(sameIds(['a'], ['a', 'b'])).toBe(false)
+  })
+
+  test('same ids in different order is NOT equal (order matters)', () => {
+    expect(sameIds(['a', 'b'], ['b', 'a'])).toBe(false)
+  })
+
+  test('one differing id', () => {
+    expect(sameIds(['a', 'b'], ['a', 'c'])).toBe(false)
   })
 })

@@ -114,12 +114,21 @@ function CanvasInner({
       setNodes((prev) => {
         const next = applyNodeChanges(changes, prev)
         if (!readOnly && onChange !== undefined) {
-          const stillReferenced = new Set(next.map((n) => n.id))
-          const liveEdges = edges.filter(
-            (e) => stillReferenced.has(e.source) && stillReferenced.has(e.target),
-          )
-          if (liveEdges.length !== edges.length) setEdges(liveEdges)
-          onChange(toDefinition(definition, next, liveEdges))
+          // Only propagate changes that actually affect the persisted
+          // workflow definition. xyflow's `select` and `dimensions`
+          // changes are local UI state — propagating them would mint a
+          // new definition reference, which the def-sync useEffect would
+          // immediately re-apply by rebuilding `nodes`, retriggering
+          // onNodesChange... a feedback loop that hits React's
+          // "Maximum update depth exceeded" guard.
+          if (affectsDefinition(changes)) {
+            const stillReferenced = new Set(next.map((n) => n.id))
+            const liveEdges = edges.filter(
+              (e) => stillReferenced.has(e.source) && stillReferenced.has(e.target),
+            )
+            if (liveEdges.length !== edges.length) setEdges(liveEdges)
+            onChange(toDefinition(definition, next, liveEdges))
+          }
         }
         return next
       })
@@ -425,7 +434,12 @@ function CanvasInner({
         onSelectionChange={(s) => {
           const ns = s.nodes.map((n) => n.id)
           const es = s.edges.map((e) => e.id)
-          setSelection({ nodes: ns, edges: es })
+          // xyflow re-fires onSelectionChange after every node/edge update
+          // even when the selected set is unchanged. Bail when nothing
+          // actually changed so we don't loop on a fresh object reference.
+          setSelection((prev) =>
+            sameIds(prev.nodes, ns) && sameIds(prev.edges, es) ? prev : { nodes: ns, edges: es },
+          )
           if (onSelect !== undefined) onSelect(ns[0] ?? null)
         }}
         onNodeContextMenu={handleNodeContextMenu}
@@ -590,6 +604,34 @@ function toFlowEdges(defEdges: WorkflowDefinition['edges']): Edge[] {
   }))
 }
 
+/**
+ * Returns true when at least one of the xyflow NodeChanges modifies the
+ * persisted WorkflowDefinition (position / add / remove / replace).
+ *
+ * `select` and `dimensions` are pure xyflow UI state. If we let them
+ * propagate to the parent's onChange we mint a new definition reference,
+ * the def-sync useEffect rebuilds the local nodes array, which retriggers
+ * onNodesChange → React eventually trips its "Maximum update depth
+ * exceeded" guard. See the comment in `handleNodesChange` for context.
+ */
+function affectsDefinition(changes: NodeChange[]): boolean {
+  return changes.some(
+    (c) => c.type === 'position' || c.type === 'add' || c.type === 'remove' || c.type === 'replace',
+  )
+}
+
+/**
+ * Reference-stable equality for two id lists in document order. Used by
+ * the onSelectionChange handler so we can keep the previous selection
+ * object reference (and avoid a setState re-render storm) when xyflow
+ * fires the same selection back at us after every nodes-update.
+ */
+function sameIds(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
 function toDefinition(
   prev: WorkflowDefinition,
   flowNodes: Node[],
@@ -688,3 +730,5 @@ export const __testToFlowNodes = (
 export const __testToFlowEdges = toFlowEdges
 export const __testToDefinition = toDefinition
 export const __testComputePorts = computePorts
+export const __testAffectsDefinition = affectsDefinition
+export const __testSameIds = sameIds
