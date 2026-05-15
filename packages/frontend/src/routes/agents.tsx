@@ -4,8 +4,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { Agent } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { ErrorBanner } from '@/components/ErrorBanner'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -102,10 +103,3 @@ function AgentsPage() {
   )
 }
 
-function ErrorBanner({ error }: { error: unknown }) {
-  const { t } = useTranslation()
-  let msg = t('common.unknownError')
-  if (error instanceof ApiError) msg = `${error.code}: ${error.message}`
-  else if (error instanceof Error) msg = error.message
-  return <div className="error-box">⚠ {msg}</div>
-}

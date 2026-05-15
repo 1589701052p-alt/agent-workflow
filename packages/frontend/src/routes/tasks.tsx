@@ -6,7 +6,8 @@ import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { TaskStatus, TaskSummary } from '@agent-workflow/shared'
 import { TASK_STATUS } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
+import { ErrorBanner } from '@/components/ErrorBanner'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { useTasksSync } from '@/hooks/useTasksSync'
 import { Route as RootRoute } from './__root'
@@ -85,6 +86,7 @@ function TasksPage() {
               <th>{t('tasks.colStarted')}</th>
               <th>{t('tasks.colRepo')}</th>
               <th>{t('tasks.colError')}</th>
+              <th aria-label="actions" />
             </tr>
           </thead>
           <tbody>
@@ -109,6 +111,11 @@ function TasksPage() {
                   <code>{row.repoPath}</code>
                 </td>
                 <td className="data-table__muted">{row.errorSummary ?? t('common.emDash')}</td>
+                <td className="data-table__actions">
+                  <Link to="/tasks/$id" params={{ id: row.id }} className="btn btn--sm">
+                    {t('common.open')}
+                  </Link>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -116,14 +123,6 @@ function TasksPage() {
       )}
     </div>
   )
-}
-
-function ErrorBanner({ error }: { error: unknown }) {
-  const { t } = useTranslation()
-  let msg = t('common.unknownError')
-  if (error instanceof ApiError) msg = `${error.code}: ${error.message}`
-  else if (error instanceof Error) msg = error.message
-  return <div className="error-box">⚠ {msg}</div>
 }
 
 function RelativeTime({ ts }: { ts: number }) {

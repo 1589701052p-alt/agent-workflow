@@ -352,6 +352,13 @@ code {
   vertical-align: middle;
 }
 
+/* Long monospace strings in cells (file paths, repo paths) must wrap so a
+   long path can't push the table past its container's max-width. */
+.data-table td code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .data-table th {
   background: var(--bg);
   color: var(--muted);
@@ -374,10 +381,17 @@ code {
   color: var(--muted);
 }
 
+/* Keep the cell as a real table-cell so the row equalizes its height and
+   `vertical-align: middle` actually centers the buttons. Don't use flex on
+   the <td> itself — that detaches it from the table row and the cell shrinks
+   to its content height. */
 .data-table__actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.data-table__actions > * + * {
+  margin-left: 6px;
 }
 
 /* ---- Chips ---- */

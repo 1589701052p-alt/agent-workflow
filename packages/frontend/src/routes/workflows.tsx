@@ -8,6 +8,7 @@ import type { Workflow } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { ErrorBanner } from '@/components/ErrorBanner'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -158,10 +159,3 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
   }
 }
 
-function ErrorBanner({ error }: { error: unknown }) {
-  const { t } = useTranslation()
-  let msg = t('common.unknownError')
-  if (error instanceof ApiError) msg = `${error.code}: ${error.message}`
-  else if (error instanceof Error) msg = error.message
-  return <div className="error-box">⚠ {msg}</div>
-}
