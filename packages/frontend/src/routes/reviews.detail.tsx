@@ -16,7 +16,9 @@ import type {
   ReviewCommentAnchor,
   ReviewDetail,
 } from '@agent-workflow/shared'
+import type { DocVersion } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
+import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
 import { MarkdownView } from '@/components/review/MarkdownView'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
@@ -44,6 +46,35 @@ function ReviewDetailPage() {
   // useTaskSync invalidates review queries on review.* events as well, so
   // the page stays live across multi-tab edits.
   useTaskSync(detail.data?.summary.taskId ?? null)
+
+  // RFC-005 PR-E T35: diff view toggle + granularity. Default to "off"
+  // (single-pane view); flipping it on loads the prior decided doc_version
+  // and renders side-by-side.
+  const [diffMode, setDiffMode] = useState(false)
+  const [diffGranularity, setDiffGranularity] = useState<DiffGranularity>('word')
+
+  const versions = useQuery<DocVersion[]>({
+    queryKey: ['reviews', 'versions', nodeRunId],
+    queryFn: ({ signal }) => api.get(`/api/reviews/${nodeRunId}/versions`, undefined, signal),
+    enabled: diffMode,
+  })
+
+  // Pick the most recent doc_version that ISN'T the current pending one as
+  // the diff "left" pane. That maps to "the last rejected / iterated /
+  // approved version" in the RFC's vocabulary.
+  const priorVersion = useMemo<DocVersion | null>(() => {
+    if (versions.data === undefined || detail.data === undefined) return null
+    const currentId = detail.data.currentVersion.id
+    const candidate = versions.data.find((v) => v.id !== currentId)
+    return candidate ?? null
+  }, [versions.data, detail.data])
+
+  const priorBody = useQuery<{ body: string } & DocVersion>({
+    queryKey: ['reviews', 'version-body', nodeRunId, priorVersion?.id ?? ''],
+    queryFn: ({ signal }) =>
+      api.get(`/api/reviews/${nodeRunId}/versions/${priorVersion?.id ?? ''}`, undefined, signal),
+    enabled: diffMode && priorVersion !== null,
+  })
 
   // Config needed for plantuml endpoint passthrough.
   const config = useQuery<Config>({
@@ -231,6 +262,26 @@ function ReviewDetailPage() {
       ) {
         return
       }
+      // Granularity hotkeys: Ctrl/Cmd+1/2/3 cycle word/line/block when diff
+      // is on. Don't run when modifiers aren't set so plain "1/2/3" still
+      // types into focused fields.
+      if (diffMode && (e.ctrlKey || e.metaKey)) {
+        if (e.key === '1') {
+          e.preventDefault()
+          setDiffGranularity('word')
+          return
+        }
+        if (e.key === '2') {
+          e.preventDefault()
+          setDiffGranularity('line')
+          return
+        }
+        if (e.key === '3') {
+          e.preventDefault()
+          setDiffGranularity('block')
+          return
+        }
+      }
       const k = e.key.toLowerCase()
       if (k === 'a') void onApprove()
       else if (k === 'r') void onReject()
@@ -255,7 +306,7 @@ function ReviewDetailPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popover, onApprove, onReject, onIterate, detail.data, activeCommentId])
+  }, [popover, onApprove, onReject, onIterate, detail.data, activeCommentId, diffMode])
 
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {
@@ -282,19 +333,64 @@ function ReviewDetailPage() {
         </p>
       </header>
 
-      <div className="review-detail__layout">
-        <div
-          className="review-detail__body"
-          ref={markdownRef}
-          onMouseUp={() => void onMouseUpInDoc()}
-        >
-          <MarkdownView
-            body={data.currentBody}
-            taskId={data.summary.taskId}
-            plantumlEndpoint={config.data?.plantumlEndpoint}
-            plantumlAuthHeader={config.data?.plantumlAuthHeader}
-          />
+      {data.currentVersion.versionIndex > 1 && (
+        <div className="review-detail__diff-toolbar">
+          <label className="diff-view__toggle">
+            <input
+              type="checkbox"
+              checked={diffMode}
+              onChange={(e) => setDiffMode(e.target.checked)}
+            />
+            <span>{t('reviews.diffToggle')}</span>
+          </label>
+          {diffMode && (
+            <div className="diff-view__granularity">
+              {(['word', 'line', 'block'] as const).map((g, idx) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={'btn btn--sm' + (diffGranularity === g ? ' btn--primary' : '')}
+                  onClick={() => setDiffGranularity(g)}
+                >
+                  {t(`reviews.diffGranularity${g.charAt(0).toUpperCase()}${g.slice(1)}` as const)}{' '}
+                  <kbd>⌘{idx + 1}</kbd>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+      )}
+
+      <div className="review-detail__layout">
+        {diffMode && priorBody.data !== undefined ? (
+          <div className="review-detail__body">
+            <DiffView
+              left={priorBody.data.body}
+              right={data.currentBody}
+              granularity={diffGranularity}
+              leftLabel={t('reviews.diffLeftLabel', {
+                version: priorVersion?.versionIndex ?? '?',
+                decision: priorVersion?.decision ?? 'pending',
+              })}
+              rightLabel={t('reviews.diffRightLabel', {
+                version: data.currentVersion.versionIndex,
+              })}
+            />
+          </div>
+        ) : (
+          <div
+            className="review-detail__body"
+            ref={markdownRef}
+            onMouseUp={() => void onMouseUpInDoc()}
+          >
+            <MarkdownView
+              body={data.currentBody}
+              taskId={data.summary.taskId}
+              plantumlEndpoint={config.data?.plantumlEndpoint}
+              plantumlAuthHeader={config.data?.plantumlAuthHeader}
+            />
+          </div>
+        )}
         <aside className="review-detail__sidebar">
           <h3>{t('reviews.sidebarTitle')}</h3>
           {data.comments.length === 0 ? (

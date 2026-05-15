@@ -45,6 +45,12 @@ export interface Resources {
     popoverPlaceholder: string
     popoverSubmit: string
     popoverCancel: string
+    diffToggle: string
+    diffGranularityWord: string
+    diffGranularityLine: string
+    diffGranularityBlock: string
+    diffLeftLabel: string
+    diffRightLabel: string
   }
   auth: {
     title: string
@@ -576,6 +582,12 @@ export const zhCN: Resources = {
     popoverPlaceholder: '写下你的评审意见…',
     popoverSubmit: '提交',
     popoverCancel: '取消',
+    diffToggle: '对比上一版',
+    diffGranularityWord: '词',
+    diffGranularityLine: '行',
+    diffGranularityBlock: '段',
+    diffLeftLabel: '上一版 v{{version}}（{{decision}}）',
+    diffRightLabel: '当前 v{{version}}',
   },
   auth: {
     title: '连接到守护进程',

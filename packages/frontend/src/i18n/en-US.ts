@@ -45,6 +45,12 @@ export const enUS: Resources = {
     popoverPlaceholder: 'Write your review comment…',
     popoverSubmit: 'Submit',
     popoverCancel: 'Cancel',
+    diffToggle: 'Compare with prior version',
+    diffGranularityWord: 'Word',
+    diffGranularityLine: 'Line',
+    diffGranularityBlock: 'Block',
+    diffLeftLabel: 'Prior v{{version}} ({{decision}})',
+    diffRightLabel: 'Current v{{version}}',
   },
   auth: {
     title: 'Connect to daemon',
