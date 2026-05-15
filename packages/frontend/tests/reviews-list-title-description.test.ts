@@ -27,8 +27,11 @@ describe('reviews list — title + description column', () => {
     expect(tsx).toMatch(/className="reviews-row__title">\{r\.title\}/)
   })
 
-  test('falls back to <code>{r.reviewNodeId}</code> when hasTitle is false', () => {
-    expect(tsx).toMatch(/<code>\{r\.reviewNodeId\}<\/code>/)
+  test('falls back to the chip-styled reviewNodeId code when hasTitle is false', () => {
+    // Node id is rendered with the same rounded-border chip style used by the
+    // skills page "source" column, so the table reads as a uniform metadata
+    // pill rather than a bare monospace token.
+    expect(tsx).toMatch(/<code className="chip chip--tight">\{r\.reviewNodeId\}<\/code>/)
   })
 
   test('renders r.description on its own muted line when non-empty', () => {
@@ -50,7 +53,9 @@ describe('reviews list — supporting styles exist', () => {
 
   test('styles.css defines .reviews-row__title / __nodeid / __desc', () => {
     expect(css).toMatch(/\.reviews-row__title\s*\{[^}]*font-weight/)
-    expect(css).toMatch(/\.reviews-row__nodeid\s*\{[^}]*display:\s*block/)
+    // nodeId chip just needs a top margin to clear the title; the chip
+    // classes handle the rest of the pill styling.
+    expect(css).toMatch(/\.reviews-row__nodeid\s*\{[^}]*margin-top/)
     expect(css).toMatch(/\.reviews-row__desc\s*\{[^}]*white-space:\s*pre-wrap/)
   })
 })

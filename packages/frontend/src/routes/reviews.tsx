@@ -95,10 +95,12 @@ function ReviewsListPage() {
                       {hasTitle ? (
                         <>
                           <div className="reviews-row__title">{r.title}</div>
-                          <code className="muted reviews-row__nodeid">{r.reviewNodeId}</code>
+                          <code className="chip chip--tight reviews-row__nodeid">
+                            {r.reviewNodeId}
+                          </code>
                         </>
                       ) : (
-                        <code>{r.reviewNodeId}</code>
+                        <code className="chip chip--tight">{r.reviewNodeId}</code>
                       )}
                       {r.description !== '' && r.description !== r.title && (
                         <div className="muted reviews-row__desc">{r.description}</div>
