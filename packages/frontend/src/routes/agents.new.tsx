@@ -13,6 +13,8 @@ import { useTranslation } from 'react-i18next'
 import type { Agent, Config, CreateAgent } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { AgentForm, emptyAgent } from '@/components/AgentForm'
+import { AgentImportDialog } from '@/components/AgentImportDialog'
+import { mergeAgentImport } from '@/lib/agent-import-merge'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -42,6 +44,7 @@ function AgentCreatePage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [draft, setDraft] = useState(emptyAgent)
+  const [importOpen, setImportOpen] = useState(false)
 
   const config = useQuery<Config>({
     queryKey: ['config'],
@@ -72,7 +75,23 @@ function AgentCreatePage() {
         <h1>{t('agents.newTitle')}</h1>
         <p className="page__hint">{t('agents.newHint')}</p>
       </header>
+      <div className="agent-new-toolbar">
+        <button
+          type="button"
+          className="btn btn--sm"
+          data-testid="agent-import-open"
+          onClick={() => setImportOpen(true)}
+        >
+          {t('agentForm.importButton')}
+        </button>
+      </div>
       <AgentForm value={draft} onChange={setDraft} />
+      <AgentImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        currentValue={draft}
+        onApply={(res) => setDraft((prev) => mergeAgentImport(prev, res))}
+      />
       <div className="form-actions">
         <button
           type="button"
