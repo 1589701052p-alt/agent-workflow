@@ -134,8 +134,10 @@ describe('coordProjection', () => {
     ]
     const projected = projectDefinitionForXyflow(d, flow)
     const w1 = projected.find((n) => n.id === 'w1')!
-    // Fit offset = (100-24, 100-24-22) = (76, 54)
-    expect(w1.position).toEqual({ x: 76, y: 54 })
+    // Fit offset = (100 - padding=40 - handleSlack=16, 100 - 40 - header=22)
+    // = (44, 38). Exact numbers tracked here to lock the projection contract;
+    // changes to padding / handle slack need to update this expectation.
+    expect(w1.position).toEqual({ x: 44, y: 38 })
     expect(w1.style?.width).toBeGreaterThan(0)
     expect(w1.style?.height).toBeGreaterThan(0)
   })

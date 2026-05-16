@@ -30,16 +30,21 @@ describe('computeFitBounds', () => {
     expect(b.offset).toEqual({ x: 100, y: 200 })
   })
 
+  // RFC-016 follow-up: bounds now include HANDLE_SLACK=16 on each side of the
+  // width axis so handle dots (RFC-006 pins them at -14px) don't graze the
+  // wrapper edge. Height adds the header strip but no per-side slack.
+  const HANDLE_SLACK = 16
+
   test('single inner node expands to inner-bbox + 2*padding (width) and +header (height)', () => {
     const a = agentSingle('a1', { x: 50, y: 80 })
     const w = wrapper('w1', ['a1'])
     const nodes = [w, a]
     const b = computeFitBounds(w, nodes)
     const sz = DEFAULT_NODE_SIZE_BY_KIND['agent-single']
-    expect(b.width).toBe(sz.width + WRAPPER_DEFAULT_PADDING * 2)
+    expect(b.width).toBe(sz.width + WRAPPER_DEFAULT_PADDING * 2 + HANDLE_SLACK * 2)
     expect(b.height).toBe(sz.height + WRAPPER_DEFAULT_PADDING * 2 + WRAPPER_HEADER_HEIGHT)
     expect(b.offset).toEqual({
-      x: 50 - WRAPPER_DEFAULT_PADDING,
+      x: 50 - WRAPPER_DEFAULT_PADDING - HANDLE_SLACK,
       y: 80 - WRAPPER_DEFAULT_PADDING - WRAPPER_HEADER_HEIGHT,
     })
   })
@@ -50,7 +55,7 @@ describe('computeFitBounds', () => {
     const w = wrapper('w1', ['a1', 'b1'])
     const out = computeFitBounds(w, [w, a, b])
     const sz = DEFAULT_NODE_SIZE_BY_KIND['agent-single']
-    expect(out.width).toBe(300 + sz.width + WRAPPER_DEFAULT_PADDING * 2)
+    expect(out.width).toBe(300 + sz.width + WRAPPER_DEFAULT_PADDING * 2 + HANDLE_SLACK * 2)
     expect(out.height).toBe(200 + sz.height + WRAPPER_DEFAULT_PADDING * 2 + WRAPPER_HEADER_HEIGHT)
   })
 
@@ -64,8 +69,20 @@ describe('computeFitBounds', () => {
     } as unknown as WorkflowNode
     const outer = wrapper('outer', ['inner'])
     const out = computeFitBounds(outer, [outer, innerWrap])
-    expect(out.width).toBe(500 + WRAPPER_DEFAULT_PADDING * 2)
+    expect(out.width).toBe(500 + WRAPPER_DEFAULT_PADDING * 2 + HANDLE_SLACK * 2)
     expect(out.height).toBe(300 + WRAPPER_DEFAULT_PADDING * 2 + WRAPPER_HEADER_HEIGHT)
+  })
+
+  test('measured sizes override DEFAULT_NODE_SIZE_BY_KIND when provided', () => {
+    // Real-world reason: an agent with many port rows renders much taller
+    // than the conservative DEFAULT estimate. Passing xyflow's measured
+    // dimensions lets the wrapper fit to actual content.
+    const a = agentSingle('a1', { x: 0, y: 0 })
+    const w = wrapper('w1', ['a1'])
+    const measured = new Map([['a1', { width: 600, height: 400 }]])
+    const b = computeFitBounds(w, [w, a], WRAPPER_DEFAULT_PADDING, measured)
+    expect(b.width).toBe(600 + WRAPPER_DEFAULT_PADDING * 2 + HANDLE_SLACK * 2)
+    expect(b.height).toBe(400 + WRAPPER_DEFAULT_PADDING * 2 + WRAPPER_HEADER_HEIGHT)
   })
 
   test('never returns dimensions smaller than the empty fallback', () => {
