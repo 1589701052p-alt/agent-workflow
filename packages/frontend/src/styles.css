@@ -422,6 +422,23 @@ code {
   color: var(--muted);
 }
 
+.data-table__nowrap {
+  white-space: nowrap;
+}
+
+/* Truncate to a single line with ellipsis inside an auto-layout table.
+   `max-width: 0` + `width: 100%` lets the table size other columns to
+   their content first; this cell then absorbs the remaining width and
+   overflow:hidden + text-overflow:ellipsis kick in. Without max-width:0
+   the cell would expand to fit its text and never truncate. */
+.data-table__truncate {
+  max-width: 0;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Keep the cell as a real table-cell so the row equalizes its height and
    `vertical-align: middle` actually centers the buttons. Don't use flex on
    the <td> itself — that detaches it from the table row and the cell shrinks

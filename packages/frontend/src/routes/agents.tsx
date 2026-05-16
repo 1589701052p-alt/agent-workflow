@@ -62,12 +62,17 @@ function AgentsPage() {
           <tbody>
             {data.map((a) => (
               <tr key={a.id}>
-                <td>
+                <td className="data-table__nowrap">
                   <Link to="/agents/$name" params={{ name: a.name }} className="data-table__link">
                     {a.name}
                   </Link>
                 </td>
-                <td className="data-table__muted">{a.description || t('common.emDash')}</td>
+                <td
+                  className="data-table__muted data-table__truncate"
+                  title={a.description || undefined}
+                >
+                  {a.description || t('common.emDash')}
+                </td>
                 <td>
                   {a.outputs.length === 0 ? (
                     <span className="muted">{t('common.emDash')}</span>

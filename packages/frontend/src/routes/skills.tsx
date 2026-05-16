@@ -78,7 +78,7 @@ function SkillsPage() {
           <tbody>
             {data.map((s) => (
               <tr key={s.id}>
-                <td>
+                <td className="data-table__nowrap">
                   <Link to="/skills/$name" params={{ name: s.name }} className="data-table__link">
                     {s.name}
                   </Link>
