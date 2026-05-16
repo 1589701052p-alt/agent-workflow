@@ -6,10 +6,15 @@
 // Two pure entry points:
 //   projectDefinitionForXyflow(definition, flowNodes)
 //     — Given pre-built xyflow nodes (one per definition node, absolute
-//       positions), set `parentId`, `extent: 'parent'`, and convert each
-//       wrapper child's position to relative-to-parent. Also stamps the
-//       wrapper's render style {width, height} from wrapper.size (or
-//       computeFitBounds fallback).
+//       positions), set `parentId` and convert each wrapper child's
+//       position to relative-to-parent. **Intentionally does NOT set
+//       `extent: 'parent'`** — that xyflow flag physically clamps the
+//       child to the parent's rect, which would make "drag-out =
+//       remove from wrapper" impossible (the drag couldn't leave the
+//       wrapper at all). Membership is enforced logically in
+//       onNodeDragStop via the center-hit test instead. Also stamps
+//       the wrapper's render style {width, height} from wrapper.size
+//       (or computeFitBounds fallback).
 //   projectXyflowPositionsToAbsolute(definition, flowNodes)
 //     — Inverse: walk children, add their parent's absolute position back
 //       so the caller can serialize back to definition.nodes with the
@@ -150,7 +155,7 @@ export function projectDefinitionForXyflow(
         out.push({
           ...fn,
           parentId,
-          extent: 'parent',
+          // No `extent: 'parent'` — RFC-016 §4.1 / drag-out membership.
           position: { x: absX - parent.position.x, y: absY - parent.position.y },
           style,
           ...(zIndex !== undefined ? { zIndex } : {}),

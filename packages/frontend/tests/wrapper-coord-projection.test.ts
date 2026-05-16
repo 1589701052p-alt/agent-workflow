@@ -56,7 +56,9 @@ describe('coordProjection', () => {
     expect(projected[0]!.id).toBe('w1')
     const a1 = projected.find((n) => n.id === 'a1')!
     expect(a1.parentId).toBe('w1')
-    expect(a1.extent).toBe('parent')
+    // Intentionally NOT 'parent' — RFC-016 drag-out membership requires
+    // children to be free to leave the wrapper rect during drag.
+    expect(a1.extent).toBeUndefined()
     expect(a1.position).toEqual({ x: 100, y: 150 }) // 200-100, 250-100
   })
 
