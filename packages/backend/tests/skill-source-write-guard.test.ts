@@ -12,7 +12,7 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { skills } from '../src/db/schema'
 import { writeSkillContent, writeSkillFile, type SkillFsOptions } from '../src/services/skill'
 import { createSkillSource } from '../src/services/skill-source'
-import { ConflictError } from '../src/util/errors'
+import type { ConflictError } from '../src/util/errors'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 

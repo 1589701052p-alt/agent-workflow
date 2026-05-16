@@ -32,6 +32,7 @@ import type {
 } from '@agent-workflow/shared'
 import { SKILL_NAME_RE } from '@agent-workflow/shared'
 import { and, eq } from 'drizzle-orm'
+import type { Dirent } from 'node:fs'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -74,9 +75,9 @@ export function discoverSkillsInDir(parentPath: string): DiscoverResult {
   const candidates: DiscoveredCandidate[] = []
   const skipped: SkillSkipReport[] = []
 
-  let entries: import('node:fs').Dirent[]
+  let entries: Dirent[]
   try {
-    entries = readdirSync(parentPath, { withFileTypes: true }) as import('node:fs').Dirent[]
+    entries = readdirSync(parentPath, { withFileTypes: true }) as Dirent[]
   } catch (e) {
     // Caller propagates this to lastScanError; here just return empty.
     log.warn('discoverSkillsInDir readdir failed', { parentPath, error: (e as Error).message })
