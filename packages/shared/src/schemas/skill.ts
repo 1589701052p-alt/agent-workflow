@@ -167,3 +167,90 @@ export const RescanSkillSourceResponseSchema = z.object({
   skipped: z.array(SkillSkipReportSchema),
 })
 export type RescanSkillSourceResponse = z.infer<typeof RescanSkillSourceResponseSchema>
+
+// ---------------------------------------------------------------------------
+// RFC-019: ZIP batch import. parse end-point returns the candidate list +
+// per-candidate errors; commit end-point takes a decision map keyed by
+// candidate name and replays the same zip against the user's selections.
+// ---------------------------------------------------------------------------
+
+export const SkillZipErrorCodeSchema = z.enum([
+  'zip-decode-failed',
+  'zip-limit-exceeded',
+  'zip-traversal',
+  'no-skill-found',
+  'skill-md-missing',
+  'skill-name-invalid',
+  'skill-name-duplicated-in-zip',
+])
+export type SkillZipErrorCode = z.infer<typeof SkillZipErrorCodeSchema>
+
+export const SkillZipErrorSchema = z.object({
+  path: z.string(),
+  code: SkillZipErrorCodeSchema,
+  message: z.string(),
+})
+export type SkillZipError = z.infer<typeof SkillZipErrorSchema>
+
+export const SkillZipCandidateConflictSchema = z.enum(['managed', 'external'])
+export type SkillZipCandidateConflict = z.infer<typeof SkillZipCandidateConflictSchema>
+
+/** One row in the parse response: a skill the zip could become. */
+export const SkillZipCandidateViewSchema = z.object({
+  name: SkillNameSchema,
+  description: z.string(),
+  fileCount: z.number().int().nonnegative(),
+  totalBytes: z.number().int().nonnegative(),
+  warnings: z.array(z.string()),
+  conflict: SkillZipCandidateConflictSchema.optional(),
+})
+export type SkillZipCandidateView = z.infer<typeof SkillZipCandidateViewSchema>
+
+export const ParseSkillZipResponseSchema = z.object({
+  skills: z.array(SkillZipCandidateViewSchema),
+  errors: z.array(SkillZipErrorSchema),
+})
+export type ParseSkillZipResponse = z.infer<typeof ParseSkillZipResponseSchema>
+
+/** Per-candidate decision applied at commit time. */
+export const SkillZipDecisionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('skip') }),
+  z.object({ action: z.literal('overwrite') }),
+  z.object({ action: z.literal('rename'), newName: SkillNameSchema }),
+  z.object({ action: z.literal('import') }), // explicit new (no conflict)
+])
+export type SkillZipDecision = z.infer<typeof SkillZipDecisionSchema>
+
+/** Decision map serialised by the frontend; key = original candidate name. */
+export const SkillZipDecisionMapSchema = z.record(z.string(), SkillZipDecisionSchema)
+export type SkillZipDecisionMap = z.infer<typeof SkillZipDecisionMapSchema>
+
+export const SkillZipCommitFailureCodeSchema = z.enum([
+  'skill-external-cannot-overwrite',
+  'skill-rename-conflict',
+  'skill-write-failed',
+  'skill-md-missing',
+  'skill-name-invalid',
+])
+export type SkillZipCommitFailureCode = z.infer<typeof SkillZipCommitFailureCodeSchema>
+
+export const SkillZipCommitFailureSchema = z.object({
+  name: z.string(),
+  code: SkillZipCommitFailureCodeSchema,
+  message: z.string(),
+})
+export type SkillZipCommitFailure = z.infer<typeof SkillZipCommitFailureSchema>
+
+export const SkillZipCommitSkippedSchema = z.object({
+  name: z.string(),
+  reason: z.string(),
+})
+export type SkillZipCommitSkipped = z.infer<typeof SkillZipCommitSkippedSchema>
+
+export const CommitSkillZipResponseSchema = z.object({
+  created: z.array(SkillSchema),
+  updated: z.array(SkillSchema),
+  skipped: z.array(SkillZipCommitSkippedSchema),
+  failed: z.array(SkillZipCommitFailureSchema),
+})
+export type CommitSkillZipResponse = z.infer<typeof CommitSkillZipResponseSchema>

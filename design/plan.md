@@ -43,7 +43,8 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-016](./RFC-016-wrapper-container-ux/proposal.md)            | 包装器交互重构：xyflow group 容器 + 拖入/拖出归属 + loop Inspector 候选式表单 + header pill（前端全栈、零 migration）              | Done        |
 | [RFC-017](./RFC-017-skill-source-directory/proposal.md)          | Skill 父目录批量纳管：一次登记自动跟随子 skill 增删（lazy 扫描 + 新 `skill_sources` 表 + runner 零改动）                           | Done        |
 | [RFC-018](./RFC-018-agent-md-import/proposal.md)                 | 新建代理导入 agent.md 自动填表：shared 纯函数 parser + AgentImportDialog（Upload / Paste 双入口，frontmatterExtra 兜底未识别字段） | Done        |
-| [RFC-019](./RFC-019-skill-zip-import/proposal.md)                | Skill ZIP 批量导入：上传 zip → 自动识别多 skill（顶层目录 / wrapper 两形态）→ 冲突逐项决策 → 全部 managed 形式落盘                  | Draft       |
+| [RFC-019](./RFC-019-skill-zip-import/proposal.md)                | Skill ZIP 批量导入：上传 zip → 自动识别多 skill（顶层目录 / wrapper 两形态）→ 冲突逐项决策 → 全部 managed 形式落盘                  | Done        |
+| [RFC-020](./RFC-020-input-file-upload/proposal.md)               | Input 节点本地文件上传（新 `kind: 'upload'`）：launcher 同步 multipart → 写入 worktree 指定 repo-relative 目录 → packed paths 喂下游     | Draft       |
 
 ---
 

@@ -10,6 +10,7 @@ import type { Skill } from '@agent-workflow/shared'
 import { SKILL_NAME_RE } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { Field, TextArea, TextInput } from '@/components/Form'
+import { ImportZipPanel } from '@/components/skills/ImportZipPanel'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -18,7 +19,7 @@ export const Route = createRoute({
   component: SkillCreatePage,
 })
 
-type Tab = 'managed' | 'external' | 'folder'
+type Tab = 'managed' | 'external' | 'folder' | 'zip'
 
 interface RegisterSourceResponse {
   source: { id: string; label: string; childCount: number }
@@ -107,81 +108,100 @@ function SkillCreatePage() {
         >
           {t('skills.tabFolder')}
         </button>
-      </div>
-
-      <div className="form-grid">
-        {tab === 'folder' ? (
-          <>
-            <Field
-              label={t('skills.fieldFolderPath')}
-              required
-              hint={t('skills.fieldFolderPathHint')}
-            >
-              <TextInput
-                value={folderPath}
-                onChange={setFolderPath}
-                placeholder={t('skills.folderPathPlaceholder')}
-                required
-              />
-            </Field>
-            <Field label={t('skills.fieldFolderLabel')} hint={t('skills.fieldFolderLabelHint')}>
-              <TextInput value={folderLabel} onChange={setFolderLabel} />
-            </Field>
-          </>
-        ) : (
-          <>
-            <Field label={t('skills.fieldName')} required hint={t('skills.fieldNameHint')}>
-              <TextInput value={name} onChange={setName} required pattern={SKILL_NAME_RE.source} />
-            </Field>
-            <Field label={t('skills.fieldDescription')}>
-              <TextInput value={description} onChange={setDescription} />
-            </Field>
-            {tab === 'managed' ? (
-              <Field label={t('skills.fieldBody')}>
-                <TextArea value={bodyMd} onChange={setBodyMd} rows={10} monospace />
-              </Field>
-            ) : (
-              <Field
-                label={t('skills.fieldExternalPath')}
-                required
-                hint={t('skills.fieldExternalPathHint')}
-              >
-                <TextInput
-                  value={externalPath}
-                  onChange={setExternalPath}
-                  placeholder={t('skills.externalPathPlaceholder')}
-                  required
-                />
-              </Field>
-            )}
-          </>
-        )}
-      </div>
-
-      <div className="form-actions">
         <button
           type="button"
-          className="btn btn--primary"
-          onClick={() => (tab === 'folder' ? registerFolder.mutate() : create.mutate())}
-          disabled={disabled}
+          className={`tabs__tab ${tab === 'zip' ? 'tabs__tab--active' : ''}`}
+          onClick={() => setTab('zip')}
+          data-testid="skills-tab-zip"
         >
-          {tab === 'folder'
-            ? registerFolder.isPending
-              ? t('common.creating')
-              : t('skills.createFolderButton')
-            : create.isPending
-              ? t('common.creating')
-              : t('skills.createButton')}
+          {t('skills.tabZip')}
         </button>
-        {tab !== 'folder' && create.error !== null && create.error !== undefined && (
-          <span className="form-actions__error">{describeError(create.error)}</span>
-        )}
-        {tab === 'folder' &&
-          registerFolder.error !== null &&
-          registerFolder.error !== undefined && (
-            <span className="form-actions__error">{describeError(registerFolder.error)}</span>
-          )}
       </div>
+
+      {tab === 'zip' ? (
+        <ImportZipPanel />
+      ) : (
+        <>
+          <div className="form-grid">
+            {tab === 'folder' ? (
+              <>
+                <Field
+                  label={t('skills.fieldFolderPath')}
+                  required
+                  hint={t('skills.fieldFolderPathHint')}
+                >
+                  <TextInput
+                    value={folderPath}
+                    onChange={setFolderPath}
+                    placeholder={t('skills.folderPathPlaceholder')}
+                    required
+                  />
+                </Field>
+                <Field label={t('skills.fieldFolderLabel')} hint={t('skills.fieldFolderLabelHint')}>
+                  <TextInput value={folderLabel} onChange={setFolderLabel} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label={t('skills.fieldName')} required hint={t('skills.fieldNameHint')}>
+                  <TextInput
+                    value={name}
+                    onChange={setName}
+                    required
+                    pattern={SKILL_NAME_RE.source}
+                  />
+                </Field>
+                <Field label={t('skills.fieldDescription')}>
+                  <TextInput value={description} onChange={setDescription} />
+                </Field>
+                {tab === 'managed' ? (
+                  <Field label={t('skills.fieldBody')}>
+                    <TextArea value={bodyMd} onChange={setBodyMd} rows={10} monospace />
+                  </Field>
+                ) : (
+                  <Field
+                    label={t('skills.fieldExternalPath')}
+                    required
+                    hint={t('skills.fieldExternalPathHint')}
+                  >
+                    <TextInput
+                      value={externalPath}
+                      onChange={setExternalPath}
+                      placeholder={t('skills.externalPathPlaceholder')}
+                      required
+                    />
+                  </Field>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => (tab === 'folder' ? registerFolder.mutate() : create.mutate())}
+              disabled={disabled}
+            >
+              {tab === 'folder'
+                ? registerFolder.isPending
+                  ? t('common.creating')
+                  : t('skills.createFolderButton')
+                : create.isPending
+                  ? t('common.creating')
+                  : t('skills.createButton')}
+            </button>
+            {tab !== 'folder' && create.error !== null && create.error !== undefined && (
+              <span className="form-actions__error">{describeError(create.error)}</span>
+            )}
+            {tab === 'folder' &&
+              registerFolder.error !== null &&
+              registerFolder.error !== undefined && (
+                <span className="form-actions__error">{describeError(registerFolder.error)}</span>
+              )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

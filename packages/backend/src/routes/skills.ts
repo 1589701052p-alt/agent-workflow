@@ -3,6 +3,8 @@
 //   GET    /api/skills                              list
 //   POST   /api/skills                              create managed
 //   POST   /api/skills/import-external              register external path
+//   POST   /api/skills/import-zip/parse             RFC-019 dry-run parse
+//   POST   /api/skills/import-zip/commit            RFC-019 apply decisions
 //   GET    /api/skills/:name                        skill metadata
 //   PUT    /api/skills/:name                        update DB metadata (description)
 //   DELETE /api/skills/:name                        delete (refuses if referenced)
@@ -18,6 +20,7 @@
 import {
   CreateManagedSkillSchema,
   ImportExternalSkillSchema,
+  SkillZipDecisionMapSchema,
   UpdateSkillContentSchema,
   UpdateSkillSchema,
   WriteSkillFileSchema,
@@ -40,6 +43,7 @@ import {
   writeSkillFile,
   type SkillFsOptions,
 } from '@/services/skill'
+import { commitSkillZipBuffer, parseSkillZipBuffer, ZIP_LIMITS } from '@/services/skill-zip'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
 export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
@@ -67,6 +71,51 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
     }
     const created = await importExternalSkill(deps.db, parsed.data)
     return c.json(created, 201)
+  })
+
+  // --- RFC-019: ZIP batch import ---------------------------------------------
+
+  app.post('/api/skills/import-zip/parse', async (c) => {
+    const buffer = await readZipFileFromMultipart(c.req.raw)
+    const { response } = await parseSkillZipBuffer(deps.db, buffer)
+    return c.json(response)
+  })
+
+  app.post('/api/skills/import-zip/commit', async (c) => {
+    let form: Awaited<ReturnType<Request['formData']>>
+    try {
+      form = await c.req.raw.formData()
+    } catch (err) {
+      throw new ValidationError(
+        'zip-multipart-invalid',
+        `failed to parse multipart body: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+    const buffer = await extractZipBuffer(form)
+    const decisionsRaw = form.get('decisions')
+    if (typeof decisionsRaw !== 'string') {
+      throw new ValidationError(
+        'zip-decisions-missing',
+        "form field 'decisions' (JSON string) is required",
+      )
+    }
+    let decisionsJson: unknown
+    try {
+      decisionsJson = JSON.parse(decisionsRaw)
+    } catch (err) {
+      throw new ValidationError(
+        'zip-decisions-invalid',
+        `'decisions' is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+    const decisionsParsed = SkillZipDecisionMapSchema.safeParse(decisionsJson)
+    if (!decisionsParsed.success) {
+      throw new ValidationError('zip-decisions-invalid', 'invalid decisions map', {
+        issues: decisionsParsed.error.issues,
+      })
+    }
+    const result = await commitSkillZipBuffer(deps.db, fsOpts, buffer, decisionsParsed.data)
+    return c.json(result)
   })
 
   app.get('/api/skills/:name', async (c) => {
@@ -150,4 +199,37 @@ async function safeJson(req: Request): Promise<unknown> {
   } catch {
     return {}
   }
+}
+
+async function readZipFileFromMultipart(req: Request): Promise<Uint8Array> {
+  let form: Awaited<ReturnType<Request['formData']>>
+  try {
+    form = await req.formData()
+  } catch (err) {
+    throw new ValidationError(
+      'zip-multipart-invalid',
+      `failed to parse multipart body: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  return extractZipBuffer(form)
+}
+
+async function extractZipBuffer(
+  form: Awaited<ReturnType<Request['formData']>>,
+): Promise<Uint8Array> {
+  const file = form.get('file')
+  if (file === null || typeof file === 'string') {
+    throw new ValidationError(
+      'zip-file-missing',
+      "multipart form field 'file' (the zip) is required",
+    )
+  }
+  if (file.size > ZIP_LIMITS.totalBytes) {
+    throw new ValidationError(
+      'zip-limit-exceeded',
+      `uploaded file exceeds ${ZIP_LIMITS.totalBytes} bytes`,
+    )
+  }
+  const ab = await file.arrayBuffer()
+  return new Uint8Array(ab)
 }
