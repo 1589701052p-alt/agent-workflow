@@ -19,7 +19,7 @@
 // array; this module returns a stably-reordered list to satisfy that.
 
 import type { Node } from '@xyflow/react'
-import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
+import type { WorkflowDefinition } from '@agent-workflow/shared'
 import { computeFitBounds } from './wrapperFit'
 
 function isWrapperKind(kind: string): boolean {
