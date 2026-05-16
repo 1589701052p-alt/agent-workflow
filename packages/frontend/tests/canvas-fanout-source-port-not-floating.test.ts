@@ -88,6 +88,12 @@ describe('RFC-015 source-level guard', () => {
     const css = readFileSync(STYLES_CSS, 'utf8')
     expect(css).toContain('.canvas-node__handle--shard-source')
     expect(css).toContain('.canvas-node__handle--shard-source.is-connected')
+    // Synthetic edge style + selected override. The selected variant
+    // exists because the user reported "selecting the line shows no
+    // visual change" — without `.selected` overriding the base stroke
+    // there's nothing to confirm the Delete shortcut will target it.
+    expect(css).toContain('.canvas-edge--source-port .react-flow__edge-path')
+    expect(css).toContain('.canvas-edge--source-port.selected .react-flow__edge-path')
   })
 
   test('zh-CN.ts and en-US.ts both declare sourcePortDragHint', () => {

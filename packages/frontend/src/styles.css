@@ -791,21 +791,34 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Keep the row inside its container: without min-width:0 a long port name
+     would push the row wider than the form column. */
+  min-width: 0;
 }
 
 .outputs-editor__name {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   font-family: var(--font-mono, monospace);
   font-size: 13px;
   padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
+  /* Long names truncate instead of stretching the row off-screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .outputs-editor__kind {
+  /* Override .form-input { width: 100% } — inside the flex row that 100%
+     would force flex-basis to a full row width and shove the rest of the
+     row past the viewport edge. */
+  width: auto;
   flex: 0 0 auto;
   min-width: 140px;
+  max-width: 40%;
 }
 
 .outputs-editor__remove {
@@ -1713,6 +1726,20 @@ code {
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
+/* Review node — human-judgment kind. Amber/gold tint mirrors the ⚖ icon
+ * in the header and visually separates it from agent/io/multi cards.
+ * Background-tinted (not solely border) so `.canvas-node[data-status=…]`
+ * can still own the border color across running/done/failed without
+ * fighting this rule. */
+.canvas-node--review {
+  background: color-mix(in srgb, #d97706 10%, var(--panel));
+  border-color: color-mix(in srgb, #d97706 45%, var(--border));
+}
+.canvas-node--review .canvas-node__kind {
+  color: #b45309;
+  font-weight: 600;
+}
+
 /* RFC-016: wrapper group container — replaces the old 240px placeholder
  * card. Renders as a sized rectangle so inner nodes physically sit inside,
  * making membership visible at a glance. Sized via xyflow Node.style; the
@@ -1933,6 +1960,23 @@ code {
 .canvas-node__handle--shard-source.is-connected {
   background: var(--accent) !important;
   border: 1.5px solid var(--accent) !important;
+}
+
+/* RFC-015: synthetic display edge that visually connects each fanout
+ * (agent-multi) node's sourcePort upstream port to its top handle. The
+ * edge is render-only — it never enters `definition.edges[]` — and the
+ * stroke + dash pattern set it apart from real persisted edges. Selecting
+ * the line (single click) thickens the stroke and adds a glow so the user
+ * can confirm the Delete shortcut will target this line. */
+.canvas-edge--source-port .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-dasharray: 4 4;
+  stroke-width: 1.5;
+}
+.canvas-edge--source-port.selected .react-flow__edge-path,
+.canvas-edge--source-port:focus .react-flow__edge-path {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 60%, transparent));
 }
 
 /* ---- Task output panel ---- */

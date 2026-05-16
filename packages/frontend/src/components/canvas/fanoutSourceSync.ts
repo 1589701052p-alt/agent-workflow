@@ -232,7 +232,12 @@ export function buildSourcePortDisplayEdges(def: WorkflowDefinition): Edge[] {
       sourceHandle: sp.portName,
       target: n.id,
       targetHandle: MULTI_SOURCE_PORT_HANDLE_ID,
-      style: { stroke: 'var(--accent)', strokeDasharray: '4 4', strokeWidth: 1.5 },
+      // Use className (applied to xyflow's `<g>` wrapper) so the CSS rules
+      // in styles.css can layer a `.selected` override on top — putting
+      // stroke/strokeDasharray on the inline `style` prop would win the
+      // specificity battle and the user-visible "I'm selected" state
+      // (thicker + glow) would be invisible.
+      className: 'canvas-edge--source-port',
       // Selectable + deletable so the user can pick the line and press
       // Delete to clear the sourcePort field. handleEdgesChange and
       // deleteSelected both detect the synthetic id prefix and bridge

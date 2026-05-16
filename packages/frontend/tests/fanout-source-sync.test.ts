@@ -293,6 +293,12 @@ describe('buildSourcePortDisplayEdges', () => {
     expect(edge.target).toBe('audit')
     expect(edge.targetHandle).toBe(MULTI_SOURCE_PORT_HANDLE_ID)
     expect(edge.data).toEqual({ synthetic: 'sourcePort' })
+    // className routes styling through CSS so the selected `.selected`
+    // override (thicker stroke + glow) can win the specificity battle
+    // against the base rule. Putting these on inline `style` would lock
+    // the user out of selected-state feedback.
+    expect(edge.className).toBe('canvas-edge--source-port')
+    expect(edge.style).toBeUndefined()
   })
 
   test('skips fanouts whose sourcePort references a deleted node', () => {
