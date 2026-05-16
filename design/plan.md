@@ -41,8 +41,8 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-014](./RFC-014-iterate-sibling-regen/proposal.md)           | Iterate 多文档同步重生 + agent `syncOutputsOnIterate` 开关（默认 true）+ `__sibling_outputs__` prompt 引导                         | Done        |
 | [RFC-015](./RFC-015-fanout-source-port-drag/proposal.md)         | Fanout（agent-multi）节点支持拖拽指定 sourcePort：节点顶部专用 target Handle + 拖入直接写字段、不入 edges[]                        | Done        |
 | [RFC-016](./RFC-016-wrapper-container-ux/proposal.md)            | 包装器交互重构：xyflow group 容器 + 拖入/拖出归属 + loop Inspector 候选式表单 + header pill（前端全栈、零 migration）              | In Progress |
-| [RFC-017](./RFC-017-skill-source-directory/proposal.md)          | Skill 父目录批量纳管：一次登记自动跟随子 skill 增删（lazy 扫描 + 新 `skill_sources` 表 + runner 零改动）                           | In Progress |
-| [RFC-018](./RFC-018-agent-md-import/proposal.md)                 | 新建代理导入 agent.md 自动填表：shared 纯函数 parser + AgentImportDialog（Upload / Paste 双入口，frontmatterExtra 兜底未识别字段） | In Progress |
+| [RFC-017](./RFC-017-skill-source-directory/proposal.md)          | Skill 父目录批量纳管：一次登记自动跟随子 skill 增删（lazy 扫描 + 新 `skill_sources` 表 + runner 零改动）                           | Done        |
+| [RFC-018](./RFC-018-agent-md-import/proposal.md)                 | 新建代理导入 agent.md 自动填表：shared 纯函数 parser + AgentImportDialog（Upload / Paste 双入口，frontmatterExtra 兜底未识别字段） | Done        |
 
 ---
 
