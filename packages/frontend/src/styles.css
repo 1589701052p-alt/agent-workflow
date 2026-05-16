@@ -2588,44 +2588,12 @@ code {
 
 /* ---- Review detail (RFC-005) ---- */
 
-/* Lock the review-detail page to the available viewport height so the body
-   + comment column become the only scrollable region. Mirrors the
-   `.page--task-detail` / `.page--editor` chrome trim. The page header keeps
-   the approve / iterate / reject buttons pinned at the top-right; the
-   scroll region below fills whatever is left. */
-.page--review-detail {
-  max-width: none;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.content:has(.page--review-detail) {
-  padding-top: 12px;
-  padding-bottom: 12px;
-}
-
-.page--review-detail .page__header {
-  margin-bottom: 0;
-  flex: 0 0 auto;
-}
-
-.page--review-detail .review-detail__diff-toolbar {
-  flex: 0 0 auto;
-}
-
 .review-detail__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;
   align-items: start;
-  margin-top: 0;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  margin-top: 16px;
 }
 
 .review-detail__body {
@@ -2984,23 +2952,14 @@ mark.comment-anchor[data-active='true'] {
   }
 }
 
-/* Action buttons (approve / iterate / reject) now live in the page
-   header's right slot alongside the download button. They're grouped in
-   their own pill-style cluster so the visual order reads:
-       [Download] | [Approve] [Iterate] [Reject]
-   …with a thin vertical separator between the two groups. */
-.review-detail__decision-actions {
-  display: inline-flex;
+.review-detail__footer {
+  display: flex;
+  gap: 12px;
   align-items: center;
-  gap: 6px;
-  margin-left: 8px;
-  padding-left: 10px;
-  border-left: 1px solid var(--border);
-}
-
-.review-detail__error {
-  flex: 0 0 auto;
-  margin-bottom: 8px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 
 @media (max-width: 720px) {
@@ -3015,104 +2974,6 @@ mark.comment-anchor[data-active='true'] {
     position: static;
     margin-bottom: 8px;
   }
-}
-
-/* ---- Decision dialog (Approve / Iterate / Reject) ----
-   Replaces window.confirm / prompt / alert on the review detail page so
-   the three decision flows use the same styled modal as the rest of the
-   app (matches `.agent-import__overlay` chrome). Reject also carries an
-   inline reason textarea + a `__error` chip the page sets when the user
-   tries to confirm with an empty reason. */
-.review-decision-dialog__overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 96px 24px 24px;
-  z-index: 1000;
-}
-.review-decision-dialog__panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  width: min(520px, 100%);
-  max-height: calc(100vh - 144px);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 18px 20px;
-  box-shadow:
-    0 20px 40px rgba(0, 0, 0, 0.25),
-    0 4px 10px rgba(0, 0, 0, 0.12);
-  overflow: auto;
-}
-.review-decision-dialog__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.review-decision-dialog__header h2 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-.review-decision-dialog__close {
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 20px;
-  line-height: 1;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-.review-decision-dialog__close:hover {
-  background: var(--border);
-  color: var(--text);
-}
-.review-decision-dialog__body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text);
-}
-.review-decision-dialog__body p {
-  margin: 0;
-  line-height: 1.5;
-}
-.review-decision-dialog__warn {
-  background: rgba(255, 180, 50, 0.12);
-  border-left: 3px solid var(--accent, #f0a020);
-  padding: 8px 10px;
-  border-radius: 4px;
-}
-.review-decision-dialog__label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.review-decision-dialog__textarea {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-  color: var(--text);
-}
-.review-decision-dialog__error {
-  margin: 0;
-  color: var(--danger, #d04040);
-  font-size: 12px;
-}
-.review-decision-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
 }
 
 /* RFC-010 — Markdown 渲染态内联 diff 高亮（仅作用于 MarkdownDiffView 容器内）。 */
@@ -3609,90 +3470,4 @@ mark.comment-anchor[data-active='true'] {
   min-height: 0;
   max-height: none;
   overflow: auto;
-}
-
-/* RFC-022: dependency-closure tree (AgentForm preview + node Stats tab). */
-.dep-tree {
-  font-family: var(--mono-font, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-  border-radius: 6px;
-  padding: 8px 12px;
-  white-space: pre;
-  overflow-x: auto;
-}
-
-.dep-tree__row {
-  display: flex;
-  align-items: baseline;
-  gap: 0;
-}
-
-.dep-tree__guide {
-  color: color-mix(in srgb, var(--text) 35%, transparent);
-  user-select: none;
-  white-space: pre;
-}
-
-.dep-tree__label {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.dep-tree__name {
-  font-weight: 500;
-}
-
-.dep-tree__link {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--accent);
-  cursor: pointer;
-  text-align: left;
-}
-
-.dep-tree__link:hover {
-  text-decoration: underline;
-}
-
-.dep-tree__chips {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.dep-tree__chip {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: color-mix(in srgb, var(--text) 70%, transparent);
-}
-
-.dep-tree__seeAbove {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
-  font-style: italic;
-}
-
-.dep-tree__cycle {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--danger, #c44) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger, #c44) 25%, transparent);
-  color: var(--text);
-}
-
-.dep-tree__cycle code {
-  font-family: var(--mono-font, ui-monospace, monospace);
-  background: color-mix(in srgb, var(--danger, #c44) 12%, transparent);
-  padding: 1px 4px;
-  border-radius: 3px;
 }
