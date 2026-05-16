@@ -1551,6 +1551,14 @@ export async function buildSiblingOutputsBlock(
   const siblingPortNames = markdownPorts.filter((p) => p !== targetPortName)
   if (siblingPortNames.length === 0) return undefined
 
+  // RFC-014 §3.2 (updated): emit worktree-relative file paths only, not body
+  // text — the agent already has cwd = worktree and can re-read whichever
+  // sibling files it needs. Skipping the body keeps the prompt short and
+  // avoids re-injecting potentially stale snapshots when the worktree was
+  // touched between iterations. Inline `markdown` ports (no sourceFilePath)
+  // are skipped entirely; if every sibling is inline → return undefined and
+  // the prompt token resolves to empty.
+  void appHome
   const sections: string[] = []
   for (const portName of siblingPortNames) {
     const rows = await db
@@ -1567,18 +1575,12 @@ export async function buildSiblingOutputsBlock(
       .limit(1)
     const row = rows[0]
     if (row === undefined) continue
-    try {
-      const body = readDocVersionBody(appHome, rowToDocVersion(row))
-      sections.push(`### ${portName}\n${body}`)
-    } catch (err) {
-      log.warn('sibling-outputs: failed to read body file; skipping port', {
-        portName,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
+    const path = row.sourceFilePath
+    if (path === null || path === undefined || path.trim().length === 0) continue
+    sections.push(`- ${portName}: ${path}`)
   }
   if (sections.length === 0) return undefined
-  return `${SIBLING_OUTPUTS_INSTRUCTION}\n\n${sections.join('\n\n')}`
+  return `${SIBLING_OUTPUTS_INSTRUCTION}\n\n${sections.join('\n')}`
 }
 
 // ---------------------------------------------------------------------------

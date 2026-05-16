@@ -327,8 +327,22 @@ describe('RFC-014 — iterate sibling cascade (multi-markdown upstream)', () => 
     expect(planAfter.reviewIteration).toBe(0)
   })
 
-  test('buildSiblingOutputsBlock returns the English instruction + sibling bodies for opt-in agent', async () => {
+  test('buildSiblingOutputsBlock returns the English instruction + worktree-relative file paths (not bodies)', async () => {
     h = await buildHarness({ agentSyncOutputsOnIterate: true })
+
+    // RFC-014 updated: the block lists `- {portName}: {sourceFilePath}` lines
+    // pulled from doc_versions.source_file_path. The harness emits inline
+    // markdown (kind='markdown', no sourceFilePath); to exercise the new
+    // path-only contract here we synthesize file paths into the existing
+    // sibling doc_versions before invoking the builder.
+    await h.db
+      .update(docVersions)
+      .set({ sourceFilePath: 'design/proposal.md' })
+      .where(eq(docVersions.sourcePortName, 'proposal'))
+    await h.db
+      .update(docVersions)
+      .set({ sourceFilePath: 'design/plan.md' })
+      .where(eq(docVersions.sourcePortName, 'plan'))
 
     const block = await buildSiblingOutputsBlock({
       db: h.db,
@@ -339,13 +353,33 @@ describe('RFC-014 — iterate sibling cascade (multi-markdown upstream)', () => 
     })
     expect(block).toBeDefined()
     expect(block!).toContain('You also produced the following sibling documents.')
-    expect(block!).toContain('### proposal')
-    expect(block!).toContain('### plan')
-    // The target port itself must NOT appear as a sibling section.
-    expect(block!).not.toContain('### design')
-    // Bodies are present (we wrote PROPOSAL_DOC / PLAN_DOC into the stub).
-    expect(block!).toContain('We build B2B platform for orders.')
-    expect(block!).toContain('Week 1: scaffolding.')
+    expect(block!).toContain('- proposal: design/proposal.md')
+    expect(block!).toContain('- plan: design/plan.md')
+    // The target port itself must NOT appear in the path list.
+    expect(block!).not.toContain('- design:')
+    // The legacy "embed body" behavior is gone — no `### proposal` headings,
+    // no body text from the stub.
+    expect(block!).not.toContain('### proposal')
+    expect(block!).not.toContain('### plan')
+    expect(block!).not.toContain('We build B2B platform for orders.')
+    expect(block!).not.toContain('Week 1: scaffolding.')
+  })
+
+  test('buildSiblingOutputsBlock returns undefined when every sibling is inline (no sourceFilePath)', async () => {
+    h = await buildHarness({ agentSyncOutputsOnIterate: true })
+
+    // Stub emits inline markdown for all three ports → sourceFilePath is
+    // null on every doc_version. With RFC-014 §3.2 (updated) "skip inline"
+    // policy, the block has nothing to list and returns undefined; downstream
+    // the `{{__sibling_outputs__}}` token resolves to empty + no auto-append.
+    const block = await buildSiblingOutputsBlock({
+      db: h.db,
+      appHome: h.appHome,
+      taskId: h.taskId,
+      upstreamNodeId: 'designer',
+      targetPortName: 'design',
+    })
+    expect(block).toBeUndefined()
   })
 
   test('buildSiblingOutputsBlock returns undefined when agent opt-out (no sibling cascade fires either)', async () => {
@@ -361,10 +395,22 @@ describe('RFC-014 — iterate sibling cascade (multi-markdown upstream)', () => 
     expect(block).toBeUndefined()
   })
 
-  test('buildReviewPromptContext on iterate path populates `siblingOutputs` for opt-in agent', async () => {
+  test('buildReviewPromptContext on iterate path populates `siblingOutputs` with paths for opt-in agent (when sibling ports have sourceFilePath)', async () => {
     h = await buildHarness({ agentSyncOutputsOnIterate: true })
 
-    // Iterate on design first so a decided doc_version exists.
+    // Seed sourceFilePath on the sibling doc_versions before the decision —
+    // simulates the upstream agent having used `kind: markdown_file` outputs
+    // that wrote into worktree-relative paths.
+    await h.db
+      .update(docVersions)
+      .set({ sourceFilePath: 'design/proposal.md' })
+      .where(eq(docVersions.sourcePortName, 'proposal'))
+    await h.db
+      .update(docVersions)
+      .set({ sourceFilePath: 'design/plan.md' })
+      .where(eq(docVersions.sourcePortName, 'plan'))
+
+    // Iterate on design so a user-decided doc_version exists.
     await submitReviewDecision({
       db: h.db,
       appHome: h.appHome,
@@ -373,14 +419,12 @@ describe('RFC-014 — iterate sibling cascade (multi-markdown upstream)', () => 
       expectedReviewIteration: 0,
     })
 
-    // Pick up the iterated doc_version's iteration scope. We use 0 here since
-    // the harness only ran a single loop iteration.
     const ctx = await buildReviewPromptContext(h.db, h.appHome, 'designer', h.taskId, 0)
     expect(ctx).toBeDefined()
     expect(ctx!.iterateTargetPort).toBe('design')
     expect(ctx!.siblingOutputs).toBeDefined()
-    expect(ctx!.siblingOutputs!).toContain('### proposal')
-    expect(ctx!.siblingOutputs!).toContain('### plan')
+    expect(ctx!.siblingOutputs!).toContain('- proposal: design/proposal.md')
+    expect(ctx!.siblingOutputs!).toContain('- plan: design/plan.md')
   })
 
   test('buildReviewPromptContext on iterate path with opt-out agent leaves `siblingOutputs` undefined', async () => {

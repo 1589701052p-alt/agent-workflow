@@ -44,7 +44,8 @@ RFC-005 把"返回修改"（iterate）实现成了**单 port 局部更新**：
 
 2. **新 builtin token `{{__sibling_outputs__}}`**。
    - 仅在 iterate 路径且上游有 ≥ 2 个 markdown[_file] 输出时填充；其它情况空串。
-   - 内容形态：每个非 target sibling port 渲染成 `### {port_name}\n{当前版本正文}\n` 的 markdown 段，前置一行英文指令 `You also produced the following sibling documents. They are tightly coupled with the document being revised; rewrite them coherently so the whole set stays consistent.`。
+   - 内容形态（v2 修订）：每个非 target sibling port 渲染成 `- {port_name}: {worktree-relative path}` 列表行，**只贴 worktree 相对路径不贴 markdown 正文**——agent 重跑时 cwd 就是 worktree，可自行 re-read sibling 文件；不贴正文能让 prompt 短、避免 worktree 已被外部改动时注入陈旧快照。前置一行英文指令 `You also produced the following sibling documents. They are tightly coupled with the document being revised; rewrite them coherently so the whole set stays consistent.`。
+   - 路径来源：`doc_versions.sourceFilePath`——只对 `outputs[i].kind = 'markdown_file'` 端口非空（agent 用 envelope 报告了写到哪个文件）。`kind = 'markdown'` 内联端口 `sourceFilePath = null`，**直接跳过不进入 sibling 列表**；若所有 sibling 都内联 → 整段返 undefined、`__sibling_outputs__` token 替换为空、不 auto-append。
    - 模板未引用时框架自动追加到 user prompt 末尾，机制与 `__review_comments__` / `__review_rejection__` 一致（RFC-005 §7.2）。
    - 命名稳定契约：测试以源码文本断言保留 `__sibling_outputs__` 字面量（同 RFC-005 C4 兜底模式）。
 
