@@ -94,14 +94,36 @@ function SkillDetailPage() {
           </p>
         </div>
         <div className="page__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={saveMeta.isPending || saveContent.isPending || !loaded}
+            onClick={() => {
+              saveMeta.mutate()
+              if (isManaged) saveContent.mutate()
+            }}
+          >
+            {saveMeta.isPending || saveContent.isPending ? t('common.saving') : t('common.save')}
+          </button>
           <ConfirmButton
-            label={t('skills.deleteButton')}
+            label={t('common.delete')}
             onConfirm={() => del.mutateAsync()}
             danger
             disabled={del.isPending}
           />
         </div>
       </header>
+      {(saveMeta.error !== null && saveMeta.error !== undefined) ||
+      (saveContent.error !== null && saveContent.error !== undefined) ? (
+        <div className="form-actions">
+          {saveMeta.error !== null && saveMeta.error !== undefined && (
+            <span className="form-actions__error">{describeError(saveMeta.error)}</span>
+          )}
+          {saveContent.error !== null && saveContent.error !== undefined && (
+            <span className="form-actions__error">{describeError(saveContent.error)}</span>
+          )}
+        </div>
+      ) : null}
 
       <section className="form-grid">
         <Field
@@ -110,40 +132,12 @@ function SkillDetailPage() {
         >
           <TextInput value={description} onChange={setDescription} />
         </Field>
-        <div className="form-actions">
-          <button
-            type="button"
-            className="btn btn--primary btn--sm"
-            disabled={saveMeta.isPending || !loaded}
-            onClick={() => saveMeta.mutate()}
-          >
-            {saveMeta.isPending ? t('common.saving') : t('skills.saveDescription')}
-          </button>
-          {saveMeta.error !== null && saveMeta.error !== undefined && (
-            <span className="form-actions__error">{describeError(saveMeta.error)}</span>
-          )}
-        </div>
       </section>
 
       <section className="page__section">
         <h2>{t('skills.bodySection')}</h2>
         {isManaged ? (
-          <>
-            <MarkdownEditor value={bodyMd} onChange={setBodyMd} rows={16} />
-            <div className="form-actions">
-              <button
-                type="button"
-                className="btn btn--primary btn--sm"
-                disabled={saveContent.isPending || !loaded}
-                onClick={() => saveContent.mutate()}
-              >
-                {saveContent.isPending ? t('common.saving') : t('skills.saveBody')}
-              </button>
-              {saveContent.error !== null && saveContent.error !== undefined && (
-                <span className="form-actions__error">{describeError(saveContent.error)}</span>
-              )}
-            </div>
-          </>
+          <MarkdownEditor value={bodyMd} onChange={setBodyMd} rows={16} />
         ) : (
           <pre className="readonly-pre">{bodyMd || t('skills.emptyBody')}</pre>
         )}

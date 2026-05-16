@@ -71,6 +71,14 @@ function AgentDetailPage() {
           <p className="page__hint">{t('agents.detailHint')}</p>
         </div>
         <div className="page__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={save.isPending || !loaded}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? t('common.saving') : t('common.save')}
+          </button>
           <ConfirmButton
             label={t('common.delete')}
             onConfirm={() => del.mutateAsync()}
@@ -79,23 +87,18 @@ function AgentDetailPage() {
           />
         </div>
       </header>
+      {(save.error !== null && save.error !== undefined) ||
+      (del.error !== null && del.error !== undefined) ? (
+        <div className="form-actions">
+          {save.error !== null && save.error !== undefined && (
+            <span className="form-actions__error">{describeError(save.error)}</span>
+          )}
+          {del.error !== null && del.error !== undefined && (
+            <span className="form-actions__error">{describeError(del.error)}</span>
+          )}
+        </div>
+      ) : null}
       <AgentForm value={draft} onChange={setDraft} nameLocked />
-      <div className="form-actions">
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={save.isPending || !loaded}
-          onClick={() => save.mutate()}
-        >
-          {save.isPending ? t('common.saving') : t('agents.saveButton')}
-        </button>
-        {save.error !== null && save.error !== undefined && (
-          <span className="form-actions__error">{describeError(save.error)}</span>
-        )}
-        {del.error !== null && del.error !== undefined && (
-          <span className="form-actions__error">{describeError(del.error)}</span>
-        )}
-      </div>
     </div>
   )
 }
@@ -109,6 +112,7 @@ export function agentToDraft(a: Agent): CreateAgent {
     syncOutputsOnIterate: a.syncOutputsOnIterate,
     permission: a.permission,
     skills: a.skills,
+    dependsOn: a.dependsOn,
     frontmatterExtra: a.frontmatterExtra,
     bodyMd: a.bodyMd,
   }
