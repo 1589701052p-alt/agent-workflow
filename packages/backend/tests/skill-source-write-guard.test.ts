@@ -10,11 +10,7 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { skills } from '../src/db/schema'
-import {
-  writeSkillContent,
-  writeSkillFile,
-  type SkillFsOptions,
-} from '../src/services/skill'
+import { writeSkillContent, writeSkillFile, type SkillFsOptions } from '../src/services/skill'
 import { createSkillSource } from '../src/services/skill-source'
 import { ConflictError } from '../src/util/errors'
 

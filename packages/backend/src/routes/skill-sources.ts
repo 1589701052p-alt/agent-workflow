@@ -6,10 +6,7 @@
 //   DELETE /api/skill-sources/:id           cascade-delete child skills + source row
 //   POST   /api/skill-sources/:id/rescan    manual rescan
 
-import {
-  CreateSkillSourceSchema,
-  UpdateSkillSourceSchema,
-} from '@agent-workflow/shared'
+import { CreateSkillSourceSchema, UpdateSkillSourceSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
 import {

@@ -11,10 +11,7 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { agents, skillSources, skills } from '../src/db/schema'
-import {
-  createSkillSource,
-  reconcileSource,
-} from '../src/services/skill-source'
+import { createSkillSource, reconcileSource } from '../src/services/skill-source'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -171,11 +168,7 @@ describe('reconcileSource', () => {
     const pinSkip = outcome.skipped.find((s) => s.proposedName === 'pinned')
     expect(pinSkip?.reason).toBe('still-referenced')
     // skill row survives even though dir is gone.
-    const stillThere = await h.db
-      .select()
-      .from(skills)
-      .where(eq(skills.name, 'pinned'))
-      .limit(1)
+    const stillThere = await h.db.select().from(skills).where(eq(skills.name, 'pinned')).limit(1)
     expect(stillThere).toHaveLength(1)
   })
 })

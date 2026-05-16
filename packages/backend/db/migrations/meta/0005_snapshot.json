@@ -148,9 +148,7 @@
       "indexes": {
         "agents_name_unique": {
           "name": "agents_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -295,17 +293,12 @@
       "indexes": {
         "idx_doc_versions_review_run": {
           "name": "idx_doc_versions_review_run",
-          "columns": [
-            "review_node_run_id",
-            "version_index"
-          ],
+          "columns": ["review_node_run_id", "version_index"],
           "isUnique": false
         },
         "idx_doc_versions_task": {
           "name": "idx_doc_versions_task",
-          "columns": [
-            "task_id"
-          ],
+          "columns": ["task_id"],
           "isUnique": false
         }
       },
@@ -314,12 +307,8 @@
           "name": "doc_versions_task_id_tasks_id_fk",
           "tableFrom": "doc_versions",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -327,12 +316,8 @@
           "name": "doc_versions_review_node_run_id_node_runs_id_fk",
           "tableFrom": "doc_versions",
           "tableTo": "node_runs",
-          "columnsFrom": [
-            "review_node_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["review_node_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -383,10 +368,7 @@
       "indexes": {
         "idx_events_node": {
           "name": "idx_events_node",
-          "columns": [
-            "node_run_id",
-            "id"
-          ],
+          "columns": ["node_run_id", "id"],
           "isUnique": false
         }
       },
@@ -395,12 +377,8 @@
           "name": "node_run_events_node_run_id_node_runs_id_fk",
           "tableFrom": "node_run_events",
           "tableTo": "node_runs",
-          "columnsFrom": [
-            "node_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["node_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -440,22 +418,15 @@
           "name": "node_run_outputs_node_run_id_node_runs_id_fk",
           "tableFrom": "node_run_outputs",
           "tableTo": "node_runs",
-          "columnsFrom": [
-            "node_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["node_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "node_run_outputs_node_run_id_port_name_pk": {
-          "columns": [
-            "node_run_id",
-            "port_name"
-          ],
+          "columns": ["node_run_id", "port_name"],
           "name": "node_run_outputs_node_run_id_port_name_pk"
         }
       },
@@ -619,19 +590,12 @@
       "indexes": {
         "idx_node_runs_task": {
           "name": "idx_node_runs_task",
-          "columns": [
-            "task_id",
-            "node_id",
-            "iteration",
-            "retry_index"
-          ],
+          "columns": ["task_id", "node_id", "iteration", "retry_index"],
           "isUnique": false
         },
         "idx_node_runs_parent": {
           "name": "idx_node_runs_parent",
-          "columns": [
-            "parent_node_run_id"
-          ],
+          "columns": ["parent_node_run_id"],
           "isUnique": false
         }
       },
@@ -640,12 +604,8 @@
           "name": "node_runs_task_id_tasks_id_fk",
           "tableFrom": "node_runs",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -785,10 +745,7 @@
       "indexes": {
         "idx_review_comments_version": {
           "name": "idx_review_comments_version",
-          "columns": [
-            "doc_version_id",
-            "anchor_section_path"
-          ],
+          "columns": ["doc_version_id", "anchor_section_path"],
           "isUnique": false
         }
       },
@@ -797,12 +754,8 @@
           "name": "review_comments_doc_version_id_doc_versions_id_fk",
           "tableFrom": "review_comments",
           "tableTo": "doc_versions",
-          "columnsFrom": [
-            "doc_version_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["doc_version_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -885,9 +838,7 @@
       "indexes": {
         "skill_sources_path_unique": {
           "name": "skill_sources_path_unique",
-          "columns": [
-            "path"
-          ],
+          "columns": ["path"],
           "isUnique": true
         }
       },
@@ -977,16 +928,12 @@
       "indexes": {
         "skills_name_unique": {
           "name": "skills_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         },
         "skills_source_id_idx": {
           "name": "skills_source_id_idx",
-          "columns": [
-            "source_id"
-          ],
+          "columns": ["source_id"],
           "isUnique": false
         }
       },
@@ -995,12 +942,8 @@
           "name": "skills_source_id_skill_sources_id_fk",
           "tableFrom": "skills",
           "tableTo": "skill_sources",
-          "columnsFrom": [
-            "source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1157,18 +1100,12 @@
       "indexes": {
         "idx_tasks_status": {
           "name": "idx_tasks_status",
-          "columns": [
-            "status",
-            "started_at"
-          ],
+          "columns": ["status", "started_at"],
           "isUnique": false
         },
         "idx_tasks_workflow": {
           "name": "idx_tasks_workflow",
-          "columns": [
-            "workflow_id",
-            "started_at"
-          ],
+          "columns": ["workflow_id", "started_at"],
           "isUnique": false
         }
       },
@@ -1177,12 +1114,8 @@
           "name": "tasks_workflow_id_workflows_id_fk",
           "tableFrom": "tasks",
           "tableTo": "workflows",
-          "columnsFrom": [
-            "workflow_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workflow_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }

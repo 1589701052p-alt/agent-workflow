@@ -27,8 +27,7 @@ export function SkillSourcesCard() {
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery<SourcesResponse>({
     queryKey: ['skill-sources'],
-    queryFn: ({ signal }) =>
-      api.get<SourcesResponse>('/api/skill-sources', undefined, signal),
+    queryFn: ({ signal }) => api.get<SourcesResponse>('/api/skill-sources', undefined, signal),
   })
 
   const rescan = useMutation({
@@ -141,10 +140,7 @@ function BlockerBanner({
   )
 }
 
-function describeError(
-  e: unknown,
-  t: (key: string) => string,
-): string {
+function describeError(e: unknown, t: (key: string) => string): string {
   if (e instanceof ApiError) return `${t('errors.fallback')}: ${e.message}`
   if (e instanceof Error) return e.message
   return String(e)

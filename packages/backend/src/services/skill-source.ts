@@ -141,10 +141,7 @@ export async function listSkillSourcesWithStats(db: DbClient): Promise<SkillSour
   const rows = await db.select().from(skillSources)
   const out: SkillSourceWithStats[] = []
   for (const row of rows) {
-    const owned = await db
-      .select({ id: skills.id })
-      .from(skills)
-      .where(eq(skills.sourceId, row.id))
+    const owned = await db.select({ id: skills.id }).from(skills).where(eq(skills.sourceId, row.id))
     const skipped = parseSkippedSummary(row.lastScanError)
     out.push({ ...rowToSource(row), childCount: owned.length, skipped })
   }
@@ -164,10 +161,7 @@ export async function getSkillSourceWithStats(
   const rows = await db.select().from(skillSources).where(eq(skillSources.id, id)).limit(1)
   const row = rows[0]
   if (!row) return null
-  const owned = await db
-    .select({ id: skills.id })
-    .from(skills)
-    .where(eq(skills.sourceId, row.id))
+  const owned = await db.select({ id: skills.id }).from(skills).where(eq(skills.sourceId, row.id))
   return {
     ...rowToSource(row),
     childCount: owned.length,
@@ -201,22 +195,12 @@ export async function createSkillSource(
   try {
     real = realpathSync(expanded)
   } catch {
-    throw new ValidationError(
-      'skill-source-path-missing',
-      `path does not exist: ${input.path}`,
-    )
+    throw new ValidationError('skill-source-path-missing', `path does not exist: ${input.path}`)
   }
   if (!statSync(real).isDirectory()) {
-    throw new ValidationError(
-      'skill-source-path-not-dir',
-      `path is not a directory: ${input.path}`,
-    )
+    throw new ValidationError('skill-source-path-not-dir', `path is not a directory: ${input.path}`)
   }
-  const existing = await db
-    .select()
-    .from(skillSources)
-    .where(eq(skillSources.path, real))
-    .limit(1)
+  const existing = await db.select().from(skillSources).where(eq(skillSources.path, real)).limit(1)
   if (existing[0]) {
     throw new ConflictError('skill-source-path-in-use', `path already registered: ${real}`)
   }
@@ -317,9 +301,7 @@ export async function deleteSkillSource(db: DbClient, id: string): Promise<void>
  * even if `enabled=false` (admin wanted explicit state refresh).
  */
 export async function rescanSkillSource(db: DbClient, id: string): Promise<ReconcileOutcome> {
-  const row = (
-    await db.select().from(skillSources).where(eq(skillSources.id, id)).limit(1)
-  )[0]
+  const row = (await db.select().from(skillSources).where(eq(skillSources.id, id)).limit(1))[0]
   if (!row) throw new NotFoundError('skill-source-not-found', `source '${id}' not found`)
   if (!row.enabled) {
     return purgeSourceChildren(db, row)
@@ -456,9 +438,7 @@ export async function reconcileSource(
         createdAt: now,
         updatedAt: now,
       })
-      const refreshed = (
-        await db.select().from(skills).where(eq(skills.name, c.name)).limit(1)
-      )[0]
+      const refreshed = (await db.select().from(skills).where(eq(skills.name, c.name)).limit(1))[0]
       if (refreshed) imported.push(skillRowToShape(refreshed))
     }
   }
@@ -577,9 +557,7 @@ function expandHome(p: string): string {
  * UI reads this back into structured reports (see parseSkippedSummary).
  */
 export function summarizeSkipped(skipped: SkillSkipReport[]): string {
-  const parts = skipped.map(
-    (s) => `${s.reason}:${s.proposedName ?? ''}`,
-  )
+  const parts = skipped.map((s) => `${s.reason}:${s.proposedName ?? ''}`)
   return `skipped|${parts.join('|')}`
 }
 

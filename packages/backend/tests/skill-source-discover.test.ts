@@ -78,7 +78,9 @@ describe('discoverSkillsInDir', () => {
 
     const { candidates, skipped } = discoverSkillsInDir(parent)
     expect(candidates).toEqual([])
-    expect(skipped).toEqual([{ childPath: join(parent, 'group-a'), proposedName: 'group-a', reason: 'no-skill-md' }])
+    expect(skipped).toEqual([
+      { childPath: join(parent, 'group-a'), proposedName: 'group-a', reason: 'no-skill-md' },
+    ])
   })
 
   test('SKILL.md unreadable is reported (frontmatter-parse-failed)', () => {
