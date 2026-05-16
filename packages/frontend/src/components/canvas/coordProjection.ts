@@ -31,6 +31,30 @@ function isWrapperKind(kind: string): boolean {
   return kind === 'wrapper-git' || kind === 'wrapper-loop'
 }
 
+/** Build the {nodeId → measured size} map that the projection layer uses to
+ * pick wrapper fit dimensions over DEFAULT_NODE_SIZE_BY_KIND estimates.
+ * xyflow populates `node.measured` after its ResizeObserver picks up the
+ * rendered DOM size; before that we just have no entry, and the projection
+ * falls back to the static defaults. */
+export function buildMeasuredSizesFromXyflowNodes(
+  flowNodes: Array<{
+    id: string
+    measured?: { width?: number; height?: number }
+    width?: number | null
+    height?: number | null
+  }>,
+): Map<string, { width: number; height: number }> {
+  const m = new Map<string, { width: number; height: number }>()
+  for (const fn of flowNodes) {
+    const w = fn.measured?.width ?? fn.width ?? null
+    const h = fn.measured?.height ?? fn.height ?? null
+    if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
+      m.set(fn.id, { width: w, height: h })
+    }
+  }
+  return m
+}
+
 interface WrapperResolved {
   id: string
   /** Absolute top-left position to render at (from offset of computeFitBounds
@@ -43,8 +67,16 @@ interface WrapperResolved {
 }
 
 /** Build a map of wrapperId → resolved rect + members, including the absolute
- * position the wrapper *renders at* (top-left of the visible group rect). */
-export function resolveWrappers(definition: WorkflowDefinition): Map<string, WrapperResolved> {
+ * position the wrapper *renders at* (top-left of the visible group rect).
+ *
+ * `measuredSizes` (optional) is the live xyflow-measured size for each node;
+ * when present, computeFitBounds uses those instead of the static
+ * DEFAULT_NODE_SIZE_BY_KIND estimates — important so a wrapper that holds
+ * agents with many ports actually grows to fit them. */
+export function resolveWrappers(
+  definition: WorkflowDefinition,
+  measuredSizes?: Map<string, { width: number; height: number }>,
+): Map<string, WrapperResolved> {
   const out = new Map<string, WrapperResolved>()
   for (const n of definition.nodes) {
     if (!isWrapperKind(n.kind)) continue
@@ -69,7 +101,7 @@ export function resolveWrappers(definition: WorkflowDefinition): Map<string, Wra
         innerIds: ids,
       })
     } else {
-      const fit = computeFitBounds(n, definition.nodes)
+      const fit = computeFitBounds(n, definition.nodes, undefined, measuredSizes)
       out.set(n.id, {
         id: n.id,
         position: { x: fit.offset.x, y: fit.offset.y },
@@ -120,12 +152,18 @@ export function topoSortByParent(flowNodes: Node[], parentMap: Map<string, strin
 /** Mutate flowNodes positions in-place — wrapper-child positions go from
  * absolute (DB form) to relative (xyflow form), and wrappers get
  * style.width/height stamped + their render anchor moved to the group's
- * top-left when wrapper.size is absent. */
+ * top-left when wrapper.size is absent.
+ *
+ * `measuredSizes` — optional, when provided lets the fit-bounds computation
+ * use xyflow's real measured dimensions instead of static estimates. The
+ * caller (WorkflowCanvas) builds it from the current `nodes` state's
+ * `node.measured` field, which xyflow populates via ResizeObserver. */
 export function projectDefinitionForXyflow(
   definition: WorkflowDefinition,
   flowNodes: Node[],
+  measuredSizes?: Map<string, { width: number; height: number }>,
 ): Node[] {
-  const wrappers = resolveWrappers(definition)
+  const wrappers = resolveWrappers(definition, measuredSizes)
   const parentMap = buildParentMap(wrappers)
   const out: Node[] = []
   for (const fn of flowNodes) {
@@ -180,6 +218,7 @@ export function projectDefinitionForXyflow(
 export function projectXyflowPositionsToAbsolute(
   definition: WorkflowDefinition,
   flowNodes: Node[],
+  measuredSizes?: Map<string, { width: number; height: number }>,
 ): Node[] {
   // Build absolute wrapper positions from the *current* flowNodes (so live
   // drags of the wrapper move children along correctly).
@@ -189,7 +228,7 @@ export function projectXyflowPositionsToAbsolute(
       wrappers.set(fn.id, { x: fn.position.x, y: fn.position.y })
     }
   }
-  const wrapperMembership = buildParentMap(resolveWrappers(definition))
+  const wrapperMembership = buildParentMap(resolveWrappers(definition, measuredSizes))
   return flowNodes.map((fn) => {
     const parentId = wrapperMembership.get(fn.id)
     if (parentId === undefined) return fn
