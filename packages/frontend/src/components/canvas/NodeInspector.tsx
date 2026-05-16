@@ -23,6 +23,7 @@ import { computePorts } from './WorkflowCanvas'
 import { REVIEW_INPUT_HANDLE_ID, syncEdgeFromFormField } from './connectionSync'
 import { patchInputDef, renameInputKey } from './syncInputDefs'
 import { PromptPreview } from './PromptPreview'
+import { loopMemberCandidates } from './wrapperCandidates'
 
 interface Props {
   definition: WorkflowDefinition
@@ -369,18 +370,68 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             label={t('inspector.fieldExitConditionTarget')}
             hint={t('inspector.fieldExitConditionTargetHint')}
           >
-            <div className="form-grid form-grid--two">
-              <TextInput
-                value={exitNodeId}
-                onChange={(v) => updateExit({ nodeId: v })}
-                placeholder={t('inspector.innerNodeIdPlaceholder')}
-              />
-              <TextInput
-                value={exitPortName}
-                onChange={(v) => updateExit({ portName: v })}
-                placeholder={t('inspector.portPlaceholder')}
-              />
-            </div>
+            {(() => {
+              // RFC-016 T7: candidate-driven selects replace the bare
+              // TextInputs. Candidates are computed from the wrapper's
+              // current nodeIds + each member's declared output ports so a
+              // node moved out of the loop can no longer be referenced.
+              const candidates = loopMemberCandidates(node, definition.nodes, agents)
+              const currentCand = candidates.find((c) => c.nodeId === exitNodeId)
+              const nodeIdInvalid = exitNodeId.length > 0 && currentCand === undefined
+              const portCandidates = currentCand?.outputPorts ?? []
+              const portInvalid = exitPortName.length > 0 && !portCandidates.includes(exitPortName)
+              return (
+                <div className="form-grid form-grid--two">
+                  <div>
+                    <select
+                      className={`form-input ${nodeIdInvalid ? 'form-input--invalid' : ''}`}
+                      value={exitNodeId}
+                      onChange={(e) => updateExit({ nodeId: e.target.value })}
+                      data-testid="loop-exit-node-select"
+                    >
+                      <option value="">{t('inspector.loopExitNodeIdSelect')}</option>
+                      {candidates.map((c) => (
+                        <option key={c.nodeId} value={c.nodeId}>
+                          {c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId}
+                        </option>
+                      ))}
+                      {nodeIdInvalid ? (
+                        <option value={exitNodeId}>{exitNodeId} (missing)</option>
+                      ) : null}
+                    </select>
+                    {nodeIdInvalid ? (
+                      <div className="form-input__error">
+                        {t('inspector.loopExitInvalidNodeId', { nodeId: exitNodeId })}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div>
+                    <select
+                      className={`form-input ${portInvalid ? 'form-input--invalid' : ''}`}
+                      value={exitPortName}
+                      onChange={(e) => updateExit({ portName: e.target.value })}
+                      disabled={exitNodeId.length === 0}
+                      data-testid="loop-exit-port-select"
+                    >
+                      <option value="">{t('inspector.loopExitPortNameSelect')}</option>
+                      {portCandidates.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                      {portInvalid ? (
+                        <option value={exitPortName}>{exitPortName} (missing)</option>
+                      ) : null}
+                    </select>
+                    {portInvalid ? (
+                      <div className="form-input__error">
+                        {t('inspector.loopExitInvalidPortName', { portName: exitPortName })}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )
+            })()}
           </Field>
           {exitKind === 'port-equals' && (
             <Field label={t('inspector.fieldExitConditionValue')}>
@@ -411,47 +462,77 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             hint={t('inspector.fieldOutputBindingsHint')}
           >
             <ul className="inspector__output-ports">
-              {bindings.map((b, i) => (
-                <li key={i} className="inspector__output-port-row">
-                  <input
-                    className="form-input"
-                    value={b.name}
-                    onChange={(e) => {
-                      const copy = [...bindings]
-                      copy[i] = { ...b, name: e.target.value }
-                      setBindings(copy)
-                    }}
-                    placeholder={t('inspector.outputNamePlaceholder')}
-                  />
-                  <input
-                    className="form-input form-input--mono"
-                    value={b.bind.nodeId}
-                    onChange={(e) => {
-                      const copy = [...bindings]
-                      copy[i] = { ...b, bind: { ...b.bind, nodeId: e.target.value } }
-                      setBindings(copy)
-                    }}
-                    placeholder={t('inspector.innerNodeIdPlaceholder')}
-                  />
-                  <input
-                    className="form-input form-input--mono"
-                    value={b.bind.portName}
-                    onChange={(e) => {
-                      const copy = [...bindings]
-                      copy[i] = { ...b, bind: { ...b.bind, portName: e.target.value } }
-                      setBindings(copy)
-                    }}
-                    placeholder={t('inspector.portPlaceholder')}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn--sm"
-                    onClick={() => setBindings(bindings.filter((_, j) => j !== i))}
-                  >
-                    {t('inspector.remove')}
-                  </button>
-                </li>
-              ))}
+              {bindings.map((b, i) => {
+                // RFC-016 T7: same candidate-driven select pattern used in
+                // exitCondition target — each binding row references an
+                // inner member node + its declared output port.
+                const candidates = loopMemberCandidates(node, definition.nodes, agents)
+                const currentCand = candidates.find((c) => c.nodeId === b.bind.nodeId)
+                const bindNodeInvalid = b.bind.nodeId.length > 0 && currentCand === undefined
+                const bindPortCandidates = currentCand?.outputPorts ?? []
+                const bindPortInvalid =
+                  b.bind.portName.length > 0 && !bindPortCandidates.includes(b.bind.portName)
+                return (
+                  <li key={i} className="inspector__output-port-row">
+                    <input
+                      className="form-input"
+                      value={b.name}
+                      onChange={(e) => {
+                        const copy = [...bindings]
+                        copy[i] = { ...b, name: e.target.value }
+                        setBindings(copy)
+                      }}
+                      placeholder={t('inspector.outputNamePlaceholder')}
+                    />
+                    <select
+                      className={`form-input form-input--mono ${bindNodeInvalid ? 'form-input--invalid' : ''}`}
+                      value={b.bind.nodeId}
+                      onChange={(e) => {
+                        const copy = [...bindings]
+                        copy[i] = { ...b, bind: { ...b.bind, nodeId: e.target.value } }
+                        setBindings(copy)
+                      }}
+                    >
+                      <option value="">{t('inspector.loopExitNodeIdSelect')}</option>
+                      {candidates.map((c) => (
+                        <option key={c.nodeId} value={c.nodeId}>
+                          {c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId}
+                        </option>
+                      ))}
+                      {bindNodeInvalid ? (
+                        <option value={b.bind.nodeId}>{b.bind.nodeId} (missing)</option>
+                      ) : null}
+                    </select>
+                    <select
+                      className={`form-input form-input--mono ${bindPortInvalid ? 'form-input--invalid' : ''}`}
+                      value={b.bind.portName}
+                      onChange={(e) => {
+                        const copy = [...bindings]
+                        copy[i] = { ...b, bind: { ...b.bind, portName: e.target.value } }
+                        setBindings(copy)
+                      }}
+                      disabled={b.bind.nodeId.length === 0}
+                    >
+                      <option value="">{t('inspector.loopExitPortNameSelect')}</option>
+                      {bindPortCandidates.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                      {bindPortInvalid ? (
+                        <option value={b.bind.portName}>{b.bind.portName} (missing)</option>
+                      ) : null}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      onClick={() => setBindings(bindings.filter((_, j) => j !== i))}
+                    >
+                      {t('inspector.remove')}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
             <button
               type="button"
@@ -704,6 +785,9 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                 agents={agents}
                 selfNodeId={node.id}
               />
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {t('inspector.sourcePortDragHint')}
+              </p>
             </Field>
           )}
 

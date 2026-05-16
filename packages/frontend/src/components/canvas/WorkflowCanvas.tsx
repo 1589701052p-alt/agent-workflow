@@ -43,16 +43,29 @@ import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
 import { ReviewNode } from './nodes/ReviewNode'
 import { INBOUND_HANDLE_ID, type CanvasNodeData, type CanvasSelection } from './nodes/types'
+import {
+  MULTI_SOURCE_PORT_HANDLE_ID,
+  applySourcePortConnection,
+  clearSourcePortOnNodeRemoved,
+  isValidSourcePortConnection,
+} from './fanoutSourceSync'
 import { syncInputDefs } from './syncInputDefs'
-import { GitWrapperNode, LoopWrapperNode } from './nodes/WrapperNodes'
+import { GroupWrapperNode } from './nodes/WrapperNodes'
+import { projectDefinitionForXyflow, projectXyflowPositionsToAbsolute } from './coordProjection'
+import {
+  applyMembershipPatch,
+  resolveMembershipOnDragStop,
+  type WrapperHitInput,
+} from './wrapperMembership'
+import { DEFAULT_NODE_SIZE_BY_KIND } from './wrapperFit'
 
 const NODE_TYPES = {
   'agent-single': AgentNode,
   'agent-multi': AgentNode,
   input: InputNode,
   output: OutputNode,
-  'wrapper-git': GitWrapperNode,
-  'wrapper-loop': LoopWrapperNode,
+  'wrapper-git': GroupWrapperNode,
+  'wrapper-loop': GroupWrapperNode,
   review: ReviewNode,
 }
 
@@ -176,7 +189,7 @@ function CanvasInner({
   const lastEmittedSelectionSig = useRef<string>('null')
 
   const [nodes, setNodes] = useState<Node[]>(() =>
-    toFlowNodes(definition, agentByName, nodeStatuses),
+    projectDefinitionForXyflow(definition, toFlowNodes(definition, agentByName, nodeStatuses)),
   )
   const [edges, setEdges] = useState<Edge[]>(() => toFlowEdges(definition.edges))
   const externalDefRef = useRef(definition)
@@ -214,7 +227,15 @@ function CanvasInner({
       // onSelectionChange with `[]` — our handler then calls
       // `onSelect(null)` and the inspector unmounts mid-keystroke.
       const sel = selectionRef.current
-      setNodes(applySelection(toFlowNodes(definition, agentByName, nodeStatuses), sel.nodes))
+      setNodes(
+        applySelection(
+          projectDefinitionForXyflow(
+            definition,
+            toFlowNodes(definition, agentByName, nodeStatuses),
+          ),
+          sel.nodes,
+        ),
+      )
       if (defChanged) setEdges(applySelection(toFlowEdges(definition.edges), sel.edges))
     }
   }, [definition, agentByName, nodeStatuses])
@@ -237,7 +258,18 @@ function CanvasInner({
               (e) => stillReferenced.has(e.source) && stillReferenced.has(e.target),
             )
             if (liveEdges.length !== edges.length) setEdges(liveEdges)
-            commitChange(toDefinition(definition, next, liveEdges))
+            // RFC-015: when a node is removed, any agent-multi node whose
+            // sourcePort referenced it must be cleared — the field isn't an
+            // edge, so xyflow's automatic edge cleanup wouldn't catch it.
+            const removedIds: string[] = []
+            for (const c of changes) {
+              if (c.type === 'remove') removedIds.push(c.id)
+            }
+            let nextDef = toDefinition(definition, next, liveEdges)
+            if (removedIds.length > 0) {
+              nextDef = clearSourcePortOnNodeRemoved(nextDef, removedIds)
+            }
+            commitChange(nextDef)
           }
         }
         return next
@@ -271,6 +303,14 @@ function CanvasInner({
   const handleConnect = useCallback(
     (conn: Connection) => {
       if (readOnly === true || onChange === undefined) return
+      // RFC-015 fast-path: a drop on the agent-multi node's top handle
+      // writes node.sourcePort directly and produces NO edge. Must be
+      // checked before translateInboundConnection rewrites targetHandle.
+      if (conn.targetHandle === MULTI_SOURCE_PORT_HANDLE_ID) {
+        const next = applySourcePortConnection(definition, conn)
+        if (next !== definition) commitChange(next)
+        return
+      }
       // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
       // on a specific named handle" BEFORE translateInboundConnection rewrites
       // targetHandle. Output's catch-all path always appends a new port (with
@@ -296,15 +336,27 @@ function CanvasInner({
    * rewire a review whose iteration count is already non-zero.
    */
   const isValidConnection = useCallback(
-    (conn: { target: string | null }) => {
+    (conn: Connection | Edge) => {
+      // RFC-015: top-handle drops on agent-multi must reject self-loops and
+      // unknown source/target before xyflow commits. Non-top-handle drops
+      // pass through (the helper returns true), so RFC-007 paths are not
+      // affected. xyflow types `Edge.targetHandle` as `string | undefined`,
+      // so normalise to `string | null` before passing in.
+      const guardConn = {
+        source: conn.source ?? null,
+        target: conn.target ?? null,
+        targetHandle: conn.targetHandle ?? null,
+      }
+      if (!isValidSourcePortConnection(definition, guardConn)) return false
+      // RFC-007 task-detail iterate lock.
       if (taskContext === undefined) return true
-      if (conn.target === null) return true
+      if (conn.target === null || conn.target === undefined) return true
       const node = definition.nodes.find((n) => n.id === conn.target)
       if (node === undefined || node.kind !== 'review') return true
       const iter = taskContext.reviewIteration[conn.target] ?? 0
       return iter === 0
     },
-    [definition.nodes, taskContext],
+    [definition, taskContext],
   )
 
   // ---- Clipboard / shortcuts (P-2-07) ----
@@ -653,7 +705,60 @@ function CanvasInner({
           // because toDefinition computes a complete next-state.
           if (readOnly === true || onChange === undefined) return
           if (draggedNodes.length === 0) return
-          commitChange(toDefinition(definition, nodes, edges))
+          // RFC-016: with positions about to be committed, decide whether any
+          // dragged node also changed wrapper membership (hit a new wrapper
+          // rect or left its current one). The membership patches go through
+          // applyMembershipPatch on the post-positions definition so the
+          // wrapper.nodeIds list stays in lock-step with the visible layout.
+          let nextDef = toDefinition(definition, nodes, edges)
+          const wrappers: WrapperHitInput[] = []
+          for (const fn of nodes) {
+            if (fn.type !== 'wrapper-git' && fn.type !== 'wrapper-loop') continue
+            const style = fn.style as { width?: unknown; height?: unknown } | undefined
+            const w = typeof style?.width === 'number' ? style.width : 200
+            const h = typeof style?.height === 'number' ? style.height : 120
+            // Wrappers in the flow node array carry absolute coords (no
+            // parentId for the top-level wrappers, and projection has
+            // already resolved nested wrappers' absolute position).
+            const absForRect = projectXyflowPositionsToAbsolute(definition, nodes).find(
+              (n) => n.id === fn.id,
+            )
+            const px = absForRect?.position.x ?? fn.position.x
+            const py = absForRect?.position.y ?? fn.position.y
+            const rec = nextDef.nodes.find((n) => n.id === fn.id) as
+              | (WorkflowNode & { nodeIds?: unknown })
+              | undefined
+            const ids = Array.isArray(rec?.nodeIds)
+              ? (rec!.nodeIds as unknown[]).filter((s): s is string => typeof s === 'string')
+              : []
+            wrappers.push({
+              id: fn.id,
+              rect: { x: px, y: py, width: w, height: h },
+              nodeIds: ids,
+            })
+          }
+          for (const dn of draggedNodes) {
+            // Wrapper-on-wrapper or non-wrapper-into-wrapper both go through
+            // the same path. Wrapper-on-itself is excluded inside resolve().
+            if (dn.type === 'wrapper-git' || dn.type === 'wrapper-loop') continue
+            const absNode = projectXyflowPositionsToAbsolute(definition, nodes).find(
+              (n) => n.id === dn.id,
+            )
+            if (absNode === undefined) continue
+            const kind = (dn.type ?? 'agent-single') as keyof typeof DEFAULT_NODE_SIZE_BY_KIND
+            const size = DEFAULT_NODE_SIZE_BY_KIND[kind] ?? { width: 240, height: 120 }
+            const center = {
+              x: absNode.position.x + size.width / 2,
+              y: absNode.position.y + size.height / 2,
+            }
+            const patch = resolveMembershipOnDragStop({
+              draggedNodeId: dn.id,
+              draggedCenter: center,
+              wrappers,
+            })
+            nextDef = applyMembershipPatch(nextDef, patch)
+          }
+          commitChange(nextDef)
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -797,6 +902,26 @@ function toFlowNodes(
       const inner = (n as unknown as { nodeIds?: string[] }).nodeIds
       ;(data as CanvasNodeData & { innerCount?: number }).innerCount = inner?.length ?? 0
     }
+    if (n.kind === 'wrapper-loop') {
+      // RFC-016: surface maxIterations + exitCondition.kind onto node data so
+      // the header pill (× N · kind) can render without re-reading the def.
+      const rec = n as unknown as Record<string, unknown>
+      const maxIter = typeof rec.maxIterations === 'number' ? rec.maxIterations : undefined
+      const exitCondRaw = rec.exitCondition as { kind?: unknown } | undefined
+      const exitKind = typeof exitCondRaw?.kind === 'string' ? exitCondRaw.kind : undefined
+      ;(
+        data as CanvasNodeData & {
+          maxIterations?: number
+          exitConditionKind?: string
+        }
+      ).maxIterations = maxIter
+      ;(
+        data as CanvasNodeData & {
+          maxIterations?: number
+          exitConditionKind?: string
+        }
+      ).exitConditionKind = exitKind
+    }
     if (n.kind === 'review') {
       // RFC-007: surface inputSource onto node data so ReviewNode can show
       // the configured upstream `node.port` summary inside the card body.
@@ -808,6 +933,18 @@ function toFlowNodes(
         ;(
           data as CanvasNodeData & { inputSource?: { nodeId: string; portName: string } }
         ).inputSource = { nodeId, portName }
+      }
+    }
+    if (n.kind === 'agent-multi') {
+      // RFC-015: mirror sourcePort into node data so AgentNode's top-handle
+      // can flip the `is-connected` class based on whether a source has been
+      // chosen (drag-set or form-set, both flow through the same field).
+      const raw = (n as unknown as { sourcePort?: { nodeId?: unknown; portName?: unknown } })
+        .sourcePort
+      if (raw !== undefined) {
+        const nodeId = typeof raw.nodeId === 'string' ? raw.nodeId : ''
+        const portName = typeof raw.portName === 'string' ? raw.portName : ''
+        data.sourcePort = { nodeId, portName }
       }
     }
     return {
@@ -981,14 +1118,34 @@ function toDefinition(
   flowNodes: Node[],
   flowEdges: Edge[],
 ): WorkflowDefinition {
+  // RFC-016: xyflow hands us children with parent-relative positions; invert
+  // to absolute coords before reading position into the persisted def.
+  const absolute = projectXyflowPositionsToAbsolute(prev, flowNodes)
   const prevById = new Map(prev.nodes.map((n) => [n.id, n]))
-  const nextNodes = flowNodes
+  const nextNodes = absolute
     .map((fn) => {
       const orig = prevById.get(fn.id)
       if (orig === undefined) return null
       const out: WorkflowNode = {
         ...orig,
         position: { x: Math.round(fn.position.x), y: Math.round(fn.position.y) },
+      }
+      // RFC-016: persist wrapper.size when xyflow has resolved it (either
+      // from our projection layer or a user-driven NodeResizer drag). Only
+      // wrapper nodes get this; non-wrappers leave size untouched.
+      if (out.kind === 'wrapper-git' || out.kind === 'wrapper-loop') {
+        const style = fn.style as { width?: unknown; height?: unknown } | undefined
+        const w = typeof style?.width === 'number' ? style.width : undefined
+        const h = typeof style?.height === 'number' ? style.height : undefined
+        if (w !== undefined && h !== undefined) {
+          const prevSize = (orig as Record<string, unknown>).size as
+            | { sizeLocked?: unknown }
+            | undefined
+          const sizeLocked = prevSize?.sizeLocked === true
+          ;(out as Record<string, unknown>).size = sizeLocked
+            ? { width: Math.round(w), height: Math.round(h), sizeLocked: true }
+            : { width: Math.round(w), height: Math.round(h) }
+        }
       }
       return out
     })

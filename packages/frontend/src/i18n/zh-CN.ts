@@ -222,6 +222,26 @@ export interface Resources {
     filesSection: string
     descHintManaged: string
     descHintExternal: string
+    tabFolder: string
+    fieldFolderPath: string
+    fieldFolderPathHint: string
+    fieldFolderLabel: string
+    fieldFolderLabelHint: string
+    folderPathPlaceholder: string
+    createFolderButton: string
+    sourcesTitle: string
+    sourcesEmpty: string
+    sourceChildCount: string
+    sourceLastScannedAt: string
+    sourceNeverScanned: string
+    sourceRescan: string
+    sourceRemove: string
+    sourceRemoveConfirmTitle: string
+    sourceRemoveConfirmBlocked: string
+    sourceSkippedBanner: string
+    sourceSkippedDetails: string
+    sourceFromPill: string
+    sourceReadonlyHint: string
   }
   workflows: {
     title: string
@@ -422,6 +442,7 @@ export interface Resources {
     sourcePortNodePlaceholder: string
     sourcePortPlaceholder: string
     sourcePortMissingSuffix: string
+    sourcePortDragHint: string
     edgeTitle: string
     edgeSourceLabel: string
     edgeTargetLabel: string
@@ -474,6 +495,33 @@ export interface Resources {
     fieldBody: string
     bodyPlaceholder: string
     rawBodySummary: string
+    importButton: string
+    importDialog: {
+      title: string
+      tabUpload: string
+      tabPaste: string
+      pastePlaceholder: string
+      selectedFile: string
+      parseButton: string
+      applyButton: string
+      cancelButton: string
+      previewEmpty: string
+      willOverwrite: string
+      footerHint: string
+      bodySizeHint: string
+      routedTo: {
+        name: string
+        description: string
+        model: string
+        variant: string
+        temperature: string
+        steps: string
+        maxSteps: string
+        permission: string
+        bodyMd: string
+        frontmatterExtra: string
+      }
+    }
   }
   nodeDrawer: {
     kindLabel: string
@@ -593,6 +641,15 @@ export interface Resources {
   }
   wrapperNode: {
     innerNodes: string
+    labelGit: string
+    labelLoop: string
+    pillGit: string
+    pillLoop: string
+    dropHere: string
+    fitToChildren: string
+    unwrap: string
+    deleteWithInner: string
+    confirmDeleteWithInner: string
   }
   errors: Record<string, string>
 }
@@ -822,6 +879,26 @@ export const zhCN: Resources = {
     filesSection: '文件',
     descHintManaged: '可编辑；写入 SKILL.md frontmatter。',
     descHintExternal: '外部技能描述（仅写库）。',
+    tabFolder: '父目录',
+    fieldFolderPath: '父目录路径',
+    fieldFolderPathHint: '父目录的绝对路径；它的每个含 SKILL.md 的直接子目录都会被自动纳管。',
+    fieldFolderLabel: '名称（可选）',
+    fieldFolderLabelHint: '用于在列表里识别这个目录；默认取末段目录名。',
+    folderPathPlaceholder: '/abs/path/to/skills-parent',
+    createFolderButton: '登记父目录',
+    sourcesTitle: '技能父目录',
+    sourcesEmpty: '还没有登记父目录。',
+    sourceChildCount: '{{n}} 条子技能',
+    sourceLastScannedAt: '最后扫描于 {{when}}',
+    sourceNeverScanned: '尚未扫描',
+    sourceRescan: '重新扫描',
+    sourceRemove: '解除登记',
+    sourceRemoveConfirmTitle: '解除登记 "{{label}}"？将删除它带进来的全部子技能。',
+    sourceRemoveConfirmBlocked: '无法解除登记：以下子技能仍被代理引用，请先解绑。',
+    sourceSkippedBanner: '本次扫描跳过 {{n}} 条候选',
+    sourceSkippedDetails: '展开详情',
+    sourceFromPill: '来自 {{label}}',
+    sourceReadonlyHint: '此技能由父目录纳管，请在外部目录里编辑文件。',
   },
   workflows: {
     title: '工作流',
@@ -1027,6 +1104,7 @@ export const zhCN: Resources = {
     sourcePortNodePlaceholder: '— 选上游节点 —',
     sourcePortPlaceholder: '— 选输出端口 —',
     sourcePortMissingSuffix: '（已失效）',
+    sourcePortDragHint: '也可以从节点顶部的端口直接拖入上游输出来设置。',
     edgeTitle: '边设置',
     edgeSourceLabel: '源',
     edgeTargetLabel: '目标节点',
@@ -1081,6 +1159,34 @@ export const zhCN: Resources = {
     fieldBody: '正文 (Markdown)',
     bodyPlaceholder: 'Agent 系统提示词；Markdown。',
     rawBodySummary: '裸 markdown（无预览）',
+    importButton: '从 agent.md 导入',
+    importDialog: {
+      title: '从 agent.md 导入',
+      tabUpload: '上传文件',
+      tabPaste: '粘贴文本',
+      pastePlaceholder:
+        '---\ndescription: 代码评审员\nmodel: anthropic/claude-sonnet-4-6\npermission:\n  edit: ask\n---\n你是一名审计员……',
+      selectedFile: '已选：{{name}}',
+      parseButton: '解析',
+      applyButton: '应用',
+      cancelButton: '取消',
+      previewEmpty: '未识别到任何字段。文件可能为空或仅包含正文。',
+      willOverwrite: '应用将覆盖你已修改的 {{count}} 个字段：{{fields}}',
+      footerHint: '仅填入下方表单；保存仍需点击「创建」按钮。',
+      bodySizeHint: '（{{bytes}} 字节）',
+      routedTo: {
+        name: '→ 名称',
+        description: '→ 描述',
+        model: '→ 模型',
+        variant: '→ 变体',
+        temperature: '→ 温度',
+        steps: '→ Steps',
+        maxSteps: '→ Max steps',
+        permission: '→ Permission',
+        bodyMd: '→ 正文（Markdown）',
+        frontmatterExtra: '→ frontmatterExtra',
+      },
+    },
   },
   nodeDrawer: {
     kindLabel: 'node_run',
@@ -1201,6 +1307,15 @@ export const zhCN: Resources = {
   },
   wrapperNode: {
     innerNodes: '{{n}} 个内部节点',
+    labelGit: 'Git 包装器',
+    labelLoop: '循环包装器',
+    pillGit: '快照',
+    pillLoop: '× {{max}} · {{kind}}',
+    dropHere: '把节点拖到这里',
+    fitToChildren: '自适应内部节点',
+    unwrap: '解散包装器',
+    deleteWithInner: '连同内部节点一起删除',
+    confirmDeleteWithInner: '确定连同 {{count}} 个内部节点一起删除该包装器？此操作不可撤销。',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {
@@ -1214,6 +1329,11 @@ export const zhCN: Resources = {
     'workflow-import-conflict': '导入冲突：已存在同 id 的工作流。',
     'config-invalid': '配置不合法。',
     'task-invalid': '任务输入不合法。',
+    'skill-source-path-missing': '路径不存在。',
+    'skill-source-path-not-dir': '路径不是目录。',
+    'skill-source-path-in-use': '该父目录已登记。',
+    'skill-source-children-referenced': '该父目录下的部分子技能仍被代理引用，请先解绑。',
+    'skill-source-readonly': '此技能由父目录纳管，请在外部目录里编辑文件。',
     fallback: '请求失败',
   },
 }

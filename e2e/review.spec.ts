@@ -115,7 +115,7 @@ async function setupViaApi(d: DaemonHandle, repoPath: string): Promise<CreatedFi
           {
             id: 'out_1',
             kind: 'output',
-            ports: [{ name: 'doc', bind: { nodeId: 'review_1', portName: 'doc' } }],
+            ports: [{ name: 'doc', bind: { nodeId: 'review_1', portName: 'approved_doc' } }],
             position: { x: 960, y: 0 },
           },
         ],
@@ -132,7 +132,7 @@ async function setupViaApi(d: DaemonHandle, repoPath: string): Promise<CreatedFi
           },
           {
             id: 'e_review_out',
-            source: { nodeId: 'review_1', portName: 'doc' },
+            source: { nodeId: 'review_1', portName: 'approved_doc' },
             target: { nodeId: 'out_1', portName: 'doc' },
           },
         ],

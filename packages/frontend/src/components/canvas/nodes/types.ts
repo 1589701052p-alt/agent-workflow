@@ -42,4 +42,10 @@ export interface CanvasNodeData extends Record<string, unknown> {
     | 'exhausted'
   /** True when this node sits inside a wrapper-loop body (blue accent). */
   loopBody?: boolean
+  /**
+   * Mirrored from `WorkflowNode.sourcePort` for agent-multi nodes only.
+   * AgentNode reads it to toggle the top-handle's `is-connected` class
+   * (RFC-015 §5.3). Other node kinds leave this `undefined`.
+   */
+  sourcePort?: { nodeId: string; portName: string }
 }
