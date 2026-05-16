@@ -22,7 +22,7 @@ import {
   resolveDependsClosure,
   validateDependsOn,
 } from '../src/services/agentDeps'
-import { DomainError } from '../src/util/errors'
+import type { DomainError } from '../src/util/errors'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 

@@ -49,6 +49,9 @@ export function DependencyTreePreview({ name, dependsOn, onNodeClick }: Props) {
   >({ kind: 'idle' })
   // Track each in-flight request so a slow response can't clobber a newer one.
   const seqRef = useRef(0)
+  // Serialize dependsOn so the effect re-runs only when the content changes
+  // (parent renders pass a fresh array reference every keystroke).
+  const dependsOnKey = dependsOn.join('\n')
 
   useEffect(() => {
     if (name === '' && dependsOn.length === 0) {
@@ -76,7 +79,11 @@ export function DependencyTreePreview({ name, dependsOn, onNodeClick }: Props) {
     return () => {
       clearTimeout(handle)
     }
-  }, [name, JSON.stringify(dependsOn)])
+    // The dependency on `dependsOn` is intentionally serialized via the
+    // memoized key below — array identity changes on every render but the
+    // serialized content is what should retrigger the preview fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, dependsOnKey])
 
   if (state.kind === 'idle') {
     return <p className="muted dep-tree__empty">{t('dependencyTreePreview.emptyHint')}</p>

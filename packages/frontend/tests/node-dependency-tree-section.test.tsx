@@ -5,7 +5,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, test, vi } from 'vitest'
 import '@/i18n'
 import { NodeDependencyTreeSection } from '../src/components/agents/NodeDependencyTreeSection'
 import { setBaseUrl, setToken } from '../src/stores/auth'
