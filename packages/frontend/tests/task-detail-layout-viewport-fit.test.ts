@@ -89,11 +89,33 @@ describe('worktree diff vertical file tabs', () => {
     expect(body).not.toMatch(/border-right:\s*1px solid var\(--border\)/)
   })
 
-  test('right body grows + independently scrolls + can shrink horizontally', () => {
+  test('right body grows + lays inner card out as a flex column', () => {
+    // Outer body itself doesn't scroll — it just sizes the inner
+    // .diff__file card, which then handles vertical overflow internally
+    // via its <pre>.  Locking this keeps a future "let's just give body
+    // overflow:auto and let things stack" regression from coming back.
     const body = ruleBody('.worktree-diff__body')
     expect(body).toMatch(/flex:\s*1/)
     expect(body).toMatch(/min-width:\s*0/)
-    expect(body).toMatch(/overflow:\s*auto/)
+    expect(body).toMatch(/display:\s*flex/)
+    expect(body).toMatch(/overflow:\s*hidden/)
+  })
+
+  test('inner .diff__file fills the full right column height (RFC-021 contract)', () => {
+    // Without these rules the .diff__file was intrinsic-content-sized
+    // and its <pre> hit a 480px max-height cap, leaving ~190px of empty
+    // space at the bottom of the right column.
+    const file = ruleBody('.worktree-diff__body > .diff__file')
+    expect(file).toMatch(/flex:\s*1/)
+    expect(file).toMatch(/display:\s*flex/)
+    expect(file).toMatch(/flex-direction:\s*column/)
+    expect(file).toMatch(/min-height:\s*0/)
+    const pre = ruleBody('.worktree-diff__body > .diff__file > .diff__body')
+    expect(pre).toMatch(/flex:\s*1/)
+    expect(pre).toMatch(/min-height:\s*0/)
+    // Explicit override of the legacy 480px cap that ships with .diff__body.
+    expect(pre).toMatch(/max-height:\s*none/)
+    expect(pre).toMatch(/overflow:\s*auto/)
   })
 
   test('file tab truncates long paths with ellipsis (hover title fallback in JSX)', () => {

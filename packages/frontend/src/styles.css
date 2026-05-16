@@ -3445,5 +3445,28 @@ mark.comment-anchor[data-active='true'] {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  /* Lay the inner .diff__file card out as a flex column that fills the
+   * full right column. The outer container itself has hidden overflow —
+   * scrolling happens inside the file body's <pre>, which lets the
+   * header stay pinned at the top of the column. */
+  display: flex;
+  overflow: hidden;
+}
+
+/* Inside the worktree-diff body, the legacy .diff__file card is forced
+ * to grow to the full available height (instead of intrinsic sizing)
+ * and its <pre> body drops its 480px max-height cap so a long diff fills
+ * the column with its own scrollbar. */
+.worktree-diff__body > .diff__file {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.worktree-diff__body > .diff__file > .diff__body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
 }
