@@ -39,6 +39,17 @@ const BUILTIN_PROMPT_VARS = new Set([
   '__node_id__',
   '__iteration__',
   '__shard_key__',
+  // RFC-005 review tokens.
+  '__review_rejection__',
+  '__review_comments__',
+  '__iterate_target_port__',
+  // RFC-014 sibling outputs.
+  '__sibling_outputs__',
+  // RFC-023 clarify tokens.
+  '__clarify_questions__',
+  '__clarify_answers__',
+  '__clarify_iteration__',
+  '__clarify_remaining__',
 ])
 
 // -----------------------------------------------------------------------------
@@ -144,6 +155,12 @@ export function validateWorkflowDef(
         const agent = agentByName.get(readString(node, 'agentName') ?? '')
         for (const o of agent?.outputs ?? []) outs.add(o)
         if (node.kind === 'agent-multi') outs.add('errors')
+        // RFC-023: when an outbound edge wires this agent's __clarify__ system
+        // port, accept it as a valid output port. The corresponding
+        // __clarify_response__ inbound is added below alongside the
+        // ins-from-edges sweep.
+        outs.add('__clarify__')
+        ins.add('__clarify_response__')
         // Inputs are derived from incoming edges (handled in rule 1 / 5).
         break
       }
@@ -163,6 +180,12 @@ export function validateWorkflowDef(
         // The input is the (sourceNode, sourcePort) declared on the review
         // node itself; review nodes don't accept inbound edges via the regular
         // edge graph in v1 (validated below).
+        break
+      }
+      case 'clarify': {
+        // RFC-023: fixed 1-in / 1-out shape — port names are hard-coded.
+        ins.add('questions')
+        outs.add('answers')
         break
       }
     }
@@ -231,16 +254,27 @@ export function validateWorkflowDef(
   // Map every node to the loop wrapper (if any) that contains it; edges whose
   // endpoints share the same loop wrapper are allowed to participate in a
   // cycle. All others must form a DAG.
+  //
+  // RFC-023: clarify "ask-back" edges (agent.__clarify__ → clarify.questions
+  // and clarify.answers → agent.__clarify_response__) form an intentional
+  // cycle by design — answers feed back to the asking agent for the next
+  // round. Cycles that pass through a clarify node are therefore allowed
+  // outside of a wrapper-loop too (the clarify_no_iteration_cap warning is
+  // what nudges users to wrap it). We strip those edges from the DAG check
+  // by skipping any edge whose source or target node is `kind: 'clarify'`.
   const loopOf = buildLoopMembership(nodes)
 
   // Build a graph that excludes intra-loop edges, then check for cycles.
   const filtered: Array<{ from: string; to: string }> = []
   for (const edge of edges) {
-    if (nodeById.get(edge.source.nodeId) === undefined) continue
-    if (nodeById.get(edge.target.nodeId) === undefined) continue
+    const srcNode = nodeById.get(edge.source.nodeId)
+    const tgtNode = nodeById.get(edge.target.nodeId)
+    if (srcNode === undefined) continue
+    if (tgtNode === undefined) continue
     const lFrom = loopOf.get(edge.source.nodeId)
     const lTo = loopOf.get(edge.target.nodeId)
     if (lFrom !== undefined && lFrom === lTo) continue
+    if (srcNode.kind === 'clarify' || tgtNode.kind === 'clarify') continue
     filtered.push({ from: edge.source.nodeId, to: edge.target.nodeId })
   }
   if (
@@ -276,6 +310,39 @@ export function validateWorkflowDef(
             pointer: node.id,
           })
         }
+      }
+      // RFC-022: also scan the agent.dependsOn closure for missing agents /
+      // missing skills. BFS over agentByName since the validator already
+      // owns the full agent set (no DB call). `seen` set guards against
+      // cycle-driven infinite loops — even though agent.ts save-time guard
+      // refuses cycles, the validator is also called from `workflow-yaml`
+      // import and from CI fixtures that may have stale DBs.
+      const seenInClosure = new Set<string>([agent.name])
+      const closureQueue = [...agent.dependsOn]
+      while (closureQueue.length > 0) {
+        const depName = closureQueue.shift()
+        if (depName === undefined) break
+        if (seenInClosure.has(depName)) continue
+        seenInClosure.add(depName)
+        const dep = agentByName.get(depName)
+        if (dep === undefined) {
+          issues.push({
+            code: 'agent-dependency-not-found',
+            message: `agent '${agent.name}' (used by node '${node.id}') depends on unknown agent '${depName}'`,
+            pointer: node.id,
+          })
+          continue
+        }
+        for (const s of dep.skills) {
+          if (!skillNames.has(s)) {
+            issues.push({
+              code: 'skill-not-found',
+              message: `dependent agent '${dep.name}' (closure of '${agent.name}', used by node '${node.id}') references unknown skill '${s}'`,
+              pointer: node.id,
+            })
+          }
+        }
+        for (const next of dep.dependsOn) closureQueue.push(next)
       }
       if (node.kind === 'agent-multi') {
         const sp = (node as Record<string, unknown>).sourcePort
@@ -562,6 +629,111 @@ export function validateWorkflowDef(
         issues.push({
           code: 'review-rerunnable-empty-on-reject',
           message: `review node '${node.id}' rerunnableOnReject is empty — reject will have nothing to re-run`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+    }
+  }
+
+  // 4c. clarify (RFC-023) -----------------------------------------------------
+  // - exactly one inbound edge on the `questions` port (the reverse-drag mints
+  //   exactly one).
+  // - inbound source must be an agent-single OR agent-multi node (other kinds
+  //   rejected with clarify-target-not-agent).
+  // - no two clarify nodes connected to the same agent.
+  // - clarify.answers must not loop back to the clarify node itself.
+  // - bare clarify (not inside a wrapper-loop) emits a warning to nudge users
+  //   toward bounding the ask-back count via the loop wrapper's max_iterations.
+  // - clarify.answers with zero outbound edges emits a warning (the injection
+  //   path is implicit via clarify_session rows, but a disconnected output is
+  //   visually confusing).
+  {
+    const loopMembership = buildLoopMembership(nodes)
+    for (const node of nodes) {
+      if (node.kind !== 'clarify') continue
+
+      // inbound on 'questions'
+      const inboundOnQuestions = edges.filter(
+        (e) => e.target.nodeId === node.id && e.target.portName === 'questions',
+      )
+      if (inboundOnQuestions.length === 0) {
+        issues.push({
+          code: 'clarify-questions-port-missing',
+          message: `clarify node '${node.id}' has no inbound edge on 'questions' port; drag from the clarify input handle onto an agent to wire it`,
+          pointer: node.id,
+        })
+      }
+
+      // inbound source must be agent-{single,multi}; bookkeeping duplicates too
+      const agentSourceIds = new Set<string>()
+      for (const e of inboundOnQuestions) {
+        const src = nodeById.get(e.source.nodeId)
+        if (src === undefined) {
+          issues.push({
+            code: 'clarify-input-source-missing',
+            message: `clarify node '${node.id}' inbound edge references unknown node '${e.source.nodeId}'`,
+            pointer: node.id,
+          })
+          continue
+        }
+        if (src.kind !== 'agent-single' && src.kind !== 'agent-multi') {
+          issues.push({
+            code: 'clarify-target-not-agent',
+            message: `clarify node '${node.id}' must connect to an agent-single or agent-multi node (got kind '${src.kind}' on '${src.id}')`,
+            pointer: node.id,
+          })
+          continue
+        }
+        agentSourceIds.add(src.id)
+      }
+
+      // multi-clarify on the same agent
+      for (const agentId of agentSourceIds) {
+        const otherClarifyOnSameAgent = edges.filter(
+          (e) =>
+            e.source.nodeId === agentId &&
+            e.source.portName === '__clarify__' &&
+            e.target.nodeId !== node.id,
+        )
+        if (otherClarifyOnSameAgent.length > 0) {
+          issues.push({
+            code: 'clarify-multiple-clarify-on-same-agent',
+            message: `agent '${agentId}' already has a clarify channel; remove the other clarify node before adding '${node.id}'`,
+            pointer: node.id,
+          })
+        }
+      }
+
+      // self-loop on answers
+      const answersOut = edges.filter(
+        (e) => e.source.nodeId === node.id && e.source.portName === 'answers',
+      )
+      for (const e of answersOut) {
+        if (e.target.nodeId === node.id) {
+          issues.push({
+            code: 'clarify-self-loop',
+            message: `clarify node '${node.id}' has an answers edge pointing back to itself`,
+            pointer: node.id,
+          })
+        }
+      }
+
+      // warning: not inside a wrapper-loop
+      if (!loopMembership.has(node.id)) {
+        issues.push({
+          code: 'clarify-no-iteration-cap',
+          message: `clarify node '${node.id}' is not inside a wrapper-loop — agent may ask back indefinitely; consider wrapping in a wrapper-loop with max_iterations`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // warning: answers port disconnected
+      if (answersOut.length === 0) {
+        issues.push({
+          code: 'clarify-answers-port-disconnected',
+          message: `clarify node '${node.id}' has no outbound edge on 'answers' port; answer injection still flows via the session, but the canvas hides the data flow`,
           pointer: node.id,
           severity: 'warning',
         })

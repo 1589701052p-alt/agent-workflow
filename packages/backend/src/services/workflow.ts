@@ -177,20 +177,33 @@ function rowToWorkflow(row: WorkflowRow): Workflow {
  *
  * v1 → v2 (RFC-005):
  *   v1 docs predate the `review` node kind, so by construction they contain
- *   no review nodes — the upgrade is a pure version-number bump. The result
- *   is identical in shape to v1 with `$schema_version: 2`.
+ *   no review nodes — the upgrade is a pure version-number bump.
  *
- * The upgrade only changes the in-memory representation returned by GET;
- * the next PUT (auto-save in the editor, YAML re-import, programmatic update)
- * flushes the bumped version back to the DB. This mirrors the RFC-004
- * "heal-on-edit" pattern — no daemon-startup scan.
+ * v2 → v3 (RFC-023):
+ *   v2 docs predate the `clarify` node kind. Same story: pure version-number
+ *   bump (no clarify nodes, no agent system ports `__clarify__` /
+ *   `__clarify_response__`, no clarify edges ever appear in older docs).
+ *
+ * The migration steps cascade — v1 docs walk 1 → 2 → 3 in a single call.
+ * Only changes the in-memory representation returned by GET; the next PUT
+ * (auto-save in the editor, YAML re-import, programmatic update) flushes
+ * the bumped version back to the DB. This mirrors the RFC-004 "heal-on-edit"
+ * pattern — no daemon-startup scan.
  *
  * Exported pure helper so it can be tested without DB plumbing.
  */
 export function migrateDefinitionToLatest(def: WorkflowDefinition): WorkflowDefinition {
-  if (def.$schema_version === WORKFLOW_SCHEMA_VERSION) return def
-  if (def.$schema_version === 1) {
-    return { ...def, $schema_version: 2 }
+  let current: WorkflowDefinition = def
+  if (current.$schema_version === 1) {
+    current = { ...current, $schema_version: 2 }
   }
-  return def
+  if (current.$schema_version === 2) {
+    current = { ...current, $schema_version: 3 }
+  }
+  if (current.$schema_version !== WORKFLOW_SCHEMA_VERSION) {
+    // Forward-compat: an unknown future version (e.g. v4 stored by a newer
+    // daemon, read by an older one) round-trips unchanged. The validator
+    // and zod schema will surface incompatibility downstream if any.
+  }
+  return current
 }

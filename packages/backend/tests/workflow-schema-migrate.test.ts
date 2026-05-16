@@ -1,12 +1,14 @@
-// Locks in RFC-005 PR-A T4: workflow $schema_version 1 → 2 transparent
-// upgrade.
+// Locks in RFC-005 PR-A T4 + RFC-023 PR-A T6: workflow $schema_version
+// transparent upgrade. As of RFC-023 the latest version is 3; v1 and v2 are
+// both upgraded on read to v3.
 //
 // Contract:
-//   - GET path: rowToWorkflow → migrateDefinitionToLatest. v1 docs come back
-//     as v2 in-memory; the on-disk row is not modified until the next PUT.
+//   - GET path: rowToWorkflow → migrateDefinitionToLatest. Old docs come back
+//     as the latest version in-memory; the on-disk row is not modified until
+//     the next PUT.
 //   - POST / PUT paths: normalize via migrateDefinitionToLatest before
 //     storing, so new writes always land at the latest version.
-//   - Pure helper: idempotent (v2 → v2 is identity).
+//   - Pure helper: idempotent (latest → latest is identity).
 //
 // If this goes red, check packages/backend/src/services/workflow.ts and
 // packages/shared/src/schemas/workflow.ts in lock-step.
@@ -29,32 +31,34 @@ import {
 
 const migrationsFolder = resolve(import.meta.dirname, '..', 'db', 'migrations')
 
-describe('RFC-005 migrateDefinitionToLatest pure helper', () => {
-  test('v1 → v2 (only schema_version field changes)', () => {
+describe('migrateDefinitionToLatest pure helper', () => {
+  test('v1 walks up to the latest version, preserving shape', () => {
     const v1: WorkflowDefinition = {
       $schema_version: 1,
       inputs: [{ kind: 'text', key: 'topic', label: 'topic' }],
       nodes: [{ id: 'in_1', kind: 'input', inputKey: 'topic' }],
       edges: [],
     }
-    const v2 = migrateDefinitionToLatest(v1)
-    expect(v2.$schema_version).toBe(2)
-    expect(v2.inputs).toEqual(v1.inputs)
-    expect(v2.nodes).toEqual(v1.nodes)
-    expect(v2.edges).toEqual(v1.edges)
+    const out = migrateDefinitionToLatest(v1)
+    // RFC-023: latest is 3. The intermediate (v2) is invisible to callers.
+    expect(out.$schema_version).toBe(3)
+    expect(out.inputs).toEqual(v1.inputs)
+    expect(out.nodes).toEqual(v1.nodes)
+    expect(out.edges).toEqual(v1.edges)
   })
 
-  test('v2 → v2 (identity)', () => {
-    const v2: WorkflowDefinition = {
-      $schema_version: 2,
+  test('latest → latest is idempotent (no upgrade, no surprise mutation)', () => {
+    const latest: WorkflowDefinition = {
+      $schema_version: 3,
       inputs: [],
       nodes: [],
       edges: [],
     }
-    const out = migrateDefinitionToLatest(v2)
-    expect(out.$schema_version).toBe(2)
-    // Same instance returned when no upgrade needed.
-    expect(out).toBe(v2)
+    const out = migrateDefinitionToLatest(latest)
+    expect(out.$schema_version).toBe(3)
+    expect(out.inputs).toEqual(latest.inputs)
+    expect(out.nodes).toEqual(latest.nodes)
+    expect(out.edges).toEqual(latest.edges)
   })
 
   test('v1 upgrade does not mutate input (returns a new object)', () => {
@@ -64,14 +68,14 @@ describe('RFC-005 migrateDefinitionToLatest pure helper', () => {
       nodes: [],
       edges: [],
     }
-    const v2 = migrateDefinitionToLatest(v1)
+    const out = migrateDefinitionToLatest(v1)
     expect(v1.$schema_version).toBe(1) // original untouched
-    expect(v2.$schema_version).toBe(2)
-    expect(v2).not.toBe(v1)
+    expect(out.$schema_version).toBe(3)
+    expect(out).not.toBe(v1)
   })
 })
 
-describe('RFC-005 GET path: v1 row → v2 returned by getWorkflow', () => {
+describe('GET path: legacy row → latest definition returned by getWorkflow', () => {
   let tmp: string
   let db: DbClient
 
@@ -84,7 +88,7 @@ describe('RFC-005 GET path: v1 row → v2 returned by getWorkflow', () => {
     rmSync(tmp, { recursive: true, force: true })
   })
 
-  test('legacy v1 row → getWorkflow returns v2 definition', async () => {
+  test('legacy v1 row → getWorkflow returns latest-version definition', async () => {
     const id = ulid()
     const now = Date.now()
     // Insert raw v1 row (simulating a workflow stored before RFC-005 shipped).
@@ -106,7 +110,7 @@ describe('RFC-005 GET path: v1 row → v2 returned by getWorkflow', () => {
     const got = await getWorkflow(db, id)
     expect(got).not.toBeNull()
     const wf = got as Workflow
-    expect(wf.definition.$schema_version).toBe(2)
+    expect(wf.definition.$schema_version).toBe(3)
     // Shape otherwise unchanged.
     expect(wf.definition.inputs).toHaveLength(1)
     expect(wf.definition.nodes).toHaveLength(1)
@@ -133,7 +137,7 @@ describe('RFC-005 GET path: v1 row → v2 returned by getWorkflow', () => {
   })
 })
 
-describe('RFC-005 POST / PUT paths normalize v1 → v2 on write', () => {
+describe('POST / PUT paths normalize older versions → latest on write', () => {
   let tmp: string
   let db: DbClient
 
@@ -146,7 +150,7 @@ describe('RFC-005 POST / PUT paths normalize v1 → v2 on write', () => {
     rmSync(tmp, { recursive: true, force: true })
   })
 
-  test('createWorkflow with v1 def → DB row stores v2', async () => {
+  test('createWorkflow with v1 def → DB row stores latest version', async () => {
     const created = await createWorkflow(db, {
       name: 'new-flow',
       description: '',
@@ -158,18 +162,18 @@ describe('RFC-005 POST / PUT paths normalize v1 → v2 on write', () => {
       },
     })
     // Returned via getWorkflow which always upgrades, so we read the raw row
-    // directly to confirm the on-disk shape is v2.
+    // directly to confirm the on-disk shape lands at the latest version.
     const rows = await db.select().from(workflows).where(eq(workflows.id, created.id))
     const raw = JSON.parse(rows[0]!.definition) as { $schema_version: number }
-    expect(raw.$schema_version).toBe(2)
+    expect(raw.$schema_version).toBe(3)
   })
 
-  test('updateWorkflow with v1 def patch → DB row stores v2', async () => {
-    // Seed a workflow at v2 (createWorkflow normalizes either way).
+  test('updateWorkflow with v1 def patch → DB row stores latest version', async () => {
+    // Seed a workflow at the latest version (createWorkflow normalizes either way).
     const created = await createWorkflow(db, {
       name: 'flow',
       description: '',
-      definition: { $schema_version: 2, inputs: [], nodes: [], edges: [] },
+      definition: { $schema_version: 3, inputs: [], nodes: [], edges: [] },
     })
 
     // PUT with a v1 patch — could happen from an older client.
@@ -187,7 +191,7 @@ describe('RFC-005 POST / PUT paths normalize v1 → v2 on write', () => {
       $schema_version: number
       inputs: Array<{ kind: string; key: string; label: string }>
     }
-    expect(raw.$schema_version).toBe(2)
+    expect(raw.$schema_version).toBe(3)
     expect(raw.inputs).toEqual([{ kind: 'text', key: 'k', label: 'k' }])
   })
 })

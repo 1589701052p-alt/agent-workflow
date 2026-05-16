@@ -34,6 +34,7 @@ function run(partial: Partial<NodeRun> & { id: string }): NodeRun {
     shardKey: partial.shardKey ?? null,
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
+    clarifyIteration: partial.clarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? 1700_000_000_000,
     finishedAt: partial.finishedAt ?? 1700_000_001_000,
@@ -65,6 +66,7 @@ function renderDrawer(props: {
           nodeRunId={props.nodeRunId}
           nodeId={props.nodeId}
           workflowNodeKind={props.workflowNodeKind}
+          agentName={null}
           runs={props.runs}
           outputs={[]}
           onClose={vi.fn()}
@@ -160,6 +162,7 @@ describe('RFC-011 NodeDetailDrawer Prompt tab', () => {
             nodeRunId={r0.id}
             nodeId={r0.nodeId}
             workflowNodeKind="agent-single"
+            agentName={null}
             runs={[r0, r1]}
             outputs={[]}
             onClose={vi.fn()}
@@ -177,6 +180,7 @@ describe('RFC-011 NodeDetailDrawer Prompt tab', () => {
             nodeRunId={r1.id}
             nodeId={r1.nodeId}
             workflowNodeKind="agent-single"
+            agentName={null}
             runs={[r0, r1]}
             outputs={[]}
             onClose={vi.fn()}

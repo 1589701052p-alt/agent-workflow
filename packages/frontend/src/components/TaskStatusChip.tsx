@@ -11,6 +11,7 @@ const TONES: Record<TaskStatus, string> = {
   canceled: 'gray',
   interrupted: 'amber',
   awaiting_review: 'amber',
+  awaiting_human: 'amber',
 }
 
 export function TaskStatusChip({ status }: { status: TaskStatus }) {

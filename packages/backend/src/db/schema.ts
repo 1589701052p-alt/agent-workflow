@@ -31,6 +31,12 @@ export const agents = sqliteTable('agents', {
   steps: integer('steps'),
   maxSteps: integer('max_steps'),
   skills: text('skills').notNull().default('[]'), // JSON string[]
+  // RFC-022: agent name list (JSON string[]) of agents this one transitively
+  // requires. Closure (BFS) gets injected into the same opencode subprocess
+  // via OPENCODE_CONFIG_CONTENT; every closure member's skills are unioned
+  // and staged under OPENCODE_CONFIG_DIR/skills/. Default [] keeps legacy
+  // agents at single-agent injection behavior.
+  dependsOn: text('depends_on').notNull().default('[]'),
   frontmatterExtra: text('frontmatter_extra').notNull().default('{}'), // JSON for advanced fields
   bodyMd: text('body_md').notNull().default(''), // system prompt; may be empty
   schemaVersion: integer('schema_version').notNull().default(1),
@@ -145,6 +151,7 @@ export const tasks = sqliteTable(
         'canceled',
         'interrupted',
         'awaiting_review', // RFC-005
+        'awaiting_human', // RFC-023
       ],
     }).notNull(),
     inputs: text('inputs').notNull(), // JSON: launcher form values
@@ -190,6 +197,13 @@ export const nodeRuns = sqliteTable(
      * orthogonal to retryIndex (technical retries from process crash / timeout).
      */
     reviewIteration: integer('review_iteration').notNull().default(0),
+    /**
+     * RFC-023: counts clarify-driven regenerations (agent asked + user
+     * answered + agent re-spawned). Orthogonal to both retryIndex and
+     * reviewIteration. For an agent-multi shard child node_run, the value
+     * tracks that shard alone.
+     */
+    clarifyIteration: integer('clarify_iteration').notNull().default(0),
     status: text('status', {
       enum: [
         'pending',
@@ -201,6 +215,7 @@ export const nodeRuns = sqliteTable(
         'skipped',
         'exhausted',
         'awaiting_review', // RFC-005
+        'awaiting_human', // RFC-023
       ],
     }).notNull(),
     startedAt: integer('started_at'),
@@ -356,5 +371,56 @@ export const nodeRunEvents = sqliteTable(
   },
   (t) => ({
     nodeIdx: index('idx_events_node').on(t.nodeRunId, t.id),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// clarify_sessions — RFC-023. One row per agent reply that contained a
+// <workflow-clarify> envelope. The clarify node's node_run sits in
+// 'awaiting_human' until the user submits answers via the REST API; the
+// runtime then mints a fresh source-agent node_run (clarify_iteration + 1)
+// and the asking agent runs again with the answers injected.
+//
+// For agent-multi: each reaching shard mints its OWN clarify node_run row
+// + its own clarify_session, keyed by (clarify_node_id, source_shard_key).
+// -----------------------------------------------------------------------------
+export const clarifySessions = sqliteTable(
+  'clarify_sessions',
+  {
+    id: text('id').primaryKey(), // ULID
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    sourceAgentNodeId: text('source_agent_node_id').notNull(),
+    // For agent-multi this is the shard child node_run id (one per shard);
+    // for agent-single it is the single asking node_run id.
+    sourceAgentNodeRunId: text('source_agent_node_run_id').notNull(),
+    sourceShardKey: text('source_shard_key'), // NULL for agent-single
+    clarifyNodeId: text('clarify_node_id').notNull(),
+    clarifyNodeRunId: text('clarify_node_run_id').notNull(),
+    // matches the source agent node_run's clarify_iteration AT TIME OF ASKING
+    iterationIndex: integer('iteration_index').notNull(),
+    questionsJson: text('questions_json').notNull(), // ClarifyQuestion[]
+    answersJson: text('answers_json'), // ClarifyAnswer[]; NULL until submitted
+    status: text('status', {
+      enum: ['awaiting_human', 'answered', 'canceled'],
+    })
+      .notNull()
+      .default('awaiting_human'),
+    truncationWarningsJson: text('truncation_warnings_json'), // JSON: { code, detail }[]
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    answeredAt: integer('answered_at'),
+    answeredBy: text('answered_by'),
+  },
+  (t) => ({
+    taskIdx: index('idx_clarify_sessions_task').on(t.taskId),
+    clarifyRunIdx: index('idx_clarify_sessions_clarify_run').on(
+      t.clarifyNodeRunId,
+      t.iterationIndex,
+    ),
+    sourceRunIdx: index('idx_clarify_sessions_source_run').on(t.sourceAgentNodeRunId),
+    nodeShardIdx: index('idx_clarify_sessions_node_shard').on(t.clarifyNodeId, t.sourceShardKey),
   }),
 )

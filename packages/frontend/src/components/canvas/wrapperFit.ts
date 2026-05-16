@@ -21,6 +21,7 @@ export const DEFAULT_NODE_SIZE_BY_KIND: Record<NodeKind, { width: number; height
   input: { width: 220, height: 120 },
   output: { width: 220, height: 140 },
   review: { width: 280, height: 180 },
+  clarify: { width: 240, height: 140 },
   'wrapper-git': { width: 240, height: 160 },
   'wrapper-loop': { width: 240, height: 160 },
 }

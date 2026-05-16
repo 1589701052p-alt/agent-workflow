@@ -7,6 +7,7 @@
 **进行中 RFC**：
 
 - [RFC-022](./design/RFC-022-agent-dependencies/proposal.md) Agent `dependsOn` 其他 Agent + 闭包注入 inline JSON 与 skills 并集（Draft，待用户确认 proposal/design/plan 后进入实现）
+- [RFC-023](./design/RFC-023-agent-clarify/proposal.md) 反问澄清节点（Clarify）：agent 主动反问 / 单选 + 多选 / 每题人工补充输入框（单选互斥 / 多选不互斥）/ 反向拖动建反问环（agent → clarify → agent，两条 edge，第二条可删）/ agent-multi 每 shard 独立反问 / `<workflow-clarify>` JSON envelope 与 `<workflow-output>` 二选一 / 4 个 builtin token (`__clarify_questions__` / `__clarify_answers__` / `__clarify_iteration__` / `__clarify_remaining__`) / 答案动态注入触发 clarify_iteration+1 重跑 / awaiting_human 状态优先级高于 awaiting_review / 裸节点 validator warning 引导套 wrapper-loop（**In Progress** — PR-A 实施中：shared schemas + DB migration 0007 + validator + schema v2→v3 migrator）
 
 **最近完成 RFC（待 push）**：
 

@@ -47,12 +47,18 @@ describe('RFC-005 NODE_KIND + WORKFLOW_SCHEMA_VERSION', () => {
     }
   })
 
-  test('WORKFLOW_SCHEMA_VERSION bumped to 2', () => {
-    expect(WORKFLOW_SCHEMA_VERSION).toBe(2)
+  // Note: when this test was written (RFC-005), WORKFLOW_SCHEMA_VERSION was
+  // bumped from 1 → 2 for the addition of the 'review' node. RFC-023 has
+  // since bumped it to 3 for the 'clarify' node. The assertion here loosens
+  // to "≥ 2" so the RFC-005 schema invariants stay locked without the test
+  // breaking on every future bump.
+  test('WORKFLOW_SCHEMA_VERSION at or above 2 (RFC-005 floor)', () => {
+    expect(WORKFLOW_SCHEMA_VERSION).toBeGreaterThanOrEqual(2)
   })
 
-  test('WORKFLOW_SCHEMA_VERSIONS lists both 1 and 2 (backward read)', () => {
-    expect([...WORKFLOW_SCHEMA_VERSIONS]).toEqual([1, 2])
+  test('WORKFLOW_SCHEMA_VERSIONS includes 1 and 2 (backward read after RFC-005)', () => {
+    expect([...WORKFLOW_SCHEMA_VERSIONS]).toContain(1)
+    expect([...WORKFLOW_SCHEMA_VERSIONS]).toContain(2)
   })
 
   test('WorkflowDefinitionSchema accepts $schema_version=1', () => {
@@ -75,9 +81,9 @@ describe('RFC-005 NODE_KIND + WORKFLOW_SCHEMA_VERSION', () => {
     expect(out.$schema_version).toBe(2)
   })
 
-  test('WorkflowDefinitionSchema rejects $schema_version=3', () => {
+  test('WorkflowDefinitionSchema rejects far-future $schema_version=99', () => {
     expect(() =>
-      WorkflowDefinitionSchema.parse({ $schema_version: 3, inputs: [], nodes: [], edges: [] }),
+      WorkflowDefinitionSchema.parse({ $schema_version: 99, inputs: [], nodes: [], edges: [] }),
     ).toThrow()
   })
 
@@ -171,6 +177,7 @@ describe('RFC-005 AgentOutputKind + outputKinds sidecar', () => {
       syncOutputsOnIterate: true,
       permission: {},
       skills: [],
+      dependsOn: [],
       frontmatterExtra: {},
       bodyMd: '',
       schemaVersion: 1,
@@ -192,6 +199,7 @@ describe('RFC-005 AgentOutputKind + outputKinds sidecar', () => {
       syncOutputsOnIterate: true,
       permission: {},
       skills: [],
+      dependsOn: [],
       frontmatterExtra: {},
       bodyMd: '',
       schemaVersion: 1,

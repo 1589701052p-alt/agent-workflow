@@ -6,13 +6,18 @@
 // RFC-005: $schema_version bumped from 1 to 2 to mark the addition of the
 // 'review' node kind. v1 documents stay readable; the transparent v1→v2
 // upgrade lives in the workflow GET path (see backend service.workflow).
+//
+// RFC-023: $schema_version bumped from 2 to 3 for the new 'clarify' node
+// kind (agent-initiated clarification questions). v1 / v2 documents stay
+// readable; both upgrade transparently — no clarify node ever appeared in
+// older versions, so the upgrade is purely a metadata bump.
 
 import { z } from 'zod'
 
 /** Currently-written schema version. New writes always set this value. */
-export const WORKFLOW_SCHEMA_VERSION = 2
-/** Set of versions GET can return; v1 is read-only and auto-upgraded on access. */
-export const WORKFLOW_SCHEMA_VERSIONS = [1, 2] as const
+export const WORKFLOW_SCHEMA_VERSION = 3
+/** Set of versions GET can return; v1/v2 are read-only and auto-upgraded on access. */
+export const WORKFLOW_SCHEMA_VERSIONS = [1, 2, 3] as const
 
 // --- enums shared across multiple shapes ---
 
@@ -24,6 +29,7 @@ export const NODE_KIND = [
   'wrapper-git',
   'wrapper-loop',
   'review', // RFC-005: human-in-the-loop review gate
+  'clarify', // RFC-023: agent-initiated clarification questions
 ] as const
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
@@ -115,11 +121,11 @@ export type WorkflowOutputBinding = z.infer<typeof WorkflowOutputBindingSchema>
 
 export const WorkflowDefinitionSchema = z.object({
   /**
-   * Both v1 (pre-RFC-005) and v2 (RFC-005+) are accepted on read. New writes
-   * always set 2 — the GET path transparently upgrades v1 docs (see backend
-   * services/workflow.ts).
+   * v1 (pre-RFC-005), v2 (RFC-005+), and v3 (RFC-023+) are all accepted on
+   * read. New writes always set the latest version — the GET path transparently
+   * upgrades older docs (see backend services/workflow.ts).
    */
-  $schema_version: z.union([z.literal(1), z.literal(2)]),
+  $schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   inputs: z.array(WorkflowInputSchema).default([]),
   nodes: z.array(WorkflowNodeSchema).default([]),
   edges: z.array(WorkflowEdgeSchema).default([]),
@@ -181,3 +187,37 @@ export const WorkflowValidationResultSchema = z.object({
   issues: z.array(WorkflowValidationIssueSchema),
 })
 export type WorkflowValidationResult = z.infer<typeof WorkflowValidationResultSchema>
+
+// --- RFC-023 Clarify node ----------------------------------------------------
+//
+// Leaf node, exactly 1 input port ('questions') + 1 output port ('answers'),
+// both hard-coded — not user-configurable. The clarify node is wired to its
+// asking agent by a reverse-drag interaction in the canvas: dragging from the
+// clarify input handle onto an agent-{single,multi} node mints two edges, one
+// each direction, using the agent's system-level `__clarify__` / `__clarify_response__`
+// ports (those ports exist only in workflow.definition.edges; never in
+// agent.outputs / DB).
+
+/** Hard-coded port name on the clarify node. Do not rename without coordinating
+ *  with packages/shared/src/clarify.ts + the canvas drag helper. */
+export const CLARIFY_INPUT_PORT_NAME = 'questions' as const
+export const CLARIFY_OUTPUT_PORT_NAME = 'answers' as const
+
+/** Agent-side system ports synthesised by the reverse-drag interaction. */
+export const CLARIFY_SOURCE_PORT_NAME = '__clarify__' as const
+export const CLARIFY_RESPONSE_TARGET_PORT_NAME = '__clarify_response__' as const
+
+export const ClarifyNodeSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.literal('clarify'),
+    position: XYSchema.optional(),
+    /** Display title in the canvas / inspector. */
+    title: z.string().default(''),
+    /** Free-form description for canvas authors; not used at runtime. */
+    description: z.string().default(''),
+    /** Reserved for future per-user assignment; UI does not expose it in v1. */
+    assignee: z.string().optional(),
+  })
+  .passthrough()
+export type ClarifyNode = z.infer<typeof ClarifyNodeSchema>

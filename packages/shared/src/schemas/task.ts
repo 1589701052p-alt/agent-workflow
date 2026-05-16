@@ -12,6 +12,11 @@ export const TASK_STATUS = [
   // RFC-005: at least one review node in the task is waiting on human decision.
   // Derived from node_runs; does NOT count against maxConcurrentNodes (idle).
   'awaiting_review',
+  // RFC-023: at least one clarify node in the task is waiting on user answers.
+  // Has HIGHER priority than awaiting_review at the task level: when both
+  // states coexist, recomputeTaskStatus reports awaiting_human (agent actively
+  // blocked on input vs. user reviewing finished output).
+  'awaiting_human',
 ] as const
 export const TaskStatusSchema = z.enum(TASK_STATUS)
 export type TaskStatus = z.infer<typeof TaskStatusSchema>
@@ -100,6 +105,10 @@ export const NODE_RUN_STATUS = [
   'exhausted',
   // RFC-005: review nodes sit here until the user approves/rejects/iterates.
   'awaiting_review',
+  // RFC-023: clarify nodes sit here until the user submits answers. The
+  // upstream agent that produced <workflow-clarify> is still 'done' — the
+  // clarify node, not the agent, is what carries this state.
+  'awaiting_human',
 ] as const
 export const NodeRunStatusSchema = z.enum(NODE_RUN_STATUS)
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>
@@ -118,6 +127,13 @@ export const NodeRunSchema = z.object({
    * counts purely technical retries like process crashes).
    */
   reviewIteration: z.number().int().nonnegative().default(0),
+  /**
+   * RFC-023: bumped each time the user submits clarify answers and the agent
+   * is re-spawned for another round. Orthogonal to retryIndex (technical
+   * retries) and reviewIteration (post-output review rounds). For an
+   * agent-multi shard child node_run, the value is per-shard.
+   */
+  clarifyIteration: z.number().int().nonnegative().default(0),
   status: NodeRunStatusSchema,
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),

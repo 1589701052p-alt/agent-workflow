@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { TaskStatusSchema, TaskSummarySchema } from './task'
 import { NodeRunStatusSchema } from './task'
 import { DocVersionDecisionSchema, ReviewCommentSchema, ReviewDecisionKindSchema } from './review'
+import { ClarifySessionSchema, ClarifySessionSummarySchema } from './clarify'
 
 // -----------------------------------------------------------------------------
 // /ws/tasks/{taskId}
@@ -105,6 +106,35 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     nodeRunId: z.string(),
     docVersionId: z.string(),
     comment: ReviewCommentSchema,
+  }),
+  // -------------------------------------------------------------------------
+  // RFC-023 clarify events. Broadcast on the same /ws/tasks/{taskId} channel
+  // as review.* events. Payloads carry sourceShardKey so subscribers can
+  // route updates to the correct shard tab in the detail UI.
+  // -------------------------------------------------------------------------
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify.created'),
+    /** node_runs.id of the clarify node instance (one per shard for agent-multi). */
+    nodeRunId: z.string(),
+    /** Workflow node id of the clarify node. */
+    clarifyNodeId: z.string(),
+    /** Source-agent shard key when applicable; null for agent-single. */
+    sourceShardKey: z.string().nullable(),
+    /** New iterationIndex for this clarify_session. */
+    iterationIndex: z.number().int().nonnegative(),
+    session: ClarifySessionSummarySchema,
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify.answered'),
+    nodeRunId: z.string(),
+    clarifyNodeId: z.string(),
+    sourceShardKey: z.string().nullable(),
+    iterationIndex: z.number().int().nonnegative(),
+    /** Newly minted source agent node_run id; subscribers can switch focus. */
+    rerunNodeRunId: z.string(),
+    session: ClarifySessionSchema,
   }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>

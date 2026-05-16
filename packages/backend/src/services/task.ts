@@ -650,6 +650,7 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     shardKey: r.shardKey,
     retryIndex: r.retryIndex,
     reviewIteration: r.reviewIteration,
+    clarifyIteration: r.clarifyIteration,
     status: r.status,
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,
