@@ -35,6 +35,8 @@ export interface Resources {
     sidebarCountLabel: string
     sidebarCollapse: string
     sidebarExpand: string
+    sidebarJumpPrev: string
+    sidebarJumpNext: string
     commentEdit: string
     commentCopy: string
     commentCopied: string
@@ -77,6 +79,13 @@ export interface Resources {
     unknownVersion: string
     downloadMarkdown: string
     downloadMarkdownTitle: string
+    // Decision dialogs (replaces window.confirm / prompt / alert).
+    approveDialogTitle: string
+    iterateDialogTitle: string
+    rejectDialogTitle: string
+    rejectReasonLabel: string
+    dialogConfirm: string
+    dialogCancel: string
   }
   auth: {
     title: string
@@ -539,6 +548,14 @@ export interface Resources {
     skillsPickerLoading: string
     skillsPickerEmpty: string
     skillsPickerLoadFailed: string
+    fieldDependsOn: string
+    fieldDependsOnHint: string
+    fieldDependsOnPlaceholder: string
+    dependsPickerLabel: string
+    dependsPickerLoading: string
+    dependsPickerEmpty: string
+    dependsPickerLoadFailed: string
+    fieldDependencyTree: string
     fieldReadonly: string
     fieldReadonlyHint: string
     fieldSyncOutputsOnIterate: string
@@ -586,6 +603,24 @@ export interface Resources {
       }
     }
   }
+  // RFC-022: shared visual for the agent dependsOn closure (DependencyTree
+  // component + buildDependencyTree helper). Used by AgentForm edit preview
+  // and node-run Stats tab; keys live in a top-level section so both call
+  // sites import them via `t('dependencyTree.X')`.
+  dependencyTree: {
+    skillCount: string
+    readonly: string
+    writes: string
+    seeAbove: string
+    cycleHeading: string
+  }
+  dependencyTreePreview: {
+    emptyHint: string
+    loading: string
+    errorSelf: string
+    errorNotFound: string
+    errorGeneric: string
+  }
   nodeDrawer: {
     kindLabel: string
     tabPrompt: string
@@ -611,6 +646,7 @@ export interface Resources {
     statCacheRead: string
     statError: string
     statRetries: string
+    statDependencyTree: string
     attempt: string
     noEventsMatch: string
     retryButton: string
@@ -747,6 +783,8 @@ export const zhCN: Resources = {
     sidebarCountLabel: '评审意见 · {{count}}',
     sidebarCollapse: '折叠侧栏',
     sidebarExpand: '展开侧栏',
+    sidebarJumpPrev: '上一条评审意见',
+    sidebarJumpNext: '下一条评审意见',
     commentEdit: '编辑',
     commentCopy: '复制',
     commentCopied: '已复制',
@@ -790,6 +828,12 @@ export const zhCN: Resources = {
     unknownVersion: '未知版本：{{id}}。已跳回当前版。',
     downloadMarkdown: '下载 Markdown',
     downloadMarkdownTitle: '下载 {{filename}}',
+    approveDialogTitle: '通过此次评审？',
+    iterateDialogTitle: '基于评审意见迭代？',
+    rejectDialogTitle: '退回此次评审',
+    rejectReasonLabel: '退回原因',
+    dialogConfirm: '确认',
+    dialogCancel: '取消',
   },
   auth: {
     title: '连接到守护进程',
@@ -1262,6 +1306,15 @@ export const zhCN: Resources = {
     skillsPickerLoading: '加载中…',
     skillsPickerEmpty: '暂无可选技能（已全部添加 / 仓库为空）',
     skillsPickerLoadFailed: '加载技能列表失败；仍可在下方手动输入。',
+    fieldDependsOn: '依赖的其他代理',
+    fieldDependsOnHint:
+      '运行时会把这些代理（递归含它们的依赖）以及它们的技能一并加载进同一个 opencode 子进程，主代理可以通过 task / subagent 工具调用它们。',
+    fieldDependsOnPlaceholder: '输入代理名后按 Enter',
+    dependsPickerLabel: '从已有代理中选择…',
+    dependsPickerLoading: '加载中…',
+    dependsPickerEmpty: '暂无可选代理（已全部添加 / 仓库为空）',
+    dependsPickerLoadFailed: '加载代理列表失败；仍可在下方手动输入。',
+    fieldDependencyTree: '闭包依赖（预览）',
     fieldReadonly: '只读',
     fieldReadonlyHint: '只读 agent 可在同一 task 中并发；可写 agent 会串行。',
     fieldSyncOutputsOnIterate: '文档迭代期间是否同步刷新本代理生成的其他文档',
@@ -1312,6 +1365,20 @@ export const zhCN: Resources = {
       },
     },
   },
+  dependencyTree: {
+    skillCount: '{{count}} 个技能',
+    readonly: '只读',
+    writes: '可写',
+    seeAbove: '↑ 见上',
+    cycleHeading: '依赖闭包检测到环：',
+  },
+  dependencyTreePreview: {
+    emptyHint: '暂未声明依赖代理；上方添加后会在此实时显示闭包。',
+    loading: '加载闭包中…',
+    errorSelf: '代理不能依赖自身。',
+    errorNotFound: '未找到代理：{{names}}',
+    errorGeneric: '闭包预览失败（{{code}}）',
+  },
   nodeDrawer: {
     kindLabel: 'node_run',
     tabPrompt: 'Prompt',
@@ -1337,6 +1404,7 @@ export const zhCN: Resources = {
     statCacheRead: '缓存读取',
     statError: '错误',
     statRetries: '重试列表',
+    statDependencyTree: '依赖闭包',
     attempt: '第 {{n}} 次',
     noEventsMatch: '没有事件匹配当前过滤。',
     retryButton: '重试节点',

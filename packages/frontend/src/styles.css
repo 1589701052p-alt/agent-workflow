@@ -2588,12 +2588,49 @@ code {
 
 /* ---- Review detail (RFC-005) ---- */
 
+/* Lock the review-detail page to the available viewport height so the body
+   + comment column become the only scrollable region. Mirrors the
+   `.page--task-detail` / `.page--editor` chrome trim. The page header keeps
+   the approve / iterate / reject buttons pinned at the top-right; the
+   scroll region below fills whatever is left. */
+.page--review-detail {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.content:has(.page--review-detail) {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.page--review-detail .page__header {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.page--review-detail .review-detail__diff-toolbar {
+  flex: 0 0 auto;
+}
+
 .review-detail__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;
   align-items: start;
-  margin-top: 16px;
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Only the vertical axis scrolls. A horizontal scrollbar on the layout
+     container would be wrong — wide markdown elements (`<pre>`, tables,
+     math blocks) have their own `overflow-x: auto` inside `.prose`, so
+     the page container should never need to scroll sideways. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .review-detail__body {
@@ -2602,10 +2639,15 @@ code {
 
 /* Bubble column: position: relative anchors absolutely-positioned bubbles
    inside it. Bubbles are placed at the vertical offset of their anchor
-   text in the rendered markdown so they scroll along with the document. */
+   text in the rendered markdown so they scroll along with the document.
+   Width matches the grid cell (driven by the user-resizable `sidebarWidth`
+   localStorage value via the inline style on `.review-detail__layout`),
+   not a hard-coded 280px — otherwise a non-default sidebar width would
+   make the bubble column extend past its grid cell and get clipped by
+   `.review-detail__layout`'s `overflow-x: hidden`. */
 .review-detail__bubbles {
   position: relative;
-  width: 280px;
+  width: 100%;
 }
 
 .review-detail__bubbles-empty {
@@ -2648,6 +2690,37 @@ code {
 .review-detail__sidebar-toggle:hover {
   background: var(--border);
   color: var(--text);
+}
+
+/* ▲ / ▼ triangle buttons in the sidebar header. Mirror the J/K keyboard
+   shortcut for jumping to the previous / next comment in doc order. The
+   pair sits to the right of the comment count and to the left of the
+   collapse toggle. Disabled state dims the arrow when at the first /
+   last comment. */
+.review-detail__sidebar-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+.review-detail__sidebar-jump-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+.review-detail__sidebar-jump-btn:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+.review-detail__sidebar-jump-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 /* RFC-009: 4px resizer pinned to the left edge of the bubble column. We
@@ -2952,14 +3025,23 @@ mark.comment-anchor[data-active='true'] {
   }
 }
 
-.review-detail__footer {
-  display: flex;
-  gap: 12px;
+/* Action buttons (approve / iterate / reject) now live in the page
+   header's right slot alongside the download button. They're grouped in
+   their own pill-style cluster so the visual order reads:
+       [Download] | [Approve] [Iterate] [Reject]
+   …with a thin vertical separator between the two groups. */
+.review-detail__decision-actions {
+  display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  gap: 6px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.review-detail__error {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
 }
 
 @media (max-width: 720px) {
@@ -2974,6 +3056,104 @@ mark.comment-anchor[data-active='true'] {
     position: static;
     margin-bottom: 8px;
   }
+}
+
+/* ---- Decision dialog (Approve / Iterate / Reject) ----
+   Replaces window.confirm / prompt / alert on the review detail page so
+   the three decision flows use the same styled modal as the rest of the
+   app (matches `.agent-import__overlay` chrome). Reject also carries an
+   inline reason textarea + a `__error` chip the page sets when the user
+   tries to confirm with an empty reason. */
+.review-decision-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 96px 24px 24px;
+  z-index: 1000;
+}
+.review-decision-dialog__panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 144px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.25),
+    0 4px 10px rgba(0, 0, 0, 0.12);
+  overflow: auto;
+}
+.review-decision-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.review-decision-dialog__header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.review-decision-dialog__close {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.review-decision-dialog__close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.review-decision-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.review-decision-dialog__body p {
+  margin: 0;
+  line-height: 1.5;
+}
+.review-decision-dialog__warn {
+  background: rgba(255, 180, 50, 0.12);
+  border-left: 3px solid var(--accent, #f0a020);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+.review-decision-dialog__label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.review-decision-dialog__textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+}
+.review-decision-dialog__error {
+  margin: 0;
+  color: var(--danger, #d04040);
+  font-size: 12px;
+}
+.review-decision-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
 }
 
 /* RFC-010 — Markdown 渲染态内联 diff 高亮（仅作用于 MarkdownDiffView 容器内）。 */

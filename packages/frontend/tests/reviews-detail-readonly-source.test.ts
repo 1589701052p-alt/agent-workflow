@@ -42,13 +42,23 @@ describe('RFC-013 reviews.detail.tsx — readonly historical view', () => {
     expect(s).toMatch(/onKey\s*=\s*\(e:[^)]*\)\s*=>\s*\{[\s\S]*?if\s*\(\s*readonly\s*\)\s*return/)
     // readonly is in the effect's deps array.
     expect(s).toMatch(/\],\s*\)\s*$/m) // trailing closer exists (sanity)
-    expect(s).toMatch(/editingId,\s*\n\s*readonly,\s*\n\s*\]/m)
+    // `readonly` is in the keyboard effect's deps array. We don't lock the
+    // exact formatting (prettier may collapse it to a single line) — just
+    // that the keyword appears alongside `editingId` inside a deps array.
+    expect(s).toMatch(/editingId[\s\S]{0,200}readonly\s*\]/m)
   })
 
-  test('decision footer + popover are gated behind !readonly', () => {
+  test('decision buttons + dialog + popover are gated behind !readonly', () => {
     const s = src()
-    // Decision footer wrapped: {!readonly && (<footer ...>).
-    expect(s).toMatch(/\{\s*!readonly\s*&&\s*\(\s*<footer/)
+    // The three decision buttons live in a header-actions cluster wrapped
+    // by `{!readonly && (<div className="review-detail__decision-actions" ...>)}`.
+    // (May 2026: the bottom <footer> was retired when the buttons moved to
+    // the top-right of the page.)
+    expect(s).toMatch(
+      /\{\s*!readonly\s*&&\s*\(\s*<div\s+className="review-detail__decision-actions"/,
+    )
+    // The styled in-app decision dialog is also gated.
+    expect(s).toMatch(/\{\s*!readonly\s*&&\s*decisionDialog\s*!==\s*null\s*&&/)
     // Popover wrapped: {!readonly && popover !== null && ...}.
     expect(s).toMatch(/\{\s*!readonly\s*&&\s*popover\s*!==\s*null\s*&&/)
   })

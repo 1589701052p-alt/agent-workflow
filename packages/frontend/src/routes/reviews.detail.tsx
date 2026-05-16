@@ -425,6 +425,18 @@ function ReviewDetailPage() {
     },
   })
 
+  // RFC followup: replace browser-native confirm / prompt / alert for the
+  // approve / iterate / reject buttons with a styled in-app dialog. State
+  // holds the kind + any kind-specific payload (draft count for approve,
+  // willRerun string for iterate / reject). `reject` also drives a
+  // controlled textarea (reason). When `null`, no dialog is open.
+  const [decisionDialog, setDecisionDialog] = useState<
+    | null
+    | { kind: 'approve'; draftCount: number }
+    | { kind: 'iterate'; willRerun: string; noComments: boolean }
+    | { kind: 'reject'; willRerun: string; reason: string; reasonError: boolean }
+  >(null)
+
   const onApprove = useCallback(async () => {
     if (detail.data === undefined) return
     const draftCount = (
@@ -435,50 +447,62 @@ function ReviewDetailPage() {
       })
     ).filter((d) => d.text.trim().length > 0).length
     if (draftCount > 0) {
-      const ok = window.confirm(
-        t('reviews.approveDraftWarning', { count: draftCount }) +
-          '\n\n' +
-          t('reviews.approveDraftConfirm'),
-      )
-      if (!ok) return
+      setDecisionDialog({ kind: 'approve', draftCount })
+      return
     }
     await submitDecision.mutateAsync({
       decision: 'approved',
       reviewIteration: detail.data.summary.reviewIteration,
     })
-  }, [detail.data, nodeRunId, submitDecision, t])
+  }, [detail.data, nodeRunId, submitDecision])
 
-  const onReject = useCallback(async () => {
+  const onReject = useCallback(() => {
     if (detail.data === undefined) return
     const willRerun = detail.data.rerunnableOnReject.join(', ') || '(none)'
-    const reason = window.prompt(t('reviews.rejectPrompt', { willRerun }), '')
-    if (reason === null) return
-    const trimmed = reason.trim()
-    if (trimmed.length === 0) {
-      window.alert(t('reviews.rejectReasonRequired'))
+    setDecisionDialog({ kind: 'reject', willRerun, reason: '', reasonError: false })
+  }, [detail.data])
+
+  const onIterate = useCallback(() => {
+    if (detail.data === undefined) return
+    const willRerun = detail.data.rerunnableOnIterate.join(', ') || '(direct upstream)'
+    setDecisionDialog({
+      kind: 'iterate',
+      willRerun,
+      noComments: detail.data.comments.length === 0,
+    })
+  }, [detail.data])
+
+  const confirmDecisionDialog = useCallback(async () => {
+    if (decisionDialog === null || detail.data === undefined) return
+    if (decisionDialog.kind === 'approve') {
+      setDecisionDialog(null)
+      await submitDecision.mutateAsync({
+        decision: 'approved',
+        reviewIteration: detail.data.summary.reviewIteration,
+      })
       return
     }
+    if (decisionDialog.kind === 'iterate') {
+      setDecisionDialog(null)
+      await submitDecision.mutateAsync({
+        decision: 'iterated',
+        reviewIteration: detail.data.summary.reviewIteration,
+      })
+      return
+    }
+    // reject — require a non-empty trimmed reason.
+    const trimmed = decisionDialog.reason.trim()
+    if (trimmed.length === 0) {
+      setDecisionDialog({ ...decisionDialog, reasonError: true })
+      return
+    }
+    setDecisionDialog(null)
     await submitDecision.mutateAsync({
       decision: 'rejected',
       rejectReason: trimmed,
       reviewIteration: detail.data.summary.reviewIteration,
     })
-  }, [detail.data, submitDecision, t])
-
-  const onIterate = useCallback(async () => {
-    if (detail.data === undefined) return
-    if (detail.data.comments.length === 0) {
-      const ok = window.confirm(t('reviews.iterateNoCommentsWarning'))
-      if (!ok) return
-    }
-    const willRerun = detail.data.rerunnableOnIterate.join(', ') || '(direct upstream)'
-    const ok = window.confirm(t('reviews.iterateConfirm', { willRerun }))
-    if (!ok) return
-    await submitDecision.mutateAsync({
-      decision: 'iterated',
-      reviewIteration: detail.data.summary.reviewIteration,
-    })
-  }, [detail.data, submitDecision, t])
+  }, [decisionDialog, detail.data, submitDecision])
 
   // Wrap each comment's selectedText in <mark data-comment-id> inside the
   // rendered markdown DOM. Diff mode renders a different component so we
@@ -627,23 +651,80 @@ function ReviewDetailPage() {
     if (el !== null) el.setAttribute('data-active', 'true')
   }, [activeCommentId, sortedComments, diffMode])
 
-  const onBubbleClick = useCallback((commentId: string) => {
-    setActiveCommentId(commentId)
+  // When the user clicks a bubble OR hits the ▲/▼ arrows OR J/K, we call
+  // `setActiveCommentId(target)` and start a programmatic smooth scroll
+  // toward the target anchor. The IntersectionObserver scroll-spy below
+  // fires *during* that scroll for every anchor that briefly becomes
+  // "topmost intersecting", which races with — and clobbers — our
+  // intentional active id (the user clicks ▼ but lands on whichever
+  // anchor happens to be scrolling past at observer-callback time).
+  // We suppress the scroll-spy for a short window after each programmatic
+  // jump using this timestamp ref. Smooth scrollIntoView typically settles
+  // within ~400ms on local docs; 800ms gives long-distance jumps headroom
+  // without blocking real reading-position updates for long.
+  const suppressScrollSpyUntilRef = useRef<number>(0)
+
+  const scrollToCommentAnchor = useCallback((commentId: string) => {
     const el = markdownRef.current?.querySelector<HTMLElement>(
       `mark.comment-anchor[data-comment-id="${commentId}"]`,
     )
-    if (el !== null && el !== undefined) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
+    if (el === null || el === undefined) return
+    suppressScrollSpyUntilRef.current = Date.now() + 800
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
+
+  const onBubbleClick = useCallback(
+    (commentId: string) => {
+      setActiveCommentId(commentId)
+      scrollToCommentAnchor(commentId)
+    },
+    [scrollToCommentAnchor],
+  )
+
+  // Shared "jump to next / prev comment" helper. Used by both the J/K
+  // keyboard shortcut and the up/down triangle buttons in the sidebar
+  // header. Doc order = sortedComments (anchor.offsetStart asc), which
+  // also matches the bubble column's visual order.
+  const jumpComment = useCallback(
+    (direction: 'next' | 'prev') => {
+      const comments = sortedComments
+      if (comments.length === 0) return
+      const currentIdx =
+        activeCommentId === null ? -1 : comments.findIndex((c) => c.id === activeCommentId)
+      const nextIdx =
+        direction === 'next'
+          ? Math.min(currentIdx + 1, comments.length - 1)
+          : Math.max(currentIdx - 1, 0)
+      const target = comments[nextIdx]
+      if (target === undefined) return
+      setActiveCommentId(target.id)
+      scrollToCommentAnchor(target.id)
+    },
+    [sortedComments, activeCommentId, scrollToCommentAnchor],
+  )
+
+  // Derived enable/disable state for the up/down triangle buttons. We
+  // disable the up arrow when the active comment is the first (or none
+  // is active and the list is empty) and the down arrow at the tail.
+  // Empty list → both disabled. No active comment → both enabled so the
+  // user can jump into the list in either direction.
+  const currentCommentIdx =
+    activeCommentId === null ? -1 : sortedComments.findIndex((c) => c.id === activeCommentId)
+  const canJumpPrev = sortedComments.length > 0 && currentCommentIdx !== 0
+  const canJumpNext = sortedComments.length > 0 && currentCommentIdx !== sortedComments.length - 1
 
   // Scroll-spy: hook IntersectionObserver to the rendered DOM after each
   // markdown rerender. Currently a simple "top visible anchor in viewport"
   // heuristic — keeps the sidebar tracking the user's reading position.
+  // While a programmatic jump (bubble click / ▲▼ / J/K) is in flight, the
+  // smooth scroll fires intersection events for every anchor it sweeps
+  // past — without suppression those would clobber our intentional active
+  // id, leaving the user landed on the wrong comment.
   useEffect(() => {
     if (markdownRef.current === null || activeBody === undefined) return
     const observer = new IntersectionObserver(
       (entries) => {
+        if (Date.now() < suppressScrollSpyUntilRef.current) return
         const top = entries
           .filter((e) => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]
@@ -714,41 +795,12 @@ function ReviewDetailPage() {
       if (k === 'a') void onApprove()
       else if (k === 'r') void onReject()
       else if (k === 'i') void onIterate()
-      else if (k === 'j' || k === 'k') {
-        // Jump to next / prev comment in doc order (sortedComments is
-        // already sorted by anchor.offsetStart, matching the bubble
-        // column's visual order).
-        const comments = sortedComments
-        if (comments.length === 0) return
-        const currentIdx =
-          activeCommentId === null ? -1 : comments.findIndex((c) => c.id === activeCommentId)
-        const nextIdx =
-          k === 'j' ? Math.min(currentIdx + 1, comments.length - 1) : Math.max(currentIdx - 1, 0)
-        const target = comments[nextIdx]
-        if (target !== undefined) {
-          setActiveCommentId(target.id)
-          const el = markdownRef.current?.querySelector(
-            `mark.comment-anchor[data-comment-id="${target.id}"]`,
-          )
-          if (el !== null && el !== undefined) {
-            ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }
-        }
-      }
+      else if (k === 'j') jumpComment('next')
+      else if (k === 'k') jumpComment('prev')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [
-    popover,
-    onApprove,
-    onReject,
-    onIterate,
-    sortedComments,
-    activeCommentId,
-    diffMode,
-    editingId,
-    readonly,
-  ])
+  }, [popover, onApprove, onReject, onIterate, jumpComment, diffMode, editingId, readonly])
 
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {
@@ -805,7 +857,7 @@ function ReviewDetailPage() {
   }
 
   return (
-    <div className="page review-detail">
+    <div className="page review-detail page--review-detail">
       <header className="page__header review-detail__page-header">
         <div className="review-detail__page-header-text">
           <h1>
@@ -846,6 +898,34 @@ function ReviewDetailPage() {
             </span>
             {t('reviews.downloadMarkdown')}
           </button>
+          {!readonly && (
+            <div className="review-detail__decision-actions" role="group" aria-label="decisions">
+              <button
+                type="button"
+                className="btn btn--sm btn--primary"
+                disabled={!isAwaiting || submitDecision.isPending}
+                onClick={() => void onApprove()}
+              >
+                {t('reviews.approveButton')}
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={!isAwaiting || submitDecision.isPending}
+                onClick={() => onIterate()}
+              >
+                {t('reviews.iterateButton')}
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm btn--danger"
+                disabled={!isAwaiting || submitDecision.isPending}
+                onClick={() => onReject()}
+              >
+                {t('reviews.rejectButton')}
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -974,11 +1054,38 @@ function ReviewDetailPage() {
               role="separator"
               aria-orientation="vertical"
             />
-            {/* RFC-009-T5: sticky header — count + collapse toggle. */}
+            {/* RFC-009-T5: sticky header — count + jump arrows + collapse
+                toggle. The two triangle buttons mirror the J/K keyboard
+                shortcut: ▲ jumps to the previous comment in doc order, ▼
+                jumps to the next. Disabled at the boundaries so the user
+                gets visual feedback when they're at the first / last
+                comment instead of the click silently no-op'ing. */}
             <header className="review-detail__sidebar-header">
               <span className="review-detail__sidebar-count">
                 {t('reviews.sidebarCountLabel', { count: sortedComments.length })}
               </span>
+              <div className="review-detail__sidebar-jump" role="group">
+                <button
+                  type="button"
+                  className="review-detail__sidebar-jump-btn"
+                  aria-label={t('reviews.sidebarJumpPrev')}
+                  title={t('reviews.sidebarJumpPrev')}
+                  disabled={!canJumpPrev}
+                  onClick={() => jumpComment('prev')}
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  className="review-detail__sidebar-jump-btn"
+                  aria-label={t('reviews.sidebarJumpNext')}
+                  title={t('reviews.sidebarJumpNext')}
+                  disabled={!canJumpNext}
+                  onClick={() => jumpComment('next')}
+                >
+                  ▼
+                </button>
+              </div>
               <button
                 type="button"
                 className="review-detail__sidebar-toggle"
@@ -1135,36 +1242,20 @@ function ReviewDetailPage() {
         )}
       </div>
 
-      {!readonly && (
-        <footer className="review-detail__footer">
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={!isAwaiting || submitDecision.isPending}
-            onClick={() => void onApprove()}
-          >
-            {t('reviews.approveButton')}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={!isAwaiting || submitDecision.isPending}
-            onClick={() => void onIterate()}
-          >
-            {t('reviews.iterateButton')}
-          </button>
-          <button
-            type="button"
-            className="btn btn--danger"
-            disabled={!isAwaiting || submitDecision.isPending}
-            onClick={() => void onReject()}
-          >
-            {t('reviews.rejectButton')}
-          </button>
-          {submitDecision.error !== null && submitDecision.error !== undefined && (
-            <div className="error-box">{(submitDecision.error as Error).message}</div>
-          )}
-        </footer>
+      {!readonly && submitDecision.error !== null && submitDecision.error !== undefined && (
+        <div className="review-detail__error error-box">
+          {(submitDecision.error as Error).message}
+        </div>
+      )}
+
+      {!readonly && decisionDialog !== null && (
+        <DecisionDialog
+          state={decisionDialog}
+          onChange={setDecisionDialog}
+          onConfirm={() => void confirmDecisionDialog()}
+          onCancel={() => setDecisionDialog(null)}
+          submitting={submitDecision.isPending}
+        />
       )}
 
       {!readonly && crossHeadingHint !== null && (
@@ -1253,4 +1344,133 @@ function ReviewDetailPage() {
     void commentsByOccurrence // silence unused-var lint if commentsByOccurrence never gets a reader
     setPopover(null)
   }
+}
+
+// In-app dialog for the three decision buttons. Replaces window.confirm /
+// window.prompt / window.alert with a styled, accessible modal so the
+// approve / iterate / reject flow stops looking like a native browser
+// prompt. Reject carries a controlled textarea + inline reason-required
+// hint; approve and iterate are pure confirms with kind-specific copy.
+type DecisionDialogState =
+  | { kind: 'approve'; draftCount: number }
+  | { kind: 'iterate'; willRerun: string; noComments: boolean }
+  | { kind: 'reject'; willRerun: string; reason: string; reasonError: boolean }
+
+function DecisionDialog({
+  state,
+  onChange,
+  onConfirm,
+  onCancel,
+  submitting,
+}: {
+  state: DecisionDialogState
+  onChange: (next: DecisionDialogState) => void
+  onConfirm: () => void
+  onCancel: () => void
+  submitting: boolean
+}) {
+  const { t } = useTranslation()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  const title =
+    state.kind === 'approve'
+      ? t('reviews.approveDialogTitle')
+      : state.kind === 'iterate'
+        ? t('reviews.iterateDialogTitle')
+        : t('reviews.rejectDialogTitle')
+
+  return (
+    <div
+      className="review-decision-dialog__overlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel()
+      }}
+    >
+      <div
+        className="review-decision-dialog__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-decision-dialog-title"
+      >
+        <header className="review-decision-dialog__header">
+          <h2 id="review-decision-dialog-title">{title}</h2>
+          <button
+            type="button"
+            className="review-decision-dialog__close"
+            onClick={onCancel}
+            aria-label={t('reviews.dialogCancel')}
+          >
+            ×
+          </button>
+        </header>
+        <div className="review-decision-dialog__body">
+          {state.kind === 'approve' && (
+            <>
+              <p>{t('reviews.approveDraftWarning', { count: state.draftCount })}</p>
+              <p>{t('reviews.approveDraftConfirm')}</p>
+            </>
+          )}
+          {state.kind === 'iterate' && (
+            <>
+              {state.noComments && (
+                <p className="review-decision-dialog__warn">
+                  {t('reviews.iterateNoCommentsWarning')}
+                </p>
+              )}
+              <p>{t('reviews.iterateConfirm', { willRerun: state.willRerun })}</p>
+            </>
+          )}
+          {state.kind === 'reject' && (
+            <>
+              <p>{t('reviews.rejectPrompt', { willRerun: state.willRerun })}</p>
+              <label className="review-decision-dialog__label">
+                {t('reviews.rejectReasonLabel')}
+                <textarea
+                  className="form-input review-decision-dialog__textarea"
+                  autoFocus
+                  rows={4}
+                  value={state.reason}
+                  onChange={(e) =>
+                    onChange({ ...state, reason: e.target.value, reasonError: false })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault()
+                      onConfirm()
+                    }
+                  }}
+                />
+              </label>
+              {state.reasonError && (
+                <p className="review-decision-dialog__error">{t('reviews.rejectReasonRequired')}</p>
+              )}
+            </>
+          )}
+        </div>
+        <footer className="review-decision-dialog__actions">
+          <button type="button" className="btn btn--sm" onClick={onCancel}>
+            {t('reviews.dialogCancel')}
+          </button>
+          <button
+            type="button"
+            className={'btn btn--sm ' + (state.kind === 'reject' ? 'btn--danger' : 'btn--primary')}
+            disabled={submitting}
+            onClick={onConfirm}
+          >
+            {t('reviews.dialogConfirm')}
+          </button>
+        </footer>
+      </div>
+    </div>
+  )
 }

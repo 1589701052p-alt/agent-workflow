@@ -1,12 +1,18 @@
 // Locks in the review detail page layout fixes reported on
-// /reviews/01KRPE30VQT3R4G24PV3ZAG82D:
+// /reviews/01KRPE30VQT3R4G24PV3ZAG82D and the May 2026 follow-ups:
 //   1. The comment column must sit on the right via a grid layout in
 //      styles.css. (Originally an <aside class="review-detail__sidebar">;
 //      after the May 2026 bubble-redesign feedback it became
 //      <div class="review-detail__bubbles"> — see review-detail-bubble-
 //      redesign.test.ts for the bubble-specific locks.)
-//   2. The three footer buttons must be spaced via `.review-detail__footer`
-//      flex rules.
+//   2. The three decision buttons (approve / iterate / reject) used to
+//      sit in a bottom `.review-detail__footer`. May 2026 user feedback
+//      pinned them to the top-right of the page so they're always visible
+//      and only the document + comment column scroll. This file locks the
+//      new shape: page is a flex column locked to viewport height, layout
+//      grid is `flex: 1` + overflow auto, decision buttons live in the
+//      header actions cluster, and the old `.review-detail__footer` CSS
+//      rule is gone.
 //   3. Buttons must NOT carry inline `<kbd>A|I|R</kbd>` keyboard hints —
 //      the keyboard handler in the route's useEffect still fires for those
 //      letters, but the visual hint inside the button label is gone.
@@ -23,7 +29,7 @@ import { resolve } from 'node:path'
 const STYLES_CSS = resolve(__dirname, '..', 'src', 'styles.css')
 const REVIEWS_DETAIL_TSX = resolve(__dirname, '..', 'src', 'routes', 'reviews.detail.tsx')
 
-describe('review detail layout — Issue: sidebar position + footer spacing + no kbd', () => {
+describe('review detail layout — sidebar position + top-right action cluster + no kbd', () => {
   test('styles.css declares the .review-detail__layout grid with a fixed right column', () => {
     const css = readFileSync(STYLES_CSS, 'utf8')
     expect(css).toMatch(/\.review-detail__layout\s*\{[^}]*display:\s*grid/)
@@ -31,39 +37,123 @@ describe('review detail layout — Issue: sidebar position + footer spacing + no
   })
 
   test('styles.css declares the right comment column as a relative positioning context', () => {
-    // Originally `.review-detail__sidebar` was sticky with a left border.
-    // The bubble-redesign turned the column into a relative container so
-    // absolutely-positioned bubbles can ride the document scroll. The
-    // bubble-specific locks live in review-detail-bubble-redesign.test.ts;
-    // here we just guard that *some* relative-positioned right column
-    // exists.
     const css = readFileSync(STYLES_CSS, 'utf8')
     expect(css).toMatch(/\.review-detail__bubbles\s*\{[^}]*position:\s*relative/)
   })
 
-  test('styles.css declares .review-detail__footer with flex gap (no longer collapsed)', () => {
+  test('styles.css locks the review-detail page to viewport height with an internally scrolling layout', () => {
+    // The page itself stops scrolling; the layout grid becomes the single
+    // scrollable region so the action cluster stays pinned at the top.
     const css = readFileSync(STYLES_CSS, 'utf8')
-    expect(css).toMatch(/\.review-detail__footer\s*\{[^}]*display:\s*flex/)
-    expect(css).toMatch(/\.review-detail__footer\s*\{[^}]*gap:/)
+    expect(css).toMatch(/\.page--review-detail\s*\{[^}]*height:\s*100%/)
+    expect(css).toMatch(/\.page--review-detail\s*\{[^}]*overflow:\s*hidden/)
+    // Vertical scroll only — a horizontal scrollbar on the layout would be
+    // wrong since wide markdown elements (pre/table/math) have their own
+    // `overflow-x: auto` inside `.prose`.
+    expect(css).toMatch(/\.review-detail__layout\s*\{[^}]*overflow-y:\s*auto/)
+    expect(css).toMatch(/\.review-detail__layout\s*\{[^}]*overflow-x:\s*hidden/)
+    expect(css).toMatch(/\.review-detail__layout\s*\{[^}]*flex:\s*1/)
   })
 
-  test('reviews.detail.tsx does not render <kbd> shortcut hints inside the footer buttons', () => {
+  test('styles.css no longer ships the old .review-detail__footer rule', () => {
+    // The bottom footer was removed when the buttons moved to the header.
+    // Keeping the rule would just be dead CSS — guard against re-adding it.
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).not.toMatch(/\.review-detail__footer\s*\{/)
+  })
+
+  test('reviews.detail.tsx renders the decision buttons inside the page header actions cluster', () => {
     const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
-    // The three footer buttons are immediately recognizable by their i18n keys.
-    // They must NOT carry the inline `<kbd>A</kbd>` / `<kbd>I</kbd>` /
-    // `<kbd>R</kbd>` letter hints that the user reported as visual noise.
+    // The decision buttons cluster wraps Approve / Iterate / Reject and
+    // lives inside `.review-detail__page-header-actions` (next to the
+    // download button). The cluster must NOT live inside the old
+    // `<footer className="review-detail__footer">` block.
+    expect(tsx).toMatch(/review-detail__decision-actions/)
+    expect(tsx).not.toMatch(/review-detail__footer/)
+  })
+
+  test('reviews.detail.tsx does not render <kbd> shortcut hints inside the decision buttons', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
     expect(tsx).not.toMatch(/reviews\.approveButton'\)\}\s*<kbd>A<\/kbd>/)
     expect(tsx).not.toMatch(/reviews\.iterateButton'\)\}\s*<kbd>I<\/kbd>/)
     expect(tsx).not.toMatch(/reviews\.rejectButton'\)\}\s*<kbd>R<\/kbd>/)
   })
 
   test('reviews.detail.tsx keeps the A/I/R keyboard handler — feature is still keyboard-driven', () => {
-    // Removing the visual kbd hint must not have deleted the actual handler.
-    // The handler lives in a useEffect that listens on window keydown and
-    // dispatches onApprove/onIterate/onReject for the lowercased keys.
     const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
     expect(tsx).toMatch(/if \(k === 'a'\) void onApprove\(\)/)
     expect(tsx).toMatch(/else if \(k === 'r'\) void onReject\(\)/)
     expect(tsx).toMatch(/else if \(k === 'i'\) void onIterate\(\)/)
+  })
+})
+
+describe('review detail decision dialog — replaces window.confirm / prompt / alert', () => {
+  test('reviews.detail.tsx no longer uses native confirm / prompt / alert for the three decisions', () => {
+    // window.alert *is* still allowed in the unknownVersion code path; we
+    // only want to lock out native dialogs from the approve / iterate /
+    // reject buttons. Easiest assertion: the three i18n strings that used
+    // to feed the native dialogs are now consumed by the new DecisionDialog
+    // component rather than `window.confirm(...)` / `window.prompt(...)`.
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    expect(tsx).not.toMatch(/window\.confirm\([^)]*reviews\.approveDraft/)
+    expect(tsx).not.toMatch(/window\.confirm\([^)]*reviews\.iterate/)
+    expect(tsx).not.toMatch(/window\.prompt\([^)]*reviews\.rejectPrompt/)
+  })
+
+  test('reviews.detail.tsx mounts the DecisionDialog component', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    expect(tsx).toMatch(/function DecisionDialog\(/)
+    expect(tsx).toMatch(/<DecisionDialog/)
+  })
+
+  test('styles.css ships chrome for the in-app decision dialog', () => {
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).toMatch(/\.review-decision-dialog__overlay\s*\{/)
+    expect(css).toMatch(/\.review-decision-dialog__panel\s*\{/)
+  })
+})
+
+describe('review detail sidebar — ▲/▼ jump buttons mirror the J/K shortcut', () => {
+  test('reviews.detail.tsx renders the up/down jump buttons in the sidebar header', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    // Both buttons must exist, share the `review-detail__sidebar-jump-btn`
+    // class, and use the new sidebarJumpPrev / sidebarJumpNext i18n keys.
+    expect(tsx).toMatch(/review-detail__sidebar-jump-btn/)
+    expect(tsx).toMatch(/reviews\.sidebarJumpPrev/)
+    expect(tsx).toMatch(/reviews\.sidebarJumpNext/)
+  })
+
+  test('jumpComment helper exists and is reused by both buttons + J/K handler', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    // Single source of truth — the helper is defined once and consumed by
+    // the keyboard branch and both arrow onClicks. Locking this prevents a
+    // future refactor from drifting the two paths.
+    expect(tsx).toMatch(/const jumpComment\s*=\s*useCallback/)
+    expect(tsx).toMatch(/jumpComment\('next'\)/)
+    expect(tsx).toMatch(/jumpComment\('prev'\)/)
+  })
+
+  test('styles.css ships hover + disabled states for the jump buttons', () => {
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).toMatch(/\.review-detail__sidebar-jump-btn\s*\{/)
+    expect(css).toMatch(/\.review-detail__sidebar-jump-btn:disabled/)
+  })
+
+  test('IntersectionObserver scroll-spy is suppressed during programmatic jumps', () => {
+    // BUG (fixed): clicking ▼ briefly set activeCommentId to the target,
+    // then the smooth-scroll fired intersection events for every anchor
+    // it swept past, and the observer's "topmost intersecting" branch
+    // clobbered our intentional active id — the user clicks ▼ at idx 0
+    // but lands on idx 3 etc. Confirmed in chrome MCP: index sequence
+    // 1,3,1,3,4,2 instead of 0..5.
+    //
+    // Fix: a timestamp ref `suppressScrollSpyUntilRef` extended by every
+    // programmatic jump, checked at the top of the observer callback. We
+    // lock both the ref and the check at source-text level so a refactor
+    // that drops the suppression immediately re-introduces the bug.
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    expect(tsx).toMatch(/const suppressScrollSpyUntilRef\s*=\s*useRef/)
+    expect(tsx).toMatch(/suppressScrollSpyUntilRef\.current\s*=\s*Date\.now\(\)\s*\+/)
+    expect(tsx).toMatch(/if\s*\(Date\.now\(\)\s*<\s*suppressScrollSpyUntilRef\.current\)\s*return/)
   })
 })
