@@ -124,6 +124,48 @@ describe('task HTTP routes', () => {
     expect(((await res.json()) as { code: string }).code).toBe('workflow-not-found')
   })
 
+  // Regression: proposal.md §静态校验 mandates "校验失败...阻止启动 task".
+  // A workflow whose definition fails the 5-rule static validator must not
+  // create a task row, must not touch the worktree, and must surface the
+  // validator's issue list to the caller so the UI can show what to fix.
+  test('POST with workflow that fails static validation -> 422 workflow-invalid; no task row created', async () => {
+    // Edge points at a non-existent target node — that's a deterministic
+    // edge-target-node-missing error from the validator.
+    const badDef: WorkflowDefinition = {
+      $schema_version: 1,
+      inputs: [],
+      nodes: [{ id: 'in1', kind: 'input', inputKey: 'x' } as WorkflowDefinition['nodes'][number]],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'x' },
+          target: { nodeId: 'ghost', portName: 'y' },
+        },
+      ],
+    }
+    const wfId = await seedWorkflow(h.db, badDef)
+    const res = await req(h.app, '/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflowId: wfId,
+        repoPath: h.repoPath,
+        baseBranch: 'main',
+        inputs: {},
+      }),
+    })
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as {
+      code: string
+      details?: { issues?: Array<{ code: string }> }
+    }
+    expect(body.code).toBe('workflow-invalid')
+    expect(body.details?.issues?.some((i) => i.code === 'edge-target-node-missing')).toBe(true)
+
+    // No task row was created — validation gate must run before any side effects.
+    const list = (await (await req(h.app, '/api/tasks')).json()) as Array<unknown>
+    expect(list.length).toBe(0)
+  })
+
   test('POST with non-git repo path creates a task with status=failed', async () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const notRepo = mkdtempSync(join(tmpdir(), 'aw-notrepo-'))

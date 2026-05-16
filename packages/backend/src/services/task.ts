@@ -18,9 +18,12 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks, workflows } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
+import { listAgents } from '@/services/agent'
+import { listSkills } from '@/services/skill'
+import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
 import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
-import { ConflictError, DomainError, NotFoundError } from '@/util/errors'
+import { ConflictError, DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { readArchivedEvents } from '@/services/eventsArchive'
 import {
   TASK_CHANNEL,
@@ -72,6 +75,22 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const workflow = await getWorkflow(deps.db, input.workflowId)
   if (workflow === null) {
     throw new NotFoundError('workflow-not-found', `workflow '${input.workflowId}' not found`)
+  }
+
+  // Static validation gate (proposal.md §静态校验): "校验失败不阻止保存，但阻止启动 task".
+  // Run the same 5-rule check the editor uses, against the live agent/skill set,
+  // and refuse to launch if it surfaces any error-severity issues. Warnings pass.
+  const validation = validateWorkflowDef(workflow.definition, {
+    agents: await listAgents(deps.db),
+    skills: await listSkills(deps.db),
+  })
+  if (!validation.ok) {
+    const errors = validation.issues.filter((i) => (i.severity ?? 'error') === 'error')
+    throw new ValidationError(
+      'workflow-invalid',
+      `workflow '${input.workflowId}' failed static validation (${errors.length} error${errors.length === 1 ? '' : 's'}); fix issues before starting a task`,
+      { issues: validation.issues },
+    )
   }
 
   const appHome = deps.appHome ?? Paths.root
