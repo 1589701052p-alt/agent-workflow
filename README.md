@@ -36,9 +36,19 @@ curl -L -o agent-workflow \
   https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-macos-arm64
 chmod +x agent-workflow
 
+# macOS (Intel)
+curl -L -o agent-workflow \
+  https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-macos-x86_64
+chmod +x agent-workflow
+
 # Linux (x86_64)
 curl -L -o agent-workflow \
   https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-linux-x86_64
+chmod +x agent-workflow
+
+# Linux (arm64)
+curl -L -o agent-workflow \
+  https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-linux-arm64
 chmod +x agent-workflow
 ```
 
@@ -135,6 +145,7 @@ next `agent-workflow start`:
 - [`docs/agent.md`](./docs/agent.md) — agent.md frontmatter reference
 - [`docs/skill.md`](./docs/skill.md) — SKILL.md frontmatter + dir layout
 - [`docs/workflow-yaml.md`](./docs/workflow-yaml.md) — workflow YAML schema
+- [`docs/performance-notes.md`](./docs/performance-notes.md) — perf tuning + benchmarks
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — common issues
 
 Designed-but-not-shipped detail lives in [`design/`](./design/):
@@ -154,8 +165,8 @@ curl -fsSL https://bun.sh/install | bash
 git clone https://github.com/wangbinquan/agent-workflow.git
 cd agent-workflow
 bun install
-bun test                  # 317 backend cases
-bun run --filter @agent-workflow/frontend test  # 117 frontend cases
+bun test                  # 534 backend cases
+bun run --filter @agent-workflow/frontend test  # 682 frontend cases
 
 # Dev: backend on a random port + vite dev server on :5174
 bun dev
