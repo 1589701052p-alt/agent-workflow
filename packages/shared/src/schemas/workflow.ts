@@ -28,7 +28,12 @@ export const NODE_KIND = [
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
 
-export const WORKFLOW_INPUT_KIND = ['text', 'files', 'enum', 'git'] as const
+// RFC-020: 'upload' joins as a sibling of 'files'. `files` picks paths
+// already inside the worktree; `upload` writes user-selected local files
+// into the worktree at a per-input `targetDir`. Packed value is identical
+// to `files` (newline-joined repo-relative paths), so downstream nodes
+// (agent prompt templates, wrapper-git, multi-process) need zero changes.
+export const WORKFLOW_INPUT_KIND = ['text', 'files', 'enum', 'git', 'upload'] as const
 export const WorkflowInputKindSchema = z.enum(WORKFLOW_INPUT_KIND)
 
 // --- pieces of a workflow definition (kept permissive in M1) ---
@@ -72,6 +77,33 @@ export const WorkflowInputSchema = z
   })
   .passthrough()
 export type WorkflowInput = z.infer<typeof WorkflowInputSchema>
+
+/**
+ * RFC-020: strict narrow schema applied to `kind: 'upload'` inputs at write
+ * time (services/workflow.ts runs this against each upload entry in addition
+ * to the permissive WorkflowInputSchema). Read paths stay permissive so old
+ * docs round-trip; new writes must satisfy this.
+ *
+ * `targetDir` is a repo-relative directory under the task worktree where
+ * uploaded files land. `accept` is a list of extension (`.pdf`) or MIME
+ * (`image/*`) tokens; matching either passes (server still sniffs MIME via
+ * file-type and does not trust client-declared mime).
+ */
+export const UploadInputSchema = WorkflowInputSchema.extend({
+  kind: z.literal('upload'),
+  targetDir: z
+    .string()
+    .min(1)
+    .max(256)
+    .refine((s) => !s.includes('..') && !s.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(s), {
+      message: 'targetDir must be a repo-relative path without ".." or drive prefixes',
+    }),
+  accept: z.array(z.string().min(1)).optional(),
+  maxFileSize: z.number().int().positive().optional(),
+  minCount: z.number().int().min(0).optional(),
+  maxCount: z.number().int().min(1).optional(),
+})
+export type UploadInput = z.infer<typeof UploadInputSchema>
 
 export const WorkflowOutputBindingSchema = z.object({
   name: z.string().min(1),

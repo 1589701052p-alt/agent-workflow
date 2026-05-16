@@ -182,8 +182,15 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               <option value="files">files</option>
               <option value="enum">enum</option>
               <option value="git">git</option>
+              <option value="upload">upload</option>
             </select>
           </Field>
+          {inputKind === 'upload' && (
+            <UploadInputFields
+              def={inputDef ?? { kind: 'upload', key, label: inputLabel }}
+              onPatch={(patch) => onCommitDef(patchInputDef(definition, key, patch))}
+            />
+          )}
           <Field label={t('inspector.fieldInputLabel')} hint={t('inspector.fieldInputLabelHint')}>
             <TextInput
               value={inputLabel}
@@ -1052,5 +1059,107 @@ function PreviewPane({ node, agents, definition }: PreviewProps) {
       inputPorts={ports.inputs}
       outputs={agent?.outputs ?? []}
     />
+  )
+}
+
+/**
+ * RFC-020: per-input editor for `kind: 'upload'` launcher fields. Mirrors
+ * UploadInputSchema in @agent-workflow/shared so anything the editor saves
+ * round-trips through the strict-on-write validator.
+ */
+function UploadInputFields({
+  def,
+  onPatch,
+}: {
+  def: WorkflowInput
+  onPatch: (patch: Partial<WorkflowInput>) => void
+}) {
+  const { t } = useTranslation()
+  const rec = def as Record<string, unknown>
+  const targetDir = typeof rec.targetDir === 'string' ? rec.targetDir : ''
+  const acceptArr = Array.isArray(rec.accept) ? (rec.accept as string[]) : []
+  const acceptText = acceptArr.join(', ')
+  const maxFileSize = typeof rec.maxFileSize === 'number' ? rec.maxFileSize : undefined
+  const minCount = typeof rec.minCount === 'number' ? rec.minCount : undefined
+  const maxCount = typeof rec.maxCount === 'number' ? rec.maxCount : undefined
+  const targetDirInvalid =
+    targetDir === '' ||
+    targetDir.includes('..') ||
+    targetDir.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(targetDir)
+  return (
+    <>
+      <Field
+        label={t('inspector.upload.targetDir')}
+        hint={
+          targetDirInvalid
+            ? t('inspector.upload.targetDirError')
+            : t('inspector.upload.targetDirHint')
+        }
+        required
+      >
+        <TextInput
+          value={targetDir}
+          onChange={(v) => onPatch({ ...(def as object), targetDir: v } as Partial<WorkflowInput>)}
+          placeholder="inputs/refs"
+        />
+      </Field>
+      <Field label={t('inspector.upload.accept')} hint={t('inspector.upload.acceptHint')}>
+        <TextInput
+          value={acceptText}
+          onChange={(v) => {
+            const next = v
+              .split(',')
+              .map((s) => s.trim())
+              .filter((s) => s !== '')
+            onPatch({ ...(def as object), accept: next } as Partial<WorkflowInput>)
+          }}
+          placeholder=".pdf, image/*"
+        />
+      </Field>
+      <Field label={t('inspector.upload.maxFileSize')} hint={t('inspector.upload.maxFileSizeHint')}>
+        <input
+          className="form-input"
+          type="number"
+          min={1}
+          value={maxFileSize ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            const n = raw === '' ? undefined : Number(raw)
+            onPatch({
+              ...(def as object),
+              maxFileSize: n,
+            } as Partial<WorkflowInput>)
+          }}
+          placeholder="52428800"
+        />
+      </Field>
+      <Field label={t('inspector.upload.minCount')}>
+        <input
+          className="form-input"
+          type="number"
+          min={0}
+          value={minCount ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            const n = raw === '' ? undefined : Number(raw)
+            onPatch({ ...(def as object), minCount: n } as Partial<WorkflowInput>)
+          }}
+        />
+      </Field>
+      <Field label={t('inspector.upload.maxCount')}>
+        <input
+          className="form-input"
+          type="number"
+          min={1}
+          value={maxCount ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            const n = raw === '' ? undefined : Number(raw)
+            onPatch({ ...(def as object), maxCount: n } as Partial<WorkflowInput>)
+          }}
+        />
+      </Field>
+    </>
   )
 }

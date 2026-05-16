@@ -394,6 +394,15 @@ export interface Resources {
     start: string
     starting: string
     repoNoCommits: string
+    upload: {
+      chooseFiles: string
+      selectedCount_one: string
+      selectedCount_other: string
+      removeFile: string
+      targetDirHint: string
+      acceptHint: string
+      maxSizeHint: string
+    }
   }
   inspector: {
     closeAria: string
@@ -410,6 +419,17 @@ export interface Resources {
     fieldInputRequired: string
     fieldInputDescription: string
     fieldInputDescriptionHint: string
+    upload: {
+      targetDir: string
+      targetDirHint: string
+      targetDirError: string
+      accept: string
+      acceptHint: string
+      maxFileSize: string
+      maxFileSizeHint: string
+      minCount: string
+      maxCount: string
+    }
     fieldReviewTitle: string
     fieldReviewTitleHint: string
     fieldReviewDescription: string
@@ -1088,6 +1108,15 @@ export const zhCN: Resources = {
     start: '启动任务',
     starting: '启动中…',
     repoNoCommits: '该仓库还没有任何提交 —— 先做一次初始提交再启动任务，否则 worktree 无法创建。',
+    upload: {
+      chooseFiles: '选择文件…',
+      selectedCount_one: '已选 {{count}} 个',
+      selectedCount_other: '已选 {{count}} 个',
+      removeFile: '移除',
+      targetDirHint: '提交时会写入 worktree 的相对目录：{{dir}}',
+      acceptHint: '接受类型：{{accept}}',
+      maxSizeHint: '单文件上限：{{bytes}} 字节',
+    },
   },
   inspector: {
     closeAria: '关闭',
@@ -1105,6 +1134,17 @@ export const zhCN: Resources = {
     fieldInputRequired: '必填',
     fieldInputDescription: '说明',
     fieldInputDescriptionHint: 'launcher 字段下方的额外说明，可空。',
+    upload: {
+      targetDir: '落点目录（worktree 相对路径）',
+      targetDirHint: '提交任务时上传的文件会写入 worktree 下的该相对目录，例如 inputs/refs。',
+      targetDirError: '落点目录必须是 worktree 相对路径，且不能含 ".."、盘符前缀或以 "/" 开头。',
+      accept: '允许的类型（逗号分隔）',
+      acceptHint: '扩展名（.pdf）或 MIME 模式（image/*）。留空 = 不限。',
+      maxFileSize: '单文件大小上限（字节）',
+      maxFileSizeHint: '留空时使用全局 uploadLimits.perFile 设置。',
+      minCount: '最少文件数',
+      maxCount: '最多文件数',
+    },
     fieldReviewTitle: '评审标题',
     fieldReviewTitleHint: '展示在评审列表与详情头部；可为空，会回退到节点 id。',
     fieldReviewDescription: '评审说明',

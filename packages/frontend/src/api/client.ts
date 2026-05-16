@@ -90,11 +90,52 @@ function isErrorPayload(
   )
 }
 
+/**
+ * RFC-020: POST a multipart/form-data body without the JSON Content-Type
+ * default. The browser fills in the boundary header automatically when we
+ * leave Content-Type unset; manually setting it would strip the boundary.
+ */
+export async function apiPostMultipart<T>(
+  path: string,
+  body: FormData,
+  signal?: AbortSignal,
+): Promise<T> {
+  const token = getToken()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (token !== null) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(buildUrl(path), {
+    method: 'POST',
+    headers,
+    body,
+    signal,
+  })
+
+  if (res.status === 401) clearToken()
+
+  const isJson = res.headers.get('content-type')?.includes('application/json') ?? false
+  const payload: unknown = isJson ? await res.json().catch(() => null) : null
+
+  if (!res.ok) {
+    const err = isErrorPayload(payload)
+      ? payload.error
+      : { code: `http-${res.status}`, message: res.statusText || 'request failed' }
+    throw new ApiError(
+      res.status,
+      err.code,
+      err.message,
+      isErrorPayload(payload) ? payload.error.details : undefined,
+    )
+  }
+  return payload as T
+}
+
 export const api = {
   get: <T>(path: string, query?: RequestOptions['query'], signal?: AbortSignal) =>
     apiRequest<T>(path, { query, signal }),
   post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     apiRequest<T>(path, { method: 'POST', body, signal }),
+  postMultipart: apiPostMultipart,
   put: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     apiRequest<T>(path, { method: 'PUT', body, signal }),
   patch: <T>(path: string, body?: unknown, signal?: AbortSignal) =>

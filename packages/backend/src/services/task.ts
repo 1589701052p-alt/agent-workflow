@@ -68,6 +68,67 @@ export interface StartTaskDeps {
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
   awaitScheduler?: boolean
+  /**
+   * RFC-020: when the multipart route has already created the worktree (so it
+   * can land upload files into it BEFORE the task row exists), it passes the
+   * pre-materialized worktree info in here. `startTask` then skips its own
+   * `createWorktree` call and uses these values verbatim. JSON-bodied calls
+   * never pass this; we generate a fresh ulid + worktree as before.
+   */
+  preCreatedWorktree?: PreCreatedWorktree
+}
+
+/**
+ * RFC-020: a worktree the caller has already created (e.g. multipart upload
+ * flow) so `startTask` can land its task row with the right paths without
+ * shelling out to git twice.
+ */
+export interface PreCreatedWorktree {
+  taskId: string
+  worktreePath: string
+  branch: string
+  baseCommit: string | null
+}
+
+/**
+ * Create a worktree for a fresh task. Pulled out of `startTask` so the
+ * multipart upload route can call it BEFORE the task row exists and write
+ * uploaded files into the resulting directory.
+ *
+ * Returns `earlyError !== null` on failure with the worktree fields blank
+ * (mirrors the failure path `startTask` baked in before this refactor).
+ */
+export async function materializeWorktree(opts: {
+  input: Pick<StartTask, 'repoPath' | 'baseBranch'>
+  taskId: string
+  appHome: string
+}): Promise<{
+  worktreePath: string
+  branch: string
+  baseCommit: string | null
+  earlyError: string | null
+}> {
+  try {
+    const wt = await createWorktree({
+      repoPath: opts.input.repoPath,
+      taskId: opts.taskId,
+      baseBranch: opts.input.baseBranch,
+      appHome: opts.appHome,
+    })
+    return {
+      worktreePath: wt.worktreePath,
+      branch: wt.branch,
+      baseCommit: wt.baseCommit,
+      earlyError: null,
+    }
+  } catch (err) {
+    return {
+      worktreePath: '',
+      branch: '',
+      baseCommit: null,
+      earlyError: err instanceof Error ? err.message : String(err),
+    }
+  }
 }
 
 export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<Task> {
@@ -94,26 +155,28 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   }
 
   const appHome = deps.appHome ?? Paths.root
-  const taskId = ulid()
 
-  // Create the worktree. Failure here means we still want a task record so
-  // the user sees why their click did nothing (per design.md §6.4).
-  let worktreePath = ''
-  let branch = ''
-  let baseCommit: string | null = null
-  let earlyError: string | null = null
-  try {
-    const wt = await createWorktree({
-      repoPath: input.repoPath,
-      taskId,
-      baseBranch: input.baseBranch,
-      appHome,
-    })
+  // RFC-020: multipart-upload flow creates the worktree before this call so
+  // it can write user files into it. JSON-body flow takes the original path:
+  // mint a fresh id, call materializeWorktree here.
+  let taskId: string
+  let worktreePath: string
+  let branch: string
+  let baseCommit: string | null
+  let earlyError: string | null
+  if (deps.preCreatedWorktree !== undefined) {
+    taskId = deps.preCreatedWorktree.taskId
+    worktreePath = deps.preCreatedWorktree.worktreePath
+    branch = deps.preCreatedWorktree.branch
+    baseCommit = deps.preCreatedWorktree.baseCommit
+    earlyError = null
+  } else {
+    taskId = ulid()
+    const wt = await materializeWorktree({ input, taskId, appHome })
     worktreePath = wt.worktreePath
     branch = wt.branch
     baseCommit = wt.baseCommit
-  } catch (err) {
-    earlyError = err instanceof Error ? err.message : String(err)
+    earlyError = wt.earlyError
   }
 
   const now = Date.now()

@@ -21,6 +21,13 @@ export const EventsArchiveThresholdsSchema = z.object({
   globalRows: z.number().int().positive(),
 })
 
+/** RFC-020: caps applied to multipart launcher uploads. */
+export const UploadLimitsSchema = z.object({
+  perFile: z.number().int().positive(),
+  perRequest: z.number().int().positive(),
+  perCount: z.number().int().positive(),
+})
+
 export const ConfigSchema = z.object({
   $schema_version: z.literal(CONFIG_SCHEMA_VERSION),
 
@@ -52,6 +59,9 @@ export const ConfigSchema = z.object({
   // --- GC ---
   worktreeAutoGc: WorktreeGcSchema,
   eventsArchiveThresholds: EventsArchiveThresholdsSchema,
+
+  // --- RFC-020 upload caps (multipart launcher uploads) ---
+  uploadLimits: UploadLimitsSchema.optional(),
 
   // --- Large outputs ---
   largeOutputThresholdBytes: z.number().int().positive(),

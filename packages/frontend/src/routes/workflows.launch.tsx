@@ -19,6 +19,8 @@ import { api, ApiError } from '@/api/client'
 import { EnumPicker } from '@/components/launch/EnumPicker'
 import { FilesPicker } from '@/components/launch/FilesPicker'
 import { GitPicker } from '@/components/launch/GitPicker'
+import { UploadPicker } from '@/components/launch/UploadPicker'
+import { buildLaunchFormData } from '@/components/launch/buildLaunchFormData'
 import { Field, TextInput } from '@/components/Form'
 import { Route as RootRoute } from './__root'
 
@@ -44,6 +46,8 @@ function LaunchPage() {
   const [repoPath, setRepoPath] = useState('')
   const [baseBranch, setBaseBranch] = useState('')
   const [inputs, setInputs] = useState<Record<string, string>>({})
+  // RFC-020: parallel state for `kind: 'upload'` inputs; key → picked Files.
+  const [uploads, setUploads] = useState<Record<string, File[]>>({})
 
   // Seed inputs map when workflow loads.
   useEffect(() => {
@@ -67,14 +71,21 @@ function LaunchPage() {
     enabled: repoPath !== '',
   })
 
+  const hasUploads = Object.values(uploads).some((arr) => arr.length > 0)
   const start = useMutation({
-    mutationFn: () =>
-      api.post<Task>('/api/tasks', {
-        workflowId: id,
-        repoPath,
-        baseBranch,
-        inputs,
-      }),
+    mutationFn: () => {
+      const payload = { workflowId: id, repoPath, baseBranch, inputs }
+      // RFC-020: any kind:'upload' input declared on the workflow drives a
+      // multipart submit — even when the user picked zero files, so the
+      // backend's upload pipeline runs (it gates min/maxCount centrally).
+      const hasUploadKind = (workflow.data?.definition.inputs ?? []).some(
+        (i) => i.kind === 'upload',
+      )
+      if (hasUploadKind || hasUploads) {
+        return api.postMultipart<Task>('/api/tasks', buildLaunchFormData(payload, uploads))
+      }
+      return api.post<Task>('/api/tasks', payload)
+    },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
 
@@ -84,9 +95,17 @@ function LaunchPage() {
   if (workflow.data === undefined) return null
 
   const inputDefs = workflow.data.definition.inputs ?? []
-  const missingRequired = inputDefs.some(
-    (def) => def.required === true && (inputs[def.key] ?? '').trim() === '',
-  )
+  const missingRequired = inputDefs.some((def) => {
+    if (def.kind === 'upload') {
+      const list = uploads[def.key] ?? []
+      const rec = def as Record<string, unknown>
+      const minCount = typeof rec.minCount === 'number' ? rec.minCount : 0
+      if (def.required === true && list.length === 0) return true
+      if (list.length < minCount) return true
+      return false
+    }
+    return def.required === true && (inputs[def.key] ?? '').trim() === ''
+  })
   const repoIssue = repoLaunchIssue(refs.data ?? null)
   const canSubmit =
     repoPath !== '' &&
@@ -170,12 +189,20 @@ function LaunchPage() {
             required={def.required === true}
             hint={def.description}
           >
-            <DynamicInput
-              def={def}
-              repoPath={repoPath}
-              value={inputs[def.key] ?? ''}
-              onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
-            />
+            {def.kind === 'upload' ? (
+              <UploadPicker
+                def={def}
+                files={uploads[def.key] ?? []}
+                onChange={(next) => setUploads((prev) => ({ ...prev, [def.key]: next }))}
+              />
+            ) : (
+              <DynamicInput
+                def={def}
+                repoPath={repoPath}
+                value={inputs[def.key] ?? ''}
+                onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
+              />
+            )}
           </Field>
         ))}
       </div>

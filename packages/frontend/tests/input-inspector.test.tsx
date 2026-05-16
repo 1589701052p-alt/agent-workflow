@@ -53,10 +53,10 @@ describe('input NodeInspector (RFC-004)', () => {
     render(<Host initial={def} onChangeSpy={vi.fn()} />)
     // inputKey TextInput by displayed value
     expect(screen.getByDisplayValue('req')).toBeTruthy()
-    // kind <select> — text default option present + 4 kinds
+    // kind <select> — text default option present + 5 kinds (RFC-020 adds 'upload')
     const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
     const kinds = Array.from(kindSelect.options).map((o) => o.value)
-    expect(kinds).toEqual(['text', 'files', 'enum', 'git'])
+    expect(kinds).toEqual(['text', 'files', 'enum', 'git', 'upload'])
     expect(kindSelect.value).toBe('text')
     // label TextInput shows 'Need it'
     expect(screen.getByDisplayValue('Need it')).toBeTruthy()

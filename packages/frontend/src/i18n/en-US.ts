@@ -412,6 +412,15 @@ export const enUS: Resources = {
     starting: 'Starting…',
     repoNoCommits:
       "This repo has no commits yet — make an initial commit before launching, otherwise the worktree can't be created.",
+    upload: {
+      chooseFiles: 'Choose files…',
+      selectedCount_one: '{{count}} selected',
+      selectedCount_other: '{{count}} selected',
+      removeFile: 'Remove',
+      targetDirHint: 'Will land in worktree directory: {{dir}}',
+      acceptHint: 'Accepted: {{accept}}',
+      maxSizeHint: 'Max per file: {{bytes}} bytes',
+    },
   },
   inspector: {
     closeAria: 'Close',
@@ -430,6 +439,19 @@ export const enUS: Resources = {
     fieldInputRequired: 'Required',
     fieldInputDescription: 'Description',
     fieldInputDescriptionHint: 'Optional helper text rendered under the launcher field.',
+    upload: {
+      targetDir: 'Target directory (worktree-relative)',
+      targetDirHint:
+        'Repo-relative path where uploaded files land at task start (e.g. inputs/refs).',
+      targetDirError:
+        'Target directory must be a repo-relative path without "..", drive prefixes, or a leading "/".',
+      accept: 'Accept (comma-separated)',
+      acceptHint: 'Extension tokens (.pdf) or MIME globs (image/*). Empty = accept anything.',
+      maxFileSize: 'Max file size (bytes)',
+      maxFileSizeHint: 'Empty = falls back to the global uploadLimits.perFile setting.',
+      minCount: 'Min file count',
+      maxCount: 'Max file count',
+    },
     fieldReviewTitle: 'Review title',
     fieldReviewTitleHint:
       'Shown in the Reviews list + detail header. Falls back to the node id when empty.',

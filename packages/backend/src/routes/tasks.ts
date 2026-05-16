@@ -7,8 +7,14 @@
 //
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
-import { StartTaskSchema, TaskStatusSchema } from '@agent-workflow/shared'
+import {
+  StartTaskSchema,
+  TaskStatusSchema,
+  UploadInputSchema,
+  type WorkflowInput,
+} from '@agent-workflow/shared'
 import type { Hono } from 'hono'
+import { ulid } from 'ulid'
 import { loadConfig } from '@/config'
 import type { AppDeps } from '@/server'
 import {
@@ -19,10 +25,20 @@ import {
   getTaskDiff,
   getTaskNodeRuns,
   listTasks,
+  materializeWorktree,
   resumeTask,
   retryNode,
   startTask,
 } from '@/services/task'
+import {
+  applyUploadsToWorktree,
+  DEFAULT_UPLOAD_LIMITS,
+  type UploadFile,
+  type UploadInputDef,
+  type UploadLimits,
+} from '@/services/upload'
+import { getWorkflow } from '@/services/workflow'
+import { Paths } from '@/util/paths'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
 /**
@@ -78,13 +94,23 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.post('/api/tasks', async (c) => {
+    const ct = c.req.header('content-type') ?? ''
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+
+    // RFC-020: multipart branch handles launcher uploads. payload field is
+    // JSON-encoded StartTask; files[<inputKey>][] fields are the binary
+    // contents bound to `kind: 'upload'` inputs.
+    if (ct.toLowerCase().startsWith('multipart/form-data')) {
+      const task = await handleMultipartTaskStart(c.req.raw, deps, opencodeCmd)
+      return c.json(task, 201)
+    }
+
     const parsed = StartTaskSchema.safeParse(await safeJson(c.req.raw))
     if (!parsed.success) {
       throw new ValidationError('task-invalid', 'invalid task payload', {
         issues: parsed.error.issues,
       })
     }
-    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
     const task = await startTask(parsed.data, {
       db: deps.db,
       ...(opencodeCmd ? { opencodeCmd } : {}),
@@ -162,5 +188,205 @@ async function safeJson(req: Request): Promise<unknown> {
     return await req.json()
   } catch {
     return {}
+  }
+}
+
+/**
+ * RFC-020: read `uploadLimits` from settings, falling back to defaults. Kept
+ * narrow so the multipart handler stays declarative.
+ */
+function resolveUploadLimits(configPath: string): UploadLimits {
+  try {
+    const cfg = loadConfig(configPath)
+    const u = cfg.uploadLimits
+    if (u !== undefined) {
+      return {
+        perFile: u.perFile,
+        perRequest: u.perRequest,
+        perCount: u.perCount,
+      }
+    }
+  } catch {
+    // unreadable config → defaults
+  }
+  return { ...DEFAULT_UPLOAD_LIMITS }
+}
+
+/**
+ * Extract upload-kind input declarations from a workflow definition. Each
+ * one must pass UploadInputSchema (strict-on-write) — anything that snuck
+ * through the workflow save path with a bad targetDir is rejected here too.
+ */
+function collectUploadInputDefs(inputs: readonly WorkflowInput[]): Map<string, UploadInputDef> {
+  const out = new Map<string, UploadInputDef>()
+  for (const inp of inputs) {
+    if (inp.kind !== 'upload') continue
+    const parsed = UploadInputSchema.safeParse(inp)
+    if (!parsed.success) {
+      throw new ValidationError(
+        'upload-input-invalid',
+        `workflow input '${inp.key}' (kind=upload) is malformed`,
+        { issues: parsed.error.issues },
+      )
+    }
+    const def: UploadInputDef = {
+      key: parsed.data.key,
+      targetDir: parsed.data.targetDir,
+    }
+    if (parsed.data.accept !== undefined) def.accept = parsed.data.accept
+    if (parsed.data.maxFileSize !== undefined) def.maxFileSize = parsed.data.maxFileSize
+    if (parsed.data.minCount !== undefined) def.minCount = parsed.data.minCount
+    if (parsed.data.maxCount !== undefined) def.maxCount = parsed.data.maxCount
+    out.set(def.key, def)
+  }
+  return out
+}
+
+/** Match `files[<key>][]` field names; allowed keys mirror WorkflowInput.key. */
+const UPLOAD_FIELD_RE = /^files\[([A-Za-z0-9_-]+)\]\[\]$/
+
+async function handleMultipartTaskStart(
+  req: Request,
+  deps: AppDeps,
+  opencodeCmd: string[] | undefined,
+) {
+  let form: Awaited<ReturnType<typeof req.formData>>
+  try {
+    form = await req.formData()
+  } catch (err) {
+    throw new ValidationError(
+      'task-multipart-invalid',
+      `failed to parse multipart body: ${(err as Error).message}`,
+    )
+  }
+
+  // 1. Pull JSON payload out of the `payload` field.
+  const payloadField = form.get('payload')
+  if (payloadField === null) {
+    throw new ValidationError(
+      'task-multipart-payload-missing',
+      'multipart body must include a "payload" field with the StartTask JSON',
+    )
+  }
+  let payloadText: string
+  if (typeof payloadField === 'string') {
+    payloadText = payloadField
+  } else {
+    payloadText = await payloadField.text()
+  }
+  let payloadJson: unknown
+  try {
+    payloadJson = JSON.parse(payloadText)
+  } catch (err) {
+    throw new ValidationError(
+      'task-multipart-payload-invalid',
+      `payload field is not valid JSON: ${(err as Error).message}`,
+    )
+  }
+  const parsed = StartTaskSchema.safeParse(payloadJson)
+  if (!parsed.success) {
+    throw new ValidationError('task-invalid', 'invalid task payload', {
+      issues: parsed.error.issues,
+    })
+  }
+  const startInput = parsed.data
+
+  // 2. Resolve workflow → extract upload input declarations.
+  const workflow = await getWorkflow(deps.db, startInput.workflowId)
+  if (workflow === null) {
+    throw new NotFoundError('workflow-not-found', `workflow '${startInput.workflowId}' not found`)
+  }
+  const uploadDefs = collectUploadInputDefs(workflow.definition.inputs)
+
+  // 3. Walk multipart fields, bind each file blob to its inputKey.
+  const uploadFiles: UploadFile[] = []
+  // Cast: bun's undici FormData type narrows to [string, string]; the real
+  // value can be a File too — that's what we actually receive at runtime.
+  const entries = form.entries() as unknown as Iterable<[string, string | File]>
+  for (const [fieldName, value] of entries) {
+    if (fieldName === 'payload') continue
+    const m = UPLOAD_FIELD_RE.exec(fieldName)
+    if (m === null) {
+      throw new ValidationError(
+        'task-multipart-unknown-field',
+        `unexpected multipart field '${fieldName}'; expected 'payload' or 'files[<key>][]'`,
+      )
+    }
+    const inputKey = m[1]!
+    if (!uploadDefs.has(inputKey)) {
+      throw new ValidationError(
+        'task-multipart-unknown-input',
+        `multipart files target unknown upload input '${inputKey}'`,
+      )
+    }
+    if (typeof value === 'string') {
+      throw new ValidationError(
+        'task-multipart-string-not-file',
+        `field '${fieldName}' must carry a file, got string`,
+      )
+    }
+    const buf = new Uint8Array(await value.arrayBuffer())
+    uploadFiles.push({
+      inputKey,
+      filename: value.name === '' ? 'upload.bin' : value.name,
+      declaredMime: value.type,
+      bytes: buf,
+    })
+  }
+
+  // 4. Materialize the worktree first so we have a real path to write into.
+  const appHome = Paths.root
+  const taskId = ulid()
+  const wt = await materializeWorktree({
+    input: { repoPath: startInput.repoPath, baseBranch: startInput.baseBranch },
+    taskId,
+    appHome,
+  })
+  if (wt.earlyError !== null) {
+    // Fall back to the original behavior: create a failed task row so the
+    // user sees the error. No files were written (worktree never existed).
+    const task = await startTask(startInput, {
+      db: deps.db,
+      ...(opencodeCmd ? { opencodeCmd } : {}),
+    })
+    return task
+  }
+
+  // 5. Write uploads + pack paths back into inputs[].
+  const limits = resolveUploadLimits(deps.configPath)
+  try {
+    const result = await applyUploadsToWorktree({
+      worktreePath: wt.worktreePath,
+      defs: uploadDefs,
+      files: uploadFiles,
+      limits,
+    })
+    const inputsOut: Record<string, string> = { ...startInput.inputs }
+    for (const [key, paths] of result.packedByKey.entries()) {
+      inputsOut[key] = paths.join('\n')
+    }
+    // 6. Hand off to startTask with the pre-created worktree.
+    return await startTask(
+      { ...startInput, inputs: inputsOut },
+      {
+        db: deps.db,
+        ...(opencodeCmd ? { opencodeCmd } : {}),
+        preCreatedWorktree: {
+          taskId,
+          worktreePath: wt.worktreePath,
+          branch: wt.branch,
+          baseCommit: wt.baseCommit,
+        },
+      },
+    )
+  } catch (err) {
+    // Upload write failed (limits, accept, or fs error). Throw a structured
+    // error; the worktree directory stays on disk but no task row is
+    // created, matching the "createWorktree failed" semantics.
+    if (err instanceof ValidationError) throw err
+    throw new ValidationError(
+      'task-upload-failed',
+      `failed to land uploads into worktree: ${(err as Error).message}`,
+    )
   }
 }

@@ -370,6 +370,30 @@ export function validateWorkflowDef(
     seenKeys.add(inp.key)
   }
 
+  // 4d. upload-input-targetDir (RFC-020) -----------------------------------
+  // `kind: 'upload'` inputs land user files into a worktree-relative
+  // directory; we refuse traversal / absolute paths here so a bad workflow
+  // never makes it to the multipart route's hot path.
+  for (const inp of inputs) {
+    if (inp.kind !== 'upload') continue
+    const td = readString(inp, 'targetDir')
+    if (td === undefined || td.length === 0) {
+      issues.push({
+        code: 'upload-input-target-dir-missing',
+        message: `upload input '${inp.key}' missing targetDir`,
+        pointer: inp.key,
+      })
+      continue
+    }
+    if (td.includes('..') || td.startsWith('/') || /^[A-Za-z]:[\\/]/.test(td)) {
+      issues.push({
+        code: 'upload-input-target-dir-invalid',
+        message: `upload input '${inp.key}' targetDir '${td}' must be a repo-relative path without '..' or absolute prefixes`,
+        pointer: inp.key,
+      })
+    }
+  }
+
   // Input-node ↔ workflow.inputs[] bijection (RFC-004).
   // Error:   input node references an inputKey that no inputs[] entry declares.
   // Warning: inputs[] declares a key that no input node references (allows the
