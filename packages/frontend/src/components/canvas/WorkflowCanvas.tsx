@@ -297,12 +297,30 @@ function CanvasInner({
               nextDef = clearSourcePortOnNodeRemoved(nextDef, removedIds)
             }
             commitChange(nextDef)
+            // Delete key path: xyflow's built-in `deleteKeyCode` removes the
+            // selected node before our `deleteSelected` callback ever fires
+            // (deleteSelected is wired only to the right-click menu). Without
+            // this branch the parent route still has `selection={kind:'node',
+            // id:<deleted>}`, the inspector returns null but the 3rd grid
+            // column stays open → an empty white frame on the right until
+            // the user clicks elsewhere. Mirror onPaneClick's "clear parent
+            // selection" path whenever an emitted-selection node is among
+            // the removed ids. The internal `selection` ref's nodes/edges
+            // are kept in sync separately via the onSelectionChange handler.
+            if (removedIds.length > 0) {
+              const sig = lastEmittedSelectionSig.current
+              const emittedNodeMatch = sig.startsWith('node:') && removedIds.includes(sig.slice(5))
+              if (emittedNodeMatch && onSelect !== undefined) {
+                lastEmittedSelectionSig.current = 'null'
+                onSelect(null)
+              }
+            }
           }
         }
         return next
       })
     },
-    [commitChange, definition, edges, onChange, readOnly],
+    [commitChange, definition, edges, onChange, onSelect, readOnly],
   )
 
   const handleEdgesChange = useCallback(
@@ -329,11 +347,24 @@ function CanvasInner({
             nextDef = clearSourcePortsForSyntheticIds(nextDef, removedIds)
           }
           commitChange(nextDef)
+          // Same parent-selection clear as handleNodesChange: xyflow's
+          // built-in Delete-key path also removes the selected edge here,
+          // not via deleteSelected. Without this, the parent route's
+          // selection still references the dead edge and the inspector
+          // column stays open.
+          if (removedIds.length > 0) {
+            const sig = lastEmittedSelectionSig.current
+            const emittedEdgeMatch = sig.startsWith('edge:') && removedIds.includes(sig.slice(5))
+            if (emittedEdgeMatch && onSelect !== undefined) {
+              lastEmittedSelectionSig.current = 'null'
+              onSelect(null)
+            }
+          }
         }
         return next
       })
     },
-    [commitChange, definition, nodes, onChange, readOnly],
+    [commitChange, definition, nodes, onChange, onSelect, readOnly],
   )
 
   const deleteKeyCodes = useMemo(() => ['Backspace', 'Delete'], [])

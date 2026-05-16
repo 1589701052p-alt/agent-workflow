@@ -153,17 +153,18 @@ describe('WorkflowCanvas does not enable selectionOnDrag', () => {
     expect(src).toMatch(/setEdges\(\s*\[?\s*\.{0,3}\s*applySelection\(toFlowEdges\(/)
   })
 
-  test('deleteSelected clears parent selection so empty inspector frame folds away', async () => {
+  test('Delete-key paths clear parent selection so the inspector column folds away', async () => {
     // Regression: pressing Delete on a selected node removed the node
     // from definition but the parent route's `selection` state still
     // held `{kind:'node', id:'foo'}` → `editorLayoutClass` kept the
-    // 3rd grid column open and the (now-rendering-null) NodeInspector
-    // showed an empty white frame until the user clicked elsewhere.
-    // The fix calls onSelect(null) inside deleteSelected so the parent
-    // collapses the inspector column synchronously. Source-level lock
-    // because triggering xyflow's Delete-key path in JSDOM is brittle;
-    // we anchor the contract with a regex that survives prettier
-    // reformatting.
+    // 3rd grid column open AND `canvas-frame` stayed at its narrower
+    // width because the grid column track was still reserved. xyflow's
+    // built-in `deleteKeyCode` fires `onNodesChange` / `onEdgesChange`
+    // — NOT our `deleteSelected` callback (which is wired only to the
+    // right-click menu). So all THREE paths must clear onSelect.
+    //
+    // Source-level lock because triggering xyflow's Delete-key path in
+    // JSDOM is brittle; the regex survives prettier reformatting.
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
     const here = path.dirname(new URL(import.meta.url).pathname)
@@ -171,15 +172,37 @@ describe('WorkflowCanvas does not enable selectionOnDrag', () => {
       path.join(here, '../src/components/canvas/WorkflowCanvas.tsx'),
       'utf8',
     )
-    const start = src.indexOf('const deleteSelected = useCallback(')
-    expect(start).toBeGreaterThan(-1)
-    const end = src.indexOf('[commitChange', start)
-    const body = src.slice(start, end)
-    // Must reset both the local sig (so the next click on a fresh node
-    // emits) AND call onSelect(null) (so the parent route's selection
-    // state clears and editorLayoutClass collapses the 3rd column).
-    expect(body).toMatch(/lastEmittedSelectionSig\.current\s*=\s*['"]null['"]/)
-    expect(body).toMatch(/onSelect\s*\(\s*null\s*\)/)
+
+    function bodyOf(opener: string, closer: string): string {
+      const start = src.indexOf(opener)
+      expect(start).toBeGreaterThan(-1)
+      const end = src.indexOf(closer, start)
+      return src.slice(start, end)
+    }
+
+    // Path 1: right-click menu / explicit deleteSelected callback.
+    const deleteSelectedBody = bodyOf('const deleteSelected = useCallback(', '[commitChange')
+    expect(deleteSelectedBody).toMatch(/lastEmittedSelectionSig\.current\s*=\s*['"]null['"]/)
+    expect(deleteSelectedBody).toMatch(/onSelect\s*\(\s*null\s*\)/)
+
+    // Path 2: Delete key on a selected node — handleNodesChange must
+    // detect that the emitted-selection node id is in removedIds and
+    // clear the parent selection.
+    const handleNodesChangeBody = bodyOf(
+      'const handleNodesChange = useCallback(',
+      '[commitChange, definition, edges',
+    )
+    expect(handleNodesChangeBody).toMatch(/lastEmittedSelectionSig\.current/)
+    expect(handleNodesChangeBody).toMatch(/onSelect\s*\(\s*null\s*\)/)
+
+    // Path 3: Delete key on a selected edge — same shape via
+    // handleEdgesChange.
+    const handleEdgesChangeBody = bodyOf(
+      'const handleEdgesChange = useCallback(',
+      '[commitChange, definition, nodes',
+    )
+    expect(handleEdgesChangeBody).toMatch(/lastEmittedSelectionSig\.current/)
+    expect(handleEdgesChangeBody).toMatch(/onSelect\s*\(\s*null\s*\)/)
   })
 })
 
