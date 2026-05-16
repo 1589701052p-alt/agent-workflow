@@ -23,7 +23,7 @@ import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
 import { Prose } from '@/components/prose/Prose'
 import { useResizable } from '@/hooks/useResizable'
 import { useTaskSync } from '@/hooks/useTaskSync'
-import { anchorKey, computeAnchorFromSelection } from '@/lib/review/anchor'
+import { anchorKey, computeAnchorFromSelection, selectionCrossesHeading } from '@/lib/review/anchor'
 import { deleteDraft, getDraft, listDrafts, setDraft } from '@/lib/review/draftStore'
 import { computeLineRange } from '@/lib/review/lineRange'
 import { resolveReviewView } from '@/lib/review/readonly'
@@ -185,6 +185,23 @@ function ReviewDetailPage() {
     rect: { left: number; top: number }
   } | null>(null)
 
+  // Light hint shown when the user's selection spans a heading boundary.
+  // computeAnchorFromSelection silently rejects those, which was confusing —
+  // the popover just never opened. We surface a small auto-dismissing tip
+  // anchored to the selection's bounding rect so the user knows *why*
+  // nothing happened. The `key` field lets repeated cross-heading attempts
+  // restart the dismiss timer without flicker.
+  const [crossHeadingHint, setCrossHeadingHint] = useState<{
+    left: number
+    top: number
+    key: number
+  } | null>(null)
+  useEffect(() => {
+    if (crossHeadingHint === null) return
+    const id = window.setTimeout(() => setCrossHeadingHint(null), 2500)
+    return () => window.clearTimeout(id)
+  }, [crossHeadingHint])
+
   // Sidebar scroll-spy: highlight the comment whose anchor element is
   // currently the topmost in view.
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
@@ -266,7 +283,20 @@ function ReviewDetailPage() {
     if (sel === null || sel.isCollapsed) return
     if (detail.data === undefined) return
     const anchor = computeAnchorFromSelection(markdownRef.current, sel, detail.data.currentBody)
-    if (anchor === null) return
+    if (anchor === null) {
+      // Distinguish "crossed a heading" (recoverable, user picked the wrong
+      // range) from other null reasons (collapsed / outside body) so we
+      // only nag in the case where there's something useful to say.
+      if (selectionCrossesHeading(markdownRef.current, sel)) {
+        const r = sel.getRangeAt(0).getBoundingClientRect()
+        setCrossHeadingHint({
+          left: r.left + window.scrollX,
+          top: r.bottom + window.scrollY,
+          key: Date.now(),
+        })
+      }
+      return
+    }
     const range = sel.getRangeAt(0)
     const rect = range.getBoundingClientRect()
     const draft =
@@ -1135,6 +1165,22 @@ function ReviewDetailPage() {
             <div className="error-box">{(submitDecision.error as Error).message}</div>
           )}
         </footer>
+      )}
+
+      {!readonly && crossHeadingHint !== null && (
+        <div
+          key={crossHeadingHint.key}
+          className="review-cross-heading-hint"
+          style={{
+            position: 'absolute',
+            left: crossHeadingHint.left,
+            top: crossHeadingHint.top,
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          {t('reviews.crossHeadingHint')}
+        </div>
       )}
 
       {!readonly && popover !== null && (

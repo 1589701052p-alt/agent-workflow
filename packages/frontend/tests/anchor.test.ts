@@ -13,6 +13,7 @@ import {
   computeParagraphIdx,
   computeSectionPath,
   findAllOccurrences,
+  selectionCrossesHeading,
 } from '@/lib/review/anchor'
 
 describe('findAllOccurrences', () => {
@@ -168,6 +169,68 @@ describe('computeAnchorFromSelection', () => {
     sel.addRange(r)
     // sourceBody doesn't contain the selected substring
     expect(computeAnchorFromSelection(root, sel, 'unrelated body')).toBeNull()
+  })
+})
+
+// Locks in the cross-heading detection helper that powers the
+// "跨章节选择无法添加评审意见" hint in reviews.detail.tsx. Without this
+// exported boolean the UI couldn't tell a cross-heading rejection apart
+// from a plain collapsed / empty selection, and there'd be no way to
+// know when to show the hint vs. when to stay silent.
+describe('selectionCrossesHeading', () => {
+  let root: HTMLElement
+
+  beforeEach(() => {
+    root = document.createElement('div')
+    root.innerHTML = `
+      <h2 id="h1">Design</h2>
+      <p id="p1">first paragraph body</p>
+      <h2 id="h2">Sequence</h2>
+      <p id="p2">second paragraph body</p>
+    `
+    document.body.appendChild(root)
+  })
+
+  test('false when the range stays inside one section', () => {
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    const r = document.createRange()
+    const p = root.querySelector('#p1')!.firstChild!
+    r.setStart(p, 0)
+    r.setEnd(p, 5)
+    sel.addRange(r)
+    expect(selectionCrossesHeading(root, sel)).toBe(false)
+  })
+
+  test('true when the range starts in one section and ends in another', () => {
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    const r = document.createRange()
+    const p1 = root.querySelector('#p1')!.firstChild!
+    const p2 = root.querySelector('#p2')!.firstChild!
+    r.setStart(p1, 0)
+    r.setEnd(p2, 5)
+    sel.addRange(r)
+    expect(selectionCrossesHeading(root, sel)).toBe(true)
+  })
+
+  test('false for collapsed / empty selection (no nag when nothing is picked)', () => {
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    expect(selectionCrossesHeading(root, sel)).toBe(false)
+  })
+})
+
+describe('computeAnchorFromSelection — valid build', () => {
+  let root: HTMLElement
+
+  beforeEach(() => {
+    root = document.createElement('div')
+    root.innerHTML = `
+      <h2>Design</h2>
+      <p id="p1">The order_status enum should include partially_refunded.</p>
+    `
+    document.body.appendChild(root)
   })
 
   test('builds a well-formed anchor for a valid selection', () => {

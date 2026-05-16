@@ -56,6 +56,7 @@ export interface Resources {
     popoverPlaceholder: string
     popoverSubmit: string
     popoverCancel: string
+    crossHeadingHint: string
     diffToggle: string
     diffOff: string
     diffGranularityWord: string
@@ -242,6 +243,31 @@ export interface Resources {
     sourceSkippedDetails: string
     sourceFromPill: string
     sourceReadonlyHint: string
+    tabZip: string
+    zipEmptyHint: string
+    zipParse: string
+    zipParsing: string
+    zipImportButton: string
+    zipImporting: string
+    zipImportSummary: string
+    zipNoCandidates: string
+    zipErrorBanner: string
+    zipColCandidate: string
+    zipColDescription: string
+    zipColFiles: string
+    zipColConflict: string
+    zipColAction: string
+    zipActionImport: string
+    zipActionSkip: string
+    zipActionOverwrite: string
+    zipActionRename: string
+    zipRenameTo: string
+    zipRenameEmpty: string
+    zipRenameInvalid: string
+    zipRenameDup: string
+    zipRenameConflict: string
+    zipConflictManaged: string
+    zipConflictExternal: string
   }
   workflows: {
     title: string
@@ -283,6 +309,7 @@ export interface Resources {
     resumeLaunchLink: string
     failedBanner: string
     jumpToFailed: string
+    reviewButton: string
     worktreePreserved: string
     sectionWorkflowStatus: string
     sectionNodeRuns: string
@@ -714,6 +741,7 @@ export const zhCN: Resources = {
     popoverPlaceholder: '写下你的评审意见…',
     popoverSubmit: '提交',
     popoverCancel: '取消',
+    crossHeadingHint: '跨章节选择无法添加评审意见，请在同一章节内重新选择。',
     diffToggle: '对比上一版',
     diffOff: '原文',
     diffGranularityWord: '词',
@@ -907,6 +935,31 @@ export const zhCN: Resources = {
     sourceSkippedDetails: '展开详情',
     sourceFromPill: '来自 {{label}}',
     sourceReadonlyHint: '此技能由父目录纳管，请在外部目录里编辑文件。',
+    tabZip: '上传 ZIP',
+    zipEmptyHint: '选择一个 .zip，顶层是一个目录，里面每个子目录是一个 skill（含 SKILL.md）。',
+    zipParse: '解析',
+    zipParsing: '解析中…',
+    zipImportButton: '导入 {{n}} 个技能',
+    zipImporting: '导入中…',
+    zipImportSummary: '新建 {{c}} · 覆盖 {{u}} · 跳过 {{s}} · 失败 {{f}}',
+    zipNoCandidates: 'zip 中未找到任何技能候选。',
+    zipErrorBanner: '以下条目无法导入：',
+    zipColCandidate: '技能',
+    zipColDescription: '描述',
+    zipColFiles: '文件数',
+    zipColConflict: '冲突',
+    zipColAction: '动作',
+    zipActionImport: '作为新技能导入',
+    zipActionSkip: '跳过',
+    zipActionOverwrite: '覆盖',
+    zipActionRename: '重命名',
+    zipRenameTo: '新名称',
+    zipRenameEmpty: '请输入名称',
+    zipRenameInvalid: '需为 kebab-case',
+    zipRenameDup: '与本批次其他重名',
+    zipRenameConflict: '名称已被占用',
+    zipConflictManaged: '已存在 managed 技能',
+    zipConflictExternal: 'external 技能 — 不支持 ZIP 覆盖',
   },
   workflows: {
     title: '工作流',
@@ -949,6 +1002,7 @@ export const zhCN: Resources = {
     resumeLaunchLink: '启动新任务 →',
     failedBanner: '任务失败。',
     jumpToFailed: '跳到失败节点 ({{nodeId}})',
+    reviewButton: '去审核',
     worktreePreserved:
       'Worktree 仍保留在 {{path}}。可手动检查；结束后执行 git worktree remove 清理。',
     sectionWorkflowStatus: '工作流状态',

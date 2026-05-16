@@ -165,6 +165,17 @@ export function computeAnchorFromSelection(
 }
 
 /**
+ * True iff the user's selection spans across an `<h1>…<h6>` boundary
+ * inside `rootEl`. Used by the UI to show a "cross-section selection
+ * not supported" hint — without this, computeAnchorFromSelection just
+ * returns null and the user sees no feedback at all.
+ */
+export function selectionCrossesHeading(rootEl: HTMLElement, selection: Selection): boolean {
+  if (selection.rangeCount === 0 || selection.isCollapsed) return false
+  return rangeCrossesHeading(rootEl, selection.getRangeAt(0))
+}
+
+/**
  * Stable hash of an anchor used to key draftStore entries. Same anchor →
  * same hash; different selections → different hash (best-effort, FNV-1a
  * over selected text + section path + offsetStart).
@@ -187,9 +198,16 @@ function rangeCrossesHeading(rootEl: HTMLElement, range: Range): boolean {
   if (range.startContainer === range.endContainer) return false
   const between = rootEl.querySelectorAll<HTMLElement>(HEADING_SELECTOR)
   for (const h of between) {
-    const before = h.compareDocumentPosition(range.startContainer)
-    const after = h.compareDocumentPosition(range.endContainer)
-    if (before & Node.DOCUMENT_POSITION_FOLLOWING && after & Node.DOCUMENT_POSITION_PRECEDING) {
+    // h.compareDocumentPosition(other) bits describe `other` relative to h:
+    //   PRECEDING → other is before h
+    //   FOLLOWING → other is after h
+    // A forward selection crosses h iff the start is before h AND the end
+    // is after h. The previous impl had the two bits swapped, which made
+    // this check effectively unreachable — the silent-failure UX the
+    // crossHeadingHint addresses depended on the helper actually firing.
+    const startPos = h.compareDocumentPosition(range.startContainer)
+    const endPos = h.compareDocumentPosition(range.endContainer)
+    if (startPos & Node.DOCUMENT_POSITION_PRECEDING && endPos & Node.DOCUMENT_POSITION_FOLLOWING) {
       return true
     }
   }
