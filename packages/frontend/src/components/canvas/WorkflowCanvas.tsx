@@ -48,11 +48,16 @@ import {
   applySourcePortConnection,
   buildSourcePortDisplayEdges,
   clearSourcePortOnNodeRemoved,
+  clearSourcePortsForSyntheticIds,
   isValidSourcePortConnection,
 } from './fanoutSourceSync'
 import { syncInputDefs } from './syncInputDefs'
 import { GroupWrapperNode } from './nodes/WrapperNodes'
-import { projectDefinitionForXyflow, projectXyflowPositionsToAbsolute } from './coordProjection'
+import {
+  buildMeasuredSizesFromXyflowNodes,
+  projectDefinitionForXyflow,
+  projectXyflowPositionsToAbsolute,
+} from './coordProjection'
 import {
   applyMembershipPatch,
   resolveMembershipOnDragStop,
@@ -299,7 +304,18 @@ function CanvasInner({
         // Only the structural mutations need to round-trip into the
         // persisted WorkflowDefinition; selection-only ticks stay local.
         if (onChange !== undefined && affectsEdgeDefinition(changes)) {
-          commitChange(toDefinition(definition, nodes, next))
+          // RFC-015: deleting a synthetic sourcePort line must also clear
+          // the corresponding fanout node's sourcePort field — otherwise
+          // the def-sync rebuild immediately puts the line back.
+          const removedIds: string[] = []
+          for (const c of changes) {
+            if (c.type === 'remove') removedIds.push(c.id)
+          }
+          let nextDef = toDefinition(definition, nodes, next)
+          if (removedIds.length > 0) {
+            nextDef = clearSourcePortsForSyntheticIds(nextDef, removedIds)
+          }
+          commitChange(nextDef)
         }
         return next
       })
@@ -433,7 +449,12 @@ function CanvasInner({
       (e) =>
         !removedEdges.has(e.id) && stillIds.has(e.source.nodeId) && stillIds.has(e.target.nodeId),
     )
-    commitChange({ ...definition, nodes: keptNodes, edges: keptEdges })
+    let nextDef: WorkflowDefinition = { ...definition, nodes: keptNodes, edges: keptEdges }
+    // RFC-015: synthetic sourcePort edge ids never appear in definition.edges,
+    // so the filter above is a no-op for them — bridge delete to the field
+    // clear here too so the keyboard Delete path works.
+    nextDef = clearSourcePortsForSyntheticIds(nextDef, selection.edges)
+    commitChange(nextDef)
     setSelection({ nodes: [], edges: [] })
   }, [commitChange, definition, onChange, readOnly, selection.edges, selection.nodes])
 

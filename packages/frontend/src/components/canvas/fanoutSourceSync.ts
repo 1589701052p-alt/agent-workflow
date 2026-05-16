@@ -173,6 +173,51 @@ export function isValidSourcePortConnection(
  * (validator 'agent-multi-source-port-missing' already surfaces the
  * misconfiguration in the inspector).
  */
+/**
+ * Returns the fanout (agent-multi) node id encoded in a synthetic
+ * sourcePort edge id, or `null` if the id is not a synthetic one. Single
+ * source of truth for "is this a sourcePort line?" — both the connect
+ * path (handleEdgesChange) and the keyboard-delete path (deleteSelected)
+ * call into this.
+ */
+export function parseSyntheticSourcePortEdgeId(id: string): string | null {
+  if (!id.startsWith(SOURCE_PORT_EDGE_ID_PREFIX)) return null
+  const target = id.slice(SOURCE_PORT_EDGE_ID_PREFIX.length)
+  return target === '' ? null : target
+}
+
+/**
+ * Bridge "user deleted a synthetic sourcePort edge on the canvas" to
+ * "clear node.sourcePort on the corresponding agent-multi node". The
+ * definition.edges[] array doesn't carry the synthetic, so the normal
+ * delete path leaves the field set and the def-sync rebuild puts the
+ * line straight back — this helper closes the loop.
+ *
+ * Returns `def` by reference when no synthetic ids matched (ref-equality
+ * short-circuit, same convention as the other helpers in this file).
+ */
+export function clearSourcePortsForSyntheticIds(
+  def: WorkflowDefinition,
+  removedIds: ReadonlyArray<string>,
+): WorkflowDefinition {
+  if (removedIds.length === 0) return def
+  const targets = new Set<string>()
+  for (const id of removedIds) {
+    const t = parseSyntheticSourcePortEdgeId(id)
+    if (t !== null) targets.add(t)
+  }
+  if (targets.size === 0) return def
+  let changed = false
+  const nextNodes = def.nodes.map((n) => {
+    if (n.kind !== 'agent-multi' || !targets.has(n.id)) return n
+    const sp = readSourcePort(n)
+    if (sp === undefined || (sp.nodeId === '' && sp.portName === '')) return n
+    changed = true
+    return withSourcePort(n, EMPTY_SOURCE_PORT)
+  })
+  return changed ? { ...def, nodes: nextNodes } : def
+}
+
 export function buildSourcePortDisplayEdges(def: WorkflowDefinition): Edge[] {
   const nodesById = new Map(def.nodes.map((n) => [n.id, n]))
   const out: Edge[] = []
@@ -188,9 +233,12 @@ export function buildSourcePortDisplayEdges(def: WorkflowDefinition): Edge[] {
       target: n.id,
       targetHandle: MULTI_SOURCE_PORT_HANDLE_ID,
       style: { stroke: 'var(--accent)', strokeDasharray: '4 4', strokeWidth: 1.5 },
-      selectable: false,
-      deletable: false,
-      focusable: false,
+      // Selectable + deletable so the user can pick the line and press
+      // Delete to clear the sourcePort field. handleEdgesChange and
+      // deleteSelected both detect the synthetic id prefix and bridge
+      // delete → clearSourcePortsForSyntheticIds; without that bridge
+      // the def-sync rebuild would re-emit the same synthetic edge from
+      // the still-set field.
       data: { synthetic: 'sourcePort' },
     })
   }

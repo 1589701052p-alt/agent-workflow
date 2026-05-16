@@ -18,7 +18,9 @@ import {
   applySourcePortConnection,
   buildSourcePortDisplayEdges,
   clearSourcePortOnNodeRemoved,
+  clearSourcePortsForSyntheticIds,
   isValidSourcePortConnection,
+  parseSyntheticSourcePortEdgeId,
 } from '../src/components/canvas/fanoutSourceSync'
 
 function makeDef(extra: Partial<WorkflowDefinition>): WorkflowDefinition {
@@ -290,8 +292,6 @@ describe('buildSourcePortDisplayEdges', () => {
     expect(edge.sourceHandle).toBe('markdown_design')
     expect(edge.target).toBe('audit')
     expect(edge.targetHandle).toBe(MULTI_SOURCE_PORT_HANDLE_ID)
-    expect(edge.selectable).toBe(false)
-    expect(edge.deletable).toBe(false)
     expect(edge.data).toEqual({ synthetic: 'sourcePort' })
   })
 
@@ -320,5 +320,93 @@ describe('buildSourcePortDisplayEdges', () => {
     // toDefinition's liveById filter would never match a synthetic id against
     // a real edge id; lock the prefix so this contract stays.
     expect(result[0]?.id.startsWith(SOURCE_PORT_EDGE_ID_PREFIX)).toBe(true)
+  })
+
+  test('synthetic edges are selectable + deletable so the user can clear via Delete', () => {
+    const def = makeDef({
+      nodes: [
+        agent('designer'),
+        multi('audit', { nodeId: 'designer', portName: 'markdown_design' }),
+      ],
+    })
+    const edge = buildSourcePortDisplayEdges(def)[0]!
+    // Default xyflow truthiness: absent / undefined = enabled. We rely on
+    // that to keep the contract permissive; explicit `false` would shadow
+    // the keyboard-delete bridge.
+    expect(edge.selectable).not.toBe(false)
+    expect(edge.deletable).not.toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parseSyntheticSourcePortEdgeId + clearSourcePortsForSyntheticIds — the
+// bridge that turns "user deleted the dashed line" into "clear the field"
+// without which the def-sync rebuild puts the line straight back.
+// ---------------------------------------------------------------------------
+
+describe('parseSyntheticSourcePortEdgeId', () => {
+  test('synthetic id → target node id', () => {
+    expect(parseSyntheticSourcePortEdgeId(`${SOURCE_PORT_EDGE_ID_PREFIX}audit`)).toBe('audit')
+  })
+
+  test('non-synthetic id → null', () => {
+    expect(parseSyntheticSourcePortEdgeId('edge_abc123')).toBeNull()
+    expect(parseSyntheticSourcePortEdgeId('')).toBeNull()
+  })
+
+  test('synthetic prefix with empty target → null (malformed)', () => {
+    expect(parseSyntheticSourcePortEdgeId(SOURCE_PORT_EDGE_ID_PREFIX)).toBeNull()
+  })
+})
+
+describe('clearSourcePortsForSyntheticIds', () => {
+  test('removing a synthetic id clears the matching fanout sourcePort', () => {
+    const def = makeDef({
+      nodes: [
+        agent('designer'),
+        multi('audit', { nodeId: 'designer', portName: 'markdown_design' }),
+      ],
+    })
+    const next = clearSourcePortsForSyntheticIds(def, [`${SOURCE_PORT_EDGE_ID_PREFIX}audit`])
+    expect(next).not.toBe(def)
+    expect(readSourcePort(next, 'audit')).toEqual({ nodeId: '', portName: '' })
+  })
+
+  test('non-synthetic ids → returns def by reference', () => {
+    const def = makeDef({
+      nodes: [
+        agent('designer'),
+        multi('audit', { nodeId: 'designer', portName: 'markdown_design' }),
+      ],
+    })
+    expect(clearSourcePortsForSyntheticIds(def, ['edge_normal_123'])).toBe(def)
+  })
+
+  test('empty removed list → returns def by reference', () => {
+    const def = makeDef({
+      nodes: [multi('audit', { nodeId: 'designer', portName: 'p' })],
+    })
+    expect(clearSourcePortsForSyntheticIds(def, [])).toBe(def)
+  })
+
+  test('synthetic id pointing to a node that already has empty sourcePort → ref-equality', () => {
+    const def = makeDef({ nodes: [multi('audit')] })
+    expect(clearSourcePortsForSyntheticIds(def, [`${SOURCE_PORT_EDGE_ID_PREFIX}audit`])).toBe(def)
+  })
+
+  test('mixed ids: real + synthetic → only the synthetic targets clear', () => {
+    const def = makeDef({
+      nodes: [
+        agent('designer'),
+        multi('mA', { nodeId: 'designer', portName: 'p1' }),
+        multi('mB', { nodeId: 'designer', portName: 'p2' }),
+      ],
+    })
+    const next = clearSourcePortsForSyntheticIds(def, [
+      'edge_real_42',
+      `${SOURCE_PORT_EDGE_ID_PREFIX}mB`,
+    ])
+    expect(readSourcePort(next, 'mA')).toEqual({ nodeId: 'designer', portName: 'p1' })
+    expect(readSourcePort(next, 'mB')).toEqual({ nodeId: '', portName: '' })
   })
 })
