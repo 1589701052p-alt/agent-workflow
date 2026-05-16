@@ -42,6 +42,7 @@ import type {
   ClarifyQuestion,
   TaskWsMessage,
   WorkflowDefinition,
+  WorkflowNode,
 } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -55,8 +56,8 @@ async function seedTask(
     $schema_version: 3,
     inputs: [],
     nodes: [
-      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as any,
-      { id: 'clarify1', kind: 'clarify', title: 'Clarify' } as any,
+      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+      { id: 'clarify1', kind: 'clarify', title: 'Clarify' } as WorkflowNode,
     ],
     edges: [
       {

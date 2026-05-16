@@ -19,7 +19,7 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { resetBroadcastersForTests, TASK_CHANNEL, taskBroadcaster } from '../src/ws/broadcaster'
-import type { TaskWsMessage, WorkflowDefinition } from '@agent-workflow/shared'
+import type { TaskWsMessage, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -37,8 +37,8 @@ async function seedTask(db: DbClient): Promise<{ taskId: string; sourceRunId: st
     $schema_version: 3,
     inputs: [],
     nodes: [
-      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as any,
-      { id: 'c1', kind: 'clarify', title: 'Clarify' } as any,
+      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+      { id: 'c1', kind: 'clarify', title: 'Clarify' } as WorkflowNode,
     ],
     edges: [],
     outputs: [],

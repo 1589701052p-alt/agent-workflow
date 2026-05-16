@@ -22,6 +22,7 @@ import type {
   ClarifySession,
   ClarifySessionSummary,
   WorkflowDefinition,
+  WorkflowNode,
 } from '@agent-workflow/shared'
 
 const TOKEN = 'a'.repeat(64)
@@ -67,20 +68,14 @@ async function seedSession(
     $schema_version: 3,
     inputs: [],
     nodes: [
-      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as any,
-      { id: 'c1', kind: 'clarify', title: 'Clarify' } as any,
+      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+      { id: 'c1', kind: 'clarify', title: 'Clarify' } as WorkflowNode,
     ],
     edges: [],
     outputs: [],
   }
   // Idempotently seed workflow + task rows for this clarify session.
   const workflowId = `wf_${taskId}`
-  const wfExists = await db
-    .select()
-    .from(workflows)
-    .where((t) => undefined as any)
-    .limit(1) // typing helper
-  void wfExists
   await db
     .insert(workflows)
     .values({

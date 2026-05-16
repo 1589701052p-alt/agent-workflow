@@ -20,7 +20,7 @@ import { docVersions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import { ulid } from 'ulid'
-import type { ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
+import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -40,9 +40,9 @@ async function seed(
     $schema_version: 3,
     inputs: [],
     nodes: [
-      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as any,
-      { id: 'review1', kind: 'review' } as any,
-      { id: 'clarify1', kind: 'clarify', title: 'Clarify' } as any,
+      { id: 'designer', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+      { id: 'review1', kind: 'review' } as WorkflowNode,
+      { id: 'clarify1', kind: 'clarify', title: 'Clarify' } as WorkflowNode,
     ],
     edges: [],
     outputs: [],

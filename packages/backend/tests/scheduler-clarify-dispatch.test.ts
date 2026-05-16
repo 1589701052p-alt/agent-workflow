@@ -21,7 +21,7 @@
 // Together with clarify-options-cap.test.ts (CLI limits guard) this rounds
 // out the 7-case T11 unit budget per RFC-023 design.md §13.
 
-import type { Agent, WorkflowDefinition } from '@agent-workflow/shared'
+import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -29,14 +29,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import {
-  agents,
-  clarifySessions,
-  nodeRunOutputs,
-  nodeRuns,
-  tasks,
-  workflows,
-} from '../src/db/schema'
+import { agents, clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 
@@ -169,9 +162,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       $schema_version: 3,
       inputs: [{ kind: 'text', key: 'req', label: 'r' }],
       nodes: [
-        { id: 'in1', kind: 'input', inputKey: 'req' } as any,
-        { id: 'd', kind: 'agent-single', agentName: 'designer' } as any,
-        { id: 'c', kind: 'clarify', title: 'Clarify me' } as any,
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+        { id: 'c', kind: 'clarify', title: 'Clarify me' } as WorkflowNode,
       ],
       edges: [
         {
@@ -227,9 +220,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       $schema_version: 3,
       inputs: [{ kind: 'text', key: 'req', label: 'r' }],
       nodes: [
-        { id: 'in1', kind: 'input', inputKey: 'req' } as any,
-        { id: 'd', kind: 'agent-single', agentName: 'designer' } as any,
-        { id: 'c', kind: 'clarify', title: 'Clarify me' } as any,
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+        { id: 'c', kind: 'clarify', title: 'Clarify me' } as WorkflowNode,
       ],
       edges: [
         {
@@ -271,8 +264,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       $schema_version: 3,
       inputs: [{ kind: 'text', key: 'req', label: 'r' }],
       nodes: [
-        { id: 'in1', kind: 'input', inputKey: 'req' } as any,
-        { id: 'd', kind: 'agent-single', agentName: 'designer' } as any,
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
       ],
       edges: [
         {
@@ -304,9 +297,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       $schema_version: 3,
       inputs: [{ kind: 'text', key: 'req', label: 'r' }],
       nodes: [
-        { id: 'in1', kind: 'input', inputKey: 'req' } as any,
-        { id: 'd', kind: 'agent-single', agentName: 'designer' } as any,
-        { id: 'c', kind: 'clarify', title: 'Clarify me' } as any,
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+        { id: 'c', kind: 'clarify', title: 'Clarify me' } as WorkflowNode,
       ],
       edges: [
         {
@@ -409,13 +402,13 @@ describe('agent-multi clarify per shard', () => {
       $schema_version: 3,
       inputs: [{ kind: 'text', key: 'diff', label: 'd' }],
       nodes: [
-        { id: 'in', kind: 'input', inputKey: 'diff' } as any,
+        { id: 'in', kind: 'input', inputKey: 'diff' } as WorkflowNode,
         {
           id: 'm',
           kind: 'agent-multi',
           agentName: 'auditor',
           sourcePort: { nodeId: 'in', portName: 'diff' },
-        } as any,
+        } as WorkflowNode,
       ],
       edges: [
         {
