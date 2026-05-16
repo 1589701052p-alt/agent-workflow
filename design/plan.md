@@ -31,18 +31,19 @@ v1 后续的产品 / 技术变更以 RFC 形式落档在 `design/RFC-NNN-{slug}/
 | [RFC-004](./RFC-004-input-port-contract/proposal.md)             | Input 节点端口契约统一：scheduler portName=inputKey + 编辑器同步 `definition.inputs[]` + validator 新规则                          | Done        |
 | [RFC-005](./RFC-005-human-review/proposal.md)                    | 设计文档人工评审节点 + Markdown 渲染 / 评审意见 / 历史 + Diff（5 PR 拆分）                                                         | Done        |
 | [RFC-006](./RFC-006-node-port-ux-cleanup/proposal.md)            | 节点端口呈现重构：消除标签遮挡 + 行内布局 + 长名截断 + tooltip 兜底（编辑器 + task 详情画布共享）                                  | Done        |
-| [RFC-007](./RFC-007-canvas-review-output-drag/proposal.md)       | Canvas review / output 节点支持拖拽连线：与 agent 节点对齐 + 字段 / 边双向同步 + iterate 锁                                        | Draft       |
-| [RFC-008](./RFC-008-markdown-prose-premium/proposal.md)          | Premium Markdown 渲染（react-markdown + shiki + KaTeX + Callout + 锚点 + 字体）替换 review + 编辑器两套渲染器                      | In Progress |
-| [RFC-009](./RFC-009-review-sidebar-enhancement/proposal.md)      | Review 评论侧栏功能增强：内联编辑 + 复制 + 数量 badge + 折叠 + 拖宽 + 行号（借鉴 md-review）                                       | In Progress |
-| [RFC-010](./RFC-010-markdown-rendered-diff/proposal.md)          | Markdown 渲染态内联 Diff：替换 review word 模式（参考 markdown-diff，PUA marker + remark 插件，绕开 rehype-raw）                   | In Progress |
-| [RFC-011](./RFC-011-node-prompt-history/proposal.md)             | 节点 Prompt 历史可见性：drawer Prompt tab attempts 切换器 + review reject/iterate 改 mint 新行（保留旧 promptText）                | In Progress |
-| [RFC-012](./RFC-012-word-diff-table-preservation/proposal.md)    | Word 模式 markdown 表格保留：表格块占位符法原子化，避免 jsdiff 在分隔符 `-` 粒度上对齐打碎渲染（RFC-010 follow-up）                | In Progress |
-| [RFC-013](./RFC-013-review-historical-versions/proposal.md)      | 评审列表页历史版本浏览：行可展开列 v1..vN + 历史版只读详情（`?version=<vid>` 隐决策/评论编辑/diff toggle）                         | In Progress |
+| [RFC-007](./RFC-007-canvas-review-output-drag/proposal.md)       | Canvas review / output 节点支持拖拽连线：与 agent 节点对齐 + 字段 / 边双向同步 + iterate 锁                                        | Done        |
+| [RFC-008](./RFC-008-markdown-prose-premium/proposal.md)          | Premium Markdown 渲染（react-markdown + shiki + KaTeX + Callout + 锚点 + 字体）替换 review + 编辑器两套渲染器                      | Done        |
+| [RFC-009](./RFC-009-review-sidebar-enhancement/proposal.md)      | Review 评论侧栏功能增强：内联编辑 + 复制 + 数量 badge + 折叠 + 拖宽 + 行号（借鉴 md-review）                                       | Done        |
+| [RFC-010](./RFC-010-markdown-rendered-diff/proposal.md)          | Markdown 渲染态内联 Diff：替换 review word 模式（参考 markdown-diff，PUA marker + remark 插件，绕开 rehype-raw）                   | Done        |
+| [RFC-011](./RFC-011-node-prompt-history/proposal.md)             | 节点 Prompt 历史可见性：drawer Prompt tab attempts 切换器 + review reject/iterate 改 mint 新行（保留旧 promptText）                | Done        |
+| [RFC-012](./RFC-012-word-diff-table-preservation/proposal.md)    | Word 模式 markdown 表格保留：表格块占位符法原子化，避免 jsdiff 在分隔符 `-` 粒度上对齐打碎渲染（RFC-010 follow-up）                | Done        |
+| [RFC-013](./RFC-013-review-historical-versions/proposal.md)      | 评审列表页历史版本浏览：行可展开列 v1..vN + 历史版只读详情（`?version=<vid>` 隐决策/评论编辑/diff toggle）                         | Done        |
 | [RFC-014](./RFC-014-iterate-sibling-regen/proposal.md)           | Iterate 多文档同步重生 + agent `syncOutputsOnIterate` 开关（默认 true）+ `__sibling_outputs__` prompt 引导                         | Done        |
 | [RFC-015](./RFC-015-fanout-source-port-drag/proposal.md)         | Fanout（agent-multi）节点支持拖拽指定 sourcePort：节点顶部专用 target Handle + 拖入直接写字段、不入 edges[]                        | Done        |
 | [RFC-016](./RFC-016-wrapper-container-ux/proposal.md)            | 包装器交互重构：xyflow group 容器 + 拖入/拖出归属 + loop Inspector 候选式表单 + header pill（前端全栈、零 migration）              | Done        |
 | [RFC-017](./RFC-017-skill-source-directory/proposal.md)          | Skill 父目录批量纳管：一次登记自动跟随子 skill 增删（lazy 扫描 + 新 `skill_sources` 表 + runner 零改动）                           | Done        |
 | [RFC-018](./RFC-018-agent-md-import/proposal.md)                 | 新建代理导入 agent.md 自动填表：shared 纯函数 parser + AgentImportDialog（Upload / Paste 双入口，frontmatterExtra 兜底未识别字段） | Done        |
+| [RFC-019](./RFC-019-skill-zip-import/proposal.md)                | Skill ZIP 批量导入：上传 zip → 自动识别多 skill（顶层目录 / wrapper 两形态）→ 冲突逐项决策 → 全部 managed 形式落盘                  | Draft       |
 
 ---
 
