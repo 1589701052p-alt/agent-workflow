@@ -22,6 +22,12 @@ export const SkillSchema = z.object({
   sourceKind: SkillSourceKindSchema,
   managedPath: z.string().optional(),
   externalPath: z.string().optional(),
+  /**
+   * RFC-017: when this skill was discovered by reconciling a registered
+   * `skill_sources` parent directory, the source row's id is carried here.
+   * Hand-imported managed/external skills leave this unset.
+   */
+  sourceId: z.string().optional(),
   schemaVersion: z.number().int(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
@@ -86,3 +92,78 @@ export const WriteSkillFileSchema = z.object({
   content: z.string(),
 })
 export type WriteSkillFile = z.infer<typeof WriteSkillFileSchema>
+
+// ---------------------------------------------------------------------------
+// RFC-017: Skill sources (parent directories whose direct children are
+// auto-imported as external skills, reconciled lazily on each list request).
+// ---------------------------------------------------------------------------
+
+/** Persisted skill_sources row exposed via API. */
+export const SkillSourceSchema = z.object({
+  id: z.string(),
+  /** Absolute, canonicalized (`realpath`) parent directory path. */
+  path: z.string(),
+  /** Display label; defaults to basename(path) when not supplied. */
+  label: z.string(),
+  enabled: z.boolean(),
+  lastScannedAt: z.number().int().nullable(),
+  lastScanError: z.string().nullable(),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+})
+export type SkillSource = z.infer<typeof SkillSourceSchema>
+
+export const SkillSkipReasonSchema = z.enum([
+  'no-skill-md',
+  'invalid-name',
+  'name-conflict-manual',
+  'name-conflict-source',
+  'frontmatter-parse-failed',
+  'still-referenced',
+])
+export type SkillSkipReason = z.infer<typeof SkillSkipReasonSchema>
+
+export const SkillSkipReportSchema = z.object({
+  childPath: z.string(),
+  proposedName: z.string().optional(),
+  reason: SkillSkipReasonSchema,
+  detail: z.string().optional(),
+})
+export type SkillSkipReport = z.infer<typeof SkillSkipReportSchema>
+
+export const SkillSourceWithStatsSchema = SkillSourceSchema.extend({
+  childCount: z.number().int().nonnegative(),
+  skipped: z.array(SkillSkipReportSchema),
+})
+export type SkillSourceWithStats = z.infer<typeof SkillSourceWithStatsSchema>
+
+/** POST /api/skill-sources body. */
+export const CreateSkillSourceSchema = z.object({
+  path: z.string().min(1),
+  label: z.string().optional(),
+})
+export type CreateSkillSource = z.infer<typeof CreateSkillSourceSchema>
+
+/** PATCH /api/skill-sources/:id body. */
+export const UpdateSkillSourceSchema = z.object({
+  label: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+})
+export type UpdateSkillSource = z.infer<typeof UpdateSkillSourceSchema>
+
+/** POST /api/skill-sources response shape. */
+export const RegisterSkillSourceResponseSchema = z.object({
+  source: SkillSourceWithStatsSchema,
+  imported: z.array(SkillSchema),
+  skipped: z.array(SkillSkipReportSchema),
+})
+export type RegisterSkillSourceResponse = z.infer<typeof RegisterSkillSourceResponseSchema>
+
+/** POST /api/skill-sources/:id/rescan response shape. */
+export const RescanSkillSourceResponseSchema = z.object({
+  source: SkillSourceWithStatsSchema,
+  imported: z.array(SkillSchema),
+  deleted: z.array(z.string()),
+  skipped: z.array(SkillSkipReportSchema),
+})
+export type RescanSkillSourceResponse = z.infer<typeof RescanSkillSourceResponseSchema>

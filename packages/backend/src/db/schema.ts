@@ -17,6 +17,13 @@ export const agents = sqliteTable('agents', {
   description: text('description').notNull().default(''),
   outputs: text('outputs').notNull().default('[]'), // JSON string[] of port names
   readonly: integer('readonly', { mode: 'boolean' }).notNull().default(false),
+  // RFC-014: agent-level switch. When true (default), an iterate review decision
+  // on a node whose upstream agent declares ≥ 2 markdown[_file] outputs will
+  // re-generate every markdown[_file] sibling port and cascade their sibling
+  // reviews back into awaiting_review. Author opt-out by setting false.
+  syncOutputsOnIterate: integer('sync_outputs_on_iterate', { mode: 'boolean' })
+    .notNull()
+    .default(true),
   model: text('model'), // nullable; falls back to settings.defaultModel
   variant: text('variant'),
   temperature: real('temperature'),
@@ -36,16 +43,18 @@ export const agents = sqliteTable('agents', {
 })
 
 // -----------------------------------------------------------------------------
-// skills — fs is source of truth (~/.agent-workflow/skills/{name}/files/).
-// DB stores only the index.
+// skill_sources — RFC-017. Parent directory whose direct child subdirectories
+// (each containing a SKILL.md) get auto-imported into `skills` with
+// sourceKind='external' + sourceId = this row's id. Reconciled lazily on
+// daemon boot + each GET /api/skills.
 // -----------------------------------------------------------------------------
-export const skills = sqliteTable('skills', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull().unique(),
-  description: text('description').notNull().default(''),
-  sourceKind: text('source_kind', { enum: ['managed', 'external'] }).notNull(),
-  managedPath: text('managed_path'), // e.g. 'skills/{name}/files/' relative to app dir
-  externalPath: text('external_path'), // absolute path
+export const skillSources = sqliteTable('skill_sources', {
+  id: text('id').primaryKey(), // ULID
+  path: text('path').notNull().unique(), // canonicalized absolute path (realpath)
+  label: text('label').notNull(), // defaults to basename(path) at create time
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  lastScannedAt: integer('last_scanned_at'), // unix ms; null = never scanned
+  lastScanError: text('last_scan_error'), // short error code OR summary of skipped reports
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -54,6 +63,35 @@ export const skills = sqliteTable('skills', {
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
 })
+
+// -----------------------------------------------------------------------------
+// skills — fs is source of truth (~/.agent-workflow/skills/{name}/files/).
+// DB stores only the index.
+// -----------------------------------------------------------------------------
+export const skills = sqliteTable(
+  'skills',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull().unique(),
+    description: text('description').notNull().default(''),
+    sourceKind: text('source_kind', { enum: ['managed', 'external'] }).notNull(),
+    managedPath: text('managed_path'), // e.g. 'skills/{name}/files/' relative to app dir
+    externalPath: text('external_path'), // absolute path
+    // RFC-017: source-folder-derived rows tag the originating skill_sources row.
+    // ON DELETE SET NULL is defensive; service layer deletes child skills first.
+    sourceId: text('source_id').references(() => skillSources.id, { onDelete: 'set null' }),
+    schemaVersion: integer('schema_version').notNull().default(1),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    sourceIdx: index('skills_source_id_idx').on(t.sourceId),
+  }),
+)
 
 // -----------------------------------------------------------------------------
 // workflows — DB is source of truth; YAML import/export is a transport, not source.

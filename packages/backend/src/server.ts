@@ -13,6 +13,7 @@ import { mountHealthRoutes } from '@/routes/health'
 import { mountRepoRoutes } from '@/routes/repos'
 import { mountRuntimeRoutes } from '@/routes/runtime'
 import { mountSkillRoutes } from '@/routes/skills'
+import { mountSkillSourceRoutes } from '@/routes/skill-sources'
 import { mountReviewRoutes } from '@/routes/reviews'
 import { mountTaskRoutes } from '@/routes/tasks'
 import { mountWorkflowRoutes } from '@/routes/workflows'
@@ -59,6 +60,7 @@ export function createApp(deps: AppDeps): Hono {
   mountRuntimeRoutes(app, deps)
   mountAgentRoutes(app, deps)
   mountSkillRoutes(app, deps)
+  mountSkillSourceRoutes(app, deps)
   mountRepoRoutes(app, deps)
   mountWorkflowRoutes(app, deps)
   mountTaskRoutes(app, deps)

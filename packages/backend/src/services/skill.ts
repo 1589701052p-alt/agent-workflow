@@ -47,6 +47,12 @@ export interface SkillFsOptions {
 // --- query helpers ---
 
 export async function listSkills(db: DbClient): Promise<Skill[]> {
+  // RFC-017: lazy reconcile every enabled skill_source before returning, so
+  // child skills mirror the filesystem without a manual rescan. The helper
+  // swallows per-source errors into lastScanError; listing never fails when a
+  // parent dir is temporarily missing.
+  const { reconcileAllSources } = await import('@/services/skill-source')
+  await reconcileAllSources(db)
   const rows = await db.select().from(skills)
   return rows.map(rowToSkill)
 }
@@ -233,12 +239,7 @@ export async function writeSkillContent(
 ): Promise<SkillContent> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
-  if (skill.sourceKind === 'external') {
-    throw new ConflictError(
-      'skill-external-readonly',
-      `skill '${name}' is external; edit on disk instead`,
-    )
-  }
+  ensureSkillIsWritable(skill)
   const current = await readSkillContent(db, opts, name).catch(() => ({
     name: skill.name,
     description: skill.description,
@@ -340,12 +341,7 @@ export async function writeSkillFile(
 ): Promise<void> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
-  if (skill.sourceKind === 'external') {
-    throw new ConflictError(
-      'skill-external-readonly',
-      `skill '${name}' is external; edit on disk instead`,
-    )
-  }
+  ensureSkillIsWritable(skill)
   const root = skillRoot(skill, opts)
   const abs = safeJoin(root, relPath)
   mkdirSync(dirname(abs), { recursive: true })
@@ -363,12 +359,7 @@ export async function deleteSkillFile(
 ): Promise<void> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
-  if (skill.sourceKind === 'external') {
-    throw new ConflictError(
-      'skill-external-readonly',
-      `skill '${name}' is external; edit on disk instead`,
-    )
-  }
+  ensureSkillIsWritable(skill)
   // SKILL.md is special — refuse to delete it; users edit via /content endpoint.
   if (normalizeSlash(relPath) === 'SKILL.md') {
     throw new ConflictError(
@@ -408,9 +399,32 @@ function rowToSkill(row: SkillRow): Skill {
   }
   if (row.managedPath !== null) out.managedPath = row.managedPath
   if (row.externalPath !== null) out.externalPath = row.externalPath
+  if (row.sourceId !== null) out.sourceId = row.sourceId
   return out
 }
 
 function normalizeSlash(p: string): string {
   return p.split(sep).join('/')
+}
+
+/**
+ * RFC-017: enforce "external folders are read-only from the platform"
+ * uniformly. Hand-imported `sourceKind='external'` rows keep the original
+ * `skill-external-readonly` code; rows imported by a registered
+ * skill_sources row carry `sourceId != null` and surface
+ * `skill-source-readonly` so the UI can render a precise "edit in the source
+ * directory" hint.
+ */
+function ensureSkillIsWritable(skill: Skill): void {
+  if (skill.sourceKind !== 'external') return
+  if (skill.sourceId !== undefined) {
+    throw new ConflictError(
+      'skill-source-readonly',
+      `skill '${skill.name}' is managed by a folder source; edit files in the source directory`,
+    )
+  }
+  throw new ConflictError(
+    'skill-external-readonly',
+    `skill '${skill.name}' is external; edit on disk instead`,
+  )
 }

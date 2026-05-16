@@ -114,6 +114,19 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     log.warn('orphan reap failed', { error: err instanceof Error ? err.message : String(err) })
   }
 
+  // 5c. RFC-017: reconcile registered skill_sources up-front so the first
+  // /api/skills hit (likely the SPA's skills query) sees the current set of
+  // child skills. Per-source failures are already swallowed into
+  // lastScanError; never abort daemon start on them.
+  try {
+    const { reconcileAllSources } = await import('@/services/skill-source')
+    await reconcileAllSources(db)
+  } catch (err) {
+    log.warn('skill-source reconcile on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })

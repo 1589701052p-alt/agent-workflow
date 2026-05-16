@@ -321,6 +321,7 @@ export interface Resources {
     validationOk: string
     validationIssues: string
     validationWarnings: string
+    validationAutoFitWrapper: string
     paletteFilter: string
     paletteNoMatches: string
     paletteAgents: string
@@ -424,6 +425,11 @@ export interface Resources {
     outputNamePlaceholder: string
     innerNodeIdPlaceholder: string
     addBinding: string
+    loopExitNodeIdSelect: string
+    loopExitPortNameSelect: string
+    loopExitInvalidNodeId: string
+    loopExitInvalidPortName: string
+    loopBindingInvalid: string
     fieldAgent: string
     fieldAgentHint: string
     pickAgent: string
@@ -480,6 +486,8 @@ export interface Resources {
     skillsPickerLoadFailed: string
     fieldReadonly: string
     fieldReadonlyHint: string
+    fieldSyncOutputsOnIterate: string
+    fieldSyncOutputsOnIterateHint: string
     fieldModel: string
     modelPlaceholder: string
     fieldVariant: string
@@ -980,6 +988,7 @@ export const zhCN: Resources = {
     validationOk: '✓ 校验通过',
     validationIssues: '{{n}} 个问题',
     validationWarnings: '{{n}} 个警告（不阻塞启动）',
+    validationAutoFitWrapper: '自适应',
     paletteFilter: '过滤面板…',
     paletteNoMatches: '没有匹配项。',
     paletteAgents: '代理',
@@ -1086,6 +1095,11 @@ export const zhCN: Resources = {
     outputNamePlaceholder: '输出名',
     innerNodeIdPlaceholder: '内部 nodeId',
     addBinding: '+ 增加绑定',
+    loopExitNodeIdSelect: '— 选择一个循环内节点 —',
+    loopExitPortNameSelect: '— 选择端口 —',
+    loopExitInvalidNodeId: '"{{nodeId}}" 已不在该循环内，请重新选择当前成员节点。',
+    loopExitInvalidPortName: '"{{portName}}" 不是该节点声明的输出端口，请重新选择。',
+    loopBindingInvalid: '"{{nodeId}}.{{portName}}" 不是当前循环成员端口，请重新选择。',
     fieldAgent: '代理',
     fieldAgentHint: 'Fan-out 会按 sourcePort 把子运行切片。',
     pickAgent: '— 选一个代理 —',
@@ -1143,6 +1157,9 @@ export const zhCN: Resources = {
     skillsPickerLoadFailed: '加载技能列表失败；仍可在下方手动输入。',
     fieldReadonly: '只读',
     fieldReadonlyHint: '只读 agent 可在同一 task 中并发；可写 agent 会串行。',
+    fieldSyncOutputsOnIterate: '文档迭代期间是否同步刷新本代理生成的其他文档',
+    fieldSyncOutputsOnIterateHint:
+      '仅当本代理 outputs 含 ≥ 2 个 markdown / markdown_file 时实际生效；关闭则在用户点"返回修改"时只重生被评审的那一份，其他文档沿用上一版本。',
     fieldModel: 'Model',
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
     fieldVariant: 'Variant',

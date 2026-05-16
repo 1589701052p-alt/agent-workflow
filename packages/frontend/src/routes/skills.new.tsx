@@ -18,7 +18,13 @@ export const Route = createRoute({
   component: SkillCreatePage,
 })
 
-type Tab = 'managed' | 'external'
+type Tab = 'managed' | 'external' | 'folder'
+
+interface RegisterSourceResponse {
+  source: { id: string; label: string; childCount: number }
+  imported: Array<{ name: string }>
+  skipped: Array<{ proposedName?: string; reason: string }>
+}
 
 function SkillCreatePage() {
   const { t } = useTranslation()
@@ -29,6 +35,8 @@ function SkillCreatePage() {
   const [description, setDescription] = useState('')
   const [bodyMd, setBodyMd] = useState('')
   const [externalPath, setExternalPath] = useState('')
+  const [folderPath, setFolderPath] = useState('')
+  const [folderLabel, setFolderLabel] = useState('')
 
   const create = useMutation({
     mutationFn: (): Promise<Skill> => {
@@ -43,11 +51,26 @@ function SkillCreatePage() {
     },
   })
 
+  const registerFolder = useMutation({
+    mutationFn: (): Promise<RegisterSourceResponse> =>
+      api.post<RegisterSourceResponse>('/api/skill-sources', {
+        path: folderPath,
+        ...(folderLabel ? { label: folderLabel } : {}),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['skills'] })
+      void qc.invalidateQueries({ queryKey: ['skill-sources'] })
+      navigate({ to: '/skills' })
+    },
+  })
+
   const disabled =
-    name === '' ||
-    create.isPending ||
-    (tab === 'external' && externalPath === '') ||
-    !SKILL_NAME_RE.test(name)
+    tab === 'folder'
+      ? folderPath === '' || registerFolder.isPending
+      : name === '' ||
+        create.isPending ||
+        (tab === 'external' && externalPath === '') ||
+        !SKILL_NAME_RE.test(name)
 
   return (
     <div className="page">
@@ -77,32 +100,61 @@ function SkillCreatePage() {
         >
           {t('skills.tabExternal')}
         </button>
+        <button
+          type="button"
+          className={`tabs__tab ${tab === 'folder' ? 'tabs__tab--active' : ''}`}
+          onClick={() => setTab('folder')}
+        >
+          {t('skills.tabFolder')}
+        </button>
       </div>
 
       <div className="form-grid">
-        <Field label={t('skills.fieldName')} required hint={t('skills.fieldNameHint')}>
-          <TextInput value={name} onChange={setName} required pattern={SKILL_NAME_RE.source} />
-        </Field>
-        <Field label={t('skills.fieldDescription')}>
-          <TextInput value={description} onChange={setDescription} />
-        </Field>
-        {tab === 'managed' ? (
-          <Field label={t('skills.fieldBody')}>
-            <TextArea value={bodyMd} onChange={setBodyMd} rows={10} monospace />
-          </Field>
-        ) : (
-          <Field
-            label={t('skills.fieldExternalPath')}
-            required
-            hint={t('skills.fieldExternalPathHint')}
-          >
-            <TextInput
-              value={externalPath}
-              onChange={setExternalPath}
-              placeholder={t('skills.externalPathPlaceholder')}
+        {tab === 'folder' ? (
+          <>
+            <Field
+              label={t('skills.fieldFolderPath')}
               required
-            />
-          </Field>
+              hint={t('skills.fieldFolderPathHint')}
+            >
+              <TextInput
+                value={folderPath}
+                onChange={setFolderPath}
+                placeholder={t('skills.folderPathPlaceholder')}
+                required
+              />
+            </Field>
+            <Field label={t('skills.fieldFolderLabel')} hint={t('skills.fieldFolderLabelHint')}>
+              <TextInput value={folderLabel} onChange={setFolderLabel} />
+            </Field>
+          </>
+        ) : (
+          <>
+            <Field label={t('skills.fieldName')} required hint={t('skills.fieldNameHint')}>
+              <TextInput value={name} onChange={setName} required pattern={SKILL_NAME_RE.source} />
+            </Field>
+            <Field label={t('skills.fieldDescription')}>
+              <TextInput value={description} onChange={setDescription} />
+            </Field>
+            {tab === 'managed' ? (
+              <Field label={t('skills.fieldBody')}>
+                <TextArea value={bodyMd} onChange={setBodyMd} rows={10} monospace />
+              </Field>
+            ) : (
+              <Field
+                label={t('skills.fieldExternalPath')}
+                required
+                hint={t('skills.fieldExternalPathHint')}
+              >
+                <TextInput
+                  value={externalPath}
+                  onChange={setExternalPath}
+                  placeholder={t('skills.externalPathPlaceholder')}
+                  required
+                />
+              </Field>
+            )}
+          </>
         )}
       </div>
 
@@ -110,14 +162,25 @@ function SkillCreatePage() {
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => create.mutate()}
+          onClick={() => (tab === 'folder' ? registerFolder.mutate() : create.mutate())}
           disabled={disabled}
         >
-          {create.isPending ? t('common.creating') : t('skills.createButton')}
+          {tab === 'folder'
+            ? registerFolder.isPending
+              ? t('common.creating')
+              : t('skills.createFolderButton')
+            : create.isPending
+              ? t('common.creating')
+              : t('skills.createButton')}
         </button>
-        {create.error !== null && create.error !== undefined && (
+        {tab !== 'folder' && create.error !== null && create.error !== undefined && (
           <span className="form-actions__error">{describeError(create.error)}</span>
         )}
+        {tab === 'folder' &&
+          registerFolder.error !== null &&
+          registerFolder.error !== undefined && (
+            <span className="form-actions__error">{describeError(registerFolder.error)}</span>
+          )}
       </div>
     </div>
   )

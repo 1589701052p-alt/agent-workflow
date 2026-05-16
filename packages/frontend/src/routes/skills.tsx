@@ -3,10 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import type { Skill } from '@agent-workflow/shared'
+import type { Skill, SkillSourceWithStats } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { ErrorBanner } from '@/components/ErrorBanner'
+import { SkillSourcesCard } from '@/components/SkillSourcesCard'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -22,6 +23,13 @@ function SkillsPage() {
     queryKey: ['skills'],
     queryFn: ({ signal }) => api.get('/api/skills', undefined, signal),
   })
+  const sourceListQuery = useQuery<{ sources: SkillSourceWithStats[] }>({
+    queryKey: ['skill-sources'],
+    queryFn: ({ signal }) => api.get('/api/skill-sources', undefined, signal),
+  })
+  const labelById = new Map<string, string>(
+    (sourceListQuery.data?.sources ?? []).map((s) => [s.id, s.label]),
+  )
 
   const del = useMutation({
     mutationFn: (name: string) => api.delete(`/api/skills/${encodeURIComponent(name)}`),
@@ -74,6 +82,17 @@ function SkillsPage() {
                   <Link to="/skills/$name" params={{ name: s.name }} className="data-table__link">
                     {s.name}
                   </Link>
+                  {s.sourceId !== undefined && (
+                    <a
+                      href={`#source-${s.sourceId}`}
+                      className="source-pill"
+                      data-testid="source-pill"
+                    >
+                      {t('skills.sourceFromPill', {
+                        label: labelById.get(s.sourceId) ?? s.sourceId,
+                      })}
+                    </a>
+                  )}
                 </td>
                 <td>
                   <span className={`chip chip--tight chip--${s.sourceKind}`}>{s.sourceKind}</span>
@@ -99,6 +118,8 @@ function SkillsPage() {
           </tbody>
         </table>
       )}
+
+      <SkillSourcesCard />
     </div>
   )
 }
