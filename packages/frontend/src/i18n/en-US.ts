@@ -336,6 +336,7 @@ export const enUS: Resources = {
     validationOk: '✓ valid',
     validationIssues: '{{n}} issue(s)',
     validationWarnings: '{{n}} warning(s) — does not block launch',
+    validationAutoFitWrapper: 'Auto-fit',
     paletteFilter: 'Filter palette…',
     paletteNoMatches: 'No matches.',
     paletteAgents: 'Agents',
@@ -450,6 +451,14 @@ export const enUS: Resources = {
     outputNamePlaceholder: 'output name',
     innerNodeIdPlaceholder: 'inner nodeId',
     addBinding: '+ Add binding',
+    // RFC-016: candidate-driven selects for loop exit + outputBindings.
+    loopExitNodeIdSelect: '— pick a loop member —',
+    loopExitPortNameSelect: '— pick a port —',
+    loopExitInvalidNodeId:
+      "'{{nodeId}}' is no longer a direct member of this loop; pick a current member.",
+    loopExitInvalidPortName: "'{{portName}}' is not declared by this node; pick a current port.",
+    loopBindingInvalid:
+      "'{{nodeId}}.{{portName}}' is not a current loop member port; pick a valid one.",
     fieldAgent: 'Agent',
     fieldAgentHint: 'Fan-out shards sourcePort across child runs.',
     pickAgent: '— pick an agent —',
@@ -510,6 +519,9 @@ export const enUS: Resources = {
     skillsPickerLoadFailed: 'Failed to load skill list; you can still type names below.',
     fieldReadonly: 'Read-only',
     fieldReadonlyHint: 'Read-only agents can run concurrently in the same task; writers serialize.',
+    fieldSyncOutputsOnIterate: 'Sync-refresh sibling documents when one is returned for revision',
+    fieldSyncOutputsOnIterateHint:
+      'Only applies when this agent emits ≥ 2 markdown / markdown_file outputs. When off, an iterate decision regenerates only the reviewed document; siblings keep their previous version.',
     fieldModel: 'Model',
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
     fieldVariant: 'Variant',
@@ -538,8 +550,7 @@ export const enUS: Resources = {
       applyButton: 'Apply',
       cancelButton: 'Cancel',
       previewEmpty: 'No fields detected. The file may be empty or only contain a body.',
-      willOverwrite:
-        'Apply will overwrite {{count}} field(s) you have edited: {{fields}}',
+      willOverwrite: 'Apply will overwrite {{count}} field(s) you have edited: {{fields}}',
       footerHint: 'Fills the form below; you still need to save.',
       bodySizeHint: '({{bytes}} bytes)',
       routedTo: {
@@ -686,7 +697,8 @@ export const enUS: Resources = {
     fitToChildren: 'Fit to children',
     unwrap: 'Unwrap',
     deleteWithInner: 'Delete wrapper and inner nodes',
-    confirmDeleteWithInner: 'Delete this wrapper and all {{count}} inner node(s)? This cannot be undone.',
+    confirmDeleteWithInner:
+      'Delete this wrapper and all {{count}} inner node(s)? This cannot be undone.',
   },
   errors: {
     'http-401': 'Unauthorized — please sign in again.',
