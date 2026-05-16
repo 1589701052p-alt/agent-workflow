@@ -103,6 +103,17 @@ describe('editor header is trimmed so the canvas owns the viewport', () => {
     const body = ruleBody('.page--editor .form-grid .form-input')
     expect(body).toMatch(/padding:\s*4px 8px/)
   })
+
+  // Locks in the fix for "name/description boxes look cut off at the page
+  // edges": .page--editor has overflow:hidden, and the form inputs use
+  // width:100%, so without an inline gutter on the row, the inputs sit
+  // flush against the clip boundary. The 1px border crowds the edge and
+  // the :focus 2px outline gets clipped on the outer side. A small
+  // padding-inline on the top-level form-grid restores breathing room.
+  test('editor top-level form-grid carries an inline gutter for focus outlines', () => {
+    const body = ruleBody('.page--editor > .form-grid')
+    expect(body).toMatch(/padding-inline:\s*2px/)
+  })
 })
 
 describe('palette item description is clamped to 2 lines', () => {

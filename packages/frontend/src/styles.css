@@ -1082,6 +1082,16 @@ code {
   gap: 8px;
 }
 
+/* The name/description row sits as a direct child of .page--editor, which
+ * has overflow:hidden to keep the canvas confined to the viewport. Inputs
+ * inside use width:100%, so without a horizontal gutter their left/right
+ * edges land exactly on the clip boundary — the 1px border crowds the
+ * edge and the 2px focus outline gets clipped. A 2px inline padding gives
+ * the outline room to render without measurably shrinking the canvas. */
+.page--editor > .form-grid {
+  padding-inline: 2px;
+}
+
 .page--editor .form-grid .field {
   gap: 2px;
 }
