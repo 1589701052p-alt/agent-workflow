@@ -13,6 +13,7 @@ function emptyDraft(): CreateAgent {
     description: '',
     outputs: [],
     readonly: false,
+    syncOutputsOnIterate: true,
     permission: {},
     skills: [],
     frontmatterExtra: {},

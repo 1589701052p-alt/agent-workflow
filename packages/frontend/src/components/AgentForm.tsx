@@ -24,6 +24,7 @@ const DEFAULT: CreateAgent = {
   description: '',
   outputs: [],
   readonly: false,
+  syncOutputsOnIterate: true,
   permission: {},
   skills: [],
   frontmatterExtra: {},
@@ -84,6 +85,13 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           onChange={(v) => patch('readonly', v)}
           label={t('agentForm.fieldReadonly')}
           hint={t('agentForm.fieldReadonlyHint')}
+        />
+
+        <Switch
+          checked={value.syncOutputsOnIterate !== false}
+          onChange={(v) => patch('syncOutputsOnIterate', v)}
+          label={t('agentForm.fieldSyncOutputsOnIterate')}
+          hint={t('agentForm.fieldSyncOutputsOnIterateHint')}
         />
 
         <div className="form-grid form-grid--cols-3">

@@ -128,6 +128,83 @@ describe('RFC-005 review-prompt token substitution', () => {
     expect(out).toContain('/repo|main|task_1|designer')
   })
 
+  // -------------------------------------------------------------------------
+  // RFC-014: {{__sibling_outputs__}} token. Only set on iterate path when the
+  // upstream declares ≥ 2 markdown[_file] outputs AND syncOutputsOnIterate=true;
+  // the value is a pre-rendered markdown block containing the English
+  // consistency instruction prefix + each sibling document's current body.
+  //
+  // If this goes red:
+  //   - check packages/shared/src/prompt.ts BUILTIN_VARS / switch / auto-append
+  //   - check services/review.ts buildSiblingOutputsBlock
+  // -------------------------------------------------------------------------
+
+  test('RFC-014 {{__sibling_outputs__}} substitutes from reviewContext.siblingOutputs', () => {
+    const block =
+      'You also produced the following sibling documents. ' +
+      'They are tightly coupled with the document being revised; ' +
+      'rewrite them coherently so the whole set stays consistent.\n\n' +
+      '### proposal\nA proposal body.\n\n### plan\nA plan body.'
+    const out = renderUserPrompt({
+      promptTemplate: 'sibling block follows:\n{{__sibling_outputs__}}',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      reviewContext: { siblingOutputs: block },
+    })
+    expect(out).toContain('sibling block follows:\n' + block)
+  })
+
+  test('RFC-014 template omits token → auto-append `## Sibling Outputs` section', () => {
+    const block = 'leading sentence.\n\n### proposal\nA proposal body.'
+    const out = renderUserPrompt({
+      promptTemplate: 'do thing',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      reviewContext: { siblingOutputs: block },
+    })
+    expect(out).toContain('## Sibling Outputs\n' + block)
+  })
+
+  test('RFC-014 template references token → NO double `## Sibling Outputs` heading', () => {
+    const block = 'leading sentence.\n\n### proposal\nx'
+    const out = renderUserPrompt({
+      promptTemplate: 'inline: {{__sibling_outputs__}}',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      reviewContext: { siblingOutputs: block },
+    })
+    expect(out).toContain('inline: ' + block)
+    expect(out).not.toContain('## Sibling Outputs')
+  })
+
+  test('RFC-014 siblingOutputs undefined → token resolves to empty string, no section', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'x={{__sibling_outputs__}}',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      reviewContext: { rejection: 'r' },
+    })
+    expect(out).toContain('x=')
+    expect(out).not.toContain('## Sibling Outputs')
+  })
+
+  test('RFC-014 A6 — reject path leaves __sibling_outputs__ empty (no auto-append)', () => {
+    // The reject decision must NOT inject sibling_outputs even if siblings
+    // exist. Locks the design-doc commitment in RFC-014 §5 + A6.
+    const out = renderUserPrompt({
+      promptTemplate: 'rerun: {{__review_rejection__}}',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      reviewContext: { rejection: 'r-text' /* siblingOutputs absent */ },
+    })
+    expect(out).not.toContain('## Sibling Outputs')
+  })
+
   test('per-port unreferenced sections still emit — auto-append section logic respects RFC-005 order', () => {
     const out = renderUserPrompt({
       promptTemplate: 'do thing',
@@ -164,5 +241,9 @@ describe('RFC-005 prompt token names are stable in source', () => {
 
   test('shared/prompt.ts mentions __iterate_target_port__ literally', () => {
     expect(promptSrc).toContain('__iterate_target_port__')
+  })
+
+  test('RFC-014 — shared/prompt.ts mentions __sibling_outputs__ literally', () => {
+    expect(promptSrc).toContain('__sibling_outputs__')
   })
 })

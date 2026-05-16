@@ -108,6 +108,7 @@ export function agentToDraft(a: Agent): CreateAgent {
     description: a.description,
     outputs: a.outputs,
     readonly: a.readonly,
+    syncOutputsOnIterate: a.syncOutputsOnIterate,
     permission: a.permission,
     skills: a.skills,
     frontmatterExtra: a.frontmatterExtra,

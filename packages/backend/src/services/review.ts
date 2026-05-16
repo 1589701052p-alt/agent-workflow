@@ -24,7 +24,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, ne } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type {
   AgentOutputKind,
@@ -39,6 +39,7 @@ import type {
   WorkflowDefinition,
   WorkflowNode,
 } from '@agent-workflow/shared'
+import { isMultiMarkdownUpstream, SIBLING_OUTPUTS_INSTRUCTION } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import {
   agents as agentsTable,
@@ -1198,10 +1199,24 @@ export async function submitReviewDecision(
     })
   }
 
-  // Sibling cascade (reject only): every other review node bound to the same
-  // source-node also returns to awaiting_review (the upstream re-run will
-  // invalidate their content). RFC-005 A2.
+  // Sibling cascade:
+  //  - reject (RFC-005 A2): always cascade; all sibling reviews invalidated.
+  //  - iterate (RFC-014 §2.1 #3): cascade only when the upstream agent has
+  //    `syncOutputsOnIterate: true` AND declares ≥ 2 markdown[_file] outputs.
+  //    Already-approved siblings get pulled back to awaiting_review with a
+  //    bumped reviewIteration — locked by review-iterate-sibling-cascade.test.ts.
+  let cascadeReason: 'rejected' | 'iterated' | null = null
   if (args.decision === 'rejected') {
+    cascadeReason = 'rejected'
+  } else if (args.decision === 'iterated') {
+    const triggered = await iterateSiblingCascadeApplies({
+      db: args.db,
+      upstreamNodeId: dv.sourceNodeId,
+      definition,
+    })
+    if (triggered) cascadeReason = 'iterated'
+  }
+  if (cascadeReason !== null) {
     await cascadeSiblingReviews({
       db: args.db,
       definition,
@@ -1209,6 +1224,7 @@ export async function submitReviewDecision(
       iteration: run.iteration,
       upstreamNodeId: dv.sourceNodeId,
       exceptReviewNodeId: dv.reviewNodeId,
+      triggeredBy: cascadeReason,
     })
   }
 
@@ -1229,6 +1245,63 @@ interface CascadeSiblingArgs {
   iteration: number
   upstreamNodeId: string
   exceptReviewNodeId: string
+  /**
+   * RFC-014: which decision triggered this cascade. Pre-RFC-014 callers only
+   * fired this on reject; the optional default keeps that backward compat.
+   */
+  triggeredBy?: 'rejected' | 'iterated'
+}
+
+/**
+ * RFC-014 §2.2: check whether an iterate decision should trigger the same
+ * sibling-review cascade reject already does. True iff the upstream agent has
+ * `syncOutputsOnIterate: true` AND declares ≥ 2 markdown[_file] outputs.
+ */
+async function iterateSiblingCascadeApplies(args: {
+  db: DbClient
+  upstreamNodeId: string
+  definition: WorkflowDefinition
+}): Promise<boolean> {
+  const upstreamNode = args.definition.nodes.find((n) => n.id === args.upstreamNodeId)
+  if (upstreamNode === undefined) return false
+  const agentName = (upstreamNode as Record<string, unknown>).agentName
+  if (typeof agentName !== 'string' || agentName.length === 0) return false
+  const agentRows = await args.db
+    .select()
+    .from(agentsTable)
+    .where(eq(agentsTable.name, agentName))
+    .limit(1)
+  const agentRow = agentRows[0]
+  if (agentRow === undefined) return false
+  if (!agentRow.syncOutputsOnIterate) return false
+  let outputKinds: Record<string, AgentOutputKind> = {}
+  try {
+    const fmExtra = JSON.parse(agentRow.frontmatterExtra) as Record<string, unknown>
+    const raw = fmExtra.outputKinds
+    if (raw !== null && raw !== undefined && typeof raw === 'object') {
+      for (const [port, kind] of Object.entries(raw as Record<string, unknown>)) {
+        if (kind === 'markdown' || kind === 'markdown_file' || kind === 'string') {
+          outputKinds[port] = kind
+        }
+      }
+    }
+  } catch {
+    outputKinds = {}
+  }
+  let outputNames: string[] = []
+  try {
+    outputNames = JSON.parse(agentRow.outputs) as string[]
+  } catch {
+    return false
+  }
+  const { trigger } = isMultiMarkdownUpstream({
+    outputs: outputNames.map((name) => {
+      const kind = outputKinds[name]
+      return kind !== undefined ? { name, kind } : { name }
+    }),
+    syncOutputsOnIterate: agentRow.syncOutputsOnIterate,
+  })
+  return trigger
 }
 
 async function cascadeSiblingReviews(args: CascadeSiblingArgs): Promise<void> {
@@ -1330,18 +1403,40 @@ export function renderCommentsForPrompt(
 /**
  * Build the ReviewPromptContext for the upstream re-run on reject/iterate.
  * Called by the scheduler when it re-runs the upstream node after a decision.
+ *
+ * RFC-014: on the iterate path, if the upstream agent declares ≥ 2 markdown
+ * outputs AND has `syncOutputsOnIterate: true`, the context also carries a
+ * pre-rendered `siblingOutputs` block (English consistency instruction +
+ * each sibling document's current body). Reject path always leaves
+ * `siblingOutputs` undefined — locked by review-prompt-injection.test.ts A6.
  */
 export async function buildReviewPromptContext(
   db: DbClient,
+  appHome: string,
   upstreamNodeId: string,
   taskId: string,
   iteration: number,
 ): Promise<ReviewPromptContext | undefined> {
-  // Find the most recently decided doc_version where sourceNodeId = upstreamNodeId.
+  // Find the most recently USER-decided doc_version where sourceNodeId =
+  // upstreamNodeId. SQLite orders NULL first in DESC, so:
+  //   - pending rows must be filtered explicitly (otherwise their NULL
+  //     decidedAt would win in DESC)
+  //   - rows produced by cascadeSiblingReviews (decidedBy='system') must be
+  //     filtered too — those mark "this port's pending doc was invalidated by
+  //     a sibling decision", not "the user decided on this port". Without
+  //     this filter, RFC-014's multi-port iterate would surface the
+  //     system-decided cascade row instead of the user's iterate row.
   const dvRows = await db
     .select()
     .from(docVersions)
-    .where(and(eq(docVersions.taskId, taskId), eq(docVersions.sourceNodeId, upstreamNodeId)))
+    .where(
+      and(
+        eq(docVersions.taskId, taskId),
+        eq(docVersions.sourceNodeId, upstreamNodeId),
+        ne(docVersions.decision, 'pending'),
+        ne(docVersions.decidedBy, 'system'),
+      ),
+    )
     .orderBy(desc(docVersions.decidedAt))
     .limit(1)
   const dv = dvRows[0]
@@ -1350,14 +1445,140 @@ export async function buildReviewPromptContext(
     return { rejection: dv.decisionReason ?? '' }
   }
   if (dv.decision === 'iterated') {
-    return {
+    const ctx: ReviewPromptContext = {
       comments: dv.decisionReason ?? '',
       iterateTargetPort: dv.sourcePortName,
     }
+    const siblingOutputs = await buildSiblingOutputsBlock({
+      db,
+      appHome,
+      taskId,
+      upstreamNodeId,
+      targetPortName: dv.sourcePortName,
+    })
+    if (siblingOutputs !== undefined) ctx.siblingOutputs = siblingOutputs
+    return ctx
   }
   // pending / approved → no review context
   void iteration
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// RFC-014: sibling-outputs block builder.
+// ---------------------------------------------------------------------------
+
+interface BuildSiblingOutputsArgs {
+  db: DbClient
+  appHome: string
+  taskId: string
+  /** Upstream agent node id (from doc_version.sourceNodeId). */
+  upstreamNodeId: string
+  /** Port being iterated — excluded from the sibling list. */
+  targetPortName: string
+}
+
+/**
+ * RFC-014 §3.2: assemble the `{{__sibling_outputs__}}` payload. Returns
+ * undefined when:
+ *   - the upstream agent doesn't have `syncOutputsOnIterate: true`, OR
+ *   - the agent declares < 2 markdown[_file] outputs, OR
+ *   - no sibling port has any doc_version body to read.
+ *
+ * Otherwise returns a markdown block with the stable English instruction
+ * prefix + a `### {port}\n{body}` section per sibling.
+ */
+export async function buildSiblingOutputsBlock(
+  args: BuildSiblingOutputsArgs,
+): Promise<string | undefined> {
+  const { db, appHome, taskId, upstreamNodeId, targetPortName } = args
+
+  const taskRow = (await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0]
+  if (taskRow === undefined) return undefined
+  let definition: WorkflowDefinition
+  try {
+    definition = JSON.parse(taskRow.workflowSnapshot) as WorkflowDefinition
+  } catch {
+    return undefined
+  }
+  const upstreamNode = definition.nodes.find((n) => n.id === upstreamNodeId)
+  if (upstreamNode === undefined) return undefined
+  const agentName = (upstreamNode as Record<string, unknown>).agentName
+  if (typeof agentName !== 'string' || agentName.length === 0) return undefined
+
+  const agentRows = await db
+    .select()
+    .from(agentsTable)
+    .where(eq(agentsTable.name, agentName))
+    .limit(1)
+  const agentRow = agentRows[0]
+  if (agentRow === undefined) {
+    log.warn('sibling-outputs: upstream agent row not found; skipping', { agentName, taskId })
+    return undefined
+  }
+
+  let outputKinds: Record<string, AgentOutputKind> = {}
+  try {
+    const fmExtra = JSON.parse(agentRow.frontmatterExtra) as Record<string, unknown>
+    const raw = fmExtra.outputKinds
+    if (raw !== null && raw !== undefined && typeof raw === 'object') {
+      for (const [port, kind] of Object.entries(raw as Record<string, unknown>)) {
+        if (kind === 'markdown' || kind === 'markdown_file' || kind === 'string') {
+          outputKinds[port] = kind
+        }
+      }
+    }
+  } catch {
+    outputKinds = {}
+  }
+
+  let outputNames: string[] = []
+  try {
+    outputNames = JSON.parse(agentRow.outputs) as string[]
+  } catch {
+    return undefined
+  }
+
+  const { trigger, markdownPorts } = isMultiMarkdownUpstream({
+    outputs: outputNames.map((name) => {
+      const kind = outputKinds[name]
+      return kind !== undefined ? { name, kind } : { name }
+    }),
+    syncOutputsOnIterate: agentRow.syncOutputsOnIterate,
+  })
+  if (!trigger) return undefined
+
+  const siblingPortNames = markdownPorts.filter((p) => p !== targetPortName)
+  if (siblingPortNames.length === 0) return undefined
+
+  const sections: string[] = []
+  for (const portName of siblingPortNames) {
+    const rows = await db
+      .select()
+      .from(docVersions)
+      .where(
+        and(
+          eq(docVersions.taskId, taskId),
+          eq(docVersions.sourceNodeId, upstreamNodeId),
+          eq(docVersions.sourcePortName, portName),
+        ),
+      )
+      .orderBy(desc(docVersions.reviewIteration), desc(docVersions.createdAt))
+      .limit(1)
+    const row = rows[0]
+    if (row === undefined) continue
+    try {
+      const body = readDocVersionBody(appHome, rowToDocVersion(row))
+      sections.push(`### ${portName}\n${body}`)
+    } catch (err) {
+      log.warn('sibling-outputs: failed to read body file; skipping port', {
+        portName,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  if (sections.length === 0) return undefined
+  return `${SIBLING_OUTPUTS_INSTRUCTION}\n\n${sections.join('\n\n')}`
 }
 
 // ---------------------------------------------------------------------------

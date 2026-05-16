@@ -15,6 +15,7 @@ function agent(name: string, outputs: string[] = [], skills: string[] = []): Age
     description: '',
     outputs,
     readonly: false,
+    syncOutputsOnIterate: true,
     permission: {},
     skills,
     frontmatterExtra: {},

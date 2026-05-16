@@ -41,6 +41,13 @@ export const AgentSchema = z.object({
   outputs: z.array(z.string()),
   outputKinds: AgentOutputKindsMapSchema.optional(),
   readonly: z.boolean(),
+  /**
+   * RFC-014: when true (default), an iterate decision on a multi-markdown
+   * upstream node re-generates every markdown[_file] sibling port and resets
+   * sibling reviews back to awaiting_review. Author opt-out → only the
+   * reviewed port regenerates (RFC-005 §2.1 #8 legacy behavior).
+   */
+  syncOutputsOnIterate: z.boolean(),
   model: z.string().optional(),
   variant: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
@@ -63,6 +70,8 @@ export const CreateAgentSchema = z.object({
   outputs: z.array(z.string()).default([]),
   outputKinds: AgentOutputKindsMapSchema.optional(),
   readonly: z.boolean().default(false),
+  /** RFC-014: default true — author must explicitly opt-out. */
+  syncOutputsOnIterate: z.boolean().default(true),
   model: z.string().min(1).optional(),
   variant: z.string().min(1).optional(),
   temperature: z.number().min(0).max(2).optional(),

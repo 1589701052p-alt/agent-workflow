@@ -402,7 +402,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // through the {{__review_comments__}} / {{__review_rejection__}} tokens.
   // Returns undefined for first runs and for runs whose latest downstream
   // decision is approve/pending — see buildReviewPromptContext.
-  const reviewContext = await buildReviewPromptContext(db, node.id, taskId, iteration)
+  const reviewContext = await buildReviewPromptContext(db, opts.appHome, node.id, taskId, iteration)
 
   // Pick up an existing pending node_run at this iteration; otherwise create
   // a fresh run with retry_index = max-existing-in-iter + 1 (or 0).
@@ -827,7 +827,7 @@ async function runFanOutNode(
   // path. Each shard child inherits the parent fan-out node's review context
   // so an iterate decision pinned to the aggregator's port re-feeds review
   // comments to every spawned child on the next pass.
-  const reviewContext = await buildReviewPromptContext(db, node.id, taskId, iteration)
+  const reviewContext = await buildReviewPromptContext(db, opts.appHome, node.id, taskId, iteration)
 
   interface ChildResult {
     shardKey: string
@@ -1038,6 +1038,7 @@ async function loadAgent(db: DbClient, name: string): Promise<Agent | null> {
     description: row.description,
     outputs: JSON.parse(row.outputs) as string[],
     readonly: row.readonly,
+    syncOutputsOnIterate: row.syncOutputsOnIterate,
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],
     frontmatterExtra: JSON.parse(row.frontmatterExtra) as Record<string, unknown>,

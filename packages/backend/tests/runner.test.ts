@@ -35,6 +35,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     description: 'an agent',
     outputs: ['summary'],
     readonly: true,
+    syncOutputsOnIterate: true,
     permission: {},
     skills: [],
     frontmatterExtra: {},

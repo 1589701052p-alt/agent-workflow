@@ -42,6 +42,7 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
     description: input.description,
     outputs: JSON.stringify(input.outputs),
     readonly: input.readonly,
+    syncOutputsOnIterate: input.syncOutputsOnIterate,
     model: input.model ?? null,
     variant: input.variant ?? null,
     temperature: input.temperature ?? null,
@@ -70,6 +71,8 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   if (patch.description !== undefined) set.description = patch.description
   if (patch.outputs !== undefined) set.outputs = JSON.stringify(patch.outputs)
   if (patch.readonly !== undefined) set.readonly = patch.readonly
+  if (patch.syncOutputsOnIterate !== undefined)
+    set.syncOutputsOnIterate = patch.syncOutputsOnIterate
   if (patch.model !== undefined) set.model = patch.model
   if (patch.variant !== undefined) set.variant = patch.variant
   if (patch.temperature !== undefined) set.temperature = patch.temperature
@@ -211,6 +214,7 @@ function rowToAgent(row: AgentRow): Agent {
     description: row.description,
     outputs: JSON.parse(row.outputs) as string[],
     readonly: row.readonly,
+    syncOutputsOnIterate: row.syncOutputsOnIterate,
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],
     frontmatterExtra: exposedFm,

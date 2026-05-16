@@ -278,3 +278,56 @@ export const DocVersionWithBodyAndCommentsSchema = DocVersionSchema.extend({
   comments: z.array(ReviewCommentSchema),
 })
 export type DocVersionWithBodyAndComments = z.infer<typeof DocVersionWithBodyAndCommentsSchema>
+
+// -----------------------------------------------------------------------------
+// RFC-014: multi-markdown upstream detection.
+//
+// Pure helper used by services/review.ts on the iterate decision path.
+// Inputs: upstream agent's declared output ports + the agent's
+// syncOutputsOnIterate switch. Output: `{ trigger, markdownPorts }` pair
+// driving (a) whether the iterate path regenerates every markdown[_file]
+// sibling port and cascades sibling reviews, and (b) whether
+// `{{__sibling_outputs__}}` gets populated.
+//
+// Trigger rule (AND):
+//   1. syncOutputsOnIterate === true                           (agent opt-in)
+//   2. count of outputs where kind ∈ {markdown, markdown_file} is ≥ 2
+//
+// kind = undefined / 'string' is treated as non-markdown (RFC-005 §3).
+// -----------------------------------------------------------------------------
+export interface MultiMarkdownUpstreamInput {
+  /** All output port specs declared on the upstream agent. */
+  outputs: ReadonlyArray<{ name: string; kind?: AgentOutputKind }>
+  /** Agent-level switch (RFC-014 §2.1 #6). */
+  syncOutputsOnIterate: boolean
+}
+
+export interface MultiMarkdownUpstreamResult {
+  trigger: boolean
+  markdownPorts: string[]
+}
+
+export function isMultiMarkdownUpstream(
+  input: MultiMarkdownUpstreamInput,
+): MultiMarkdownUpstreamResult {
+  if (!input.syncOutputsOnIterate) {
+    return { trigger: false, markdownPorts: [] }
+  }
+  const markdownPorts: string[] = []
+  for (const o of input.outputs) {
+    if (o.kind === 'markdown' || o.kind === 'markdown_file') {
+      markdownPorts.push(o.name)
+    }
+  }
+  return { trigger: markdownPorts.length >= 2, markdownPorts }
+}
+
+/**
+ * RFC-014: stable English instruction prefix injected at the top of the
+ * `{{__sibling_outputs__}}` block. Source-level grep tests assert this
+ * literal — renaming it silently would let agents miss the consistency cue.
+ */
+export const SIBLING_OUTPUTS_INSTRUCTION =
+  'You also produced the following sibling documents. ' +
+  'They are tightly coupled with the document being revised; ' +
+  'rewrite them coherently so the whole set stays consistent.'

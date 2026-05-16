@@ -113,6 +113,7 @@ async function buildHarness(): Promise<Harness> {
     outputs: ['design'],
     outputKinds: { design: 'markdown' },
     readonly: false,
+    syncOutputsOnIterate: true,
     permission: {},
     skills: [],
     frontmatterExtra: {},

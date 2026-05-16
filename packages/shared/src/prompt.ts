@@ -3,10 +3,10 @@
 // imports. Mirrors design.md §7.2.
 
 /**
- * Review-driven re-run context (RFC-005).
+ * Review-driven re-run context (RFC-005 + RFC-014).
  *
  * Filled only when a node is being re-run because a downstream review decision
- * (`reject` or `iterate`) fired. Both fields are pre-rendered strings — the
+ * (`reject` or `iterate`) fired. All fields are pre-rendered strings — the
  * structured-to-markdown serialization lives in `services/review.ts` so this
  * module stays a pure substitution engine.
  *
@@ -14,6 +14,12 @@
  *   {{__review_rejection__}}     ← rejection (set on reject path)
  *   {{__review_comments__}}      ← comments  (set on iterate path; markdown list)
  *   {{__iterate_target_port__}}  ← iterateTargetPort (set on iterate path)
+ *   {{__sibling_outputs__}}      ← siblingOutputs (set on iterate path when the
+ *                                  upstream agent declares ≥ 2 markdown[_file]
+ *                                  outputs AND opted into `syncOutputsOnIterate`;
+ *                                  carries the other documents' current bodies
+ *                                  prefixed with a stable English consistency
+ *                                  instruction — RFC-014 §3.1)
  *
  * Templates that don't reference these tokens get framework-auto-appended
  * sections at the tail of the user prompt (just like unreferenced ports).
@@ -28,6 +34,14 @@ export interface ReviewPromptContext {
    * branch their generation logic on "regen this port only, leave others".
    */
   iterateTargetPort?: string
+  /**
+   * RFC-014: pre-rendered markdown listing the other markdown[_file] outputs
+   * of the same upstream node. Only set on iterate path when the upstream
+   * declares ≥ 2 markdown[_file] outputs AND has `syncOutputsOnIterate: true`.
+   * Includes the leading English consistency instruction line — see
+   * `buildSiblingOutputsBlock` in services/review.ts.
+   */
+  siblingOutputs?: string
 }
 
 export interface RenderPromptInput {
@@ -68,6 +82,9 @@ const BUILTIN_VARS = new Set([
   '__review_rejection__',
   '__review_comments__',
   '__iterate_target_port__',
+  // RFC-014 sibling-outputs token — stable name; same grep contract as the
+  // review tokens above. See packages/backend/tests/review-prompt-injection.test.ts.
+  '__sibling_outputs__',
 ])
 
 /**
@@ -105,6 +122,8 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return rc?.comments ?? ''
         case '__iterate_target_port__':
           return rc?.iterateTargetPort ?? ''
+        case '__sibling_outputs__':
+          return rc?.siblingOutputs ?? ''
       }
     }
     const v = input.inputs[name]
@@ -141,6 +160,14 @@ export function renderUserPrompt(input: RenderPromptInput): string {
       !referenced.has('__iterate_target_port__')
     ) {
       sections += `\n\n## Iterate Target Port\n${rc.iterateTargetPort}`
+    }
+    // RFC-014: auto-append sibling outputs when the iterate path populated them.
+    if (
+      rc.siblingOutputs !== undefined &&
+      rc.siblingOutputs.trim().length > 0 &&
+      !referenced.has('__sibling_outputs__')
+    ) {
+      sections += `\n\n## Sibling Outputs\n${rc.siblingOutputs}`
     }
   }
 

@@ -18,6 +18,7 @@ const CODER: Agent = {
   description: '',
   outputs: ['code', 'notes'],
   readonly: false,
+  syncOutputsOnIterate: true,
   permission: {},
   skills: [],
   frontmatterExtra: {},
