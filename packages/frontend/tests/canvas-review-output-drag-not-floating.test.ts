@@ -24,6 +24,7 @@ const CONNECTION_SYNC_TS = resolve(FRONTEND_SRC, 'components', 'canvas', 'connec
 const WORKFLOW_CANVAS_TSX = resolve(FRONTEND_SRC, 'components', 'canvas', 'WorkflowCanvas.tsx')
 const NODE_INSPECTOR_TSX = resolve(FRONTEND_SRC, 'components', 'canvas', 'NodeInspector.tsx')
 const WORKFLOWS_EDIT_TSX = resolve(FRONTEND_SRC, 'routes', 'workflows.edit.tsx')
+const STYLES_CSS = resolve(FRONTEND_SRC, 'styles.css')
 
 describe('RFC-007 source-level guard', () => {
   test('connectionSync.ts exists and exports the four sync helpers + sentinel', () => {
@@ -66,5 +67,18 @@ describe('RFC-007 source-level guard', () => {
     const tsx = readFileSync(WORKFLOWS_EDIT_TSX, 'utf8')
     expect(tsx).toMatch(/from\s+['"]@\/components\/canvas\/connectionSync['"]/)
     expect(tsx).toContain('healFieldEdgeConsistency')
+  })
+
+  // Visual distinction for the review-node kind: the canvas would otherwise
+  // render review/agent/io cards in the same neutral panel color, leaving
+  // users to read the small kind label to tell them apart. The CSS gives
+  // `.canvas-node--review` an amber tint that matches the ⚖ judgment
+  // icon — runtime tests can't assert color (jsdom has no layout/style
+  // engine), so lock in the rule at the source level.
+  test('styles.css gives .canvas-node--review a dedicated amber tint', () => {
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).toMatch(/\.canvas-node--review\s*\{[^}]*background:[^;]*color-mix/)
+    expect(css).toMatch(/\.canvas-node--review\s*\{[^}]*border-color:[^;]*color-mix/)
+    expect(css).toMatch(/\.canvas-node--review\s+\.canvas-node__kind\s*\{/)
   })
 })

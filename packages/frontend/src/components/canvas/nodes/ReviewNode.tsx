@@ -26,7 +26,10 @@ export function ReviewNode({ data, selected }: Props) {
     (data as CanvasNodeData & { inputSource?: { nodeId: string; portName: string } }).inputSource ??
     null
   return (
-    <div className={'canvas-node canvas-node--review' + (selected ? ' canvas-node--selected' : '')}>
+    <div
+      className={'canvas-node canvas-node--review' + (selected ? ' canvas-node--selected' : '')}
+      data-status={data.status ?? 'default'}
+    >
       <Handle
         type="target"
         position={Position.Left}

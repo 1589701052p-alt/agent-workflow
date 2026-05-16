@@ -405,6 +405,19 @@ function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
               <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
                 {t(displayNoderunStatusKey(r))}
               </span>
+              {shouldShowReviewJump(r.status) && (
+                <>
+                  {' '}
+                  <Link
+                    to="/reviews/$nodeRunId"
+                    params={{ nodeRunId: r.id }}
+                    search={{}}
+                    className="btn btn--sm node-runs__review-link"
+                  >
+                    {t('tasks.reviewButton')}
+                  </Link>
+                </>
+              )}
             </td>
             <td className="data-table__muted">{r.iteration}</td>
             <td className="data-table__muted">{r.retryIndex}</td>
@@ -428,6 +441,16 @@ function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
       </tbody>
     </table>
   )
+}
+
+/**
+ * True when a node_run row should render a "Review" jump button next to
+ * its status chip. Only the awaiting-review state hides a pending human
+ * action behind the table row; every other status either runs on its own
+ * or is terminal. Exported for unit tests.
+ */
+export function shouldShowReviewJump(status: NodeRun['status']): boolean {
+  return status === 'awaiting_review'
 }
 
 function noderunTone(status: NodeRun['status']): string {

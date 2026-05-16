@@ -1094,9 +1094,44 @@ export async function submitReviewDecision(
 
   // 3. Per-decision state mutation.
   if (args.decision === 'approved') {
+    // Publish the two declared output ports (`approved_doc`, `approval_meta`)
+    // into node_run_outputs so downstream output bindings + the task-detail
+    // TaskOutputPanel can resolve them. Without these rows downstream
+    // consumers see no output for the review run and render "等待中…" forever
+    // even though the review is `done` and the upstream content exists. The
+    // workflow.validator already promises these ports exist (RFC-005
+    // design.md §2.2, workflow.validator.ts approved_doc / approval_meta).
+    //
+    // approved_doc must mirror the *shape* upstream emitted, not the
+    // resolved body — otherwise a downstream agent declared to consume
+    // `markdown_file` paths would receive raw markdown text and break. When
+    // the doc_version carries a sourceFilePath (= upstream port was kind
+    // 'markdown_file'), pass the same worktree-relative path through so
+    // downstream's resolvePortContent re-reads the file. Inline markdown
+    // (no sourceFilePath) still publishes the body verbatim.
+    const decidedAt = Date.now()
+    const decidedBy = args.author ?? 'local'
+    const sourcePath = dv.sourceFilePath ?? null
+    const approvedDocContent =
+      sourcePath !== null && sourcePath.trim().length > 0
+        ? sourcePath
+        : readDocVersionBody(args.appHome, dv)
+    const meta = JSON.stringify({
+      decision: 'approved',
+      decidedAt,
+      decidedBy,
+      reviewIteration: run.reviewIteration,
+      versionIndex: dv.versionIndex,
+      sourceNodeId: dv.sourceNodeId,
+      sourcePortName: dv.sourcePortName,
+    })
+    await args.db.insert(nodeRunOutputs).values([
+      { nodeRunId: args.nodeRunId, portName: 'approved_doc', content: approvedDocContent },
+      { nodeRunId: args.nodeRunId, portName: 'approval_meta', content: meta },
+    ])
     await args.db
       .update(nodeRuns)
-      .set({ status: 'done', finishedAt: Date.now() })
+      .set({ status: 'done', finishedAt: decidedAt })
       .where(eq(nodeRuns.id, args.nodeRunId))
     return { taskId: dv.taskId, reviewIteration: run.reviewIteration, resumeRequired: true }
   }

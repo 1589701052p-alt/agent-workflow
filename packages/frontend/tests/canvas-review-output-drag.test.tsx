@@ -341,4 +341,68 @@ describe('ReviewNode — RFC-007 left target Handle', () => {
     expect(reviewInput).toBeDefined()
     expect(reviewInput!.getAttribute('aria-label')).toBe('review-input')
   })
+
+  // Regression: review node_run becomes `done` after approval, but the
+  // ReviewNode root previously did not render the `data-status` attribute
+  // that drives `.canvas-node[data-status='done']` → green border. So
+  // approved review nodes stayed gray on the task-detail canvas. Mirrors
+  // the same attribute on AgentNode / WrapperNodes.
+  test('root carries data-status from data.status (so approved reviews go green)', () => {
+    const props = {
+      id: 'r',
+      type: 'review',
+      data: {
+        nodeId: 'r',
+        kind: 'review' as const,
+        title: 'review-target',
+        inputPorts: [],
+        outputPorts: ['approved_doc', 'approval_meta'],
+        status: 'done' as const,
+      },
+      selected: false,
+      dragging: false,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      zIndex: 0,
+    }
+    render(
+      <ReactFlowProvider>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        <ReviewNode {...(props as any)} />
+      </ReactFlowProvider>,
+    )
+    const root = document.querySelector('.canvas-node--review') as HTMLElement | null
+    expect(root).not.toBeNull()
+    expect(root!.getAttribute('data-status')).toBe('done')
+  })
+
+  test('root falls back to data-status="default" when no status is provided', () => {
+    const props = {
+      id: 'r',
+      type: 'review',
+      data: {
+        nodeId: 'r',
+        kind: 'review' as const,
+        title: 'review-target',
+        inputPorts: [],
+        outputPorts: ['approved_doc', 'approval_meta'],
+      },
+      selected: false,
+      dragging: false,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      zIndex: 0,
+    }
+    render(
+      <ReactFlowProvider>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        <ReviewNode {...(props as any)} />
+      </ReactFlowProvider>,
+    )
+    const root = document.querySelector('.canvas-node--review') as HTMLElement | null
+    expect(root).not.toBeNull()
+    expect(root!.getAttribute('data-status')).toBe('default')
+  })
 })

@@ -16,7 +16,7 @@ import { execSync } from 'node:child_process'
 import { and, eq } from 'drizzle-orm'
 import type { DbClient } from '../src/db/client'
 import { createInMemoryDb } from '../src/db/client'
-import { docVersions, nodeRuns, reviewComments, tasks } from '../src/db/schema'
+import { docVersions, nodeRunOutputs, nodeRuns, reviewComments, tasks } from '../src/db/schema'
 import { createApp } from '../src/server'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
@@ -257,6 +257,81 @@ describe('RFC-005 review state machine — dispatch + decisions', () => {
     expect(dv?.decision).toBe('approved')
 
     expect(await countPendingReviews(h.db)).toBe(0)
+  })
+
+  // Regression: approving a review used to flip status=done but never write
+  // the two declared output ports (`approved_doc`, `approval_meta`) into
+  // node_run_outputs. Downstream output bindings + the task-detail
+  // TaskOutputPanel then rendered "等待中…" forever even though the review
+  // was complete. RFC-005 design.md §2.2 + workflow.validator.ts declare
+  // these ports exist; this test locks in that we actually produce rows.
+  test('approve writes approved_doc + approval_meta into node_run_outputs', async () => {
+    await submitReviewDecision({
+      db: h.db,
+      appHome: h.appHome,
+      nodeRunId: h.reviewNodeRunId,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+      author: 'tester',
+    })
+
+    const outRows = await h.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, h.reviewNodeRunId))
+    const byPort = new Map(outRows.map((r) => [r.portName, r.content]))
+    expect(byPort.size).toBe(2)
+    // The stub script writes the body with literal "\n" escapes (matches the
+    // existing dispatch test's contract); we just assert the design body
+    // landed in the row so downstream consumers can read it.
+    expect(byPort.get('approved_doc')).toContain('Design v1')
+    expect(byPort.get('approved_doc')).toContain('order_status')
+    const metaRaw = byPort.get('approval_meta')
+    expect(metaRaw).toBeDefined()
+    const meta = JSON.parse(metaRaw!) as Record<string, unknown>
+    expect(meta.decision).toBe('approved')
+    expect(meta.decidedBy).toBe('tester')
+    expect(typeof meta.decidedAt).toBe('number')
+    expect(meta.reviewIteration).toBe(0)
+    expect(meta.versionIndex).toBe(1)
+    expect(meta.sourceNodeId).toBe('designer')
+    expect(meta.sourcePortName).toBe('design')
+  })
+
+  // Regression: when upstream port kind is `markdown_file` (= the agent
+  // emitted a worktree-relative path, framework resolved the body for the
+  // reviewer), approving used to publish the resolved body into
+  // approved_doc. Downstream nodes declared to consume `markdown_file`
+  // would then see raw markdown text where they expected a path and
+  // fail. Mirror the upstream shape: when doc_version.sourceFilePath is
+  // set, approved_doc must re-emit the same path.
+  test('approve preserves upstream shape — markdown_file path passes through to approved_doc', async () => {
+    // Inject a sourceFilePath onto the pending v1 doc_version to simulate
+    // an upstream that emitted `markdown_file`. Existing harness produces
+    // inline markdown; we don't need a second harness for this assertion.
+    const pendingPath = 'docs/design-v1.md'
+    await h.db
+      .update(docVersions)
+      .set({ sourceFilePath: pendingPath })
+      .where(eq(docVersions.reviewNodeRunId, h.reviewNodeRunId))
+
+    await submitReviewDecision({
+      db: h.db,
+      appHome: h.appHome,
+      nodeRunId: h.reviewNodeRunId,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+      author: 'tester',
+    })
+
+    const outRows = await h.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, h.reviewNodeRunId))
+    const byPort = new Map(outRows.map((r) => [r.portName, r.content]))
+    expect(byPort.get('approved_doc')).toBe(pendingPath)
+    // Must NOT have inlined the body — that's exactly the bug this guards.
+    expect(byPort.get('approved_doc')).not.toContain('Design v1')
   })
 
   test('reject archives v1 comments, bumps reviewIteration, mints a new pending upstream run (RFC-011)', async () => {
