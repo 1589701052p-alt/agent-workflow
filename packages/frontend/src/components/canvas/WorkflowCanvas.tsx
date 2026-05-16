@@ -58,6 +58,7 @@ import {
   type WrapperHitInput,
 } from './wrapperMembership'
 import { DEFAULT_NODE_SIZE_BY_KIND } from './wrapperFit'
+import { clearWrapperSize, deleteWrapperWithChildren } from './wrapperOps'
 
 const NODE_TYPES = {
   'agent-single': AgentNode,
@@ -498,6 +499,33 @@ function CanvasInner({
     [commitChange, definition, onChange, readOnly],
   )
 
+  // RFC-016 T8: Fit to children — closure around the pure clearWrapperSize
+  // transformation. The next onNodeDragStop / commitChange cycle writes the
+  // recomputed bbox back to wrapper.size.
+  const fitWrapperToChildren = useCallback(
+    (wrapperId: string) => {
+      if (onChange === undefined || readOnly === true) return
+      const next = clearWrapperSize(definition, wrapperId)
+      if (next !== definition) commitChange(next)
+    },
+    [commitChange, definition, onChange, readOnly],
+  )
+
+  // RFC-016 T8: delete a wrapper AND its inner nodes (right-click menu).
+  // Differs from `Unwrap` (decomposeWrapper) which only removes the wrapper
+  // and keeps the inner nodes on the canvas. Caller is responsible for the
+  // user-facing confirm dialog.
+  const deleteWrapperWithInner = useCallback(
+    (wrapperId: string) => {
+      if (onChange === undefined || readOnly === true) return
+      const next = deleteWrapperWithChildren(definition, wrapperId)
+      if (next === definition) return
+      commitChange(next)
+      setSelection({ nodes: [], edges: [] })
+    },
+    [commitChange, definition, onChange, readOnly],
+  )
+
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
     if (readOnly === true) return
     if (
@@ -588,9 +616,34 @@ function CanvasInner({
         onSelect: () => wrapSelection('wrapper-loop'),
       },
       {
-        label: t('editor.menuDecompose'),
+        // RFC-016 T8: rename "Decompose" → "Unwrap" in the user-facing
+        // string; the underlying decomposeWrapper logic is unchanged.
+        label: t('wrapperNode.unwrap'),
         disabled: !isWrapperNode(definition, menu.nodeId),
         onSelect: () => menu.nodeId !== null && decomposeWrapper(menu.nodeId),
+      },
+      {
+        // RFC-016 T8: Fit to children — clears wrapper.size so the next
+        // render recomputes from the current inner-node bbox.
+        label: t('wrapperNode.fitToChildren'),
+        disabled: !isWrapperNode(definition, menu.nodeId),
+        onSelect: () => menu.nodeId !== null && fitWrapperToChildren(menu.nodeId),
+      },
+      {
+        // RFC-016 T8: explicit "delete the wrapper AND every inner node",
+        // distinct from Unwrap which keeps inner nodes on the canvas.
+        label: t('wrapperNode.deleteWithInner'),
+        danger: true,
+        disabled: !isWrapperNode(definition, menu.nodeId),
+        onSelect: () => {
+          if (menu.nodeId === null) return
+          const w = definition.nodes.find((n) => n.id === menu.nodeId)
+          if (w === undefined) return
+          const inner = (w as Record<string, unknown>).nodeIds
+          const count = Array.isArray(inner) ? inner.length : 0
+          const ok = window.confirm(t('wrapperNode.confirmDeleteWithInner', { count }))
+          if (ok) deleteWrapperWithInner(menu.nodeId)
+        },
       },
       { label: t('common.delete'), danger: true, onSelect: deleteSelected },
     ]
@@ -599,7 +652,9 @@ function CanvasInner({
     decomposeWrapper,
     definition,
     deleteSelected,
+    deleteWrapperWithInner,
     duplicateNode,
+    fitWrapperToChildren,
     menu,
     pasteFromClipboard,
     rf,

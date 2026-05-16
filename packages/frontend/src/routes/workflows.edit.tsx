@@ -14,6 +14,7 @@ import { EdgeInspector } from '@/components/canvas/EdgeInspector'
 import { NodeInspector } from '@/components/canvas/NodeInspector'
 import { healFieldEdgeConsistency } from '@/components/canvas/connectionSync'
 import { syncInputDefs } from '@/components/canvas/syncInputDefs'
+import { clearWrapperSize } from '@/components/canvas/wrapperOps'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasSelection } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -373,7 +374,17 @@ function WorkflowEditPage() {
         </div>
       )}
       {validate.data !== undefined && validate.error === null && (
-        <ValidationPanel result={validate.data} />
+        <ValidationPanel
+          result={validate.data}
+          onAutoFitWrapper={(wrapperId) => {
+            // RFC-016: inline Auto-fit clears wrapper.size so the next render
+            // recomputes the bbox from current inner-node positions.
+            const next = clearWrapperSize(draft, wrapperId)
+            if (next === draft) return
+            setDraft(next)
+            setDirty(true)
+          }}
+        />
       )}
 
       <div className={editorLayoutClass(selection?.id ?? null)}>
@@ -421,6 +432,9 @@ interface ValidationIssue {
   code: string
   message: string
   severity?: 'error' | 'warning'
+  /** Pointer into the definition (e.g. wrapper id). Used by RFC-016
+   * Auto-fit inline action to know which wrapper to reset. */
+  pointer?: string
 }
 
 /**
@@ -441,7 +455,13 @@ export function partitionIssues(issues: ValidationIssue[]): {
   return { errors, warnings }
 }
 
-function ValidationPanel({ result }: { result: { ok: boolean; issues: ValidationIssue[] } }) {
+function ValidationPanel({
+  result,
+  onAutoFitWrapper,
+}: {
+  result: { ok: boolean; issues: ValidationIssue[] }
+  onAutoFitWrapper?: (wrapperId: string) => void
+}) {
   const { t } = useTranslation()
   const { errors, warnings } = partitionIssues(result.issues)
   return (
@@ -471,6 +491,20 @@ function ValidationPanel({ result }: { result: { ok: boolean; issues: Validation
             {warnings.map((i, idx) => (
               <li key={`w-${idx}`}>
                 <code>{i.code}</code> — {i.message}
+                {i.code === 'wrapper-children-outside-bounds' &&
+                i.pointer !== undefined &&
+                onAutoFitWrapper !== undefined ? (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="validation-panel__action"
+                      onClick={() => onAutoFitWrapper(i.pointer as string)}
+                    >
+                      {t('editor.validationAutoFitWrapper')}
+                    </button>
+                  </>
+                ) : null}
               </li>
             ))}
           </ul>

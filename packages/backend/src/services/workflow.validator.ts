@@ -401,6 +401,41 @@ export function validateWorkflowDef(
     }
   }
 
+  // 4c. wrapper-children-outside-bounds (RFC-016) --------------------------
+  // Non-blocking warning: when a wrapper has a persisted `size` (set by
+  // RFC-016 auto-fit or user resize), every node listed in wrapper.nodeIds
+  // should also visually sit inside the rect at (wrapper.position,
+  // wrapper.position + size). Hand-edited YAML or stale rows from a pre-
+  // RFC-016 export can drift; the editor's ValidationPanel surfaces an
+  // inline "Auto-fit" link that clears wrapper.size to fix the drift.
+  for (const node of nodes) {
+    if (node.kind !== 'wrapper-git' && node.kind !== 'wrapper-loop') continue
+    const rec = node as Record<string, unknown>
+    const size = rec.size as { width?: unknown; height?: unknown } | undefined
+    if (size === undefined || typeof size.width !== 'number' || typeof size.height !== 'number') {
+      continue
+    }
+    const pos = node.position ?? { x: 0, y: 0 }
+    const innerIds = readStringArray(node, 'nodeIds')
+    for (const innerId of innerIds) {
+      const inner = nodeById.get(innerId)
+      if (inner === undefined) continue
+      const ip = inner.position ?? { x: 0, y: 0 }
+      const outside =
+        ip.x < pos.x || ip.y < pos.y || ip.x > pos.x + size.width || ip.y > pos.y + size.height
+      if (outside) {
+        issues.push({
+          code: 'wrapper-children-outside-bounds',
+          message: `wrapper '${node.id}' contains inner node '${innerId}' positioned outside its visual bounds — fit to children to fix`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+        // One warning per wrapper is enough — auto-fit fixes them all.
+        break
+      }
+    }
+  }
+
   // 4b. review (RFC-005) -----------------------------------------------------
   // - inputSource must reference an existing (node, port).
   // - sourcePort must be declared kind ∈ {markdown, markdown_file} on the

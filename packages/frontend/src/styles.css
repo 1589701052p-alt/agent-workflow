@@ -1713,10 +1713,78 @@ code {
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
-.canvas-node--wrapper {
-  border-style: dashed;
-  min-width: 200px;
-  background: color-mix(in srgb, var(--muted) 6%, var(--panel));
+/* RFC-016: wrapper group container — replaces the old 240px placeholder
+ * card. Renders as a sized rectangle so inner nodes physically sit inside,
+ * making membership visible at a glance. Sized via xyflow Node.style; the
+ * coordProjection pass stamps width/height from wrapper.size or
+ * computeFitBounds. */
+.canvas-node--wrapper-group {
+  background: color-mix(in srgb, var(--muted) 4%, var(--panel));
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--muted));
+  border-radius: 10px;
+  padding: 0;
+  box-sizing: border-box;
+}
+.canvas-node--wrapper-group--git {
+  background-color: color-mix(in srgb, #4a78a6 6%, var(--panel));
+  border-color: color-mix(in srgb, #4a78a6 55%, transparent);
+}
+.canvas-node--wrapper-group--loop {
+  background-color: color-mix(in srgb, #7a4ea6 6%, var(--panel));
+  border-color: color-mix(in srgb, #7a4ea6 55%, transparent);
+}
+.canvas-node--wrapper-group--drop-hover {
+  background-color: color-mix(in srgb, var(--accent) 14%, var(--panel)) !important;
+  border-color: var(--accent) !important;
+}
+.canvas-node--wrapper-group--leave-hint {
+  border-style: dotted;
+  border-color: var(--danger);
+}
+.canvas-node--wrapper-group .canvas-node__header {
+  padding: 4px 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.canvas-node__wrapper-empty-hint {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12px;
+}
+.wrapper-header-pill {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* ValidationPanel inline Auto-fit action (RFC-016 T9). */
+.validation-panel__action {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.validation-panel__action:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+/* Loop exit-condition / outputBindings invalid-value hint (RFC-016 T7). */
+.form-input--invalid {
+  border-color: var(--danger) !important;
+}
+.form-input__error {
+  color: var(--danger);
+  font-size: 11px;
+  margin-top: 2px;
 }
 
 /* Status overlay (populated by the task-detail canvas later). */

@@ -138,8 +138,15 @@ describe('WorkflowCanvas does not enable selectionOnDrag', () => {
     )
     // The def-sync useEffect MUST wrap toFlowNodes/toFlowEdges in
     // applySelection — bug 5 regresses (inspector closes on every
-    // keystroke) if either rebuild loses the `selected` flag.
-    expect(src).toMatch(/setNodes\(\s*applySelection\(toFlowNodes\(/)
+    // keystroke) if either rebuild loses the `selected` flag. After
+    // RFC-016 the node path interposes projectDefinitionForXyflow
+    // between applySelection and toFlowNodes so xyflow nodes get
+    // parentId / relative-position projection at rebuild time. The
+    // intent we lock here is "applySelection wraps the result",
+    // regardless of any intermediate transform.
+    expect(src).toMatch(
+      /setNodes\(\s*applySelection\(\s*projectDefinitionForXyflow\(\s*definition,\s*toFlowNodes\(/,
+    )
     expect(src).toMatch(/setEdges\(\s*applySelection\(toFlowEdges\(/)
   })
 })

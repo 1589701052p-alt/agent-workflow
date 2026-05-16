@@ -286,3 +286,108 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   expect(labelFit.count).toBeGreaterThan(0)
   expect(labelFit.offenders).toEqual([])
 })
+
+// RFC-016 e2e: wrapper-git renders as a visible group container with its
+// inner agent node physically contained inside the rect. Distinct from the
+// happy-path test above because the existing fixture has no wrapper; we
+// create a one-off workflow via the same API surface, open the editor, and
+// assert the visual contract.
+test('RFC-016: wrapper-git renders as a group container with inner node inside its rect', async ({
+  page,
+}) => {
+  const headers = {
+    Authorization: `Bearer ${daemon.token}`,
+    'Content-Type': 'application/json',
+  }
+  const workflowName = 'e2e-wrapper-container'
+  const createRes = await fetch(`${daemon.baseUrl}/api/workflows`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: workflowName,
+      description: 'RFC-016 e2e — wrapper container visual contract.',
+      definition: {
+        $schema_version: 2,
+        inputs: [{ kind: 'text', key: 'topic', label: 'Topic', required: true }],
+        nodes: [
+          { id: 'in_1', kind: 'input', inputKey: 'topic', position: { x: 0, y: 0 } },
+          {
+            id: 'w_git_1',
+            kind: 'wrapper-git',
+            nodeIds: ['agent_inside'],
+            position: { x: 200, y: 100 },
+            size: { width: 360, height: 200 },
+          },
+          {
+            id: 'agent_inside',
+            kind: 'agent-single',
+            agentName: fixtures.agentName,
+            promptTemplate: 'Explain {{topic}} briefly.',
+            position: { x: 260, y: 160 }, // inside the wrapper rect
+          },
+          {
+            id: 'out_1',
+            kind: 'output',
+            ports: [{ name: 'answer', bind: { nodeId: 'agent_inside', portName: 'answer' } }],
+            position: { x: 700, y: 100 },
+          },
+        ],
+        edges: [
+          {
+            id: 'e_in_agent',
+            source: { nodeId: 'in_1', portName: 'topic' },
+            target: { nodeId: 'agent_inside', portName: 'topic' },
+          },
+          {
+            id: 'e_agent_out',
+            source: { nodeId: 'agent_inside', portName: 'answer' },
+            target: { nodeId: 'out_1', portName: 'answer' },
+          },
+        ],
+      },
+    }),
+  })
+  expectOk(createRes, 'create wrapper workflow')
+  const wf = (await createRes.json()) as { id: string }
+
+  // Open the editor directly — read-only canvas in /tasks/:id would also
+  // work but we don't need a task run to validate the visual contract.
+  await page.addInitScript(
+    ({ baseUrl, token }) => {
+      window.localStorage.setItem('agent-workflow.baseUrl', baseUrl)
+      window.localStorage.setItem('agent-workflow.token', token)
+      window.localStorage.setItem('aw-language', 'en-US')
+    },
+    { baseUrl: daemon.baseUrl, token: daemon.token },
+  )
+  await page.goto(`${daemon.baseUrl}/workflows/${wf.id}`)
+
+  await expect(page.locator('.canvas-node--wrapper-group').first()).toBeVisible({
+    timeout: 10_000,
+  })
+  await expect(page.locator('.canvas-node--wrapper-group--git').first()).toBeVisible()
+
+  // The inner agent node should be visually contained in the wrapper rect.
+  const containment = await page.evaluate(() => {
+    const wrap = document.querySelector('.canvas-node--wrapper-group')
+    const inner = Array.from(document.querySelectorAll('.canvas-node')).find(
+      (n) =>
+        !n.classList.contains('canvas-node--wrapper-group') &&
+        n.textContent !== null &&
+        n.textContent.includes('agent_inside'),
+    )
+    if (wrap === null || inner === undefined) return { found: false }
+    const wr = wrap.getBoundingClientRect()
+    const ir = inner.getBoundingClientRect()
+    return {
+      found: true,
+      inside:
+        ir.left >= wr.left - 1 &&
+        ir.right <= wr.right + 1 &&
+        ir.top >= wr.top - 1 &&
+        ir.bottom <= wr.bottom + 1,
+    }
+  })
+  expect(containment.found).toBe(true)
+  expect(containment.inside).toBe(true)
+})
