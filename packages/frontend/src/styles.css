@@ -1719,6 +1719,15 @@ code {
  * coordProjection pass stamps width/height from wrapper.size or
  * computeFitBounds. */
 .canvas-node--wrapper-group {
+  /* xyflow's outer node wrapper carries the group's width/height from
+   * the projection layer; fill it so the visible wrapper rect matches
+   * the bbox xyflow uses for parentId/extent='parent' child clipping.
+   * Without `width/height: 100%` the inherited `min-width: 180px` +
+   * default `width: auto` would shrink to header content (~150px) and
+   * the inner agent would visually escape the wrapper rect. */
+  width: 100%;
+  height: 100%;
+  min-width: unset;
   background: color-mix(in srgb, var(--muted) 4%, var(--panel));
   border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--muted));
   border-radius: 10px;
