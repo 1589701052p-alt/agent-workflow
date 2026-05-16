@@ -27,7 +27,7 @@ import { resolveDependsClosure } from '@/services/agentDeps'
 import { buildClarifyPromptContext, createClarifySession } from '@/services/clarify'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
-import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
+import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
 import { splitDiffPerDirectory, splitDiffPerFile, splitDiffPerNFiles } from '@/util/diffSplit'
@@ -462,6 +462,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const maxRetries = pickNumber(node, 'retries') ?? 0
+  const nodeOverrides = pickOverrides(node)
 
   // RFC-005: when this node is being re-run because a downstream review node
   // was rejected/iterated, surface the rendered comments / rejection reason
@@ -578,6 +579,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
           ...(reviewContext !== undefined ? { reviewContext } : {}),
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
+          ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
           hasClarifyChannel,
           skills: resolvedSkills,
           dependents,
@@ -961,6 +963,7 @@ async function runFanOutNode(
   const { dependents, resolvedSkills } = injection
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
+  const nodeOverrides = pickOverrides(node)
   // RFC-005 review-driven re-run context — same plumbing as the single-agent
   // path. Each shard child inherits the parent fan-out node's review context
   // so an iterate decision pinned to the aggregator's port re-feeds review
@@ -1036,6 +1039,7 @@ async function runFanOutNode(
             ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
             ...(reviewContext !== undefined ? { reviewContext } : {}),
             ...(clarifyContext !== undefined ? { clarifyContext } : {}),
+            ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
             hasClarifyChannel,
             skills: resolvedSkills,
             dependents,
@@ -1546,6 +1550,26 @@ function pickStringArray(node: WorkflowNode, key: string): string[] {
   const v = (node as Record<string, unknown>)[key]
   if (!Array.isArray(v)) return []
   return v.filter((s): s is string => typeof s === 'string')
+}
+
+/**
+ * Read per-node model/variant/temperature overrides written by the canvas
+ * inspector under `node.overrides`. Returns undefined when no usable override
+ * is present so the caller can omit the field entirely (keeps the runner's
+ * `overrides ?? agent.<field>` fallback identity-preserving). An empty string
+ * model/variant is treated as "cleared" and not forwarded.
+ */
+function pickOverrides(node: WorkflowNode): AgentOverrides | undefined {
+  const raw = (node as Record<string, unknown>).overrides
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  const out: AgentOverrides = {}
+  if (typeof rec.model === 'string' && rec.model.length > 0) out.model = rec.model
+  if (typeof rec.variant === 'string' && rec.variant.length > 0) out.variant = rec.variant
+  if (typeof rec.temperature === 'number' && Number.isFinite(rec.temperature)) {
+    out.temperature = rec.temperature
+  }
+  return Object.keys(out).length === 0 ? undefined : out
 }
 
 interface Binding {

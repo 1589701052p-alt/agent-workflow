@@ -217,11 +217,20 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
 
   // 4. Spawn opencode.
   const cmd = buildCommand(opts, prompt)
+  // Diagnostic: surface the model/variant/temperature that actually landed in
+  // the inline-agent JSON. Lets operators tell "scheduler dropped the override
+  // on the floor" apart from "opencode received it but ignored it" without
+  // having to dump the full OPENCODE_CONFIG_CONTENT.
+  const primaryInline = inlineConfig.agent[opts.agent.name] as Record<string, unknown> | undefined
   log.info('spawning opencode', {
     bin: cmd[0],
     agent: opts.agent.name,
     cwd: opts.worktreePath,
     nodeRunId: opts.nodeRunId,
+    inlineModel: primaryInline?.model ?? null,
+    inlineVariant: primaryInline?.variant ?? null,
+    inlineTemperature: primaryInline?.temperature ?? null,
+    overrides: opts.overrides ?? null,
   })
 
   const env: Record<string, string> = {

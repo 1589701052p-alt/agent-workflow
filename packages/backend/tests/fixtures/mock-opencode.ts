@@ -17,9 +17,14 @@
 //                                the mock emits a <workflow-clarify> envelope INSTEAD
 //                                of <workflow-output>. To exercise the both-envelope
 //                                rejection path, set this alongside MOCK_OPENCODE_OUTPUTS.
+//   MOCK_OPENCODE_CAPTURE_CONFIG_TO  path; if set, the mock appends one JSON line
+//                                    per invocation containing { agent, model, variant,
+//                                    temperature } pulled from OPENCODE_CONFIG_CONTENT.
+//                                    Lets tests assert per-node overrides survived the
+//                                    scheduler → runner → env-var → subprocess hop.
 
 import process from 'node:process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 function fail(msg: string, code = 2): never {
   process.stderr.write(`mock-opencode: ${msg}\n`)
@@ -51,6 +56,28 @@ if (agentFlagIdx < 0 || !argv[agentFlagIdx + 1]) fail('missing --agent <name>')
 if (env.MOCK_OPENCODE_REQUIRE_TOKEN === '1') {
   if (!env.OPENCODE_CONFIG_CONTENT.includes('"prompt"')) {
     fail('OPENCODE_CONFIG_CONTENT does not contain inline agent prompt')
+  }
+}
+
+// Append one JSON line per invocation so tests can inspect what model /
+// variant / temperature actually reached the subprocess. Guards the
+// scheduler → runner → env hop end-to-end.
+if (env.MOCK_OPENCODE_CAPTURE_CONFIG_TO) {
+  try {
+    const cfg = JSON.parse(env.OPENCODE_CONFIG_CONTENT) as {
+      agent?: Record<string, Record<string, unknown>>
+    }
+    const agentName = argv[agentFlagIdx + 1] ?? ''
+    const entry = cfg.agent?.[agentName] ?? {}
+    const row = {
+      agent: agentName,
+      model: entry.model ?? null,
+      variant: entry.variant ?? null,
+      temperature: entry.temperature ?? null,
+    }
+    appendFileSync(env.MOCK_OPENCODE_CAPTURE_CONFIG_TO, JSON.stringify(row) + '\n')
+  } catch (e) {
+    fail(`MOCK_OPENCODE_CAPTURE_CONFIG_TO write failed: ${(e as Error).message}`)
   }
 }
 
