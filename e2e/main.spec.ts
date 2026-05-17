@@ -738,7 +738,10 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
   await page.locator('.canvas-node--agent').first().click()
 
   // Session tab MUST be present and default-selected. Prompt tab is gone.
-  const tabBar = page.locator('.inspector__tabs')
+  // RFC-035 PR2: `.inspector__tabs` was a sibling-class wart on `.tabs`;
+  // it is now expressed as the `.tabs--inspector` modifier on the same
+  // primitive.
+  const tabBar = page.locator('.tabs--inspector')
   await expect(tabBar.getByRole('button', { name: 'Session', exact: true })).toBeVisible()
   await expect(tabBar.getByRole('button', { name: 'Prompt', exact: true })).toHaveCount(0)
 
