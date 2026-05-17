@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
-import { createInMemoryDb, type DbClient } from '../src/db/client'
+import { createInMemoryDb } from '../src/db/client'
 import { agents, clarifySessions, tasks, workflows } from '../src/db/schema'
 import { submitClarifyAnswers } from '../src/services/clarify'
 import { runTask } from '../src/services/scheduler'
