@@ -4519,17 +4519,26 @@ mark.comment-anchor[data-active='true'] {
 /* ---------------------------------------------------------------- */
 /* RFC-030 — MCP probe status chip + list row expand + inventory.   */
 /* ---------------------------------------------------------------- */
+/* Theme tokens used: --bg (page), --panel (card), --border, --text,
+ * --muted, --accent, --danger. Defined in :root + :root[data-theme='dark']
+ * at the top of this file. Earlier draft of this block hard-coded #fff /
+ * rgba(0,0,0,.05) which made the tool list invisible in dark mode — the
+ * user report explicitly called that out, so everything below now reads
+ * from the theme tokens and dark-mode overrides only diverge for the
+ * coloured probe-status chips (where readable contrast needs distinct
+ * fg/bg per mode). */
 .mcp-probe-chip {
   --chip-fg: var(--text);
-  --chip-bg: var(--muted-bg, #eee);
-  --chip-border: var(--border, #ddd);
+  --chip-bg: color-mix(in srgb, var(--text) 8%, transparent);
+  --chip-border: var(--border);
   background: var(--chip-bg);
   color: var(--chip-fg);
   border-color: var(--chip-border);
 }
 .mcp-probe-chip--unknown {
-  --chip-bg: rgba(140, 140, 140, 0.15);
-  --chip-fg: #666;
+  --chip-bg: color-mix(in srgb, var(--muted) 18%, transparent);
+  --chip-fg: var(--muted);
+  --chip-border: color-mix(in srgb, var(--muted) 35%, transparent);
 }
 .mcp-probe-chip--probing {
   --chip-bg: rgba(56, 132, 255, 0.15);
@@ -4546,6 +4555,40 @@ mark.comment-anchor[data-active='true'] {
   --chip-fg: #b81f24;
   --chip-border: rgba(207, 34, 46, 0.4);
 }
+/* Dark-mode chip overrides — same hues but brighter fg + denser tint so
+ * the chip stays legible on the #1c2028 panel background. */
+:root[data-theme='dark'] .mcp-probe-chip--probing {
+  --chip-bg: rgba(74, 144, 255, 0.22);
+  --chip-fg: #6aa3ff;
+  --chip-border: rgba(74, 144, 255, 0.5);
+}
+:root[data-theme='dark'] .mcp-probe-chip--ok {
+  --chip-bg: rgba(63, 185, 80, 0.22);
+  --chip-fg: #56d364;
+  --chip-border: rgba(63, 185, 80, 0.5);
+}
+:root[data-theme='dark'] .mcp-probe-chip--error {
+  --chip-bg: rgba(248, 81, 73, 0.22);
+  --chip-fg: #ff8b8b;
+  --chip-border: rgba(248, 81, 73, 0.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .mcp-probe-chip--probing {
+    --chip-bg: rgba(74, 144, 255, 0.22);
+    --chip-fg: #6aa3ff;
+    --chip-border: rgba(74, 144, 255, 0.5);
+  }
+  :root:not([data-theme]) .mcp-probe-chip--ok {
+    --chip-bg: rgba(63, 185, 80, 0.22);
+    --chip-fg: #56d364;
+    --chip-border: rgba(63, 185, 80, 0.5);
+  }
+  :root:not([data-theme]) .mcp-probe-chip--error {
+    --chip-bg: rgba(248, 81, 73, 0.22);
+    --chip-fg: #ff8b8b;
+    --chip-border: rgba(248, 81, 73, 0.5);
+  }
+}
 
 .data-table__expand {
   width: 24px;
@@ -4559,7 +4602,10 @@ mark.comment-anchor[data-active='true'] {
   text-align: center;
 }
 .data-table__expanded-row {
-  background: rgba(0, 0, 0, 0.02);
+  /* Subtle contrast tint that works in both light and dark — text-color
+   * tinted overlay reads as "slightly different from row bg" in either mode,
+   * unlike hard-coded rgba(0,0,0,0.02) which vanishes on dark. */
+  background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 .mcp-expanded-cell {
   padding: 12px 16px;
@@ -4583,15 +4629,17 @@ mark.comment-anchor[data-active='true'] {
   flex-shrink: 0;
 }
 .mcp-tool-chip {
-  font-family: var(--mono);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Inventory panel on /mcps/$name */
 .mcp-inventory {
   margin-top: 24px;
-  border: 1px solid var(--border, #ddd);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 16px;
+  background: var(--panel);
+  color: var(--text);
 }
 .mcp-inventory__header {
   display: flex;
@@ -4605,34 +4653,40 @@ mark.comment-anchor[data-active='true'] {
   font-weight: 600;
   margin: 0;
   flex: 1;
+  color: var(--text);
 }
 .mcp-inventory__meta {
   font-size: 11px;
-  opacity: 0.65;
+  color: var(--muted);
 }
 .mcp-inventory__section {
-  border-top: 1px dashed var(--border, #ddd);
+  border-top: 1px dashed var(--border);
   padding: 8px 0;
 }
 .mcp-inventory__section > summary {
   cursor: pointer;
   font-weight: 500;
   font-size: 13px;
+  color: var(--text);
 }
 .mcp-inventory__tool {
-  border: 1px solid var(--border, #ddd);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px 10px;
   margin: 6px 0;
-  background: var(--card-bg, #fff);
+  /* Distinct from --panel so each tool card visibly separates from the
+   * surrounding inventory container in both themes. */
+  background: var(--bg);
+  color: var(--text);
 }
 .mcp-inventory__tool-name {
-  font-family: var(--mono);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
+  color: var(--text);
 }
 .mcp-inventory__tool-desc {
   font-size: 12px;
-  opacity: 0.8;
+  color: var(--muted);
   margin: 4px 0;
 }
 .mcp-inventory__tool-schema {
@@ -4641,19 +4695,22 @@ mark.comment-anchor[data-active='true'] {
 .mcp-inventory__tool-schema summary {
   font-size: 11px;
   cursor: pointer;
-  opacity: 0.7;
+  color: var(--muted);
 }
 .mcp-inventory__tool-schema pre {
-  background: rgba(0, 0, 0, 0.05);
+  /* Slightly recessed surface inside the already-recessed tool card. */
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
   padding: 8px;
   border-radius: 4px;
   font-size: 11px;
   overflow-x: auto;
   margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .mcp-inventory__error {
-  border: 1px solid rgba(207, 34, 46, 0.5);
-  background: rgba(207, 34, 46, 0.05);
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   border-radius: 4px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -4661,12 +4718,107 @@ mark.comment-anchor[data-active='true'] {
 .mcp-inventory__error-title {
   font-weight: 600;
   font-size: 12px;
-  color: #b81f24;
+  color: var(--danger);
   margin: 0 0 4px;
 }
 .mcp-inventory__error-message {
   font-size: 12px;
   margin: 0;
-  font-family: var(--mono);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   word-break: break-word;
+  color: var(--text);
+}
+
+/* RFC-029: Runtime Inventory section rendered at the top of the Session
+   tab. Positioned between the attempts switcher and the conversation flow;
+   default collapsed via <details>, expanded shows four sub-tables. */
+.inventory-section {
+  margin: 8px 0 12px;
+  border-bottom: 1px solid var(--surface-border, #d0d7de);
+  padding-bottom: 8px;
+}
+.inventory-section__summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.inventory-section__chips {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.inventory-section__chip {
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--surface-muted, #eaeef2);
+}
+.inventory-section__missing {
+  color: var(--muted, #57606a);
+  font-style: italic;
+  margin-top: 8px;
+}
+.inventory-section__pending {
+  color: var(--muted, #57606a);
+  margin-top: 8px;
+}
+.inventory-section__body {
+  margin-top: 8px;
+}
+.inventory-section__subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 12px 0 4px;
+  color: var(--muted, #57606a);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.inventory-section__empty {
+  font-size: 12px;
+  padding: 4px 0;
+}
+.inventory-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.inventory-table th,
+.inventory-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--surface-border, #d0d7de);
+  vertical-align: top;
+}
+.inventory-table th {
+  font-weight: 600;
+  color: var(--muted, #57606a);
+}
+.inventory-table tbody tr:hover {
+  background: var(--surface-hover, #f6f8fa);
+}
+.status-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.status-badge--success {
+  background: rgba(31, 136, 61, 0.12);
+  color: #1f883d;
+}
+.status-badge--warn {
+  background: rgba(191, 135, 0, 0.15);
+  color: #9a6700;
+}
+.status-badge--danger {
+  background: rgba(207, 34, 46, 0.12);
+  color: #b81f24;
+}
+.status-badge--muted {
+  background: var(--surface-muted, #eaeef2);
+  color: var(--muted, #57606a);
 }
