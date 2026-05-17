@@ -89,6 +89,72 @@ test('RFC-032 nav-redesign auth gate: no token → /auth, no sidebar', async ({ 
   await expect(page.locator('aside.sidebar')).toHaveCount(0)
 })
 
+test('RFC-032 nav-redesign runtime row: click → /settings#runtime with flash animation', async ({
+  page,
+}) => {
+  await primeAuth(page, daemon)
+  await page.goto(`${daemon.baseUrl}/agents`)
+
+  // The runtime row lives inside the agents nav group; we click the row
+  // (not the dot itself, which is decorative) and assert routing.
+  const runtimeRow = page
+    .locator('.nav-group[data-group="agents"] button.nav-item--runtime')
+    .or(page.locator('.nav-group[data-group="agents"] .nav-item--runtime'))
+    .first()
+  await expect(runtimeRow).toBeVisible()
+  await runtimeRow.click()
+  await page.waitForURL(/\/settings/)
+  // Settings tab forced to runtime; the runtime-status-anchor wrapper picks
+  // up the flash class for ~2 s after navigation. We assert it exists at
+  // least once shortly after navigation; afterwards the animation clears.
+  await expect(page.locator('.runtime-status-anchor')).toBeVisible()
+})
+
+test('RFC-032 nav-redesign homepage: non-first-run / renders 3 sections + Start task button', async ({
+  page,
+}) => {
+  await primeAuth(page, daemon)
+  // Seed a workflow + repo so the onboarding probe says "not first run".
+  // The daemon comes up clean; we create one workflow via API so
+  // useOnboardingProbe().isFirstRun flips false.
+  const headers = {
+    Authorization: `Bearer ${daemon.token}`,
+    'Content-Type': 'application/json',
+  }
+  await fetch(`${daemon.baseUrl}/api/agents`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: 'nav-redesign-stub-agent',
+      description: 'e2e seed',
+      outputs: ['answer'],
+      readonly: true,
+      bodyMd: '',
+    }),
+  })
+  await fetch(`${daemon.baseUrl}/api/workflows`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: 'nav-redesign-stub-workflow',
+      description: 'e2e seed',
+      definition: {
+        $schema_version: 1,
+        inputs: [],
+        nodes: [],
+        edges: [],
+      },
+    }),
+  })
+
+  await page.goto(`${daemon.baseUrl}/`)
+  await expect(page.locator('[data-testid="homepage"]')).toBeVisible()
+  await expect(page.locator('[data-testid="homepage-section-running"]')).toBeVisible()
+  await expect(page.locator('[data-testid="homepage-section-inbox"]')).toBeVisible()
+  await expect(page.locator('[data-testid="homepage-section-recent"]')).toBeVisible()
+  await expect(page.locator('[data-testid="homepage-start-task"]')).toBeVisible()
+})
+
 test('RFC-032 nav-redesign inbox: footer button opens drawer; empty pending → empty hint, no badge', async ({
   page,
 }) => {

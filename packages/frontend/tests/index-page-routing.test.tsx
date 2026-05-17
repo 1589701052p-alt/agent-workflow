@@ -1,0 +1,132 @@
+// RFC-032 PR3 index route — locks `routes/index.tsx`'s first-run vs.
+// non-first-run branches, and the source-code guard that the legacy
+// `<Navigate to="/agents">` fallback is gone.
+//
+// Why this test exists: the previous fallback silently forced `/agents`
+// to be the de-facto home; PR3 replaces it with `<Homepage />` and
+// keeps Onboarding intact for first-run environments. A regression
+// that puts the Navigate back, or drops Onboarding, would break a
+// well-trodden UX path. The cases below cover both branches plus a
+// source-level grep to keep the contract explicit.
+
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor } from '@testing-library/react'
+import type * as RouterModule from '@tanstack/react-router'
+import '../src/i18n'
+import { setBaseUrl, setToken } from '../src/stores/auth'
+
+vi.mock('@tanstack/react-router', async () => {
+  const actual = await vi.importActual<typeof RouterModule>('@tanstack/react-router')
+  return {
+    ...actual,
+    Link: ({
+      to,
+      children,
+      ...rest
+    }: {
+      to: string
+      children: React.ReactNode
+    } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+      <a href={to} {...rest}>
+        {children}
+      </a>
+    ),
+    useNavigate: () => vi.fn(),
+    Navigate: ({ to }: { to: string }) => <div data-testid="navigate-stub" data-to={to} />,
+  }
+})
+
+// IndexPage isn't exported (only the Route is via createRoute). The
+// component-level branch logic lives inline; we exercise it by mocking
+// `useOnboardingProbe` at module-load time so the import in
+// `routes/index.tsx` resolves through the mock factory.
+const probeReturn: { current: OnboardingModule.OnboardingProbe } = {
+  current: { isLoading: false, isFirstRun: false, error: null },
+}
+
+vi.mock('../src/components/Onboarding', async () => {
+  const actual = await vi.importActual<typeof OnboardingModule>('../src/components/Onboarding')
+  return {
+    ...actual,
+    useOnboardingProbe: () => probeReturn.current,
+  }
+})
+
+// Imported AFTER the mocks so the wired behaviour applies.
+import type * as OnboardingModule from '../src/components/Onboarding'
+
+function wrap(node: React.ReactElement) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>)
+}
+
+function mockTasksRuntimeEmpty(): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
+    const s = typeof url === 'string' ? url : url.toString()
+    if (s.includes('/api/runtime/opencode')) {
+      return new Response(
+        JSON.stringify({
+          binary: '/usr/local/bin/opencode',
+          version: '0.13.2',
+          compatible: true,
+          minVersion: '0.12.0',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+  })
+}
+
+beforeEach(() => {
+  setBaseUrl('http://daemon.test')
+  setToken('tok')
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('RFC-032 / route — locks first-run vs. non-first-run branching', () => {
+  test('isFirstRun:true → Onboarding renders (P-5-10 path)', async () => {
+    probeReturn.current = { isLoading: false, isFirstRun: true, error: null }
+    mockTasksRuntimeEmpty()
+    const { Route } = await import('../src/routes/index')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Comp = (Route.options as any).component as React.ComponentType
+    wrap(<Comp />)
+    await waitFor(() => {
+      // Onboarding renders a button labelled "Import demo workflow" in en-US.
+      expect(screen.queryByText(/Import demo workflow|导入示例工作流/)).not.toBeNull()
+    })
+    expect(screen.queryByTestId('homepage')).toBeNull()
+  })
+
+  test('isFirstRun:false → Homepage renders (no Navigate)', async () => {
+    probeReturn.current = { isLoading: false, isFirstRun: false, error: null }
+    mockTasksRuntimeEmpty()
+    const { Route } = await import('../src/routes/index')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Comp = (Route.options as any).component as React.ComponentType
+    wrap(<Comp />)
+    await waitFor(() => {
+      expect(screen.queryByTestId('homepage')).not.toBeNull()
+    })
+    // The Navigate stub must NOT appear — we replaced it with <Homepage />.
+    expect(screen.queryByTestId('navigate-stub')).toBeNull()
+  })
+
+  test('source guard: routes/index.tsx no longer ships Navigate.*/agents', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(resolve(here, '..', 'src', 'routes', 'index.tsx'), 'utf8')
+    expect(src).not.toMatch(/Navigate\b.*to=["'`]\/agents["'`]/)
+    expect(src).toContain('<Homepage />')
+    expect(src).toContain('useOnboardingProbe')
+  })
+})
