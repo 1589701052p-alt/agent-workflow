@@ -1,0 +1,220 @@
+// RFC-036 — task visibility filter integration.
+//
+// We seed three users (admin alice / user bob / user carol) and two task rows
+// — one owned by bob with carol added as a collaborator, and one owned by
+// the daemon-token actor (__system__). Then for each actor:
+//   - admin → sees both (default scope=all);
+//   - bob → sees only his task (scope=mine);
+//   - carol → sees only the shared task (scope=mine);
+//   - dave (unrelated user) → sees nothing;
+//   - GET /api/tasks/:id is gated by canViewTask (third-party → 403).
+
+import { beforeEach, describe, expect, test } from 'bun:test'
+import type { Hono } from 'hono'
+import { resolve } from 'node:path'
+import { createSession } from '../src/auth/sessionStore'
+import { createInMemoryDb, type DbClient } from '../src/db/client'
+import { createApp } from '../src/server'
+import { createUser } from '../src/services/users'
+import { taskCollaborators, tasks, workflows } from '../src/db/schema'
+
+const DAEMON_TOKEN = 'a'.repeat(64)
+const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+interface Harness {
+  db: DbClient
+  app: Hono
+  aliceToken: string
+  bobToken: string
+  carolToken: string
+  daveToken: string
+  bobTaskId: string
+  systemTaskId: string
+}
+
+async function buildHarness(): Promise<Harness> {
+  const db = createInMemoryDb(MIGRATIONS)
+  const app = createApp({
+    token: DAEMON_TOKEN,
+    configPath: '/tmp/aw-test-config-never-used.json',
+    opencodeVersion: '1.14.25',
+    dbVersion: 1,
+    db,
+  })
+
+  const alice = await createUser(db, {
+    username: 'alice',
+    displayName: 'Alice',
+    role: 'admin',
+    password: 'longEnoughPassword',
+  })
+  const bob = await createUser(db, {
+    username: 'bob',
+    displayName: 'Bob',
+    role: 'user',
+    password: 'longEnoughPassword',
+  })
+  const carol = await createUser(db, {
+    username: 'carol',
+    displayName: 'Carol',
+    role: 'user',
+    password: 'longEnoughPassword',
+  })
+  const dave = await createUser(db, {
+    username: 'dave',
+    displayName: 'Dave',
+    role: 'user',
+    password: 'longEnoughPassword',
+  })
+
+  const aliceToken = (await createSession({ db, userId: alice.id })).token
+  const bobToken = (await createSession({ db, userId: bob.id })).token
+  const carolToken = (await createSession({ db, userId: carol.id })).token
+  const daveToken = (await createSession({ db, userId: dave.id })).token
+
+  // Seed a workflow + two tasks directly via the DB (PR4 wires the launcher).
+  const wfId = 'wf01'
+  await db.insert(workflows).values({
+    id: wfId,
+    name: 'wf',
+    description: '',
+    definition: JSON.stringify({ nodes: [], edges: [], inputs: [] }),
+  })
+
+  const bobTaskId = 'task-bob'
+  const systemTaskId = 'task-system'
+  const now = Date.now()
+  await db.insert(tasks).values({
+    id: bobTaskId,
+    workflowId: wfId,
+    workflowSnapshot: '{}',
+    repoPath: '/tmp/repo',
+    repoUrl: null,
+    worktreePath: '/tmp/wt',
+    baseBranch: 'main',
+    branch: 'agent-workflow/task-bob',
+    baseCommit: null,
+    status: 'done',
+    inputs: '{}',
+    maxDurationMs: null,
+    maxTotalTokens: null,
+    startedAt: now,
+    finishedAt: now,
+    errorSummary: null,
+    errorMessage: null,
+    failedNodeId: null,
+    expiresAt: null,
+    deletedAt: null,
+    schemaVersion: 1,
+    ownerUserId: bob.id,
+  })
+  await db.insert(taskCollaborators).values([
+    { taskId: bobTaskId, userId: bob.id, role: 'owner', addedBy: bob.id, addedAt: now },
+    { taskId: bobTaskId, userId: carol.id, role: 'reviewer', addedBy: bob.id, addedAt: now },
+  ])
+  await db.insert(tasks).values({
+    id: systemTaskId,
+    workflowId: wfId,
+    workflowSnapshot: '{}',
+    repoPath: '/tmp/repo',
+    repoUrl: null,
+    worktreePath: '/tmp/wt-system',
+    baseBranch: 'main',
+    branch: 'agent-workflow/task-system',
+    baseCommit: null,
+    status: 'done',
+    inputs: '{}',
+    maxDurationMs: null,
+    maxTotalTokens: null,
+    startedAt: now,
+    finishedAt: now,
+    errorSummary: null,
+    errorMessage: null,
+    failedNodeId: null,
+    expiresAt: null,
+    deletedAt: null,
+    schemaVersion: 1,
+    ownerUserId: '__system__',
+  })
+
+  return { db, app, aliceToken, bobToken, carolToken, daveToken, bobTaskId, systemTaskId }
+}
+
+async function reqAs(app: Hono, token: string, path: string): Promise<Response> {
+  return app.request(path, { headers: { Authorization: `Bearer ${token}` } })
+}
+
+describe('GET /api/tasks visibility filter', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+
+  test('admin sees both tasks by default (scope=all)', async () => {
+    const res = await reqAs(h.app, h.aliceToken, '/api/tasks')
+    expect(res.status).toBe(200)
+    const list = (await res.json()) as { id: string }[]
+    expect(list.map((t) => t.id).sort()).toEqual([h.bobTaskId, h.systemTaskId].sort())
+  })
+
+  test('bob (owner) sees only his task by default', async () => {
+    const res = await reqAs(h.app, h.bobToken, '/api/tasks')
+    const list = (await res.json()) as { id: string }[]
+    expect(list.map((t) => t.id)).toEqual([h.bobTaskId])
+  })
+
+  test("carol (collaborator only) sees the shared task via 'mine'", async () => {
+    const res = await reqAs(h.app, h.carolToken, '/api/tasks')
+    const list = (await res.json()) as { id: string }[]
+    expect(list.map((t) => t.id)).toEqual([h.bobTaskId])
+  })
+
+  test('dave (unrelated) sees nothing', async () => {
+    const res = await reqAs(h.app, h.daveToken, '/api/tasks')
+    const list = (await res.json()) as { id: string }[]
+    expect(list).toEqual([])
+  })
+
+  test('user asking for scope=all gets coerced to mine', async () => {
+    const res = await reqAs(h.app, h.bobToken, '/api/tasks?scope=all')
+    const list = (await res.json()) as { id: string }[]
+    expect(list.map((t) => t.id)).toEqual([h.bobTaskId])
+  })
+
+  test('scope=shared excludes self-owned rows', async () => {
+    const res = await reqAs(h.app, h.bobToken, '/api/tasks?scope=shared')
+    const list = (await res.json()) as { id: string }[]
+    expect(list).toEqual([])
+  })
+
+  test('daemon token actor sees everything', async () => {
+    const res = await reqAs(h.app, DAEMON_TOKEN, '/api/tasks')
+    const list = (await res.json()) as { id: string }[]
+    expect(list.length).toBe(2)
+  })
+})
+
+describe('GET /api/tasks/:id visibility gate', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+
+  test('admin → 200 on either task', async () => {
+    expect((await reqAs(h.app, h.aliceToken, `/api/tasks/${h.bobTaskId}`)).status).toBe(200)
+    expect((await reqAs(h.app, h.aliceToken, `/api/tasks/${h.systemTaskId}`)).status).toBe(200)
+  })
+
+  test('owner / collaborator → 200; outsider → 403 task-not-visible', async () => {
+    expect((await reqAs(h.app, h.bobToken, `/api/tasks/${h.bobTaskId}`)).status).toBe(200)
+    expect((await reqAs(h.app, h.carolToken, `/api/tasks/${h.bobTaskId}`)).status).toBe(200)
+    const r = await reqAs(h.app, h.daveToken, `/api/tasks/${h.bobTaskId}`)
+    expect(r.status).toBe(403)
+    const body = (await r.json()) as { code: string }
+    expect(body.code).toBe('task-not-visible')
+  })
+
+  test('outsider → 403 on system task as well', async () => {
+    expect((await reqAs(h.app, h.daveToken, `/api/tasks/${h.systemTaskId}`)).status).toBe(403)
+  })
+})

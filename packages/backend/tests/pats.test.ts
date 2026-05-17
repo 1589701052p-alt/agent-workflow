@@ -102,11 +102,9 @@ describe('patStore', () => {
   test('scopes JSON malformed → empty scopes (no crash)', async () => {
     const id = await seedActiveUser(db)
     const { token } = await createPat({ db, userId: id, name: 'ci' })
+    const { userPats } = await import('../src/db/schema')
     // Manually corrupt the row.
-    await db
-      .update(require('../src/db/schema').userPats)
-      .set({ scopesJson: '{not-json' })
-      .where(eq(require('../src/db/schema').userPats.userId, id))
+    await db.update(userPats).set({ scopesJson: '{not-json' }).where(eq(userPats.userId, id))
     const resolved = await lookupActivePat(db, token)
     expect(resolved?.scopes).toEqual([])
   })

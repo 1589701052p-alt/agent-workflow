@@ -64,6 +64,19 @@ export class UnauthorizedError extends DomainError {
   }
 }
 
+/**
+ * RFC-036 — raised by requirePermission / canViewTask when the resolved actor
+ * lacks the required permission point. `code` differentiates the specific
+ * failure (e.g. 'forbidden' / 'task-not-visible' / 'not-reviewer'); `details`
+ * may carry `{ requiredPermission, actorPermissions[] }` for admin debugging.
+ */
+export class ForbiddenError extends DomainError {
+  constructor(code: string = 'forbidden', message: string = 'forbidden', details?: unknown) {
+    super(code, message, 403, details)
+    this.name = 'ForbiddenError'
+  }
+}
+
 /** Hono error handler. Mounted via `app.onError(errorHandler)`. */
 export const errorHandler: ErrorHandler = (err, c) => {
   if (err instanceof DomainError) {

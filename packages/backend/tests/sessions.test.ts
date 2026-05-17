@@ -1,6 +1,7 @@
 // RFC-036 — sessionStore CRUD + lookup invariants.
 
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { eq } from 'drizzle-orm'
 import { resolve } from 'node:path'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import {
@@ -117,6 +118,5 @@ async function lookupRawHash(db: DbClient, raw: string): Promise<boolean> {
 }
 
 function idEq(id: string) {
-  // Tiny local helper so we do not have to import drizzle's eq here.
-  return require('drizzle-orm').eq(users.id, id)
+  return eq(users.id, id)
 }

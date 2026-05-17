@@ -3,9 +3,12 @@
 // without monkey-patching the module.
 
 import { Hono } from 'hono'
+import type { MiddlewareHandler } from 'hono'
 import { actorOf } from '@/auth/actor'
+import { requirePermission, resourcePermissionGate } from '@/auth/permissions'
 import { multiAuth } from '@/auth/session'
 import type { DbClient } from '@/db/client'
+import { ForbiddenError } from '@/util/errors'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
 import { mountBackupRoutes } from '@/routes/backup'
@@ -76,6 +79,51 @@ export function createApp(deps: AppDeps): Hono {
       source: actor.source,
     })
   })
+
+  // RFC-036 permission gates. Mounted BEFORE the route handlers so a non-
+  // permitted actor (e.g. a regular-user session token) is rejected with 403
+  // before any service-layer code runs. The gates pick the permission point
+  // from the request method (GET → :read, mutating verbs → :write).
+  app.use('/api/agents', resourcePermissionGate('agents'))
+  app.use('/api/agents/*', resourcePermissionGate('agents'))
+  app.use('/api/skills', resourcePermissionGate('skills'))
+  app.use('/api/skills/*', resourcePermissionGate('skills'))
+  app.use('/api/skill-sources', resourcePermissionGate('skills'))
+  app.use('/api/skill-sources/*', resourcePermissionGate('skills'))
+  app.use('/api/mcps', resourcePermissionGate('mcps'))
+  app.use('/api/mcps/*', resourcePermissionGate('mcps'))
+  app.use('/api/plugins', resourcePermissionGate('plugins'))
+  app.use('/api/plugins/*', resourcePermissionGate('plugins'))
+  app.use('/api/workflows', resourcePermissionGate('workflows'))
+  app.use('/api/workflows/*', resourcePermissionGate('workflows'))
+  app.use('/api/repos', resourcePermissionGate('repos'))
+  app.use('/api/repos/*', resourcePermissionGate('repos'))
+  app.use('/api/cached-repos', resourcePermissionGate('repos'))
+  app.use('/api/cached-repos/*', resourcePermissionGate('repos'))
+
+  // Admin-only end points: settings, OIDC providers, backup. /api/users +
+  // /api/users/search are mounted in mountUserRoutes (PR3/PR5) and have
+  // their own bespoke gates (search is admin+user, the rest admin-only).
+  const configGate: MiddlewareHandler = async (c, next) => {
+    const perm =
+      c.req.method === 'GET' || c.req.method === 'HEAD' ? 'settings:read' : 'settings:write'
+    const actor = actorOf(c)
+    if (!actor.permissions.has(perm)) {
+      throw new ForbiddenError('forbidden', `missing permission: ${perm}`, {
+        requiredPermission: perm,
+        actorPermissions: [...actor.permissions],
+      })
+    }
+    await next()
+  }
+  app.use('/api/config', configGate)
+  app.use('/api/config/*', configGate)
+  app.use('/api/backup', requirePermission('backup:run'))
+  app.use('/api/backup/*', requirePermission('backup:run'))
+
+  // runtime is admin+user — homepage runtime dot relies on it.
+  app.use('/api/runtime', requirePermission('runtime:read'))
+  app.use('/api/runtime/*', requirePermission('runtime:read'))
 
   mountConfigRoutes(app, deps)
   mountRuntimeRoutes(app, deps)

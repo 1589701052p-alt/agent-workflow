@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretBox, createSecretBoxFromKey, ensureSecretKey } from '../src/auth/secretBox'
@@ -31,7 +31,7 @@ describe('ensureSecretKey', () => {
     try {
       const keyPath = join(dir, 'secret.key')
       // Write a 10-byte file.
-      require('node:fs').writeFileSync(keyPath, randomBytes(10), { mode: 0o600 })
+      writeFileSync(keyPath, randomBytes(10), { mode: 0o600 })
       expect(() => ensureSecretKey(keyPath)).toThrow(/wrong size/)
     } finally {
       rmSync(dir, { recursive: true, force: true })

@@ -12,11 +12,18 @@ import type {
   TaskNodeRuns,
   TaskSummary,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm'
 import { existsSync } from 'node:fs'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRunOutputs, nodeRuns, tasks, workflows } from '@/db/schema'
+import {
+  nodeRunEvents,
+  nodeRunOutputs,
+  nodeRuns,
+  taskCollaborators,
+  tasks,
+  workflows,
+} from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
 import { listAgents } from '@/services/agent'
 import { listSkills } from '@/services/skill'
@@ -710,6 +717,17 @@ export interface ListTasksFilters {
   workflowId?: string
   repoPath?: string
   limit?: number
+  /**
+   * RFC-036 visibility filter. When set, the SQL also requires either
+   * `tasks.owner_user_id = visibility.actorUserId` OR an entry in
+   * task_collaborators for that user. `scope: 'shared'` excludes self-owned
+   * rows. Setting visibility=undefined disables the filter (admin scope=all
+   * + legacy daemon-token callers).
+   */
+  visibility?: {
+    actorUserId: string
+    scope: 'mine' | 'shared'
+  }
 }
 
 export async function listTasks(
@@ -720,6 +738,24 @@ export async function listTasks(
   if (filters.status !== undefined) conditions.push(eq(tasks.status, filters.status))
   if (filters.workflowId !== undefined) conditions.push(eq(tasks.workflowId, filters.workflowId))
   if (filters.repoPath !== undefined) conditions.push(eq(tasks.repoPath, filters.repoPath))
+  if (filters.visibility) {
+    const { actorUserId, scope } = filters.visibility
+    const ownerEq = eq(tasks.ownerUserId, actorUserId)
+    const collabExists = inArray(
+      tasks.id,
+      db
+        .select({ id: taskCollaborators.taskId })
+        .from(taskCollaborators)
+        .where(eq(taskCollaborators.userId, actorUserId)),
+    )
+    if (scope === 'shared') {
+      // Strict "shared with me but not mine" — exclude rows the actor owns.
+      conditions.push(and(collabExists, ne(tasks.ownerUserId, actorUserId)))
+    } else {
+      // 'mine' — owner OR collaborator. Either alone satisfies the gate.
+      conditions.push(or(ownerEq, collabExists)!)
+    }
+  }
   const where =
     conditions.length === 0
       ? undefined

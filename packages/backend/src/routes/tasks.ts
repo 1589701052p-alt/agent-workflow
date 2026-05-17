@@ -15,8 +15,14 @@ import {
 } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { ulid } from 'ulid'
+import { eq } from 'drizzle-orm'
+import type { Context } from 'hono'
+import { actorOf } from '@/auth/actor'
 import { loadConfig } from '@/config'
+import { tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
+import { canViewTask } from '@/services/taskCollab'
+import { ForbiddenError } from '@/util/errors'
 import {
   cancelTask,
   getNodeRunEvents,
@@ -63,6 +69,7 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
 
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {
+    const actor = actorOf(c)
     const filters: Parameters<typeof listTasks>[1] = {}
     const status = c.req.query('status')
     if (status !== undefined) {
@@ -84,13 +91,50 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       }
       filters.limit = Math.min(n, 500)
     }
+    // RFC-036 visibility filter. Admin default scope=all; regular user
+    // default scope=mine. Explicit ?scope=mine|shared|all wins. Asking for
+    // 'all' without tasks:read:all collapses to 'mine'.
+    const rawScope = c.req.query('scope')
+    const scope: 'mine' | 'shared' | 'all' =
+      rawScope === 'shared'
+        ? 'shared'
+        : rawScope === 'all'
+          ? 'all'
+          : rawScope === 'mine'
+            ? 'mine'
+            : actor.permissions.has('tasks:read:all')
+              ? 'all'
+              : 'mine'
+    if (scope !== 'all') {
+      filters.visibility = { actorUserId: actor.user.id, scope }
+    } else if (!actor.permissions.has('tasks:read:all')) {
+      filters.visibility = { actorUserId: actor.user.id, scope: 'mine' }
+    }
     return c.json(await listTasks(deps.db, filters))
   })
 
+  // RFC-036 visibility gate. All /api/tasks/:id/... reads require the actor
+  // to be admin, owner, or a task_collaborators member. Mounted as middleware
+  // so each downstream handler can assume the task is visible.
+  app.use('/api/tasks/:id', async (c, next) => {
+    // POST /api/tasks does not have :id; skip in that case.
+    if (!c.req.param('id')) {
+      await next()
+      return
+    }
+    await visibilityCheck(c, deps)
+    await next()
+  })
+  app.use('/api/tasks/:id/*', async (c, next) => {
+    await visibilityCheck(c, deps)
+    await next()
+  })
+
   app.get('/api/tasks/:id', async (c) => {
-    const task = await getTask(deps.db, c.req.param('id'))
+    const id = c.req.param('id')
+    const task = await getTask(deps.db, id)
     if (task === null) {
-      throw new NotFoundError('task-not-found', `task '${c.req.param('id')}' not found`)
+      throw new NotFoundError('task-not-found', `task '${id}' not found`)
     }
     return c.json(task)
   })
@@ -209,6 +253,20 @@ async function safeJson(req: Request): Promise<unknown> {
     return await req.json()
   } catch {
     return {}
+  }
+}
+
+async function visibilityCheck(c: Context, deps: AppDeps): Promise<void> {
+  const id = c.req.param('id')
+  if (!id) return
+  const rows = await deps.db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1)
+  const row = rows[0]
+  if (!row) {
+    // Let the per-route 404 handler fire; do not leak existence vs. forbidden.
+    return
+  }
+  if (!(await canViewTask(deps.db, actorOf(c), row))) {
+    throw new ForbiddenError('task-not-visible', `task '${id}' is not visible to this actor`)
   }
 }
 
