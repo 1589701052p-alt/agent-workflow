@@ -55,4 +55,19 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
     const src = readFileSync(join(BACKEND_SRC, 'runner.ts'), 'utf8')
     expect(src).toContain('clarifyContext')
   })
+
+  // RFC-023 directive iteration — both scheduler call sites MUST consult the
+  // prompt context's directive and feed an `effectiveHasClarifyChannel` flag
+  // into runNode. A future refactor that removes the override silently
+  // re-enables the <workflow-clarify> protocol block for stop-clarify reruns
+  // (the user explicitly asked for it not to appear), so this grep guard is
+  // the cheapest way to lock the contract without spinning up a full
+  // scheduler integration test.
+  test('scheduler.ts gates hasClarifyChannel on clarifyContext.directive !== "stop" at both sites', () => {
+    const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
+    expect(src).toContain("clarifyContext?.directive !== 'stop'")
+    const occurrences = src.match(/effectiveHasClarifyChannel/g) ?? []
+    // Two declarations + two passes into runNode → expect ≥ 4 mentions.
+    expect(occurrences.length).toBeGreaterThanOrEqual(4)
+  })
 })

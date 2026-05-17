@@ -1,0 +1,1 @@
+ALTER TABLE `clarify_sessions` ADD `directive` text;

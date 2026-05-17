@@ -14,6 +14,7 @@ import {
   CLARIFY_SOURCE_PORT_NAME,
   findClarifyNodeForAgent,
   parseClarifyEnvelopeBody,
+  renderClarifyDirectiveTrailer,
   renderClarifyQuestionsBlock,
   summariseClarifyAnswer,
 } from '../src/index'
@@ -255,6 +256,57 @@ describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
     )
     expect(md).toContain('Q1: Which DB?')
     expect(md).toContain('- User did not answer this question.')
+  })
+})
+
+// RFC-023 directive iteration: locks the exact wording the asking agent
+// reads in its next-round prompt for each directive. Changing the phrasing
+// is a contract break with already-running agents mid-task — keep the
+// English sentences load-bearing here so a future refactor can't silently
+// soften the "STOP CLARIFYING" instruction.
+describe('renderClarifyDirectiveTrailer / buildClarifyPromptBlock directive (RFC-023 iter)', () => {
+  const q = {
+    id: 'q1',
+    title: 'Which DB?',
+    kind: 'single' as const,
+    recommended: false,
+    options: [
+      { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
+      { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+    ],
+  }
+  const ans = [
+    {
+      questionId: 'q1',
+      selectedOptionIndices: [0],
+      selectedOptionLabels: ['Postgres'],
+      customText: '',
+    },
+  ]
+
+  test('undefined directive → empty trailer (legacy pre-directive callers untouched)', () => {
+    expect(renderClarifyDirectiveTrailer(undefined)).toBe('')
+    const md = buildClarifyPromptBlock([q], ans)
+    expect(md).not.toContain('User directive')
+  })
+
+  test('continue directive → encourages further clarify when material details remain', () => {
+    const trailer = renderClarifyDirectiveTrailer('continue')
+    expect(trailer).toContain('User directive: KEEP CLARIFYING IF NEEDED')
+    expect(trailer).toContain('emit another <workflow-clarify> envelope')
+    const md = buildClarifyPromptBlock([q], ans, 'continue')
+    expect(md).toContain('User directive: KEEP CLARIFYING IF NEEDED')
+    // Answers section still rendered first; trailer is at the end.
+    expect(md.indexOf('User chose: "Postgres"')).toBeLessThan(md.indexOf('User directive'))
+  })
+
+  test('stop directive → forbids further clarify and demands <workflow-output> now', () => {
+    const trailer = renderClarifyDirectiveTrailer('stop')
+    expect(trailer).toContain('User directive: STOP CLARIFYING')
+    expect(trailer).toContain('NOT to emit another <workflow-clarify>')
+    expect(trailer).toContain('final <workflow-output> reply now')
+    const md = buildClarifyPromptBlock([q], ans, 'stop')
+    expect(md).toContain('User directive: STOP CLARIFYING')
   })
 })
 

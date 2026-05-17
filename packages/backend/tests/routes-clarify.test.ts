@@ -259,4 +259,85 @@ describe('POST /api/clarify/:nodeRunId/answers', () => {
     const body = (await res.json()) as { code: string }
     expect(body.code).toBe('clarify-answers-invalid')
   })
+
+  // RFC-023 directive iteration — the POST body now carries an optional
+  // `directive` field. Bodies that omit it must still parse (back-compat
+  // with deployed clients) and default to 'continue'; 'stop' must round-trip
+  // into the session row so a later prompt assembly can act on it. Locks the
+  // wire format that the frontend two-button footer relies on.
+  describe('POST /answers — directive iteration', () => {
+    test('omitted directive defaults to "continue" on the persisted session', async () => {
+      const { db, app } = buildApp()
+      const { clarifyNodeRunId } = await seedSession(db)
+      const res = await req(app, `/api/clarify/${clarifyNodeRunId}/answers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          answers: [
+            {
+              questionId: 'qdb',
+              selectedOptionIndices: [0],
+              selectedOptionLabels: [],
+              customText: '',
+            },
+          ],
+        }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        ok: boolean
+        session: ClarifySession
+      }
+      expect(body.session.directive).toBe('continue')
+    })
+
+    test('explicit directive="stop" round-trips to the session row', async () => {
+      const { db, app } = buildApp()
+      const { clarifyNodeRunId } = await seedSession(db)
+      const res = await req(app, `/api/clarify/${clarifyNodeRunId}/answers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directive: 'stop',
+          answers: [
+            {
+              questionId: 'qdb',
+              selectedOptionIndices: [0],
+              selectedOptionLabels: [],
+              customText: '',
+            },
+          ],
+        }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        ok: boolean
+        session: ClarifySession
+      }
+      expect(body.session.directive).toBe('stop')
+    })
+
+    test('unknown directive value returns 422 (schema enum guard)', async () => {
+      const { db, app } = buildApp()
+      const { clarifyNodeRunId } = await seedSession(db)
+      const res = await req(app, `/api/clarify/${clarifyNodeRunId}/answers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directive: 'maybe',
+          answers: [
+            {
+              questionId: 'qdb',
+              selectedOptionIndices: [0],
+              selectedOptionLabels: [],
+              customText: '',
+            },
+          ],
+        }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { code: string }
+      expect(body.code).toBe('clarify-answers-invalid')
+    })
+  })
 })

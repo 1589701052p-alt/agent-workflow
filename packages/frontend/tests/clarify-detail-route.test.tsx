@@ -66,6 +66,7 @@ function mkSession(overrides: Partial<ClarifySession> = {}): ClarifySession {
     createdAt: 1_700_000_000_000,
     answeredAt: null,
     answeredBy: null,
+    directive: null,
     ...overrides,
   }
 }
@@ -261,12 +262,84 @@ describe('/clarify/$nodeRunId reviewer keyboard nav', () => {
     const q2 = screen.getByTestId('clarify-question-q2')
     q2.focus()
     fireEvent.keyDown(q2, { key: 'Enter' })
-    expect(document.activeElement).toBe(screen.getByTestId('clarify-submit'))
+    // RFC-023 directive iteration: the primary "submit & keep clarifying"
+    // button absorbs Enter from the last question (continue is the default).
+    expect(document.activeElement).toBe(screen.getByTestId('clarify-submit-continue'))
   })
 
   test('keyboard hint is rendered for awaiting_human sessions', async () => {
     mockApi(twoQuestionSession())
     renderRoute()
     await waitFor(() => screen.getByTestId('clarify-keyboard-hint'))
+  })
+})
+
+// RFC-023 directive iteration: the footer renders TWO buttons. Each one POSTs
+// /answers with the matching directive so the runtime can either keep the
+// clarify channel open ('continue') or suppress the <workflow-clarify>
+// protocol block for the source agent's next rerun ('stop'). Locks the
+// wire format the backend now consumes — renaming the POST field would be a
+// silent contract break with deployed clients.
+describe('/clarify/$nodeRunId directive submit buttons (RFC-023 iter)', () => {
+  test('continue button POSTs directive="continue"; stop button POSTs directive="stop"', async () => {
+    const session = mkSession()
+    let capturedPosts: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        const s = typeof url === 'string' ? url : url.toString()
+        if (s.includes(`/api/clarify/${session.clarifyNodeRunId}`) && s.endsWith('/answers')) {
+          const body =
+            typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {}
+          capturedPosts.push(body)
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              session: { ...session, status: 'answered' },
+              rerunNodeRunId: 'nr_rerun',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (s.includes(`/api/clarify/${session.clarifyNodeRunId}`)) {
+          return new Response(JSON.stringify(session), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      },
+    )
+    // First render: click continue.
+    const { unmount } = renderRoute()
+    await waitFor(() => screen.getByTestId('clarify-submit-continue'))
+    fireEvent.click(screen.getByTestId('clarify-submit-continue'))
+    await waitFor(() => expect(capturedPosts.length).toBe(1))
+    expect(capturedPosts[0]?.directive).toBe('continue')
+    unmount()
+
+    // Second render: click stop.
+    capturedPosts = []
+    renderRoute()
+    await waitFor(() => screen.getByTestId('clarify-submit-stop'))
+    fireEvent.click(screen.getByTestId('clarify-submit-stop'))
+    await waitFor(() => expect(capturedPosts.length).toBe(1))
+    expect(capturedPosts[0]?.directive).toBe('stop')
+  })
+
+  test('both buttons render with the i18n-keyed labels and continue is the primary action', async () => {
+    mockApi(mkSession())
+    renderRoute()
+    await waitFor(() => screen.getByTestId('clarify-submit-continue'))
+    const cont = screen.getByTestId('clarify-submit-continue')
+    const stop = screen.getByTestId('clarify-submit-stop')
+    // Primary vs ghost — visual ranking encodes "continue is default".
+    expect(cont.className).toContain('btn--primary')
+    expect(stop.className).toContain('btn--ghost')
+    // Both carry their directive in a data-attribute the e2e layer can grep.
+    expect(cont.getAttribute('data-directive')).toBe('continue')
+    expect(stop.getAttribute('data-directive')).toBe('stop')
   })
 })

@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   ClarifyAnswer,
+  ClarifyDirective,
   ClarifySession,
   ClarifySessionSummary,
   SubmitClarifyAnswersResponse,
@@ -172,8 +173,8 @@ export function ClarifyDetailPage() {
   // submit
   // ----------------------------------------------------------------------
 
-  const submitMut = useMutation<SubmitClarifyAnswersResponse, Error>({
-    mutationFn: async () => {
+  const submitMut = useMutation<SubmitClarifyAnswersResponse, Error, ClarifyDirective>({
+    mutationFn: async (directive) => {
       const s = session.data
       if (s === undefined) throw new Error('no session loaded')
       const arr = s.questions.map(
@@ -187,7 +188,7 @@ export function ClarifyDetailPage() {
       )
       const resp = await api.post<SubmitClarifyAnswersResponse>(
         `/api/clarify/${s.clarifyNodeRunId}/answers`,
-        { answers: arr, ifMatchIteration: s.iterationIndex },
+        { answers: arr, ifMatchIteration: s.iterationIndex, directive },
       )
       // Clear the IDB draft; the answer is committed server-side.
       await deleteClarifyDraft({
@@ -233,7 +234,11 @@ export function ClarifyDetailPage() {
   //      we focus the submit button so a follow-up Enter actually submits.
   // ----------------------------------------------------------------------
   const questionRefs = useRef<Map<string, QuestionFormHandle | null>>(new Map())
-  const submitRef = useRef<HTMLButtonElement | null>(null)
+  // Two submit buttons now (RFC-023 directive iteration): the primary
+  // "submit & keep clarifying" gets keyboard focus after the last question's
+  // Enter, matching the "continue is default" semantics. Users who actually
+  // want to stop can tab once or click the secondary button.
+  const submitContinueRef = useRef<HTMLButtonElement | null>(null)
   const initialFocusedRef = useRef(false)
 
   function isAnswerEmpty(a: ClarifyAnswer | undefined): boolean {
@@ -249,7 +254,7 @@ export function ClarifyDetailPage() {
     if (next !== undefined) {
       questionRefs.current.get(next.id)?.focus()
     } else {
-      submitRef.current?.focus()
+      submitContinueRef.current?.focus()
     }
   }
 
@@ -366,16 +371,29 @@ export function ClarifyDetailPage() {
         <span className="muted" data-testid="clarify-draft-indicator">
           {draftSaving ? t('clarify.detail.draftSaving') : t('clarify.detail.draftSaved')}
         </span>
-        <button
-          ref={submitRef}
-          type="button"
-          className="btn btn--primary"
-          disabled={readonly || submitMut.isPending || requiredMissing}
-          onClick={() => submitMut.mutate()}
-          data-testid="clarify-submit"
-        >
-          {t('clarify.detail.submit')}
-        </button>
+        <div className="clarify-detail__submit-group" data-testid="clarify-submit-group">
+          <button
+            ref={submitContinueRef}
+            type="button"
+            className="btn btn--primary"
+            disabled={readonly || submitMut.isPending || requiredMissing}
+            onClick={() => submitMut.mutate('continue')}
+            data-testid="clarify-submit-continue"
+            data-directive="continue"
+          >
+            {t('clarify.detail.submitContinue')}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={readonly || submitMut.isPending || requiredMissing}
+            onClick={() => submitMut.mutate('stop')}
+            data-testid="clarify-submit-stop"
+            data-directive="stop"
+          >
+            {t('clarify.detail.submitStop')}
+          </button>
+        </div>
         {requiredMissing && (
           <span className="error-box" data-testid="clarify-required-missing">
             {t('clarify.detail.submitDisabledRequired')}

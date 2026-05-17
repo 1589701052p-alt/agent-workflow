@@ -43,6 +43,7 @@ import {
   ClarifyEnvelopeBodySchema,
   ClarifyQuestionSchema,
   type ClarifyAnswer,
+  type ClarifyDirective,
   type ClarifyQuestion,
   type ClarifySession,
   type ClarifySessionStatus,
@@ -209,6 +210,10 @@ export async function createClarifySession(
     createdAt,
     answeredAt: null,
     answeredBy: null,
+    // Directive is captured at submit time; awaiting_human sessions don't
+    // have one yet. NULL surfaces as 'continue' to readers that need a
+    // concrete value (see buildClarifyPromptContext).
+    directive: null,
   }
   if (truncationWarnings && truncationWarnings.length > 0) {
     session.truncationWarnings = truncationWarnings
@@ -231,6 +236,12 @@ export interface SubmitClarifyAnswersArgs {
   ifMatchIteration?: number
   /** Defaults to 'local'. Reserved for future per-user attribution. */
   answeredBy?: string
+  /** RFC-023 directive: 'continue' (default) keeps the legacy ask-channel
+   *  behaviour for the asking agent's next rerun; 'stop' instructs the runner
+   *  to (1) inject a "user wants no more clarifications" sentence into the
+   *  next-round prompt and (2) suppress the <workflow-clarify> protocol
+   *  block for that single rerun only. */
+  directive?: ClarifyDirective
   /** Defaults to Date.now(). */
   now?: () => number
 }
@@ -262,6 +273,7 @@ export async function submitClarifyAnswers(
   const { db, clarifyNodeRunId, ifMatchIteration } = args
   const now = args.now ?? Date.now
   const answeredBy = args.answeredBy ?? 'local'
+  const directive: ClarifyDirective = args.directive ?? 'continue'
 
   const sessionRows = await db
     .select()
@@ -300,6 +312,7 @@ export async function submitClarifyAnswers(
       status: 'answered',
       answeredAt,
       answeredBy,
+      directive,
     })
     .where(eq(clarifySessions.id, sessionRow.id))
 
@@ -376,6 +389,7 @@ export async function submitClarifyAnswers(
     createdAt: sessionRow.createdAt,
     answeredAt,
     answeredBy,
+    directive,
   }
   if (sessionRow.truncationWarningsJson) {
     try {
@@ -447,11 +461,16 @@ export async function buildClarifyPromptContext(
     return undefined
   }
 
+  // Coalesce legacy NULL directive to 'continue' — pre-directive rows always
+  // behaved that way at submit time. Anything else from the DB is one of the
+  // CHECK-constrained enum values from the migration.
+  const persistedDirective = (latest.directive ?? 'continue') as ClarifyDirective
   const ctx: ClarifyPromptContext = {
     questionsBlock: renderClarifyQuestionsBlock(questions),
-    answersBlock: buildClarifyPromptBlock(questions, answers),
+    answersBlock: buildClarifyPromptBlock(questions, answers, persistedDirective),
     iteration: String(args.targetIteration),
     remaining: computeRemaining(args.definition, args.agentNodeId, args.targetIteration),
+    directive: persistedDirective,
   }
   return ctx
 }
@@ -692,6 +711,9 @@ function rowToSession(row: typeof clarifySessions.$inferSelect): ClarifySession 
     createdAt: row.createdAt,
     answeredAt: row.answeredAt,
     answeredBy: row.answeredBy,
+    // History views surface this; null until the user has submitted (or
+    // pre-directive rows that predate the column).
+    directive: row.directive === null ? null : (row.directive as ClarifyDirective),
   }
   if (row.answersJson !== null) {
     try {

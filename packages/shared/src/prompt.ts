@@ -75,6 +75,13 @@ export interface ClarifyPromptContext {
    *  String(max_iterations - current iteration). Agent reads this to know how
    *  many ask-back rounds it has left before the framework exhausts the loop. */
   remaining?: string
+  /** RFC-023 directive iteration: 'stop' means the runner MUST NOT append the
+   *  `<workflow-clarify>` protocol block for this rerun, regardless of the
+   *  agent node's clarify channel wiring. Not consumed by `renderUserPrompt`
+   *  directly — it is read by the scheduler to override `hasClarifyChannel`
+   *  before calling the runner. `undefined` (default) preserves legacy
+   *  behaviour: the channel is gated purely on the workflow definition. */
+  directive?: 'continue' | 'stop'
 }
 
 export interface RenderPromptInput {

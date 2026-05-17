@@ -15,6 +15,7 @@ import {
   CLARIFY_MAX_QUESTIONS,
   CLARIFY_MAX_OPTIONS_PER_QUESTION,
   type ClarifyAnswer,
+  type ClarifyDirective,
   type ClarifyEnvelopeBody,
   type ClarifyQuestion,
   type ClarifyTruncationWarning,
@@ -183,6 +184,7 @@ export function renderClarifyQuestionsBlock(questions: ClarifyQuestion[]): strin
 export function buildClarifyPromptBlock(
   questions: ClarifyQuestion[],
   answers: ClarifyAnswer[],
+  directive?: ClarifyDirective,
 ): string {
   const byId = new Map(answers.map((a) => [a.questionId, a]))
   const lines: string[] = []
@@ -196,7 +198,43 @@ export function buildClarifyPromptBlock(
     }
     lines.push('')
   })
+  const trailer = renderClarifyDirectiveTrailer(directive)
+  if (trailer.length > 0) {
+    lines.push(trailer)
+  }
   return lines.join('\n').trimEnd()
+}
+
+/** Render the trailing English instruction that converts the user's
+ *  continue-or-stop directive into a sentence the asking agent can read in
+ *  its next-round prompt. Emitted at the end of `buildClarifyPromptBlock`
+ *  so the directive sits right where the agent finishes consuming the
+ *  user's answers.
+ *
+ *  - 'continue' → mild reminder that the agent may keep asking; the
+ *    `<workflow-clarify>` protocol block remains attached by the runner.
+ *  - 'stop'    → hard instruction not to clarify this rerun, paired with
+ *    the runner withholding the protocol block so the agent literally
+ *    can't see the JSON template anymore.
+ *  - undefined → empty string (legacy behaviour: no trailer at all).
+ *
+ *  Exported so backend tests can lock the exact wording — changing it is
+ *  a contract break with already-running agents in mid-task. */
+export function renderClarifyDirectiveTrailer(directive?: ClarifyDirective): string {
+  if (directive === 'stop') {
+    return [
+      '### User directive: STOP CLARIFYING',
+      '- The user has explicitly asked you NOT to emit another <workflow-clarify> envelope this round.',
+      '- Produce your final <workflow-output> reply now using the answers above. If any detail is still ambiguous, make your best informed call based on the answers and proceed.',
+    ].join('\n')
+  }
+  if (directive === 'continue') {
+    return [
+      '### User directive: KEEP CLARIFYING IF NEEDED',
+      '- The user is willing to answer more clarification questions. If material details remain unresolved after the answers above, emit another <workflow-clarify> envelope covering every remaining detail before producing <workflow-output>.',
+    ].join('\n')
+  }
+  return ''
 }
 
 /** Deterministic single-sentence English synthesis for one answer. The agent

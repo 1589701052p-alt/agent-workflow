@@ -116,12 +116,28 @@ export const ClarifyAnswerSchema = z.object({
 })
 export type ClarifyAnswer = z.infer<typeof ClarifyAnswerSchema>
 
+/** User-supplied directive carried alongside the answers: tells the asking
+ *  agent whether the next round should keep asking clarifications or stop and
+ *  produce the final output. `continue` is the default — preserves legacy
+ *  behaviour where the asking agent re-receives the clarify protocol block
+ *  and decides on its own. `stop` instructs the runtime to (1) inject an
+ *  explicit "user wants no more clarifications" sentence into the next-round
+ *  prompt and (2) NOT append `<workflow-clarify>` protocol instructions to
+ *  that same prompt, so the agent cannot re-ask this round even if it wanted
+ *  to. Scope is exactly one rerun — see RFC-023 directive iteration. */
+export const ClarifyDirectiveSchema = z.enum(['continue', 'stop'])
+export type ClarifyDirective = z.infer<typeof ClarifyDirectiveSchema>
+
 export const SubmitClarifyAnswersSchema = z.object({
   answers: z.array(ClarifyAnswerSchema),
   /** Optimistic-lock guard: must equal the session's current iterationIndex
    *  or the server returns 412 Precondition Failed (defends against two-tab
    *  double-submit). */
   ifMatchIteration: z.number().int().nonnegative().optional(),
+  /** RFC-023 directive iteration: 'continue' (default — legacy behaviour) or
+   *  'stop' (no more clarifying this rerun). Omitted bodies still parse so
+   *  pre-directive clients keep working. */
+  directive: ClarifyDirectiveSchema.default('continue'),
 })
 export type SubmitClarifyAnswers = z.infer<typeof SubmitClarifyAnswersSchema>
 
@@ -152,6 +168,11 @@ export const ClarifySessionSchema = z.object({
   createdAt: z.number().int(),
   answeredAt: z.number().int().nullable().default(null),
   answeredBy: z.string().nullable().default(null),
+  /** User's continue-or-stop directive captured at submit time. Null until
+   *  the session is answered. Old answered rows persisted before the
+   *  directive feature shipped will surface as 'continue' (the default
+   *  semantics they always had). */
+  directive: ClarifyDirectiveSchema.nullable().default(null),
 })
 export type ClarifySession = z.infer<typeof ClarifySessionSchema>
 

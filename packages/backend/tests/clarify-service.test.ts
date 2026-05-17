@@ -518,6 +518,93 @@ describe('buildClarifyPromptContext', () => {
     })
     expect(ctxShard).toBeDefined()
   })
+
+  // RFC-023 directive iteration — when the last submit carried directive='stop'
+  // the prompt context must (1) expose `directive: 'stop'` so the scheduler
+  // can override hasClarifyChannel for this one rerun and (2) bake the stop
+  // sentence into the answersBlock so the agent reads it even if the runner
+  // does not strip the protocol block.
+  test('directive=stop surfaces stop sentence in answersBlock AND context.directive', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await db.insert(nodeRuns).values({
+      id: 'nr_dir_src',
+      taskId,
+      nodeId: 'designer',
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      clarifyIteration: 0,
+    })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: 'designer',
+      sourceAgentNodeRunId: 'nr_dir_src',
+      sourceShardKey: null,
+      clarifyNodeId: 'clarify1',
+      iterationIndex: 0,
+      questions: [makeQuestion()],
+    })
+    await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId,
+      answers: [makeAnswer()],
+      directive: 'stop',
+    })
+
+    const ctx = await buildClarifyPromptContext({
+      db,
+      definition: emptyDefinition(),
+      taskId,
+      agentNodeId: 'designer',
+      targetIteration: 1,
+      shardKey: null,
+    })
+    expect(ctx?.directive).toBe('stop')
+    expect(ctx?.answersBlock ?? '').toContain('User directive: STOP CLARIFYING')
+  })
+
+  test('directive=continue (default) surfaces continue sentence and context.directive', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await db.insert(nodeRuns).values({
+      id: 'nr_dir_cont',
+      taskId,
+      nodeId: 'designer',
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      clarifyIteration: 0,
+    })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: 'designer',
+      sourceAgentNodeRunId: 'nr_dir_cont',
+      sourceShardKey: null,
+      clarifyNodeId: 'clarify1',
+      iterationIndex: 0,
+      questions: [makeQuestion()],
+    })
+    // Omit `directive` — service defaults to 'continue'.
+    await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId,
+      answers: [makeAnswer()],
+    })
+
+    const ctx = await buildClarifyPromptContext({
+      db,
+      definition: emptyDefinition(),
+      taskId,
+      agentNodeId: 'designer',
+      targetIteration: 1,
+      shardKey: null,
+    })
+    expect(ctx?.directive).toBe('continue')
+    expect(ctx?.answersBlock ?? '').toContain('User directive: KEEP CLARIFYING IF NEEDED')
+  })
 })
 
 function emptyDefinition(): WorkflowDefinition {

@@ -314,6 +314,27 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
         remaining,
       })
       if (added > 0) continue
+      // If a prior batch parked a node in awaiting_human / awaiting_review,
+      // the downstream is blocked WAITING for a human, not stalled. Bubble
+      // the awaiting signal up so runTask can transition the task chip
+      // cleanly. Without this branch the post-RFC-023-bug-13 refactor (which
+      // moved the awaiting return out of the per-batch for-loop into the
+      // end-of-scope priority block) breaks the agent-single happy-path
+      // e2e: designer asks clarify, review_design has no completed upstream,
+      // ready becomes empty, we'd otherwise fail the task with "scheduler
+      // stalled" before the user ever sees the question.
+      if (anyAwaitingHuman) {
+        return { kind: 'awaiting_human', detail: awaitingHumanDetail }
+      }
+      if (anyAwaitingReview) {
+        return { kind: 'awaiting_review', detail: awaitingReviewDetail }
+      }
+      // Genuine stall: no awaiting, no completable progress. Surface any
+      // earlier per-node failure as the cause if one exists; otherwise
+      // fall back to the generic stalled message.
+      if (firstFailureDetail !== undefined) {
+        return { kind: 'failed', detail: firstFailureDetail }
+      }
       return {
         kind: 'failed',
         detail: { summary: 'scheduler stalled', message: 'no ready nodes in scope' },
@@ -661,6 +682,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               shardKey: currentShardKey,
             })
           : undefined
+        // RFC-023 directive iteration: when the last answered session was
+        // submitted with directive='stop', this single rerun MUST NOT see
+        // the <workflow-clarify> protocol block — the answersBlock already
+        // carries the stop-clarifying sentence the agent reads instead.
+        // Retries inside this attempt loop inherit the same gate. The next
+        // round (clarifyIteration + 1) walks back through scheduleAgentNode
+        // and re-derives the flag, so 'stop' naturally scopes to one rerun.
+        const effectiveHasClarifyChannel = hasClarifyChannel && clarifyContext?.directive !== 'stop'
         lastResult = await runNode({
           taskId,
           nodeRunId,
@@ -679,7 +708,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(reviewContext !== undefined ? { reviewContext } : {}),
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
           ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
-          hasClarifyChannel,
+          hasClarifyChannel: effectiveHasClarifyChannel,
           skills: resolvedSkills,
           dependents,
           appHome: opts.appHome,
@@ -1120,6 +1149,12 @@ async function runFanOutNode(
                 shardKey: shard.shardKey,
               })
             : undefined
+          // RFC-023 directive iteration: stop suppresses the protocol block
+          // for the shard's rerun (clarify service mints a fresh per-shard
+          // run before calling resumeTask, so this branch only sees stop
+          // when the new run inherits an answered session with directive=stop).
+          const effectiveHasClarifyChannel =
+            hasClarifyChannel && clarifyContext?.directive !== 'stop'
           const result = await runNode({
             taskId,
             nodeRunId: childRunId,
@@ -1139,7 +1174,7 @@ async function runFanOutNode(
             ...(reviewContext !== undefined ? { reviewContext } : {}),
             ...(clarifyContext !== undefined ? { clarifyContext } : {}),
             ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
-            hasClarifyChannel,
+            hasClarifyChannel: effectiveHasClarifyChannel,
             skills: resolvedSkills,
             dependents,
             appHome: opts.appHome,

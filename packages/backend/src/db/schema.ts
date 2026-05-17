@@ -438,6 +438,10 @@ export const clarifySessions = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
     answeredAt: integer('answered_at'),
     answeredBy: text('answered_by'),
+    // RFC-023 directive: 'continue' (default, legacy) | 'stop'. Nullable so
+    // already-persisted pre-directive rows survive; readers coalesce NULL to
+    // 'continue' to match the behaviour those sessions had at submit time.
+    directive: text('directive', { enum: ['continue', 'stop'] }),
   },
   (t) => ({
     taskIdx: index('idx_clarify_sessions_task').on(t.taskId),

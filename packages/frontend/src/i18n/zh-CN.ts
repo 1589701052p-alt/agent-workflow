@@ -833,7 +833,8 @@ export interface Resources {
       shardSwitcherEmpty: string
       historyTitle: string
       historyEmpty: string
-      submit: string
+      submitContinue: string
+      submitStop: string
       submitDisabledRequired: string
       draftSaving: string
       draftSaved: string
@@ -1733,7 +1734,8 @@ export const zhCN: Resources = {
       shardSwitcherEmpty: '当前 shard 没有待回答的反问。',
       historyTitle: '历史轮次',
       historyEmpty: '没有历史反问。',
-      submit: '全部提交',
+      submitContinue: '提交并继续反问',
+      submitStop: '提交并停止反问',
       submitDisabledRequired: '请先回答所有"推荐"题',
       draftSaving: '正在保存草稿…',
       draftSaved: '草稿已保存（关 tab 不丢）',

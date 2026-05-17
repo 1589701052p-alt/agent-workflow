@@ -4100,6 +4100,20 @@ mark.comment-anchor[data-active='true'] {
   margin-left: auto;
 }
 
+/* RFC-023 directive iteration: two submit buttons share a group container
+   so they sit together at the footer's right edge while keeping the draft
+   indicator on the left. `.clarify-detail__footer .btn` above still pins
+   the lone group to the right via its `margin-left: auto`. */
+.clarify-detail__submit-group {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.clarify-detail__submit-group .btn {
+  margin-left: 0;
+}
+
 .clarify-shard-switcher {
   display: flex;
   align-items: center;

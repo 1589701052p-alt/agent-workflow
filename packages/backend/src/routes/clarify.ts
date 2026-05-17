@@ -98,6 +98,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       db: deps.db,
       clarifyNodeRunId: nodeRunId,
       answers: parsed.data.answers,
+      directive: parsed.data.directive,
       ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
     })
     // Re-enter the scheduler so the freshly minted rerun node_run starts.
