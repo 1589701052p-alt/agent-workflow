@@ -74,6 +74,25 @@ describe('RFC-031 /plugins wiring', () => {
     expect(src).toContain('ConfirmButton')
   })
 
+  test('detail page renders save/del errors in dedicated .form-actions row, NOT inside header .page__actions', () => {
+    // Regression: previously the detail page rendered `<span class="form-actions__error">`
+    // for save.error / del.error as a child of `<div className="page__actions">` in
+    // the page header. That header row is `display:flex; justify-content:space-between`,
+    // so a long error like "plugin-install-failed: plugin install failed (exit 1)" got
+    // squeezed into the top-right corner of the page, visually disconnected from the
+    // form it pertains to. Sibling detail pages (mcps/skills/agents.detail.tsx) all
+    // keep Save/Delete in `.page__actions` but render error spans in a separate
+    // `.form-actions` row UNDER the header. This test locks that placement.
+    const src = read('routes/plugins.detail.tsx')
+    expect(src).toContain('className="form-actions"')
+    // Slice the header actions cluster (opener .. first </div>) — plugins.detail.tsx
+    // keeps it shallow (only <button> + <ConfirmButton ... />, no nested <div>), so a
+    // non-greedy match closes at the cluster's own </div>.
+    const headerActions = src.match(/className="page__actions"[\s\S]*?<\/div>/)
+    expect(headerActions).not.toBeNull()
+    expect(headerActions![0]).not.toContain('form-actions__error')
+  })
+
   test('list page still keeps check-update + upgrade row actions', () => {
     const src = read('routes/plugins.tsx')
     expect(src).toContain('plugin-check-update-')

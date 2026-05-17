@@ -106,6 +106,12 @@ function PluginDetailPage() {
             danger
             disabled={del.isPending}
           />
+        </div>
+      </header>
+
+      {(save.error !== null && save.error !== undefined) ||
+      (del.error !== null && del.error !== undefined) ? (
+        <div className="form-actions">
           {save.error !== null && save.error !== undefined && (
             <span className="form-actions__error">{describeError(save.error)}</span>
           )}
@@ -113,7 +119,7 @@ function PluginDetailPage() {
             <span className="form-actions__error">{describeError(del.error)}</span>
           )}
         </div>
-      </header>
+      ) : null}
 
       <PluginFields value={form} onChange={setForm} nameLocked errors={errors} />
     </div>
