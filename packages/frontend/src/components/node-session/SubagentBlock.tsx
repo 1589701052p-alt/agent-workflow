@@ -6,7 +6,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SessionSubagentCall } from '@agent-workflow/shared'
-import { ConversationFlow } from './ConversationFlow'
+import { ConversationFlow, RoleBadge } from './ConversationFlow'
 
 interface Props {
   call: SessionSubagentCall
@@ -28,12 +28,12 @@ export function SubagentBlock({ call }: Props) {
           className="session-subagent__toggle"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
+          aria-label={open ? t('session.collapse') : t('session.expand')}
         >
           {open ? '▼' : '▶'}
         </button>
-        <span className="session-block__role">
-          {t('session.subagent')}: <code>{subtitle}</code>
-        </span>
+        <RoleBadge variant="subagent" icon="🪆" label={t('session.subagent')} />
+        <code className="session-block__tool-name">{subtitle}</code>
         <span className={`status-chip status-chip--${toneFor(call.status)}`}>{call.status}</span>
         {captureMissing && (
           <span className="session-capture-warning">{t('session.captureMissing')}</span>

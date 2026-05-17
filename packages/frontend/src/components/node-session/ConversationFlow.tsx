@@ -35,7 +35,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
       return (
         <article className="session-block session-block--user">
           <header className="session-block__head">
-            <span className="session-block__role">{t('session.user')}</span>
+            <RoleBadge variant="user" icon="👤" label={t('session.user')} />
             <Ts ts={message.ts} />
           </header>
           <pre className="session-block__body">{message.text}</pre>
@@ -45,7 +45,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
       return (
         <article className="session-block session-block--assistant">
           <header className="session-block__head">
-            <span className="session-block__role">{t('session.assistant')}</span>
+            <RoleBadge variant="assistant" icon="🤖" label={t('session.assistant')} />
             <Ts ts={message.ts} />
           </header>
           <pre className="session-block__body">{message.text}</pre>
@@ -55,9 +55,8 @@ function MessageBlock({ message }: { message: SessionMessage }) {
       return (
         <article className="session-block session-block--tool">
           <header className="session-block__head">
-            <span className="session-block__role">
-              {t('session.toolCall')}: <code>{message.toolName}</code>
-            </span>
+            <RoleBadge variant="tool" icon="🔧" label={t('session.toolCall')} />
+            <code className="session-block__tool-name">{message.toolName}</code>
             <span className={`status-chip status-chip--${toneFor(message.status)}`}>
               {statusLabel(message.status, t)}
             </span>
@@ -65,13 +64,17 @@ function MessageBlock({ message }: { message: SessionMessage }) {
           </header>
           {message.input !== undefined && message.input !== null ? (
             <details className="session-block__details">
-              <summary>{t('session.toolCall')} · input</summary>
+              <summary>
+                <span className="session-block__details-tag">input</span>
+              </summary>
               <pre className="session-block__body">{stringify(message.input)}</pre>
             </details>
           ) : null}
           {message.output !== null ? (
             <details open className="session-block__details">
-              <summary>{t('session.toolResult')}</summary>
+              <summary>
+                <span className="session-block__details-tag">{t('session.toolResult')}</span>
+              </summary>
               <pre className="session-block__body">{message.output}</pre>
             </details>
           ) : null}
@@ -80,6 +83,32 @@ function MessageBlock({ message }: { message: SessionMessage }) {
     case 'subagent-call':
       return <SubagentBlock call={message} />
   }
+}
+
+export type RoleVariant = 'user' | 'assistant' | 'tool' | 'subagent'
+
+/**
+ * Visually distinct role chip rendered in the top-left of every session
+ * block. Colored pill + icon + uppercase label so users can scan the
+ * conversation by role at a glance — RFC-027 §UX revision.
+ */
+export function RoleBadge({
+  variant,
+  icon,
+  label,
+}: {
+  variant: RoleVariant
+  icon: string
+  label: string
+}) {
+  return (
+    <span className={`session-role-badge session-role-badge--${variant}`}>
+      <span className="session-role-badge__icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="session-role-badge__label">{label}</span>
+    </span>
+  )
 }
 
 function Ts({ ts }: { ts: number }) {
