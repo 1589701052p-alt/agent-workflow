@@ -255,7 +255,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       mkdirSync(runRoot, { recursive: true })
       // materializeInventoryPlugin handles both dev (source tree) and
       // single-binary (embed table) layouts — see opencode-plugin/index.ts.
-      const pluginPath = materializeInventoryPlugin(runRoot)
+      // Async because the binary-mode branch reads bytes via Bun.file(); the
+      // surrounding `runNode` is already async so awaiting here doesn't
+      // change the call-graph.
+      const pluginPath = await materializeInventoryPlugin(runRoot)
       const fileSpec: string | [string, Record<string, unknown>] = `file://${pluginPath}`
       inlineConfig.plugin = [...(inlineConfig.plugin ?? []), fileSpec]
       inventoryOutPath = join(runRoot, 'inventory.json')

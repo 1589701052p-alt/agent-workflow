@@ -15,7 +15,7 @@
 // copyFileSync ENOENT → no OPENCODE_AW_INVENTORY_OUT set → stub couldn't
 // write inventory → captured:false → no chips → e2e red.
 
-import { copyFileSync, existsSync } from 'node:fs'
+import { copyFileSync, existsSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PLUGIN_FILES } from '../embed.generated'
@@ -44,8 +44,20 @@ export function awInventoryDumpSourcePath(): string {
  * should reference. Throws if neither dev nor embedded source is reachable
  * so the runner's outer try/catch can degrade cleanly to
  * `plugin-load-failed`.
+ *
+ * Dev mode: `copyFileSync` from the source tree path.
+ *
+ * Binary mode: the embed table value is a `/$bunfs/...` path Bun materializes
+ * from a `with { type: 'file' }` import. `copyFileSync` on those bunfs paths
+ * is unreliable (CI run 25993404058 / e2e RFC-029 surfaced this — copy
+ * silently dropped the file so the plugin never wrote inventory.json). The
+ * working pattern (also used by `extractMigrationsTo` in `embed.ts`) is to
+ * read the bytes via `Bun.file(...).arrayBuffer()` and `writeFileSync` them
+ * out — hence the async signature. Synchronously checking `existsSync` on
+ * the bunfs path also returns false in 1.3.x, so we use the embed table
+ * presence as the gating signal instead of `existsSync`.
  */
-export function materializeInventoryPlugin(runRoot: string): string {
+export async function materializeInventoryPlugin(runRoot: string): Promise<string> {
   const target = join(runRoot, PLUGIN_BASENAME)
   const devPath = resolve(HERE, PLUGIN_BASENAME)
   if (existsSync(devPath)) {
@@ -53,8 +65,9 @@ export function materializeInventoryPlugin(runRoot: string): string {
     return target
   }
   const embedded = PLUGIN_FILES[PLUGIN_BASENAME]
-  if (embedded !== undefined && existsSync(embedded)) {
-    copyFileSync(embedded, target)
+  if (embedded !== undefined) {
+    const bytes = new Uint8Array(await Bun.file(embedded).arrayBuffer())
+    writeFileSync(target, bytes)
     return target
   }
   throw new Error(

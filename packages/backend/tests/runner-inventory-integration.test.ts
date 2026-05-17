@@ -293,8 +293,10 @@ describe('runner.ts source: dump plugin wiring lock', () => {
     )
     // Source-tree path resolver (used by docs / logs).
     expect(src).toContain('export function awInventoryDumpSourcePath')
-    // Runtime materializer that handles dev + binary modes.
-    expect(src).toContain('export function materializeInventoryPlugin')
+    // Runtime materializer that handles dev + binary modes. Async because
+    // binary mode reads bytes via `Bun.file().arrayBuffer()` — see
+    // opencode-plugin/index.ts comment for why copyFileSync on /$bunfs fails.
+    expect(src).toContain('export async function materializeInventoryPlugin')
     // Binary-mode fallback is via the embed table.
     expect(src).toContain('PLUGIN_FILES')
   })
