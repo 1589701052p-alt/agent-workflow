@@ -121,6 +121,40 @@ describe('computePorts', () => {
     })
     expect(ports.outputs).toEqual([])
   })
+
+  test('RFC-023 bugfix #1: agent with outbound clarify edge gets __clarify__ source port', () => {
+    // Without this entry in outputs[], xyflow has no Handle to anchor the
+    // ask edge (agent.__clarify__ → clarify.questions) to, so the edge
+    // renders invisible — only the answer edge shows up, which is exactly
+    // the user-reported regression.
+    const defWithClarify: WorkflowDefinition = {
+      ...DEF,
+      nodes: [...DEF.nodes, { id: 'c1', kind: 'clarify', position: { x: 600, y: 30 } }],
+      edges: [
+        ...DEF.edges,
+        {
+          id: 'clarify_ask',
+          source: { nodeId: 'a1', portName: '__clarify__' },
+          target: { nodeId: 'c1', portName: 'questions' },
+        },
+        {
+          id: 'clarify_ans',
+          source: { nodeId: 'c1', portName: 'answers' },
+          target: { nodeId: 'a1', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const ports = computePorts(defWithClarify.nodes[1]!, byName, defWithClarify)
+    expect(ports.outputs).toContain('__clarify__')
+    // The answer edge's response port is auto-derived via the generic
+    // inbound-edges loop, so it should also surface on inputs.
+    expect(ports.inputs).toContain('__clarify_response__')
+  })
+
+  test('RFC-023: agent without a clarify channel does NOT get the __clarify__ port', () => {
+    const ports = computePorts(DEF.nodes[1]!, byName, DEF)
+    expect(ports.outputs).not.toContain('__clarify__')
+  })
 })
 
 describe('toFlowNodes', () => {

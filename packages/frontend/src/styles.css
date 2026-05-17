@@ -3823,3 +3823,215 @@ mark.comment-anchor[data-active='true'] {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+/* ---------------------------------------------------------------------------
+   RFC-023 Clarify question form (UX iteration)
+   ---------------------------------------------------------------------------
+   Each option is a card-shaped row: full width, generous touch target, the
+   whole row clickable via the wrapping <label>. Selected state uses the
+   accent color so reviewers can scan answers at a glance. The recommended
+   question header gets a soft accent tint to highlight "you must answer
+   this one" without being shouty.
+*/
+.clarify-question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.clarify-question:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.clarify-question--recommended {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+
+.clarify-question__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  flex-wrap: wrap;
+}
+.clarify-question__index {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  font-weight: 500;
+}
+.clarify-question__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.clarify-question__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.clarify-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+  font-size: 13px;
+  color: var(--text);
+  /* The whole row is the touch target — make sure even thin labels fill it. */
+  width: 100%;
+  box-sizing: border-box;
+  user-select: none;
+}
+.clarify-option:hover:not(.is-checked) {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.clarify-option.is-checked {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border-color: var(--accent);
+}
+.clarify-option input[type='radio'],
+.clarify-option input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.clarify-option input[type='radio']:disabled,
+.clarify-option input[type='checkbox']:disabled {
+  cursor: not-allowed;
+}
+.clarify-option__digit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.clarify-option.is-checked .clarify-option__digit {
+  background: var(--accent);
+  color: var(--panel);
+}
+.clarify-option__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Custom (Other) row gets a subtle dashed border so it visually reads as
+ * "you can write your own" — paired with the textarea card just below. */
+.clarify-option--custom {
+  border-style: dashed;
+}
+.clarify-option--custom.is-checked {
+  border-style: solid;
+}
+
+/* Custom textarea card — collapses to a thin disabled state until the
+ * user picks the Other row (single) or ticks the "also include" box
+ * (multi). When active, it stays adjacent to the custom option card to
+ * make the visual relationship obvious. */
+.clarify-question__custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: -2px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+  opacity: 0.55;
+}
+.clarify-question__custom.is-active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.clarify-custom-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 56px;
+}
+.clarify-custom-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.clarify-custom-input:disabled {
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--muted) 6%, var(--panel));
+  color: var(--muted);
+}
+.clarify-question__custom-hint {
+  margin: 0;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* ---------------------------------------------------------------------------
+   RFC-023 Clarify channel system ports on agent nodes
+   ---------------------------------------------------------------------------
+   The agent's `__clarify__` source port + `__clarify_response__` target
+   port are rendered as normal port rows so xyflow can draw the two
+   clarify channel edges. The system port name is noisy though — swap
+   the visible label for a friendlier badge and tint the row so reviewers
+   immediately see "this row IS the clarify channel".
+*/
+.canvas-node__port-row .canvas-node__port-label[title='__clarify__'],
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'] {
+  font-family: inherit;
+  color: var(--accent);
+  font-weight: 500;
+}
+.canvas-node__port-row .canvas-node__port-label[title='__clarify__']::after {
+  content: '❓ clarify ask';
+}
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__']::after {
+  content: '💬 clarify answer';
+}
+.canvas-node__port-row .canvas-node__port-label[title='__clarify__'],
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'] {
+  font-size: 0;
+}
+.canvas-node__port-row .canvas-node__port-label[title='__clarify__']::after,
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__']::after {
+  font-size: 11px;
+}

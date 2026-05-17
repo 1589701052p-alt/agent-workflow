@@ -117,6 +117,67 @@ export function applyClarifyReverseDrag(
 }
 
 /**
+ * Pure classifier for "is this xyflow Connection a clarify-channel drop?"
+ * Used by both `handleConnect` (to route the drop into
+ * `applyClarifyReverseDrag`) and `isValidConnection` (to fast-fail before
+ * xyflow commits a stray normal edge). Returns the (agent, clarify) pair
+ * the drop implies + which direction the user dragged. Returns null when
+ * the connection is NOT a clarify-channel drop (caller falls through to
+ * the normal edge-creation path).
+ *
+ * The function deliberately does NOT check `hasExistingClarifyChannel` —
+ * isValidConnection enforces that separately so the rejection happens
+ * visually (red dashed line) instead of silently no-opping inside the
+ * drop handler.
+ */
+export function classifyClarifyConnection(
+  def: WorkflowDefinition,
+  conn: {
+    source: string | null
+    target: string | null
+    sourceHandle: string | null
+    targetHandle: string | null
+  },
+): { sourceAgentNodeId: string; clarifyNodeId: string; direction: 'reverse' | 'forward' } | null {
+  // Reverse drag: user grabbed the clarify input handle (questions) and
+  // dropped on an agent output port. xyflow normalises to source=agent,
+  // target=clarify, targetHandle='questions'.
+  if (
+    conn.targetHandle === CLARIFY_INPUT_PORT_NAME &&
+    conn.source !== null &&
+    conn.target !== null
+  ) {
+    const targetNode = def.nodes.find((n) => n.id === conn.target)
+    if (targetNode !== undefined && targetNode.kind === 'clarify') {
+      return {
+        sourceAgentNodeId: conn.source,
+        clarifyNodeId: conn.target,
+        direction: 'reverse',
+      }
+    }
+  }
+  // Forward drag: user grabbed clarify.answers and dropped on any agent
+  // input handle. Without this branch the drop would create a stray
+  // `clarify.answers → agent.<input>` edge that the runtime ignores (the
+  // clarify channel keys off agent.__clarify__ outbound, not this edge).
+  if (
+    conn.sourceHandle === CLARIFY_OUTPUT_PORT_NAME &&
+    conn.source !== null &&
+    conn.target !== null
+  ) {
+    const sourceNode = def.nodes.find((n) => n.id === conn.source)
+    if (sourceNode !== undefined && sourceNode.kind === 'clarify') {
+      return {
+        sourceAgentNodeId: conn.target,
+        clarifyNodeId: conn.source,
+        direction: 'forward',
+      }
+    }
+  }
+  return null
+}
+
+/**
  * Drop-side cleanup: when the user deletes an agent or clarify node,
  * cascade-remove any clarify channel edges that referenced it. Otherwise
  * the canvas would render dangling arrows.
@@ -139,6 +200,70 @@ export function clearClarifyEdgesForRemovedNodes(
       e.source.portName === CLARIFY_OUTPUT_PORT_NAME ||
       e.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME
     if (refsRemoved && isClarifyChannelEdge) {
+      changed = true
+      return false
+    }
+    return true
+  })
+  return changed ? { ...def, edges: nextEdges } : def
+}
+
+/**
+ * Identify whether an edge is one half of a clarify channel. Returns a
+ * `{ agentNodeId, clarifyNodeId, half }` descriptor when it is, `null`
+ * otherwise. The pair is keyed by the (agent, clarify) tuple so a single
+ * agent with two clarify nodes wired (a misconfiguration the validator
+ * already rejects) still bookkeeps independently.
+ */
+export function describeClarifyChannelEdge(
+  edge: WorkflowEdge,
+): { agentNodeId: string; clarifyNodeId: string; half: 'ask' | 'ans' } | null {
+  if (
+    edge.source.portName === CLARIFY_SOURCE_PORT_NAME &&
+    edge.target.portName === CLARIFY_INPUT_PORT_NAME
+  ) {
+    return { agentNodeId: edge.source.nodeId, clarifyNodeId: edge.target.nodeId, half: 'ask' }
+  }
+  if (
+    edge.source.portName === CLARIFY_OUTPUT_PORT_NAME &&
+    edge.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME
+  ) {
+    return { agentNodeId: edge.target.nodeId, clarifyNodeId: edge.source.nodeId, half: 'ans' }
+  }
+  return null
+}
+
+/**
+ * Bug-fix cascade: when the user deletes ONE half of a clarify channel
+ * (either the ask or the ans edge), the other half is conceptually dead
+ * weight — keeping it would leave the runtime believing the channel is
+ * still wired (scheduler keys on the ask edge) AND would render an arrow
+ * pointing nowhere meaningful. So whenever `removedEdges` contains a
+ * clarify-channel edge, we look up its sibling in `def.edges` and drop
+ * that too.
+ *
+ * Returns `def` by reference if no clarify channel edges were removed
+ * (so React effects can short-circuit on `===`).
+ */
+export function cascadeRemoveClarifyChannel(
+  def: WorkflowDefinition,
+  removedEdges: ReadonlyArray<WorkflowEdge>,
+): WorkflowDefinition {
+  if (removedEdges.length === 0) return def
+  const brokenPairs = new Set<string>()
+  for (const e of removedEdges) {
+    const desc = describeClarifyChannelEdge(e)
+    if (desc !== null) {
+      brokenPairs.add(`${desc.agentNodeId}|${desc.clarifyNodeId}`)
+    }
+  }
+  if (brokenPairs.size === 0) return def
+  let changed = false
+  const nextEdges = def.edges.filter((e) => {
+    const desc = describeClarifyChannelEdge(e)
+    if (desc === null) return true
+    const key = `${desc.agentNodeId}|${desc.clarifyNodeId}`
+    if (brokenPairs.has(key)) {
       changed = true
       return false
     }

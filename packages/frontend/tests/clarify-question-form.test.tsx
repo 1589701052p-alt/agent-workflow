@@ -158,6 +158,54 @@ describe('QuestionForm — multi-choice', () => {
   })
 })
 
+describe('QuestionForm — UX redesign (RFC-023 bugfix #4)', () => {
+  test('each option renders as a card-shaped row with is-checked toggling on selection', () => {
+    render(<Host question={SINGLE_Q} initial={emptyAnswer('q-db')} onChangeSpy={() => {}} />)
+    const options = document.querySelectorAll('.clarify-option')
+    // 2 normal options + 1 custom row = 3 cards.
+    expect(options.length).toBe(3)
+    // None are checked initially.
+    options.forEach((opt) => {
+      expect(opt.classList.contains('is-checked')).toBe(false)
+    })
+    // Selecting the first option flips its row visual to is-checked.
+    const radios = document.querySelectorAll('input[type=radio][data-option-idx]')
+    fireEvent.click(radios[0]!)
+    const refreshed = document.querySelectorAll('.clarify-option')
+    expect(refreshed[0]?.classList.contains('is-checked')).toBe(true)
+    expect(refreshed[1]?.classList.contains('is-checked')).toBe(false)
+  })
+
+  test('every option row is rendered as a <label htmlFor=…> wrapping its input (full-row touch target)', () => {
+    // We assert the markup contract rather than firing a click on a
+    // descendant span: in real browsers a click on any descendant of a
+    // <label> triggers the associated input via HTML's native semantics,
+    // but JSDOM only forwards the click when the target is the label
+    // itself. The contract is "the row IS a label with htmlFor matching
+    // the radio's id" — that's the structural guarantee for
+    // full-row-clickability across all real browsers + screen readers.
+    render(<Host question={SINGLE_Q} initial={emptyAnswer('q-db')} onChangeSpy={() => {}} />)
+    const labels = document.querySelectorAll('.clarify-option') as NodeListOf<HTMLLabelElement>
+    expect(labels.length).toBeGreaterThan(0)
+    for (const label of labels) {
+      expect(label.tagName).toBe('LABEL')
+      expect(label.htmlFor).not.toBe('')
+      const input = document.getElementById(label.htmlFor) as HTMLInputElement | null
+      expect(input).not.toBeNull()
+      expect(input!.type === 'radio' || input!.type === 'checkbox').toBe(true)
+    }
+  })
+
+  test('custom textarea container carries is-active when the Other row is selected', () => {
+    render(<Host question={SINGLE_Q} initial={emptyAnswer('q-db')} onChangeSpy={() => {}} />)
+    const customContainer = document.querySelector('.clarify-question__custom')!
+    expect(customContainer.classList.contains('is-active')).toBe(false)
+    fireEvent.click(screen.getByTestId('clarify-custom-radio'))
+    const refreshed = document.querySelector('.clarify-question__custom')!
+    expect(refreshed.classList.contains('is-active')).toBe(true)
+  })
+})
+
 describe('QuestionForm — keyboard hotkeys', () => {
   test('digit 1..N picks / toggles the matching option', () => {
     const spy = vi.fn()

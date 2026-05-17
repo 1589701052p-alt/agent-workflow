@@ -38,7 +38,11 @@ import { AgentNode } from './nodes/AgentNode'
 import { applyPaste, buildSlice, getClipboard, setClipboard } from './canvasClipboard'
 import {
   applyClarifyReverseDrag,
+  cascadeRemoveClarifyChannel,
+  classifyClarifyConnection,
   CLARIFY_INPUT_PORT_NAME,
+  CLARIFY_OUTPUT_PORT_NAME,
+  CLARIFY_SOURCE_PORT_NAME,
   clearClarifyEdgesForRemovedNodes,
   hasExistingClarifyChannel,
   isValidClarifyTarget,
@@ -181,6 +185,15 @@ function CanvasInner({
       const nextEdgeIds = new Set(next.edges.map((e) => e.id))
       const deleted = definition.edges.filter((e) => !nextEdgeIds.has(e.id))
       let staged = deleted.length === 0 ? next : applyDisconnectForReviewOutput(next, deleted)
+      // RFC-023 bugfix: a clarify channel is a (ask, ans) pair persisted as
+      // two edges. Deleting either half on its own would leave a half-wired
+      // channel — the scheduler still sees the ask edge and re-runs the
+      // clarify cycle, but the canvas no longer shows the answer arrow.
+      // Cascade-remove the sibling so a single-edge delete cleanly tears
+      // down the whole channel.
+      if (deleted.length > 0) {
+        staged = cascadeRemoveClarifyChannel(staged, deleted)
+      }
       const synced = syncInputDefs(staged.inputs ?? [], staged.nodes)
       if (synced !== (staged.inputs ?? [])) staged = { ...staged, inputs: synced }
       onChange(staged)
@@ -389,28 +402,27 @@ function CanvasInner({
         if (next !== definition) commitChange(next)
         return
       }
-      // RFC-023 reverse-drag: user dragged FROM the clarify node's input
-      // handle (`questions`) TO an agent node. xyflow normalises the
-      // Connection so source = agent (its right-side output handle was the
-      // drop target) and target = clarify with targetHandle === 'questions'.
-      // We splice the TWO clarify channel edges atomically and short-circuit
-      // — the user's drag should never produce a normal "source.outputPort
-      // → clarify.questions" edge (the only valid clarify wiring goes
-      // through the `__clarify__` system port).
-      if (
-        conn.targetHandle === CLARIFY_INPUT_PORT_NAME &&
-        conn.source !== null &&
-        conn.target !== null
-      ) {
-        const targetNode = definition.nodes.find((n) => n.id === conn.target)
-        if (targetNode !== undefined && targetNode.kind === 'clarify') {
-          const next = applyClarifyReverseDrag(definition, {
-            sourceAgentNodeId: conn.source,
-            clarifyNodeId: conn.target,
-          })
-          if (next !== definition) commitChange(next)
-          return
-        }
+      // RFC-023 clarify-channel drops (both directions). The pure classifier
+      // recognises:
+      //   - reverse drag: drag FROM clarify.questions input handle TO an
+      //     agent output port (xyflow normalises to source=agent,
+      //     target=clarify, targetHandle='questions').
+      //   - forward drag: drag FROM clarify.answers output handle TO any
+      //     agent input handle (source=clarify, sourceHandle='answers').
+      // Both produce the same two-edge clarify channel via
+      // applyClarifyReverseDrag — the user gets the same outcome
+      // regardless of drag direction. Without this branch the forward
+      // drag would create a stray `clarify.answers → agent.<input>` edge
+      // that the runtime ignores (channel detection keys off the agent's
+      // `__clarify__` outbound edge).
+      const clarifyDrop = classifyClarifyConnection(definition, conn)
+      if (clarifyDrop !== null) {
+        const next = applyClarifyReverseDrag(definition, {
+          sourceAgentNodeId: clarifyDrop.sourceAgentNodeId,
+          clarifyNodeId: clarifyDrop.clarifyNodeId,
+        })
+        if (next !== definition) commitChange(next)
+        return
       }
       // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
       // on a specific named handle" BEFORE translateInboundConnection rewrites
@@ -446,23 +458,34 @@ function CanvasInner({
       const guardConn = {
         source: conn.source ?? null,
         target: conn.target ?? null,
+        sourceHandle: conn.sourceHandle ?? null,
         targetHandle: conn.targetHandle ?? null,
       }
       if (!isValidSourcePortConnection(definition, guardConn)) return false
-      // RFC-023: reverse-drag pre-flight — when the user is dragging from a
-      // clarify input handle toward an agent, fail fast on (a) non-agent
-      // source, (b) self-loop on a clarify node, (c) the agent already has
-      // another clarify wired. xyflow respects the false return by
-      // showing a red dashed line + refusing to fire onConnect.
-      if (conn.targetHandle === CLARIFY_INPUT_PORT_NAME) {
-        if (conn.source === null || conn.target === null) return false
-        if (conn.source === conn.target) return false
-        const target = definition.nodes.find((n) => n.id === conn.target)
-        if (target === undefined || target.kind !== 'clarify') return false
-        const source = definition.nodes.find((n) => n.id === conn.source)
-        if (!isValidClarifyTarget(source)) return false
-        if (hasExistingClarifyChannel(definition, conn.source)) return false
+      // RFC-023: clarify-channel pre-flight for both reverse + forward
+      // drags. Fail fast on self-loops, non-agent counterparts, or an
+      // agent that already has another clarify wired. xyflow respects the
+      // false return by showing a red dashed line + refusing to fire
+      // onConnect. When `null`, this connection is not a clarify drop and
+      // falls through to the regular validity checks below.
+      const clarifyDrop = classifyClarifyConnection(definition, guardConn)
+      if (clarifyDrop !== null) {
+        if (clarifyDrop.sourceAgentNodeId === clarifyDrop.clarifyNodeId) return false
+        const agent = definition.nodes.find((n) => n.id === clarifyDrop.sourceAgentNodeId)
+        if (!isValidClarifyTarget(agent)) return false
+        if (hasExistingClarifyChannel(definition, clarifyDrop.sourceAgentNodeId)) return false
         return true
+      }
+      // The targetHandle / sourceHandle of a clarify drop was already
+      // observed by the classifier above; if a connection arrived with
+      // those exact handle names but the classifier rejected (e.g. the
+      // counterpart node was missing), refuse to fall through to the
+      // generic catch-all — that path would create a stray edge.
+      if (
+        conn.targetHandle === CLARIFY_INPUT_PORT_NAME ||
+        conn.sourceHandle === CLARIFY_OUTPUT_PORT_NAME
+      ) {
+        return false
       }
       // RFC-007 task-detail iterate lock.
       if (taskContext === undefined) return true
@@ -1045,6 +1068,16 @@ export function computePorts(
       const agent = agentByName.get(agentName)
       for (const o of agent?.outputs ?? []) outputs.push(o)
       if (node.kind === 'agent-multi') outputs.push('errors')
+      // RFC-023 bugfix: when this agent has a clarify channel wired up, the
+      // canvas must render the `__clarify__` source handle so the ask edge
+      // (agent.__clarify__ → clarify.questions) is visible. The runtime
+      // already stores this edge in definition.edges; without an actual
+      // Handle on the agent's right side, xyflow silently drops the edge
+      // and the user only sees the answer feedback edge.
+      const hasOutboundClarify = definition.edges.some(
+        (e) => e.source.nodeId === node.id && e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+      )
+      if (hasOutboundClarify) outputs.push(CLARIFY_SOURCE_PORT_NAME)
       break
     }
     case 'wrapper-git':

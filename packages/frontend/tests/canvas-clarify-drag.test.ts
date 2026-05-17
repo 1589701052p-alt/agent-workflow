@@ -17,11 +17,14 @@ import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-work
 import {
   applyClarifyReverseDrag,
   buildClarifyEdges,
+  cascadeRemoveClarifyChannel,
+  classifyClarifyConnection,
   CLARIFY_INPUT_PORT_NAME,
   CLARIFY_OUTPUT_PORT_NAME,
   CLARIFY_RESPONSE_TARGET_PORT_NAME,
   CLARIFY_SOURCE_PORT_NAME,
   clearClarifyEdgesForRemovedNodes,
+  describeClarifyChannelEdge,
   hasExistingClarifyChannel,
   isValidClarifyTarget,
 } from '../src/components/canvas/clarifyDragHelper'
@@ -154,6 +157,156 @@ describe('applyClarifyReverseDrag', () => {
       clarifyNodeId: 'c',
     })
     expect(next.edges.length).toBe(2)
+  })
+})
+
+describe('classifyClarifyConnection (RFC-023 bugfix #2)', () => {
+  function defWithBoth(): WorkflowDefinition {
+    return defOf([
+      node({ id: 'agent', kind: 'agent-single' }),
+      node({ id: 'clar', kind: 'clarify' }),
+    ])
+  }
+
+  it('classifies a reverse drag (target=clarify.questions) with the right pair', () => {
+    const out = classifyClarifyConnection(defWithBoth(), {
+      source: 'agent',
+      target: 'clar',
+      sourceHandle: 'whatever_output_port',
+      targetHandle: CLARIFY_INPUT_PORT_NAME,
+    })
+    expect(out).toEqual({
+      sourceAgentNodeId: 'agent',
+      clarifyNodeId: 'clar',
+      direction: 'reverse',
+    })
+  })
+
+  it('classifies a forward drag (source=clarify.answers) with the right pair', () => {
+    const out = classifyClarifyConnection(defWithBoth(), {
+      source: 'clar',
+      target: 'agent',
+      sourceHandle: CLARIFY_OUTPUT_PORT_NAME,
+      targetHandle: 'requirement', // arbitrary agent input
+    })
+    expect(out).toEqual({
+      sourceAgentNodeId: 'agent',
+      clarifyNodeId: 'clar',
+      direction: 'forward',
+    })
+  })
+
+  it('returns null for a non-clarify drop (caller falls through to normal edge creation)', () => {
+    const out = classifyClarifyConnection(defWithBoth(), {
+      source: 'agent',
+      target: 'clar',
+      sourceHandle: 'something',
+      targetHandle: 'something_else',
+    })
+    expect(out).toBeNull()
+  })
+
+  it('returns null when the would-be clarify target/source node is missing or wrong kind', () => {
+    const out = classifyClarifyConnection(defWithBoth(), {
+      source: 'agent',
+      target: 'nonexistent',
+      sourceHandle: 'x',
+      targetHandle: CLARIFY_INPUT_PORT_NAME,
+    })
+    expect(out).toBeNull()
+    const out2 = classifyClarifyConnection(defWithBoth(), {
+      source: 'agent', // not a clarify node
+      target: 'clar',
+      sourceHandle: CLARIFY_OUTPUT_PORT_NAME,
+      targetHandle: 'x',
+    })
+    expect(out2).toBeNull()
+  })
+})
+
+describe('describeClarifyChannelEdge', () => {
+  it('classifies the ask edge as "ask" half with correct (agent, clarify) pair', () => {
+    const [ask] = buildClarifyEdges('a', 'c')
+    const desc = describeClarifyChannelEdge(ask)
+    expect(desc).toEqual({ agentNodeId: 'a', clarifyNodeId: 'c', half: 'ask' })
+  })
+
+  it('classifies the ans edge as "ans" half with correct (agent, clarify) pair', () => {
+    const [, ans] = buildClarifyEdges('a', 'c')
+    const desc = describeClarifyChannelEdge(ans)
+    expect(desc).toEqual({ agentNodeId: 'a', clarifyNodeId: 'c', half: 'ans' })
+  })
+
+  it('returns null for unrelated edges', () => {
+    const e: WorkflowEdge = {
+      id: 'x',
+      source: { nodeId: 'in', portName: 'requirement' },
+      target: { nodeId: 'a', portName: 'requirement' },
+    }
+    expect(describeClarifyChannelEdge(e)).toBeNull()
+  })
+})
+
+describe('cascadeRemoveClarifyChannel (RFC-023 bugfix #3)', () => {
+  it('drops the sibling edge when the ans edge is removed alone', () => {
+    const [ask, ans] = buildClarifyEdges('a', 'c')
+    const def = defOf(
+      [node({ id: 'a', kind: 'agent-single' }), node({ id: 'c', kind: 'clarify' })],
+      [ask, ans],
+    )
+    // Simulate xyflow's "user pressed delete on the answer edge" path: the
+    // ans edge is gone from def.edges but ask is still in it. Cascade
+    // should then drop ask too.
+    const afterDelete: WorkflowDefinition = { ...def, edges: [ask] }
+    const next = cascadeRemoveClarifyChannel(afterDelete, [ans])
+    expect(next.edges.length).toBe(0)
+  })
+
+  it('drops the sibling edge when the ask edge is removed alone', () => {
+    const [ask, ans] = buildClarifyEdges('a', 'c')
+    const def = defOf(
+      [node({ id: 'a', kind: 'agent-single' }), node({ id: 'c', kind: 'clarify' })],
+      [ask, ans],
+    )
+    const afterDelete: WorkflowDefinition = { ...def, edges: [ans] }
+    const next = cascadeRemoveClarifyChannel(afterDelete, [ask])
+    expect(next.edges.length).toBe(0)
+  })
+
+  it('is a no-op (returns by ref) when no clarify edges were removed', () => {
+    const [ask, ans] = buildClarifyEdges('a', 'c')
+    const otherEdge: WorkflowEdge = {
+      id: 'other',
+      source: { nodeId: 'in', portName: 'requirement' },
+      target: { nodeId: 'a', portName: 'requirement' },
+    }
+    const def = defOf(
+      [
+        node({ id: 'in', kind: 'input' }),
+        node({ id: 'a', kind: 'agent-single' }),
+        node({ id: 'c', kind: 'clarify' }),
+      ],
+      [otherEdge, ask, ans],
+    )
+    const afterDelete: WorkflowDefinition = { ...def, edges: [ask, ans] }
+    expect(cascadeRemoveClarifyChannel(afterDelete, [otherEdge])).toBe(afterDelete)
+  })
+
+  it('preserves unrelated clarify channels when one channel is deleted', () => {
+    const [askA, ansA] = buildClarifyEdges('agentA', 'clarA')
+    const [askB, ansB] = buildClarifyEdges('agentB', 'clarB')
+    const def = defOf(
+      [
+        node({ id: 'agentA', kind: 'agent-single' }),
+        node({ id: 'agentB', kind: 'agent-single' }),
+        node({ id: 'clarA', kind: 'clarify' }),
+        node({ id: 'clarB', kind: 'clarify' }),
+      ],
+      [askA, ansA, askB, ansB],
+    )
+    const afterDelete: WorkflowDefinition = { ...def, edges: [askA, askB, ansB] }
+    const next = cascadeRemoveClarifyChannel(afterDelete, [ansA])
+    expect(next.edges.map((e) => e.id).sort()).toEqual([askB.id, ansB.id].sort())
   })
 })
 

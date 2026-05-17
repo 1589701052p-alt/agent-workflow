@@ -214,7 +214,11 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
             : value.selectedOptionIndices.includes(idx)
           const inputId = `${groupId}_o${idx}`
           return (
-            <label key={idx} className="clarify-option" htmlFor={inputId}>
+            <label
+              key={idx}
+              className={'clarify-option' + (checked ? ' is-checked' : '')}
+              htmlFor={inputId}
+            >
               <input
                 id={inputId}
                 type={isSingle ? 'radio' : 'checkbox'}
@@ -224,16 +228,17 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
                 onChange={() => (isSingle ? pickSingleOption(idx) : toggleMultiOption(idx))}
                 data-option-idx={idx}
               />
-              <span className="clarify-option__digit">{`${idx + 1}.`}</span>
+              <span className="clarify-option__digit" aria-hidden="true">{`${idx + 1}`}</span>
               <span className="clarify-option__label">{opt}</span>
             </label>
           )
         })}
-        {/* Custom row */}
+        {/* Custom row — visually paired with the textarea below via CSS. */}
         {isSingle ? (
           <label
             className={
-              'clarify-option clarify-option--custom' + (singleCustomRowActive ? ' is-active' : '')
+              'clarify-option clarify-option--custom' +
+              (singleCustomRowActive ? ' is-checked is-active' : '')
             }
             htmlFor={`${groupId}_custom`}
           >
@@ -247,7 +252,9 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
               data-option-idx={customRowIndex}
               data-testid="clarify-custom-radio"
             />
-            <span className="clarify-option__digit">{`${customRowIndex + 1}.`}</span>
+            <span className="clarify-option__digit" aria-hidden="true">{`${
+              customRowIndex + 1
+            }`}</span>
             <span className="clarify-option__label">
               {t('clarify.question.single.customLabel')}
             </span>
@@ -255,7 +262,8 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
         ) : (
           <label
             className={
-              'clarify-option clarify-option--custom' + (multiCustomEnabled ? ' is-active' : '')
+              'clarify-option clarify-option--custom' +
+              (multiCustomEnabled ? ' is-checked is-active' : '')
             }
             htmlFor={`${groupId}_customcb`}
           >
@@ -268,21 +276,29 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
               data-option-idx={customRowIndex}
               data-testid="clarify-custom-checkbox"
             />
-            <span className="clarify-option__digit">{`${customRowIndex + 1}.`}</span>
+            <span className="clarify-option__digit" aria-hidden="true">{`${
+              customRowIndex + 1
+            }`}</span>
             <span className="clarify-option__label">{t('clarify.question.multi.customLabel')}</span>
           </label>
         )}
       </div>
       {/* Custom textarea — disabled until the user picked the custom row (single)
-          or checked the "also include" box (multi). Hard-capped to CLARIFY_MAX_CUSTOM_TEXT_LEN. */}
-      <div className="clarify-question__custom">
+          or checked the "also include" box (multi). Hard-capped to CLARIFY_MAX_CUSTOM_TEXT_LEN.
+          Visually attached to the custom option card above via CSS when active. */}
+      <div
+        className={
+          'clarify-question__custom' +
+          ((isSingle ? singleCustomRowActive : multiCustomEnabled) ? ' is-active' : '')
+        }
+      >
         <textarea
           className="clarify-custom-input"
           value={value.customText}
           disabled={disabled === true || (isSingle ? !singleCustomRowActive : !multiCustomEnabled)}
           maxLength={CLARIFY_MAX_CUSTOM_TEXT_LEN}
           placeholder={t('clarify.question.multi.customPlaceholder')}
-          rows={2}
+          rows={3}
           onChange={(e) => onCustomTextChange(e.target.value)}
           data-testid="clarify-custom-textarea"
         />
