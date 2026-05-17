@@ -1,6 +1,7 @@
 // Tiny status pill used in task list rows + detail header. Colors map to
 // the task status enum from shared schemas.
 
+import { useTranslation } from 'react-i18next'
 import type { TaskStatus } from '@agent-workflow/shared'
 
 const TONES: Record<TaskStatus, string> = {
@@ -15,5 +16,10 @@ const TONES: Record<TaskStatus, string> = {
 }
 
 export function TaskStatusChip({ status }: { status: TaskStatus }) {
-  return <span className={`status-chip status-chip--${TONES[status]}`}>{status}</span>
+  const { t } = useTranslation()
+  return (
+    <span className={`status-chip status-chip--${TONES[status]}`}>
+      {t(`tasks.status.${status}`)}
+    </span>
+  )
 }

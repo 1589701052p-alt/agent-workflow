@@ -66,7 +66,7 @@ function TasksPage() {
             search={{ status: s }}
             className={`chip ${status === s ? 'chip--active' : ''}`}
           >
-            {s}
+            {t(`tasks.status.${s}`)}
           </Link>
         ))}
       </div>

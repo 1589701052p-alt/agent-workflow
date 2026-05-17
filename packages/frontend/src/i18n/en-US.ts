@@ -442,6 +442,11 @@ export const enUS: Resources = {
     colEnabled: 'Enabled',
     formTitleNew: 'New plugin',
     formTitleEdit: 'Edit plugin',
+    newTitle: 'New plugin',
+    newHint:
+      'Register an opencode plugin so agents can reference it by name via frontmatter.plugins. Saving runs `npm install --prefix ~/.agent-workflow/plugins/{id}/` immediately; the runner then injects file://<cachedPath> at spawn time (no network at run time).',
+    detailHint:
+      "Edit this plugin's spec / options. Changes apply on the next launch of every agent that references it; in-flight tasks keep using the previously cached path.",
     fieldName: 'Name',
     fieldSpec: 'Spec',
     fieldSpecHint:
@@ -532,6 +537,16 @@ export const enUS: Resources = {
     secondsAgo: '{{n}}s ago',
     minutesAgo: '{{n}}m ago',
     hoursAgo: '{{n}}h ago',
+    status: {
+      pending: 'Pending',
+      running: 'Running',
+      done: 'Done',
+      failed: 'Failed',
+      canceled: 'Canceled',
+      interrupted: 'Interrupted',
+      awaiting_review: 'Awaiting review',
+      awaiting_human: 'Awaiting input',
+    },
   },
   editor: {
     newTitle: 'New workflow',

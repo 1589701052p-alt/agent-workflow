@@ -132,6 +132,9 @@ export interface Resources {
     colEnabled: string
     formTitleNew: string
     formTitleEdit: string
+    newTitle: string
+    newHint: string
+    detailHint: string
     fieldName: string
     fieldSpec: string
     fieldSpecHint: string
@@ -503,6 +506,16 @@ export interface Resources {
     secondsAgo: string
     minutesAgo: string
     hoursAgo: string
+    status: {
+      pending: string
+      running: string
+      done: string
+      failed: string
+      canceled: string
+      interrupted: string
+      awaiting_review: string
+      awaiting_human: string
+    }
   }
   editor: {
     newTitle: string
@@ -1529,6 +1542,11 @@ export const zhCN: Resources = {
     colEnabled: '启用',
     formTitleNew: '新建插件',
     formTitleEdit: '编辑插件',
+    newTitle: '新建插件',
+    newHint:
+      '注册一个 opencode 插件后，代理可在 frontmatter.plugins 中按名引用。保存即执行 `npm install --prefix ~/.agent-workflow/plugins/{id}/` 急安装；运行时框架以 file://<cachedPath> 注入，spawn 阶段不联网。',
+    detailHint:
+      '编辑插件的 spec / options 等字段。改动会在引用该插件的任意 agent 下次启动时生效；正在执行的 task 仍使用旧 cachedPath。',
     fieldName: '名称',
     fieldSpec: 'Spec',
     fieldSpecHint:
@@ -1617,6 +1635,16 @@ export const zhCN: Resources = {
     secondsAgo: '{{n}} 秒前',
     minutesAgo: '{{n}} 分钟前',
     hoursAgo: '{{n}} 小时前',
+    status: {
+      pending: '待运行',
+      running: '运行中',
+      done: '已完成',
+      failed: '失败',
+      canceled: '已取消',
+      interrupted: '已中断',
+      awaiting_review: '等待审核',
+      awaiting_human: '等待回答',
+    },
   },
   editor: {
     newTitle: '新建工作流',
