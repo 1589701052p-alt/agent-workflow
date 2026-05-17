@@ -552,14 +552,15 @@ test('RFC-024: launch task from git URL clones into cache and renders redacted U
   }
 })
 
-// RFC-033 e2e: batch import two bare repos via the HTTP API + WS channel.
-//
-// This test drives only the backend surface (POST /batch-import, GET
-// /imports/:batchId, /ws/repo-imports/:batchId, and the cached-repos list
-// delta). The /repos page button + modal wiring lands in a follow-up commit
-// alongside the RFC-034 SubmoduleBadge integration; once that lands a UI
-// version of this test can layer on top.
-test('RFC-033: batch import via API completes, populates cached-repos, prunes', async () => {
+// RFC-033 e2e: batch import two bare repos via the /repos page modal.
+// Asserts:
+//   - Batch import button visible on /repos
+//   - Pasting two valid `file://` URLs + one garbage string and clicking
+//     Start posts to /api/cached-repos/batch-import and renders the table
+//   - The two valid rows complete; the garbage row goes failed
+//   - The main /repos table picks up two new cached-repo entries
+test('RFC-033: batch import remote repos on /repos page', async ({ page }) => {
+  // Two bare remotes — same fixture pattern as the RFC-024 test above.
   const root = mkdtempSync(join(tmpdir(), 'aw-e2e-rfc033-'))
   const urls: string[] = []
   for (let i = 0; i < 2; i++) {
@@ -575,46 +576,43 @@ test('RFC-033: batch import via API completes, populates cached-repos, prunes', 
     urls.push(`file://${bare}`)
   }
 
-  const headers = {
-    Authorization: `Bearer ${daemon.token}`,
-    'Content-Type': 'application/json',
-  }
-  const startRes = await fetch(`${daemon.baseUrl}/api/cached-repos/batch-import`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ urls: [...urls, 'not-a-url'] }),
-  })
-  expectOk(startRes, 'POST batch-import')
-  const startBody = (await startRes.json()) as {
-    batchId: string
-    rows: Array<{ rowId: string; status: string }>
-  }
-  expect(startBody.batchId).toBeTruthy()
+  await primeAuthLocalStorage(page, daemon)
+  await page.goto(`${daemon.baseUrl}/repos`)
 
-  // Poll until completion.
+  await page.getByTestId('repos-batch-import-button').click()
+
+  const textarea = page.getByTestId('batch-import-textarea')
+  await textarea.fill([...urls, 'not-a-url'].join('\n'))
+  await page.getByTestId('batch-import-start').click()
+
+  await page.getByTestId('batch-import-table').waitFor({ state: 'visible' })
+
+  // Poll the snapshot endpoint until the batch completes.
+  const batchIdFromLs = await page.evaluate(() =>
+    window.localStorage.getItem('repo-import-batch-id'),
+  )
+  expect(batchIdFromLs).toBeTruthy()
+  const headers = { Authorization: `Bearer ${daemon.token}` }
   const deadline = Date.now() + 60_000
   let snap: { state: string; rows: Array<{ status: string; inputUrlRedacted: string }> } | null =
     null
   while (Date.now() < deadline) {
-    const r = await fetch(
-      `${daemon.baseUrl}/api/cached-repos/imports/${startBody.batchId}`,
-      { headers: { Authorization: `Bearer ${daemon.token}` } },
-    )
+    const r = await fetch(`${daemon.baseUrl}/api/cached-repos/imports/${batchIdFromLs}`, {
+      headers,
+    })
     if (r.ok) {
       snap = (await r.json()) as typeof snap
       if (snap!.state === 'completed') break
     }
-    await new Promise((res) => setTimeout(res, 200))
+    await new Promise((res) => setTimeout(res, 300))
   }
   expect(snap).not.toBeNull()
   expect(snap!.state).toBe('completed')
   const statuses = snap!.rows.map((r) => r.status).sort()
   expect(statuses).toEqual(['done', 'done', 'failed'])
 
-  // /api/cached-repos now lists both bare repos.
-  const cachedRes = await fetch(`${daemon.baseUrl}/api/cached-repos`, {
-    headers: { Authorization: `Bearer ${daemon.token}` },
-  })
+  // Main /repos table should now list both URLs.
+  const cachedRes = await fetch(`${daemon.baseUrl}/api/cached-repos`, { headers })
   expectOk(cachedRes, 'GET cached-repos after batch import')
   const cached = (await cachedRes.json()) as { items: Array<{ id: string; url: string }> }
   for (const u of urls) {
@@ -627,7 +625,7 @@ test('RFC-033: batch import via API completes, populates cached-repos, prunes', 
     if (it !== undefined) {
       await fetch(`${daemon.baseUrl}/api/cached-repos/${it.id}?force=1`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${daemon.token}` },
+        headers,
       })
     }
   }

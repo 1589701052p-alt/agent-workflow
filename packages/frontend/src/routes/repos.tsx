@@ -5,12 +5,16 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CachedRepo, ListCachedReposResponse } from '@agent-workflow/shared'
 import { redactGitUrl } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { BatchImportDialog } from '@/components/repos/BatchImportDialog'
+import { SubmoduleBadge } from '@/components/repos/SubmoduleBadge'
 import { Route as RootRoute } from './__root'
+
+const BATCH_ID_LS_KEY = 'repo-import-batch-id'
 
 export const ReposRoute = createRoute({
   getParentRoute: () => RootRoute,
@@ -37,6 +41,22 @@ function ReposPage() {
   })
 
   const [pendingDelete, setPendingDelete] = useState<CachedRepo | null>(null)
+  const [batchImportOpen, setBatchImportOpen] = useState(false)
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(BATCH_ID_LS_KEY)
+    } catch {
+      return null
+    }
+  })
+  useEffect(() => {
+    try {
+      if (activeBatchId === null) localStorage.removeItem(BATCH_ID_LS_KEY)
+      else localStorage.setItem(BATCH_ID_LS_KEY, activeBatchId)
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [activeBatchId])
 
   const items = list.data?.items ?? []
 
@@ -45,7 +65,24 @@ function ReposPage() {
       <header className="page__header">
         <h1>{t('repos.title')}</h1>
         <p className="page__hint">{t('repos.hint')}</p>
+        <div className="page__actions">
+          <button
+            type="button"
+            className="btn btn--sm btn--primary"
+            data-testid="repos-batch-import-button"
+            onClick={() => setBatchImportOpen(true)}
+          >
+            {t('repos.batchImport.button')}
+          </button>
+        </div>
       </header>
+
+      <BatchImportDialog
+        open={batchImportOpen}
+        onClose={() => setBatchImportOpen(false)}
+        activeBatchId={activeBatchId}
+        onActiveBatchIdChange={setActiveBatchId}
+      />
 
       {list.isLoading && <div className="muted">{t('repos.loading')}</div>}
       {list.error !== null && list.error !== undefined && (
@@ -69,7 +106,14 @@ function ReposPage() {
           <tbody>
             {items.map((item) => (
               <tr key={item.id} data-testid={`repos-row-${item.id}`}>
-                <td className="repos-table__url">{item.urlRedacted}</td>
+                <td className="repos-table__url">
+                  {item.urlRedacted}{' '}
+                  <SubmoduleBadge
+                    hasSubmodules={item.hasSubmodules}
+                    lastSubmoduleSyncOk={item.lastSubmoduleSyncOk}
+                    lastSubmoduleSyncError={item.lastSubmoduleSyncError}
+                  />
+                </td>
                 <td className="repos-table__url">{item.localPath}</td>
                 <td>
                   <time dateTime={item.lastFetchedAt}>{formatTimestamp(item.lastFetchedAt)}</time>
