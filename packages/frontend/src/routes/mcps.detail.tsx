@@ -10,6 +10,7 @@ import type { Mcp } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { McpFields } from '@/components/McpFields'
+import { McpInventoryPanel } from '@/components/mcps/McpInventoryPanel'
 import { buildCreatePayload, EMPTY_LOCAL_FORM, mcpToForm, type McpFormState } from '@/lib/mcp-form'
 import { Route as RootRoute } from './__root'
 
@@ -108,6 +109,12 @@ function McpDetailPage() {
           )}
         </div>
       ) : null}
+
+      {/* RFC-030 — primary view: interface inventory (tools + inputSchema +
+        resources + prompts + capabilities). Sits ABOVE the edit form because
+        the most common visit reason from /mcps "查看完整接口" is "what does
+        this MCP expose?", not "let me edit the config." */}
+      <McpInventoryPanel mcpName={name} />
 
       <McpFields value={form} onChange={setForm} nameLocked errors={errors} />
     </div>

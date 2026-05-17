@@ -1,0 +1,44 @@
+// RFC-030 follow-up — locks that /mcps/$name actually mounts
+// <McpInventoryPanel/> AND renders it above the edit form.
+//
+// Why this exists: during the RFC-030 commit dance a concurrent editor
+// silently stripped the <McpInventoryPanel mcpName={name} /> insertion
+// from routes/mcps.detail.tsx; the page shipped showing only the edit
+// form, so the "查看完整接口" link from the /mcps list landed users on a
+// page where the inventory looked completely absent. This source-grep
+// guards both the import and the JSX mount, and pins the ordering
+// (panel before <McpFields/>) so the primary view stays the inventory.
+
+import { readFileSync } from 'node:fs'
+import path, { resolve } from 'node:path'
+import { describe, expect, test } from 'vitest'
+
+const SRC = resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  '..',
+  'src',
+  'routes',
+  'mcps.detail.tsx',
+)
+
+const text = readFileSync(SRC, 'utf-8')
+
+describe('/mcps/$name mounts the RFC-030 inventory panel', () => {
+  test('imports McpInventoryPanel from components/mcps/', () => {
+    expect(text).toMatch(
+      /import\s*\{\s*McpInventoryPanel\s*\}\s*from\s*['"]@\/components\/mcps\/McpInventoryPanel['"]/,
+    )
+  })
+
+  test('renders <McpInventoryPanel mcpName={name} /> in JSX', () => {
+    expect(text).toMatch(/<McpInventoryPanel\s+mcpName=\{name\}\s*\/>/)
+  })
+
+  test('mounts InventoryPanel BEFORE McpFields (primary-view ordering)', () => {
+    const panelIdx = text.indexOf('<McpInventoryPanel')
+    const fieldsIdx = text.indexOf('<McpFields')
+    expect(panelIdx).toBeGreaterThan(0)
+    expect(fieldsIdx).toBeGreaterThan(0)
+    expect(panelIdx).toBeLessThan(fieldsIdx)
+  })
+})
