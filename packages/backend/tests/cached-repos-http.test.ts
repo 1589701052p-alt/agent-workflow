@@ -73,7 +73,7 @@ describe('cached-repos HTTP routes (RFC-024 T5)', () => {
   test('GET /api/cached-repos returns [] when empty', async () => {
     const res = await req(h.app, '/api/cached-repos')
     expect(res.status).toBe(200)
-    const body = await res.json()
+    const body = (await res.json()) as { items: unknown[] }
     expect(body.items).toEqual([])
     rmSync(h.tmp, { recursive: true, force: true })
   })
@@ -85,10 +85,12 @@ describe('cached-repos HTTP routes (RFC-024 T5)', () => {
     )
     const res = await req(h.app, '/api/cached-repos')
     expect(res.status).toBe(200)
-    const body = await res.json()
+    const body = (await res.json()) as {
+      items: Array<{ urlRedacted: string; defaultBranch: string | null }>
+    }
     expect(body.items.length).toBe(1)
-    expect(typeof body.items[0].urlRedacted).toBe('string')
-    expect(body.items[0].defaultBranch).toBe('main')
+    expect(typeof body.items[0]?.urlRedacted).toBe('string')
+    expect(body.items[0]?.defaultBranch).toBe('main')
     rmSync(h.tmp, { recursive: true, force: true })
   })
 
@@ -101,7 +103,7 @@ describe('cached-repos HTTP routes (RFC-024 T5)', () => {
     await Bun.sleep(5)
     const res = await req(h.app, `/api/cached-repos/${r.cached.id}/refresh`, { method: 'POST' })
     expect(res.status).toBe(200)
-    const body = await res.json()
+    const body = (await res.json()) as { fetchOk: boolean; item: { lastFetchedAt: string } }
     expect(body.fetchOk).toBe(true)
     expect(Date.parse(body.item.lastFetchedAt)).toBeGreaterThanOrEqual(Date.parse(initial))
     rmSync(h.tmp, { recursive: true, force: true })
@@ -156,7 +158,7 @@ describe('cached-repos HTTP routes (RFC-024 T5)', () => {
 
     const res = await req(h.app, `/api/cached-repos/${r.cached.id}`, { method: 'DELETE' })
     expect(res.status).toBe(409)
-    const body = await res.json()
+    const body = (await res.json()) as { code: string }
     expect(body.code).toBe('cached-repo-has-references')
 
     const forced = await req(h.app, `/api/cached-repos/${r.cached.id}?force=1`, {
