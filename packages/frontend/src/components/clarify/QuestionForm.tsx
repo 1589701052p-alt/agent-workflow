@@ -49,6 +49,17 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
   useEffect(() => {
     if (value.selectedOptionIndices.length > 0) setOtherIntent(false)
   }, [value.selectedOptionIndices])
+  // multi-choice has the same problem: deriving the "custom checkbox is
+  // checked" state purely from `customText.length > 0` means the first
+  // click on the empty checkbox is a no-op (nothing changes customText →
+  // the next render still shows it unchecked → user can't tick it).
+  // Mirror the single-choice `otherIntent` pattern: a local intent flag
+  // that's seeded from the incoming customText (so already-drafted multi
+  // answers render checked) and flipped explicitly on each click. The
+  // visual `multiCustomEnabled` is the OR of intent + non-empty text so
+  // sealed history answers (with text but no intent flag) still render
+  // checked when the page mounts.
+  const [multiCustomIntent, setMultiCustomIntent] = useState<boolean>(value.customText.length > 0)
 
   /** Convert a digit key (1..N+1) to the option index it targets. */
   const digitToOptionIdx = useCallback(
@@ -117,17 +128,17 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
     [onChange, value],
   )
 
-  const multiCustomEnabled = value.customText.length > 0
+  const multiCustomEnabled = multiCustomIntent || value.customText.length > 0
   const toggleMultiCustomEnabled = useCallback(
     (enabled: boolean): void => {
-      if (enabled) {
-        // Re-enable with empty text — user will fill it in.
-        if (value.customText.length === 0) {
-          // No-op for the controlled state; textarea becomes editable when the
-          // checkbox is checked, so just keep the empty string.
-          onChange({ ...value })
-        }
-      } else {
+      // Always flip the intent flag — that's what makes the next render
+      // observe the new checked state. The previous version only mutated
+      // `value.customText`, but the case "user clicks the empty checkbox"
+      // had no field to update, so the click was a no-op (Bug #12 root
+      // cause). Unchecking additionally clears any typed text so the
+      // sealed answer doesn't carry stale free-text from a previous draft.
+      setMultiCustomIntent(enabled)
+      if (!enabled && value.customText.length > 0) {
         onChange({ ...value, customText: '' })
       }
     },

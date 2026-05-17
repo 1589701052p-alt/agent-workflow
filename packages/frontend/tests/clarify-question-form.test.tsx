@@ -163,6 +163,45 @@ describe('QuestionForm — multi-choice', () => {
     expect(cleared.customText).toBe('')
   })
 
+  test('clicking the multi-choice custom checkbox from empty IS observable (RFC-023 bugfix #12)', () => {
+    // Pre-fix regression: multiCustomEnabled was derived purely from
+    // customText.length > 0, so the first click on an empty checkbox
+    // was a no-op (toggleMultiCustomEnabled went into the inner if,
+    // called onChange({...value}) without changing customText, and the
+    // next render still showed it unchecked). User could never tick
+    // the (N+1)th custom option on a fresh multi question.
+    render(<Host question={MULTI_Q} initial={emptyAnswer('q-langs')} onChangeSpy={() => {}} />)
+    const cb = screen.getByTestId('clarify-custom-checkbox') as HTMLInputElement
+    expect(cb.checked).toBe(false)
+    const textarea = screen.getByTestId('clarify-custom-textarea') as HTMLTextAreaElement
+    expect(textarea.disabled).toBe(true)
+    fireEvent.click(cb)
+    // After the click the visual state MUST flip to checked + textarea
+    // enabled, even though customText is still empty.
+    const cbAfter = screen.getByTestId('clarify-custom-checkbox') as HTMLInputElement
+    expect(cbAfter.checked).toBe(true)
+    const taAfter = screen.getByTestId('clarify-custom-textarea') as HTMLTextAreaElement
+    expect(taAfter.disabled).toBe(false)
+  })
+
+  test('multi-choice custom checkbox stays checked while user clears their typed text', () => {
+    // User journey: checks the box → types "abc" → backspaces all the way
+    // to "". The checkbox must remain checked because the user's INTENT is
+    // still "I want a custom answer". Pre-fix this scenario silently
+    // unchecked the box the moment customText became empty.
+    const spy = vi.fn()
+    render(<Host question={MULTI_Q} initial={emptyAnswer('q-langs')} onChangeSpy={spy} />)
+    const cb = screen.getByTestId('clarify-custom-checkbox') as HTMLInputElement
+    fireEvent.click(cb)
+    const textarea = screen.getByTestId('clarify-custom-textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'abc' } })
+    fireEvent.change(textarea, { target: { value: '' } })
+    expect((screen.getByTestId('clarify-custom-checkbox') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('clarify-custom-textarea') as HTMLTextAreaElement).disabled).toBe(
+      false,
+    )
+  })
+
   test('hard-caps customText input to CLARIFY_MAX_CUSTOM_TEXT_LEN', () => {
     const spy = vi.fn()
     render(
