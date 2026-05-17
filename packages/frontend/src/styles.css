@@ -831,9 +831,60 @@ code {
 .form-switch {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 13px;
   color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* iOS-style slider toggle. Replaces the native checkbox visually while
+ * keeping it functional + accessible (label association unchanged). Applies
+ * everywhere Switch is used (agent readonly, syncOutputsOnIterate, mcp
+ * enabled, ...). */
+.form-switch > input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.form-switch > input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+.form-switch > input[type='checkbox']:checked {
+  background: var(--accent);
+}
+.form-switch > input[type='checkbox']:checked::before {
+  transform: translateX(14px);
+}
+.form-switch > input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.form-switch > input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.form-switch > .form-field__hint {
+  margin-left: auto;
 }
 
 .form-actions {
@@ -4288,4 +4339,3 @@ mark.comment-anchor[data-active='true'] {
   color: var(--muted);
   font-style: italic;
 }
-

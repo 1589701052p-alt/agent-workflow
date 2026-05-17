@@ -3,7 +3,7 @@
 // so the three "new" pages look visually identical.
 
 import { useTranslation } from 'react-i18next'
-import { Field, TextArea, TextInput } from './Form'
+import { Field, Switch, TextArea, TextInput } from './Form'
 import { MCP_NAME_RE } from '@agent-workflow/shared'
 import type { McpFormState } from '@/lib/mcp-form'
 
@@ -62,13 +62,12 @@ export function McpFields({ value, onChange, nameLocked, errors }: McpFieldsProp
         </div>
       </Field>
 
-      <Field label={t('mcps.fieldEnabled')} hint={t('mcps.fieldEnabledHint')}>
-        <input
-          type="checkbox"
-          checked={value.enabled}
-          onChange={(e) => set('enabled', e.target.checked)}
-        />
-      </Field>
+      <Switch
+        checked={value.enabled}
+        onChange={(v) => set('enabled', v)}
+        label={t('mcps.fieldEnabled')}
+        hint={t('mcps.fieldEnabledHint')}
+      />
 
       <p className="form-field__hint">{t('mcps.toolNamingHint')}</p>
 
