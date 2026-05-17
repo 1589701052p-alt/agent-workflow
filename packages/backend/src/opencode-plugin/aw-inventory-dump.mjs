@@ -97,22 +97,54 @@ export default {
     const out = process.env.OPENCODE_AW_INVENTORY_OUT
     let dumped = false
 
+    // Resolve SDK methods defensively. `PluginInput.client` is the v1
+    // `@opencode-ai/sdk` client, which has `app.agents()` and `mcp.status()`
+    // but does NOT expose `app.skills()` (the v2 SDK does — the in-process
+    // `/skill` HTTP endpoint exists either way). We fall back to the
+    // protected `_client.get({url:'/skill'})` so we still get the data; if
+    // even that path is missing we degrade to skills=[] rather than failing
+    // the whole snapshot.
+    async function callAgents() {
+      if (typeof input.client?.app?.agents !== 'function') return []
+      const res = await input.client.app.agents()
+      return res?.data ?? []
+    }
+    async function callSkills() {
+      const app = input.client?.app
+      if (app && typeof app.skills === 'function') {
+        const res = await app.skills()
+        return res?.data ?? []
+      }
+      // v1 SDK fallback: hit the in-process HTTP route via the protected
+      // hey-api client. Safe because all in-process responses are local; we
+      // catch any thrown error per-section so the rest of the snapshot
+      // still lands.
+      const lowClient = app && app._client
+      if (lowClient && typeof lowClient.get === 'function') {
+        const res = await lowClient.get({ url: '/skill' })
+        return res?.data ?? []
+      }
+      return []
+    }
+    async function callMcp() {
+      if (typeof input.client?.mcp?.status !== 'function') return {}
+      const res = await input.client.mcp.status()
+      return res?.data ?? {}
+    }
+
     async function dump() {
       if (dumped) return
       dumped = true
       if (!out) return
       try {
         const [agentsRes, skillsRes, mcpsRes] = await Promise.allSettled([
-          input.client.app.agents(),
-          input.client.app.skills(),
-          input.client.mcp.status(),
+          callAgents(),
+          callSkills(),
+          callMcp(),
         ])
-        const agentsRaw =
-          agentsRes.status === 'fulfilled' ? agentsRes.value?.data ?? [] : []
-        const skillsRaw =
-          skillsRes.status === 'fulfilled' ? skillsRes.value?.data ?? [] : []
-        const mcpsRaw =
-          mcpsRes.status === 'fulfilled' ? mcpsRes.value?.data ?? {} : {}
+        const agentsRaw = agentsRes.status === 'fulfilled' ? agentsRes.value : []
+        const skillsRaw = skillsRes.status === 'fulfilled' ? skillsRes.value : []
+        const mcpsRaw = mcpsRes.status === 'fulfilled' ? mcpsRes.value : {}
         const agents = Array.isArray(agentsRaw) ? agentsRaw.map(transcodeAgent) : []
         const skills = Array.isArray(skillsRaw) ? skillsRaw.map(transcodeSkill) : []
         const mcps = []

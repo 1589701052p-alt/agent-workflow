@@ -63,10 +63,17 @@ describe('aw-inventory-dump.mjs ↔ transcoder.ts parity', () => {
     expect(MJS).toContain('async server(input)')
   })
 
-  test('calls the three required opencode SDK methods', () => {
+  test('calls the three required opencode SDK methods (incl. v1 SDK fallback for skills)', () => {
+    // agents + mcp.status() are stable across v1/v2 SDK.
     expect(MJS).toContain('input.client.app.agents()')
-    expect(MJS).toContain('input.client.app.skills()')
     expect(MJS).toContain('input.client.mcp.status()')
+    // skills lives only on v2 SDK; the v1 SDK that PluginInput.client uses
+    // omits it, so the plugin defensively probes `app.skills` AND falls back
+    // to the underlying hey-api `_client.get({url:'/skill'})` HTTP route.
+    // Both shapes must remain present or skills silently degrade to [] in
+    // every install instead of just the absent-SDK-method case.
+    expect(MJS).toContain("typeof app.skills === 'function'")
+    expect(MJS).toContain("url: '/skill'")
   })
 
   test('reads OPENCODE_AW_INVENTORY_OUT and writes JSON', () => {
