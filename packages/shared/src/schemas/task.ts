@@ -34,6 +34,12 @@ export const TaskSchema = z.object({
   /** Snapshotted workflow definition; survives later workflow edits. */
   workflowSnapshot: z.unknown(),
   repoPath: z.string(),
+  /**
+   * RFC-024: original Git URL the task was launched from (when the user picked
+   * the "remote URL" tab). `null` for path-mode tasks. May contain credentials —
+   * UI MUST render via `redactGitUrl`.
+   */
+  repoUrl: z.string().nullable(),
   worktreePath: z.string(),
   baseBranch: z.string(),
   branch: z.string(),
@@ -60,6 +66,8 @@ export const TaskSummarySchema = z.object({
   /** Joined display name (null when the workflow row no longer exists). */
   workflowName: z.string().nullable(),
   repoPath: z.string(),
+  /** RFC-024: provenance URL; null for path-mode tasks. UI must redact before render. */
+  repoUrl: z.string().nullable(),
   status: TaskStatusSchema,
   startedAt: z.number().int(),
   finishedAt: z.number().int().nullable(),
@@ -67,16 +75,53 @@ export const TaskSummarySchema = z.object({
 })
 export type TaskSummary = z.infer<typeof TaskSummarySchema>
 
-/** POST /api/tasks body. */
-export const StartTaskSchema = z.object({
-  workflowId: z.string().min(1),
-  repoPath: z.string().min(1),
-  baseBranch: z.string().min(1),
-  inputs: z.record(z.string(), z.string()).default({}),
-  /** Per-task overrides (settings defaults apply when omitted). */
-  maxDurationMs: z.number().int().nonnegative().optional(),
-  maxTotalTokens: z.number().int().nonnegative().optional(),
-})
+/**
+ * POST /api/tasks body.
+ *
+ * RFC-024: `repoPath` and `repoUrl` are mutually exclusive but exactly one
+ * is required. `baseBranch` is only required in path mode (preserves legacy
+ * launcher behavior); in URL mode the optional `ref` is used instead (falls
+ * back to the cached repo's default branch on the server).
+ */
+export const StartTaskSchema = z
+  .object({
+    workflowId: z.string().min(1),
+    repoPath: z.string().min(1).optional(),
+    baseBranch: z.string().min(1).optional(),
+    /** RFC-024: remote Git URL (SSH or HTTP/HTTPS). Triggers clone-or-reuse. */
+    repoUrl: z.string().min(1).optional(),
+    /** RFC-024: branch / tag / commit to check out from the cached repo. Optional. */
+    ref: z.string().min(1).optional(),
+    inputs: z.record(z.string(), z.string()).default({}),
+    /** Per-task overrides (settings defaults apply when omitted). */
+    maxDurationMs: z.number().int().nonnegative().optional(),
+    maxTotalTokens: z.number().int().nonnegative().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasPath = typeof value.repoPath === 'string' && value.repoPath.length > 0
+    const hasUrl = typeof value.repoUrl === 'string' && value.repoUrl.length > 0
+    if (hasPath && hasUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'repoPath and repoUrl are mutually exclusive',
+        path: ['repoUrl'],
+      })
+    }
+    if (!hasPath && !hasUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'one of repoPath or repoUrl is required',
+        path: ['repoPath'],
+      })
+    }
+    if (hasPath && (!value.baseBranch || value.baseBranch.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'baseBranch is required in path mode',
+        path: ['baseBranch'],
+      })
+    }
+  })
 export type StartTask = z.infer<typeof StartTaskSchema>
 
 /** Filters for GET /api/tasks. */

@@ -8,6 +8,7 @@ import type { DbClient } from '@/db/client'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
 import { mountBackupRoutes } from '@/routes/backup'
+import { mountCachedRepoRoutes } from '@/routes/cached-repos'
 import { mountConfigRoutes } from '@/routes/config'
 import { mountHealthRoutes } from '@/routes/health'
 import { mountRepoRoutes } from '@/routes/repos'
@@ -63,6 +64,7 @@ export function createApp(deps: AppDeps): Hono {
   mountSkillRoutes(app, deps)
   mountSkillSourceRoutes(app, deps)
   mountRepoRoutes(app, deps)
+  mountCachedRepoRoutes(app, deps)
   mountWorkflowRoutes(app, deps)
   mountTaskRoutes(app, deps)
   mountBackupRoutes(app, deps)

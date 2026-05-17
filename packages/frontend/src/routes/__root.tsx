@@ -15,7 +15,15 @@ import { useApplyLanguage } from '@/hooks/useLanguage'
 import { useApplyTheme } from '@/hooks/useTheme'
 import { getToken, subscribeAuth } from '@/stores/auth'
 
-type NavKey = 'agents' | 'skills' | 'workflows' | 'tasks' | 'reviews' | 'clarify' | 'settings'
+type NavKey =
+  | 'agents'
+  | 'skills'
+  | 'workflows'
+  | 'tasks'
+  | 'reviews'
+  | 'clarify'
+  | 'repos'
+  | 'settings'
 const NAV: { to: string; key: NavKey }[] = [
   { to: '/agents', key: 'agents' },
   { to: '/skills', key: 'skills' },
@@ -23,6 +31,7 @@ const NAV: { to: string; key: NavKey }[] = [
   { to: '/tasks', key: 'tasks' },
   { to: '/reviews', key: 'reviews' },
   { to: '/clarify', key: 'clarify' },
+  { to: '/repos', key: 'repos' },
   { to: '/settings', key: 'settings' },
 ]
 

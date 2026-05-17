@@ -24,6 +24,7 @@ import {
   NewRoute as workflowNewRoute,
 } from '@/routes/workflows.edit'
 import { LaunchRoute as workflowLaunchRoute } from '@/routes/workflows.launch'
+import { ReposRoute as reposRoute } from '@/routes/repos'
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -47,6 +48,7 @@ const routeTree = rootRoute.addChildren([
   // RFC-023: same rule — `$nodeRunId` literal needs to win over the index.
   clarifyDetailRoute,
   clarifyRoute,
+  reposRoute,
   settingsRoute,
 ])
 

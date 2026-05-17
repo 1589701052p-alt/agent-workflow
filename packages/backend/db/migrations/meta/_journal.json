@@ -57,6 +57,13 @@
       "when": 1778948098434,
       "tag": "0007_rfc023_clarify_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1778984916054,
+      "tag": "0008_rfc024_cached_repos",
+      "breakpoints": true
     }
   ]
 }

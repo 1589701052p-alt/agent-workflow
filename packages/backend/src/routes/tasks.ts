@@ -337,8 +337,18 @@ async function handleMultipartTaskStart(
   // 4. Materialize the worktree first so we have a real path to write into.
   const appHome = Paths.root
   const taskId = ulid()
+  // RFC-024 NOTE: multipart upload path currently requires path-mode launch
+  // (URL-mode uploads would need to resolve the cache before this point).
+  // Refuse URL+upload combos with a clear 422 instead of silently dropping.
+  if (startInput.repoUrl) {
+    throw new ValidationError(
+      'multipart-upload-requires-path-mode',
+      'multipart uploads currently require launching with a local repoPath; URL launches are JSON-only',
+    )
+  }
   const wt = await materializeWorktree({
-    input: { repoPath: startInput.repoPath, baseBranch: startInput.baseBranch },
+    repoPath: startInput.repoPath as string,
+    baseBranch: startInput.baseBranch,
     taskId,
     appHome,
   })

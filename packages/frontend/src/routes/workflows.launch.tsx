@@ -21,7 +21,14 @@ import { FilesPicker } from '@/components/launch/FilesPicker'
 import { GitPicker } from '@/components/launch/GitPicker'
 import { UploadPicker } from '@/components/launch/UploadPicker'
 import { buildLaunchFormData } from '@/components/launch/buildLaunchFormData'
+import { RepoSourceTabs } from '@/components/launch/RepoSourceTabs'
 import { Field, TextInput } from '@/components/Form'
+import {
+  buildLaunchBody,
+  buildLaunchFormDataV2,
+  validateRepoUrl,
+  type RepoSource,
+} from '@/lib/launch-repo-source'
 import { Route as RootRoute } from './__root'
 
 export const LaunchRoute = createRoute({
@@ -43,8 +50,12 @@ function LaunchPage() {
     queryFn: ({ signal }) => api.get('/api/repos/recent', undefined, signal),
   })
 
-  const [repoPath, setRepoPath] = useState('')
-  const [baseBranch, setBaseBranch] = useState('')
+  // RFC-024: repo source can be a local path OR a remote git URL.
+  const [source, setSource] = useState<RepoSource>({
+    kind: 'path',
+    repoPath: '',
+    baseBranch: '',
+  })
   const [inputs, setInputs] = useState<Record<string, string>>({})
   // RFC-020: parallel state for `kind: 'upload'` inputs; key → picked Files.
   const [uploads, setUploads] = useState<Record<string, File[]>>({})
@@ -57,34 +68,56 @@ function LaunchPage() {
       seeded[i.key] = inputs[i.key] ?? ''
     }
     setInputs(seeded)
-    // Auto-pick the most recent repo as default.
-    if (repoPath === '' && recent.data !== undefined && recent.data[0] !== undefined) {
-      setRepoPath(recent.data[0].path)
-      setBaseBranch(recent.data[0].defaultBranch ?? '')
+    // Auto-pick the most recent repo as default (path mode only).
+    if (
+      source.kind === 'path' &&
+      source.repoPath === '' &&
+      recent.data !== undefined &&
+      recent.data[0] !== undefined
+    ) {
+      setSource({
+        kind: 'path',
+        repoPath: recent.data[0].path,
+        baseBranch: recent.data[0].defaultBranch ?? '',
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.data, recent.data])
 
   const refs = useQuery<RepoRefsResponse>({
-    queryKey: ['repos', 'refs', repoPath],
-    queryFn: ({ signal }) => api.get('/api/repos/refs', { path: repoPath }, signal),
-    enabled: repoPath !== '',
+    queryKey: ['repos', 'refs', source.kind === 'path' ? source.repoPath : ''],
+    queryFn: ({ signal }) =>
+      api.get('/api/repos/refs', { path: source.kind === 'path' ? source.repoPath : '' }, signal),
+    enabled: source.kind === 'path' && source.repoPath !== '',
   })
 
   const hasUploads = Object.values(uploads).some((arr) => arr.length > 0)
   const start = useMutation({
     mutationFn: () => {
-      const payload = { workflowId: id, repoPath, baseBranch, inputs }
       // RFC-020: any kind:'upload' input declared on the workflow drives a
       // multipart submit — even when the user picked zero files, so the
       // backend's upload pipeline runs (it gates min/maxCount centrally).
       const hasUploadKind = (workflow.data?.definition.inputs ?? []).some(
         (i) => i.kind === 'upload',
       )
-      if (hasUploadKind || hasUploads) {
+      if (source.kind === 'path' && (hasUploadKind || hasUploads)) {
+        const payload = {
+          workflowId: id,
+          repoPath: source.repoPath,
+          baseBranch: source.baseBranch,
+          inputs,
+        }
         return api.postMultipart<Task>('/api/tasks', buildLaunchFormData(payload, uploads))
       }
-      return api.post<Task>('/api/tasks', payload)
+      if (source.kind === 'url' && (hasUploadKind || hasUploads)) {
+        // RFC-024: URL + uploads not supported by the backend yet — keep the
+        // multipart envelope for parity, backend will 422 us politely.
+        return api.postMultipart<Task>(
+          '/api/tasks',
+          buildLaunchFormDataV2(source, { workflowId: id, inputs }, uploads),
+        )
+      }
+      return api.post<Task>('/api/tasks', buildLaunchBody(source, { workflowId: id, inputs }))
     },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
@@ -106,13 +139,12 @@ function LaunchPage() {
     }
     return def.required === true && (inputs[def.key] ?? '').trim() === ''
   })
-  const repoIssue = repoLaunchIssue(refs.data ?? null)
-  const canSubmit =
-    repoPath !== '' &&
-    baseBranch !== '' &&
-    !missingRequired &&
-    repoIssue === null &&
-    !start.isPending
+  const repoIssue = source.kind === 'path' ? repoLaunchIssue(refs.data ?? null) : null
+  const sourceReady =
+    source.kind === 'path'
+      ? source.repoPath !== '' && source.baseBranch !== ''
+      : validateRepoUrl(source.repoUrl) === null
+  const canSubmit = sourceReady && !missingRequired && repoIssue === null && !start.isPending
 
   return (
     <div className="page">
@@ -133,52 +165,13 @@ function LaunchPage() {
       {repoIssue === 'no-commits' && <div className="error-box">{t('launch.repoNoCommits')}</div>}
 
       <div className="form-grid">
-        <Field label={t('launch.fieldRepo')} required hint={t('launch.fieldRepoHint')}>
-          <select
-            className="form-input"
-            value={repoPath}
-            onChange={(e) => setRepoPath(e.target.value)}
-          >
-            <option value="">{t('launch.pickRepoPlaceholder')}</option>
-            {(recent.data ?? []).map((r) => (
-              <option key={r.path} value={r.path}>
-                {r.path} {r.defaultBranch ? `(${r.defaultBranch})` : ''}
-              </option>
-            ))}
-          </select>
-          <TextInput
-            value={repoPath}
-            onChange={setRepoPath}
-            placeholder={t('launch.pasteRepoPath')}
-          />
-        </Field>
+        <RepoSourceTabs source={source} onChange={setSource} />
 
-        <Field
-          label={t('launch.fieldBaseBranch')}
-          required
-          hint={refs.error !== null ? describeError(refs.error) : t('launch.baseBranchHint')}
-        >
-          {refs.data !== undefined ? (
-            <select
-              className="form-input"
-              value={baseBranch}
-              onChange={(e) => setBaseBranch(e.target.value)}
-            >
-              <option value="">{t('launch.pickBranchPlaceholder')}</option>
-              {refs.data.branches.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <TextInput
-              value={baseBranch}
-              onChange={setBaseBranch}
-              placeholder={t('launch.baseBranchPlaceholder')}
-            />
-          )}
-        </Field>
+        {source.kind === 'url' && start.isPending && (
+          <div className="muted" data-testid="launch-cloning-hint">
+            {t('launch.repoSource.cloningHint')}
+          </div>
+        )}
 
         {inputDefs.length === 0 && <div className="muted">{t('launch.noInputs')}</div>}
 
@@ -198,7 +191,7 @@ function LaunchPage() {
             ) : (
               <DynamicInput
                 def={def}
-                repoPath={repoPath}
+                repoPath={source.kind === 'path' ? source.repoPath : ''}
                 value={inputs[def.key] ?? ''}
                 onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
               />

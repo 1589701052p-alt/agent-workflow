@@ -1,0 +1,443 @@
+// RFC-024: persistent Git URL → local mirror cache.
+//
+// Responsibilities:
+//   - `resolveCachedRepo`: ensure a usable local clone exists for a given URL.
+//     Cold path runs `git clone`; warm path optionally `git fetch` and returns
+//     the existing cache dir.
+//   - `listCachedRepos` / `refreshCachedRepo` / `deleteCachedRepo`: backing
+//     ops for the `/api/cached-repos` management surface.
+//
+// Concurrency: same-URL clones are serialized via an in-process mutex map so
+// two concurrent launches against a cold URL can't race on the same target
+// directory. The mutex also bounds the second caller's wait under the
+// configured `gitCloneTimeoutMs`.
+//
+// Logging / errors: any stderr fragment that may contain a credential-bearing
+// URL is run through `redactGitUrl` before it leaves this module (logs, error
+// bodies, DB rows).
+
+import {
+  type CachedRepo,
+  gitUrlCacheKeyWith,
+  parseGitUrl,
+  redactGitUrl,
+} from '@agent-workflow/shared'
+import { eq, sql } from 'drizzle-orm'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { rename } from 'node:fs/promises'
+import { join } from 'node:path'
+import { ulid } from 'ulid'
+import type { DbClient } from '@/db/client'
+import { cachedRepos, tasks } from '@/db/schema'
+import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
+import { runGit } from '@/util/git'
+import { createLogger } from '@/util/log'
+import { Paths } from '@/util/paths'
+
+const log = createLogger('git-repo-cache')
+
+const DEFAULT_CLONE_TIMEOUT_MS = 30 * 60 * 1000
+
+const sha1Hex = (s: string) => createHash('sha1').update(s).digest('hex')
+
+/** Per-URL serialization. Same urlHash → second caller awaits the first. */
+const urlMutex = new Map<string, Promise<unknown>>()
+
+async function withUrlLock<T>(urlHash: string, fn: () => Promise<T>): Promise<T> {
+  const prev = urlMutex.get(urlHash) ?? Promise.resolve()
+  let release!: () => void
+  const slot = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  urlMutex.set(
+    urlHash,
+    prev.then(() => slot),
+  )
+  try {
+    await prev
+    return await fn()
+  } finally {
+    release()
+    // Best-effort cleanup: if no one queued behind us, drop the map entry.
+    if (urlMutex.get(urlHash) === prev.then(() => slot)) {
+      urlMutex.delete(urlHash)
+    }
+  }
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let to: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    to = setTimeout(
+      () =>
+        reject(
+          new DomainError('repo-cache-locked', `${label} timed out after ${ms}ms`, 504, undefined),
+        ),
+      ms,
+    )
+  })
+  try {
+    return await Promise.race([p, timeout])
+  } finally {
+    if (to) clearTimeout(to)
+  }
+}
+
+/**
+ * Bun-spawn wrapper for a `git` command that runs without a fixed cwd
+ * (e.g. `git clone <url> <dir>`). Mirrors `runGit`'s return shape.
+ */
+async function spawnGit(
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn({
+    cmd: ['git', ...args],
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { stdout, stderr, exitCode }
+}
+
+export interface GitRepoCacheDeps {
+  db: DbClient
+  /** Override app home (tests). Defaults to Paths.root. */
+  appHome?: string
+  /** Mutex + clone/fetch wait budget in ms. Default 30 min. */
+  cloneTimeoutMs?: number
+  /** If true, `git fetch` runs whenever a cache row is reused. Default true. */
+  fetchOnReuse?: boolean
+  /** Override now() for deterministic tests. */
+  now?: () => number
+}
+
+export interface ResolveCachedRepoInput {
+  url: string
+}
+
+export interface ResolveCachedRepoResult {
+  cached: CachedRepo
+  cold: boolean
+  fetchOk: boolean
+  fetchError: string | null
+}
+
+function rowToCached(row: typeof cachedRepos.$inferSelect, referencingTaskCount = 0): CachedRepo {
+  return {
+    id: row.id,
+    url: row.url,
+    urlRedacted: redactGitUrl(row.url),
+    localPath: row.localPath,
+    defaultBranch: row.defaultBranch ?? null,
+    lastFetchedAt: new Date(row.lastFetchedAt).toISOString(),
+    createdAt: new Date(row.createdAt).toISOString(),
+    referencingTaskCount,
+  }
+}
+
+async function detectDefaultBranchInRepo(dir: string): Promise<string | null> {
+  const sym = await runGit(dir, ['symbolic-ref', '--short', 'HEAD'])
+  if (sym.exitCode === 0) {
+    const v = sym.stdout.trim()
+    if (v.length > 0 && v !== 'HEAD') return v
+  }
+  // Fallback to origin/HEAD when local HEAD is detached.
+  const origin = await runGit(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+  if (origin.exitCode === 0) {
+    const v = origin.stdout.trim().replace(/^origin\//, '')
+    if (v.length > 0) return v
+  }
+  return null
+}
+
+async function isValidGitDir(dir: string): Promise<boolean> {
+  if (!existsSync(dir)) return false
+  const r = await runGit(dir, ['rev-parse', '--git-dir'])
+  return r.exitCode === 0
+}
+
+export async function resolveCachedRepo(
+  deps: GitRepoCacheDeps,
+  input: ResolveCachedRepoInput,
+): Promise<ResolveCachedRepoResult> {
+  const parsed = parseGitUrl(input.url)
+  if (!parsed) {
+    throw new ValidationError('repo-url-invalid', 'unsupported or malformed Git URL', {
+      url: redactGitUrl(input.url),
+    })
+  }
+  const { hash, slug } = gitUrlCacheKeyWith(parsed, sha1Hex)
+  const appHome = deps.appHome ?? Paths.root
+  const cacheRoot = join(appHome, 'repos')
+  const cacheDir = join(cacheRoot, `${hash}-${slug}`)
+  const now = deps.now ?? Date.now
+  const timeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS
+  const fetchOnReuse = deps.fetchOnReuse ?? true
+  const redacted = redactGitUrl(input.url)
+
+  const work = withUrlLock(hash, async () => {
+    const existing = deps.db
+      .select()
+      .from(cachedRepos)
+      .where(eq(cachedRepos.urlHash, hash))
+      .limit(1)
+      .all()
+    const row = existing[0]
+
+    if (row && (await isValidGitDir(row.localPath))) {
+      // Warm path.
+      let fetchOk = true
+      let fetchError: string | null = null
+      if (fetchOnReuse) {
+        const r = await runGit(row.localPath, ['fetch', '--all', '--prune', '--tags'])
+        if (r.exitCode !== 0) {
+          fetchOk = false
+          fetchError = redactGitUrl(r.stderr.trim())
+          log.warn('git fetch on reuse failed', { url: redacted, stderr: fetchError })
+        }
+      }
+      const ts = now()
+      deps.db.update(cachedRepos).set({ lastFetchedAt: ts }).where(eq(cachedRepos.id, row.id)).run()
+      const updated = { ...row, lastFetchedAt: ts }
+      return {
+        cached: rowToCached(updated, await refTaskCount(deps.db, row.url)),
+        cold: false,
+        fetchOk,
+        fetchError,
+      }
+    }
+
+    if (row) {
+      // Cache row points at a missing / corrupt dir. Drop it and re-clone.
+      log.warn('cached repo dir invalid; treating as cold clone', {
+        url: redacted,
+        localPath: row.localPath,
+      })
+      deps.db.delete(cachedRepos).where(eq(cachedRepos.id, row.id)).run()
+    }
+
+    // Cold path: clone into a sibling temp dir, then atomic rename.
+    mkdirSync(cacheRoot, { recursive: true })
+    const tmpDir = join(cacheRoot, `${hash}-${slug}.partial-${ulid()}`)
+    const r = await spawnGit(['clone', input.url, tmpDir])
+    if (r.exitCode !== 0) {
+      // Wipe whatever git may have left behind.
+      try {
+        rmSync(tmpDir, { recursive: true, force: true })
+      } catch {
+        /* best-effort */
+      }
+      const stderr = redactGitUrl(r.stderr.trim())
+      throw new DomainError(
+        'repo-clone-failed',
+        `git clone failed for ${redacted}: ${stderr}`,
+        400,
+        { url: redacted, stderr },
+      )
+    }
+    // Probe default branch before moving into place — runs from tmpDir
+    const defaultBr = await detectDefaultBranchInRepo(tmpDir)
+
+    // Atomic rename onto the canonical cache path.
+    try {
+      // If a previous failed run left a stale dir, remove it first.
+      if (existsSync(cacheDir)) {
+        rmSync(cacheDir, { recursive: true, force: true })
+      }
+      await rename(tmpDir, cacheDir)
+    } catch (err) {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true })
+      } catch {
+        /* best-effort */
+      }
+      throw new DomainError(
+        'repo-clone-failed',
+        `failed to finalize cache dir for ${redacted}: ${(err as Error).message}`,
+        500,
+        { url: redacted },
+      )
+    }
+
+    const ts = now()
+    const id = ulid()
+    deps.db
+      .insert(cachedRepos)
+      .values({
+        id,
+        urlHash: hash,
+        url: input.url,
+        localPath: cacheDir,
+        defaultBranch: defaultBr,
+        lastFetchedAt: ts,
+        createdAt: ts,
+      })
+      .run()
+    log.info('cloned new cached repo', { url: redacted, hash, localPath: cacheDir })
+    return {
+      cached: rowToCached(
+        {
+          id,
+          urlHash: hash,
+          url: input.url,
+          localPath: cacheDir,
+          defaultBranch: defaultBr,
+          lastFetchedAt: ts,
+          createdAt: ts,
+        },
+        await refTaskCount(deps.db, input.url),
+      ),
+      cold: true,
+      fetchOk: true,
+      fetchError: null,
+    }
+  })
+
+  return await withTimeout(work, timeoutMs, `resolveCachedRepo(${redacted})`)
+}
+
+async function refTaskCount(db: DbClient, url: string): Promise<number> {
+  const r = db
+    .select({ count: sql<number>`count(*)`.as('count') })
+    .from(tasks)
+    .where(eq(tasks.repoUrl, url))
+    .all()
+  return r[0]?.count ?? 0
+}
+
+export async function listCachedRepos(db: DbClient): Promise<CachedRepo[]> {
+  const rows = db.select().from(cachedRepos).all()
+  const out: CachedRepo[] = []
+  for (const row of rows) {
+    out.push(rowToCached(row, await refTaskCount(db, row.url)))
+  }
+  // Most recently fetched first.
+  out.sort((a, b) =>
+    a.lastFetchedAt > b.lastFetchedAt ? -1 : a.lastFetchedAt < b.lastFetchedAt ? 1 : 0,
+  )
+  return out
+}
+
+export interface RefreshCachedRepoResult {
+  item: CachedRepo
+  fetchOk: boolean
+  fetchError: string | null
+}
+
+export async function refreshCachedRepo(
+  deps: GitRepoCacheDeps,
+  id: string,
+): Promise<RefreshCachedRepoResult> {
+  const rows = deps.db.select().from(cachedRepos).where(eq(cachedRepos.id, id)).limit(1).all()
+  const row = rows[0]
+  if (!row) {
+    throw new NotFoundError('cached-repo-not-found', `cached repo ${id} not found`)
+  }
+  const now = deps.now ?? Date.now
+  const redacted = redactGitUrl(row.url)
+
+  return await withUrlLock(row.urlHash, async () => {
+    if (!(await isValidGitDir(row.localPath))) {
+      throw new DomainError(
+        'repo-cache-corrupt',
+        `cache dir missing for ${redacted}; delete and re-launch a task to re-clone`,
+        409,
+        { url: redacted, localPath: row.localPath },
+      )
+    }
+    const r = await runGit(row.localPath, ['fetch', '--all', '--prune', '--tags'])
+    const ts = now()
+    let fetchOk = true
+    let fetchError: string | null = null
+    if (r.exitCode !== 0) {
+      fetchOk = false
+      fetchError = redactGitUrl(r.stderr.trim())
+      log.warn('manual refresh fetch failed', { url: redacted, stderr: fetchError })
+    }
+    deps.db.update(cachedRepos).set({ lastFetchedAt: ts }).where(eq(cachedRepos.id, id)).run()
+    const updated = { ...row, lastFetchedAt: ts }
+    return {
+      item: rowToCached(updated, await refTaskCount(deps.db, row.url)),
+      fetchOk,
+      fetchError,
+    }
+  })
+}
+
+export interface DeleteCachedRepoOptions {
+  /** Skip the "referenced by N tasks" guard. Caller (HTTP route) flips this
+   * after user confirmation. */
+  force?: boolean
+}
+
+export class CachedRepoHasReferencesError extends DomainError {
+  constructor(
+    public readonly count: number,
+    public readonly urlRedacted: string,
+  ) {
+    super(
+      'cached-repo-has-references',
+      `${count} task(s) still reference ${urlRedacted}; pass force=1 to delete anyway`,
+      409,
+      { count, urlRedacted },
+    )
+  }
+}
+
+export async function deleteCachedRepo(
+  deps: GitRepoCacheDeps,
+  id: string,
+  options: DeleteCachedRepoOptions = {},
+): Promise<{ deletedLocalPath: string }> {
+  const rows = deps.db.select().from(cachedRepos).where(eq(cachedRepos.id, id)).limit(1).all()
+  const row = rows[0]
+  if (!row) {
+    throw new NotFoundError('cached-repo-not-found', `cached repo ${id} not found`)
+  }
+  const count = await refTaskCount(deps.db, row.url)
+  if (count > 0 && !options.force) {
+    throw new CachedRepoHasReferencesError(count, redactGitUrl(row.url))
+  }
+  return await withUrlLock(row.urlHash, async () => {
+    try {
+      rmSync(row.localPath, { recursive: true, force: true })
+    } catch (err) {
+      log.warn('failed to rm cache dir; deleting DB row anyway', {
+        url: redactGitUrl(row.url),
+        err: (err as Error).message,
+      })
+    }
+    deps.db.delete(cachedRepos).where(eq(cachedRepos.id, id)).run()
+    return { deletedLocalPath: row.localPath }
+  })
+}
+
+/**
+ * Resolve the first 10 short branch + tag refs from a cached repo, useful for
+ * "you asked for ref X but here are the available ones" 4xx bodies.
+ */
+export async function listAvailableRefs(repoPath: string, limit = 10): Promise<string[]> {
+  const out: string[] = []
+  const heads = await runGit(repoPath, [
+    'for-each-ref',
+    `--count=${limit}`,
+    '--format=%(refname:short)',
+    'refs/heads',
+    'refs/remotes',
+    'refs/tags',
+  ])
+  if (heads.exitCode === 0) {
+    for (const line of heads.stdout.split('\n')) {
+      const v = line.trim()
+      if (v.length > 0) out.push(v)
+      if (out.length >= limit) break
+    }
+  }
+  return out
+}

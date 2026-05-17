@@ -407,6 +407,149 @@ test('RFC-016: wrapper-git renders as a group container with inner node inside i
   expect(containment.inside).toBe(true)
 })
 
+// RFC-024 e2e: launch a task from a Git URL (cloned from a local `file://`
+// bare repo). Asserts:
+//   - Launcher's Repo source tab can switch to Remote URL
+//   - POST /api/tasks with `repoUrl` succeeds; task lands in done
+//   - Task detail page shows the redacted URL via the source row
+//   - /api/cached-repos lists exactly one entry and DELETE removes it
+test('RFC-024: launch task from git URL clones into cache and renders redacted URL', async ({
+  page,
+}) => {
+  // Seed a bare repo + agent + workflow for this run via REST.
+  const remoteRoot = mkdtempSync(join(tmpdir(), 'aw-e2e-rfc024-'))
+  const working = join(remoteRoot, 'src')
+  execSync('git init -b main -q', { cwd: remoteRoot })
+  execSync(`mkdir -p "${working}"`, { stdio: 'ignore' })
+  writeFileSync(join(remoteRoot, 'README.md'), '# rfc-024 fixture\n')
+  execSync('git config user.email e2e@example.com', { cwd: remoteRoot })
+  execSync('git config user.name e2e', { cwd: remoteRoot })
+  execSync('git add . && git commit -qm init', { cwd: remoteRoot })
+  const bare = join(remoteRoot, 'remote.git')
+  execSync(`git clone --bare "${remoteRoot}" "${bare}"`, { stdio: 'ignore' })
+  const remoteUrl = `file://${bare}`
+
+  const headers = {
+    Authorization: `Bearer ${daemon.token}`,
+    'Content-Type': 'application/json',
+  }
+  const agentName = 'rfc024-stub'
+  await fetch(`${daemon.baseUrl}/api/agents`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: agentName,
+      description: 'rfc-024 e2e stub',
+      outputs: ['answer'],
+      readonly: true,
+      bodyMd: '',
+    }),
+  })
+  const workflowRes = await fetch(`${daemon.baseUrl}/api/workflows`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: 'rfc024-url-launch',
+      description: 'RFC-024 e2e',
+      definition: {
+        $schema_version: 1,
+        inputs: [{ kind: 'text', key: 'topic', label: 'Topic', required: true }],
+        nodes: [
+          { id: 'in_1', kind: 'input', inputKey: 'topic', position: { x: 0, y: 0 } },
+          {
+            id: 'agent_1',
+            kind: 'agent-single',
+            agentName,
+            promptTemplate: '{{topic}}',
+            position: { x: 320, y: 0 },
+          },
+          {
+            id: 'out_1',
+            kind: 'output',
+            ports: [{ name: 'answer', bind: { nodeId: 'agent_1', portName: 'answer' } }],
+            position: { x: 640, y: 0 },
+          },
+        ],
+        edges: [
+          {
+            id: 'e1',
+            source: { nodeId: 'in_1', portName: 'topic' },
+            target: { nodeId: 'agent_1', portName: 'topic' },
+          },
+          {
+            id: 'e2',
+            source: { nodeId: 'agent_1', portName: 'answer' },
+            target: { nodeId: 'out_1', portName: 'answer' },
+          },
+        ],
+      },
+    }),
+  })
+  expectOk(workflowRes, 'create rfc-024 workflow')
+  const wf = (await workflowRes.json()) as { id: string }
+
+  await primeAuthLocalStorage(page, daemon)
+  await page.goto(`${daemon.baseUrl}/workflows/${wf.id}/launch`)
+
+  // Switch to Remote URL tab + fill URL.
+  await page.getByTestId('repo-source-tab-url').click()
+  const urlInput = page
+    .locator('label.form-field', { hasText: /Git URL/i })
+    .locator('input.form-input')
+  await urlInput.fill(remoteUrl)
+
+  const topicInput = page
+    .locator('label.form-field', { hasText: 'Topic (topic)' })
+    .locator('input.form-input')
+  await topicInput.fill('rfc-024-test')
+
+  await page.getByRole('button', { name: /Start task/ }).click()
+  await page.waitForURL(/\/tasks\/[A-Z0-9]+/i, { timeout: 30_000 })
+
+  const taskId = page.url().match(/\/tasks\/([A-Z0-9]+)/i)![1]
+  const final = await pollUntilTerminal(daemon, taskId, 60_000)
+  expect(final.status).toBe('done')
+
+  // Task detail → Details tab → redacted URL row visible.
+  await page.locator('.task-detail__tab-bar [role="tab"]', { hasText: /Details|详细信息/ }).click()
+  const urlCell = page.getByTestId('task-detail-repo-url')
+  await expect(urlCell).toBeVisible({ timeout: 10_000 })
+  // For a `file://` URL there are no creds to redact; the redacted form is
+  // identical, so we just check the URL is present.
+  await expect(urlCell).toContainText('file://')
+
+  // Cached repos list exposes a single entry for this URL.
+  const cachedRes = await fetch(`${daemon.baseUrl}/api/cached-repos`, {
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  })
+  expectOk(cachedRes, 'GET cached-repos')
+  const cachedBody = (await cachedRes.json()) as {
+    items: Array<{ id: string; url: string; referencingTaskCount: number }>
+  }
+  const match = cachedBody.items.find((it) => it.url === remoteUrl)
+  expect(match).toBeDefined()
+  expect(match!.referencingTaskCount).toBeGreaterThanOrEqual(1)
+
+  // DELETE without force → 409 (still referenced). Then DELETE with force → 200.
+  const blocked = await fetch(`${daemon.baseUrl}/api/cached-repos/${match!.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  })
+  expect(blocked.status).toBe(409)
+  const forced = await fetch(`${daemon.baseUrl}/api/cached-repos/${match!.id}?force=1`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  })
+  expect(forced.status).toBe(200)
+
+  // Cleanup.
+  try {
+    rmSync(remoteRoot, { recursive: true, force: true })
+  } catch {
+    /* noop */
+  }
+})
+
 // RFC-022 e2e: dependsOn closure renders as a Dependency tree on the agent
 // detail page. We seed three agents A → B → C via REST, open the form for A,
 // and assert that the tree renders all three rows (A as root, B + C nested).

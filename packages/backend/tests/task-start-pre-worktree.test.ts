@@ -98,7 +98,8 @@ describe('startTask with preCreatedWorktree (RFC-020)', () => {
     // Caller pre-creates the worktree (simulating the multipart route).
     const taskId = ulid()
     const wt = await materializeWorktree({
-      input: { repoPath, baseBranch: 'main' },
+      repoPath,
+      baseBranch: 'main',
       taskId,
       appHome,
     })
@@ -147,7 +148,8 @@ describe('startTask with preCreatedWorktree (RFC-020)', () => {
   test('materializeWorktree returns earlyError on bad repo', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'aw-materialize-'))
     const wt = await materializeWorktree({
-      input: { repoPath: join(tmp, 'no-such-repo'), baseBranch: 'main' },
+      repoPath: join(tmp, 'no-such-repo'),
+      baseBranch: 'main',
       taskId: ulid(),
       appHome: join(tmp, 'home'),
     })

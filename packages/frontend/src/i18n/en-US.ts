@@ -11,6 +11,7 @@ export const enUS: Resources = {
     tasks: 'Tasks',
     reviews: 'Reviews',
     clarify: 'Clarify',
+    repos: 'Repos',
     settings: 'Settings',
     brand: 'Agent Workflow',
   },
@@ -98,6 +99,26 @@ export const enUS: Resources = {
     tokenPlaceholder: '64-char hex',
     verifying: 'Verifying…',
     connect: 'Connect',
+  },
+  repos: {
+    title: 'Cached repos',
+    hint:
+      'Persistent mirrors created when you launch a task against a Git URL. Refresh to pull updates, Delete to reclaim disk.',
+    loading: 'Loading…',
+    empty:
+      "No cached repos yet. Launch a task in the launcher's Remote URL mode to populate this list.",
+    colUrl: 'Remote URL',
+    colLocalPath: 'Local cache path',
+    colLastFetched: 'Last fetched',
+    colRefs: 'Referenced by',
+    colActions: 'Actions',
+    refresh: 'Refresh',
+    delete: 'Delete',
+    cancel: 'Cancel',
+    confirmDelete: 'Confirm delete',
+    deleteConfirmTitle: 'Delete this cache?',
+    deleteConfirmBody:
+      'Cache for {{url}} is currently referenced by {{count}} task(s). Past worktrees and task detail pages are preserved; the next launch with the same URL will re-clone.',
   },
   settings: {
     title: 'Settings',
@@ -325,6 +346,8 @@ export const enUS: Resources = {
     loadingTask: 'Loading task…',
     metaWorkflow: 'Workflow',
     metaRepo: 'Repo',
+    metaRepoUrl: 'Source repo (cloned from)',
+    metaRepoCachePath: 'Local cache path',
     metaWorktree: 'Worktree',
     metaBranch: 'Branch',
     metaStarted: 'Started',
@@ -445,6 +468,23 @@ export const enUS: Resources = {
       targetDirHint: 'Will land in worktree directory: {{dir}}',
       acceptHint: 'Accepted: {{accept}}',
       maxSizeHint: 'Max per file: {{bytes}} bytes',
+    },
+    repoSource: {
+      bar: 'Repo source',
+      path: 'Local path',
+      url: 'Remote URL',
+      urlField: 'Git URL',
+      urlHint:
+        'Supports SSH (git@host:org/repo.git) and HTTP/HTTPS (public repos, or with a token embedded in the URL).',
+      urlPlaceholder: 'git@github.com:org/repo.git',
+      urlInvalid: 'URL not recognized (must be SSH or HTTP/HTTPS).',
+      refField: 'Branch / tag / commit (optional)',
+      refHint: 'Leave blank to use the cloned default branch.',
+      refPlaceholder: 'main / v1.2.0 / a3f9c…',
+      recentUrls: 'Recently used URLs',
+      recentUrlsHint: 'Pick a previously cached remote — its local mirror is reused.',
+      recentUrlsPlaceholder: '— pick a cached repo —',
+      cloningHint: 'First-time clone may take a few minutes; subsequent launches reuse the cache.',
     },
   },
   inspector: {
@@ -874,6 +914,10 @@ export const enUS: Resources = {
         customPlaceholder: 'Write your supplementary note here…',
       },
       custom: { lengthHint: '{{count}} / {{max}}' },
+    },
+    option: {
+      recommendedBadge: 'Recommended',
+      reasonLabel: 'Why recommended',
     },
     canvas: {
       error: {

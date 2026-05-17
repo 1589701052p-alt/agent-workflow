@@ -13,6 +13,7 @@ export interface Resources {
     tasks: string
     reviews: string
     clarify: string
+    repos: string
     settings: string
     brand: string
   }
@@ -98,6 +99,23 @@ export interface Resources {
     tokenPlaceholder: string
     verifying: string
     connect: string
+  }
+  repos: {
+    title: string
+    hint: string
+    loading: string
+    empty: string
+    colUrl: string
+    colLocalPath: string
+    colLastFetched: string
+    colRefs: string
+    colActions: string
+    refresh: string
+    delete: string
+    cancel: string
+    confirmDelete: string
+    deleteConfirmTitle: string
+    deleteConfirmBody: string
   }
   settings: {
     title: string
@@ -311,6 +329,8 @@ export interface Resources {
     loadingTask: string
     metaWorkflow: string
     metaRepo: string
+    metaRepoUrl: string
+    metaRepoCachePath: string
     metaWorktree: string
     metaBranch: string
     metaStarted: string
@@ -428,6 +448,22 @@ export interface Resources {
       targetDirHint: string
       acceptHint: string
       maxSizeHint: string
+    }
+    repoSource: {
+      bar: string
+      path: string
+      url: string
+      urlField: string
+      urlHint: string
+      urlPlaceholder: string
+      urlInvalid: string
+      refField: string
+      refHint: string
+      refPlaceholder: string
+      recentUrls: string
+      recentUrlsHint: string
+      recentUrlsPlaceholder: string
+      cloningHint: string
     }
   }
   inspector: {
@@ -809,6 +845,10 @@ export interface Resources {
       multi: { customLabel: string; customPlaceholder: string }
       custom: { lengthHint: string }
     }
+    option: {
+      recommendedBadge: string
+      reasonLabel: string
+    }
     canvas: {
       error: { multiNotSupported: string; duplicate: string }
     }
@@ -839,6 +879,7 @@ export const zhCN: Resources = {
     tasks: '任务',
     reviews: '评审',
     clarify: '反问',
+    repos: '远端仓',
     settings: '设置',
     brand: 'Agent Workflow',
   },
@@ -924,6 +965,24 @@ export const zhCN: Resources = {
     tokenPlaceholder: '64 位十六进制',
     verifying: '验证中…',
     connect: '连接',
+  },
+  repos: {
+    title: '远端仓缓存',
+    hint: '所有通过 Git URL 启动任务时克隆下来的远端仓库；可手动 Refresh 拉新或 Delete 释放磁盘。',
+    loading: '加载中…',
+    empty: '还没有任何缓存的远端仓库。在 launcher 的"远端 URL"模式启动一次任务即可建立缓存。',
+    colUrl: '远端 URL',
+    colLocalPath: '本地缓存路径',
+    colLastFetched: '上次 fetch 时间',
+    colRefs: '关联任务',
+    colActions: '操作',
+    refresh: 'Refresh',
+    delete: 'Delete',
+    cancel: '取消',
+    confirmDelete: '确认删除',
+    deleteConfirmTitle: '删除该缓存？',
+    deleteConfirmBody:
+      '该缓存 {{url}} 目前被 {{count}} 个历史任务引用。删除后历史任务的 worktree 与详情页保留，但后续用同一 URL 启动任务会重新克隆。',
   },
   settings: {
     title: '设置',
@@ -1144,6 +1203,8 @@ export const zhCN: Resources = {
     loadingTask: '加载任务中…',
     metaWorkflow: '工作流',
     metaRepo: '仓库',
+    metaRepoUrl: '源仓库（克隆自）',
+    metaRepoCachePath: '本地缓存路径',
     metaWorktree: 'Worktree',
     metaBranch: '分支',
     metaStarted: '开始',
@@ -1260,6 +1321,22 @@ export const zhCN: Resources = {
       targetDirHint: '提交时会写入 worktree 的相对目录：{{dir}}',
       acceptHint: '接受类型：{{accept}}',
       maxSizeHint: '单文件上限：{{bytes}} 字节',
+    },
+    repoSource: {
+      bar: '仓库来源',
+      path: '本地路径',
+      url: '远端 URL',
+      urlField: 'Git URL',
+      urlHint: '支持 SSH（git@host:org/repo.git）与 HTTP/HTTPS（公开仓 / URL 中可携带 token）。',
+      urlPlaceholder: 'git@github.com:org/repo.git',
+      urlInvalid: 'URL 格式无法识别（应为 SSH 或 HTTP/HTTPS）',
+      refField: '分支 / tag / commit（可选）',
+      refHint: '留空则使用克隆后的默认分支。',
+      refPlaceholder: 'main / v1.2.0 / a3f9c…',
+      recentUrls: '最近使用的 URL',
+      recentUrlsHint: '从已缓存的远端仓里挑一个，复用本地副本，不会重新克隆。',
+      recentUrlsPlaceholder: '— 从已缓存仓里挑一个 —',
+      cloningHint: '首次克隆可能耗时数分钟；下次启动会复用本地缓存。',
     },
   },
   inspector: {
@@ -1667,6 +1744,10 @@ export const zhCN: Resources = {
         customPlaceholder: '在此填写补充内容…',
       },
       custom: { lengthHint: '{{count}} / {{max}}' },
+    },
+    option: {
+      recommendedBadge: '推荐',
+      reasonLabel: '推荐理由',
     },
     canvas: {
       error: {

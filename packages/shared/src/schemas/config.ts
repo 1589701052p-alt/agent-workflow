@@ -63,6 +63,20 @@ export const ConfigSchema = z.object({
   // --- RFC-020 upload caps (multipart launcher uploads) ---
   uploadLimits: UploadLimitsSchema.optional(),
 
+  // --- RFC-024 git URL cache ---
+  /**
+   * Max time `resolveCachedRepo` spends waiting for the per-URL mutex plus
+   * the underlying `git clone` / `git fetch`. Queued tasks behind a long
+   * cold-clone get the same budget. Default 30 min (1_800_000 ms).
+   */
+  gitCloneTimeoutMs: z.number().int().positive().optional(),
+  /**
+   * When a cached repo is reused (cache hit), also run `git fetch --all
+   * --prune --tags` before handing the path back. Default true — keeps the
+   * mirror fresh; disable to skip network on every launch.
+   */
+  gitFetchOnReuse: z.boolean().optional(),
+
   // --- Large outputs ---
   largeOutputThresholdBytes: z.number().int().positive(),
 

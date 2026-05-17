@@ -100,30 +100,28 @@ describe('RFC-005 0002 migration — data integrity + new schema', () => {
       .run()
 
     const taskId = ulid()
-    db.insert(tasks)
-      .values({
-        id: taskId,
+    // RFC-024 update: switched from drizzle's typed insert to raw SQL for the
+    // same reason node_runs already does (see comment below). Adding `repoUrl`
+    // (RFC-024) to schema.ts would make drizzle emit `INSERT (..., repo_url)`
+    // against a v1 DB that doesn't yet have the column. Raw SQL pins the test
+    // to the columns 0000+0001 actually created.
+    sqlite
+      .prepare(
+        `INSERT INTO tasks
+          (id, workflow_id, workflow_snapshot, repo_path, worktree_path,
+           base_branch, branch, base_commit, status, inputs, max_duration_ms,
+           max_total_tokens, started_at, finished_at, error_summary,
+           error_message, failed_node_id, expires_at, deleted_at, schema_version)
+         VALUES (?, ?, ?, '/repo', '/wt', 'main', ?, NULL, 'done',
+                 ?, NULL, NULL, 1000, 2000, NULL, NULL, NULL, NULL, NULL, 1)`,
+      )
+      .run(
+        taskId,
         workflowId,
-        workflowSnapshot: JSON.stringify({ $schema_version: 1 }),
-        repoPath: '/repo',
-        worktreePath: '/wt',
-        baseBranch: 'main',
-        branch: 'agent-workflow/' + taskId,
-        baseCommit: null,
-        status: 'done',
-        inputs: JSON.stringify({ requirement: 'do thing' }),
-        maxDurationMs: null,
-        maxTotalTokens: null,
-        startedAt: 1000,
-        finishedAt: 2000,
-        errorSummary: null,
-        errorMessage: null,
-        failedNodeId: null,
-        expiresAt: null,
-        deletedAt: null,
-        schemaVersion: 1,
-      })
-      .run()
+        JSON.stringify({ $schema_version: 1 }),
+        'agent-workflow/' + taskId,
+        JSON.stringify({ requirement: 'do thing' }),
+      )
 
     const nodeRunId = ulid()
     // NB: review_iteration column does not exist yet in stage A — drizzle

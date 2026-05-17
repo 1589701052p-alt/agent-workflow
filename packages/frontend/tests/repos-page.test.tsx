@@ -1,0 +1,59 @@
+// RFC-024 T7 — locks the source wiring + i18n key references for the
+// /repos cached-repos management page. Behavioural tests (modal open /
+// force=1 / row render) are covered by the e2e in T9; here we just keep
+// the route registered + i18n keys present.
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, test } from 'vitest'
+
+const REPOS_SRC = readFileSync(
+  resolve(import.meta.dirname, '..', 'src', 'routes', 'repos.tsx'),
+  'utf-8',
+)
+const ROUTER_SRC = readFileSync(resolve(import.meta.dirname, '..', 'src', 'router.tsx'), 'utf-8')
+const ROOT_SRC = readFileSync(
+  resolve(import.meta.dirname, '..', 'src', 'routes', '__root.tsx'),
+  'utf-8',
+)
+const ZH = readFileSync(resolve(import.meta.dirname, '..', 'src', 'i18n', 'zh-CN.ts'), 'utf-8')
+const EN = readFileSync(resolve(import.meta.dirname, '..', 'src', 'i18n', 'en-US.ts'), 'utf-8')
+
+describe('/repos page wiring (RFC-024)', () => {
+  test('ReposRoute is registered in the router tree', () => {
+    expect(ROUTER_SRC).toContain('ReposRoute')
+    expect(ROUTER_SRC).toContain('reposRoute')
+  })
+
+  test('sidebar nav includes /repos entry', () => {
+    expect(ROOT_SRC).toContain("{ to: '/repos', key: 'repos' }")
+  })
+
+  test('repos.tsx calls the three /api/cached-repos endpoints', () => {
+    expect(REPOS_SRC).toContain("'/api/cached-repos'")
+    expect(REPOS_SRC).toContain('/refresh')
+    expect(REPOS_SRC).toContain('?force=1')
+  })
+
+  test('renders only the redacted URL (no raw item.url interpolation)', () => {
+    // The table cell uses `item.urlRedacted`; the only direct `item.url`
+    // reference is the dialog's body where it passes through redactGitUrl.
+    expect(REPOS_SRC).toContain('item.urlRedacted')
+    // Any other `item.url` mention must be inside redactGitUrl(...).
+    const lines = REPOS_SRC.split('\n')
+    for (const ln of lines) {
+      if (/\bitem\.url\b/.test(ln) && !/urlRedacted/.test(ln)) {
+        expect(ln).toMatch(/redactGitUrl/)
+      }
+    }
+  })
+
+  test('zh + en i18n carry the repos.* namespace', () => {
+    for (const src of [ZH, EN]) {
+      expect(src).toContain('colUrl')
+      expect(src).toContain('colLocalPath')
+      expect(src).toContain('confirmDelete')
+      expect(src).toContain('deleteConfirmTitle')
+    }
+  })
+})

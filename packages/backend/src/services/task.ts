@@ -22,7 +22,9 @@ import { listAgents } from '@/services/agent'
 import { listSkills } from '@/services/skill'
 import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
+import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
 import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
+import { redactGitUrl } from '@agent-workflow/shared'
 import { ConflictError, DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { readArchivedEvents } from '@/services/eventsArchive'
 import {
@@ -99,7 +101,9 @@ export interface PreCreatedWorktree {
  * (mirrors the failure path `startTask` baked in before this refactor).
  */
 export async function materializeWorktree(opts: {
-  input: Pick<StartTask, 'repoPath' | 'baseBranch'>
+  /** Resolved local repoPath (cache dir for URL mode, user-supplied for path mode). */
+  repoPath: string
+  baseBranch: string | undefined
   taskId: string
   appHome: string
 }): Promise<{
@@ -110,9 +114,9 @@ export async function materializeWorktree(opts: {
 }> {
   try {
     const wt = await createWorktree({
-      repoPath: opts.input.repoPath,
+      repoPath: opts.repoPath,
       taskId: opts.taskId,
-      baseBranch: opts.input.baseBranch,
+      ...(opts.baseBranch !== undefined ? { baseBranch: opts.baseBranch } : {}),
       appHome: opts.appHome,
     })
     return {
@@ -128,6 +132,38 @@ export async function materializeWorktree(opts: {
       baseCommit: null,
       earlyError: err instanceof Error ? err.message : String(err),
     }
+  }
+}
+
+/**
+ * RFC-024: resolve `StartTask` to the local path + ref the worktree machinery
+ * needs. Path mode is pass-through; URL mode triggers `resolveCachedRepo`
+ * (clone-or-reuse) and folds in the cache's default branch when the caller
+ * didn't specify a ref.
+ */
+async function resolveRepoSource(
+  input: StartTask,
+  deps: StartTaskDeps,
+): Promise<{ repoPath: string; baseBranch: string | undefined; repoUrl: string | null }> {
+  if (input.repoPath) {
+    return {
+      repoPath: input.repoPath,
+      baseBranch: input.baseBranch,
+      repoUrl: null,
+    }
+  }
+  if (!input.repoUrl) {
+    throw new ValidationError(
+      'start-task-source-required',
+      'one of repoPath or repoUrl is required',
+    )
+  }
+  const appHome = deps.appHome ?? Paths.root
+  const resolved = await resolveCachedRepo({ db: deps.db, appHome }, { url: input.repoUrl })
+  return {
+    repoPath: resolved.cached.localPath,
+    baseBranch: input.ref ?? resolved.cached.defaultBranch ?? undefined,
+    repoUrl: input.repoUrl,
   }
 }
 
@@ -156,6 +192,12 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
 
   const appHome = deps.appHome ?? Paths.root
 
+  // RFC-024: resolve URL or path mode to a concrete local repoPath + ref.
+  // URL mode may trigger a `git clone` here (caller is responsible for any
+  // user-facing "cloning in progress" UI). For multipart (RFC-020) the
+  // resolved repo info is reused via deps.preCreatedWorktree below.
+  const source = await resolveRepoSource(input, deps)
+
   // RFC-020: multipart-upload flow creates the worktree before this call so
   // it can write user files into it. JSON-body flow takes the original path:
   // mint a fresh id, call materializeWorktree here.
@@ -172,11 +214,32 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     earlyError = null
   } else {
     taskId = ulid()
-    const wt = await materializeWorktree({ input, taskId, appHome })
+    const wt = await materializeWorktree({
+      repoPath: source.repoPath,
+      baseBranch: source.baseBranch,
+      taskId,
+      appHome,
+    })
     worktreePath = wt.worktreePath
     branch = wt.branch
     baseCommit = wt.baseCommit
     earlyError = wt.earlyError
+
+    // URL mode: a `worktree-base-invalid` from createWorktree usually means
+    // the user-supplied ref doesn't exist in the cached mirror. Rewrap it
+    // with the available refs so the launcher can render a helpful list.
+    if (
+      earlyError !== null &&
+      source.repoUrl !== null &&
+      /worktree-base-invalid|cannot resolve base ref/i.test(earlyError)
+    ) {
+      const available = await listAvailableRefs(source.repoPath, 10)
+      throw new ValidationError(
+        'repo-ref-not-found',
+        `ref '${input.ref ?? source.baseBranch ?? '(default)'}' not found in ${redactGitUrl(source.repoUrl)}`,
+        { url: redactGitUrl(source.repoUrl), ref: input.ref ?? null, availableRefs: available },
+      )
+    }
   }
 
   const now = Date.now()
@@ -184,9 +247,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     id: taskId,
     workflowId: workflow.id,
     workflowSnapshot: JSON.stringify(workflow.definition),
-    repoPath: input.repoPath,
+    repoPath: source.repoPath,
+    repoUrl: source.repoUrl,
     worktreePath,
-    baseBranch: input.baseBranch,
+    baseBranch: source.baseBranch ?? '',
     branch: branch !== '' ? branch : `agent-workflow/${taskId}`,
     baseCommit,
     status: earlyError === null ? 'pending' : 'failed',
@@ -200,9 +264,13 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   })
 
   // Mirror this repo into the recent-repos cache — best-effort, never blocks.
-  upsertRecentRepo(deps.db, input.repoPath).catch((err) => {
-    log.warn('upsertRecentRepo failed', { error: (err as Error).message })
-  })
+  // RFC-024: only path-mode tasks belong in `recent_repos` (URL-mode tasks
+  // are tracked via `cached_repos` instead).
+  if (source.repoUrl === null) {
+    upsertRecentRepo(deps.db, source.repoPath).catch((err) => {
+      log.warn('upsertRecentRepo failed', { error: (err as Error).message })
+    })
+  }
 
   const task = (await getTask(deps.db, taskId)) as Task
 
@@ -213,6 +281,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       workflowId: task.workflowId,
       workflowName: task.workflowName,
       repoPath: task.repoPath,
+      repoUrl: task.repoUrl,
       status: task.status,
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,
@@ -846,6 +915,7 @@ function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null):
     workflowName,
     workflowSnapshot: snapshot,
     repoPath: row.repoPath,
+    repoUrl: row.repoUrl ?? null,
     worktreePath: row.worktreePath,
     baseBranch: row.baseBranch,
     branch: row.branch,
@@ -871,6 +941,7 @@ function rowToSummary(row: typeof tasks.$inferSelect, workflowName: string | nul
     workflowId: row.workflowId,
     workflowName,
     repoPath: row.repoPath,
+    repoUrl: row.repoUrl ?? null,
     status: row.status,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,

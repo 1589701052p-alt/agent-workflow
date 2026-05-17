@@ -13,6 +13,7 @@ import type {
   TaskNodeRuns,
   WorkflowDefinition,
 } from '@agent-workflow/shared'
+import { redactGitUrl } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
@@ -272,7 +273,15 @@ function TaskDetailPage() {
                 </>
               )}
             </dd>
-            <dt>{t('tasks.metaRepo')}</dt>
+            {tk.repoUrl !== null && (
+              <>
+                <dt>{t('tasks.metaRepoUrl')}</dt>
+                <dd>
+                  <code data-testid="task-detail-repo-url">{redactGitUrl(tk.repoUrl)}</code>
+                </dd>
+              </>
+            )}
+            <dt>{tk.repoUrl !== null ? t('tasks.metaRepoCachePath') : t('tasks.metaRepo')}</dt>
             <dd>
               <code>{tk.repoPath}</code>
             </dd>

@@ -127,6 +127,28 @@ export const recentRepos = sqliteTable('recent_repos', {
 })
 
 // -----------------------------------------------------------------------------
+// RFC-024: cached_repos — persistent mirror of remote Git URLs the user has
+// launched tasks against. Lives at `~/.agent-workflow/repos/{slug}` on disk;
+// this table tracks provenance + lookup index. Distinct from `recent_repos`,
+// which records local absolute paths only.
+// -----------------------------------------------------------------------------
+export const cachedRepos = sqliteTable(
+  'cached_repos',
+  {
+    id: text('id').primaryKey(), // ULID
+    urlHash: text('url_hash').notNull().unique(), // 8-hex sha1 of canonical URL
+    url: text('url').notNull(), // original URL as supplied (may contain creds — redact in UI)
+    localPath: text('local_path').notNull(), // absolute path under ~/.agent-workflow/repos/
+    defaultBranch: text('default_branch'), // nullable; null when HEAD was detached / unborn
+    lastFetchedAt: integer('last_fetched_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    lastFetchedIdx: index('idx_cached_repos_last_fetched').on(t.lastFetchedAt),
+  }),
+)
+
+// -----------------------------------------------------------------------------
 // tasks — one row per `POST /api/tasks`. Holds workflow snapshot for replay safety.
 // -----------------------------------------------------------------------------
 export const tasks = sqliteTable(
@@ -138,6 +160,9 @@ export const tasks = sqliteTable(
       .references(() => workflows.id),
     workflowSnapshot: text('workflow_snapshot').notNull(), // JSON: workflow definition at start time
     repoPath: text('repo_path').notNull(),
+    // RFC-024: original Git URL when launched from a remote URL. NULL for path-mode
+    // tasks. May contain credentials; render via redactGitUrl before display.
+    repoUrl: text('repo_url'),
     worktreePath: text('worktree_path').notNull(),
     baseBranch: text('base_branch').notNull(),
     branch: text('branch').notNull(), // 'agent-workflow/{task-id}'
