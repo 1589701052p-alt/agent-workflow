@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { Hono } from 'hono'
 import { resolve } from 'node:path'
+import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunEvents, nodeRuns, tasks, workflows } from '../src/db/schema'
@@ -219,5 +220,138 @@ describe('GET /api/tasks/:id/node-runs/:nodeRunId/session', () => {
     const body = (await res.json()) as SessionViewResponse
     const allText = JSON.stringify(body)
     expect(allText).not.toContain('SIBLING')
+  })
+
+  test('RFC-027 §UX merge: inline-session siblings get their events + prompts unified', async () => {
+    const { db, app } = buildApp()
+    const { taskId, nodeRunId } = await seed(db, { promptText: 'round-0 ask' })
+    // The seed gives us round 0 (clarifyIteration=0). Attach an
+    // opencode session_id to it, then mint two more node_runs that
+    // share the same session_id (RFC-026 inline reruns).
+    // Real-world startedAt is always BEFORE the first event of the
+    // run; force that ordering on round 0 by resetting startedAt
+    // (the default seed used 1000, but our event below lands at 1100).
+    await db
+      .update(nodeRuns)
+      .set({ opencodeSessionId: 'opc_inline_1', startedAt: 1000 })
+      .where(eq(nodeRuns.id, nodeRunId))
+    await insertEvent(db, nodeRunId, {
+      ts: 1100,
+      kind: 'text',
+      sessionId: 'opc_inline_1',
+      payload: {
+        type: 'text',
+        sessionID: 'opc_inline_1',
+        messageID: 'm1',
+        part: { type: 'text', text: 'ROUND_0_REPLY' },
+      },
+    })
+
+    const round1Id = ulid()
+    await db.insert(nodeRuns).values({
+      id: round1Id,
+      taskId,
+      nodeId: 'n1',
+      iteration: 0,
+      retryIndex: 0,
+      reviewIteration: 0,
+      clarifyIteration: 1,
+      status: 'done',
+      promptText: 'round-1 answer',
+      startedAt: 2000,
+      opencodeSessionId: 'opc_inline_1',
+    })
+    await insertEvent(db, round1Id, {
+      ts: 2100,
+      kind: 'text',
+      sessionId: 'opc_inline_1',
+      payload: {
+        type: 'text',
+        sessionID: 'opc_inline_1',
+        messageID: 'm2',
+        part: { type: 'text', text: 'ROUND_1_REPLY' },
+      },
+    })
+
+    const round2Id = ulid()
+    await db.insert(nodeRuns).values({
+      id: round2Id,
+      taskId,
+      nodeId: 'n1',
+      iteration: 0,
+      retryIndex: 0,
+      reviewIteration: 0,
+      clarifyIteration: 2,
+      status: 'done',
+      promptText: 'round-2 answer',
+      startedAt: 3000,
+      opencodeSessionId: 'opc_inline_1',
+    })
+    await insertEvent(db, round2Id, {
+      ts: 3100,
+      kind: 'text',
+      sessionId: 'opc_inline_1',
+      payload: {
+        type: 'text',
+        sessionID: 'opc_inline_1',
+        messageID: 'm3',
+        part: { type: 'text', text: 'ROUND_2_REPLY' },
+      },
+    })
+
+    // Request the LATEST round; backend must merge in earlier rounds.
+    const res = await req(app, `/api/tasks/${taskId}/node-runs/${round2Id}/session`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionViewResponse
+    // Three user prompts + three assistant replies, in chronological order.
+    const seq = body.tree.messages.map((m) =>
+      m.kind === 'user' ? `U:${m.text}` : m.kind === 'assistant-text' ? `A:${m.text}` : m.kind,
+    )
+    expect(seq).toEqual([
+      'U:round-0 ask',
+      'A:ROUND_0_REPLY',
+      'U:round-1 answer',
+      'A:ROUND_1_REPLY',
+      'U:round-2 answer',
+      'A:ROUND_2_REPLY',
+    ])
+  })
+
+  test('legacy path: opencodeSessionId=null keeps the per-node_run isolation', async () => {
+    const { db, app } = buildApp()
+    const { taskId, nodeRunId } = await seed(db, { promptText: 'only-this-run' })
+    // Same node, no opencode session id — a follow-up retry should
+    // NOT leak its events into this run's /session response.
+    const siblingId = ulid()
+    await db.insert(nodeRuns).values({
+      id: siblingId,
+      taskId,
+      nodeId: 'n1',
+      iteration: 0,
+      retryIndex: 1,
+      reviewIteration: 0,
+      clarifyIteration: 0,
+      status: 'done',
+      promptText: 'retry-prompt',
+      startedAt: 3000,
+    })
+    await insertEvent(db, siblingId, {
+      ts: 3100,
+      kind: 'text',
+      sessionId: 'opc_sibling',
+      payload: {
+        type: 'text',
+        sessionID: 'opc_sibling',
+        messageID: 'm1',
+        part: { type: 'text', text: 'RETRY_REPLY' },
+      },
+    })
+    const res = await req(app, `/api/tasks/${taskId}/node-runs/${nodeRunId}/session`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionViewResponse
+    const serialized = JSON.stringify(body)
+    expect(serialized).toContain('only-this-run')
+    expect(serialized).not.toContain('RETRY_REPLY')
+    expect(serialized).not.toContain('retry-prompt')
   })
 })

@@ -93,6 +93,20 @@ export interface ParseSessionInput {
   startedAt: number | null
   primaryAgentName: string
   events: ParseSessionInputEvent[]
+  /**
+   * RFC-027 §UX merge — extra user prompts from sibling node_runs
+   * sharing the same opencode session (e.g. RFC-026 inline clarify
+   * reruns). Each entry becomes an additional SessionUserMessage in
+   * the root tree, inserted at its `ts` so it interleaves correctly
+   * with assistant events emitted between the prompts. The legacy
+   * `promptText` field still seeds the FIRST user prompt; this array
+   * carries the subsequent rounds.
+   *
+   * When this field is absent or empty, the parser preserves the
+   * pre-RFC-027 §UX behavior of unshifting promptText to index 0
+   * regardless of ts (legacy callers unchanged).
+   */
+  extraUserPrompts?: Array<{ text: string; ts: number }>
 }
 
 const UNKNOWN_SESSION_ID = '(unknown)'
@@ -270,23 +284,59 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
 
   const tree = build(rootKey, null, input.primaryAgentName)
 
-  if (input.promptText !== null && input.promptText !== '') {
-    const userMsg: SessionUserMessage = {
-      kind: 'user',
-      text: input.promptText,
-      ts: input.startedAt ?? earliestTs(tree.messages) ?? 0,
+  const extras = input.extraUserPrompts ?? []
+  if (extras.length === 0) {
+    // Legacy path — promptText (when present) unshifted to index 0
+    // regardless of ts. Preserves pre-RFC-027 §UX merge behavior so
+    // every single-attempt caller sees no change.
+    if (input.promptText !== null && input.promptText !== '') {
+      const userMsg: SessionUserMessage = {
+        kind: 'user',
+        text: input.promptText,
+        ts: input.startedAt ?? earliestTs(tree.messages) ?? 0,
+      }
+      tree.messages.unshift(userMsg)
     }
-    tree.messages.unshift(userMsg)
+  } else {
+    // RFC-027 §UX merge — when multiple sibling node_runs share an
+    // opencode session, each round's user prompt becomes its own
+    // SessionUserMessage interleaved with the assistant events by ts.
+    const userMsgs: SessionUserMessage[] = []
+    if (input.promptText !== null && input.promptText !== '') {
+      userMsgs.push({
+        kind: 'user',
+        text: input.promptText,
+        ts: input.startedAt ?? earliestTs(tree.messages) ?? 0,
+      })
+    }
+    for (const p of extras) {
+      userMsgs.push({ kind: 'user', text: p.text, ts: p.ts })
+    }
+    for (const um of userMsgs) {
+      insertByTs(tree.messages, um)
+    }
   }
 
-  // Root is always captureComplete=true once the user prompt exists
+  // Root is always captureComplete=true once any user prompt exists
   // (parent stdout is by definition captured); empty buckets only flip
   // captureComplete for genuine child sessions.
-  if (input.promptText !== null && input.promptText !== '') {
+  if ((input.promptText !== null && input.promptText !== '') || extras.length > 0) {
     tree.captureComplete = true
   }
 
   return tree
+}
+
+/**
+ * Insert a user message into `messages` at the first index whose
+ * existing ts is greater. Keeps the array in stable (ts, insertion)
+ * order — important when several user prompts share a ts boundary
+ * with an assistant event (e.g. clarify reply emitted in the same ms).
+ */
+function insertByTs(messages: SessionMessage[], userMsg: SessionUserMessage): void {
+  const idx = messages.findIndex((m) => m.ts > userMsg.ts)
+  if (idx === -1) messages.push(userMsg)
+  else messages.splice(idx, 0, userMsg)
 }
 
 // -----------------------------------------------------------------------------

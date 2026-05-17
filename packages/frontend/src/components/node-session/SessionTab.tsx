@@ -100,6 +100,7 @@ function AttemptPicker({
   isFanoutParent: (a: NodeRun) => boolean
 }) {
   const { t } = useTranslation()
+  const groups = useMemo(() => groupAttemptsByInlineSession(attempts), [attempts])
   return (
     <div className="session-attempts">
       <span className="session-attempts__label">{t('nodeDrawer.promptAttemptLabel')}</span>
@@ -108,27 +109,45 @@ function AttemptPicker({
         aria-label={t('nodeDrawer.promptAttemptLabel')}
         className="session-attempts__group"
       >
-        {attempts.map((a) => {
-          const active = a.id === pickedId
+        {groups.map((g) => {
+          // Inline groups bundle N attempts under one chip; clicking it
+          // hands the LATEST attempt's id to the parent so the backend
+          // /session route can unify all rounds via opencodeSessionId.
+          const latest = g.attempts[g.attempts.length - 1]!
+          const active = g.attempts.some((a) => a.id === pickedId)
+          const inline = g.attempts.length > 1
           return (
             <button
-              key={a.id}
+              key={inline ? `inline:${g.sessionId}` : latest.id}
               type="button"
               role="radio"
               aria-checked={active}
-              onClick={() => onPick(a.id)}
-              className={`session-attempts__item ${active ? 'is-active' : ''}`}
-              title={attemptTooltip(a, t, isFanoutParent(a))}
+              onClick={() => onPick(latest.id)}
+              className={`session-attempts__item ${active ? 'is-active' : ''} ${inline ? 'is-inline' : ''}`}
+              title={
+                inline
+                  ? `inline · ${g.attempts.length} rounds`
+                  : attemptTooltip(latest, t, isFanoutParent(latest))
+              }
             >
-              <span className={`session-attempts__dot status-dot--${toneFor(a.status)}`} />
-              <span className="session-attempts__iter">{iterLabel(a, t)}</span>
-              {a.shardKey !== null && a.shardKey !== '' && (
-                <span className="session-attempts__shard">{a.shardKey}</span>
+              <span className={`session-attempts__dot status-dot--${toneFor(latest.status)}`} />
+              <span className="session-attempts__iter">
+                {inline
+                  ? t('nodeDrawer.inlineRoundsLabel', {
+                      n: g.attempts.length,
+                      defaultValue: 'inline · {{n}} rounds',
+                    })
+                  : iterLabel(latest, t)}
+              </span>
+              {!inline && latest.shardKey !== null && latest.shardKey !== '' && (
+                <span className="session-attempts__shard">{latest.shardKey}</span>
               )}
-              {isFanoutParent(a) && <span className="session-attempts__parent">parent</span>}
-              {a.startedAt !== null && (
+              {!inline && isFanoutParent(latest) && (
+                <span className="session-attempts__parent">parent</span>
+              )}
+              {latest.startedAt !== null && (
                 <span className="session-attempts__time">
-                  {new Date(a.startedAt).toLocaleTimeString()}
+                  {new Date(latest.startedAt).toLocaleTimeString()}
                 </span>
               )}
             </button>
@@ -137,6 +156,41 @@ function AttemptPicker({
       </div>
     </div>
   )
+}
+
+interface AttemptGroup {
+  /** opencode session id when grouped; for legacy/isolated attempts uses the run id as a unique placeholder. */
+  sessionId: string
+  attempts: NodeRun[]
+}
+
+/**
+ * Walk attempts (already sorted by sortNodeRunsForPromptHistory) and
+ * fuse consecutive entries that share a non-null opencodeSessionId
+ * into one chip. Legacy attempts (opencodeSessionId === null) stay as
+ * 1-attempt groups so the picker behaves like the pre-merge version
+ * for non-inline workflows.
+ *
+ * Exported for direct unit testing.
+ */
+export function groupAttemptsByInlineSession(attempts: NodeRun[]): AttemptGroup[] {
+  const out: AttemptGroup[] = []
+  for (const a of attempts) {
+    const sid = a.opencodeSessionId
+    if (sid !== null && sid !== '') {
+      const last = out[out.length - 1]
+      if (last !== undefined && last.sessionId === sid) {
+        last.attempts.push(a)
+        continue
+      }
+      out.push({ sessionId: sid, attempts: [a] })
+    } else {
+      // Singleton — use the run id as the bucket key so duplicate
+      // legacy attempts never collide.
+      out.push({ sessionId: a.id, attempts: [a] })
+    }
+  }
+  return out
 }
 
 function iterLabel(a: NodeRun, t: TFunction): string {

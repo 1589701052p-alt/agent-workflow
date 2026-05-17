@@ -305,4 +305,113 @@ describe('captureChildSessions', () => {
     expect(result.failed).toBe(false)
     expect(result.capturedSessionIds).toEqual(['A'])
   })
+
+  test('RFC-026 inline-mode dedup: child sessions already captured by sibling node_runs are skipped', async () => {
+    // Two node_runs in the same task share the same opencode root
+    // session. First run already captured child session 'shared'.
+    // Second run's capture must skip 'shared' and only write 'new'.
+    const taskRow = db.select({ taskId: nodeRuns.taskId }).from(nodeRuns).all()[0]!
+    const taskId = taskRow.taskId
+    const siblingId = ulid()
+    db.insert(nodeRuns)
+      .values({
+        id: siblingId,
+        taskId,
+        nodeId: 'n2',
+        iteration: 0,
+        retryIndex: 0,
+        reviewIteration: 0,
+        clarifyIteration: 0,
+        status: 'done',
+      })
+      .run()
+    // Pre-populate sibling's events under sessionId='shared' to
+    // simulate the first inline round's capture.
+    db.insert(nodeRunEvents)
+      .values({
+        nodeRunId: siblingId,
+        ts: 100,
+        kind: 'text',
+        payload: '{"part":{"type":"text","text":"prior round"}}',
+        sessionId: 'shared',
+        parentSessionId: 'root',
+      })
+      .run()
+
+    const opencodeDb = buildOpencodeDb({
+      sessions: [
+        { id: 'root', parent_id: null, agent: 'r' },
+        { id: 'shared', parent_id: 'root', agent: 'a' },
+        { id: 'new', parent_id: 'root', agent: 'b' },
+      ],
+      messages: [
+        { id: 'mS', session_id: 'shared', time_created: 200, data: '{}' },
+        { id: 'mN', session_id: 'new', time_created: 300, data: '{}' },
+      ],
+      parts: [
+        {
+          id: 'pS',
+          message_id: 'mS',
+          session_id: 'shared',
+          time_created: 200,
+          data: '{"type":"text","text":"shared text"}',
+        },
+        {
+          id: 'pN',
+          message_id: 'mN',
+          session_id: 'new',
+          time_created: 300,
+          data: '{"type":"text","text":"new text"}',
+        },
+      ],
+    })
+
+    const result = await captureChildSessions({
+      rootSessionId: 'root',
+      nodeRunId, // this run, NOT the sibling
+      taskId,
+      db,
+      opencodeDbPath: opencodeDb,
+    })
+    expect(result.failed).toBe(false)
+    // Only 'new' should be in capturedSessionIds (shared was deduped).
+    expect(result.capturedSessionIds.sort()).toEqual(['new'])
+    expect(result.insertedEventRows).toBe(1)
+    // node_run_events under THIS nodeRunId should not contain 'shared'.
+    const myRows = db
+      .select()
+      .from(nodeRunEvents)
+      .where(eq(nodeRunEvents.nodeRunId, nodeRunId))
+      .all()
+    expect(myRows.find((r) => r.sessionId === 'shared')).toBeUndefined()
+    expect(myRows.find((r) => r.sessionId === 'new')).toBeDefined()
+  })
+
+  test('without taskId, dedup is skipped (legacy callers unchanged)', async () => {
+    const opencodeDb = buildOpencodeDb({
+      sessions: [
+        { id: 'root', parent_id: null, agent: 'r' },
+        { id: 'X', parent_id: 'root', agent: 'a' },
+      ],
+      messages: [{ id: 'mX', session_id: 'X', time_created: 1, data: '{}' }],
+      parts: [
+        {
+          id: 'pX',
+          message_id: 'mX',
+          session_id: 'X',
+          time_created: 1,
+          data: '{"type":"text","text":"x"}',
+        },
+      ],
+    })
+    const result = await captureChildSessions({
+      rootSessionId: 'root',
+      nodeRunId,
+      // taskId intentionally omitted — backward compat with pre-dedup callers
+      db,
+      opencodeDbPath: opencodeDb,
+    })
+    expect(result.failed).toBe(false)
+    expect(result.capturedSessionIds).toEqual(['X'])
+  })
 })

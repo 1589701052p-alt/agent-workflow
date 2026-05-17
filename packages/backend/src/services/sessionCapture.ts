@@ -26,8 +26,9 @@ import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { nodeRunEvents } from '../db/schema'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import type { DbClient } from '../db/client'
+import { nodeRunEvents, nodeRuns } from '../db/schema'
 import { createLogger, type Logger } from '@/util/log'
 
 export interface CaptureChildSessionsOptions {
@@ -37,6 +38,15 @@ export interface CaptureChildSessionsOptions {
   log?: Logger
   /** Override the opencode SQLite path (tests). */
   opencodeDbPath?: string
+  /**
+   * RFC-027 §UX merge — when set, captureChildSessions queries
+   * sibling node_runs in the same task that already captured events
+   * for a given child sessionId and skips the re-write. Prevents
+   * RFC-026 inline-mode reruns from double-counting subagent events
+   * (the resumed opencode session keeps the prior round's child
+   * session rows around).
+   */
+  taskId?: string
 }
 
 export interface CaptureChildSessionsResult {
@@ -204,8 +214,22 @@ export async function captureChildSessions(
       }
     }
 
+    // RFC-027 §UX merge / RFC-026 inline-mode dedup: when a sibling
+    // node_run in this same task already captured rows for this
+    // child sessionId (typical for resumed opencode sessions),
+    // skip the re-import — otherwise every inline rerun would
+    // duplicate every prior round's subagent events.
+    const alreadyCaptured = opts.taskId
+      ? await loadSiblingsCapturedSessionIds(opts.db, opts.taskId, opts.nodeRunId)
+      : new Set<string>()
+
     let insertedRows = 0
+    const skipped: string[] = []
     for (const sess of order) {
+      if (alreadyCaptured.has(sess.id)) {
+        skipped.push(sess.id)
+        continue
+      }
       const messages = opencodeDb
         .query<
           OpencodeMessageRow,
@@ -231,9 +255,12 @@ export async function captureChildSessions(
       await opts.db.insert(nodeRunEvents).values(rows)
       insertedRows += rows.length
     }
+    if (skipped.length > 0) {
+      log.info('subagent-already-captured', { nodeRunId: opts.nodeRunId, skipped })
+    }
 
     return {
-      capturedSessionIds: order.map((s) => s.id),
+      capturedSessionIds: order.filter((s) => !alreadyCaptured.has(s.id)).map((s) => s.id),
       insertedEventRows: insertedRows,
       failed: false,
     }
@@ -256,6 +283,33 @@ export async function captureChildSessions(
       }
     }
   }
+}
+
+/**
+ * Returns the set of opencode child sessionIds already persisted into
+ * node_run_events by SOME OTHER node_run in the same task. Used to
+ * dedup re-captures during RFC-026 inline-mode reruns.
+ */
+async function loadSiblingsCapturedSessionIds(
+  db: DbClient,
+  taskId: string,
+  myNodeRunId: string,
+): Promise<Set<string>> {
+  const siblings = await db
+    .select({ id: nodeRuns.id })
+    .from(nodeRuns)
+    .where(and(eq(nodeRuns.taskId, taskId), ne(nodeRuns.id, myNodeRunId)))
+  const sibIds = siblings.map((r) => r.id)
+  if (sibIds.length === 0) return new Set()
+  const rows = await db
+    .selectDistinct({ sessionId: nodeRunEvents.sessionId })
+    .from(nodeRunEvents)
+    .where(inArray(nodeRunEvents.nodeRunId, sibIds))
+  const out = new Set<string>()
+  for (const r of rows) {
+    if (r.sessionId !== null && r.sessionId !== '') out.add(r.sessionId)
+  }
+  return out
 }
 
 async function markCaptureFailed(

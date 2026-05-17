@@ -179,4 +179,86 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
     const group = screen.getByRole('radiogroup', { name: /attempt/i })
     expect(group.querySelector('select')).toBeNull()
   })
+
+  // RFC-027 §UX merge — RFC-026 inline clarify reruns share an
+  // opencode session across many node_runs. The picker MUST fold
+  // those rounds into one chip so the user sees "one logical
+  // conversation" rather than N separate attempts.
+  test('inline-session siblings collapse into a single chip with the "inline · N rounds" label', () => {
+    const r0 = run({
+      id: 'r0',
+      clarifyIteration: 0,
+      opencodeSessionId: 'opc_inline_A',
+      startedAt: 100,
+    })
+    const r1 = run({
+      id: 'r1',
+      clarifyIteration: 1,
+      opencodeSessionId: 'opc_inline_A',
+      startedAt: 200,
+    })
+    const r2 = run({
+      id: 'r2',
+      clarifyIteration: 2,
+      opencodeSessionId: 'opc_inline_A',
+      startedAt: 300,
+    })
+    renderDrawer({
+      nodeRunId: r2.id,
+      nodeId: r0.nodeId,
+      workflowNodeKind: 'agent-single',
+      runs: [r0, r1, r2],
+    })
+    const radios = screen.getAllByRole('radio')
+    // Three node_runs but one chip — RFC-027 §UX merge.
+    expect(radios).toHaveLength(1)
+    expect(radios[0]!.getAttribute('aria-checked')).toBe('true')
+    expect(radios[0]!.textContent ?? '').toMatch(/3 rounds/i)
+    expect(radios[0]!.className).toContain('is-inline')
+  })
+
+  test('isolated attempts (no opencodeSessionId) still render as separate chips', () => {
+    const r0 = run({ id: 'r0', clarifyIteration: 0, opencodeSessionId: null })
+    const r1 = run({ id: 'r1', clarifyIteration: 1, opencodeSessionId: null, startedAt: 200 })
+    renderDrawer({
+      nodeRunId: r1.id,
+      nodeId: r0.nodeId,
+      workflowNodeKind: 'agent-single',
+      runs: [r0, r1],
+    })
+    expect(screen.getAllByRole('radio')).toHaveLength(2)
+  })
+
+  test('mixed: an inline group + a follow-on isolated retry render as 2 chips', () => {
+    const r0 = run({
+      id: 'r0',
+      clarifyIteration: 0,
+      opencodeSessionId: 'opc_inline_B',
+      startedAt: 100,
+    })
+    const r1 = run({
+      id: 'r1',
+      clarifyIteration: 1,
+      opencodeSessionId: 'opc_inline_B',
+      startedAt: 200,
+    })
+    // A subsequent retry that started a fresh opencode session.
+    const r2 = run({
+      id: 'r2',
+      retryIndex: 1,
+      clarifyIteration: 0,
+      opencodeSessionId: null,
+      startedAt: 300,
+    })
+    renderDrawer({
+      nodeRunId: r2.id,
+      nodeId: r0.nodeId,
+      workflowNodeKind: 'agent-single',
+      runs: [r0, r1, r2],
+    })
+    const radios = screen.getAllByRole('radio')
+    expect(radios).toHaveLength(2)
+    expect(radios[0]!.className).toContain('is-inline')
+    expect(radios[1]!.className).not.toContain('is-inline')
+  })
 })

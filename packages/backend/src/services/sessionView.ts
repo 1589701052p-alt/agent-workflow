@@ -10,7 +10,7 @@
 // tree client-side from raw event rows. Here we just do the IO and
 // pass-through.
 
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, inArray } from 'drizzle-orm'
 import {
   parseSessionTree,
   type ParseSessionInputEvent,
@@ -50,6 +50,9 @@ export async function getSessionTree(
       nodeId: nodeRuns.nodeId,
       promptText: nodeRuns.promptText,
       startedAt: nodeRuns.startedAt,
+      opencodeSessionId: nodeRuns.opencodeSessionId,
+      clarifyIteration: nodeRuns.clarifyIteration,
+      retryIndex: nodeRuns.retryIndex,
     })
     .from(nodeRuns)
     .where(eq(nodeRuns.id, nodeRunId))
@@ -74,6 +77,22 @@ export async function getSessionTree(
     )
   }
 
+  // RFC-027 §UX merge — when the requested node_run shares an opencode
+  // session_id with sibling node_runs in this task (RFC-026 inline
+  // clarify reruns), unify their events + treat each round's promptText
+  // as a separate user message in the merged conversation flow.
+  const inlineSiblings = await loadInlineSiblings(db, taskId, run)
+  const targetNodeRunIds = inlineSiblings.map((s) => s.id)
+  const promptText = inlineSiblings[0]!.promptText
+  const startedAt = inlineSiblings[0]!.startedAt
+  const extraUserPrompts: Array<{ text: string; ts: number }> = []
+  for (let i = 1; i < inlineSiblings.length; i++) {
+    const s = inlineSiblings[i]!
+    if (s.promptText !== null && s.promptText !== '') {
+      extraUserPrompts.push({ text: s.promptText, ts: s.startedAt ?? 0 })
+    }
+  }
+
   const rows = await db
     .select({
       id: nodeRunEvents.id,
@@ -84,8 +103,8 @@ export async function getSessionTree(
       payload: nodeRunEvents.payload,
     })
     .from(nodeRunEvents)
-    .where(and(eq(nodeRunEvents.nodeRunId, nodeRunId)))
-    .orderBy(asc(nodeRunEvents.id))
+    .where(inArray(nodeRunEvents.nodeRunId, targetNodeRunIds))
+    .orderBy(asc(nodeRunEvents.ts), asc(nodeRunEvents.id))
 
   const events: ParseSessionInputEvent[] = rows.map((r) => ({
     id: r.id,
@@ -100,12 +119,84 @@ export async function getSessionTree(
 
   const tree = parseSessionTree({
     rootSessionId,
-    promptText: run.promptText,
-    startedAt: run.startedAt,
+    promptText,
+    startedAt,
     primaryAgentName: primaryAgentName ?? 'agent',
     events,
+    ...(extraUserPrompts.length > 0 ? { extraUserPrompts } : {}),
   })
   return { tree }
+}
+
+interface InlineSiblingRow {
+  id: string
+  promptText: string | null
+  startedAt: number | null
+  clarifyIteration: number
+  retryIndex: number
+}
+
+/**
+ * Returns the chronological chain of node_runs that share an opencode
+ * session id with the requested run. When opencodeSessionId is null
+ * (legacy / isolated mode), returns just [run] so the rest of
+ * getSessionTree degrades to the pre-merge single-attempt query.
+ */
+async function loadInlineSiblings(
+  db: DbClient,
+  taskId: string,
+  run: {
+    id: string
+    promptText: string | null
+    startedAt: number | null
+    opencodeSessionId: string | null
+    clarifyIteration: number
+    retryIndex: number
+  },
+): Promise<InlineSiblingRow[]> {
+  if (run.opencodeSessionId === null) {
+    return [
+      {
+        id: run.id,
+        promptText: run.promptText,
+        startedAt: run.startedAt,
+        clarifyIteration: run.clarifyIteration,
+        retryIndex: run.retryIndex,
+      },
+    ]
+  }
+  const rows = await db
+    .select({
+      id: nodeRuns.id,
+      promptText: nodeRuns.promptText,
+      startedAt: nodeRuns.startedAt,
+      clarifyIteration: nodeRuns.clarifyIteration,
+      retryIndex: nodeRuns.retryIndex,
+    })
+    .from(nodeRuns)
+    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.opencodeSessionId, run.opencodeSessionId)))
+  if (rows.length === 0) {
+    return [
+      {
+        id: run.id,
+        promptText: run.promptText,
+        startedAt: run.startedAt,
+        clarifyIteration: run.clarifyIteration,
+        retryIndex: run.retryIndex,
+      },
+    ]
+  }
+  // Same chronological ordering the AttemptPicker uses
+  // (sortNodeRunsForPromptHistory): (clarifyIteration, retryIndex,
+  // startedAt). Ensures the first sibling is round 0 and its
+  // promptText is the original ask, with later rounds appended.
+  rows.sort(
+    (a, b) =>
+      a.clarifyIteration - b.clarifyIteration ||
+      a.retryIndex - b.retryIndex ||
+      (a.startedAt ?? 0) - (b.startedAt ?? 0),
+  )
+  return rows
 }
 
 interface SnapshotNode {

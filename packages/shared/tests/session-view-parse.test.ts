@@ -469,3 +469,97 @@ describe('parseSessionTree — ordering + edge cases', () => {
     expect(tree.captureComplete).toBe(false)
   })
 })
+
+// RFC-027 §UX merge — RFC-026 inline clarify rerun shares a single
+// opencode session across multiple node_runs. The Session view must
+// stitch every round's user prompt + assistant text into one
+// conversation flow, interleaved by ts.
+describe('parseSessionTree — extraUserPrompts (inline-session merge)', () => {
+  test('extra prompts get interleaved with assistant events by ts', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: 'initial ask',
+      startedAt: 100,
+      primaryAgentName: 'coder',
+      extraUserPrompts: [
+        { text: 'follow-up answer A', ts: 220 },
+        { text: 'follow-up answer B', ts: 420 },
+      ],
+      events: [
+        evt({
+          ts: 150,
+          kind: 'text',
+          payload: { type: 'text', part: { type: 'text', text: 'first reply' }, messageID: 'm1' },
+        }),
+        evt({
+          ts: 300,
+          kind: 'text',
+          payload: { type: 'text', part: { type: 'text', text: 'second reply' }, messageID: 'm2' },
+        }),
+        evt({
+          ts: 500,
+          kind: 'text',
+          payload: { type: 'text', part: { type: 'text', text: 'third reply' }, messageID: 'm3' },
+        }),
+      ],
+    })
+    const sequence = tree.messages.map((m) =>
+      m.kind === 'user' ? `U:${m.text}` : m.kind === 'assistant-text' ? `A:${m.text}` : m.kind,
+    )
+    expect(sequence).toEqual([
+      'U:initial ask',
+      'A:first reply',
+      'U:follow-up answer A',
+      'A:second reply',
+      'U:follow-up answer B',
+      'A:third reply',
+    ])
+    expect(tree.captureComplete).toBe(true)
+  })
+
+  test('extras without an initial promptText still all render as user messages', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      extraUserPrompts: [
+        { text: 'round 2 answer', ts: 200 },
+        { text: 'round 3 answer', ts: 400 },
+      ],
+      events: [
+        evt({
+          ts: 300,
+          kind: 'text',
+          payload: { type: 'text', part: { type: 'text', text: 'between' }, messageID: 'm1' },
+        }),
+      ],
+    })
+    expect(tree.messages.map((m) => m.kind)).toEqual(['user', 'assistant-text', 'user'])
+    expect(tree.captureComplete).toBe(true)
+  })
+
+  test('absent / empty extraUserPrompts preserves legacy unshift-to-index-0 behavior', () => {
+    // The initial prompt with ts=200 would normally interleave AFTER
+    // events with ts=100 / 150 if we were sorting. Legacy callers
+    // (one-attempt SessionTab) need the prompt at index 0 unchanged.
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: 'legacy ask',
+      startedAt: 200,
+      primaryAgentName: 'coder',
+      events: [
+        evt({
+          ts: 100,
+          kind: 'text',
+          payload: {
+            type: 'text',
+            part: { type: 'text', text: 'before prompt ts' },
+            messageID: 'm1',
+          },
+        }),
+      ],
+    })
+    expect(tree.messages[0]!.kind).toBe('user')
+  })
+})
