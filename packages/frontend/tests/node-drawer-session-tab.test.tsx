@@ -101,12 +101,16 @@ describe('RFC-027 NodeDetailDrawer Session tab', () => {
     expect(tabButtons.find((s) => s === 'Prompt')).toBeUndefined()
   })
 
-  test('Session is the default selected tab and the attempts picker renders', () => {
+  test('Session is the default selected tab and the attempts chip-row picker renders', () => {
     const r = run({ id: 'r1', promptText: 'hi' })
     renderDrawer({ nodeRunId: r.id, nodeId: r.nodeId, workflowNodeKind: 'agent-single', runs: [r] })
-    // The attempts picker is reused from PromptTab — confirms SessionTab
-    // is mounted by default (vs PromptTab or empty).
-    expect(screen.getByRole('combobox')).toBeTruthy()
+    // The attempts picker is a radiogroup of chip buttons (RFC-027 §UX
+    // revision replaced the bare <select>). Confirms SessionTab is
+    // mounted by default (vs PromptTab or empty placeholder).
+    expect(screen.getByRole('radiogroup', { name: /attempt/i })).toBeTruthy()
+    const radios = screen.getAllByRole('radio')
+    expect(radios.length).toBe(1)
+    expect(radios[0]!.getAttribute('aria-checked')).toBe('true')
   })
 
   test('non-agent kind (wrapper-git) shows the "not applicable" hint', () => {

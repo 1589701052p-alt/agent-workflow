@@ -7,14 +7,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import type { NodeRun, SessionViewResponse } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import {
-  formatAttemptLabel,
   isFanoutParentRun,
   isPromptCapableKind,
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
+import { displayNoderunStatusKey } from '@/lib/noderun-status'
 import { ConversationFlow } from './ConversationFlow'
 import { RuntimeInventorySection } from '@/components/inventory/RuntimeInventorySection'
 
@@ -52,20 +53,12 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
 
   return (
     <div className="session-history">
-      <label className="prompt-history__picker">
-        <span className="muted">{t('nodeDrawer.promptAttemptLabel')}</span>
-        <select
-          value={picked.id}
-          onChange={(e) => setPickedId(e.target.value)}
-          className="prompt-history__select"
-        >
-          {attempts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {formatAttemptLabel(a, { fanoutParent: isFanoutParentRun(a, attempts), t })}
-            </option>
-          ))}
-        </select>
-      </label>
+      <AttemptPicker
+        attempts={attempts}
+        pickedId={picked.id}
+        onPick={setPickedId}
+        isFanoutParent={(a) => isFanoutParentRun(a, attempts)}
+      />
       {fanoutParent ? (
         <div className="muted">{t('nodeDrawer.sessionFanoutParent')}</div>
       ) : (
@@ -83,6 +76,100 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
       )}
     </div>
   )
+}
+
+/**
+ * Chip-row picker replacing the ugly native <select> RFC-027 originally
+ * inherited from RFC-011's PromptTab. Each attempt is a button with its
+ * iteration / retry / clarify label + a status chip + a timestamp; the
+ * active attempt gets a solid accent background. Renders as a single
+ * horizontally-scrollable row when there are many attempts.
+ *
+ * ARIA: radiogroup + radio buttons so screen readers + tests can
+ * interact via roles instead of relying on a combobox.
+ */
+function AttemptPicker({
+  attempts,
+  pickedId,
+  onPick,
+  isFanoutParent,
+}: {
+  attempts: NodeRun[]
+  pickedId: string
+  onPick: (id: string) => void
+  isFanoutParent: (a: NodeRun) => boolean
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="session-attempts">
+      <span className="session-attempts__label">{t('nodeDrawer.promptAttemptLabel')}</span>
+      <div
+        role="radiogroup"
+        aria-label={t('nodeDrawer.promptAttemptLabel')}
+        className="session-attempts__group"
+      >
+        {attempts.map((a) => {
+          const active = a.id === pickedId
+          return (
+            <button
+              key={a.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onPick(a.id)}
+              className={`session-attempts__item ${active ? 'is-active' : ''}`}
+              title={attemptTooltip(a, t, isFanoutParent(a))}
+            >
+              <span className={`session-attempts__dot status-dot--${toneFor(a.status)}`} />
+              <span className="session-attempts__iter">{iterLabel(a, t)}</span>
+              {a.shardKey !== null && a.shardKey !== '' && (
+                <span className="session-attempts__shard">{a.shardKey}</span>
+              )}
+              {isFanoutParent(a) && <span className="session-attempts__parent">parent</span>}
+              {a.startedAt !== null && (
+                <span className="session-attempts__time">
+                  {new Date(a.startedAt).toLocaleTimeString()}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function iterLabel(a: NodeRun, t: TFunction): string {
+  if (a.clarifyIteration > 0) return t('nodeDrawer.iterClarify', { n: a.clarifyIteration })
+  if (a.reviewIteration > 0) return t('nodeDrawer.iterReview', { n: a.reviewIteration })
+  if (a.iteration > 0) return t('nodeDrawer.iterLoop', { n: a.iteration })
+  if (a.retryIndex > 0) return t('nodeDrawer.iterRetry', { n: a.retryIndex })
+  return t('nodeDrawer.iterInitial')
+}
+
+function attemptTooltip(a: NodeRun, t: TFunction, fanoutParent: boolean): string {
+  const parts: string[] = [iterLabel(a, t), t(displayNoderunStatusKey(a))]
+  if (a.shardKey !== null && a.shardKey !== '') parts.push(`shard=${a.shardKey}`)
+  if (fanoutParent) parts.push('fan-out parent')
+  if (a.startedAt !== null) parts.push(new Date(a.startedAt).toLocaleString())
+  return parts.join(' · ')
+}
+
+function toneFor(status: NodeRun['status']): string {
+  switch (status) {
+    case 'done':
+      return 'green'
+    case 'running':
+      return 'blue'
+    case 'failed':
+    case 'exhausted':
+      return 'red'
+    case 'awaiting_review':
+    case 'awaiting_human':
+      return 'amber'
+    default:
+      return 'gray'
+  }
 }
 
 function SessionBody({ taskId, nodeRunId }: { taskId: string; nodeRunId: string }) {
