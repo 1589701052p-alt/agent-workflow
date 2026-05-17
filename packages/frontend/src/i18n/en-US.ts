@@ -126,6 +126,11 @@ export const enUS: Resources = {
     themeSystem: 'Follow system',
     themeLight: 'Light',
     themeDark: 'Dark',
+    languageLabel: 'UI language',
+    languageHint:
+      'Switch between Chinese and English. The saved value applies instantly — no page refresh required.',
+    languageZhCN: '简体中文',
+    languageEnUS: 'English',
     restartRequiredTitle: 'Daemon restart required',
     restartRequiredHint:
       'The new value was written to config.json, but bind host / bind port only apply on the next agent-workflow start. Run `agent-workflow stop` and then `agent-workflow start` in your terminal.',
@@ -884,5 +889,12 @@ export const enUS: Resources = {
     },
     task: { statusLabel: 'Awaiting your answer' },
     error: { unknown: 'Failed to load clarify detail' },
+  },
+  sidebar: {
+    languageGroupLabel: 'Switch UI language',
+    lang: {
+      zh: '中',
+      en: 'EN',
+    },
   },
 }

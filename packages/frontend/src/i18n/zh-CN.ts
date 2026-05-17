@@ -125,6 +125,10 @@ export interface Resources {
     themeSystem: string
     themeLight: string
     themeDark: string
+    languageLabel: string
+    languageHint: string
+    languageZhCN: string
+    languageEnUS: string
     restartRequiredTitle: string
     restartRequiredHint: string
     renderingPlantumlEndpointLabel: string
@@ -816,6 +820,13 @@ export interface Resources {
     task: { statusLabel: string }
     error: { unknown: string }
   }
+  sidebar: {
+    languageGroupLabel: string
+    lang: {
+      zh: string
+      en: string
+    }
+  }
 }
 
 export const zhCN: Resources = {
@@ -939,6 +950,10 @@ export const zhCN: Resources = {
     themeSystem: '跟随系统',
     themeLight: '浅色',
     themeDark: '深色',
+    languageLabel: '界面语言',
+    languageHint: '切换中文 / 英文，保存即生效，无需刷新页面。',
+    languageZhCN: '简体中文',
+    languageEnUS: 'English',
     restartRequiredTitle: '需要重启守护进程',
     restartRequiredHint:
       '新值已写入 config.json，但 bind host / bind port 仅在下次 agent-workflow start 时生效。请在终端先 agent-workflow stop，再 agent-workflow start。',
@@ -1666,5 +1681,12 @@ export const zhCN: Resources = {
     },
     task: { statusLabel: '等待用户回答' },
     error: { unknown: '加载反问详情失败' },
+  },
+  sidebar: {
+    languageGroupLabel: '切换界面语言',
+    lang: {
+      zh: '中',
+      en: 'EN',
+    },
   },
 }

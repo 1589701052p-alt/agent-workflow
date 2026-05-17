@@ -159,6 +159,65 @@ code {
   color: var(--accent);
 }
 
+/* RFC-025: language switch lives in a footer block pinned to the bottom of the
+   sidebar, separated from the nav list by the auto margin. */
+.sidebar__footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.language-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.language-switch__options {
+  display: inline-flex;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 2px;
+  gap: 2px;
+}
+
+.language-switch__option {
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.language-switch__option:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.language-switch__option--active,
+.language-switch__option--active:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.language-switch__option:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.language-switch__error {
+  font-size: 11px;
+  color: var(--danger);
+  padding: 0 4px;
+}
+
 .content {
   padding: 24px 32px;
   overflow: auto;

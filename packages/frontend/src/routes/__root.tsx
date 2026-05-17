@@ -10,6 +10,8 @@ import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ClarifyPendingCount, ReviewPendingCount } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { LanguageSwitch } from '@/components/LanguageSwitch'
+import { useApplyLanguage } from '@/hooks/useLanguage'
 import { useApplyTheme } from '@/hooks/useTheme'
 import { getToken, subscribeAuth } from '@/stores/auth'
 
@@ -43,6 +45,7 @@ function RootComponent() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { t } = useTranslation()
   useApplyTheme()
+  useApplyLanguage()
   // RFC-005: Reviews nav badge — periodically poll the pending-count endpoint.
   // Disabled when not signed in to avoid 401 spam.
   const pending = useQuery<ReviewPendingCount>({
@@ -99,6 +102,9 @@ function RootComponent() {
             </Link>
           ))}
         </nav>
+        <div className="sidebar__footer">
+          <LanguageSwitch />
+        </div>
       </aside>
       <main className="content">
         <Outlet />

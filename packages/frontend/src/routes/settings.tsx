@@ -14,7 +14,8 @@ import { api, ApiError } from '@/api/client'
 import { Field, NumberInput, Switch, TextInput } from '@/components/Form'
 import { ModelSelect } from '@/components/ModelSelect'
 import { RUNTIME_OPENCODE_QUERY_KEY, RuntimeStatusCard } from '@/components/RuntimeStatusCard'
-import { describeApiError } from '@/i18n'
+import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
+import { isSupportedLanguage } from '@/hooks/useLanguage'
 import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
 import { Route as RootRoute } from './__root'
 
@@ -418,9 +419,13 @@ function NetworkTab({ config }: TabProps) {
   )
 }
 
-function AppearanceTab({ config }: TabProps) {
+export function AppearanceTab({ config }: TabProps) {
   const { t } = useTranslation()
-  const { state, setState, save } = useTabState(config, ['theme'])
+  const { state, setState, save } = useTabState(config, ['theme', 'language'], {
+    onSaved: (next) => {
+      if (isSupportedLanguage(next.language)) setLanguage(next.language as SupportedLanguage)
+    },
+  })
   return (
     <SectionForm
       onSave={save.mutate}
@@ -437,6 +442,17 @@ function AppearanceTab({ config }: TabProps) {
           <option value="system">{t('settings.themeSystem')}</option>
           <option value="light">{t('settings.themeLight')}</option>
           <option value="dark">{t('settings.themeDark')}</option>
+        </select>
+      </Field>
+      <Field label={t('settings.languageLabel')} hint={t('settings.languageHint')}>
+        <select
+          className="form-input"
+          data-testid="settings-language-select"
+          value={state.language ?? 'zh-CN'}
+          onChange={(e) => setState({ ...state, language: e.target.value as SupportedLanguage })}
+        >
+          <option value="zh-CN">{t('settings.languageZhCN')}</option>
+          <option value="en-US">{t('settings.languageEnUS')}</option>
         </select>
       </Field>
     </SectionForm>
