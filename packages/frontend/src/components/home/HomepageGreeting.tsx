@@ -3,8 +3,7 @@
 // Top of the dashboard: a time-of-day greeting, the runtime status line,
 // and the "Start task" primary action. The runtime status uses an
 // independent query key (`['runtime','opencode','home']`) so it does
-// not drag the sidebar's `RuntimeNavDot` or Settings' `RuntimeStatusCard`
-// into a refetch storm.
+// not drag Settings' `RuntimeStatusCard` into a refetch storm.
 
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'

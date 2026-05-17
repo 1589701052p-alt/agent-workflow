@@ -191,9 +191,7 @@ code {
 }
 
 /* RFC-032 — 3-group sidebar nav. Group headers are 11-px small caps; sub-items
-   are 32-px tall rows with a soft accent hover and full-accent active fill.
-   `.nav-item--runtime` adds a thin separator above so the runtime row reads
-   as a different category than the capability rows above it. */
+   are 32-px tall rows with a soft accent hover and full-accent active fill. */
 .nav-group {
   display: flex;
   flex-direction: column;
@@ -270,49 +268,6 @@ code {
 
 .nav-item--home {
   margin: 2px 0 6px;
-}
-
-.nav-item--runtime {
-  margin-top: 6px;
-  position: relative;
-}
-
-.nav-item--runtime::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 12px;
-  right: 12px;
-  height: 1px;
-  background: var(--border);
-}
-
-/* RFC-032 — daemon status dot pinned to the right side of the runtime nav
-   row. Four discrete states drive the four colors; tooltip lives on `title`
-   to avoid a heavyweight popper. */
-.nav-runtime-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.nav-runtime-dot--ready {
-  background: #1e8e3e;
-}
-
-.nav-runtime-dot--checking {
-  background: #f5a623;
-}
-
-.nav-runtime-dot--incompatible {
-  background: #9aa0a6;
-}
-
-.nav-runtime-dot--missing {
-  background: #c5221f;
 }
 
 /* RFC-032 — settings cog button in the sidebar footer row. Becomes a square

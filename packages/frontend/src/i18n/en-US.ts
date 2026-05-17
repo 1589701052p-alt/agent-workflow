@@ -17,15 +17,6 @@ export const enUS: Resources = {
     settings: 'Settings',
     brand: 'Agent Workflow',
     home: 'Home',
-    runtime: {
-      label: 'Runtime',
-      tooltip: {
-        ready: 'opencode v{{version}} · ready',
-        checking: 'checking…',
-        incompatible: 'opencode v{{version}} below minimum v{{minVersion}}',
-        missing: 'opencode not found (path: {{path}})',
-      },
-    },
     group: {
       agents: 'Agents',
       workflows: 'Workflows',

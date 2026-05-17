@@ -89,27 +89,6 @@ test('RFC-032 nav-redesign auth gate: no token → /auth, no sidebar', async ({ 
   await expect(page.locator('aside.sidebar')).toHaveCount(0)
 })
 
-test('RFC-032 nav-redesign runtime row: click → /settings#runtime with flash animation', async ({
-  page,
-}) => {
-  await primeAuth(page, daemon)
-  await page.goto(`${daemon.baseUrl}/agents`)
-
-  // The runtime row lives inside the agents nav group; we click the row
-  // (not the dot itself, which is decorative) and assert routing.
-  const runtimeRow = page
-    .locator('.nav-group[data-group="agents"] button.nav-item--runtime')
-    .or(page.locator('.nav-group[data-group="agents"] .nav-item--runtime'))
-    .first()
-  await expect(runtimeRow).toBeVisible()
-  await runtimeRow.click()
-  await page.waitForURL(/\/settings/)
-  // Settings tab forced to runtime; the runtime-status-anchor wrapper picks
-  // up the flash class for ~2 s after navigation. We assert it exists at
-  // least once shortly after navigation; afterwards the animation clears.
-  await expect(page.locator('.runtime-status-anchor')).toBeVisible()
-})
-
 test('RFC-032 nav-redesign homepage: non-first-run / renders 3 sections + Start task button', async ({
   page,
 }) => {

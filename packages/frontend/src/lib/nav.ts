@@ -9,12 +9,7 @@ export type GroupKey = 'agents' | 'workflows' | 'tasks'
 export interface SubNavItem {
   to: string
   i18nKey: string
-  /**
-   * `'capability'` items render visually adjacent. `'runtime'` items get a thin
-   * separator above them so the user reads them as a different category
-   * ("compute" vs "capabilities").
-   */
-  variant?: 'capability' | 'runtime'
+  variant?: 'capability'
 }
 
 export interface NavGroupEntry {
@@ -40,7 +35,6 @@ export const NAV_GROUPS: NavGroupEntry[] = [
       { to: '/skills', i18nKey: 'nav.skills', variant: 'capability' },
       { to: '/mcps', i18nKey: 'nav.mcps', variant: 'capability' },
       { to: '/plugins', i18nKey: 'nav.plugins', variant: 'capability' },
-      { to: '/runtime', i18nKey: 'nav.runtime.label', variant: 'runtime' },
     ],
   },
   {
@@ -80,9 +74,6 @@ export interface ActiveNav {
  *   lifted them into the unified inbox drawer); the fallback at the bottom
  *   keeps `activeGroup = 'workflows'` so detail-page deep links retain the
  *   correct group highlight even though the items themselves are gone.
- * - `/runtime` is a pseudo-URL that exists in `NAV_GROUPS` only as a click
- *   target. The `<NavItem>` for it navigates to `/settings#runtime`, after
- *   which `onSettings` flips true (and `activeGroup` becomes `null`).
  */
 export function resolveActiveNav(pathname: string): ActiveNav {
   if (pathname === '/') {

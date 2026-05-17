@@ -3,20 +3,16 @@
 // Each group renders an 11-px uppercase header + a chevron placeholder (no
 // collapse behaviour in v1; the chevron is a pure visual anchor so the user
 // reads the section as a folded unit) and the group's sub-items underneath.
-//
-// `runtime`-variant sub-items get a separator above them and embed the
-// `<RuntimeNavDot>` daemon status indicator on the right.
 
 import type { ReactNode } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { ActiveNav, NavGroupEntry, SubNavItem } from '@/lib/nav'
-import { RuntimeNavDot } from './RuntimeNavDot'
 
 interface NavGroupProps {
   group: NavGroupEntry
   active: ActiveNav
-  /** Optional badge factory (PR1 passes `null`; reviews/clarify get badges via the inline placeholder until PR2 lifts them into the inbox). */
+  /** Optional badge factory; PR1 / PR2 do not use it but PR3 may attach per-row counts. */
   renderBadge?: (item: SubNavItem) => ReactNode
 }
 
@@ -52,32 +48,7 @@ interface NavItemProps {
 
 function NavItem({ item, isActive, badge }: NavItemProps) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
-  const className = [
-    'nav-item',
-    item.variant === 'runtime' ? 'nav-item--runtime' : null,
-    isActive ? 'nav-item--active' : null,
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  // The /runtime pseudo-URL is a click target only; intercept the navigation
-  // and route the user to /settings#runtime where the runtime card lives.
-  if (item.to === '/runtime') {
-    return (
-      <button
-        type="button"
-        className={className}
-        onClick={() => {
-          void navigate({ to: '/settings', hash: 'runtime' })
-        }}
-      >
-        <span className="nav-item__label">{t(item.i18nKey)}</span>
-        <RuntimeNavDot />
-      </button>
-    )
-  }
-
+  const className = ['nav-item', isActive ? 'nav-item--active' : null].filter(Boolean).join(' ')
   return (
     <Link
       to={item.to}

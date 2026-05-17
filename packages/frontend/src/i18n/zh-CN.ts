@@ -20,15 +20,6 @@ export interface Resources {
     brand: string
     // RFC-032 PR1: home + group headers + runtime sub-item + settings gear.
     home: string
-    runtime: {
-      label: string
-      tooltip: {
-        ready: string
-        checking: string
-        incompatible: string
-        missing: string
-      }
-    }
     group: {
       agents: string
       workflows: string
@@ -1239,15 +1230,6 @@ export const zhCN: Resources = {
     settings: '设置',
     brand: 'Agent Workflow',
     home: '首页',
-    runtime: {
-      label: '运行时',
-      tooltip: {
-        ready: 'opencode v{{version}} · 已就绪',
-        checking: '检查中…',
-        incompatible: 'opencode v{{version}} 低于最低门槛 v{{minVersion}}',
-        missing: '未找到 opencode（path: {{path}}）',
-      },
-    },
     group: {
       agents: '代理',
       workflows: '工作流',
