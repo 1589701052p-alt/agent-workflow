@@ -3,7 +3,8 @@
 // without monkey-patching the module.
 
 import { Hono } from 'hono'
-import { tokenAuth } from '@/auth/token'
+import { actorOf } from '@/auth/actor'
+import { multiAuth } from '@/auth/session'
 import type { DbClient } from '@/db/client'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
@@ -52,13 +53,29 @@ export function createApp(deps: AppDeps): Hono {
   // Public routes (no auth).
   mountHealthRoutes(app, deps)
 
-  // Authenticated routes — token middleware before any /api/* declaration.
-  app.use('/api/*', tokenAuth(deps.token))
+  // Authenticated routes — three-track auth (RFC-036): session token / PAT /
+  // legacy daemon token. Daemon token still maps to the seeded __system__
+  // admin actor so existing single-user deployments stay zero-touch.
+  app.use('/api/*', multiAuth({ db: deps.db, daemonToken: deps.token }))
 
-  // Tiny probe endpoint to verify the auth path; superseded by real routes in P-1-08+.
-  app.get('/api/whoami', (c) =>
-    c.json({ ok: true, pid: process.pid, uptime: Math.round(process.uptime()) }),
-  )
+  // /api/whoami returns the resolved actor; keeps `ok`/`pid` fields for
+  // backwards compatibility with anything that pinged the P-1-08 probe.
+  app.get('/api/whoami', (c) => {
+    const actor = actorOf(c)
+    return c.json({
+      ok: true,
+      pid: process.pid,
+      uptime: Math.round(process.uptime()),
+      user: {
+        id: actor.user.id,
+        username: actor.user.username,
+        displayName: actor.user.displayName,
+        role: actor.user.role,
+        status: actor.user.status,
+      },
+      source: actor.source,
+    })
+  })
 
   mountConfigRoutes(app, deps)
   mountRuntimeRoutes(app, deps)

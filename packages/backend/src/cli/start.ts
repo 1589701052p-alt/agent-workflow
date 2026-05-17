@@ -99,6 +99,19 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     : 0
   log.info('db ready', { path: Paths.db, dbVersion })
 
+  // RFC-036 bootstrap hint: if no real user has been created yet, log a
+  // one-shot pointer to the CLI so admins know how to leave single-user mode.
+  try {
+    const { countNonSystemUsers } = await import('@/services/users')
+    if ((await countNonSystemUsers(db)) === 0) {
+      log.info(
+        'first multi-user run? create your admin via `agent-workflow user create --admin --username <name>`',
+      )
+    }
+  } catch {
+    /* users service may not be available in degraded mode; ignore */
+  }
+
   // 5b. P-4-07: reap orphan runs from the previous (crashed/SIGKILLed) daemon
   // process. Any task/node_run left in 'running' is flipped to 'interrupted'
   // with task.error_message = 'daemon-restart' so the UI surfaces what

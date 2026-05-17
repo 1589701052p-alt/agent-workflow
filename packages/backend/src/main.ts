@@ -16,6 +16,7 @@ import { migrateCommand } from './cli/migrate'
 import { startCommand } from './cli/start'
 import { statusCommand, formatStatus } from './cli/status'
 import { stopCommand } from './cli/stop'
+import { userCommand } from './cli/user'
 
 function readFlag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name)
@@ -107,6 +108,14 @@ async function main(): Promise<void> {
       break
     }
 
+    case 'user': {
+      const rest = Bun.argv.slice(3)
+      const result = await userCommand(rest)
+      process.stdout.write(result.output)
+      if (result.status !== 'ok') process.exit(1)
+      break
+    }
+
     case 'help':
     case '--help':
     case '-h':
@@ -127,6 +136,14 @@ async function main(): Promise<void> {
       console.log(
         '  backup                            write a tar.gz snapshot under ~/.agent-workflow/backups/',
       )
+      console.log(
+        '  user create --username <name>     create a user (RFC-036; --admin to set role=admin)',
+      )
+      console.log(
+        "  user reset-password ...           reset a user's password and revoke their sessions",
+      )
+      console.log('  user list                         list all users (id, username, role, status)')
+      console.log('  user disable --username <name>    disable (soft-delete) a user')
       if (sub !== 'help' && sub !== '--help' && sub !== '-h') {
         console.error(`unknown subcommand: ${sub}`)
         process.exit(2)

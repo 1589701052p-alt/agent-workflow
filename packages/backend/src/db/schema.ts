@@ -327,10 +327,15 @@ export const tasks = sqliteTable(
     expiresAt: integer('expires_at'),
     deletedAt: integer('deleted_at'),
     schemaVersion: integer('schema_version').notNull().default(1),
+    // RFC-036: launcher actor for visibility filtering. NULL = legacy task
+    // launched before RFC-036 or by daemon-token (system) actor; admins still
+    // see those via scope=all, regular users do not.
+    ownerUserId: text('owner_user_id'),
   },
   (t) => ({
     statusIdx: index('idx_tasks_status').on(t.status, t.startedAt),
     workflowIdx: index('idx_tasks_workflow').on(t.workflowId, t.startedAt),
+    ownerIdx: index('idx_tasks_owner').on(t.ownerUserId),
   }),
 )
 
@@ -616,5 +621,195 @@ export const clarifySessions = sqliteTable(
     ),
     sourceRunIdx: index('idx_clarify_sessions_source_run').on(t.sourceAgentNodeRunId),
     nodeShardIdx: index('idx_clarify_sessions_node_shard').on(t.clarifyNodeId, t.sourceShardKey),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 users — first-class user identity. `__system__` row is seeded by
+// migration 0018 and represents the daemon-token actor (read-only, immutable
+// from the API; reused as the launcher of any task whose actor was the daemon
+// token rather than a real user session/PAT).
+// -----------------------------------------------------------------------------
+export const users = sqliteTable(
+  'users',
+  {
+    id: text('id').primaryKey(), // ULID; the literal '__system__' is reserved
+    username: text('username').notNull().unique(),
+    email: text('email').unique(), // nullable; SQLite UNIQUE allows multiple NULL
+    displayName: text('display_name').notNull(),
+    passwordHash: text('password_hash'), // NULL = OIDC-only or invited user
+    role: text('role', { enum: ['admin', 'user'] })
+      .notNull()
+      .default('user'),
+    status: text('status', { enum: ['active', 'disabled', 'invited'] })
+      .notNull()
+      .default('active'),
+    forcePasswordChange: integer('force_password_change').notNull().default(0),
+    createdBy: text('created_by'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    lastLoginAt: integer('last_login_at'),
+    schemaVersion: integer('schema_version').notNull().default(1),
+  },
+  (t) => ({
+    statusIdx: index('idx_users_status').on(t.status),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 user_sessions — opaque session tokens minted by `POST /api/auth/login`.
+// `token_hash` is sha256(raw); raw value (prefix `aws_s_`) is shown only in the
+// login response and never persisted.
+// -----------------------------------------------------------------------------
+export const userSessions = sqliteTable(
+  'user_sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    userAgent: text('user_agent'),
+    createdAt: integer('created_at').notNull(),
+    lastUsedAt: integer('last_used_at').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    revokedAt: integer('revoked_at'),
+  },
+  (t) => ({
+    userIdx: index('idx_user_sessions_user').on(t.userId, t.expiresAt),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 user_pats — personal access tokens. Same hash-only storage as
+// sessions. Scopes are a JSON string[] subset of PERMISSIONS (catalog lives in
+// packages/shared/src/schemas/permission.ts).
+// -----------------------------------------------------------------------------
+export const userPats = sqliteTable(
+  'user_pats',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    scopesJson: text('scopes_json').notNull().default('[]'),
+    createdAt: integer('created_at').notNull(),
+    lastUsedAt: integer('last_used_at'),
+    expiresAt: integer('expires_at'),
+    revokedAt: integer('revoked_at'),
+  },
+  (t) => ({
+    userIdx: index('idx_user_pats_user').on(t.userId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 oidc_providers — admin-managed list of OIDC identity providers. The
+// client secret is AES-256-GCM-sealed with the per-host secret.key (see
+// auth/secretBox.ts) before being written to client_secret_enc.
+// -----------------------------------------------------------------------------
+export const oidcProviders = sqliteTable(
+  'oidc_providers',
+  {
+    id: text('id').primaryKey(),
+    slug: text('slug').notNull().unique(),
+    displayName: text('display_name').notNull(),
+    issuerUrl: text('issuer_url').notNull(),
+    clientId: text('client_id').notNull(),
+    clientSecretEnc: text('client_secret_enc').notNull(),
+    scopes: text('scopes').notNull().default('openid profile email'),
+    provisioning: text('provisioning', { enum: ['auto', 'allowlist', 'invite'] })
+      .notNull()
+      .default('invite'),
+    allowedEmailDomainsJson: text('allowed_email_domains_json').notNull().default('[]'),
+    iconUrl: text('icon_url'),
+    enabled: integer('enabled').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    schemaVersion: integer('schema_version').notNull().default(1),
+  },
+  (t) => ({
+    enabledIdx: index('idx_oidc_providers_enabled').on(t.enabled),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 user_identities — 1:N from users to (provider, subject). Linking is
+// manual (never automatic by email) except invite-only flow that pre-creates a
+// users row with status='invited' and binds on first OIDC login.
+// -----------------------------------------------------------------------------
+export const userIdentities = sqliteTable(
+  'user_identities',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    providerId: text('provider_id')
+      .notNull()
+      .references(() => oidcProviders.id, { onDelete: 'restrict' }),
+    subject: text('subject').notNull(),
+    email: text('email'),
+    emailVerified: integer('email_verified').notNull().default(0),
+    linkedAt: integer('linked_at').notNull(),
+  },
+  (t) => ({
+    userIdx: index('idx_user_identities_user').on(t.userId),
+    providerIdx: index('idx_user_identities_provider').on(t.providerId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 task_collaborators — owner + collaborators + role-tagged members
+// (reviewer/clarify_target). Composite PK lets the same user hold multiple
+// roles on a task without losing audit context.
+// -----------------------------------------------------------------------------
+export const taskCollaborators = sqliteTable(
+  'task_collaborators',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    role: text('role', {
+      enum: ['owner', 'reviewer', 'clarify_target', 'collaborator'],
+    }).notNull(),
+    addedBy: text('added_by').notNull(),
+    addedAt: integer('added_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.userId, t.role] }),
+    userIdx: index('idx_task_collab_user').on(t.userId),
+    taskIdx: index('idx_task_collab_task').on(t.taskId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-036 node_assignments — per-node reviewer / clarify_target assignments
+// recorded at launch time. PATCH `/api/tasks/:id/assignments/:nodeId` mutates
+// in place (owner or admin only).
+// -----------------------------------------------------------------------------
+export const nodeAssignments = sqliteTable(
+  'node_assignments',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    nodeId: text('node_id').notNull(),
+    kind: text('kind', { enum: ['reviewer', 'clarify_target'] }).notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    assignedBy: text('assigned_by').notNull(),
+    assignedAt: integer('assigned_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.nodeId, t.kind] }),
+    userIdx: index('idx_node_assign_user').on(t.userId),
+    taskIdx: index('idx_node_assign_task').on(t.taskId),
   }),
 )
