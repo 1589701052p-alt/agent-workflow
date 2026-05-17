@@ -142,6 +142,45 @@ describe('installPlugin — npm path (with fake npm shim)', () => {
     expect(st.isDirectory()).toBe(true)
   })
 
+  test('picks requested package by host package.json, not readdir order', async () => {
+    // Regression: before this fix, readInstalledPackage() picked
+    // `readdir(node_modules)[0]` as "the installed package" and read its
+    // version. For a real npm install of e.g. `opencode-toolkit@0.2.6`,
+    // npm flattens transitive deps (zod, effect, …) alongside the requested
+    // package and readdir order is filesystem-dependent — on the user's
+    // machine readdir returned `zod` first, so the UI surfaced zod's
+    // version (`4.1.8`) as the plugin's resolvedVersion, and the runner
+    // pointed opencode at `node_modules/zod/` instead of the real plugin.
+    // Fix: read host pluginDir/package.json's `dependencies` to identify
+    // the package the user actually requested. fake-npm.sh's success mode
+    // now drops two alphabetical-bracket decoy transitive deps with version
+    // `9.9.9`; if this regression returns, resolvedVersion will be `9.9.9`
+    // (or `cachedPath` will point at a decoy) and this test will fail.
+    process.env.FAKE_NPM_MODE = 'success'
+    process.env.FAKE_NPM_VERSION = '0.2.6'
+    const result = await installPlugin('p-regression-readdir', 'opencode-toolkit@0.2.6', {
+      pluginsDir,
+      npmBin: FAKE_NPM,
+    })
+    expect(result.resolvedVersion).toBe('0.2.6')
+    expect(result.cachedPath).toContain('node_modules/opencode-toolkit')
+    expect(result.cachedPath).not.toContain('decoy')
+    // Sanity: the decoys really were written (the fixture is doing its job).
+    const decoyPkg = JSON.parse(
+      await readFile(
+        join(
+          pluginsDir,
+          'p-regression-readdir',
+          'node_modules',
+          'aaa-decoy-transitive',
+          'package.json',
+        ),
+        'utf-8',
+      ),
+    )
+    expect(decoyPkg.version).toBe('9.9.9')
+  })
+
   test('scoped package name resolves under node_modules/@scope/name', async () => {
     process.env.FAKE_NPM_MODE = 'success'
     const result = await installPlugin('p11', '@scope/pkg@1.0.0', {

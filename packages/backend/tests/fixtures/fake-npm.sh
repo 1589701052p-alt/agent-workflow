@@ -64,8 +64,29 @@ if [[ "$1" == "install" ]]; then
       INSTALL_DIR="${PREFIX}/node_modules/${PKG_NAME}"
       ;;
   esac
-  mkdir -p "$INSTALL_DIR"
   VERSION="${FAKE_NPM_VERSION:-2.4.1}"
+
+  # Mimic real `npm install` behaviour: drop transitive deps into node_modules/
+  # with DIFFERENT (misleading) versions, so any code that picks "the installed
+  # package" by walking node_modules blindly will resolve the wrong
+  # package.json. Decoys are created BEFORE the requested package so on
+  # creation-ordered filesystems readdir returns a decoy first (this is how
+  # the production bug manifested — readdir returned `zod` ahead of the
+  # actually-requested package). See tests/services/pluginInstaller.test.ts
+  # "picks requested package by host package.json, not readdir order".
+  for DECOY in aaa-decoy-transitive zzz-decoy-transitive; do
+    DECOY_DIR="${PREFIX}/node_modules/${DECOY}"
+    mkdir -p "$DECOY_DIR"
+    cat > "$DECOY_DIR/package.json" <<EOF
+{
+  "name": "${DECOY}",
+  "version": "9.9.9",
+  "main": "index.js"
+}
+EOF
+  done
+
+  mkdir -p "$INSTALL_DIR"
   cat > "$INSTALL_DIR/package.json" <<EOF
 {
   "name": "${PKG_NAME}",
@@ -76,6 +97,24 @@ EOF
   cat > "$INSTALL_DIR/index.js" <<'EOF'
 export default { id: 'fake' }
 EOF
+
+  # Mimic real `npm install`'s default --save behaviour: record the requested
+  # package under the host package.json's dependencies, so the installer has a
+  # reliable signal for *which* node_modules entry the user actually asked for.
+  HOST_PKG="${PREFIX}/package.json"
+  if [[ -f "$HOST_PKG" ]]; then
+    # Naive rewrite — fixture host package.json is always seeded with a literal
+    # "dependencies": {} line by installPluginInner; we just substitute it.
+    TMP="${HOST_PKG}.tmp"
+    awk -v pkg="$PKG_NAME" -v ver="$VERSION" '
+      {
+        if ($0 ~ /"dependencies":[[:space:]]*\{\}/) {
+          sub(/"dependencies":[[:space:]]*\{\}/, "\"dependencies\": { \"" pkg "\": \"^" ver "\" }")
+        }
+        print
+      }
+    ' "$HOST_PKG" > "$TMP" && mv "$TMP" "$HOST_PKG"
+  fi
   exit 0
 fi
 

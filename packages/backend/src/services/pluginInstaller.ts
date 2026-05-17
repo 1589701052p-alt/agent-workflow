@@ -197,9 +197,17 @@ async function installPluginInner(
   )
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS
+  // NOTE: do NOT pass `--no-save`. We rely on npm's default save behaviour
+  // (npm 5+) to record the requested package under the host package.json's
+  // `dependencies`, which `readInstalledPackage` then uses to identify
+  // *which* node_modules entry the user actually asked for. Without that
+  // signal we'd have to guess by walking `node_modules/`, which silently
+  // picks the wrong package whenever npm flattens transitive deps alongside
+  // the requested one (e.g. for `github:…/opencode-toolkit#v0.2.6` we
+  // previously surfaced `zod`'s version because readdir returned it first).
   const { stdout, stderr, exitCode } = await runCommand(
     npmBin,
-    ['install', '--prefix', pluginDir, '--no-audit', '--no-fund', '--no-save', '--silent', spec],
+    ['install', '--prefix', pluginDir, '--no-audit', '--no-fund', '--silent', spec],
     { timeoutMs },
   )
   if (exitCode !== 0) {
@@ -243,39 +251,46 @@ async function installFilePlugin(spec: string): Promise<InstallResult> {
 }
 
 /**
- * Inspect `pluginDir/node_modules/` to find the single direct dependency
- * we just installed. We pick the only non-hidden top-level entry and read
- * its `package.json`.
+ * Resolve the package npm just installed at the user's request — by *name*,
+ * not by `readdir(node_modules)` order. The authoritative signal is the host
+ * `pluginDir/package.json`'s `dependencies`, which `npm install` populates by
+ * default (we deliberately omit `--no-save` from the install args). Walking
+ * node_modules blindly is unsafe: npm flattens transitive deps next to the
+ * requested package, and readdir order is filesystem-dependent — that's how
+ * the production bug surfaced `zod` (a transitive dep of `opencode-toolkit`)
+ * as the plugin's `resolvedVersion`.
  */
 async function readInstalledPackage(
   pluginDir: string,
 ): Promise<{ entryDir: string; version: string | null }> {
   const nm = join(pluginDir, 'node_modules')
-  let entries: string[]
+  let requestedName: string | null = null
   try {
-    const dir = await import('node:fs/promises').then((m) => m.readdir(nm))
-    entries = dir.filter((n) => !n.startsWith('.'))
+    const host = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf-8'))
+    const deps = host?.dependencies
+    if (deps !== null && typeof deps === 'object') {
+      const keys = Object.keys(deps as Record<string, unknown>)
+      // npm install of a single spec writes exactly one direct dep. If we
+      // somehow find more than one (host pkg.json hand-edited?), pick the
+      // newest by mtime via Object.keys insertion order (npm appends).
+      if (keys.length > 0) requestedName = keys[keys.length - 1]!
+    }
   } catch {
-    // No node_modules — npm reported success but produced nothing. Treat as
-    // partial install: return the plugin dir itself; opencode will then fail
-    // on import with a clearer error, and we still have a row to retry.
+    // unreadable host package.json — fall through to the partial-install path.
+  }
+
+  if (requestedName === null) {
+    // No host deps recorded: most likely npm reported success but wrote
+    // nothing (broken install), or a future npm version dropped default
+    // --save. Either way, picking an arbitrary node_modules entry would
+    // mislead the UI/runner, so surface the install as version-less and let
+    // opencode fail loudly on import.
+    log.warn('plugin install left host package.json without dependencies', { pluginDir })
     return { entryDir: pluginDir, version: null }
   }
-  // Scoped packages live under nm/@scope/<pkg>; walk one level when needed.
-  let pkgRoot = ''
-  if (entries.length === 0) {
-    return { entryDir: pluginDir, version: null }
-  }
-  const first = entries[0]!
-  if (first.startsWith('@')) {
-    const scopeDir = join(nm, first)
-    const sub = await import('node:fs/promises').then((m) => m.readdir(scopeDir))
-    const subFiltered = sub.filter((n) => !n.startsWith('.'))
-    if (subFiltered.length === 0) return { entryDir: scopeDir, version: null }
-    pkgRoot = join(scopeDir, subFiltered[0]!)
-  } else {
-    pkgRoot = join(nm, first)
-  }
+
+  // Scoped name (`@scope/pkg`) joins correctly under node_modules/.
+  const pkgRoot = join(nm, requestedName)
   let version: string | null = null
   try {
     const json = JSON.parse(await readFile(join(pkgRoot, 'package.json'), 'utf-8'))
