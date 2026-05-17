@@ -4367,6 +4367,106 @@ mark.comment-anchor[data-active='true'] {
   flex-direction: column;
   gap: 12px;
 }
+
+/* RFC-027 §UX revision — attempts chip-row replacing the bare <select>.
+ * Each attempt is a button: status dot + iter label + optional shard +
+ * timestamp. Active button gets the accent-blue background. Container
+ * scrolls horizontally so many retries stay reachable without wrap. */
+.session-attempts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.session-attempts__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted, #888);
+  font-weight: 600;
+}
+.session-attempts__group {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.session-attempts__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+  color: inherit;
+  transition:
+    background-color 80ms ease,
+    border-color 80ms ease,
+    color 80ms ease;
+}
+.session-attempts__item:hover {
+  background: color-mix(in srgb, #2563eb 6%, var(--surface-2));
+  border-color: color-mix(in srgb, #2563eb 35%, var(--surface-border));
+}
+.session-attempts__item.is-active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.session-attempts__item.is-active .session-attempts__time,
+.session-attempts__item.is-active .session-attempts__shard,
+.session-attempts__item.is-active .session-attempts__parent {
+  color: rgba(255, 255, 255, 0.85);
+}
+.session-attempts__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.session-attempts__item.is-active .session-attempts__dot {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+.status-dot--green {
+  background: #16a34a;
+}
+.status-dot--blue {
+  background: #2563eb;
+}
+.status-dot--red {
+  background: #dc2626;
+}
+.status-dot--amber {
+  background: #d97706;
+}
+.status-dot--gray {
+  background: #9ca3af;
+}
+.session-attempts__iter {
+  font-weight: 600;
+}
+.session-attempts__shard {
+  font-family: var(--mono);
+  font-size: 10px;
+  opacity: 0.8;
+}
+.session-attempts__parent {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+.session-attempts__time {
+  font-size: 10px;
+  opacity: 0.65;
+}
+
 .session-flow {
   display: flex;
   flex-direction: column;
@@ -4534,6 +4634,12 @@ mark.comment-anchor[data-active='true'] {
   background: var(--chip-bg);
   color: var(--chip-fg);
   border-color: var(--chip-border);
+  /* Status chip must never wrap — 在线 / 探测中 / 失败 are short by design,
+   * but narrow table cells (e.g. when Tools column has wide counts) were
+   * squeezing "探测中" onto two lines. Defense-in-depth: the
+   * .data-table__nowrap on the parent <td> is the primary lock; this is
+   * the chip-level fallback (so detail-page header etc. also stay safe). */
+  white-space: nowrap;
 }
 .mcp-probe-chip--unknown {
   --chip-bg: color-mix(in srgb, var(--muted) 18%, transparent);

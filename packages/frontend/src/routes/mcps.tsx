@@ -163,7 +163,7 @@ function McpRow(props: McpRowProps) {
           {props.mcp.description || t('common.emDash')}
         </td>
         <td>{props.mcp.enabled ? t('common.yes') : t('common.no')}</td>
-        <td>
+        <td className="data-table__nowrap">
           <McpProbeStatusChip status={uiStatus} title={props.probe?.errorMessage ?? undefined} />
         </td>
         <td className="data-table__nowrap">{latencyLabel}</td>
