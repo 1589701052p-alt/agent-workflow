@@ -5,8 +5,18 @@
 // the rendered markdown. The component is a static helper, not a React
 // component — see MarkdownView for why we mount diagrams as DOM-side
 // attachments (one React tree for the whole document, not per diagram).
+//
+// NOTE: we intentionally do not run an extra DOMPurify pass on the SVG
+// mermaid returns. mermaid flowcharts emit node labels as <foreignObject>
+// wrapping XHTML, and no DOMPurify configuration we tested (svg profile,
+// html profile, ADD_TAGS: ['foreignObject'], PARSER_MEDIA_TYPE xhtml) can
+// preserve the foreignObject children through the SVG↔HTML namespace
+// transition — the labels come out blank. mermaid.initialize already
+// applies its own DOMPurify in `securityLevel: 'strict'` mode (text-level
+// `<script>` is encoded, click handlers disabled), so this is the
+// defensive layer; an outer pass was double-sanitizing and breaking
+// labels (see the prose-code-mermaid-labels regression test).
 
-import DOMPurify from 'dompurify'
 import type * as MermaidNS from 'mermaid'
 
 type Mermaid = (typeof MermaidNS)['default']
@@ -46,9 +56,7 @@ export const MermaidBlock = {
       const mermaid = await loadMermaid()
       const id = 'mermaid-' + Math.random().toString(36).slice(2, 10)
       const { svg } = await mermaid.render(id, source)
-      mount.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
-      })
+      mount.innerHTML = svg
     } catch (err) {
       mount.innerHTML =
         `<div class="review-diagram__error">${escapeHtml((err as Error).message)}</div>` +
