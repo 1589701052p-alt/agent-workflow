@@ -88,7 +88,76 @@ function RootComponent() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar__brand">{t('nav.brand')}</div>
+        <div className="sidebar__brand">
+          <svg
+            className="sidebar__brand-icon"
+            viewBox="0 0 64 64"
+            width="52"
+            height="52"
+            aria-hidden="true"
+          >
+            <defs>
+              <linearGradient
+                id="aw-stream-a"
+                x1="0"
+                y1="0"
+                x2="64"
+                y2="0"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0" stopColor="#10b981" />
+                <stop offset="1" stopColor="#06b6d4" />
+              </linearGradient>
+              <linearGradient
+                id="aw-stream-b"
+                x1="0"
+                y1="0"
+                x2="64"
+                y2="0"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0" stopColor="#3b82f6" />
+                <stop offset="1" stopColor="#a855f7" />
+              </linearGradient>
+              <linearGradient
+                id="aw-stream-c"
+                x1="0"
+                y1="0"
+                x2="64"
+                y2="0"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0" stopColor="#ec4899" />
+                <stop offset="1" stopColor="#f97316" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M 6 22 Q 22 12, 32 22 T 58 22"
+              fill="none"
+              stroke="url(#aw-stream-a)"
+              strokeWidth="4"
+              strokeLinecap="round"
+              opacity="0.95"
+            />
+            <path
+              d="M 6 32 Q 22 22, 32 32 T 58 32"
+              fill="none"
+              stroke="url(#aw-stream-b)"
+              strokeWidth="4"
+              strokeLinecap="round"
+              opacity="0.95"
+            />
+            <path
+              d="M 6 42 Q 22 32, 32 42 T 58 42"
+              fill="none"
+              stroke="url(#aw-stream-c)"
+              strokeWidth="4"
+              strokeLinecap="round"
+              opacity="0.95"
+            />
+          </svg>
+          <span>{t('nav.brand')}</span>
+        </div>
         <nav className="sidebar__nav">
           {NAV.map((item) => (
             <Link

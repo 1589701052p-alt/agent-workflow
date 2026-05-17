@@ -105,9 +105,21 @@ code {
 }
 
 .sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  padding: 4px 8px;
+  line-height: 1;
+  /* Horizontal padding matches .sidebar__link below, so the icon's left edge
+     lines up with the nav items' text column. */
+  padding: 4px 12px;
+}
+
+.sidebar__brand-icon {
+  flex-shrink: 0;
+  display: block;
 }
 
 .sidebar__nav {
