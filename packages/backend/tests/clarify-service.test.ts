@@ -16,9 +16,10 @@
 //      had a preSnapshot. (We patch the git util via the worktree path
 //      being empty to keep the test hermetic; we assert the rerun row
 //      exists with preSnapshot mirrored.)
-//   7. buildClarifyPromptContext returns the most-recent answered session
+//   7. buildClarifyPromptContext returns every prior answered session
 //      for (agentNodeId, shardKey) only when targetIteration > 0; absent
-//      otherwise.
+//      otherwise. Multi-round runs see ALL earlier rounds (not just the
+//      latest) so prior Q&A is never dropped from the rerun prompt.
 //   8. buildClarifyPromptContext respects shardKey scoping: an agent-single
 //      rerun (shardKey=null) does NOT see an agent-multi shard's session.
 //
@@ -427,7 +428,7 @@ describe('buildClarifyPromptContext', () => {
     expect(ctx).toBeUndefined()
   })
 
-  test('surfaces the latest answered session whose iterationIndex < targetIteration', async () => {
+  test('single prior round: surfaces the answered session whose iterationIndex < targetIteration', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values({
@@ -467,6 +468,97 @@ describe('buildClarifyPromptContext', () => {
     expect(ctx?.iteration).toBe('1')
     expect(ctx?.questionsBlock ?? '').toContain('Which database?')
     expect(ctx?.answersBlock ?? '').toContain('Postgres')
+  })
+
+  // Regression for "在多轮迭代反问的时候，每次都应该把之前轮次的答案都附在
+  // 提示词里，否则就丢了" — buildClarifyPromptContext used to surface only the
+  // single most-recent answered session, so by round 3 the agent could no
+  // longer see what was decided in rounds 1 and 2. The fix renders every
+  // prior round oldest → newest, each under a "### Round N" header, and only
+  // attaches the directive trailer to the latest round (it is the user's
+  // standing instruction for the upcoming rerun, not historical state).
+  test('multi-round: all prior rounds appear under "### Round N" headers; directive trailer only on the latest', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+
+    // Three asking node_runs for the same agent, one per round. We don't run
+    // the scheduler here — just seed the rows so buildClarifyPromptContext
+    // has something to assemble.
+    const seedRound = async (
+      runId: string,
+      iterationIndex: number,
+      questionTitle: string,
+      pickIndex: number,
+      directive: 'continue' | 'stop' | undefined,
+    ): Promise<void> => {
+      await db.insert(nodeRuns).values({
+        id: runId,
+        taskId,
+        nodeId: 'designer',
+        status: 'done',
+        retryIndex: 0,
+        iteration: 0,
+        clarifyIteration: iterationIndex,
+      })
+      const { clarifyNodeRunId } = await createClarifySession({
+        db,
+        taskId,
+        sourceAgentNodeId: 'designer',
+        sourceAgentNodeRunId: runId,
+        sourceShardKey: null,
+        clarifyNodeId: 'clarify1',
+        iterationIndex,
+        questions: [makeQuestion({ title: questionTitle })],
+      })
+      await submitClarifyAnswers({
+        db,
+        clarifyNodeRunId,
+        answers: [makeAnswer({ selectedOptionIndices: [pickIndex] })],
+        ...(directive !== undefined ? { directive } : {}),
+      })
+    }
+
+    // Round 1 → Postgres (idx 0), continue.
+    await seedRound('nr_r1', 0, 'Which database?', 0, 'continue')
+    // Round 2 → MySQL (idx 1), continue.
+    await seedRound('nr_r2', 1, 'Which ORM?', 1, 'continue')
+    // Round 3 → SQLite (idx 2), stop.
+    await seedRound('nr_r3', 2, 'Which migration tool?', 2, 'stop')
+
+    const ctx = await buildClarifyPromptContext({
+      db,
+      definition: emptyDefinition(),
+      taskId,
+      agentNodeId: 'designer',
+      targetIteration: 3,
+      shardKey: null,
+    })
+    expect(ctx).toBeDefined()
+
+    // Every round's question title and selected label must show up — losing
+    // any one of them is the original bug.
+    expect(ctx?.questionsBlock ?? '').toContain('Which database?')
+    expect(ctx?.questionsBlock ?? '').toContain('Which ORM?')
+    expect(ctx?.questionsBlock ?? '').toContain('Which migration tool?')
+    expect(ctx?.answersBlock ?? '').toContain('Postgres')
+    expect(ctx?.answersBlock ?? '').toContain('MySQL')
+    expect(ctx?.answersBlock ?? '').toContain('SQLite')
+
+    // Round headers — chronological order, 1-based labels (iterationIndex + 1).
+    expect(ctx?.questionsBlock ?? '').toContain('### Round 1')
+    expect(ctx?.questionsBlock ?? '').toContain('### Round 2')
+    expect(ctx?.questionsBlock ?? '').toContain('### Round 3')
+    const qBlock = ctx?.questionsBlock ?? ''
+    expect(qBlock.indexOf('### Round 1')).toBeLessThan(qBlock.indexOf('### Round 2'))
+    expect(qBlock.indexOf('### Round 2')).toBeLessThan(qBlock.indexOf('### Round 3'))
+
+    // Only the latest round (Round 3, directive=stop) carries the directive
+    // trailer — older rounds' continue/stop sentences would just confuse the
+    // agent if echoed verbatim.
+    const aBlock = ctx?.answersBlock ?? ''
+    expect(aBlock).toContain('User directive: STOP CLARIFYING')
+    expect(aBlock).not.toContain('User directive: KEEP CLARIFYING IF NEEDED')
+    expect(ctx?.directive).toBe('stop')
   })
 
   test('shardKey scoping: agent-single rerun does not see agent-multi shard sessions', async () => {

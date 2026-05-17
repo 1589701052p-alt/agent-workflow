@@ -240,14 +240,14 @@ export function renderUserPrompt(input: RenderPromptInput): string {
       cc.questionsBlock.trim().length > 0 &&
       !referenced.has('__clarify_questions__')
     ) {
-      sections += `\n\n## Clarify Q&A — Last-Round Questions\n${cc.questionsBlock}`
+      sections += `\n\n## Clarify Q&A — Prior Rounds (Questions)\n${cc.questionsBlock}`
     }
     if (
       cc.answersBlock !== undefined &&
       cc.answersBlock.trim().length > 0 &&
       !referenced.has('__clarify_answers__')
     ) {
-      sections += `\n\n## Clarify Q&A — User Answers\n${cc.answersBlock}`
+      sections += `\n\n## Clarify Q&A — Prior Rounds (Answers)\n${cc.answersBlock}`
     }
   }
 
@@ -313,5 +313,5 @@ Hard rules — violation is treated as a malformed reply and the node will fail 
 - Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
 - Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
 - Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.
-- Once the user submits answers, you will receive them in the next prompt under "## Clarify Q&A — User Answers" plus a deterministic synthesis line per question.`
+- Once the user submits answers, you will receive every prior round's Q&A in the next prompt under "## Clarify Q&A — Prior Rounds (Answers)" — each round is wrapped in a "### Round N" header with a deterministic synthesis line per question. Treat earlier rounds as already-resolved decisions; only the latest round carries the user's standing continue/stop directive.`
 }

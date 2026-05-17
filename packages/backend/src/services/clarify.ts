@@ -434,6 +434,16 @@ export interface BuildClarifyPromptContextArgs {
  * Compose the ClarifyPromptContext for the agent's next run. Returns
  * `undefined` when there is no prior answered session to surface (first
  * run, or no clarify channel exercised yet at this shard).
+ *
+ * Multi-round behaviour: every prior answered session for this
+ * (task, agent, shard) — not just the most recent — is rendered in
+ * chronological order, with each round wrapped in a `### Round N` header.
+ * Dropping older rounds would lose the user's earlier answers as soon as
+ * the agent asked a follow-up question. The trailing directive trailer
+ * (`KEEP CLARIFYING IF NEEDED` / `STOP CLARIFYING`) only attaches to the
+ * latest round, since it is the user's standing instruction for the
+ * upcoming rerun; earlier rounds' directives are historical and would just
+ * confuse the agent if echoed verbatim.
  */
 export async function buildClarifyPromptContext(
   args: BuildClarifyPromptContextArgs,
@@ -445,32 +455,47 @@ export async function buildClarifyPromptContext(
   // unanswered session never bleeds into the next prompt; only sealed
   // answers feed the agent.
   const rows = await db_selectAnsweredSessionsForRerun(args)
-  const latest = rows[0]
-  if (latest === undefined) return undefined
+  if (rows.length === 0) return undefined
 
-  let questions: ClarifyQuestion[]
-  let answers: ClarifyAnswer[]
-  try {
-    questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
-    answers = JSON.parse(latest.answersJson ?? '[]') as ClarifyAnswer[]
-  } catch (err) {
-    log.warn('clarify context JSON parse failed; skipping injection', {
-      sessionId: latest.id,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return undefined
+  const questionParts: string[] = []
+  const answerParts: string[] = []
+  let latestDirective: ClarifyDirective = 'continue'
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!
+    let questions: ClarifyQuestion[]
+    let answers: ClarifyAnswer[]
+    try {
+      questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
+      answers = JSON.parse(row.answersJson ?? '[]') as ClarifyAnswer[]
+    } catch (err) {
+      log.warn('clarify context JSON parse failed; skipping round', {
+        sessionId: row.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      continue
+    }
+    const isLast = i === rows.length - 1
+    // Coalesce legacy NULL directive to 'continue' — pre-directive rows always
+    // behaved that way at submit time. Anything else from the DB is one of the
+    // CHECK-constrained enum values from the migration.
+    const directive = (row.directive ?? 'continue') as ClarifyDirective
+    if (isLast) latestDirective = directive
+    const roundLabel = `### Round ${row.iterationIndex + 1}`
+    questionParts.push(`${roundLabel}\n${renderClarifyQuestionsBlock(questions)}`)
+    answerParts.push(
+      `${roundLabel}\n${buildClarifyPromptBlock(questions, answers, isLast ? directive : undefined)}`,
+    )
   }
 
-  // Coalesce legacy NULL directive to 'continue' — pre-directive rows always
-  // behaved that way at submit time. Anything else from the DB is one of the
-  // CHECK-constrained enum values from the migration.
-  const persistedDirective = (latest.directive ?? 'continue') as ClarifyDirective
+  if (questionParts.length === 0) return undefined
+
   const ctx: ClarifyPromptContext = {
-    questionsBlock: renderClarifyQuestionsBlock(questions),
-    answersBlock: buildClarifyPromptBlock(questions, answers, persistedDirective),
+    questionsBlock: questionParts.join('\n\n'),
+    answersBlock: answerParts.join('\n\n'),
     iteration: String(args.targetIteration),
     remaining: computeRemaining(args.definition, args.agentNodeId, args.targetIteration),
-    directive: persistedDirective,
+    directive: latestDirective,
   }
   return ctx
 }
@@ -494,7 +519,9 @@ async function db_selectAnsweredSessionsForRerun(
   const filtered = rows.filter(
     (r) => r.iterationIndex < args.targetIteration && (r.sourceShardKey ?? null) === args.shardKey,
   )
-  filtered.sort((a, b) => b.iterationIndex - a.iterationIndex)
+  // Ascending: oldest → newest, so the multi-round rendering reads
+  // chronologically and the LAST element is the most recent round.
+  filtered.sort((a, b) => a.iterationIndex - b.iterationIndex)
   return filtered
 }
 

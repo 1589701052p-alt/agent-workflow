@@ -47,8 +47,8 @@ describe('RFC-023 prompt token substitution', () => {
         remaining: '',
       },
     })
-    expect(out).toContain('## Clarify Q&A — Last-Round Questions')
-    expect(out).toContain('## Clarify Q&A — User Answers')
+    expect(out).toContain('## Clarify Q&A — Prior Rounds (Questions)')
+    expect(out).toContain('## Clarify Q&A — Prior Rounds (Answers)')
   })
 
   test('omits auto-append sections when blocks are empty', () => {
