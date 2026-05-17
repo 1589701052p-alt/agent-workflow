@@ -1,25 +1,13 @@
-// Tiny status pill used in task list rows + detail header. Colors map to
-// the task status enum from shared schemas.
+// Tiny status pill used in task list rows + detail header. Internally renders
+// the unified <StatusChip>; the TaskStatus → kind map lives in
+// lib/task-status.ts so the homepage task-row picks up the exact same map.
 
 import { useTranslation } from 'react-i18next'
 import type { TaskStatus } from '@agent-workflow/shared'
-
-const TONES: Record<TaskStatus, string> = {
-  pending: 'gray',
-  running: 'blue',
-  done: 'green',
-  failed: 'red',
-  canceled: 'gray',
-  interrupted: 'amber',
-  awaiting_review: 'amber',
-  awaiting_human: 'amber',
-}
+import { StatusChip } from './StatusChip'
+import { TASK_STATUS_KIND } from '@/lib/task-status'
 
 export function TaskStatusChip({ status }: { status: TaskStatus }) {
   const { t } = useTranslation()
-  return (
-    <span className={`status-chip status-chip--${TONES[status]}`}>
-      {t(`tasks.status.${status}`)}
-    </span>
-  )
+  return <StatusChip kind={TASK_STATUS_KIND[status]}>{t(`tasks.status.${status}`)}</StatusChip>
 }

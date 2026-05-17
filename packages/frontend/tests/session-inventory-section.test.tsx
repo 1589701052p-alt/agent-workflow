@@ -134,7 +134,7 @@ describe('RuntimeInventorySection', () => {
     expect((det as HTMLDetailsElement).open).toBe(false)
   })
 
-  test('MCP needs_auth status uses warn status-badge class', async () => {
+  test('MCP needs_auth status uses warn status chip', async () => {
     mockInventory('t1', 'r1', CAPTURED)
     const { container } = render(
       withQc(
@@ -143,10 +143,14 @@ describe('RuntimeInventorySection', () => {
     )
     const det = await screen.findByTestId('runtime-inventory-section')
     fireEvent.click(det.querySelector('summary')!)
+    // RFC-035: StatusBadge now renders the unified <StatusChip>, so the
+    // semantic anchor is `status-chip--warn` / `--success`. The old
+    // `status-badge--*` class survives only as a CSS fallback during the
+    // cleanup window.
     await waitFor(() => {
-      expect(container.querySelectorAll('.status-badge--warn').length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('.status-chip--warn').length).toBeGreaterThan(0)
     })
-    expect(container.querySelectorAll('.status-badge--success').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.status-chip--success').length).toBeGreaterThan(0)
   })
 
   test('captured:true with zero items in a category shows (none) placeholder', async () => {

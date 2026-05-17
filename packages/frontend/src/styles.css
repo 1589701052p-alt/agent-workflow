@@ -12,6 +12,39 @@
   --muted: #6b7180;
   --accent: #2f6feb;
   --danger: #d12c2c;
+
+  /* RFC-035 design tokens. New code MUST use these tokens instead of magic
+     numbers; old code is migrated opportunistically. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 14px;
+  --font-lg: 16px;
+  --font-xl: 22px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
+  --shadow-lg:
+    0 20px 40px rgba(0, 0, 0, 0.25), 0 4px 10px rgba(0, 0, 0, 0.12);
+
+  /* Semantic status colors. --danger is reused from above. */
+  --success: #2da44e;
+  --success-bg: color-mix(in srgb, var(--success) 18%, transparent);
+  --warn: #bf6900;
+  --warn-bg: color-mix(in srgb, var(--warn) 18%, transparent);
+  --info: #266ab3;
+  --info-bg: color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 /* P-5-04 dark theme — applied when the resolved theme is dark, which the
@@ -29,6 +62,12 @@
   --muted: #95a0b3;
   --accent: #6aa3ff;
   --danger: #ff6b6b;
+
+  /* RFC-035: semantic colors that need higher contrast in dark theme.
+     Spacing/font/radius/shadow tokens carry over from :root. */
+  --success: #3fb959;
+  --warn: #f0a020;
+  --info: var(--accent);
 }
 
 :root[data-theme='light'] {
@@ -44,6 +83,10 @@
     --muted: #95a0b3;
     --accent: #6aa3ff;
     --danger: #ff6b6b;
+
+    --success: #3fb959;
+    --warn: #f0a020;
+    --info: var(--accent);
   }
 }
 
@@ -1098,6 +1141,31 @@ code {
   font-size: 13px;
 }
 
+/* RFC-035: previously used at 9 callsites but had no CSS. Render an
+   accent-colored text-only button; transparent border occupies space so
+   hover doesn't shift the layout. */
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+.btn--ghost:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.btn--ghost.btn--danger {
+  color: var(--danger);
+}
+.btn--ghost.btn--danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* RFC-035: extra-small variant used by toolbar / row-internal actions. */
+.btn--xs {
+  padding: 2px 8px;
+  font-size: var(--font-sm);
+  border-radius: var(--radius-sm);
+}
+
 .btn--armed {
   background: var(--danger);
   border-color: var(--danger);
@@ -1223,17 +1291,65 @@ code {
   color: #fff;
 }
 
+/* RFC-035 unified <StatusChip>. Five semantic modifiers
+   (success/warn/danger/info/neutral) are the canonical kinds. Five legacy
+   modifiers (--gray/--blue/--green/--red/--amber) are preserved as
+   backward-compat aliases for the cleanup PR to remove later. */
 .status-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   padding: 2px 10px;
-  border-radius: 10px;
-  font-size: 12px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-sm);
   font-weight: 500;
+  border: 1px solid transparent;
   text-transform: lowercase;
   letter-spacing: 0.02em;
-  border: 1px solid transparent;
 }
 
+.status-chip--sm {
+  padding: 1px 8px;
+  font-size: var(--font-xs);
+}
+.status-chip--md {
+  /* default */
+}
+
+.status-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-chip--success {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+.status-chip--warn {
+  background: var(--warn-bg);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.status-chip--danger {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.status-chip--info {
+  background: var(--info-bg);
+  border-color: var(--info);
+  color: var(--info);
+}
+.status-chip--neutral {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+/* Backward-compat aliases (cleanup PR will remove after one release). */
 .status-chip--gray {
   background: var(--bg);
   border-color: var(--border);
@@ -1247,9 +1363,9 @@ code {
 }
 
 .status-chip--green {
-  background: color-mix(in srgb, #2da44e 18%, transparent);
-  border-color: #2da44e;
-  color: #2da44e;
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .status-chip--red {

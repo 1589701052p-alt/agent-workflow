@@ -4,10 +4,16 @@
 // Rendered as a button so keyboard users can tab into it; routes to
 // `/tasks/$id` on click. The status chip reuses the i18n `home.taskRow.*`
 // labels so visual semantics line up across both sections.
+//
+// RFC-035: the inline `task-row__status*` span is replaced with the unified
+// <StatusChip>. The TaskStatus → kind map lives in lib/task-status.ts so
+// /tasks list + /tasks/$id header + homepage row use the exact same map.
 
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { TaskStatus, TaskSummary } from '@agent-workflow/shared'
+import { StatusChip } from '@/components/StatusChip'
+import { TASK_STATUS_KIND } from '@/lib/task-status'
 import { formatRelativeTime } from '@/lib/homepage'
 
 interface TaskRowProps {
@@ -36,7 +42,14 @@ export function TaskRow({ task, nowMs }: TaskRowProps) {
         {task.id}
       </span>
       <span className="task-row__name">{task.workflowName ?? '—'}</span>
-      <span className={`task-row__status task-row__status--${task.status}`}>{statusLabel}</span>
+      <StatusChip
+        kind={TASK_STATUS_KIND[task.status]}
+        size="sm"
+        className="task-row__status"
+        data-testid={`task-row-status-${task.id}`}
+      >
+        {statusLabel}
+      </StatusChip>
       <span className="task-row__time muted">{t(`home.taskRow.${rel.key}`, rel.opts)}</span>
     </button>
   )
