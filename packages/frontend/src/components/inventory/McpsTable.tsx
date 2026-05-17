@@ -8,7 +8,13 @@ export function McpsTable({ mcps }: { mcps: readonly InventoryMcp[] }) {
     return <div className="muted inventory-section__empty">{t('nodeDrawer.inventory.empty')}</div>
   }
   return (
-    <table className="inventory-table">
+    <table className="inventory-table inventory-table--mcps">
+      <colgroup>
+        <col className="col-name" />
+        <col className="col-status" />
+        <col className="col-type" />
+        <col className="col-hint" />
+      </colgroup>
       <thead>
         <tr>
           <th>{t('nodeDrawer.inventory.col.name')}</th>

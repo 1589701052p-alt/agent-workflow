@@ -8,7 +8,11 @@ export function PluginsTable({ plugins }: { plugins: readonly InventoryPlugin[] 
     return <div className="muted inventory-section__empty">{t('nodeDrawer.inventory.empty')}</div>
   }
   return (
-    <table className="inventory-table">
+    <table className="inventory-table inventory-table--plugins">
+      <colgroup>
+        <col className="col-specifier" />
+        <col className="col-source" />
+      </colgroup>
       <thead>
         <tr>
           <th>{t('nodeDrawer.inventory.col.specifier')}</th>

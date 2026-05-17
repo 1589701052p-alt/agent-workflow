@@ -4837,10 +4837,14 @@ mark.comment-anchor[data-active='true'] {
 
 /* RFC-029: Runtime Inventory section rendered at the top of the Session
    tab. Positioned between the attempts switcher and the conversation flow;
-   default collapsed via <details>, expanded shows four sub-tables. */
+   default collapsed via <details>, expanded shows four sub-tables.
+   Uses the project-wide CSS vars (--panel / --border / --muted / --text)
+   so both light & dark themes render legibly — earlier --surface-* tokens
+   are not defined repo-wide and silently fell back to light hex values in
+   dark mode. */
 .inventory-section {
   margin: 8px 0 12px;
-  border-bottom: 1px solid var(--surface-border, #d0d7de);
+  border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
 }
 .inventory-section__summary {
@@ -4850,81 +4854,139 @@ mark.comment-anchor[data-active='true'] {
   align-items: center;
   gap: 8px;
   padding: 4px 0;
+  color: var(--text);
 }
 .inventory-section__chips {
   margin-left: auto;
   display: flex;
   gap: 4px;
   font-size: 11px;
-  opacity: 0.7;
 }
 .inventory-section__chip {
   padding: 0 6px;
   border-radius: 3px;
-  background: var(--surface-muted, #eaeef2);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
 }
 .inventory-section__missing {
-  color: var(--muted, #57606a);
+  color: var(--muted);
   font-style: italic;
   margin-top: 8px;
 }
 .inventory-section__pending {
-  color: var(--muted, #57606a);
+  color: var(--muted);
   margin-top: 8px;
 }
 .inventory-section__body {
   margin-top: 8px;
+  /* Allow horizontal scroll instead of forcing the whole drawer to widen
+     when a row carries a long file:// URL — the table cells still wrap
+     long words via word-break below, but the wrapper keeps a safety net. */
+  overflow-x: auto;
 }
 .inventory-section__subtitle {
   font-size: 12px;
   font-weight: 600;
   margin: 12px 0 4px;
-  color: var(--muted, #57606a);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 .inventory-section__empty {
   font-size: 12px;
   padding: 4px 0;
+  color: var(--muted);
 }
 .inventory-table {
   width: 100%;
+  /* fixed layout + percent-based column widths in the per-table CSS below
+     stop any single long cell (file:// URLs, model ids) from pushing the
+     whole table past the drawer's right edge. */
+  table-layout: fixed;
   font-size: 12px;
   border-collapse: collapse;
+  color: var(--text);
 }
 .inventory-table th,
 .inventory-table td {
   text-align: left;
   padding: 4px 8px;
-  border-bottom: 1px solid var(--surface-border, #d0d7de);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
+  /* Long file:// paths / model ids must wrap inside the cell rather than
+     stretch the column past the drawer width. break-word keeps
+     space-separated tokens intact when there's room, falls back to
+     character-level breaks only when needed. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .inventory-table th {
   font-weight: 600;
-  color: var(--muted, #57606a);
+  color: var(--muted);
 }
 .inventory-table tbody tr:hover {
-  background: var(--surface-hover, #f6f8fa);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
+/* Per-column widths keep the widest text (Path / Hint / Specifier) from
+   eating all the horizontal real estate. Percentages so the table still
+   responds to drawer-width changes. */
+.inventory-table--agents col.col-name { width: 22%; }
+.inventory-table--agents col.col-mode { width: 12%; }
+.inventory-table--agents col.col-model { width: 36%; }
+.inventory-table--agents col.col-ro { width: 10%; }
+.inventory-table--agents col.col-source { width: 20%; }
+.inventory-table--skills col.col-name { width: 22%; }
+.inventory-table--skills col.col-source { width: 14%; }
+.inventory-table--skills col.col-path { width: 32%; }
+.inventory-table--skills col.col-desc { width: 32%; }
+.inventory-table--mcps col.col-name { width: 26%; }
+.inventory-table--mcps col.col-status { width: 22%; }
+.inventory-table--mcps col.col-type { width: 14%; }
+.inventory-table--mcps col.col-hint { width: 38%; }
+.inventory-table--plugins col.col-specifier { width: 75%; }
+.inventory-table--plugins col.col-source { width: 25%; }
 .status-badge {
+  display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 11px;
-  white-space: nowrap;
+  /* Avoid white-space:nowrap so a long localized label still wraps inside
+     the chip rather than overflowing the column. */
+  line-height: 1.4;
+  border: 1px solid transparent;
 }
+/* Color tokens use rgb()-with-alpha tints layered over the panel surface so
+   the chips stay readable on both themes. */
 .status-badge--success {
-  background: rgba(31, 136, 61, 0.12);
-  color: #1f883d;
+  background: color-mix(in srgb, #1f883d 18%, var(--panel));
+  color: #2da44e;
+  border-color: color-mix(in srgb, #1f883d 40%, transparent);
 }
 .status-badge--warn {
-  background: rgba(191, 135, 0, 0.15);
-  color: #9a6700;
+  background: color-mix(in srgb, #bf8700 22%, var(--panel));
+  color: #d4a72c;
+  border-color: color-mix(in srgb, #bf8700 45%, transparent);
 }
 .status-badge--danger {
-  background: rgba(207, 34, 46, 0.12);
-  color: #b81f24;
+  background: color-mix(in srgb, #cf222e 18%, var(--panel));
+  color: #f85149;
+  border-color: color-mix(in srgb, #cf222e 40%, transparent);
 }
 .status-badge--muted {
-  background: var(--surface-muted, #eaeef2);
-  color: var(--muted, #57606a);
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--border);
+}
+/* In dark mode, the success / warn / danger foregrounds are already bright;
+   in light mode they should be the darker variant for contrast on the
+   tinted background. */
+:root[data-theme='light'] .status-badge--success {
+  color: #1f883d;
+}
+:root[data-theme='light'] .status-badge--warn {
+  color: #9a6700;
+}
+:root[data-theme='light'] .status-badge--danger {
+  color: #b81f24;
 }
