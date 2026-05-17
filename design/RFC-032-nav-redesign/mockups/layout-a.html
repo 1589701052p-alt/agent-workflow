@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Layout A — 分组侧栏</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+        --bg: #f8f9fb;
+        --panel: #ffffff;
+        --border: #e3e5ea;
+        --text: #1f2328;
+        --muted: #6b7180;
+        --accent: #2f6feb;
+        --danger: #d12c2c;
+        --success: #1f9d55;
+        --warn: #d97706;
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #15181d;
+        --panel: #1c2028;
+        --border: #2a2f38;
+        --text: #e6e7ea;
+        --muted: #95a0b3;
+        --accent: #6aa3ff;
+        --danger: #ff6b6b;
+        --success: #4ade80;
+        --warn: #fbbf24;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 14px;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      /* --- Sidebar --- */
+      .sidebar {
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        padding: 16px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        overflow-y: auto;
+      }
+      .sidebar__brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 600;
+        padding: 6px 12px 14px;
+      }
+      .sidebar__brand-dot {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, #22d3ee, #818cf8 50%, #e879f9);
+      }
+
+      .nav-group {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        margin-bottom: 4px;
+      }
+      .nav-group__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 12px 4px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      .nav-group__chevron {
+        width: 10px;
+        text-align: center;
+      }
+      .nav-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 7px 12px 7px 28px;
+        border-radius: 6px;
+        font-size: 13px;
+        color: var(--text);
+        position: relative;
+      }
+      .nav-item--top {
+        padding-left: 12px;
+      }
+      .nav-item:hover {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--accent);
+      }
+      .nav-item--active,
+      .nav-item--active:hover {
+        background: var(--accent);
+        color: #fff;
+      }
+      .nav-item__label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .nav-item__dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--success);
+        flex-shrink: 0;
+      }
+      .nav-item__dot--warn {
+        background: var(--warn);
+      }
+      .nav-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 18px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--danger);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .nav-item--active .nav-badge {
+        background: #fff;
+        color: var(--accent);
+      }
+
+      .sidebar__footer {
+        margin-top: auto;
+        padding-top: 10px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-left: 4px;
+        padding-right: 4px;
+      }
+      .theme-toggle {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 4px 8px;
+      }
+      .lang-pill {
+        display: inline-flex;
+        font-size: 11px;
+        color: var(--muted);
+        gap: 4px;
+      }
+
+      /* --- Content --- */
+      .content {
+        padding: 24px 32px;
+        overflow: auto;
+      }
+      .page-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .page-title {
+        font-size: 22px;
+        font-weight: 600;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .breadcrumb {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--accent);
+      }
+      .pill--muted {
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+        color: var(--muted);
+      }
+
+      .tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 20px;
+      }
+      .tab {
+        padding: 8px 14px;
+        font-size: 13px;
+        color: var(--muted);
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+      }
+      .tab--active {
+        color: var(--text);
+        border-bottom-color: var(--accent);
+        font-weight: 600;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 20px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px 18px;
+      }
+      .card__title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0 0 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .card__title .pill {
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-top: 1px dashed var(--border);
+      }
+      .row:first-of-type {
+        border-top: 0;
+      }
+      .row__main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .row__icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .row__meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .row__actions {
+        display: flex;
+        gap: 6px;
+      }
+      .btn-ghost {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 6px;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+        border: 0;
+        font-size: 12px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+      }
+
+      .yaml {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre;
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        margin: 0;
+      }
+
+      .runtime-card .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .runtime-card .status .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      .inbox-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .inbox-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0;
+        border-top: 1px dashed var(--border);
+      }
+      .inbox-item:first-child {
+        border-top: 0;
+      }
+      .inbox-tag {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--warn) 18%, transparent);
+        color: var(--warn);
+      }
+      .inbox-tag--review {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--accent);
+      }
+      .inbox-text {
+        flex: 1;
+        font-size: 12px;
+        color: var(--text);
+      }
+      .inbox-time {
+        font-size: 11px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar__brand">
+          <span class="sidebar__brand-dot"></span>
+          <span>Agent Workflow</span>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group__header">
+            <span>代理 · Agents</span><span class="nav-group__chevron">▾</span>
+          </div>
+          <a class="nav-item nav-item--top nav-item--active" href="#">
+            <span class="nav-item__label">代理</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label">技能</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label">MCP</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label">插件</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label"><span class="nav-item__dot"></span>运行时</span>
+            <span class="pill pill--muted" style="font-size: 10px">v0.13.2</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group__header">
+            <span>工作流 · Workflows</span><span class="nav-group__chevron">▾</span>
+          </div>
+          <a class="nav-item nav-item--top" href="#">
+            <span class="nav-item__label">工作流</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label">收件箱</span>
+            <span class="nav-badge">12</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group__header">
+            <span>任务 · Tasks</span><span class="nav-group__chevron">▾</span>
+          </div>
+          <a class="nav-item nav-item--top" href="#">
+            <span class="nav-item__label">任务</span>
+            <span class="nav-badge" style="background: var(--warn)">3</span>
+          </a>
+          <a class="nav-item" href="#">
+            <span class="nav-item__label">远端仓</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group__header">
+            <span>系统</span>
+          </div>
+          <a class="nav-item nav-item--top" href="#">
+            <span class="nav-item__label">设置</span>
+          </a>
+        </div>
+
+        <div class="sidebar__footer">
+          <span class="lang-pill">中文 / EN</span>
+          <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <div class="breadcrumb">代理 / reviewer</div>
+        <div class="page-head">
+          <h1 class="page-title">
+            reviewer
+            <span class="pill">readonly</span>
+            <span class="pill pill--muted">claude-opus-4-7</span>
+          </h1>
+          <div style="display: flex; gap: 8px">
+            <button class="btn-ghost">复制为模板</button>
+            <button class="btn-ghost">试运行</button>
+            <button class="btn-primary">保存</button>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <div class="tab tab--active">概览</div>
+          <div class="tab">能力</div>
+          <div class="tab">提示词</div>
+          <div class="tab">版本</div>
+        </div>
+
+        <div class="grid">
+          <div>
+            <div class="card" style="margin-bottom: 16px">
+              <div class="card__title">
+                能力 · Capabilities
+                <span class="pill">3 技能 · 2 MCP · 1 插件</span>
+              </div>
+              <div class="row">
+                <div class="row__main">
+                  <div class="row__icon">S</div>
+                  <div>
+                    <div>code-review</div>
+                    <div class="row__meta">技能 · managed · v1.2</div>
+                  </div>
+                </div>
+                <div class="row__actions">
+                  <button class="btn-ghost">查看</button>
+                  <button class="btn-ghost">解绑</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row__main">
+                  <div class="row__icon">S</div>
+                  <div>
+                    <div>git-tools</div>
+                    <div class="row__meta">技能 · external · v0.4</div>
+                  </div>
+                </div>
+                <div class="row__actions">
+                  <button class="btn-ghost">查看</button>
+                  <button class="btn-ghost">解绑</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row__main">
+                  <div class="row__icon" style="background: color-mix(in srgb, #818cf8 14%, transparent); color: #818cf8">M</div>
+                  <div>
+                    <div>lint-mcp</div>
+                    <div class="row__meta">MCP · ws://localhost:7421 · connected</div>
+                  </div>
+                </div>
+                <div class="row__actions">
+                  <button class="btn-ghost">查看</button>
+                  <button class="btn-ghost">解绑</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row__main">
+                  <div class="row__icon" style="background: color-mix(in srgb, #e879f9 14%, transparent); color: #e879f9">P</div>
+                  <div>
+                    <div>opentelemetry-plugin</div>
+                    <div class="row__meta">插件 · runtime · enabled</div>
+                  </div>
+                </div>
+                <div class="row__actions">
+                  <button class="btn-ghost">查看</button>
+                  <button class="btn-ghost">解绑</button>
+                </div>
+              </div>
+              <div style="margin-top: 12px; text-align: right">
+                <button class="btn-ghost">+ 添加能力</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__title">Frontmatter (YAML)</div>
+              <pre class="yaml">model: claude-opus-4-7
+readonly: false
+temperature: 0.2
+outputs: [report, patch]
+skills:
+  - code-review
+  - git-tools
+mcps:
+  - lint-mcp
+plugins:
+  - opentelemetry-plugin</pre>
+            </div>
+          </div>
+
+          <div>
+            <div class="card runtime-card" style="margin-bottom: 16px">
+              <div class="card__title">运行时 · Runtime</div>
+              <div class="status">
+                <span class="dot"></span>
+                opencode v0.13.2 · ready
+              </div>
+              <div class="row" style="margin-top: 6px">
+                <div class="row__meta">PATH</div>
+                <div class="row__meta" style="color: var(--text)">/usr/local/bin/opencode</div>
+              </div>
+              <div class="row">
+                <div class="row__meta">最低版本</div>
+                <div class="row__meta" style="color: var(--text)">v0.12.0</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__title">
+                收件箱 <span class="nav-badge">12</span>
+              </div>
+              <div class="inbox-list">
+                <div class="inbox-item">
+                  <span class="inbox-tag inbox-tag--review">评审</span>
+                  <span class="inbox-text">workflow #482 等你确认审计结论</span>
+                  <span class="inbox-time">3 分钟前</span>
+                </div>
+                <div class="inbox-item">
+                  <span class="inbox-tag">反问</span>
+                  <span class="inbox-text">coder 节点请你澄清"目标文件范围"</span>
+                  <span class="inbox-time">17 分钟前</span>
+                </div>
+                <div class="inbox-item">
+                  <span class="inbox-tag">反问</span>
+                  <span class="inbox-text">auditor 想确认是否跳过 vendored 目录</span>
+                  <span class="inbox-time">1 小时前</span>
+                </div>
+                <div class="inbox-item">
+                  <span class="inbox-tag inbox-tag--review">评审</span>
+                  <span class="inbox-text">workflow #479 的 patch 待签</span>
+                  <span class="inbox-time">昨天</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      function toggleTheme() {
+        const r = document.documentElement
+        r.setAttribute(
+          'data-theme',
+          r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark',
+        )
+      }
+    </script>
+  </body>
+</html>
