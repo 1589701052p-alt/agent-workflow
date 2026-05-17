@@ -78,7 +78,19 @@ export const QuestionForm = forwardRef<QuestionFormHandle, QuestionFormProps>(fu
     forwardedRef,
     () => ({
       focus: () => {
-        rootRef.current?.focus()
+        const el = rootRef.current
+        if (el === null) return
+        // Suppress the native focus auto-scroll (`block: 'nearest'`)
+        // so we can deterministically align the card's top with the
+        // viewport top. Without this, when the next question is already
+        // partially visible the browser doesn't scroll at all — and
+        // reviewers reported "看不到现在在回答哪个问题" because the
+        // active card stayed mid-page. `block: 'start'` clamps at the
+        // scroll container's bottom, so the last question simply
+        // scrolls as far as it can — matching the "scroll to top
+        // unless we're already at the bottom" UX.
+        el.focus({ preventScroll: true })
+        el.scrollIntoView({ block: 'start', behavior: 'smooth' })
       },
     }),
     [],

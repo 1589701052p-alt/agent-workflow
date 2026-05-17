@@ -28,6 +28,23 @@ describe('RFC-023 bugfix #4 — clarify question form CSS contract', () => {
     expect(css).toContain('.clarify-option--custom')
   })
 
+  // Bug report: "反问页面，题目的选中状态不突出，导致经常看不到现在在回答哪个问题".
+  // Root cause was that `.clarify-question:focus` alone stops matching the
+  // moment focus moves to a child radio / checkbox / textarea — i.e. the
+  // instant the reviewer starts answering. The fix pairs `:focus` with
+  // `:focus-within` so the active-question highlight survives child focus.
+  // If a future refactor drops `:focus-within` (or weakens the highlight to
+  // just a box-shadow), users lose the "which question am I on" cue again.
+  test('styles.css keeps the active-question highlight visible while a child input is focused', () => {
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).toContain('.clarify-question:focus-within')
+    // The highlight must do more than a faint outer halo — locking in at
+    // least the accent border so the active card is unmistakable.
+    expect(css).toMatch(
+      /\.clarify-question:focus(-within)?[^{]*,\s*\.clarify-question:focus(-within)?\s*\{[^}]*border-color:\s*var\(--accent\)/,
+    )
+  })
+
   test('styles.css declares the custom textarea container with active toggle', () => {
     const css = readFileSync(STYLES_CSS, 'utf8')
     expect(css).toMatch(/\.clarify-question__custom\s*\{/)

@@ -3968,9 +3968,20 @@ mark.comment-anchor[data-active='true'] {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.clarify-question:focus {
+/* Active-question highlight. `:focus-within` (not just `:focus`) is load-bearing:
+   the moment the reviewer clicks a radio / checkbox / textarea inside, focus
+   moves to that child and `:focus` on the wrapper stops matching, leaving no
+   signal for "which question am I answering". Pairs an accent border, soft
+   tint, inset left rail, and outer halo so the active card is obvious at a
+   glance even on the busiest clarify page. */
+.clarify-question:focus,
+.clarify-question:focus-within {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  box-shadow:
+    inset 4px 0 0 0 var(--accent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .clarify-question--recommended {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));

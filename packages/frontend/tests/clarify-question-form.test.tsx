@@ -15,10 +15,10 @@
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { useState } from 'react'
+import { createRef, useState } from 'react'
 import type { ClarifyAnswer, ClarifyQuestion } from '@agent-workflow/shared'
 import { CLARIFY_MAX_CUSTOM_TEXT_LEN } from '@agent-workflow/shared'
-import { QuestionForm } from '../src/components/clarify/QuestionForm'
+import { QuestionForm, type QuestionFormHandle } from '../src/components/clarify/QuestionForm'
 import '../src/i18n'
 
 afterEach(() => {
@@ -416,5 +416,45 @@ describe('QuestionForm — keyboard advance', () => {
     const last = change.mock.calls[change.mock.calls.length - 1]?.[0] as ClarifyAnswer
     expect(last.selectedOptionIndices).toEqual([1])
     expect(adv).not.toHaveBeenCalled()
+  })
+})
+
+// Bug report: "选中某个题目的时候，没有把题目滚动到最上方，除非已经到底了，
+// 否则要都滚动到最上方". The parent route drives keyboard navigation by
+// invoking the QuestionForm's imperative `focus()` handle. The native
+// `.focus()` auto-scrolls with `block: 'nearest'`, which leaves a
+// partially-visible card mid-page and confuses reviewers. The handle must
+// (a) suppress the native auto-scroll and (b) call scrollIntoView with
+// `block: 'start'` so the card is pinned to the viewport top (the scroll
+// container clamps at its own bottom, which naturally handles the "already
+// at the bottom" case the bug report carves out).
+describe('QuestionForm — focus() handle scrolls active card to top', () => {
+  test('imperative focus aligns the card to the top of the scroll container', () => {
+    const scrollSpy = vi.fn()
+    // jsdom doesn't implement Element.prototype.scrollIntoView — patch it
+    // on the prototype so the spy fires regardless of which element the
+    // handle ends up calling it on.
+    Element.prototype.scrollIntoView = scrollSpy
+    const ref = createRef<QuestionFormHandle>()
+    render(
+      <QuestionForm
+        ref={ref}
+        question={SINGLE_Q}
+        value={emptyAnswer('q-db')}
+        index={1}
+        onChange={() => {}}
+      />,
+    )
+    ref.current!.focus()
+    // Card root receives focus.
+    const root = document.querySelector('.clarify-question') as HTMLElement
+    expect(document.activeElement).toBe(root)
+    // …and scrollIntoView is invoked with block:'start' so the card pins
+    // to the top of the viewport (smooth behavior is a nice-to-have but
+    // the load-bearing assertion is block:'start' — locking the native
+    // 'nearest' default that caused the bug).
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+    const arg = scrollSpy.mock.calls[0]?.[0] as ScrollIntoViewOptions
+    expect(arg.block).toBe('start')
   })
 })
