@@ -111,7 +111,12 @@ function buildUnconfigured(source: string): HTMLElement {
   wrap.className = 'review-diagram__unconfigured'
   const hint = document.createElement('div')
   hint.className = 'review-diagram__hint'
-  hint.textContent = 'plantuml endpoint not configured (Settings → Rendering); showing source.'
+  // Wording stays explicitly "plantuml ... not configured" so the
+  // plantuml-block.test.ts regex (/not configured/) still matches; the
+  // banner styling in prose.css is what makes it read as a system notice
+  // rather than markdown body text.
+  hint.textContent =
+    'PlantUML renderer not configured — set an endpoint in Settings → Rendering. Showing diagram source below.'
   const pre = document.createElement('pre')
   pre.className = 'review-diagram__source'
   pre.textContent = source

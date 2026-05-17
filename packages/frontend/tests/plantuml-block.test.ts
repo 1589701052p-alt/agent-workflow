@@ -47,6 +47,19 @@ describe('render — unconfigured endpoint', () => {
     expect(mount.querySelector('.review-diagram__source')?.textContent).toContain('@startuml')
   })
 
+  test('hint copy reads as a system notice, not body text', () => {
+    // Wording locked in so a future copy refactor cannot silently regress
+    // the "this is a system message, not markdown content" cue. The CSS
+    // banner (border-left accent + tinted bg) lives in prose.css; here we
+    // just verify the textual cues are present.
+    const mount = makeMount()
+    PlantUmlBlock.render(mount, '@startuml\nA -> B\n@enduml', undefined, undefined)
+    const hintText = mount.querySelector('.review-diagram__hint')?.textContent ?? ''
+    expect(hintText).toMatch(/PlantUML/)
+    expect(hintText).toMatch(/Settings → Rendering/)
+    expect(hintText.toLowerCase()).toContain('showing')
+  })
+
   test('whitespace endpoint → same fallback', () => {
     const mount = makeMount()
     PlantUmlBlock.render(mount, '@startuml\nA -> B\n@enduml', '   ', undefined)
