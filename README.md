@@ -36,11 +36,6 @@ curl -L -o agent-workflow \
   https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-macos-arm64
 chmod +x agent-workflow
 
-# macOS (Intel)
-curl -L -o agent-workflow \
-  https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-macos-x86_64
-chmod +x agent-workflow
-
 # Linux (x86_64)
 curl -L -o agent-workflow \
   https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-linux-x86_64

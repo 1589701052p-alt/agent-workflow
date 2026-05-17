@@ -8,9 +8,9 @@ name: Release
 # (scripts/build-binary.ts), so simply running on each runner produces the
 # correct asset name automatically:
 # - macos-latest      (Apple Silicon) -> dist/agent-workflow-macos-arm64
-# - macos-13          (Intel)         -> dist/agent-workflow-macos-x86_64
 # - ubuntu-latest     (x86_64)        -> dist/agent-workflow-linux-x86_64
 # - ubuntu-24.04-arm  (arm64)         -> dist/agent-workflow-linux-arm64
+# macOS Intel (macos-13) was dropped — GitHub Actions retired the runner.
 #
 # Cutting a release:
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
