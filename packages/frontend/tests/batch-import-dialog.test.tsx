@@ -152,12 +152,16 @@ describe('BatchImportDialog (RFC-033)', () => {
       target: { value: 'https://h/a.git' },
     })
     fireEvent.click(screen.getByTestId('batch-import-start'))
-    await new Promise((r) => setTimeout(r, 0))
+    // RFC-035 PR3: state flips through three setState calls after the mocked
+    // api.post resolves; React 19 batches them on the next microtask. Use
+    // findByTestId so the assertion polls (default 1s timeout) rather than
+    // racing against a single setTimeout(0) tick — needed under Linux
+    // scheduling jitter on CI.
+    await screen.findByTestId('batch-import-table')
     expect(api.post).toHaveBeenCalledWith('/api/cached-repos/batch-import', {
       urls: ['https://h/a.git'],
     })
     expect(onActiveBatchIdChange).toHaveBeenCalledWith('b1')
-    expect(screen.getByTestId('batch-import-table')).toBeTruthy()
   })
 
   test('progress view: row.update via WS replaces the row in place', async () => {
