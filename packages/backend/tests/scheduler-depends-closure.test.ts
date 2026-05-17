@@ -30,7 +30,7 @@ const NOOP_LOG: Logger = {
 async function seedAgent(
   db: DbClient,
   name: string,
-  opts: { dependsOn?: string[]; skills?: string[] } = {},
+  opts: { dependsOn?: string[]; skills?: string[]; mcp?: string[] } = {},
 ): Promise<void> {
   await createAgent(db, {
     name,
@@ -41,6 +41,7 @@ async function seedAgent(
     permission: {},
     skills: opts.skills ?? [],
     dependsOn: opts.dependsOn ?? [],
+    mcp: opts.mcp ?? [],
     frontmatterExtra: {},
     bodyMd: '',
   })

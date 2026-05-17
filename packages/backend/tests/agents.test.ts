@@ -53,6 +53,7 @@ function samplePayload(name: string): Record<string, unknown> {
     permission: { edit: 'deny' },
     skills: ['s1'],
     dependsOn: [],
+    mcp: [],
     bodyMd: '# hello',
   }
 }
@@ -79,6 +80,7 @@ describe('agent service', () => {
       permission: { edit: 'deny', bash: 'deny' },
       skills: ['go-conventions'],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: { custom: 'value' },
       bodyMd: '# System prompt\nDo the thing.',
     })
@@ -104,6 +106,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -117,6 +120,7 @@ describe('agent service', () => {
         permission: {},
         skills: [],
         dependsOn: [],
+        mcp: [],
         frontmatterExtra: {},
         bodyMd: '',
       }),
@@ -133,6 +137,7 @@ describe('agent service', () => {
       permission: { edit: 'allow' },
       skills: ['s1'],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: 'body',
     })
@@ -161,6 +166,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -179,6 +185,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -206,6 +213,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -218,6 +226,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -238,6 +247,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -267,6 +277,7 @@ describe('agent service', () => {
       permission: {},
       skills: [] as string[],
       dependsOn: [] as string[],
+      mcp: [] as string[],
       frontmatterExtra: {},
       bodyMd: '',
     }
@@ -282,6 +293,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: ['code-auditor', 'unit-test-runner'],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -296,6 +308,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })
@@ -314,6 +327,7 @@ describe('agent service', () => {
       permission: {},
       skills: [],
       dependsOn: ['a', 'b', 'a', 'c', 'b'],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
     })

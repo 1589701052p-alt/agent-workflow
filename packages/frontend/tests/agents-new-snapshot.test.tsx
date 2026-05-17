@@ -17,6 +17,7 @@ function emptyDraft(): CreateAgent {
     permission: {},
     skills: [],
     dependsOn: [],
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: '',
   }

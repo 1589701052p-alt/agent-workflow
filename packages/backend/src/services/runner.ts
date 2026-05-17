@@ -22,6 +22,7 @@ import type {
   ClarifyPromptContext,
   ClarifyQuestion,
   ClarifyTruncationWarning,
+  Mcp,
   ReviewPromptContext,
 } from '@agent-workflow/shared'
 import { parseClarifyEnvelopeBody } from '@agent-workflow/shared'
@@ -116,6 +117,16 @@ export interface RunNodeOptions {
    * primary agent.
    */
   dependents?: Agent[]
+  /**
+   * RFC-028: MCP server configs to inject under `mcp.<name>` in the inline
+   * OPENCODE_CONFIG_CONTENT. Scheduler pre-loads these via
+   * `collectMcpNamesFromClosure` + `loadMcpsByNames` (see services/mcpClosure)
+   * over the dependsOn closure. Empty / undefined → omit the `mcp` key
+   * entirely; the user's repo `.opencode/config.json` + `~/.config/opencode/`
+   * MCPs still load naturally (deep-merge baseline). See OPENCODE_CONFIG.md
+   * §1 and §3.3 for the field-name translation rules.
+   */
+  mcps?: readonly Mcp[]
   /** Default true. */
   dangerouslySkipPermissions?: boolean
   /** Wall-clock timeout in ms. Undefined = no limit. */
@@ -189,18 +200,29 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // 1. Prepare per-run config dir and inject skills.
   prepareSkills(runDir, opts.skills, log)
 
-  // 2. Build OPENCODE_CONFIG_CONTENT inline agent JSON. RFC-022: primary
-  // agent plus every closure dependent gets a `agent.<name>` entry; opencode
-  // merges this after all directory scans so platform definitions win.
-  const inlineConfig = buildInlineConfig(opts.agent, opts.overrides, opts.dependents ?? [])
+  // 2. Build OPENCODE_CONFIG_CONTENT inline agent + mcp JSON. RFC-022:
+  // primary agent plus every closure dependent gets a `agent.<name>` entry.
+  // RFC-028: every Mcp the scheduler pre-loaded becomes an `mcp.<name>` entry
+  // (field names translated env→environment / timeoutMs→timeout to match
+  // opencode's `McpLocalConfig` / `McpRemoteConfig` wire format — see
+  // OPENCODE_CONFIG.md §3.3). opencode merges this AFTER all directory scans
+  // so platform definitions win at field level.
+  const inlineConfig = buildInlineConfig(
+    opts.agent,
+    opts.overrides,
+    opts.dependents ?? [],
+    opts.mcps ?? [],
+  )
   // RFC-022 §design B6: warn (don't fail) when the serialized config crosses
   // the soft cap. Real OS env-var ceilings are well above this; the warning
-  // helps catch authors stuffing massive bodies into every dependent agent.
+  // helps catch authors stuffing massive bodies into every dependent agent
+  // OR cramming many MCP servers' env / headers maps.
   const serializedInline = JSON.stringify(inlineConfig)
   if (serializedInline.length > 32 * 1024) {
     log.warn('inline-config-large', {
       bytes: serializedInline.length,
       agents: Object.keys(inlineConfig.agent),
+      mcpCount: inlineConfig.mcp ? Object.keys(inlineConfig.mcp).length : 0,
     })
   }
 
@@ -235,6 +257,11 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // on the floor" apart from "opencode received it but ignored it" without
   // having to dump the full OPENCODE_CONFIG_CONTENT.
   const primaryInline = inlineConfig.agent[opts.agent.name] as Record<string, unknown> | undefined
+  // RFC-028: log only the count + names of injected MCPs — never the config
+  // bodies. env / headers may contain user tokens; OPENCODE_CONFIG.md §6 calls
+  // this out explicitly. If the count seems wrong (e.g. user expected 3 but
+  // log shows 1) the operator can grep `mcpKeys` to see which names actually
+  // landed without redacting the inline JSON.
   log.info('spawning opencode', {
     bin: cmd[0],
     agent: opts.agent.name,
@@ -244,6 +271,8 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     inlineVariant: primaryInline?.variant ?? null,
     inlineTemperature: primaryInline?.temperature ?? null,
     overrides: opts.overrides ?? null,
+    mcpCount: inlineConfig.mcp ? Object.keys(inlineConfig.mcp).length : 0,
+    mcpKeys: inlineConfig.mcp ? Object.keys(inlineConfig.mcp) : [],
   })
 
   const env: Record<string, string> = {
@@ -532,7 +561,11 @@ export function buildInlineConfig(
   agent: Agent,
   overrides: AgentOverrides | undefined,
   dependents: readonly Agent[],
-): { agent: Record<string, Record<string, unknown>> } {
+  mcps: readonly Mcp[] = [],
+): {
+  agent: Record<string, Record<string, unknown>>
+  mcp?: Record<string, Record<string, unknown>>
+} {
   const map: Record<string, Record<string, unknown>> = {
     [agent.name]: buildInlineAgentEntry(agent, overrides),
   }
@@ -541,7 +574,49 @@ export function buildInlineConfig(
     if (map[dep.name] !== undefined) continue // closure already deduped, but guard anyway
     map[dep.name] = buildInlineAgentEntry(dep)
   }
-  return { agent: map }
+  const out: {
+    agent: Record<string, Record<string, unknown>>
+    mcp?: Record<string, Record<string, unknown>>
+  } = { agent: map }
+  // RFC-028: emit the mcp record only when at least one ENABLED entry exists.
+  // Disabled entries are skipped entirely to keep the env-var compact AND to
+  // avoid masking a same-name inherited entry from repo .opencode/config.json
+  // — leaving inherited config alone is the v1 stance (OPENCODE_CONFIG.md §6).
+  const mcpMap: Record<string, Record<string, unknown>> = {}
+  for (const m of mcps) {
+    if (m.enabled === false) continue
+    if (mcpMap[m.name] !== undefined) continue // closure dedupe
+    mcpMap[m.name] = buildInlineMcpEntry(m)
+  }
+  if (Object.keys(mcpMap).length > 0) out.mcp = mcpMap
+  return out
+}
+
+/**
+ * Translate one DB-shape Mcp into the opencode-wire shape consumed by
+ * `OPENCODE_CONFIG_CONTENT.mcp.<name>`:
+ *   - Local : `command` array kept verbatim; `env` → `environment`;
+ *             `timeoutMs` → `timeout`. **No `cwd` field** (opencode lacks it
+ *             — stdio child cwd is taken from the opencode process directory
+ *             = our worktree). See OPENCODE_CONFIG.md §3.3.
+ *   - Remote: `url` / `headers` / `oauth` kept verbatim; `timeoutMs` → `timeout`.
+ *
+ * Undefined fields are stripped so the resulting JSON does not include `null`
+ * values that opencode's Effect Schema would reject.
+ */
+function buildInlineMcpEntry(m: Mcp): Record<string, unknown> {
+  const entry: Record<string, unknown> = { type: m.type, enabled: m.enabled }
+  if (m.type === 'local') {
+    entry.command = m.config.command
+    if (m.config.env !== undefined) entry.environment = m.config.env
+    if (m.config.timeoutMs !== undefined) entry.timeout = m.config.timeoutMs
+  } else {
+    entry.url = m.config.url
+    if (m.config.headers !== undefined) entry.headers = m.config.headers
+    if (m.config.oauth !== undefined) entry.oauth = m.config.oauth
+    if (m.config.timeoutMs !== undefined) entry.timeout = m.config.timeoutMs
+  }
+  return entry
 }
 
 export function buildCommand(opts: RunNodeOptions, prompt: string): string[] {

@@ -13,7 +13,7 @@ import { validateWorkflowDef } from '../src/services/workflow.validator'
 function agent(
   name: string,
   outputs: string[] = [],
-  opts: { skills?: string[]; dependsOn?: string[] } = {},
+  opts: { skills?: string[]; dependsOn?: string[]; mcp?: string[] } = {},
 ): Agent {
   return {
     id: `agent-${name}`,
@@ -25,6 +25,7 @@ function agent(
     permission: {},
     skills: opts.skills ?? [],
     dependsOn: opts.dependsOn ?? [],
+    mcp: opts.mcp ?? [],
     frontmatterExtra: {},
     bodyMd: '',
     schemaVersion: 1,
@@ -89,6 +90,7 @@ describe('RFC-022 workflow validator: dependsOn closure scan', () => {
     const auditor = agent('auditor', ['out'], {
       skills: ['style-guide'],
       dependsOn: ['explainer'],
+      mcp: [],
     })
     const explainer = agent('explainer')
     const def = makeDef()

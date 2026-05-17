@@ -51,6 +51,7 @@ describe('<DependencyTreePreview>', () => {
           skillCount: 0,
           readonly: false,
           dependsOn: ['auditor'],
+          mcp: [],
         },
         { name: 'auditor', description: '', skillCount: 1, readonly: true, dependsOn: [] },
       ],

@@ -60,6 +60,7 @@ async function setup() {
     permission: {},
     skills: [],
     dependsOn: [],
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: '',
   })

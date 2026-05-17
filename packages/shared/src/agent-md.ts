@@ -42,6 +42,11 @@ const KNOWN_KEYS = new Set<string>([
   // Must be a string[] of valid agent names; bad shapes demote to
   // frontmatterExtra with a warning (same pattern as `permission` / `tools`).
   'dependsOn',
+  // RFC-028: list of MCP server names this agent needs at runtime. Same
+  // shape policy as dependsOn — must be string[] of valid mcp names; bad
+  // shapes demote to frontmatterExtra. Existence check happens server-side
+  // at save time (services/agent.ts `validateMcpReferences`).
+  'mcp',
 ])
 
 /** RFC-022: matches AGENT_NAME_RE in schemas/agent.ts so import-time and
@@ -259,6 +264,39 @@ export function parseAgentMarkdown(
     } else {
       extras.dependsOn = data.dependsOn
       warnings.push('dependsOn must be an array of agent names; kept in frontmatterExtra')
+    }
+  }
+
+  // RFC-028: mcp — string[] of MCP server names. Same shape rules as
+  // dependsOn. Existence/closure validation belongs to the save-time guard
+  // in services/agent.ts (`validateMcpReferences`).
+  if (data.mcp !== undefined) {
+    if (Array.isArray(data.mcp)) {
+      const cleaned: string[] = []
+      const rejected: unknown[] = []
+      for (const entry of data.mcp) {
+        if (typeof entry === 'string' && AGENT_NAME_RE_LOCAL.test(entry)) {
+          cleaned.push(entry)
+        } else {
+          rejected.push(entry)
+        }
+      }
+      if (rejected.length > 0) {
+        extras.mcp = data.mcp
+        warnings.push('mcp entries must match [a-z0-9][a-z0-9_-]*; kept in frontmatterExtra')
+      } else {
+        const seen = new Set<string>()
+        const ordered: string[] = []
+        for (const n of cleaned) {
+          if (seen.has(n)) continue
+          seen.add(n)
+          ordered.push(n)
+        }
+        partial.mcp = ordered
+      }
+    } else {
+      extras.mcp = data.mcp
+      warnings.push('mcp must be an array of MCP server names; kept in frontmatterExtra')
     }
   }
 

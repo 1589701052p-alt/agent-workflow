@@ -42,7 +42,13 @@ async function req(app: Hono, path: string, init?: RequestInit): Promise<Respons
 async function seedAgent(
   db: DbClient,
   name: string,
-  opts: { dependsOn?: string[]; skills?: string[]; description?: string; readonly?: boolean } = {},
+  opts: {
+    dependsOn?: string[]
+    skills?: string[]
+    mcp?: string[]
+    description?: string
+    readonly?: boolean
+  } = {},
 ): Promise<void> {
   await createAgent(db, {
     name,
@@ -53,6 +59,7 @@ async function seedAgent(
     permission: {},
     skills: opts.skills ?? [],
     dependsOn: opts.dependsOn ?? [],
+    mcp: opts.mcp ?? [],
     frontmatterExtra: {},
     bodyMd: '',
   })

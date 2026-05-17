@@ -19,6 +19,7 @@ const CODER: Agent = {
   permission: {},
   skills: [],
   dependsOn: [],
+  mcp: [],
   frontmatterExtra: {},
   bodyMd: '',
   schemaVersion: 1,

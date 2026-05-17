@@ -30,6 +30,7 @@ const AGENT: Agent = {
   permission: {},
   skills: [],
   dependsOn: [],
+  mcp: [],
   frontmatterExtra: {},
   bodyMd: 'body',
   schemaVersion: 1,

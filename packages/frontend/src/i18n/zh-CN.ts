@@ -9,6 +9,7 @@ export interface Resources {
   nav: {
     agents: string
     skills: string
+    mcps: string
     workflows: string
     tasks: string
     reviews: string
@@ -16,6 +17,45 @@ export interface Resources {
     repos: string
     settings: string
     brand: string
+  }
+  mcps: {
+    title: string
+    hint: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colType: string
+    colDescription: string
+    colEnabled: string
+    typeLocal: string
+    typeRemote: string
+    deleteButton: string
+    deleteConfirm: string
+    deleteReferenced: string
+    formTitle: string
+    formEditTitle: string
+    fieldName: string
+    fieldNameHint: string
+    fieldDescription: string
+    fieldType: string
+    fieldEnabled: string
+    fieldEnabledHint: string
+    fieldCommand: string
+    fieldCommandHint: string
+    fieldEnv: string
+    fieldEnvHint: string
+    fieldTimeoutMs: string
+    fieldUrl: string
+    fieldUrlHint: string
+    fieldHeaders: string
+    fieldHeadersHint: string
+    fieldOauth: string
+    fieldOauthHint: string
+    saveButton: string
+    cancelButton: string
+    toolNamingHint: string
+    cwdHint: string
+    oauthCliHint: string
   }
   reviews: {
     title: string
@@ -617,6 +657,13 @@ export interface Resources {
     dependsPickerLoading: string
     dependsPickerEmpty: string
     dependsPickerLoadFailed: string
+    fieldMcps: string
+    fieldMcpsHint: string
+    fieldMcpsPlaceholder: string
+    mcpsPickerLabel: string
+    mcpsPickerLoading: string
+    mcpsPickerEmpty: string
+    mcpsPickerLoadFailed: string
     fieldDependencyTree: string
     fieldReadonly: string
     fieldReadonlyHint: string
@@ -708,7 +755,16 @@ export interface Resources {
     statCacheRead: string
     statError: string
     statRetries: string
+    statIterations: string
+    iterLoop: string
+    iterReview: string
+    iterClarify: string
+    iterRetry: string
+    iterInitial: string
     statDependencyTree: string
+    statMcpClosure: string
+    mcpClosureEmpty: string
+    mcpClosureLoadFailed: string
     attempt: string
     noEventsMatch: string
     retryButton: string
@@ -896,6 +952,7 @@ export const zhCN: Resources = {
   nav: {
     agents: '代理',
     skills: '技能',
+    mcps: 'MCP',
     workflows: '工作流',
     tasks: '任务',
     reviews: '评审',
@@ -1195,6 +1252,50 @@ export const zhCN: Resources = {
     zipRenameConflict: '名称已被占用',
     zipConflictManaged: '已存在 managed 技能',
     zipConflictExternal: 'external 技能 — 不支持 ZIP 覆盖',
+  },
+  mcps: {
+    title: 'MCP 服务器',
+    hint: '注册可供 agent 引用的 MCP 服务器。运行时 runner 按 agent 依赖闭包合并注入 OPENCODE_CONFIG_CONTENT.mcp，opencode 子进程启动后建立连接。',
+    newButton: '+ 新建 MCP',
+    emptyList: '还没有登记的 MCP 服务器。',
+    colName: '名称',
+    colType: '类型',
+    colDescription: '描述',
+    colEnabled: '启用',
+    typeLocal: '本地 (stdio)',
+    typeRemote: '远端 (http / sse)',
+    deleteButton: '删除',
+    deleteConfirm: '删除该 MCP？',
+    deleteReferenced: '无法删除：以下 agent 仍在引用，请先解除引用：',
+    formTitle: '新建 MCP 服务器',
+    formEditTitle: '编辑 MCP "{{name}}"',
+    fieldName: '名称',
+    fieldNameHint:
+      '小写字母 / 数字 / `-` / `_`，需以字母数字开头。同时是工具命名前缀（详见下方说明）。',
+    fieldDescription: '描述',
+    fieldType: '类型',
+    fieldEnabled: '启用',
+    fieldEnabledHint: '禁用时本 MCP 不会注入到 opencode 子进程（agent 看不到它的工具）。',
+    fieldCommand: '启动命令',
+    fieldCommandHint: '至少 1 项。第一项是可执行文件名，后续为参数，例如 `uvx postgres-mcp`。',
+    fieldEnv: '环境变量',
+    fieldEnvHint: '每行 KEY=VALUE。可能含凭据，不会写入日志（仅 mcpKeys 名字会被记录）。',
+    fieldTimeoutMs: '超时（毫秒）',
+    fieldUrl: 'URL',
+    fieldUrlHint: '必须以 http:// 或 https:// 开头。',
+    fieldHeaders: '请求头',
+    fieldHeadersHint: '每行 KEY=VALUE。用于 Bearer / PAT 凭据等。',
+    fieldOauth: 'OAuth',
+    fieldOauthHint:
+      'v1 简化：默认留空（启用 opencode 自动 OAuth 探测）；填 false 显式禁用。完整 OAuth 流程请用 `opencode mcp auth <name>` 在主机本地登录。',
+    saveButton: '保存',
+    cancelButton: '取消',
+    toolNamingHint:
+      '在 agent 的 permission 字段里点名某 MCP 工具时，使用 `{name}_{tool_name}`（opencode 自动按 mcp 名 + 工具名拼接，详见 OPENCODE_CONFIG.md §3.3）。',
+    cwdHint:
+      'stdio 子进程会在该 task 的 worktree 目录下启动（opencode 端没有 cwd 字段，所以这里也不提供）。',
+    oauthCliHint:
+      'remote MCP 走 OAuth 时，建议先在主机上执行 `opencode mcp auth <name>` 完成一次浏览器登录，token 会落到 ~/.opencode/auth/，之后所有 opencode 子进程都能复用。',
   },
   workflows: {
     title: '工作流',
@@ -1515,6 +1616,13 @@ export const zhCN: Resources = {
     dependsPickerLoading: '加载中…',
     dependsPickerEmpty: '暂无可选代理（已全部添加 / 仓库为空）',
     dependsPickerLoadFailed: '加载代理列表失败；仍可在下方手动输入。',
+    fieldMcps: 'MCP 依赖',
+    fieldMcpsHint: '该 agent 启动时按 dependsOn 闭包合并注入。详细规则见 OPENCODE_CONFIG.md §3.3。',
+    fieldMcpsPlaceholder: '输入 MCP 名后按 Enter',
+    mcpsPickerLabel: '从已登记的 MCP 中选择…',
+    mcpsPickerLoading: '加载中…',
+    mcpsPickerEmpty: '暂无可选 MCP（已全部添加 / 仓库为空）',
+    mcpsPickerLoadFailed: '加载 MCP 列表失败；仍可在下方手动输入。',
     fieldDependencyTree: '闭包依赖（预览）',
     fieldReadonly: '只读',
     fieldReadonlyHint: '只读 agent 可在同一 task 中并发；可写 agent 会串行。',
@@ -1605,7 +1713,16 @@ export const zhCN: Resources = {
     statCacheRead: '缓存读取',
     statError: '错误',
     statRetries: '重试列表',
+    statIterations: '迭代历史',
+    iterLoop: '循环#{{n}}',
+    iterReview: '评审#{{n}}',
+    iterClarify: '反问#{{n}}',
+    iterRetry: '重试#{{n}}',
+    iterInitial: '初次',
     statDependencyTree: '依赖闭包',
+    statMcpClosure: 'MCP 闭包',
+    mcpClosureEmpty: '本次注入未带 MCP',
+    mcpClosureLoadFailed: '加载 MCP 闭包失败',
     attempt: '第 {{n}} 次',
     noEventsMatch: '没有事件匹配当前过滤。',
     retryButton: '重试节点',

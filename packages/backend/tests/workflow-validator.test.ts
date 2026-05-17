@@ -24,6 +24,7 @@ function agent(
     permission: {},
     skills,
     dependsOn,
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: '',
     schemaVersion: 1,

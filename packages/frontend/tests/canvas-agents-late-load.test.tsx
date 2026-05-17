@@ -50,6 +50,7 @@ const CODER: Agent = {
   readonly: false,
   skills: [],
   dependsOn: [],
+  mcp: [],
   permission: {},
   bodyMd: '',
   frontmatterExtra: {},

@@ -37,6 +37,12 @@ export const agents = sqliteTable('agents', {
   // and staged under OPENCODE_CONFIG_DIR/skills/. Default [] keeps legacy
   // agents at single-agent injection behavior.
   dependsOn: text('depends_on').notNull().default('[]'),
+  // RFC-028: agent name list (JSON string[]) of MCP server names this agent
+  // needs at runtime. Runner unions every dependsOn closure member's mcp[] and
+  // injects each as an entry under `mcp` in OPENCODE_CONFIG_CONTENT. Default
+  // [] keeps legacy agents on the inherited-only baseline (repo
+  // .opencode/opencode.json + ~/.config/opencode/ still loads naturally).
+  mcp: text('mcp').notNull().default('[]'),
   frontmatterExtra: text('frontmatter_extra').notNull().default('{}'), // JSON for advanced fields
   bodyMd: text('body_md').notNull().default(''), // system prompt; may be empty
   schemaVersion: integer('schema_version').notNull().default(1),
@@ -61,6 +67,38 @@ export const skillSources = sqliteTable('skill_sources', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   lastScannedAt: integer('last_scanned_at'), // unix ms; null = never scanned
   lastScanError: text('last_scan_error'), // short error code OR summary of skipped reports
+  schemaVersion: integer('schema_version').notNull().default(1),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+})
+
+// -----------------------------------------------------------------------------
+// mcps — RFC-028. DB is source of truth. Agents reference these by name via
+// agents.mcp (JSON string[]); runner unions the dependsOn closure's mcp names,
+// loads the rows here, and injects them into `OPENCODE_CONFIG_CONTENT.mcp` for
+// the spawned opencode process. See OPENCODE_CONFIG.md §1 and §3.3 for the
+// field-name translation (env→environment, timeoutMs→timeout) and §3.3 for
+// why `config.command[0]` is the executable (no `cwd` field — opencode uses
+// the process directory = worktree).
+// -----------------------------------------------------------------------------
+export const mcps = sqliteTable('mcps', {
+  id: text('id').primaryKey(), // ULID
+  name: text('name').notNull().unique(),
+  description: text('description').notNull().default(''),
+  /** 'local' (stdio) | 'remote' (http/sse). Matches opencode McpLocalConfig/McpRemoteConfig. */
+  type: text('type', { enum: ['local', 'remote'] }).notNull(),
+  /**
+   * Type-specific config serialised as JSON.
+   *   local : { command: string[], env?, timeoutMs? }
+   *   remote: { url: string, headers?, oauth?, timeoutMs? }
+   */
+  config: text('config').notNull().default('{}'),
+  /** Per-server toggle (matches opencode `mcp.<name>.enabled`). */
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()

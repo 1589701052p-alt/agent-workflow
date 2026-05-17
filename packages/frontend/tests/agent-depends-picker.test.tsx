@@ -29,6 +29,7 @@ function fakeAgent(name: string, description = ''): Agent {
     permission: {},
     skills: [],
     dependsOn: [],
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: '',
     schemaVersion: 1,

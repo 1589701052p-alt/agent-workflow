@@ -215,4 +215,30 @@ describe('parseAgentMarkdown', () => {
     expect(r.partial.frontmatterExtra?.dependsOn).toBe('code-auditor')
     expect(r.warnings.some((w) => w.startsWith('dependsOn must be an array'))).toBe(true)
   })
+
+  // RFC-028: mcp parser cases — mirror dependsOn's shape policy so the import
+  // dialog can surface missing-MCP candidates the same way as missing-agents.
+  test('mcp (array of valid names) round-trips and dedupes order', () => {
+    const src = '---\nmcp:\n  - postgres-prod\n  - sentry\n  - postgres-prod\n---\nbody'
+    const r = parseAgentMarkdown(src)
+    expect(r.partial.mcp).toEqual(['postgres-prod', 'sentry'])
+    expect(r.warnings).toEqual([])
+    expect(r.unrecognizedKeys).toEqual([])
+  })
+
+  test('mcp with an invalid name demotes the whole field to frontmatterExtra with a warning', () => {
+    const src = '---\nmcp:\n  - postgres-prod\n  - "Bad Name"\n---\n'
+    const r = parseAgentMarkdown(src)
+    expect(r.partial.mcp).toBeUndefined()
+    expect(r.partial.frontmatterExtra?.mcp).toEqual(['postgres-prod', 'Bad Name'])
+    expect(r.warnings.some((w) => w.includes('mcp entries must match'))).toBe(true)
+  })
+
+  test('mcp with non-array value demotes to frontmatterExtra with a warning', () => {
+    const src = '---\nmcp: postgres-prod\n---\n'
+    const r = parseAgentMarkdown(src)
+    expect(r.partial.mcp).toBeUndefined()
+    expect(r.partial.frontmatterExtra?.mcp).toBe('postgres-prod')
+    expect(r.warnings.some((w) => w.startsWith('mcp must be an array'))).toBe(true)
+  })
 })

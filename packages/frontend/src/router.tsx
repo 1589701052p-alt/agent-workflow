@@ -9,6 +9,7 @@ import { Route as authRoute } from '@/routes/auth'
 import { Route as indexRoute } from '@/routes/index'
 import { Route as rootRoute } from '@/routes/__root'
 import { Route as settingsRoute } from '@/routes/settings'
+import { Route as mcpsRoute } from '@/routes/mcps'
 import { Route as skillsRoute } from '@/routes/skills'
 import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
@@ -36,6 +37,7 @@ const routeTree = rootRoute.addChildren([
   skillNewRoute,
   skillDetailRoute,
   skillsRoute,
+  mcpsRoute,
   workflowNewRoute,
   workflowLaunchRoute,
   workflowEditRoute,

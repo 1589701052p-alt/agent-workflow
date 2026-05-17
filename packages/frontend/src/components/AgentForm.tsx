@@ -11,6 +11,7 @@ import { DependencyTreePreview } from './agents/DependencyTreePreview'
 import { Field, NumberInput, Switch, TextArea, TextInput } from './Form'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
+import { McpsPicker } from './McpsPicker'
 import { ModelSelect } from './ModelSelect'
 import { OutputsEditor } from './OutputsEditor'
 import { SkillsPicker } from './SkillsPicker'
@@ -31,6 +32,7 @@ const DEFAULT: CreateAgent = {
   permission: {},
   skills: [],
   dependsOn: [],
+  mcp: [],
   frontmatterExtra: {},
   bodyMd: '',
 }
@@ -82,6 +84,14 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             value={value.skills ?? []}
             onChange={(v) => patch('skills', v)}
             placeholder={t('agentForm.fieldSkillsPlaceholder')}
+          />
+        </Field>
+
+        <Field label={t('agentForm.fieldMcps')} hint={t('agentForm.fieldMcpsHint')}>
+          <McpsPicker
+            value={value.mcp ?? []}
+            onChange={(v) => patch('mcp', v)}
+            placeholder={t('agentForm.fieldMcpsPlaceholder')}
           />
         </Field>
 

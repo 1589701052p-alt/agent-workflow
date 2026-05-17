@@ -29,6 +29,7 @@ const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 interface AgentSeed {
   name: string
   dependsOn?: string[]
+  mcp?: string[]
 }
 
 async function seed(db: DbClient, ...rows: AgentSeed[]): Promise<void> {
@@ -42,6 +43,7 @@ async function seed(db: DbClient, ...rows: AgentSeed[]): Promise<void> {
       permission: {},
       skills: [],
       dependsOn: r.dependsOn ?? [],
+      mcp: r.mcp ?? [],
       frontmatterExtra: {},
       bodyMd: '',
     })

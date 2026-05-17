@@ -21,6 +21,7 @@ describe('agentToDraft', () => {
       permission: {},
       skills: [],
       dependsOn: [],
+      mcp: [],
       frontmatterExtra: {},
       bodyMd: '',
       schemaVersion: 1,

@@ -4,6 +4,7 @@
 // these schemas describe the response/request shape after marshaling.
 
 import { z } from 'zod'
+import { McpNameSchema } from './mcp'
 import { AgentOutputKindSchema } from './review'
 
 /**
@@ -67,6 +68,16 @@ export const AgentSchema = z.object({
    * `agent-not-found` / `skill-not-found` checks to the closure.
    */
   dependsOn: z.array(AgentNameSchema),
+  /**
+   * RFC-028: MCP server names this agent needs at runtime. Runner unions the
+   * mcp[] of every agent in the dependsOn closure (RFC-022) and injects each
+   * member as an entry under `mcp` in OPENCODE_CONFIG_CONTENT. opencode then
+   * spawns the listed servers and exposes their tools to the spawned process.
+   * Default `[]` leaves the agent free of framework-managed MCPs (the user's
+   * repo `.opencode/config.json` and `~/.config/opencode/` MCPs still load
+   * naturally — see OPENCODE_CONFIG.md §4).
+   */
+  mcp: z.array(McpNameSchema),
   frontmatterExtra: z.record(z.string(), z.unknown()),
   bodyMd: z.string(),
   schemaVersion: z.number().int(),
@@ -93,6 +104,8 @@ export const CreateAgentSchema = z.object({
   skills: z.array(z.string()).default([]),
   /** RFC-022 — see AgentSchema.dependsOn. */
   dependsOn: z.array(AgentNameSchema).max(64).default([]),
+  /** RFC-028 — see AgentSchema.mcp. */
+  mcp: z.array(McpNameSchema).max(64).default([]),
   frontmatterExtra: z.record(z.string(), z.unknown()).default({}),
   bodyMd: z.string().default(''),
 })

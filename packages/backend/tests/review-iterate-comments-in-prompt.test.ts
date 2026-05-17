@@ -117,6 +117,7 @@ async function buildHarness(): Promise<Harness> {
     permission: {},
     skills: [],
     dependsOn: [],
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: '',
   })

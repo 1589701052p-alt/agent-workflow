@@ -113,6 +113,7 @@ export function agentToDraft(a: Agent): CreateAgent {
     permission: a.permission,
     skills: a.skills,
     dependsOn: a.dependsOn,
+    mcp: [],
     frontmatterExtra: a.frontmatterExtra,
     bodyMd: a.bodyMd,
   }

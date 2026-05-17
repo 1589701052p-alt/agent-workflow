@@ -39,6 +39,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     permission: {},
     skills: [],
     dependsOn: [],
+    mcp: [],
     frontmatterExtra: {},
     bodyMd: 'You are a test agent.',
     schemaVersion: 1,

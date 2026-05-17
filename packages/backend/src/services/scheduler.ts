@@ -31,6 +31,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { resolveDependsClosure } from '@/services/agentDeps'
+import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
 import {
   buildClarifyPromptContext,
   createClarifySession,
@@ -617,7 +618,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // silently spawning with a broken closure.
   const injection = await prepareNodeRunInjection(db, opts.appHome, agent, log)
   if (injection.kind === 'failed') return injection
-  const { dependents, resolvedSkills } = injection
+  const { dependents, resolvedSkills, mcps } = injection
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const maxRetries = pickNumber(node, 'retries') ?? 0
@@ -835,6 +836,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           hasClarifyChannel: effectiveHasClarifyChannel,
           skills: resolvedSkills,
           dependents,
+          mcps,
           appHome: opts.appHome,
           ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
           db,
@@ -1238,7 +1240,7 @@ async function runFanOutNode(
   // subprocess gets the full closure + skills union (design.md §4.2 #2).
   const injection = await prepareNodeRunInjection(db, opts.appHome, agent, log)
   if (injection.kind === 'failed') return injection
-  const { dependents, resolvedSkills } = injection
+  const { dependents, resolvedSkills, mcps } = injection
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const nodeOverrides = pickOverrides(node)
@@ -1327,6 +1329,7 @@ async function runFanOutNode(
             hasClarifyChannel: effectiveHasClarifyChannel,
             skills: resolvedSkills,
             dependents,
+            mcps,
             appHome: opts.appHome,
             ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
             db,
@@ -1570,6 +1573,8 @@ async function loadAgent(db: DbClient, name: string): Promise<Agent | null> {
     // RFC-022: tolerate legacy rows whose depends_on column is missing /
     // malformed (manual SQL edits); parse failure or non-array → [].
     dependsOn: parseStringArray(row.dependsOn),
+    // RFC-028: same lenient parsing for the mcp column.
+    mcp: parseStringArray(row.mcp),
     frontmatterExtra: JSON.parse(row.frontmatterExtra) as Record<string, unknown>,
     bodyMd: row.bodyMd,
     schemaVersion: row.schemaVersion,
@@ -1603,7 +1608,19 @@ export async function prepareNodeRunInjection(
   agent: Agent,
   log: Logger,
 ): Promise<
-  | { kind: 'ok'; dependents: Agent[]; resolvedSkills: ResolvedSkill[] }
+  | {
+      kind: 'ok'
+      dependents: Agent[]
+      resolvedSkills: ResolvedSkill[]
+      /**
+       * RFC-028: MCP rows hydrated from the dependsOn closure's union of
+       * agent.mcp[] names. Empty when nothing in the closure declares an
+       * mcp (most workflows pre-RFC-028). Names that no longer resolve
+       * in the DB (deleted out from under the running task) are silently
+       * dropped — see loadMcpsByNames + OPENCODE_CONFIG.md §6.
+       */
+      mcps: import('@agent-workflow/shared').Mcp[]
+    }
   | { kind: 'failed'; summary: string; message: string }
 > {
   const closure = await resolveDependsClosure(db, agent, { allowMissing: false }).catch(
@@ -1646,7 +1663,14 @@ export async function prepareNodeRunInjection(
     skillsUnion.push(skillName)
   }
   const resolvedSkills = await resolveSkills(db, appHome, skillsUnion)
-  return { kind: 'ok', dependents, resolvedSkills }
+  // RFC-028: union mcp names across the full closure (root first, then BFS
+  // dependents) and hydrate the rows. Errors that can't surface as a
+  // 'failed' here — missing MCP names are silently skipped at hydrate time
+  // (see loadMcpsByNames docstring; we prefer "spawn without that MCP" over
+  // "fail the whole node because a previously-saved name no longer exists").
+  const mcpNames = collectMcpNamesFromClosure(closure.agents)
+  const mcps = await loadMcpsByNames(db, mcpNames)
+  return { kind: 'ok', dependents, resolvedSkills, mcps }
 }
 
 async function resolveSkills(

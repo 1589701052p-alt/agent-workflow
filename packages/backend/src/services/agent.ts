@@ -4,11 +4,11 @@
 // pure JS objects.
 
 import type { Agent, CreateAgent, RenameAgent, UpdateAgent } from '@agent-workflow/shared'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { agents, workflows } from '@/db/schema'
-import { ConflictError, NotFoundError } from '@/util/errors'
+import { agents, mcps, workflows } from '@/db/schema'
+import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { findAgentsDependingOn, validateDependsOn } from './agentDeps'
 
 type AgentRow = typeof agents.$inferSelect
@@ -35,6 +35,12 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
   // partially-validated rows never land in the DB.
   await validateDependsOn(db, input.name, input.dependsOn)
 
+  // RFC-028 save-time guard: every `mcp[]` entry must resolve to an existing
+  // mcps row. Without this, agents save successfully but fail at runtime when
+  // the scheduler tries to load the row (or worse, succeeds with a partial
+  // closure that silently drops the missing reference).
+  await validateMcpReferences(db, input.mcp)
+
   const id = ulid()
   const now = Date.now()
   // RFC-005: outputKinds is a sidecar map ported through `frontmatter_extra`
@@ -57,6 +63,7 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
     maxSteps: input.maxSteps ?? null,
     skills: JSON.stringify(input.skills),
     dependsOn: JSON.stringify(dedupePreservingOrder(input.dependsOn)),
+    mcp: JSON.stringify(dedupePreservingOrder(input.mcp)),
     frontmatterExtra: JSON.stringify(fmExtra),
     bodyMd: input.bodyMd,
     createdAt: now,
@@ -80,6 +87,11 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
     await validateDependsOn(db, name, patch.dependsOn)
   }
 
+  // RFC-028 save-time guard — only when caller patched mcp.
+  if (patch.mcp !== undefined) {
+    await validateMcpReferences(db, patch.mcp)
+  }
+
   const set: Partial<typeof agents.$inferInsert> = { updatedAt: Date.now() }
   if (patch.description !== undefined) set.description = patch.description
   if (patch.outputs !== undefined) set.outputs = JSON.stringify(patch.outputs)
@@ -95,6 +107,7 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   if (patch.skills !== undefined) set.skills = JSON.stringify(patch.skills)
   if (patch.dependsOn !== undefined)
     set.dependsOn = JSON.stringify(dedupePreservingOrder(patch.dependsOn))
+  if (patch.mcp !== undefined) set.mcp = JSON.stringify(dedupePreservingOrder(patch.mcp))
   // RFC-005: merge outputKinds into frontmatter_extra alongside the explicit
   // patch (if any). Tests that PATCH only outputKinds preserve the rest of
   // frontmatter_extra; tests that PATCH only frontmatterExtra drop outputKinds
@@ -248,6 +261,35 @@ function dedupePreservingOrder(names: readonly string[]): string[] {
  * entries.
  */
 function parseDependsOnColumn(value: string | null | undefined): string[] {
+  return parseStringArrayColumn(value)
+}
+
+/**
+ * RFC-028: assert every MCP name in the agent's `mcp[]` array maps to an
+ * existing mcps row. Empty input is a no-op. Throws `mcp-not-found` (422)
+ * with the list of missing names so the UI can surface them inline.
+ */
+async function validateMcpReferences(db: DbClient, names: readonly string[]): Promise<void> {
+  if (names.length === 0) return
+  const unique = Array.from(new Set(names))
+  const rows = await db.select({ name: mcps.name }).from(mcps).where(inArray(mcps.name, unique))
+  const known = new Set(rows.map((r) => r.name))
+  const missing = unique.filter((n) => !known.has(n))
+  if (missing.length > 0) {
+    throw new ValidationError(
+      'mcp-not-found',
+      `agent references unknown mcp(s): ${missing.join(', ')}`,
+      { notFound: missing },
+    )
+  }
+}
+
+/**
+ * RFC-028: same lenient parser pattern as dependsOn — used for the `mcp`
+ * column. Any non-string entries or parse errors collapse to `[]` so a row
+ * with a hand-edited corrupt column never crashes downstream code.
+ */
+function parseStringArrayColumn(value: string | null | undefined): string[] {
   if (value === null || value === undefined || value === '') return []
   try {
     const parsed = JSON.parse(value) as unknown
@@ -289,6 +331,7 @@ function rowToAgent(row: AgentRow): Agent {
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],
     dependsOn: parseDependsOnColumn(row.dependsOn),
+    mcp: parseStringArrayColumn(row.mcp),
     frontmatterExtra: exposedFm,
     bodyMd: row.bodyMd,
     schemaVersion: row.schemaVersion,

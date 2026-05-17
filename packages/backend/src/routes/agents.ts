@@ -154,6 +154,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
           permission: {},
           skills: [],
           dependsOn: parsed.data.dependsOn,
+          mcp: [],
           frontmatterExtra: {},
           bodyMd: '',
           schemaVersion: 1,
@@ -192,6 +193,12 @@ function toAgentClosureSummaries(
   skillCount: number
   readonly: boolean
   dependsOn: string[]
+  /**
+   * RFC-028: include this agent's mcp[] in the closure summary so the
+   * NodeDetailDrawer Stats tab can render the inline-injected MCP union
+   * without an extra round-trip. Empty array for pre-RFC-028 agents.
+   */
+  mcp: string[]
   missing: boolean
 }> {
   const out: Array<{
@@ -200,6 +207,7 @@ function toAgentClosureSummaries(
     skillCount: number
     readonly: boolean
     dependsOn: string[]
+    mcp: string[]
     missing: boolean
   }> = closure.map((a) => ({
     name: a.name,
@@ -207,6 +215,7 @@ function toAgentClosureSummaries(
     skillCount: a.skills.length,
     readonly: a.readonly,
     dependsOn: a.dependsOn,
+    mcp: a.mcp ?? [],
     missing: false,
   }))
   // Append placeholder rows for names referenced by any closure member but
@@ -228,6 +237,7 @@ function toAgentClosureSummaries(
       skillCount: 0,
       readonly: false,
       dependsOn: [],
+      mcp: [],
       missing: true,
     })
   }
