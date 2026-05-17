@@ -69,7 +69,7 @@ function McpsPage() {
                     {m.name}
                   </Link>
                 </td>
-                <td>
+                <td className="data-table__nowrap">
                   <span className="chip chip--tight">
                     {m.type === 'local' ? t('mcps.typeLocal') : t('mcps.typeRemote')}
                   </span>

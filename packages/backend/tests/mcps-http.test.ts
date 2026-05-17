@@ -45,9 +45,8 @@ function localPayload(name: string): Record<string, unknown> {
 
 describe('POST /api/mcps', () => {
   let app: Hono
-  let db: DbClient
   beforeEach(() => {
-    ;({ app, db } = buildHarness())
+    ;({ app } = buildHarness())
   })
 
   test('happy path → 201 + created row', async () => {

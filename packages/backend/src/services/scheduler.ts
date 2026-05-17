@@ -16,6 +16,7 @@
 import type {
   Agent,
   ClarifyNode,
+  Mcp,
   WorkflowDefinition,
   WorkflowEdge,
   WorkflowNode,
@@ -1619,7 +1620,7 @@ export async function prepareNodeRunInjection(
        * in the DB (deleted out from under the running task) are silently
        * dropped — see loadMcpsByNames + OPENCODE_CONFIG.md §6.
        */
-      mcps: import('@agent-workflow/shared').Mcp[]
+      mcps: Mcp[]
     }
   | { kind: 'failed'; summary: string; message: string }
 > {
