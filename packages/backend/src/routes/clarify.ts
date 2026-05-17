@@ -24,7 +24,10 @@ import {
 } from '@/services/clarify'
 import { resumeTask } from '@/services/task'
 import { Paths } from '@/util/paths'
-import { ValidationError } from '@/util/errors'
+import { ConflictError, ValidationError } from '@/util/errors'
+import { createLogger } from '@/util/log'
+
+const log = createLogger('clarify-route')
 
 function resolveOpencodeCmd(configPath: string): string[] | undefined {
   if (configPath === '') return undefined
@@ -98,14 +101,38 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
     })
     // Re-enter the scheduler so the freshly minted rerun node_run starts.
+    //
+    // RFC-023 bug 13: when the task is still `running` / `pending` at submit
+    // time (typical when there are multiple parallel branches and the user
+    // answers one clarify while another branch keeps the scheduler busy),
+    // `resumeTask` throws `task-not-resumable`. That used to be swallowed
+    // silently and the freshly minted rerun row sat orphaned. Now:
+    //   - The scheduler's per-batch rescan (services/scheduler.ts
+    //     `rescanScopeForNewPendingRows`) will pick up the new pending row
+    //     on its next iteration. So this resume is best-effort.
+    //   - We still TRY to resume in case the task is already paused
+    //     (awaiting_human / awaiting_review / failed / interrupted), which
+    //     covers the single-branch happy path.
+    //   - `task-not-resumable` is now logged at info — not silent — so the
+    //     deferral is visible in the daemon log if anyone needs to debug.
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
     const resumeDeps: Parameters<typeof resumeTask>[2] = {
       db: deps.db,
       appHome: Paths.root,
       ...(opencodeCmd ? { opencodeCmd } : {}),
     }
-    void resumeTask(deps.db, result.session.taskId, resumeDeps).catch(() => {
-      /* errors land in task.errorMessage via failTask */
+    void resumeTask(deps.db, result.session.taskId, resumeDeps).catch((err) => {
+      if (err instanceof ConflictError && err.code === 'task-not-resumable') {
+        log.info('clarify resume deferred — scheduler will rescan mid-batch', {
+          taskId: result.session.taskId,
+          rerunNodeRunId: result.rerunNodeRunId,
+        })
+        return
+      }
+      log.warn('clarify resume threw', {
+        taskId: result.session.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
     })
     return c.json({ ok: true, ...result })
   })

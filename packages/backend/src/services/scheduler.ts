@@ -278,6 +278,20 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     }
   }
 
+  // Cross-batch aggregation: collect awaiting / failure signals across every
+  // batch instead of short-circuiting on the first failure. Background: a
+  // wrapper-loop sibling failing fast used to swallow a parallel branch's
+  // `awaiting_human` (RFC-023 bug 13). The new contract — "let each batch
+  // finish, then decide based on priority canceled > awaiting_human >
+  // awaiting_review > failed > ok" — matches the user's mental model that an
+  // un-answered clarify cannot be silently lost just because another branch
+  // exhausted its retry budget.
+  let anyAwaitingReview = false
+  let anyAwaitingHuman = false
+  let awaitingReviewDetail: { summary: string; message: string; nodeId?: string } | undefined
+  let awaitingHumanDetail: { summary: string; message: string; nodeId?: string } | undefined
+  let firstFailureDetail: { summary: string; message: string; nodeId?: string } | undefined
+
   while (remaining.size > 0) {
     if (opts.signal?.aborted === true) {
       return { kind: 'canceled', detail: { summary: 'task canceled', message: 'signal aborted' } }
@@ -288,6 +302,18 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
       if (ups.every((u) => completed.has(u))) ready.push(n)
     }
     if (ready.length === 0) {
+      // No ready nodes AND remaining is non-empty. Before declaring the
+      // scope stalled, re-scan in case a clarify answer (or any other
+      // out-of-band mutation) minted a fresh pending row for a node we
+      // previously considered `done`. If rescan added at least one node
+      // back to remaining, try again on the next loop iteration.
+      const added = await rescanScopeForNewPendingRows(state, args, {
+        scopeNodes,
+        latestPerNode,
+        completed,
+        remaining,
+      })
+      if (added > 0) continue
       return {
         kind: 'failed',
         detail: { summary: 'scheduler stalled', message: 'no ready nodes in scope' },
@@ -298,10 +324,6 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     const results = await Promise.all(
       ready.map((node) => runOneNode(state, { node, iteration, log })),
     )
-    let anyAwaitingReview = false
-    let anyAwaitingHuman = false
-    let awaitingDetail: { summary: string; message: string; nodeId?: string } | undefined
-    let awaitingHumanDetail: { summary: string; message: string; nodeId?: string } | undefined
     for (let i = 0; i < ready.length; i++) {
       const node = ready[i]!
       const r = results[i]!
@@ -310,39 +332,116 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
         continue
       }
       if (r.kind === 'awaiting_review') {
-        // RFC-005: review node paused waiting for human decision. Don't add
-        // to `completed` (downstream stays blocked) and don't fail. Keep
-        // surveying other ready nodes in this batch — they may complete
-        // independently. After the batch, bubble awaiting_review up so the
-        // task-level loop knows to pause cleanly.
         anyAwaitingReview = true
-        awaitingDetail = { summary: r.summary, message: r.message, nodeId: node.id }
+        awaitingReviewDetail = { summary: r.summary, message: r.message, nodeId: node.id }
         continue
       }
       if (r.kind === 'awaiting_human') {
-        // RFC-023: agent emitted a <workflow-clarify> envelope; the clarify
-        // node_run is parked awaiting_human. Same shape as awaiting_review:
-        // downstream stays blocked, other batch members continue, the task
-        // bubbles up after the loop. awaiting_human outranks awaiting_review
-        // when both happen at once.
         anyAwaitingHuman = true
         awaitingHumanDetail = { summary: r.summary, message: r.message, nodeId: node.id }
         continue
       }
-      return {
-        kind: r.kind,
-        detail: { summary: r.summary, message: r.message, nodeId: node.id },
+      if (r.kind === 'canceled') {
+        // canceled is the only hard short-circuit — the signal was tripped
+        // explicitly by the user, so no point processing the remaining batch.
+        return {
+          kind: 'canceled',
+          detail: { summary: r.summary, message: r.message, nodeId: node.id },
+        }
+      }
+      // failed: record the first one for the eventual return value but
+      // do NOT short-circuit; sibling branches may still need
+      // awaiting_human / awaiting_review bubbled up to the user.
+      if (firstFailureDetail === undefined) {
+        firstFailureDetail = { summary: r.summary, message: r.message, nodeId: node.id }
       }
     }
-    if (anyAwaitingHuman) {
-      return { kind: 'awaiting_human', detail: awaitingHumanDetail }
-    }
-    if (anyAwaitingReview) {
-      return { kind: 'awaiting_review', detail: awaitingDetail }
-    }
+    // RFC-023 bug 13: after every batch, re-scan node_runs from the DB. If a
+    // user answered a clarify session mid-execution, `submitClarifyAnswers`
+    // already minted a fresh `pending` row for the asking agent with a
+    // higher `clarifyIteration`. Pull that node back into `remaining` so the
+    // next loop iteration dispatches it — otherwise the orphaned row would
+    // sit pending forever (scope's initial `latestPerNode` snapshot was
+    // already stale).
+    await rescanScopeForNewPendingRows(state, args, {
+      scopeNodes,
+      latestPerNode,
+      completed,
+      remaining,
+    })
   }
 
+  if (anyAwaitingHuman) {
+    return { kind: 'awaiting_human', detail: awaitingHumanDetail }
+  }
+  if (anyAwaitingReview) {
+    return { kind: 'awaiting_review', detail: awaitingReviewDetail }
+  }
+  if (firstFailureDetail !== undefined) {
+    return { kind: 'failed', detail: firstFailureDetail }
+  }
   return { kind: 'ok' }
+}
+
+/**
+ * RFC-023 bug 13: rescan node_runs for the current task + iteration looking
+ * for fresh rows whose (retryIndex, clarifyIteration) tuple beats whatever
+ * `latestPerNode` cached at scope entry (or after the prior batch). When a
+ * beating row is `pending`, the corresponding node is added back into
+ * `remaining` (and pulled out of `completed` if it was there) so the
+ * scheduler picks it up on the next batch — covering the "user answered a
+ * clarify while the scope's `Promise.all` was still blocked on a sibling
+ * branch" race. Returns the number of nodes added back to remaining so the
+ * caller can decide whether to break a stall.
+ */
+async function rescanScopeForNewPendingRows(
+  state: SchedulerState,
+  args: ScopeArgs,
+  ctx: {
+    scopeNodes: WorkflowNode[]
+    latestPerNode: Map<string, typeof nodeRuns.$inferSelect>
+    completed: Set<string>
+    remaining: Map<string, WorkflowNode>
+  },
+): Promise<number> {
+  const { db, taskId } = state
+  const { iteration, scopeIds } = args
+  const fresh = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  let added = 0
+  const newLatest = new Map<string, (typeof fresh)[number]>()
+  for (const r of fresh) {
+    if (r.iteration !== iteration) continue
+    if (!scopeIds.has(r.nodeId)) continue
+    if (r.parentNodeRunId !== null) continue
+    const prev = newLatest.get(r.nodeId)
+    if (
+      prev === undefined ||
+      r.retryIndex > prev.retryIndex ||
+      (r.retryIndex === prev.retryIndex && r.clarifyIteration > prev.clarifyIteration)
+    ) {
+      newLatest.set(r.nodeId, r)
+    }
+  }
+  for (const [nodeId, row] of newLatest) {
+    const cached = ctx.latestPerNode.get(nodeId)
+    const beatsCached =
+      cached === undefined ||
+      row.retryIndex > cached.retryIndex ||
+      (row.retryIndex === cached.retryIndex && row.clarifyIteration > cached.clarifyIteration)
+    if (!beatsCached) continue
+    ctx.latestPerNode.set(nodeId, row)
+    if (row.status === 'pending') {
+      ctx.completed.delete(nodeId)
+      if (!ctx.remaining.has(nodeId)) {
+        const node = ctx.scopeNodes.find((n) => n.id === nodeId)
+        if (node !== undefined) {
+          ctx.remaining.set(nodeId, node)
+          added += 1
+        }
+      }
+    }
+  }
+  return added
 }
 
 // -----------------------------------------------------------------------------

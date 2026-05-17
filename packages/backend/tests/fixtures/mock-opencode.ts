@@ -59,6 +59,20 @@ if (env.MOCK_OPENCODE_REQUIRE_TOKEN === '1') {
   }
 }
 
+// Per-agent env overrides. When MOCK_OPENCODE_CLARIFY_BODY_FOR_<agent> or
+// MOCK_OPENCODE_CRASH_FOR_<agent> is set, the matching agent takes that
+// branch while sibling agents in the same task fall back to the global
+// MOCK_OPENCODE_* env. Lets parallel-branch tests (RFC-023 bug 13) wire
+// one agent to "ask clarify" and another to "crash" inside one runTask.
+const mockedAgentName = argv[agentFlagIdx + 1] ?? ''
+{
+  const perAgentClarify = env[`MOCK_OPENCODE_CLARIFY_BODY_FOR_${mockedAgentName}`]
+  if (perAgentClarify !== undefined) env.MOCK_OPENCODE_CLARIFY_BODY = perAgentClarify
+  if (env[`MOCK_OPENCODE_CRASH_FOR_${mockedAgentName}`] === '1') {
+    env.MOCK_OPENCODE_SKIP_ENVELOPE = '1'
+  }
+}
+
 // Append one JSON line per invocation so tests can inspect what model /
 // variant / temperature actually reached the subprocess. Guards the
 // scheduler → runner → env hop end-to-end.
