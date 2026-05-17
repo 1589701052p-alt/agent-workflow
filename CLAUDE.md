@@ -109,3 +109,16 @@ The proposal directs Claude to consult these when designing or making technical 
 - `/Users/wangbinquan/Documents/code/opencode` — the opencode source. Read this directly to answer any question about how an opencode process is launched, how it loads `.opencode/agents` and `.opencode/skills`, and what its standardized agent output XML looks like. (Bun-based monorepo.)
 
 When the proposal and these repos disagree, the repos are authoritative for runtime behavior; the proposal is authoritative for product intent.
+
+## opencode 源码自取规则（强制）
+
+`/Users/wangbinquan/Documents/code/opencode` 是 opencode 的完整源码仓库（Bun monorepo）。**遇到以下场景必须主动 grep / 读源码，不要靠记忆或推测**：
+
+- 任何涉及 opencode 进程启动、CLI 参数、环境变量（`OPENCODE_*`）、退出码、stdout/stderr 协议的判断。
+- agent / skill 加载顺序、合并优先级、`.opencode/` 目录扫描规则（典型入口：`packages/opencode/src/config/config.ts`、`packages/opencode/src/agent/`、`packages/opencode/src/skill/`）。
+- 输出 XML envelope 格式、tool-use 协议、session 行为。
+- 任何 "opencode 是不是支持 X" / "opencode 在 Y 情况下表现如何" 的问题。
+
+读取方式：直接用 Read / Bash(grep|rg) 即可，不需要等用户授权——这是公开本机源码、纯只读、零副作用。读完在回复里**引用具体文件:行号**，让用户能追溯依据。
+
+跨 session 也一样：新接手任务时若 RFC / design 里出现了对 opencode 行为的断言（例如 "opencode 合并 config 时 inline JSON 优先级最高"），上手前先去源码验证一遍再继续，避免基于过期假设写代码。
