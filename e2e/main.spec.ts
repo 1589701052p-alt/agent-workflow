@@ -249,7 +249,7 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   // API — this turns a previously-flaky timing race into a deterministic
   // assertion (RFC-004 CI run 25915917054 caught the prior 1-flaky case).
   await page.reload()
-  await expect(page.locator('.status-chip', { hasText: /^done$/ }).first()).toBeVisible({
+  await expect(page.locator('.status-chip', { hasText: /^done$/i }).first()).toBeVisible({
     timeout: 15_000,
   })
   // RFC-021: outputs now live inside the Outputs tab on the task detail
@@ -643,7 +643,7 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
   expect(finalTask.status).toBe('done')
 
   await page.goto(`${daemon.baseUrl}/tasks/${startedTask.id}`)
-  await expect(page.locator('.status-chip', { hasText: /^done$/ }).first()).toBeVisible({
+  await expect(page.locator('.status-chip', { hasText: /^done$/i }).first()).toBeVisible({
     timeout: 15_000,
   })
 
@@ -703,7 +703,7 @@ test('RFC-029: Runtime Inventory section renders on the Session tab', async ({ p
   expect(finalTask.status).toBe('done')
 
   await page.goto(`${daemon.baseUrl}/tasks/${startedTask.id}`)
-  await expect(page.locator('.status-chip', { hasText: /^done$/ }).first()).toBeVisible({
+  await expect(page.locator('.status-chip', { hasText: /^done$/i }).first()).toBeVisible({
     timeout: 15_000,
   })
 
