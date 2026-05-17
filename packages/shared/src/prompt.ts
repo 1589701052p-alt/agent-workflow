@@ -186,6 +186,24 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   const referenced = new Set<string>()
   const rc = input.reviewContext
   const cc = input.clarifyContext
+  // RFC-026: inline-mode clarify reruns send opencode a SECOND message in an
+  // already-loaded session. The original first-round user prompt — template
+  // body + every input port value — is already in opencode's transcript and
+  // visible to the agent. Re-substituting input port values into the
+  // template, and re-emitting the `## ${port_name}` auto-append sections
+  // would just bloat the incremental message with duplicated context and
+  // risk the agent re-anchoring on stale large payloads.
+  //
+  // Strategy:
+  //   - `{{port_name}}` tokens substitute to '' instead of the port value
+  //     (template structural words survive, port body drops out).
+  //   - The auto-append loop skips input port sections entirely.
+  //   - Built-in tokens (`{{__repo_path__}}` etc) AND clarify tokens still
+  //     resolve — they're context this round needs.
+  //
+  // Isolated mode is untouched: a fresh opencode process has no prior
+  // memory and genuinely needs the inputs re-included.
+  const inlineMode = cc?.mode === 'inline'
 
   const body = tpl.replace(TEMPLATE_RE, (_match, name: string) => {
     referenced.add(name)
@@ -221,6 +239,9 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return cc?.remaining ?? ''
       }
     }
+    // RFC-026: drop input port values from inline-mode reruns (see comment
+    // above the inlineMode declaration).
+    if (inlineMode) return ''
     const v = input.inputs[name]
     return v ?? ''
   })
@@ -228,6 +249,9 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   let sections = ''
   for (const [name, content] of Object.entries(input.inputs)) {
     if (referenced.has(name)) continue
+    // RFC-026: inline mode — skip the `## ${port}` auto-append for the same
+    // reason input substitution above drops to ''.
+    if (inlineMode) continue
     sections += `\n\n## ${name}\n${content}`
   }
 
@@ -277,7 +301,6 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // it to the prior wording. (Authors who explicitly reference
   // `{{__clarify_questions__}}` still get substitution above — that path is
   // a deliberate template choice.)
-  const inlineMode = cc?.mode === 'inline'
   if (cc !== undefined) {
     if (
       !inlineMode &&

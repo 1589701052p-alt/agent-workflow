@@ -140,4 +140,89 @@ describe('RFC-026 renderUserPrompt — inline mode', () => {
     })
     expect(b).toBe(a)
   })
+
+  // -------------------------------------------------------------------------
+  // RFC-026 second pass — inline-mode reruns must NOT re-emit input port
+  // values. The first-round prompt already shipped them into opencode's
+  // session memory; re-substituting + auto-appending burns tokens and risks
+  // re-anchoring the agent on stale large payloads.
+  // -------------------------------------------------------------------------
+
+  test('inline mode replaces input substitutions with empty (template structural words survive)', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'Update the design for {{topic}} now.',
+      inputs: { topic: 'ORIGINAL-TOPIC-PAYLOAD' },
+      meta: META,
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+      clarifyContext: {
+        answersBlock: 'A-LATEST',
+        mode: 'inline',
+        currentRoundOnly: true,
+      },
+    })
+    expect(out).not.toContain('ORIGINAL-TOPIC-PAYLOAD')
+    // Template structural words still present so the agent sees the
+    // instruction wrapper, just not the port body.
+    expect(out).toContain('Update the design for  now.')
+  })
+
+  test('inline mode skips the `## ${port_name}` auto-append for unreferenced inputs', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'do the thing',
+      inputs: {
+        spec: 'GIANT-SPEC-BODY-FROM-PRIOR-ROUND',
+        notes: 'AUX-NOTES',
+      },
+      meta: META,
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+      clarifyContext: {
+        answersBlock: 'A-LATEST',
+        mode: 'inline',
+        currentRoundOnly: true,
+      },
+    })
+    expect(out).not.toContain('GIANT-SPEC-BODY-FROM-PRIOR-ROUND')
+    expect(out).not.toContain('AUX-NOTES')
+    expect(out).not.toMatch(/##\s+spec\b/)
+    expect(out).not.toMatch(/##\s+notes\b/)
+    // But the answers section and inline reminder still ride along.
+    expect(out).toContain('User Answers (Current Round)')
+    expect(out).toContain('A-LATEST')
+  })
+
+  test('isolated mode is unchanged — input substitutions and auto-append still fire', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'Update the design for {{topic}} now.',
+      inputs: { topic: 'ORIGINAL-TOPIC-PAYLOAD', notes: 'AUX-NOTES' },
+      meta: META,
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+      clarifyContext: { answersBlock: 'A-PRIOR' /* mode undefined → isolated */ },
+    })
+    expect(out).toContain('Update the design for ORIGINAL-TOPIC-PAYLOAD now.')
+    expect(out).toMatch(/##\s+notes\b/)
+    expect(out).toContain('AUX-NOTES')
+  })
+
+  test('built-in tokens (repo_path, clarify_iteration, etc.) STILL substitute in inline mode', () => {
+    // RFC-026: only input port substitutions get nulled. Built-in tokens are
+    // context this round needs (e.g. iteration counter, repo path for tool
+    // invocations) and stay populated.
+    const out = renderUserPrompt({
+      promptTemplate: 'repo {{__repo_path__}} iter {{__clarify_iteration__}}',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+      clarifyContext: {
+        answersBlock: 'A',
+        iteration: '2',
+        mode: 'inline',
+        currentRoundOnly: true,
+      },
+    })
+    expect(out).toContain('repo /r iter 2')
+  })
 })
