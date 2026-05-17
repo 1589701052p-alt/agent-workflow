@@ -236,6 +236,43 @@ interface ScopeArgs {
   log: Logger
 }
 
+/**
+ * Order two node_run rows by "freshness". The freshest row drives the node's
+ * state in the scheduler (latestPerNode + rescan).
+ *
+ * Why this ordering specifically:
+ *   - `clarifyIteration` is the user-facing counter that grows whenever the
+ *     user answers a clarify session (submitClarifyAnswers mints retry=0 with
+ *     clarifyIteration+1 to keep the process-retry budget intact). Putting it
+ *     first means a fresh clarify rerun ALWAYS beats prior runs of the same
+ *     node — even if process-retries previously inflated retryIndex above 0.
+ *   - Within the same clarify round, higher retryIndex wins (newer process
+ *     retry attempt).
+ *   - When (clarifyIteration, retryIndex) tie — which CAN happen: e.g. an
+ *     old round of clarifyIteration=1 plus a fresh rerun whose source's
+ *     clarifyIteration was 0 collide at (0, 1) — ULID id is the monotonic
+ *     tie-break; the newer insert wins. Without this tie-break the comparator
+ *     is non-deterministic on ties.
+ *
+ * Locks in the fix for the bug where a directive=continue clarify rerun was
+ * silently shadowed by a (retryIndex=N, clarifyIteration=0) done row from an
+ * earlier single-node-retry storm, causing the task to be marked done while
+ * the freshly-minted pending rerun row never ran.
+ */
+function isFresherNodeRun(
+  candidate: typeof nodeRuns.$inferSelect,
+  incumbent: typeof nodeRuns.$inferSelect | undefined,
+): boolean {
+  if (incumbent === undefined) return true
+  if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
+    return candidate.clarifyIteration > incumbent.clarifyIteration
+  }
+  if (candidate.retryIndex !== incumbent.retryIndex) {
+    return candidate.retryIndex > incumbent.retryIndex
+  }
+  return candidate.id > incumbent.id
+}
+
 async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeResult> {
   const { db, taskId, definition, opts } = state
   const { scopeIds, iteration, log } = args
@@ -251,23 +288,18 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
   // pre-completed. Inner scopes additionally narrow by iteration so re-runs
   // start fresh per iteration.
   //
-  // RFC-023: the "latest" comparator widens from retryIndex alone to a
-  // (retryIndex, clarifyIteration) tuple. A clarify-driven rerun mints a
-  // node_run with retryIndex=0 (process-retry budget intact) but a
-  // bumped clarifyIteration — without this, the older done row of the same
-  // node beats it and the rerun row stays pending forever.
+  // RFC-023: the "latest" comparator must put clarifyIteration first.
+  // submitClarifyAnswers mints clarify reruns at retryIndex=0 (process-retry
+  // budget intact) with clarifyIteration+1 — putting retryIndex first lets
+  // a stale (retryIndex=N, clarifyIteration=0) done row from a prior single-
+  // node-retry storm beat the fresh rerun. See isFresherNodeRun.
   const priorRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
   const latestPerNode = new Map<string, (typeof priorRuns)[number]>()
   for (const r of priorRuns) {
     if (r.iteration !== iteration) continue
     if (!scopeIds.has(r.nodeId)) continue
     if (r.parentNodeRunId !== null) continue // skip fan-out child rows
-    const prev = latestPerNode.get(r.nodeId)
-    if (
-      prev === undefined ||
-      r.retryIndex > prev.retryIndex ||
-      (r.retryIndex === prev.retryIndex && r.clarifyIteration > prev.clarifyIteration)
-    ) {
+    if (isFresherNodeRun(r, latestPerNode.get(r.nodeId))) {
       latestPerNode.set(r.nodeId, r)
     }
   }
@@ -434,22 +466,13 @@ async function rescanScopeForNewPendingRows(
     if (r.iteration !== iteration) continue
     if (!scopeIds.has(r.nodeId)) continue
     if (r.parentNodeRunId !== null) continue
-    const prev = newLatest.get(r.nodeId)
-    if (
-      prev === undefined ||
-      r.retryIndex > prev.retryIndex ||
-      (r.retryIndex === prev.retryIndex && r.clarifyIteration > prev.clarifyIteration)
-    ) {
+    if (isFresherNodeRun(r, newLatest.get(r.nodeId))) {
       newLatest.set(r.nodeId, r)
     }
   }
   for (const [nodeId, row] of newLatest) {
     const cached = ctx.latestPerNode.get(nodeId)
-    const beatsCached =
-      cached === undefined ||
-      row.retryIndex > cached.retryIndex ||
-      (row.retryIndex === cached.retryIndex && row.clarifyIteration > cached.clarifyIteration)
-    if (!beatsCached) continue
+    if (!isFresherNodeRun(row, cached)) continue
     ctx.latestPerNode.set(nodeId, row)
     if (row.status === 'pending') {
       ctx.completed.delete(nodeId)

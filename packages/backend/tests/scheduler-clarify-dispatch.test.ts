@@ -378,6 +378,131 @@ describe('scheduler RFC-023 clarify dispatch', () => {
     expect(rerunRow.promptText ?? '').toContain('Clarify Q&A')
     expect(rerunRow.promptText ?? '').toContain('Postgres')
   })
+
+  // Regression: prior to the isFresherNodeRun comparator, the latest-row
+  // ordering put retryIndex first. When a user (a) had previously triggered
+  // single-node retries that left a high retryIndex `done` row on the agent,
+  // and then (b) answered a fresh clarify session — submitClarifyAnswers
+  // mints the rerun row at (retryIndex=0, clarifyIteration+1) per RFC-023's
+  // "process-retry budget intact" rule. The old ordering let the stale
+  // (retryIndex=N, clarifyIteration=0) done row beat the rerun, so the
+  // scheduler marked the node completed, returned ok, marked the TASK done,
+  // and the pending rerun was left to be swept to `interrupted` on daemon
+  // shutdown. Observed in production task 01KRT38TKXQGKEDHCPQXPXTB9J.
+  test('clarify rerun (retry=0, clarifyIter=N+1) beats a stale higher-retryIndex done row', async () => {
+    await seedAgent(h.db, 'designer', ['design'])
+    const def: WorkflowDefinition = {
+      $schema_version: 3,
+      inputs: [{ kind: 'text', key: 'req', label: 'r' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+        { id: 'c', kind: 'clarify', title: 'Clarify me' } as WorkflowNode,
+      ],
+      edges: [
+        {
+          id: 'e_in',
+          source: { nodeId: 'in1', portName: 'req' },
+          target: { nodeId: 'd', portName: 'req' },
+        },
+        {
+          id: 'e_ask',
+          source: { nodeId: 'd', portName: '__clarify__' },
+          target: { nodeId: 'c', portName: 'questions' },
+        },
+        {
+          id: 'e_ans',
+          source: { nodeId: 'c', portName: 'answers' },
+          target: { nodeId: 'd', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def, { req: 'go' })
+
+    // Step 1: drive the first run so the agent asks (creates clarify_session
+    // + clarify node_run + agent node_run at retry=0/clarifyIter=0/done).
+    await withEnv({ MOCK_OPENCODE_CLARIFY_BODY: CLARIFY_BODY }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
+    )
+
+    // Step 2: simulate the historical single-node-retry storm by inserting a
+    // late `done` row for the agent at a high retryIndex but clarifyIter=0.
+    // This is what production task 01KRT38TKXQGKEDHCPQXPXTB9J actually had:
+    // retry=6 / clarify=0 / done from process retries that succeeded.
+    await h.db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId,
+      nodeId: 'd',
+      status: 'done',
+      retryIndex: 6,
+      iteration: 0,
+      clarifyIteration: 0,
+      startedAt: Date.now() - 1000,
+      finishedAt: Date.now() - 500,
+    })
+
+    // Step 3: synthesize an answered clarify session + a rerun row at the
+    // tuple submitClarifyAnswers actually mints (retry=0, clarifyIter=1).
+    const sessRow = (
+      await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
+    )[0]!
+    await h.db
+      .update(clarifySessions)
+      .set({
+        status: 'answered',
+        answeredAt: Date.now(),
+        answeredBy: 'local',
+        directive: 'continue',
+        answersJson: JSON.stringify([
+          {
+            questionId: 'qdb',
+            selectedOptionIndices: [0],
+            selectedOptionLabels: ['Postgres'],
+            customText: '',
+          },
+        ]),
+      })
+      .where(eq(clarifySessions.id, sessRow.id))
+    await h.db
+      .update(nodeRuns)
+      .set({ status: 'done', finishedAt: Date.now() })
+      .where(eq(nodeRuns.id, sessRow.clarifyNodeRunId))
+    const rerunId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: rerunId,
+      taskId,
+      nodeId: 'd',
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+      clarifyIteration: 1,
+    })
+    await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
+
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'with pg' }) }, () =>
+      runTask({
+        taskId,
+        db: h.db,
+        appHome: h.appHome,
+        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+      }),
+    )
+
+    // The fresh rerun must actually run — not be shadowed by the retry=6 row.
+    const rerunRow = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunId)))[0]!
+    expect(rerunRow.status).toBe('done')
+    expect(rerunRow.promptText ?? '').toContain('Postgres')
+
+    // And the task must reach done via the rerun, not by short-circuiting on
+    // the stale retry=6 done row.
+    const finalTask = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!
+    expect(finalTask.status).toBe('done')
+  })
 })
 
 describe('agent-multi clarify per shard', () => {
