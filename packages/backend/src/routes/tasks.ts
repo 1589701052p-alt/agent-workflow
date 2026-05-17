@@ -38,6 +38,7 @@ import {
   type UploadLimits,
 } from '@/services/upload'
 import { getSessionTree } from '@/services/sessionView'
+import { getInventorySnapshot } from '@/services/inventory'
 import { getWorkflow } from '@/services/workflow'
 import { Paths } from '@/util/paths'
 import { NotFoundError, ValidationError } from '@/util/errors'
@@ -191,6 +192,15 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   // sessionCapture).
   app.get('/api/tasks/:id/node-runs/:nodeRunId/session', async (c) => {
     return c.json(await getSessionTree(deps.db, c.req.param('id'), c.req.param('nodeRunId')))
+  })
+
+  // RFC-029: Runtime inventory snapshot rendered at the top of the
+  // NodeDetailDrawer's Session tab. The snapshot was written into
+  // node_runs.inventory_snapshot_json by the runner after `child.exited`,
+  // sourced from a file the framework-injected `aw-inventory-dump.mjs`
+  // opencode plugin produced inside the per-run dir.
+  app.get('/api/tasks/:id/node-runs/:nodeRunId/inventory', async (c) => {
+    return c.json(await getInventorySnapshot(deps.db, c.req.param('id'), c.req.param('nodeRunId')))
   })
 }
 

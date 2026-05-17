@@ -671,3 +671,60 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
   // tab actually contains a session-flow container (vs an empty fallback).
   await expect(page.locator('.session-flow').first()).toBeVisible()
 })
+
+// RFC-029 e2e: NodeDetailDrawer "Session" tab renders the Runtime
+// Inventory section at the top, sourced from the per-run inventory.json
+// the stub-opencode shim writes when OPENCODE_AW_INVENTORY_OUT is set.
+// Verifies AC-1 (section appears in Session tab), AC-2 (Agents row), AC-4
+// (MCP status badge color), AC-9 (chips show counts in the summary).
+test('RFC-029: Runtime Inventory section renders on the Session tab', async ({ page }) => {
+  await primeAuthLocalStorage(page, daemon)
+
+  const headers = {
+    Authorization: `Bearer ${daemon.token}`,
+    'Content-Type': 'application/json',
+  }
+  const startRes = await fetch(`${daemon.baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      workflowId: fixtures.workflowId,
+      inputs: { topic: 'rfc-029' },
+      repoPath: fixtures.repoPath,
+      baseBranch: 'main',
+    }),
+  })
+  expectOk(startRes, 'start task for rfc-029')
+  const startedTask = (await startRes.json()) as { id: string }
+  const finalTask = await pollUntilTerminal(daemon, startedTask.id, 30_000)
+  expect(finalTask.status).toBe('done')
+
+  await page.goto(`${daemon.baseUrl}/tasks/${startedTask.id}`)
+  await expect(page.locator('.status-chip', { hasText: /^done$/ }).first()).toBeVisible({
+    timeout: 15_000,
+  })
+
+  await expect(page.locator('.canvas-node--agent').first()).toBeVisible({ timeout: 10_000 })
+  await page.locator('.canvas-node--agent').first().click()
+
+  // The inventory section must be present in the Session tab body, with
+  // count chips visible even before the user expands it.
+  const section = page.locator('[data-testid="runtime-inventory-section"]')
+  await expect(section).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('[data-testid="inventory-chips"]')).toBeVisible({
+    timeout: 10_000,
+  })
+
+  // Expand the section. <details> is keyboard-toggleable via click on the
+  // summary; use a click rather than .open property to mimic the user.
+  await section.locator('summary').click()
+
+  // Stub inventory has one agent + one skill + two mcps + one plugin.
+  await expect(section).toContainText('e2e-stub-coder')
+  await expect(section).toContainText('fixture-skill')
+  await expect(section).toContainText('fixture-mcp-ok')
+  await expect(section).toContainText('fixture-mcp-warn')
+  // status-badge--warn color class on the needs_auth row.
+  await expect(section.locator('.status-badge--warn').first()).toBeVisible()
+  await expect(section.locator('.status-badge--success').first()).toBeVisible()
+})

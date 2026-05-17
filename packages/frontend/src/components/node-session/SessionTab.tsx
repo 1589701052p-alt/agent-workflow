@@ -16,6 +16,7 @@ import {
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
 import { ConversationFlow } from './ConversationFlow'
+import { RuntimeInventorySection } from '@/components/inventory/RuntimeInventorySection'
 
 interface Props {
   taskId: string
@@ -68,7 +69,17 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
       {fanoutParent ? (
         <div className="muted">{t('nodeDrawer.sessionFanoutParent')}</div>
       ) : (
-        <SessionBody taskId={taskId} nodeRunId={picked.id} />
+        <>
+          {/* RFC-029: runtime inventory section sits between the attempts
+              switcher and the conversation flow so users can confirm "what
+              opencode actually loaded" before scanning the dialog. */}
+          <RuntimeInventorySection
+            taskId={taskId}
+            nodeRunId={picked.id}
+            workflowNodeKind={workflowNodeKind}
+          />
+          <SessionBody taskId={taskId} nodeRunId={picked.id} />
+        </>
       )}
     </div>
   )

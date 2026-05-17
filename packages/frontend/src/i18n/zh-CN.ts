@@ -10,6 +10,7 @@ export interface Resources {
     agents: string
     skills: string
     mcps: string
+    plugins: string
     workflows: string
     tasks: string
     reviews: string
@@ -118,6 +119,36 @@ export interface Resources {
         codeMcpDisabled: string
       }
     }
+  }
+  plugins: {
+    title: string
+    hint: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colSpec: string
+    colSource: string
+    colVersion: string
+    colEnabled: string
+    formTitleNew: string
+    formTitleEdit: string
+    fieldName: string
+    fieldSpec: string
+    fieldSpecHint: string
+    fieldDescription: string
+    fieldOptions: string
+    fieldOptionsHint: string
+    fieldEnabled: string
+    createButton: string
+    creating: string
+    saveButton: string
+    saving: string
+    cancelEdit: string
+    checkUpdateButton: string
+    checking: string
+    upgradeButton: string
+    upgrading: string
+    errorOptionsJson: string
   }
   reviews: {
     title: string
@@ -842,6 +873,43 @@ export interface Resources {
     promptFanoutParent: string
     promptNotApplicable: string
     promptEmpty: string
+    inventory: {
+      title: string
+      pending: string
+      empty: string
+      chip: { agents: string; skills: string; mcps: string; plugins: string }
+      subtitle: { agents: string; skills: string; mcps: string; plugins: string }
+      col: {
+        name: string
+        mode: string
+        model: string
+        readonly: string
+        source: string
+        path: string
+        desc: string
+        status: string
+        type: string
+        hint: string
+        specifier: string
+      }
+      source: { inline: string; project: string; global: string; native: string; unknown: string }
+      status: {
+        connected: string
+        disabled: string
+        needs_auth: string
+        needs_client_registration: string
+        failed: string
+        not_initialized: string
+      }
+      reason: {
+        'file-missing': string
+        'parse-failed': string
+        'opencode-pure-mode': string
+        'plugin-load-failed': string
+        'dump-plugin-internal-error': string
+        'non-agent-kind': string
+      }
+    }
   }
   noderunStatus: {
     pending: string
@@ -1035,6 +1103,7 @@ export const zhCN: Resources = {
     agents: '代理',
     skills: '技能',
     mcps: 'MCP',
+    plugins: '插件',
     workflows: '工作流',
     tasks: '任务',
     reviews: '评审',
@@ -1438,6 +1507,38 @@ export const zhCN: Resources = {
         codeMcpDisabled: '该 MCP 已被禁用，需先在编辑页启用。',
       },
     },
+  },
+  plugins: {
+    title: '插件',
+    hint: '注册 opencode 插件后，可在任意代理的 frontmatter.plugins 中按名称引用。保存即在 ~/.agent-workflow/plugins/ 下急安装，运行时框架以 file://<已缓存路径> 注入到 OPENCODE_CONFIG_CONTENT.plugin，spawn 阶段零联网。',
+    newButton: '+ 新建插件',
+    emptyList: '尚未登记任何插件。',
+    colName: '名称',
+    colSpec: 'Spec',
+    colSource: '来源',
+    colVersion: '版本',
+    colEnabled: '启用',
+    formTitleNew: '新建插件',
+    formTitleEdit: '编辑插件',
+    fieldName: '名称',
+    fieldSpec: 'Spec',
+    fieldSpecHint:
+      'npm 包（pkg@1.2.3 / @scope/pkg@x）/ 本地路径（file:///abs 或 ./rel）/ Git URL（git+https / github:org/repo）',
+    fieldDescription: '描述',
+    fieldOptions: 'Options（JSON 对象）',
+    fieldOptionsHint:
+      '传给 opencode 插件的配置对象；非空时框架以 [file://..., options] 元组形式注入；为空对象时仅注入路径字符串。',
+    fieldEnabled: '启用',
+    createButton: '创建',
+    creating: '安装中…',
+    saveButton: '保存',
+    saving: '保存中…',
+    cancelEdit: '取消编辑',
+    checkUpdateButton: '检查更新',
+    checking: '检查中…',
+    upgradeButton: '升级',
+    upgrading: '升级中…',
+    errorOptionsJson: 'Options 必须是合法的 JSON 对象。',
   },
   workflows: {
     title: '工作流',
@@ -1880,6 +1981,43 @@ export const zhCN: Resources = {
     promptFanoutParent: '多进程父节点本身没有 prompt — 请选一个 shard。',
     promptNotApplicable: '该节点种类不发起 opencode prompt。',
     promptEmpty: '本次执行尚未记录 prompt。',
+    inventory: {
+      title: '运行时清单',
+      pending: '正在捕获清单…',
+      empty: '（无）',
+      chip: { agents: '智', skills: '技', mcps: 'M', plugins: '插' },
+      subtitle: { agents: '智能体', skills: '技能', mcps: 'MCP 服务', plugins: '插件' },
+      col: {
+        name: '名称',
+        mode: '模式',
+        model: '模型',
+        readonly: '只读',
+        source: '来源',
+        path: '路径',
+        desc: '描述',
+        status: '状态',
+        type: '类型',
+        hint: '提示',
+        specifier: '标识',
+      },
+      source: { inline: '内联', project: '项目', global: '全局', native: '内置', unknown: '未知' },
+      status: {
+        connected: '已连接',
+        disabled: '已禁用',
+        needs_auth: '需要认证',
+        needs_client_registration: '需要注册客户端',
+        failed: '失败',
+        not_initialized: '未初始化',
+      },
+      reason: {
+        'file-missing': '未生成清单文件（插件可能加载失败）。',
+        'parse-failed': '清单文件格式异常。',
+        'opencode-pure-mode': 'opencode 处于 --pure 模式，未启用外部插件。',
+        'plugin-load-failed': '插件写入或加载失败。',
+        'dump-plugin-internal-error': '清单插件内部报错。',
+        'non-agent-kind': '该节点类型不产生运行时清单。',
+      },
+    },
   },
   noderunStatus: {
     pending: '待运行',

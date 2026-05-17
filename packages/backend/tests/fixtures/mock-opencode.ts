@@ -31,6 +31,18 @@
 //                                    so the runner captures it into RunResult.sessionId.
 //                                    Default ULID-style synthetic id when set to '1';
 //                                    any other value is treated as the literal id.
+//   MOCK_OPENCODE_WRITE_INVENTORY_FROM
+//                                    RFC-029: path to a JSON fixture. When set AND
+//                                    OPENCODE_AW_INVENTORY_OUT is also set, the mock
+//                                    copies the fixture contents to that path *before*
+//                                    exiting. Simulates what the real
+//                                    `aw-inventory-dump.mjs` plugin would do at boot —
+//                                    lets runner integration tests assert the
+//                                    framework-side read path without spawning a
+//                                    real opencode binary. Set the literal string
+//                                    `__MISSING__` to skip writing (default case;
+//                                    runner should then store captured:false /
+//                                    file-missing).
 
 import process from 'node:process'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -115,6 +127,25 @@ if (env.MOCK_OPENCODE_CAPTURE_CONFIG_TO) {
     appendFileSync(env.MOCK_OPENCODE_CAPTURE_CONFIG_TO, JSON.stringify(row) + '\n')
   } catch (e) {
     fail(`MOCK_OPENCODE_CAPTURE_CONFIG_TO write failed: ${(e as Error).message}`)
+  }
+}
+
+// RFC-029: simulate the dump plugin's write side. The real plugin runs
+// inside the opencode child process and writes
+// `$OPENCODE_AW_INVENTORY_OUT`. Here, the mock copies a test-provided
+// fixture so the runner's read path can be exercised end-to-end without
+// loading a real opencode binary. Skip when the fixture path is unset or
+// the sentinel `__MISSING__` (intentional missing case).
+if (
+  env.MOCK_OPENCODE_WRITE_INVENTORY_FROM &&
+  env.MOCK_OPENCODE_WRITE_INVENTORY_FROM !== '__MISSING__' &&
+  env.OPENCODE_AW_INVENTORY_OUT
+) {
+  try {
+    const body = readFileSync(env.MOCK_OPENCODE_WRITE_INVENTORY_FROM, 'utf-8')
+    writeFileSync(env.OPENCODE_AW_INVENTORY_OUT, body)
+  } catch (e) {
+    fail(`MOCK_OPENCODE_WRITE_INVENTORY_FROM write failed: ${(e as Error).message}`)
   }
 }
 

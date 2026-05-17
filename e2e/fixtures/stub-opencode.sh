@@ -34,5 +34,31 @@ esac
 # concatenates `part.text` from each `text` event, then extracts the last
 # <workflow-output> envelope from that buffer. One event with the whole
 # envelope is sufficient.
+# RFC-029: when the framework asks for an inventory drop (by setting
+# OPENCODE_AW_INVENTORY_OUT), simulate what the real aw-inventory-dump
+# plugin would have written. Keeps existing main.spec.ts cases unaffected
+# while letting the inventory-section spec exercise the captured:true path.
+if [ -n "${OPENCODE_AW_INVENTORY_OUT:-}" ]; then
+  cat > "${OPENCODE_AW_INVENTORY_OUT}" <<'INVENTORY_JSON'
+{
+  "schemaVersion": 1,
+  "capturedAt": 1700000000000,
+  "agents": [
+    {"name": "e2e-stub-coder", "mode": "primary", "modelProviderId": "anthropic", "modelId": "claude-opus-4-7", "readonly": true, "source": "inline"}
+  ],
+  "skills": [
+    {"name": "fixture-skill", "source": "managed", "path": "/tmp/skills/fixture-skill", "description": "stub e2e skill"}
+  ],
+  "mcps": [
+    {"name": "fixture-mcp-ok", "type": "local", "status": "connected", "hint": null},
+    {"name": "fixture-mcp-warn", "type": "remote", "status": "needs_auth", "hint": "token missing"}
+  ],
+  "plugins": [
+    {"specifier": "file:///tmp/plugins/aw-inventory-dump.mjs", "source": "inline"}
+  ]
+}
+INVENTORY_JSON
+fi
+
 printf '%s\n' '{"type":"text","timestamp":0,"part":{"type":"text","text":"<workflow-output>\n  <port name=\"answer\">stub e2e output</port>\n</workflow-output>"}}'
 exit 0

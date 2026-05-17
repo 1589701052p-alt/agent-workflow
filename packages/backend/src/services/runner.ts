@@ -23,6 +23,7 @@ import type {
   ClarifyQuestion,
   ClarifyTruncationWarning,
   Mcp,
+  Plugin,
   ReviewPromptContext,
 } from '@agent-workflow/shared'
 import { parseClarifyEnvelopeBody } from '@agent-workflow/shared'
@@ -40,6 +41,9 @@ import {
 } from './envelope'
 import { renderUserPrompt } from './protocol'
 import { captureChildSessions } from './sessionCapture'
+import { isAgentRunKind, readSnapshotFromRunDir } from './inventory'
+import { awInventoryDumpSourcePath } from '@/opencode-plugin'
+import { copyFileSync } from 'node:fs'
 
 export type SkillSource = 'managed' | 'external' | 'project'
 
@@ -128,6 +132,17 @@ export interface RunNodeOptions {
    * §1 and §3.3 for the field-name translation rules.
    */
   mcps?: readonly Mcp[]
+  /**
+   * RFC-031: opencode plugin records to inject under `plugin` in the inline
+   * OPENCODE_CONFIG_CONTENT. Scheduler pre-loads these via
+   * `collectPluginNamesFromClosure` + `loadPluginsByNames` (see
+   * services/pluginClosure) over the dependsOn closure. Each record carries
+   * a `cachedPath` populated at save time by services/pluginInstaller; the
+   * runner injects `file://<cachedPath>` so opencode resolves the entry
+   * without touching the network. Empty / undefined → omit the `plugin` key
+   * entirely.
+   */
+  plugins?: readonly Plugin[]
   /** Default true. */
   dangerouslySkipPermissions?: boolean
   /** Wall-clock timeout in ms. Undefined = no limit. */
@@ -158,6 +173,16 @@ export interface RunNodeOptions {
    * proposal §2.1 / A12 / A13 / A7.
    */
   resumeSessionId?: string
+  /**
+   * RFC-029: workflow node kind for the row being executed. Drives whether
+   * the inventory dump plugin is wired in and whether the inventory snapshot
+   * is read back after `child.exited`. Only the two agent kinds
+   * (`'agent-single'` / `'agent-multi'`) produce an inventory; anything else
+   * results in `node_runs.inventory_snapshot_json` staying NULL. Optional
+   * (defaults to `'agent-single'` for legacy callers / tests that don't
+   * exercise the inventory path).
+   */
+  nodeKind?: string
 }
 
 export type RunFinalStatus = 'done' | 'failed' | 'canceled'
@@ -208,12 +233,43 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // opencode's `McpLocalConfig` / `McpRemoteConfig` wire format — see
   // OPENCODE_CONFIG.md §3.3). opencode merges this AFTER all directory scans
   // so platform definitions win at field level.
-  const inlineConfig = buildInlineConfig(
+  const inlineConfig: {
+    agent: Record<string, Record<string, unknown>>
+    mcp?: Record<string, Record<string, unknown>>
+    plugin?: Array<string | [string, Record<string, unknown>]>
+  } = buildInlineConfig(
     opts.agent,
     opts.overrides,
     opts.dependents ?? [],
     opts.mcps ?? [],
+    opts.plugins ?? [],
   )
+
+  // RFC-029: only wire the dump plugin for agent kinds (single / multi). For
+  // wrapper / clarify / review etc. runNode is not invoked anyway, but the
+  // explicit guard keeps the behavior stable even if a future caller routes
+  // non-agent kinds through here.
+  const inventoryNodeKind = opts.nodeKind ?? 'agent-single'
+  let inventoryOutPath: string | undefined
+  if (isAgentRunKind(inventoryNodeKind)) {
+    try {
+      mkdirSync(runRoot, { recursive: true })
+      const pluginPath = join(runRoot, 'aw-inventory-dump.mjs')
+      copyFileSync(awInventoryDumpSourcePath(), pluginPath)
+      const fileSpec: string | [string, Record<string, unknown>] = `file://${pluginPath}`
+      inlineConfig.plugin = [...(inlineConfig.plugin ?? []), fileSpec]
+      inventoryOutPath = join(runRoot, 'inventory.json')
+    } catch (err) {
+      // Non-fatal: if we can't materialize the plugin (disk full / permission
+      // denied), the run continues without inventory capture and the post-exit
+      // read just lands on a `plugin-load-failed` reason.
+      log.warn('inventory-plugin-materialize-failed', {
+        nodeRunId: opts.nodeRunId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // RFC-022 §design B6: warn (don't fail) when the serialized config crosses
   // the soft cap. Real OS env-var ceilings are well above this; the warning
   // helps catch authors stuffing massive bodies into every dependent agent
@@ -274,12 +330,25 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     overrides: opts.overrides ?? null,
     mcpCount: inlineConfig.mcp ? Object.keys(inlineConfig.mcp).length : 0,
     mcpKeys: inlineConfig.mcp ? Object.keys(inlineConfig.mcp) : [],
+    // RFC-031: log only the count + names of injected plugins — never the
+    // options bodies (may contain API keys / tokens). pluginNames lets the
+    // operator spot "expected dd-trace, got nothing" without dumping the full
+    // OPENCODE_CONFIG_CONTENT to logs.
+    pluginCount: (opts.plugins ?? []).filter((p) => p.enabled !== false).length,
+    pluginNames: (opts.plugins ?? []).filter((p) => p.enabled !== false).map((p) => p.name),
   })
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     OPENCODE_CONFIG_DIR: runDir,
     OPENCODE_CONFIG_CONTENT: JSON.stringify(inlineConfig),
+  }
+  // RFC-029: tell the dump plugin where to write the snapshot file. Set only
+  // when the plugin was actually injected — otherwise leaving it unset keeps
+  // any externally-set value (e.g. a developer running mock-opencode) from
+  // accidentally hijacking the path.
+  if (inventoryOutPath !== undefined) {
+    env.OPENCODE_AW_INVENTORY_OUT = inventoryOutPath
   }
 
   const child = Bun.spawn({
@@ -380,6 +449,25 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       kind: 'stderr',
       payload: line,
     })
+    // RFC-031: detect opencode's plugin-load error log lines and surface a
+    // synthetic `text` event tagged `[rfc031/plugin-load-failed]`. opencode
+    // only logs + publishes these (does NOT kill the parent process — see
+    // opencode/packages/opencode/src/plugin/index.ts:170-209), so without
+    // this tap the operator never sees that an injected plugin failed.
+    const decoded = detectPluginLoadFailure(line, opts.plugins ?? [])
+    if (decoded !== null) {
+      await opts.db.insert(nodeRunEvents).values({
+        nodeRunId: opts.nodeRunId,
+        ts: Date.now(),
+        kind: 'text',
+        payload: `[rfc031/plugin-load-failed] ${JSON.stringify({
+          rfc: 'RFC-031',
+          code: 'plugin-load-failed',
+          pluginName: decoded.pluginName,
+          message: decoded.message,
+        })}`,
+      })
+    }
   })
 
   // 7. Wait for exit + drain streams.
@@ -504,6 +592,28 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     }
   }
 
+  // 10b. RFC-029: read the runtime inventory snapshot the dump plugin wrote
+  //      into runRoot. Total: any failure path resolves to a `captured:false`
+  //      stub with a precise reason code rather than leaving the column
+  //      NULL, so the UI's reason-pinpointed messaging works on the first
+  //      load. Skipped (column stays NULL) for non-agent kinds.
+  let inventoryJson: string | null = null
+  if (isAgentRunKind(inventoryNodeKind)) {
+    try {
+      const snapshot = await readSnapshotFromRunDir({
+        runDir: runRoot,
+        nodeKind: inventoryNodeKind,
+        pureMode: process.env.OPENCODE_PURE === '1' || process.env.OPENCODE_PURE === 'true',
+      })
+      inventoryJson = JSON.stringify(snapshot)
+    } catch (err) {
+      log.warn('inventory-read-unhandled', {
+        nodeRunId: opts.nodeRunId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // 11. Update node_runs final state.
   await opts.db
     .update(nodeRuns)
@@ -512,6 +622,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       finishedAt: Date.now(),
       exitCode: exitCode ?? null,
       errorMessage: errorMessage ?? null,
+      inventorySnapshotJson: inventoryJson,
       tokInput: tokenUsage.input,
       tokOutput: tokenUsage.output,
       tokCacheCreate: tokenUsage.cacheCreate,
@@ -593,9 +704,18 @@ export function buildInlineConfig(
   overrides: AgentOverrides | undefined,
   dependents: readonly Agent[],
   mcps: readonly Mcp[] = [],
+  plugins: readonly Plugin[] = [],
 ): {
   agent: Record<string, Record<string, unknown>>
   mcp?: Record<string, Record<string, unknown>>
+  /**
+   * RFC-031: opencode `config.plugin` is an array of `Spec` values. Each
+   * element is either a bare `file://<path>` string or a `[file://..., options]`
+   * tuple when the plugin record carries non-empty options. We NEVER inject
+   * the raw user-supplied spec — opencode would re-resolve it through npm,
+   * defeating the eager-install + cache contract.
+   */
+  plugin?: Array<string | [string, Record<string, unknown>]>
 } {
   const map: Record<string, Record<string, unknown>> = {
     [agent.name]: buildInlineAgentEntry(agent, overrides),
@@ -608,6 +728,7 @@ export function buildInlineConfig(
   const out: {
     agent: Record<string, Record<string, unknown>>
     mcp?: Record<string, Record<string, unknown>>
+    plugin?: Array<string | [string, Record<string, unknown>]>
   } = { agent: map }
   // RFC-028: emit the mcp record only when at least one ENABLED entry exists.
   // Disabled entries are skipped entirely to keep the env-var compact AND to
@@ -620,6 +741,21 @@ export function buildInlineConfig(
     mcpMap[m.name] = buildInlineMcpEntry(m)
   }
   if (Object.keys(mcpMap).length > 0) out.mcp = mcpMap
+  // RFC-031: emit the plugin array only when at least one ENABLED entry
+  // resolves. Dedupe by plugin.name (closure may visit the same plugin via
+  // multiple agents). Each element is `file://<cachedPath>` so opencode's
+  // `resolvePathPluginTarget` handles it without npm.
+  const pluginArr: Array<string | [string, Record<string, unknown>]> = []
+  const pluginSeen = new Set<string>()
+  for (const p of plugins) {
+    if (p.enabled === false) continue
+    if (pluginSeen.has(p.name)) continue
+    pluginSeen.add(p.name)
+    const pathSpec = p.cachedPath.startsWith('file://') ? p.cachedPath : `file://${p.cachedPath}`
+    const opts = p.options && Object.keys(p.options).length > 0 ? p.options : undefined
+    pluginArr.push(opts === undefined ? pathSpec : [pathSpec, opts])
+  }
+  if (pluginArr.length > 0) out.plugin = pluginArr
   return out
 }
 
@@ -648,6 +784,64 @@ function buildInlineMcpEntry(m: Mcp): Record<string, unknown> {
     if (m.config.timeoutMs !== undefined) entry.timeout = m.config.timeoutMs
   }
   return entry
+}
+
+/**
+ * RFC-031 — substring-scan a stderr line for opencode plugin-load error
+ * patterns (see opencode/packages/opencode/src/plugin/index.ts:170-209 for
+ * the producer side). Returns `{ pluginName, message }` when matched and
+ * `null` otherwise.
+ *
+ * `pluginName` is best-effort: we try to map back from the file://<cached>
+ * path embedded in the spec to the plugin record's `name`. When the line
+ * mentions a different path or the lookup fails, we return an empty string
+ * so the UI still renders the message (truncated stderr) with a generic
+ * "unknown plugin" label.
+ */
+export function detectPluginLoadFailure(
+  line: string,
+  plugins: readonly Plugin[],
+): { pluginName: string; message: string } | null {
+  // opencode log lines pass through a structured logger; the human-readable
+  // tail of the line (after `INFO`/`ERROR`/etc.) starts with the message we
+  // emitted via `publishPluginError`. Match against the publish strings.
+  const PATTERNS = [
+    /Failed to load plugin (\S+):\s*(.*)$/,
+    /Failed to install plugin (\S+):\s*(.*)$/,
+    /Plugin (\S+) skipped:\s*(.*)$/,
+  ]
+  let spec: string | null = null
+  let message = ''
+  for (const re of PATTERNS) {
+    const m = re.exec(line)
+    if (m !== null) {
+      spec = m[1] ?? null
+      message = (m[2] ?? '').trim()
+      break
+    }
+  }
+  if (spec === null) return null
+  // Try to map a file:// spec back to a plugin record by suffix.
+  let pluginName = ''
+  if (spec.startsWith('file://')) {
+    const path = spec.replace(/^file:\/\//, '')
+    for (const p of plugins) {
+      const cached = p.cachedPath.replace(/^file:\/\//, '')
+      if (path === cached || path.endsWith(cached) || cached.endsWith(path)) {
+        pluginName = p.name
+        break
+      }
+    }
+  } else {
+    // npm/git spec form — try direct name match.
+    for (const p of plugins) {
+      if (p.spec === spec || p.name === spec) {
+        pluginName = p.name
+        break
+      }
+    }
+  }
+  return { pluginName, message: message.length > 0 ? message : spec }
 }
 
 export function buildCommand(opts: RunNodeOptions, prompt: string): string[] {
