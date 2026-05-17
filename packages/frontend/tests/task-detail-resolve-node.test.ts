@@ -5,7 +5,11 @@
 
 import { describe, expect, test } from 'vitest'
 import type { NodeRun } from '@agent-workflow/shared'
-import { resolveNodeIdFromRuns, resolveNodeKindFromSnapshot } from '../src/routes/tasks.detail'
+import {
+  resolveNodeIdFromRuns,
+  resolveNodeKindFromSnapshot,
+  resolveNodeNameFromSnapshot,
+} from '../src/routes/tasks.detail'
 
 function makeRun(id: string, nodeId: string): NodeRun {
   return {
@@ -70,5 +74,48 @@ describe('RFC-011 resolveNodeKindFromSnapshot', () => {
     expect(resolveNodeKindFromSnapshot(null, 'n1')).toBeNull()
     expect(resolveNodeKindFromSnapshot('not-object', 'n1')).toBeNull()
     expect(resolveNodeKindFromSnapshot({ nodes: 'oops' }, 'n1')).toBeNull()
+  })
+})
+
+// Locks the priority order the node-runs table relies on: title > agentName /
+// inputKey > null (caller falls back to nodeId). Mirrors canvas `nodeTitle`
+// so the table label matches the canvas label for the same node.
+describe('resolveNodeNameFromSnapshot', () => {
+  const snap = {
+    nodes: [
+      { id: 'a1', kind: 'agent-single', agentName: 'auditor' },
+      { id: 'a2', kind: 'agent-multi', agentName: 'fixer', title: 'Parallel fixer' },
+      { id: 'in1', kind: 'input', inputKey: 'repo_path' },
+      { id: 'c1', kind: 'clarify', title: 'Ask user' },
+      { id: 'r1', kind: 'review' },
+      { id: 'a3', kind: 'agent-single' },
+    ],
+  }
+
+  test('explicit title wins over agentName', () => {
+    expect(resolveNodeNameFromSnapshot(snap, 'a2')).toBe('Parallel fixer')
+  })
+
+  test('agent nodes fall back to agentName', () => {
+    expect(resolveNodeNameFromSnapshot(snap, 'a1')).toBe('auditor')
+  })
+
+  test('input nodes fall back to inputKey', () => {
+    expect(resolveNodeNameFromSnapshot(snap, 'in1')).toBe('repo_path')
+  })
+
+  test('clarify uses its title', () => {
+    expect(resolveNodeNameFromSnapshot(snap, 'c1')).toBe('Ask user')
+  })
+
+  test('nodes with no displayable field return null', () => {
+    expect(resolveNodeNameFromSnapshot(snap, 'r1')).toBeNull()
+    expect(resolveNodeNameFromSnapshot(snap, 'a3')).toBeNull()
+  })
+
+  test('null nodeId / malformed snapshot return null', () => {
+    expect(resolveNodeNameFromSnapshot(snap, null)).toBeNull()
+    expect(resolveNodeNameFromSnapshot(null, 'a1')).toBeNull()
+    expect(resolveNodeNameFromSnapshot({ nodes: 'oops' }, 'a1')).toBeNull()
   })
 })

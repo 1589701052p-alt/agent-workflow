@@ -251,7 +251,9 @@ function TaskDetailPage() {
           {nodeRuns.error !== null && nodeRuns.error !== undefined && (
             <div className="error-box">{describeError(nodeRuns.error)}</div>
           )}
-          {nodeRuns.data !== undefined && <NodeRunsTable runs={nodeRuns.data.runs} />}
+          {nodeRuns.data !== undefined && (
+            <NodeRunsTable runs={nodeRuns.data.runs} workflowSnapshot={tk.workflowSnapshot} />
+          )}
         </div>
 
         <div className="task-detail__pane" hidden={tab !== 'details'}>
@@ -444,7 +446,7 @@ function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
   }
 }
 
-function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
+function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSnapshot: unknown }) {
   const { t } = useTranslation()
   if (runs.length === 0) return <div className="muted">{t('tasks.noNodeRuns')}</div>
   return (
@@ -461,49 +463,58 @@ function NodeRunsTable({ runs }: { runs: NodeRun[] }) {
         </tr>
       </thead>
       <tbody>
-        {runs.map((r) => (
-          <tr key={r.id}>
-            <td>
-              <code>{r.nodeId}</code>
-              {r.shardKey !== null && <span className="muted"> · {r.shardKey}</span>}
-            </td>
-            <td>
-              <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
-                {t(displayNoderunStatusKey(r))}
-              </span>
-              {shouldShowReviewJump(r.status) && (
-                <>
-                  {' '}
-                  <Link
-                    to="/reviews/$nodeRunId"
-                    params={{ nodeRunId: r.id }}
-                    search={{}}
-                    className="btn btn--sm node-runs__review-link"
-                  >
-                    {t('tasks.reviewButton')}
-                  </Link>
-                </>
-              )}
-            </td>
-            <td className="data-table__muted">{r.iteration}</td>
-            <td className="data-table__muted">{r.retryIndex}</td>
-            <td className="data-table__muted">
-              {r.startedAt === null
-                ? t('common.emDash')
-                : new Date(r.startedAt).toLocaleTimeString()}
-            </td>
-            <td className="data-table__muted">
-              {r.startedAt === null || r.finishedAt === null
-                ? t('common.emDash')
-                : `${Math.round((r.finishedAt - r.startedAt) / 100) / 10}s`}
-            </td>
-            <td className="data-table__muted">
-              {classifyCanceled(r) === 'manual'
-                ? (r.errorMessage ?? t('common.emDash'))
-                : t('common.emDash')}
-            </td>
-          </tr>
-        ))}
+        {runs.map((r) => {
+          const name = resolveNodeNameFromSnapshot(workflowSnapshot, r.nodeId) ?? r.nodeId
+          return (
+            <tr key={r.id}>
+              <td>
+                <span>{name}</span>
+                {name !== r.nodeId && (
+                  <>
+                    {' '}
+                    <code className="data-table__muted">{r.nodeId}</code>
+                  </>
+                )}
+                {r.shardKey !== null && <span className="muted"> · {r.shardKey}</span>}
+              </td>
+              <td>
+                <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
+                  {t(displayNoderunStatusKey(r))}
+                </span>
+                {shouldShowReviewJump(r.status) && (
+                  <>
+                    {' '}
+                    <Link
+                      to="/reviews/$nodeRunId"
+                      params={{ nodeRunId: r.id }}
+                      search={{}}
+                      className="btn btn--sm node-runs__review-link"
+                    >
+                      {t('tasks.reviewButton')}
+                    </Link>
+                  </>
+                )}
+              </td>
+              <td className="data-table__muted">{r.iteration}</td>
+              <td className="data-table__muted">{r.retryIndex}</td>
+              <td className="data-table__muted">
+                {r.startedAt === null
+                  ? t('common.emDash')
+                  : new Date(r.startedAt).toLocaleTimeString()}
+              </td>
+              <td className="data-table__muted">
+                {r.startedAt === null || r.finishedAt === null
+                  ? t('common.emDash')
+                  : `${Math.round((r.finishedAt - r.startedAt) / 100) / 10}s`}
+              </td>
+              <td className="data-table__muted">
+                {classifyCanceled(r) === 'manual'
+                  ? (r.errorMessage ?? t('common.emDash'))
+                  : t('common.emDash')}
+              </td>
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )
@@ -636,6 +647,47 @@ export function resolveNodeKindFromSnapshot(
  *
  * Exported for unit tests.
  */
+/**
+ * Resolve a node's user-facing display name from the task's frozen workflow
+ * snapshot. Mirrors the canvas `nodeTitle` priority so the node-runs table
+ * shows the same label users see on the canvas:
+ *   - explicit `title` (review / clarify / any node that set one)
+ *   - `agentName` for agent-single / agent-multi
+ *   - `inputKey` for input
+ *   - otherwise null — caller falls back to nodeId
+ *
+ * Exported for unit tests.
+ */
+export function resolveNodeNameFromSnapshot(
+  snapshot: unknown,
+  nodeId: string | null,
+): string | null {
+  if (nodeId === null) return null
+  if (typeof snapshot !== 'object' || snapshot === null) return null
+  const nodes = (snapshot as { nodes?: unknown }).nodes
+  if (!Array.isArray(nodes)) return null
+  for (const n of nodes) {
+    if (typeof n !== 'object' || n === null) continue
+    const node = n as {
+      id?: unknown
+      kind?: unknown
+      title?: unknown
+      agentName?: unknown
+      inputKey?: unknown
+    }
+    if (node.id !== nodeId) continue
+    if (typeof node.title === 'string' && node.title.length > 0) return node.title
+    if (node.kind === 'agent-single' || node.kind === 'agent-multi') {
+      if (typeof node.agentName === 'string' && node.agentName.length > 0) return node.agentName
+    }
+    if (node.kind === 'input') {
+      if (typeof node.inputKey === 'string' && node.inputKey.length > 0) return node.inputKey
+    }
+    return null
+  }
+  return null
+}
+
 export function resolveAgentNameFromSnapshot(
   snapshot: unknown,
   nodeId: string | null,
