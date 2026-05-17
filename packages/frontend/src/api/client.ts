@@ -64,30 +64,53 @@ export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Pr
   const payload: unknown = isJson ? await res.json().catch(() => null) : null
 
   if (!res.ok) {
-    const err = isErrorPayload(payload)
-      ? payload.error
-      : { code: `http-${res.status}`, message: res.statusText || 'request failed' }
-    throw new ApiError(
-      res.status,
-      err.code,
-      err.message,
-      isErrorPayload(payload) ? payload.error.details : undefined,
-    )
+    const err = extractErrorBody(payload, res)
+    throw new ApiError(res.status, err.code, err.message, err.details)
   }
   return payload as T
 }
 
-function isErrorPayload(
-  v: unknown,
-): v is { error: { code: string; message: string; details?: unknown } } {
-  if (typeof v !== 'object' || v === null) return false
-  const e = (v as { error?: unknown }).error
-  return (
-    typeof e === 'object' &&
-    e !== null &&
-    typeof (e as { code?: unknown }).code === 'string' &&
-    typeof (e as { message?: unknown }).message === 'string'
-  )
+/**
+ * The daemon's `errorHandler` (packages/backend/src/util/errors.ts) emits
+ * `{ ok: false, code, message, details? }` for every DomainError. Older
+ * (pre-RFC-024) versions of this client looked for a nested `{ error: {...} }`
+ * shape which the backend never actually used — every 4xx was therefore
+ * surfaced as a generic `http-<status>: <statusText>`, hiding the structured
+ * code/message from the user (most painfully for RFC-024 clone failures whose
+ * stderr is the only useful debugging signal). Now we recognize both shapes
+ * so any future endpoint that wraps in `{ error: ... }` still parses.
+ */
+function extractErrorBody(
+  payload: unknown,
+  res: Response,
+): { code: string; message: string; details?: unknown } {
+  if (typeof payload === 'object' && payload !== null) {
+    const obj = payload as Record<string, unknown>
+    // Flat shape (current backend convention).
+    if (typeof obj.code === 'string' && typeof obj.message === 'string') {
+      return {
+        code: obj.code,
+        message: obj.message,
+        ...(obj.details !== undefined ? { details: obj.details } : {}),
+      }
+    }
+    // Nested shape (defensive fallback for routes that might wrap later).
+    const nested = obj.error
+    if (
+      typeof nested === 'object' &&
+      nested !== null &&
+      typeof (nested as { code?: unknown }).code === 'string' &&
+      typeof (nested as { message?: unknown }).message === 'string'
+    ) {
+      const e = nested as { code: string; message: string; details?: unknown }
+      return {
+        code: e.code,
+        message: e.message,
+        ...(e.details !== undefined ? { details: e.details } : {}),
+      }
+    }
+  }
+  return { code: `http-${res.status}`, message: res.statusText || 'request failed' }
 }
 
 /**
@@ -117,15 +140,8 @@ export async function apiPostMultipart<T>(
   const payload: unknown = isJson ? await res.json().catch(() => null) : null
 
   if (!res.ok) {
-    const err = isErrorPayload(payload)
-      ? payload.error
-      : { code: `http-${res.status}`, message: res.statusText || 'request failed' }
-    throw new ApiError(
-      res.status,
-      err.code,
-      err.message,
-      isErrorPayload(payload) ? payload.error.details : undefined,
-    )
+    const err = extractErrorBody(payload, res)
+    throw new ApiError(res.status, err.code, err.message, err.details)
   }
   return payload as T
 }

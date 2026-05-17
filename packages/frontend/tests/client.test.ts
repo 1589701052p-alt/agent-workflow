@@ -61,7 +61,7 @@ describe('apiRequest', () => {
     expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
   })
 
-  test('throws ApiError preserving code/message/details on backend error', async () => {
+  test('throws ApiError preserving code/message/details on backend error (nested shape)', async () => {
     globalThis.fetch = (async () =>
       jsonResponse(
         { error: { code: 'task-not-found', message: "task 'x' not found", details: { id: 'x' } } },
@@ -73,6 +73,31 @@ describe('apiRequest', () => {
       status: 404,
       code: 'task-not-found',
       message: "task 'x' not found",
+    })
+  })
+
+  // RFC-024 regression: the daemon's `errorHandler` actually returns the FLAT
+  // shape `{ ok: false, code, message, details? }` — not wrapped in
+  // `{ error: ... }`. Pre-RFC-024 this client only recognized the nested
+  // shape, so users saw `http-400: Bad Request` instead of the real
+  // `repo-clone-failed: ...` message. If anyone re-tightens isErrorPayload to
+  // the nested shape only, this test catches it.
+  test("throws ApiError reading the daemon's flat error payload", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(
+        {
+          ok: false,
+          code: 'repo-clone-failed',
+          message: 'git clone failed for https://***@host.example/foo.git: fatal: ...',
+          details: { url: 'https://***@host.example/foo.git', stderr: 'fatal: ...' },
+        },
+        { status: 400 },
+      )) as unknown as typeof fetch
+
+    await expect(apiRequest('/api/tasks', { method: 'POST', body: {} })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 400,
+      code: 'repo-clone-failed',
     })
   })
 

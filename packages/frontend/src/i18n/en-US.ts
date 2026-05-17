@@ -102,8 +102,7 @@ export const enUS: Resources = {
   },
   repos: {
     title: 'Cached repos',
-    hint:
-      'Persistent mirrors created when you launch a task against a Git URL. Refresh to pull updates, Delete to reclaim disk.',
+    hint: 'Persistent mirrors created when you launch a task against a Git URL. Refresh to pull updates, Delete to reclaim disk.',
     loading: 'Loading…',
     empty:
       "No cached repos yet. Launch a task in the launcher's Remote URL mode to populate this list.",
