@@ -20,11 +20,7 @@
 // `plugins: [...]` list — same pattern as RFC-022 / RFC-028.
 
 import type { Plugin, RenamePlugin, UpdatePlugin } from '@agent-workflow/shared'
-import {
-  CreatePluginSchema,
-  PluginOptionsSchema,
-  PluginSchema,
-} from '@agent-workflow/shared'
+import { CreatePluginSchema, PluginOptionsSchema, PluginSchema } from '@agent-workflow/shared'
 import type { z } from 'zod'
 
 /**

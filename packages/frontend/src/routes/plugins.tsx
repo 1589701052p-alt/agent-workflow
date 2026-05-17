@@ -102,7 +102,10 @@ function PluginsPage() {
 
   const update = useMutation({
     mutationFn: async (id: string): Promise<Plugin> => {
-      const patch = parseFormToUpdate(form, data?.find((p) => p.id === id))
+      const patch = parseFormToUpdate(
+        form,
+        data?.find((p) => p.id === id),
+      )
       if (patch === null) {
         setFormError(t('plugins.errorOptionsJson'))
         throw new Error('invalid')
@@ -117,8 +120,7 @@ function PluginsPage() {
       api.post<{ available: boolean; latest: string | null; current: string | null }>(
         `/api/plugins/${encodeURIComponent(id)}/check-update`,
       ),
-    onSuccess: (result, id) =>
-      setUpdateInfo((s) => ({ ...s, [id]: { latest: result.latest } })),
+    onSuccess: (result, id) => setUpdateInfo((s) => ({ ...s, [id]: { latest: result.latest } })),
   })
 
   const upgrade = useMutation({
@@ -162,7 +164,9 @@ function PluginsPage() {
       {checkUpdate.error !== null && checkUpdate.error !== undefined && (
         <ErrorBanner error={checkUpdate.error} />
       )}
-      {upgrade.error !== null && upgrade.error !== undefined && <ErrorBanner error={upgrade.error} />}
+      {upgrade.error !== null && upgrade.error !== undefined && (
+        <ErrorBanner error={upgrade.error} />
+      )}
 
       {!isLoading && data !== undefined && data.length === 0 && (
         <div className="muted">{t('plugins.emptyList')}</div>
@@ -360,7 +364,10 @@ function parseFormToCreate(form: PluginFormState): CreatePlugin | null {
   }
 }
 
-function parseFormToUpdate(form: PluginFormState, existing: Plugin | undefined): UpdatePlugin | null {
+function parseFormToUpdate(
+  form: PluginFormState,
+  existing: Plugin | undefined,
+): UpdatePlugin | null {
   const opts = tryParseOptions(form.optionsJson)
   if (opts === null) return null
   const patch: UpdatePlugin = {}

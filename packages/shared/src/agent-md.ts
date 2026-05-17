@@ -320,9 +320,7 @@ export function parseAgentMarkdown(
       }
       if (rejected.length > 0) {
         extras.plugins = data.plugins
-        warnings.push(
-          'plugins entries must match [a-z0-9][a-z0-9_-]*; kept in frontmatterExtra',
-        )
+        warnings.push('plugins entries must match [a-z0-9][a-z0-9_-]*; kept in frontmatterExtra')
       } else {
         const seen = new Set<string>()
         const ordered: string[] = []
