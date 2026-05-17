@@ -93,7 +93,7 @@ function ReposPage() {
       )}
 
       {items.length > 0 && (
-        <table className="repos-table" data-testid="repos-table">
+        <table className="data-table" data-testid="repos-table">
           <thead>
             <tr>
               <th>{t('repos.colUrl')}</th>
@@ -106,7 +106,7 @@ function ReposPage() {
           <tbody>
             {items.map((item) => (
               <tr key={item.id} data-testid={`repos-row-${item.id}`}>
-                <td className="repos-table__url">
+                <td className="data-table__truncate">
                   {item.urlRedacted}{' '}
                   <SubmoduleBadge
                     hasSubmodules={item.hasSubmodules}
@@ -114,13 +114,13 @@ function ReposPage() {
                     lastSubmoduleSyncError={item.lastSubmoduleSyncError}
                   />
                 </td>
-                <td className="repos-table__url">{item.localPath}</td>
+                <td className="data-table__truncate">{item.localPath}</td>
                 <td>
                   <time dateTime={item.lastFetchedAt}>{formatTimestamp(item.lastFetchedAt)}</time>
                 </td>
                 <td>{item.referencingTaskCount}</td>
                 <td>
-                  <div className="repos-table__actions">
+                  <div className="data-table__actions">
                     <button
                       type="button"
                       className="btn btn--sm"

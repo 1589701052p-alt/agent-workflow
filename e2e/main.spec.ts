@@ -174,8 +174,9 @@ async function primeAuthLocalStorage(page: Page, d: DaemonHandle): Promise<void>
 test('happy path: agents → workflow → launch → task done → outputs visible', async ({ page }) => {
   await primeAuthLocalStorage(page, daemon)
 
-  // 1. Landing — pre-seeded localStorage routes us straight to /agents.
-  await page.goto(`${daemon.baseUrl}/`)
+  // 1. Landing — after RFC-032 PR3, `/` renders the task-driven Homepage
+  // rather than auto-redirecting to /agents. We explicitly navigate.
+  await page.goto(`${daemon.baseUrl}/agents`)
   await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
   await expect(page.getByText(fixtures.agentName)).toBeVisible()
 
@@ -811,7 +812,8 @@ test('RFC-029: Runtime Inventory section renders on the Session tab', async ({ p
   await expect(section).toContainText('fixture-skill')
   await expect(section).toContainText('fixture-mcp-ok')
   await expect(section).toContainText('fixture-mcp-warn')
-  // status-badge--warn color class on the needs_auth row.
-  await expect(section.locator('.status-badge--warn').first()).toBeVisible()
-  await expect(section.locator('.status-badge--success').first()).toBeVisible()
+  // RFC-035 PR1: StatusBadge now renders the unified <StatusChip>, so the
+  // semantic class anchor is `status-chip--warn` / `status-chip--success`.
+  await expect(section.locator('.status-chip--warn').first()).toBeVisible()
+  await expect(section.locator('.status-chip--success').first()).toBeVisible()
 })

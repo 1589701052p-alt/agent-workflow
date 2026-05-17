@@ -135,7 +135,7 @@ export function NodeDetailDrawer({
           ×
         </button>
       </header>
-      <div className="tabs inspector__tabs">
+      <div className="tabs tabs--inspector">
         {tabs.map(([k, label]) => (
           <button
             key={k}

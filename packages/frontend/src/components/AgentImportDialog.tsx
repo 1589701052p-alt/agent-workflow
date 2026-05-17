@@ -174,12 +174,12 @@ export function AgentImportDialog({
           </button>
         </header>
 
-        <div className="agent-import__tabs" role="tablist">
+        <div className="tabs tabs--inline" role="tablist">
           <button
             type="button"
             role="tab"
             aria-selected={tab === 'upload'}
-            className={`agent-import__tab${tab === 'upload' ? ' is-active' : ''}`}
+            className={`tabs__tab${tab === 'upload' ? ' tabs__tab--active' : ''}`}
             onClick={() => setTab('upload')}
           >
             {t('agentForm.importDialog.tabUpload')}
@@ -188,7 +188,7 @@ export function AgentImportDialog({
             type="button"
             role="tab"
             aria-selected={tab === 'paste'}
-            className={`agent-import__tab${tab === 'paste' ? ' is-active' : ''}`}
+            className={`tabs__tab${tab === 'paste' ? ' tabs__tab--active' : ''}`}
             onClick={() => setTab('paste')}
           >
             {t('agentForm.importDialog.tabPaste')}
@@ -267,7 +267,7 @@ export function AgentImportDialog({
             {previewRows.length === 0 ? (
               <p className="agent-import__empty">{t('agentForm.importDialog.previewEmpty')}</p>
             ) : (
-              <table className="agent-import__table">
+              <table className="data-table data-table--compact agent-import__table">
                 <tbody>
                   {previewRows.map((row, i) => (
                     <tr key={`${row.field}-${i}`}>

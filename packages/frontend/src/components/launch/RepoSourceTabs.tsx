@@ -44,13 +44,13 @@ export function RepoSourceTabs({ source, onChange }: RepoSourceTabsProps) {
 
   return (
     <div className="repo-source-tabs">
-      <div className="repo-source-tabs__bar" role="tablist" aria-label={t('launch.repoSource.bar')}>
+      <div className="tabs tabs--segment" role="tablist" aria-label={t('launch.repoSource.bar')}>
         <button
           type="button"
           role="tab"
           aria-selected={source.kind === 'path'}
           data-testid="repo-source-tab-path"
-          className={`repo-source-tabs__tab ${source.kind === 'path' ? 'is-active' : ''}`}
+          className={`tabs__tab ${source.kind === 'path' ? 'tabs__tab--active' : ''}`}
           onClick={() => switchTo('path')}
         >
           {t('launch.repoSource.path')}
@@ -60,7 +60,7 @@ export function RepoSourceTabs({ source, onChange }: RepoSourceTabsProps) {
           role="tab"
           aria-selected={source.kind === 'url'}
           data-testid="repo-source-tab-url"
-          className={`repo-source-tabs__tab ${source.kind === 'url' ? 'is-active' : ''}`}
+          className={`tabs__tab ${source.kind === 'url' ? 'tabs__tab--active' : ''}`}
           onClick={() => switchTo('url')}
         >
           {t('launch.repoSource.url')}

@@ -143,7 +143,7 @@ describe('NodeInspector', () => {
       />,
     )
     // Only Edit tab is in the DOM — Preview button gone.
-    const tabs = document.querySelectorAll('.inspector__tabs .tabs__tab')
+    const tabs = document.querySelectorAll('.tabs--inspector .tabs__tab')
     expect(tabs.length).toBe(1)
     expect(tabs[0]?.textContent).toMatch(/Edit/i)
   })
@@ -155,7 +155,7 @@ describe('NodeInspector', () => {
       agentName: 'coder',
     } as unknown as WorkflowNode
     setup(node)
-    const tabs = document.querySelectorAll('.inspector__tabs .tabs__tab')
+    const tabs = document.querySelectorAll('.tabs--inspector .tabs__tab')
     expect(tabs.length).toBe(2)
     expect(tabs[1]?.textContent).toMatch(/Preview/i)
   })
@@ -489,7 +489,7 @@ describe('NodeInspector', () => {
     // Pre-RFC-015 follow-up the tab was rendered with `disabled`. Now it's
     // removed entirely so the surface doesn't advertise unavailable
     // functionality. Look up by class because the button label is i18n'd.
-    let tabs = document.querySelectorAll('.inspector__tabs .tabs__tab')
+    let tabs = document.querySelectorAll('.tabs--inspector .tabs__tab')
     expect(tabs.length).toBe(1)
     unmount()
     wrap(
@@ -501,7 +501,7 @@ describe('NodeInspector', () => {
         onClose={() => {}}
       />,
     )
-    tabs = document.querySelectorAll('.inspector__tabs .tabs__tab')
+    tabs = document.querySelectorAll('.tabs--inspector .tabs__tab')
     expect(tabs.length).toBe(2)
   })
 })

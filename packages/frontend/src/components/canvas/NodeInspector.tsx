@@ -82,7 +82,7 @@ export function NodeInspector({ definition, selectedNodeId, agents, onChange, on
           ×
         </button>
       </header>
-      <div className="tabs inspector__tabs">
+      <div className="tabs tabs--inspector">
         <button
           type="button"
           className={`tabs__tab ${activeTab === 'edit' ? 'tabs__tab--active' : ''}`}
