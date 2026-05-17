@@ -20,6 +20,11 @@ export interface GitRunResult {
 export async function runGit(cwd: string, args: string[]): Promise<GitRunResult> {
   const proc = Bun.spawn({
     cmd: ['git', '-C', cwd, ...args],
+    // Explicit env passthrough — Bun.spawn under `bun test` does not pick up
+    // post-startup process.env mutations otherwise, which makes per-test env
+    // injection (e.g. GIT_CONFIG_GLOBAL) unreliable. In production this is a
+    // no-op since process.env is fixed at daemon start.
+    env: process.env,
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
@@ -137,6 +142,15 @@ export interface CreateWorktreeOptions {
   baseBranch?: string
   /** App home (default ~/.agent-workflow) — used to compose the worktree path. */
   appHome: string
+  /**
+   * RFC-034: behavior for the post-`worktree add` `submodule update --init`
+   * pass. Defaults to 'auto' (init when `.gitmodules` is present in the parent
+   * repo). Caller (services/task.ts startTask) wires this through from
+   * settings.gitRecurseSubmodules.
+   */
+  submoduleMode?: 'auto' | 'always' | 'never'
+  /** RFC-034: --jobs N for the submodule init. Defaults to 4. */
+  submoduleJobs?: number
 }
 
 export interface CreatedWorktree {
@@ -144,6 +158,18 @@ export interface CreatedWorktree {
   branch: string
   /** Source-repo commit the worktree starts from (for snapshotting later). */
   baseCommit: string
+  /**
+   * RFC-034: outcome of the `submodule update --init --recursive` pass on the
+   * fresh worktree. `true` when no submodules / mode='never' / sync succeeded.
+   * `false` indicates a partial init — caller should emit a warning event but
+   * MUST NOT fail the task launch (submodule access is often the user's
+   * responsibility, not the framework's).
+   */
+  submoduleInitOk: boolean
+  /** Redacted stderr from a failed submodule init, or null. */
+  submoduleInitError: string | null
+  /** True iff the parent repo carries a `.gitmodules` file. */
+  hasSubmodules: boolean
 }
 
 export async function createWorktree(opts: CreateWorktreeOptions): Promise<CreatedWorktree> {
@@ -180,7 +206,25 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Creat
       500,
     )
   }
-  return { worktreePath, branch, baseCommit }
+
+  // RFC-034: dynamic import to avoid a circular dep between util/git.ts and
+  // services/gitSubmodule.ts (which itself imports runGit from this file).
+  const { syncSubmodules } = await import('@/services/gitSubmodule')
+  const { resolveSubmoduleParams } = await import('@/services/gitRepoCache')
+  const effective = resolveSubmoduleParams(opts.submoduleMode, opts.submoduleJobs)
+  const sub = await syncSubmodules(worktreePath, {
+    mode: effective.mode,
+    jobs: effective.jobs,
+  })
+
+  return {
+    worktreePath,
+    branch,
+    baseCommit,
+    submoduleInitOk: sub.ok,
+    submoduleInitError: sub.error,
+    hasSubmodules: sub.hasGitmodules,
+  }
 }
 
 /**

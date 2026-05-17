@@ -234,6 +234,13 @@ export const NODE_EVENT_KIND = [
   // post-run opencode SQLite read fails. SessionTab treats it as a
   // captureComplete=false signal for the affected child session.
   'subagent_capture_failed',
+  // RFC-034: emitted by services/task.ts when worktree creation succeeded
+  // but the post-`worktree add` `submodule update --init --recursive` pass
+  // failed. Task continues; agents will see empty submodule directories.
+  'submodule_init_failed',
+  // RFC-034: emitted when warm-fetch / refresh on a cached repo succeeded but
+  // the `submodule sync && update` pass failed.
+  'submodule_sync_failed',
 ] as const
 
 export const NodeRunEventSchema = z.object({

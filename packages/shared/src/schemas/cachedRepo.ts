@@ -18,6 +18,13 @@ export const CachedRepoSchema = z.object({
   createdAt: z.string(),
   /** Count of `tasks` rows whose `repoUrl` matches `url`. Joined at query time. */
   referencingTaskCount: z.number().int().nonnegative(),
+  // --- RFC-034 submodule recursion ---
+  /** Last detected `.gitmodules` presence. `null` when never probed (legacy rows). */
+  hasSubmodules: z.boolean().nullable(),
+  /** Outcome of the last submodule sync/init pass. `null` when never attempted. */
+  lastSubmoduleSyncOk: z.boolean().nullable(),
+  /** Redacted stderr from the last failed submodule pass, or `null`. */
+  lastSubmoduleSyncError: z.string().nullable(),
 })
 export type CachedRepo = z.infer<typeof CachedRepoSchema>
 
@@ -32,6 +39,13 @@ export const RefreshCachedRepoResponseSchema = z.object({
   fetchOk: z.boolean(),
   /** Redacted stderr from a failed fetch, if any. */
   fetchError: z.string().nullable(),
+  // --- RFC-034 submodule recursion ---
+  /** True when `submodule sync && update --init --recursive` succeeded. */
+  submoduleSyncOk: z.boolean(),
+  /** Redacted stderr from a failed submodule pass, if any. */
+  submoduleSyncError: z.string().nullable(),
+  /** Detected `.gitmodules` presence after this refresh. */
+  hasSubmodules: z.boolean(),
 })
 export type RefreshCachedRepoResponse = z.infer<typeof RefreshCachedRepoResponseSchema>
 

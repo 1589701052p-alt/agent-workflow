@@ -111,6 +111,10 @@ export async function materializeWorktree(opts: {
   branch: string
   baseCommit: string | null
   earlyError: string | null
+  // RFC-034: surface submodule init outcome so caller can emit warning event.
+  submoduleInitOk: boolean
+  submoduleInitError: string | null
+  hasSubmodules: boolean
 }> {
   try {
     const wt = await createWorktree({
@@ -124,6 +128,9 @@ export async function materializeWorktree(opts: {
       branch: wt.branch,
       baseCommit: wt.baseCommit,
       earlyError: null,
+      submoduleInitOk: wt.submoduleInitOk,
+      submoduleInitError: wt.submoduleInitError,
+      hasSubmodules: wt.hasSubmodules,
     }
   } catch (err) {
     return {
@@ -131,6 +138,9 @@ export async function materializeWorktree(opts: {
       branch: '',
       baseCommit: null,
       earlyError: err instanceof Error ? err.message : String(err),
+      submoduleInitOk: true,
+      submoduleInitError: null,
+      hasSubmodules: false,
     }
   }
 }
@@ -224,6 +234,21 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     branch = wt.branch
     baseCommit = wt.baseCommit
     earlyError = wt.earlyError
+
+    // RFC-034: worktree creation succeeded but post-`worktree add` submodule
+    // init may have failed. We warn and continue — agents see empty submodule
+    // dirs but task lifecycle is unaffected. UI surface lives in /repos page
+    // for URL mode (via cached_repos.last_submodule_sync_*); path mode users
+    // see warn logs only.
+    if (earlyError === null && !wt.submoduleInitOk) {
+      const { createLogger } = await import('@/util/log')
+      const log = createLogger('task')
+      log.warn('[rfc034/submodule-init-failed] worktree submodule init failed', {
+        taskId,
+        worktreePath,
+        stderr: wt.submoduleInitError ?? '',
+      })
+    }
 
     // URL mode: a `worktree-base-invalid` from createWorktree usually means
     // the user-supplied ref doesn't exist in the cached mirror. Rewrap it

@@ -270,6 +270,11 @@ export const cachedRepos = sqliteTable(
     defaultBranch: text('default_branch'), // nullable; null when HEAD was detached / unborn
     lastFetchedAt: integer('last_fetched_at').notNull(),
     createdAt: integer('created_at').notNull(),
+    // RFC-034: submodule recursion telemetry. All three are nullable so legacy
+    // pre-RFC-034 rows serialize cleanly until the next clone / refresh fills them.
+    hasSubmodules: integer('has_submodules', { mode: 'boolean' }),
+    lastSubmoduleSyncOk: integer('last_submodule_sync_ok', { mode: 'boolean' }),
+    lastSubmoduleSyncError: text('last_submodule_sync_error'),
   },
   (t) => ({
     lastFetchedIdx: index('idx_cached_repos_last_fetched').on(t.lastFetchedAt),

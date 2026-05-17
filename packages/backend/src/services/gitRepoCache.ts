@@ -34,6 +34,8 @@ import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { runGit } from '@/util/git'
 import { createLogger } from '@/util/log'
 import { Paths } from '@/util/paths'
+import { getCachedGitCapabilities } from '@/services/gitVersion'
+import { detectSubmodules, syncSubmodules, type SubmoduleMode } from '@/services/gitSubmodule'
 
 const log = createLogger('git-repo-cache')
 
@@ -93,6 +95,8 @@ async function spawnGit(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn({
     cmd: ['git', ...args],
+    // Explicit env passthrough — see runGit() in util/git.ts for rationale.
+    env: process.env,
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
@@ -115,6 +119,18 @@ export interface GitRepoCacheDeps {
   fetchOnReuse?: boolean
   /** Override now() for deterministic tests. */
   now?: () => number
+  // --- RFC-034 submodule recursion ---
+  /**
+   * Behavior for cold clone / warm fetch submodule passes. Default 'auto'.
+   * Callers (settings reader) pass through the global config value. Effective
+   * mode is further clamped by local git capabilities (see resolveSubmoduleMode).
+   */
+  submoduleMode?: SubmoduleMode
+  /**
+   * `--jobs N` for clone / sync / update. Default 4. Clamped to 1 when the
+   * local git is older than 2.13.
+   */
+  submoduleJobs?: number
 }
 
 export interface ResolveCachedRepoInput {
@@ -126,6 +142,10 @@ export interface ResolveCachedRepoResult {
   cold: boolean
   fetchOk: boolean
   fetchError: string | null
+  /** RFC-034: outcome of the submodule sync/init pass on this resolve. */
+  submoduleSyncOk: boolean
+  submoduleSyncError: string | null
+  hasSubmodules: boolean
 }
 
 function rowToCached(row: typeof cachedRepos.$inferSelect, referencingTaskCount = 0): CachedRepo {
@@ -138,7 +158,31 @@ function rowToCached(row: typeof cachedRepos.$inferSelect, referencingTaskCount 
     lastFetchedAt: new Date(row.lastFetchedAt).toISOString(),
     createdAt: new Date(row.createdAt).toISOString(),
     referencingTaskCount,
+    hasSubmodules: row.hasSubmodules ?? null,
+    lastSubmoduleSyncOk: row.lastSubmoduleSyncOk ?? null,
+    lastSubmoduleSyncError: row.lastSubmoduleSyncError ?? null,
   }
+}
+
+/**
+ * Resolve effective submodule mode + jobs from caller config + local git caps.
+ * Pre-2.5 git can't run worktree+submodule reliably → force never.
+ * Pre-2.13 git lacks `--jobs` → clamp to 1.
+ */
+export function resolveSubmoduleParams(
+  inMode: SubmoduleMode | undefined,
+  inJobs: number | undefined,
+): { mode: SubmoduleMode; jobs: number } {
+  const caps = getCachedGitCapabilities()
+  let mode: SubmoduleMode = inMode ?? 'auto'
+  if (caps && !caps.supportsRecurseInWorktree) {
+    mode = 'never'
+  }
+  let jobs = Math.max(1, Math.min(32, Math.floor(inJobs ?? 4)))
+  if (caps && !caps.supportsSubmoduleJobs) {
+    jobs = 1
+  }
+  return { mode, jobs }
 }
 
 async function detectDefaultBranchInRepo(dir: string): Promise<string | null> {
@@ -180,6 +224,7 @@ export async function resolveCachedRepo(
   const timeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS
   const fetchOnReuse = deps.fetchOnReuse ?? true
   const redacted = redactGitUrl(input.url)
+  const submodule = resolveSubmoduleParams(deps.submoduleMode, deps.submoduleJobs)
 
   const work = withUrlLock(hash, async () => {
     const existing = deps.db
@@ -202,14 +247,45 @@ export async function resolveCachedRepo(
           log.warn('git fetch on reuse failed', { url: redacted, stderr: fetchError })
         }
       }
+      // RFC-034: refresh submodule working dirs to whatever the parent's
+      // gitlink pointers say. Failures here are warnings — fetch is still
+      // considered successful and `last_fetched_at` still advances.
+      const sub = await syncSubmodules(row.localPath, {
+        mode: submodule.mode,
+        jobs: submodule.jobs,
+      })
+      if (!sub.ok) {
+        log.warn('submodule sync on reuse failed', {
+          url: redacted,
+          stderr: sub.error ?? '',
+        })
+      }
       const ts = now()
-      deps.db.update(cachedRepos).set({ lastFetchedAt: ts }).where(eq(cachedRepos.id, row.id)).run()
-      const updated = { ...row, lastFetchedAt: ts }
+      deps.db
+        .update(cachedRepos)
+        .set({
+          lastFetchedAt: ts,
+          hasSubmodules: sub.hasGitmodules,
+          lastSubmoduleSyncOk: sub.ok,
+          lastSubmoduleSyncError: sub.error,
+        })
+        .where(eq(cachedRepos.id, row.id))
+        .run()
+      const updated = {
+        ...row,
+        lastFetchedAt: ts,
+        hasSubmodules: sub.hasGitmodules,
+        lastSubmoduleSyncOk: sub.ok,
+        lastSubmoduleSyncError: sub.error,
+      }
       return {
         cached: rowToCached(updated, await refTaskCount(deps.db, row.url)),
         cold: false,
         fetchOk,
         fetchError,
+        submoduleSyncOk: sub.ok,
+        submoduleSyncError: sub.error,
+        hasSubmodules: sub.hasGitmodules,
       }
     }
 
@@ -225,7 +301,19 @@ export async function resolveCachedRepo(
     // Cold path: clone into a sibling temp dir, then atomic rename.
     mkdirSync(cacheRoot, { recursive: true })
     const tmpDir = join(cacheRoot, `${hash}-${slug}.partial-${ulid()}`)
-    const r = await spawnGit(['clone', input.url, tmpDir])
+    // RFC-034: recurse into submodules during clone so the cache is usable
+    // as-is. `--jobs N` is only emitted when N > 1 (matches gitSubmodule.ts
+    // policy and stays compatible with git < 2.13 if effective jobs got
+    // clamped to 1).
+    const cloneArgs: string[] = ['clone']
+    if (submodule.mode !== 'never') {
+      cloneArgs.push('--recurse-submodules')
+      if (submodule.jobs > 1) {
+        cloneArgs.push('--jobs', String(submodule.jobs))
+      }
+    }
+    cloneArgs.push(input.url, tmpDir)
+    const r = await spawnGit(cloneArgs)
     if (r.exitCode !== 0) {
       // Wipe whatever git may have left behind.
       try {
@@ -265,6 +353,11 @@ export async function resolveCachedRepo(
       )
     }
 
+    // RFC-034: clone already recursed (or was disabled). Probe `.gitmodules`
+    // so we record `has_submodules` accurately on this fresh row. We do NOT
+    // re-run sync/update — that would be redundant.
+    const hasGitmodules = submodule.mode === 'never' ? false : detectSubmodules(cacheDir)
+
     const ts = now()
     const id = ulid()
     deps.db
@@ -277,6 +370,9 @@ export async function resolveCachedRepo(
         defaultBranch: defaultBr,
         lastFetchedAt: ts,
         createdAt: ts,
+        hasSubmodules: hasGitmodules,
+        lastSubmoduleSyncOk: true,
+        lastSubmoduleSyncError: null,
       })
       .run()
     log.info('cloned new cached repo', { url: redacted, hash, localPath: cacheDir })
@@ -290,12 +386,18 @@ export async function resolveCachedRepo(
           defaultBranch: defaultBr,
           lastFetchedAt: ts,
           createdAt: ts,
+          hasSubmodules: hasGitmodules,
+          lastSubmoduleSyncOk: true,
+          lastSubmoduleSyncError: null,
         },
         await refTaskCount(deps.db, input.url),
       ),
       cold: true,
       fetchOk: true,
       fetchError: null,
+      submoduleSyncOk: true,
+      submoduleSyncError: null,
+      hasSubmodules: hasGitmodules,
     }
   })
 
@@ -328,6 +430,10 @@ export interface RefreshCachedRepoResult {
   item: CachedRepo
   fetchOk: boolean
   fetchError: string | null
+  /** RFC-034: outcome of the submodule pass triggered by this manual refresh. */
+  submoduleSyncOk: boolean
+  submoduleSyncError: string | null
+  hasSubmodules: boolean
 }
 
 export async function refreshCachedRepo(
@@ -341,6 +447,7 @@ export async function refreshCachedRepo(
   }
   const now = deps.now ?? Date.now
   const redacted = redactGitUrl(row.url)
+  const submodule = resolveSubmoduleParams(deps.submoduleMode, deps.submoduleJobs)
 
   return await withUrlLock(row.urlHash, async () => {
     if (!(await isValidGitDir(row.localPath))) {
@@ -360,12 +467,40 @@ export async function refreshCachedRepo(
       fetchError = redactGitUrl(r.stderr.trim())
       log.warn('manual refresh fetch failed', { url: redacted, stderr: fetchError })
     }
-    deps.db.update(cachedRepos).set({ lastFetchedAt: ts }).where(eq(cachedRepos.id, id)).run()
-    const updated = { ...row, lastFetchedAt: ts }
+    const sub = await syncSubmodules(row.localPath, {
+      mode: submodule.mode,
+      jobs: submodule.jobs,
+    })
+    if (!sub.ok) {
+      log.warn('manual refresh submodule sync failed', {
+        url: redacted,
+        stderr: sub.error ?? '',
+      })
+    }
+    deps.db
+      .update(cachedRepos)
+      .set({
+        lastFetchedAt: ts,
+        hasSubmodules: sub.hasGitmodules,
+        lastSubmoduleSyncOk: sub.ok,
+        lastSubmoduleSyncError: sub.error,
+      })
+      .where(eq(cachedRepos.id, id))
+      .run()
+    const updated = {
+      ...row,
+      lastFetchedAt: ts,
+      hasSubmodules: sub.hasGitmodules,
+      lastSubmoduleSyncOk: sub.ok,
+      lastSubmoduleSyncError: sub.error,
+    }
     return {
       item: rowToCached(updated, await refTaskCount(deps.db, row.url)),
       fetchOk,
       fetchError,
+      submoduleSyncOk: sub.ok,
+      submoduleSyncError: sub.error,
+      hasSubmodules: sub.hasGitmodules,
     }
   })
 }
