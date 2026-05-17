@@ -6,14 +6,21 @@
 // DELETE /api/cached-repos/:id?force=1  remove cache dir + DB row (force=1 skips
 //                                       the "referenced by N tasks" guard)
 
+import {
+  RetryBatchImportRowRequestSchema,
+  StartBatchImportRequestSchema,
+} from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
+import { loadConfig } from '@/config'
 import {
   CachedRepoHasReferencesError,
   deleteCachedRepo,
   listCachedRepos,
   refreshCachedRepo,
 } from '@/services/gitRepoCache'
+import { getBatchSnapshot, retryBatchRow, startBatchImport } from '@/services/repoBatchImport'
+import { NotFoundError, ValidationError } from '@/util/errors'
 
 export function mountCachedRepoRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/cached-repos', async (c) => {
@@ -42,5 +49,56 @@ export function mountCachedRepoRoutes(app: Hono, deps: AppDeps): void {
       }
       throw err
     }
+  })
+
+  // RFC-033 — batch import surface. Returns the synchronous snapshot; the
+  // actual clones run in the background and stream progress via
+  // /ws/repo-imports/{batchId}.
+  app.post('/api/cached-repos/batch-import', async (c) => {
+    const raw = (await c.req.json().catch(() => null)) as unknown
+    const parsed = StartBatchImportRequestSchema.safeParse(raw)
+    if (!parsed.success) {
+      throw new ValidationError('batch-request-invalid', parsed.error.message, {
+        issues: parsed.error.issues,
+      })
+    }
+    const cfg = loadConfig(deps.configPath)
+    const result = startBatchImport(
+      {
+        db: deps.db,
+        concurrency: cfg.repoBatchImportConcurrency,
+        retentionMs: cfg.repoBatchImportRetentionMs,
+      },
+      parsed.data,
+    )
+    return c.json(result.snapshot, 201)
+  })
+
+  app.get('/api/cached-repos/imports/:batchId', (c) => {
+    const batchId = c.req.param('batchId')
+    const snap = getBatchSnapshot(batchId)
+    if (snap === null) {
+      throw new NotFoundError('batch-not-found', `batch ${batchId} not found or expired`)
+    }
+    return c.json(snap)
+  })
+
+  app.post('/api/cached-repos/imports/:batchId/rows/:rowId/retry', async (c) => {
+    const batchId = c.req.param('batchId')
+    const rowId = c.req.param('rowId')
+    const hasBody = (c.req.header('content-length') ?? '0') !== '0'
+    let body: { url?: string } = {}
+    if (hasBody) {
+      const raw = (await c.req.json().catch(() => null)) as unknown
+      const parsed = RetryBatchImportRowRequestSchema.safeParse(raw ?? {})
+      if (!parsed.success) {
+        throw new ValidationError('retry-request-invalid', parsed.error.message, {
+          issues: parsed.error.issues,
+        })
+      }
+      body = parsed.data
+    }
+    const snap = retryBatchRow({ db: deps.db }, batchId, rowId, body)
+    return c.json(snap)
   })
 }

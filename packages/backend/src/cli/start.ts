@@ -9,6 +9,7 @@ import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
+import { startBatchImportGc } from '@/services/repoBatchImport'
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
@@ -168,10 +169,16 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const baseUrl = `http://${server.hostname}:${server.port}/`
   log.info('listening', { url: baseUrl })
 
-  // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC + P-5-01 events archival).
+  // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC + P-5-01 events archival
+  //    + RFC-033 batch-import retention GC).
   const limitsTicker = startLimitsTicker(db)
   const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config))
   const archiveTicker = startEventsArchiver(db, () => loadConfig(Paths.config), Paths.logsDir)
+  const batchImportCfg = loadConfig(Paths.config)
+  const batchImportGcTicker = startBatchImportGc(
+    undefined,
+    batchImportCfg.repoBatchImportRetentionMs,
+  )
 
   // 9. Graceful shutdown (P-4-06).
   //
@@ -204,6 +211,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     limitsTicker.stop()
     gcTicker.stop()
     archiveTicker.stop()
+    batchImportGcTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {

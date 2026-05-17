@@ -252,6 +252,37 @@ export interface Resources {
     confirmDelete: string
     deleteConfirmTitle: string
     deleteConfirmBody: string
+    batchImport: {
+      button: string
+      title: string
+      placeholder: string
+      start: string
+      cancel: string
+      close: string
+      again: string
+      colIndex: string
+      colUrl: string
+      colStatus: string
+      colDetail: string
+      colActions: string
+      statusQueued: string
+      statusCloning: string
+      statusDoneCold: string
+      statusDoneHit: string
+      statusDoneHitFetchFail: string
+      statusFailed: string
+      retry: string
+      retryWithEdit: string
+      batchEmpty: string
+      batchTooLarge: string
+      promptOverrideUrl: string
+    }
+    submodule: {
+      labelOk: string
+      labelError: string
+      titleOk: string
+      errorFallback: string
+    }
   }
   settings: {
     title: string
@@ -1231,6 +1262,37 @@ export const zhCN: Resources = {
     deleteConfirmTitle: '删除该缓存？',
     deleteConfirmBody:
       '该缓存 {{url}} 目前被 {{count}} 个历史任务引用。删除后历史任务的 worktree 与详情页保留，但后续用同一 URL 启动任务会重新克隆。',
+    batchImport: {
+      button: '批量导入',
+      title: '批量导入远端仓',
+      placeholder: '每行一个 SSH 或 HTTPS Git URL',
+      start: '开始导入',
+      cancel: '取消',
+      close: '关闭',
+      again: '再来一批',
+      colIndex: '#',
+      colUrl: 'URL',
+      colStatus: '状态',
+      colDetail: '详情',
+      colActions: '操作',
+      statusQueued: '等待中',
+      statusCloning: '克隆中…',
+      statusDoneCold: '克隆成功',
+      statusDoneHit: '已缓存（已 fetch）',
+      statusDoneHitFetchFail: '已缓存（fetch 失败）',
+      statusFailed: '失败',
+      retry: '重试',
+      retryWithEdit: '修改 URL 后重试',
+      batchEmpty: '请粘贴至少一行 URL',
+      batchTooLarge: '单批最多 100 行',
+      promptOverrideUrl: '新 URL（留空则按原 URL 重试）：',
+    },
+    submodule: {
+      labelOk: '含 submodule',
+      labelError: '⚠ submodule',
+      titleOk: '上次 submodule 同步成功',
+      errorFallback: 'submodule 同步失败（无 stderr）',
+    },
   },
   settings: {
     title: '设置',

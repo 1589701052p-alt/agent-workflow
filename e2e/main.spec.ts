@@ -552,6 +552,92 @@ test('RFC-024: launch task from git URL clones into cache and renders redacted U
   }
 })
 
+// RFC-033 e2e: batch import two bare repos via the HTTP API + WS channel.
+//
+// This test drives only the backend surface (POST /batch-import, GET
+// /imports/:batchId, /ws/repo-imports/:batchId, and the cached-repos list
+// delta). The /repos page button + modal wiring lands in a follow-up commit
+// alongside the RFC-034 SubmoduleBadge integration; once that lands a UI
+// version of this test can layer on top.
+test('RFC-033: batch import via API completes, populates cached-repos, prunes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-e2e-rfc033-'))
+  const urls: string[] = []
+  for (let i = 0; i < 2; i++) {
+    const working = join(root, `src-${i}`)
+    execSync(`mkdir -p "${working}"`, { stdio: 'ignore' })
+    execSync('git init -b main -q', { cwd: working })
+    writeFileSync(join(working, 'README.md'), `# rfc-033 fixture ${i}\n`)
+    execSync('git config user.email e2e@example.com', { cwd: working })
+    execSync('git config user.name e2e', { cwd: working })
+    execSync('git add . && git commit -qm init', { cwd: working })
+    const bare = join(root, `remote-${i}.git`)
+    execSync(`git clone --bare "${working}" "${bare}"`, { stdio: 'ignore' })
+    urls.push(`file://${bare}`)
+  }
+
+  const headers = {
+    Authorization: `Bearer ${daemon.token}`,
+    'Content-Type': 'application/json',
+  }
+  const startRes = await fetch(`${daemon.baseUrl}/api/cached-repos/batch-import`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ urls: [...urls, 'not-a-url'] }),
+  })
+  expectOk(startRes, 'POST batch-import')
+  const startBody = (await startRes.json()) as {
+    batchId: string
+    rows: Array<{ rowId: string; status: string }>
+  }
+  expect(startBody.batchId).toBeTruthy()
+
+  // Poll until completion.
+  const deadline = Date.now() + 60_000
+  let snap: { state: string; rows: Array<{ status: string; inputUrlRedacted: string }> } | null =
+    null
+  while (Date.now() < deadline) {
+    const r = await fetch(
+      `${daemon.baseUrl}/api/cached-repos/imports/${startBody.batchId}`,
+      { headers: { Authorization: `Bearer ${daemon.token}` } },
+    )
+    if (r.ok) {
+      snap = (await r.json()) as typeof snap
+      if (snap!.state === 'completed') break
+    }
+    await new Promise((res) => setTimeout(res, 200))
+  }
+  expect(snap).not.toBeNull()
+  expect(snap!.state).toBe('completed')
+  const statuses = snap!.rows.map((r) => r.status).sort()
+  expect(statuses).toEqual(['done', 'done', 'failed'])
+
+  // /api/cached-repos now lists both bare repos.
+  const cachedRes = await fetch(`${daemon.baseUrl}/api/cached-repos`, {
+    headers: { Authorization: `Bearer ${daemon.token}` },
+  })
+  expectOk(cachedRes, 'GET cached-repos after batch import')
+  const cached = (await cachedRes.json()) as { items: Array<{ id: string; url: string }> }
+  for (const u of urls) {
+    expect(cached.items.some((it) => it.url === u)).toBe(true)
+  }
+
+  // Cleanup cached entries + tmp dir.
+  for (const u of urls) {
+    const it = cached.items.find((c) => c.url === u)
+    if (it !== undefined) {
+      await fetch(`${daemon.baseUrl}/api/cached-repos/${it.id}?force=1`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${daemon.token}` },
+      })
+    }
+  }
+  try {
+    rmSync(root, { recursive: true, force: true })
+  } catch {
+    /* noop */
+  }
+})
+
 // RFC-022 e2e: dependsOn closure renders as a Dependency tree on the agent
 // detail page. We seed three agents A → B → C via REST, open the form for A,
 // and assert that the tree renders all three rows (A as root, B + C nested).

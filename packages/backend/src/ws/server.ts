@@ -16,6 +16,7 @@
 // subscription is live.
 
 import type {
+  RepoImportWsMessage,
   TaskWsMessage,
   TasksListWsMessage,
   WorkflowsWsMessage,
@@ -27,9 +28,11 @@ import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRuns } from '@/db/schema'
 import { createLogger } from '@/util/log'
 import {
+  REPO_IMPORT_CHANNEL,
   TASK_CHANNEL,
   TASKS_LIST_CHANNEL,
   WORKFLOWS_CHANNEL,
+  repoImportsBroadcaster,
   taskBroadcaster,
   tasksListBroadcaster,
   workflowsBroadcaster,
@@ -42,6 +45,7 @@ interface ConnectionData {
     | { kind: 'task'; taskId: string; since?: number }
     | { kind: 'tasks-list' }
     | { kind: 'workflows' }
+    | { kind: 'repo-import'; batchId: string }
   unsubscribe: () => void
 }
 
@@ -75,6 +79,7 @@ const WS_PATH_RE = {
   task: /^\/ws\/tasks\/([^/?#]+)$/,
   list: /^\/ws\/tasks$/,
   flows: /^\/ws\/workflows$/,
+  repoImport: /^\/ws\/repo-imports\/([^/?#]+)$/,
 }
 
 export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdapter {
@@ -93,6 +98,10 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
     }
     if (WS_PATH_RE.list.test(url.pathname)) return { kind: 'tasks-list' }
     if (WS_PATH_RE.flows.test(url.pathname)) return { kind: 'workflows' }
+    const rm = WS_PATH_RE.repoImport.exec(url.pathname)
+    if (rm !== null) {
+      return { kind: 'repo-import', batchId: decodeURIComponent(rm[1] ?? '') }
+    }
     return null
   }
 
@@ -159,6 +168,17 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
           (msg: WorkflowsWsMessage) => safeSend(ws, msg),
         )
         safeSend(ws, { type: 'hello', channel: 'workflows' } satisfies WsControlMessage)
+        return
+      }
+      case 'repo-import': {
+        ws.data.unsubscribe = repoImportsBroadcaster.subscribe(
+          REPO_IMPORT_CHANNEL(ch.batchId),
+          (msg: RepoImportWsMessage) => safeSend(ws, msg),
+        )
+        safeSend(ws, {
+          type: 'hello',
+          channel: `repo-imports/${ch.batchId}`,
+        } satisfies WsControlMessage)
         return
       }
     }
@@ -229,7 +249,12 @@ async function replayTaskEvents(
 
 function safeSend(
   ws: ServerWebSocket<ConnectionData>,
-  msg: TaskWsMessage | TasksListWsMessage | WorkflowsWsMessage | WsControlMessage,
+  msg:
+    | TaskWsMessage
+    | TasksListWsMessage
+    | WorkflowsWsMessage
+    | RepoImportWsMessage
+    | WsControlMessage,
 ): void {
   try {
     ws.send(JSON.stringify(msg))

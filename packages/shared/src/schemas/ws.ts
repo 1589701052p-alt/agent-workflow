@@ -7,6 +7,7 @@ import { TaskStatusSchema, TaskSummarySchema } from './task'
 import { NodeRunStatusSchema } from './task'
 import { DocVersionDecisionSchema, ReviewCommentSchema, ReviewDecisionKindSchema } from './review'
 import { ClarifySessionSchema, ClarifySessionSummarySchema } from './clarify'
+import { BatchImportRowSchema } from './repoBatchImport'
 
 // -----------------------------------------------------------------------------
 // /ws/tasks/{taskId}
@@ -24,6 +25,9 @@ export const NodeEventKindSchema = z.enum([
   // RFC-027: synthetic marker for post-run subagent capture failures.
   // Mirrors NODE_EVENT_KIND in schemas/task.ts.
   'subagent_capture_failed',
+  // RFC-034: submodule init/sync warnings — mirror of NODE_EVENT_KIND.
+  'submodule_init_failed',
+  'submodule_sync_failed',
 ])
 export type NodeEventKind = z.infer<typeof NodeEventKindSchema>
 
@@ -173,6 +177,29 @@ export const WorkflowsWsMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('workflow.deleted'), workflowId: z.string() }),
 ])
 export type WorkflowsWsMessage = z.infer<typeof WorkflowsWsMessageSchema>
+
+// -----------------------------------------------------------------------------
+// /ws/repo-imports/{batchId} — RFC-033 batch import progress.
+// -----------------------------------------------------------------------------
+
+export const RepoImportWsMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('row.update'),
+    row: BatchImportRowSchema,
+  }),
+  z.object({
+    type: z.literal('batch.completed'),
+    batchId: z.string(),
+    completedAt: z.string(),
+  }),
+  z.object({
+    type: z.literal('batch.error'),
+    batchId: z.string(),
+    errorCode: z.string(),
+    message: z.string(),
+  }),
+])
+export type RepoImportWsMessage = z.infer<typeof RepoImportWsMessageSchema>
 
 // -----------------------------------------------------------------------------
 // Server → client control frames common to every channel.

@@ -63,16 +63,25 @@ class TypedBroadcaster<M> {
 export const TASK_CHANNEL = (taskId: string): ChannelKey => `task:${taskId}`
 export const TASKS_LIST_CHANNEL: ChannelKey = 'tasks-list'
 export const WORKFLOWS_CHANNEL: ChannelKey = 'workflows'
+/** RFC-033: per-batch progress channel for `/repos` batch import. */
+export const REPO_IMPORT_CHANNEL = (batchId: string): ChannelKey => `repo-import:${batchId}`
 
-import type { TaskWsMessage, TasksListWsMessage, WorkflowsWsMessage } from '@agent-workflow/shared'
+import type {
+  RepoImportWsMessage,
+  TaskWsMessage,
+  TasksListWsMessage,
+  WorkflowsWsMessage,
+} from '@agent-workflow/shared'
 
 export const taskBroadcaster = new TypedBroadcaster<TaskWsMessage>()
 export const tasksListBroadcaster = new TypedBroadcaster<TasksListWsMessage>()
 export const workflowsBroadcaster = new TypedBroadcaster<WorkflowsWsMessage>()
+export const repoImportsBroadcaster = new TypedBroadcaster<RepoImportWsMessage>()
 
 /** Reset all broadcasters — only used in tests between cases. */
 export function resetBroadcastersForTests(): void {
   taskBroadcaster.reset()
   tasksListBroadcaster.reset()
   workflowsBroadcaster.reset()
+  repoImportsBroadcaster.reset()
 }

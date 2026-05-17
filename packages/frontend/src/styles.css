@@ -4372,6 +4372,79 @@ mark.comment-anchor[data-active='true'] {
   font-style: italic;
 }
 
+/* RFC-034 — submodule recursion badge on /repos rows. */
+.submodule-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+.submodule-badge--ok {
+  background: var(--accent-soft, #e0f2fe);
+  color: var(--accent-strong, #075985);
+}
+.submodule-badge--error {
+  background: var(--warn-soft, #fef3c7);
+  color: var(--warn-strong, #92400e);
+  cursor: help;
+}
+
+/* RFC-033 — Batch import dialog on /repos. */
+.batch-import-dialog {
+  max-width: 760px;
+  width: 90vw;
+}
+.batch-import-dialog__textarea {
+  width: 100%;
+  min-height: 200px;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 8px;
+}
+.batch-import-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+.batch-import-table th,
+.batch-import-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+}
+.batch-import-table th {
+  font-weight: 600;
+  color: var(--muted);
+}
+.batch-import-table__url {
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.batch-import-table__detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+.batch-import-table__actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.batch-import-table tr[data-row-status='done'] td:nth-child(3) {
+  color: var(--success, #2a7a2a);
+}
+.batch-import-table tr[data-row-status='failed'] td:nth-child(3) {
+  color: var(--danger, #b34141);
+}
+.batch-import-table tr[data-row-status='cloning'] td:nth-child(3) {
+  color: var(--info, #266ab3);
+}
+
 /* ---------------------------------------------------------------------------
  * RFC-027 — NodeDetailDrawer Session tab. Conversation flow + recursive
  * subagent cards. Indentation per nesting level is expressed via

@@ -77,6 +77,37 @@ export const ConfigSchema = z.object({
    */
   gitFetchOnReuse: z.boolean().optional(),
 
+  // --- RFC-033 batch import (`/repos` page) ---
+  /**
+   * How many `git clone` workers the batch-import driver may run in parallel.
+   * Cap is shared across all in-flight batches so two simultaneous batches
+   * don't multiply the actual concurrency. Default 3; clamped to [1, 8].
+   */
+  repoBatchImportConcurrency: z.number().int().min(1).max(8).optional(),
+  /**
+   * In-memory retention for completed batches before they're GC'd. Default
+   * 60 min — long enough for a user to refresh / share the link with a
+   * teammate, short enough to keep daemon RSS bounded.
+   */
+  repoBatchImportRetentionMs: z.number().int().positive().optional(),
+
+  // --- RFC-034 git submodule recursion ---
+  /**
+   * Behavior when cold-cloning, warm-fetching, or worktree-launching a repo
+   * that may contain `.gitmodules`.
+   * - `'auto'` (default): detect `.gitmodules` and recurse only when present
+   * - `'always'`: always run `submodule update --init --recursive` (idempotent
+   *   no-op for repos without `.gitmodules`)
+   * - `'never'`: fully disabled; equivalent to pre-RFC-034 behavior
+   */
+  gitRecurseSubmodules: z.enum(['auto', 'always', 'never']).optional(),
+  /**
+   * `--jobs <N>` for recursive clone / submodule update. Default 4. Clamped
+   * to 1 by callers when the local git is older than 2.13 (no --jobs support).
+   * Max 32.
+   */
+  gitSubmoduleJobs: z.number().int().min(1).max(32).optional(),
+
   // --- Large outputs ---
   largeOutputThresholdBytes: z.number().int().positive(),
 
