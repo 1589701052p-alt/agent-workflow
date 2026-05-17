@@ -43,6 +43,13 @@ export const agents = sqliteTable('agents', {
   // [] keeps legacy agents on the inherited-only baseline (repo
   // .opencode/opencode.json + ~/.config/opencode/ still loads naturally).
   mcp: text('mcp').notNull().default('[]'),
+  // RFC-031: opencode plugin name list (JSON string[]) referenced by this
+  // agent. Runner unions every dependsOn closure member's plugins[] and
+  // injects each as `file://<cachedPath>` (or `[file://..., options]` tuple)
+  // under `plugin` in OPENCODE_CONFIG_CONTENT. Default [] keeps legacy agents
+  // on the inherited-only baseline (repo .opencode/opencode.json plugins
+  // continue to load naturally).
+  plugins: text('plugins').notNull().default('[]'),
   frontmatterExtra: text('frontmatter_extra').notNull().default('{}'), // JSON for advanced fields
   bodyMd: text('body_md').notNull().default(''), // system prompt; may be empty
   schemaVersion: integer('schema_version').notNull().default(1),
@@ -99,6 +106,40 @@ export const mcps = sqliteTable('mcps', {
   config: text('config').notNull().default('{}'),
   /** Per-server toggle (matches opencode `mcp.<name>.enabled`). */
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  schemaVersion: integer('schema_version').notNull().default(1),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+})
+
+// -----------------------------------------------------------------------------
+// plugins — RFC-031. DB is source of truth for opencode plugin records. The
+// installer materialises every record to ~/.agent-workflow/plugins/{id}/ at
+// save time (npm install --prefix, or realpath for file: spec), and the
+// runner injects `file://<cached_path>` (plus options when non-empty) into
+// `OPENCODE_CONFIG_CONTENT.plugin` — opencode then loads via
+// resolvePathPluginTarget without hitting the network. Agents reference these
+// by name via agents.plugins (JSON string[]).
+// -----------------------------------------------------------------------------
+export const plugins = sqliteTable('plugins', {
+  id: text('id').primaryKey(), // ULID
+  name: text('name').notNull().unique(), // /api/plugins/:id identifier; also frontmatter ref
+  /** User-supplied spec (npm specifier / file URL / path / git URL / github shorthand). */
+  spec: text('spec').notNull(),
+  /** opencode plugin options bag, JSON record; emitted as the tuple second element when non-empty. */
+  optionsJson: text('options_json').notNull().default('{}'),
+  description: text('description').notNull().default(''),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  /** Derived from spec by the installer: 'npm' | 'file' | 'git'. */
+  sourceKind: text('source_kind', { enum: ['npm', 'file', 'git'] }).notNull(),
+  /** Absolute filesystem path to the resolved plugin entry. Injected as file://<this> at run time. */
+  cachedPath: text('cached_path').notNull(),
+  /** npm: package.json.version; git: commit short sha; file: mtime hash. Nullable on partial install. */
+  resolvedVersion: text('resolved_version'),
+  installedAt: integer('installed_at').notNull(),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -355,6 +396,17 @@ export const nodeRuns = sqliteTable(
      * the prior session's full transcript is resumed.
      */
     opencodeSessionId: text('opencode_session_id'),
+    /**
+     * RFC-029: serialized `InventorySnapshot` (shared/inventory.ts) — what the
+     * opencode child process actually loaded (agents / skills / mcps /
+     * plugins) at boot. Populated by runner.ts after `child.exited` by reading
+     * the file written by the framework-injected `aw-inventory-dump` plugin.
+     * NULL for legacy rows and for non-agent-kind runs (input / output /
+     * wrapper / review / clarify); a captured:false stub with a `reason` code
+     * is stored when the file was missing / unreadable / malformed so the UI
+     * can show a precise "why no inventory" instead of a blank.
+     */
+    inventorySnapshotJson: text('inventory_snapshot_json'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),

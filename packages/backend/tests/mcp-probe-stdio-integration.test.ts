@@ -1,0 +1,70 @@
+// RFC-030 T7 — end-to-end probe against a real stdio MCP server fixture.
+//
+// Spawns `bun tests/fixtures/mock-mcp-stdio.ts ok` via the default SDK-backed
+// openClient, then asserts:
+//   - status = 'ok' + 4 tools captured
+//   - serverInfo round-trips
+//   - the captured 'docs' resource shows up
+//   - the captured 'summarize' prompt shows up
+// This exercises the SDK transport + handshake + 4 list calls + close that
+// unit tests in services/mcpProbe.test.ts can't (because they inject fakes).
+
+import { describe, expect, test } from 'bun:test'
+import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import type { Mcp } from '@agent-workflow/shared'
+import { probeMcp } from '../src/services/mcpProbe'
+
+// `import.meta.dir` is typed as string | undefined under @types/bun but is
+// always populated at runtime in Bun; guard so tsc is happy.
+const TEST_DIR = import.meta.dir ?? '.'
+const FIXTURE = resolve(TEST_DIR, 'fixtures', 'mock-mcp-stdio.ts')
+
+if (!existsSync(FIXTURE)) {
+  throw new Error(`fixture missing: ${FIXTURE}`)
+}
+
+function makeStdioMcp(mode: 'ok' | 'crash' | 'no-resources'): Mcp {
+  return {
+    id: 'm_fixture',
+    name: `mock-${mode}`,
+    description: '',
+    type: 'local',
+    config: {
+      command: ['bun', FIXTURE, mode],
+      // Generous list timeout — local bun spawn is fast but CI can be slow.
+      timeoutMs: 10_000,
+    },
+    enabled: true,
+    schemaVersion: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  } as Mcp
+}
+
+describe('probe against real stdio MCP fixture', () => {
+  test('ok mode: status=ok with 4 tools + 1 resource + 1 prompt + serverInfo', async () => {
+    const r = await probeMcp(makeStdioMcp('ok'))
+    expect(r.status).toBe('ok')
+    expect(r.errorCode).toBeNull()
+    expect(r.tools?.map((t) => t.name).sort()).toEqual(['explain', 'ping', 'query', 'schema'])
+    expect(r.resources?.length ?? 0).toBeGreaterThanOrEqual(1)
+    expect(r.prompts?.map((p) => p.name)).toEqual(['summarize'])
+    expect(r.serverInfo?.name).toBe('mock-mcp-stdio')
+    expect(r.serverInfo?.version).toBe('0.1.0')
+    expect(r.latencyMs).toBeGreaterThan(0)
+    expect(r.latencyMs).toBeLessThan(15_000)
+  }, 30_000)
+
+  test('crash mode: connect-failed (subprocess exited before handshake)', async () => {
+    const r = await probeMcp(makeStdioMcp('crash'))
+    expect(r.status).toBe('error')
+    // Specific code may vary by environment (connect-failed vs handshake-failed
+    // depending on whether stdio EOF arrives before init request is sent), so
+    // assert it's in the failure family rather than pinning a single value.
+    expect(r.errorCode).not.toBeNull()
+    expect(['connect-failed', 'handshake-failed', 'internal-error']).toContain(
+      r.errorCode as string,
+    )
+  }, 30_000)
+})

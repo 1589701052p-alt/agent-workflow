@@ -32,6 +32,8 @@ describe('/mcps list — name cell does not wrap, description cell truncates to 
   test('description <td> has a title attribute so the full text is reachable on hover', async () => {
     const src = await fs.readFile(ROUTE_SRC, 'utf8')
     // Without this, truncation would silently hide content.
-    expect(src).toMatch(/title=\{m\.description \|\| undefined\}/)
+    // RFC-030 split the row into a McpRow subcomponent — the title lock is now
+    // on `props.mcp.description` (was `m.description` before the refactor).
+    expect(src).toMatch(/title=\{(m|props\.mcp)\.description \|\| undefined\}/)
   })
 })

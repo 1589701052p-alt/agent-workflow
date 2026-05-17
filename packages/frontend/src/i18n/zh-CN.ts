@@ -57,6 +57,67 @@ export interface Resources {
     toolNamingHint: string
     cwdHint: string
     oauthCliHint: string
+    // RFC-030 — probe columns + expand block.
+    colStatus: string
+    colLatency: string
+    colToolCount: string
+    probe: {
+      btnRun: string
+      btnRunning: string
+      viewFull: string
+      expandRow: string
+      collapseRow: string
+      expandNotProbed: string
+      expandNoTools: string
+      moreCount: string
+      status: {
+        unknown: string
+        probing: string
+        ok: string
+        error: string
+      }
+      // Inventory panel (T9)
+      lastProbed: string
+      neverProbed: string
+      section: {
+        tools: string
+        resources: string
+        prompts: string
+        capabilities: string
+      }
+      tools: {
+        empty: string
+        descriptionEmpty: string
+        showSchema: string
+        hideSchema: string
+        noInputSchema: string
+      }
+      resources: {
+        empty: string
+        templatesHeading: string
+      }
+      prompts: {
+        empty: string
+        argumentsHeading: string
+        argumentRequired: string
+      }
+      capabilities: {
+        empty: string
+      }
+      error: {
+        title: string
+        showDetail: string
+        hideDetail: string
+        // Mirror McpProbeErrorCode enum values.
+        codeConnectFailed: string
+        codeHandshakeFailed: string
+        codeAuthRequired: string
+        codeTimeout: string
+        codePartial: string
+        codeInternalError: string
+        codeMcpDisabled: string
+      }
+    }
   }
   reviews: {
     title: string
@@ -1318,6 +1379,65 @@ export const zhCN: Resources = {
       'stdio 子进程会在该 task 的 worktree 目录下启动（opencode 端没有 cwd 字段，所以这里也不提供）。',
     oauthCliHint:
       'remote MCP 走 OAuth 时，建议先在主机上执行 `opencode mcp auth <name>` 完成一次浏览器登录，token 会落到 ~/.opencode/auth/，之后所有 opencode 子进程都能复用。',
+    // RFC-030 — probe columns + expand block.
+    colStatus: '状态',
+    colLatency: '延时',
+    colToolCount: '工具',
+    probe: {
+      btnRun: '重新探测',
+      btnRunning: '探测中…',
+      viewFull: '查看完整接口',
+      expandRow: '展开行',
+      collapseRow: '折叠行',
+      expandNotProbed: '尚未探测过，点右侧"重新探测"获取该 MCP 的工具清单。',
+      expandNoTools: '该 MCP 未暴露任何工具。',
+      moreCount: '+{{count}}',
+      status: {
+        unknown: '未探测',
+        probing: '探测中',
+        ok: '在线',
+        error: '失败',
+      },
+      lastProbed: '最近探测：{{at}}',
+      neverProbed: '尚未探测。',
+      section: {
+        tools: '工具',
+        resources: '资源',
+        prompts: '提示',
+        capabilities: '能力',
+      },
+      tools: {
+        empty: '没有工具。',
+        descriptionEmpty: '（未提供描述）',
+        showSchema: '查看 inputSchema',
+        hideSchema: '收起 inputSchema',
+        noInputSchema: '（该工具未声明 inputSchema）',
+      },
+      resources: {
+        empty: '没有资源。',
+        templatesHeading: '资源模板',
+      },
+      prompts: {
+        empty: '没有提示模板。',
+        argumentsHeading: '参数',
+        argumentRequired: '必填',
+      },
+      capabilities: {
+        empty: '没有上报 capabilities。',
+      },
+      error: {
+        title: '探测失败',
+        showDetail: '查看详情',
+        hideDetail: '收起详情',
+        codeConnectFailed: '连接失败：进程未起来或网络拒绝。',
+        codeHandshakeFailed: '握手失败：连接建立后 initialize 没在限定时间内返回。',
+        codeAuthRequired: '需要鉴权：服务端返回 401/403 或 OAuth 未完成。',
+        codeTimeout: '总耗时超过 60 秒上限。',
+        codePartial: '部分清单不可用（服务端未实现该方法），其它接口仍可用。',
+        codeInternalError: '探测出现未预期错误。',
+        codeMcpDisabled: '该 MCP 已被禁用，需先在编辑页启用。',
+      },
+    },
   },
   workflows: {
     title: '工作流',

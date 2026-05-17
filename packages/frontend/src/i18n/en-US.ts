@@ -366,6 +366,68 @@ export const enUS: Resources = {
       "The stdio subprocess runs from the task's worktree directory (opencode has no cwd field, so this form does not expose one).",
     oauthCliHint:
       'For OAuth-protected remote MCPs, run `opencode mcp auth <name>` on the host machine once. Tokens persist under ~/.opencode/auth/ and every opencode subprocess shares them.',
+    // RFC-030 — probe columns + expand block.
+    colStatus: 'Status',
+    colLatency: 'Latency',
+    colToolCount: 'Tools',
+    probe: {
+      btnRun: 'Re-probe',
+      btnRunning: 'Probing…',
+      viewFull: 'View full inventory',
+      expandRow: 'Expand row',
+      collapseRow: 'Collapse row',
+      expandNotProbed:
+        'Not probed yet. Click "Re-probe" on the right to fetch this MCP\'s tool list.',
+      expandNoTools: 'This MCP does not expose any tools.',
+      moreCount: '+{{count}} more',
+      status: {
+        unknown: 'Unknown',
+        probing: 'Probing',
+        ok: 'Online',
+        error: 'Error',
+      },
+      lastProbed: 'Last probed {{at}}',
+      neverProbed: 'Not probed yet.',
+      section: {
+        tools: 'Tools',
+        resources: 'Resources',
+        prompts: 'Prompts',
+        capabilities: 'Capabilities',
+      },
+      tools: {
+        empty: 'No tools.',
+        descriptionEmpty: '(no description)',
+        showSchema: 'Show inputSchema',
+        hideSchema: 'Hide inputSchema',
+        noInputSchema: '(this tool declares no inputSchema)',
+      },
+      resources: {
+        empty: 'No resources.',
+        templatesHeading: 'Resource templates',
+      },
+      prompts: {
+        empty: 'No prompt templates.',
+        argumentsHeading: 'Arguments',
+        argumentRequired: 'required',
+      },
+      capabilities: {
+        empty: 'No capabilities reported.',
+      },
+      error: {
+        title: 'Probe failed',
+        showDetail: 'Show details',
+        hideDetail: 'Hide details',
+        codeConnectFailed: 'Connect failed: subprocess never started or network refused.',
+        codeHandshakeFailed:
+          'Handshake failed: transport opened but `initialize` did not respond within the timeout.',
+        codeAuthRequired: 'Authentication required: server returned 401/403 or OAuth incomplete.',
+        codeTimeout: 'Total probe exceeded the 60s ceiling.',
+        codePartial:
+          'Some list endpoints are missing on the server side; the rest of the inventory is still usable.',
+        codeInternalError: 'Unexpected probe error.',
+        codeMcpDisabled: 'MCP is disabled; enable it from its edit page first.',
+      },
+    },
   },
   workflows: {
     title: 'Workflows',
