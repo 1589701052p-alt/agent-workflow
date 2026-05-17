@@ -1,59 +1,36 @@
-// Splits sibling node_runs of the same workflow node into two groups so the
-// NodeDetailDrawer Stats tab can render "retries" and "iteration history"
-// separately.
+// Builds the unified "Run history / 运行历史" list shown in the
+// NodeDetailDrawer Stats tab.
 //
-// Background: a single workflow node id may produce many node_runs that share
-// no `retryIndex` bump — they were instead minted from a different orthogonal
-// counter (loop wrapper `iteration`, RFC-005 `reviewIteration`, RFC-023
-// `clarifyIteration`). Lumping all of them under "retries" makes every row
-// label as `第 0 次` while clicking each shows wildly different prompts /
-// outputs, which is the bug this helper is fixing.
+// Background: a single workflow node id may produce many node_runs that
+// differ on any of four orthogonal counters — loop `iteration`, RFC-005
+// `reviewIteration`, RFC-023 `clarifyIteration`, or process `retryIndex`.
+// We used to render iterations and retries in two separate boxes, but
+// retries always also showed up in the iteration list, so the boxes were
+// redundant in the mixed case and just confusing. One unified, always-
+// visible timeline — with the active row highlighted — fits both pure-
+// retry and mixed cases.
 
 import type { NodeRun } from '@agent-workflow/shared'
 
-function sameTuple(a: NodeRun, b: NodeRun): boolean {
-  return (
-    a.iteration === b.iteration &&
-    a.reviewIteration === b.reviewIteration &&
-    a.clarifyIteration === b.clarifyIteration
-  )
-}
-
-export interface NodeRunHistorySplit {
-  /**
-   * Process-level retries of the *current* (iteration, reviewIteration,
-   * clarifyIteration) tuple. Excludes the current run itself.
-   */
-  retries: NodeRun[]
-  /**
-   * Full iteration history of the same nodeId — *includes* the current run
-   * so the user always sees the complete `初次 + 反问#1 + 反问#2 + …`
-   * timeline and the active row is highlighted. Empty when every sibling
-   * shares the current run's (iteration, reviewIteration, clarifyIteration)
-   * tuple — in that case only the retries list is relevant.
-   */
-  iterations: NodeRun[]
-}
-
-export function splitNodeRunHistory(
-  current: NodeRun,
-  runs: readonly NodeRun[],
-): NodeRunHistorySplit {
-  const siblings = runs.filter((r) => r.nodeId === current.nodeId && r.parentNodeRunId === null)
-  const retries = siblings
-    .filter((r) => r.id !== current.id && sameTuple(r, current))
-    .sort((a, b) => a.retryIndex - b.retryIndex)
-  const hasMultipleTuples = siblings.some((r) => !sameTuple(r, current))
-  const iterations = hasMultipleTuples
-    ? [...siblings].sort((a, b) => {
-        if (a.iteration !== b.iteration) return a.iteration - b.iteration
-        if (a.reviewIteration !== b.reviewIteration) return a.reviewIteration - b.reviewIteration
-        if (a.clarifyIteration !== b.clarifyIteration)
-          return a.clarifyIteration - b.clarifyIteration
-        return a.retryIndex - b.retryIndex
-      })
-    : []
-  return { retries, iterations }
+/**
+ * All sibling node_runs of the same workflow node, sorted by
+ * (iteration, reviewIteration, clarifyIteration, retryIndex, startedAt).
+ * *Includes* the current run so the active row can be highlighted in
+ * place. Excludes multi-process shard children (they belong to a separate
+ * "shards" section above).
+ */
+export function nodeRunHistory(current: NodeRun, runs: readonly NodeRun[]): NodeRun[] {
+  return runs
+    .filter((r) => r.nodeId === current.nodeId && r.parentNodeRunId === null)
+    .sort((a, b) => {
+      if (a.iteration !== b.iteration) return a.iteration - b.iteration
+      if (a.reviewIteration !== b.reviewIteration) return a.reviewIteration - b.reviewIteration
+      if (a.clarifyIteration !== b.clarifyIteration) return a.clarifyIteration - b.clarifyIteration
+      if (a.retryIndex !== b.retryIndex) return a.retryIndex - b.retryIndex
+      const at = a.startedAt ?? Number.POSITIVE_INFINITY
+      const bt = b.startedAt ?? Number.POSITIVE_INFINITY
+      return at - bt
+    })
 }
 
 interface IterationLabelOpts {

@@ -24,7 +24,7 @@ import {
   isPromptCapableKind,
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
-import { formatIterationLabel, splitNodeRunHistory } from '@/lib/node-history'
+import { formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
 import { classifyCanceled, displayNoderunStatusKey, supersededDecision } from '@/lib/noderun-status'
 import { parseRfc026Event } from '@/lib/rfc026-events'
 
@@ -104,10 +104,10 @@ export function NodeDetailDrawer({
 
   // P-3-10: sibling fan-out children, if this run is a multi-process parent.
   const children = runs.filter((r) => r.parentNodeRunId === nodeRunId)
-  // Split same-nodeId siblings into pure process retries (same
-  // iteration/review/clarify tuple) vs other iterations — see node-history.ts
-  // for why this matters.
-  const { retries, iterations: iterationsHistory } = splitNodeRunHistory(run, runs)
+  // Unified run history — every sibling node_run of the same nodeId, with
+  // the active row highlighted in place. See node-history.ts for why we
+  // collapsed the previous two-section layout into one.
+  const history = nodeRunHistory(run, runs)
 
   const tabs: Array<[Tab, string]> = [
     ['prompt', t('nodeDrawer.tabPrompt')],
@@ -183,13 +183,7 @@ export function NodeDetailDrawer({
         {tab === 'events' && <EventsTab taskId={taskId} nodeRunId={nodeRunId} />}
         {tab === 'output' && <OutputTab outputs={nodeOutputs} />}
         {tab === 'stats' && (
-          <StatsTab
-            run={run}
-            retries={retries}
-            iterationsHistory={iterationsHistory}
-            onPickRetry={onSelectRun}
-            agentName={agentName}
-          />
+          <StatsTab run={run} history={history} onPickRetry={onSelectRun} agentName={agentName} />
         )}
       </div>
     </aside>
@@ -365,14 +359,12 @@ function StatsDependencyTreeRow({ agentName }: { agentName: string }) {
 
 function StatsTab({
   run,
-  retries,
-  iterationsHistory,
+  history,
   onPickRetry,
   agentName,
 }: {
   run: NodeRun
-  retries: NodeRun[]
-  iterationsHistory: NodeRun[]
+  history: NodeRun[]
   onPickRetry?: (id: string) => void
   /** RFC-022: primary agent name; null hides the dependency-tree section. */
   agentName: string | null
@@ -461,38 +453,12 @@ function StatsTab({
         </>
       )}
       {agentName !== null && <StatsDependencyTreeRow agentName={agentName} />}
-      {retries.length > 0 && (
+      {history.length > 1 && (
         <>
-          <dt>{t('nodeDrawer.statRetries')}</dt>
+          <dt>{t('nodeDrawer.statHistory')}</dt>
           <dd>
-            <ul className="retries-history" data-testid="stats-retries-list">
-              {retries.map((r) => (
-                <li key={r.id}>
-                  <button
-                    type="button"
-                    className="retries-history__item"
-                    onClick={() => onPickRetry?.(r.id)}
-                  >
-                    <code>{t('nodeDrawer.attempt', { n: r.retryIndex })}</code>{' '}
-                    <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
-                      {t(displayNoderunStatusKey(r))}
-                    </span>
-                    {r.startedAt !== null && (
-                      <span className="muted">{new Date(r.startedAt).toLocaleTimeString()}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </>
-      )}
-      {iterationsHistory.length > 0 && (
-        <>
-          <dt>{t('nodeDrawer.statIterations')}</dt>
-          <dd>
-            <ul className="retries-history" data-testid="stats-iterations-list">
-              {iterationsHistory.map((r) => {
+            <ul className="retries-history" data-testid="stats-history-list">
+              {history.map((r) => {
                 const isActive = r.id === run.id
                 return (
                   <li key={r.id}>
