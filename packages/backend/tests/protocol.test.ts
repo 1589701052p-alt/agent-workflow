@@ -23,6 +23,85 @@ describe('buildProtocolBlock', () => {
     expect(block).toContain('<workflow-output>')
     expect(block).toContain('</workflow-output>')
   })
+
+  // Locks in the markdown_file guidance: agents were observed to emit a
+  // worktree-relative path on a markdown_file port without ever creating the
+  // file behind it, then resolvePortContent (envelope.ts) failed the run on
+  // the missing file. The protocol block now spells out the file-first
+  // contract by name so the agent can't conflate markdown_file with
+  // sibling string/markdown ports. If these assertions ever break, the agent
+  // is about to be allowed back into the "path without a file" failure mode
+  // — re-confirm the regression before weakening them.
+  describe('markdown_file output kind guidance', () => {
+    test('flags the markdown_file port in the bullet list', () => {
+      const block = buildProtocolBlock(['summary', 'report'], false, { report: 'markdown_file' })
+      expect(block).toContain('  - summary\n')
+      expect(block).toContain(
+        '  - report (markdown_file — write the file first, then emit only its worktree-relative path)',
+      )
+    })
+
+    test('emits the two-step write-then-emit-path block naming the markdown_file ports', () => {
+      const block = buildProtocolBlock(['summary', 'report', 'plan'], false, {
+        report: 'markdown_file',
+        plan: 'markdown_file',
+      })
+      // Names every markdown_file port so the agent knows which ones need a
+      // real file behind them; sibling string ports are NOT named here.
+      expect(block).toContain('For ports declared `markdown_file` above (`report`, `plan`)')
+      expect(block).toContain('USE A FILE-WRITING TOOL')
+      expect(block).toContain('Write / Edit')
+      expect(block).toContain('task worktree')
+      expect(block).toContain(
+        'place ONLY that worktree-relative path inside the matching `<port>` tag',
+      )
+      expect(block).toContain(
+        'a path that does not point to an existing file causes the run to fail',
+      )
+    })
+
+    test('swaps the `...` placeholder for a path hint inside the format example', () => {
+      const block = buildProtocolBlock(['summary', 'report'], false, { report: 'markdown_file' })
+      // summary is a plain string port — placeholder unchanged.
+      expect(block).toContain('<port name="summary">...</port>')
+      // report is markdown_file — placeholder becomes a worktree-relative path hint.
+      expect(block).toContain(
+        '<port name="report"><worktree-relative path to the .md file you just wrote></port>',
+      )
+    })
+
+    test('omits the guidance block entirely when no port is markdown_file', () => {
+      const noKindsBlock = buildProtocolBlock(['summary', 'findings'])
+      const allStringBlock = buildProtocolBlock(['summary', 'findings'], false, {
+        summary: 'string',
+        findings: 'markdown',
+      })
+      for (const block of [noKindsBlock, allStringBlock]) {
+        expect(block).not.toContain('For ports declared `markdown_file` above')
+        expect(block).not.toContain('write the file first')
+        expect(block).not.toContain('USE A FILE-WRITING TOOL')
+      }
+    })
+
+    test('preserves trailing </workflow-output> contract so the prompt still ends with the envelope example', () => {
+      const block = buildProtocolBlock(['report'], false, { report: 'markdown_file' })
+      // protocol block always ends with the literal close tag — this is the
+      // contract the 'protocol block always appended at the end' test below
+      // depends on; the markdown_file guidance is inserted BEFORE the
+      // example, not after.
+      expect(block.endsWith('</workflow-output>')).toBe(true)
+    })
+
+    test('bi-modal trailing block (hasClarifyChannel=true) still surfaces the markdown_file guidance', () => {
+      const block = buildProtocolBlock(['design'], true, { design: 'markdown_file' })
+      expect(block).toContain('This node has a clarify channel')
+      expect(block).toContain('For ports declared `markdown_file` above (`design`)')
+      expect(block).toContain('USE A FILE-WRITING TOOL')
+      expect(block).toContain(
+        '<port name="design"><worktree-relative path to the .md file you just wrote></port>',
+      )
+    })
+  })
 })
 
 describe('renderUserPrompt — template substitution', () => {
@@ -139,5 +218,23 @@ describe('renderUserPrompt — template substitution', () => {
     })
     expect(out).toContain(`cwd=${META.repoPath}`)
     expect(out).toContain('## unrelated\ndata')
+  })
+
+  test('agentOutputKinds is threaded into the trailing protocol block', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'go',
+      inputs: {},
+      meta: META,
+      agentOutputs: ['report'],
+      agentOutputKinds: { report: 'markdown_file' },
+    })
+    // End-to-end: the runner-equivalent call surfaces the file-first rule.
+    expect(out).toContain('For ports declared `markdown_file` above (`report`)')
+    expect(out).toContain('USE A FILE-WRITING TOOL')
+    expect(out).toContain(
+      '<port name="report"><worktree-relative path to the .md file you just wrote></port>',
+    )
+    // Final `</workflow-output>` is still the very last token of the prompt.
+    expect(out.endsWith('</workflow-output>')).toBe(true)
   })
 })

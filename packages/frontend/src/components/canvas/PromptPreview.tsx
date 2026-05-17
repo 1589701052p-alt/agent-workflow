@@ -6,7 +6,7 @@
 // on every keystroke. Builtin meta uses placeholders since the editor
 // has no real task to bind to.
 
-import { renderUserPrompt } from '@agent-workflow/shared'
+import { renderUserPrompt, type AgentOutputKindsMap } from '@agent-workflow/shared'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -17,11 +17,18 @@ interface Props {
   inputPorts: string[]
   /** Output ports the agent declares (drives the protocol block). */
   outputs: string[]
+  /**
+   * Per-port `outputKinds` map from the agent. Optional — when any entry is
+   * `markdown_file`, the rendered protocol block calls out the file-first
+   * rule. Threading this through keeps the editor preview byte-for-byte
+   * aligned with what the runner sends opencode.
+   */
+  outputKinds?: AgentOutputKindsMap
 }
 
 const DEFAULT_PLACEHOLDER = '<sample content>'
 
-export function PromptPreview({ template, inputPorts, outputs }: Props) {
+export function PromptPreview({ template, inputPorts, outputs, outputKinds }: Props) {
   const { t } = useTranslation()
   const [inputs, setInputs] = useState<Record<string, string>>(() => seedInputs(inputPorts))
 
@@ -47,8 +54,9 @@ export function PromptPreview({ template, inputPorts, outputs }: Props) {
           taskId: '<task.id>',
         },
         agentOutputs: outputs,
+        ...(outputKinds !== undefined ? { agentOutputKinds: outputKinds } : {}),
       }),
-    [template, inputs, outputs],
+    [template, inputs, outputs, outputKinds],
   )
 
   return (

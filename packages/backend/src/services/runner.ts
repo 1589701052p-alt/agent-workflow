@@ -296,6 +296,12 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     inputs: opts.inputs,
     meta: opts.templateMeta,
     agentOutputs: opts.agent.outputs,
+    // RFC-005 outputKinds: when any port is `markdown_file`, the trailing
+    // protocol block surfaces the "write the file first, then emit only its
+    // worktree-relative path" rule by name. Pass-through is unconditional so
+    // the editor preview (which threads the same map via PromptPreview) and
+    // the live runner stay in lock-step.
+    ...(opts.agent.outputKinds !== undefined ? { agentOutputKinds: opts.agent.outputKinds } : {}),
     ...(opts.reviewContext !== undefined ? { reviewContext: opts.reviewContext } : {}),
     ...(opts.clarifyContext !== undefined ? { clarifyContext: opts.clarifyContext } : {}),
     ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),

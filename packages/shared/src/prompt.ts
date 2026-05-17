@@ -2,6 +2,8 @@
 // preview pane (NodeInspector). Pure functions — no Bun / Node / DB
 // imports. Mirrors design.md §7.2.
 
+import type { AgentOutputKindsMap } from './schemas/agent'
+
 /**
  * Review-driven re-run context (RFC-005 + RFC-014).
  *
@@ -129,6 +131,20 @@ export interface RenderPromptInput {
   }
   /** Declared outputs for the protocol block instructions. */
   agentOutputs: string[]
+  /**
+   * Per-port `outputKinds` map from the agent (RFC-005). When a port's kind is
+   * `markdown_file`, the trailing protocol block calls out — explicitly and by
+   * name — that the agent MUST write the markdown body to a file inside the
+   * worktree BEFORE emitting only the worktree-relative path inside `<port>`.
+   *
+   * Without this hint, agents have been observed to emit a path string with
+   * no corresponding file on disk; the framework then fails the run when
+   * `resolvePortContent` tries to read it. Surfacing the file-first rule in
+   * the protocol block (alongside the existing port list) makes the contract
+   * unmissable to the agent. Ports absent from the map default to `string`
+   * (legacy behaviour — no extra wording).
+   */
+  agentOutputKinds?: AgentOutputKindsMap
   /** RFC-005 review-driven re-run context. Absent for normal first-time runs. */
   reviewContext?: ReviewPromptContext
   /** RFC-023 clarify-driven re-run context. Absent for first runs and runs
@@ -333,9 +349,11 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   if (inlineMode) {
     trailing = buildClarifyInlineReminder()
   } else if (input.hasClarifyChannel === true) {
-    trailing = buildProtocolBlock(input.agentOutputs, true) + buildClarifyProtocolBlock()
+    trailing =
+      buildProtocolBlock(input.agentOutputs, true, input.agentOutputKinds) +
+      buildClarifyProtocolBlock()
   } else {
-    trailing = buildProtocolBlock(input.agentOutputs)
+    trailing = buildProtocolBlock(input.agentOutputs, false, input.agentOutputKinds)
   }
   return body + sections + trailing
 }
@@ -353,17 +371,43 @@ export function renderUserPrompt(input: RenderPromptInput): string {
  * "You MUST end your reply with <workflow-output>" wording anchored the
  * agent toward output even when blocking questions remained — a real
  * production regression that this rewording targets.
+ *
+ * When `agentOutputKinds` declares any port as `markdown_file`, the block
+ * additionally emits explicit "write the file first, then emit only the
+ * worktree-relative path" instructions for those ports. This fixes the
+ * observed failure mode where agents return a path with no corresponding
+ * file on disk and the framework's later `resolvePortContent` read fails.
  */
-export function buildProtocolBlock(agentOutputs: string[], hasClarifyChannel?: boolean): string {
+export function buildProtocolBlock(
+  agentOutputs: string[],
+  hasClarifyChannel?: boolean,
+  agentOutputKinds?: AgentOutputKindsMap,
+): string {
+  const isMdFile = (port: string): boolean => agentOutputKinds?.[port] === 'markdown_file'
+  const mdFilePorts = agentOutputs.filter(isMdFile)
+
+  const renderBullet = (port: string): string =>
+    isMdFile(port)
+      ? `  - ${port} (markdown_file — write the file first, then emit only its worktree-relative path)\n`
+      : `  - ${port}\n`
+
+  const renderExample = (port: string): string =>
+    isMdFile(port)
+      ? `  <port name="${port}"><worktree-relative path to the .md file you just wrote></port>\n`
+      : `  <port name="${port}">...</port>\n`
+
   if (hasClarifyChannel !== true) {
     let s =
       '\n\n---\nYou MUST end your reply with a `<workflow-output>` block listing these ports:\n'
     for (const port of agentOutputs) {
-      s += `  - ${port}\n`
+      s += renderBullet(port)
+    }
+    if (mdFilePorts.length > 0) {
+      s += buildMarkdownFilePortGuidance(mdFilePorts)
     }
     s += '\nFormat:\n<workflow-output>\n'
     for (const port of agentOutputs) {
-      s += `  <port name="${port}">...</port>\n`
+      s += renderExample(port)
     }
     s += '</workflow-output>'
     return s
@@ -382,14 +426,41 @@ export function buildProtocolBlock(agentOutputs: string[], hasClarifyChannel?: b
   s +=
     'When you are ready to commit the final answer, end your reply with a `<workflow-output>` block listing these ports:\n'
   for (const port of agentOutputs) {
-    s += `  - ${port}\n`
+    s += renderBullet(port)
+  }
+  if (mdFilePorts.length > 0) {
+    s += buildMarkdownFilePortGuidance(mdFilePorts)
   }
   s += '\n<workflow-output>\n'
   for (const port of agentOutputs) {
-    s += `  <port name="${port}">...</port>\n`
+    s += renderExample(port)
   }
   s += '</workflow-output>'
   return s
+}
+
+/**
+ * Rendered guidance block inserted into `buildProtocolBlock` whenever the
+ * agent declares ≥ 1 `markdown_file` output port.
+ *
+ * Why this exists: production agents have been observed to emit a worktree
+ * path inside `<port>` without first creating the file on disk. The
+ * framework's `resolvePortContent` (envelope.ts) then fails the run when it
+ * tries to `readFileSync` the missing file. The contract was always
+ * "markdown_file = worktree-relative path to a real file", but the protocol
+ * block didn't say so loudly enough — the bare port list + `...` placeholder
+ * looked the same regardless of kind, so agents free-styled. This block makes
+ * the file-first rule unmissable and names the offending ports explicitly so
+ * the agent can't conflate them with sibling `string` / `markdown` ports.
+ */
+function buildMarkdownFilePortGuidance(mdFilePorts: string[]): string {
+  const list = mdFilePorts.map((p) => `\`${p}\``).join(', ')
+  return (
+    '\n' +
+    `For ports declared \`markdown_file\` above (${list}) you MUST follow this two-step protocol — emitting only a path without the file behind it will fail the run:\n` +
+    '  1. First, USE A FILE-WRITING TOOL (Write / Edit / shell `cat > path` / equivalent) to persist the FULL markdown body to a file inside the current working directory (the task worktree). Pick a stable worktree-relative path such as `report.md` or `docs/findings.md`.\n' +
+    '  2. THEN, place ONLY that worktree-relative path inside the matching `<port>` tag — no markdown body, no code fences, no surrounding prose, no leading or trailing whitespace, no placeholder. The framework reads the file at that path; a path that does not point to an existing file causes the run to fail.\n'
+  )
 }
 
 /**

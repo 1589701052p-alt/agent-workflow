@@ -1180,6 +1180,7 @@ function PreviewPane({ node, agents, definition }: PreviewProps) {
       template={template ?? ''}
       inputPorts={ports.inputs}
       outputs={agent?.outputs ?? []}
+      outputKinds={agent?.outputKinds}
     />
   )
 }
