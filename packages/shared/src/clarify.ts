@@ -144,17 +144,25 @@ export function parseClarifyEnvelopeBody(jsonText: string): ParseClarifyEnvelope
 // -----------------------------------------------------------------------------
 
 /** Render the agent-facing markdown block listing the questions the agent
- *  asked last round. Used for `{{__clarify_questions__}}`. */
+ *  asked last round. Used for `{{__clarify_questions__}}`. Option-level
+ *  Recommended + description + recommendationReason are surfaced inline so
+ *  the agent has the same context the user saw. */
 export function renderClarifyQuestionsBlock(questions: ClarifyQuestion[]): string {
   const lines: string[] = []
   questions.forEach((q, idx) => {
-    const star = q.recommended ? ' (recommended)' : ''
     const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
-    lines.push(`### Q${idx + 1}${star}: ${q.title}`)
+    lines.push(`### Q${idx + 1}: ${q.title}`)
     lines.push(`- Type: ${kindLabel}`)
     lines.push(`- Candidate options:`)
     q.options.forEach((opt, i) => {
-      lines.push(`  ${i + 1}. ${opt}`)
+      const recMark = opt.recommended ? ' [recommended]' : ''
+      lines.push(`  ${i + 1}. ${opt.label}${recMark}`)
+      if (opt.description.length > 0) {
+        lines.push(`     description: ${opt.description}`)
+      }
+      if (opt.recommended && opt.recommendationReason.length > 0) {
+        lines.push(`     reason: ${opt.recommendationReason}`)
+      }
     })
     lines.push('')
   })
@@ -172,9 +180,8 @@ export function buildClarifyPromptBlock(
   const lines: string[] = []
   questions.forEach((q, idx) => {
     const a = byId.get(q.id)
-    const star = q.recommended ? ' (recommended)' : ''
     const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
-    lines.push(`### Q${idx + 1}${star}: ${q.title}`)
+    lines.push(`### Q${idx + 1}: ${q.title}`)
     lines.push(`- Type: ${kindLabel}`)
     if (!a) {
       lines.push('- User answer: *(no answer received)*')

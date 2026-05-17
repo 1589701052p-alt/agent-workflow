@@ -127,6 +127,74 @@ describe('RFC-023 ClarifyQuestion + envelope body shape', () => {
   })
 })
 
+describe('RFC-023 iter #2 — ClarifyOption per-option metadata + sort', () => {
+  test('strings are lifted to ClarifyOption objects (backward compat with legacy envelopes)', () => {
+    const q = ClarifyQuestionSchema.parse({
+      id: 'q1',
+      title: 'pick',
+      kind: 'single',
+      options: ['Postgres', 'MySQL'],
+    })
+    expect(q.options[0]).toEqual({
+      label: 'Postgres',
+      description: '',
+      recommended: false,
+      recommendationReason: '',
+    })
+    expect(q.options[1]?.label).toBe('MySQL')
+  })
+
+  test('object options preserve description / recommended / recommendationReason', () => {
+    const q = ClarifyQuestionSchema.parse({
+      id: 'q1',
+      title: 'pick',
+      kind: 'single',
+      options: [
+        {
+          label: 'A',
+          description: 'desc A',
+          recommended: true,
+          recommendationReason: 'why A',
+        },
+        { label: 'B' },
+      ],
+    })
+    expect(q.options[0]).toEqual({
+      label: 'A',
+      description: 'desc A',
+      recommended: true,
+      recommendationReason: 'why A',
+    })
+    expect(q.options[1]?.description).toBe('')
+    expect(q.options[1]?.recommended).toBe(false)
+  })
+
+  test('options are sorted: recommended first, original order preserved within group', () => {
+    const q = ClarifyQuestionSchema.parse({
+      id: 'q1',
+      title: 'pick',
+      kind: 'single',
+      options: [
+        { label: 'A' },
+        { label: 'B', recommended: true },
+        { label: 'C' },
+        { label: 'D', recommended: true },
+      ],
+    })
+    expect(q.options.map((o) => o.label)).toEqual(['B', 'D', 'A', 'C'])
+  })
+
+  test('mixed string and object options are normalised + sorted together', () => {
+    const q = ClarifyQuestionSchema.parse({
+      id: 'q1',
+      title: 'pick',
+      kind: 'single',
+      options: ['plain1', { label: 'rec1', recommended: true }, 'plain2'],
+    })
+    expect(q.options.map((o) => o.label)).toEqual(['rec1', 'plain1', 'plain2'])
+  })
+})
+
 describe('RFC-023 ClarifyAnswer + SubmitClarifyAnswers', () => {
   test('ClarifyAnswerSchema fills defaults for empty fields', () => {
     const a = ClarifyAnswerSchema.parse({ questionId: 'q1' })

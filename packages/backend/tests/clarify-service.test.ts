@@ -104,7 +104,11 @@ function makeQuestion(overrides: Partial<ClarifyQuestion> = {}): ClarifyQuestion
     title: 'Which database?',
     kind: 'single',
     recommended: true,
-    options: ['Postgres', 'MySQL', 'SQLite'],
+    options: [
+      { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
+      { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+      { label: 'SQLite', description: '', recommended: false, recommendationReason: '' },
+    ],
     ...overrides,
   }
 }

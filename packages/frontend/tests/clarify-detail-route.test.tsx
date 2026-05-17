@@ -56,7 +56,10 @@ function mkSession(overrides: Partial<ClarifySession> = {}): ClarifySession {
         title: 'Pick DB',
         kind: 'single',
         recommended: false,
-        options: ['Postgres', 'MySQL'],
+        options: [
+          { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
+          { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+        ],
       },
     ],
     status: 'awaiting_human',

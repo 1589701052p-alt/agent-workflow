@@ -286,8 +286,14 @@ Format:
       "id": "<stable-id>",
       "title": "<question text>",
       "kind": "single" | "multi",
-      "recommended": true | false,
-      "options": ["...", "...", "...", "..."]
+      "options": [
+        {
+          "label": "<picker text>",
+          "description": "<what this option does / expected outcome / trade-offs>",
+          "recommended": true | false,
+          "recommendationReason": "<why the user should pick this one>"
+        }
+      ]
     }
   ]
 }
@@ -296,7 +302,9 @@ Format:
 Hard rules — violation is treated as a malformed reply and the node will fail / retry:
 - A reply must contain EITHER one <workflow-output> block OR one <workflow-clarify> block — NEVER both, NEVER neither.
 - Asking back means deferring all output ports to the next round; do not also output partial data.
-- Mark only the truly blocking questions as "recommended": true. The UI renders an "(推荐)" / "(Recommended)" tag for them.
 - Limits: at most 5 questions, each question 2–4 options. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
+- Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
+- Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
+- Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.
 - Once the user submits answers, you will receive them in the next prompt under "## Clarify Q&A — User Answers" plus a deterministic synthesis line per question.`
 }

@@ -322,12 +322,23 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
     })
     expectOk(detailRes, 'GET clarify detail')
     const detail = (await detailRes.json()) as {
-      questions: Array<{ id: string; recommended: boolean; options: string[]; kind: string }>
+      questions: Array<{
+        id: string
+        recommended: boolean
+        options: Array<{
+          label: string
+          description: string
+          recommended: boolean
+          recommendationReason: string
+        }>
+        kind: string
+      }>
     }
     expect(detail.questions.map((q) => q.id).sort()).toEqual(['q-db', 'q-lang'])
     const qDb = detail.questions.find((q) => q.id === 'q-db')!
-    expect(qDb.recommended).toBe(true)
-    expect(qDb.options).toEqual(['Postgres', 'SQLite'])
+    // RFC-023 iter #2: options are now objects ({label, description, recommended, reason}).
+    // Backward-compat: strings emitted by the stub are lifted to objects with empty defaults.
+    expect(qDb.options.map((o) => o.label)).toEqual(['Postgres', 'SQLite'])
 
     // 5. Submit answers — pick Postgres + check TypeScript.
     const submitRes = await fetch(

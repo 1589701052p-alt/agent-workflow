@@ -30,8 +30,16 @@ const SINGLE_Q: ClarifyQuestion = {
   id: 'q-db',
   title: 'Pick a database',
   kind: 'single',
-  recommended: true,
-  options: ['Postgres', 'MySQL'],
+  recommended: false,
+  options: [
+    {
+      label: 'Postgres',
+      description: 'Battle-tested relational store with rich query features.',
+      recommended: true,
+      recommendationReason: 'Best fit for transactional workloads.',
+    },
+    { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+  ],
 }
 
 const MULTI_Q: ClarifyQuestion = {
@@ -39,7 +47,11 @@ const MULTI_Q: ClarifyQuestion = {
   title: 'Pick languages',
   kind: 'multi',
   recommended: false,
-  options: ['TS', 'Python', 'Go'],
+  options: [
+    { label: 'TS', description: '', recommended: false, recommendationReason: '' },
+    { label: 'Python', description: '', recommended: false, recommendationReason: '' },
+    { label: 'Go', description: '', recommended: false, recommendationReason: '' },
+  ],
 }
 
 function emptyAnswer(qid: string): ClarifyAnswer {
@@ -98,9 +110,19 @@ describe('QuestionForm — single-choice', () => {
     expect(textarea.disabled).toBe(false)
   })
 
-  test('renders the Recommended chip when question.recommended is true', () => {
+  test('renders Recommended badge + description + reason on the per-option that has them (RFC-023 iter #2)', () => {
     render(<Host question={SINGLE_Q} initial={emptyAnswer('q-db')} onChangeSpy={() => {}} />)
-    expect(screen.getByTestId('clarify-recommended-chip')).toBeTruthy()
+    // SINGLE_Q has Postgres at index 0 as the recommended option with both
+    // description and recommendationReason populated.
+    expect(screen.getByTestId('clarify-option-recommended-0')).toBeTruthy()
+    expect(screen.getByTestId('clarify-option-description-0').textContent).toContain(
+      'Battle-tested',
+    )
+    expect(screen.getByTestId('clarify-option-reason-0').textContent).toContain('transactional')
+    // MySQL (idx 1) has neither — no description nor recommended chip.
+    expect(screen.queryByTestId('clarify-option-recommended-1')).toBeNull()
+    expect(screen.queryByTestId('clarify-option-description-1')).toBeNull()
+    expect(screen.queryByTestId('clarify-option-reason-1')).toBeNull()
   })
 })
 

@@ -91,20 +91,30 @@ describe('parseClarifyEnvelopeBody — happy + truncation', () => {
   })
 })
 
+const optAB = [
+  { label: 'A', description: '', recommended: false, recommendationReason: '' },
+  { label: 'B', description: '', recommended: false, recommendationReason: '' },
+]
+const optABC = [
+  { label: 'A', description: '', recommended: false, recommendationReason: '' },
+  { label: 'B', description: '', recommended: false, recommendationReason: '' },
+  { label: 'C', description: '', recommended: false, recommendationReason: '' },
+]
+
 describe('summariseClarifyAnswer — 5 cases', () => {
   const single = {
     id: 'q',
     title: 't',
     kind: 'single' as const,
     recommended: false,
-    options: ['A', 'B'],
+    options: optAB,
   }
   const multi = {
     id: 'q',
     title: 't',
     kind: 'multi' as const,
     recommended: false,
-    options: ['A', 'B', 'C'],
+    options: optABC,
   }
 
   test('single + selected = "User chose"', () => {
@@ -164,18 +174,29 @@ describe('summariseClarifyAnswer — 5 cases', () => {
 })
 
 describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
-  test('rendered question block sorts recommended tag and lists options', () => {
+  test('rendered question block surfaces per-option recommended + description + reason', () => {
     const md = renderClarifyQuestionsBlock([
       {
         id: 'q1',
         title: 'Which DB?',
         kind: 'single',
-        recommended: true,
-        options: ['Postgres', 'MySQL'],
+        recommended: false,
+        options: [
+          {
+            label: 'Postgres',
+            description: 'Battle-tested relational DB',
+            recommended: true,
+            recommendationReason: 'Default for transactional apps',
+          },
+          { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+        ],
       },
     ])
-    expect(md).toContain('Q1 (recommended): Which DB?')
-    expect(md).toContain('1. Postgres')
+    expect(md).toContain('Q1: Which DB?')
+    expect(md).toContain('1. Postgres [recommended]')
+    expect(md).toContain('description: Battle-tested relational DB')
+    expect(md).toContain('reason: Default for transactional apps')
+    expect(md).toContain('2. MySQL')
     expect(md).toContain('Type: single-choice')
   })
 
@@ -187,7 +208,15 @@ describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
           title: 'Which DB?',
           kind: 'single',
           recommended: false,
-          options: ['Postgres', 'MySQL'],
+          options: [
+            {
+              label: 'Postgres',
+              description: '',
+              recommended: false,
+              recommendationReason: '',
+            },
+            { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+          ],
         },
       ],
       [

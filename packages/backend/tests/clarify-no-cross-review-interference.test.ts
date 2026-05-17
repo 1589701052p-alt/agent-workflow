@@ -29,7 +29,10 @@ const QUESTION: ClarifyQuestion = {
   title: 'Which?',
   kind: 'single',
   recommended: false,
-  options: ['Red', 'Blue'],
+  options: [
+    { label: 'Red', description: '', recommended: false, recommendationReason: '' },
+    { label: 'Blue', description: '', recommended: false, recommendationReason: '' },
+  ],
 }
 
 async function seed(

@@ -23,7 +23,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ClarifyAnswer, ClarifyQuestion } from '@agent-workflow/shared'
 import { CLARIFY_MAX_CUSTOM_TEXT_LEN } from '@agent-workflow/shared'
-import { RecommendedChip } from './RecommendedChip'
 
 export interface QuestionFormProps {
   question: ClarifyQuestion
@@ -71,7 +70,7 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
       onChange({
         ...value,
         selectedOptionIndices: [idx],
-        selectedOptionLabels: [question.options[idx] ?? ''],
+        selectedOptionLabels: [question.options[idx]?.label ?? ''],
         customText: '',
       })
     },
@@ -97,7 +96,9 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
       onChange({
         ...value,
         selectedOptionIndices: next,
-        selectedOptionLabels: next.map((i) => question.options[i] ?? '').filter((s) => s !== ''),
+        selectedOptionLabels: next
+          .map((i) => question.options[i]?.label ?? '')
+          .filter((s) => s !== ''),
       })
     },
     [onChange, question.options, value],
@@ -194,18 +195,13 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
     <div
       ref={rootRef}
       tabIndex={0}
-      className={
-        'clarify-question' +
-        (question.recommended ? ' clarify-question--recommended' : '') +
-        ` clarify-question--${question.kind}`
-      }
+      className={'clarify-question' + ` clarify-question--${question.kind}`}
       data-question-id={question.id}
       data-testid={`clarify-question-${question.id}`}
     >
       <div className="clarify-question__header">
         <span className="clarify-question__index">{`Q${index}.`}</span>
         <span className="clarify-question__title">{question.title}</span>
-        {question.recommended && <RecommendedChip />}
       </div>
       <div className="clarify-question__options" role={isSingle ? 'radiogroup' : 'group'}>
         {question.options.map((opt, idx) => {
@@ -216,8 +212,13 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
           return (
             <label
               key={idx}
-              className={'clarify-option' + (checked ? ' is-checked' : '')}
+              className={
+                'clarify-option' +
+                (checked ? ' is-checked' : '') +
+                (opt.recommended ? ' is-recommended' : '')
+              }
               htmlFor={inputId}
+              data-option-recommended={opt.recommended ? 'true' : undefined}
             >
               <input
                 id={inputId}
@@ -229,7 +230,38 @@ export function QuestionForm({ question, value, index, onChange, disabled }: Que
                 data-option-idx={idx}
               />
               <span className="clarify-option__digit" aria-hidden="true">{`${idx + 1}`}</span>
-              <span className="clarify-option__label">{opt}</span>
+              <span className="clarify-option__body">
+                <span className="clarify-option__label-row">
+                  <span className="clarify-option__label">{opt.label}</span>
+                  {opt.recommended && (
+                    <span
+                      className="clarify-option__recommended-badge"
+                      data-testid={`clarify-option-recommended-${idx}`}
+                    >
+                      {t('clarify.option.recommendedBadge')}
+                    </span>
+                  )}
+                </span>
+                {opt.description.length > 0 && (
+                  <span
+                    className="clarify-option__description muted"
+                    data-testid={`clarify-option-description-${idx}`}
+                  >
+                    {opt.description}
+                  </span>
+                )}
+                {opt.recommended && opt.recommendationReason.length > 0 && (
+                  <span
+                    className="clarify-option__reason"
+                    data-testid={`clarify-option-reason-${idx}`}
+                  >
+                    <span className="clarify-option__reason-label">
+                      {t('clarify.option.reasonLabel')}:
+                    </span>{' '}
+                    {opt.recommendationReason}
+                  </span>
+                )}
+              </span>
             </label>
           )
         })}

@@ -28,7 +28,10 @@ const QUESTION = {
   title: 'Pick?',
   kind: 'single' as const,
   recommended: false,
-  options: ['A', 'B'],
+  options: [
+    { label: 'A', description: '', recommended: false, recommendationReason: '' },
+    { label: 'B', description: '', recommended: false, recommendationReason: '' },
+  ],
 }
 
 async function seedTask(db: DbClient): Promise<{ taskId: string; sourceRunId: string }> {

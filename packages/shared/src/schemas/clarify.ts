@@ -19,6 +19,40 @@ export const CLARIFY_MAX_CUSTOM_TEXT_LEN = 2000
 export const ClarifyQuestionKindSchema = z.enum(['single', 'multi'])
 export type ClarifyQuestionKind = z.infer<typeof ClarifyQuestionKindSchema>
 
+/** Per-option metadata (RFC-023 iteration #2 — moved Recommended from
+ *  question level down to option level). Each option carries the label the
+ *  user sees, an explanatory description (rendered muted under the label),
+ *  a recommended flag (the agent's pick), and an explanation of why it's
+ *  recommended. All but `label` default to empty strings / false so the
+ *  bare-minimum agent emission still parses cleanly. */
+export const ClarifyOptionSchema = z.object({
+  /** Picker text (≤ 256 chars). */
+  label: z.string().min(1).max(256),
+  /** Free-form explanation of what this option means, the expected outcome,
+   *  trade-offs. Rendered in muted text below the label. ≤ 512 chars. */
+  description: z.string().max(512).default(''),
+  /** When true, this option is highlighted as the agent's suggestion. The
+   *  parser sorts recommended options first within their question so the
+   *  user's eye lands on them. */
+  recommended: z.boolean().default(false),
+  /** Why the agent recommends this option (rendered below the description
+   *  in the recommended-callout style). Only meaningful when `recommended`
+   *  is true. ≤ 512 chars. */
+  recommendationReason: z.string().max(512).default(''),
+})
+export type ClarifyOption = z.infer<typeof ClarifyOptionSchema>
+
+/** Accepts both legacy `string` options (backward compat with v1 envelope
+ *  + already-stored sessions in clarify_sessions.questions_json) and the
+ *  new {label, description, recommended, recommendationReason} object form.
+ *  Strings get lifted into the object shape with defaults. */
+const ClarifyOptionInputSchema = z.preprocess((v) => {
+  if (typeof v === 'string') {
+    return { label: v, description: '', recommended: false, recommendationReason: '' }
+  }
+  return v
+}, ClarifyOptionSchema)
+
 /** One question the agent asked. The framework appends a 5th "free-text" row
  *  in the UI automatically; agents must NOT include a free-text option here. */
 export const ClarifyQuestionSchema = z.object({
@@ -28,17 +62,36 @@ export const ClarifyQuestionSchema = z.object({
   title: z.string().min(1).max(512),
   /** single = radio + mutually-exclusive custom row; multi = checkbox + parallel custom row. */
   kind: ClarifyQuestionKindSchema,
-  /** When true, the UI renders a "(推荐)" / "(Recommended)" badge and the
-   *  question becomes required. Defaults to false. */
+  /** DEPRECATED — kept for backward compatibility with already-stored sessions.
+   *  Old envelopes used this flag to mark a question "required to answer";
+   *  the chip was confusing and the user moved "recommended" semantics down
+   *  to option level. New emissions should leave this false (default) and
+   *  set `recommended` per-option instead. The form no longer renders a
+   *  required-question chip; submit accepts empty answers. */
   recommended: z.boolean().default(false),
   /** Candidate options. Between MIN (2) and MAX (4); over-emission is
-   *  truncated and a warning recorded at parse time. */
+   *  truncated and a warning recorded at parse time. Sorted by `recommended`
+   *  (true first) at the parsing layer so the UI doesn't have to re-sort. */
   options: z
-    .array(z.string().min(1).max(256))
+    .array(ClarifyOptionInputSchema)
     .min(CLARIFY_MIN_OPTIONS_PER_QUESTION)
-    .max(CLARIFY_MAX_OPTIONS_PER_QUESTION),
+    .max(CLARIFY_MAX_OPTIONS_PER_QUESTION)
+    .transform((opts) => sortOptionsByRecommended(opts)),
 })
 export type ClarifyQuestion = z.infer<typeof ClarifyQuestionSchema>
+
+/** Stable sort: recommended options first, preserving original order
+ *  within each group (so a deterministic emission stays deterministic). */
+export function sortOptionsByRecommended(opts: ClarifyOption[]): ClarifyOption[] {
+  const annotated = opts.map((opt, i) => ({ opt, i }))
+  annotated.sort((a, b) => {
+    const ra = a.opt.recommended ? 0 : 1
+    const rb = b.opt.recommended ? 0 : 1
+    if (ra !== rb) return ra - rb
+    return a.i - b.i
+  })
+  return annotated.map((a) => a.opt)
+}
 
 /** What `<workflow-clarify>` body JSON.parse must yield (after truncation). */
 export const ClarifyEnvelopeBodySchema = z.object({

@@ -636,7 +636,7 @@ export function sealAnswersServerSide(
       continue
     }
     const indices = a.selectedOptionIndices.filter((i) => i >= 0 && i < q.options.length)
-    const labels = indices.map((i) => q.options[i] ?? '').filter((s) => s.length > 0)
+    const labels = indices.map((i) => q.options[i]?.label ?? '').filter((s) => s.length > 0)
     sealed.push({
       questionId: a.questionId,
       selectedOptionIndices: indices,

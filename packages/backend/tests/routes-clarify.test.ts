@@ -33,7 +33,10 @@ const QUESTION = {
   title: 'Which database?',
   kind: 'single' as const,
   recommended: true,
-  options: ['Postgres', 'MySQL'],
+  options: [
+    { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
+    { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
+  ],
 }
 
 function buildApp(): { db: DbClient; app: Hono } {

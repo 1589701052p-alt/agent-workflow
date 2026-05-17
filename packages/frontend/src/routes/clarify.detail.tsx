@@ -82,6 +82,23 @@ export function ClarifyDetailPage() {
         customText: '',
       }
     }
+    // RFC-023 bugfix #5 — when this session has already been sealed
+    // (status != 'awaiting_human' → 'answered' or 'canceled'), pre-fill
+    // the form with the submitted answers so the history view shows what
+    // the user actually picked. Without this, opening a past session
+    // renders an empty form which (a) misrepresents what was answered and
+    // (b) is unreviewable.
+    if (s.status !== 'awaiting_human' && Array.isArray(s.answers)) {
+      for (const a of s.answers) {
+        if (fresh[a.questionId] !== undefined) fresh[a.questionId] = a
+      }
+      // Sealed sessions never reload from IDB drafts — the answer is what
+      // got persisted server-side. Mark loaded immediately and skip the
+      // draft restore branch below.
+      setAnswers(fresh)
+      setDraftLoaded(true)
+      return
+    }
     // Try to restore the IDB draft (if any) for this session.
     const key = { taskId: s.taskId, clarifyNodeRunId: s.clarifyNodeRunId, sessionId: s.id }
     getClarifyDraft(key)
@@ -183,21 +200,29 @@ export function ClarifyDetailPage() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
-      void navigate({ to: '/clarify' })
+      // RFC-023 bugfix #8 — after answering, take the user to the task
+      // detail page so they immediately see the agent re-run kick off
+      // (via the WS `clarify.answered` → node-runs invalidation in
+      // useTaskSync). The previous behavior navigated to /clarify (the
+      // list page), which had NO live WS sync, so users believed "nothing
+      // happened" until they manually opened the task. Also invalidate
+      // the task's queries upfront in case WS is delayed/dropped.
+      const taskId = session.data?.taskId
+      if (taskId !== undefined) {
+        void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
+        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
+        void navigate({ to: '/tasks/$id', params: { id: taskId } })
+      } else {
+        void navigate({ to: '/clarify' })
+      }
     },
   })
 
-  const requiredMissing = useMemo(() => {
-    const s = session.data
-    if (s === undefined) return false
-    for (const q of s.questions) {
-      if (!q.recommended) continue
-      const a = answers[q.id]
-      if (a === undefined) return true
-      if (a.selectedOptionIndices.length === 0 && a.customText.trim().length === 0) return true
-    }
-    return false
-  }, [answers, session.data])
+  // RFC-023 iter #2: the per-question `recommended` flag was deprecated when
+  // "recommended" moved to the option level. All questions are now optional
+  // to answer (the submit button is always enabled in awaiting_human mode).
+  // Keep the variable so the JSX hint can simply not render.
+  const requiredMissing = false
 
   // ----------------------------------------------------------------------
   // render
