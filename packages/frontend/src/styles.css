@@ -828,14 +828,26 @@ code {
   font-size: 13px;
 }
 
+/* Switch row: switch + label on line 1; hint (if any) on line 2 indented to
+ * align under the label. Grid keeps the hint from pushing inline to the
+ * right edge or wrapping awkwardly across the row. */
 .form-switch {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 4px;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
   user-select: none;
+}
+.form-switch > span {
+  grid-column: 2;
+}
+.form-switch > .form-field__hint {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 /* iOS-style slider toggle. Replaces the native checkbox visually while
@@ -882,9 +894,6 @@ code {
 .form-switch > input[type='checkbox']:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-.form-switch > .form-field__hint {
-  margin-left: auto;
 }
 
 .form-actions {
