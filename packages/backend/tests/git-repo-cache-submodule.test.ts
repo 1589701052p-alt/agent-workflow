@@ -17,7 +17,6 @@ import { join, resolve } from 'node:path'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { refreshCachedRepo, resolveCachedRepo } from '../src/services/gitRepoCache'
 import { cachedRepos } from '../src/db/schema'
-import { runGit } from '../src/util/git'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 

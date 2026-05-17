@@ -2,7 +2,7 @@
 // presence × git outcome. Uses an in-memory runGit stub so we can assert
 // exact argv ordering and verify stderr redaction without spinning real git.
 
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
+import { describe, expect, test, afterEach } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
