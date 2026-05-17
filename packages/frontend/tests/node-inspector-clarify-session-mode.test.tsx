@@ -129,6 +129,39 @@ describe('NodeInspector — RFC-026 clarify sessionMode segmented', () => {
     expect(patched.kind).toBe('clarify')
   })
 
+  test('segmented control is not wrapped in a <label> (avoids implicit label-to-first-button binding)', () => {
+    // Regression: a <label> wrapping multiple <button>s implicitly binds to
+    // the first one — so hovering / clicking the hint text below was being
+    // proxied to the first segmented button. The Field wrapper must render
+    // as <div> when carrying a group of controls.
+    const onChange = vi.fn()
+    wrap(
+      <Host
+        initial={makeDef({
+          id: 'c1',
+          kind: 'clarify',
+          title: '',
+          description: '',
+        } as unknown as WorkflowNode)}
+        onChangeSpy={onChange}
+      />,
+    )
+    const radiogroup = screen.getByTestId('clarify-session-mode')
+    // Walk ancestors: no <label> on the way up to the closest .form-field
+    let cur: HTMLElement | null = radiogroup.parentElement
+    let found: HTMLElement | null = null
+    while (cur !== null) {
+      if (cur.classList.contains('form-field')) {
+        found = cur
+        break
+      }
+      expect(cur.tagName.toLowerCase()).not.toBe('label')
+      cur = cur.parentElement
+    }
+    expect(found).not.toBeNull()
+    expect(found!.tagName.toLowerCase()).toBe('div')
+  })
+
   test('clicking the isolated option writes the explicit value too (not undefined)', () => {
     const onChange = vi.fn()
     wrap(

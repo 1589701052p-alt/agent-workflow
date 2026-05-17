@@ -8,19 +8,29 @@ interface FieldProps {
   hint?: string
   required?: boolean
   children: ReactNode
+  // When the field wraps a group of controls (e.g. a segmented radiogroup
+  // with multiple <button> elements) rather than a single form control,
+  // render as <div> instead of <label>. A <label> wrapping multiple buttons
+  // implicitly binds to the first one — clicks/hover on the hint area then
+  // proxy to that button, which surprises users.
+  group?: boolean
 }
 
-export function Field({ label, hint, required, children }: FieldProps) {
-  return (
-    <label className="form-field">
+export function Field({ label, hint, required, children, group }: FieldProps) {
+  const inner = (
+    <>
       <span className="form-field__label">
         {label}
         {required === true && <span className="form-field__required"> *</span>}
       </span>
       {children}
       {hint !== undefined && <span className="form-field__hint">{hint}</span>}
-    </label>
+    </>
   )
+  if (group === true) {
+    return <div className="form-field">{inner}</div>
+  }
+  return <label className="form-field">{inner}</label>
 }
 
 interface TextInputProps {

@@ -842,6 +842,7 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
           <Field
             label={t('inspector.fieldClarifySessionMode')}
             hint={t('inspector.clarifySessionModeHint')}
+            group
           >
             <div
               className="segmented"
