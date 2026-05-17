@@ -19,7 +19,7 @@
 // case fails here loudly — before users see "清单插件内部报错" in the UI.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -46,7 +46,6 @@ interface PluginModule {
 async function loadPlugin(): Promise<PluginModule> {
   // cache-busting query keeps each test isolated.
   const url = `${PLUGIN_PATH}?t=${process.hrtime.bigint()}`
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod = (await import(url)) as { default: PluginModule }
   return mod.default
 }

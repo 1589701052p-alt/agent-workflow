@@ -1334,6 +1334,7 @@ async function runFanOutNode(
             skills: resolvedSkills,
             dependents,
             mcps,
+            plugins,
             appHome: opts.appHome,
             ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
             db,
