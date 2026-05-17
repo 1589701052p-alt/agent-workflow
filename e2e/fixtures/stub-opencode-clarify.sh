@@ -45,9 +45,12 @@ state_dir="${CLARIFY_STUB_STATE:-/tmp/aw-e2e-clarify-state}"
 mkdir -p "$state_dir"
 
 # Derive a per-(agent, shard_key) counter key. The agent name comes from
-# --agent <name>; loop the argv to find it.
+# --agent <name>; loop the argv to find it. Capture the prompt (first
+# positional after 'run') BEFORE the flag loop eats it, since we need it
+# for shard-key extraction further down.
 agent="default"
 shift  # drop the leading 'run'
+RAW_PROMPT="${1-}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --agent)
@@ -61,16 +64,31 @@ shard="${MOCK_OPENCODE_SHARD_KEY:-_none_}"
 key="$state_dir/$(printf '%s' "$agent.$shard" | tr -c 'A-Za-z0-9._-' '_')"
 
 # Decide whether THIS invocation should clarify or finalise.
+# The runner does NOT forward MOCK_OPENCODE_SHARD_KEY to subprocess env, so
+# we fall back to extracting the shard from the prompt body. The fan-out
+# spec uses promptTemplate `Audit {{__shard_key__}}.` so the rendered
+# prompt always contains `Audit <shard_key>.`. We grep that.
 ask_list="${CLARIFY_STUB_ASK_SHARDS:-}"
 should_ask=1
 if [ -n "$ask_list" ]; then
   should_ask=0
+  prompt_shard=""
   for s in $ask_list; do
-    if [ "$s" = "$shard" ]; then
-      should_ask=1
-      break
-    fi
+    # Look for the literal "Audit <shard>." anywhere in stdin / argv. The
+    # prompt was passed as positional arg via $RAW_PROMPT (captured at the
+    # top of the script before the flag-parsing loop ate the argv).
+    case "$RAW_PROMPT" in
+      *"Audit $s"*)
+        prompt_shard="$s"
+        should_ask=1
+        break
+        ;;
+    esac
   done
+  if [ -n "$prompt_shard" ]; then
+    shard="$prompt_shard"
+    key="$state_dir/$(printf '%s' "$agent.$shard" | tr -c 'A-Za-z0-9._-' '_')"
+  fi
 fi
 
 # First call → clarify (if eligible). Second+ call → output.
