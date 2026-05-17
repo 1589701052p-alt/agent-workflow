@@ -8,6 +8,7 @@
 // (right) caps right-pane DOM at one file no matter the diff size.
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { DiffFileBody, splitByFile, type FileBlock } from './DiffViewer'
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function WorktreeDiffPanel({ diff, truncated }: Props) {
+  const { t } = useTranslation()
   const blocks = useMemo(() => splitByFile(diff), [diff])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
@@ -36,7 +38,7 @@ export function WorktreeDiffPanel({ diff, truncated }: Props) {
   }, [blocks, selectedKey])
 
   if (diff.trim() === '') {
-    return <div className="diff diff--empty muted">No changes since the task started.</div>
+    return <div className="diff diff--empty muted">{t('tasks.diffNoChanges')}</div>
   }
 
   const selected = blocks.find((b, i) => keyOf(b, i) === selectedKey) ?? blocks[0]
@@ -46,7 +48,7 @@ export function WorktreeDiffPanel({ diff, truncated }: Props) {
       <aside className="worktree-diff__files">
         {truncated === true && (
           <div className="worktree-diff__truncated diff__truncated">
-            ⚠ Diff truncated at 1 MiB. View the worktree directly for the full output.
+            {t('tasks.diffTruncatedBanner')}
           </div>
         )}
         <nav role="tablist" aria-orientation="vertical" className="worktree-diff__tablist">

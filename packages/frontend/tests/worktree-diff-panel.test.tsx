@@ -6,7 +6,8 @@
 // behavior when the diff string changes mid-session.
 
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { afterAll, describe, expect, test } from 'vitest'
+import i18n from '@/i18n'
 import { WorktreeDiffPanel } from '../src/components/WorktreeDiffPanel'
 
 const THREE_FILE_DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -35,6 +36,13 @@ index 5555..6666 100644
  ctx c
 `
 
+// One test below flips the locale to lock i18n coverage; restore the
+// bootstrap language afterward so neighbouring test files keep the locale
+// they expect (the harness defaults via navigator.language under happy-dom).
+afterAll(async () => {
+  await i18n.changeLanguage('en-US')
+})
+
 describe('WorktreeDiffPanel', () => {
   test('renders one tab per file, defaults to selecting the first', () => {
     render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
@@ -60,6 +68,7 @@ describe('WorktreeDiffPanel', () => {
 
   test('empty diff string renders the "No changes" fallback with no tablist', () => {
     render(<WorktreeDiffPanel diff="" />)
+    // i18next bootstraps from navigator.language under happy-dom (= en-US).
     expect(screen.getByText(/No changes/i)).toBeTruthy()
     expect(screen.queryByRole('tablist')).toBeNull()
   })
@@ -68,10 +77,10 @@ describe('WorktreeDiffPanel', () => {
     render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} truncated />)
     const aside = document.querySelector('.worktree-diff__files')
     expect(aside).toBeTruthy()
-    expect(within(aside as HTMLElement).getByText(/truncated at 1 MiB/i)).toBeTruthy()
+    expect(within(aside as HTMLElement).getByText(/1 MiB/)).toBeTruthy()
     const body = document.querySelector('.worktree-diff__body')
     expect(body).toBeTruthy()
-    expect(within(body as HTMLElement).queryByText(/truncated at 1 MiB/i)).toBeNull()
+    expect(within(body as HTMLElement).queryByText(/1 MiB/)).toBeNull()
   })
 
   test('selectedKey self-heals when the diff string changes and the prior file is gone', () => {
@@ -94,6 +103,21 @@ index 9999..AAAA 100644
     expect(tabs).toHaveLength(1)
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByText('+new z')).toBeTruthy()
+  })
+
+  test('empty / truncated banners localize across zh-CN and en-US', async () => {
+    await i18n.changeLanguage('en-US')
+    const { rerender, unmount } = render(<WorktreeDiffPanel diff="" />)
+    expect(screen.getByText(/No changes since the task started/i)).toBeTruthy()
+    rerender(<WorktreeDiffPanel diff={THREE_FILE_DIFF} truncated />)
+    expect(screen.getByText(/Diff truncated at 1 MiB/i)).toBeTruthy()
+    unmount()
+
+    await i18n.changeLanguage('zh-CN')
+    const { rerender: rerenderZh } = render(<WorktreeDiffPanel diff="" />)
+    expect(screen.getByText('自任务启动以来没有改动。')).toBeTruthy()
+    rerenderZh(<WorktreeDiffPanel diff={THREE_FILE_DIFF} truncated />)
+    expect(screen.getByText(/Diff 已截断至 1 MiB/)).toBeTruthy()
   })
 
   test('100-file diff renders in well under a second (perf smoke)', () => {

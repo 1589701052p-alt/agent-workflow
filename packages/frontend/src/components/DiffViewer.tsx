@@ -7,6 +7,7 @@
 // can reuse the same parsing + per-line styling without duplicating it.
 
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface DiffViewerProps {
   diff: string
@@ -19,18 +20,17 @@ export interface FileBlock {
 }
 
 export function DiffViewer({ diff, truncated }: DiffViewerProps) {
+  const { t } = useTranslation()
   const blocks = useMemo(() => splitByFile(diff), [diff])
 
   if (diff.trim() === '') {
-    return <div className="diff diff--empty muted">No changes since the task started.</div>
+    return <div className="diff diff--empty muted">{t('tasks.diffNoChanges')}</div>
   }
 
   return (
     <div className="diff">
       {truncated === true && (
-        <div className="diff__truncated">
-          ⚠ Diff truncated at 1 MiB. View the worktree directly for the full output.
-        </div>
+        <div className="diff__truncated">{t('tasks.diffTruncatedBanner')}</div>
       )}
       {blocks.map((b, i) => (
         <DiffFileBody key={`${b.header}-${i}`} block={b} />

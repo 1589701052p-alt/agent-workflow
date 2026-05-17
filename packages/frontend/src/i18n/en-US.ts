@@ -352,6 +352,9 @@ export const enUS: Resources = {
     noWorkflowSnapshot: 'No workflow snapshot available.',
     noBaseCommit: 'No base commit recorded; diff is unavailable.',
     loadingDiff: 'Loading diff…',
+    diffNoChanges: 'No changes since the task started.',
+    diffTruncatedBanner:
+      '⚠ Diff truncated at 1 MiB. View the worktree directly for the full output.',
     noNodeRuns: "No node runs yet; scheduler hasn't reached any nodes.",
     colNode: 'Node',
     colIteration: 'Iteration',

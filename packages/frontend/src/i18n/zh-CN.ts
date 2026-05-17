@@ -339,6 +339,8 @@ export interface Resources {
     noWorkflowSnapshot: string
     noBaseCommit: string
     loadingDiff: string
+    diffNoChanges: string
+    diffTruncatedBanner: string
     noNodeRuns: string
     colNode: string
     colIteration: string
@@ -1169,6 +1171,8 @@ export const zhCN: Resources = {
     noWorkflowSnapshot: '没有工作流快照。',
     noBaseCommit: '未记录 base commit；diff 不可用。',
     loadingDiff: '加载 diff 中…',
+    diffNoChanges: '自任务启动以来没有改动。',
+    diffTruncatedBanner: '⚠ Diff 已截断至 1 MiB。请直接查看 worktree 获取完整输出。',
     noNodeRuns: '还没有节点运行；调度器还未触达任何节点。',
     colNode: '节点',
     colIteration: '轮次',
