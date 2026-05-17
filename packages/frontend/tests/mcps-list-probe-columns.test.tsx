@@ -14,10 +14,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
-  createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
 } from '@tanstack/react-router'
 import type { Mcp, McpProbe } from '@agent-workflow/shared'
 import { setBaseUrl, setToken } from '../src/stores/auth'
