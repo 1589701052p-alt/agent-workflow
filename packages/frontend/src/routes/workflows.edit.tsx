@@ -3,7 +3,7 @@
 // arrives in P-2-05; per-kind node renderers in P-2-04.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, createRoute, useNavigate } from '@tanstack/react-router'
+import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, Workflow, WorkflowDefinition } from '@agent-workflow/shared'
@@ -287,9 +287,28 @@ function WorkflowEditPage() {
   const headerActions = useMemo(
     () => (
       <div className="page__actions">
-        <Link to="/workflows/$id/launch" params={{ id }} className="btn btn--sm btn--primary">
-          {t('editor.launch')}
-        </Link>
+        {/* RFC parity with backend startTask: run static validation on
+            click; only navigate to the launcher if there are no
+            error-severity issues. Warnings still let the user through. */}
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          onClick={() => {
+            validate
+              .mutateAsync()
+              .then((result) => {
+                const hasBlocking = result.issues.some((i) => (i.severity ?? 'error') === 'error')
+                if (hasBlocking) return
+                navigate({ to: '/workflows/$id/launch', params: { id } })
+              })
+              .catch(() => {
+                /* network/server error already surfaced via validate.error */
+              })
+          }}
+          disabled={validate.isPending}
+        >
+          {validate.isPending ? t('editor.validating') : t('editor.launch')}
+        </button>
         <button
           type="button"
           className="btn btn--sm"
@@ -315,7 +334,7 @@ function WorkflowEditPage() {
         />
       </div>
     ),
-    [id, validate, del, t],
+    [id, navigate, validate, del, t],
   )
 
   if (query.isLoading || draft === null)
