@@ -2,10 +2,12 @@
 // command/env/headers UI shapes vs CreateMcp payload shape.
 
 import { describe, expect, test } from 'vitest'
+import type { Mcp } from '@agent-workflow/shared'
 import {
   buildCreatePayload,
   EMPTY_LOCAL_FORM,
   kvToLines,
+  mcpToForm,
   parseKvLines,
   tokenizeCommand,
   type McpFormState,
@@ -142,5 +144,54 @@ describe('buildCreatePayload (remote)', () => {
   test('non-http(s) url → form error', () => {
     expect(buildCreatePayload({ ...base, url: 'ftp://x' }).ok).toBe(false)
     expect(buildCreatePayload({ ...base, url: '' }).ok).toBe(false)
+  })
+})
+
+describe('mcpToForm (edit-page round-trip)', () => {
+  test('local row populates command (joined with space) + env textarea + timeout', () => {
+    const row: Mcp = {
+      id: 'mcp-1',
+      name: 'pg',
+      description: 'desc',
+      type: 'local',
+      config: { command: ['uvx', 'pg-mcp'], env: { PG: 'x', LOG: 'y' }, timeoutMs: 5000 },
+      enabled: true,
+      schemaVersion: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+    const form = mcpToForm(row)
+    expect(form).toEqual({
+      name: 'pg',
+      description: 'desc',
+      type: 'local',
+      enabled: true,
+      command: 'uvx pg-mcp',
+      envText: 'LOG=y\nPG=x',
+      url: '',
+      headersText: '',
+      oauthMode: 'auto',
+      timeoutMsText: '5000',
+    })
+  })
+
+  test('remote row populates url + headers + oauth=false → oauthMode=disabled', () => {
+    const row: Mcp = {
+      id: 'mcp-2',
+      name: 'sentry',
+      description: '',
+      type: 'remote',
+      config: { url: 'https://s.io/mcp', headers: { Authorization: 'Bearer x' }, oauth: false },
+      enabled: false,
+      schemaVersion: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+    const form = mcpToForm(row)
+    expect(form.type).toBe('remote')
+    expect(form.url).toBe('https://s.io/mcp')
+    expect(form.headersText).toBe('Authorization=Bearer x')
+    expect(form.oauthMode).toBe('disabled')
+    expect(form.enabled).toBe(false)
   })
 })

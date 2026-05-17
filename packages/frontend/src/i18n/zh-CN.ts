@@ -32,8 +32,9 @@ export interface Resources {
     deleteButton: string
     deleteConfirm: string
     deleteReferenced: string
-    formTitle: string
-    formEditTitle: string
+    newTitle: string
+    newHint: string
+    detailHint: string
     fieldName: string
     fieldNameHint: string
     fieldDescription: string
@@ -52,7 +53,7 @@ export interface Resources {
     fieldOauth: string
     fieldOauthHint: string
     saveButton: string
-    cancelButton: string
+    createButton: string
     toolNamingHint: string
     cwdHint: string
     oauthCliHint: string
@@ -754,8 +755,7 @@ export interface Resources {
     statCacheCreate: string
     statCacheRead: string
     statError: string
-    statRetries: string
-    statIterations: string
+    statHistory: string
     iterLoop: string
     iterReview: string
     iterClarify: string
@@ -1267,8 +1267,9 @@ export const zhCN: Resources = {
     deleteButton: '删除',
     deleteConfirm: '删除该 MCP？',
     deleteReferenced: '无法删除：以下 agent 仍在引用，请先解除引用：',
-    formTitle: '新建 MCP 服务器',
-    formEditTitle: '编辑 MCP "{{name}}"',
+    newTitle: '新建 MCP 服务器',
+    newHint: '注册可被 agent 引用的 MCP 服务器；运行时按依赖闭包合并注入到 opencode 子进程。',
+    detailHint: '编辑该 MCP 的配置；保存后所有引用它的 agent 下一次启动时生效。',
     fieldName: '名称',
     fieldNameHint:
       '小写字母 / 数字 / `-` / `_`，需以字母数字开头。同时是工具命名前缀（详见下方说明）。',
@@ -1288,8 +1289,8 @@ export const zhCN: Resources = {
     fieldOauth: 'OAuth',
     fieldOauthHint:
       'v1 简化：默认留空（启用 opencode 自动 OAuth 探测）；填 false 显式禁用。完整 OAuth 流程请用 `opencode mcp auth <name>` 在主机本地登录。',
-    saveButton: '保存',
-    cancelButton: '取消',
+    saveButton: '保存修改',
+    createButton: '创建 MCP',
     toolNamingHint:
       '在 agent 的 permission 字段里点名某 MCP 工具时，使用 `{name}_{tool_name}`（opencode 自动按 mcp 名 + 工具名拼接，详见 OPENCODE_CONFIG.md §3.3）。',
     cwdHint:
@@ -1712,8 +1713,7 @@ export const zhCN: Resources = {
     statCacheCreate: '缓存创建',
     statCacheRead: '缓存读取',
     statError: '错误',
-    statRetries: '重试列表',
-    statIterations: '迭代历史',
+    statHistory: '运行历史',
     iterLoop: '循环#{{n}}',
     iterReview: '评审#{{n}}',
     iterClarify: '反问#{{n}}',

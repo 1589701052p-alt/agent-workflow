@@ -799,6 +799,12 @@ code {
   color: var(--muted);
 }
 
+.form-field__error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
 .form-input {
   font: inherit;
   font-size: 14px;
@@ -4283,54 +4289,3 @@ mark.comment-anchor[data-active='true'] {
   font-style: italic;
 }
 
-/* RFC-028 — MCP editor (used by /mcps page). Reuses .form-grid / .form-input
-   variables; only adds the per-row label + hint + error helpers. */
-.mcp-editor {
-  margin-top: 16px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary, transparent);
-}
-.mcp-editor__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-.mcp-editor__close {
-  background: none;
-  border: none;
-  font-size: 18px;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-.mcp-editor__close:hover {
-  color: var(--text);
-}
-.mcp-editor__cwd-hint {
-  font-style: italic;
-}
-.form-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.form-row__label {
-  font-size: 13px;
-  font-weight: 500;
-}
-.form-input--textarea {
-  font-family: var(--font-mono, monospace);
-  resize: vertical;
-}
-.form-error {
-  color: var(--error, #b91c1c);
-  font-size: 12px;
-}
-.form-hint {
-  color: var(--muted, #6b7280);
-  font-size: 12px;
-}

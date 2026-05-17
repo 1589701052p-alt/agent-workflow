@@ -331,8 +331,11 @@ export const enUS: Resources = {
     deleteButton: 'Delete',
     deleteConfirm: 'Delete this MCP?',
     deleteReferenced: 'Cannot delete: still referenced by the following agents:',
-    formTitle: 'New MCP server',
-    formEditTitle: 'Edit MCP "{{name}}"',
+    newTitle: 'New MCP server',
+    newHint:
+      "Register MCP servers that agents can reference; at runtime the framework unions every dependsOn-closure member's mcp[] and injects the union into the opencode subprocess.",
+    detailHint:
+      "Edit this MCP's configuration. Changes apply on the next launch of every agent that references it.",
     fieldName: 'Name',
     fieldNameHint:
       'Lowercase / digits / dash / underscore; must start with a letter or digit. Used as the tool-naming prefix (see below).',
@@ -355,8 +358,8 @@ export const enUS: Resources = {
     fieldOauth: 'OAuth',
     fieldOauthHint:
       'v1: leave blank to allow opencode auto-discovery; set to `false` to explicitly disable. For the full OAuth dance run `opencode mcp auth <name>` once on the host machine.',
-    saveButton: 'Save',
-    cancelButton: 'Cancel',
+    saveButton: 'Save changes',
+    createButton: 'Create MCP',
     toolNamingHint:
       "To reference a specific MCP tool in an agent's permission field, use `{name}_{tool_name}` (opencode joins them automatically — see OPENCODE_CONFIG.md §3.3).",
     cwdHint:
@@ -803,8 +806,7 @@ export const enUS: Resources = {
     statCacheCreate: 'Cache create',
     statCacheRead: 'Cache read',
     statError: 'Error',
-    statRetries: 'Retries',
-    statIterations: 'Iteration history',
+    statHistory: 'Run history',
     iterLoop: 'loop#{{n}}',
     iterReview: 'review#{{n}}',
     iterClarify: 'clarify#{{n}}',

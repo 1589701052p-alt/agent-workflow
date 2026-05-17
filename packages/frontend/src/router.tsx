@@ -10,6 +10,8 @@ import { Route as indexRoute } from '@/routes/index'
 import { Route as rootRoute } from '@/routes/__root'
 import { Route as settingsRoute } from '@/routes/settings'
 import { Route as mcpsRoute } from '@/routes/mcps'
+import { Route as mcpDetailRoute } from '@/routes/mcps.detail'
+import { Route as mcpNewRoute } from '@/routes/mcps.new'
 import { Route as skillsRoute } from '@/routes/skills'
 import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
@@ -37,6 +39,9 @@ const routeTree = rootRoute.addChildren([
   skillNewRoute,
   skillDetailRoute,
   skillsRoute,
+  // '/mcps/new' literal must precede '/mcps/$name' so the literal wins.
+  mcpNewRoute,
+  mcpDetailRoute,
   mcpsRoute,
   workflowNewRoute,
   workflowLaunchRoute,

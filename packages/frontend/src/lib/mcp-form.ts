@@ -3,7 +3,7 @@
 // nasty bits (KEY=VALUE list editor, type-discriminated payload assembly,
 // validation messages) without rendering the page.
 
-import type { CreateMcp } from '@agent-workflow/shared'
+import type { CreateMcp, Mcp } from '@agent-workflow/shared'
 import { CreateMcpSchema } from '@agent-workflow/shared'
 
 /**
@@ -162,4 +162,38 @@ function parseTimeoutMs(text: string): number | undefined | 'invalid' {
   const n = Number(trimmed)
   if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return 'invalid'
   return n
+}
+
+/**
+ * Inverse of buildCreatePayload: turn an existing Mcp row into form state for
+ * the /mcps/$name edit page. Stable; covered by mcp-form.test.ts so the edit
+ * page never silently mis-renders a stored row.
+ */
+export function mcpToForm(m: Mcp): McpFormState {
+  if (m.type === 'local') {
+    return {
+      name: m.name,
+      description: m.description,
+      type: 'local',
+      enabled: m.enabled,
+      command: m.config.command.join(' '),
+      envText: kvToLines(m.config.env),
+      url: '',
+      headersText: '',
+      oauthMode: 'auto',
+      timeoutMsText: m.config.timeoutMs?.toString() ?? '',
+    }
+  }
+  return {
+    name: m.name,
+    description: m.description,
+    type: 'remote',
+    enabled: m.enabled,
+    command: '',
+    envText: '',
+    url: m.config.url,
+    headersText: kvToLines(m.config.headers),
+    oauthMode: m.config.oauth === false ? 'disabled' : 'auto',
+    timeoutMsText: m.config.timeoutMs?.toString() ?? '',
+  }
 }
