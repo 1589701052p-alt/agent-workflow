@@ -200,7 +200,7 @@ describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
     expect(md).toContain('Type: single-choice')
   })
 
-  test('buildClarifyPromptBlock pairs Q+A and includes synthesis line', () => {
+  test('buildClarifyPromptBlock pairs each Q with one synthesis line only (no Type/Selected/Custom note redundancy)', () => {
     const md = buildClarifyPromptBlock(
       [
         {
@@ -228,8 +228,33 @@ describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
         },
       ],
     )
-    expect(md).toContain('Selected: "Postgres"')
-    expect(md).toContain('Synthesis: User chose: "Postgres"')
+    // Only the synthesis line survives — Selected / Type / Custom note are
+    // gone (the synthesis already says "User chose: Postgres").
+    expect(md).toContain('Q1: Which DB?')
+    expect(md).toContain('- User chose: "Postgres"')
+    expect(md).not.toContain('Selected:')
+    expect(md).not.toContain('Type:')
+    expect(md).not.toContain('Synthesis:')
+  })
+
+  test('buildClarifyPromptBlock surfaces an unanswered question explicitly', () => {
+    const md = buildClarifyPromptBlock(
+      [
+        {
+          id: 'q1',
+          title: 'Which DB?',
+          kind: 'single',
+          recommended: false,
+          options: [
+            { label: 'A', description: '', recommended: false, recommendationReason: '' },
+            { label: 'B', description: '', recommended: false, recommendationReason: '' },
+          ],
+        },
+      ],
+      [],
+    )
+    expect(md).toContain('Q1: Which DB?')
+    expect(md).toContain('- User did not answer this question.')
   })
 })
 

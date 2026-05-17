@@ -169,9 +169,17 @@ export function renderClarifyQuestionsBlock(questions: ClarifyQuestion[]): strin
   return lines.join('\n').trimEnd()
 }
 
-/** Render the user-answered Q&A block. Combines questions, structured answers
- *  and a deterministic English synthesis line per question. Used for
- *  `{{__clarify_answers__}}`. */
+/** Render the user-answered Q&A block. One line per question summarising
+ *  what the user picked. Used for `{{__clarify_answers__}}`.
+ *
+ *  Previous versions emitted four fields per question (Type / Selected /
+ *  Custom note / Synthesis); the structured fields were redundant with the
+ *  natural-language synthesis (and Type just repeated what the questions
+ *  block above already showed). The synthesis sentence covers every case —
+ *  empty answer, multi with custom, custom-only, etc — see
+ *  {@link summariseClarifyAnswer}. Keeping only the synthesis halves the
+ *  token cost of this block and removes a "why are these the same thing"
+ *  trap for both the agent and any human reviewing the prompt. */
 export function buildClarifyPromptBlock(
   questions: ClarifyQuestion[],
   answers: ClarifyAnswer[],
@@ -180,23 +188,12 @@ export function buildClarifyPromptBlock(
   const lines: string[] = []
   questions.forEach((q, idx) => {
     const a = byId.get(q.id)
-    const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
     lines.push(`### Q${idx + 1}: ${q.title}`)
-    lines.push(`- Type: ${kindLabel}`)
     if (!a) {
-      lines.push('- User answer: *(no answer received)*')
-      lines.push(`- Synthesis: User did not answer this question.`)
-      lines.push('')
-      return
+      lines.push(`- User did not answer this question.`)
+    } else {
+      lines.push(`- ${summariseClarifyAnswer(q, a)}`)
     }
-    const picked = a.selectedOptionLabels.length
-      ? a.selectedOptionLabels.map((s) => `"${s}"`).join(', ')
-      : '*(none)*'
-    lines.push(`- Selected: ${picked}`)
-    if (a.customText.trim().length > 0) {
-      lines.push(`- Custom note: ${a.customText}`)
-    }
-    lines.push(`- Synthesis: ${summariseClarifyAnswer(q, a)}`)
     lines.push('')
   })
   return lines.join('\n').trimEnd()
