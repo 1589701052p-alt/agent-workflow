@@ -171,15 +171,199 @@ code {
   color: var(--accent);
 }
 
-/* RFC-025: language switch lives in a footer block pinned to the bottom of the
-   sidebar, separated from the nav list by the auto margin. */
+/* RFC-025 / RFC-032: language switch + (PR1) settings gear share the footer
+   row. The auto margin pushes the block to the bottom of the sidebar; on the
+   row itself the language switch takes the left flex column and the gear
+   sits on the right. */
 .sidebar__footer {
   margin-top: auto;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+}
+
+.sidebar__footer .language-switch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* RFC-032 — 3-group sidebar nav. Group headers are 11-px small caps; sub-items
+   are 32-px tall rows with a soft accent hover and full-accent active fill.
+   `.nav-item--runtime` adds a thin separator above so the runtime row reads
+   as a different category than the capability rows above it. */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0 6px;
+}
+
+.nav-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+}
+
+.nav-group__chevron {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.nav-group__items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  min-height: 32px;
+  font-family: inherit;
+}
+
+.nav-item__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.nav-item--active,
+.nav-item--active:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.nav-item--active .sidebar__badge {
+  background: #fff;
+  color: var(--accent);
+}
+
+.nav-item--home {
+  margin: 2px 0 6px;
+}
+
+.nav-item--runtime {
+  margin-top: 6px;
+  position: relative;
+}
+
+.nav-item--runtime::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* RFC-032 — daemon status dot pinned to the right side of the runtime nav
+   row. Four discrete states drive the four colors; tooltip lives on `title`
+   to avoid a heavyweight popper. */
+.nav-runtime-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.nav-runtime-dot--ready {
+  background: #1e8e3e;
+}
+
+.nav-runtime-dot--checking {
+  background: #f5a623;
+}
+
+.nav-runtime-dot--incompatible {
+  background: #9aa0a6;
+}
+
+.nav-runtime-dot--missing {
+  background: #c5221f;
+}
+
+/* RFC-032 — settings cog button in the sidebar footer row. Becomes a square
+   accent-tinted button when the user is on /settings*. */
+.settings-gear {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.settings-gear:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.settings-gear--active,
+.settings-gear--active:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* RFC-032 — Settings runtime card flash. Triggered when the sidebar runtime
+   row navigates here via /settings#runtime: the wrapper gets a 2 s
+   accent-tinted overlay fading back to transparent so the user can locate
+   the card without us having to install a popper. */
+.runtime-status-anchor {
+  border-radius: 6px;
+  transition: background 200ms ease;
+}
+
+.runtime-status-anchor--flash {
+  animation: runtime-status-flash 2s ease-out forwards;
+}
+
+@keyframes runtime-status-flash {
+  0% {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 .language-switch {

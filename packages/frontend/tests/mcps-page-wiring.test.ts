@@ -23,8 +23,11 @@ function read(rel: string): string {
 
 describe('RFC-028 /mcps wiring', () => {
   test('sidebar nav exposes a /mcps entry', () => {
-    const root = read('routes/__root.tsx')
-    expect(root).toContain("{ to: '/mcps', key: 'mcps' }")
+    // RFC-032 moved the sidebar nav table from `__root.tsx` into the shared
+    // `lib/nav.ts::NAV_GROUPS` constant. The /mcps entry still has to exist;
+    // it just lives under the agents group now.
+    const nav = read('lib/nav.ts')
+    expect(nav).toContain("to: '/mcps'")
   })
 
   test('router registers list + new + detail routes (literal before $param)', () => {

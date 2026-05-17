@@ -24,11 +24,14 @@ describe('left-nav Clarify badge wiring (RFC-023 T25)', () => {
     expect(src).toContain("clarifyPendingCount > 99 ? '99+' : clarifyPendingCount")
   })
 
-  it('Clarify is the 6th nav item, immediately after Reviews', () => {
-    const src = readFileSync(join(__dirname, '..', 'src', 'routes', '__root.tsx'), 'utf8')
-    // Match by ordering in the NAV array literal.
-    const idxReviews = src.indexOf("key: 'reviews'")
-    const idxClarify = src.indexOf("key: 'clarify'")
+  it('Clarify appears in the workflows nav group immediately after Reviews', () => {
+    // RFC-032 PR1 still surfaces Reviews + Clarify as visible sub-items
+    // under the workflows group (placeholders until PR2 lifts both into the
+    // shared inbox drawer). The relative ordering — Reviews above Clarify —
+    // is what locks the badge column visual.
+    const nav = readFileSync(join(__dirname, '..', 'src', 'lib', 'nav.ts'), 'utf8')
+    const idxReviews = nav.indexOf("to: '/reviews'")
+    const idxClarify = nav.indexOf("to: '/clarify'")
     expect(idxReviews).toBeGreaterThan(-1)
     expect(idxClarify).toBeGreaterThan(idxReviews)
   })

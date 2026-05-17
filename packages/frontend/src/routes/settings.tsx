@@ -6,8 +6,8 @@
 // shows a "saved" toast, and labels fields that need a daemon restart.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoute, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { createRoute, useNavigate, useRouterState } from '@tanstack/react-router'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Config, ConfigPatch } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
@@ -29,11 +29,24 @@ type Tab = 'runtime' | 'limits' | 'gc' | 'network' | 'appearance' | 'connection'
 
 function SettingsPage() {
   const [tab, setTab] = useState<Tab>('runtime')
+  const [runtimeFlashKey, setRuntimeFlashKey] = useState(0)
   const { t } = useTranslation()
   const config = useQuery<Config>({
     queryKey: ['config'],
     queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
   })
+
+  // RFC-032: when the sidebar's runtime nav row navigates here it lands on
+  // `/settings#runtime`. Force the runtime tab + bump a key the RuntimeTab
+  // uses to re-trigger its flash animation. We also re-trigger the flash on
+  // every navigation to the same hash (router updates that don't unmount).
+  const hash = useRouterState({ select: (s) => s.location.hash })
+  useEffect(() => {
+    if (hash === 'runtime') {
+      setTab('runtime')
+      setRuntimeFlashKey((k) => k + 1)
+    }
+  }, [hash])
 
   return (
     <div className="page">
@@ -77,7 +90,7 @@ function SettingsPage() {
       )}
       {config.data !== undefined && (
         <>
-          {tab === 'runtime' && <RuntimeTab config={config.data} />}
+          {tab === 'runtime' && <RuntimeTab config={config.data} flashKey={runtimeFlashKey} />}
           {tab === 'limits' && <LimitsTab config={config.data} />}
           {tab === 'gc' && <GcTab config={config.data} />}
           {tab === 'network' && <NetworkTab config={config.data} />}
@@ -98,9 +111,24 @@ interface TabProps {
   config: Config
 }
 
-function RuntimeTab({ config }: TabProps) {
+function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const runtimeRef = useRef<HTMLDivElement | null>(null)
+  const [flashing, setFlashing] = useState(false)
+
+  // RFC-032: scroll the runtime status block into view + briefly highlight it
+  // when the sidebar runtime row navigates here. flashKey > 0 means the
+  // parent has just observed `location.hash === '#runtime'`; we restart the
+  // 2 s flash + scroll any time it bumps.
+  useEffect(() => {
+    if (flashKey === 0) return
+    setFlashing(true)
+    runtimeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    const id = window.setTimeout(() => setFlashing(false), 2000)
+    return () => window.clearTimeout(id)
+  }, [flashKey])
+
   const { state, setState, save } = useTabState(
     config,
     [
@@ -124,7 +152,13 @@ function RuntimeTab({ config }: TabProps) {
   )
   return (
     <>
-      <RuntimeStatusCard />
+      <div
+        ref={runtimeRef}
+        className={`runtime-status-anchor${flashing ? ' runtime-status-anchor--flash' : ''}`}
+        data-flash={flashing ? '1' : '0'}
+      >
+        <RuntimeStatusCard />
+      </div>
       <SectionForm
         onSave={save.mutate}
         busy={save.isPending}

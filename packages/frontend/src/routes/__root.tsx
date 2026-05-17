@@ -3,6 +3,13 @@
 // If no token is present in localStorage, every route except /auth redirects
 // to /auth so the user can paste the daemon token. The daemon prints it at
 // startup.
+//
+// RFC-032 PR1: the previously-flat 10-item sidebar is now a 3-group layout
+// (agents / workflows / tasks) with a Home top entry, a placeholder for the
+// PR2 inbox button, and a footer row containing the language switch + a
+// settings gear button. The legacy reviews/clarify sub-items still render
+// inside the workflows group as a PR1 stop-gap until the inbox drawer ships
+// in PR2.
 
 import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tanstack/react-router'
@@ -11,33 +18,13 @@ import { useTranslation } from 'react-i18next'
 import type { ClarifyPendingCount, ReviewPendingCount } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { LanguageSwitch } from '@/components/LanguageSwitch'
+import { NavGroup } from '@/components/shell/NavGroup'
+import { SettingsGearButton } from '@/components/shell/SettingsGearButton'
 import { useApplyLanguage } from '@/hooks/useLanguage'
 import { useApplyTheme } from '@/hooks/useTheme'
+import { NAV_GROUPS, resolveActiveNav } from '@/lib/nav'
+import type { SubNavItem } from '@/lib/nav'
 import { getToken, subscribeAuth } from '@/stores/auth'
-
-type NavKey =
-  | 'agents'
-  | 'skills'
-  | 'workflows'
-  | 'tasks'
-  | 'reviews'
-  | 'clarify'
-  | 'mcps'
-  | 'plugins'
-  | 'repos'
-  | 'settings'
-const NAV: { to: string; key: NavKey }[] = [
-  { to: '/agents', key: 'agents' },
-  { to: '/skills', key: 'skills' },
-  { to: '/mcps', key: 'mcps' },
-  { to: '/plugins', key: 'plugins' },
-  { to: '/workflows', key: 'workflows' },
-  { to: '/tasks', key: 'tasks' },
-  { to: '/reviews', key: 'reviews' },
-  { to: '/clarify', key: 'clarify' },
-  { to: '/repos', key: 'repos' },
-  { to: '/settings', key: 'settings' },
-]
 
 export const Route = createRootRoute({
   beforeLoad: ({ location }) => {
@@ -83,6 +70,29 @@ function RootComponent() {
         <Outlet />
       </div>
     )
+  }
+
+  const active = resolveActiveNav(pathname)
+  const renderBadge = (item: SubNavItem) => {
+    if (item.to === '/reviews' && pendingCount > 0) {
+      return (
+        <span className="sidebar__badge" aria-label={`${pendingCount} pending reviews`}>
+          {pendingCount > 99 ? '99+' : pendingCount}
+        </span>
+      )
+    }
+    if (item.to === '/clarify' && clarifyPendingCount > 0) {
+      return (
+        <span
+          className="sidebar__badge"
+          data-testid="clarify-nav-badge"
+          aria-label={t('clarify.nav.badgeTitle', { count: clarifyPendingCount })}
+        >
+          {clarifyPendingCount > 99 ? '99+' : clarifyPendingCount}
+        </span>
+      )
+    }
+    return null
   }
 
   return (
@@ -159,33 +169,21 @@ function RootComponent() {
           <span>{t('nav.brand')}</span>
         </div>
         <nav className="sidebar__nav">
-          {NAV.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className="sidebar__link"
-              activeProps={{ className: 'sidebar__link sidebar__link--active' }}
-            >
-              {t(`nav.${item.key}`)}
-              {item.key === 'reviews' && pendingCount > 0 && (
-                <span className="sidebar__badge" aria-label={`${pendingCount} pending reviews`}>
-                  {pendingCount > 99 ? '99+' : pendingCount}
-                </span>
-              )}
-              {item.key === 'clarify' && clarifyPendingCount > 0 && (
-                <span
-                  className="sidebar__badge"
-                  data-testid="clarify-nav-badge"
-                  aria-label={t('clarify.nav.badgeTitle', { count: clarifyPendingCount })}
-                >
-                  {clarifyPendingCount > 99 ? '99+' : clarifyPendingCount}
-                </span>
-              )}
-            </Link>
+          <Link
+            to="/"
+            className={`nav-item nav-item--home${active.onHome ? ' nav-item--active' : ''}`}
+            activeOptions={{ exact: true }}
+            activeProps={{ className: 'nav-item nav-item--home nav-item--active' }}
+          >
+            <span className="nav-item__label">{t('nav.home')}</span>
+          </Link>
+          {NAV_GROUPS.map((group) => (
+            <NavGroup key={group.key} group={group} active={active} renderBadge={renderBadge} />
           ))}
         </nav>
         <div className="sidebar__footer">
           <LanguageSwitch />
+          <SettingsGearButton active={active.onSettings} />
         </div>
       </aside>
       <main className="content">

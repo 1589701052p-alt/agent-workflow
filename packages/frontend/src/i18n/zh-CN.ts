@@ -18,6 +18,26 @@ export interface Resources {
     repos: string
     settings: string
     brand: string
+    // RFC-032 PR1: home + group headers + runtime sub-item + settings gear.
+    home: string
+    runtime: {
+      label: string
+      tooltip: {
+        ready: string
+        checking: string
+        incompatible: string
+        missing: string
+      }
+    }
+    group: {
+      agents: string
+      workflows: string
+      tasks: string
+    }
+    settingsIcon: {
+      label: string
+      tooltip: string
+    }
   }
   mcps: {
     title: string
@@ -1161,6 +1181,25 @@ export const zhCN: Resources = {
     repos: '远端仓',
     settings: '设置',
     brand: 'Agent Workflow',
+    home: '首页',
+    runtime: {
+      label: '运行时',
+      tooltip: {
+        ready: 'opencode v{{version}} · 已就绪',
+        checking: '检查中…',
+        incompatible: 'opencode v{{version}} 低于最低门槛 v{{minVersion}}',
+        missing: '未找到 opencode（path: {{path}}）',
+      },
+    },
+    group: {
+      agents: '代理',
+      workflows: '工作流',
+      tasks: '任务',
+    },
+    settingsIcon: {
+      label: '设置',
+      tooltip: '设置（含主题切换）',
+    },
   },
   reviews: {
     title: '评审',

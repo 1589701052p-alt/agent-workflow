@@ -12,10 +12,7 @@ const REPOS_SRC = readFileSync(
   'utf-8',
 )
 const ROUTER_SRC = readFileSync(resolve(import.meta.dirname, '..', 'src', 'router.tsx'), 'utf-8')
-const ROOT_SRC = readFileSync(
-  resolve(import.meta.dirname, '..', 'src', 'routes', '__root.tsx'),
-  'utf-8',
-)
+const NAV_SRC = readFileSync(resolve(import.meta.dirname, '..', 'src', 'lib', 'nav.ts'), 'utf-8')
 const ZH = readFileSync(resolve(import.meta.dirname, '..', 'src', 'i18n', 'zh-CN.ts'), 'utf-8')
 const EN = readFileSync(resolve(import.meta.dirname, '..', 'src', 'i18n', 'en-US.ts'), 'utf-8')
 
@@ -26,7 +23,9 @@ describe('/repos page wiring (RFC-024)', () => {
   })
 
   test('sidebar nav includes /repos entry', () => {
-    expect(ROOT_SRC).toContain("{ to: '/repos', key: 'repos' }")
+    // RFC-032 moved the sidebar nav into `lib/nav.ts::NAV_GROUPS`; /repos
+    // now lives under the tasks group.
+    expect(NAV_SRC).toContain("to: '/repos'")
   })
 
   test('repos.tsx calls the three /api/cached-repos endpoints', () => {

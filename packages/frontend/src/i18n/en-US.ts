@@ -16,6 +16,25 @@ export const enUS: Resources = {
     repos: 'Repos',
     settings: 'Settings',
     brand: 'Agent Workflow',
+    home: 'Home',
+    runtime: {
+      label: 'Runtime',
+      tooltip: {
+        ready: 'opencode v{{version}} · ready',
+        checking: 'checking…',
+        incompatible: 'opencode v{{version}} below minimum v{{minVersion}}',
+        missing: 'opencode not found (path: {{path}})',
+      },
+    },
+    group: {
+      agents: 'Agents',
+      workflows: 'Workflows',
+      tasks: 'Tasks',
+    },
+    settingsIcon: {
+      label: 'Settings',
+      tooltip: 'Settings (incl. theme)',
+    },
   },
   reviews: {
     title: 'Reviews',

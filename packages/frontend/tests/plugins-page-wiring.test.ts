@@ -26,8 +26,10 @@ function read(rel: string): string {
 
 describe('RFC-031 /plugins wiring', () => {
   test('sidebar nav exposes a /plugins entry', () => {
-    const root = read('routes/__root.tsx')
-    expect(root).toContain("{ to: '/plugins', key: 'plugins' }")
+    // RFC-032 lifted the sidebar nav into `lib/nav.ts::NAV_GROUPS` — the
+    // /plugins entry now lives under the agents group.
+    const nav = read('lib/nav.ts')
+    expect(nav).toContain("to: '/plugins'")
   })
 
   test('router registers list + new + detail routes (literal before $param)', () => {
