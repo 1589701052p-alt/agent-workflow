@@ -146,6 +146,16 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const server = Bun.serve({
     port: bindPort,
     hostname: bindHost,
+    // Bun's default idleTimeout is 10s — far too short for endpoints that
+    // synchronously await `npm install` (POST /api/plugins/:id/check-update
+    // and /upgrade can legitimately block for up to
+    // DEFAULT_INSTALL_TIMEOUT_MS = 60s). When the inbound socket is idle
+    // longer than the timeout Bun closes it, the daemon's response never
+    // reaches the client, and Vite surfaces "socket hang up" while the npm
+    // child keeps running orphaned. 255s is Bun's hard maximum and gives
+    // ~4× headroom over the install ceiling without changing endpoint
+    // semantics. See tests/cli-start-idle-timeout.test.ts.
+    idleTimeout: 255,
     fetch(req, srv) {
       const upgraded = ws.tryUpgrade(req, srv)
       if (upgraded === true) return undefined as unknown as Response
