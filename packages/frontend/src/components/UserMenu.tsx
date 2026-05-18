@@ -1,5 +1,9 @@
-// RFC-036 — sidebar footer user dropdown. Admin sees 4 items
-// (account / users / settings / logout); regular user sees 2 (account / logout).
+// RFC-036 — sidebar footer user dropdown. Admin sees: Manage users +
+// Sign out. Regular user sees: My account + Sign out. The Settings entry
+// is intentionally NOT included here — the sidebar gear icon (rendered
+// next to LanguageSwitch when the actor has settings:read) is the
+// canonical Settings entry, so duplicating it inside this menu would
+// just be visual noise.
 
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
@@ -12,7 +16,6 @@ export function UserMenu() {
   const { data, isLoading } = useActor()
   const { t } = useTranslation()
   const isAdmin = usePermission('users:read')
-  const canSettings = usePermission('settings:read')
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -97,16 +100,10 @@ export function UserMenu() {
               {t('userMenu.users', { defaultValue: 'Manage users' })}
             </Link>
           )}
-          {canSettings && (
-            <Link
-              to="/settings"
-              className="user-menu__item"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
-              {t('userMenu.settings', { defaultValue: 'Settings' })}
-            </Link>
-          )}
+          {/* "Settings" intentionally omitted — the sidebar's gear icon
+              (rendered next to LanguageSwitch for admin actors) is the
+              canonical entry to /settings. Keeping a duplicate link here
+              just adds visual noise. */}
           <button className="user-menu__item user-menu__item--danger" onClick={logout}>
             {t('userMenu.logout', { defaultValue: 'Sign out' })}
           </button>
