@@ -745,11 +745,13 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
   await expect(tabBar.getByRole('button', { name: 'Session', exact: true })).toBeVisible()
   await expect(tabBar.getByRole('button', { name: 'Prompt', exact: true })).toHaveCount(0)
 
-  // The attempts picker is now a chip-row radiogroup (RFC-027 §UX
-  // revision replaced the native <select>). One radio per attempt;
-  // the only one in this happy-path task is the initial run.
-  await expect(page.locator('.session-attempts__group')).toBeVisible({ timeout: 5_000 })
-  await expect(page.locator('.session-attempts__item.is-active')).toHaveCount(1)
+  // The attempts picker is the Select-based combobox (replaced the
+  // earlier chip-row, which itself replaced a native <select>). The
+  // trigger is visible without opening; this happy-path task has one
+  // attempt — the initial run — so the picked label reads "initial".
+  const attemptsTrigger = page.locator('.session-attempts [role="combobox"]')
+  await expect(attemptsTrigger).toBeVisible({ timeout: 5_000 })
+  await expect(attemptsTrigger).toContainText(/initial/i)
 
   // The user prompt becomes the first message in the conversation flow —
   // its body should contain the rendered template ("Explain rfc-027 …").
