@@ -8,7 +8,8 @@
 // Accessibility: role=combobox + aria-controls/expanded + role=listbox /
 // option + arrow-key + Home/End + Enter/Space + Esc.
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface SelectOption<V extends string> {
   value: V
@@ -40,10 +41,39 @@ export function Select<V extends string>(props: Props<V>) {
       props.options.findIndex((o) => o.value === props.value),
     ),
   )
+  // Listbox is portaled out of the trigger's parent so containers with
+  // overflow:hidden (e.g. .data-table — used for border-radius rounding)
+  // don't clip it. We position it manually with the trigger's
+  // bounding rect each time it opens / on scroll / on resize.
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const popoverId = useId()
   const labelId = useId()
+  const [popPos, setPopPos] = useState<{ left: number; top: number; width: number } | null>(null)
+
+  // Recompute popover position relative to the viewport each time the
+  // dropdown opens, and on every scroll/resize while open. Uses
+  // window-scroll coords so we don't have to chase ancestor offsets.
+  useLayoutEffect(() => {
+    if (!open) return
+    function recompute() {
+      const t = triggerRef.current
+      if (!t) return
+      const r = t.getBoundingClientRect()
+      setPopPos({
+        left: r.left + window.scrollX,
+        top: r.bottom + window.scrollY + 4,
+        width: r.width,
+      })
+    }
+    recompute()
+    window.addEventListener('scroll', recompute, true)
+    window.addEventListener('resize', recompute)
+    return () => {
+      window.removeEventListener('scroll', recompute, true)
+      window.removeEventListener('resize', recompute)
+    }
+  }, [open])
 
   const current = useMemo(
     () => props.options.find((o) => o.value === props.value),
@@ -132,53 +162,62 @@ export function Select<V extends string>(props: Props<V>) {
           ▾
         </span>
       </button>
-      {open && (
-        <ul
-          id={popoverId}
-          ref={listRef}
-          tabIndex={-1}
-          role="listbox"
-          aria-label={props.ariaLabel ?? 'Select an option'}
-          aria-activedescendant={`${popoverId}-opt-${activeIndex}`}
-          className="select__listbox"
-          onKeyDown={onListKey}
-        >
-          {props.options.map((opt, i) => {
-            const active = i === activeIndex
-            const selected = opt.value === props.value
-            return (
-              <li
-                id={`${popoverId}-opt-${i}`}
-                key={opt.value}
-                role="option"
-                aria-selected={selected}
-                aria-disabled={opt.disabled || undefined}
-                className={`select__option ${active ? 'select__option--active' : ''} ${
-                  selected ? 'select__option--selected' : ''
-                }`.trim()}
-                onMouseEnter={() => setActiveIndex(i)}
-                onMouseDown={(e) => {
-                  // mousedown not click — keeps focus from leaving before we close
-                  e.preventDefault()
-                  if (opt.disabled) return
-                  props.onChange(opt.value)
-                  setOpen(false)
-                  triggerRef.current?.focus()
-                }}
-              >
-                <span className="select__option-label">
-                  {props.renderOption ? props.renderOption(opt) : opt.label}
-                </span>
-                {selected && (
-                  <span className="select__option-check" aria-hidden>
-                    ✓
+      {open &&
+        popPos &&
+        createPortal(
+          <ul
+            id={popoverId}
+            ref={listRef}
+            tabIndex={-1}
+            role="listbox"
+            aria-label={props.ariaLabel ?? 'Select an option'}
+            aria-activedescendant={`${popoverId}-opt-${activeIndex}`}
+            className="select__listbox select__listbox--portal"
+            onKeyDown={onListKey}
+            style={{
+              position: 'absolute',
+              left: popPos.left,
+              top: popPos.top,
+              minWidth: popPos.width,
+            }}
+          >
+            {props.options.map((opt, i) => {
+              const active = i === activeIndex
+              const selected = opt.value === props.value
+              return (
+                <li
+                  id={`${popoverId}-opt-${i}`}
+                  key={opt.value}
+                  role="option"
+                  aria-selected={selected}
+                  aria-disabled={opt.disabled || undefined}
+                  className={`select__option ${active ? 'select__option--active' : ''} ${
+                    selected ? 'select__option--selected' : ''
+                  }`.trim()}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  onMouseDown={(e) => {
+                    // mousedown not click — keeps focus from leaving before we close
+                    e.preventDefault()
+                    if (opt.disabled) return
+                    props.onChange(opt.value)
+                    setOpen(false)
+                    triggerRef.current?.focus()
+                  }}
+                >
+                  <span className="select__option-label">
+                    {props.renderOption ? props.renderOption(opt) : opt.label}
                   </span>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+                  {selected && (
+                    <span className="select__option-check" aria-hidden>
+                      ✓
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>,
+          document.body,
+        )}
     </div>
   )
 }

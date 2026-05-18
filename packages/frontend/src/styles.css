@@ -494,10 +494,10 @@ code {
 }
 
 .select__listbox {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
+  /* Portaled to document.body — position+coords are set inline by the
+     Select component via getBoundingClientRect() each open / scroll /
+     resize. This avoids being clipped by any ancestor with
+     overflow:hidden (.data-table uses it for border-radius rounding). */
   margin: 0;
   padding: 4px;
   list-style: none;
@@ -505,7 +505,9 @@ code {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.18));
-  z-index: 50;
+  /* Above dialog (z=1000) so an in-dialog Select can pop through; below
+     toast / tooltip layers if we ever add them. */
+  z-index: 1200;
   max-height: 280px;
   overflow-y: auto;
   outline: none;
