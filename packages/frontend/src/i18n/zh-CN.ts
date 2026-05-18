@@ -301,6 +301,93 @@ export interface Resources {
     tokenPlaceholder: string
     verifying: string
     connect: string
+    // RFC-036 — multi-entrance login screen.
+    subtitle: string
+    username: string
+    usernamePlaceholder: string
+    password: string
+    passwordPlaceholder: string
+    signIn: string
+    invalidCredentials: string
+    or: string
+    loginWith: string
+    useDaemonToken: string
+  }
+  // RFC-036 — sidebar UserMenu dropdown.
+  userMenu: {
+    account: string
+    users: string
+    settings: string
+    logout: string
+    daemonAccess: string
+    daemonRole: string
+  }
+  // RFC-036 — /account self-service page.
+  account: {
+    title: string
+    subtitle: string
+    profile: string
+    username: string
+    displayName: string
+    role: string
+    status: string
+    source: string
+    password: string
+    passwordDesc: string
+    oldPassword: string
+    newPassword: string
+    update: string
+    passwordChanged: string
+    pats: string
+    patsDesc: string
+    patName: string
+    patNamePlaceholder: string
+    patNameCol: string
+    patScopes: string
+    patStatus: string
+    patShownOnce: string
+    copy: string
+    generate: string
+    revoke: string
+    unlink: string
+    noPats: string
+    sessions: string
+    sessionsDesc: string
+    sessionId: string
+    userAgent: string
+    noSessions: string
+    linkedIdentities: string
+    identitiesDesc: string
+    provider: string
+    subject: string
+    noIdentities: string
+  }
+  // RFC-036 — /users admin page.
+  users: {
+    title: string
+    hint: string
+    new: string
+    username: string
+    displayName: string
+    role: string
+    status: string
+    disable: string
+    cancel: string
+    password: string
+    create: {
+      title: string
+      submit: string
+    }
+    roleOption: {
+      user: string
+      admin: string
+      userDesc: string
+      adminDesc: string
+    }
+    noPermission: {
+      title: string
+      body: string
+    }
   }
   repos: {
     title: string
@@ -1377,6 +1464,90 @@ export const zhCN: Resources = {
     tokenPlaceholder: '64 位十六进制',
     verifying: '验证中…',
     connect: '连接',
+    subtitle: '使用账户密码登录，或选择一个已配置的身份提供商。',
+    username: '用户名',
+    usernamePlaceholder: '例如 alice',
+    password: '密码',
+    passwordPlaceholder: '••••••••',
+    signIn: '登录',
+    invalidCredentials: '用户名或密码错误',
+    or: '或',
+    loginWith: '使用 {{name}} 登录',
+    useDaemonToken: '使用守护进程 Token',
+  },
+  userMenu: {
+    account: '我的账户',
+    users: '管理用户',
+    settings: '系统设置',
+    logout: '退出登录',
+    daemonAccess: '守护进程访问',
+    daemonRole: '守护进程管理员',
+  },
+  account: {
+    title: '我的账户',
+    subtitle: '管理你的密码、会话与个人访问令牌。',
+    profile: '基本信息',
+    username: '用户名',
+    displayName: '显示名',
+    role: '角色',
+    status: '状态',
+    source: '登录方式',
+    password: '修改密码',
+    passwordDesc: '设置新密码后，你的其他会话会被吊销；当前窗口会自动获得一枚新的会话 Token。',
+    oldPassword: '当前密码',
+    newPassword: '新密码',
+    update: '更新密码',
+    passwordChanged: '密码已更新。',
+    pats: '个人访问令牌',
+    patsDesc:
+      '供脚本和 CI 使用。每个令牌只持有你角色权限的一个子集；生成后只显示一次，请立即复制。',
+    patName: '令牌名称',
+    patNamePlaceholder: '例如 ci-launcher',
+    patNameCol: '名称',
+    patScopes: '作用域',
+    patStatus: '状态',
+    patShownOnce: '新令牌（请立即复制）',
+    copy: '复制',
+    generate: '生成',
+    revoke: '吊销',
+    unlink: '解除绑定',
+    noPats: '还没有任何令牌。',
+    sessions: '活跃会话',
+    sessionsDesc: '当前账号的 Web 会话。看到陌生的会话立即吊销，下一次请求会返回 401。',
+    sessionId: '会话',
+    userAgent: '客户端',
+    noSessions: '当前没有活跃会话。',
+    linkedIdentities: '已绑定身份',
+    identitiesDesc: '与本账号绑定的 OIDC 身份提供商。解除绑定不会删除账户，可以从登录页重新绑定。',
+    provider: '提供商',
+    subject: 'Subject',
+    noIdentities: '还没有绑定任何身份。',
+  },
+  users: {
+    title: '用户',
+    hint: '管理用户列表 —— 仅管理员可见。',
+    new: '新建用户',
+    username: '用户名',
+    displayName: '显示名',
+    role: '角色',
+    status: '状态',
+    disable: '停用',
+    cancel: '取消',
+    password: '密码（留空则状态为已邀请）',
+    create: {
+      title: '新建用户',
+      submit: '创建',
+    },
+    roleOption: {
+      user: '普通用户',
+      admin: '管理员',
+      userDesc: '只读资源 + 启动任务 + 管理自己的账户。',
+      adminDesc: '完整权限：用户、设置、OIDC、所有任务。',
+    },
+    noPermission: {
+      title: '需要管理员权限',
+      body: '该页面仅管理员角色可访问。',
+    },
   },
   repos: {
     title: '远端仓缓存',

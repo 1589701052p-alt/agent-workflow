@@ -199,17 +199,13 @@ function CreateUserDialog(props: {
             options={[
               {
                 value: 'user',
-                label: t('users.role.user', { defaultValue: 'user' }),
-                description: t('users.role.userDesc', {
-                  defaultValue: 'Resource read + launch tasks + manage own account.',
-                }),
+                label: t('users.roleOption.user'),
+                description: t('users.roleOption.userDesc'),
               },
               {
                 value: 'admin',
-                label: t('users.role.admin', { defaultValue: 'admin' }),
-                description: t('users.role.adminDesc', {
-                  defaultValue: 'Full access: users, settings, OIDC, all tasks.',
-                }),
+                label: t('users.roleOption.admin'),
+                description: t('users.roleOption.adminDesc'),
               },
             ]}
             renderOption={(opt) => (
