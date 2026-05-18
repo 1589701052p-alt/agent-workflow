@@ -176,10 +176,59 @@ function PasswordSection() {
   )
 }
 
+// Curated list of scopes the user can toggle on a PAT. Keys map 1:1 to
+// PERMISSIONS in the shared catalog; we intentionally don't expose every
+// admin-only point here — admins can still grant them by checking the
+// matching boxes (the backend intersects PAT scopes with the role baseline
+// anyway, so a regular-user PAT cannot escalate).
+const PAT_SCOPE_GROUPS: ReadonlyArray<{
+  titleKey: string
+  defaultTitle: string
+  scopes: string[]
+}> = [
+  {
+    titleKey: 'account.patGroup.spa',
+    defaultTitle: 'SPA access (needed to use the web UI as this PAT)',
+    scopes: ['account:self', 'users:search', 'runtime:read'],
+  },
+  {
+    titleKey: 'account.patGroup.tasks',
+    defaultTitle: 'Tasks',
+    scopes: ['tasks:launch', 'tasks:read:own', 'tasks:cancel:own'],
+  },
+  {
+    titleKey: 'account.patGroup.resourceRead',
+    defaultTitle: 'Browse resources',
+    scopes: [
+      'agents:read',
+      'skills:read',
+      'mcps:read',
+      'plugins:read',
+      'workflows:read',
+      'repos:read',
+    ],
+  },
+  {
+    titleKey: 'account.patGroup.admin',
+    defaultTitle: 'Admin (only effective if your role is admin)',
+    scopes: ['users:read', 'users:write', 'settings:read', 'settings:write', 'tasks:read:all'],
+  },
+]
+
+function defaultPatScopes(): Set<string> {
+  // Sensible default: everything in the "SPA access" + "Tasks" + resource-
+  // read groups. This is what most CI / script PATs actually need; admins
+  // can still tick admin boxes by hand.
+  const out = new Set<string>()
+  for (const g of PAT_SCOPE_GROUPS.slice(0, 3)) for (const s of g.scopes) out.add(s)
+  return out
+}
+
 function PatSection() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [name, setName] = useState('')
+  const [scopes, setScopes] = useState<Set<string>>(() => defaultPatScopes())
   const [shown, setShown] = useState<string | null>(null)
   const { data } = useQuery<
     Array<{
@@ -198,11 +247,12 @@ function PatSection() {
     mutationFn: () =>
       api.post<{ token: string }>('/api/auth/pats', {
         name,
-        scopes: ['tasks:launch', 'tasks:read:own', 'agents:read'],
+        scopes: [...scopes],
       }),
     onSuccess: (r) => {
       setShown(r.token)
       setName('')
+      setScopes(defaultPatScopes())
       void qc.invalidateQueries({ queryKey: ['pats'] })
     },
   })
@@ -210,12 +260,20 @@ function PatSection() {
     mutationFn: (id: string) => api.delete(`/api/auth/pats/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['pats'] }),
   })
+  function toggleScope(s: string) {
+    setScopes((prev) => {
+      const next = new Set(prev)
+      if (next.has(s)) next.delete(s)
+      else next.add(s)
+      return next
+    })
+  }
   return (
     <SectionShell
       title={t('account.pats', { defaultValue: 'Personal Access Tokens' })}
       description={t('account.patsDesc', {
         defaultValue:
-          'For scripts and CI. Each token carries a subset of your role permissions. Tokens are shown once at creation — copy it before closing.',
+          'For scripts and CI. Each token carries a subset of your role permissions — pick only the scopes the token actually needs. Tokens are shown once at creation; copy it before closing.',
       })}
     >
       <form
@@ -223,9 +281,9 @@ function PatSection() {
           e.preventDefault()
           create.mutate()
         }}
-        className="account-form account-form--inline"
+        className="account-form"
       >
-        <label className="account-form__field account-form__field--grow">
+        <label className="account-form__field">
           <span className="account-form__label">
             {t('account.patName', { defaultValue: 'Token name' })}
           </span>
@@ -236,9 +294,46 @@ function PatSection() {
             required
           />
         </label>
-        <button type="submit" className="btn btn--primary" disabled={!name || create.isPending}>
-          {t('account.generate', { defaultValue: 'Generate' })}
-        </button>
+        <div className="pat-scopes">
+          <span className="account-form__label">
+            {t('account.patScopesLabel', { defaultValue: 'Scopes' })}
+          </span>
+          {PAT_SCOPE_GROUPS.map((g) => (
+            <fieldset key={g.titleKey} className="pat-scopes__group">
+              <legend className="pat-scopes__group-title">
+                {t(g.titleKey, { defaultValue: g.defaultTitle })}
+              </legend>
+              <div className="pat-scopes__list">
+                {g.scopes.map((s) => (
+                  <label key={s} className="pat-scopes__row">
+                    <input
+                      type="checkbox"
+                      checked={scopes.has(s)}
+                      onChange={() => toggleScope(s)}
+                    />
+                    <code>{s}</code>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+        <div className="account-form__actions">
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={!name || scopes.size === 0 || create.isPending}
+          >
+            {t('account.generate', { defaultValue: 'Generate' })}
+          </button>
+          {scopes.size === 0 && (
+            <span className="account-form__error">
+              {t('account.patNoScopes', {
+                defaultValue: 'Pick at least one scope.',
+              })}
+            </span>
+          )}
+        </div>
       </form>
       {shown && (
         <div className="account-callout account-callout--success" data-testid="new-pat-secret">

@@ -1093,6 +1093,70 @@ code {
   color: var(--muted);
 }
 
+/* RFC-036 — PAT scope picker (account/PatSection). Four fieldsets in a
+   tinted card, each listing the scope codes as checkbox rows. The card
+   gives it the same visual weight as the rest of the account-form
+   without inheriting account-form__field's max-width cap. */
+.pat-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--border) 20%, transparent);
+  border-radius: 8px;
+}
+
+.pat-scopes__group {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pat-scopes__group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0;
+  margin: 0 0 2px;
+}
+
+.pat-scopes__list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 16px;
+}
+
+@media (max-width: 540px) {
+  .pat-scopes__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pat-scopes__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pat-scopes__row code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.pat-scopes__row input[type='checkbox'] {
+  margin: 0;
+}
+
 /* Scope chips inside PAT list rows. */
 .account-scope-chips {
   display: flex;
