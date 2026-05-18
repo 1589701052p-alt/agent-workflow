@@ -501,7 +501,7 @@ Format:
 Hard rules — violation is treated as a malformed reply and the node will fail / retry:
 - A reply must contain EITHER one <workflow-output> block OR one <workflow-clarify> block — NEVER both, NEVER neither.
 - Asking back means deferring all output ports to the next round; do not also output partial data.
-- Limits: at most 5 questions, each question 2–4 options. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
+- Limits: at most 5 questions, each question 2–4 options — any option beyond the 4th is silently dropped, so cap each question at 4. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
 - Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
 - Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
 - Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.

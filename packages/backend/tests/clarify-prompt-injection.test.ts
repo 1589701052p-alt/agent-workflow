@@ -69,6 +69,18 @@ describe('RFC-023 prompt token substitution', () => {
     expect(block).toContain('Clarify mode is enabled for this node')
   })
 
+  // Locks the explicit warning that a 5th+ option is silently dropped by
+  // parseClarifyEnvelopeBody (CLARIFY_MAX_OPTIONS_PER_QUESTION=4). Without
+  // this nudge in the prompt, agents routinely emit 5–6 options and the user
+  // never sees the trailing ones. If this breaks, the wording in
+  // shared/src/prompt.ts:buildClarifyProtocolBlock has drifted from the
+  // truncation contract in packages/backend/tests/clarify-options-cap.test.ts.
+  test('buildClarifyProtocolBlock warns that options beyond the 4th are dropped', () => {
+    const block = buildClarifyProtocolBlock()
+    expect(block).toContain('beyond the 4th is silently dropped')
+    expect(block).toContain('cap each question at 4')
+  })
+
   // Locks in the bi-modal wording fix: when the scheduler tells the renderer
   // the agent node has a clarify channel, the trailing protocol block must
   // present `<workflow-output>` and `<workflow-clarify>` as equally
