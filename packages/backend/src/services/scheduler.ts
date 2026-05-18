@@ -48,6 +48,11 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
+import {
+  decodeWrapperProgress,
+  encodeWrapperProgress,
+  type WrapperProgress,
+} from '@/services/wrapperProgress'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
 import { splitDiffPerDirectory, splitDiffPerFile, splitDiffPerNFiles } from '@/util/diffSplit'
@@ -958,7 +963,90 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
 }
 
 // -----------------------------------------------------------------------------
-// wrapper-loop (P-4-01)
+// RFC-040 — wrapper resume helpers shared by runLoopWrapperNode and
+// runGitWrapperNode.
+//
+// Why they exist: before RFC-040, both wrappers silently swallowed
+// `awaiting_human` / `awaiting_review` signals from their inner scope (only
+// `canceled` / `failed` were matched) and either kept iterating (loop) or
+// computed a diff against a half-finished worktree (git). The result was N
+// ghost clarify/review rows and, for git, a wrong final diff. The fix is to
+// (a) bubble the awaiting signal up unchanged, (b) persist enough state on
+// the wrapper's node_run so the dispatcher can resume from the same loop
+// iteration / git baseline when the user answers clarify or decides review,
+// and (c) reuse the existing wrapper node_run row on resume instead of
+// minting a fresh one. See design/RFC-040-wrapper-await-bubble/design.md §4.
+// -----------------------------------------------------------------------------
+
+/**
+ * Find a non-terminal wrapper node_run row for (taskId, nodeId, iteration)
+ * to resume into, if any. Terminal states (done / failed / canceled /
+ * exhausted) return null — the dispatcher should mint a fresh wrapper run
+ * for them (e.g. a sibling iteration of an outer loop wrapper).
+ *
+ * latestPerNode in runScope keys on nodeId only and would otherwise return
+ * a stale row from another iteration when an outer loop wrapper drives the
+ * dispatch; we MUST filter by iteration here to avoid grabbing a sibling
+ * iteration's wrapper row.
+ */
+async function findResumableWrapperRun(
+  db: DbClient,
+  taskId: string,
+  nodeId: string,
+  parentIteration: number,
+): Promise<typeof nodeRuns.$inferSelect | null> {
+  const rows = await db
+    .select()
+    .from(nodeRuns)
+    .where(
+      and(
+        eq(nodeRuns.taskId, taskId),
+        eq(nodeRuns.nodeId, nodeId),
+        eq(nodeRuns.iteration, parentIteration),
+      ),
+    )
+    .orderBy(desc(nodeRuns.id))
+    .limit(1)
+  if (rows.length === 0) return null
+  const r = rows[0]!
+  if (
+    r.status === 'done' ||
+    r.status === 'failed' ||
+    r.status === 'canceled' ||
+    r.status === 'exhausted'
+  ) {
+    return null
+  }
+  return r
+}
+
+async function persistWrapperProgress(
+  db: DbClient,
+  wrapperRunId: string,
+  progress: WrapperProgress,
+): Promise<void> {
+  await db
+    .update(nodeRuns)
+    .set({ wrapperProgressJson: encodeWrapperProgress(progress) })
+    .where(eq(nodeRuns.id, wrapperRunId))
+}
+
+async function markWrapperTerminal(
+  db: DbClient,
+  wrapperRunId: string,
+  status: 'done' | 'failed' | 'canceled' | 'exhausted',
+  errorMessage?: string,
+): Promise<void> {
+  const set: Record<string, unknown> = { status, finishedAt: Date.now() }
+  if (errorMessage !== undefined) set.errorMessage = errorMessage
+  await db.update(nodeRuns).set(set).where(eq(nodeRuns.id, wrapperRunId))
+  // Note: wrapperProgressJson is left in place after terminal transitions —
+  // it's debug breadcrumb for "where did this wrapper park last" and is
+  // never read again by the scheduler once status is terminal.
+}
+
+// -----------------------------------------------------------------------------
+// wrapper-loop (P-4-01) — RFC-040 makes it bubble awaiting_* and resumable.
 // -----------------------------------------------------------------------------
 
 async function runLoopWrapperNode(
@@ -966,7 +1054,7 @@ async function runLoopWrapperNode(
   args: OneNodeArgs,
 ): Promise<OneNodeResult> {
   const { db, taskId } = state
-  const { node, iteration: parentIteration } = args
+  const { node, iteration: parentIteration, log } = args
   const inner = pickStringArray(node, 'nodeIds')
   if (inner.length === 0) {
     return {
@@ -993,33 +1081,59 @@ async function runLoopWrapperNode(
   }
   const bindings = readBindings(node, 'outputBindings')
 
-  const wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, parentIteration)
-  broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+  // RFC-040 resume detection: if the dispatcher re-entered us after we
+  // previously bubbled awaiting_*, reuse our prior wrapper row and pick up
+  // at the persisted iteration. The user answered clarify / decided review
+  // while we were parked; runScope's rescanScopeForNewPendingRows (RFC-023
+  // bug 13) will see the freshly-minted agent rerun row inside iter N.
+  const existing = await findResumableWrapperRun(db, taskId, node.id, parentIteration)
+  let wrapperRunId: string
+  let startIter = 0
+  if (existing !== null) {
+    const progress = decodeWrapperProgress(existing.wrapperProgressJson, (msg) => log.warn(msg))
+    wrapperRunId = existing.id
+    if (progress?.kind === 'loop' && typeof progress.iteration === 'number') {
+      startIter = progress.iteration
+    } else {
+      // Malformed / missing payload — observable regression to "start over",
+      // but at least we don't double-mint a wrapper row. decodeWrapperProgress
+      // already logged a warn if applicable.
+      startIter = 0
+    }
+    if (existing.status !== 'running') {
+      await db.update(nodeRuns).set({ status: 'running' }).where(eq(nodeRuns.id, wrapperRunId))
+      broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+    }
+  } else {
+    wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, parentIteration)
+    broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+  }
 
   const innerSet = new Set(inner)
-  for (let i = 0; i < maxIter; i++) {
+  for (let i = startIter; i < maxIter; i++) {
+    await persistWrapperProgress(db, wrapperRunId, {
+      kind: 'loop',
+      iteration: i,
+      phase: 'inner-running',
+    })
+
     const subRes = await runScope(state, {
       scopeIds: innerSet,
       iteration: i,
-      log: args.log.child(`loop:${node.id}`),
+      log: log.child(`loop:${node.id}`),
     })
     if (subRes.kind === 'canceled') {
-      await db
-        .update(nodeRuns)
-        .set({ status: 'canceled', finishedAt: Date.now() })
-        .where(eq(nodeRuns.id, wrapperRunId))
+      await markWrapperTerminal(db, wrapperRunId, 'canceled')
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'canceled')
       return { kind: 'canceled', summary: subRes.detail?.summary ?? 'canceled', message: '' }
     }
     if (subRes.kind === 'failed') {
-      await db
-        .update(nodeRuns)
-        .set({
-          status: 'failed',
-          finishedAt: Date.now(),
-          errorMessage: subRes.detail?.message ?? 'inner failed',
-        })
-        .where(eq(nodeRuns.id, wrapperRunId))
+      await markWrapperTerminal(
+        db,
+        wrapperRunId,
+        'failed',
+        subRes.detail?.message ?? 'inner failed',
+      )
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
       return {
         kind: 'failed',
@@ -1027,31 +1141,46 @@ async function runLoopWrapperNode(
         message: subRes.detail?.message ?? 'inner failed',
       }
     }
+    // RFC-040: bubble awaiting_* up. Wrapper stays non-terminal; its status
+    // mirrors the inner park so the task chip reads "awaiting human/review".
+    if (subRes.kind === 'awaiting_human' || subRes.kind === 'awaiting_review') {
+      await persistWrapperProgress(db, wrapperRunId, {
+        kind: 'loop',
+        iteration: i,
+        phase: 'awaiting',
+      })
+      const newStatus = subRes.kind === 'awaiting_human' ? 'awaiting_human' : 'awaiting_review'
+      await db.update(nodeRuns).set({ status: newStatus }).where(eq(nodeRuns.id, wrapperRunId))
+      broadcastNodeStatus(taskId, wrapperRunId, node.id, newStatus)
+      return {
+        kind: subRes.kind,
+        summary: subRes.detail?.summary ?? '',
+        message: subRes.detail?.message ?? '',
+      }
+    }
 
-    // Evaluate exit condition against the current iteration's outputs.
+    // subRes.kind === 'ok' — evaluate exit condition for this iteration.
+    await persistWrapperProgress(db, wrapperRunId, {
+      kind: 'loop',
+      iteration: i,
+      phase: 'iter-done',
+    })
     const portContent = await readPortAtIteration(db, taskId, cond.nodeId, cond.portName, i)
     if (evaluateExitCondition(cond, portContent)) {
-      // Bind outputs from this iteration.
       for (const b of bindings) {
         const v = await readPortAtIteration(db, taskId, b.bind.nodeId, b.bind.portName, i)
         await db
           .insert(nodeRunOutputs)
           .values({ nodeRunId: wrapperRunId, portName: b.name, content: v })
       }
-      await db
-        .update(nodeRuns)
-        .set({ status: 'done', finishedAt: Date.now() })
-        .where(eq(nodeRuns.id, wrapperRunId))
+      await markWrapperTerminal(db, wrapperRunId, 'done')
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
       return { kind: 'ok', summary: '', message: '' }
     }
   }
 
   // Exhausted: max iterations without exit.
-  await db
-    .update(nodeRuns)
-    .set({ status: 'exhausted', finishedAt: Date.now(), errorMessage: 'max iterations reached' })
-    .where(eq(nodeRuns.id, wrapperRunId))
+  await markWrapperTerminal(db, wrapperRunId, 'exhausted', 'max iterations reached')
   broadcastNodeStatus(taskId, wrapperRunId, node.id, 'exhausted')
   return {
     kind: 'failed',
@@ -1061,17 +1190,32 @@ async function runLoopWrapperNode(
 }
 
 // -----------------------------------------------------------------------------
-// wrapper-git (P-3-03 + nested via P-4-03)
+// wrapper-git (P-3-03 + nested via P-4-03) — RFC-040 makes it bubble
+// awaiting_* and resumable.
 //
 // The wrapper takes a baseline = HEAD, recursively executes its inner scope
 // once, then computes the diff vs the baseline. This works for unnested
 // wrappers and for wrapper-loop-in-wrapper-git (the inner scope can itself
-// contain a wrapper-loop).
+// contain a wrapper-loop). On RFC-040 resume the baseline is read from
+// persisted progress — we MUST NOT re-capture HEAD on resume because the
+// worktree has already diverged from the original pre-inner state while the
+// inner agent was running; the final diff is meant to be against pre-inner,
+// not pre-resume.
 // -----------------------------------------------------------------------------
+
+async function captureHead(worktreePath: string): Promise<string> {
+  try {
+    const r = await runGit(worktreePath, ['rev-parse', 'HEAD'])
+    if (r.exitCode === 0) return r.stdout.trim()
+  } catch {
+    /* empty fixture in tests */
+  }
+  return ''
+}
 
 async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
   const { db, task, taskId } = state
-  const { node, iteration } = args
+  const { node, iteration, log } = args
   const inner = pickStringArray(node, 'nodeIds')
   if (inner.length === 0) {
     return {
@@ -1081,41 +1225,46 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     }
   }
 
-  const wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
-  broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
-
-  // Baseline = HEAD of the worktree right before inner runs.
-  let baseline = ''
-  try {
-    const r = await runGit(task.worktreePath, ['rev-parse', 'HEAD'])
-    if (r.exitCode === 0) baseline = r.stdout.trim()
-  } catch {
-    /* empty fixture in tests */
+  const existing = await findResumableWrapperRun(db, taskId, node.id, iteration)
+  let wrapperRunId: string
+  let baseline: string
+  if (existing !== null) {
+    const progress = decodeWrapperProgress(existing.wrapperProgressJson, (msg) => log.warn(msg))
+    wrapperRunId = existing.id
+    if (progress?.kind === 'git' && typeof progress.baseline === 'string') {
+      baseline = progress.baseline
+    } else {
+      // Malformed / missing — best-effort re-capture. Worse than persisted
+      // baseline but no worse than today's pre-RFC-040 init-only path.
+      baseline = await captureHead(task.worktreePath)
+    }
+    if (existing.status !== 'running') {
+      await db.update(nodeRuns).set({ status: 'running' }).where(eq(nodeRuns.id, wrapperRunId))
+      broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+    }
+  } else {
+    wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+    broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
+    baseline = await captureHead(task.worktreePath)
+    await persistWrapperProgress(db, wrapperRunId, {
+      kind: 'git',
+      baseline,
+      phase: 'inner-running',
+    })
   }
 
-  // Recurse into inner scope.
   const subRes = await runScope(state, {
     scopeIds: new Set(inner),
     iteration,
-    log: args.log.child(`git:${node.id}`),
+    log: log.child(`git:${node.id}`),
   })
   if (subRes.kind === 'canceled') {
-    await db
-      .update(nodeRuns)
-      .set({ status: 'canceled', finishedAt: Date.now() })
-      .where(eq(nodeRuns.id, wrapperRunId))
+    await markWrapperTerminal(db, wrapperRunId, 'canceled')
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'canceled')
     return { kind: 'canceled', summary: 'inner canceled', message: '' }
   }
   if (subRes.kind === 'failed') {
-    await db
-      .update(nodeRuns)
-      .set({
-        status: 'failed',
-        finishedAt: Date.now(),
-        errorMessage: subRes.detail?.message ?? 'inner failed',
-      })
-      .where(eq(nodeRuns.id, wrapperRunId))
+    await markWrapperTerminal(db, wrapperRunId, 'failed', subRes.detail?.message ?? 'inner failed')
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
     return {
       kind: 'failed',
@@ -1123,8 +1272,26 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
       message: subRes.detail?.message ?? 'inner failed',
     }
   }
+  // RFC-040: bubble awaiting_* up. We do NOT compute the diff yet —
+  // doing so against a half-finished worktree was the silent correctness
+  // bug RFC-040 is fixing.
+  if (subRes.kind === 'awaiting_human' || subRes.kind === 'awaiting_review') {
+    await persistWrapperProgress(db, wrapperRunId, {
+      kind: 'git',
+      baseline,
+      phase: 'awaiting',
+    })
+    const newStatus = subRes.kind === 'awaiting_human' ? 'awaiting_human' : 'awaiting_review'
+    await db.update(nodeRuns).set({ status: newStatus }).where(eq(nodeRuns.id, wrapperRunId))
+    broadcastNodeStatus(taskId, wrapperRunId, node.id, newStatus)
+    return {
+      kind: subRes.kind,
+      summary: subRes.detail?.summary ?? '',
+      message: subRes.detail?.message ?? '',
+    }
+  }
 
-  // Compute diff vs baseline (or HEAD as fallback when worktree was empty).
+  // subRes.kind === 'ok' — compute diff against persisted baseline.
   let diff = ''
   try {
     diff = await gitDiffSnapshot(task.worktreePath, baseline || 'HEAD')
@@ -1134,10 +1301,7 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   await db
     .insert(nodeRunOutputs)
     .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: diff })
-  await db
-    .update(nodeRuns)
-    .set({ status: 'done', finishedAt: Date.now() })
-    .where(eq(nodeRuns.id, wrapperRunId))
+  await markWrapperTerminal(db, wrapperRunId, 'done')
   broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
   return { kind: 'ok', summary: '', message: '' }
 }
@@ -1829,14 +1993,26 @@ async function readPortAtIteration(
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  const r = rows
-    .filter((r) => r.parentNodeRunId === null)
-    .sort((a, b) => b.retryIndex - a.retryIndex)[0]
-  if (!r) return ''
+  // Pick the freshest top-level run. RFC-040 surfaced a bug here: a wrapper-
+  // loop iteration that produced output via a clarify-driven rerun (the
+  // agent asked, the user answered, the framework minted a rerun row with
+  // clarifyIteration=1) would be silently shadowed by the original
+  // (clarifyIteration=0, retryIndex=0) row when this helper sorted only by
+  // retryIndex. The dispatcher's `isFresherNodeRun` comparator (see :287)
+  // already uses (clarifyIteration desc, retryIndex desc, id desc) for the
+  // same reason; replicate that ordering here so exit_condition / output
+  // binding evaluation sees the post-rerun output, not the original empty
+  // ask. See design/RFC-040-wrapper-await-bubble/design.md §4.5.
+  const candidates = rows.filter((r) => r.parentNodeRunId === null)
+  let chosen: (typeof candidates)[number] | undefined
+  for (const r of candidates) {
+    if (isFresherNodeRun(r, chosen)) chosen = r
+  }
+  if (chosen === undefined) return ''
   const out = await db
     .select()
     .from(nodeRunOutputs)
-    .where(and(eq(nodeRunOutputs.nodeRunId, r.id), eq(nodeRunOutputs.portName, portName)))
+    .where(and(eq(nodeRunOutputs.nodeRunId, chosen.id), eq(nodeRunOutputs.portName, portName)))
   return out[0]?.content ?? ''
 }
 

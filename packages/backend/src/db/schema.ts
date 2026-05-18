@@ -421,6 +421,16 @@ export const nodeRuns = sqliteTable(
      * can show a precise "why no inventory" instead of a blank.
      */
     inventorySnapshotJson: text('inventory_snapshot_json'),
+    /**
+     * RFC-040: serialized `WrapperProgress` (services/wrapperProgress.ts)
+     * used by wrapper-loop / wrapper-git to resume from the iteration /
+     * baseline where they parked when an inner node entered awaiting_human
+     * / awaiting_review. NULL for non-wrapper runs and for wrapper runs
+     * that never parked (single-shot init → done in one call). Read by
+     * `runLoopWrapperNode` / `runGitWrapperNode` on resume, never read by
+     * the frontend.
+     */
+    wrapperProgressJson: text('wrapper_progress_json'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),
