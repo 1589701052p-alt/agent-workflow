@@ -21,6 +21,7 @@ import { mountMcpRoutes } from '@/routes/mcps'
 import { mountOidcRoutes } from '@/routes/oidc'
 import { mountOidcAuthRoutes } from '@/routes/oidc-auth'
 import { mountPluginRoutes } from '@/routes/plugins'
+import { mountUserRoutes } from '@/routes/users'
 import { mountRepoRoutes } from '@/routes/repos'
 import { mountRuntimeRoutes } from '@/routes/runtime'
 import { mountSkillRoutes } from '@/routes/skills'
@@ -155,6 +156,7 @@ export function createApp(deps: AppDeps): Hono {
   mountAuthRoutes(app, deps)
   mountOidcAuthRoutes(app, deps)
   mountOidcRoutes(app, deps)
+  mountUserRoutes(app, deps)
 
   app.onError(errorHandler)
 

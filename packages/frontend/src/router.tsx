@@ -2,11 +2,13 @@
 // is overkill until the workflow editor (M2) adds nested layouts.
 
 import { createRouter } from '@tanstack/react-router'
+import { Route as accountRoute } from '@/routes/account'
 import { Route as agentsRoute } from '@/routes/agents'
 import { Route as agentDetailRoute } from '@/routes/agents.detail'
 import { Route as agentNewRoute } from '@/routes/agents.new'
 import { Route as authRoute } from '@/routes/auth'
 import { Route as indexRoute } from '@/routes/index'
+import { Route as usersRoute } from '@/routes/users'
 import { Route as rootRoute } from '@/routes/__root'
 import { Route as settingsRoute } from '@/routes/settings'
 import { Route as mcpsRoute } from '@/routes/mcps'
@@ -64,6 +66,9 @@ const routeTree = rootRoute.addChildren([
   clarifyRoute,
   reposRoute,
   settingsRoute,
+  // RFC-036
+  accountRoute,
+  usersRoute,
 ])
 
 export const router = createRouter({

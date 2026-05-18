@@ -13,6 +13,8 @@ import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tansta
 import { useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LanguageSwitch } from '@/components/LanguageSwitch'
+import { UserMenu } from '@/components/UserMenu'
+import { usePermission } from '@/hooks/useActor'
 import { InboxDrawer } from '@/components/shell/InboxDrawer'
 import { InboxFooterButton } from '@/components/shell/InboxFooterButton'
 import { NavGroup } from '@/components/shell/NavGroup'
@@ -147,7 +149,8 @@ function RootComponent() {
         <InboxFooterButton open={inboxOpen} onToggle={() => setInboxOpen((v) => !v)} />
         <div className="sidebar__footer">
           <LanguageSwitch />
-          <SettingsGearButton active={active.onSettings} />
+          <UserMenu />
+          <AdminGear active={active.onSettings} />
         </div>
       </aside>
       <main className="content">
@@ -156,4 +159,17 @@ function RootComponent() {
       <InboxDrawer open={inboxOpen} onClose={() => setInboxOpen(false)} />
     </div>
   )
+}
+
+/**
+ * RFC-036 — gear icon is rendered only when the actor has settings:read
+ * (admins only). Hooks must run unconditionally so this thin wrapper
+ * encapsulates that. Regular-user sidebar has the LanguageSwitch +
+ * UserMenu but no gear icon (matches the design spec: zero DOM, not
+ * disabled).
+ */
+function AdminGear({ active }: { active: boolean }) {
+  const allowed = usePermission('settings:read')
+  if (!allowed) return null
+  return <SettingsGearButton active={active} />
 }

@@ -1,0 +1,170 @@
+// RFC-036 — /api/users admin routes + /api/users/search public-field endpoint.
+
+import { beforeEach, describe, expect, test } from 'bun:test'
+import { randomBytes } from 'node:crypto'
+import { resolve } from 'node:path'
+import type { Hono } from 'hono'
+import { createSecretBoxFromKey } from '../src/auth/secretBox'
+import { createSession } from '../src/auth/sessionStore'
+import { createInMemoryDb, type DbClient } from '../src/db/client'
+import { createApp } from '../src/server'
+import { createUser } from '../src/services/users'
+
+const DAEMON_TOKEN = 'a'.repeat(64)
+const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+interface Harness {
+  db: DbClient
+  app: Hono
+  bobToken: string
+}
+
+async function buildHarness(): Promise<Harness> {
+  const db = createInMemoryDb(MIGRATIONS)
+  const secretBox = createSecretBoxFromKey(randomBytes(32))
+  const app = createApp({
+    token: DAEMON_TOKEN,
+    configPath: '/tmp/aw-test-config-never-used.json',
+    opencodeVersion: '1.14.25',
+    dbVersion: 1,
+    db,
+    secretBox,
+  })
+  const bob = await createUser(db, {
+    username: 'bob',
+    displayName: 'Bob',
+    role: 'user',
+    password: 'longEnoughPassword',
+  })
+  const { token } = await createSession({ db, userId: bob.id })
+  return { db, app, bobToken: token }
+}
+
+async function reqAs(
+  app: Hono,
+  token: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const h = new Headers(init.headers)
+  h.set('Authorization', `Bearer ${token}`)
+  if (init.body && !h.has('content-type')) h.set('content-type', 'application/json')
+  return app.request(path, { ...init, headers: h })
+}
+
+describe('/api/users (admin only)', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+
+  test('GET /api/users — daemon token OK; user token 403', async () => {
+    const admin = await reqAs(h.app, DAEMON_TOKEN, '/api/users')
+    expect(admin.status).toBe(200)
+    const user = await reqAs(h.app, h.bobToken, '/api/users')
+    expect(user.status).toBe(403)
+  })
+
+  test('POST /api/users — daemon token creates a user', async () => {
+    const res = await reqAs(h.app, DAEMON_TOKEN, '/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'carol',
+        displayName: 'Carol',
+        role: 'user',
+        password: 'longEnoughPassword',
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { username: string; role: string }
+    expect(body.username).toBe('carol')
+  })
+
+  test('PATCH /api/users/:id — daemon token updates displayName', async () => {
+    const created = await reqAs(h.app, DAEMON_TOKEN, '/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'carol',
+        displayName: 'Carol',
+        role: 'user',
+        password: 'longEnoughPassword',
+      }),
+    })
+    const { id } = (await created.json()) as { id: string }
+    const patched = await reqAs(h.app, DAEMON_TOKEN, `/api/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ displayName: 'Carol Liu' }),
+    })
+    expect(patched.status).toBe(200)
+    const body = (await patched.json()) as { displayName: string }
+    expect(body.displayName).toBe('Carol Liu')
+  })
+
+  test('DELETE /api/users/:id soft-disables', async () => {
+    const created = await reqAs(h.app, DAEMON_TOKEN, '/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'dave',
+        displayName: 'Dave',
+        role: 'user',
+        password: 'longEnoughPassword',
+      }),
+    })
+    const { id } = (await created.json()) as { id: string }
+    const del = await reqAs(h.app, DAEMON_TOKEN, `/api/users/${id}`, { method: 'DELETE' })
+    expect(del.status).toBe(200)
+    const get = await reqAs(h.app, DAEMON_TOKEN, `/api/users/${id}`)
+    expect(get.status).toBe(200)
+    const body = (await get.json()) as { status: string }
+    expect(body.status).toBe('disabled')
+  })
+})
+
+describe('/api/users/search — admin + user (public 5-field view)', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+    await createUser(h.db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    await createUser(h.db, {
+      username: 'carol',
+      displayName: 'Carol',
+      role: 'user',
+      password: 'longEnoughPassword',
+    })
+  })
+
+  test('regular user can call /search', async () => {
+    const res = await reqAs(h.app, h.bobToken, '/api/users/search?q=a')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Array<Record<string, unknown>>
+    // Bob does not match "a" prefix; "alice" does.
+    expect(body.some((r) => r.username === 'alice')).toBe(true)
+  })
+
+  test('search response only contains the public 5 fields', async () => {
+    const res = await reqAs(h.app, h.bobToken, '/api/users/search?q=a')
+    const body = (await res.json()) as Array<Record<string, unknown>>
+    for (const row of body) {
+      expect(Object.keys(row).sort()).toEqual(['displayName', 'id', 'role', 'status', 'username'])
+      expect(row.email).toBeUndefined()
+      expect(row.lastLoginAt).toBeUndefined()
+    }
+  })
+
+  test('excludeIds removes the given ids from results', async () => {
+    const aliceId = (
+      (await reqAs(h.app, DAEMON_TOKEN, '/api/users?q=alice').then((r) => r.json())) as Array<{
+        id: string
+        username: string
+      }>
+    ).find((r) => r.username === 'alice')!.id
+    const res = await reqAs(h.app, h.bobToken, `/api/users/search?q=a&excludeIds=${aliceId}`)
+    const body = (await res.json()) as Array<{ id: string }>
+    expect(body.some((r) => r.id === aliceId)).toBe(false)
+  })
+})
