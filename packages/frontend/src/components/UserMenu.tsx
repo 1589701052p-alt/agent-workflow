@@ -39,6 +39,18 @@ export function UserMenu() {
 
   if (isLoading || !data) return null
 
+  const isDaemon = data.source === 'daemon'
+  // For daemon-token actors we surface the friendly displayName ("System")
+  // and a "daemon access" sub-label instead of the internal __system__
+  // slug. For real session/PAT users the username is the canonical identity
+  // and we keep it visible.
+  const triggerLabel = isDaemon ? data.user.displayName : data.user.username
+  const triggerSub = isDaemon
+    ? t('userMenu.daemonAccess', { defaultValue: 'daemon access' })
+    : data.user.displayName !== data.user.username
+      ? data.user.displayName
+      : null
+
   return (
     <div className="user-menu" ref={ref}>
       <button
@@ -48,24 +60,33 @@ export function UserMenu() {
         aria-expanded={open}
       >
         <span className="user-menu__avatar" aria-hidden>
-          {(data.user.displayName ?? data.user.username).slice(0, 1).toUpperCase()}
+          {triggerLabel.slice(0, 1).toUpperCase()}
         </span>
-        <span className="user-menu__name">{data.user.username}</span>
+        <span className="user-menu__name-wrap">
+          <span className="user-menu__name">{triggerLabel}</span>
+          {triggerSub && <span className="user-menu__sub">{triggerSub}</span>}
+        </span>
       </button>
       {open && (
         <div className="user-menu__dropdown" role="menu">
           <div className="user-menu__header">
             <strong>{data.user.displayName}</strong>
-            <span className="user-menu__role">{data.user.role}</span>
+            <span className="user-menu__role">
+              {isDaemon
+                ? t('userMenu.daemonRole', { defaultValue: 'daemon admin' })
+                : data.user.role}
+            </span>
           </div>
-          <Link
-            to="/account"
-            className="user-menu__item"
-            role="menuitem"
-            onClick={() => setOpen(false)}
-          >
-            {t('userMenu.account', { defaultValue: 'My account' })}
-          </Link>
+          {!isDaemon && (
+            <Link
+              to="/account"
+              className="user-menu__item"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+            >
+              {t('userMenu.account', { defaultValue: 'My account' })}
+            </Link>
+          )}
           {isAdmin && (
             <Link
               to="/users"

@@ -286,13 +286,33 @@ code {
   flex-shrink: 0;
 }
 
-.user-menu__name {
+.user-menu__name-wrap {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+
+.user-menu__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.user-menu__sub {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .user-menu__dropdown {
