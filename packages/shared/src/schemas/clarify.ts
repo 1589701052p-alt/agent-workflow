@@ -181,6 +181,15 @@ export const ClarifySessionSummarySchema = z.object({
   id: z.string(),
   taskId: z.string(),
   sourceAgentNodeId: z.string(),
+  /**
+   * Display name from the workflow snapshot's source-agent node (the new
+   * `WorkflowNode.title` field). Surfaced so the inbox can show the
+   * user-set "节点名" instead of the opaque `sourceAgentNodeId`. Null when
+   * the agent node has no title set or when the snapshot is unavailable.
+   * Field is optional for backwards compatibility — clients that haven't
+   * upgraded still see `sourceAgentNodeId`.
+   */
+  sourceAgentNodeTitle: z.string().nullable().optional(),
   sourceShardKey: z.string().nullable(),
   clarifyNodeId: z.string(),
   clarifyNodeRunId: z.string(),

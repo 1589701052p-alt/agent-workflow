@@ -101,6 +101,67 @@ describe('RFC-032 mergeInboxItems — locks newest-first ordering and limit', ()
     ]
     expect(mergeInboxItems(reviews, [], 1).map((r) => r.id)).toEqual(['r2'])
   })
+
+  // Source-agent title surfacing — locks in: when the backend has
+  // enriched a clarify summary with sourceAgentNodeTitle from the workflow
+  // snapshot, the inbox row uses that display name instead of the opaque
+  // node id. Null / empty title falls back to sourceAgentNodeId.
+  test('clarify row prefers sourceAgentNodeTitle when set', () => {
+    const result = mergeInboxItems(
+      [],
+      [
+        clarify({
+          clarifyNodeRunId: 'cn1',
+          sourceAgentNodeId: 'agent_xy_01',
+          sourceAgentNodeTitle: 'Implementation Coder',
+        }),
+      ],
+    )
+    expect(result[0]?.title).toBe('Implementation Coder')
+  })
+
+  test('clarify row falls back to sourceAgentNodeId when title is null', () => {
+    const result = mergeInboxItems(
+      [],
+      [
+        clarify({
+          clarifyNodeRunId: 'cn1',
+          sourceAgentNodeId: 'agent_xy_01',
+          sourceAgentNodeTitle: null,
+        }),
+      ],
+    )
+    expect(result[0]?.title).toBe('agent_xy_01')
+  })
+
+  test('clarify row falls back to sourceAgentNodeId when title is empty', () => {
+    const result = mergeInboxItems(
+      [],
+      [
+        clarify({
+          clarifyNodeRunId: 'cn1',
+          sourceAgentNodeId: 'agent_xy_01',
+          sourceAgentNodeTitle: '',
+        }),
+      ],
+    )
+    expect(result[0]?.title).toBe('agent_xy_01')
+  })
+
+  test('clarify row falls back to sourceAgentNodeId when title field is omitted (legacy backend)', () => {
+    const result = mergeInboxItems(
+      [],
+      [
+        clarify({
+          clarifyNodeRunId: 'cn1',
+          sourceAgentNodeId: 'agent_legacy',
+          // Note: sourceAgentNodeTitle deliberately not passed — simulates a
+          // backend that hasn't been upgraded to the title-surfacing path.
+        }),
+      ],
+    )
+    expect(result[0]?.title).toBe('agent_legacy')
+  })
 })
 
 describe('RFC-032 pickGreetingKey — hourly boundary table', () => {

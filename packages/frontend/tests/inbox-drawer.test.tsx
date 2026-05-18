@@ -35,6 +35,7 @@ function mockLists(opts: {
       clarifyNodeRunId: string
       taskId: string
       sourceAgentNodeId: string
+      sourceAgentNodeTitle: string | null
       createdAt: number
     }>
   >
@@ -68,6 +69,7 @@ function mockLists(opts: {
         id: `sess_${i}`,
         taskId: c.taskId ?? 'task_b',
         sourceAgentNodeId: c.sourceAgentNodeId ?? `agent_${i}`,
+        sourceAgentNodeTitle: c.sourceAgentNodeTitle === undefined ? null : c.sourceAgentNodeTitle,
         sourceShardKey: null,
         clarifyNodeId: 'clarify_node',
         clarifyNodeRunId: c.clarifyNodeRunId ?? `cn${i}`,
@@ -193,6 +195,40 @@ describe('RFC-032 InboxDrawer', () => {
     // Outside click — should close.
     fireEvent.mouseDown(extra)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // Clarify rows prefer the source-agent node's user-set title (the new
+  // WorkflowNode.title field surfaced through `sourceAgentNodeTitle`) so
+  // the inbox reads "节点名" instead of an opaque internal id.
+  test('clarify row title uses sourceAgentNodeTitle when set', async () => {
+    mockLists({
+      clarify: [
+        {
+          clarifyNodeRunId: 'cn-titled',
+          sourceAgentNodeId: 'agent_xy_01',
+          sourceAgentNodeTitle: 'Implementation Coder',
+        },
+      ],
+    })
+    wrap(<InboxDrawer open={true} onClose={() => {}} />)
+    const row = await screen.findByTestId('inbox-row-clarify-cn-titled')
+    expect(row.textContent ?? '').toContain('Implementation Coder')
+    expect(row.textContent ?? '').not.toContain('agent_xy_01')
+  })
+
+  test('clarify row title falls back to sourceAgentNodeId when title is null', async () => {
+    mockLists({
+      clarify: [
+        {
+          clarifyNodeRunId: 'cn-untitled',
+          sourceAgentNodeId: 'agent_legacy_99',
+          sourceAgentNodeTitle: null,
+        },
+      ],
+    })
+    wrap(<InboxDrawer open={true} onClose={() => {}} />)
+    const row = await screen.findByTestId('inbox-row-clarify-cn-untitled')
+    expect(row.textContent ?? '').toContain('agent_legacy_99')
   })
 
   test('empty queues render the empty hint', async () => {

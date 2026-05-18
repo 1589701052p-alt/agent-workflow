@@ -48,11 +48,18 @@ export function mergeInboxItems(
     })
   }
   for (const c of clarify) {
+    // Prefer the source-agent node's user-set display name (RFC node-title
+    // field) so the inbox shows "节点名" — matches what the review tab
+    // already does. Null/empty falls back to the raw node id.
+    const agentTitle =
+      typeof c.sourceAgentNodeTitle === 'string' && c.sourceAgentNodeTitle.length > 0
+        ? c.sourceAgentNodeTitle
+        : c.sourceAgentNodeId
     out.push({
       kind: 'clarify',
       id: c.clarifyNodeRunId,
       taskId: c.taskId,
-      title: c.sourceAgentNodeId,
+      title: agentTitle,
       subtitle:
         c.sourceShardKey !== null && c.sourceShardKey !== ''
           ? `shard ${c.sourceShardKey}`

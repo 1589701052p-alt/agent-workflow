@@ -95,13 +95,18 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
     }
     if (tab === 'all' || tab === 'clarify') {
       for (const c of clarify.data ?? []) {
+        // Prefer the source-agent node's user-set display name (RFC
+        // node-title field) so the row reads "Coder" not "agent_xy_01".
+        // Null/empty falls back to the opaque node id.
+        const agentTitle =
+          typeof c.sourceAgentNodeTitle === 'string' && c.sourceAgentNodeTitle.length > 0
+            ? c.sourceAgentNodeTitle
+            : c.sourceAgentNodeId
         rows.push({
           kind: 'clarify',
           id: c.clarifyNodeRunId,
           taskId: c.taskId,
-          // The list page renders source-agent + iteration; the drawer is
-          // tighter, so we use just the agent name as the title.
-          title: c.sourceAgentNodeId,
+          title: agentTitle,
           subtitle: c.sourceShardKey ? `shard ${c.sourceShardKey}` : `iter ${c.iterationIndex}`,
           createdAt: c.createdAt,
         })

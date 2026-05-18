@@ -616,7 +616,57 @@ export async function listClarifySummaries(
   })
   const limit = filter.limit ?? 100
   const sliced = filtered.slice(0, limit)
-  return sliced.map(rowToSummary)
+
+  // Look up each session's source-agent node display name from the task's
+  // workflowSnapshot (mirrors the review summary path which already does
+  // the same for review nodes). Lets the inbox render the user-set node
+  // title instead of the opaque agent node id. Snapshot read errors or
+  // missing nodes degrade to `null` so the frontend keeps the existing
+  // fallback to `sourceAgentNodeId`.
+  const taskIds = Array.from(new Set(sliced.map((r) => r.taskId)))
+  const agentTitleByTaskAndNode = await loadAgentNodeTitlesByTask(db, taskIds)
+
+  return sliced.map((row) => {
+    const summary = rowToSummary(row)
+    const title = agentTitleByTaskAndNode.get(row.taskId)?.get(row.sourceAgentNodeId)
+    summary.sourceAgentNodeTitle = typeof title === 'string' && title.length > 0 ? title : null
+    return summary
+  })
+}
+
+/**
+ * Bulk-fetch the `tasks.workflowSnapshot` rows for `taskIds` and extract
+ * each non-empty agent-{single,multi} node title into a nested map
+ * `taskId → nodeId → title`. Used by listClarifySummaries to enrich
+ * inbox rows with the user-set "display name" (RFC node-title field).
+ * Pure read; corrupt snapshots or missing tasks degrade to empty maps.
+ */
+async function loadAgentNodeTitlesByTask(
+  db: DbClient,
+  taskIds: string[],
+): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>()
+  if (taskIds.length === 0) return out
+  const taskRows = await db.select().from(tasks)
+  const wanted = new Set(taskIds)
+  for (const t of taskRows) {
+    if (!wanted.has(t.id)) continue
+    const inner = new Map<string, string>()
+    try {
+      const def = JSON.parse(t.workflowSnapshot) as WorkflowDefinition
+      for (const node of def.nodes ?? []) {
+        const rec = node as Record<string, unknown>
+        if (rec.kind !== 'agent-single' && rec.kind !== 'agent-multi') continue
+        const title = typeof rec.title === 'string' ? rec.title.trim() : ''
+        if (title.length === 0) continue
+        inner.set(node.id, title)
+      }
+    } catch {
+      // corrupt snapshot — leave inner empty; callers fall back to nodeId.
+    }
+    out.set(t.id, inner)
+  }
+  return out
 }
 
 export async function countPendingClarifications(db: DbClient): Promise<number> {
@@ -814,6 +864,10 @@ function rowToSummary(row: typeof clarifySessions.$inferSelect): ClarifySessionS
     id: row.id,
     taskId: row.taskId,
     sourceAgentNodeId: row.sourceAgentNodeId,
+    // Populated by listClarifySummaries (which has access to the task
+    // snapshot); single-session paths leave this null and the frontend
+    // falls back to `sourceAgentNodeId`.
+    sourceAgentNodeTitle: null,
     sourceShardKey: row.sourceShardKey,
     clarifyNodeId: row.clarifyNodeId,
     clarifyNodeRunId: row.clarifyNodeRunId,
@@ -830,6 +884,7 @@ function sessionToSummary(session: ClarifySession): ClarifySessionSummary {
     id: session.id,
     taskId: session.taskId,
     sourceAgentNodeId: session.sourceAgentNodeId,
+    sourceAgentNodeTitle: null,
     sourceShardKey: session.sourceShardKey ?? null,
     clarifyNodeId: session.clarifyNodeId,
     clarifyNodeRunId: session.clarifyNodeRunId,
