@@ -4,7 +4,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
 import { ACTOR_QUERY_KEY, useActor, type MeResponse } from '@/hooks/useActor'
@@ -321,8 +321,35 @@ function defaultPatScopes(): Set<string> {
 function PatSection() {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const { data: me } = useActor()
+  // RFC-036 — the backend intersects PAT scopes with the actor's role
+  // baseline, so a user-role actor that ticks `settings:read` gets it
+  // silently stripped before the PAT row is written. To avoid the
+  // "I ticked it but the PAT doesn't have it" UX surprise, we drive the
+  // picker off the actor's actual permissions: scopes the actor doesn't
+  // hold render disabled + faded, and groups where every scope is
+  // disabled fall behind a "your role doesn't grant any of these" hint.
+  const actorPerms = me?.permissions ?? []
+  const hasPerm = (s: string) => actorPerms.includes(s)
   const [name, setName] = useState('')
   const [scopes, setScopes] = useState<Set<string>>(() => defaultPatScopes())
+
+  // Reconcile the seed default against the actor's permissions when /me
+  // resolves — strips any pre-checked scope the actor cannot grant so the
+  // user never sees "I ticked this, why didn't it land in the PAT".
+  useEffect(() => {
+    if (!me) return
+    const allowed = new Set(me.permissions)
+    setScopes((prev) => {
+      let changed = false
+      const next = new Set<string>()
+      for (const s of prev) {
+        if (allowed.has(s)) next.add(s)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [me])
   const [shown, setShown] = useState<string | null>(null)
   const { data } = useQuery<
     Array<{
@@ -398,8 +425,15 @@ function PatSection() {
                 type="button"
                 className="btn btn--ghost btn--xs"
                 onClick={() => {
+                  // Tick everything the actor is *allowed* to grant —
+                  // scopes outside the role baseline would be stripped by
+                  // the backend anyway.
                   const all = new Set<string>()
-                  for (const g of PAT_SCOPE_GROUPS) for (const s of g.scopes) all.add(s.code)
+                  for (const g of PAT_SCOPE_GROUPS) {
+                    for (const s of g.scopes) {
+                      if (hasPerm(s.code)) all.add(s.code)
+                    }
+                  }
                   setScopes(all)
                 }}
               >
@@ -408,7 +442,9 @@ function PatSection() {
               <button
                 type="button"
                 className="btn btn--ghost btn--xs"
-                onClick={() => setScopes(defaultPatScopes())}
+                onClick={() =>
+                  setScopes(new Set([...defaultPatScopes()].filter((s) => hasPerm(s))))
+                }
               >
                 {t('account.patSelectDefault', { defaultValue: 'Defaults' })}
               </button>
@@ -422,17 +458,23 @@ function PatSection() {
             </div>
           </div>
           {PAT_SCOPE_GROUPS.map((g) => {
-            const checkedCount = g.scopes.filter((s) => scopes.has(s.code)).length
+            // Only render scopes the actor's role actually grants — the
+            // backend would strip the rest anyway. If a whole group is
+            // beyond the actor's role we omit it entirely (regular users
+            // never see the Admin group, etc).
+            const grantable = g.scopes.filter((s) => hasPerm(s.code))
+            if (grantable.length === 0) return null
+            const checkedCount = grantable.filter((s) => scopes.has(s.code)).length
             return (
               <fieldset key={g.titleKey} className="pat-scopes__group">
                 <legend className="pat-scopes__group-title">
                   <span>{t(g.titleKey)}</span>
                   <span className="pat-scopes__group-count">
-                    {checkedCount}/{g.scopes.length}
+                    {checkedCount}/{grantable.length}
                   </span>
                 </legend>
                 <div className="pat-scopes__list">
-                  {g.scopes.map((s) => {
+                  {grantable.map((s) => {
                     const checked = scopes.has(s.code)
                     return (
                       <label

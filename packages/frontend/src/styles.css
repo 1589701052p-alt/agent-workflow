@@ -1248,6 +1248,11 @@ code {
   border: 1px solid var(--border);
 }
 
+/* RFC-036 — scopes the current actor's role doesn't include are hidden
+   entirely; the picker shows only grantable scopes, and groups that
+   would be empty drop out completely (regular users never see the
+   Admin group, etc). */
+
 /* Scope chips inside PAT list rows. */
 .account-scope-chips {
   display: flex;
