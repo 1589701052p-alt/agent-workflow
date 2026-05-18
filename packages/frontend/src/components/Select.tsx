@@ -31,6 +31,12 @@ interface Props<V extends string> {
   name?: string
   /** Render a custom row body. Default = `option.label`. */
   renderOption?: (opt: SelectOption<V>) => React.ReactNode
+  /**
+   * Render the trigger's selected-value display. Default = `option.label`.
+   * Useful when the option rows are rich (icons, badges, mono-font sub-text)
+   * and the same layout should appear on the closed trigger button.
+   */
+  renderValue?: (opt: SelectOption<V>) => React.ReactNode
 }
 
 export function Select<V extends string>(props: Props<V>) {
@@ -145,18 +151,24 @@ export function Select<V extends string>(props: Props<V>) {
       {props.name && <input type="hidden" name={props.name} value={props.value} />}
       <button
         type="button"
+        role="combobox"
         ref={triggerRef}
         className={`select__trigger ${props.className ?? ''}`.trim()}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={popoverId}
-        aria-labelledby={labelId}
+        aria-labelledby={props.ariaLabel ? undefined : labelId}
+        aria-label={props.ariaLabel}
         disabled={props.disabled}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onTriggerKey}
       >
         <span id={labelId} className="select__value">
-          {current ? current.label : (props.placeholder ?? '')}
+          {current
+            ? props.renderValue
+              ? props.renderValue(current)
+              : current.label
+            : (props.placeholder ?? '')}
         </span>
         <span className="select__chevron" aria-hidden>
           ▾

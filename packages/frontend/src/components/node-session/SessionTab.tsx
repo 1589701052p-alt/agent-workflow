@@ -15,9 +15,9 @@ import {
   isPromptCapableKind,
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
-import { displayNoderunStatusKey } from '@/lib/noderun-status'
 import { ConversationFlow } from './ConversationFlow'
 import { RuntimeInventorySection } from '@/components/inventory/RuntimeInventorySection'
+import { Select, type SelectOption } from '@/components/Select'
 
 interface Props {
   taskId: string
@@ -79,14 +79,17 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
 }
 
 /**
- * Chip-row picker replacing the ugly native <select> RFC-027 originally
- * inherited from RFC-011's PromptTab. Each attempt is a button with its
- * iteration / retry / clarify label + a status chip + a timestamp; the
- * active attempt gets a solid accent background. Renders as a single
- * horizontally-scrollable row when there are many attempts.
+ * Dropdown picker for node attempts. Replaces the earlier chip-row layout —
+ * with many retries / fan-out shards / clarify rounds the chips wrapped or
+ * scrolled awkwardly inside the node drawer. The Select component (RFC-036)
+ * is the project's styled, portal-based combobox so it still avoids the
+ * "丑 native <select>" complaint that the chip-row was created to fix.
  *
- * ARIA: radiogroup + radio buttons so screen readers + tests can
- * interact via roles instead of relying on a combobox.
+ * `renderOption` and `renderValue` preserve the exact row content (status
+ * dot · iter label · shard · parent · timestamp) inside both the dropdown
+ * list and the closed trigger.
+ *
+ * ARIA: combobox + listbox + option via the Select primitive.
  */
 function AttemptPicker({
   attempts,
@@ -101,59 +104,81 @@ function AttemptPicker({
 }) {
   const { t } = useTranslation()
   const groups = useMemo(() => groupAttemptsByInlineSession(attempts), [attempts])
+
+  // Each Select option's `value` is the LATEST run id in the group. Clicking
+  // hands that id to the parent so the backend /session route can unify all
+  // rounds of an inline-session group via opencodeSessionId.
+  const options = useMemo<SelectOption<string>[]>(
+    () =>
+      groups.map((g) => {
+        const latest = g.attempts[g.attempts.length - 1]!
+        const inline = g.attempts.length > 1
+        const label = inline
+          ? t('nodeDrawer.inlineRoundsLabel', {
+              n: g.attempts.length,
+              defaultValue: 'inline · {{n}} rounds',
+            })
+          : iterLabel(latest, t)
+        return { value: latest.id, label }
+      }),
+    [groups, t],
+  )
+
+  // Map the latest-id back to its group for renderOption / renderValue.
+  const groupByValue = useMemo(() => {
+    const m = new Map<string, AttemptGroup>()
+    for (const g of groups) m.set(g.attempts[g.attempts.length - 1]!.id, g)
+    return m
+  }, [groups])
+
+  // The Select's `value` must match an option (always the latest id in a
+  // group). If the externally selected run id is one of the earlier
+  // members of an inline group, translate it up to the group's latest.
+  const pickedValue = useMemo(() => {
+    for (const g of groups) {
+      if (g.attempts.some((a) => a.id === pickedId)) {
+        return g.attempts[g.attempts.length - 1]!.id
+      }
+    }
+    return pickedId
+  }, [groups, pickedId])
+
+  function renderRow(opt: SelectOption<string>): React.ReactNode {
+    const g = groupByValue.get(opt.value)
+    if (!g) return opt.label
+    const latest = g.attempts[g.attempts.length - 1]!
+    const inline = g.attempts.length > 1
+    return (
+      <span className={`session-attempts__row ${inline ? 'is-inline' : ''}`}>
+        <span className={`session-attempts__dot status-dot--${toneFor(latest.status)}`} />
+        <span className="session-attempts__iter">{opt.label}</span>
+        {!inline && latest.shardKey !== null && latest.shardKey !== '' && (
+          <span className="session-attempts__shard">{latest.shardKey}</span>
+        )}
+        {!inline && isFanoutParent(latest) && (
+          <span className="session-attempts__parent">parent</span>
+        )}
+        {latest.startedAt !== null && (
+          <span className="session-attempts__time">
+            {new Date(latest.startedAt).toLocaleTimeString()}
+          </span>
+        )}
+      </span>
+    )
+  }
+
   return (
     <div className="session-attempts">
       <span className="session-attempts__label">{t('nodeDrawer.promptAttemptLabel')}</span>
-      <div
-        role="radiogroup"
-        aria-label={t('nodeDrawer.promptAttemptLabel')}
-        className="session-attempts__group"
-      >
-        {groups.map((g) => {
-          // Inline groups bundle N attempts under one chip; clicking it
-          // hands the LATEST attempt's id to the parent so the backend
-          // /session route can unify all rounds via opencodeSessionId.
-          const latest = g.attempts[g.attempts.length - 1]!
-          const active = g.attempts.some((a) => a.id === pickedId)
-          const inline = g.attempts.length > 1
-          return (
-            <button
-              key={inline ? `inline:${g.sessionId}` : latest.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onPick(latest.id)}
-              className={`session-attempts__item ${active ? 'is-active' : ''} ${inline ? 'is-inline' : ''}`}
-              title={
-                inline
-                  ? `inline · ${g.attempts.length} rounds`
-                  : attemptTooltip(latest, t, isFanoutParent(latest))
-              }
-            >
-              <span className={`session-attempts__dot status-dot--${toneFor(latest.status)}`} />
-              <span className="session-attempts__iter">
-                {inline
-                  ? t('nodeDrawer.inlineRoundsLabel', {
-                      n: g.attempts.length,
-                      defaultValue: 'inline · {{n}} rounds',
-                    })
-                  : iterLabel(latest, t)}
-              </span>
-              {!inline && latest.shardKey !== null && latest.shardKey !== '' && (
-                <span className="session-attempts__shard">{latest.shardKey}</span>
-              )}
-              {!inline && isFanoutParent(latest) && (
-                <span className="session-attempts__parent">parent</span>
-              )}
-              {latest.startedAt !== null && (
-                <span className="session-attempts__time">
-                  {new Date(latest.startedAt).toLocaleTimeString()}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
+      <Select<string>
+        value={pickedValue}
+        options={options}
+        onChange={onPick}
+        ariaLabel={t('nodeDrawer.promptAttemptLabel')}
+        className="session-attempts__select"
+        renderOption={renderRow}
+        renderValue={renderRow}
+      />
     </div>
   )
 }
@@ -199,14 +224,6 @@ function iterLabel(a: NodeRun, t: TFunction): string {
   if (a.iteration > 0) return t('nodeDrawer.iterLoop', { n: a.iteration })
   if (a.retryIndex > 0) return t('nodeDrawer.iterRetry', { n: a.retryIndex })
   return t('nodeDrawer.iterInitial')
-}
-
-function attemptTooltip(a: NodeRun, t: TFunction, fanoutParent: boolean): string {
-  const parts: string[] = [iterLabel(a, t), t(displayNoderunStatusKey(a))]
-  if (a.shardKey !== null && a.shardKey !== '') parts.push(`shard=${a.shardKey}`)
-  if (fanoutParent) parts.push('fan-out parent')
-  if (a.startedAt !== null) parts.push(new Date(a.startedAt).toLocaleString())
-  return parts.join(' · ')
 }
 
 function toneFor(status: NodeRun['status']): string {

@@ -1,21 +1,35 @@
-// RFC-027 §UX revision — locks the AttemptPicker chip-row in SessionTab:
-//   - renders a `radiogroup` with one `radio` per attempt
-//   - the active attempt is the only aria-checked=true row
-//   - iter label uses the right key for retry / loop / clarify / initial
-//   - clicking a different chip flips the active state without remount
-//   - shard chips render their shardKey
+// Locks the AttemptPicker dropdown in SessionTab. Originally the picker
+// was a `radiogroup` chip-row (RFC-027 §UX) that itself replaced a bare
+// native `<select>` the user had flagged as "丑". With many retries /
+// fan-out shards / clarify rounds the chips wrapped awkwardly inside the
+// node drawer, so the picker now uses the project's styled Select
+// (RFC-036) — combobox + portaled listbox — which sidesteps the original
+// native-dropdown complaint while collapsing back to a single control.
 //
-// Importantly this replaces the prior `<select>`-based picker that the
-// user flagged as "丑" — keep this suite green to prevent a regression
-// back to a bare native dropdown.
+// What this suite locks:
+//   - renders a `combobox` (not a `radiogroup`)
+//   - opening the listbox exposes one `option` per attempt group
+//   - the picked option is the only aria-selected=true row
+//   - iter label uses the right key for retry / loop / clarify / initial
+//   - clicking a different option flips the picked state
+//   - shard / inline-rounds metadata is still visible per row
+//
+// If this goes red back to a chip-row or a bare `<select>`, that's the
+// regression direction to investigate before re-greening.
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { I18nextProvider } from 'react-i18next'
 import type { NodeRun, SessionViewResponse } from '@agent-workflow/shared'
 import i18n from '../src/i18n'
 import { NodeDetailDrawer } from '../src/components/NodeDetailDrawer'
+
+function openCombobox() {
+  const trigger = screen.getByRole('combobox', { name: /attempt/i })
+  fireEvent.click(trigger)
+  return screen.getByRole('listbox')
+}
 
 function run(partial: Partial<NodeRun> & { id: string }): NodeRun {
   return {
@@ -87,12 +101,16 @@ beforeEach(() => {
   ) as unknown as typeof globalThis.fetch
 })
 afterEach(() => {
+  // Unmount React via testing-library first so portaled children (the
+  // Select listbox lives on document.body) get cleaned up by React.
+  // Wiping document.body.innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   globalThis.fetch = originalFetch
-  document.body.innerHTML = ''
 })
 
-describe('RFC-027 §UX — Session attempts chip-row picker', () => {
-  test('multi-attempts renders one radio per attempt + only the picked is aria-checked', () => {
+describe('Session attempts dropdown picker', () => {
+  test('renders a combobox (not a radiogroup) and the picked label is on the trigger', () => {
     const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100 })
     const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200 })
     const r2 = run({ id: 'r2', retryIndex: 2, startedAt: 300 })
@@ -102,17 +120,34 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [r0, r1, r2],
     })
-    const radios = screen.getAllByRole('radio')
-    expect(radios).toHaveLength(3)
-    const checked = radios.filter((r) => r.getAttribute('aria-checked') === 'true')
-    expect(checked).toHaveLength(1)
-    // attempts are sorted ascending by (iteration, retryIndex, startedAt)
-    // and rendered in that order. The picked one (selectedRunId='r2') is
-    // the last chip.
-    expect(checked[0]).toBe(radios[2]!)
+    expect(screen.queryByRole('radiogroup')).toBeNull()
+    const trigger = screen.getByRole('combobox', { name: /attempt/i })
+    expect(trigger).toBeTruthy()
+    // Trigger shows the picked attempt's iter label (retryIndex=2).
+    expect(trigger.textContent ?? '').toMatch(/retry#2/i)
   })
 
-  test('clicking a chip flips the active row without errors', () => {
+  test('opening the listbox exposes one option per attempt + only the picked is aria-selected', () => {
+    const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100 })
+    const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200 })
+    const r2 = run({ id: 'r2', retryIndex: 2, startedAt: 300 })
+    renderDrawer({
+      nodeRunId: r2.id,
+      nodeId: r0.nodeId,
+      workflowNodeKind: 'agent-single',
+      runs: [r0, r1, r2],
+    })
+    openCombobox()
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(3)
+    const selected = options.filter((o) => o.getAttribute('aria-selected') === 'true')
+    expect(selected).toHaveLength(1)
+    // attempts are sorted ascending by (iteration, retryIndex, startedAt)
+    // — the picked one (selectedRunId='r2') is the last option.
+    expect(selected[0]).toBe(options[2]!)
+  })
+
+  test('clicking a different option flips the picked state without errors', () => {
     const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100 })
     const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200 })
     renderDrawer({
@@ -121,12 +156,15 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [r0, r1],
     })
-    const radios = screen.getAllByRole('radio')
-    expect(radios[1]!.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(radios[0]!)
-    const after = screen.getAllByRole('radio')
-    expect(after[0]!.getAttribute('aria-checked')).toBe('true')
-    expect(after[1]!.getAttribute('aria-checked')).toBe('false')
+    openCombobox()
+    const before = screen.getAllByRole('option')
+    expect(before[1]!.getAttribute('aria-selected')).toBe('true')
+    fireEvent.mouseDown(before[0]!)
+    // Re-open: the listbox is portaled and Select closes on mouseDown.
+    openCombobox()
+    const after = screen.getAllByRole('option')
+    expect(after[0]!.getAttribute('aria-selected')).toBe('true')
+    expect(after[1]!.getAttribute('aria-selected')).toBe('false')
   })
 
   test('iter label distinguishes initial / retry / loop / clarify rows', () => {
@@ -146,6 +184,7 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [initial, retry, loop, clarify],
     })
+    openCombobox()
     const html = document.body.innerHTML
     expect(html).toMatch(/initial/i)
     expect(html).toMatch(/retry#1/i)
@@ -163,28 +202,30 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-multi',
       runs: [parent, shardA, shardB],
     })
+    openCombobox()
     const html = document.body.innerHTML
     expect(html).toContain('src/a.ts')
     expect(html).toContain('src/b.ts')
   })
 
-  test('no native <select> remains under the attempts picker (the ugly dropdown is gone)', () => {
+  test('no native <select> element is rendered (the original "丑" dropdown stays gone)', () => {
     const r = run({ id: 'r1' })
-    renderDrawer({
+    const { container } = renderDrawer({
       nodeRunId: r.id,
       nodeId: r.nodeId,
       workflowNodeKind: 'agent-single',
       runs: [r],
     })
-    const group = screen.getByRole('radiogroup', { name: /attempt/i })
-    expect(group.querySelector('select')).toBeNull()
+    expect(container.querySelector('select')).toBeNull()
+    // The styled trigger is a <button role="combobox">, never a <select>.
+    const trigger = screen.getByRole('combobox', { name: /attempt/i })
+    expect(trigger.tagName.toLowerCase()).toBe('button')
   })
 
-  // RFC-027 §UX merge — RFC-026 inline clarify reruns share an
-  // opencode session across many node_runs. The picker MUST fold
-  // those rounds into one chip so the user sees "one logical
-  // conversation" rather than N separate attempts.
-  test('inline-session siblings collapse into a single chip with the "inline · N rounds" label', () => {
+  // RFC-026 inline clarify reruns share an opencode session across many
+  // node_runs. The picker MUST fold those rounds into one option so the
+  // user sees "one logical conversation" rather than N separate attempts.
+  test('inline-session siblings collapse into a single option labelled "inline · N rounds"', () => {
     const r0 = run({
       id: 'r0',
       clarifyIteration: 0,
@@ -209,15 +250,18 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [r0, r1, r2],
     })
-    const radios = screen.getAllByRole('radio')
-    // Three node_runs but one chip — RFC-027 §UX merge.
-    expect(radios).toHaveLength(1)
-    expect(radios[0]!.getAttribute('aria-checked')).toBe('true')
-    expect(radios[0]!.textContent ?? '').toMatch(/3 rounds/i)
-    expect(radios[0]!.className).toContain('is-inline')
+    // Trigger shows the merged label without opening the listbox.
+    const trigger = screen.getByRole('combobox', { name: /attempt/i })
+    expect(trigger.textContent ?? '').toMatch(/3 rounds/i)
+    openCombobox()
+    const options = screen.getAllByRole('option')
+    // Three node_runs but one option — inline-session merge.
+    expect(options).toHaveLength(1)
+    expect(options[0]!.getAttribute('aria-selected')).toBe('true')
+    expect(options[0]!.textContent ?? '').toMatch(/3 rounds/i)
   })
 
-  test('isolated attempts (no opencodeSessionId) still render as separate chips', () => {
+  test('isolated attempts (no opencodeSessionId) still render as separate options', () => {
     const r0 = run({ id: 'r0', clarifyIteration: 0, opencodeSessionId: null })
     const r1 = run({ id: 'r1', clarifyIteration: 1, opencodeSessionId: null, startedAt: 200 })
     renderDrawer({
@@ -226,10 +270,11 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [r0, r1],
     })
-    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    openCombobox()
+    expect(screen.getAllByRole('option')).toHaveLength(2)
   })
 
-  test('mixed: an inline group + a follow-on isolated retry render as 2 chips', () => {
+  test('mixed: an inline group + a follow-on isolated retry render as 2 options', () => {
     const r0 = run({
       id: 'r0',
       clarifyIteration: 0,
@@ -256,9 +301,10 @@ describe('RFC-027 §UX — Session attempts chip-row picker', () => {
       workflowNodeKind: 'agent-single',
       runs: [r0, r1, r2],
     })
-    const radios = screen.getAllByRole('radio')
-    expect(radios).toHaveLength(2)
-    expect(radios[0]!.className).toContain('is-inline')
-    expect(radios[1]!.className).not.toContain('is-inline')
+    openCombobox()
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(2)
+    expect(options[0]!.textContent ?? '').toMatch(/rounds/i)
+    expect(options[1]!.textContent ?? '').not.toMatch(/rounds/i)
   })
 })
