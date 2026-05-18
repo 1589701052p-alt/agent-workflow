@@ -96,6 +96,26 @@ export const StartTaskSchema = z
     /** Per-task overrides (settings defaults apply when omitted). */
     maxDurationMs: z.number().int().nonnegative().optional(),
     maxTotalTokens: z.number().int().nonnegative().optional(),
+    /**
+     * RFC-036 — optional per-node reviewer / clarify_target assignments
+     * recorded at launch time. Each entry's `nodeId` must exist in the
+     * workflow definition and its kind must match the node's runtime kind.
+     */
+    assignments: z
+      .array(
+        z.object({
+          nodeId: z.string().min(1),
+          kind: z.enum(['reviewer', 'clarify_target']),
+          userId: z.string().min(1),
+        }),
+      )
+      .optional(),
+    /**
+     * RFC-036 — additional collaborator user IDs (besides the launcher).
+     * Owner / reviewer / clarify_target are recorded automatically; this
+     * field is for "share with me" peers without an assignment role.
+     */
+    collaboratorUserIds: z.array(z.string().min(1)).optional(),
   })
   .superRefine((value, ctx) => {
     const hasPath = typeof value.repoPath === 'string' && value.repoPath.length > 0

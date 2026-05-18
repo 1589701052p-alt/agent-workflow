@@ -85,6 +85,13 @@ export interface StartTaskDeps {
    * never pass this; we generate a fresh ulid + worktree as before.
    */
   preCreatedWorktree?: PreCreatedWorktree
+  /**
+   * RFC-036 — launcher user id. NULL falls back to the legacy single-user
+   * behavior (ownerUserId stays NULL; no collab/assignment rows written).
+   * The route passes actor.user.id when the actor is a real user; daemon-
+   * token callers can leave it unset or pass '__system__' explicitly.
+   */
+  actorUserId?: string
 }
 
 /**
@@ -293,7 +300,30 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     finishedAt: earlyError === null ? null : now,
     errorSummary: earlyError !== null ? `worktree creation failed: ${earlyError}` : null,
     errorMessage: earlyError,
+    // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
+    ownerUserId: deps.actorUserId ?? null,
   })
+
+  // RFC-036: record collaborators + node assignments. ensureValidAssignments
+  // has already been run by the caller against the user-provided payload.
+  if (deps.actorUserId) {
+    const { recordLaunchContext } = await import('@/services/taskCollab')
+    try {
+      await recordLaunchContext(deps.db, {
+        taskId,
+        ownerUserId: deps.actorUserId,
+        assignments: input.assignments ?? [],
+        collaboratorUserIds: input.collaboratorUserIds ?? [],
+        now,
+      })
+    } catch (err) {
+      // Roll back the task row so the caller sees a clean 422 with no
+      // half-created row in /api/tasks. Use deletedAt soft-delete since
+      // SQLite FKs may still hold partial node_assignments inserts.
+      await deps.db.delete(tasks).where(eq(tasks.id, taskId))
+      throw err
+    }
+  }
 
   // Mirror this repo into the recent-repos cache — best-effort, never blocks.
   // RFC-024: only path-mode tasks belong in `recent_repos` (URL-mode tasks

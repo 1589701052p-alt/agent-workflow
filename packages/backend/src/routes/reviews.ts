@@ -17,9 +17,13 @@ import {
   SubmitReviewDecisionSchema,
   UpdateReviewCommentBodySchema,
 } from '@agent-workflow/shared'
+import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
+import type { Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
+import { nodeRuns } from '@/db/schema'
 import type { AppDeps } from '@/server'
+import { isAssignedReviewer } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
 import {
   addReviewComment,
@@ -32,8 +36,39 @@ import {
   submitReviewDecision,
   updateReviewCommentText,
 } from '@/services/review'
-import { NotFoundError, ValidationError } from '@/util/errors'
+import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import { Paths } from '@/util/paths'
+
+/**
+ * RFC-036 — guard for review decision endpoint. The actor must be the
+ * assigned reviewer for this node, the task owner, or an admin. Legacy
+ * tasks (no ownerUserId, no assignment row) fall through to admin / owner-
+ * via-collaborator, which already passes for daemon-token actor.
+ */
+async function ensureReviewerAuth(deps: AppDeps, nodeRunId: string, actor: Actor): Promise<void> {
+  if (actor.permissions.has('tasks:read:all')) return // admins pass
+  const rows = await deps.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+  const run = rows[0]
+  if (!run) {
+    throw new NotFoundError('node-run-not-found', `node run '${nodeRunId}' not found`)
+  }
+  const { tasks: tasksTable } = await import('@/db/schema')
+  const taskRows = await deps.db
+    .select()
+    .from(tasksTable)
+    .where(eq(tasksTable.id, run.taskId))
+    .limit(1)
+  const task = taskRows[0]
+  if (!task) {
+    throw new NotFoundError('task-not-found', `task '${run.taskId}' not found`)
+  }
+  if (task.ownerUserId === actor.user.id) return
+  if (await isAssignedReviewer(deps.db, run.taskId, run.nodeId, actor.user.id)) return
+  throw new ForbiddenError(
+    'not-reviewer',
+    'only the assigned reviewer, task owner, or admin can submit this decision',
+  )
+}
 
 function appHomeFor(_deps: AppDeps): string {
   // RFC-005: doc_version body paths are anchored at the daemon's app home
@@ -118,12 +153,17 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    // RFC-036: reviewer / task owner / admin only. Look up the node_run to
+    // find its task + node id, then check assignments + ownership.
+    const actor = (await import('@/auth/actor')).actorOf(c)
+    await ensureReviewerAuth(deps, nodeRunId, actor)
     const args: Parameters<typeof submitReviewDecision>[0] = {
       db: deps.db,
       appHome: appHomeFor(deps),
       nodeRunId,
       decision: parsed.data.decision,
       expectedReviewIteration: parsed.data.reviewIteration,
+      author: actor.user.id,
       ...(parsed.data.rejectReason !== undefined ? { rejectReason: parsed.data.rejectReason } : {}),
     }
     const result = await submitReviewDecision(args)

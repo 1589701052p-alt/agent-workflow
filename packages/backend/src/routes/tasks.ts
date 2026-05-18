@@ -21,7 +21,10 @@ import { actorOf } from '@/auth/actor'
 import { loadConfig } from '@/config'
 import { tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
-import { canViewTask } from '@/services/taskCollab'
+import {
+  canViewTask,
+  ensureValidAssignments as ensureValidAssignmentsForRoute,
+} from '@/services/taskCollab'
 import { ForbiddenError } from '@/util/errors'
 import {
   cancelTask,
@@ -157,11 +160,60 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    // RFC-036: validate assignments against the workflow definition before
+    // we materialize the worktree (avoid orphan worktrees on 422 paths).
+    const assignments = parsed.data.assignments ?? []
+    if (assignments.length > 0) {
+      const { getWorkflow } = await import('@/services/workflow')
+      const wf = await getWorkflow(deps.db, parsed.data.workflowId)
+      if (wf) {
+        ensureValidAssignmentsForRoute(wf.definition, assignments)
+      }
+    }
     const task = await startTask(parsed.data, {
       db: deps.db,
+      actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
     })
     return c.json(task, 201)
+  })
+
+  app.patch('/api/tasks/:id/assignments/:nodeId', async (c) => {
+    const actor = actorOf(c)
+    const taskId = c.req.param('id')
+    const nodeId = c.req.param('nodeId')
+    const body = (await safeJson(c.req.raw)) as Record<string, unknown>
+    const kind = typeof body.kind === 'string' ? body.kind : null
+    const newUserId = typeof body.userId === 'string' ? body.userId : null
+    if (kind !== 'reviewer' && kind !== 'clarify_target') {
+      throw new ValidationError('invalid-assignment', `kind must be reviewer | clarify_target`)
+    }
+    if (!newUserId) {
+      throw new ValidationError('invalid-assignment', `userId is required`)
+    }
+    // Only the task owner or an admin may PATCH assignments.
+    const taskRows = await deps.db
+      .select()
+      .from(tasksTable)
+      .where(eq(tasksTable.id, taskId))
+      .limit(1)
+    const task = taskRows[0]
+    if (!task) throw new NotFoundError('task-not-found', `task ${taskId} not found`)
+    const isAdmin = actor.permissions.has('tasks:read:all')
+    if (!isAdmin && task.ownerUserId !== actor.user.id) {
+      throw new ForbiddenError('forbidden', 'only task owner or admin can change assignments')
+    }
+    const { changeNodeAssignment } = await import('@/services/taskCollab')
+    await changeNodeAssignment(deps.db, {
+      taskId,
+      nodeId,
+      kind,
+      newUserId,
+      actorId: actor.user.id,
+      now: Date.now(),
+    })
+    return c.json({ ok: true })
   })
 
   app.post('/api/tasks/:id/cancel', async (c) => {

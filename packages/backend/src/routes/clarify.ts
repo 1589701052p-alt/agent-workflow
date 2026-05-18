@@ -13,8 +13,11 @@
 // 409, not 412; we keep 409 to match the rest of the API surface.)
 
 import { ListClarifyQuerySchema, SubmitClarifyAnswersSchema } from '@agent-workflow/shared'
+import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
+import { actorOf, type Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
+import { clarifySessions, nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
 import {
   countPendingClarifications,
@@ -22,9 +25,10 @@ import {
   listClarifySummaries,
   submitClarifyAnswers,
 } from '@/services/clarify'
+import { isAssignedClarifyTarget } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
 import { Paths } from '@/util/paths'
-import { ConflictError, ValidationError } from '@/util/errors'
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('clarify-route')
@@ -40,6 +44,49 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
     /* nothing */
   }
   return undefined
+}
+
+async function ensureClarifyAnswerAuth(
+  deps: AppDeps,
+  clarifyNodeRunId: string,
+  actor: Actor,
+): Promise<void> {
+  if (actor.permissions.has('tasks:read:all')) return
+  // node_runs.id → taskId + nodeId (the clarify node's own id, which is the
+  // assignment key on node_assignments).
+  const sess = await deps.db
+    .select()
+    .from(clarifySessions)
+    .where(eq(clarifySessions.clarifyNodeRunId, clarifyNodeRunId))
+    .limit(1)
+  if (!sess[0]) {
+    // Fallback to node_runs lookup so the 404 is still correctly attributed.
+    const runs = await deps.db
+      .select()
+      .from(nodeRuns)
+      .where(eq(nodeRuns.id, clarifyNodeRunId))
+      .limit(1)
+    if (!runs[0]) {
+      throw new NotFoundError('clarify-session-not-found', 'clarify session not found')
+    }
+    return // no clarify session yet → service will throw its own error
+  }
+  const taskRow = (
+    await deps.db.select().from(tasksTable).where(eq(tasksTable.id, sess[0].taskId)).limit(1)
+  )[0]
+  if (!taskRow) {
+    throw new NotFoundError('task-not-found', `task '${sess[0].taskId}' not found`)
+  }
+  if (taskRow.ownerUserId === actor.user.id) return
+  if (
+    await isAssignedClarifyTarget(deps.db, sess[0].taskId, sess[0].clarifyNodeId, actor.user.id)
+  ) {
+    return
+  }
+  throw new ForbiddenError(
+    'not-clarify-target',
+    'only the assigned clarify target, task owner, or admin can submit this answer',
+  )
 }
 
 export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
@@ -94,11 +141,15 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         ifMatch = Number.parseInt(header, 10)
       }
     }
+    // RFC-036: clarify_target / task owner / admin only.
+    const actor = actorOf(c)
+    await ensureClarifyAnswerAuth(deps, nodeRunId, actor)
     const result = await submitClarifyAnswers({
       db: deps.db,
       clarifyNodeRunId: nodeRunId,
       answers: parsed.data.answers,
       directive: parsed.data.directive,
+      answeredBy: actor.user.id,
       ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
     })
     // Re-enter the scheduler so the freshly minted rerun node_run starts.
