@@ -11,13 +11,114 @@ feed the audit back to one or more fixer agents.
 
 ---
 
+## How it works
+
+The daemon is one Bun process that serves the SPA, owns the SQLite database,
+and spawns one `opencode` subprocess per node. Each subprocess gets its own
+private `OPENCODE_CONFIG_DIR` and runs with the task's `git worktree` as `cwd`,
+so concurrent agents never step on each other's `.opencode/` directories.
+
+```mermaid
+flowchart LR
+  Browser["Browser SPA<br/>(React + xyflow)"] -- "HTTP / WebSocket" --> Daemon["agent-workflow daemon<br/>(Bun + Hono)"]
+  Daemon --> DB[("SQLite<br/>agents · skills · workflows<br/>tasks · node_runs · events")]
+  Daemon -- spawn --> OC1["opencode #1<br/>worker"]
+  Daemon -- spawn --> OC2["opencode #2<br/>auditor"]
+  Daemon -- spawn --> OCN["opencode #N<br/>fixer"]
+  OC1 -- cwd --> WT["git worktree<br/>per task"]
+  OC2 -- cwd --> WT
+  OCN -- cwd --> WT
+  Daemon --> FS["~/.agent-workflow/<br/>skills · runs · logs · backups"]
+```
+
+The canonical pipeline — `Code → Audit → Fix` — composes a `git` wrapper, an
+optional fan-out, and an aggregation step:
+
+```mermaid
+flowchart LR
+  Launch([Launch task]) --> S1["Snapshot<br/>commit + worktree"]
+  S1 --> Worker[Worker agent]
+  Worker --> S2["Snapshot<br/>commit + worktree"]
+  S2 --> Diff["git diff<br/>(incl. uncommitted)"]
+  Diff --> Shard{"Shard<br/>per-file / per-N / per-dir"}
+  Shard --> A1[Auditor 1]
+  Shard --> A2[Auditor 2]
+  Shard --> A3[Auditor 3]
+  A1 --> Agg[Aggregate reviews]
+  A2 --> Agg
+  A3 --> Agg
+  Agg --> Fixer[Fixer agent]
+  Fixer --> Done([Worktree carries the final diff])
+```
+
+---
+
+## A look at the UI
+
+Screenshots were taken against a freshly seeded daemon with stub agents — the
+names, IDs and review body are sample content, not data from a real workspace.
+
+**Home** — task-driven landing page: what's running, what's waiting on you,
+what just finished.
+
+![Home](./docs/images/01-home.png)
+
+**Workflow editor** — left palette of agents + wrappers, xyflow canvas in
+the middle, drag-to-wire ports. The pipeline below covers the full
+**Doc → Clarify → Review → Code → Review** loop: `doc-writer` paired with a
+`clarify` node via the `__clarify__` / `__clarify_response__` system ports
+drafts a design doc; a markdown `review` gate human-approves it; `code-writer`
+(wrapped in a `git` wrapper, so its file changes become the wrapper's
+`git_diff`) implements the approved doc; finally `code-reviewer` flags issues
+on the resulting diff.
+
+![Workflow editor](./docs/images/05-workflow-editor.png)
+
+**Task detail · Worktree diff** — every task runs in its own `git worktree`;
+the diff tab lists touched files and renders the unified diff against the
+base branch.
+
+![Task detail – worktree diff](./docs/images/06b-task-diff.png)
+
+**Markdown review** — `review` nodes pause the workflow on a generated
+markdown port and surface it here for an Approve / Iterate / Reject decision.
+Highlighted spans are reviewer comments anchored to the doc; each card on the
+right pins to its anchor so iterations can fold them back into the regen
+prompt.
+
+![Review detail](./docs/images/08-review-detail.png)
+
+**Clarify** — an agent can pause the workflow and ask the human a structured
+question set instead of guessing. The Clarify inbox lists every awaiting
+session (node + asking agent + round + question count):
+
+![Clarify list](./docs/images/12-clarify-list.png)
+
+Opening one shows the agent-emitted questions. Each option is a digit-numbered
+radio (`single`) or checkbox (`multi`), with a free-form note field and a
+"submit & keep clarifying" / "submit & stop" pair at the bottom:
+
+![Clarify detail](./docs/images/13-clarify-detail.png)
+
+Ticking options highlights the chosen rows; the answers feed back into the
+asking agent's next round via the `__clarify_response__` system port:
+
+![Clarify detail with answers](./docs/images/14-clarify-detail-selected.png)
+
+**Agent catalog** — virtual agents stored in the database, injected per-run
+via `OPENCODE_CONFIG_CONTENT`.
+
+![Agents list](./docs/images/02-agents-list.png)
+
+---
+
 ## Requirements
 
-| Tool         | Minimum version              | Why                                     |
-| ------------ | ---------------------------- | --------------------------------------- |
-| **opencode** | 1.14.0 (1.14.25 verified)    | Spawned as the agent subprocess         |
-| **git**      | 2.5+                         | `git worktree`, snapshots, stash, diff  |
-| **OS**       | macOS or Linux               | Windows is not supported in v1          |
+| Tool         | Minimum version           | Why                                    |
+| ------------ | ------------------------- | -------------------------------------- |
+| **opencode** | 1.14.0 (1.14.25 verified) | Spawned as the agent subprocess        |
+| **git**      | 2.5+                      | `git worktree`, snapshots, stash, diff |
+| **OS**       | macOS or Linux            | Windows is not supported in v1         |
 
 `opencode` must be on `PATH` (or `opencodePath` set in `config.json`). The
 daemon refuses to start otherwise.
@@ -115,22 +216,22 @@ agent-workflow version
 it via `PUT /api/config`. Fields marked **restart required** only apply on the
 next `agent-workflow start`:
 
-| Field                                  | Default       | Notes                                                  |
-| -------------------------------------- | ------------- | ------------------------------------------------------ |
-| `opencodePath`                         | (PATH lookup) | Override the opencode binary                           |
-| `defaultModel`                         | —             | Used by agents without an explicit `model`             |
-| `maxConcurrentNodes`                   | `4`           | Global node-execution semaphore                        |
-| `multiProcessSubprocessConcurrency`    | `4`           | Per multi-process node sub-pool                        |
-| `defaultPerNodeTimeoutMs`              | `1800000`     | 30 min; overridable per node                           |
-| `defaultPerTaskMaxDurationMs`          | `3600000`     | 1 h; `0` = unlimited                                   |
-| `defaultPerTaskMaxTotalTokens`         | `0`           | `0` = unlimited                                        |
-| `worktreeAutoGc`                       | `{enabled:false}` | Hourly background sweep                              |
-| `eventsArchiveThresholds`              | 50k / 1M      | Per-node-run / global event row caps                   |
-| `bindHost`                             | `127.0.0.1`   | **restart required**                                   |
-| `bindPort`                             | `0`           | `0` picks free port; **restart required**              |
-| `theme`                                | `system`      | `system / light / dark`                                |
-| `language`                             | `zh-CN`       | `zh-CN / en-US`                                        |
-| `logLevel`                             | `info`        | `debug / info / warn / error`                          |
+| Field                               | Default           | Notes                                      |
+| ----------------------------------- | ----------------- | ------------------------------------------ |
+| `opencodePath`                      | (PATH lookup)     | Override the opencode binary               |
+| `defaultModel`                      | —                 | Used by agents without an explicit `model` |
+| `maxConcurrentNodes`                | `4`               | Global node-execution semaphore            |
+| `multiProcessSubprocessConcurrency` | `4`               | Per multi-process node sub-pool            |
+| `defaultPerNodeTimeoutMs`           | `1800000`         | 30 min; overridable per node               |
+| `defaultPerTaskMaxDurationMs`       | `3600000`         | 1 h; `0` = unlimited                       |
+| `defaultPerTaskMaxTotalTokens`      | `0`               | `0` = unlimited                            |
+| `worktreeAutoGc`                    | `{enabled:false}` | Hourly background sweep                    |
+| `eventsArchiveThresholds`           | 50k / 1M          | Per-node-run / global event row caps       |
+| `bindHost`                          | `127.0.0.1`       | **restart required**                       |
+| `bindPort`                          | `0`               | `0` picks free port; **restart required**  |
+| `theme`                             | `system`          | `system / light / dark`                    |
+| `language`                          | `zh-CN`           | `zh-CN / en-US`                            |
+| `logLevel`                          | `info`            | `debug / info / warn / error`              |
 
 ---
 
