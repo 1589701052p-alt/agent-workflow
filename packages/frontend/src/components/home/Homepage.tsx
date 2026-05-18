@@ -35,15 +35,6 @@ export function Homepage() {
       <HomepageGreeting />
 
       <HomepageSection
-        title={t('home.section.running')}
-        count={runningCount}
-        link={{ label: t('home.section.viewAll'), to: '/tasks?status=running' }}
-        testId="homepage-section-running"
-      >
-        <RunningTaskList onCount={onRunningCount} />
-      </HomepageSection>
-
-      <HomepageSection
         title={t('home.section.inbox')}
         count={inboxCount}
         variant="warn"
@@ -51,6 +42,15 @@ export function Homepage() {
         testId="homepage-section-inbox"
       >
         <InboxPreviewList onCount={onInboxCount} />
+      </HomepageSection>
+
+      <HomepageSection
+        title={t('home.section.running')}
+        count={runningCount}
+        link={{ label: t('home.section.viewAll'), to: '/tasks?status=running' }}
+        testId="homepage-section-running"
+      >
+        <RunningTaskList onCount={onRunningCount} />
       </HomepageSection>
 
       <HomepageSection

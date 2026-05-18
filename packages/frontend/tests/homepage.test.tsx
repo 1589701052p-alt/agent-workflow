@@ -160,6 +160,21 @@ describe('RFC-032 Homepage dashboard', () => {
     expect(startBtn.getAttribute('href')).toBe('/workflows')
   })
 
+  // Locks the section order: Inbox ("等你处理") sits above Running, so the
+  // awaiting_review / awaiting_human rows the Running list also surfaces
+  // don't dominate the page above the actually-actionable inbox queue.
+  test('Inbox section renders above Running section', async () => {
+    mockEndpoints({})
+    wrap(<Homepage />)
+    await waitFor(() => {
+      expect(screen.getByTestId('homepage-section-inbox')).toBeTruthy()
+    })
+    const inbox = screen.getByTestId('homepage-section-inbox')
+    const running = screen.getByTestId('homepage-section-running')
+    const order = inbox.compareDocumentPosition(running)
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   test('Running section lists running + awaiting tasks; the others sit under Recent', async () => {
     mockEndpoints({
       tasks: [
