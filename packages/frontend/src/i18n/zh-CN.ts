@@ -312,6 +312,11 @@ export interface Resources {
     or: string
     loginWith: string
     useDaemonToken: string
+    tabPassword: string
+    tabOidc: string
+    tabToken: string
+    oidcHint: string
+    tokenHint: string
   }
   // RFC-036 — sidebar UserMenu dropdown.
   userMenu: {
@@ -1526,6 +1531,11 @@ export const zhCN: Resources = {
     or: '或',
     loginWith: '使用 {{name}} 登录',
     useDaemonToken: '使用守护进程 Token',
+    tabPassword: '账号密码',
+    tabOidc: '身份提供商',
+    tabToken: '守护进程 Token',
+    oidcHint: '通过已配置的身份提供商登录。',
+    tokenHint: '使用 daemon 启动时打印的 64 位十六进制 token。仅供管理员 / 应急使用。',
   },
   userMenu: {
     account: '我的账户',

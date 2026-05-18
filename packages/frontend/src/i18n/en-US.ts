@@ -176,6 +176,12 @@ export const enUS: Resources = {
     or: 'or',
     loginWith: 'Login with {{name}}',
     useDaemonToken: 'Use daemon token',
+    tabPassword: 'Username & password',
+    tabOidc: 'Identity provider',
+    tabToken: 'Daemon token',
+    oidcHint: 'Sign in with an external identity provider.',
+    tokenHint:
+      'Use the 64-char hex token printed when the daemon started. Admin / break-glass only.',
   },
   userMenu: {
     account: 'My account',
