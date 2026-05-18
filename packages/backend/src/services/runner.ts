@@ -99,12 +99,14 @@ export interface RunNodeOptions {
    */
   clarifyContext?: ClarifyPromptContext
   /**
-   * RFC-023: when true (scheduler computed `agentHasClarifyChannel(definition,
-   * agentNodeId)` from the workflow definition), the renderer emits a bi-modal
-   * trailing block (`<workflow-output>` and `<workflow-clarify>` presented as
-   * equally first-class reply envelopes) so the agent treats ask-back as
-   * first-class instead of a contingency. Off by default keeps the non-clarify
-   * wire format identical to pre-RFC-023.
+   * RFC-023 + RFC-039: when true (scheduler computed
+   * `agentHasClarifyChannel(definition, agentNodeId)` from the workflow
+   * definition), the renderer emits a bi-modal trailing block. RFC-039
+   * sharpened the basetone so `<workflow-clarify>` is the default reply and
+   * `<workflow-output>` is only allowed when every decision has been pinned
+   * down — agents biased toward output even when the user wired a clarify
+   * channel. Off by default keeps the non-clarify wire format identical to
+   * pre-RFC-023.
    */
   hasClarifyChannel?: boolean
   /** Skills used by this agent. */
@@ -288,9 +290,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
 
   // 3. Render the user prompt. When the scheduler tells us this node has a
   // clarify channel wired in the workflow definition, the renderer rewrites
-  // the trailing protocol block as a bi-modal preamble (output vs clarify
-  // presented as equally first-class envelopes) and appends the clarify
-  // format block immediately after — see `buildProtocolBlock` in shared.
+  // the trailing protocol block as a bi-modal preamble (RFC-039: defaults to
+  // <workflow-clarify> first; <workflow-output> only when every decision is
+  // already pinned down) and appends the clarify format block immediately
+  // after — see `buildProtocolBlock` in shared.
   const prompt = renderUserPrompt({
     promptTemplate: opts.promptTemplate,
     inputs: opts.inputs,

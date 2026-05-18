@@ -698,6 +698,8 @@ describe('buildClarifyPromptContext', () => {
     })
     expect(ctx?.directive).toBe('continue')
     expect(ctx?.answersBlock ?? '').toContain('User directive: KEEP CLARIFYING IF NEEDED')
+    // RFC-039: continue trailer is now a strong directive
+    expect(ctx?.answersBlock ?? '').toContain('REQUIRED to be another')
   })
 })
 

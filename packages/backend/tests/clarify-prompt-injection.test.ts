@@ -83,14 +83,16 @@ describe('RFC-023 prompt token substitution', () => {
 
   // Locks in the bi-modal wording fix: when the scheduler tells the renderer
   // the agent node has a clarify channel, the trailing protocol block must
-  // present `<workflow-output>` and `<workflow-clarify>` as equally
-  // first-class envelopes BEFORE describing the output format. The previous
-  // single-envelope "You MUST end your reply with <workflow-output>" lead
-  // anchored the agent toward output even when blocking questions remained.
-  // Do not weaken these assertions without re-confirming the regression
-  // (agent biased toward output instead of asking back).
+  // present `<workflow-output>` and `<workflow-clarify>` as a bi-modal choice
+  // BEFORE describing the output format. RFC-039 further sharpened the
+  // basetone: the preamble now defaults to "(B) <workflow-clarify> first",
+  // explicitly demoting (A) to a permission gate. The previous
+  // "equally first-class" wording still let agents glide into output mode
+  // whenever inputs looked plausible. Do not weaken these assertions without
+  // re-confirming the regression (agent biased toward output instead of
+  // asking back, even when the user wired a clarify channel).
   describe('bi-modal trailing block when hasClarifyChannel=true', () => {
-    test('renderer emits bi-modal preamble and softens the output "MUST" wording', () => {
+    test('renderer emits ask-back-default preamble and softens the output "MUST" wording', () => {
       const out = renderUserPrompt({
         promptTemplate: 'do the thing',
         inputs: {},
@@ -99,8 +101,11 @@ describe('RFC-023 prompt token substitution', () => {
         hasClarifyChannel: true,
       })
       expect(out).toContain('This node has a clarify channel')
-      expect(out).toContain('Both envelopes are equally first-class')
-      expect(out).toContain('Do NOT default to (A)')
+      // RFC-039 strong-bias anchors
+      expect(out).toContain('The user has wired it because they expect you to ask back')
+      expect(out).toContain('By default, your next reply should be (B)')
+      expect(out).toContain('ONLY when every decision')
+      expect(out).toContain('you do NOT have the green light for (A)')
       // Output format wording is softened — no top-level "MUST end your reply"
       expect(out).not.toContain('You MUST end your reply with a `<workflow-output>` block')
       expect(out).toContain('When you are ready to commit the final answer')
@@ -149,4 +154,87 @@ describe('RFC-023 prompt.ts source-code-text grep guard', () => {
       expect(src).toContain(token)
     })
   }
+})
+
+// RFC-039 — strong ask-back bias when a clarify channel is wired. The user's
+// production complaint: with the legacy "equally first-class" wording, agents
+// glided into <workflow-output> whenever inputs looked plausible, ignoring the
+// user's explicit "I wired a clarify channel so you'd ask first" signal. These
+// tests lock the new default-to-(B) anchors. Do not weaken without fresh
+// production evidence — see design/RFC-039-clarify-ask-bias/proposal.md §G1.
+describe('RFC-039 bi-modal preamble default-asks (B) and lists ask-back triggers', () => {
+  test('preamble contains all four strong-bias anchors', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'do the thing',
+      inputs: {},
+      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+    })
+    // Anchor 1 — explains WHY ask-back is the default (the user wired it).
+    expect(out).toContain('The user has wired it because they expect you to ask back')
+    // Anchor 2 — sets (B) as the default reply.
+    expect(out).toContain('By default, your next reply should be (B)')
+    // Anchor 3 — names the gate for choosing (A).
+    expect(out).toContain('ONLY when every decision')
+    // Anchor 4 — escape-hatch denial when the agent is hedging.
+    expect(out).toContain('you do NOT have the green light for (A)')
+    // Anchor 5 — list of behaviours that should trigger (B), kept loose so the
+    // exact wording can drift slightly but the trigger set survives.
+    expect(out).toMatch(/marking decisions as "TBD"/)
+    expect(out).toMatch(/inventing constraints/)
+    expect(out).toMatch(/rationalizing your own pick/)
+  })
+
+  test('legacy "equally first-class" wording is gone', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'do the thing',
+      inputs: {},
+      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
+      agentOutputs: ['design'],
+      hasClarifyChannel: true,
+    })
+    expect(out).not.toContain('Both envelopes are equally first-class')
+    expect(out).not.toContain('Do NOT default to (A) just because')
+  })
+
+  test('non-clarify-channel path stays on the legacy single-envelope wording', () => {
+    // RFC-039 only sharpens the hasClarifyChannel=true branch. Channels that
+    // never wired clarify must still see the original "MUST end your reply
+    // with <workflow-output>" wording — otherwise non-clarify workflows would
+    // suddenly see a phantom (B) option they have no way to honour.
+    const out = renderUserPrompt({
+      promptTemplate: 'do the thing',
+      inputs: {},
+      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
+      agentOutputs: ['design'],
+    })
+    expect(out).toContain('You MUST end your reply with a `<workflow-output>` block')
+    expect(out).not.toContain('By default, your next reply should be (B)')
+    expect(out).not.toContain('This node has a clarify channel')
+  })
+})
+
+// RFC-039 — prompt.ts / clarify.ts source-code grep guards. Prevents a future
+// refactor from silently re-introducing the legacy soft wording. The pattern
+// mirrors the RFC-023 guards above + the `selectionOnDrag` guard from RFC-022.
+describe('RFC-039 source-code grep guards', () => {
+  const PROMPT_SRC = readFileSync(PROMPT_TS_PATH, 'utf8')
+  const CLARIFY_SRC = readFileSync(resolve(__dirname, '../../shared/src/clarify.ts'), 'utf8')
+
+  test('prompt.ts must not retain the legacy "equally first-class" wording', () => {
+    expect(PROMPT_SRC).not.toContain('Both envelopes are equally first-class')
+  })
+
+  test('prompt.ts contains the RFC-039 strong-bias preamble anchor', () => {
+    expect(PROMPT_SRC).toContain('By default, your next reply should be (B)')
+  })
+
+  test('clarify.ts must not retain the legacy "willing to answer" continue wording', () => {
+    expect(CLARIFY_SRC).not.toContain('willing to answer more clarification questions')
+  })
+
+  test('clarify.ts contains the RFC-039 strong-bias continue anchor', () => {
+    expect(CLARIFY_SRC).toContain('REQUIRED to be another')
+  })
 })

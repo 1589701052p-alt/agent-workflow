@@ -216,8 +216,13 @@ export function buildClarifyPromptBlock(
  *  so the directive sits right where the agent finishes consuming the
  *  user's answers.
  *
- *  - 'continue' → mild reminder that the agent may keep asking; the
- *    `<workflow-clarify>` protocol block remains attached by the runner.
+ *  - 'continue' → RFC-039 strong directive: user clicked "Keep clarifying",
+ *    so the agent is REQUIRED to emit another `<workflow-clarify>` envelope
+ *    unless every remaining detail is fully resolved by the prior answers.
+ *    The runner keeps the `<workflow-clarify>` protocol block attached.
+ *    Soft escape hatch — the agent may still emit `<workflow-output>` if and
+ *    only if zero unresolved decisions remain; the framework does not
+ *    hard-reject the choice.
  *  - 'stop'    → hard instruction not to clarify this rerun, paired with
  *    the runner withholding the protocol block so the agent literally
  *    can't see the JSON template anymore.
@@ -236,7 +241,9 @@ export function renderClarifyDirectiveTrailer(directive?: ClarifyDirective): str
   if (directive === 'continue') {
     return [
       '### User directive: KEEP CLARIFYING IF NEEDED',
-      '- The user is willing to answer more clarification questions. If material details remain unresolved after the answers above, emit another <workflow-clarify> envelope covering every remaining detail before producing <workflow-output>.',
+      '- The user has explicitly clicked "Keep clarifying" — they want you to ask another round.',
+      '- Your next reply is REQUIRED to be another `<workflow-clarify>` envelope unless every single unresolved detail has been fully pinned down by the answers above. Inventing a "good enough" excuse to skip to <workflow-output> defeats the user\'s stated intent.',
+      '- If — and only if — re-reading the answers above leaves zero unresolved decisions, you may emit <workflow-output> instead. Otherwise emit <workflow-clarify> with every still-open question.',
     ].join('\n')
   }
   return ''

@@ -151,13 +151,14 @@ export interface RenderPromptInput {
    *  where the agent's clarify channel is wired but it hasn't yet asked. */
   clarifyContext?: ClarifyPromptContext
   /**
-   * RFC-023: when true, the trailing protocol block is rewritten as a bi-modal
-   * preamble that presents `<workflow-output>` and `<workflow-clarify>` as
-   * equally-first-class reply envelopes (instead of the legacy "MUST end with
-   * <workflow-output>" wording, which anchored the agent toward output even
-   * when it had blocking questions). The clarify-format block is appended
-   * after. When undefined / false, the legacy single-envelope wording is
-   * emitted unchanged.
+   * RFC-023 + RFC-039: when true, the trailing protocol block is rewritten
+   * as a bi-modal preamble. RFC-039 made the basetone "default to (B)
+   * `<workflow-clarify>`; emit (A) `<workflow-output>` only when every
+   * decision is already pinned down" — the legacy "MUST end with
+   * <workflow-output>" wording anchored the agent toward output, and the
+   * intermediate "equally first-class" framing was still too soft. The
+   * clarify-format block is appended after. When undefined / false, the
+   * legacy single-envelope wording is emitted unchanged.
    */
   hasClarifyChannel?: boolean
 }
@@ -362,15 +363,16 @@ export function renderUserPrompt(input: RenderPromptInput): string {
  * The English protocol block. Always appended to user prompt, never to the
  * agent's system prompt (agent.md body is passed through verbatim).
  *
- * When `hasClarifyChannel` is true (RFC-023), the block is rewritten as a
- * bi-modal preamble: it announces that the reply must be EXACTLY ONE of two
- * envelopes (`<workflow-output>` or `<workflow-clarify>`) before the agent
- * starts drafting, then describes the output format with softened wording.
- * The clarify-format block is appended by `renderUserPrompt` immediately
- * after. The bi-modal framing exists because the legacy single-envelope
- * "You MUST end your reply with <workflow-output>" wording anchored the
- * agent toward output even when blocking questions remained — a real
- * production regression that this rewording targets.
+ * When `hasClarifyChannel` is true (RFC-023 + RFC-039), the block is rewritten
+ * as a bi-modal preamble. RFC-039 sharpened the basetone: the default is now
+ * "you should ask back (B)"; emitting `<workflow-output>` directly is allowed
+ * ONLY when every decision needed to satisfy the inputs has already been
+ * pinned down. The user wired a clarify channel because they expect ask-back;
+ * the legacy "equally first-class" wording was too soft and let agents glide
+ * into output mode whenever the inputs looked plausible. The clarify-format
+ * block is appended by `renderUserPrompt` immediately after. No runner-side
+ * hard rejection — the agent retains an escape hatch when inputs are truly
+ * unambiguous.
  *
  * When `agentOutputKinds` declares any port as `markdown_file`, the block
  * additionally emits explicit "write the file first, then emit only the
@@ -415,13 +417,15 @@ export function buildProtocolBlock(
 
   let s = '\n\n---\n'
   s +=
-    '**This node has a clarify channel. Your reply must be EXACTLY ONE of two envelopes — decide which one applies BEFORE you start drafting:**\n\n'
+    '**This node has a clarify channel. The user has wired it because they expect you to ask back when intent is under-specified.**\n\n'
   s +=
-    '  (A) `<workflow-output>` — you have everything you need and are committing the final answer for the ports listed below.\n'
+    'By default, your next reply should be (B) `<workflow-clarify>` — ask the user to disambiguate before you commit a final answer. You may emit (A) `<workflow-output>` directly ONLY when every decision needed to satisfy the inputs has already been pinned down by the prompt / inputs / earlier rounds — i.e. there is genuinely nothing left to ask. Picking (A) means you are taking full responsibility that no naming choice, technical option, UX decision, or unstated constraint is being guessed at.\n\n'
   s +=
-    '  (B) `<workflow-clarify>` — you have unresolved questions, missing context, or decisions you would otherwise have to guess at, and you need the user to resolve them before you can produce a useful answer. Format described under "Clarify mode is enabled for this node" below.\n\n'
+    'If, while drafting, you find yourself: hedging, marking decisions as "TBD", inventing constraints not given by the inputs, choosing between plausible alternatives without a stated preference, or rationalizing your own pick of the user\'s intent — you do NOT have the green light for (A); emit (B) instead.\n\n'
   s +=
-    'Both envelopes are equally first-class. Do NOT default to (A) just because its format is shown first or feels like the "normal" path. If, while drafting (A), you find yourself hedging, marking decisions as "TBD", inventing constraints not given by the inputs, or guessing at the user\'s intent — stop and emit (B) instead. Asking back is the correct behavior when intent is genuinely under-specified; silently picking a direction and committing it as final is the failure mode this channel exists to prevent.\n\n'
+    '  (A) `<workflow-output>` — final answer, format described under "(A) `<workflow-output>` format" below.\n'
+  s +=
+    '  (B) `<workflow-clarify>` — ask the user; format described under "Clarify mode is enabled for this node" further below.\n\n'
   s += '— (A) `<workflow-output>` format —\n'
   s +=
     'When you are ready to commit the final answer, end your reply with a `<workflow-output>` block listing these ports:\n'

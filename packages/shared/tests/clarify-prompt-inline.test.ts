@@ -72,7 +72,8 @@ describe('RFC-026 renderUserPrompt — inline mode', () => {
     expect(out).toContain(buildClarifyInlineReminder().trim())
     // Full bi-modal preamble / clarify format block must NOT be re-emitted
     expect(out).not.toContain('This node has a clarify channel.')
-    expect(out).not.toContain('Both envelopes are equally first-class')
+    expect(out).not.toContain('By default, your next reply should be (B)')
+    expect(out).not.toContain('The user has wired it because they expect you to ask back')
     expect(out).not.toContain('Clarify mode is enabled for this node')
     // Legacy single-envelope wording must also not appear
     expect(out).not.toContain('You MUST end your reply with a `<workflow-output>` block')
@@ -84,6 +85,20 @@ describe('RFC-026 renderUserPrompt — inline mode', () => {
     expect(reminder).toContain('<workflow-clarify>')
     expect(reminder).toContain('User Answers (Current Round)')
     expect(reminder).toMatch(/session/i)
+  })
+
+  // RFC-039: inline reminder was NOT touched by the ask-back-bias rewrite —
+  // it is a short kickoff for an opencode session that already has the full
+  // bi-modal preamble in its memory, so re-strengthening here would just
+  // duplicate context the agent already saw. Lock the wording verbatim so a
+  // future RFC-039-adjacent edit doesn't inadvertently re-touch this string.
+  test('RFC-039: inline reminder wording locked verbatim', () => {
+    expect(buildClarifyInlineReminder()).toBe(
+      '\n\n---\n' +
+        'The user has answered your previous `<workflow-clarify>` round (see "Clarify Q&A — User Answers (Current Round)" above). ' +
+        'Reply with EXACTLY ONE envelope — either `<workflow-output>` if the answers unblocked you, or another `<workflow-clarify>` if real blockers remain. ' +
+        'Earlier rounds, the full envelope formats, and the asking-back rules are still in this session — they have not been re-emitted.',
+    )
   })
 
   // ---------------------------------------------------------------------------

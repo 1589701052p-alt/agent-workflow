@@ -12,7 +12,7 @@
 //      — duplicating here so a future split of that file doesn't silently
 //      drop this one.)
 //   3. shared/src/prompt.ts MUST still call buildClarifyProtocolBlock — the
-//      bi-modal rewrite (output + clarify presented as equally first-class)
+//      bi-modal rewrite (RFC-039: ask-back-default preamble for output + clarify)
 //      moved this call out of runner.ts and into renderUserPrompt so the
 //      preamble in `buildProtocolBlock(outputs, hasClarifyChannel=true)` and
 //      the clarify-format block always travel together. Asserting on the
