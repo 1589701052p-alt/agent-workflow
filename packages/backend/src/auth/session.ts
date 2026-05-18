@@ -28,9 +28,27 @@ export interface MultiAuthDeps {
   now?: () => number
 }
 
+// RFC-036 — public paths that bypass multiAuth entirely. The OIDC login flow
+// must be reachable before the user has a session token (they are obtaining
+// one via the IdP). Each entry is a path prefix; `:slug` segments are
+// matched by the literal-then-/ shape, no regex required.
+const PUBLIC_PATH_PREFIXES = [
+  '/api/auth/oidc/providers', // list enabled providers for the login page
+  '/api/auth/oidc/', // /api/auth/oidc/:slug/login/start + /callback
+  '/api/auth/login',
+] as const
+
+function isPublicAuthPath(path: string): boolean {
+  return PUBLIC_PATH_PREFIXES.some((p) => path === p || path.startsWith(p))
+}
+
 export function multiAuth(deps: MultiAuthDeps): MiddlewareHandler {
   const daemonBuf = Buffer.from(deps.daemonToken, 'utf-8')
   return async (c, next) => {
+    if (isPublicAuthPath(c.req.path)) {
+      await next()
+      return
+    }
     const raw = extractRawToken(c)
     if (!raw) throw new UnauthorizedError()
     const now = deps.now ? deps.now() : Date.now()

@@ -6,16 +6,20 @@ import { Hono } from 'hono'
 import type { MiddlewareHandler } from 'hono'
 import { actorOf } from '@/auth/actor'
 import { requirePermission, resourcePermissionGate } from '@/auth/permissions'
+import type { SecretBox } from '@/auth/secretBox'
 import { multiAuth } from '@/auth/session'
 import type { DbClient } from '@/db/client'
 import { ForbiddenError } from '@/util/errors'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
+import { mountAuthRoutes } from '@/routes/auth'
 import { mountBackupRoutes } from '@/routes/backup'
 import { mountCachedRepoRoutes } from '@/routes/cached-repos'
 import { mountConfigRoutes } from '@/routes/config'
 import { mountHealthRoutes } from '@/routes/health'
 import { mountMcpRoutes } from '@/routes/mcps'
+import { mountOidcRoutes } from '@/routes/oidc'
+import { mountOidcAuthRoutes } from '@/routes/oidc-auth'
 import { mountPluginRoutes } from '@/routes/plugins'
 import { mountRepoRoutes } from '@/routes/repos'
 import { mountRuntimeRoutes } from '@/routes/runtime'
@@ -40,6 +44,12 @@ export interface AppDeps {
   dbVersion: number
   /** Drizzle DB client. */
   db: DbClient
+  /**
+   * RFC-036 — AES-256-GCM seal/unseal helper. Required only for the OIDC
+   * routes (admin CRUD + login callback). Tests that do not exercise OIDC
+   * can omit it; the OIDC routes refuse to mount without it.
+   */
+  secretBox?: SecretBox
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -140,6 +150,11 @@ export function createApp(deps: AppDeps): Hono {
   mountWorktreeFilesRoutes(app, deps)
   mountReviewRoutes(app, deps)
   mountClarifyRoutes(app, deps)
+  // RFC-036 — auth + OIDC + user-CRUD routes. The first three are always
+  // mounted; OIDC routes self-skip when deps.secretBox is omitted.
+  mountAuthRoutes(app, deps)
+  mountOidcAuthRoutes(app, deps)
+  mountOidcRoutes(app, deps)
 
   app.onError(errorHandler)
 
