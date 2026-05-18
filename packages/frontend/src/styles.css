@@ -842,6 +842,172 @@ code {
   max-width: none;
 }
 
+/* RFC-036 — OIDC provider create/edit dialog form. Three fieldsets
+   (Provider / Credentials / Behavior), each with a small section title
+   + descriptive hint. Inputs span the full content width (no 360-px
+   cap from .account-form__field). Visual rhythm matches the rest of
+   the settings tabs. */
+.oidc-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.oidc-form__group {
+  border: 0;
+  margin: 0;
+  padding: 14px 16px 16px;
+  background: color-mix(in srgb, var(--border) 16%, transparent);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.oidc-form__group-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  padding: 0;
+  margin: 0 0 -4px;
+}
+
+.oidc-form__group-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.oidc-form__row {
+  display: grid;
+  gap: 12px;
+}
+
+.oidc-form__row--cols-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 600px) {
+  .oidc-form__row--cols-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.oidc-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.oidc-form__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.oidc-form__hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.oidc-form input[type='text'],
+.oidc-form input[type='password'],
+.oidc-form input[type='url'],
+.oidc-form input:not([type]) {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+
+.oidc-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* Toggle row — checkbox + stacked title/hint, full-width hit target. */
+.oidc-form__toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.oidc-form__toggle input[type='checkbox'] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.oidc-form__toggle-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.oidc-form__toggle-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.oidc-form__test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.oidc-form__test-result--ok {
+  background: color-mix(in srgb, var(--success, #2c8a2c) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #2c8a2c) 35%, var(--border));
+}
+
+.oidc-form__test-result--err {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.oidc-form__test-detail {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.oidc-form__test-detail code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.oidc-form__error {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  color: var(--danger);
+  font-size: 12px;
+}
+
 /* Role / status / source chips */
 .role-chip {
   display: inline-flex;

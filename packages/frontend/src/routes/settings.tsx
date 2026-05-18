@@ -826,7 +826,7 @@ function OidcProviderDialog(props: {
           ? t('settings.auth.addTitle', { defaultValue: 'Add OIDC provider' })
           : t('settings.auth.editTitle', { defaultValue: 'Edit OIDC provider' })
       }
-      size="md"
+      size="lg"
       footer={
         <>
           {props.mode === 'edit' && (
@@ -857,158 +857,239 @@ function OidcProviderDialog(props: {
     >
       <form
         id="oidc-provider-form"
-        className="account-form"
+        className="oidc-form"
         onSubmit={(e) => {
           e.preventDefault()
           setError(null)
           save.mutate()
         }}
       >
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.slug', { defaultValue: 'Slug (URL-safe identifier)' })}
-          </span>
-          <input
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            pattern="[a-z0-9][a-z0-9-]{0,63}"
-            required
-            placeholder="e.g. github-enterprise"
-          />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.displayName', { defaultValue: 'Display name' })}
-          </span>
-          <input
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            required
-            placeholder="e.g. GitHub Enterprise"
-          />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.issuerUrl', { defaultValue: 'Issuer URL' })}
-          </span>
-          <input
-            type="url"
-            value={issuerUrl}
-            onChange={(e) => setIssuerUrl(e.target.value)}
-            required
-            placeholder="https://github.corp.com"
-          />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.clientId', { defaultValue: 'Client ID' })}
-          </span>
-          <input value={clientId} onChange={(e) => setClientId(e.target.value)} required />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.clientSecret', { defaultValue: 'Client secret' })}
-            {props.mode === 'edit' && (
-              <span className="auth-tab__hint-inline">
-                {' '}
-                {t('settings.auth.clientSecretEditHint', {
-                  defaultValue: '(leave blank to keep current)',
+        <fieldset className="oidc-form__group">
+          <legend className="oidc-form__group-title">
+            {t('settings.auth.groupProvider', { defaultValue: 'Provider' })}
+          </legend>
+          <p className="oidc-form__group-hint">
+            {t('settings.auth.groupProviderHint', {
+              defaultValue:
+                'Identifies this IdP in the URL and on the login page button. The issuer URL is what the daemon points OIDC discovery at.',
+            })}
+          </p>
+          <div className="oidc-form__row oidc-form__row--cols-2">
+            <label className="oidc-form__field">
+              <span className="oidc-form__label">
+                {t('settings.auth.slug', { defaultValue: 'Slug' })}
+              </span>
+              <input
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                pattern="[a-z0-9][a-z0-9-]{0,63}"
+                required
+                placeholder="github-enterprise"
+              />
+              <span className="oidc-form__hint">
+                {t('settings.auth.slugHint', {
+                  defaultValue: 'Used in /api/auth/oidc/<slug>/callback',
                 })}
               </span>
-            )}
-          </span>
-          <input
-            type="password"
-            value={clientSecret}
-            onChange={(e) => setClientSecret(e.target.value)}
-            required={props.mode === 'create'}
-          />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.scopes', { defaultValue: 'Scopes' })}
-          </span>
-          <input value={scopes} onChange={(e) => setScopes(e.target.value)} required />
-        </label>
-        <label className="account-form__field">
-          <span className="account-form__label">
-            {t('settings.auth.provisioning', { defaultValue: 'Provisioning' })}
-          </span>
-          <Select<'auto' | 'allowlist' | 'invite'>
-            value={provisioning}
-            onChange={setProvisioning}
-            ariaLabel={t('settings.auth.provisioning', { defaultValue: 'Provisioning' })}
-            options={[
-              {
-                value: 'invite',
-                label: 'invite',
-                description: t('settings.auth.inviteDesc', {
-                  defaultValue: 'Only pre-created users with matching verified email may sign in.',
-                }),
-              },
-              {
-                value: 'allowlist',
-                label: 'allowlist',
-                description: t('settings.auth.allowlistDesc', {
-                  defaultValue:
-                    'Auto-provision users whose verified email matches an allowed domain.',
-                }),
-              },
-              {
-                value: 'auto',
-                label: 'auto',
-                description: t('settings.auth.autoDesc', {
-                  defaultValue:
-                    'Auto-provision any successful IdP login. Use only with a trusted IdP.',
-                }),
-              },
-            ]}
-            renderOption={(opt) => (
-              <span className="select__option-stack">
-                <span className="select__option-title">{opt.label}</span>
-                {opt.description && <span className="select__option-sub">{opt.description}</span>}
+            </label>
+            <label className="oidc-form__field">
+              <span className="oidc-form__label">
+                {t('settings.auth.displayName', { defaultValue: 'Display name' })}
               </span>
-            )}
-          />
-        </label>
-        {provisioning === 'allowlist' && (
-          <label className="account-form__field">
-            <span className="account-form__label">
-              {t('settings.auth.allowedDomains', {
-                defaultValue: 'Allowed email domains (comma-separated, e.g. @corp.com)',
-              })}
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+                placeholder="GitHub Enterprise"
+              />
+              <span className="oidc-form__hint">
+                {t('settings.auth.displayNameHint', {
+                  defaultValue: 'Shown on the login page button.',
+                })}
+              </span>
+            </label>
+          </div>
+          <label className="oidc-form__field">
+            <span className="oidc-form__label">
+              {t('settings.auth.issuerUrl', { defaultValue: 'Issuer URL' })}
             </span>
             <input
-              value={allowedDomains}
-              onChange={(e) => setAllowedDomains(e.target.value)}
-              placeholder="@corp.com, @subsidiary.com"
+              type="url"
+              value={issuerUrl}
+              onChange={(e) => setIssuerUrl(e.target.value)}
+              required
+              placeholder="https://github.corp.com"
+            />
+            <span className="oidc-form__hint">
+              {t('settings.auth.issuerUrlHint', {
+                defaultValue: 'Daemon fetches <issuer>/.well-known/openid-configuration.',
+              })}
+            </span>
+          </label>
+        </fieldset>
+
+        <fieldset className="oidc-form__group">
+          <legend className="oidc-form__group-title">
+            {t('settings.auth.groupCreds', { defaultValue: 'Credentials' })}
+          </legend>
+          <p className="oidc-form__group-hint">
+            {t('settings.auth.groupCredsHint', {
+              defaultValue:
+                'OAuth 2.0 client your daemon impersonates against the IdP. Secret is AES-256-GCM-sealed at rest.',
+            })}
+          </p>
+          <div className="oidc-form__row oidc-form__row--cols-2">
+            <label className="oidc-form__field">
+              <span className="oidc-form__label">
+                {t('settings.auth.clientId', { defaultValue: 'Client ID' })}
+              </span>
+              <input value={clientId} onChange={(e) => setClientId(e.target.value)} required />
+            </label>
+            <label className="oidc-form__field">
+              <span className="oidc-form__label">
+                {t('settings.auth.clientSecret', { defaultValue: 'Client secret' })}
+              </span>
+              <input
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                required={props.mode === 'create'}
+                placeholder={
+                  props.mode === 'edit'
+                    ? t('settings.auth.clientSecretEditHint', {
+                        defaultValue: 'leave blank to keep current',
+                      })
+                    : ''
+                }
+              />
+            </label>
+          </div>
+          <label className="oidc-form__field">
+            <span className="oidc-form__label">
+              {t('settings.auth.scopes', { defaultValue: 'Scopes' })}
+            </span>
+            <input value={scopes} onChange={(e) => setScopes(e.target.value)} required />
+            <span className="oidc-form__hint">
+              {t('settings.auth.scopesHint', {
+                defaultValue: 'Space-separated. openid is required; profile + email recommended.',
+              })}
+            </span>
+          </label>
+        </fieldset>
+
+        <fieldset className="oidc-form__group">
+          <legend className="oidc-form__group-title">
+            {t('settings.auth.groupBehavior', { defaultValue: 'Behavior' })}
+          </legend>
+          <label className="oidc-form__field">
+            <span className="oidc-form__label">
+              {t('settings.auth.provisioning', { defaultValue: 'Provisioning policy' })}
+            </span>
+            <Select<'auto' | 'allowlist' | 'invite'>
+              value={provisioning}
+              onChange={setProvisioning}
+              ariaLabel={t('settings.auth.provisioning', { defaultValue: 'Provisioning' })}
+              options={[
+                {
+                  value: 'invite',
+                  label: t('settings.auth.optInvite', { defaultValue: 'invite (recommended)' }),
+                  description: t('settings.auth.inviteDesc', {
+                    defaultValue:
+                      'Only pre-created users with matching verified email may sign in.',
+                  }),
+                },
+                {
+                  value: 'allowlist',
+                  label: t('settings.auth.optAllowlist', { defaultValue: 'allowlist' }),
+                  description: t('settings.auth.allowlistDesc', {
+                    defaultValue:
+                      'Auto-provision users whose verified email matches an allowed domain.',
+                  }),
+                },
+                {
+                  value: 'auto',
+                  label: t('settings.auth.optAuto', { defaultValue: 'auto' }),
+                  description: t('settings.auth.autoDesc', {
+                    defaultValue:
+                      'Auto-provision any successful IdP login. Use only with a trusted IdP.',
+                  }),
+                },
+              ]}
+              renderOption={(opt) => (
+                <span className="select__option-stack">
+                  <span className="select__option-title">{opt.label}</span>
+                  {opt.description && <span className="select__option-sub">{opt.description}</span>}
+                </span>
+              )}
             />
           </label>
-        )}
-        <label className="account-form__field account-form__field--inline">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <span>
-            {t('settings.auth.enabledLabel', {
-              defaultValue: 'Enabled (show on login page)',
-            })}
-          </span>
-        </label>
+          {provisioning === 'allowlist' && (
+            <label className="oidc-form__field">
+              <span className="oidc-form__label">
+                {t('settings.auth.allowedDomains', { defaultValue: 'Allowed email domains' })}
+              </span>
+              <input
+                value={allowedDomains}
+                onChange={(e) => setAllowedDomains(e.target.value)}
+                placeholder="@corp.com, @subsidiary.com"
+              />
+              <span className="oidc-form__hint">
+                {t('settings.auth.allowedDomainsHint', {
+                  defaultValue:
+                    'Comma-separated, each prefixed with @. email_verified=true is also required.',
+                })}
+              </span>
+            </label>
+          )}
+          <label className="oidc-form__toggle">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span className="oidc-form__toggle-body">
+              <span className="oidc-form__toggle-title">
+                {t('settings.auth.enabledLabel', { defaultValue: 'Enabled' })}
+              </span>
+              <span className="oidc-form__hint">
+                {t('settings.auth.enabledHint', {
+                  defaultValue: 'Visible on the login page when on; hidden when off.',
+                })}
+              </span>
+            </span>
+          </label>
+        </fieldset>
+
         {testResult && (
           <div
-            className={
-              testResult.ok ? 'account-callout account-callout--success' : 'auth-form__error'
-            }
+            className={`oidc-form__test-result oidc-form__test-result--${
+              testResult.ok ? 'ok' : 'err'
+            }`}
           >
             {testResult.ok ? (
-              <span>
-                ✓ {testResult.issuer} · token={new URL(testResult.tokenEndpoint).host}
-              </span>
+              <>
+                <strong>
+                  ✓ {t('settings.auth.testOk', { defaultValue: 'Connection successful' })}
+                </strong>
+                <span className="oidc-form__test-detail">
+                  issuer: <code>{testResult.issuer}</code>
+                  <br />
+                  token: <code>{new URL(testResult.tokenEndpoint).host}</code>
+                  <br />
+                  jwks: <code>{new URL(testResult.jwksUri).host}</code>
+                </span>
+              </>
             ) : (
-              <span>✗ {testResult.error}</span>
+              <>
+                <strong>
+                  ✗ {t('settings.auth.testFail', { defaultValue: 'Connection failed' })}
+                </strong>
+                <span className="oidc-form__test-detail">{testResult.error}</span>
+              </>
             )}
           </div>
         )}
-        {error && <div className="auth-form__error">{error}</div>}
+        {error && <div className="oidc-form__error">{error}</div>}
       </form>
     </Dialog>
   )
