@@ -6,6 +6,7 @@ import { createRoute } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
+import { Dialog } from '@/components/Dialog'
 import { usePermission } from '@/hooks/useActor'
 import { Route as RootRoute } from './__root'
 
@@ -139,61 +140,78 @@ function CreateUserDialog(props: {
   const [role, setRole] = useState<'admin' | 'user'>('user')
   const [password, setPassword] = useState('')
   return (
-    <div className="dialog__overlay" role="dialog" aria-modal="true">
-      <div className="dialog">
-        <h2>{t('users.create.title', { defaultValue: 'New user' })}</h2>
-        <form
-          className="auth-form"
-          onSubmit={(e) => {
-            e.preventDefault()
-            const body: Parameters<typeof props.onSubmit>[0] = { username, displayName, role }
-            if (password) body.password = password
-            props.onSubmit(body)
-          }}
-        >
-          <label>
+    <Dialog
+      open
+      onClose={props.onCancel}
+      title={t('users.create.title', { defaultValue: 'New user' })}
+      size="sm"
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={props.onCancel}>
+            {t('users.cancel', { defaultValue: 'Cancel' })}
+          </button>
+          <button
+            type="submit"
+            form="users-create-form"
+            className="btn btn--primary"
+            disabled={props.busy}
+          >
+            {t('users.create.submit', { defaultValue: 'Create' })}
+          </button>
+        </>
+      }
+    >
+      <form
+        id="users-create-form"
+        className="users-create-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          const body: Parameters<typeof props.onSubmit>[0] = { username, displayName, role }
+          if (password) body.password = password
+          props.onSubmit(body)
+        }}
+      >
+        <label className="form-field">
+          <span className="form-field__label">
             {t('users.username', { defaultValue: 'Username' })}
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              pattern="[a-z0-9][a-z0-9_-]{0,63}"
-              required
-            />
-          </label>
-          <label>
+          </span>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            pattern="[a-z0-9][a-z0-9_-]{0,63}"
+            required
+            autoFocus
+          />
+        </label>
+        <label className="form-field">
+          <span className="form-field__label">
             {t('users.displayName', { defaultValue: 'Display name' })}
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
-          </label>
-          <label>
-            {t('users.role', { defaultValue: 'Role' })}
-            <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'user')}>
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </select>
-          </label>
-          <label>
+          </span>
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
+        </label>
+        <label className="form-field">
+          <span className="form-field__label">{t('users.role', { defaultValue: 'Role' })}</span>
+          <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'user')}>
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span className="form-field__label">
             {t('users.password', {
               defaultValue: 'Password (leave blank for invite-only)',
             })}
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              minLength={8}
-            />
-          </label>
-          {props.error && <div className="auth-form__error">{props.error}</div>}
-          <div className="dialog__actions">
-            <button type="button" onClick={props.onCancel}>
-              {t('users.cancel', { defaultValue: 'Cancel' })}
-            </button>
-            <button type="submit" className="btn btn--primary" disabled={props.busy}>
-              {t('users.create.submit', { defaultValue: 'Create' })}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          </span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
+          />
+        </label>
+        {props.error && <div className="form-field__error">{props.error}</div>}
+      </form>
+    </Dialog>
   )
 }
 

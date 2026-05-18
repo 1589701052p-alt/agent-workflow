@@ -379,6 +379,33 @@ code {
   border-radius: 0 0 4px 4px;
 }
 
+/* RFC-036 — create-user form body inside <Dialog>. Stack of labelled
+   inputs with consistent gap; inputs span the panel width. */
+.users-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.users-create-form input,
+.users-create-form select {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+
+.users-create-form input:focus,
+.users-create-form select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 /* RFC-032 — 3-group sidebar nav. Group headers are 11-px small caps that
    sit at the sidebar's gutter edge; sub-items are 32-px tall rows indented
    to read as children of their group header. */
