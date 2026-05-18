@@ -221,16 +221,142 @@ code {
 .sidebar__footer {
   margin-top: auto;
   display: flex;
-  flex-direction: row;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
-.sidebar__footer .language-switch {
+/* RFC-036 — the bottom-most controls row hosts LanguageSwitch on the left
+   (grows to fill the sidebar width) and the admin gear on the right. The
+   UserMenu sits in a separate stacked row above this one. */
+.sidebar__footer-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar__footer-row .language-switch {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* RFC-036 — UserMenu sidebar-footer dropdown. The trigger is a full-width
+   pill that shows the user's avatar initial + username; the dropdown
+   anchors above-left (sidebar lives on the left edge, dropdown can't go
+   left of the viewport). */
+.user-menu {
+  position: relative;
+  width: 100%;
+}
+
+.user-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.user-menu__trigger:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.user-menu__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.user-menu__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.user-menu__dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.18));
+  padding: 6px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-menu__header {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.user-menu__header strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.user-menu__role {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+.user-menu__item {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.user-menu__item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.user-menu__item--danger {
+  color: var(--danger);
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  border-radius: 0 0 4px 4px;
 }
 
 /* RFC-032 — 3-group sidebar nav. Group headers are 11-px small caps that

@@ -148,9 +148,11 @@ function RootComponent() {
         </nav>
         <InboxFooterButton open={inboxOpen} onToggle={() => setInboxOpen((v) => !v)} />
         <div className="sidebar__footer">
-          <LanguageSwitch />
           <UserMenu />
-          <AdminGear active={active.onSettings} />
+          <div className="sidebar__footer-row">
+            <LanguageSwitch />
+            <AdminGear active={active.onSettings} />
+          </div>
         </div>
       </aside>
       <main className="content">
