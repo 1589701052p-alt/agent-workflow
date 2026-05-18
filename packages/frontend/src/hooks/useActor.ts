@@ -1,8 +1,16 @@
 // RFC-036 — current actor + permission set from /api/auth/me.
 // Returns null while loading or when unauthenticated.
+//
+// Cache strategy: the auth token participates in the queryKey so logging
+// out + back in with a different account invalidates the prior actor's
+// /me payload immediately (instead of holding stale role/permission data
+// until the 30-s staleTime elapses). A null token short-circuits the
+// fetch and returns null.
 
 import { useQuery } from '@tanstack/react-query'
+import { useSyncExternalStore } from 'react'
 import { api } from '@/api/client'
+import { getToken, subscribeAuth } from '@/stores/auth'
 
 export interface MeResponse {
   user: {
@@ -18,12 +26,24 @@ export interface MeResponse {
   pats: unknown[]
 }
 
-export const ACTOR_QUERY_KEY = ['auth', 'me']
+/** Base queryKey prefix. Components that want to invalidate every actor
+ *  variant can do `queryClient.invalidateQueries({ queryKey: ACTOR_QUERY_KEY })`. */
+export const ACTOR_QUERY_KEY = ['auth', 'me'] as const
+
+function useAuthTokenSnapshot(): string | null {
+  return useSyncExternalStore(subscribeAuth, getToken, () => null)
+}
 
 export function useActor() {
-  const q = useQuery<MeResponse | null>({
-    queryKey: ACTOR_QUERY_KEY,
+  const token = useAuthTokenSnapshot()
+  return useQuery<MeResponse | null>({
+    // Including the token in the key makes "log out → log in as someone
+    // else" surface fresh /me data instantly. Token is process-local state
+    // (not network-bound), so leaking it through the React Query devtools
+    // is no different from leaking it through localStorage.
+    queryKey: [...ACTOR_QUERY_KEY, token ?? 'no-token'],
     queryFn: async () => {
+      if (!token) return null
       try {
         return await api.get<MeResponse>('/api/auth/me')
       } catch {
@@ -32,8 +52,10 @@ export function useActor() {
     },
     staleTime: 30_000,
     refetchOnWindowFocus: false,
+    // Drop the previously-cached value on token change so consumers don't
+    // briefly render last-user data while the new query is in-flight.
+    placeholderData: undefined,
   })
-  return q
 }
 
 export function usePermission(perm: string): boolean {
