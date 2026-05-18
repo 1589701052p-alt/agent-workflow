@@ -481,6 +481,57 @@ export interface Resources {
     renderingTestSuccess: string
     renderingTestFailure: string
     renderingTestEmptyEndpoint: string
+    // RFC-036 — Authentication tab (OIDC providers admin).
+    auth: {
+      providersTitle: string
+      providersHint: string
+      add: string
+      empty: string
+      colSlug: string
+      colName: string
+      colIssuer: string
+      colProvisioning: string
+      colEnabled: string
+      enabled: string
+      disabled: string
+      edit: string
+      delete: string
+      deleteConfirm: string
+      addTitle: string
+      editTitle: string
+      testConnection: string
+      cancel: string
+      save: string
+      groupProvider: string
+      groupProviderHint: string
+      slug: string
+      slugHint: string
+      displayName: string
+      displayNameHint: string
+      issuerUrl: string
+      issuerUrlHint: string
+      groupCreds: string
+      groupCredsHint: string
+      clientId: string
+      clientSecret: string
+      clientSecretEditHint: string
+      scopes: string
+      scopesHint: string
+      groupBehavior: string
+      provisioning: string
+      optInvite: string
+      optAllowlist: string
+      optAuto: string
+      inviteDesc: string
+      allowlistDesc: string
+      autoDesc: string
+      allowedDomains: string
+      allowedDomainsHint: string
+      enabledLabel: string
+      enabledHint: string
+      testOk: string
+      testFail: string
+    }
   }
   onboarding: {
     title: string
@@ -1646,6 +1697,59 @@ export const zhCN: Resources = {
     renderingTestSuccess: '已返回 svg，端点可用。',
     renderingTestFailure: '渲染失败：',
     renderingTestEmptyEndpoint: '请先填写端点 URL。',
+    auth: {
+      providersTitle: 'OIDC 身份提供商',
+      providersHint:
+        '配置用户可用来登录的外部身份提供商。每条记录保存 OAuth 2.0 / OIDC 的 client_id + client_secret + scopes；secret 在落盘前会用 AES-256-GCM 加密。',
+      add: '添加提供商',
+      empty: '还没有配置任何提供商。添加一条以启用单点登录。',
+      colSlug: '标识',
+      colName: '显示名',
+      colIssuer: 'Issuer',
+      colProvisioning: '准入策略',
+      colEnabled: '状态',
+      enabled: '启用',
+      disabled: '停用',
+      edit: '编辑',
+      delete: '删除',
+      deleteConfirm: '确定要删除提供商 "{{name}}" 吗？',
+      addTitle: '添加 OIDC 提供商',
+      editTitle: '编辑 OIDC 提供商',
+      testConnection: '测试连接',
+      cancel: '取消',
+      save: '保存',
+      groupProvider: '提供商',
+      groupProviderHint:
+        '在 URL 和登录页按钮上标识该 IdP。Issuer URL 是 daemon 拉取 OIDC discovery 的起点。',
+      slug: '标识符',
+      slugHint: '用于 /api/auth/oidc/<标识符>/callback；仅限小写字母/数字/连字符。',
+      displayName: '显示名',
+      displayNameHint: '登录页按钮上的文字。',
+      issuerUrl: 'Issuer URL',
+      issuerUrlHint: 'daemon 会请求 <issuer>/.well-known/openid-configuration。',
+      groupCreds: '凭据',
+      groupCredsHint:
+        'daemon 用来访问 IdP 的 OAuth 2.0 客户端凭据。Secret 落盘前 AES-256-GCM 加密。',
+      clientId: 'Client ID',
+      clientSecret: 'Client Secret',
+      clientSecretEditHint: '留空则保留现有值',
+      scopes: 'Scopes',
+      scopesHint: '空格分隔。openid 是必需的；推荐同时申请 profile + email。',
+      groupBehavior: '行为',
+      provisioning: '准入策略',
+      optInvite: '邀请制（推荐）',
+      optAllowlist: '域名白名单',
+      optAuto: '自动',
+      inviteDesc: '只有预先创建、已验证邮箱匹配的用户才能登录。',
+      allowlistDesc: '已验证邮箱命中允许域名的用户自动开通账号。',
+      autoDesc: '任何成功完成 IdP 登录的用户都自动开通。仅在 IdP 完全可信时使用。',
+      allowedDomains: '允许的邮箱域名',
+      allowedDomainsHint: '逗号分隔，每个域名以 @ 开头；同时要求 email_verified=true。',
+      enabledLabel: '启用',
+      enabledHint: '开启后会出现在登录页；关闭则隐藏。',
+      testOk: '连接成功',
+      testFail: '连接失败',
+    },
   },
   onboarding: {
     title: '欢迎使用 Agent Workflow',
