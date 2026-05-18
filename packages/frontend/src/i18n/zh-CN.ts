@@ -368,6 +368,36 @@ export interface Resources {
     provider: string
     subject: string
     noIdentities: string
+    patScopesLabel: string
+    patSelectAll: string
+    patSelectDefault: string
+    patSelectNone: string
+    patNoScopes: string
+    patGroup: {
+      spa: string
+      tasks: string
+      resourceRead: string
+      admin: string
+    }
+    patScope: {
+      accountSelf: { label: string; desc: string }
+      usersSearch: { label: string; desc: string }
+      runtimeRead: { label: string; desc: string }
+      tasksLaunch: { label: string; desc: string }
+      tasksReadOwn: { label: string; desc: string }
+      tasksCancelOwn: { label: string; desc: string }
+      agentsRead: { label: string; desc: string }
+      skillsRead: { label: string; desc: string }
+      mcpsRead: { label: string; desc: string }
+      pluginsRead: { label: string; desc: string }
+      workflowsRead: { label: string; desc: string }
+      reposRead: { label: string; desc: string }
+      usersRead: { label: string; desc: string }
+      usersWrite: { label: string; desc: string }
+      settingsRead: { label: string; desc: string }
+      settingsWrite: { label: string; desc: string }
+      tasksReadAll: { label: string; desc: string }
+    }
   }
   // RFC-036 — /users admin page.
   users: {
@@ -1588,6 +1618,48 @@ export const zhCN: Resources = {
     provider: '提供商',
     subject: 'Subject',
     noIdentities: '还没有绑定任何身份。',
+    patScopesLabel: '权限范围',
+    patSelectAll: '全选',
+    patSelectDefault: '默认',
+    patSelectNone: '清空',
+    patNoScopes: '请至少勾选一个权限。',
+    patGroup: {
+      spa: 'Web 访问 — 使用此 Token 登录网页时需要',
+      tasks: '任务',
+      resourceRead: '只读资源',
+      admin: '管理员权限 — 仅在你的角色为 admin 时实际生效',
+    },
+    patScope: {
+      accountSelf: {
+        label: '账户自助',
+        desc: '读取 /api/auth/me、改自己密码、管理自己的 PAT 和会话。',
+      },
+      usersSearch: {
+        label: '搜索用户',
+        desc: 'launcher / collaborators 选用户时需要。仅返回公开字段。',
+      },
+      runtimeRead: {
+        label: '运行时状态',
+        desc: '首页运行时小圆点和 /settings 运行时面板依赖这条。',
+      },
+      tasksLaunch: { label: '启动任务', desc: '提交 POST /api/tasks 启动新任务。' },
+      tasksReadOwn: { label: '查看自己的任务', desc: '查看你 owner 或被加入协作的任务。' },
+      tasksCancelOwn: { label: '取消自己的任务', desc: '中止你 owner 的任务。' },
+      agentsRead: { label: '浏览 Agents', desc: '读取 agent 列表 / 详情。' },
+      skillsRead: { label: '浏览 Skills', desc: '读取 skill 列表 / 详情。' },
+      mcpsRead: { label: '浏览 MCP', desc: '读取 MCP 列表 / 详情 / 探针结果。' },
+      pluginsRead: { label: '浏览插件', desc: '读取 opencode 插件列表 / 详情。' },
+      workflowsRead: { label: '浏览工作流', desc: '读取 workflow 列表 / 定义。' },
+      reposRead: { label: '浏览远端仓', desc: '读取 cached_repos 列表 / 同步状态。' },
+      usersRead: { label: '读取用户列表', desc: '/api/users 完整字段（含 email、上次登录）。' },
+      usersWrite: { label: '管理用户', desc: '新建 / 编辑 / 停用 / 重置密码。' },
+      settingsRead: { label: '读取设置', desc: '/api/config 完整字段。' },
+      settingsWrite: { label: '修改设置', desc: 'PUT /api/config 改全局配置。' },
+      tasksReadAll: {
+        label: '查看所有任务',
+        desc: '不止 owner 或 collaborator —— 整库可见。仅管理员。',
+      },
+    },
   },
   users: {
     title: '用户',

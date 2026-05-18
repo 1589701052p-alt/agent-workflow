@@ -1106,17 +1106,31 @@ code {
   color: var(--muted);
 }
 
-/* RFC-036 — PAT scope picker (account/PatSection). Four fieldsets in a
-   tinted card, each listing the scope codes as checkbox rows. The card
-   gives it the same visual weight as the rest of the account-form
-   without inheriting account-form__field's max-width cap. */
+/* RFC-036 — PAT scope picker (account/PatSection). Four labelled groups,
+   each row is a card with checkbox + friendly title + short description
+   + small mono permission-code chip. Card hover + checked-state border
+   help the row read as a tappable target instead of a dense form. */
 .pat-scopes {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  background: color-mix(in srgb, var(--border) 20%, transparent);
-  border-radius: 8px;
+  gap: 16px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--border) 18%, transparent);
+  border-radius: 10px;
+}
+
+.pat-scopes__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pat-scopes__bulk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .pat-scopes__group {
@@ -1125,23 +1139,34 @@ code {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .pat-scopes__group-title {
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text);
+  padding: 0 4px;
+  margin: 0;
+}
+
+.pat-scopes__group-count {
+  font-size: 11px;
+  font-weight: 500;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 0;
-  margin: 0 0 2px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: 999px;
 }
 
 .pat-scopes__list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 6px 16px;
+  gap: 8px;
 }
 
 @media (max-width: 540px) {
@@ -1152,22 +1177,64 @@ code {
 
 .pat-scopes__row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
   cursor: pointer;
   user-select: none;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
 }
 
-.pat-scopes__row code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--text);
+.pat-scopes__row:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.pat-scopes__row--checked {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
 }
 
 .pat-scopes__row input[type='checkbox'] {
-  margin: 0;
+  margin: 2px 0 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.pat-scopes__row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pat-scopes__row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pat-scopes__row-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pat-scopes__row-code {
+  margin-top: 4px;
+  align-self: flex-start;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--border) 30%, transparent);
+  border: 1px solid var(--border);
 }
 
 /* Scope chips inside PAT list rows. */

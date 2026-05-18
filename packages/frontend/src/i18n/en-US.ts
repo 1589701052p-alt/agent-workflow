@@ -235,6 +235,57 @@ export const enUS: Resources = {
     provider: 'Provider',
     subject: 'Subject',
     noIdentities: 'No linked identities yet.',
+    patScopesLabel: 'Scopes',
+    patSelectAll: 'Select all',
+    patSelectDefault: 'Defaults',
+    patSelectNone: 'Clear',
+    patNoScopes: 'Pick at least one scope.',
+    patGroup: {
+      spa: 'Web access — required to sign into the SPA with this token',
+      tasks: 'Tasks',
+      resourceRead: 'Browse resources',
+      admin: 'Admin — only effective if your role is admin',
+    },
+    patScope: {
+      accountSelf: {
+        label: 'Self-service',
+        desc: 'Read /api/auth/me, change your own password, manage your PATs and sessions.',
+      },
+      usersSearch: {
+        label: 'Search users',
+        desc: 'Needed by launcher / collaborators pickers. Public fields only.',
+      },
+      runtimeRead: {
+        label: 'Runtime status',
+        desc: 'Homepage runtime dot + /settings runtime panel rely on this.',
+      },
+      tasksLaunch: { label: 'Launch tasks', desc: 'POST /api/tasks — start a new task.' },
+      tasksReadOwn: {
+        label: 'View own tasks',
+        desc: 'See tasks you own or were added to as a collaborator.',
+      },
+      tasksCancelOwn: { label: 'Cancel own tasks', desc: 'Abort tasks you own.' },
+      agentsRead: { label: 'Browse agents', desc: 'List + read agent definitions.' },
+      skillsRead: { label: 'Browse skills', desc: 'List + read skill definitions.' },
+      mcpsRead: { label: 'Browse MCPs', desc: 'List + read MCP definitions + probe results.' },
+      pluginsRead: { label: 'Browse plugins', desc: 'List + read opencode plugins.' },
+      workflowsRead: { label: 'Browse workflows', desc: 'List + read workflow definitions.' },
+      reposRead: {
+        label: 'Browse repos',
+        desc: 'List cached_repos + sync status.',
+      },
+      usersRead: {
+        label: 'Read user directory',
+        desc: '/api/users full fields (email + last-login).',
+      },
+      usersWrite: { label: 'Manage users', desc: 'Create / edit / disable / reset password.' },
+      settingsRead: { label: 'Read settings', desc: '/api/config full fields.' },
+      settingsWrite: { label: 'Update settings', desc: 'PUT /api/config to change global config.' },
+      tasksReadAll: {
+        label: 'View all tasks',
+        desc: 'Beyond owner or collaborator — see the whole task list. Admin only.',
+      },
+    },
   },
   users: {
     title: 'Users',

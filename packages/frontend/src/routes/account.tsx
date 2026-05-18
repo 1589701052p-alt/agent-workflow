@@ -176,42 +176,136 @@ function PasswordSection() {
   )
 }
 
-// Curated list of scopes the user can toggle on a PAT. Keys map 1:1 to
-// PERMISSIONS in the shared catalog; we intentionally don't expose every
-// admin-only point here — admins can still grant them by checking the
-// matching boxes (the backend intersects PAT scopes with the role baseline
-// anyway, so a regular-user PAT cannot escalate).
-const PAT_SCOPE_GROUPS: ReadonlyArray<{
+// Curated list of scopes the user can toggle on a PAT. Each scope carries
+// a friendly i18n label + short description so the picker reads as
+// purposes ("Launch tasks") rather than literal permission codes
+// ("tasks:launch"). The bare code is still rendered in a small mono chip
+// below the label so admins / CI authors can still tell exactly what each
+// box maps to.
+//
+// Admins can grant any box in any group; the backend intersects PAT scopes
+// with the role baseline so a regular-user PAT with the "Admin" boxes
+// ticked just has them stripped (no privilege escalation possible).
+
+interface PatScopeDef {
+  code: string
+  /** i18n key for the friendly label (e.g. "Launch tasks"). */
+  labelKey: string
+  /** i18n key for the one-line description (the "why pick this" hint). */
+  descKey: string
+}
+
+interface PatScopeGroup {
+  /** i18n key for the section heading. */
   titleKey: string
-  defaultTitle: string
-  scopes: string[]
-}> = [
+  scopes: PatScopeDef[]
+}
+
+const PAT_SCOPE_GROUPS: ReadonlyArray<PatScopeGroup> = [
   {
     titleKey: 'account.patGroup.spa',
-    defaultTitle: 'SPA access (needed to use the web UI as this PAT)',
-    scopes: ['account:self', 'users:search', 'runtime:read'],
+    scopes: [
+      {
+        code: 'account:self',
+        labelKey: 'account.patScope.accountSelf.label',
+        descKey: 'account.patScope.accountSelf.desc',
+      },
+      {
+        code: 'users:search',
+        labelKey: 'account.patScope.usersSearch.label',
+        descKey: 'account.patScope.usersSearch.desc',
+      },
+      {
+        code: 'runtime:read',
+        labelKey: 'account.patScope.runtimeRead.label',
+        descKey: 'account.patScope.runtimeRead.desc',
+      },
+    ],
   },
   {
     titleKey: 'account.patGroup.tasks',
-    defaultTitle: 'Tasks',
-    scopes: ['tasks:launch', 'tasks:read:own', 'tasks:cancel:own'],
+    scopes: [
+      {
+        code: 'tasks:launch',
+        labelKey: 'account.patScope.tasksLaunch.label',
+        descKey: 'account.patScope.tasksLaunch.desc',
+      },
+      {
+        code: 'tasks:read:own',
+        labelKey: 'account.patScope.tasksReadOwn.label',
+        descKey: 'account.patScope.tasksReadOwn.desc',
+      },
+      {
+        code: 'tasks:cancel:own',
+        labelKey: 'account.patScope.tasksCancelOwn.label',
+        descKey: 'account.patScope.tasksCancelOwn.desc',
+      },
+    ],
   },
   {
     titleKey: 'account.patGroup.resourceRead',
-    defaultTitle: 'Browse resources',
     scopes: [
-      'agents:read',
-      'skills:read',
-      'mcps:read',
-      'plugins:read',
-      'workflows:read',
-      'repos:read',
+      {
+        code: 'agents:read',
+        labelKey: 'account.patScope.agentsRead.label',
+        descKey: 'account.patScope.agentsRead.desc',
+      },
+      {
+        code: 'skills:read',
+        labelKey: 'account.patScope.skillsRead.label',
+        descKey: 'account.patScope.skillsRead.desc',
+      },
+      {
+        code: 'mcps:read',
+        labelKey: 'account.patScope.mcpsRead.label',
+        descKey: 'account.patScope.mcpsRead.desc',
+      },
+      {
+        code: 'plugins:read',
+        labelKey: 'account.patScope.pluginsRead.label',
+        descKey: 'account.patScope.pluginsRead.desc',
+      },
+      {
+        code: 'workflows:read',
+        labelKey: 'account.patScope.workflowsRead.label',
+        descKey: 'account.patScope.workflowsRead.desc',
+      },
+      {
+        code: 'repos:read',
+        labelKey: 'account.patScope.reposRead.label',
+        descKey: 'account.patScope.reposRead.desc',
+      },
     ],
   },
   {
     titleKey: 'account.patGroup.admin',
-    defaultTitle: 'Admin (only effective if your role is admin)',
-    scopes: ['users:read', 'users:write', 'settings:read', 'settings:write', 'tasks:read:all'],
+    scopes: [
+      {
+        code: 'users:read',
+        labelKey: 'account.patScope.usersRead.label',
+        descKey: 'account.patScope.usersRead.desc',
+      },
+      {
+        code: 'users:write',
+        labelKey: 'account.patScope.usersWrite.label',
+        descKey: 'account.patScope.usersWrite.desc',
+      },
+      {
+        code: 'settings:read',
+        labelKey: 'account.patScope.settingsRead.label',
+        descKey: 'account.patScope.settingsRead.desc',
+      },
+      {
+        code: 'settings:write',
+        labelKey: 'account.patScope.settingsWrite.label',
+        descKey: 'account.patScope.settingsWrite.desc',
+      },
+      {
+        code: 'tasks:read:all',
+        labelKey: 'account.patScope.tasksReadAll.label',
+        descKey: 'account.patScope.tasksReadAll.desc',
+      },
+    ],
   },
 ]
 
@@ -220,7 +314,7 @@ function defaultPatScopes(): Set<string> {
   // read groups. This is what most CI / script PATs actually need; admins
   // can still tick admin boxes by hand.
   const out = new Set<string>()
-  for (const g of PAT_SCOPE_GROUPS.slice(0, 3)) for (const s of g.scopes) out.add(s)
+  for (const g of PAT_SCOPE_GROUPS.slice(0, 3)) for (const s of g.scopes) out.add(s.code)
   return out
 }
 
@@ -295,28 +389,73 @@ function PatSection() {
           />
         </label>
         <div className="pat-scopes">
-          <span className="account-form__label">
-            {t('account.patScopesLabel', { defaultValue: 'Scopes' })}
-          </span>
-          {PAT_SCOPE_GROUPS.map((g) => (
-            <fieldset key={g.titleKey} className="pat-scopes__group">
-              <legend className="pat-scopes__group-title">
-                {t(g.titleKey, { defaultValue: g.defaultTitle })}
-              </legend>
-              <div className="pat-scopes__list">
-                {g.scopes.map((s) => (
-                  <label key={s} className="pat-scopes__row">
-                    <input
-                      type="checkbox"
-                      checked={scopes.has(s)}
-                      onChange={() => toggleScope(s)}
-                    />
-                    <code>{s}</code>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ))}
+          <div className="pat-scopes__header">
+            <span className="account-form__label">
+              {t('account.patScopesLabel', { defaultValue: 'Scopes' })}
+            </span>
+            <div className="pat-scopes__bulk">
+              <button
+                type="button"
+                className="btn btn--ghost btn--xs"
+                onClick={() => {
+                  const all = new Set<string>()
+                  for (const g of PAT_SCOPE_GROUPS) for (const s of g.scopes) all.add(s.code)
+                  setScopes(all)
+                }}
+              >
+                {t('account.patSelectAll', { defaultValue: 'Select all' })}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--xs"
+                onClick={() => setScopes(defaultPatScopes())}
+              >
+                {t('account.patSelectDefault', { defaultValue: 'Defaults' })}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--xs"
+                onClick={() => setScopes(new Set())}
+              >
+                {t('account.patSelectNone', { defaultValue: 'Clear' })}
+              </button>
+            </div>
+          </div>
+          {PAT_SCOPE_GROUPS.map((g) => {
+            const checkedCount = g.scopes.filter((s) => scopes.has(s.code)).length
+            return (
+              <fieldset key={g.titleKey} className="pat-scopes__group">
+                <legend className="pat-scopes__group-title">
+                  <span>{t(g.titleKey)}</span>
+                  <span className="pat-scopes__group-count">
+                    {checkedCount}/{g.scopes.length}
+                  </span>
+                </legend>
+                <div className="pat-scopes__list">
+                  {g.scopes.map((s) => {
+                    const checked = scopes.has(s.code)
+                    return (
+                      <label
+                        key={s.code}
+                        className={`pat-scopes__row ${checked ? 'pat-scopes__row--checked' : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleScope(s.code)}
+                        />
+                        <span className="pat-scopes__row-body">
+                          <span className="pat-scopes__row-title">{t(s.labelKey)}</span>
+                          <span className="pat-scopes__row-desc">{t(s.descKey)}</span>
+                          <code className="pat-scopes__row-code">{s.code}</code>
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
+            )
+          })}
         </div>
         <div className="account-form__actions">
           <button
