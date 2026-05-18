@@ -1101,6 +1101,14 @@ code {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
+/* RFC-036 — /users table inline role-change error. */
+.users-row__error {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--danger);
+  line-height: 1.4;
+}
+
 .role-chip--user {
   background: color-mix(in srgb, var(--muted) 15%, transparent);
   color: var(--muted);

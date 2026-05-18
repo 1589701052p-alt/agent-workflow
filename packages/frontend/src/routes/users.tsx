@@ -54,6 +54,22 @@ function UsersPage() {
     mutationFn: (id: string) => api.delete(`/api/users/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
+  // RFC-036 — inline role change. The backend's last-admin-protection
+  // already refuses to demote the only remaining admin (422
+  // last-admin-protection); we surface that error inline rather than
+  // pre-disabling the option client-side so an admin who *is* the last
+  // admin sees a real reason for the refusal.
+  const [roleError, setRoleError] = useState<{ id: string; msg: string } | null>(null)
+  const updateRole = useMutation({
+    mutationFn: (args: { id: string; role: 'admin' | 'user' }) =>
+      api.patch(`/api/users/${args.id}`, { role: args.role }),
+    onMutate: () => setRoleError(null),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e: unknown, vars) => {
+      const msg = e instanceof ApiError ? e.message : ((e as Error).message ?? 'failed')
+      setRoleError({ id: vars.id, msg })
+    },
+  })
 
   if (!allowed) {
     return (
@@ -90,26 +106,64 @@ function UsersPage() {
           </tr>
         </thead>
         <tbody>
-          {(data ?? []).map((u) => (
-            <tr key={u.id}>
-              <td>
-                <code>{u.username}</code>
-              </td>
-              <td>{u.displayName}</td>
-              <td>{u.role}</td>
-              <td>{u.status}</td>
-              <td>
-                {u.id !== '__system__' && u.status === 'active' && (
-                  <button
-                    className="btn btn--ghost btn--xs btn--danger"
-                    onClick={() => disable.mutate(u.id)}
-                  >
-                    {t('users.disable', { defaultValue: 'Disable' })}
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
+          {(data ?? []).map((u) => {
+            const isSystem = u.id === '__system__'
+            const showRoleError = roleError?.id === u.id
+            return (
+              <tr key={u.id}>
+                <td>
+                  <code>{u.username}</code>
+                </td>
+                <td>{u.displayName}</td>
+                <td>
+                  {isSystem ? (
+                    <span className="role-chip role-chip--admin">{u.role}</span>
+                  ) : (
+                    <Select<'admin' | 'user'>
+                      value={u.role}
+                      onChange={(role) => {
+                        if (role === u.role) return
+                        updateRole.mutate({ id: u.id, role })
+                      }}
+                      ariaLabel={t('users.role', { defaultValue: 'Role' })}
+                      options={[
+                        {
+                          value: 'user',
+                          label: t('users.roleOption.user'),
+                          description: t('users.roleOption.userDesc'),
+                        },
+                        {
+                          value: 'admin',
+                          label: t('users.roleOption.admin'),
+                          description: t('users.roleOption.adminDesc'),
+                        },
+                      ]}
+                      renderOption={(opt) => (
+                        <span className="select__option-stack">
+                          <span className="select__option-title">{opt.label}</span>
+                          {opt.description && (
+                            <span className="select__option-sub">{opt.description}</span>
+                          )}
+                        </span>
+                      )}
+                    />
+                  )}
+                  {showRoleError && <div className="users-row__error">{roleError.msg}</div>}
+                </td>
+                <td>{u.status}</td>
+                <td>
+                  {!isSystem && u.status === 'active' && (
+                    <button
+                      className="btn btn--ghost btn--xs btn--danger"
+                      onClick={() => disable.mutate(u.id)}
+                    >
+                      {t('users.disable', { defaultValue: 'Disable' })}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
       {showCreate && (
