@@ -935,33 +935,83 @@ code {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-/* Toggle row — checkbox + stacked title/hint, full-width hit target. */
+/* iOS-style toggle row: title + sub-hint on the left, sliding switch on
+   the right. Whole row is a click target. */
 .oidc-form__toggle {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--bg);
   cursor: pointer;
 }
 
-.oidc-form__toggle input[type='checkbox'] {
-  margin-top: 2px;
-  flex-shrink: 0;
+.oidc-form__toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
 .oidc-form__toggle-body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .oidc-form__toggle-title {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text);
+}
+
+/* The native <input type="checkbox"> renders as a sliding pill — appearance
+   stripped, sizing fixed, ::before drawn as the thumb. accent-color is
+   var(--accent) when checked. Matches the .form-switch primitive used in
+   the agent + mcp + plugin forms but lives in the OIDC namespace so I don't
+   accidentally inherit settings-form-specific margins. */
+.oidc-form__toggle input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.oidc-form__toggle input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+
+.oidc-form__toggle input[type='checkbox']:checked {
+  background: var(--accent);
+}
+
+.oidc-form__toggle input[type='checkbox']:checked::before {
+  transform: translateX(16px);
+}
+
+.oidc-form__toggle input[type='checkbox']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .oidc-form__test-result {

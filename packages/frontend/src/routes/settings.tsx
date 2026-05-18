@@ -1042,11 +1042,6 @@ function OidcProviderDialog(props: {
             </label>
           )}
           <label className="oidc-form__toggle">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
             <span className="oidc-form__toggle-body">
               <span className="oidc-form__toggle-title">
                 {t('settings.auth.enabledLabel', { defaultValue: 'Enabled' })}
@@ -1057,6 +1052,12 @@ function OidcProviderDialog(props: {
                 })}
               </span>
             </span>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+              aria-label={t('settings.auth.enabledLabel', { defaultValue: 'Enabled' })}
+            />
           </label>
         </fieldset>
 
