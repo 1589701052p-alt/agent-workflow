@@ -7,7 +7,9 @@ import { useNavigate } from '@tanstack/react-router'
 import type { CreateAgent } from '@agent-workflow/shared'
 import { AGENT_NAME_RE } from '@agent-workflow/shared'
 import { AgentDependsPicker } from './AgentDependsPicker'
+import { DependencyAutodetectButton } from './agents/DependencyAutodetectButton'
 import { DependencyTreePreview } from './agents/DependencyTreePreview'
+import { mergeAgentDeps } from '@/lib/agent-dep-detect'
 import { Field, NumberInput, Switch, TextArea, TextInput } from './Form'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
@@ -113,6 +115,13 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             placeholder={t('agentForm.fieldDependsOnPlaceholder')}
           />
         </Field>
+
+        <DependencyAutodetectButton
+          bodyMd={value.bodyMd ?? ''}
+          value={value}
+          selfName={value.name}
+          onApply={(selection) => onChange(mergeAgentDeps(value, selection))}
+        />
 
         <Field label={t('agentForm.fieldDependencyTree')}>
           <DependencyTreePreview

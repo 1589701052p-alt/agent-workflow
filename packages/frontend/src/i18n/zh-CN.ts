@@ -1083,6 +1083,29 @@ export interface Resources {
     bodyPlaceholder: string
     rawBodySummary: string
     importButton: string
+    autodetect: {
+      button: string
+      disabledHint: string
+      dialogTitle: string
+      dialogHint: string
+      emptyText: string
+      groupLoadFailed: string
+      groupName: {
+        agents: string
+        skills: string
+        mcps: string
+        plugins: string
+      }
+      section: {
+        agents: string
+        skills: string
+        mcps: string
+        plugins: string
+      }
+      cancelButton: string
+      applyButton: string
+      closeButton: string
+    }
     importDialog: {
       title: string
       tabUpload: string
@@ -2514,6 +2537,29 @@ export const zhCN: Resources = {
     bodyPlaceholder: 'Agent 系统提示词；Markdown。',
     rawBodySummary: '裸 markdown（无预览）',
     importButton: '从 agent.md 导入',
+    autodetect: {
+      button: '自动识别依赖',
+      disabledHint: '请先填写 agent 正文',
+      dialogTitle: '识别到的潜在依赖',
+      dialogHint: '按子串匹配，请人工确认每一项',
+      emptyText: '未识别到新依赖',
+      groupLoadFailed: '{{group}} 列表加载失败，已跳过',
+      groupName: {
+        agents: 'Agent',
+        skills: 'Skill',
+        mcps: 'MCP',
+        plugins: 'Plugin',
+      },
+      section: {
+        agents: 'Agents（{{count}}）',
+        skills: 'Skills（{{count}}）',
+        mcps: 'MCPs（{{count}}）',
+        plugins: 'Plugins（{{count}}）',
+      },
+      cancelButton: '取消',
+      applyButton: '导入选中（{{count}}）',
+      closeButton: '关闭',
+    },
     importDialog: {
       title: '从 agent.md 导入',
       tabUpload: '上传文件',

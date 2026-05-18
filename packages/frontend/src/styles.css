@@ -35,8 +35,7 @@
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
-  --shadow-lg:
-    0 20px 40px rgba(0, 0, 0, 0.25), 0 4px 10px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.25), 0 4px 10px rgba(0, 0, 0, 0.12);
 
   /* Semantic status colors. --danger is reused from above. */
   --success: #2da44e;
@@ -7082,21 +7081,51 @@ mark.comment-anchor[data-active='true'] {
 /* Per-column widths keep the widest text (Path / Hint / Specifier) from
    eating all the horizontal real estate. Percentages so the table still
    responds to drawer-width changes. */
-.inventory-table--agents col.col-name { width: 22%; }
-.inventory-table--agents col.col-mode { width: 12%; }
-.inventory-table--agents col.col-model { width: 36%; }
-.inventory-table--agents col.col-ro { width: 10%; }
-.inventory-table--agents col.col-source { width: 20%; }
-.inventory-table--skills col.col-name { width: 22%; }
-.inventory-table--skills col.col-source { width: 14%; }
-.inventory-table--skills col.col-path { width: 32%; }
-.inventory-table--skills col.col-desc { width: 32%; }
-.inventory-table--mcps col.col-name { width: 26%; }
-.inventory-table--mcps col.col-status { width: 22%; }
-.inventory-table--mcps col.col-type { width: 14%; }
-.inventory-table--mcps col.col-hint { width: 38%; }
-.inventory-table--plugins col.col-specifier { width: 75%; }
-.inventory-table--plugins col.col-source { width: 25%; }
+.inventory-table--agents col.col-name {
+  width: 22%;
+}
+.inventory-table--agents col.col-mode {
+  width: 12%;
+}
+.inventory-table--agents col.col-model {
+  width: 36%;
+}
+.inventory-table--agents col.col-ro {
+  width: 10%;
+}
+.inventory-table--agents col.col-source {
+  width: 20%;
+}
+.inventory-table--skills col.col-name {
+  width: 22%;
+}
+.inventory-table--skills col.col-source {
+  width: 14%;
+}
+.inventory-table--skills col.col-path {
+  width: 32%;
+}
+.inventory-table--skills col.col-desc {
+  width: 32%;
+}
+.inventory-table--mcps col.col-name {
+  width: 26%;
+}
+.inventory-table--mcps col.col-status {
+  width: 22%;
+}
+.inventory-table--mcps col.col-type {
+  width: 14%;
+}
+.inventory-table--mcps col.col-hint {
+  width: 38%;
+}
+.inventory-table--plugins col.col-specifier {
+  width: 75%;
+}
+.inventory-table--plugins col.col-source {
+  width: 25%;
+}
 .status-badge {
   display: inline-block;
   padding: 1px 6px;
@@ -7352,4 +7381,59 @@ mark.comment-anchor[data-active='true'] {
 }
 .settings-hint--tight {
   margin-bottom: 0;
+}
+
+/* RFC-038 — AgentForm "auto-detect dependencies" button + dialog. */
+.agent-form__autodetect-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--space-2);
+}
+.agent-dep-autodetect__hint {
+  margin-top: 0;
+  margin-bottom: var(--space-3);
+  font-size: var(--font-sm);
+}
+.agent-dep-autodetect__section + .agent-dep-autodetect__section {
+  margin-top: var(--space-3);
+}
+.agent-dep-autodetect__section-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+.agent-dep-autodetect__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.agent-dep-autodetect__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  min-width: 0;
+}
+.agent-dep-autodetect__row input[type='checkbox'] {
+  margin: 0;
+  flex-shrink: 0;
+}
+.agent-dep-autodetect__name {
+  flex-shrink: 0;
+}
+.agent-dep-autodetect__desc {
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-dep-autodetect__failures {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-xs);
 }
