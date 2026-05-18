@@ -174,7 +174,13 @@ async function buildHarness(opts: HarnessOpts): Promise<Harness> {
   process.env.AGENT_WORKFLOW_HOME = appHome
 
   const task = await startTask(
-    { workflowId: wf.id, repoPath, baseBranch: 'main', inputs: { topic: 'orders' } },
+    {
+      workflowId: wf.id,
+      name: 'fixture-task',
+      repoPath,
+      baseBranch: 'main',
+      inputs: { topic: 'orders' },
+    },
     { db, appHome, opencodeCmd: [stubOpencode], awaitScheduler: true },
   )
 

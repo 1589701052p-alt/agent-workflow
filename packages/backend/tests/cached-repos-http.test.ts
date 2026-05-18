@@ -141,6 +141,8 @@ describe('cached-repos HTTP routes (RFC-024 T5)', () => {
     h.db
       .insert(tasks)
       .values({
+        name: 'fixture-task',
+
         id: ulid(),
         workflowId: wfId,
         workflowSnapshot: '{}',

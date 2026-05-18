@@ -41,6 +41,8 @@ interface TextInputProps {
   disabled?: boolean
   required?: boolean
   pattern?: string
+  maxLength?: number
+  'data-testid'?: string
 }
 
 export function TextInput({
@@ -51,6 +53,8 @@ export function TextInput({
   disabled,
   required,
   pattern,
+  maxLength,
+  'data-testid': testid,
 }: TextInputProps) {
   return (
     <input
@@ -62,6 +66,8 @@ export function TextInput({
       disabled={disabled}
       required={required}
       pattern={pattern}
+      maxLength={maxLength}
+      data-testid={testid}
     />
   )
 }

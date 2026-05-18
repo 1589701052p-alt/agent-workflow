@@ -158,6 +158,7 @@ describe('/clarify/$nodeRunId detail (RFC-023 T23)', () => {
       {
         id: 'sess_a',
         taskId: 'task_a',
+        taskName: 'fixture-task',
         sourceAgentNodeId: 'designer',
         sourceShardKey: 'shard-A',
         clarifyNodeId: 'c1',
@@ -171,6 +172,7 @@ describe('/clarify/$nodeRunId detail (RFC-023 T23)', () => {
       {
         id: 'sess_b',
         taskId: 'task_a',
+        taskName: 'fixture-task',
         sourceAgentNodeId: 'designer',
         sourceShardKey: 'shard-B',
         clarifyNodeId: 'c1',

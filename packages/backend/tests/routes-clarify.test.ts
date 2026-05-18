@@ -93,6 +93,8 @@ async function seedSession(
   await db
     .insert(tasks)
     .values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId,
       workflowSnapshot: JSON.stringify(def),

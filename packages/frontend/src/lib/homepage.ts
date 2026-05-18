@@ -16,6 +16,12 @@ export interface InboxPreviewItem {
   kind: 'review' | 'clarify'
   id: string
   taskId: string
+  /**
+   * RFC-037: user-supplied task display name, copied from the joined
+   * `tasks.name`. Renderers show this as a chip / breadcrumb so the inbox
+   * can disambiguate multiple tasks that share a workflow.
+   */
+  taskName: string
   title: string
   subtitle: string
   /** Used for sort + relative-time rendering. */
@@ -42,6 +48,7 @@ export function mergeInboxItems(
       kind: 'review',
       id: r.nodeRunId,
       taskId: r.taskId,
+      taskName: r.taskName,
       title: r.title,
       subtitle: r.workflowName,
       timestamp: r.createdAt,
@@ -59,6 +66,7 @@ export function mergeInboxItems(
       kind: 'clarify',
       id: c.clarifyNodeRunId,
       taskId: c.taskId,
+      taskName: c.taskName,
       title: agentTitle,
       subtitle:
         c.sourceShardKey !== null && c.sourceShardKey !== ''

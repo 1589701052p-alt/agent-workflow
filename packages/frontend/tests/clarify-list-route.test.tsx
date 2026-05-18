@@ -54,6 +54,7 @@ function mkSummary(overrides: Partial<ClarifySessionSummary> = {}): ClarifySessi
   return {
     id: 'sess_1',
     taskId: 'task_a',
+    taskName: 'fixture-task',
     sourceAgentNodeId: 'designer',
     sourceShardKey: null,
     clarifyNodeId: 'c1',
@@ -125,9 +126,19 @@ describe('/clarify list (RFC-023 T22)', () => {
 
   test('renders shard key on rows with sourceShardKey non-null, groups by task', async () => {
     mockListResponse([
-      mkSummary({ id: 's1', taskId: 'task_a', sourceShardKey: 'shard-A' }),
-      mkSummary({ id: 's2', taskId: 'task_a', sourceShardKey: 'shard-B' }),
-      mkSummary({ id: 's3', taskId: 'task_b', sourceShardKey: null }),
+      mkSummary({
+        id: 's1',
+        taskId: 'task_a',
+        taskName: 'fixture-task',
+        sourceShardKey: 'shard-A',
+      }),
+      mkSummary({
+        id: 's2',
+        taskId: 'task_a',
+        taskName: 'fixture-task',
+        sourceShardKey: 'shard-B',
+      }),
+      mkSummary({ id: 's3', taskId: 'task_b', taskName: 'fixture-task', sourceShardKey: null }),
     ])
     renderWithRouter()
     await waitFor(() => screen.getByTestId('clarify-row-s1'))

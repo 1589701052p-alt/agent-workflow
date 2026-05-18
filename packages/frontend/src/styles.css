@@ -1524,7 +1524,9 @@ code {
 .inbox-drawer__item {
   display: grid;
   grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto auto;
+  /* RFC-037: extra row for the task-name chip (row 3); the source-task
+     short-id stays last so it remains the most-muted label. */
+  grid-template-rows: auto auto auto auto;
   column-gap: 8px;
   row-gap: 2px;
   padding: 8px 10px;
@@ -1583,8 +1585,19 @@ code {
   font-size: 12px;
 }
 
-.inbox-drawer__task {
+.inbox-drawer__task-name {
   grid-row: 3;
+  grid-column: 2;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-drawer__task {
+  grid-row: 4;
   grid-column: 2;
   font-size: 11px;
 }
@@ -2508,6 +2521,51 @@ code {
 .data-table__id code {
   overflow-wrap: normal;
   word-break: normal;
+  white-space: nowrap;
+}
+
+/* RFC-037: task detail page H1 + ID subtitle. */
+.task-detail__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  word-break: break-word;
+}
+
+.task-detail__name {
+  font-weight: 600;
+}
+
+.task-detail__id {
+  margin-top: var(--space-1);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.task-detail__id-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* RFC-037: tasks list "Linear-style" first column. Task name is the primary
+   identifier; the ULID short-hash drops to a muted subtitle inside the same
+   cell so users can still copy / disambiguate when names repeat. */
+.task-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.task-name-cell__name {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.task-name-cell__id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -4593,6 +4651,12 @@ code {
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+/* RFC-037: muted short-ULID chip next to the task-name group heading. */
+.reviews-group__id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
 }
 
 /* ---- Reviews list rows ---- */

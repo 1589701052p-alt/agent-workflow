@@ -59,12 +59,20 @@ export function ReviewsListPage() {
     refetchInterval: 10000,
   })
 
-  // Group by task.
-  const groups = new Map<string, { name: string; items: ReviewSummary[] }>()
+  // Group by task. RFC-037: capture both workflowName (kept as muted
+  // breadcrumb) and taskName (the new primary heading).
+  const groups = new Map<
+    string,
+    { workflowName: string; taskName: string; items: ReviewSummary[] }
+  >()
   for (const r of list.data ?? []) {
     const g = groups.get(r.taskId)
     if (g === undefined) {
-      groups.set(r.taskId, { name: r.workflowName, items: [r] })
+      groups.set(r.taskId, {
+        workflowName: r.workflowName,
+        taskName: r.taskName,
+        items: [r],
+      })
     } else {
       g.items.push(r)
     }
@@ -102,8 +110,11 @@ export function ReviewsListPage() {
         <section key={taskId} className="reviews-group">
           <h2 className="reviews-group__title">
             <Link to="/tasks/$id" params={{ id: taskId }} className="link">
-              {g.name}
+              {/* RFC-037: task name first, then workflow name as a muted
+                  breadcrumb, then short ULID. */}
+              {g.taskName.length > 0 ? g.taskName : g.workflowName}
             </Link>
+            <span className="muted reviews-group__workflow">{g.workflowName}</span>
             <code className="muted reviews-group__taskid"> · {taskId}</code>
           </h2>
           <table className="data-table">

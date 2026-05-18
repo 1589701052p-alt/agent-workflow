@@ -85,6 +85,8 @@ async function buildHarness(): Promise<Harness> {
   const systemTaskId = 'task-system'
   const now = Date.now()
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: bobTaskId,
     workflowId: wfId,
     workflowSnapshot: '{}',
@@ -113,6 +115,8 @@ async function buildHarness(): Promise<Harness> {
     { taskId: bobTaskId, userId: carol.id, role: 'reviewer', addedBy: bob.id, addedAt: now },
   ])
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: systemTaskId,
     workflowId: wfId,
     workflowSnapshot: '{}',

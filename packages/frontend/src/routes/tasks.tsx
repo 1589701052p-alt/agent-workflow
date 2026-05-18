@@ -83,7 +83,9 @@ function TasksPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>{t('tasks.colId')}</th>
+              {/* RFC-037: task name is the primary identifier; the ULID drops
+                  into a muted subtitle inside the same cell. */}
+              <th>{t('tasks.colName')}</th>
               <th>{t('tasks.colWorkflow')}</th>
               <th>{t('tasks.colStatus')}</th>
               <th>{t('tasks.colStarted')}</th>
@@ -95,14 +97,17 @@ function TasksPage() {
           <tbody>
             {data.map((row) => (
               <tr key={row.id}>
-                <td>
+                <td className="task-name-cell">
                   <Link
                     to="/tasks/$id"
                     params={{ id: row.id }}
-                    className="data-table__link data-table__id"
+                    className="data-table__link task-name-cell__name"
                   >
-                    <code>{row.id.slice(-10)}</code>
+                    {row.name}
                   </Link>
+                  <code className="task-name-cell__id" title={row.id}>
+                    {row.id.slice(-10)}
+                  </code>
                 </td>
                 <td>
                   <Link

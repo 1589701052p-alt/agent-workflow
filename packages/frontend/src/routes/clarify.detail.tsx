@@ -53,6 +53,17 @@ export function ClarifyDetailPage() {
     refetchOnWindowFocus: false,
   })
 
+  // RFC-037: fetch the host task once we know the taskId so the header can
+  // render the user-supplied task name as a breadcrumb. Cheap because tasks
+  // detail is already React-Query-cached if the user came from /tasks.
+  const taskQuery = useQuery<{ name: string }>({
+    queryKey: ['tasks', session.data?.taskId, 'name-only'],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${session.data?.taskId}`, undefined, signal) as Promise<{ name: string }>,
+    enabled: typeof session.data?.taskId === 'string',
+    refetchOnWindowFocus: false,
+  })
+
   // Subscribe to the host task's WS channel for clarify.* events so
   // sibling tabs picking up the same session see a real-time re-fetch
   // when the other tab submits.
@@ -295,7 +306,20 @@ export function ClarifyDetailPage() {
         <Link to="/clarify" className="link">
           {t('clarify.detail.back')}
         </Link>
-        <h1>{s.clarifyNodeId}</h1>
+        {/* RFC-037: lead with the user-supplied task name (when loaded);
+            fall back to the clarify node id so the heading is never empty. */}
+        <h1>
+          {taskQuery.data?.name && taskQuery.data.name.length > 0
+            ? `${taskQuery.data.name} / ${s.clarifyNodeId}`
+            : s.clarifyNodeId}
+        </h1>
+        {taskQuery.data?.name && taskQuery.data.name.length > 0 && (
+          <div className="muted" data-testid="clarify-detail-task-name">
+            <Link to="/tasks/$id" params={{ id: s.taskId }} className="link">
+              {t('clarify.taskNameLabel')}: {taskQuery.data.name}
+            </Link>
+          </div>
+        )}
         <p className="page__hint" data-testid="clarify-context-card">
           {t('clarify.detail.contextCard', { name: s.sourceAgentNodeId, n: s.iterationIndex })}
           {s.sourceShardKey !== null && (

@@ -157,6 +157,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: h.workflowId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'orders', refs: '' },
@@ -196,6 +197,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: h.workflowId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'x', refs: '' },
@@ -214,6 +216,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: h.workflowId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'x', refs: '' },
@@ -231,6 +234,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: 'no-such-id',
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'x', refs: '' },
@@ -246,6 +250,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: h.workflowId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'x', refs: '' },
@@ -268,6 +273,7 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
     const fd = buildFormData(
       {
         workflowId: h.workflowId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: { topic: 'x', refs: '' },

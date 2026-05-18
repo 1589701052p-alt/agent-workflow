@@ -15,9 +15,14 @@ import {
 describe('buildLaunchBody (RFC-024)', () => {
   test('path mode emits workflowId/repoPath/baseBranch/inputs', () => {
     const src: RepoSource = { kind: 'path', repoPath: '/tmp/repo', baseBranch: 'main' }
-    const body = buildLaunchBody(src, { workflowId: 'wf-1', inputs: { topic: 'orders' } })
+    const body = buildLaunchBody(src, {
+      workflowId: 'wf-1',
+      name: 'fixture-task',
+      inputs: { topic: 'orders' },
+    })
     expect(body).toEqual({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoPath: '/tmp/repo',
       baseBranch: 'main',
       inputs: { topic: 'orders' },
@@ -28,9 +33,10 @@ describe('buildLaunchBody (RFC-024)', () => {
 
   test('url mode emits workflowId/repoUrl/inputs (no baseBranch)', () => {
     const src: RepoSource = { kind: 'url', repoUrl: 'git@github.com:foo/bar.git', ref: '' }
-    const body = buildLaunchBody(src, { workflowId: 'wf-1', inputs: {} })
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 'fixture-task', inputs: {} })
     expect(body).toEqual({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoUrl: 'git@github.com:foo/bar.git',
       inputs: {},
     })
@@ -40,7 +46,7 @@ describe('buildLaunchBody (RFC-024)', () => {
 
   test('url mode keeps non-empty ref (trimmed)', () => {
     const src: RepoSource = { kind: 'url', repoUrl: 'git@h:o/r.git', ref: '  feature/x  ' }
-    const body = buildLaunchBody(src, { workflowId: 'wf-1', inputs: {} })
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 'fixture-task', inputs: {} })
     expect(body.ref).toBe('feature/x')
   })
 })
@@ -70,7 +76,7 @@ describe('buildLaunchFormDataV2 (RFC-024)', () => {
     const f2 = new File(['world'], 'b.txt', { type: 'text/plain' })
     const fd = buildLaunchFormDataV2(
       src,
-      { workflowId: 'wf-1', inputs: { topic: 'orders' } },
+      { workflowId: 'wf-1', name: 'fixture-task', inputs: { topic: 'orders' } },
       { docs: [f1, f2] },
     )
     // payload field is a Blob with the JSON body.

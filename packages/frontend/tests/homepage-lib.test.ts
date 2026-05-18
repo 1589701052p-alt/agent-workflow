@@ -22,6 +22,7 @@ function review(overrides: Partial<ReviewSummary> = {}): ReviewSummary {
   return {
     nodeRunId: 'nr1',
     taskId: 'task_a',
+    taskName: 'fixture-task',
     workflowId: 'wf_1',
     workflowName: 'wf-name',
     reviewNodeId: 'rev_node',
@@ -42,6 +43,7 @@ function clarify(overrides: Partial<ClarifySessionSummary> = {}): ClarifySession
   return {
     id: 'sess_1',
     taskId: 'task_b',
+    taskName: 'fixture-task',
     sourceAgentNodeId: 'agent_x',
     sourceShardKey: null,
     clarifyNodeId: 'c1',

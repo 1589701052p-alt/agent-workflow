@@ -30,6 +30,8 @@ function seedTaskAndWorkflow(db: DbClient): { taskId: string } {
   const taskId = ulid()
   db.insert(tasks)
     .values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId: wfId,
       workflowSnapshot: '{}',

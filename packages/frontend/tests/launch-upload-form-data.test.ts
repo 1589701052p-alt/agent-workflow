@@ -12,7 +12,13 @@ function makeFile(name: string, body = 'x'): File {
 describe('buildLaunchFormData (RFC-020)', () => {
   test('writes payload JSON into the payload field', async () => {
     const fd = buildLaunchFormData(
-      { workflowId: 'wf1', repoPath: '/r', baseBranch: 'main', inputs: { topic: 't' } },
+      {
+        workflowId: 'wf1',
+        name: 'fixture-task',
+        repoPath: '/r',
+        baseBranch: 'main',
+        inputs: { topic: 't' },
+      },
       {},
     )
     const blob = fd.get('payload') as Blob
@@ -21,6 +27,7 @@ describe('buildLaunchFormData (RFC-020)', () => {
     const text = await blob.text()
     expect(JSON.parse(text)).toEqual({
       workflowId: 'wf1',
+      name: 'fixture-task',
       repoPath: '/r',
       baseBranch: 'main',
       inputs: { topic: 't' },
@@ -29,7 +36,13 @@ describe('buildLaunchFormData (RFC-020)', () => {
 
   test('appends one files[<key>][] entry per File in order', () => {
     const fd = buildLaunchFormData(
-      { workflowId: 'wf', repoPath: '/r', baseBranch: 'main', inputs: { refs: '' } },
+      {
+        workflowId: 'wf',
+        name: 'fixture-task',
+        repoPath: '/r',
+        baseBranch: 'main',
+        inputs: { refs: '' },
+      },
       { refs: [makeFile('a.txt'), makeFile('b.txt')] },
     )
     const all = fd.getAll('files[refs][]')
@@ -40,7 +53,13 @@ describe('buildLaunchFormData (RFC-020)', () => {
 
   test('back-fills inputs[uploadKey]="" when missing', async () => {
     const fd = buildLaunchFormData(
-      { workflowId: 'wf', repoPath: '/r', baseBranch: 'main', inputs: { topic: 't' } },
+      {
+        workflowId: 'wf',
+        name: 'fixture-task',
+        repoPath: '/r',
+        baseBranch: 'main',
+        inputs: { topic: 't' },
+      },
       { refs: [makeFile('x.txt')] },
     )
     const payload = JSON.parse(await (fd.get('payload') as Blob).text())
@@ -49,7 +68,7 @@ describe('buildLaunchFormData (RFC-020)', () => {
 
   test('uploads with two different keys produce two field names', () => {
     const fd = buildLaunchFormData(
-      { workflowId: 'w', repoPath: '/r', baseBranch: 'main', inputs: {} },
+      { workflowId: 'w', name: 'fixture-task', repoPath: '/r', baseBranch: 'main', inputs: {} },
       { refs: [makeFile('a.txt')], pics: [makeFile('p.png'), makeFile('q.png')] },
     )
     expect(fd.getAll('files[refs][]')).toHaveLength(1)
@@ -58,7 +77,7 @@ describe('buildLaunchFormData (RFC-020)', () => {
 
   test('empty uploads still emits the payload field', () => {
     const fd = buildLaunchFormData(
-      { workflowId: 'w', repoPath: '/r', baseBranch: 'main', inputs: {} },
+      { workflowId: 'w', name: 'fixture-task', repoPath: '/r', baseBranch: 'main', inputs: {} },
       {},
     )
     expect(fd.get('payload')).not.toBeNull()

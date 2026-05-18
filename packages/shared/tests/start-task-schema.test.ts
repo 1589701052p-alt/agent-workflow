@@ -8,6 +8,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('path mode (legacy) parses unchanged', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoPath: '/tmp/repo',
       baseBranch: 'main',
       inputs: {},
@@ -18,6 +19,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('url mode parses (no baseBranch required)', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoUrl: 'git@github.com:foo/bar.git',
       inputs: {},
     })
@@ -27,6 +29,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('url mode with explicit ref parses', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoUrl: 'https://github.com/foo/bar.git',
       ref: 'feature/x',
       inputs: {},
@@ -37,6 +40,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('rejects when both repoPath and repoUrl given', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoPath: '/tmp/repo',
       baseBranch: 'main',
       repoUrl: 'git@github.com:foo/bar.git',
@@ -51,6 +55,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('rejects when neither given', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       inputs: {},
     })
     expect(r.success).toBe(false)
@@ -62,6 +67,7 @@ describe('StartTaskSchema (RFC-024)', () => {
   test('rejects path mode without baseBranch', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
+      name: 'fixture-task',
       repoPath: '/tmp/repo',
       inputs: {},
     })

@@ -58,6 +58,8 @@ async function seed(): Promise<Seed> {
     updatedAt: 1,
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

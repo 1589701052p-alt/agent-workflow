@@ -99,6 +99,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: wfId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -116,6 +117,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: '01HFAKE',
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -149,6 +151,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: wfId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -175,6 +178,7 @@ describe('task HTTP routes', () => {
         method: 'POST',
         body: JSON.stringify({
           workflowId: wfId,
+          name: 'fixture-task',
           repoPath: notRepo,
           baseBranch: 'main',
           inputs: {},
@@ -194,6 +198,8 @@ describe('task HTTP routes', () => {
     // Create three tasks; vary status by direct insert (POST always starts as
     // pending/running so we can't observe filtering on POST alone).
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: ulid(),
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -207,6 +213,8 @@ describe('task HTTP routes', () => {
       finishedAt: Date.now() - 1000,
     })
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: ulid(),
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -251,6 +259,8 @@ describe('task HTTP routes', () => {
     })
     const taskId = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -282,7 +292,13 @@ describe('task HTTP routes', () => {
   test('POST invalid body returns 422', async () => {
     const res = await req(h.app, '/api/tasks', {
       method: 'POST',
-      body: JSON.stringify({ workflowId: '', repoPath: '', baseBranch: '', inputs: {} }),
+      body: JSON.stringify({
+        workflowId: '',
+        name: 'fixture-task',
+        repoPath: '',
+        baseBranch: '',
+        inputs: {},
+      }),
     })
     expect(res.status).toBe(422)
     expect(((await res.json()) as { code: string }).code).toBe('task-invalid')
@@ -292,6 +308,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -321,6 +339,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -349,6 +369,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: wfId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -376,6 +397,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: wfId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -408,6 +430,7 @@ describe('task HTTP routes', () => {
       method: 'POST',
       body: JSON.stringify({
         workflowId: wfId,
+        name: 'fixture-task',
         repoPath: h.repoPath,
         baseBranch: 'main',
         inputs: {},
@@ -429,6 +452,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -450,6 +475,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -471,6 +498,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const taskId = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -521,6 +550,7 @@ describe('task HTTP routes', () => {
     await h.db.insert(tasks).values([
       {
         id: idA,
+        name: 'fixture-task',
         workflowId: wfId,
         workflowSnapshot: '{}',
         repoPath: h.repoPath,
@@ -533,6 +563,7 @@ describe('task HTTP routes', () => {
       },
       {
         id: idB,
+        name: 'fixture-task',
         workflowId: wfId,
         workflowSnapshot: '{}',
         repoPath: h.repoPath,
@@ -561,6 +592,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -581,6 +614,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',
@@ -609,6 +644,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: JSON.stringify({
@@ -656,6 +693,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: JSON.stringify({
@@ -716,6 +755,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: JSON.stringify({
@@ -798,6 +839,8 @@ describe('task HTTP routes', () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const id = ulid()
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: JSON.stringify({

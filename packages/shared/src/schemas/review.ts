@@ -233,6 +233,12 @@ export type ListReviewsQuery = z.infer<typeof ListReviewsQuerySchema>
 export const ReviewSummarySchema = z.object({
   nodeRunId: z.string(),
   taskId: z.string(),
+  /**
+   * RFC-037: display name of the owning task (`tasks.name`). Required; backend
+   * joins at query time. Lets the reviews list / inbox disambiguate multiple
+   * tasks that share a workflow.
+   */
+  taskName: z.string(),
   workflowId: z.string(),
   workflowName: z.string(),
   reviewNodeId: z.string(),

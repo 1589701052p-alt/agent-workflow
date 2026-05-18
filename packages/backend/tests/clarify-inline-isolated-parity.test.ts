@@ -103,6 +103,8 @@ async function setup(
     .insert(workflows)
     .values({ id: workflowId, name: 'wf', definition: JSON.stringify(def) })
   await h.db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: JSON.stringify(def),

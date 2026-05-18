@@ -123,9 +123,17 @@ function TaskDetailPage() {
     <div className="page page--task-detail">
       <header className="page__header page__header--row">
         <div>
-          <h1>
-            <code>{tk.id}</code> <TaskStatusChip status={tk.status} />
+          {/* RFC-037: user-supplied display name is the primary heading;
+              the ULID drops to a muted subtitle so it stays copyable but
+              doesn't dominate the page. */}
+          <h1 className="task-detail__title">
+            <span className="task-detail__name">{tk.name}</span>{' '}
+            <TaskStatusChip status={tk.status} />
           </h1>
+          <div className="task-detail__id">
+            <span className="task-detail__id-label">{t('tasks.detailTitleIdLabel')}</span>{' '}
+            <code>{tk.id}</code>
+          </div>
         </div>
         <div className="page__actions">
           {resumability === 'ready' && (

@@ -46,6 +46,7 @@ function mockLists(opts: {
       const rows = (opts.reviews ?? []).map((r, i) => ({
         nodeRunId: r.nodeRunId ?? `r${i}`,
         taskId: r.taskId ?? 'task_a',
+        taskName: 'fixture-task',
         workflowId: 'wf_1',
         workflowName: 'wf-name',
         reviewNodeId: 'rev_node',
@@ -68,6 +69,7 @@ function mockLists(opts: {
       const rows = (opts.clarify ?? []).map((c, i) => ({
         id: `sess_${i}`,
         taskId: c.taskId ?? 'task_b',
+        taskName: 'fixture-task',
         sourceAgentNodeId: c.sourceAgentNodeId ?? `agent_${i}`,
         sourceAgentNodeTitle: c.sourceAgentNodeTitle === undefined ? null : c.sourceAgentNodeTitle,
         sourceShardKey: null,

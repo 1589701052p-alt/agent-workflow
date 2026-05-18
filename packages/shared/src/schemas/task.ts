@@ -21,9 +21,24 @@ export const TASK_STATUS = [
 export const TaskStatusSchema = z.enum(TASK_STATUS)
 export type TaskStatus = z.infer<typeof TaskStatusSchema>
 
+/**
+ * RFC-037: user-supplied display name captured at launch time. Required for
+ * all new tasks. Trimmed; 1..255 chars after trim. Persisted in `tasks.name`.
+ * Migration 0021 backfills historical rows from `workflows.name` (fallback:
+ * `task-{shortId}`).
+ */
+export const TASK_NAME_MAX = 255
+export const TaskNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'name is required (1..255 chars after trim)')
+  .max(TASK_NAME_MAX, `name must be ≤ ${TASK_NAME_MAX} chars`)
+
 /** Full task row as returned by GET /api/tasks/:id. */
 export const TaskSchema = z.object({
   id: z.string(),
+  /** RFC-037: user-supplied display name; non-empty after migration 0021 backfill. */
+  name: z.string(),
   workflowId: z.string(),
   /**
    * Display name of the referenced workflow, joined at query time. Null
@@ -62,6 +77,8 @@ export type Task = z.infer<typeof TaskSchema>
 /** Compact task entry for list pages. */
 export const TaskSummarySchema = z.object({
   id: z.string(),
+  /** RFC-037: user-supplied display name. */
+  name: z.string(),
   workflowId: z.string(),
   /** Joined display name (null when the workflow row no longer exists). */
   workflowName: z.string().nullable(),
@@ -86,6 +103,11 @@ export type TaskSummary = z.infer<typeof TaskSummarySchema>
 export const StartTaskSchema = z
   .object({
     workflowId: z.string().min(1),
+    /**
+     * RFC-037: user-supplied display name. Required, trimmed, 1..255 chars.
+     * Empty / whitespace-only / overlong → 422. No server fallback.
+     */
+    name: TaskNameSchema,
     repoPath: z.string().min(1).optional(),
     baseBranch: z.string().min(1).optional(),
     /** RFC-024: remote Git URL (SSH or HTTP/HTTPS). Triggers clone-or-reuse. */

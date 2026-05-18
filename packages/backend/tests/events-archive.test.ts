@@ -44,6 +44,8 @@ async function seedTaskWithNodeRun(
     updatedAt: Date.now(),
   })
   await h.db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

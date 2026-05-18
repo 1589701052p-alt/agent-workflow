@@ -108,7 +108,7 @@ describe('startTask URL mode (RFC-024)', () => {
   test('cold launch clones URL, persists repoUrl, does not write recent_repos', async () => {
     const { tmp, appHome, db, stubOpencode, wf, remoteUrl } = await setup()
     const task = await startTask(
-      { workflowId: wf.id, repoUrl: remoteUrl, inputs: { topic: 'orders' } },
+      { workflowId: wf.id, name: 'fixture-task', repoUrl: remoteUrl, inputs: { topic: 'orders' } },
       { db, appHome, opencodeCmd: [stubOpencode], awaitScheduler: true },
     )
     expect(task.repoUrl).toBe(remoteUrl)
@@ -124,11 +124,11 @@ describe('startTask URL mode (RFC-024)', () => {
   test('warm launch (second task same URL) reuses cache', async () => {
     const { tmp, appHome, db, stubOpencode, wf, remoteUrl } = await setup()
     const t1 = await startTask(
-      { workflowId: wf.id, repoUrl: remoteUrl, inputs: { topic: 'a' } },
+      { workflowId: wf.id, name: 'fixture-task', repoUrl: remoteUrl, inputs: { topic: 'a' } },
       { db, appHome, opencodeCmd: [stubOpencode], awaitScheduler: true },
     )
     const t2 = await startTask(
-      { workflowId: wf.id, repoUrl: remoteUrl, inputs: { topic: 'b' } },
+      { workflowId: wf.id, name: 'fixture-task', repoUrl: remoteUrl, inputs: { topic: 'b' } },
       { db, appHome, opencodeCmd: [stubOpencode], awaitScheduler: true },
     )
     expect(t1.repoPath).toBe(t2.repoPath)
@@ -143,6 +143,7 @@ describe('startTask URL mode (RFC-024)', () => {
       await startTask(
         {
           workflowId: wf.id,
+          name: 'fixture-task',
           repoUrl: remoteUrl,
           ref: 'this-ref-does-not-exist',
           inputs: { topic: 'orders' },

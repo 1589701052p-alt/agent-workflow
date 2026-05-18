@@ -11,6 +11,13 @@ export type RepoSource =
 
 export interface LaunchCommonPayload {
   workflowId: string
+  /**
+   * RFC-037: user-supplied display name. Required by the backend's
+   * `StartTaskSchema`; both helpers stamp it into the outgoing body verbatim
+   * (after the caller has trimmed). The schema rejects empty / overlong
+   * names server-side, so the helper does not need to re-validate.
+   */
+  name: string
   inputs: Record<string, string>
 }
 
@@ -27,6 +34,7 @@ export function buildLaunchBody(
   if (source.kind === 'path') {
     return {
       workflowId: common.workflowId,
+      name: common.name,
       repoPath: source.repoPath,
       baseBranch: source.baseBranch,
       inputs: common.inputs,
@@ -34,6 +42,7 @@ export function buildLaunchBody(
   }
   const out: Record<string, unknown> = {
     workflowId: common.workflowId,
+    name: common.name,
     repoUrl: source.repoUrl,
     inputs: common.inputs,
   }

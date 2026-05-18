@@ -21,6 +21,7 @@ import '../src/i18n'
 function fakeTask(id: string, status: TaskStatus): TaskSummary {
   return {
     id,
+    name: 'fixture-task',
     workflowId: 'wf_1',
     workflowName: 'wf-x',
     repoPath: '/tmp/x',

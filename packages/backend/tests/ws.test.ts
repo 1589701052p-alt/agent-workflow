@@ -190,6 +190,8 @@ describe('WebSocket channels', () => {
       updatedAt: Date.now(),
     })
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId: 'wf-x',
       workflowSnapshot: '{}',
@@ -215,6 +217,7 @@ describe('WebSocket channels', () => {
     if (t === undefined) throw new Error('seeded task missing')
     emitTaskStatus({
       id: t.id,
+      name: t.name,
       workflowId: t.workflowId,
       workflowName: null,
       workflowSnapshot: {},
@@ -258,6 +261,8 @@ describe('WebSocket channels', () => {
       updatedAt: Date.now(),
     })
     await h.db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId: 'wf-y',
       workflowSnapshot: '{}',

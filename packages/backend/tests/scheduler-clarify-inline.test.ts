@@ -137,6 +137,8 @@ async function seedWorkflowAndTask(
     definition: JSON.stringify(def),
   })
   await h.db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: JSON.stringify(def),

@@ -56,6 +56,8 @@ async function seedTask(db: DbClient): Promise<{ taskId: string; sourceRunId: st
     schemaVersion: 3,
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId: wfId,
     workflowSnapshot: JSON.stringify(def),

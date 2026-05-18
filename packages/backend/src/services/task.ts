@@ -284,6 +284,8 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const now = Date.now()
   await deps.db.insert(tasks).values({
     id: taskId,
+    // RFC-037: required name (StartTaskSchema already trimmed + length-validated).
+    name: input.name,
     workflowId: workflow.id,
     workflowSnapshot: JSON.stringify(workflow.definition),
     repoPath: source.repoPath,
@@ -340,6 +342,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     type: 'task.created',
     task: {
       id: task.id,
+      name: task.name, // RFC-037
       workflowId: task.workflowId,
       workflowName: task.workflowName,
       repoPath: task.repoPath,
@@ -1022,6 +1025,7 @@ function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null):
   }
   return {
     id: row.id,
+    name: row.name, // RFC-037
     workflowId: row.workflowId,
     workflowName,
     workflowSnapshot: snapshot,
@@ -1049,6 +1053,7 @@ function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null):
 function rowToSummary(row: typeof tasks.$inferSelect, workflowName: string | null): TaskSummary {
   return {
     id: row.id,
+    name: row.name, // RFC-037
     workflowId: row.workflowId,
     workflowName,
     repoPath: row.repoPath,

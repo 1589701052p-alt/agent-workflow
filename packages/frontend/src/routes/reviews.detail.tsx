@@ -862,18 +862,25 @@ function ReviewDetailPage() {
       <header className="page__header review-detail__page-header">
         <div className="review-detail__page-header-text">
           <h1>
-            {data.summary.workflowName} /{' '}
+            {/* RFC-037: lead with the user-supplied task name; workflow
+                name + review node title stay as muted breadcrumbs. */}
+            {data.summary.taskName.length > 0 ? data.summary.taskName : data.summary.workflowName}
+            {' / '}
             {hasTitle ? data.summary.title : <code>{data.summary.reviewNodeId}</code>}
             <span className="muted">
               {' '}
               · v{headerVersionIndex ?? data.currentVersion.versionIndex}
             </span>
           </h1>
-          {hasTitle && (
-            <div className="muted">
-              <code>{data.summary.reviewNodeId}</code>
-            </div>
-          )}
+          <div className="muted review-detail__breadcrumbs">
+            <span>{data.summary.workflowName}</span>
+            {hasTitle && (
+              <>
+                {' · '}
+                <code>{data.summary.reviewNodeId}</code>
+              </>
+            )}
+          </div>
           {data.summary.description !== '' && data.summary.description !== data.summary.title && (
             <p className="page__hint review-detail__description">{data.summary.description}</p>
           )}

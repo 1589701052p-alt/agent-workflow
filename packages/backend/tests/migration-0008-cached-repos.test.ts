@@ -89,6 +89,8 @@ describe('migration 0008 (RFC-024 cached_repos + tasks.repoUrl)', () => {
     const now = Date.now()
     db.insert(tasks)
       .values({
+        name: 'fixture-task',
+
         id: idUrl,
         workflowId: wfId,
         workflowSnapshot: '{}',
@@ -105,6 +107,8 @@ describe('migration 0008 (RFC-024 cached_repos + tasks.repoUrl)', () => {
       .run()
     db.insert(tasks)
       .values({
+        name: 'fixture-task',
+
         id: idPath,
         workflowId: wfId,
         workflowSnapshot: '{}',

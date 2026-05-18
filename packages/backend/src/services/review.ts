@@ -651,6 +651,8 @@ export async function listReviewSummaries(
     out.push({
       nodeRunId: dv.reviewNodeRunId,
       taskId: dv.taskId,
+      // RFC-037: required taskName from tasks.name.
+      taskName: task.name,
       workflowId: task.workflowId,
       workflowName: wf.name,
       reviewNodeId: dv.reviewNodeId,

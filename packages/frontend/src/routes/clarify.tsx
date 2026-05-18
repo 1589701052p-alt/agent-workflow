@@ -89,8 +89,13 @@ export function ClarifyListPage() {
         <section key={taskId} className="reviews-group" data-testid={`clarify-group-${taskId}`}>
           <h2 className="reviews-group__title">
             <Link to="/tasks/$id" params={{ id: taskId }} className="link">
-              {taskId}
+              {/* RFC-037: prefer the user-supplied task name; fall back to
+                  the ULID when no rows are present (defensive). */}
+              {items[0]?.taskName && items[0].taskName.length > 0 ? items[0].taskName : taskId}
             </Link>
+            <code className="reviews-group__id muted" title={taskId}>
+              {taskId.slice(-10)}
+            </code>
           </h2>
           <table className="data-table">
             <thead>

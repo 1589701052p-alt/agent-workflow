@@ -43,6 +43,8 @@ async function seedRunning(db: DbClient): Promise<string> {
     updatedAt: Date.now(),
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

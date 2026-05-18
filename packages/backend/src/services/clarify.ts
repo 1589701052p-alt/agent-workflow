@@ -221,7 +221,17 @@ export async function createClarifySession(
     session.truncationWarnings = truncationWarnings
   }
 
-  broadcastClarifyCreated(taskId, session)
+  // RFC-037: fetch tasks.name once so the WS summary carries the joined
+  // display name. Missing task (hard delete race) degrades to empty string;
+  // the schema accepts any string and the frontend has its own fallback.
+  const taskNameRow = await db
+    .select({ name: tasks.name })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  const taskName = taskNameRow[0]?.name ?? ''
+
+  broadcastClarifyCreated(taskId, taskName, session)
   return { session, clarifyNodeRunId }
 }
 
@@ -625,13 +635,36 @@ export async function listClarifySummaries(
   // fallback to `sourceAgentNodeId`.
   const taskIds = Array.from(new Set(sliced.map((r) => r.taskId)))
   const agentTitleByTaskAndNode = await loadAgentNodeTitlesByTask(db, taskIds)
+  const taskNameByTaskId = await loadTaskNamesByTaskId(db, taskIds)
 
   return sliced.map((row) => {
-    const summary = rowToSummary(row)
+    const summary = rowToSummary(row, taskNameByTaskId.get(row.taskId) ?? '')
     const title = agentTitleByTaskAndNode.get(row.taskId)?.get(row.sourceAgentNodeId)
     summary.sourceAgentNodeTitle = typeof title === 'string' && title.length > 0 ? title : null
     return summary
   })
+}
+
+/**
+ * RFC-037: bulk-fetch `tasks.name` for the given taskIds. Returns a map
+ * keyed by taskId. Missing rows (task hard-deleted) surface as absent — the
+ * caller falls back to empty string so the schema-required `taskName` field
+ * still parses. Mirrors loadAgentNodeTitlesByTask in shape so future joins
+ * can be batched.
+ */
+async function loadTaskNamesByTaskId(
+  db: DbClient,
+  taskIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (taskIds.length === 0) return out
+  const taskRows = await db.select().from(tasks)
+  const wanted = new Set(taskIds)
+  for (const t of taskRows) {
+    if (!wanted.has(t.id)) continue
+    out.set(t.id, t.name)
+  }
+  return out
 }
 
 /**
@@ -786,7 +819,7 @@ export function sealAnswersServerSide(
   return sealed
 }
 
-function broadcastClarifyCreated(taskId: string, session: ClarifySession): void {
+function broadcastClarifyCreated(taskId: string, taskName: string, session: ClarifySession): void {
   taskBroadcaster.broadcast(TASK_CHANNEL(taskId), {
     id: -1,
     type: 'clarify.created',
@@ -794,7 +827,7 @@ function broadcastClarifyCreated(taskId: string, session: ClarifySession): void 
     clarifyNodeId: session.clarifyNodeId,
     sourceShardKey: session.sourceShardKey ?? null,
     iterationIndex: session.iterationIndex,
-    session: sessionToSummary(session),
+    session: sessionToSummary(session, taskName),
   })
 }
 
@@ -852,7 +885,10 @@ function rowToSession(row: typeof clarifySessions.$inferSelect): ClarifySession 
   return out
 }
 
-function rowToSummary(row: typeof clarifySessions.$inferSelect): ClarifySessionSummary {
+function rowToSummary(
+  row: typeof clarifySessions.$inferSelect,
+  taskName: string,
+): ClarifySessionSummary {
   let questionCount = 0
   try {
     const qs = JSON.parse(row.questionsJson) as ClarifyQuestion[]
@@ -863,6 +899,8 @@ function rowToSummary(row: typeof clarifySessions.$inferSelect): ClarifySessionS
   return {
     id: row.id,
     taskId: row.taskId,
+    // RFC-037: required field; caller passes joined `tasks.name`.
+    taskName,
     sourceAgentNodeId: row.sourceAgentNodeId,
     // Populated by listClarifySummaries (which has access to the task
     // snapshot); single-session paths leave this null and the frontend
@@ -879,10 +917,12 @@ function rowToSummary(row: typeof clarifySessions.$inferSelect): ClarifySessionS
   }
 }
 
-function sessionToSummary(session: ClarifySession): ClarifySessionSummary {
+function sessionToSummary(session: ClarifySession, taskName: string): ClarifySessionSummary {
   return {
     id: session.id,
     taskId: session.taskId,
+    // RFC-037: required field; caller resolves and passes `tasks.name`.
+    taskName,
     sourceAgentNodeId: session.sourceAgentNodeId,
     sourceAgentNodeTitle: null,
     sourceShardKey: session.sourceShardKey ?? null,

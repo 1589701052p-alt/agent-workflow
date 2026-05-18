@@ -42,6 +42,8 @@ async function seedTask(
     updatedAt: Date.now(),
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: JSON.stringify({ $schema_version: 1, inputs: [], nodes: [], edges: [] }),

@@ -97,6 +97,8 @@ describe('dispatchReviewNode forgiveness path (path-shaped port content)', () =>
 
     const taskId = ulid()
     await db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: taskId,
       workflowId,
       workflowSnapshot: JSON.stringify(definition),

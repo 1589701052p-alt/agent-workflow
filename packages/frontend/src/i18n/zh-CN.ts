@@ -230,6 +230,7 @@ export interface Resources {
     filterApproved: string
     filterRejected: string
     filterIterated: string
+    taskNameLabel: string
     colNode: string
     colStatus: string
     colVersion: string
@@ -734,11 +735,13 @@ export interface Resources {
     filterAll: string
     emptyList: string
     colId: string
+    colName: string
     colWorkflow: string
     colStatus: string
     colStarted: string
     colRepo: string
     colError: string
+    detailTitleIdLabel: string
     loadingTask: string
     metaWorkflow: string
     metaRepo: string
@@ -852,6 +855,9 @@ export interface Resources {
     hintCode: string
     hintAfter: string
     backToEditor: string
+    fieldTaskName: string
+    fieldTaskNameHint: string
+    errorTaskNameRequired: string
     fieldRepo: string
     fieldRepoHint: string
     pickRepoPlaceholder: string
@@ -1303,6 +1309,7 @@ export interface Resources {
   errors: Record<string, string>
   // RFC-023 clarify feature (PR-C).
   clarify: {
+    taskNameLabel: string
     nav: { label: string; badgeTitle: string }
     list: {
       title: string
@@ -1488,6 +1495,7 @@ export const zhCN: Resources = {
     filterApproved: '已通过',
     filterRejected: '已退回',
     filterIterated: '已迭代',
+    taskNameLabel: '所属任务',
     colNode: '节点',
     colStatus: '状态',
     colVersion: '版本',
@@ -2152,11 +2160,13 @@ export const zhCN: Resources = {
     filterAll: '全部',
     emptyList: '没有匹配当前过滤的任务。',
     colId: 'ID',
+    colName: '名称',
     colWorkflow: '工作流',
     colStatus: '状态',
     colStarted: '开始',
     colRepo: '仓库',
     colError: '错误',
+    detailTitleIdLabel: '任务 ID',
     loadingTask: '加载任务中…',
     metaWorkflow: '工作流',
     metaRepo: '仓库',
@@ -2269,6 +2279,9 @@ export const zhCN: Resources = {
     hintCode: '~/.agent-workflow/worktrees/<repo>/<taskId>',
     hintAfter: ' 处创建一个 worktree。',
     backToEditor: '← 返回编辑器',
+    fieldTaskName: '任务名称',
+    fieldTaskNameHint: '用于在列表和收件箱里区分本次任务，最多 255 字符（首尾空格会被裁剪）。',
+    errorTaskNameRequired: '请填写任务名称。',
     fieldRepo: '仓库',
     fieldRepoHint: '从最近列表选一个，或粘贴绝对路径。',
     pickRepoPlaceholder: '— 选一个仓库 —',
@@ -2741,6 +2754,7 @@ export const zhCN: Resources = {
     fallback: '请求失败',
   },
   clarify: {
+    taskNameLabel: '所属任务',
     nav: {
       label: '反问澄清',
       badgeTitle: '{{count}} 条待回答的反问',

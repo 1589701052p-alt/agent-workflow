@@ -90,6 +90,8 @@ async function seedWorkflowAndTask(
     updatedAt: Date.now(),
   })
   await h.db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: JSON.stringify(definition),

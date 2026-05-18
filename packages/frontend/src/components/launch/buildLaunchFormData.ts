@@ -11,6 +11,8 @@
 
 export interface LaunchPayload {
   workflowId: string
+  /** RFC-037: user-supplied display name; required by backend StartTaskSchema. */
+  name: string
   repoPath: string
   baseBranch: string
   inputs: Record<string, string>

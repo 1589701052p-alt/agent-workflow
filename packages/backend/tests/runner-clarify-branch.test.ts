@@ -67,6 +67,8 @@ async function buildHarness(): Promise<Harness> {
     definition: JSON.stringify({ $schema_version: 3, inputs: [], nodes: [], edges: [] }),
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

@@ -67,6 +67,8 @@ async function buildHarness(): Promise<Harness> {
     updatedAt: Date.now(),
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

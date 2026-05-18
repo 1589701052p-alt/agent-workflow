@@ -288,6 +288,10 @@ export const tasks = sqliteTable(
   'tasks',
   {
     id: text('id').primaryKey(), // ULID
+    // RFC-037: user-supplied display name captured at launch time. Required
+    // (StartTaskSchema enforces 1..255 trim before INSERT). Migration 0021
+    // backfilled historical rows from workflows.name or "task-{shortId}".
+    name: text('name').notNull(),
     workflowId: text('workflow_id')
       .notNull()
       .references(() => workflows.id),

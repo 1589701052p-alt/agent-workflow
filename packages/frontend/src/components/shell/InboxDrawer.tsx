@@ -87,6 +87,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
           kind: 'review',
           id: r.nodeRunId,
           taskId: r.taskId,
+          taskName: r.taskName,
           title: r.title,
           subtitle: r.workflowName,
           createdAt: r.createdAt,
@@ -106,6 +107,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
           kind: 'clarify',
           id: c.clarifyNodeRunId,
           taskId: c.taskId,
+          taskName: c.taskName,
           title: agentTitle,
           subtitle: c.sourceShardKey ? `shard ${c.sourceShardKey}` : `iter ${c.iterationIndex}`,
           createdAt: c.createdAt,
@@ -184,6 +186,14 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
             </span>
             <span className="inbox-drawer__title">{it.title}</span>
             <span className="inbox-drawer__subtitle muted">{it.subtitle}</span>
+            {/* RFC-037: surface the user-supplied task name so the inbox
+                disambiguates same-workflow tasks. Falls back to the short
+                ID label when name is blank (defensive — schema requires it). */}
+            <span className="inbox-drawer__task-name" data-testid="inbox-row-task-name">
+              {it.taskName.length > 0
+                ? it.taskName
+                : t('nav.inbox.sourceTask', { taskId: it.taskId })}
+            </span>
             <span className="inbox-drawer__task muted">
               {t('nav.inbox.sourceTask', { taskId: it.taskId })}
             </span>
@@ -232,6 +242,8 @@ interface InboxItem {
   kind: 'review' | 'clarify'
   id: string
   taskId: string
+  /** RFC-037: joined `tasks.name`. Rendered as a chip in the row. */
+  taskName: string
   title: string
   subtitle: string
   createdAt: number

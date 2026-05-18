@@ -180,6 +180,12 @@ export type ClarifySession = z.infer<typeof ClarifySessionSchema>
 export const ClarifySessionSummarySchema = z.object({
   id: z.string(),
   taskId: z.string(),
+  /**
+   * RFC-037: display name of the owning task (`tasks.name`). Required; backend
+   * joins at query time. Lets the inbox show "PR-1234 修分页 bug · review:final"
+   * instead of opaque ULIDs across multi-user mixed-source rows.
+   */
+  taskName: z.string(),
   sourceAgentNodeId: z.string(),
   /**
    * Display name from the workflow snapshot's source-agent node (the new

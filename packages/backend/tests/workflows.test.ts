@@ -123,6 +123,8 @@ describe('workflow service', () => {
       definition: sampleDefinition(),
     })
     await db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: ulid(),
       workflowId: wf.id,
       workflowSnapshot: JSON.stringify(wf.definition),
@@ -146,6 +148,8 @@ describe('workflow service', () => {
       definition: sampleDefinition(),
     })
     await db.insert(tasks).values({
+      name: 'fixture-task',
+
       id: ulid(),
       workflowId: wf.id,
       workflowSnapshot: JSON.stringify(wf.definition),

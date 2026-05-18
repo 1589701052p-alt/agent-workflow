@@ -82,6 +82,8 @@ describe('recordLaunchContext + changeNodeAssignment', () => {
       definition: JSON.stringify(wfDef),
     })
     await db.insert(tasks).values({
+      name: 'fixture-task',
+
       id,
       workflowId: wfId,
       workflowSnapshot: '{}',

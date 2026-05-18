@@ -54,6 +54,8 @@ async function seed(opts: { decision?: 'pending' | 'approved' } = {}): Promise<S
     updatedAt: 1,
   })
   await db.insert(tasks).values({
+    name: 'fixture-task',
+
     id: taskId,
     workflowId,
     workflowSnapshot: '{}',

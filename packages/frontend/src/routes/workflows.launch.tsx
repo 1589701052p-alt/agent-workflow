@@ -50,6 +50,8 @@ function LaunchPage() {
     queryFn: ({ signal }) => api.get('/api/repos/recent', undefined, signal),
   })
 
+  // RFC-037: user-supplied display name for this task. Required for submit.
+  const [taskName, setTaskName] = useState('')
   // RFC-024: repo source can be a local path OR a remote git URL.
   const [source, setSource] = useState<RepoSource>({
     kind: 'path',
@@ -100,9 +102,13 @@ function LaunchPage() {
       const hasUploadKind = (workflow.data?.definition.inputs ?? []).some(
         (i) => i.kind === 'upload',
       )
+      // RFC-037: user-supplied display name. Trim before stamping into the
+      // body so the frontend doesn't waste a 422 round-trip on stray spaces.
+      const name = taskName.trim()
       if (source.kind === 'path' && (hasUploadKind || hasUploads)) {
         const payload = {
           workflowId: id,
+          name,
           repoPath: source.repoPath,
           baseBranch: source.baseBranch,
           inputs,
@@ -114,10 +120,10 @@ function LaunchPage() {
         // multipart envelope for parity, backend will 422 us politely.
         return api.postMultipart<Task>(
           '/api/tasks',
-          buildLaunchFormDataV2(source, { workflowId: id, inputs }, uploads),
+          buildLaunchFormDataV2(source, { workflowId: id, name, inputs }, uploads),
         )
       }
-      return api.post<Task>('/api/tasks', buildLaunchBody(source, { workflowId: id, inputs }))
+      return api.post<Task>('/api/tasks', buildLaunchBody(source, { workflowId: id, name, inputs }))
     },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
@@ -144,7 +150,11 @@ function LaunchPage() {
     source.kind === 'path'
       ? source.repoPath !== '' && source.baseBranch !== ''
       : validateRepoUrl(source.repoUrl) === null
-  const canSubmit = sourceReady && !missingRequired && repoIssue === null && !start.isPending
+  // RFC-037: task name is required; mirror backend trim semantics here so the
+  // Start button stays disabled for whitespace-only input.
+  const nameReady = taskName.trim().length > 0
+  const canSubmit =
+    nameReady && sourceReady && !missingRequired && repoIssue === null && !start.isPending
 
   return (
     <div className="page">
@@ -165,6 +175,17 @@ function LaunchPage() {
       {repoIssue === 'no-commits' && <div className="error-box">{t('launch.repoNoCommits')}</div>}
 
       <div className="form-grid">
+        {/* RFC-037: task name is required at launch time — required input first. */}
+        <Field label={t('launch.fieldTaskName')} required hint={t('launch.fieldTaskNameHint')}>
+          <TextInput
+            value={taskName}
+            onChange={setTaskName}
+            required
+            maxLength={255}
+            data-testid="launch-task-name"
+          />
+        </Field>
+
         <RepoSourceTabs source={source} onChange={setSource} />
 
         {source.kind === 'url' && start.isPending && (
