@@ -32,6 +32,7 @@ function mockLists(opts: {
   reviews?: Array<Partial<{ nodeRunId: string; taskId: string; title: string; createdAt: number }>>
   clarify?: Array<
     Partial<{
+      id: string
       clarifyNodeRunId: string
       taskId: string
       sourceAgentNodeId: string
@@ -67,7 +68,7 @@ function mockLists(opts: {
     }
     if (s.includes('/api/clarify?status=awaiting_human')) {
       const rows = (opts.clarify ?? []).map((c, i) => ({
-        id: `sess_${i}`,
+        id: c.id ?? `sess_${i}`,
         taskId: c.taskId ?? 'task_b',
         taskName: 'fixture-task',
         sourceAgentNodeId: c.sourceAgentNodeId ?? `agent_${i}`,
@@ -117,7 +118,10 @@ describe('RFC-032 InboxDrawer', () => {
   })
 
   test('open=true → portal mounts the drawer with three tabs', async () => {
-    mockLists({ reviews: [{ nodeRunId: 'r1' }], clarify: [{ clarifyNodeRunId: 'c1' }] })
+    mockLists({
+      reviews: [{ nodeRunId: 'r1' }],
+      clarify: [{ id: 'c1', clarifyNodeRunId: 'c1' }],
+    })
     wrap(<InboxDrawer open={true} onClose={() => {}} />)
     await waitFor(() => {
       expect(screen.getByTestId('inbox-drawer')).toBeTruthy()
@@ -130,7 +134,7 @@ describe('RFC-032 InboxDrawer', () => {
   test('All tab merges both feeds; Reviews tab filters to reviews only', async () => {
     mockLists({
       reviews: [{ nodeRunId: 'r1' }, { nodeRunId: 'r2' }],
-      clarify: [{ clarifyNodeRunId: 'c1' }],
+      clarify: [{ id: 'c1', clarifyNodeRunId: 'c1' }],
     })
     wrap(<InboxDrawer open={true} onClose={() => {}} />)
     await waitFor(() => {
@@ -164,7 +168,7 @@ describe('RFC-032 InboxDrawer', () => {
   })
 
   test('clicking a clarify row triggers navigate to /clarify/$nodeRunId', async () => {
-    mockLists({ clarify: [{ clarifyNodeRunId: 'cn-42' }] })
+    mockLists({ clarify: [{ id: 'cn-42', clarifyNodeRunId: 'cn-42' }] })
     wrap(<InboxDrawer open={true} onClose={() => {}} />)
     await waitFor(() => screen.getByTestId('inbox-row-clarify-cn-42'))
     fireEvent.click(screen.getByTestId('inbox-row-clarify-cn-42'))
@@ -206,6 +210,7 @@ describe('RFC-032 InboxDrawer', () => {
     mockLists({
       clarify: [
         {
+          id: 'cn-titled',
           clarifyNodeRunId: 'cn-titled',
           sourceAgentNodeId: 'agent_xy_01',
           sourceAgentNodeTitle: 'Implementation Coder',
@@ -222,6 +227,7 @@ describe('RFC-032 InboxDrawer', () => {
     mockLists({
       clarify: [
         {
+          id: 'cn-untitled',
           clarifyNodeRunId: 'cn-untitled',
           sourceAgentNodeId: 'agent_legacy_99',
           sourceAgentNodeTitle: null,
@@ -276,5 +282,71 @@ describe('RFC-032 InboxDrawer', () => {
     fireEvent.click(screen.getByTestId('inbox-drawer-open-clarify'))
     expect(navigateSpy).toHaveBeenCalledWith({ to: '/clarify' })
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // Regression for the "switching tabs leaves stale clarify rows" bug
+  // reported in production: the backend can legitimately return several
+  // `awaiting_human` clarify sessions that share a `clarifyNodeRunId`
+  // (loop iterations / retries on the same node). The drawer originally
+  // used `clarifyNodeRunId` for the React `key`, which produced duplicate
+  // keys and broke reconciliation — clicking the Reviews tab after the
+  // Clarify tab would leave the clarify rows in the DOM instead of
+  // filtering them out. Lock in: keys are session-id based and tab
+  // switches correctly remove the other kind.
+  test('clarify sessions sharing a clarifyNodeRunId all render and tab filter still works', async () => {
+    mockLists({
+      reviews: [{ nodeRunId: 'r1' }],
+      clarify: [
+        { id: 'sess_x', clarifyNodeRunId: 'shared_nrun' },
+        { id: 'sess_y', clarifyNodeRunId: 'shared_nrun' },
+        { id: 'sess_z', clarifyNodeRunId: 'shared_nrun' },
+      ],
+    })
+    wrap(<InboxDrawer open={true} onClose={() => {}} />)
+    await waitFor(() => screen.getByTestId('inbox-row-review-r1'))
+    // All three clarify sessions render under their session ids despite
+    // sharing the node-run id — proves keys are session-unique.
+    expect(screen.getByTestId('inbox-row-clarify-sess_x')).toBeTruthy()
+    expect(screen.getByTestId('inbox-row-clarify-sess_y')).toBeTruthy()
+    expect(screen.getByTestId('inbox-row-clarify-sess_z')).toBeTruthy()
+    // Default = all: 1 review + 3 clarify = 4 rows.
+    const countItems = (): number =>
+      screen.getAllByRole('button').filter((b) => b.className.includes('inbox-drawer__item')).length
+    expect(countItems()).toBe(4)
+    // Click Reviews — clarify rows must disappear (the bug left them in
+    // the DOM because duplicate React keys broke reconciliation).
+    fireEvent.click(screen.getByTestId('inbox-tab-reviews'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('inbox-row-clarify-sess_x')).toBeNull()
+    })
+    expect(screen.queryByTestId('inbox-row-clarify-sess_y')).toBeNull()
+    expect(screen.queryByTestId('inbox-row-clarify-sess_z')).toBeNull()
+    expect(countItems()).toBe(1)
+    // Click Clarify — all three reappear, review row gone.
+    fireEvent.click(screen.getByTestId('inbox-tab-clarify'))
+    await waitFor(() => screen.getByTestId('inbox-row-clarify-sess_x'))
+    expect(screen.queryByTestId('inbox-row-review-r1')).toBeNull()
+    expect(countItems()).toBe(3)
+    // Back to All — everything visible again.
+    fireEvent.click(screen.getByTestId('inbox-tab-all'))
+    await waitFor(() => screen.getByTestId('inbox-row-review-r1'))
+    expect(countItems()).toBe(4)
+  })
+
+  // Clarify rows always navigate to `/clarify/$nodeRunId` even when their
+  // React key is the session id — the detail route is per-node-run, not
+  // per-session. Lock in the split so a future refactor doesn't
+  // accidentally route by session id and 404.
+  test('clarify row nav target is clarifyNodeRunId, not session id', async () => {
+    mockLists({
+      clarify: [{ id: 'sess_abc', clarifyNodeRunId: 'nrun_xyz' }],
+    })
+    wrap(<InboxDrawer open={true} onClose={() => {}} />)
+    await waitFor(() => screen.getByTestId('inbox-row-clarify-sess_abc'))
+    fireEvent.click(screen.getByTestId('inbox-row-clarify-sess_abc'))
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: '/clarify/$nodeRunId',
+      params: { nodeRunId: 'nrun_xyz' },
+    })
   })
 })

@@ -14,6 +14,14 @@ export type GreetingKey = 'morning' | 'afternoon' | 'evening'
 
 export interface InboxPreviewItem {
   kind: 'review' | 'clarify'
+  /**
+   * Row-unique key for React reconciliation and `data-testid`. Reviews use
+   * `nodeRunId`; clarify uses the session `id` (NOT `clarifyNodeRunId`)
+   * because a node-run can host multiple awaiting clarify sessions across
+   * loop iterations / retries — sharing keys breaks reconciliation.
+   */
+  rowKey: string
+  /** Navigation target (always a node-run id). */
   id: string
   taskId: string
   /**
@@ -46,6 +54,7 @@ export function mergeInboxItems(
   for (const r of reviews) {
     out.push({
       kind: 'review',
+      rowKey: r.nodeRunId,
       id: r.nodeRunId,
       taskId: r.taskId,
       taskName: r.taskName,
@@ -64,6 +73,7 @@ export function mergeInboxItems(
         : c.sourceAgentNodeId
     out.push({
       kind: 'clarify',
+      rowKey: c.id,
       id: c.clarifyNodeRunId,
       taskId: c.taskId,
       taskName: c.taskName,

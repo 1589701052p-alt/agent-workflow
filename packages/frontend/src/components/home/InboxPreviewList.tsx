@@ -88,7 +88,7 @@ export function InboxPreviewList({ onCount }: InboxPreviewListProps) {
     <div className="inbox-list">
       {items.map((item) => (
         <InboxPreviewRow
-          key={`${item.kind}-${item.id}`}
+          key={`${item.kind}-${item.rowKey}`}
           item={item}
           nowMs={nowMs}
           navigate={navigate}
@@ -112,7 +112,7 @@ function InboxPreviewRow({ item, nowMs, navigate }: InboxPreviewRowProps) {
     <button
       type="button"
       className="inbox-row"
-      data-testid={`inbox-preview-${item.kind}-${item.id}`}
+      data-testid={`inbox-preview-${item.kind}-${item.rowKey}`}
       onClick={() => {
         const target =
           item.kind === 'review'

@@ -85,6 +85,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
       for (const r of reviews.data ?? []) {
         rows.push({
           kind: 'review',
+          rowKey: r.nodeRunId,
           id: r.nodeRunId,
           taskId: r.taskId,
           taskName: r.taskName,
@@ -105,6 +106,13 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
             : c.sourceAgentNodeId
         rows.push({
           kind: 'clarify',
+          // React key uses the session id (always unique). The nav target
+          // stays on `clarifyNodeRunId` because the detail route is
+          // /clarify/$nodeRunId. Multiple awaiting sessions can share a
+          // node-run (loop iterations / retries) — without separating the
+          // key from the nav id we get duplicate React keys, and tab
+          // switches leave stale rows in the DOM instead of re-filtering.
+          rowKey: c.id,
           id: c.clarifyNodeRunId,
           taskId: c.taskId,
           taskName: c.taskName,
@@ -165,10 +173,10 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
       <div className="inbox-drawer__list">
         {items.map((it) => (
           <button
-            key={`${it.kind}-${it.id}`}
+            key={`${it.kind}-${it.rowKey}`}
             type="button"
             className="inbox-drawer__item"
-            data-testid={`inbox-row-${it.kind}-${it.id}`}
+            data-testid={`inbox-row-${it.kind}-${it.rowKey}`}
             onClick={() => {
               const target =
                 it.kind === 'review'
@@ -240,6 +248,15 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
 
 interface InboxItem {
   kind: 'review' | 'clarify'
+  /**
+   * Stable, row-unique identifier used for the React `key` and the row's
+   * `data-testid`. For reviews this is `nodeRunId` (unique per pending
+   * review); for clarify this is the session `id` rather than
+   * `clarifyNodeRunId`, because a single node-run can have several
+   * awaiting sessions across loop iterations / retries.
+   */
+  rowKey: string
+  /** Navigation target — `nodeRunId` for both kinds. */
   id: string
   taskId: string
   /** RFC-037: joined `tasks.name`. Rendered as a chip in the row. */

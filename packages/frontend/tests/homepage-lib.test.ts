@@ -164,6 +164,36 @@ describe('RFC-032 mergeInboxItems — locks newest-first ordering and limit', ()
     )
     expect(result[0]?.title).toBe('agent_legacy')
   })
+
+  // Locks in the fix for the "inbox tab switch leaves stale rows" bug.
+  // The backend can return several `awaiting_human` clarify sessions
+  // sharing one `clarifyNodeRunId` (loop iterations / retries). If we
+  // key React rows by node-run id, duplicate keys break reconciliation
+  // and stale rows linger in the DOM after a tab switch. The merge
+  // therefore exposes `rowKey = session.id` (always unique) alongside
+  // `id = clarifyNodeRunId` (the navigation target).
+  test('clarify rows expose session-id as rowKey, even when clarifyNodeRunId repeats', () => {
+    const result = mergeInboxItems(
+      [],
+      [
+        clarify({ id: 'sess_a', clarifyNodeRunId: 'shared_nrun', createdAt: 3 }),
+        clarify({ id: 'sess_b', clarifyNodeRunId: 'shared_nrun', createdAt: 2 }),
+        clarify({ id: 'sess_c', clarifyNodeRunId: 'shared_nrun', createdAt: 1 }),
+      ],
+    )
+    expect(result.length).toBe(3)
+    expect(result.map((r) => r.rowKey)).toEqual(['sess_a', 'sess_b', 'sess_c'])
+    expect(new Set(result.map((r) => r.rowKey)).size).toBe(3)
+    // Navigation target stays on node-run id so the detail page route
+    // (/clarify/$nodeRunId) keeps working.
+    expect(result.every((r) => r.id === 'shared_nrun')).toBe(true)
+  })
+
+  test('review rows expose nodeRunId as rowKey (unique per pending review)', () => {
+    const result = mergeInboxItems([review({ nodeRunId: 'r_only' })], [])
+    expect(result[0]?.rowKey).toBe('r_only')
+    expect(result[0]?.id).toBe('r_only')
+  })
 })
 
 describe('RFC-032 pickGreetingKey — hourly boundary table', () => {

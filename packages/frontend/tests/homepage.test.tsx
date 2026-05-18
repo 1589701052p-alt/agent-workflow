@@ -204,7 +204,9 @@ describe('RFC-032 Homepage dashboard', () => {
       expect(screen.getByTestId('inbox-preview-review-rev_a')).toBeTruthy()
     })
     expect(screen.getByTestId('inbox-preview-review-rev_b')).toBeTruthy()
-    expect(screen.getByTestId('inbox-preview-clarify-cln_a')).toBeTruthy()
+    // testid is keyed on the clarify session `id` (unique across rows),
+    // not on `clarifyNodeRunId` which can repeat across loop iterations.
+    expect(screen.getByTestId('inbox-preview-clarify-sess_0')).toBeTruthy()
   })
 
   test('runtime probe ready → renders the version in the greeting line', async () => {
