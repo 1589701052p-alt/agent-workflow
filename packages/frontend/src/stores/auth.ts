@@ -33,6 +33,31 @@ function safeStorage(): Storage | null {
   }
 }
 
+// RFC-036 — module-init OIDC fragment consumer. The OIDC callback redirects
+// the browser to `<postLoginRedirect>#aw_session=<token>`. The token has to
+// land in localStorage BEFORE TanStack Router's beforeLoad inspects
+// getToken() — otherwise the user is bounced to /auth and the fragment is
+// lost. This block runs once when the module is first imported (i.e. at SPA
+// bootstrap), so by the time any route hook reads getToken() the token is
+// already there. The fragment is stripped from window.history so a reload
+// won't replay it.
+;(function consumeSessionFragment() {
+  if (typeof window === 'undefined') return
+  const m = window.location.hash.match(/^#aw_session=(.+)$/)
+  if (!m || !m[1]) return
+  try {
+    const raw = decodeURIComponent(m[1]).trim()
+    if (raw.length > 0) {
+      safeStorage()?.setItem(TOKEN_KEY, raw)
+    }
+  } catch {
+    // ignore malformed fragments
+  }
+  // Strip the fragment so refresh doesn't reapply it.
+  const { pathname, search } = window.location
+  window.history.replaceState(null, '', `${pathname}${search}`)
+})()
+
 export function getToken(): string | null {
   return safeStorage()?.getItem(TOKEN_KEY) ?? null
 }

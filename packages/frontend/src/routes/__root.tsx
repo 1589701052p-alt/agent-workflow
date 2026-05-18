@@ -44,6 +44,10 @@ function RootComponent() {
   const { t } = useTranslation()
   useApplyTheme()
   useApplyLanguage()
+  // RFC-036 — the `#aw_session=` fragment from the OIDC callback is
+  // consumed at module-init time inside @/stores/auth.ts (so the token
+  // is set BEFORE TanStack Router's beforeLoad gate inspects it).
+  // Nothing else to do here on cold boot.
   // RFC-032 PR2: inbox-drawer open state lifted here so the footer button
   // and the drawer can share it. Reviews + clarify pending-count queries
   // moved inside <InboxFooterButton> (still keyed `['reviews','pending-count']`

@@ -59,15 +59,13 @@ function AuthPage() {
       .catch(() => setProviders([]))
   }, [])
 
-  // Honor session-token-in-fragment redirect from OIDC callback.
-  useEffect(() => {
-    const m = window.location.hash.match(/^#aw_session=(.+)$/)
-    if (m && m[1]) {
-      setToken(decodeURIComponent(m[1]))
-      window.location.hash = ''
-      navigate({ to: '/agents' })
-    }
-  }, [navigate])
+  // Note: the `#aw_session=` fragment from the OIDC callback is handled
+  // globally in __root.tsx (so any postLoginRedirect target picks it up),
+  // not here. If the token lands while we're on /auth the SPA still
+  // reflows correctly: setToken triggers the auth-store emit →
+  // RootComponent's token-aware fallback drops the bare layout →
+  // beforeLoad's redirect-to-/auth check won't refire because the token
+  // is now set; user lands on whatever route they navigate to next.
 
   // When switching tabs, drop any per-tab error so the user gets a clean
   // form. We deliberately keep input values so accidental tab clicks don't
