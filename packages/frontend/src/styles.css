@@ -669,7 +669,14 @@ code {
   color: var(--muted);
 }
 
-.account-form input {
+/* Text-like inputs only — checkboxes/radios stay at their intrinsic
+   13×13 size (otherwise the .pat-scopes picker's checkboxes would each
+   grow to fill 100% of their row and obliterate the labels). */
+.account-form input[type='text'],
+.account-form input[type='password'],
+.account-form input[type='email'],
+.account-form input[type='url'],
+.account-form input:not([type]) {
   font: inherit;
   font-size: 13px;
   padding: 7px 10px;
@@ -680,7 +687,11 @@ code {
   width: 100%;
 }
 
-.account-form input:focus {
+.account-form input[type='text']:focus,
+.account-form input[type='password']:focus,
+.account-form input[type='email']:focus,
+.account-form input[type='url']:focus,
+.account-form input:not([type]):focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
