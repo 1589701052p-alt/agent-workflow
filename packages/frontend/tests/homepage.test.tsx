@@ -224,4 +224,29 @@ describe('RFC-032 Homepage dashboard', () => {
       )
     })
   })
+
+  // Regression: the inbox section header link previously hard-coded `to:
+  // '/reviews'`, so clicking "Open Inbox" only surfaced reviews — the
+  // clarify (反问) items merged into the same preview list had no way to
+  // reach. The fix re-points the link at the unified inbox drawer via
+  // stores/inbox.ts. This test locks both halves: (a) the link no longer
+  // navigates to /reviews, and (b) clicking it flips the inbox store to
+  // open.
+  test('inbox section "Open inbox" link opens the unified drawer (not /reviews)', async () => {
+    const inboxStore = await import('../src/stores/inbox')
+    inboxStore.setInboxOpen(false)
+    mockEndpoints({ reviews: [{ nodeRunId: 'rev_a' }] })
+    wrap(<Homepage />)
+    const section = await screen.findByTestId('homepage-section-inbox')
+    const link = section.querySelector<HTMLElement>('.homepage-section__link')
+    expect(link).toBeTruthy()
+    // Bug regression: the link must NOT be a plain <a href="/reviews"> —
+    // that's what surfaced only one of the two inbox feeds.
+    expect(link?.tagName.toLowerCase()).toBe('button')
+    expect(link?.getAttribute('href')).toBeNull()
+    expect(inboxStore.getInboxOpen()).toBe(false)
+    ;(link as HTMLButtonElement).click()
+    expect(inboxStore.getInboxOpen()).toBe(true)
+    inboxStore.setInboxOpen(false)
+  })
 })

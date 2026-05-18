@@ -39,6 +39,8 @@ export interface Resources {
       errorClarify: string
       retry: string
       sourceTask: string
+      openReviews: string
+      openClarify: string
     }
   }
   home: {
@@ -1429,6 +1431,8 @@ export const zhCN: Resources = {
       errorClarify: '反问列表加载失败',
       retry: '重试',
       sourceTask: '任务 {{taskId}}',
+      openReviews: '查看全部评审 →',
+      openClarify: '查看全部反问 →',
     },
   },
   home: {

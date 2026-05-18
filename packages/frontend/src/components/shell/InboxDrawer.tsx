@@ -190,6 +190,38 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
           </button>
         ))}
       </div>
+
+      {/* Footer entry points to the full list pages. The drawer was
+          intentionally kept short (pending-only), so users need a way to
+          reach the historical /reviews + /clarify tabs (approved /
+          rejected / answered, etc.). Clicking closes the drawer so the
+          user lands cleanly on the list page. */}
+      <div className="inbox-drawer__footer">
+        <button
+          type="button"
+          className="inbox-drawer__footer-link"
+          data-testid="inbox-drawer-open-reviews"
+          onClick={() => {
+            onClose()
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            void navigate({ to: '/reviews' } as any)
+          }}
+        >
+          {t('nav.inbox.openReviews')}
+        </button>
+        <button
+          type="button"
+          className="inbox-drawer__footer-link"
+          data-testid="inbox-drawer-open-clarify"
+          onClick={() => {
+            onClose()
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            void navigate({ to: '/clarify' } as any)
+          }}
+        >
+          {t('nav.inbox.openClarify')}
+        </button>
+      </div>
     </div>
   )
 

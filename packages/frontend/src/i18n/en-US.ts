@@ -36,6 +36,8 @@ export const enUS: Resources = {
       errorClarify: 'Failed to load clarify sessions',
       retry: 'Retry',
       sourceTask: 'task {{taskId}}',
+      openReviews: 'View all reviews →',
+      openClarify: 'View all clarify →',
     },
   },
   home: {

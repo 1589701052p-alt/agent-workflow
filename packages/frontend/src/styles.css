@@ -1602,6 +1602,31 @@ code {
   font-size: 12px;
 }
 
+.inbox-drawer__footer {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.inbox-drawer__footer-link {
+  flex: 1 1 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.inbox-drawer__footer-link:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* RFC-032 PR3 — task-driven homepage. The page-level layout follows
    .page conventions (set elsewhere), so .homepage only owns its own
    sectioning. */

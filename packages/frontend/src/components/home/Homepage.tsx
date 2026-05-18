@@ -13,6 +13,7 @@
 
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { setInboxOpen } from '@/stores/inbox'
 import { HomepageGreeting } from './HomepageGreeting'
 import { HomepageSection } from './HomepageSection'
 import { InboxPreviewList } from './InboxPreviewList'
@@ -46,7 +47,7 @@ export function Homepage() {
         title={t('home.section.inbox')}
         count={inboxCount}
         variant="warn"
-        link={{ label: t('home.section.openInbox'), to: '/reviews' }}
+        link={{ label: t('home.section.openInbox'), onClick: () => setInboxOpen(true) }}
         testId="homepage-section-inbox"
       >
         <InboxPreviewList onCount={onInboxCount} />

@@ -10,7 +10,7 @@
 // workflows-group highlight via `resolveActiveNav`'s fallback.
 
 import { Link, Outlet, createRootRoute, redirect, useRouterState } from '@tanstack/react-router'
-import { useState, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LanguageSwitch } from '@/components/LanguageSwitch'
 import { UserMenu } from '@/components/UserMenu'
@@ -23,6 +23,7 @@ import { useApplyLanguage } from '@/hooks/useLanguage'
 import { useApplyTheme } from '@/hooks/useTheme'
 import { NAV_GROUPS, resolveActiveNav } from '@/lib/nav'
 import { getToken, subscribeAuth } from '@/stores/auth'
+import { setInboxOpen, toggleInboxOpen, useInboxOpen } from '@/stores/inbox'
 
 export const Route = createRootRoute({
   beforeLoad: ({ location }) => {
@@ -48,11 +49,13 @@ function RootComponent() {
   // consumed at module-init time inside @/stores/auth.ts (so the token
   // is set BEFORE TanStack Router's beforeLoad gate inspects it).
   // Nothing else to do here on cold boot.
-  // RFC-032 PR2: inbox-drawer open state lifted here so the footer button
-  // and the drawer can share it. Reviews + clarify pending-count queries
-  // moved inside <InboxFooterButton> (still keyed `['reviews','pending-count']`
-  // and `['clarify','pending-count']` so older tests + cached data align).
-  const [inboxOpen, setInboxOpen] = useState(false)
+  // RFC-032 PR2: inbox-drawer open state. Lifted into a module-level store
+  // (stores/inbox.ts) so call sites outside the root subtree — typically
+  // the Homepage's "Open Inbox" section link — can pop the drawer without
+  // prop-drilling through the auth gate. Reviews + clarify pending-count
+  // queries still live inside <InboxFooterButton> (keyed
+  // `['reviews','pending-count']` and `['clarify','pending-count']`).
+  const inboxOpen = useInboxOpen()
 
   if (pathname === '/auth' || token === null) {
     return (
@@ -150,7 +153,7 @@ function RootComponent() {
             <NavGroup key={group.key} group={group} active={active} />
           ))}
         </nav>
-        <InboxFooterButton open={inboxOpen} onToggle={() => setInboxOpen((v) => !v)} />
+        <InboxFooterButton open={inboxOpen} onToggle={toggleInboxOpen} />
         <div className="sidebar__footer">
           <UserMenu />
           <div className="sidebar__footer-row">

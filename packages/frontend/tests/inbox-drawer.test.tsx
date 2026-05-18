@@ -240,4 +240,39 @@ describe('RFC-032 InboxDrawer', () => {
       expect(drawer.textContent ?? '').toMatch(/Nothing waiting|当前没有/)
     })
   })
+
+  // Regression: the drawer was originally PR2's only entry into the
+  // pending queue, and the standalone /reviews + /clarify pages — which
+  // surface historical / approved / rejected / answered rows the drawer
+  // intentionally hides — became unreachable from the sidebar once the
+  // separate nav items were removed. The drawer now carries explicit
+  // footer links to both list pages.
+  test('footer surfaces View-all entries for both /reviews and /clarify', async () => {
+    mockLists({ reviews: [], clarify: [] })
+    const onClose = vi.fn()
+    wrap(<InboxDrawer open={true} onClose={onClose} />)
+    await waitFor(() => screen.getByTestId('inbox-drawer'))
+    expect(screen.getByTestId('inbox-drawer-open-reviews')).toBeTruthy()
+    expect(screen.getByTestId('inbox-drawer-open-clarify')).toBeTruthy()
+  })
+
+  test('clicking View-all reviews navigates to /reviews and closes the drawer', async () => {
+    mockLists({ reviews: [], clarify: [] })
+    const onClose = vi.fn()
+    wrap(<InboxDrawer open={true} onClose={onClose} />)
+    await waitFor(() => screen.getByTestId('inbox-drawer'))
+    fireEvent.click(screen.getByTestId('inbox-drawer-open-reviews'))
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/reviews' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  test('clicking View-all clarify navigates to /clarify and closes the drawer', async () => {
+    mockLists({ reviews: [], clarify: [] })
+    const onClose = vi.fn()
+    wrap(<InboxDrawer open={true} onClose={onClose} />)
+    await waitFor(() => screen.getByTestId('inbox-drawer'))
+    fireEvent.click(screen.getByTestId('inbox-drawer-open-clarify'))
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/clarify' })
+    expect(onClose).toHaveBeenCalled()
+  })
 })
