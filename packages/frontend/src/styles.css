@@ -549,6 +549,270 @@ code {
   flex-shrink: 0;
 }
 
+/* ---- RFC-036 /account page ----------------------------------------- */
+
+.account-page {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.account-page__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.account-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+}
+
+.account-card__header {
+  margin-bottom: 14px;
+}
+
+.account-card__title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.account-card__description {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.account-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Definition list — Profile section. Two columns at md+, stack on sm. */
+.account-defs {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+
+.account-defs__row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.account-defs__row dt {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.account-defs__row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* Forms inside .account-card. Inputs are width-capped so password fields
+   don't stretch across the entire 760-px card. */
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-form--inline {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.account-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 360px;
+}
+
+.account-form__field--grow {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.account-form__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.account-form input {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+
+.account-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.account-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.account-form__ok {
+  font-size: 12px;
+  color: var(--success, #2c8a2c);
+}
+
+.account-form__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* Tables — PAT list, sessions, identities */
+.account-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.account-table th,
+.account-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.account-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.account-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.account-table__ua {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+  max-width: 360px;
+}
+
+.account-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Callout — shown once after generating a new PAT so the user can copy it */
+.account-callout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.account-callout--success {
+  background: color-mix(in srgb, var(--success, #2c8a2c) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #2c8a2c) 35%, var(--border));
+  color: var(--text);
+}
+
+.account-callout__code {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* Role / status / source chips */
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.role-chip--admin {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.role-chip--user {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.source-chip {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+}
+
+/* Scope chips inside PAT list rows. */
+.account-scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.account-scope-chip {
+  display: inline-block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
 /* RFC-032 — 3-group sidebar nav. Group headers are 11-px small caps that
    sit at the sidebar's gutter edge; sub-items are 32-px tall rows indented
    to read as children of their group header. */

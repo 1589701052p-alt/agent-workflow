@@ -19,50 +19,84 @@ export const Route = createRoute({
 function AccountPage() {
   const { t } = useTranslation()
   const { data, isLoading } = useActor()
-  if (isLoading) return <div className="page">Loading…</div>
+  if (isLoading) return <div className="page account-page">Loading…</div>
   if (!data) {
     return (
-      <div className="page">
+      <div className="page account-page">
         <h1>{t('account.title', { defaultValue: 'My account' })}</h1>
         <p>Please sign in.</p>
       </div>
     )
   }
   return (
-    <div className="page">
+    <div className="page account-page">
       <header className="page__header">
         <h1>{t('account.title', { defaultValue: 'My account' })}</h1>
         <p className="page__hint">
           {t('account.subtitle', { defaultValue: 'Manage your password, sessions, and tokens.' })}
         </p>
       </header>
-      <ProfileSection me={data} />
-      <PasswordSection />
-      <PatSection />
-      <IdentitiesSection />
-      <SessionsSection />
+      <div className="account-page__grid">
+        <ProfileSection me={data} />
+        <PasswordSection />
+        <PatSection />
+        <IdentitiesSection />
+        <SessionsSection />
+      </div>
     </div>
+  )
+}
+
+function SectionShell(props: { title: string; description?: string; children: React.ReactNode }) {
+  return (
+    <section className="account-card">
+      <header className="account-card__header">
+        <h2 className="account-card__title">{props.title}</h2>
+        {props.description && <p className="account-card__description">{props.description}</p>}
+      </header>
+      <div className="account-card__body">{props.children}</div>
+    </section>
   )
 }
 
 function ProfileSection({ me }: { me: MeResponse }) {
   const { t } = useTranslation()
+  const rows: Array<[string, React.ReactNode]> = [
+    [t('account.username', { defaultValue: 'Username' }), <code key="u">{me.user.username}</code>],
+    [t('account.displayName', { defaultValue: 'Display name' }), me.user.displayName],
+    [
+      t('account.role', { defaultValue: 'Role' }),
+      <span key="r" className={`role-chip role-chip--${me.user.role}`}>
+        {me.user.role}
+      </span>,
+    ],
+    [
+      t('account.status', { defaultValue: 'Status' }),
+      <span
+        key="s"
+        className={`status-chip status-chip--${me.user.status === 'active' ? 'success' : 'warn'}`}
+      >
+        {me.user.status}
+      </span>,
+    ],
+    [
+      t('account.source', { defaultValue: 'Authenticated via' }),
+      <span key="src" className="source-chip">
+        {me.source}
+      </span>,
+    ],
+  ]
   return (
-    <section className="card">
-      <h2>{t('account.profile', { defaultValue: 'Profile' })}</h2>
-      <dl>
-        <dt>{t('account.username', { defaultValue: 'Username' })}</dt>
-        <dd>{me.user.username}</dd>
-        <dt>{t('account.displayName', { defaultValue: 'Display name' })}</dt>
-        <dd>{me.user.displayName}</dd>
-        <dt>{t('account.role', { defaultValue: 'Role' })}</dt>
-        <dd>{me.user.role}</dd>
-        <dt>{t('account.status', { defaultValue: 'Status' })}</dt>
-        <dd>{me.user.status}</dd>
-        <dt>{t('account.source', { defaultValue: 'Authenticated via' })}</dt>
-        <dd>{me.source}</dd>
+    <SectionShell title={t('account.profile', { defaultValue: 'Profile' })}>
+      <dl className="account-defs">
+        {rows.map(([k, v], i) => (
+          <div key={i} className="account-defs__row">
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
       </dl>
-    </section>
+    </SectionShell>
   )
 }
 
@@ -89,17 +123,24 @@ function PasswordSection() {
       }),
   })
   return (
-    <section className="card">
-      <h2>{t('account.password', { defaultValue: 'Change password' })}</h2>
+    <SectionShell
+      title={t('account.password', { defaultValue: 'Change password' })}
+      description={t('account.passwordDesc', {
+        defaultValue:
+          'Set a new password. Your other sessions will be revoked; this window will get a fresh session token automatically.',
+      })}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault()
           m.mutate()
         }}
-        className="auth-form"
+        className="account-form"
       >
-        <label>
-          {t('account.oldPassword', { defaultValue: 'Current password' })}
+        <label className="account-form__field">
+          <span className="account-form__label">
+            {t('account.oldPassword', { defaultValue: 'Current password' })}
+          </span>
           <input
             type="password"
             autoComplete="current-password"
@@ -108,8 +149,10 @@ function PasswordSection() {
             required
           />
         </label>
-        <label>
-          {t('account.newPassword', { defaultValue: 'New password' })}
+        <label className="account-form__field">
+          <span className="account-form__label">
+            {t('account.newPassword', { defaultValue: 'New password' })}
+          </span>
           <input
             type="password"
             autoComplete="new-password"
@@ -119,14 +162,18 @@ function PasswordSection() {
             minLength={8}
           />
         </label>
-        <button type="submit" disabled={m.isPending}>
-          {m.isPending ? '…' : t('account.update', { defaultValue: 'Update' })}
-        </button>
-        {msg && (
-          <div className={msg.kind === 'ok' ? 'auth-form__ok' : 'auth-form__error'}>{msg.text}</div>
-        )}
+        <div className="account-form__actions">
+          <button type="submit" className="btn btn--primary" disabled={m.isPending}>
+            {m.isPending ? '…' : t('account.update', { defaultValue: 'Update password' })}
+          </button>
+          {msg && (
+            <span className={msg.kind === 'ok' ? 'account-form__ok' : 'account-form__error'}>
+              {msg.text}
+            </span>
+          )}
+        </div>
       </form>
-    </section>
+    </SectionShell>
   )
 }
 
@@ -165,56 +212,98 @@ function PatSection() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['pats'] }),
   })
   return (
-    <section className="card">
-      <h2>{t('account.pats', { defaultValue: 'Personal Access Tokens' })}</h2>
+    <SectionShell
+      title={t('account.pats', { defaultValue: 'Personal Access Tokens' })}
+      description={t('account.patsDesc', {
+        defaultValue:
+          'For scripts and CI. Each token carries a subset of your role permissions. Tokens are shown once at creation — copy it before closing.',
+      })}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault()
           create.mutate()
         }}
-        className="auth-form"
+        className="account-form account-form--inline"
       >
-        <label>
-          {t('account.patName', { defaultValue: 'Name' })}
-          <input value={name} onChange={(e) => setName(e.target.value)} required />
+        <label className="account-form__field account-form__field--grow">
+          <span className="account-form__label">
+            {t('account.patName', { defaultValue: 'Token name' })}
+          </span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t('account.patNamePlaceholder', { defaultValue: 'e.g. ci-launcher' })}
+            required
+          />
         </label>
-        <button type="submit" disabled={!name || create.isPending}>
+        <button type="submit" className="btn btn--primary" disabled={!name || create.isPending}>
           {t('account.generate', { defaultValue: 'Generate' })}
         </button>
-        {shown && (
-          <div className="auth-form__ok" data-testid="new-pat-secret">
-            <strong>{t('account.patShownOnce', { defaultValue: 'Token (copy now):' })}</strong>
-            <code>{shown}</code>
-          </div>
-        )}
       </form>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>{t('account.patNameCol', { defaultValue: 'Name' })}</th>
-            <th>{t('account.patScopes', { defaultValue: 'Scopes' })}</th>
-            <th>{t('account.patStatus', { defaultValue: 'Status' })}</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {(data ?? []).map((p) => (
-            <tr key={p.id}>
-              <td>{p.name}</td>
-              <td>{p.scopes.join(', ')}</td>
-              <td>{p.revokedAt ? 'revoked' : 'active'}</td>
-              <td>
-                {!p.revokedAt && (
-                  <button onClick={() => revoke.mutate(p.id)} className="btn btn--ghost btn--xs">
-                    {t('account.revoke', { defaultValue: 'Revoke' })}
-                  </button>
-                )}
-              </td>
+      {shown && (
+        <div className="account-callout account-callout--success" data-testid="new-pat-secret">
+          <strong>{t('account.patShownOnce', { defaultValue: 'New token (copy now)' })}</strong>
+          <code className="account-callout__code">{shown}</code>
+          <button
+            className="btn btn--ghost btn--xs"
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(shown)
+            }}
+          >
+            {t('account.copy', { defaultValue: 'Copy' })}
+          </button>
+        </div>
+      )}
+      {(data ?? []).length === 0 ? (
+        <p className="account-empty">{t('account.noPats', { defaultValue: 'No tokens yet.' })}</p>
+      ) : (
+        <table className="account-table">
+          <thead>
+            <tr>
+              <th>{t('account.patNameCol', { defaultValue: 'Name' })}</th>
+              <th>{t('account.patScopes', { defaultValue: 'Scopes' })}</th>
+              <th>{t('account.patStatus', { defaultValue: 'Status' })}</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {(data ?? []).map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td>
+                  <div className="account-scope-chips">
+                    {p.scopes.map((s) => (
+                      <span key={s} className="account-scope-chip">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  <span
+                    className={`status-chip status-chip--${p.revokedAt ? 'danger' : 'success'}`}
+                  >
+                    {p.revokedAt ? 'revoked' : 'active'}
+                  </span>
+                </td>
+                <td>
+                  {!p.revokedAt && (
+                    <button
+                      onClick={() => revoke.mutate(p.id)}
+                      className="btn btn--ghost btn--xs btn--danger"
+                    >
+                      {t('account.revoke', { defaultValue: 'Revoke' })}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </SectionShell>
   )
 }
 
@@ -233,33 +322,47 @@ function SessionsSection() {
     },
   })
   return (
-    <section className="card">
-      <h2>{t('account.sessions', { defaultValue: 'Sessions' })}</h2>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>{t('account.sessionId', { defaultValue: 'Session' })}</th>
-            <th>{t('account.userAgent', { defaultValue: 'User agent' })}</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {(data ?? []).map((s) => (
-            <tr key={s.id}>
-              <td>
-                <code>{s.id.slice(0, 8)}…</code>
-              </td>
-              <td>{s.userAgent ?? '—'}</td>
-              <td>
-                <button onClick={() => revoke.mutate(s.id)} className="btn btn--ghost btn--xs">
-                  {t('account.revoke', { defaultValue: 'Revoke' })}
-                </button>
-              </td>
+    <SectionShell
+      title={t('account.sessions', { defaultValue: 'Active sessions' })}
+      description={t('account.sessionsDesc', {
+        defaultValue:
+          'Web sessions for this account. Revoke any session you do not recognise — the next request from that browser will return 401.',
+      })}
+    >
+      {(data ?? []).length === 0 ? (
+        <p className="account-empty">
+          {t('account.noSessions', { defaultValue: 'No active sessions.' })}
+        </p>
+      ) : (
+        <table className="account-table">
+          <thead>
+            <tr>
+              <th>{t('account.sessionId', { defaultValue: 'Session' })}</th>
+              <th>{t('account.userAgent', { defaultValue: 'User agent' })}</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {(data ?? []).map((s) => (
+              <tr key={s.id}>
+                <td>
+                  <code>{s.id.slice(0, 10)}…</code>
+                </td>
+                <td className="account-table__ua">{s.userAgent ?? '—'}</td>
+                <td>
+                  <button
+                    onClick={() => revoke.mutate(s.id)}
+                    className="btn btn--ghost btn--xs btn--danger"
+                  >
+                    {t('account.revoke', { defaultValue: 'Revoke' })}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </SectionShell>
   )
 }
 
@@ -283,12 +386,19 @@ function IdentitiesSection() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['identities'] }),
   })
   return (
-    <section className="card">
-      <h2>{t('account.linkedIdentities', { defaultValue: 'Linked identities' })}</h2>
+    <SectionShell
+      title={t('account.linkedIdentities', { defaultValue: 'Linked identities' })}
+      description={t('account.identitiesDesc', {
+        defaultValue:
+          'OIDC providers linked to this account. Unlinking does not delete the account; you can re-link from the login page.',
+      })}
+    >
       {(data ?? []).length === 0 ? (
-        <p>{t('account.noIdentities', { defaultValue: 'No linked identities yet.' })}</p>
+        <p className="account-empty">
+          {t('account.noIdentities', { defaultValue: 'No linked identities yet.' })}
+        </p>
       ) : (
-        <table className="data-table">
+        <table className="account-table">
           <thead>
             <tr>
               <th>{t('account.provider', { defaultValue: 'Provider' })}</th>
@@ -304,7 +414,10 @@ function IdentitiesSection() {
                   <code>{i.subject}</code>
                 </td>
                 <td>
-                  <button onClick={() => remove.mutate(i.id)} className="btn btn--ghost btn--xs">
+                  <button
+                    onClick={() => remove.mutate(i.id)}
+                    className="btn btn--ghost btn--xs btn--danger"
+                  >
                     {t('account.unlink', { defaultValue: 'Unlink' })}
                   </button>
                 </td>
@@ -313,6 +426,6 @@ function IdentitiesSection() {
           </tbody>
         </table>
       )}
-    </section>
+    </SectionShell>
   )
 }
