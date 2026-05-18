@@ -67,7 +67,14 @@ function SkillsPage() {
       )}
 
       {data !== undefined && data.length > 0 && (
-        <table className="data-table">
+        <table className="data-table" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '180px' }} />
+            <col style={{ width: '110px' }} />
+            <col />
+            <col style={{ width: '30%' }} />
+            <col style={{ width: '140px' }} />
+          </colgroup>
           <thead>
             <tr>
               <th>{t('skills.colName')}</th>
@@ -99,8 +106,16 @@ function SkillsPage() {
                 <td>
                   <span className={`chip chip--tight chip--${s.sourceKind}`}>{s.sourceKind}</span>
                 </td>
-                <td className="data-table__muted">{s.description || t('common.emDash')}</td>
-                <td className="data-table__muted">
+                <td
+                  className="data-table__muted data-table__truncate"
+                  title={s.description || undefined}
+                >
+                  {s.description || t('common.emDash')}
+                </td>
+                <td
+                  className="data-table__muted data-table__truncate"
+                  title={s.managedPath ?? s.externalPath ?? undefined}
+                >
                   <code>{s.managedPath ?? s.externalPath ?? t('common.emDash')}</code>
                 </td>
                 <td className="data-table__actions">
