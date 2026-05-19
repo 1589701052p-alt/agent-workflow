@@ -25,9 +25,14 @@ import type { Agent } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { cachedRepos, memories, tasks } from '@/db/schema'
 
-const DEFAULT_BUDGET = { agent: 1500, workflow: 800, repo: 800, global: 500 } as const
+export interface ScopeBudget {
+  agent: number
+  workflow: number
+  repo: number
+  global: number
+}
 
-export type ScopeBudget = typeof DEFAULT_BUDGET
+const DEFAULT_BUDGET: ScopeBudget = { agent: 1500, workflow: 800, repo: 800, global: 500 }
 
 export interface InjectableMemoryRow {
   id: string
