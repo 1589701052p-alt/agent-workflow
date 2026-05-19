@@ -238,6 +238,66 @@ describe('parseSessionTree — subagent nesting', () => {
     expect(sub.child!.messages.map((m) => m.kind)).toEqual(['assistant-text'])
   })
 
+  // Regression: opencode 1.15.x writes the spawned child sessionID at
+  // part.state.metadata.sessionId (lowercase Id), NOT at part.metadata.
+  // See opencode packages/opencode/src/tool/task.ts:170-180 and
+  // session/prompt.ts:780-787. Before the fix the parser only looked at
+  // top-level part.metadata, so every real-world task tool_use ended up
+  // with childSessionId=null → SubagentBlock rendered "未能捕获子代理事件"
+  // even though sessionCapture had successfully readback the child's events.
+  test('task tool with state.metadata.sessionId (real opencode shape) wires to child', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      events: [
+        evt({
+          sessionId: 'root',
+          kind: 'tool_use',
+          payload: {
+            type: 'tool_use',
+            sessionID: 'root',
+            part: {
+              type: 'tool',
+              callID: 'task1',
+              tool: 'task',
+              // No top-level part.metadata — matches real captures.
+              state: {
+                status: 'completed',
+                input: { subagent_type: 'auditor', prompt: 'review X' },
+                output: 'audit done',
+                metadata: {
+                  parentSessionId: 'root',
+                  sessionId: 'child-1',
+                  model: { modelID: 'glm-5', providerID: 'alibaba-cn' },
+                },
+              },
+            },
+          },
+        }),
+        evt({
+          sessionId: 'child-1',
+          parentSessionId: 'root',
+          kind: 'text',
+          payload: {
+            type: 'text',
+            sessionID: 'child-1',
+            messageID: 'c1-m1',
+            part: { type: 'text', text: 'child says hi' },
+          },
+        }),
+      ],
+    })
+    const sub = tree.messages[0]
+    expect(sub.kind).toBe('subagent-call')
+    if (sub.kind !== 'subagent-call') return
+    expect(sub.childSessionId).toBe('child-1')
+    expect(sub.child).not.toBeNull()
+    expect(sub.child!.captureComplete).toBe(true)
+    expect(sub.child!.messages.map((m) => m.kind)).toEqual(['assistant-text'])
+  })
+
   test('three-level nested subagent reconstructs full chain', () => {
     const evts: ParseSessionInputEvent[] = []
     // root → child-A → grand-B → great-C, each level emits a task tool + a text.

@@ -256,13 +256,20 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
 
         const existing = tools.get(callId)
         if (toolName === 'task') {
-          const metadata = isRecord(part.metadata) ? part.metadata : {}
-          const childSessionId =
-            typeof metadata.sessionID === 'string'
-              ? metadata.sessionID
-              : typeof metadata['sessionId'] === 'string'
-                ? (metadata['sessionId'] as string)
-                : null
+          // opencode 1.15.x writes the spawned child sessionID at
+          // `part.state.metadata.sessionId` (see opencode
+          // packages/opencode/src/tool/task.ts:170-180 and
+          // packages/opencode/src/session/prompt.ts:780-787 which
+          // spreads ctx.metadata's `{title, metadata}` into part.state).
+          // Earlier drafts of this parser looked at top-level
+          // `part.metadata`, which never exists in real captures and made
+          // every task tool_use render as "未能捕获子代理事件" even when
+          // sessionCapture had successfully readback the child's events.
+          // The top-level fallback is kept so test fixtures asserting the
+          // legacy shape continue to pass.
+          const stateMeta = isRecord(state.metadata) ? state.metadata : {}
+          const partMeta = isRecord(part.metadata) ? part.metadata : {}
+          const childSessionId = pickChildSessionId(stateMeta) ?? pickChildSessionId(partMeta)
           const childAgentName = pickSubagentAgentName(input)
           const block: SessionSubagentCall = {
             kind: 'subagent-call',
@@ -418,6 +425,12 @@ function pickMessageId(envelope: unknown, part: Record<string, unknown>): string
   if (typeof part.messageID === 'string') return part.messageID
   if (isRecord(envelope) && typeof envelope['messageID'] === 'string')
     return envelope['messageID'] as string
+  return null
+}
+
+function pickChildSessionId(meta: Record<string, unknown>): string | null {
+  if (typeof meta['sessionID'] === 'string') return meta['sessionID'] as string
+  if (typeof meta['sessionId'] === 'string') return meta['sessionId'] as string
   return null
 }
 
