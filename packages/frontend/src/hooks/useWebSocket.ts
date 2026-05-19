@@ -46,13 +46,15 @@ export function useWebSocket({ path, onMessage, enabled = true }: UseWebSocketOp
         return
       }
       const url = wsUrl(path, token)
+      let ws: WebSocket
       try {
-        socket = new WebSocket(url)
+        ws = new WebSocket(url)
       } catch {
         scheduleReconnect()
         return
       }
-      socket.addEventListener('message', (e) => {
+      socket = ws
+      ws.addEventListener('message', (e) => {
         try {
           const msg = JSON.parse(String(e.data))
           listenerRef.current(msg)
@@ -60,14 +62,14 @@ export function useWebSocket({ path, onMessage, enabled = true }: UseWebSocketOp
           /* ignore non-JSON frames */
         }
       })
-      socket.addEventListener('open', () => {
+      ws.addEventListener('open', () => {
         backoff = BASE_BACKOFF_MS
       })
-      socket.addEventListener('close', () => {
-        socket = null
+      ws.addEventListener('close', () => {
+        if (socket === ws) socket = null
         scheduleReconnect()
       })
-      socket.addEventListener('error', () => {
+      ws.addEventListener('error', () => {
         // The close handler will fire next and reschedule.
       })
     }
@@ -83,9 +85,24 @@ export function useWebSocket({ path, onMessage, enabled = true }: UseWebSocketOp
     return () => {
       stopped = true
       if (reconnectTimer !== null) clearTimeout(reconnectTimer)
-      socket?.close()
+      closeSocket(socket)
+      socket = null
     }
   }, [path, enabled])
+}
+
+function closeSocket(ws: WebSocket | null): void {
+  if (ws === null) return
+  // Closing a CONNECTING socket triggers a browser warning ("WebSocket is
+  // closed before the connection is established"). React StrictMode's
+  // double-invoke of effects in dev hits this on every mount. Defer the
+  // close until the handshake finishes so the warning stays silent; the
+  // outer `stopped` flag keeps the eventual close handler from reconnecting.
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.addEventListener('open', () => ws.close(), { once: true })
+  } else {
+    ws.close()
+  }
 }
 
 function wsUrl(path: string, token: string): string {
