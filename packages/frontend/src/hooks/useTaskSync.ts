@@ -28,7 +28,7 @@ export function useTaskSync(taskId: string | null): void {
       if (msg.type === 'node.status') {
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
       }
-      if (msg.type === 'node.event' || msg.type === 'node.output') {
+      if (msg.type === 'node.event') {
         // Future: render directly on a node-events feed instead of going
         // through react-query. For now we just keep the node-runs row's
         // token usage etc. up to date.

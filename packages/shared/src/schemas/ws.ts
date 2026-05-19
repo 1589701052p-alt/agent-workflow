@@ -59,13 +59,6 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     id: z.number().int(),
-    type: z.literal('node.output'),
-    nodeRunId: z.string(),
-    portName: z.string(),
-    content: z.string(),
-  }),
-  z.object({
-    id: z.number().int(),
     type: z.literal('task.done'),
     status: z.enum(['done', 'failed', 'canceled', 'interrupted']),
   }),

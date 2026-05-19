@@ -65,7 +65,7 @@ try {
 
 - `task.status` / `task.done`
 - `node.status`
-- `node.event` / `node.output`
+- `node.event`
 
 scheduler 在 runner 开始前已经 broadcast 过一次 `node.status: running`（见 `scheduler.ts:1240` 等多处 `broadcastNodeStatus`）。早写发生在那次广播之后、opencode 进程开始流式输出之前，需要**额外**一次能让前端 invalidate 的事件。两种取法：
 

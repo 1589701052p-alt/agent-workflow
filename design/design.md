@@ -427,7 +427,6 @@ type TaskWsMessage =
       kind: EventKind
       payload: unknown
     }
-  | { id: number; type: 'node.output'; nodeRunId: string; portName: string; content: string }
   | { id: number; type: 'task.done'; status: 'done' | 'failed' | 'canceled' | 'interrupted' }
   // —— 人审（RFC-005） ——
   | {
@@ -998,12 +997,6 @@ async function startNodeRun(task: Task, nodeRun: NodeRun, agent: Agent) {
       const ports = parseEnvelope(xml, agent.outputs)
       for (const [name, content] of ports) {
         await dbUpsertOutput(nodeRun.id, name, content)
-        wsBroadcast(task.id, {
-          type: 'node.output',
-          nodeRunId: nodeRun.id,
-          portName: name,
-          content,
-        })
       }
       await dbUpdateNodeRun(nodeRun.id, { status: 'done' })
     }
