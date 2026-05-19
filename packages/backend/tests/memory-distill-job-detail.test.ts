@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
-import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import {
