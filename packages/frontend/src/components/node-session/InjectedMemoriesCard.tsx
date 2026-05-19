@@ -79,9 +79,15 @@ export function InjectedMemoriesCard({ run, attempts, workflowNodeKind }: Props)
       </summary>
       <div className="injected-memories-card__body">
         {status === 'pre-rfc046' && (
-          <p className="muted">{t('nodeDrawer.injectedMemoriesNotCaptured')}</p>
+          <div className="inventory-section__missing">
+            {t('nodeDrawer.injectedMemoriesNotCaptured')}
+          </div>
         )}
-        {status === 'empty' && <p className="muted">{t('nodeDrawer.injectedMemoriesEmpty')}</p>}
+        {status === 'empty' && (
+          <div className="inventory-section__missing">
+            {t('nodeDrawer.injectedMemoriesEmpty')}
+          </div>
+        )}
         {status === 'captured' && (
           <div className="injected-memories-card__groups">
             {SCOPE_ORDER.map((scope) => {
