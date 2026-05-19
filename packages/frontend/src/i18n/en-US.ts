@@ -913,6 +913,7 @@ export const enUS: Resources = {
     menuWrapGit: 'Wrap in git wrapper',
     menuWrapLoop: 'Wrap in loop wrapper',
     menuDecompose: 'Decompose wrapper',
+    boxSelectHint: 'Hold Shift to box-select',
   },
   launch: {
     title: 'Launch: {{name}}',

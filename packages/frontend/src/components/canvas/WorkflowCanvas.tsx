@@ -1016,6 +1016,11 @@ function CanvasInner({
           )
         }
       />
+      {readOnly !== true ? (
+        <div className="workflow-canvas__hint-bottom" aria-hidden="true">
+          {t('editor.boxSelectHint')}
+        </div>
+      ) : null}
     </div>
   )
 }

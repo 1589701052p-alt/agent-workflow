@@ -128,6 +128,27 @@ describe('WorkflowCanvas does not enable selectionOnDrag', () => {
     expect(code).not.toMatch(/selectionOnDrag\s*=/)
   })
 
+  // Since the Shift+drag lasso is the only box-select path (the comment in
+  // WorkflowCanvas explains why selectionOnDrag is unsafe), the gesture
+  // must stay discoverable. Lock in the bottom-center hint chip + its
+  // i18n key so a future refactor doesn't quietly strip it.
+  test('canvas renders the Shift box-select hint in editable mode', async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const here = path.dirname(new URL(import.meta.url).pathname)
+    const src = await fs.readFile(
+      path.join(here, '../src/components/canvas/WorkflowCanvas.tsx'),
+      'utf8',
+    )
+    expect(src).toMatch(/workflow-canvas__hint-bottom/)
+    expect(src).toMatch(/editor\.boxSelectHint/)
+
+    const zh = await fs.readFile(path.join(here, '../src/i18n/zh-CN.ts'), 'utf8')
+    const en = await fs.readFile(path.join(here, '../src/i18n/en-US.ts'), 'utf8')
+    expect(zh).toMatch(/boxSelectHint:\s*'按住 Shift 框选'/)
+    expect(en).toMatch(/boxSelectHint:\s*'Hold Shift to box-select'/)
+  })
+
   test('WorkflowCanvas threads applySelection through the def-sync rebuild', async () => {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')

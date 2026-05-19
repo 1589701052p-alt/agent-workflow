@@ -3874,6 +3874,29 @@ code {
   outline: none;
 }
 
+/* Bottom-center affordance for the box-select gesture. Shift+drag is the
+ * only lasso path (see `selectionOnDrag` regression lock in
+ * canvas-edge-changes.test.ts), so we surface it as an always-visible chip
+ * rather than burying it in onboarding. pointer-events:none keeps the chip
+ * from absorbing panning / right-click on the area it covers. */
+.workflow-canvas__hint-bottom {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text-muted, var(--text));
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.75;
+  z-index: 4;
+}
+
 .workflow-canvas .react-flow {
   width: 100%;
   height: 100%;

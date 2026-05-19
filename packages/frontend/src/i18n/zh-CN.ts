@@ -859,6 +859,7 @@ export interface Resources {
     menuWrapGit: string
     menuWrapLoop: string
     menuDecompose: string
+    boxSelectHint: string
   }
   launch: {
     title: string
@@ -2491,6 +2492,7 @@ export const zhCN: Resources = {
     menuWrapGit: '用 git wrapper 包装',
     menuWrapLoop: '用 loop wrapper 包装',
     menuDecompose: '解组 wrapper',
+    boxSelectHint: '按住 Shift 框选',
   },
   launch: {
     title: '启动：{{name}}',
