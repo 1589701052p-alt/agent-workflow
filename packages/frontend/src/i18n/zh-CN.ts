@@ -24,6 +24,8 @@ export interface Resources {
       agents: string
       workflows: string
       tasks: string
+      // RFC-041 PR4 follow-up: single-item "记忆" group header.
+      memory: string
     }
     settingsIcon: {
       label: string
@@ -1550,6 +1552,7 @@ export const zhCN: Resources = {
       agents: '代理',
       workflows: '工作流',
       tasks: '任务',
+      memory: '记忆',
     },
     settingsIcon: {
       label: '设置',

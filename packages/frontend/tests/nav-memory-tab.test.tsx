@@ -1,25 +1,18 @@
-// RFC-041 PR4 — top-level Memory nav link.
+// RFC-041 PR4 — Memory group in the sidebar nav.
 //
 // Locks:
-// 1. Link is rendered with the data-testid="nav-memory-link".
-// 2. Admin (has memory:approve) AND there exist candidates → badge shown.
-// 3. Non-admin → no badge even if /api/memories returns candidates (query
-//    is gated by usePermission and disabled, so no fetch fires).
+// 1. NAV_GROUPS exposes a "memory" group with a single /memory sub-item.
+// 2. <MemoryPendingBadge /> hides when actor lacks memory:approve (no badge,
+//    no fetch fired beyond /api/auth/me).
+// 3. Admin with ≥1 candidate sees a numeric badge.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-} from '@tanstack/react-router'
 import { render, screen, waitFor } from '@testing-library/react'
-import type { Memory, MemorySummary } from '@agent-workflow/shared'
+import type { MemorySummary } from '@agent-workflow/shared'
 import { setBaseUrl, setToken } from '../src/stores/auth'
-import { MemoryNavLink } from '../src/components/shell/MemoryNavLink'
+import { MemoryPendingBadge } from '../src/components/shell/MemoryPendingBadge'
+import { NAV_GROUPS } from '../src/lib/nav'
 import '../src/i18n'
 
 function mkSum(overrides: Partial<MemorySummary> = {}): MemorySummary {
@@ -37,18 +30,14 @@ function mkSum(overrides: Partial<MemorySummary> = {}): MemorySummary {
   }
 }
 
-interface FetchedUrls {
-  list: string[]
-}
-
 function installFetch(
   meResponse: { permissions: string[] },
-  candidates: Memory[] | MemorySummary[],
-): FetchedUrls {
-  const list: string[] = []
+  candidates: MemorySummary[],
+): { urls: string[] } {
+  const urls: string[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
-    list.push(url)
+    urls.push(url)
     if (url.includes('/api/auth/me')) {
       return new Response(
         JSON.stringify({
@@ -75,36 +64,16 @@ function installFetch(
     }
     return new Response('{}', { status: 200 })
   })
-  return { list }
+  return { urls }
 }
 
-function renderInRouter() {
+function renderBadge() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const rootRoute = createRootRoute({
-    component: () => (
-      <QueryClientProvider client={qc}>
-        <MemoryNavLink />
-        <Outlet />
-      </QueryClientProvider>
-    ),
-  })
-  const homeRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/',
-    component: () => null,
-  })
-  // /memory route doesn't need a real component for this nav-only test.
-  const memoryRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/memory',
-    component: () => null,
-  })
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([homeRoute, memoryRoute]),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
-  })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return render(<RouterProvider router={router as any} />)
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryPendingBadge />
+    </QueryClientProvider>,
+  )
 }
 
 beforeEach(() => {
@@ -117,31 +86,40 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('MemoryNavLink', () => {
-  test('link is always rendered for logged-in user', async () => {
-    installFetch({ permissions: ['memory:read'] }, [])
-    renderInRouter()
-    await waitFor(() => {
-      expect(screen.getByTestId('nav-memory-link')).toBeTruthy()
-    })
+describe('NAV_GROUPS includes memory', () => {
+  test('memory group has a single /memory sub-item', () => {
+    const memory = NAV_GROUPS.find((g) => g.key === 'memory')
+    expect(memory).toBeTruthy()
+    expect(memory!.i18nKey).toBe('nav.group.memory')
+    expect(memory!.subnav).toHaveLength(1)
+    expect(memory!.subnav[0]?.to).toBe('/memory')
+    expect(memory!.subnav[0]?.i18nKey).toBe('nav.memory')
   })
+})
 
-  test('admin with pending candidates sees the badge', async () => {
+describe('MemoryPendingBadge', () => {
+  test('admin with pending candidates renders the badge', async () => {
     installFetch({ permissions: ['memory:read', 'memory:approve'] }, [mkSum(), mkSum({ id: 'm2' })])
-    renderInRouter()
+    renderBadge()
     await waitFor(() => {
       expect(screen.getByTestId('nav-memory-badge').textContent).toBe('2')
     })
   })
 
-  test('non-admin never shows the badge', async () => {
-    installFetch({ permissions: ['memory:read'] }, [mkSum(), mkSum({ id: 'm2' })])
-    renderInRouter()
-    // Wait for actor to load + the nav link render — give the badge time to appear.
-    await waitFor(() => {
-      expect(screen.getByTestId('nav-memory-link')).toBeTruthy()
-    })
-    // Badge should be absent.
+  test('non-admin sees no badge (and no /api/memories fetch fires)', async () => {
+    const { urls } = installFetch({ permissions: ['memory:read'] }, [mkSum(), mkSum({ id: 'm2' })])
+    renderBadge()
+    // Allow react-query a tick to consider firing the candidate query.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByTestId('nav-memory-badge')).toBeNull()
+    expect(urls.some((u) => u.includes('/api/memories'))).toBe(false)
+  })
+
+  test('admin with zero pending candidates does not render the badge', async () => {
+    installFetch({ permissions: ['memory:approve'] }, [])
+    renderBadge()
+    // Wait long enough for the actor + candidate fetches to settle.
+    await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByTestId('nav-memory-badge')).toBeNull()
   })
 })

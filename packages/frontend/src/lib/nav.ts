@@ -4,7 +4,7 @@
 // workflows / tasks). `resolveActiveNav` is a pure function so unit tests can
 // exhaustively cover every route → group mapping without spinning up a router.
 
-export type GroupKey = 'agents' | 'workflows' | 'tasks'
+export type GroupKey = 'agents' | 'workflows' | 'tasks' | 'memory'
 
 export interface SubNavItem {
   to: string
@@ -49,6 +49,15 @@ export const NAV_GROUPS: NavGroupEntry[] = [
       { to: '/tasks', i18nKey: 'nav.tasks' },
       { to: '/repos', i18nKey: 'nav.repos' },
     ],
+  },
+  // RFC-041 PR4 follow-up: mirror the single-item Workflows-group shape so
+  // the sidebar reads as four parallel categories. The pending-candidate
+  // badge is rendered by NavGroup's `renderBadge` hook from __root.tsx
+  // (admin only — non-admin sees the row without a badge).
+  {
+    key: 'memory',
+    i18nKey: 'nav.group.memory',
+    subnav: [{ to: '/memory', i18nKey: 'nav.memory' }],
   },
 ]
 

@@ -21,6 +21,7 @@ export const enUS: Resources = {
       agents: 'Agents',
       workflows: 'Workflows',
       tasks: 'Tasks',
+      memory: 'Memory',
     },
     settingsIcon: {
       label: 'Settings',

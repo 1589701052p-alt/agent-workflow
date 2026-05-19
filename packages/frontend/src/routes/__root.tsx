@@ -17,7 +17,7 @@ import { UserMenu } from '@/components/UserMenu'
 import { usePermission } from '@/hooks/useActor'
 import { InboxDrawer } from '@/components/shell/InboxDrawer'
 import { InboxFooterButton } from '@/components/shell/InboxFooterButton'
-import { MemoryNavLink } from '@/components/shell/MemoryNavLink'
+import { MemoryPendingBadge } from '@/components/shell/MemoryPendingBadge'
 import { NavGroup } from '@/components/shell/NavGroup'
 import { SettingsGearButton } from '@/components/shell/SettingsGearButton'
 import { useApplyLanguage } from '@/hooks/useLanguage'
@@ -151,11 +151,21 @@ function RootComponent() {
             <span className="nav-item__label">{t('nav.home')}</span>
           </Link>
           {NAV_GROUPS.map((group) => (
-            <NavGroup key={group.key} group={group} active={active} />
+            <NavGroup
+              key={group.key}
+              group={group}
+              active={active}
+              // RFC-041 PR4 follow-up: only the memory group needs a per-row
+              // badge today. NavGroup hands each sub-item to renderBadge so
+              // the lookup stays declarative — adding more grouped badges
+              // later just extends this switch.
+              renderBadge={
+                group.key === 'memory'
+                  ? (item) => (item.to === '/memory' ? <MemoryPendingBadge /> : null)
+                  : undefined
+              }
+            />
           ))}
-          {/* RFC-041 PR4: top-level Memory tab. Visible to every logged-in
-              user; the candidate-pending badge is admin-only. */}
-          <MemoryNavLink />
         </nav>
         <InboxFooterButton open={inboxOpen} onToggle={toggleInboxOpen} />
         <div className="sidebar__footer">
