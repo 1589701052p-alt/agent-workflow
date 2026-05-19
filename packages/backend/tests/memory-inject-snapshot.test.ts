@@ -211,7 +211,7 @@ describe('RFC-046 — injectMemoryForRun snapshot capture', () => {
   })
 
   test('B5: loadInjectableMemories tolerates malformed tags JSON', async () => {
-    const { taskId, workflowId } = seedTask(db)
+    const { workflowId } = seedTask(db)
     seedApproved(db, {
       scopeType: 'workflow',
       scopeId: workflowId,

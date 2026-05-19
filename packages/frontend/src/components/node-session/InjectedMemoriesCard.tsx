@@ -28,19 +28,22 @@ interface Props {
 export function InjectedMemoriesCard({ run, attempts, workflowNodeKind }: Props) {
   const { t } = useTranslation()
 
+  // Hooks MUST run unconditionally per the rules-of-hooks lint; the
+  // non-agent-kind early return below the hook block is the gate that
+  // keeps the card from rendering on input/wrapper/review/clarify nodes.
+  const list = run.injectedMemories ?? null
+  const attempt0 = useMemo(() => findFirstAttemptSibling(run, attempts), [run, attempts])
+  const groups = useMemo(() => groupByScope(list ?? []), [list])
+
   // Non-agent kinds (input / output / wrapper / review / clarify) never
   // call the runner inject path; rendering an empty card there would be
   // misleading. The component returns null so the SessionTab DOM stays
   // identical to pre-RFC-046 for those nodes.
   if (!isAgentKind(workflowNodeKind)) return null
 
-  const list = run.injectedMemories ?? null
   const status = decideStatus(list)
-  const attempt0 = useMemo(() => findFirstAttemptSibling(run, attempts), [run, attempts])
   const followupInherit = isFollowupInherit(run, attempt0)
-
   const labelN = status === 'pre-rfc046' ? '—' : String(list?.length ?? 0)
-  const groups = useMemo(() => groupByScope(list ?? []), [list])
 
   return (
     <details className="injected-memories-card">
