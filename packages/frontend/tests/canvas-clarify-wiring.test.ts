@@ -58,15 +58,19 @@ describe('RFC-023 bugfix source-level wiring guard', () => {
     expect(commitBlock).toContain('cascadeRemoveClarifyChannel')
   })
 
-  test('computePorts adds __clarify__ to agent outputs when an outbound clarify edge exists', () => {
+  test('computePorts backfills outputs from outbound edges so orphan/system ports stay visible', () => {
     const src = readFileSync(WORKFLOW_CANVAS_TSX, 'utf8')
-    // Locate computePorts; the agent branch must consult definition.edges
-    // for the system port name and push it onto outputs[]. Without this
-    // the ask edge has no Handle to anchor and xyflow silently drops it.
+    // The original RFC-023 bugfix special-cased `__clarify__`. That case is
+    // now subsumed by a generalized final pass that backfills ANY port name
+    // referenced by an outbound edge but missing from the declared outputs
+    // (e.g. frozen task-snapshot edge referencing an output port the live
+    // agent has since renamed). Without this loop the edge has no Handle to
+    // anchor and xyflow logs "Couldn't create edge for source handle id".
     const fnIdx = src.indexOf('export function computePorts')
     expect(fnIdx).toBeGreaterThan(-1)
     const body = src.slice(fnIdx, fnIdx + 3000)
-    expect(body).toContain('CLARIFY_SOURCE_PORT_NAME')
-    expect(body).toMatch(/outputs\.push\(\s*CLARIFY_SOURCE_PORT_NAME\s*\)/)
+    expect(body).toMatch(
+      /for \(const e of definition\.edges\)[\s\S]*?e\.source\.nodeId === node\.id[\s\S]*?outputs\.push\(e\.source\.portName\)/,
+    )
   })
 })

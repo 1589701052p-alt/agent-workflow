@@ -117,9 +117,12 @@ describe('computePorts', () => {
   })
 
   test('unknown agent → no outputs (port inventory is empty rather than crash)', () => {
+    // Use an empty edge list too, otherwise the outbound-edge backfill
+    // loop would surface those edges' port names as outputs.
     const ports = computePorts({ id: 'a1', kind: 'agent-single', agentName: 'ghost' }, byName, {
       ...DEF,
       nodes: [],
+      edges: [],
     })
     expect(ports.outputs).toEqual([])
   })
@@ -156,6 +159,31 @@ describe('computePorts', () => {
   test('RFC-023: agent without a clarify channel does NOT get the __clarify__ port', () => {
     const ports = computePorts(DEF.nodes[1]!, byName, DEF)
     expect(ports.outputs).not.toContain('__clarify__')
+  })
+
+  test('stale snapshot port: outbound edge to a port the live agent no longer declares still renders a Handle', () => {
+    // TaskStatusCanvas feeds a frozen workflow snapshot (definition pinned
+    // at task launch time) into the canvas alongside the LIVE agent list.
+    // If `agent.outputs` was edited after launch — say, `docpath` was
+    // renamed — the snapshot edge still references the old port. Without
+    // the backfill loop in computePorts, no Handle renders for `docpath`
+    // and xyflow logs "Couldn't create edge for source handle id: docpath".
+    const liveCoder: Agent = { ...CODER, outputs: ['code'] } // dropped `notes`
+    const liveByName = new Map([['coder', liveCoder]])
+    const snapshot: WorkflowDefinition = {
+      ...DEF,
+      edges: [
+        ...DEF.edges,
+        {
+          id: 'stale',
+          source: { nodeId: 'a1', portName: 'docpath' },
+          target: { nodeId: 'o1', portName: 'final' },
+        },
+      ],
+    }
+    const ports = computePorts(snapshot.nodes[1]!, liveByName, snapshot)
+    expect(ports.outputs).toContain('docpath')
+    expect(ports.outputs).toContain('code')
   })
 })
 

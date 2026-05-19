@@ -42,7 +42,6 @@ import {
   classifyClarifyConnection,
   CLARIFY_INPUT_PORT_NAME,
   CLARIFY_OUTPUT_PORT_NAME,
-  CLARIFY_SOURCE_PORT_NAME,
   clearClarifyEdgesForRemovedNodes,
   hasExistingClarifyChannel,
   isValidClarifyTarget,
@@ -1073,16 +1072,11 @@ export function computePorts(
       const agent = agentByName.get(agentName)
       for (const o of agent?.outputs ?? []) outputs.push(o)
       if (node.kind === 'agent-multi') outputs.push('errors')
-      // RFC-023 bugfix: when this agent has a clarify channel wired up, the
-      // canvas must render the `__clarify__` source handle so the ask edge
-      // (agent.__clarify__ → clarify.questions) is visible. The runtime
-      // already stores this edge in definition.edges; without an actual
-      // Handle on the agent's right side, xyflow silently drops the edge
-      // and the user only sees the answer feedback edge.
-      const hasOutboundClarify = definition.edges.some(
-        (e) => e.source.nodeId === node.id && e.source.portName === CLARIFY_SOURCE_PORT_NAME,
-      )
-      if (hasOutboundClarify) outputs.push(CLARIFY_SOURCE_PORT_NAME)
+      // RFC-023 bugfix (now generalized): when an outbound edge references a
+      // port the live agent no longer declares — frozen task snapshots vs
+      // edited agent.outputs, or the `__clarify__` channel — render a
+      // fallback Handle so the edge stays visible. Without this, xyflow
+      // drops the edge and logs "Couldn't create edge for source handle id".
       break
     }
     case 'wrapper-git':
@@ -1102,6 +1096,15 @@ export function computePorts(
       outputs.push('approved_doc')
       outputs.push('approval_meta')
       break
+    }
+  }
+  // Final pass: any outbound edge referencing a port we didn't declare above
+  // (stale snapshot vs edited agent/wrapper definition) still needs a Handle
+  // so xyflow can route the edge. Without this, the edge silently disappears
+  // and the console fills with "Couldn't create edge for source handle id".
+  for (const e of definition.edges) {
+    if (e.source.nodeId === node.id && !outputs.includes(e.source.portName)) {
+      outputs.push(e.source.portName)
     }
   }
   return { inputs, outputs }
