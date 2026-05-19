@@ -31,7 +31,7 @@ import {
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { agents, nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
+import { nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
 import { getAgent } from '@/services/agent'
 import { resolveDependsClosure } from '@/services/agentDeps'
 import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
@@ -1859,17 +1859,6 @@ async function cancelTaskRow(db: DbClient, taskId: string, failedNodeId?: string
   if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
   await db.update(tasks).set(set).where(eq(tasks.id, taskId))
   await emitStatus(db, taskId)
-}
-
-function parseStringArray(value: string | null | undefined): string[] {
-  if (value === null || value === undefined || value === '') return []
-  try {
-    const parsed = JSON.parse(value) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((x): x is string => typeof x === 'string')
-  } catch {
-    return []
-  }
 }
 
 /**
