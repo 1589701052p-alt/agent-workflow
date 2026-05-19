@@ -549,4 +549,55 @@ describe('runDistill orchestration (mocked spawnFn)', () => {
     expect(src).toContain('aw-memory-distiller')
     expect(DISTILLER_SYSTEM_PROMPT.length).toBeGreaterThan(200)
   })
+
+  // Locks in the business-focus addendum on DISTILLER_SYSTEM_PROMPT: this
+  // platform ships to real business deployments, so the distiller must be
+  // *explicitly* steered toward durable domain / architecture knowledge,
+  // and must tag candidates with a [category:xxx] title prefix so admins
+  // can sort the Approval Queue by category without a schema change.
+  // Future refactors that drop these phrases would silently regress the
+  // distiller back to RFC-041's generic "atomic rule of thumb" framing
+  // and we'd only find out from admin complaints about noisy candidates.
+  describe('business-focus prompt invariants', () => {
+    test('prompt explicitly biases toward business + architecture knowledge', () => {
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('real business workflows')
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('BUSINESS and ARCHITECTURE')
+    })
+
+    test('all ten priority categories appear with [category:xxx] prefix', () => {
+      const required = [
+        '[category:domain-glossary]',
+        '[category:invariant]',
+        '[category:process]',
+        '[category:architecture]',
+        '[category:integration]',
+        '[category:compliance]',
+        '[category:data-semantics]',
+        '[category:anti-pattern]',
+        '[category:convention]',
+        '[category:quality-bar]',
+      ]
+      for (const tag of required) {
+        expect(DISTILLER_SYSTEM_PROMPT).toContain(tag)
+      }
+    })
+
+    test('prompt instructs distiller to emit category tag + rationale-bearing body', () => {
+      // Title-prefix instruction must be present so the distiller knows
+      // to put "[category:xxx]" at the start of every title.
+      expect(DISTILLER_SYSTEM_PROMPT).toMatch(/title.*\[category:xxx\]/i)
+      // Rationale ("why") emphasis: makes architecture-category memories
+      // useful when injected downstream rather than dogmatic.
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('rationale')
+      // The category MUST also land in tags (knownTags or newTags),
+      // otherwise tag-based scope filtering misses the categorization.
+      expect(DISTILLER_SYSTEM_PROMPT).toMatch(/ALWAYS include the chosen category as a tag/i)
+    })
+
+    test('prompt rejects business-noise inputs (PII / single-decision narratives / personal preferences)', () => {
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('single-decision narrative')
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('personally-identifying information')
+      expect(DISTILLER_SYSTEM_PROMPT).toContain('personal momentary preference')
+    })
+  })
 })
