@@ -244,6 +244,26 @@ export const MemoryDistillJobDetailSchema = z.object({
 })
 export type MemoryDistillJobDetail = z.infer<typeof MemoryDistillJobDetailSchema>
 
+// RFC-046: snapshot of one approved memory captured at runner-inject time.
+// Persisted in node_runs.injected_memories_json as an array. The runner
+// freezes the *post-budget-clip* set so the snapshot byte-for-byte mirrors
+// what the model actually saw in its system prompt (see RFC-041 §G7 /
+// RFC-046 §design.md §3.1). All fields are captured verbatim from the
+// memories row at inject time so later RFC-045 edits / archives / supersedes
+// do not rewrite history.
+export const InjectedMemorySnapshotSchema = z.object({
+  id: z.string().min(1),
+  version: z.number().int().nonnegative(),
+  scopeType: MemoryScopeSchema,
+  scopeId: z.string().nullable(),
+  title: z.string().min(1).max(120),
+  bodyMd: z.string().min(1).max(4000),
+  tags: z.array(z.string()).max(16),
+  sourceKind: z.string(),
+  approvedAt: z.number().int().nonnegative().nullable(),
+})
+export type InjectedMemorySnapshot = z.infer<typeof InjectedMemorySnapshotSchema>
+
 export const MemoryListFilterSchema = z.object({
   status: MemoryStatusSchema.optional(),
   scopeType: MemoryScopeSchema.optional(),

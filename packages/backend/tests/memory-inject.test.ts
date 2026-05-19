@@ -399,7 +399,7 @@ describe('injectMemoryForRun', () => {
 
   test('returns null when the task has no scope memories anywhere', async () => {
     const { taskId } = seedTask()
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('agent-1'),
@@ -409,7 +409,7 @@ describe('injectMemoryForRun', () => {
   })
 
   test('returns null when taskId does not exist (degraded gracefully)', async () => {
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId: 't_nope',
       primaryAgent: mkAgent('agent-1'),
@@ -421,7 +421,7 @@ describe('injectMemoryForRun', () => {
   test('resolves workflowId from tasks row and surfaces workflow-scope memory', async () => {
     const { taskId, workflowId } = seedTask()
     seedApprovedMemory(db, { scopeType: 'workflow', scopeId: workflowId, title: 'WF' })
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('agent-1'),
@@ -445,7 +445,7 @@ describe('injectMemoryForRun', () => {
       .run()
     const { taskId } = seedTask({ repoUrl: url })
     seedApprovedMemory(db, { scopeType: 'repo', scopeId: 'cr-1', title: 'REPO' })
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('agent-1'),
@@ -458,7 +458,7 @@ describe('injectMemoryForRun', () => {
     const { taskId } = seedTask()
     seedApprovedMemory(db, { scopeType: 'agent', scopeId: 'primary', title: 'P' })
     seedApprovedMemory(db, { scopeType: 'agent', scopeId: 'dep-1', title: 'D' })
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('primary'),
@@ -471,7 +471,7 @@ describe('injectMemoryForRun', () => {
   test('global scope always loads even with no agent/workflow/repo binding', async () => {
     const { taskId } = seedTask()
     seedApprovedMemory(db, { scopeType: 'global', scopeId: null, title: 'GG' })
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('agent-1'),
@@ -484,7 +484,7 @@ describe('injectMemoryForRun', () => {
     const { taskId, workflowId } = seedTask()
     seedApprovedMemory(db, { scopeType: 'workflow', scopeId: workflowId, title: 'WF' })
     seedApprovedMemory(db, { scopeType: 'global', scopeId: null, title: 'GG' })
-    const block = await injectMemoryForRun({
+    const { block } = await injectMemoryForRun({
       db,
       taskId,
       primaryAgent: mkAgent('agent-1'),

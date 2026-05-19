@@ -20,10 +20,10 @@
 //   - Token estimate is intentionally cheap (chars/4) — runs in the hot
 //     path of every node spawn, so the per-row cost must stay O(strlen).
 
-import { and, desc, eq, inArray } from 'drizzle-orm'
-import type { Agent } from '@agent-workflow/shared'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import type { Agent, InjectedMemorySnapshot } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
-import { cachedRepos, memories, tasks } from '@/db/schema'
+import { cachedRepos, memories, nodeRuns, tasks } from '@/db/schema'
 
 export interface ScopeBudget {
   agent: number
@@ -41,6 +41,18 @@ export interface InjectableMemoryRow {
   title: string
   bodyMd: string
   createdAt: number
+  /**
+   * RFC-046: extra fields captured from the memories row at inject time so
+   * the runner can persist a complete snapshot to
+   * `node_runs.injected_memories_json`. Optional in the type signature so
+   * older tests that build `InjectableMemoryRow` literals keep working; the
+   * real loader populates them unconditionally and `toSnapshot` falls back
+   * to safe defaults if a caller skipped them.
+   */
+  version?: number
+  tags?: string[]
+  sourceKind?: string
+  approvedAt?: number | null
 }
 
 export interface InjectableMemorySet {
@@ -162,6 +174,10 @@ function rowToInjectable(row: {
   title: string
   bodyMd: string
   createdAt: number
+  version: number
+  tags: string
+  sourceKind: string
+  approvedAt: number | null
 }): InjectableMemoryRow {
   return {
     id: row.id,
@@ -170,6 +186,26 @@ function rowToInjectable(row: {
     title: row.title,
     bodyMd: row.bodyMd,
     createdAt: row.createdAt,
+    version: row.version,
+    tags: parseTagsField(row.tags),
+    sourceKind: row.sourceKind,
+    approvedAt: row.approvedAt,
+  }
+}
+
+/**
+ * RFC-046: tolerant parse for memories.tags (text JSON column). A malformed
+ * row must never crash inject — degrade to [] rather than 5xx the user's
+ * task.
+ */
+function parseTagsField(raw: string | null | undefined): string[] {
+  if (raw == null) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((t): t is string => typeof t === 'string')
+  } catch {
+    return []
   }
 }
 
@@ -184,12 +220,27 @@ export function formatMemoryBlock(
   set: InjectableMemorySet,
   budget: ScopeBudget = DEFAULT_BUDGET,
 ): string | null {
+  return formatMemoryBlockWithSnapshot(set, budget).block
+}
+
+/**
+ * RFC-046: render the block AND return the post-clip rows as
+ * `InjectedMemorySnapshot[]` so the runner can persist them to
+ * `node_runs.injected_memories_json`. When `block === null` the snapshot
+ * is also `null` (mirrors the legacy "skip append" contract). The block
+ * text is byte-for-byte identical to the legacy `formatMemoryBlock` path
+ * (grep-guarded in memory-inject.test.ts).
+ */
+export function formatMemoryBlockWithSnapshot(
+  set: InjectableMemorySet,
+  budget: ScopeBudget = DEFAULT_BUDGET,
+): { block: string | null; snapshot: InjectedMemorySnapshot[] | null } {
   const agent = clipByBudget(set.byScope.agent, budget.agent)
   const workflow = clipByBudget(set.byScope.workflow, budget.workflow)
   const repo = clipByBudget(set.byScope.repo, budget.repo)
   const global = clipByBudget(set.byScope.global, budget.global)
   const all = [...agent, ...workflow, ...repo, ...global]
-  if (all.length === 0) return null
+  if (all.length === 0) return { block: null, snapshot: null }
   const lines: string[] = [
     '## Learned context (auto-injected, advisory)',
     '',
@@ -201,7 +252,21 @@ export function formatMemoryBlock(
     lines.push(`- [${m.scopeType}] ${m.title} — ${m.bodyMd}`)
   }
   lines.push('--- END INJECTED MEMORY ---')
-  return lines.join('\n')
+  return { block: lines.join('\n'), snapshot: all.map(toSnapshot) }
+}
+
+function toSnapshot(row: InjectableMemoryRow): InjectedMemorySnapshot {
+  return {
+    id: row.id,
+    version: row.version ?? 1,
+    scopeType: row.scopeType,
+    scopeId: row.scopeId,
+    title: row.title,
+    bodyMd: row.bodyMd,
+    tags: row.tags ?? [],
+    sourceKind: row.sourceKind ?? 'manual',
+    approvedAt: row.approvedAt ?? null,
+  }
 }
 
 /**
@@ -250,17 +315,33 @@ export const DEFAULT_INJECTION_BUDGET = DEFAULT_BUDGET
  * this call in try/catch so a broken table or a slow query degrades to
  * "no memory injected" rather than a 5xx for the user's task.
  */
+export interface InjectMemoryResult {
+  /**
+   * Markdown block to append to the primary agent's inline prompt, or null
+   * when every scope resolved to zero memories (legacy "skip append"
+   * contract — the prompt stays byte-for-byte identical to the pre-RFC-041
+   * path).
+   */
+  block: string | null
+  /**
+   * RFC-046: the post-clip snapshot of the rows the runner should persist
+   * to `node_runs.injected_memories_json`. Always paired with `block`:
+   * both null together or both non-null together.
+   */
+  snapshot: InjectedMemorySnapshot[] | null
+}
+
 export async function injectMemoryForRun(deps: {
   db: DbClient
   taskId: string
   primaryAgent: Agent
   dependents: readonly Agent[]
   budget?: ScopeBudget
-}): Promise<string | null> {
+}): Promise<InjectMemoryResult> {
   const taskRow = (await deps.db.select().from(tasks).where(eq(tasks.id, deps.taskId)).limit(1))[0]
   // If the task vanished mid-run there is genuinely no scope context to
   // resolve — better to skip inject than to crash the run.
-  if (taskRow === undefined) return null
+  if (taskRow === undefined) return { block: null, snapshot: null }
   const workflowId =
     typeof taskRow.workflowId === 'string' && taskRow.workflowId.length > 0
       ? taskRow.workflowId
@@ -285,5 +366,96 @@ export async function injectMemoryForRun(deps: {
     workflowId,
     repoId,
   })
-  return formatMemoryBlock(set, deps.budget ?? DEFAULT_BUDGET)
+  return formatMemoryBlockWithSnapshot(set, deps.budget ?? DEFAULT_BUDGET)
+}
+
+/**
+ * RFC-046: load the snapshot persisted on the retry_index=0 sibling row for
+ * the given (task, node, iteration, shard, reviewIteration, clarifyIteration)
+ * tuple. Used by runner.ts on the envelope-followup retry path — that path
+ * skips inject so the model can resume the same opencode session (which
+ * still has the original block in its transcript), but the UI's "what
+ * memories did this attempt see" needs the original list.
+ *
+ * Returns null when:
+ *   - the first-attempt row does not exist (race);
+ *   - the first-attempt row's column is NULL (legacy / non-agent / zero
+ *     memories);
+ *   - the JSON parses but is structurally invalid (degrade gracefully).
+ */
+export async function loadInjectedSnapshotFromFirstAttempt(
+  db: DbClient,
+  ctx: {
+    taskId: string
+    nodeId: string
+    iteration: number
+    shardKey: string | null
+    reviewIteration: number
+    clarifyIteration: number
+  },
+): Promise<InjectedMemorySnapshot[] | null> {
+  const row = (
+    await db
+      .select({ json: nodeRuns.injectedMemoriesJson })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, ctx.taskId),
+          eq(nodeRuns.nodeId, ctx.nodeId),
+          eq(nodeRuns.iteration, ctx.iteration),
+          ctx.shardKey === null ? isNull(nodeRuns.shardKey) : eq(nodeRuns.shardKey, ctx.shardKey),
+          eq(nodeRuns.reviewIteration, ctx.reviewIteration),
+          eq(nodeRuns.clarifyIteration, ctx.clarifyIteration),
+          eq(nodeRuns.retryIndex, 0),
+        ),
+      )
+      .limit(1)
+  )[0]
+  if (row?.json == null) return null
+  return parseInjectedSnapshotJson(row.json)
+}
+
+/**
+ * RFC-046: parse the raw JSON stored in `node_runs.injected_memories_json`.
+ * Defensive — malformed payloads degrade to null rather than throw, so
+ * neither the runner followup path nor the REST `rowToNodeRun` projection
+ * can 5xx on a corrupted column.
+ */
+export function parseInjectedSnapshotJson(raw: string | null): InjectedMemorySnapshot[] | null {
+  if (raw == null) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    const out: InjectedMemorySnapshot[] = []
+    for (const item of parsed) {
+      if (item == null || typeof item !== 'object') continue
+      const m = item as Record<string, unknown>
+      if (
+        typeof m.id !== 'string' ||
+        typeof m.version !== 'number' ||
+        typeof m.scopeType !== 'string' ||
+        typeof m.title !== 'string' ||
+        typeof m.bodyMd !== 'string' ||
+        typeof m.sourceKind !== 'string'
+      ) {
+        continue
+      }
+      out.push({
+        id: m.id,
+        version: m.version,
+        scopeType: m.scopeType as InjectedMemorySnapshot['scopeType'],
+        scopeId: typeof m.scopeId === 'string' ? m.scopeId : null,
+        title: m.title,
+        bodyMd: m.bodyMd,
+        tags: Array.isArray(m.tags)
+          ? (m.tags.filter((t) => typeof t === 'string') as string[])
+          : [],
+        sourceKind: m.sourceKind,
+        approvedAt: typeof m.approvedAt === 'number' ? m.approvedAt : null,
+      })
+    }
+    return out
+  } catch {
+    return null
+  }
 }

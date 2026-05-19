@@ -1,6 +1,7 @@
 // Task schemas. Mirrors design.md §3 (tasks table) + plan.md P-1-14.
 
 import { z } from 'zod'
+import { InjectedMemorySnapshotSchema } from './memory'
 
 export const TASK_STATUS = [
   'pending',
@@ -243,6 +244,18 @@ export const NodeRunSchema = z.object({
    * exited before emitting any session event.
    */
   opencodeSessionId: z.string().nullable().default(null),
+  /**
+   * RFC-046: post-budget-clip snapshot of the approved memories injected into
+   * this agent run's inline prompt (the `## Learned context` block produced
+   * by `formatMemoryBlock`). NULL for pre-RFC-046 rows, for non-agent kinds
+   * that never call inject (input/output/wrapper/review/clarify), and for
+   * runs where every scope returned zero memories (block was null — the
+   * prompt was byte-for-byte unchanged). For envelope-followup retries
+   * (RFC-042), the runner copies this column from the retry_index=0 sibling
+   * row so the UI surfaces the same list the model is still seeing in its
+   * resumed session. Optional+nullable to keep older API responses parseable.
+   */
+  injectedMemories: z.array(InjectedMemorySnapshotSchema).nullable().optional(),
 })
 export type NodeRun = z.infer<typeof NodeRunSchema>
 

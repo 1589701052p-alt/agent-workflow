@@ -16,6 +16,7 @@ import {
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
 import { ConversationFlow } from './ConversationFlow'
+import { InjectedMemoriesCard } from './InjectedMemoriesCard'
 import { RuntimeInventorySection } from '@/components/inventory/RuntimeInventorySection'
 import { Select, type SelectOption } from '@/components/Select'
 
@@ -63,6 +64,14 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
         <div className="muted">{t('nodeDrawer.sessionFanoutParent')}</div>
       ) : (
         <>
+          {/* RFC-046: post-budget-clip snapshot of memories injected at
+              runner-inject time. Collapsed by default; only renders for
+              agent-* kinds (helper returns null otherwise). */}
+          <InjectedMemoriesCard
+            run={picked}
+            attempts={attempts}
+            workflowNodeKind={workflowNodeKind}
+          />
           {/* RFC-029: runtime inventory section sits between the attempts
               switcher and the conversation flow so users can confirm "what
               opencode actually loaded" before scanning the dialog. */}

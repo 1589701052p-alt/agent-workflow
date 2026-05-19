@@ -43,6 +43,7 @@ import {
 import { runTask } from './scheduler'
 import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
+import { parseInjectedSnapshotJson } from './memoryInject'
 
 const log = createLogger('task')
 
@@ -847,6 +848,12 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     // RFC-026: surface opencode session id to the UI so a clarify-inline
     // chip can render + operators can copy it for local debugging.
     opencodeSessionId: r.opencodeSessionId,
+    // RFC-046: parse the post-budget-clip memory snapshot the runner
+    // persisted at inject time. Malformed payloads degrade to null + log
+    // (the column is JSON written by the runner; nothing user-supplied,
+    // so corruption should be impossible, but defensive at the API edge
+    // beats a 5xx on the whole task detail page).
+    injectedMemories: parseInjectedSnapshotJson(r.injectedMemoriesJson),
   }))
 
   let outputs: NodeRunOutput[] = []

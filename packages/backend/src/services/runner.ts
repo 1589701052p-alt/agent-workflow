@@ -42,7 +42,12 @@ import {
 import { renderUserPrompt } from './protocol'
 import { captureChildSessions } from './sessionCapture'
 import { isAgentRunKind, readSnapshotFromRunDir } from './inventory'
-import { injectMemoryForRun, type ScopeBudget } from './memoryInject'
+import {
+  injectMemoryForRun,
+  loadInjectedSnapshotFromFirstAttempt,
+  type ScopeBudget,
+} from './memoryInject'
+import type { InjectedMemorySnapshot } from '@agent-workflow/shared'
 import { materializeInventoryPlugin } from '@/opencode-plugin'
 
 export type SkillSource = 'managed' | 'external' | 'project'
@@ -317,15 +322,22 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // first attempt already saw the original block, and re-stringifying a
   // large prompt fragment on each retry would pointlessly invalidate the
   // session prompt cache).
+  // RFC-046: capture the post-clip snapshot from inject so the final
+  // node_runs UPDATE can persist it to `injected_memories_json`. Stays
+  // null in every failure / non-agent / followup-with-attempt-0-null path
+  // so the column distinguishes legitimate zero-inject runs from
+  // "captured but empty" runs (see RFC-046 design.md §3.2).
+  let injectedSnapshot: InjectedMemorySnapshot[] | null = null
   if (opts.envelopeFollowup !== true) {
     try {
-      const memoryBlock = await injectMemoryForRun({
+      const { block: memoryBlock, snapshot } = await injectMemoryForRun({
         db: opts.db,
         taskId: opts.taskId,
         primaryAgent: opts.agent,
         dependents: opts.dependents ?? [],
         budget: opts.memoryInjectionBudget,
       })
+      injectedSnapshot = snapshot
       if (memoryBlock !== null) {
         const primary = inlineConfig.agent[opts.agent.name]
         if (primary !== undefined && typeof primary.prompt === 'string') {
@@ -334,6 +346,45 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       }
     } catch (err) {
       log.warn('memory-inject-failed', {
+        nodeRunId: opts.nodeRunId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      // injectedSnapshot stays null — fail-safe column write at the end
+      // of the run mirrors the legacy "no inject" path so the UI shows
+      // nothing rather than a corrupt list.
+    }
+  } else {
+    // RFC-046: envelope-followup retries (RFC-042) skip inject entirely so
+    // the resumed opencode session keeps cache-hit ratios on the original
+    // prompt. The model is still seeing the first attempt's memory block
+    // in its transcript, so we copy that attempt's snapshot to the current
+    // retry's row — the Session-tab card stays consistent across attempts.
+    try {
+      const currentRunRow = (
+        await opts.db
+          .select({
+            nodeId: nodeRuns.nodeId,
+            iteration: nodeRuns.iteration,
+            shardKey: nodeRuns.shardKey,
+            reviewIteration: nodeRuns.reviewIteration,
+            clarifyIteration: nodeRuns.clarifyIteration,
+          })
+          .from(nodeRuns)
+          .where(eq(nodeRuns.id, opts.nodeRunId))
+          .limit(1)
+      )[0]
+      if (currentRunRow !== undefined) {
+        injectedSnapshot = await loadInjectedSnapshotFromFirstAttempt(opts.db, {
+          taskId: opts.taskId,
+          nodeId: currentRunRow.nodeId,
+          iteration: currentRunRow.iteration,
+          shardKey: currentRunRow.shardKey,
+          reviewIteration: currentRunRow.reviewIteration,
+          clarifyIteration: currentRunRow.clarifyIteration,
+        })
+      }
+    } catch (err) {
+      log.warn('memory-inject-followup-inherit-failed', {
         nodeRunId: opts.nodeRunId,
         error: err instanceof Error ? err.message : String(err),
       })
@@ -727,6 +778,11 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       exitCode: exitCode ?? null,
       errorMessage: errorMessage ?? null,
       inventorySnapshotJson: inventoryJson,
+      // RFC-046: persist the post-budget-clip snapshot captured at inject
+      // time (or copied from attempt 0 on the envelope-followup path).
+      // NULL when inject was skipped or resolved to zero memories — see
+      // RFC-046 design.md §3.2.3.
+      injectedMemoriesJson: injectedSnapshot === null ? null : JSON.stringify(injectedSnapshot),
       tokInput: tokenUsage.input,
       tokOutput: tokenUsage.output,
       tokCacheCreate: tokenUsage.cacheCreate,

@@ -431,6 +431,19 @@ export const nodeRuns = sqliteTable(
      * the frontend.
      */
     wrapperProgressJson: text('wrapper_progress_json'),
+    /**
+     * RFC-046: post-budget-clip snapshot of approved memories injected into
+     * this agent run's inline prompt (rendered into the `## Learned context`
+     * block by `formatMemoryBlock` — see services/memoryInject.ts).
+     * Serialized as `InjectedMemorySnapshot[]` (shared/schemas/memory.ts).
+     * NULL when the run pre-dates RFC-046, when the run kind is non-agent
+     * (input/output/wrapper/review/clarify never call inject), or when
+     * inject resolved to zero memories (block was null — prompt stayed
+     * byte-for-byte identical to the pre-RFC-041 path). For envelope-followup
+     * retries (RFC-042) the runner copies the value from the retry_index=0
+     * sibling row at write time.
+     */
+    injectedMemoriesJson: text('injected_memories_json'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),
