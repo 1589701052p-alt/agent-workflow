@@ -188,11 +188,14 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
         }),
     )
     // The eager broadcast is a `node.status: running` event tagged with our
-    // nodeRunId; nothing else in the runner path emits it for this nodeRun.
+    // nodeRunId. Since RFC-036 (`397d525 fix(ws): RFC-036 接 resolveActor`)
+    // also wired a throttled `node.status: running` re-ping inside
+    // stdoutPump, the count may now be > 1 — we just lock that the eager
+    // broadcast at least fires.
     const runningEvents = received.filter(
       (m) => m.type === 'node.status' && m.nodeRunId === nodeRunId && m.status === 'running',
     )
-    expect(runningEvents.length).toBe(1)
+    expect(runningEvents.length).toBeGreaterThanOrEqual(1)
     // Final column also persisted.
     const rows = await h.db.select({ json: nodeRuns.injectedMemoriesJson }).from(nodeRuns)
     const target = rows.find(() => true) // single row in this harness
@@ -228,7 +231,9 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
     const runningEvents = received.filter(
       (m) => m.type === 'node.status' && m.nodeRunId === nodeRunId && m.status === 'running',
     )
-    expect(runningEvents.length).toBe(1)
+    // RFC-036's throttled re-ping inside stdoutPump may fire alongside the
+    // eager broadcast; assert "at least once" instead of "exactly once".
+    expect(runningEvents.length).toBeGreaterThanOrEqual(1)
     const rows = await h.db.select({ json: nodeRuns.injectedMemoriesJson }).from(nodeRuns)
     expect(rows[0]?.json).toBeNull()
   })
@@ -286,7 +291,8 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
     const runningEvents = received.filter(
       (m) => m.type === 'node.status' && m.nodeRunId === followupId && m.status === 'running',
     )
-    expect(runningEvents.length).toBe(1)
+    // See E1's note — RFC-036 throttled re-ping may fire too.
+    expect(runningEvents.length).toBeGreaterThanOrEqual(1)
     const rows = await h.db
       .select({ id: nodeRuns.id, json: nodeRuns.injectedMemoriesJson })
       .from(nodeRuns)
@@ -369,10 +375,15 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
 
     expect(eagerWriteIntercepted).toBe(true)
     // No eager broadcast (it lives in the same try block as the eager UPDATE).
+    // RFC-036's throttled re-ping inside stdoutPump may still emit one
+    // `node.status: running` from the envelope text event — so the bound
+    // here is "no MORE than the throttled one", not "zero". Paired with
+    // the `eagerWriteIntercepted === true` assertion above (which proves
+    // the eager block actually threw) this keeps the suppression contract.
     const runningEvents = received.filter(
       (m) => m.type === 'node.status' && m.nodeRunId === nodeRunId && m.status === 'running',
     )
-    expect(runningEvents.length).toBe(0)
+    expect(runningEvents.length).toBeLessThanOrEqual(1)
     // Final UPDATE still landed — column visible to the UI at end-of-run
     // (i.e. legacy RFC-046 behavior).
     const rows = await h.db.select({ json: nodeRuns.injectedMemoriesJson }).from(nodeRuns)
