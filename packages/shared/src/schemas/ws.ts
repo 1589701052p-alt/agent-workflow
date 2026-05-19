@@ -8,6 +8,7 @@ import { NodeRunStatusSchema } from './task'
 import { DocVersionDecisionSchema, ReviewCommentSchema, ReviewDecisionKindSchema } from './review'
 import { ClarifySessionSchema, ClarifySessionSummarySchema } from './clarify'
 import { BatchImportRowSchema } from './repoBatchImport'
+import { MemorySummarySchema } from './memory'
 
 // -----------------------------------------------------------------------------
 // /ws/tasks/{taskId}
@@ -200,6 +201,59 @@ export const RepoImportWsMessageSchema = z.discriminatedUnion('type', [
   }),
 ])
 export type RepoImportWsMessage = z.infer<typeof RepoImportWsMessageSchema>
+
+// -----------------------------------------------------------------------------
+// /ws/memories — RFC-041 platform memory candidate / promotion stream.
+// All logged-in users may subscribe; the actual UI only renders the admin
+// "approval queue" badge when the actor's role allows it.
+// -----------------------------------------------------------------------------
+
+export const MemoryWsMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('memory.candidate.created'),
+    memory: MemorySummarySchema,
+  }),
+  z.object({
+    type: z.literal('memory.candidate.promoted'),
+    memoryId: z.string(),
+    newStatus: z.enum(['approved', 'rejected']),
+    supersededIds: z.array(z.string()).optional(),
+  }),
+  z.object({ type: z.literal('memory.archived'), memoryId: z.string() }),
+  z.object({ type: z.literal('memory.unarchived'), memoryId: z.string() }),
+  z.object({ type: z.literal('memory.deleted'), memoryId: z.string() }),
+  z.object({
+    type: z.literal('memory.superseded'),
+    oldId: z.string(),
+    newId: z.string(),
+  }),
+])
+export type MemoryWsMessage = z.infer<typeof MemoryWsMessageSchema>
+
+// -----------------------------------------------------------------------------
+// /ws/memory-distill-jobs — RFC-041 admin monitor of the distill queue.
+// Subscribed only by admin clients; backend WS upgrade enforces the same.
+// -----------------------------------------------------------------------------
+
+export const MemoryDistillJobWsMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('distill.queued'),
+    jobId: z.string(),
+    debounceKey: z.string(),
+  }),
+  z.object({ type: z.literal('distill.started'), jobId: z.string() }),
+  z.object({
+    type: z.literal('distill.done'),
+    jobId: z.string(),
+    candidatesCreated: z.number().int(),
+  }),
+  z.object({
+    type: z.literal('distill.failed'),
+    jobId: z.string(),
+    error: z.string(),
+  }),
+])
+export type MemoryDistillJobWsMessage = z.infer<typeof MemoryDistillJobWsMessageSchema>
 
 // -----------------------------------------------------------------------------
 // Server → client control frames common to every channel.

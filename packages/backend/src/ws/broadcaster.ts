@@ -65,8 +65,14 @@ export const TASKS_LIST_CHANNEL: ChannelKey = 'tasks-list'
 export const WORKFLOWS_CHANNEL: ChannelKey = 'workflows'
 /** RFC-033: per-batch progress channel for `/repos` batch import. */
 export const REPO_IMPORT_CHANNEL = (batchId: string): ChannelKey => `repo-import:${batchId}`
+/** RFC-041: platform-wide memory candidate / promotion stream. */
+export const MEMORY_CHANNEL: ChannelKey = 'memories'
+/** RFC-041: admin-only distill queue monitor. */
+export const MEMORY_DISTILL_JOB_CHANNEL: ChannelKey = 'memory-distill-jobs'
 
 import type {
+  MemoryDistillJobWsMessage,
+  MemoryWsMessage,
   RepoImportWsMessage,
   TaskWsMessage,
   TasksListWsMessage,
@@ -77,6 +83,8 @@ export const taskBroadcaster = new TypedBroadcaster<TaskWsMessage>()
 export const tasksListBroadcaster = new TypedBroadcaster<TasksListWsMessage>()
 export const workflowsBroadcaster = new TypedBroadcaster<WorkflowsWsMessage>()
 export const repoImportsBroadcaster = new TypedBroadcaster<RepoImportWsMessage>()
+export const memoryBroadcaster = new TypedBroadcaster<MemoryWsMessage>()
+export const memoryDistillJobBroadcaster = new TypedBroadcaster<MemoryDistillJobWsMessage>()
 
 /** Reset all broadcasters — only used in tests between cases. */
 export function resetBroadcastersForTests(): void {
@@ -84,4 +92,6 @@ export function resetBroadcastersForTests(): void {
   tasksListBroadcaster.reset()
   workflowsBroadcaster.reset()
   repoImportsBroadcaster.reset()
+  memoryBroadcaster.reset()
+  memoryDistillJobBroadcaster.reset()
 }

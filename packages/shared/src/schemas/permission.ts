@@ -42,6 +42,12 @@ export const PERMISSIONS = [
   'tasks:cancel:all',
   // self-service (admin + user)
   'account:self',
+  // RFC-041 platform long-term memory
+  'memory:read',
+  'memory:approve',
+  'memory:archive',
+  'memory:delete',
+  'memory:write_feedback',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -67,6 +73,10 @@ const USER_BASELINE: ReadonlyArray<Permission> = [
   'tasks:read:own',
   'tasks:cancel:own',
   'account:self',
+  // RFC-041: anyone logged in can read approved memories and write task
+  // feedback on tasks they can see. approve/archive/delete stay admin-only.
+  'memory:read',
+  'memory:write_feedback',
 ]
 
 export const ROLE_PERMISSIONS: Record<Role, ReadonlyArray<Permission>> = {

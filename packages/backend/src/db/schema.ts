@@ -827,3 +827,100 @@ export const nodeAssignments = sqliteTable(
     taskIdx: index('idx_node_assign_task').on(t.taskId),
   }),
 )
+
+// -----------------------------------------------------------------------------
+// RFC-041 memories — single source of truth for the platform's long-term
+// memory layer. One row = one atomic learned rule / decision / preference
+// scoped to exactly one of agent / workflow / repo / global. CHECK
+// constraints in migration 0023 enforce status / scope_type / source_kind /
+// distill_action enums and the "global ↔ NULL scope_id" invariant; we keep
+// the columns as plain text here so drizzle does not over-narrow inference.
+// -----------------------------------------------------------------------------
+export const memories = sqliteTable(
+  'memories',
+  {
+    id: text('id').primaryKey(),
+    scopeType: text('scope_type', { enum: ['agent', 'workflow', 'repo', 'global'] }).notNull(),
+    scopeId: text('scope_id'),
+    title: text('title').notNull(),
+    bodyMd: text('body_md').notNull(),
+    tags: text('tags').notNull().default('[]'), // JSON string[]
+    status: text('status', {
+      enum: ['candidate', 'approved', 'archived', 'superseded', 'rejected'],
+    }).notNull(),
+    sourceKind: text('source_kind', {
+      enum: ['clarify', 'review', 'feedback', 'manual'],
+    }).notNull(),
+    sourceEventId: text('source_event_id'),
+    sourceTaskId: text('source_task_id'),
+    distillJobId: text('distill_job_id'),
+    distillAction: text('distill_action', {
+      enum: ['new', 'update_of', 'duplicate_of', 'conflict_with'],
+    }),
+    supersedesId: text('supersedes_id'),
+    supersededById: text('superseded_by_id'),
+    approvedByUserId: text('approved_by_user_id'),
+    approvedAt: integer('approved_at'),
+    createdAt: integer('created_at').notNull(),
+    version: integer('version').notNull().default(1),
+  },
+  (t) => ({
+    scopeStatusIdx: index('idx_memories_scope_status').on(t.scopeType, t.scopeId, t.status),
+    statusCreatedIdx: index('idx_memories_status_created').on(t.status, t.createdAt),
+    supersedesIdx: index('idx_memories_supersedes').on(t.supersedesId),
+    sourceIdx: index('idx_memories_source').on(t.sourceKind, t.sourceEventId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-041 memory_distill_jobs — queue consumed by the daemon 1Hz worker.
+// One row per source event; siblings sharing a debounce_key get merged into
+// one distill subprocess. `scope_resolved_json` is computed at enqueue time
+// so the worker never re-queries the task graph.
+// -----------------------------------------------------------------------------
+export const memoryDistillJobs = sqliteTable(
+  'memory_distill_jobs',
+  {
+    id: text('id').primaryKey(),
+    debounceKey: text('debounce_key').notNull(),
+    sourceKind: text('source_kind', { enum: ['clarify', 'review', 'feedback'] }).notNull(),
+    sourceEventId: text('source_event_id').notNull(),
+    taskId: text('task_id'),
+    scopeResolvedJson: text('scope_resolved_json').notNull(),
+    status: text('status', {
+      enum: ['pending', 'running', 'done', 'failed', 'canceled'],
+    }).notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextRunAt: integer('next_run_at').notNull(),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    statusNextIdx: index('idx_distill_jobs_status_next').on(t.status, t.nextRunAt),
+    debounceIdx: index('idx_distill_jobs_debounce').on(t.debounceKey, t.status),
+    taskIdx: index('idx_distill_jobs_task').on(t.taskId, t.sourceKind),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-041 task_feedback — per-task free-text user notes ("dear future me").
+// Each row independently enqueues a distill job. Not cascaded on task
+// delete so historical notes survive worktree GC.
+// -----------------------------------------------------------------------------
+export const taskFeedback = sqliteTable(
+  'task_feedback',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id').notNull(),
+    authorUserId: text('author_user_id'),
+    bodyMd: text('body_md').notNull(),
+    createdAt: integer('created_at').notNull(),
+    distilled: integer('distilled').notNull().default(0),
+    distillJobId: text('distill_job_id'),
+  },
+  (t) => ({
+    taskIdx: index('idx_task_feedback_task').on(t.taskId, t.createdAt),
+  }),
+)
