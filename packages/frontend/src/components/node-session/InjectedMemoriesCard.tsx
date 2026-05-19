@@ -84,9 +84,7 @@ export function InjectedMemoriesCard({ run, attempts, workflowNodeKind }: Props)
           </div>
         )}
         {status === 'empty' && (
-          <div className="inventory-section__missing">
-            {t('nodeDrawer.injectedMemoriesEmpty')}
-          </div>
+          <div className="inventory-section__missing">{t('nodeDrawer.injectedMemoriesEmpty')}</div>
         )}
         {status === 'captured' && (
           <div className="injected-memories-card__groups">
