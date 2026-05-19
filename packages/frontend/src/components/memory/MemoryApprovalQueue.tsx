@@ -53,9 +53,22 @@ export function MemoryApprovalQueue({ isAdmin }: MemoryApprovalQueueProps) {
     candidate: Memory
     existingId: string
   } | null>(null)
-  // RFC-045: row-level edit dialog. Candidate cards already have the full
-  // Memory object so no extra fetch is needed.
-  const [editing, setEditing] = useState<Memory | null>(null)
+  // RFC-045: row-level edit dialog. The candidates list endpoint returns
+  // MemorySummary[] (no bodyMd / sourceKind / etc — see backend
+  // listMemories → toSummary). MemoryEditDialog needs the full Memory,
+  // so we fetch detail by id on click and only mount the dialog once
+  // data is in the cache.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const editingMemory = useQuery<{ memory: Memory }>({
+    queryKey: ['memories', 'detail', editingId],
+    queryFn: ({ signal }) =>
+      api.get<{ memory: Memory }>(
+        `/api/memories/${encodeURIComponent(editingId ?? '')}`,
+        undefined,
+        signal,
+      ),
+    enabled: editingId !== null,
+  })
 
   if (candidates.isLoading) {
     return <LoadingState label={t('common.loading')} />
@@ -85,7 +98,7 @@ export function MemoryApprovalQueue({ isAdmin }: MemoryApprovalQueueProps) {
             onApprove={() => promote.mutate({ id: mem.id, body: { action: 'approve' } })}
             onReject={() => promote.mutate({ id: mem.id, body: { action: 'reject' } })}
             onCompare={(refId) => setCompareWith({ candidate: mem, existingId: refId })}
-            onEdit={isAdmin ? () => setEditing(mem) : undefined}
+            onEdit={isAdmin ? () => setEditingId(mem.id) : undefined}
           />
         ))}
       </ul>
@@ -130,8 +143,12 @@ export function MemoryApprovalQueue({ isAdmin }: MemoryApprovalQueueProps) {
           {describeApiError(promote.error)}
         </div>
       )}
-      {editing !== null && (
-        <MemoryEditDialog open onClose={() => setEditing(null)} memory={editing} />
+      {editingId !== null && editingMemory.data?.memory !== undefined && (
+        <MemoryEditDialog
+          open
+          onClose={() => setEditingId(null)}
+          memory={editingMemory.data.memory}
+        />
       )}
     </div>
   )

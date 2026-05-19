@@ -63,10 +63,20 @@ export function defaultMemoryFormState(): MemoryFormState {
 }
 
 export function useMemoryFormState(initial?: Partial<MemoryFormState>) {
-  const [state, setState] = useState<MemoryFormState>(() => ({
-    ...defaultMemoryFormState(),
-    ...initial,
-  }))
+  const [state, setState] = useState<MemoryFormState>(() => {
+    // Defensive: spread of a partial whose value is explicitly `undefined`
+    // still overrides the default (e.g. `{ ...{title:'x'}, ...{title:undefined} }`
+    // yields `title:undefined`). Some upstream callers pass a MemorySummary
+    // (missing bodyMd / sourceKind etc.) and would otherwise crash later
+    // calls like `state.bodyMd.trim()`. Strip undefined-valued keys.
+    const cleaned: Partial<MemoryFormState> = {}
+    if (initial !== undefined) {
+      for (const [k, v] of Object.entries(initial)) {
+        if (v !== undefined) (cleaned as Record<string, unknown>)[k] = v
+      }
+    }
+    return { ...defaultMemoryFormState(), ...cleaned }
+  })
   const setScopeType = useCallback((scopeType: MemoryScope) => {
     setState((prev) => ({
       ...prev,
