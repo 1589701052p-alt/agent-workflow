@@ -41,6 +41,7 @@ import {
 } from './envelope'
 import { renderUserPrompt } from './protocol'
 import { captureChildSessions } from './sessionCapture'
+import { startLiveSubagentCapture } from './subagentLiveCapture'
 import { isAgentRunKind, readSnapshotFromRunDir } from './inventory'
 import {
   injectMemoryForRun,
@@ -49,6 +50,7 @@ import {
 } from './memoryInject'
 import type { InjectedMemorySnapshot } from '@agent-workflow/shared'
 import { materializeInventoryPlugin } from '@/opencode-plugin'
+import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 export type SkillSource = 'managed' | 'external' | 'project'
 
@@ -69,6 +71,14 @@ export interface RunNodeOptions {
   taskId: string
   /** ULID of a pre-existing node_runs row in 'pending' state. */
   nodeRunId: string
+  /**
+   * RFC-047: workflow node id (the canvas-level id, not the run id). The
+   * scheduler always knows it at the call site; threading it through lets
+   * the runner emit `node.status` broadcasts (e.g. after the eager
+   * injected-snapshot write at runner.ts §inject) without an extra
+   * `SELECT nodeId FROM node_runs WHERE id = ?` round-trip.
+   */
+  nodeId: string
   agent: Agent
   /** Resolved upstream port values (already concatenated by the scheduler). */
   inputs: Record<string, string>
@@ -218,6 +228,13 @@ export interface RunNodeOptions {
    * through; tests omit to use the design.md §3.3 defaults.
    */
   memoryInjectionBudget?: ScopeBudget
+  /**
+   * RFC-048: cadence + failure tolerance for the live subagent capture
+   * poller. Omitted (or `pollMs === 0`) falls back to RFC-027 behavior —
+   * the runner only captures child-session events in the single post-run
+   * BFS. Scheduler / cli plumb `config.subagentLiveCapture` through here.
+   */
+  subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
 }
 
 export type RunFinalStatus = 'done' | 'failed' | 'canceled'
@@ -389,6 +406,44 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  // RFC-047: persist the injected-memory snapshot to `injected_memories_json`
+  // BEFORE spawning opencode, so the task-detail Session tab can show the
+  // `Injected memories (N)` card while the agent is still running instead of
+  // waiting for the run-end UPDATE (which can take many minutes for long
+  // sessions / review / clarify await_human). The final UPDATE at step 11
+  // still writes the same column with the same value — keeping it as a
+  // fail-safe means an early-write SQL throw degrades to legacy RFC-046
+  // behavior (column populated at end-of-run), not to a corrupted column.
+  // A follow-up `node.status: running` broadcast lets `useTaskSync` invalidate
+  // `['tasks', taskId, 'node-runs']` so the card materializes without a manual
+  // refresh.
+  try {
+    await opts.db
+      .update(nodeRuns)
+      .set({
+        injectedMemoriesJson: injectedSnapshot === null ? null : JSON.stringify(injectedSnapshot),
+      })
+      .where(eq(nodeRuns.id, opts.nodeRunId))
+    log.info('inject-snapshot-eager-write', {
+      nodeRunId: opts.nodeRunId,
+      count: injectedSnapshot?.length ?? 0,
+    })
+    taskBroadcaster.broadcast(TASK_CHANNEL(opts.taskId), {
+      id: -1,
+      type: 'node.status',
+      nodeRunId: opts.nodeRunId,
+      nodeId: opts.nodeId,
+      status: 'running',
+    })
+  } catch (err) {
+    log.warn('inject-snapshot-eager-write-failed', {
+      nodeRunId: opts.nodeRunId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    // Non-fatal: the final UPDATE at step 11 still carries injectedMemoriesJson,
+    // so behavior degrades exactly to RFC-046 (column visible only after run ends).
   }
 
   // RFC-022 §design B6: warn (don't fail) when the serialized config crosses
@@ -590,6 +645,44 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     }
   })
 
+  // RFC-048: spin up the subagent live capture poller alongside the child.
+  // It mirrors opencode's child-session SQLite into `node_run_events` on a
+  // fixed cadence (default 1500ms) so the SessionTab sees subagent output
+  // accumulate during the run instead of waiting for post-run BFS. The
+  // handle is stopped on child exit; the post-run captureChildSessions call
+  // below still runs and uses `insertedPartIdsBySession` to skip rows the
+  // poller already wrote.
+  const livePollMs = opts.subagentLiveCapture?.pollMs ?? 1500
+  const liveFailureLimit = opts.subagentLiveCapture?.consecutiveFailureLimit ?? 5
+  const liveCtrl = new AbortController()
+  const livePoller = startLiveSubagentCapture({
+    nodeRunId: opts.nodeRunId,
+    taskId: opts.taskId,
+    nodeId: opts.nodeId,
+    getRootSessionId: () => sessionId ?? null,
+    db: opts.db,
+    log: log.child('subagent-live-poll'),
+    pollMs: livePollMs,
+    consecutiveFailureLimit: liveFailureLimit,
+    signal: liveCtrl.signal,
+    onInsert: (info) => {
+      // Reuse the existing `node.status: running` broadcast lane so the
+      // frontend `useTaskSync` invalidates `['tasks', taskId, 'node-runs']`
+      // without an additional WS schema entry. The status hasn't actually
+      // changed — we're piggybacking the cheap idempotent ping that already
+      // triggers the right invalidation. Empty ticks don't reach this
+      // callback so we never spam empty broadcasts.
+      void info
+      taskBroadcaster.broadcast(TASK_CHANNEL(opts.taskId), {
+        id: -1,
+        type: 'node.status',
+        nodeRunId: opts.nodeRunId,
+        nodeId: opts.nodeId,
+        status: 'running',
+      })
+    },
+  })
+
   const stderrPump = pumpLines(child.stderr, async (line) => {
     await opts.db.insert(nodeRunEvents).values({
       nodeRunId: opts.nodeRunId,
@@ -620,6 +713,12 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
 
   // 7. Wait for exit + drain streams.
   const exitCode = await child.exited
+  // RFC-048: stop the live poller before the post-run BFS so no concurrent
+  // SELECT races against the final captureChildSessions read. `abort()` is
+  // idempotent + signal-based; `livePoller.stop()` clears the interval and
+  // closes the readonly handle.
+  liveCtrl.abort()
+  livePoller.stop()
   await Promise.all([stdoutPump, stderrPump])
   if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   if (timeoutHandle !== null) clearTimeout(timeoutHandle)
@@ -724,6 +823,11 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   //     from opencode's persisted SQLite. Non-fatal; any failure writes
   //     a `subagent_capture_failed` marker and lets the SessionTab tab
   //     fall back to AC-10 rendering.
+  //
+  // RFC-048: forward the live poller's partId dedupe state so post-run BFS
+  // only inserts the tail rows opencode flushed after the last tick. With
+  // pollMs=0 the poller returned a no-op handle whose Map is empty, so the
+  // call falls back to RFC-027 byte-for-byte behavior.
   if (sessionId !== undefined) {
     try {
       await captureChildSessions({
@@ -732,6 +836,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         taskId: opts.taskId,
         db: opts.db,
         log,
+        alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
       })
     } catch (err) {
       log.warn('subagent-capture-unhandled', {

@@ -132,6 +132,7 @@ describe('runner stdout → node_run_events session tagging', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent: makeAgent(),
           inputs: {},
           worktreePath: h.worktreePath,
@@ -169,6 +170,7 @@ describe('runner stdout → node_run_events session tagging', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent: makeAgent(),
           inputs: {},
           worktreePath: h.worktreePath,

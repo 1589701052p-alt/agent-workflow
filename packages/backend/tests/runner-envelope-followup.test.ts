@@ -138,6 +138,7 @@ describe('RFC-042 runner envelopeFollowup', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: { spec: 'a real input value the followup must not re-emit' },
           worktreePath: h.worktreePath,
@@ -167,6 +168,7 @@ describe('RFC-042 runner envelopeFollowup', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'n1',
         agent,
         inputs: { spec: 'UNIQUE_INPUT_PAYLOAD_THAT_MUST_NOT_LEAK_INTO_FOLLOWUP' },
         worktreePath: h.worktreePath,
@@ -202,6 +204,7 @@ describe('RFC-042 runner envelopeFollowup', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'n1',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,
@@ -238,6 +241,7 @@ describe('RFC-042 runner envelopeFollowup', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,

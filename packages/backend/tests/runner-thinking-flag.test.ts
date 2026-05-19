@@ -34,6 +34,7 @@ function baseOpts(overrides: Partial<RunNodeOptions> = {}): RunNodeOptions {
   return {
     taskId: 't',
     nodeRunId: 'nr',
+    nodeId: 'n',
     agent: AGENT,
     inputs: {},
     worktreePath: '/tmp/wt',

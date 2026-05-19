@@ -140,6 +140,7 @@ describe('runNode envelope branching (RFC-023)', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'asker',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -184,6 +185,7 @@ describe('runNode envelope branching (RFC-023)', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'asker',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -219,6 +221,7 @@ describe('runNode envelope branching (RFC-023)', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'asker',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,
@@ -241,6 +244,7 @@ describe('runNode envelope branching (RFC-023)', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'asker',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,
@@ -273,6 +277,7 @@ describe('runNode envelope branching (RFC-023)', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'asker',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,

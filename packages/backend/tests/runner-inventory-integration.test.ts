@@ -150,6 +150,7 @@ describe('runNode RFC-029 inventory snapshot', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -185,6 +186,7 @@ describe('runNode RFC-029 inventory snapshot', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -220,6 +222,7 @@ describe('runNode RFC-029 inventory snapshot', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -256,6 +259,7 @@ describe('runNode RFC-029 inventory snapshot', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'n1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,

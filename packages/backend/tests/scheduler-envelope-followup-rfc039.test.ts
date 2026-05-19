@@ -117,6 +117,7 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'n',
         agent: makeAgent(),
         inputs: {},
         worktreePath: h.worktreePath,
@@ -145,6 +146,7 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'n',
         agent: makeAgent(),
         inputs: {},
         worktreePath: h.worktreePath,

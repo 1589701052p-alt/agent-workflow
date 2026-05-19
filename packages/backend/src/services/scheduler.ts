@@ -78,6 +78,12 @@ export interface RunTaskOptions {
   maxConcurrentNodes?: number
   /** Concurrency cap for fan-out child subprocesses (P-3-02). Default 4. */
   multiProcessSubprocessConcurrency?: number
+  /**
+   * RFC-048: forwarded verbatim to every `runNode` call so the runner spins
+   * up its subagent live-capture poller with the operator-configured cadence.
+   * Omitted → runner falls back to its compile-time defaults.
+   */
+  subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
 }
 
 type NodeStatus =
@@ -945,6 +951,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         lastResult = await runNode({
           taskId,
           nodeRunId,
+          nodeId: node.id,
           agent,
           inputs: upstreamInputs,
           worktreePath: task.worktreePath,
@@ -982,6 +989,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           db,
           log: log.child('run'),
           ...(opts.signal ? { signal: opts.signal } : {}),
+          ...(opts.subagentLiveCapture !== undefined
+            ? { subagentLiveCapture: opts.subagentLiveCapture }
+            : {}),
         })
 
         // RFC-026: persist opencode session id captured from the JSON event
@@ -1609,6 +1619,7 @@ async function runFanOutNode(
           const result = await runNode({
             taskId,
             nodeRunId: childRunId,
+            nodeId: node.id,
             agent,
             inputs: shardInputs,
             worktreePath: task.worktreePath,
@@ -1635,6 +1646,9 @@ async function runFanOutNode(
             db,
             log: log.child('fanout'),
             ...(opts.signal ? { signal: opts.signal } : {}),
+            ...(opts.subagentLiveCapture !== undefined
+              ? { subagentLiveCapture: opts.subagentLiveCapture }
+              : {}),
           })
           // RFC-026: persist opencode session id for this shard so a future
           // clarify-inline rerun on the same shard chain can resume. Captured

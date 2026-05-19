@@ -140,6 +140,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -197,6 +198,7 @@ describe('runNode', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'node1',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,
@@ -225,6 +227,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -252,6 +255,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -287,6 +291,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -317,6 +322,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: {},
           worktreePath: h.worktreePath,
@@ -350,6 +356,7 @@ describe('runNode', () => {
           runNode({
             taskId: h.taskId,
             nodeRunId,
+            nodeId: 'node1',
             agent,
             inputs: {},
             worktreePath: h.worktreePath,
@@ -385,6 +392,7 @@ describe('runNode', () => {
         runNode({
           taskId: h.taskId,
           nodeRunId,
+          nodeId: 'node1',
           agent,
           inputs: { changes: 'diff text' },
           worktreePath: h.worktreePath,
@@ -416,6 +424,7 @@ describe('runNode', () => {
       runNode({
         taskId: h.taskId,
         nodeRunId,
+        nodeId: 'node1',
         agent,
         inputs: {},
         worktreePath: h.worktreePath,
