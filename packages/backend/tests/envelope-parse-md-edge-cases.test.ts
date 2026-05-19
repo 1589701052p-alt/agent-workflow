@@ -108,7 +108,7 @@ describe('RFC-005 resolvePortContent', () => {
     ).toThrow(ValidationError)
   })
 
-  test('missing file → ValidationError (markdown-file-read-failed)', () => {
+  test('missing file → ValidationError (port-validation-markdown_file-missing-file)', () => {
     expect(() =>
       resolvePortContent({
         rawContent: 'does-not-exist.md',

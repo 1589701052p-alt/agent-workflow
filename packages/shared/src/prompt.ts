@@ -3,6 +3,7 @@
 // imports. Mirrors design.md §7.2.
 
 import type { AgentOutputKindsMap } from './schemas/agent'
+import { groupPortsByKind } from './outputKinds'
 
 /**
  * Review-driven re-run context (RFC-005 + RFC-014).
@@ -386,7 +387,6 @@ export function buildProtocolBlock(
   agentOutputKinds?: AgentOutputKindsMap,
 ): string {
   const isMdFile = (port: string): boolean => agentOutputKinds?.[port] === 'markdown_file'
-  const mdFilePorts = agentOutputs.filter(isMdFile)
 
   const renderBullet = (port: string): string =>
     isMdFile(port)
@@ -398,15 +398,28 @@ export function buildProtocolBlock(
       ? `  <port name="${port}"><worktree-relative path to the .md file you just wrote></port>\n`
       : `  <port name="${port}">...</port>\n`
 
+  // RFC-049: per-kind prompt guidance is now owned by each kind's handler.
+  // Iterate the registered handlers for the kinds declared on this agent and
+  // concatenate their non-null guidance segments. Handlers see ONLY ports
+  // declared as their kind — string / markdown handlers add nothing today;
+  // markdown_file handler emits the two-step protocol reminder.
+  const renderPerKindGuidance = (): string => {
+    const groups = groupPortsByKind(agentOutputs, agentOutputKinds)
+    let out = ''
+    for (const { handler, ports } of groups) {
+      const segment = handler.buildPromptGuidance({ ports })
+      if (segment !== null) out += segment
+    }
+    return out
+  }
+
   if (hasClarifyChannel !== true) {
     let s =
       '\n\n---\nYou MUST end your reply with a `<workflow-output>` block listing these ports:\n'
     for (const port of agentOutputs) {
       s += renderBullet(port)
     }
-    if (mdFilePorts.length > 0) {
-      s += buildMarkdownFilePortGuidance(mdFilePorts)
-    }
+    s += renderPerKindGuidance()
     s += '\nFormat:\n<workflow-output>\n'
     for (const port of agentOutputs) {
       s += renderExample(port)
@@ -432,39 +445,13 @@ export function buildProtocolBlock(
   for (const port of agentOutputs) {
     s += renderBullet(port)
   }
-  if (mdFilePorts.length > 0) {
-    s += buildMarkdownFilePortGuidance(mdFilePorts)
-  }
+  s += renderPerKindGuidance()
   s += '\n<workflow-output>\n'
   for (const port of agentOutputs) {
     s += renderExample(port)
   }
   s += '</workflow-output>'
   return s
-}
-
-/**
- * Rendered guidance block inserted into `buildProtocolBlock` whenever the
- * agent declares ≥ 1 `markdown_file` output port.
- *
- * Why this exists: production agents have been observed to emit a worktree
- * path inside `<port>` without first creating the file on disk. The
- * framework's `resolvePortContent` (envelope.ts) then fails the run when it
- * tries to `readFileSync` the missing file. The contract was always
- * "markdown_file = worktree-relative path to a real file", but the protocol
- * block didn't say so loudly enough — the bare port list + `...` placeholder
- * looked the same regardless of kind, so agents free-styled. This block makes
- * the file-first rule unmissable and names the offending ports explicitly so
- * the agent can't conflate them with sibling `string` / `markdown` ports.
- */
-function buildMarkdownFilePortGuidance(mdFilePorts: string[]): string {
-  const list = mdFilePorts.map((p) => `\`${p}\``).join(', ')
-  return (
-    '\n' +
-    `For ports declared \`markdown_file\` above (${list}) you MUST follow this two-step protocol — emitting only a path without the file behind it will fail the run:\n` +
-    '  1. First, USE A FILE-WRITING TOOL (Write / Edit / shell `cat > path` / equivalent) to persist the FULL markdown body to a file inside the current working directory (the task worktree). Pick a stable worktree-relative path such as `report.md` or `docs/findings.md`.\n' +
-    '  2. THEN, place ONLY that worktree-relative path inside the matching `<port>` tag — no markdown body, no code fences, no surrounding prose, no leading or trailing whitespace, no placeholder. The framework reads the file at that path; a path that does not point to an existing file causes the run to fail.\n'
-  )
 }
 
 /**

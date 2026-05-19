@@ -22,8 +22,31 @@
 
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import type { AgentOutputKind } from '@agent-workflow/shared'
+import { getOutputKindHandler, type AgentOutputKind, type ValidateIO } from '@agent-workflow/shared'
 import { ValidationError } from '@/util/errors'
+
+/**
+ * Node-backed ValidateIO supplied to RFC-049 OutputKindHandler.validate.
+ * Centralized here so the same fs / path semantics back every handler call;
+ * the handlers themselves stay pure JS and can be exercised in tests with a
+ * stub IO that doesn't touch disk.
+ */
+const NODE_VALIDATE_IO: ValidateIO = {
+  resolveWorktreePath(worktreeAbsPath, rawContent) {
+    const rootAbs = resolve(worktreeAbsPath)
+    const targetAbs = isAbsolute(rawContent) ? resolve(rawContent) : resolve(rootAbs, rawContent)
+    // Lexical containment — same rule the pre-RFC-049 code used. realpath()
+    // is intentionally NOT done here; the documented limit (a symlink inside
+    // the worktree pointing outside still reads through) is locked by
+    // envelope-parse-md-edge-cases.test.ts.
+    const insideWorktree = targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep)
+    const relativePath = relative(rootAbs, targetAbs)
+    return { targetAbs, relativePath, insideWorktree }
+  },
+  readFileUtf8(absPath) {
+    return readFileSync(absPath, 'utf8')
+  },
+}
 
 const ENVELOPE_RE = /<workflow-output>([\s\S]*?)<\/workflow-output>/g
 const CLARIFY_ENVELOPE_RE = /<workflow-clarify>([\s\S]*?)<\/workflow-clarify>/g
@@ -157,7 +180,7 @@ export function parseEnvelope(envelopeXml: string, declaredOutputs: string[]): E
 export interface ResolvePortContentOptions {
   /** The literal envelope content for this port (already trimmed). */
   rawContent: string
-  /** Per-port kind hint from agent.outputKinds (undefined → 'string'). */
+  /** Per-port kind hint from agent.outputKinds (undefined → forgiveness path). */
   kind?: AgentOutputKind
   /**
    * Worktree root (absolute). All `markdown_file` paths must resolve inside
@@ -165,6 +188,13 @@ export interface ResolvePortContentOptions {
    * landing outside) raise ValidationError before any read happens.
    */
   worktreePath: string
+  /**
+   * RFC-049: the port name this content belongs to. Optional for
+   * backwards-compat with existing callers; threaded through to the handler
+   * ctx so future per-port error context (e.g. structured failures payload
+   * in PR-B) has it. Defaults to '' when omitted.
+   */
+  port?: string
 }
 
 /**
@@ -197,47 +227,34 @@ export function resolvePortContentDetailed(opts: ResolvePortContentOptions): {
     // real file safely contained inside the task worktree (lexical +
     // realpath checks). Any failure mode → return rawContent unchanged so
     // legitimate string ports that happen to look path-shaped don't crash.
+    //
+    // RFC-049 PR-A keeps this path intact (strict zero-behavior). PR-B
+    // removes it entirely and forces agents to declare outputKinds; the
+    // string / markdown handlers will be wired in at the same time.
     return tryReadInWorktreeMarkdownPath(rawContent, worktreePath)
   }
 
-  const trimmed = rawContent.trim()
-  if (trimmed.length === 0) {
-    throw new ValidationError(
-      'markdown-file-empty-path',
-      'markdown_file port content must be a worktree-relative path, got empty string',
-    )
+  // RFC-049 PR-A: route the markdown_file path through the registered
+  // handler. The handler's `validate` returns either `{ ok: true, body,
+  // sourcePath? }` or `{ ok: false, subReason, detail }`; failures translate
+  // into a `port-validation-<kind>-<sub>` errCode at the wire (kind
+  // namespace so future kinds can't collide with markdown_file's codes).
+  const handler = getOutputKindHandler(kind)
+  const result = handler.validate(
+    rawContent,
+    { port: opts.port ?? '', kind, worktreePath },
+    NODE_VALIDATE_IO,
+  )
+  if (result.ok) {
+    const out: { body: string; sourcePath?: string } = { body: result.body }
+    if (result.sourcePath !== undefined) out.sourcePath = result.sourcePath
+    return out
   }
-
-  // Both relative and absolute paths are accepted, but absolute paths must
-  // still resolve inside the worktree. Agents naturally emit absolute paths
-  // because the opencode process's cwd IS the task worktree (e.g. `pwd`/`find`
-  // output is absolute), so requiring relative-only caused real review
-  // failures in the field. The containment check below is the actual security
-  // boundary; whether the path was absolute or relative on the wire is
-  // incidental.
-  const rootAbs = resolve(worktreePath)
-  const targetAbs = isAbsolute(trimmed) ? resolve(trimmed) : resolve(rootAbs, trimmed)
-  // realpath-after-resolve guarantees we land inside the worktree. We do not
-  // follow symlinks (readFileSync follows them, but the containment check
-  // must use the lexical absolute path so a symlinked file inside the
-  // worktree pointing outside doesn't bypass the check).
-  if (!(targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep))) {
-    throw new ValidationError(
-      'markdown-file-escapes-worktree',
-      `markdown_file port content '${trimmed}' resolves outside the task worktree`,
-    )
-  }
-
-  try {
-    const body = readFileSync(targetAbs, 'utf8')
-    const sourcePath = relative(rootAbs, targetAbs)
-    return { body, sourcePath }
-  } catch (err) {
-    throw new ValidationError(
-      'markdown-file-read-failed',
-      `markdown_file '${trimmed}': ${(err as Error).message}`,
-    )
-  }
+  throw new ValidationError(
+    `port-validation-${kind}-${result.subReason}`,
+    `port-validation-${kind}-${result.subReason}: ${result.detail}`,
+    { port: opts.port, kind, subReason: result.subReason, detail: result.detail },
+  )
 }
 
 /**
