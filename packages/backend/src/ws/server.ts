@@ -26,6 +26,8 @@ import type {
 } from '@agent-workflow/shared'
 import type { ServerWebSocket } from 'bun'
 import { and, eq, gt, asc } from 'drizzle-orm'
+import type { Actor } from '@/auth/actor'
+import { resolveActor } from '@/auth/session'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRuns } from '@/db/schema'
 import { createLogger } from '@/util/log'
@@ -54,11 +56,24 @@ interface ConnectionData {
     | { kind: 'repo-import'; batchId: string }
     | { kind: 'memories' }
     | { kind: 'memory-distill-jobs' }
+  /**
+   * The resolved actor that owns this connection. Pinned at upgrade time so
+   * per-actor logging / future per-user channel filtering doesn't need a
+   * second DB round-trip on every broadcast.
+   */
+  actor: Actor
   unsubscribe: () => void
 }
 
 export interface WebSocketAdapterDeps {
-  token: string
+  /**
+   * Legacy daemon-token value used to bootstrap a daemon before any user
+   * exists. Continues to upgrade WS connections as the `__system__` admin
+   * actor (via auth/session.ts:resolveActor) so the single-user / scripted
+   * daemon mode keeps working alongside the OIDC/PAT paths introduced by
+   * RFC-036.
+   */
+  daemonToken: string
   db: DbClient
 }
 
@@ -68,8 +83,11 @@ export interface WebSocketAdapter {
    * should return without producing a Response), false if the request isn't
    * a WS endpoint at all, or a Response to send back when the upgrade is
    * refused (bad token, unknown channel, etc.).
+   *
+   * Async because token resolution (RFC-036) may hit the DB to validate a
+   * session token or PAT before the upgrade is allowed.
    */
-  tryUpgrade(req: Request, server: { upgrade: BunUpgradeFn }): true | false | Response
+  tryUpgrade(req: Request, server: { upgrade: BunUpgradeFn }): Promise<true | false | Response>
 
   /**
    * Bun.serve `websocket` handler tree. Pass directly to Bun.serve().
@@ -93,6 +111,11 @@ const WS_PATH_RE = {
 }
 
 export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdapter {
+  // Pre-allocate the daemon-token Buffer once — `resolveActor` does a
+  // length-check + timing-safe equality, so we avoid Buffer.from() per
+  // upgrade attempt.
+  const daemonTokenBuf = Buffer.from(deps.daemonToken, 'utf-8')
+
   function parseChannel(url: URL): ConnectionData['channel'] | null {
     const m = WS_PATH_RE.task.exec(url.pathname)
     if (m !== null) {
@@ -117,7 +140,10 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
     return null
   }
 
-  function tryUpgrade(req: Request, server: { upgrade: BunUpgradeFn }): true | false | Response {
+  async function tryUpgrade(
+    req: Request,
+    server: { upgrade: BunUpgradeFn },
+  ): Promise<true | false | Response> {
     const url = new URL(req.url)
     if (!url.pathname.startsWith('/ws/')) return false
     const channel = parseChannel(url)
@@ -128,7 +154,28 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
       )
     }
     const queryToken = url.searchParams.get('token')
-    if (queryToken === null || !timingSafeEquals(queryToken, deps.token)) {
+    if (queryToken === null || queryToken === '') {
+      return new Response(
+        JSON.stringify({ error: { code: 'auth-required', message: 'invalid or missing token' } }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+    // RFC-036 — accept session tokens (aws_s_…), PATs (aws_pat_…) and the
+    // legacy daemon token, the same set the HTTP `multiAuth` middleware
+    // recognises. Previously this branch only ran `timingSafeEquals` against
+    // the static daemon token, so any client that logged in via OIDC and
+    // received a session token failed every WS upgrade with 401 — the
+    // SessionTab fell back to remount-on-tab-switch refetches and looked
+    // "not live" even though the runner was broadcasting correctly.
+    let actor: Actor | null = null
+    try {
+      actor = await resolveActor(deps.db, queryToken, daemonTokenBuf)
+    } catch (err) {
+      log.warn('upgrade-token-resolve-threw', {
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+    if (actor === null) {
       return new Response(
         JSON.stringify({ error: { code: 'auth-required', message: 'invalid or missing token' } }),
         { status: 401, headers: { 'Content-Type': 'application/json' } },
@@ -136,6 +183,7 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
     }
     const data: ConnectionData = {
       channel,
+      actor,
       unsubscribe: () => {
         /* set on open */
       },
@@ -295,13 +343,4 @@ function safeSend(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-}
-
-function timingSafeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let mismatch = 0
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  }
-  return mismatch === 0
 }

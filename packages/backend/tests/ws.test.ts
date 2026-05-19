@@ -38,15 +38,15 @@ async function buildHarness(): Promise<Harness> {
     dbVersion: 1,
     db,
   })
-  const ws = buildWebSocketAdapter({ token: TOKEN, db })
+  const ws = buildWebSocketAdapter({ daemonToken: TOKEN, db })
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch(req, srv) {
-      const upgraded = ws.tryUpgrade(req, srv)
+    async fetch(req: Request, srv): Promise<Response> {
+      const upgraded = await ws.tryUpgrade(req, srv)
       if (upgraded === true) return undefined as unknown as Response
-      if (upgraded !== false) return upgraded
-      return app.fetch(req)
+      if (upgraded === false) return await app.fetch(req)
+      return upgraded
     },
     websocket: ws.handlers,
   })

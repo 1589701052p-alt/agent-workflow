@@ -603,6 +603,32 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   }
   let sessionId: string | undefined
 
+  // Throttled `node.status: running` re-ping so the SessionTab's `/session`
+  // query refreshes live while the parent opencode child is streaming events.
+  // Without this, the only mid-run broadcast came from RFC-048's subagent
+  // live poller (runner.ts §livePoller below) — but workflows whose worker
+  // never spawns a subagent produced ZERO mid-run broadcasts, so the
+  // conversation list in the Session tab sat stale until the user switched
+  // tabs and forced a remount-refetch. Cadence is intentionally coarser
+  // than per-line: opencode emits many events per agent message and React-
+  // Query would coalesce anyway, but cutting WS volume to ~2/s keeps the
+  // browser tab cheap. The terminal `node.status: done|failed|...` ping
+  // from the scheduler handles the trailing-edge flush.
+  const PARENT_BROADCAST_THROTTLE_MS = 500
+  let lastParentBroadcastTs = 0
+  const broadcastParentRunning = (): void => {
+    const now = Date.now()
+    if (now - lastParentBroadcastTs < PARENT_BROADCAST_THROTTLE_MS) return
+    lastParentBroadcastTs = now
+    taskBroadcaster.broadcast(TASK_CHANNEL(opts.taskId), {
+      id: -1,
+      type: 'node.status',
+      nodeRunId: opts.nodeRunId,
+      nodeId: opts.nodeId,
+      status: 'running',
+    })
+  }
+
   const stdoutPump = pumpLines(child.stdout, async (line) => {
     let evt: Record<string, unknown> | null = null
     try {
@@ -632,6 +658,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         sessionId: evtSessionId,
         parentSessionId: null,
       })
+      broadcastParentRunning()
     } else {
       // Non-JSON stdout lines shouldn't happen with --format json, but record
       // them as kind=text for debugging.
@@ -642,6 +669,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         payload: line,
       })
       agentText.push(line)
+      broadcastParentRunning()
     }
   })
 

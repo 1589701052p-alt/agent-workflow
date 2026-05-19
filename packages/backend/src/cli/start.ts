@@ -165,7 +165,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
 
   const bindHost = opts.host ?? config.bindHost
   const bindPort = opts.port ?? config.bindPort ?? 0
-  const ws = buildWebSocketAdapter({ token, db })
+  const ws = buildWebSocketAdapter({ daemonToken: token, db })
   const server = Bun.serve({
     port: bindPort,
     hostname: bindHost,
@@ -179,11 +179,16 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     // ~4× headroom over the install ceiling without changing endpoint
     // semantics. See tests/cli-start-idle-timeout.test.ts.
     idleTimeout: 255,
-    fetch(req, srv) {
-      const upgraded = ws.tryUpgrade(req, srv)
+    async fetch(req: Request, srv): Promise<Response> {
+      // `tryUpgrade` is async because RFC-036 token resolution may need a
+      // DB round-trip to validate a session token / PAT. The Bun fetch
+      // handler natively accepts a Promise<Response> so awaiting here keeps
+      // upgrade ordering deterministic (upgrade decision happens before
+      // any Hono route runs).
+      const upgraded = await ws.tryUpgrade(req, srv)
       if (upgraded === true) return undefined as unknown as Response
-      if (upgraded !== false) return upgraded
-      return app.fetch(req)
+      if (upgraded === false) return await app.fetch(req)
+      return upgraded
     },
     websocket: ws.handlers,
   })
