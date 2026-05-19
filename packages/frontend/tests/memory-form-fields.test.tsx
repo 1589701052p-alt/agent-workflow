@@ -3,7 +3,7 @@
 // Pure UI / pure-function tests — no network, no router. The dialog wrappers
 // own the API calls and dialog chrome and have their own tests.
 
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { useTranslation } from 'react-i18next'
 import {
