@@ -32,6 +32,7 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
+import { getAgent } from '@/services/agent'
 import { resolveDependsClosure } from '@/services/agentDeps'
 import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
 import { collectPluginNamesFromClosure, loadPluginsByNames } from '@/services/pluginClosure'
@@ -655,7 +656,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       message: 'invalid agent node',
     }
   }
-  const agent = await loadAgent(db, agentName)
+  const agent = await getAgent(db, agentName)
   if (agent === null) {
     return { kind: 'failed', summary: `agent '${agentName}' not found`, message: 'agent-not-found' }
   }
@@ -1869,40 +1870,6 @@ function parseStringArray(value: string | null | undefined): string[] {
   } catch {
     return []
   }
-}
-
-async function loadAgent(db: DbClient, name: string): Promise<Agent | null> {
-  const rows = await db.select().from(agents).where(eq(agents.name, name)).limit(1)
-  const row = rows[0]
-  if (!row) return null
-  const out: Agent = {
-    id: row.id,
-    name: row.name,
-    description: row.description,
-    outputs: JSON.parse(row.outputs) as string[],
-    readonly: row.readonly,
-    syncOutputsOnIterate: row.syncOutputsOnIterate,
-    permission: JSON.parse(row.permission) as Record<string, unknown>,
-    skills: JSON.parse(row.skills) as string[],
-    // RFC-022: tolerate legacy rows whose depends_on column is missing /
-    // malformed (manual SQL edits); parse failure or non-array → [].
-    dependsOn: parseStringArray(row.dependsOn),
-    // RFC-028: same lenient parsing for the mcp column.
-    mcp: parseStringArray(row.mcp),
-    // RFC-031: same lenient parsing for the plugins column.
-    plugins: parseStringArray(row.plugins),
-    frontmatterExtra: JSON.parse(row.frontmatterExtra) as Record<string, unknown>,
-    bodyMd: row.bodyMd,
-    schemaVersion: row.schemaVersion,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  }
-  if (row.model !== null) out.model = row.model
-  if (row.variant !== null) out.variant = row.variant
-  if (row.temperature !== null) out.temperature = row.temperature
-  if (row.steps !== null) out.steps = row.steps
-  if (row.maxSteps !== null) out.maxSteps = row.maxSteps
-  return out
 }
 
 /**
