@@ -1559,6 +1559,10 @@ export const enUS: Resources = {
     confirmDelete: 'Permanently delete this memory? This cannot be undone.',
     confirmArchive:
       'Archive this memory? It will stop being injected into future runs. You can restore it from the Archived view.',
+    archiveDialogTitle: 'Archive memory',
+    deleteDialogTitle: 'Delete memory',
+    dialogCancel: 'Cancel',
+    dialogConfirm: 'Confirm',
     tab: {
       approvalQueue: 'Approval Queue',
       all: 'All Approved',

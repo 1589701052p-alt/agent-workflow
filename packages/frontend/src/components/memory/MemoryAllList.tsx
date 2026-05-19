@@ -1,13 +1,14 @@
 // RFC-041 PR4 — flat list of every approved memory.
 // Used for the /memory/all sub-route. Per-row [Archive] / [Delete] for admins.
 //
-// Bug-fix (post-RFC-041): the original implementation hardcoded the query
-// to status=approved and had no archived view, so once an admin clicked
-// Archive (which fired without confirmation) the row vanished from every
-// tab and there was no way to un-archive it from the UI. Two fixes:
-//   1. Archive button now goes through window.confirm — matches Delete.
-//   2. A status filter toggle (Approved / Archived) drives the query;
-//      in the Archived view, Archive is replaced with Unarchive.
+// Bug-fix (post-RFC-041):
+//   1. Archive used to fire on a single click with no confirmation, and
+//      the UI offered no Archived view to restore from — a mis-click
+//      effectively hid the memory until the user hit the API by hand.
+//   2. Both Archive and Delete now route through the shared <Dialog>
+//      (same chrome as the reviews-detail decision dialog) rather than
+//      the native browser modal — consistent in-app styling + focus
+//      trap + ESC + portal + a11y.
 // Backend already exposes `?status=archived` listing + POST /unarchive.
 
 import { useState } from 'react'
@@ -16,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import type { MemorySummary } from '@agent-workflow/shared'
 import type { ApiError } from '@/api/client'
 import { api } from '@/api/client'
+import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/LoadingState'
 import { describeApiError } from '@/i18n'
@@ -28,6 +30,8 @@ interface ListResponse {
 
 type View = 'approved' | 'archived'
 
+type PendingConfirm = { kind: 'archive' | 'delete'; id: string } | null
+
 export interface MemoryAllListProps {
   isAdmin: boolean
 }
@@ -36,6 +40,7 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [view, setView] = useState<View>('approved')
+  const [pending, setPending] = useState<PendingConfirm>(null)
 
   const list = useQuery<ListResponse>({
     queryKey: ['memories', 'all', view],
@@ -57,6 +62,17 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
     mutationFn: (id) => api.delete(`/api/memories/${encodeURIComponent(id)}?confirm=true`),
     onSuccess: invalidate,
   })
+
+  const submitting =
+    (pending?.kind === 'archive' && archive.isPending) ||
+    (pending?.kind === 'delete' && del.isPending)
+
+  const confirmPending = () => {
+    if (pending === null) return
+    if (pending.kind === 'archive') archive.mutate(pending.id)
+    else del.mutate(pending.id)
+    setPending(null)
+  }
 
   return (
     <div className="memory-all" data-testid="memory-all">
@@ -80,11 +96,52 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
         list,
         view,
         isAdmin,
-        archive,
-        unarchive,
-        del,
+        archivePending: archive.isPending,
+        unarchivePending: unarchive.isPending,
+        delPending: del.isPending,
+        onArchive: (id) => setPending({ kind: 'archive', id }),
+        onUnarchive: (id) => unarchive.mutate(id),
+        onDelete: (id) => setPending({ kind: 'delete', id }),
         t,
       })}
+
+      {pending !== null && (
+        <Dialog
+          open
+          onClose={() => setPending(null)}
+          size="sm"
+          title={t(
+            pending.kind === 'archive' ? 'memory.archiveDialogTitle' : 'memory.deleteDialogTitle',
+          )}
+          panelClassName="memory-confirm-dialog__panel"
+          data-testid="memory-confirm-dialog"
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => setPending(null)}
+                data-testid="memory-confirm-cancel"
+              >
+                {t('memory.dialogCancel')}
+              </button>
+              <button
+                type="button"
+                className={
+                  'btn btn--sm ' + (pending.kind === 'delete' ? 'btn--danger' : 'btn--primary')
+                }
+                onClick={confirmPending}
+                disabled={submitting}
+                data-testid="memory-confirm-ok"
+              >
+                {t('memory.dialogConfirm')}
+              </button>
+            </>
+          }
+        >
+          <p>{t(pending.kind === 'archive' ? 'memory.confirmArchive' : 'memory.confirmDelete')}</p>
+        </Dialog>
+      )}
     </div>
   )
 }
@@ -93,13 +150,28 @@ interface BodyArgs {
   list: ReturnType<typeof useQuery<ListResponse>>
   view: View
   isAdmin: boolean
-  archive: ReturnType<typeof useMutation<unknown, ApiError, string>>
-  unarchive: ReturnType<typeof useMutation<unknown, ApiError, string>>
-  del: ReturnType<typeof useMutation<unknown, ApiError, string>>
+  archivePending: boolean
+  unarchivePending: boolean
+  delPending: boolean
+  onArchive: (id: string) => void
+  onUnarchive: (id: string) => void
+  onDelete: (id: string) => void
   t: (key: string) => string
 }
 
-function renderBody({ list, view, isAdmin, archive, unarchive, del, t }: BodyArgs) {
+function renderBody(args: BodyArgs) {
+  const {
+    list,
+    view,
+    isAdmin,
+    archivePending,
+    unarchivePending,
+    delPending,
+    onArchive,
+    onUnarchive,
+    onDelete,
+    t,
+  } = args
   if (list.isLoading) return <LoadingState />
   if (list.error !== null && list.error !== undefined) {
     return <div className="error-box">{describeApiError(list.error)}</div>
@@ -121,10 +193,8 @@ function renderBody({ list, view, isAdmin, archive, unarchive, del, t }: BodyArg
                 <button
                   type="button"
                   className="btn btn--xs"
-                  onClick={() => {
-                    if (window.confirm(t('memory.confirmArchive'))) archive.mutate(m.id)
-                  }}
-                  disabled={!isAdmin || archive.isPending}
+                  onClick={() => onArchive(m.id)}
+                  disabled={!isAdmin || archivePending}
                   data-testid={`memory-all-${m.id}-archive`}
                 >
                   {t('memory.action.archive')}
@@ -133,8 +203,8 @@ function renderBody({ list, view, isAdmin, archive, unarchive, del, t }: BodyArg
                 <button
                   type="button"
                   className="btn btn--xs"
-                  onClick={() => unarchive.mutate(m.id)}
-                  disabled={!isAdmin || unarchive.isPending}
+                  onClick={() => onUnarchive(m.id)}
+                  disabled={!isAdmin || unarchivePending}
                   data-testid={`memory-all-${m.id}-unarchive`}
                 >
                   {t('memory.action.unarchive')}
@@ -143,10 +213,8 @@ function renderBody({ list, view, isAdmin, archive, unarchive, del, t }: BodyArg
               <button
                 type="button"
                 className="btn btn--xs btn--danger"
-                onClick={() => {
-                  if (window.confirm(t('memory.confirmDelete'))) del.mutate(m.id)
-                }}
-                disabled={!isAdmin || del.isPending}
+                onClick={() => onDelete(m.id)}
+                disabled={!isAdmin || delPending}
                 data-testid={`memory-all-${m.id}-delete`}
               >
                 {t('memory.action.delete')}

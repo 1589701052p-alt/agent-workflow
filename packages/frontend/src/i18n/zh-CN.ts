@@ -1443,6 +1443,10 @@ export interface Resources {
     empty: string
     confirmDelete: string
     confirmArchive: string
+    archiveDialogTitle: string
+    deleteDialogTitle: string
+    dialogCancel: string
+    dialogConfirm: string
     tab: {
       approvalQueue: string
       all: string
@@ -3055,6 +3059,10 @@ export const zhCN: Resources = {
     empty: '暂无沉淀',
     confirmDelete: '永久删除这条记忆？不可恢复。',
     confirmArchive: '确认归档这条记忆？归档后将不再注入未来运行，可在"已归档"视图中恢复。',
+    archiveDialogTitle: '归档记忆',
+    deleteDialogTitle: '删除记忆',
+    dialogCancel: '取消',
+    dialogConfirm: '确认',
     tab: {
       approvalQueue: '审批队列',
       all: '已审批',

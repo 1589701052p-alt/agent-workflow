@@ -18,6 +18,10 @@ const MEMORY_TOP = [
   'empty',
   'confirmDelete',
   'confirmArchive',
+  'archiveDialogTitle',
+  'deleteDialogTitle',
+  'dialogCancel',
+  'dialogConfirm',
 ] as const
 const MEMORY_TABS = ['approvalQueue', 'all', 'byScope', 'distillJobs'] as const
 const MEMORY_ACTIONS = [

@@ -1,11 +1,10 @@
 // MemoryAllList contract — locks the post-RFC-041 bug-fix:
 //   1. The Approved / Archived filter drives the GET status= param.
-//   2. Archive button confirms via window.confirm; rejecting it MUST NOT
-//      fire POST /archive (the original bug — a single click could
-//      silently archive a memory with no UI to recover it).
+//   2. Archive and Delete go through the shared <Dialog> (no
+//      window.confirm). Clicking the row button opens the dialog;
+//      Cancel MUST NOT POST; Confirm POSTs to the right endpoint.
 //   3. In Archived view, the row's primary action is Unarchive and
-//      POSTs /unarchive — this is the only place in the UI today where
-//      an archived memory can be restored.
+//      POSTs /unarchive directly (no dialog — restore is harmless).
 //   4. Non-admin sees the action buttons disabled in both views.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -78,7 +77,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
+describe('MemoryAllList — Approved/Archived filter + in-app confirm dialog', () => {
   test('default view is Approved → GET ?status=approved', async () => {
     const calls = installFetch(
       () =>
@@ -117,11 +116,10 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
     fireEvent.click(screen.getByTestId('memory-all-filter-archived'))
     await screen.findByTestId('memory-all-mem_arc-unarchive')
     expect(lastStatusParam).toBe('archived')
-    // The Archive button must NOT render in archived view for this row.
     expect(screen.queryByTestId('memory-all-mem_arc-archive')).toBeNull()
   })
 
-  test('Archive click without confirm DOES NOT POST /archive', async () => {
+  test('Archive opens shared Dialog; Cancel closes it and DOES NOT POST', async () => {
     const calls = installFetch(
       () =>
         new Response(JSON.stringify({ items: [mkMem()] }), {
@@ -129,17 +127,23 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
           headers: { 'content-type': 'application/json' },
         }),
     )
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const confirmSpy = vi.spyOn(window, 'confirm')
     wrap(true)
     const btn = await screen.findByTestId('memory-all-mem_1-archive')
     fireEvent.click(btn)
-    expect(confirmSpy).toHaveBeenCalledOnce()
-    // Give react-query a tick to definitely not fire anything async.
+    // Dialog rendered; the original window.confirm is NOT used.
+    const dialog = await screen.findByTestId('memory-confirm-dialog')
+    expect(dialog).toBeTruthy()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('memory-confirm-cancel'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('memory-confirm-dialog')).toBeNull()
+    })
     await new Promise((r) => setTimeout(r, 0))
     expect(calls.find((c) => c.method === 'POST')).toBeUndefined()
   })
 
-  test('Archive click WITH confirm POSTs /archive', async () => {
+  test('Archive → Confirm POSTs /archive', async () => {
     const calls = installFetch(({ method }) => {
       if (method === 'GET') {
         return new Response(JSON.stringify({ items: [mkMem()] }), {
@@ -152,17 +156,49 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
         headers: { 'content-type': 'application/json' },
       })
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     wrap(true)
     const btn = await screen.findByTestId('memory-all-mem_1-archive')
     fireEvent.click(btn)
+    await screen.findByTestId('memory-confirm-dialog')
+    fireEvent.click(screen.getByTestId('memory-confirm-ok'))
     await waitFor(() => {
       const post = calls.find((c) => c.method === 'POST')
       expect(post?.url).toContain('/api/memories/mem_1/archive')
     })
+    // Dialog closes after confirm.
+    await waitFor(() => {
+      expect(screen.queryByTestId('memory-confirm-dialog')).toBeNull()
+    })
   })
 
-  test('Unarchive click POSTs /unarchive (no confirm required)', async () => {
+  test('Delete also routes through the shared Dialog, not window.confirm', async () => {
+    const calls = installFetch(({ method }) => {
+      if (method === 'GET') {
+        return new Response(JSON.stringify({ items: [mkMem()] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    wrap(true)
+    const btn = await screen.findByTestId('memory-all-mem_1-delete')
+    fireEvent.click(btn)
+    await screen.findByTestId('memory-confirm-dialog')
+    expect(confirmSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('memory-confirm-ok'))
+    await waitFor(() => {
+      const del = calls.find((c) => c.method === 'DELETE')
+      expect(del?.url).toContain('/api/memories/mem_1')
+      expect(del?.url).toContain('confirm=true')
+    })
+  })
+
+  test('Unarchive click POSTs /unarchive without opening a Dialog', async () => {
     const calls = installFetch(({ method, url }) => {
       if (method === 'GET') {
         const u = new URL(url)
@@ -182,7 +218,6 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
         headers: { 'content-type': 'application/json' },
       })
     })
-    const confirmSpy = vi.spyOn(window, 'confirm')
     wrap(true)
     fireEvent.click(screen.getByTestId('memory-all-filter-archived'))
     const btn = await screen.findByTestId('memory-all-mem_arc-unarchive')
@@ -191,7 +226,7 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
       const post = calls.find((c) => c.method === 'POST')
       expect(post?.url).toContain('/api/memories/mem_arc/unarchive')
     })
-    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('memory-confirm-dialog')).toBeNull()
   })
 
   test('non-admin sees archive + unarchive disabled across views', async () => {
@@ -216,5 +251,22 @@ describe('MemoryAllList — Approved/Archived filter + safe Archive', () => {
       'memory-all-mem_arc-unarchive',
     )) as HTMLButtonElement
     expect(unarchiveBtn.disabled).toBe(true)
+  })
+})
+
+describe('MemoryAllList source-level grep — no native window.confirm', () => {
+  test('component file does not call window.confirm anywhere', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const path = await import('node:path')
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const body = readFileSync(
+      path.resolve(here, '../src/components/memory/MemoryAllList.tsx'),
+      'utf8',
+    )
+    // Native browser modal must be replaced by the shared <Dialog>.
+    expect(body.includes('window.confirm')).toBe(false)
+    expect(body.includes("from '@/components/Dialog'")).toBe(true)
+    expect(/<Dialog[\s>]/.test(body)).toBe(true)
   })
 })
