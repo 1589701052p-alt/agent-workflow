@@ -23,19 +23,34 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
-import type { Memory, MemoryDistillJob, ResolvedDistillScope } from '@agent-workflow/shared'
-import { MemorySchema, redactGitUrl } from '@agent-workflow/shared'
+import type {
+  Memory,
+  MemoryDistillJob,
+  ParseSessionInputEvent,
+  ResolvedDistillScope,
+  SourceContextBudget,
+} from '@agent-workflow/shared'
+import {
+  DEFAULT_SOURCE_CONTEXT_BUDGET,
+  MemorySchema,
+  parseSessionTree,
+  redactGitUrl,
+} from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import {
   clarifySessions,
   docVersions,
   memories,
   memoryDistillJobs,
+  nodeRunEvents,
+  nodeRuns,
   reviewComments,
   taskFeedback,
 } from '@/db/schema'
 import { extractLastEnvelope } from '@/services/envelope'
 import { captureDistillJobSession } from '@/services/distillSessionCapture'
+import { clipHeadTail, renderSessionTreeToDistillerMd } from '@/services/distillerSourceContext'
+import { appHome } from '@/util/paths'
 import { MEMORY_CHANNEL, memoryBroadcaster } from '@/ws/broadcaster'
 import { createLogger } from '@/util/log'
 
@@ -181,6 +196,13 @@ export interface RunDistillOptions {
    * `memoryDistillModel` is plumbed through by the scheduler.
    */
   model?: string | null
+  /**
+   * RFC-044: per-source byte budget for the new transcript / body context
+   * blocks. Plumbed by the scheduler from `config.memoryDistillSourceContext`.
+   * Defaults to DEFAULT_SOURCE_CONTEXT_BUDGET — passing 0 fields disables the
+   * corresponding block.
+   */
+  sourceContextBudget?: SourceContextBudget
 }
 
 export interface DistillerSpawnInput {
@@ -214,6 +236,15 @@ export interface LoadedSourceEvents {
     nodeId: string
     questions: string
     answers: string
+    /**
+     * RFC-044: markdown-rendered source-agent transcript (events for the
+     * node_run that emitted this clarify), already byte-clipped to the
+     * configured budget. NULL means the loader could not produce a
+     * transcript — `sourceTranscriptReason` carries the human-readable
+     * cause and the builder prints a placeholder line instead.
+     */
+    sourceTranscriptMd: string | null
+    sourceTranscriptReason: string | null
   }>
   review: Array<{
     id: string
@@ -222,6 +253,13 @@ export interface LoadedSourceEvents {
     decision: string
     bodyPath: string
     comments: Array<{ body: string; anchorParagraphIdx: number; selectedText: string }>
+    /**
+     * RFC-044: full markdown body of the reviewed doc version, already
+     * byte-clipped. NULL when the file is unreadable (worktree GC / path
+     * drift) — `reviewedBodyReason` carries the cause.
+     */
+    reviewedBodyMd: string | null
+    reviewedBodyReason: string | null
   }>
   feedback: Array<{ id: string; taskId: string; bodyMd: string; createdAt: number }>
 }
@@ -230,10 +268,20 @@ export interface LoadedSourceEvents {
  * Read every source event named in `jobs`. Best-effort — missing rows
  * (event was deleted between enqueue and run) are silently skipped so a
  * single bad row never poisons the rest of the batch.
+ *
+ * RFC-044: when the optional `budget` argument is passed, the loader also
+ * fetches the source-agent transcript for clarify rows (via
+ * `clarify_sessions.source_agent_node_run_id` → `node_run_events`) and the
+ * reviewed document body for review rows (`docVersions.bodyPath` file).
+ * Each extra read is best-effort: on failure the corresponding `*Md` field
+ * is null and the `*Reason` field carries a short string the builder prints
+ * as a placeholder line — the distiller still runs, degraded to RFC-041
+ * fidelity for that one source.
  */
 export async function loadSourceEvents(
   db: DbClient,
   jobs: MemoryDistillJob[],
+  budget: SourceContextBudget = DEFAULT_SOURCE_CONTEXT_BUDGET,
 ): Promise<LoadedSourceEvents> {
   const clarifyIds = jobs.filter((j) => j.sourceKind === 'clarify').map((j) => j.sourceEventId)
   const reviewIds = jobs.filter((j) => j.sourceKind === 'review').map((j) => j.sourceEventId)
@@ -278,22 +326,38 @@ export async function loadSourceEvents(
     })
   }
 
+  const transcriptsByClarifyId = await loadClarifyTranscripts(db, clarifyRows, budget)
+  const reviewBodiesByDvId = await loadReviewBodies(reviewRows, budget)
+
   return {
-    clarify: clarifyRows.map((r) => ({
-      id: r.id,
-      taskId: r.taskId,
-      nodeId: r.clarifyNodeId,
-      questions: r.questionsJson,
-      answers: r.answersJson ?? '[]',
-    })),
-    review: reviewRows.map((r) => ({
-      id: r.id,
-      taskId: r.taskId,
-      nodeId: r.reviewNodeId,
-      decision: r.decision,
-      bodyPath: r.bodyPath,
-      comments: commentsByDv.get(r.id) ?? [],
-    })),
+    clarify: clarifyRows.map((r) => {
+      const t = transcriptsByClarifyId.get(r.id) ?? {
+        md: null,
+        reason: 'disabled by config',
+      }
+      return {
+        id: r.id,
+        taskId: r.taskId,
+        nodeId: r.clarifyNodeId,
+        questions: r.questionsJson,
+        answers: r.answersJson ?? '[]',
+        sourceTranscriptMd: t.md,
+        sourceTranscriptReason: t.reason,
+      }
+    }),
+    review: reviewRows.map((r) => {
+      const b = reviewBodiesByDvId.get(r.id) ?? { md: null, reason: 'disabled by config' }
+      return {
+        id: r.id,
+        taskId: r.taskId,
+        nodeId: r.reviewNodeId,
+        decision: r.decision,
+        bodyPath: r.bodyPath,
+        comments: commentsByDv.get(r.id) ?? [],
+        reviewedBodyMd: b.md,
+        reviewedBodyReason: b.reason,
+      }
+    }),
     feedback: feedbackRows.map((r) => ({
       id: r.id,
       taskId: r.taskId,
@@ -301,6 +365,136 @@ export async function loadSourceEvents(
       createdAt: r.createdAt,
     })),
   }
+}
+
+interface SourceContextResult {
+  md: string | null
+  reason: string | null
+}
+
+/**
+ * RFC-044: per-clarify-session source-agent transcript.
+ *
+ *  - Skipped entirely when `budget.clarifyTranscriptMaxBytes === 0`; the
+ *    map omits these keys so the caller's `.get() ?? {...'disabled by config'}`
+ *    fallback fills them in uniformly.
+ *  - Pulls the source agent node_run row (prompt + startedAt + agentId),
+ *    its events, and the agent name in three batch SELECTs.
+ *  - Renders each session via `parseSessionTree` →
+ *    `renderSessionTreeToDistillerMd`, then byte-clips to the configured
+ *    budget.
+ */
+async function loadClarifyTranscripts(
+  db: DbClient,
+  clarifyRows: Array<{ id: string; sourceAgentNodeRunId: string }>,
+  budget: SourceContextBudget,
+): Promise<Map<string, SourceContextResult>> {
+  const out = new Map<string, SourceContextResult>()
+  if (budget.clarifyTranscriptMaxBytes === 0 || clarifyRows.length === 0) return out
+
+  const sourceRunIds = [...new Set(clarifyRows.map((r) => r.sourceAgentNodeRunId))]
+  const runRows = await db
+    .select({
+      id: nodeRuns.id,
+      promptText: nodeRuns.promptText,
+      startedAt: nodeRuns.startedAt,
+      opencodeSessionId: nodeRuns.opencodeSessionId,
+    })
+    .from(nodeRuns)
+    .where(inArray(nodeRuns.id, sourceRunIds))
+  const runById = new Map(runRows.map((r) => [r.id, r] as const))
+
+  const eventRows =
+    sourceRunIds.length > 0
+      ? await db
+          .select({
+            id: nodeRunEvents.id,
+            ts: nodeRunEvents.ts,
+            kind: nodeRunEvents.kind,
+            payload: nodeRunEvents.payload,
+            sessionId: nodeRunEvents.sessionId,
+            parentSessionId: nodeRunEvents.parentSessionId,
+            nodeRunId: nodeRunEvents.nodeRunId,
+          })
+          .from(nodeRunEvents)
+          .where(inArray(nodeRunEvents.nodeRunId, sourceRunIds))
+          .orderBy(asc(nodeRunEvents.ts), asc(nodeRunEvents.id))
+      : []
+  const eventsByRun = new Map<string, ParseSessionInputEvent[]>()
+  for (const e of eventRows) {
+    const list = eventsByRun.get(e.nodeRunId) ?? []
+    list.push({
+      id: e.id,
+      ts: e.ts,
+      kind: e.kind,
+      payload: e.payload,
+      sessionId: e.sessionId,
+      parentSessionId: e.parentSessionId,
+    })
+    eventsByRun.set(e.nodeRunId, list)
+  }
+
+  for (const c of clarifyRows) {
+    const run = runById.get(c.sourceAgentNodeRunId)
+    if (run === undefined) {
+      out.set(c.id, { md: null, reason: 'source node_run not found' })
+      continue
+    }
+    const events = eventsByRun.get(run.id) ?? []
+    if (events.length === 0) {
+      out.set(c.id, { md: null, reason: 'no events captured for source node_run' })
+      continue
+    }
+    try {
+      // node_runs has no agent_id column; agent identity is by workflow
+      // node lookup (out of scope here). Render with a neutral name — the
+      // transcript content itself carries the context the distiller needs.
+      const tree = parseSessionTree({
+        rootSessionId: run.opencodeSessionId,
+        promptText: run.promptText,
+        startedAt: run.startedAt,
+        primaryAgentName: 'agent',
+        events,
+      })
+      const md = renderSessionTreeToDistillerMd(tree)
+      out.set(c.id, { md: clipHeadTail(md, budget.clarifyTranscriptMaxBytes), reason: null })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      out.set(c.id, { md: null, reason: `parse-failed: ${msg}` })
+    }
+  }
+  return out
+}
+
+/**
+ * RFC-044: read each `docVersions.bodyPath` markdown file (relative to
+ * appHome) and clip to the budget. Skipped when the budget is 0; per-row
+ * read failures degrade to a null + reason pair so the builder can render a
+ * placeholder line.
+ */
+async function loadReviewBodies(
+  reviewRows: Array<{ id: string; bodyPath: string }>,
+  budget: SourceContextBudget,
+): Promise<Map<string, SourceContextResult>> {
+  const out = new Map<string, SourceContextResult>()
+  if (budget.reviewBodyMaxBytes === 0 || reviewRows.length === 0) return out
+  const home = appHome()
+  for (const r of reviewRows) {
+    try {
+      const abs = join(home, r.bodyPath)
+      const file = Bun.file(abs)
+      if (!(await file.exists())) {
+        out.set(r.id, { md: null, reason: 'reviewed body unreadable: file missing' })
+        continue
+      }
+      const text = await file.text()
+      out.set(r.id, { md: clipHeadTail(text, budget.reviewBodyMaxBytes), reason: null })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      out.set(r.id, { md: null, reason: `reviewed body unreadable: ${msg}` })
+    }
+  }
+  return out
 }
 
 // -----------------------------------------------------------------------------
@@ -381,9 +575,21 @@ export interface BuildDistillerPromptInput {
   events: LoadedSourceEvents
   scopeContexts: ScopeContext[]
   taskId: string | null
+  /**
+   * RFC-044: governs whether the `Source agent transcript:` /
+   * `Reviewed document body:` blocks are emitted per source event. When a
+   * field is 0 the corresponding block is skipped entirely — keeping the
+   * prompt byte-for-byte equivalent to the RFC-041 baseline. Optional so
+   * existing callers (tests + legacy code) keep compiling; defaults to the
+   * shared DEFAULT_SOURCE_CONTEXT_BUDGET.
+   */
+  sourceContextBudget?: SourceContextBudget
 }
 
 export function buildDistillerUserPrompt(input: BuildDistillerPromptInput): string {
+  const budget = input.sourceContextBudget ?? DEFAULT_SOURCE_CONTEXT_BUDGET
+  const emitClarifyTranscript = budget.clarifyTranscriptMaxBytes > 0
+  const emitReviewBody = budget.reviewBodyMaxBytes > 0
   const lines: string[] = []
   lines.push('# Source events to distill')
   if (input.taskId !== null) {
@@ -399,6 +605,16 @@ export function buildDistillerUserPrompt(input: BuildDistillerPromptInput): stri
       lines.push(stringifyForPrompt(ev.questions))
       lines.push('Answers:')
       lines.push(stringifyForPrompt(ev.answers))
+      if (emitClarifyTranscript) {
+        lines.push('Source agent transcript:')
+        if (ev.sourceTranscriptMd !== null) {
+          lines.push(ev.sourceTranscriptMd)
+        } else {
+          lines.push(
+            `(source-agent transcript unavailable: ${ev.sourceTranscriptReason ?? 'unknown'})`,
+          )
+        }
+      }
       lines.push('')
     }
   }
@@ -407,7 +623,17 @@ export function buildDistillerUserPrompt(input: BuildDistillerPromptInput): stri
     lines.push('## Review decisions')
     for (const ev of input.events.review) {
       lines.push(`### review:${ev.id} (node ${ev.nodeId}, decision=${ev.decision})`)
-      lines.push(`(reviewed body lives at ${ev.bodyPath})`)
+      lines.push(`Source path: ${ev.bodyPath}`)
+      if (emitReviewBody) {
+        lines.push('Reviewed document body:')
+        if (ev.reviewedBodyMd !== null) {
+          lines.push('```markdown')
+          lines.push(ev.reviewedBodyMd)
+          lines.push('```')
+        } else {
+          lines.push(`(reviewed body unavailable: ${ev.reviewedBodyReason ?? 'unknown'})`)
+        }
+      }
       if (ev.comments.length > 0) {
         lines.push('Comments:')
         for (const c of ev.comments) {
@@ -733,14 +959,16 @@ export async function runDistill(options: RunDistillOptions): Promise<DistillRes
   const spawnFn = options.spawnFn ?? defaultDistillerSpawn
 
   const scope = options.job.scopeResolved
+  const sourceContextBudget = options.sourceContextBudget ?? DEFAULT_SOURCE_CONTEXT_BUDGET
   const [events, scopeContexts] = await Promise.all([
-    loadSourceEvents(options.db, options.siblings),
+    loadSourceEvents(options.db, options.siblings, sourceContextBudget),
     loadScopeContexts(options.db, scope),
   ])
   const userPrompt = buildDistillerUserPrompt({
     events,
     scopeContexts,
     taskId: options.job.taskId,
+    sourceContextBudget,
   })
 
   // RFC-043: persist the user prompt + dedup snapshot on the first

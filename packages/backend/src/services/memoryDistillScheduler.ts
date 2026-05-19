@@ -17,6 +17,7 @@ import type {
   MemoryDistillJob,
   MemoryDistillJobWsMessage,
   ResolvedDistillScope,
+  SourceContextBudget,
 } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { agents, cachedRepos, memoryDistillJobs, tasks } from '@/db/schema'
@@ -165,6 +166,12 @@ export interface DistillTickOptions {
   spawnFn?: DistillerSpawnFn
   /** Default model for distiller agent. Settings: memoryDistillModel. */
   model?: string | null
+  /**
+   * RFC-044: per-source byte budget for distiller user prompt context.
+   * Plumbed from `config.memoryDistillSourceContext`. Defaults to
+   * DEFAULT_SOURCE_CONTEXT_BUDGET when omitted.
+   */
+  sourceContextBudget?: SourceContextBudget
   /** Default = Date.now; tests pump time forward via a mock. */
   now?: () => number
 }
@@ -245,6 +252,7 @@ export async function distillTick(options: DistillTickOptions): Promise<{
         siblings: siblings.map(rowToDistillJob),
         spawnFn: options.spawnFn,
         model: options.model,
+        sourceContextBudget: options.sourceContextBudget,
       })
       await options.db
         .update(memoryDistillJobs)
@@ -303,6 +311,8 @@ export interface StartLoopOptions {
   /** Default 1000ms (1Hz). Tests can shorten / lengthen. */
   intervalMs?: number
   model?: string | null
+  /** RFC-044: forwarded to distillTick → runDistill on every tick. */
+  sourceContextBudget?: SourceContextBudget
 }
 
 export interface DistillLoopHandle {
@@ -328,7 +338,12 @@ export function startMemoryDistillLoop(options: StartLoopOptions): DistillLoopHa
   })
   const interval = options.intervalMs ?? 1000
   const handle = setInterval(() => {
-    distillTick({ db: options.db, spawnFn: options.spawnFn, model: options.model }).catch((err) => {
+    distillTick({
+      db: options.db,
+      spawnFn: options.spawnFn,
+      model: options.model,
+      sourceContextBudget: options.sourceContextBudget,
+    }).catch((err) => {
       log.warn('tick threw', { error: err instanceof Error ? err.message : String(err) })
     })
   }, interval)

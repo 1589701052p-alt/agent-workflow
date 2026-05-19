@@ -207,6 +207,9 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     db,
     enabled: batchImportCfg.memoryDistillerEnabled !== false,
     model: batchImportCfg.memoryDistillModel ?? null,
+    // RFC-044: per-source byte budget for the new distiller context blocks.
+    // Undefined falls back to DEFAULT_SOURCE_CONTEXT_BUDGET inside runDistill.
+    sourceContextBudget: batchImportCfg.memoryDistillSourceContext,
   })
 
   // 9. Graceful shutdown (P-4-06).

@@ -346,7 +346,17 @@ describe('buildDistillerUserPrompt', () => {
   test('renders clarify / review / feedback events + per-scope dedup context', () => {
     const prompt = buildDistillerUserPrompt({
       events: {
-        clarify: [{ id: 'c1', taskId: 't1', nodeId: 'n1', questions: '[]', answers: '[]' }],
+        clarify: [
+          {
+            id: 'c1',
+            taskId: 't1',
+            nodeId: 'n1',
+            questions: '[]',
+            answers: '[]',
+            sourceTranscriptMd: null,
+            sourceTranscriptReason: 'disabled by config',
+          },
+        ],
         review: [
           {
             id: 'r1',
@@ -355,6 +365,8 @@ describe('buildDistillerUserPrompt', () => {
             decision: 'approved',
             bodyPath: 'docs/v1.md',
             comments: [{ body: 'tighten', anchorParagraphIdx: 2, selectedText: 'foo bar' }],
+            reviewedBodyMd: null,
+            reviewedBodyReason: 'disabled by config',
           },
         ],
         feedback: [{ id: 'f1', taskId: 't1', bodyMd: 'note', createdAt: 1 }],
@@ -599,5 +611,19 @@ describe('runDistill orchestration (mocked spawnFn)', () => {
       expect(DISTILLER_SYSTEM_PROMPT).toContain('personally-identifying information')
       expect(DISTILLER_SYSTEM_PROMPT).toContain('personal momentary preference')
     })
+  })
+})
+
+// RFC-044: grep guard — the two block headers MUST stay grep-able in the
+// builder so a future refactor cannot silently drop the source-context
+// blocks without tripping CI.
+describe('RFC-044 grep guard (source-context block literals)', () => {
+  test('memoryDistiller source emits both Source agent transcript: and Reviewed document body: literals', () => {
+    const src = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'memoryDistiller.ts'),
+      'utf8',
+    )
+    expect(src).toContain("'Source agent transcript:'")
+    expect(src).toContain("'Reviewed document body:'")
   })
 })

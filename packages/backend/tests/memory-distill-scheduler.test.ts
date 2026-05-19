@@ -10,7 +10,16 @@ import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { agents, cachedRepos, memoryDistillJobs, tasks, workflows } from '../src/db/schema'
+import {
+  agents,
+  cachedRepos,
+  clarifySessions,
+  memoryDistillJobs,
+  nodeRunEvents,
+  nodeRuns,
+  tasks,
+  workflows,
+} from '../src/db/schema'
 import {
   buildDebounceKey,
   cancelPendingJob,
@@ -327,6 +336,114 @@ describe('distillTick', () => {
     })
     const r = await distillTick({ db, spawnFn: EMPTY_ENVELOPE_SPAWN, now: () => Date.now() })
     expect(r.picked).toBe(0)
+  })
+
+  test('RFC-044: sourceContextBudget = {0,0} is plumbed through to user prompt', async () => {
+    // End-to-end check: scheduler → runDistill → buildDistillerUserPrompt.
+    // When the scheduler hands sourceContextBudget = {0, 0} down the stack,
+    // the resulting user prompt must NOT contain the new block headers.
+    // This locks the wiring so a missed argument silently disabling the
+    // feature does not slip past tests.
+    const { taskId } = seedTask(db)
+    // Seed an actual clarify_session with a source-agent node_run + events so
+    // the loader path runs end-to-end (rather than the empty-clarify branch).
+    const sourceRunId = ulid()
+    db.insert(nodeRuns)
+      .values({
+        id: sourceRunId,
+        taskId,
+        nodeId: 'agent-1',
+        iteration: 0,
+        retryIndex: 0,
+        reviewIteration: 0,
+        clarifyIteration: 0,
+        status: 'awaiting_human',
+        promptText: 'hi',
+        startedAt: Date.now(),
+        opencodeSessionId: 'sess-1',
+      })
+      .run()
+    const clarifyRunId = ulid()
+    db.insert(nodeRuns)
+      .values({
+        id: clarifyRunId,
+        taskId,
+        nodeId: 'clarify-1',
+        iteration: 0,
+        retryIndex: 0,
+        reviewIteration: 0,
+        clarifyIteration: 0,
+        status: 'awaiting_human',
+      })
+      .run()
+    const clarifyId = ulid()
+    db.insert(clarifySessions)
+      .values({
+        id: clarifyId,
+        taskId,
+        sourceAgentNodeId: 'agent-1',
+        sourceAgentNodeRunId: sourceRunId,
+        sourceShardKey: null,
+        clarifyNodeId: 'clarify-1',
+        clarifyNodeRunId: clarifyRunId,
+        iterationIndex: 0,
+        questionsJson: '[]',
+        answersJson: '[]',
+        status: 'answered',
+      })
+      .run()
+    db.insert(nodeRunEvents)
+      .values({
+        nodeRunId: sourceRunId,
+        ts: 1,
+        kind: 'text',
+        payload: JSON.stringify({
+          type: 'text',
+          sessionID: 'sess-1',
+          messageID: 'm1',
+          part: { type: 'text', text: 'PLUMBING-MARKER' },
+        }),
+        sessionId: 'sess-1',
+        parentSessionId: null,
+      })
+      .run()
+
+    await enqueueDistillJob(db, {
+      sourceKind: 'clarify',
+      sourceEventId: clarifyId,
+      taskId,
+      debounceMs: 0,
+    })
+
+    let capturedPrompt: string | null = null
+    const captureSpawn: DistillerSpawnFn = async (input) => {
+      capturedPrompt = input.userPrompt
+      return {
+        exitCode: 0,
+        stderr: '',
+        stdout:
+          '<workflow-output><port name="candidates">{"candidates":[]}</port></workflow-output>',
+      }
+    }
+    await distillTick({
+      db,
+      spawnFn: captureSpawn,
+      sourceContextBudget: { clarifyTranscriptMaxBytes: 0, reviewBodyMaxBytes: 0 },
+    })
+    expect(capturedPrompt).not.toBeNull()
+    expect(capturedPrompt!).not.toContain('Source agent transcript:')
+    expect(capturedPrompt!).not.toContain('PLUMBING-MARKER')
+
+    // Counter-check: with default budget the marker IS visible. Resetting
+    // the job state to pending re-runs the same source event.
+    await db
+      .update(memoryDistillJobs)
+      .set({ status: 'pending', attempts: 0, nextRunAt: Date.now() - 1 })
+      .run()
+    capturedPrompt = null
+    await distillTick({ db, spawnFn: captureSpawn })
+    expect(capturedPrompt!).toContain('Source agent transcript:')
+    expect(capturedPrompt!).toContain('PLUMBING-MARKER')
   })
 })
 

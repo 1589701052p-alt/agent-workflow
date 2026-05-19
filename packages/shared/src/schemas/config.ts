@@ -119,6 +119,25 @@ export const ConfigSchema = z.object({
     })
     .optional(),
 
+  // --- RFC-044 distiller source context ---
+  /**
+   * Per-source byte cap for the transcript / body blocks injected into the
+   * distiller user prompt. clarifyTranscriptMaxBytes governs the source
+   * agent transcript pulled from `node_run_events` keyed by
+   * `clarify_sessions.source_agent_node_run_id`; reviewBodyMaxBytes governs
+   * the markdown file pointed at by `doc_versions.body_path`. When original
+   * content exceeds the cap the loader keeps first 50% + last 50% with a
+   * `[truncated <N> bytes]` marker in between. Setting a field to 0
+   * disables that block — the builder falls back to RFC-041 behaviour for
+   * that source. Defaults: 16384 / 16384 (~4K tokens each).
+   */
+  memoryDistillSourceContext: z
+    .object({
+      clarifyTranscriptMaxBytes: z.number().int().min(0).max(65536),
+      reviewBodyMaxBytes: z.number().int().min(0).max(65536),
+    })
+    .optional(),
+
   // --- RFC-034 git submodule recursion ---
   /**
    * Behavior when cold-cloning, warm-fetching, or worktree-launching a repo
@@ -208,3 +227,17 @@ export const DEFAULT_CONFIG: Config = {
  */
 export const ConfigPatchSchema = ConfigSchema.partial().omit({ $schema_version: true })
 export type ConfigPatch = z.infer<typeof ConfigPatchSchema>
+
+/**
+ * RFC-044: defaults for the distiller source-context budget. Exported so
+ * the backend loader can use a single source of truth instead of duplicating
+ * the literals in service code.
+ */
+export interface SourceContextBudget {
+  clarifyTranscriptMaxBytes: number
+  reviewBodyMaxBytes: number
+}
+export const DEFAULT_SOURCE_CONTEXT_BUDGET: SourceContextBudget = {
+  clarifyTranscriptMaxBytes: 16384,
+  reviewBodyMaxBytes: 16384,
+}
