@@ -13,7 +13,7 @@
 //     PR-B work; an unused function in PR-A is harmless and avoids touching
 //     this file again in PR-B for shared text.
 
-import type { OutputKindHandler, KindFailure } from './types'
+import type { OutputKindHandler } from './types'
 
 const SUB_REASON_DESCRIPTIONS: Record<string, string> = {
   'empty-path': 'empty path',
