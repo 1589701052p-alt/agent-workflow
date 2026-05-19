@@ -38,13 +38,16 @@ function makeRun(over: Partial<NodeRun>): NodeRun {
 }
 
 describe('TAB_ORDER', () => {
-  test('is the canonical 5-tab order from the RFC', () => {
+  test('is the canonical 6-tab order from the RFC', () => {
+    // `feedback` is the RFC-041 reflective tab. It sits last because it's a
+    // companion to the run, not part of the run-monitoring flow above.
     expect(TAB_ORDER).toEqual([
       'workflow-status',
       'node-runs',
       'details',
       'outputs',
       'worktree-diff',
+      'feedback',
     ])
   })
 
@@ -52,25 +55,29 @@ describe('TAB_ORDER', () => {
     // The `readonly` annotation is enforced at compile time. We still
     // sanity-check length here so a future reorder via .sort would
     // surface a failed length assertion if it accidentally dropped a tab.
-    expect(TAB_ORDER).toHaveLength(5)
+    expect(TAB_ORDER).toHaveLength(6)
   })
 })
 
 describe('availableTabs', () => {
-  test('returns all 5 tabs when the workflow declares outputs', () => {
+  test('returns all 6 tabs when the workflow declares outputs', () => {
     expect(availableTabs({ hasOutputs: true })).toEqual([
       'workflow-status',
       'node-runs',
       'details',
       'outputs',
       'worktree-diff',
+      'feedback',
     ])
   })
 
-  test('hides only the outputs tab when no output nodes exist', () => {
+  test('hides only the outputs tab when no output nodes exist; feedback always present', () => {
     const tabs = availableTabs({ hasOutputs: false })
-    expect(tabs).toEqual(['workflow-status', 'node-runs', 'details', 'worktree-diff'])
+    expect(tabs).toEqual(['workflow-status', 'node-runs', 'details', 'worktree-diff', 'feedback'])
     expect(tabs.includes('outputs' as never)).toBe(false)
+    // Feedback is unconditional — letting the user reflect on a finished
+    // or failed task is the whole point of distillation.
+    expect(tabs).toContain('feedback')
   })
 })
 

@@ -11,15 +11,21 @@ export type TaskDetailTab =
   | 'details'
   | 'outputs'
   | 'worktree-diff'
+  | 'feedback'
 
 /** Canonical left-to-right tab order shown in the page tab bar. The
- *  product spec pins this sequence; do not reorder without an RFC. */
+ *  product spec pins this sequence; do not reorder without an RFC.
+ *  `feedback` sits last — it's a reflective companion to the run, not part
+ *  of the run-monitoring flow above. Moving it into a tab (instead of a
+ *  fixed footer panel) was a deliberate call: a long feedback thread used
+ *  to squeeze the panes' `flex:1; min-height:0` track down to zero. */
 export const TAB_ORDER: readonly TaskDetailTab[] = [
   'workflow-status',
   'node-runs',
   'details',
   'outputs',
   'worktree-diff',
+  'feedback',
 ] as const
 
 /**

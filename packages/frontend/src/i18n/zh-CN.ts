@@ -783,6 +783,7 @@ export interface Resources {
     tabDetails: string
     tabOutputs: string
     tabWorktreeDiff: string
+    tabFeedback: string
     noWorkflowSnapshot: string
     noBaseCommit: string
     loadingDiff: string
@@ -2333,6 +2334,7 @@ export const zhCN: Resources = {
     tabDetails: '详细信息',
     tabOutputs: '输出',
     tabWorktreeDiff: 'Worktree diff',
+    tabFeedback: '留言',
     noWorkflowSnapshot: '没有工作流快照。',
     noBaseCommit: '未记录 base commit；diff 不可用。',
     loadingDiff: '加载 diff 中…',

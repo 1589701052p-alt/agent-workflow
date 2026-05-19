@@ -29,8 +29,8 @@ describe('TaskDetailPage tab structure', () => {
     expect(SRC).toMatch(/className="task-detail__tab-bar tabs"/)
   })
 
-  test('renders five panes keyed by `hidden={tab !== ...}` (one per TaskDetailTab)', () => {
-    const tabs = ['workflow-status', 'node-runs', 'details', 'outputs', 'worktree-diff']
+  test('renders six panes keyed by `hidden={tab !== ...}` (one per TaskDetailTab)', () => {
+    const tabs = ['workflow-status', 'node-runs', 'details', 'outputs', 'worktree-diff', 'feedback']
     for (const k of tabs) {
       expect(SRC).toMatch(new RegExp(`hidden=\\{tab !== '${k}'\\}`))
     }
@@ -56,13 +56,14 @@ describe('TaskDetailPage tab structure', () => {
     expect(SRC).not.toMatch(/<DiffViewer\b/)
   })
 
-  test('emits all five tab i18n labels via the tabLabel switch', () => {
+  test('emits all six tab i18n labels via the tabLabel switch', () => {
     for (const key of [
       'tabWorkflowStatus',
       'tabNodeRuns',
       'tabDetails',
       'tabOutputs',
       'tabWorktreeDiff',
+      'tabFeedback',
     ]) {
       expect(SRC).toMatch(new RegExp(`'tasks\\.${key}'`))
     }
@@ -72,27 +73,29 @@ describe('TaskDetailPage tab structure', () => {
     // Counts panes vs occurrences of the panes wrapper — the wrapper
     // should appear exactly once and contain every `.task-detail__pane`.
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(5)
+    expect(paneCount).toBe(6)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })
 
 describe('TaskDetailPage i18n key coverage', () => {
-  test('zh-CN.ts ships all five tab labels', () => {
+  test('zh-CN.ts ships all six tab labels', () => {
     const zh = readFileSync(resolve(import.meta.dirname, '..', 'src/i18n/zh-CN.ts'), 'utf8')
     expect(zh).toMatch(/tabWorkflowStatus:\s*'/)
     expect(zh).toMatch(/tabNodeRuns:\s*'/)
     expect(zh).toMatch(/tabDetails:\s*'/)
     expect(zh).toMatch(/tabOutputs:\s*'/)
     expect(zh).toMatch(/tabWorktreeDiff:\s*'/)
+    expect(zh).toMatch(/tabFeedback:\s*'/)
   })
 
-  test('en-US.ts ships all five tab labels', () => {
+  test('en-US.ts ships all six tab labels', () => {
     const en = readFileSync(resolve(import.meta.dirname, '..', 'src/i18n/en-US.ts'), 'utf8')
     expect(en).toMatch(/tabWorkflowStatus:\s*'/)
     expect(en).toMatch(/tabNodeRuns:\s*'/)
     expect(en).toMatch(/tabDetails:\s*'/)
     expect(en).toMatch(/tabOutputs:\s*'/)
     expect(en).toMatch(/tabWorktreeDiff:\s*'/)
+    expect(en).toMatch(/tabFeedback:\s*'/)
   })
 })

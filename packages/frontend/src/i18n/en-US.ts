@@ -834,6 +834,7 @@ export const enUS: Resources = {
     tabDetails: 'Details',
     tabOutputs: 'Outputs',
     tabWorktreeDiff: 'Worktree diff',
+    tabFeedback: 'Feedback',
     noWorkflowSnapshot: 'No workflow snapshot available.',
     noBaseCommit: 'No base commit recorded; diff is unavailable.',
     loadingDiff: 'Loading diff…',

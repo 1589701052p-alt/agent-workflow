@@ -345,12 +345,16 @@ function TaskDetailPage() {
             <WorktreeDiffPanel diff={diff.data.diff} truncated={diff.data.truncated} />
           ) : null}
         </div>
-      </div>
 
-      {/* RFC-041 PR4: per-task feedback area. Always mounted regardless of
-          task status — letting the user reflect on a finished or failed task
-          is the whole point of distillation. */}
-      <TaskFeedbackList taskId={id} />
+        {/* RFC-041 PR4: per-task feedback. Originally lived in a fixed
+            footer panel below the panes, but a long feedback thread
+            squeezed `.task-detail__panes` (flex:1; min-height:0) down to
+            zero and hid the task area. Promoting it to its own tab keeps
+            the run-monitoring panes their full height. */}
+        <div className="task-detail__pane" hidden={tab !== 'feedback'}>
+          <TaskFeedbackList taskId={id} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -367,6 +371,8 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabOutputs')
     case 'worktree-diff':
       return t('tasks.tabWorktreeDiff')
+    case 'feedback':
+      return t('tasks.tabFeedback')
   }
 }
 
