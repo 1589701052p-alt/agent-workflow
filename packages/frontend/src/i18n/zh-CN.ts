@@ -1513,6 +1513,39 @@ export interface Resources {
         cancel: string
       }
     }
+    // RFC-043: aliases existing candidate.source.* at top level so the
+    // distill detail page can read `memory.sourceKind.{kind}` without a
+    // nested lookup.
+    sourceKind: {
+      clarify: string
+      review: string
+      feedback: string
+      manual: string
+    }
+    distillJobDetail: {
+      adminOnly: string
+      attempt: string
+      attemptsCount: string
+      attemptPickerLabel: string
+      candidateStatus: string
+      captureFailed: string
+      dedupSnapshotLabel: string
+      loadError: string
+      noCandidates: string
+      noConversation: string
+      noDedupSnapshot: string
+      noSourceEvents: string
+      openInQueue: string
+      section: {
+        candidates: string
+        conversation: string
+        scope: string
+        sourceEvents: string
+      }
+      sessionLoadError: string
+      sourceDeleted: string
+      stderrLabel: string
+    }
   }
   // RFC-041 PR4: per-task feedback ("dear future me") area.
   taskFeedback: {
@@ -3090,6 +3123,36 @@ export const zhCN: Resources = {
         retry: '重试',
         cancel: '取消',
       },
+    },
+    sourceKind: {
+      clarify: '反问',
+      review: '评审',
+      feedback: '反馈',
+      manual: '手工',
+    },
+    distillJobDetail: {
+      adminOnly: '提炼详情仅 admin 可见',
+      attempt: '第 {{n}} 次',
+      attemptsCount: '尝试次数：{{n}}',
+      attemptPickerLabel: '选择尝试：',
+      candidateStatus: '当前状态：{{status}}',
+      captureFailed: '对话捕获失败；仅可看 raw 输出',
+      dedupSnapshotLabel: '本次提炼时可见的已批准记忆',
+      loadError: '加载提炼任务详情失败',
+      noCandidates: '本次未生成候选',
+      noConversation: '运行完成后才会出现对话',
+      noDedupSnapshot: '本次提炼时无可见的已批准记忆',
+      noSourceEvents: '没有可解析的源事件',
+      openInQueue: '在审批队列中打开',
+      section: {
+        candidates: '本次生成的候选记忆',
+        conversation: '提炼器对话',
+        scope: '范围与去重快照',
+        sourceEvents: '源事件',
+      },
+      sessionLoadError: '加载对话失败',
+      sourceDeleted: '源已删除',
+      stderrLabel: '子进程 stderr（截断）',
     },
   },
   taskFeedback: {

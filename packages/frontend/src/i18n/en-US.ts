@@ -1628,6 +1628,38 @@ export const enUS: Resources = {
         cancel: 'Cancel',
       },
     },
+    // RFC-043: top-level alias of source-kind labels for the distill
+    // detail page (existing candidate.source.* nests under candidate.).
+    sourceKind: {
+      clarify: 'Clarify',
+      review: 'Review',
+      feedback: 'Feedback',
+      manual: 'Manual',
+    },
+    distillJobDetail: {
+      adminOnly: 'Distill detail is admin-only',
+      attempt: 'Attempt {{n}}',
+      attemptsCount: 'attempts: {{n}}',
+      attemptPickerLabel: 'Attempt:',
+      candidateStatus: 'current: {{status}}',
+      captureFailed: 'Conversation capture failed; raw outputs only',
+      dedupSnapshotLabel: 'Approved memories visible to the distiller at run time',
+      loadError: 'Failed to load distill job detail',
+      noCandidates: 'No candidates emitted',
+      noConversation: 'Conversation will appear once the run completes',
+      noDedupSnapshot: 'No prior memories were visible to the distiller',
+      noSourceEvents: 'No source events resolved',
+      openInQueue: 'Open in Approval Queue',
+      section: {
+        candidates: 'Candidates produced',
+        conversation: 'Distiller conversation',
+        scope: 'Scope & dedup snapshot',
+        sourceEvents: 'Source events',
+      },
+      sessionLoadError: 'Failed to load conversation',
+      sourceDeleted: 'source deleted',
+      stderrLabel: 'Subprocess stderr (truncated)',
+    },
   },
   taskFeedback: {
     title: 'Task notes',

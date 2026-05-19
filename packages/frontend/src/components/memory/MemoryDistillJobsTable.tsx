@@ -3,6 +3,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 import type { MemoryDistillJob } from '@agent-workflow/shared'
 import type { ApiError } from '@/api/client'
 import { api } from '@/api/client'
@@ -17,6 +18,7 @@ interface ListResponse {
 export function MemoryDistillJobsTable() {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const list = useQuery<ListResponse>({
     queryKey: ['memory-distill-jobs', 'list'],
     queryFn: ({ signal }) => api.get<ListResponse>('/api/memory-distill-jobs', undefined, signal),
@@ -55,7 +57,21 @@ export function MemoryDistillJobsTable() {
         </thead>
         <tbody>
           {rows.map((job) => (
-            <tr key={job.id} data-testid={`distill-job-row-${job.id}`}>
+            <tr
+              key={job.id}
+              data-testid={`distill-job-row-${job.id}`}
+              className="memory-distill-jobs__row"
+              onClick={() =>
+                // RFC-043: whole-row click jumps to the admin detail
+                // page. Retry / Cancel buttons stop propagation so they
+                // remain row-local controls.
+                void navigate({
+                  to: '/memory/distill-jobs/$jobId',
+                  params: { jobId: job.id },
+                })
+              }
+              style={{ cursor: 'pointer' }}
+            >
               <td>
                 <code>{job.id}</code>
               </td>
@@ -73,7 +89,10 @@ export function MemoryDistillJobsTable() {
                   <button
                     type="button"
                     className="btn btn--xs"
-                    onClick={() => action.mutate({ id: job.id, verb: 'retry' })}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      action.mutate({ id: job.id, verb: 'retry' })
+                    }}
                     disabled={action.isPending}
                     data-testid={`distill-job-row-${job.id}-retry`}
                   >
@@ -84,7 +103,10 @@ export function MemoryDistillJobsTable() {
                   <button
                     type="button"
                     className="btn btn--xs"
-                    onClick={() => action.mutate({ id: job.id, verb: 'cancel' })}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      action.mutate({ id: job.id, verb: 'cancel' })
+                    }}
                     disabled={action.isPending}
                     data-testid={`distill-job-row-${job.id}-cancel`}
                   >

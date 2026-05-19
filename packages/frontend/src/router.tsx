@@ -34,6 +34,7 @@ import {
 import { LaunchRoute as workflowLaunchRoute } from '@/routes/workflows.launch'
 import { ReposRoute as reposRoute } from '@/routes/repos'
 import { Route as memoryRoute } from '@/routes/memory'
+import { Route as memoryDistillJobDetailRoute } from '@/routes/memory.distill-jobs.$jobId'
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -66,6 +67,9 @@ const routeTree = rootRoute.addChildren([
   clarifyDetailRoute,
   clarifyRoute,
   reposRoute,
+  // RFC-043: admin distill job detail. Must come BEFORE /memory so the
+  // longer literal segment wins the match.
+  memoryDistillJobDetailRoute,
   // RFC-041 PR4: platform memory tab.
   memoryRoute,
   settingsRoute,

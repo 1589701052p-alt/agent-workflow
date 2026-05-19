@@ -74,11 +74,16 @@ export function resolveOpencodeDbPath(env: NodeJS.ProcessEnv = process.env): str
 }
 
 function defaultXdgDataDir(home: string): string {
-  // Matches xdg-basedir behavior on macOS / Linux. Windows is out of
-  // scope for v1 per RFC-027 design.md §8.
-  if (process.platform === 'darwin') {
-    return join(home, 'Library', 'Application Support')
-  }
+  // Verified against opencode's actual behavior on this machine:
+  // opencode uses xdg-basedir v5 (packages/core/src/global.ts:3) which
+  // resolves `xdgData` to `~/.local/share` on macOS as well as Linux —
+  // it does NOT remap to `~/Library/Application Support` despite the
+  // Apple convention. The earlier macOS branch returning the Library
+  // path was a wrong assumption that caused captureChildSessions (and
+  // RFC-043 captureDistillJobSession) to silently write
+  // `subagent_capture_failed` / `rfc043/distill-capture-failed` marker
+  // rows with reason `opencode-db-not-found`.
+  // Windows is out of scope for v1 per RFC-027 design.md §8.
   return join(home, '.local', 'share')
 }
 

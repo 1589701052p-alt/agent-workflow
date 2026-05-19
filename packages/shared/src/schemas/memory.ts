@@ -2,6 +2,7 @@
 // See design/RFC-041-platform-long-term-memory/design.md §3.1.
 
 import { z } from 'zod'
+import { SessionTreeSchema } from './sessionView'
 
 export const MemoryScopeSchema = z.enum(['agent', 'workflow', 'repo', 'global'])
 export type MemoryScope = z.infer<typeof MemoryScopeSchema>
@@ -148,8 +149,100 @@ export const MemoryDistillJobSchema = z.object({
   createdAt: z.number().int(),
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),
+  // RFC-043: distill job detail artefacts. All nullable — old job rows
+  // (created before migration 0024) and rows that errored before
+  // spawn / before opencode emitted a sessionId leave these as null.
+  opencodeSessionId: z.string().nullable().optional(),
+  userPromptMd: z.string().nullable().optional(),
+  exitCode: z.number().int().nullable().optional(),
+  stderrExcerpt: z.string().nullable().optional(),
 })
 export type MemoryDistillJob = z.infer<typeof MemoryDistillJobSchema>
+
+// RFC-043: a single captured event row from memory_distill_events, sent
+// over the wire as the building block of MemoryDistillSessionViewSchema.
+// kind mirrors node_run_events.kind plus the RFC-043 capture-failure
+// marker; payload is the raw JSON line transcoded from opencode's
+// SQLite (handed straight to parseSessionTree on the backend).
+export const MemoryDistillEventSchema = z.object({
+  id: z.number().int(),
+  attemptIndex: z.number().int().min(0),
+  sessionId: z.string(),
+  parentSessionId: z.string().nullable(),
+  ts: z.number().int(),
+  kind: z.string(),
+  payload: z.string(),
+})
+export type MemoryDistillEvent = z.infer<typeof MemoryDistillEventSchema>
+
+// RFC-043: GET /api/memory/distill-jobs/:jobId/session response. One
+// attempt entry per retry round; the conversation tree is the same
+// shape RFC-027 SessionTab consumes so ConversationFlow is reusable.
+export const MemoryDistillSessionAttemptSchema = z.object({
+  attemptIndex: z.number().int().min(0),
+  rootSessionId: z.string().nullable(),
+  startedAt: z.number().int().nullable(),
+  finishedAt: z.number().int().nullable(),
+  /** True when the capture wrote a 'rfc043/distill-capture-failed' marker for this attempt. */
+  captureFailed: z.boolean(),
+  tree: SessionTreeSchema.nullable(),
+})
+export type MemoryDistillSessionAttempt = z.infer<typeof MemoryDistillSessionAttemptSchema>
+
+export const MemoryDistillSessionViewSchema = z.object({
+  attempts: z.array(MemoryDistillSessionAttemptSchema),
+})
+export type MemoryDistillSessionView = z.infer<typeof MemoryDistillSessionViewSchema>
+
+// RFC-043: a memory candidate produced by THIS distill job, paired with
+// its currently-stored status (which may have moved on from candidate
+// to approved / rejected / archived since the job ran).
+export const MemoryDistillCandidateSnapshotSchema = z.object({
+  memoryId: z.string(),
+  title: z.string(),
+  bodyMd: z.string(),
+  scopeType: MemoryScopeSchema,
+  scopeId: z.string().nullable(),
+  distillAction: DistillActionSchema,
+  currentStatus: MemoryStatusSchema,
+  referenceMemoryId: z.string().nullable(),
+  createdAt: z.number().int(),
+})
+export type MemoryDistillCandidateSnapshot = z.infer<typeof MemoryDistillCandidateSnapshotSchema>
+
+// RFC-043: minimal row about each source event the distiller consumed.
+// `deletedOrMissing` lets the frontend grey out deep links to e.g. a
+// clarify session that was cleaned up after the job ran.
+export const MemoryDistillSourceEventEntrySchema = z.object({
+  kind: z.enum(['clarify', 'review', 'feedback']),
+  id: z.string(),
+  summary: z.string(),
+  deepLink: z.string(),
+  deletedOrMissing: z.boolean(),
+  taskId: z.string().nullable(),
+})
+export type MemoryDistillSourceEventEntry = z.infer<typeof MemoryDistillSourceEventEntrySchema>
+
+// RFC-043: per-memory snapshot row captured at distill time so detail
+// page can show "what the distiller actually saw" even after approve /
+// archive changes those memories. Only minimal columns are stored —
+// memories table remains the source of truth.
+export const MemoryDistillDedupSnapshotEntrySchema = z.object({
+  memoryId: z.string(),
+  scopeType: MemoryScopeSchema,
+  scopeId: z.string().nullable(),
+  title: z.string(),
+})
+export type MemoryDistillDedupSnapshotEntry = z.infer<typeof MemoryDistillDedupSnapshotEntrySchema>
+
+export const MemoryDistillJobDetailSchema = z.object({
+  job: MemoryDistillJobSchema,
+  siblings: z.array(MemoryDistillJobSchema),
+  sourceEvents: z.array(MemoryDistillSourceEventEntrySchema),
+  dedupSnapshot: z.array(MemoryDistillDedupSnapshotEntrySchema),
+  candidates: z.array(MemoryDistillCandidateSnapshotSchema),
+})
+export type MemoryDistillJobDetail = z.infer<typeof MemoryDistillJobDetailSchema>
 
 export const MemoryListFilterSchema = z.object({
   status: MemoryStatusSchema.optional(),

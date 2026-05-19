@@ -24,11 +24,18 @@ import { join } from 'node:path'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { Memory, MemoryDistillJob, ResolvedDistillScope } from '@agent-workflow/shared'
-import { MemorySchema } from '@agent-workflow/shared'
+import { MemorySchema, redactGitUrl } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
-import { clarifySessions, docVersions, memories, reviewComments, taskFeedback } from '@/db/schema'
-import type { memoryDistillJobs } from '@/db/schema'
+import {
+  clarifySessions,
+  docVersions,
+  memories,
+  memoryDistillJobs,
+  reviewComments,
+  taskFeedback,
+} from '@/db/schema'
 import { extractLastEnvelope } from '@/services/envelope'
+import { captureDistillJobSession } from '@/services/distillSessionCapture'
 import { MEMORY_CHANNEL, memoryBroadcaster } from '@/ws/broadcaster'
 import { createLogger } from '@/util/log'
 
@@ -683,6 +690,30 @@ export async function runDistill(options: RunDistillOptions): Promise<DistillRes
     scopeContexts,
     taskId: options.job.taskId,
   })
+
+  // RFC-043: persist the user prompt + dedup snapshot on the first
+  // attempt so the admin detail page can show "what the distiller saw"
+  // even if the subprocess errors out before any output. Subsequent
+  // retries re-derive prompt-side context from events captured per
+  // attempt; we do NOT overwrite the prompt on retry to preserve the
+  // first-attempt audit trail.
+  if (options.job.attempts === 0) {
+    const dedupSnapshotJson = JSON.stringify({
+      snapshot: buildDedupSnapshotForPersist(scopeContexts),
+    })
+    try {
+      await options.db
+        .update(memoryDistillJobs)
+        .set({ userPromptMd: userPrompt, dedupSnapshotIdsJson: dedupSnapshotJson })
+        .where(eq(memoryDistillJobs.id, options.job.id))
+    } catch (err) {
+      log.warn('rfc043/persist-prompt-failed', {
+        jobId: options.job.id,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   const inlineConfig: { agent: Record<string, Record<string, unknown>> } = {
     agent: {
       [DISTILLER_AGENT_NAME]: {
@@ -705,6 +736,47 @@ export async function runDistill(options: RunDistillOptions): Promise<DistillRes
       // best-effort cleanup
     })
   }
+
+  // RFC-043: stamp the post-spawn artefacts onto the job row before any
+  // throw / capture. Failures here are non-fatal (logged); the original
+  // success/failure semantics of runDistill are preserved.
+  const sessionId = extractFirstSessionIdFromStdout(result.stdout)
+  const stderrExcerpt = clipAndRedactStderr(result.stderr, 2048)
+  try {
+    await options.db
+      .update(memoryDistillJobs)
+      .set({
+        opencodeSessionId: sessionId,
+        exitCode: result.exitCode,
+        stderrExcerpt,
+      })
+      .where(eq(memoryDistillJobs.id, options.job.id))
+  } catch (err) {
+    log.warn('rfc043/persist-spawn-result-failed', {
+      jobId: options.job.id,
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // RFC-043: capture conversation BEFORE the exit-code throw so failed
+  // jobs still get whatever events opencode managed to write before
+  // crashing. captureDistillJobSession never throws.
+  if (sessionId !== null) {
+    try {
+      await captureDistillJobSession({
+        db: options.db,
+        distillJobId: options.job.id,
+        attemptIndex: options.job.attempts,
+        rootSessionId: sessionId,
+      })
+    } catch (err) {
+      log.warn('rfc043/distill-capture-failed', {
+        jobId: options.job.id,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   if (result.exitCode !== 0 && result.exitCode !== null) {
     throw new Error(
       `distiller subprocess exited with code ${result.exitCode}: ${result.stderr.slice(0, 400)}`,
@@ -717,6 +789,84 @@ export async function runDistill(options: RunDistillOptions): Promise<DistillRes
     if (ok !== null) persisted.push(ok.memory.id)
   }
   return { candidatesCreated: persisted.length, createdMemoryIds: persisted }
+}
+
+// -----------------------------------------------------------------------------
+// RFC-043 helpers
+// -----------------------------------------------------------------------------
+
+/**
+ * Pull the first `sessionID` field out of opencode's --format json stdout.
+ * Mirrors the inline extraction the worker-node runner does in
+ * runner.ts:498-510. Lines that don't parse as JSON or lack the field
+ * are skipped silently.
+ */
+export function extractFirstSessionIdFromStdout(stdout: string): string | null {
+  if (typeof stdout !== 'string' || stdout.length === 0) return null
+  const lines = stdout.split(/\r?\n/)
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line.length === 0) continue
+    let evt: unknown
+    try {
+      evt = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (evt !== null && typeof evt === 'object') {
+      const candidate = (evt as { sessionID?: unknown }).sessionID
+      if (typeof candidate === 'string' && candidate.length > 0) return candidate
+    }
+  }
+  return null
+}
+
+/**
+ * Truncate + redact a stderr blob before persisting it on the job row.
+ * `redactGitUrl` strips SSH / HTTPS credentials embedded in URLs; the
+ * trailing slice keeps the column bounded for the detail page.
+ *
+ * Null/empty stderr becomes null (so the admin UI can detect "nothing
+ * was written" vs. "we kept the first N bytes").
+ */
+export function clipAndRedactStderr(stderr: string, maxBytes: number): string | null {
+  if (typeof stderr !== 'string') return null
+  if (stderr.length === 0) return null
+  const redacted = redactGitUrl(stderr)
+  if (redacted.length <= maxBytes) return redacted
+  return `${redacted.slice(0, maxBytes)}\n…(truncated; original ${redacted.length} bytes)`
+}
+
+/**
+ * Reduce the scope-context bundle the distiller actually saw at run
+ * time down to the minimal columns the detail page needs ({memoryId,
+ * scopeType, scopeId, title}). Body is intentionally omitted — the
+ * memories table remains the source of truth so detail page can re-
+ * fetch full body for entries still alive.
+ */
+export function buildDedupSnapshotForPersist(scopeContexts: ScopeContext[]): Array<{
+  memoryId: string
+  scopeType: ScopeContext['scopeType']
+  scopeId: string | null
+  title: string
+}> {
+  const out: Array<{
+    memoryId: string
+    scopeType: ScopeContext['scopeType']
+    scopeId: string | null
+    title: string
+  }> = []
+  for (const ctx of scopeContexts) {
+    for (const m of ctx.approved) {
+      out.push({
+        memoryId: m.id,
+        scopeType: ctx.scopeType,
+        scopeId: ctx.scopeId,
+        title: m.title,
+      })
+    }
+  }
+  return out
 }
 
 // -----------------------------------------------------------------------------

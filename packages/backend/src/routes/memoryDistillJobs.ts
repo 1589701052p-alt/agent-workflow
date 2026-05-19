@@ -18,6 +18,8 @@ import {
   listDistillJobs,
   retryFailedJob,
 } from '@/services/memoryDistillScheduler'
+import { getDistillJobDetail } from '@/services/memoryDistillJobDetail'
+import { getDistillJobSessionView } from '@/services/memoryDistillSessionView'
 import { ConflictError, ValidationError } from '@/util/errors'
 
 export function mountMemoryDistillJobRoutes(app: Hono, deps: AppDeps): void {
@@ -61,6 +63,21 @@ export function mountMemoryDistillJobRoutes(app: Hono, deps: AppDeps): void {
         )
       }
       return c.json({ ok: true })
+    },
+  )
+
+  // RFC-043: admin-only distill job detail page support.
+  app.get('/api/memory-distill-jobs/:id', requirePermission('memory:approve'), async (c) => {
+    const detail = await getDistillJobDetail(deps.db, c.req.param('id'))
+    return c.json(detail)
+  })
+
+  app.get(
+    '/api/memory-distill-jobs/:id/session',
+    requirePermission('memory:approve'),
+    async (c) => {
+      const view = await getDistillJobSessionView(deps.db, c.req.param('id'))
+      return c.json(view)
     },
   )
 }

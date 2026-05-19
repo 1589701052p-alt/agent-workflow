@@ -119,13 +119,19 @@ describe('resolveOpencodeDbPath', () => {
     expect(path).toBe('/tmp/fake-home/data/opencode/opencode.db')
   })
 
-  test('falls back to XDG default per platform when no overrides set', () => {
+  test('falls back to ~/.local/share/opencode/opencode.db when no XDG override (regression: matches opencode xdg-basedir on macOS too)', () => {
+    // opencode resolves data dir via xdg-basedir v5 which returns
+    // `~/.local/share` on BOTH macOS and Linux (verified in-repo: see
+    // /Users/wangbinquan/Documents/code/opencode/packages/core/src/global.ts:3).
+    // An earlier macOS-only Library/Application Support branch caused
+    // captureChildSessions + captureDistillJobSession to silently fail
+    // with `opencode-db-not-found` for every run on this developer's
+    // machine. This test locks in the corrected behavior so the
+    // wrong-platform branch can't reappear.
     const path = resolveOpencodeDbPath({
       OPENCODE_TEST_HOME: '/users/me',
     } as NodeJS.ProcessEnv)
-    expect(path).toMatch(
-      /\/users\/me\/(Library\/Application Support|\.local\/share)\/opencode\/opencode\.db/,
-    )
+    expect(path).toBe('/users/me/.local/share/opencode/opencode.db')
   })
 })
 

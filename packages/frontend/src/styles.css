@@ -7873,3 +7873,253 @@ mark.comment-anchor[data-active='true'] {
   background: color-mix(in srgb, var(--success) 18%, transparent);
   color: var(--success);
 }
+
+/* RFC-043 — admin distill job detail page. Scoped under
+ * `.distill-job-detail`; consumes the same design tokens as RFC-035 so
+ * the page visually fits between Approval Queue and Reviews. */
+.page--distill-job-detail .distill-job-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.distill-job-detail__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.distill-job-detail__crumbs {
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+
+.distill-job-detail__title {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.distill-job-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: var(--font-xs);
+}
+
+.distill-job-detail__meta-chip {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.distill-job-detail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.distill-job-detail__section-title {
+  margin: 0;
+  font-size: var(--font-md);
+}
+
+.distill-job-detail__section-subhead {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--muted);
+}
+
+.distill-job-detail__source-events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.distill-source-events__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.distill-source-events__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.distill-source-events__row.is-missing {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+}
+
+.distill-source-events__link {
+  font-weight: 500;
+}
+
+.distill-job-detail__scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.distill-job-detail__scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.distill-job-detail__scope-chip {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--info);
+  font-size: var(--font-xs);
+}
+
+.distill-job-detail__snapshot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.distill-job-detail__snapshot-list li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.distill-job-detail__snapshot-title {
+  flex: 1;
+}
+
+.distill-job-detail__candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.distill-job-detail__candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.distill-job-detail__candidate--candidate {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+}
+
+.distill-job-detail__candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.distill-job-detail__candidate-title {
+  margin: 0;
+  font-weight: 500;
+}
+
+.distill-job-detail__candidate-body {
+  margin: 0;
+  font-size: var(--font-sm);
+  white-space: pre-wrap;
+}
+
+.distill-job-detail__action {
+  font-size: var(--font-xs);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.distill-job-detail__action--update_of,
+.distill-job-detail__action--conflict_with {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.distill-job-detail__action--duplicate_of {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+}
+
+.distill-job-detail__diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 6%, var(--panel));
+}
+
+.distill-job-detail__diagnostics-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+
+.distill-job-detail__diagnostics-list dt {
+  color: var(--muted);
+  font-size: var(--font-xs);
+}
+
+.distill-job-detail__diagnostics-list dd {
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.distill-job-detail__diagnostics-error {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.distill-job-detail__stderr {
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.distill-job-detail__conversation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.distill-job-detail__attempt-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.memory-distill-jobs__row:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}

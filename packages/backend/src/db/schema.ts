@@ -896,11 +896,49 @@ export const memoryDistillJobs = sqliteTable(
     createdAt: integer('created_at').notNull(),
     startedAt: integer('started_at'),
     finishedAt: integer('finished_at'),
+    // RFC-043: artefacts persisted for the admin-only distill job detail
+    // page. All nullable so pre-migration rows render with empty Section
+    // placeholders. `opencode_session_id` is overwritten on each retry
+    // attempt; per-attempt history is recoverable through
+    // memory_distill_events.attempt_index.
+    opencodeSessionId: text('opencode_session_id'),
+    userPromptMd: text('user_prompt_md'),
+    exitCode: integer('exit_code'),
+    stderrExcerpt: text('stderr_excerpt'),
+    dedupSnapshotIdsJson: text('dedup_snapshot_ids_json'),
   },
   (t) => ({
     statusNextIdx: index('idx_distill_jobs_status_next').on(t.status, t.nextRunAt),
     debounceIdx: index('idx_distill_jobs_debounce').on(t.debounceKey, t.status),
     taskIdx: index('idx_distill_jobs_task').on(t.taskId, t.sourceKind),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-043 memory_distill_events — mirrors node_run_events for the distiller
+// subprocess so the admin detail page can replay the conversation using
+// the same RFC-027 ConversationFlow component used for worker nodes.
+// One row per opencode event captured from the distiller's (and any
+// recursively-spawned subagent) session. attempt_index groups events by
+// distill retry round so the detail page can offer an attempt picker.
+// -----------------------------------------------------------------------------
+export const memoryDistillEvents = sqliteTable(
+  'memory_distill_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    distillJobId: text('distill_job_id')
+      .notNull()
+      .references(() => memoryDistillJobs.id, { onDelete: 'cascade' }),
+    attemptIndex: integer('attempt_index').notNull(),
+    sessionId: text('session_id').notNull(),
+    parentSessionId: text('parent_session_id'),
+    ts: integer('ts').notNull(),
+    kind: text('kind').notNull(), // mirrors nodeRunEvents.kind enum + RFC-043 markers
+    payload: text('payload').notNull(),
+  },
+  (t) => ({
+    jobAttemptIdx: index('idx_distill_events_job_attempt').on(t.distillJobId, t.attemptIndex, t.ts),
+    sessionIdx: index('idx_distill_events_session').on(t.distillJobId, t.sessionId, t.ts),
   }),
 )
 
