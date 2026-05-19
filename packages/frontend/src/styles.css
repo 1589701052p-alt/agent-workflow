@@ -2316,6 +2316,21 @@ code {
   white-space: nowrap;
 }
 
+/* Cap a free-text cell at a fixed width inside an auto-layout table without
+   hijacking the whole row. Unlike `.data-table__truncate` (which absorbs all
+   leftover width via `width: 100%`), this rule lives on an inner inline-block
+   so the surrounding <td> still sizes by content and other columns keep their
+   natural widths. Use for fields like `errorSummary` where multi-line stack
+   traces would otherwise blow up row height. */
+.data-table__clip {
+  display: inline-block;
+  max-width: 360px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
 /* Truncate to a single line with ellipsis inside an auto-layout table.
    `max-width: 0` + `width: 100%` lets the table size other columns to
    their content first; this cell then absorbs the remaining width and

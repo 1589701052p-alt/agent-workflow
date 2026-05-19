@@ -126,7 +126,11 @@ function TasksPage() {
                 <td className="data-table__muted">
                   <code>{row.repoPath}</code>
                 </td>
-                <td className="data-table__muted">{row.errorSummary ?? t('common.emDash')}</td>
+                <td className="data-table__muted">
+                  <span className="data-table__clip" title={row.errorSummary ?? undefined}>
+                    {row.errorSummary ?? t('common.emDash')}
+                  </span>
+                </td>
                 <td className="data-table__actions">
                   <Link to="/tasks/$id" params={{ id: row.id }} className="btn btn--sm">
                     {t('common.open')}
