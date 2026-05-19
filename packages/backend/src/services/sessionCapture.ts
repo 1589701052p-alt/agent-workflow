@@ -47,6 +47,16 @@ export interface CaptureChildSessionsOptions {
    * session rows around).
    */
   taskId?: string
+  /**
+   * RFC-048 — partId-level dedupe. The live poller (see
+   * services/subagentLiveCapture.ts) inserts part rows during the
+   * opencode run; this map (`sessionId → set of partIds already
+   * written by this nodeRun`) lets the post-run BFS skip rows the
+   * live poll already persisted. Omitted callers (RFC-027 legacy
+   * path, `pollMs = 0`) get byte-level identical behavior because
+   * the filter step is skipped entirely.
+   */
+  alreadyInsertedPartIds?: Map<string, Set<string>>
 }
 
 export interface CaptureChildSessionsResult {
@@ -247,7 +257,22 @@ export async function captureChildSessions(
           [string]
         >('SELECT id, message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created, id')
         .all(sess.id)
-      const events = transcodeOpencodeRowsToEvents({ sessionId: sess.id, messages, parts })
+      // RFC-048: when the live poller already wrote part rows for this
+      // sessionId in the current nodeRun, drop them before transcoding so
+      // post-run capture only inserts the tail flushed after the last tick.
+      // The filter is keyed off the opencode `part.id`, which transcode
+      // preserves as the envelope's `part.id` field — `extractPartId` reads
+      // it back from the (just-stringified) envelope.
+      const skipPartIds = opts.alreadyInsertedPartIds?.get(sess.id)
+      const filteredParts =
+        skipPartIds !== undefined && skipPartIds.size > 0
+          ? parts.filter((p) => !skipPartIds.has(p.id))
+          : parts
+      const events = transcodeOpencodeRowsToEvents({
+        sessionId: sess.id,
+        messages,
+        parts: filteredParts,
+      })
       if (events.length === 0) continue
       const rows = events.map((e) => ({
         nodeRunId: opts.nodeRunId,
@@ -293,9 +318,12 @@ export async function captureChildSessions(
 /**
  * Returns the set of opencode child sessionIds already persisted into
  * node_run_events by SOME OTHER node_run in the same task. Used to
- * dedup re-captures during RFC-026 inline-mode reruns.
+ * dedup re-captures during RFC-026 inline-mode reruns. Exported for
+ * the RFC-048 live poller which loads the sibling set once at start
+ * so its per-tick BFS shares the same skip semantics as the post-run
+ * BFS in captureChildSessions.
  */
-async function loadSiblingsCapturedSessionIds(
+export async function loadSiblingsCapturedSessionIds(
   db: DbClient,
   taskId: string,
   myNodeRunId: string,

@@ -138,6 +138,22 @@ export const ConfigSchema = z.object({
     })
     .optional(),
 
+  // --- RFC-048 subagent live capture ---
+  /**
+   * Cadence + failure tolerance for the runner-side live poller that mirrors
+   * opencode's child-session SQLite into `node_run_events` while the parent
+   * opencode process is still alive (RFC-048). `pollMs = 0` disables live
+   * polling entirely — behavior degrades to RFC-027's post-run BFS.
+   * `consecutiveFailureLimit` ticks of back-to-back SQLite errors auto-disable
+   * the poller for that nodeRun; post-run capture then runs once as before.
+   */
+  subagentLiveCapture: z
+    .object({
+      pollMs: z.number().int().min(0).max(60_000),
+      consecutiveFailureLimit: z.number().int().min(1).max(100),
+    })
+    .optional(),
+
   // --- RFC-034 git submodule recursion ---
   /**
    * Behavior when cold-cloning, warm-fetching, or worktree-launching a repo
@@ -240,4 +256,18 @@ export interface SourceContextBudget {
 export const DEFAULT_SOURCE_CONTEXT_BUDGET: SourceContextBudget = {
   clarifyTranscriptMaxBytes: 16384,
   reviewBodyMaxBytes: 16384,
+}
+
+/**
+ * RFC-048: defaults for the runner's subagent live poller. The runner falls
+ * back to these constants when `config.subagentLiveCapture` is omitted, so
+ * existing deployments inherit the new behavior without a config edit.
+ */
+export interface SubagentLiveCapture {
+  pollMs: number
+  consecutiveFailureLimit: number
+}
+export const DEFAULT_SUBAGENT_LIVE_CAPTURE: SubagentLiveCapture = {
+  pollMs: 1500,
+  consecutiveFailureLimit: 5,
 }

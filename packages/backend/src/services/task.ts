@@ -74,6 +74,13 @@ export interface StartTaskDeps {
   appHome?: string
   /** Default per-node timeout (ms). Defaults from settings; tests can pin. */
   defaultPerNodeTimeoutMs?: number
+  /**
+   * RFC-048: cadence + failure tolerance for the runner-side subagent live
+   * capture poller. Threaded into `RunTaskOptions` → `runNode`. Omitted →
+   * runner falls back to its compile-time defaults (1500ms / 5 failures);
+   * `pollMs = 0` keeps RFC-027 behavior (post-run BFS only).
+   */
+  subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -370,6 +377,9 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     ...(deps.defaultPerNodeTimeoutMs !== undefined
       ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
       : {}),
+    ...(deps.subagentLiveCapture !== undefined
+      ? { subagentLiveCapture: deps.subagentLiveCapture }
+      : {}),
     log,
     signal: controller.signal,
   })
@@ -518,6 +528,9 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     ...(deps.defaultPerNodeTimeoutMs !== undefined
       ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
+    ...(deps.subagentLiveCapture !== undefined
+      ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
     log,
     signal: controller.signal,
@@ -677,6 +690,9 @@ export async function retryNode(
     ...(opts.deps.opencodeCmd ? { opencodeCmd: opts.deps.opencodeCmd } : {}),
     ...(opts.deps.defaultPerNodeTimeoutMs !== undefined
       ? { defaultPerNodeTimeoutMs: opts.deps.defaultPerNodeTimeoutMs }
+      : {}),
+    ...(opts.deps.subagentLiveCapture !== undefined
+      ? { subagentLiveCapture: opts.deps.subagentLiveCapture }
       : {}),
     log,
     signal: controller.signal,

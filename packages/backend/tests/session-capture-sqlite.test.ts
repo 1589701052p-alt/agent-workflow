@@ -395,6 +395,104 @@ describe('captureChildSessions', () => {
     expect(myRows.find((r) => r.sessionId === 'new')).toBeDefined()
   })
 
+  // RFC-048 — partId-level dedupe so the post-run BFS doesn't double-write
+  // rows the live poller already flushed during the run. Omitting the new
+  // option preserves byte-for-byte RFC-027 behavior; supplying it filters
+  // each session's part rows before INSERT.
+
+  test('RFC-048: alreadyInsertedPartIds skips rows the live poller already wrote', async () => {
+    const opencodeDb = buildOpencodeDb({
+      sessions: [
+        { id: 'root', parent_id: null, agent: 'r' },
+        { id: 'A', parent_id: 'root', agent: 'a' },
+      ],
+      messages: [{ id: 'mA', session_id: 'A', time_created: 10, data: '{}' }],
+      parts: [
+        {
+          id: 'pLive',
+          message_id: 'mA',
+          session_id: 'A',
+          time_created: 10,
+          data: '{"type":"text","text":"live"}',
+        },
+        {
+          id: 'pPost',
+          message_id: 'mA',
+          session_id: 'A',
+          time_created: 11,
+          data: '{"type":"text","text":"post"}',
+        },
+      ],
+    })
+    const already = new Map<string, Set<string>>([['A', new Set(['pLive'])]])
+    const result = await captureChildSessions({
+      rootSessionId: 'root',
+      nodeRunId,
+      db,
+      opencodeDbPath: opencodeDb,
+      alreadyInsertedPartIds: already,
+    })
+    expect(result.failed).toBe(false)
+    expect(result.insertedEventRows).toBe(1) // only pPost
+    const rows = db.select().from(nodeRunEvents).where(eq(nodeRunEvents.nodeRunId, nodeRunId)).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.payload).toContain('post')
+  })
+
+  test('RFC-048: alreadyInsertedPartIds covering every part of a session inserts 0 rows and does not throw', async () => {
+    const opencodeDb = buildOpencodeDb({
+      sessions: [
+        { id: 'root', parent_id: null, agent: 'r' },
+        { id: 'A', parent_id: 'root', agent: 'a' },
+      ],
+      messages: [{ id: 'mA', session_id: 'A', time_created: 10, data: '{}' }],
+      parts: [
+        {
+          id: 'pA',
+          message_id: 'mA',
+          session_id: 'A',
+          time_created: 10,
+          data: '{"type":"text","text":"x"}',
+        },
+      ],
+    })
+    const result = await captureChildSessions({
+      rootSessionId: 'root',
+      nodeRunId,
+      db,
+      opencodeDbPath: opencodeDb,
+      alreadyInsertedPartIds: new Map([['A', new Set(['pA'])]]),
+    })
+    expect(result.failed).toBe(false)
+    expect(result.insertedEventRows).toBe(0)
+  })
+
+  test('RFC-048: omitted alreadyInsertedPartIds preserves byte-level RFC-027 behavior', async () => {
+    const opencodeDb = buildOpencodeDb({
+      sessions: [
+        { id: 'root', parent_id: null, agent: 'r' },
+        { id: 'A', parent_id: 'root', agent: 'a' },
+      ],
+      messages: [{ id: 'mA', session_id: 'A', time_created: 10, data: '{}' }],
+      parts: [
+        {
+          id: 'pA',
+          message_id: 'mA',
+          session_id: 'A',
+          time_created: 10,
+          data: '{"type":"text","text":"x"}',
+        },
+      ],
+    })
+    const result = await captureChildSessions({
+      rootSessionId: 'root',
+      nodeRunId,
+      db,
+      opencodeDbPath: opencodeDb,
+    })
+    expect(result.insertedEventRows).toBe(1)
+  })
+
   test('without taskId, dedup is skipped (legacy callers unchanged)', async () => {
     const opencodeDb = buildOpencodeDb({
       sessions: [

@@ -70,6 +70,24 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
   return undefined
 }
 
+/**
+ * RFC-048: forward the configured subagent live-capture cadence to the
+ * scheduler/runner. Reading the config here (instead of inside the runner)
+ * keeps the runner pure and lets the operator flip `pollMs = 0` to disable
+ * live polling without restarting the daemon — the next task pulls the
+ * updated value.
+ */
+function resolveSubagentLiveCapture(
+  configPath: string,
+): { pollMs: number; consecutiveFailureLimit: number } | undefined {
+  try {
+    const cfg = loadConfig(configPath)
+    return cfg.subagentLiveCapture
+  } catch {
+    return undefined
+  }
+}
+
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {
     const actor = actorOf(c)
@@ -171,10 +189,12 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         ensureValidAssignmentsForRoute(wf.definition, assignments)
       }
     }
+    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await startTask(parsed.data, {
       db: deps.db,
       actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
+      ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
     })
     return c.json(task, 201)
   })
@@ -231,9 +251,11 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.post('/api/tasks/:id/resume', async (c) => {
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await resumeTask(deps.db, c.req.param('id'), {
       db: deps.db,
       ...(opencodeCmd ? { opencodeCmd } : {}),
+      ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
     })
     return c.json(task)
   })
@@ -242,11 +264,13 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     const cascadeRaw = c.req.query('cascade')
     const cascade = cascadeRaw === undefined ? true : cascadeRaw !== 'false'
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await retryNode(deps.db, c.req.param('id'), c.req.param('nodeRunId'), {
       cascade,
       deps: {
         db: deps.db,
         ...(opencodeCmd ? { opencodeCmd } : {}),
+        ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
       },
     })
     return c.json(task)
@@ -483,12 +507,14 @@ async function handleMultipartTaskStart(
     taskId,
     appHome,
   })
+  const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
   if (wt.earlyError !== null) {
     // Fall back to the original behavior: create a failed task row so the
     // user sees the error. No files were written (worktree never existed).
     const task = await startTask(startInput, {
       db: deps.db,
       ...(opencodeCmd ? { opencodeCmd } : {}),
+      ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
     })
     return task
   }
@@ -512,6 +538,7 @@ async function handleMultipartTaskStart(
       {
         db: deps.db,
         ...(opencodeCmd ? { opencodeCmd } : {}),
+        ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
         preCreatedWorktree: {
           taskId,
           worktreePath: wt.worktreePath,
