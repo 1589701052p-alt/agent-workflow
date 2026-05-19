@@ -33,6 +33,7 @@ import {
 } from '@/routes/workflows.edit'
 import { LaunchRoute as workflowLaunchRoute } from '@/routes/workflows.launch'
 import { ReposRoute as reposRoute } from '@/routes/repos'
+import { Route as memoryRoute } from '@/routes/memory'
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -65,6 +66,8 @@ const routeTree = rootRoute.addChildren([
   clarifyDetailRoute,
   clarifyRoute,
   reposRoute,
+  // RFC-041 PR4: platform memory tab.
+  memoryRoute,
   settingsRoute,
   // RFC-036
   accountRoute,

@@ -17,6 +17,7 @@ import { UserMenu } from '@/components/UserMenu'
 import { usePermission } from '@/hooks/useActor'
 import { InboxDrawer } from '@/components/shell/InboxDrawer'
 import { InboxFooterButton } from '@/components/shell/InboxFooterButton'
+import { MemoryNavLink } from '@/components/shell/MemoryNavLink'
 import { NavGroup } from '@/components/shell/NavGroup'
 import { SettingsGearButton } from '@/components/shell/SettingsGearButton'
 import { useApplyLanguage } from '@/hooks/useLanguage'
@@ -152,6 +153,9 @@ function RootComponent() {
           {NAV_GROUPS.map((group) => (
             <NavGroup key={group.key} group={group} active={active} />
           ))}
+          {/* RFC-041 PR4: top-level Memory tab. Visible to every logged-in
+              user; the candidate-pending badge is admin-only. */}
+          <MemoryNavLink />
         </nav>
         <InboxFooterButton open={inboxOpen} onToggle={toggleInboxOpen} />
         <div className="sidebar__footer">

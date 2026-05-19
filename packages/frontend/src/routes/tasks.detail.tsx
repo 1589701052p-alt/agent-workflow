@@ -18,6 +18,7 @@ import { api, ApiError } from '@/api/client'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
@@ -343,6 +344,11 @@ function TaskDetailPage() {
           ) : null}
         </div>
       </div>
+
+      {/* RFC-041 PR4: per-task feedback area. Always mounted regardless of
+          task status — letting the user reflect on a finished or failed task
+          is the whole point of distillation. */}
+      <TaskFeedbackList taskId={id} />
     </div>
   )
 }

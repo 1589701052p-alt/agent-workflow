@@ -41,7 +41,15 @@ export interface Resources {
       sourceTask: string
       openReviews: string
       openClarify: string
+      // RFC-041 PR4: admin-only "pending memory" group in the unified inbox.
+      pendingMemoryGroup: string
+      pendingMemoryEmpty: string
+      memoryItemSubtitle: string
     }
+    // RFC-041 PR4: top-level Memory route.
+    memory: string
+    memoryHint: string
+    memoryBadge: string
   }
   home: {
     greet: {
@@ -1424,6 +1432,104 @@ export interface Resources {
     loadError: string
     empty: string
   }
+  // RFC-041 PR4: platform memory UI surface.
+  memory: {
+    title: string
+    hint: string
+    adminOnly: string
+    empty: string
+    confirmDelete: string
+    tab: {
+      approvalQueue: string
+      all: string
+      byScope: string
+      distillJobs: string
+    }
+    action: {
+      approve: string
+      approveSupersede: string
+      reject: string
+      archive: string
+      unarchive: string
+      delete: string
+      compare: string
+    }
+    candidate: {
+      from: string
+      pendingCount: string
+      source: {
+        clarify: string
+        review: string
+        feedback: string
+        manual: string
+      }
+    }
+    distillAction: {
+      new: string
+      updateOf: string
+      duplicateOf: string
+      conflictWith: string
+    }
+    scope: {
+      agent: string
+      workflow: string
+      repo: string
+      global: string
+    }
+    status: {
+      candidate: string
+      approved: string
+      archived: string
+      superseded: string
+      rejected: string
+    }
+    conflictDialog: {
+      title: string
+      existing: string
+      candidate: string
+      close: string
+      tagsLabel: string
+    }
+    distillJobs: {
+      empty: string
+      colId: string
+      colStatus: string
+      colSource: string
+      colAttempts: string
+      colCreated: string
+      colError: string
+      status: {
+        pending: string
+        running: string
+        done: string
+        failed: string
+        canceled: string
+      }
+      action: {
+        retry: string
+        cancel: string
+      }
+    }
+  }
+  // RFC-041 PR4: per-task feedback ("dear future me") area.
+  taskFeedback: {
+    title: string
+    hint: string
+    placeholder: string
+    submit: string
+    submitting: string
+    empty: string
+    distilled: string
+    rateLimit: string
+    secretHint: string
+    submitError: string
+    loadError: string
+    submittedJustNow: string
+  }
+  // RFC-041 PR4: "Memories" sub-tab embedded into resource detail pages.
+  detail: {
+    memories: string
+  }
 }
 
 export const zhCN: Resources = {
@@ -1461,7 +1567,13 @@ export const zhCN: Resources = {
       sourceTask: '任务 {{taskId}}',
       openReviews: '查看全部评审 →',
       openClarify: '查看全部反问 →',
+      pendingMemoryGroup: '待审批记忆 ({{count}})',
+      pendingMemoryEmpty: '暂无候选记忆',
+      memoryItemSubtitle: '{{scope}} · {{kind}}',
     },
+    memory: '记忆',
+    memoryHint: '从过往反问、评审与反馈中沉淀的长期上下文',
+    memoryBadge: '{{count}} 项待审批',
   },
   home: {
     greet: {
@@ -2896,5 +3008,100 @@ export const zhCN: Resources = {
     statusError: '出错',
     loadError: '加载会话失败。',
     empty: '本轮 session 暂无事件。',
+  },
+  memory: {
+    title: '平台长期记忆',
+    hint: '从过往反问、评审与反馈中沉淀的长期上下文，注入到每次同维度的 agent 运行。',
+    adminOnly: '仅管理员可审批',
+    empty: '暂无沉淀',
+    confirmDelete: '永久删除这条记忆？不可恢复。',
+    tab: {
+      approvalQueue: '审批队列',
+      all: '已审批',
+      byScope: '按维度',
+      distillJobs: '提炼任务',
+    },
+    action: {
+      approve: '批准',
+      approveSupersede: '批准并覆盖…',
+      reject: '驳回',
+      archive: '归档',
+      unarchive: '取消归档',
+      delete: '删除',
+      compare: '对比',
+    },
+    candidate: {
+      from: '来自 {{kind}} {{id}}',
+      pendingCount: '共 {{count}} 条待审批',
+      source: {
+        clarify: '反问',
+        review: '评审',
+        feedback: '反馈',
+        manual: '手工',
+      },
+    },
+    distillAction: {
+      new: '新增',
+      updateOf: '更新自 {{id}}',
+      duplicateOf: '重复于 {{id}}',
+      conflictWith: '与 {{id}} 冲突',
+    },
+    scope: {
+      agent: 'Agent',
+      workflow: '工作流',
+      repo: '仓库',
+      global: '全局',
+    },
+    status: {
+      candidate: '候选',
+      approved: '已批准',
+      archived: '已归档',
+      superseded: '已覆盖',
+      rejected: '已驳回',
+    },
+    conflictDialog: {
+      title: '与已有记忆冲突 — 并排对比',
+      existing: '已有记忆',
+      candidate: '候选记忆',
+      close: '关闭',
+      tagsLabel: '标签',
+    },
+    distillJobs: {
+      empty: '当前没有提炼任务',
+      colId: '任务 ID',
+      colStatus: '状态',
+      colSource: '来源',
+      colAttempts: '尝试次数',
+      colCreated: '创建时间',
+      colError: '错误',
+      status: {
+        pending: '等待',
+        running: '运行中',
+        done: '完成',
+        failed: '失败',
+        canceled: '已取消',
+      },
+      action: {
+        retry: '重试',
+        cancel: '取消',
+      },
+    },
+  },
+  taskFeedback: {
+    title: '任务留言',
+    hint: '给本工作流将来运行的我们留一句话。可能被提炼成长期记忆。',
+    placeholder: '给本工作流未来运行的我们留一句话…',
+    submit: '保存留言',
+    submitting: '保存中…',
+    empty: '暂无留言',
+    distilled: '已交付提炼',
+    rateLimit: '请稍候，3 秒内只能提交一次。',
+    secretHint: '不要写入密钥；管理员与未来任务运行均可见。',
+    submitError: '提交失败',
+    loadError: '加载留言失败',
+    submittedJustNow: '刚刚',
+  },
+  detail: {
+    memories: '记忆',
   },
 }

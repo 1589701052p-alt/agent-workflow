@@ -16,6 +16,8 @@
 // subscription is live.
 
 import type {
+  MemoryDistillJobWsMessage,
+  MemoryWsMessage,
   RepoImportWsMessage,
   TaskWsMessage,
   TasksListWsMessage,
@@ -28,10 +30,14 @@ import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRuns } from '@/db/schema'
 import { createLogger } from '@/util/log'
 import {
+  MEMORY_CHANNEL,
+  MEMORY_DISTILL_JOB_CHANNEL,
   REPO_IMPORT_CHANNEL,
   TASK_CHANNEL,
   TASKS_LIST_CHANNEL,
   WORKFLOWS_CHANNEL,
+  memoryBroadcaster,
+  memoryDistillJobBroadcaster,
   repoImportsBroadcaster,
   taskBroadcaster,
   tasksListBroadcaster,
@@ -46,6 +52,8 @@ interface ConnectionData {
     | { kind: 'tasks-list' }
     | { kind: 'workflows' }
     | { kind: 'repo-import'; batchId: string }
+    | { kind: 'memories' }
+    | { kind: 'memory-distill-jobs' }
   unsubscribe: () => void
 }
 
@@ -80,6 +88,8 @@ const WS_PATH_RE = {
   list: /^\/ws\/tasks$/,
   flows: /^\/ws\/workflows$/,
   repoImport: /^\/ws\/repo-imports\/([^/?#]+)$/,
+  memories: /^\/ws\/memories$/,
+  memoryDistillJobs: /^\/ws\/memory-distill-jobs$/,
 }
 
 export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdapter {
@@ -102,6 +112,8 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
     if (rm !== null) {
       return { kind: 'repo-import', batchId: decodeURIComponent(rm[1] ?? '') }
     }
+    if (WS_PATH_RE.memories.test(url.pathname)) return { kind: 'memories' }
+    if (WS_PATH_RE.memoryDistillJobs.test(url.pathname)) return { kind: 'memory-distill-jobs' }
     return null
   }
 
@@ -181,6 +193,24 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         } satisfies WsControlMessage)
         return
       }
+      case 'memories': {
+        ws.data.unsubscribe = memoryBroadcaster.subscribe(MEMORY_CHANNEL, (msg: MemoryWsMessage) =>
+          safeSend(ws, msg),
+        )
+        safeSend(ws, { type: 'hello', channel: 'memories' } satisfies WsControlMessage)
+        return
+      }
+      case 'memory-distill-jobs': {
+        ws.data.unsubscribe = memoryDistillJobBroadcaster.subscribe(
+          MEMORY_DISTILL_JOB_CHANNEL,
+          (msg: MemoryDistillJobWsMessage) => safeSend(ws, msg),
+        )
+        safeSend(ws, {
+          type: 'hello',
+          channel: 'memory-distill-jobs',
+        } satisfies WsControlMessage)
+        return
+      }
     }
   }
 
@@ -254,6 +284,8 @@ function safeSend(
     | TasksListWsMessage
     | WorkflowsWsMessage
     | RepoImportWsMessage
+    | MemoryWsMessage
+    | MemoryDistillJobWsMessage
     | WsControlMessage,
 ): void {
   try {

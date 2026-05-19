@@ -1,0 +1,103 @@
+// RFC-041 PR4 — admin monitoring table for the distill queue.
+// Lists rows + per-row [Retry] (failed → pending) / [Cancel] (pending → canceled).
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
+import type { MemoryDistillJob } from '@agent-workflow/shared'
+import { api, ApiError } from '@/api/client'
+import { EmptyState } from '@/components/EmptyState'
+import { LoadingState } from '@/components/LoadingState'
+import { describeApiError } from '@/i18n'
+
+interface ListResponse {
+  items: MemoryDistillJob[]
+}
+
+export function MemoryDistillJobsTable() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const list = useQuery<ListResponse>({
+    queryKey: ['memory-distill-jobs', 'list'],
+    queryFn: ({ signal }) => api.get<ListResponse>('/api/memory-distill-jobs', undefined, signal),
+  })
+
+  const action = useMutation<unknown, ApiError, { id: string; verb: 'retry' | 'cancel' }>({
+    mutationFn: ({ id, verb }) =>
+      api.post(`/api/memory-distill-jobs/${encodeURIComponent(id)}/${verb}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['memory-distill-jobs', 'list'] })
+    },
+  })
+
+  if (list.isLoading) return <LoadingState />
+  if (list.error !== null && list.error !== undefined) {
+    return <div className="error-box">{describeApiError(list.error)}</div>
+  }
+  const rows = list.data?.items ?? []
+  if (rows.length === 0) {
+    return <EmptyState title={t('memory.distillJobs.empty')} />
+  }
+
+  return (
+    <div className="memory-distill-jobs" data-testid="memory-distill-jobs">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>{t('memory.distillJobs.colId')}</th>
+            <th>{t('memory.distillJobs.colStatus')}</th>
+            <th>{t('memory.distillJobs.colSource')}</th>
+            <th>{t('memory.distillJobs.colAttempts')}</th>
+            <th>{t('memory.distillJobs.colCreated')}</th>
+            <th>{t('memory.distillJobs.colError')}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((job) => (
+            <tr key={job.id} data-testid={`distill-job-row-${job.id}`}>
+              <td>
+                <code>{job.id}</code>
+              </td>
+              <td>
+                <span className={`memory-distill-status memory-distill-status--${job.status}`}>
+                  {t(`memory.distillJobs.status.${job.status}`)}
+                </span>
+              </td>
+              <td>{job.sourceKind}</td>
+              <td>{job.attempts}</td>
+              <td className="muted">{new Date(job.createdAt).toLocaleString()}</td>
+              <td className="memory-distill-status__error">{job.lastError ?? ''}</td>
+              <td>
+                {job.status === 'failed' && (
+                  <button
+                    type="button"
+                    className="btn btn--xs"
+                    onClick={() => action.mutate({ id: job.id, verb: 'retry' })}
+                    disabled={action.isPending}
+                    data-testid={`distill-job-row-${job.id}-retry`}
+                  >
+                    {t('memory.distillJobs.action.retry')}
+                  </button>
+                )}
+                {job.status === 'pending' && (
+                  <button
+                    type="button"
+                    className="btn btn--xs"
+                    onClick={() => action.mutate({ id: job.id, verb: 'cancel' })}
+                    disabled={action.isPending}
+                    data-testid={`distill-job-row-${job.id}-cancel`}
+                  >
+                    {t('memory.distillJobs.action.cancel')}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {action.error !== null && action.error !== undefined && (
+        <div className="error-box">{describeApiError(action.error)}</div>
+      )}
+    </div>
+  )
+}
