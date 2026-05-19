@@ -313,6 +313,57 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
       }
     }
 
+    // RFC-048: surface orphan child sessions while the parent's `task`
+    // tool_use part is still in flight. opencode 1.15.x emits the
+    // `tool_use` envelope (carrying `state.metadata.sessionId`) only after
+    // the subagent has produced some output — but the live SQLite poller
+    // is already capturing the child's message/part rows. Without this
+    // pass the child bucket exists in `buckets` but is never linked,
+    // leaving the conversation flow stuck on the parent's reasoning/text
+    // while the subagent is hard at work.
+    //
+    // We synthesize a placeholder `subagent-call` block for every child
+    // sessionId whose `parent_id` points at this session and which is not
+    // already represented by a real `task` tool_use. The placeholder's
+    // `callId` is namespaced so a later refetch — when the real `tool_use`
+    // arrives via stdout — replaces it through `replaceMessage` instead of
+    // adding a duplicate (see the `__orphan__:` prefix path below).
+    const claimedChildSessionIds = new Set<string>()
+    for (const m of messages) {
+      if (m.kind === 'subagent-call' && m.childSessionId !== null) {
+        claimedChildSessionIds.add(m.childSessionId)
+      }
+    }
+    const orphanChildren: Array<{ id: string; firstTs: number }> = []
+    for (const [childId, parentId] of parentOf) {
+      if (parentId !== sessionId) continue
+      if (claimedChildSessionIds.has(childId)) continue
+      if (visited.has(childId)) continue
+      const childBucket = buckets.get(childId)
+      if (childBucket === undefined || childBucket.length === 0) continue
+      orphanChildren.push({ id: childId, firstTs: childBucket[0]!.ts })
+    }
+    orphanChildren.sort((a, b) => a.firstTs - b.firstTs || a.id.localeCompare(b.id))
+    for (const orphan of orphanChildren) {
+      const placeholder: SessionSubagentCall = {
+        kind: 'subagent-call',
+        toolName: 'task',
+        callId: `__orphan__:${orphan.id}`,
+        status: 'running',
+        input: null,
+        output: null,
+        ts: orphan.firstTs,
+        messageId: null,
+        childSessionId: orphan.id,
+        child: null,
+        childOutputFallback: null,
+        childAgentName: null,
+      }
+      const insertAt = messages.findIndex((m) => m.ts > orphan.firstTs)
+      if (insertAt === -1) messages.push(placeholder)
+      else messages.splice(insertAt, 0, placeholder)
+    }
+
     // Resolve subagent children — recursive build, bounded by buckets map
     // and visited set (no cycles possible).
     for (const msg of messages) {

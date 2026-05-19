@@ -433,6 +433,237 @@ describe('parseSessionTree — subagent nesting', () => {
     if (sub.kind !== 'subagent-call' || sub.child === null) throw new Error('child missing')
     expect(sub.child.captureComplete).toBe(false)
   })
+
+  // RFC-048: when the runner's live SQLite poller has already captured a
+  // child session's message/part rows but the parent's `task` tool_use
+  // envelope hasn't been emitted yet (opencode only writes that part once
+  // the subagent produces output), parseSessionTree must still surface
+  // the child via a placeholder `subagent-call` so the conversation flow
+  // grows in real time. Without this we left the user staring at the
+  // parent's reasoning while the subagent was already minutes deep into
+  // its work — events tab showed activity, session tab did not.
+  test('RFC-048 orphan child bucket (parent has no task tool_use yet) surfaces as placeholder subagent-call', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      events: [
+        evt({
+          sessionId: 'root',
+          kind: 'text',
+          ts: 10,
+          payload: {
+            type: 'text',
+            sessionID: 'root',
+            messageID: 'm-root-1',
+            part: { type: 'text', text: 'Spinning up the doc agent…' },
+          },
+        }),
+        // Child session events already captured by the live poller — note
+        // parentSessionId is set, which is how RFC-048 tags rows written
+        // via captureChildSessions / startLiveSubagentCapture.
+        evt({
+          sessionId: 'child-live',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 20,
+          payload: {
+            type: 'text',
+            sessionID: 'child-live',
+            messageID: 'm-child-1',
+            part: { type: 'text', text: 'Subagent: starting outline…' },
+          },
+        }),
+        evt({
+          sessionId: 'child-live',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 30,
+          payload: {
+            type: 'text',
+            sessionID: 'child-live',
+            messageID: 'm-child-2',
+            part: { type: 'text', text: 'Subagent: drafting section 2…' },
+          },
+        }),
+      ],
+    })
+    // Two top-level messages: the parent's text first, then the
+    // synthesized orphan subagent-call (placed by earliest child ts).
+    expect(tree.messages).toHaveLength(2)
+    expect(tree.messages[0]!.kind).toBe('assistant-text')
+    const sub = tree.messages[1]
+    if (sub.kind !== 'subagent-call') throw new Error('expected placeholder subagent-call')
+    expect(sub.childSessionId).toBe('child-live')
+    expect(sub.status).toBe('running')
+    expect(sub.callId.startsWith('__orphan__:')).toBe(true)
+    if (sub.child === null) throw new Error('child tree should be populated')
+    expect(sub.child.messages.map((m) => (m.kind === 'assistant-text' ? m.text : ''))).toEqual([
+      'Subagent: starting outline…',
+      'Subagent: drafting section 2…',
+    ])
+    expect(sub.child.captureComplete).toBe(true)
+  })
+
+  test('RFC-048 orphan placeholder does NOT duplicate a real task tool_use already referencing the child', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      events: [
+        evt({
+          sessionId: 'root',
+          kind: 'tool_use',
+          ts: 5,
+          payload: {
+            type: 'tool_use',
+            sessionID: 'root',
+            part: {
+              type: 'tool',
+              callID: 'task-real',
+              tool: 'task',
+              state: {
+                status: 'running',
+                input: { subagent_type: 'doc', prompt: '…' },
+                metadata: { sessionId: 'child-live' },
+              },
+            },
+          },
+        }),
+        evt({
+          sessionId: 'child-live',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 20,
+          payload: {
+            type: 'text',
+            sessionID: 'child-live',
+            part: { type: 'text', text: 'hello from child' },
+          },
+        }),
+      ],
+    })
+    // Exactly one subagent-call — the real one. No placeholder injected.
+    const subs = tree.messages.filter((m) => m.kind === 'subagent-call')
+    expect(subs).toHaveLength(1)
+    const sub = subs[0]!
+    if (sub.kind !== 'subagent-call') throw new Error('expected subagent-call')
+    expect(sub.callId).toBe('task-real')
+    expect(sub.childSessionId).toBe('child-live')
+  })
+
+  test('RFC-048 multiple orphan children of the same parent appear in chronological order', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      events: [
+        evt({
+          sessionId: 'root',
+          kind: 'text',
+          ts: 1,
+          payload: {
+            type: 'text',
+            sessionID: 'root',
+            part: { type: 'text', text: 'launching workers' },
+          },
+        }),
+        evt({
+          sessionId: 'child-B',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 50,
+          payload: {
+            type: 'text',
+            sessionID: 'child-B',
+            part: { type: 'text', text: 'B starting' },
+          },
+        }),
+        evt({
+          sessionId: 'child-A',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 30,
+          payload: {
+            type: 'text',
+            sessionID: 'child-A',
+            part: { type: 'text', text: 'A starting' },
+          },
+        }),
+      ],
+    })
+    const subs = tree.messages.filter((m) => m.kind === 'subagent-call')
+    expect(subs).toHaveLength(2)
+    // child-A's earliest ts is 30, child-B's is 50 → A surfaces first.
+    if (subs[0]!.kind !== 'subagent-call' || subs[1]!.kind !== 'subagent-call') return
+    expect(subs[0]!.childSessionId).toBe('child-A')
+    expect(subs[1]!.childSessionId).toBe('child-B')
+  })
+
+  test('RFC-048 orphan logic recurses — grand-child events surface even when only the leaf parent has no tool_use', () => {
+    const tree = parseSessionTree({
+      rootSessionId: 'root',
+      promptText: null,
+      startedAt: null,
+      primaryAgentName: 'coder',
+      events: [
+        // Parent → child via a real task tool_use…
+        evt({
+          sessionId: 'root',
+          kind: 'tool_use',
+          ts: 5,
+          payload: {
+            type: 'tool_use',
+            sessionID: 'root',
+            part: {
+              type: 'tool',
+              callID: 'task-1',
+              tool: 'task',
+              state: {
+                status: 'completed',
+                input: { subagent_type: 'mid' },
+                metadata: { sessionId: 'mid' },
+              },
+            },
+          },
+        }),
+        // …but the mid agent's task tool_use to launch its own subagent
+        // hasn't been emitted yet. The grand-child is captured live.
+        evt({
+          sessionId: 'mid',
+          parentSessionId: 'root',
+          kind: 'text',
+          ts: 10,
+          payload: {
+            type: 'text',
+            sessionID: 'mid',
+            part: { type: 'text', text: 'mid says hi' },
+          },
+        }),
+        evt({
+          sessionId: 'leaf',
+          parentSessionId: 'mid',
+          kind: 'text',
+          ts: 20,
+          payload: {
+            type: 'text',
+            sessionID: 'leaf',
+            part: { type: 'text', text: 'leaf says hi' },
+          },
+        }),
+      ],
+    })
+    const a = tree.messages.find((m) => m.kind === 'subagent-call')
+    if (a?.kind !== 'subagent-call' || a.child === null) throw new Error('missing mid agent')
+    const b = a.child.messages.find((m) => m.kind === 'subagent-call')
+    if (b?.kind !== 'subagent-call' || b.child === null) throw new Error('missing orphan leaf')
+    expect(b.childSessionId).toBe('leaf')
+    expect(b.callId.startsWith('__orphan__:')).toBe(true)
+    expect(b.child.messages.some((m) => m.kind === 'assistant-text')).toBe(true)
+  })
 })
 
 describe('parseSessionTree — ordering + edge cases', () => {
