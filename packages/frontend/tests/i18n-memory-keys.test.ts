@@ -11,7 +11,14 @@ import { enUS } from '../src/i18n/en-US'
 
 const NAV_KEYS = ['memory', 'memoryHint', 'memoryBadge'] as const
 const INBOX_KEYS = ['pendingMemoryGroup', 'pendingMemoryEmpty', 'memoryItemSubtitle'] as const
-const MEMORY_TOP = ['title', 'hint', 'adminOnly', 'empty', 'confirmDelete'] as const
+const MEMORY_TOP = [
+  'title',
+  'hint',
+  'adminOnly',
+  'empty',
+  'confirmDelete',
+  'confirmArchive',
+] as const
 const MEMORY_TABS = ['approvalQueue', 'all', 'byScope', 'distillJobs'] as const
 const MEMORY_ACTIONS = [
   'approve',

@@ -1442,6 +1442,7 @@ export interface Resources {
     adminOnly: string
     empty: string
     confirmDelete: string
+    confirmArchive: string
     tab: {
       approvalQueue: string
       all: string
@@ -3053,6 +3054,7 @@ export const zhCN: Resources = {
     adminOnly: '仅管理员可审批',
     empty: '暂无沉淀',
     confirmDelete: '永久删除这条记忆？不可恢复。',
+    confirmArchive: '确认归档这条记忆？归档后将不再注入未来运行，可在"已归档"视图中恢复。',
     tab: {
       approvalQueue: '审批队列',
       all: '已审批',

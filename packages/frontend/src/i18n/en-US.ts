@@ -1557,6 +1557,8 @@ export const enUS: Resources = {
     adminOnly: 'Admin only',
     empty: 'No learned context yet',
     confirmDelete: 'Permanently delete this memory? This cannot be undone.',
+    confirmArchive:
+      'Archive this memory? It will stop being injected into future runs. You can restore it from the Archived view.',
     tab: {
       approvalQueue: 'Approval Queue',
       all: 'All Approved',
