@@ -91,6 +91,12 @@ export function useWebSocket({ path, onMessage, enabled = true }: UseWebSocketOp
   }, [path, enabled])
 }
 
+// `readyState === 0` is CONNECTING per the WebSocket spec; hard-coded to
+// keep us off `WebSocket.CONNECTING`, which is undefined in vitest's jsdom
+// mock WebSocket and used to crash every ws hook test with "Cannot read
+// properties of undefined (reading 'CONNECTING')".
+const WS_CONNECTING = 0
+
 function closeSocket(ws: WebSocket | null): void {
   if (ws === null) return
   // Closing a CONNECTING socket triggers a browser warning ("WebSocket is
@@ -98,7 +104,7 @@ function closeSocket(ws: WebSocket | null): void {
   // double-invoke of effects in dev hits this on every mount. Defer the
   // close until the handshake finishes so the warning stays silent; the
   // outer `stopped` flag keeps the eventual close handler from reconnecting.
-  if (ws.readyState === WebSocket.CONNECTING) {
+  if (ws.readyState === WS_CONNECTING) {
     ws.addEventListener('open', () => ws.close(), { once: true })
   } else {
     ws.close()
