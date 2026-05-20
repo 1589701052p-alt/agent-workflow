@@ -90,4 +90,17 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
     // Two declarations + two passes into runNode → expect ≥ 4 mentions.
     expect(occurrences.length).toBeGreaterThanOrEqual(4)
   })
+
+  // The agent-single buildClarifyPromptContext call MUST pass
+  // `applyLatestDirective: isClarifyRerun` so the prior round's
+  // directive='stop' only suppresses the IMMEDIATE clarify-rerun (the row
+  // submitClarifyAnswers minted at retryIndex=0). Review-iterate /
+  // process-retry reruns inherit clarifyIteration via review.ts's mint, and
+  // without this gate they'd re-pick the stale 'stop' and refuse to
+  // surface the clarify protocol block while addressing fresh reviewer
+  // comments. See clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
+  test('scheduler.ts wires applyLatestDirective=isClarifyRerun on the agent-single clarify context call', () => {
+    const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
+    expect(src).toContain('applyLatestDirective: isClarifyRerun')
+  })
 })

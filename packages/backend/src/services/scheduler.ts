@@ -1007,6 +1007,16 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               targetIteration: currentClarifyIteration,
               shardKey: currentShardKey,
               ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
+              // RFC-023 originally claimed `directive='stop'` "naturally scopes
+              // to one rerun", but only the clarify-driven rerun
+              // (clarifyIteration just bumped, retryIndex=0) actually
+              // satisfies that. Review-iterate / process-retry reruns inherit
+              // clarifyIteration without producing a new answered session, so
+              // the prior 'stop' directive would drag along and tell the
+              // agent to skip clarify even when answering NEW reviewer
+              // comments. Gate the directive propagation on isClarifyRerun
+              // so 'stop' truly only suppresses the immediate next rerun.
+              applyLatestDirective: isClarifyRerun,
             })
           : undefined
         // RFC-023 directive iteration: when the last answered session was

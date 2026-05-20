@@ -492,6 +492,23 @@ export interface BuildClarifyPromptContextArgs {
    * duplicate context the agent already has.
    */
   sessionMode?: 'isolated' | 'inline'
+  /**
+   * Whether the last answered session's `directive` ('continue' | 'stop')
+   * should propagate into this rerun. RFC-023 originally treated 'stop' as
+   * "naturally scopes to one rerun" — the assumption was that the only run
+   * inheriting a directive is the immediate clarify-rerun (clarifyIteration
+   * just bumped, retryIndex=0). But review-iterate / process-retry reruns
+   * also inherit `clarifyIteration` and would re-pick the same answered
+   * session, dragging a stale `directive='stop'` into a context where the
+   * agent is actually being asked to address NEW reviewer comments — making
+   * it skip clarify (and dump the bi-modal answers trailer) even when the
+   * comments are ambiguous. Callers pass `false` for those reruns so:
+   *   - `latestDirective` stays 'continue'
+   *   - the rendered answersBlock omits the `KEEP/STOP CLARIFYING` trailer
+   * Default `true` preserves the pre-fix behavior for clarify-driven reruns.
+   * Locked by clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
+   */
+  applyLatestDirective?: boolean
 }
 
 /**
@@ -530,6 +547,11 @@ export async function buildClarifyPromptContext(
   const questionParts: string[] = []
   const answerParts: string[] = []
   let latestDirective: ClarifyDirective = 'continue'
+  // Default true preserves clarify-driven rerun behavior (RFC-023). Scheduler
+  // passes false for review-iterate / process-retry reruns so a stale
+  // directive='stop' from the prior clarify round doesn't follow the agent
+  // into runs that are answering NEW review comments.
+  const applyLatestDirective = args.applyLatestDirective ?? true
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!
@@ -550,11 +572,11 @@ export async function buildClarifyPromptContext(
     // behaved that way at submit time. Anything else from the DB is one of the
     // CHECK-constrained enum values from the migration.
     const directive = (row.directive ?? 'continue') as ClarifyDirective
-    if (isLast) latestDirective = directive
+    if (isLast && applyLatestDirective) latestDirective = directive
     const roundLabel = `### Round ${row.iterationIndex + 1}`
     questionParts.push(`${roundLabel}\n${renderClarifyQuestionsBlock(questions)}`)
     answerParts.push(
-      `${roundLabel}\n${buildClarifyPromptBlock(questions, answers, isLast ? directive : undefined)}`,
+      `${roundLabel}\n${buildClarifyPromptBlock(questions, answers, isLast && applyLatestDirective ? directive : undefined)}`,
     )
   }
 
