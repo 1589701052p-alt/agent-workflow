@@ -2330,6 +2330,31 @@ code {
 
 .data-table__nowrap {
   white-space: nowrap;
+  /* Without overflow:hidden a fixed-layout table (e.g. /skills with colgroup
+     widths) lets overlong single-line content bleed into the next column.
+     In auto-layout tables the cell still grows to fit, so this clip is a
+     no-op there — safe to apply universally. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* /skills name cell: keep the link truncated with ellipsis while leaving the
+   source pill visible on the right. The flex lives on an inner wrapper (not
+   the <td>) so the cell stays a real table-cell — table layout / row height
+   alignment depend on that, see .data-table__actions for the same caveat. */
+.skills__name-cell__inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skills__name-link {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Cap a free-text cell at a fixed width inside an auto-layout table without

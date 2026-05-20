@@ -69,10 +69,10 @@ function SkillsPage() {
       {data !== undefined && data.length > 0 && (
         <table className="data-table" style={{ tableLayout: 'fixed' }}>
           <colgroup>
-            <col style={{ width: '180px' }} />
+            <col style={{ width: '260px' }} />
             <col style={{ width: '110px' }} />
             <col />
-            <col style={{ width: '30%' }} />
+            <col style={{ width: '20%' }} />
             <col style={{ width: '140px' }} />
           </colgroup>
           <thead>
@@ -88,20 +88,27 @@ function SkillsPage() {
             {data.map((s) => (
               <tr key={s.id}>
                 <td className="data-table__nowrap">
-                  <Link to="/skills/$name" params={{ name: s.name }} className="data-table__link">
-                    {s.name}
-                  </Link>
-                  {s.sourceId !== undefined && (
-                    <a
-                      href={`#source-${s.sourceId}`}
-                      className="source-pill"
-                      data-testid="source-pill"
+                  <div className="skills__name-cell__inner">
+                    <Link
+                      to="/skills/$name"
+                      params={{ name: s.name }}
+                      className="data-table__link skills__name-link"
+                      title={s.name}
                     >
-                      {t('skills.sourceFromPill', {
-                        label: labelById.get(s.sourceId) ?? s.sourceId,
-                      })}
-                    </a>
-                  )}
+                      {s.name}
+                    </Link>
+                    {s.sourceId !== undefined && (
+                      <a
+                        href={`#source-${s.sourceId}`}
+                        className="source-pill"
+                        data-testid="source-pill"
+                      >
+                        {t('skills.sourceFromPill', {
+                          label: labelById.get(s.sourceId) ?? s.sourceId,
+                        })}
+                      </a>
+                    )}
+                  </div>
                 </td>
                 <td>
                   <span className={`chip chip--tight chip--${s.sourceKind}`}>{s.sourceKind}</span>
