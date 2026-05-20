@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet" shape-rendering="geometricPrecision" text-rendering="geometricPrecision">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fbfcfe"/>
+      <stop offset="100%" stop-color="#dde7f7"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowPink" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#c2185b"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <!-- Title block -->
+  <text x="800" y="100" font-family="'PingFang SC','Microsoft YaHei','Hiragino Sans GB',Helvetica,sans-serif" font-size="60" font-weight="800" text-anchor="middle" fill="#0c3d8a">Agent Workflow</text>
+  <text x="800" y="148" font-family="'PingFang SC','Microsoft YaHei','Hiragino Sans GB',Helvetica,sans-serif" font-size="26" font-weight="600" text-anchor="middle" fill="#1a73e8">——把 AI Native 交付工作流真的落到地上</text>
+  <text x="800" y="190" font-family="'PingFang SC','Microsoft YaHei','Hiragino Sans GB',Helvetica,sans-serif" font-size="20" font-weight="500" text-anchor="middle" fill="#5a3e00">AI Native 交付工作流 · 下篇 · 架构、能力八件套与团队飞轮</text>
+  <line x1="600" y1="215" x2="1000" y2="215" stroke="#94a3b8" stroke-width="2"/>
+
+  <!-- Layer 1: Workflow -->
+  <g transform="translate(800,310)">
+    <rect x="-450" y="-50" width="900" height="100" rx="20" fill="#e8f0fe" stroke="#1a73e8" stroke-width="5"/>
+    <text y="-12" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#1a73e8">Workflow</text>
+    <text y="22" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="17" font-weight="500" text-anchor="middle" fill="#0c3d8a">拖拽编辑 · 版本化 · YAML 导入导出 · Wrapper(Git / Loop) · Review 节点</text>
+  </g>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="800" y1="365" x2="800" y2="420" stroke="#475569" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="820" y="400" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="16" font-weight="600" fill="#475569">一次实例化</text>
+
+  <!-- Layer 2: Task -->
+  <g transform="translate(800,460)">
+    <rect x="-450" y="-40" width="900" height="80" rx="20" fill="#fef7e0" stroke="#f9ab00" stroke-width="5"/>
+    <text y="-6" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#b48211">Task</text>
+    <text y="22" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="17" font-weight="500" text-anchor="middle" fill="#5a3e00">worktree 隔离 · 输入快照 · 状态机</text>
+  </g>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="800" y1="505" x2="800" y2="560" stroke="#475569" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="820" y="540" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="16" font-weight="600" fill="#475569">调度</text>
+
+  <!-- Layer 3: Agent / Skill / Runtime -->
+  <g transform="translate(800,600)">
+    <rect x="-450" y="-40" width="900" height="80" rx="20" fill="#e6f4ea" stroke="#34a853" stroke-width="5"/>
+    <text y="-6" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#1d6e3a">Agent · Skill · Runtime</text>
+    <text y="22" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="17" font-weight="500" text-anchor="middle" fill="#0d4d2a">注入到 AI CLI 子进程 · 进程隔离 · readonly 并发 / 写入串行</text>
+  </g>
+
+  <!-- Arrow 3 -> 4 -->
+  <line x1="800" y1="645" x2="800" y2="700" stroke="#475569" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="820" y="680" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="16" font-weight="600" fill="#475569">跑完</text>
+
+  <!-- Layer 4: Memory (cylinder) -->
+  <g transform="translate(800,765)">
+    <ellipse cx="0" cy="-25" rx="450" ry="22" fill="#fde7f3" stroke="#c2185b" stroke-width="5"/>
+    <path d="M -450,-25 L -450,25 A 450,22 0 0 0 450,25 L 450,-25" fill="#fde7f3" stroke="#c2185b" stroke-width="5"/>
+    <ellipse cx="0" cy="-25" rx="450" ry="22" fill="none" stroke="#c2185b" stroke-width="5"/>
+    <text y="-5" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#5a0d34">Memory · 长期飞轮</text>
+    <text y="26" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="17" font-weight="500" text-anchor="middle" fill="#7a1d34">distill 提炼 · 反问 Q&amp;A / 决策 / 经验 · 按相关性召回注入下一次任务</text>
+  </g>
+
+  <!-- Feedback arrow from Memory back to Agent layer -->
+  <path d="M 1250,725 Q 1400,640 1280,600" stroke="#c2185b" stroke-width="4" stroke-dasharray="11 7" fill="none" marker-end="url(#arrowPink)"/>
+  <text x="1305" y="675" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="15" font-weight="700" fill="#c2185b">召回 + 注入</text>
+  <text x="1305" y="698" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="15" font-weight="700" fill="#c2185b">下一次任务</text>
+
+  <!-- Bottom tagline -->
+  <text x="800" y="868" font-family="'PingFang SC','Microsoft YaHei',Helvetica,sans-serif" font-size="17" text-anchor="middle" fill="#475569">8 天 · 422 commits · 17 万行代码 · 50 篇 RFC · 552 个测试文件 · 单人 + AI 协作产出</text>
+</svg>
