@@ -6,7 +6,7 @@
 // user does not need to refresh when their OS toggles between light/dark.
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { Config } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { getToken, subscribeAuth } from '@/stores/auth'
@@ -41,6 +41,33 @@ function useSystemTheme(): ResolvedTheme {
 
 function useAuthToken(): string | null {
   return useSyncExternalStore(subscribeAuth, getToken, () => null)
+}
+
+function readHtmlTheme(): ResolvedTheme | null {
+  if (typeof document === 'undefined') return null
+  const v = document.documentElement.getAttribute('data-theme')
+  return v === 'dark' || v === 'light' ? v : null
+}
+
+/**
+ * Resolved light/dark, observed at the source of truth: the `<html data-theme>`
+ * attribute when set by `useApplyTheme`, or the `prefers-color-scheme` media
+ * query when the attribute is absent (system mode). Used by features whose
+ * output bakes in a palette (mermaid SVG, etc.) and must re-render when the
+ * theme flips. CSS-variable-driven UI does not need this hook.
+ */
+export function useResolvedTheme(): ResolvedTheme {
+  const system = useSystemTheme()
+  const [attr, setAttr] = useState<ResolvedTheme | null>(() => readHtmlTheme())
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return
+    const html = document.documentElement
+    const obs = new MutationObserver(() => setAttr(readHtmlTheme()))
+    obs.observe(html, { attributes: true, attributeFilter: ['data-theme'] })
+    setAttr(readHtmlTheme())
+    return () => obs.disconnect()
+  }, [])
+  return attr ?? system
 }
 
 /** Apply <html data-theme=…> as a side effect for the lifetime of the caller. */

@@ -20,17 +20,103 @@
 import type * as MermaidNS from 'mermaid'
 
 type Mermaid = (typeof MermaidNS)['default']
+export type MermaidTheme = 'light' | 'dark'
 
 let mermaidPromise: Promise<Mermaid> | null = null
 
-async function loadMermaid(): Promise<Mermaid> {
+// Custom mermaid palettes keyed to the app's CSS variables (see
+// styles.css :root / [data-theme=dark]). We use theme: 'base' + explicit
+// themeVariables rather than mermaid's stock 'default' / 'dark' so diagrams
+// read like part of the UI instead of an unstyled screenshot. The light
+// preset mirrors --panel / --text / --accent / --border at light values
+// and the dark preset at dark values, with `darkMode: true` flipping
+// mermaid's internal defaults for any variable we don't explicitly set.
+const THEME_VARS: Record<MermaidTheme, Record<string, string>> = {
+  light: {
+    background: '#ffffff',
+    primaryColor: '#ffffff',
+    primaryTextColor: '#1f2328',
+    primaryBorderColor: '#2f6feb',
+    secondaryColor: '#eef3ff',
+    secondaryTextColor: '#1f2328',
+    secondaryBorderColor: '#6aa3ff',
+    tertiaryColor: '#f8f9fb',
+    tertiaryTextColor: '#1f2328',
+    tertiaryBorderColor: '#e3e5ea',
+    lineColor: '#6b7180',
+    textColor: '#1f2328',
+    mainBkg: '#ffffff',
+    nodeBorder: '#2f6feb',
+    clusterBkg: '#f8f9fb',
+    clusterBorder: '#e3e5ea',
+    defaultLinkColor: '#6b7180',
+    edgeLabelBackground: '#ffffff',
+    actorBkg: '#ffffff',
+    actorBorder: '#2f6feb',
+    actorTextColor: '#1f2328',
+    actorLineColor: '#6b7180',
+    signalColor: '#1f2328',
+    signalTextColor: '#1f2328',
+    labelBoxBkgColor: '#eef3ff',
+    labelBoxBorderColor: '#2f6feb',
+    labelTextColor: '#1f2328',
+    loopTextColor: '#1f2328',
+    noteBkgColor: '#fff8d6',
+    noteBorderColor: '#bf6900',
+    noteTextColor: '#1f2328',
+  },
+  dark: {
+    darkMode: 'true',
+    background: '#15181d',
+    primaryColor: '#1c2028',
+    primaryTextColor: '#e6e7ea',
+    primaryBorderColor: '#6aa3ff',
+    secondaryColor: '#222a38',
+    secondaryTextColor: '#e6e7ea',
+    secondaryBorderColor: '#6aa3ff',
+    tertiaryColor: '#1c2028',
+    tertiaryTextColor: '#e6e7ea',
+    tertiaryBorderColor: '#2a2f38',
+    lineColor: '#95a0b3',
+    textColor: '#e6e7ea',
+    mainBkg: '#1c2028',
+    nodeBorder: '#6aa3ff',
+    clusterBkg: '#15181d',
+    clusterBorder: '#2a2f38',
+    defaultLinkColor: '#95a0b3',
+    edgeLabelBackground: '#1c2028',
+    actorBkg: '#1c2028',
+    actorBorder: '#6aa3ff',
+    actorTextColor: '#e6e7ea',
+    actorLineColor: '#95a0b3',
+    signalColor: '#e6e7ea',
+    signalTextColor: '#e6e7ea',
+    labelBoxBkgColor: '#222a38',
+    labelBoxBorderColor: '#6aa3ff',
+    labelTextColor: '#e6e7ea',
+    loopTextColor: '#e6e7ea',
+    noteBkgColor: '#3a2f10',
+    noteBorderColor: '#f0a020',
+    noteTextColor: '#e6e7ea',
+  },
+}
+
+async function loadMermaid(theme: MermaidTheme): Promise<Mermaid> {
   if (mermaidPromise === null) {
-    mermaidPromise = import('mermaid').then((m) => {
-      m.default.initialize({ startOnLoad: false, securityLevel: 'strict' })
-      return m.default
-    })
+    mermaidPromise = import('mermaid').then((m) => m.default)
   }
-  return mermaidPromise
+  const mermaid = await mermaidPromise
+  // initialize is idempotent and the only way to flip the baked-in palette
+  // (mermaid renders colors into the SVG, no CSS-variable hook). Call it
+  // before every render so light↔dark theme flips re-color subsequent
+  // diagrams.
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: 'base',
+    themeVariables: THEME_VARS[theme],
+  })
+  return mermaid
 }
 
 function isMermaidAvailable(): boolean {
@@ -46,14 +132,14 @@ export const MermaidBlock = {
    * if rendering failed). Caller hands us the mount element + the diagram
    * source.
    */
-  async render(mount: HTMLElement, source: string): Promise<void> {
+  async render(mount: HTMLElement, source: string, theme: MermaidTheme = 'light'): Promise<void> {
     if (!isMermaidAvailable()) {
       mount.innerHTML =
         '<pre class="review-diagram__source"><code>' + escapeHtml(source) + '</code></pre>'
       return
     }
     try {
-      const mermaid = await loadMermaid()
+      const mermaid = await loadMermaid(theme)
       const id = 'mermaid-' + Math.random().toString(36).slice(2, 10)
       const { svg } = await mermaid.render(id, source)
       mount.innerHTML = svg

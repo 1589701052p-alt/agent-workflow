@@ -22,6 +22,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { MermaidBlock } from '../review/MermaidBlock'
 import { PlantUmlBlock } from '../review/PlantUmlBlock'
 import { getHighlighter } from './highlighter'
+import { useResolvedTheme } from '@/hooks/useTheme'
 
 export interface MakeCodeOptions {
   plantumlEndpoint?: string
@@ -100,19 +101,21 @@ function childrenToString(c: ReactNode): string {
 
 function MermaidDiagram({ source }: { source: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const theme = useResolvedTheme()
   useEffect(() => {
     if (ref.current === null) return
     const mount = ref.current
-    void MermaidBlock.render(mount, source)
+    void MermaidBlock.render(mount, source, theme)
     return () => {
       mount.innerHTML = ''
     }
-  }, [source])
+  }, [source, theme])
   return (
     <div
       ref={ref}
       className="prose__diagram prose__diagram--mermaid"
       data-prose-diagram="mermaid"
+      data-prose-diagram-theme={theme}
     />
   )
 }
