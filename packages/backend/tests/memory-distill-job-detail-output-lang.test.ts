@@ -12,7 +12,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { ulid } from 'ulid'
-import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { memoryDistillJobs } from '../src/db/schema'
 import { getDistillJobDetail } from '../src/services/memoryDistillJobDetail'
