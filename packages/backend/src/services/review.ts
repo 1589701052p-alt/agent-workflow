@@ -1209,8 +1209,21 @@ export async function submitReviewDecision(
           eq(nodeRuns.iteration, run.iteration),
         ),
       )
-      .orderBy(desc(nodeRuns.retryIndex))
-    const latest = upRuns.find((r) => r.parentNodeRunId === null) ?? upRuns[0]
+    // Pick the freshest top-level upstream row with the same comparator the
+    // scheduler / dispatchReviewNode use (clarifyIteration → retryIndex → ulid).
+    // A plain desc(retryIndex) sort silently shadows the clarify-rerun row
+    // (clarifyIteration=N, retryIndex=0) behind any stale process-retry row
+    // (clarifyIteration=0, retryIndex=M>0). When that happens the new pending
+    // row inherits the WRONG clarifyIteration and loses the latestPerNode
+    // race in scheduler.runScope, so the agent never re-runs and review
+    // immediately reads the stale upstream output to mint v(n+1) — i.e. iterate
+    // looks like "version refreshed, no agent run". Locked by
+    // review-iterate-inherits-clarify-iteration.test.ts.
+    let latest: (typeof upRuns)[number] | undefined
+    for (const r of upRuns) {
+      if (r.parentNodeRunId !== null) continue
+      if (isFresherNodeRun(r, latest)) latest = r
+    }
     if (latest === undefined) continue
     // Worktree rollback per the review-node config. Track whether rollback
     // *actually completed* so the supersede marker can distinguish "files
@@ -1253,6 +1266,14 @@ export async function submitReviewDecision(
       iteration: latest.iteration,
       parentNodeRunId: null,
       preSnapshot: latest.preSnapshot,
+      // Must inherit clarifyIteration so isFresherNodeRun ranks this fresh
+      // pending row above any prior clarify-rerun done row at the same node.
+      // Without this the scheduler's latestPerNode picks the prior done row,
+      // skips agent execution, and dispatchReviewNode reads its stale output
+      // into a brand-new doc_version — the "version refreshed without rerun"
+      // bug from task 01KS1N8WVZWE8FTR4K9WSETRNW (贪吃蛇). Locked by
+      // review-iterate-inherits-clarify-iteration.test.ts.
+      clarifyIteration: latest.clarifyIteration,
     })
   }
 
