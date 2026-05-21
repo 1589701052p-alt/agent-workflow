@@ -3,6 +3,7 @@
 export const SHARED_PACKAGE_VERSION = '0.0.0'
 
 export * from './schemas/agent'
+export * from './schemas/apiError'
 export * from './schemas/cachedRepo'
 export * from './schemas/clarify'
 export * from './schemas/config'

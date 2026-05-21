@@ -1,0 +1,338 @@
+// RFC-054 W1-2 — API contract registry.
+//
+// Every endpoint mounted under `packages/backend/src/routes/*.ts` must
+// appear in `ENDPOINTS` below. The coverage-guard test
+// (`api-contract-coverage.test.ts`) greps the routes/*.ts sources and asserts
+// no method+path appears in production that is missing here. New routes that
+// land without a registry entry → CI red.
+//
+// Each entry can also declare:
+//   - `public: true`          — public route; multiAuth skips it (no 401 case).
+//   - `happy: HappyFixture`   — request fixture the contract test runs and
+//                               schema-validates the 2xx response against.
+//
+// Without `happy`, an entry still gets:
+//   - a 401 case (if not public) confirming the auth gate.
+//   - the coverage-guard sanity check that it is registered.
+//
+// W1-2 deliberately keeps the happy-path coverage to a curated subset.
+// Follow-ups (Wave 2 / Wave 3) can layer in detailed Zod schemas for the
+// remaining ~110 endpoints incrementally — adding `happy: {...}` to an
+// existing entry is non-breaking.
+
+import { z } from 'zod'
+import { ErrorResponseSchema } from '@agent-workflow/shared'
+import type { ContractHarness } from './harness'
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
+
+export interface HappyFixture {
+  /** Static path-param overrides, e.g. `{ name: 'foo' }` for `/api/x/:name`. */
+  pathParams?: Record<string, string> | ((h: ContractHarness) => Record<string, string>)
+  /** Static query string. */
+  query?: Record<string, string>
+  /** Static or dynamic body. */
+  body?: unknown | ((h: ContractHarness) => unknown | Promise<unknown>)
+  /** Extra headers (e.g. `content-type: multipart/form-data`). Auth is added. */
+  headers?: Record<string, string>
+  /** Expected HTTP status. Defaults to 200. */
+  status?: number
+  /** Schema the response body must satisfy. Defaults to a permissive z.unknown(). */
+  schema?: z.ZodType
+  /** Skip happy assertion with a reason — useful for endpoints whose happy
+   *  path requires complex side-effect seeds we haven't built yet. */
+  skipHappy?: string
+}
+
+export interface EndpointSpec {
+  method: HttpMethod
+  path: string
+  /** true → multiAuth bypasses; no 401 case generated. Default: false. */
+  public?: boolean
+  happy?: HappyFixture
+}
+
+// ----------------------------------------------------------------------------
+// Permissive shape used as the default happy schema — every endpoint at least
+// returns a JSON object (or array). When detailed schemas are added in later
+// PRs, override this on the relevant entry.
+// ----------------------------------------------------------------------------
+const JsonValue: z.ZodType = z.unknown()
+
+// ----------------------------------------------------------------------------
+// Registry. Keep ordered by route file then path for readability.
+// ----------------------------------------------------------------------------
+export const ENDPOINTS: EndpointSpec[] = [
+  // ---- health ----
+  {
+    method: 'GET',
+    path: '/health',
+    public: true,
+    happy: {
+      schema: z
+        .object({
+          ok: z.literal(true),
+          opencodeVersion: z.string(),
+          dbVersion: z.number(),
+          uptime: z.number(),
+          runningTasks: z.number(),
+        })
+        .passthrough(),
+    },
+  },
+
+  // ---- auth (RFC-036) ----
+  { method: 'POST', path: '/api/auth/login', public: true },
+  { method: 'POST', path: '/api/auth/logout' },
+  { method: 'GET', path: '/api/auth/me' },
+  { method: 'POST', path: '/api/auth/change-password' },
+  { method: 'GET', path: '/api/auth/sessions' },
+  { method: 'POST', path: '/api/auth/sessions/:id/revoke' },
+  { method: 'GET', path: '/api/auth/pats' },
+  { method: 'POST', path: '/api/auth/pats' },
+  { method: 'DELETE', path: '/api/auth/pats/:id' },
+  { method: 'GET', path: '/api/auth/identities' },
+  { method: 'DELETE', path: '/api/auth/identities/:id' },
+
+  // ---- oidc-auth (mixed: providers list + login flow are public) ----
+  { method: 'GET', path: '/api/auth/oidc/providers', public: true },
+  { method: 'POST', path: '/api/auth/oidc/:slug/login/start', public: true },
+  { method: 'GET', path: '/api/auth/oidc/:slug/callback', public: true },
+
+  // ---- oidc (admin) ----
+  { method: 'GET', path: '/api/oidc/providers' },
+  { method: 'POST', path: '/api/oidc/providers' },
+  { method: 'GET', path: '/api/oidc/providers/:id' },
+  { method: 'PATCH', path: '/api/oidc/providers/:id' },
+  { method: 'DELETE', path: '/api/oidc/providers/:id' },
+  { method: 'POST', path: '/api/oidc/providers/:id/test' },
+
+  // ---- agents ----
+  {
+    method: 'GET',
+    path: '/api/agents',
+    happy: { schema: z.array(z.any()) },
+  },
+  {
+    method: 'GET',
+    path: '/api/agents/:name',
+    happy: {
+      pathParams: (h) => ({ name: h.fixtures.agentName }),
+      schema: z.object({ agent: z.any() }).passthrough(),
+    },
+  },
+  { method: 'POST', path: '/api/agents' },
+  { method: 'PUT', path: '/api/agents/:name' },
+  { method: 'DELETE', path: '/api/agents/:name' },
+  { method: 'POST', path: '/api/agents/:name/rename' },
+  {
+    method: 'GET',
+    path: '/api/agents/:name/closure',
+    happy: {
+      pathParams: (h) => ({ name: h.fixtures.agentName }),
+      schema: z.object({ ok: z.literal(true) }).passthrough(),
+    },
+  },
+  { method: 'POST', path: '/api/agents/closure-preview' },
+
+  // ---- mcps (RFC-028) ----
+  {
+    method: 'GET',
+    path: '/api/mcps',
+    happy: { schema: z.array(z.any()) },
+  },
+  { method: 'GET', path: '/api/mcps/:name' },
+  { method: 'POST', path: '/api/mcps' },
+  { method: 'PUT', path: '/api/mcps/:name' },
+  { method: 'DELETE', path: '/api/mcps/:name' },
+  { method: 'POST', path: '/api/mcps/:name/rename' },
+  { method: 'GET', path: '/api/mcps/probes' },
+  { method: 'GET', path: '/api/mcps/:name/probe' },
+  { method: 'POST', path: '/api/mcps/:name/probe' },
+
+  // ---- plugins (RFC-031) ----
+  {
+    method: 'GET',
+    path: '/api/plugins',
+    happy: { schema: z.array(z.any()) },
+  },
+  { method: 'GET', path: '/api/plugins/:id' },
+  { method: 'POST', path: '/api/plugins' },
+  { method: 'PUT', path: '/api/plugins/:id' },
+  { method: 'DELETE', path: '/api/plugins/:id' },
+  { method: 'POST', path: '/api/plugins/:id/rename' },
+  { method: 'POST', path: '/api/plugins/:id/check-update' },
+  { method: 'POST', path: '/api/plugins/:id/upgrade' },
+
+  // ---- skills ----
+  {
+    method: 'GET',
+    path: '/api/skills',
+    happy: { schema: z.array(z.any()) },
+  },
+  { method: 'GET', path: '/api/skills/:name' },
+  { method: 'POST', path: '/api/skills' },
+  { method: 'PUT', path: '/api/skills/:name' },
+  { method: 'DELETE', path: '/api/skills/:name' },
+  { method: 'GET', path: '/api/skills/:name/content' },
+  { method: 'PUT', path: '/api/skills/:name/content' },
+  { method: 'GET', path: '/api/skills/:name/files' },
+  { method: 'GET', path: '/api/skills/:name/file' },
+  { method: 'PUT', path: '/api/skills/:name/file' },
+  { method: 'DELETE', path: '/api/skills/:name/file' },
+  { method: 'POST', path: '/api/skills/import-external' },
+  { method: 'POST', path: '/api/skills/import-zip/parse' },
+  { method: 'POST', path: '/api/skills/import-zip/commit' },
+
+  // ---- skill-sources (RFC-017) ----
+  { method: 'GET', path: '/api/skill-sources' },
+  { method: 'POST', path: '/api/skill-sources' },
+  { method: 'PATCH', path: '/api/skill-sources/:id' },
+  { method: 'DELETE', path: '/api/skill-sources/:id' },
+  { method: 'POST', path: '/api/skill-sources/:id/rescan' },
+
+  // ---- workflows ----
+  {
+    method: 'GET',
+    path: '/api/workflows',
+    happy: { schema: z.array(z.any()) },
+  },
+  {
+    method: 'GET',
+    path: '/api/workflows/:id',
+    happy: {
+      pathParams: (h) => ({ id: h.fixtures.workflowId }),
+      schema: z.object({ workflow: z.any() }).passthrough(),
+    },
+  },
+  { method: 'POST', path: '/api/workflows' },
+  { method: 'PUT', path: '/api/workflows/:id' },
+  { method: 'DELETE', path: '/api/workflows/:id' },
+  { method: 'POST', path: '/api/workflows/:id/validate' },
+  { method: 'GET', path: '/api/workflows/:id/export' },
+  { method: 'POST', path: '/api/workflows/import' },
+
+  // ---- repos (path / refs / file system) ----
+  { method: 'GET', path: '/api/repos/recent' },
+  { method: 'POST', path: '/api/repos/recent' },
+  { method: 'GET', path: '/api/repos/files' },
+  { method: 'GET', path: '/api/repos/refs' },
+
+  // ---- cached-repos (RFC-024 / RFC-033) ----
+  { method: 'GET', path: '/api/cached-repos' },
+  { method: 'POST', path: '/api/cached-repos/:id/refresh' },
+  { method: 'DELETE', path: '/api/cached-repos/:id' },
+  { method: 'POST', path: '/api/cached-repos/batch-import' },
+  { method: 'GET', path: '/api/cached-repos/imports/:batchId' },
+  { method: 'POST', path: '/api/cached-repos/imports/:batchId/rows/:rowId/retry' },
+
+  // ---- tasks ----
+  {
+    method: 'GET',
+    path: '/api/tasks',
+    happy: { schema: z.array(z.any()) },
+  },
+  {
+    method: 'GET',
+    path: '/api/tasks/:id',
+    happy: {
+      pathParams: (h) => ({ id: h.fixtures.taskId }),
+      schema: z.object({ task: z.any() }).passthrough(),
+    },
+  },
+  { method: 'POST', path: '/api/tasks' },
+  { method: 'POST', path: '/api/tasks/:id/cancel' },
+  { method: 'POST', path: '/api/tasks/:id/resume' },
+  { method: 'POST', path: '/api/tasks/:id/diagnose' },
+  { method: 'GET', path: '/api/tasks/:id/alerts' },
+  { method: 'GET', path: '/api/tasks/:id/diff' },
+  { method: 'GET', path: '/api/tasks/:id/node-runs' },
+  { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/events' },
+  { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/inventory' },
+  { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/session' },
+  { method: 'GET', path: '/api/tasks/:id/nodes/:nodeRunId/stdout' },
+  { method: 'POST', path: '/api/tasks/:id/nodes/:nodeRunId/retry' },
+  { method: 'PATCH', path: '/api/tasks/:id/assignments/:nodeId' },
+
+  // ---- worktree-files ----
+  { method: 'GET', path: '/api/worktree-files/:taskId' },
+  { method: 'GET', path: '/api/worktree-files/:taskId/*' },
+
+  // ---- reviews (RFC-005) ----
+  { method: 'GET', path: '/api/reviews' },
+  { method: 'GET', path: '/api/reviews/pending-count' },
+  { method: 'GET', path: '/api/reviews/:nodeRunId' },
+  { method: 'GET', path: '/api/reviews/:nodeRunId/versions' },
+  { method: 'GET', path: '/api/reviews/:nodeRunId/versions/:versionId' },
+  { method: 'POST', path: '/api/reviews/:nodeRunId/decision' },
+  { method: 'POST', path: '/api/reviews/:nodeRunId/comments' },
+  { method: 'PATCH', path: '/api/reviews/:nodeRunId/comments/:commentId' },
+  { method: 'DELETE', path: '/api/reviews/:nodeRunId/comments/:commentId' },
+
+  // ---- clarify (RFC-023) ----
+  { method: 'GET', path: '/api/clarify' },
+  { method: 'GET', path: '/api/clarify/pending-count' },
+  { method: 'GET', path: '/api/clarify/:nodeRunId' },
+  { method: 'POST', path: '/api/clarify/:nodeRunId/answers' },
+
+  // ---- memories (RFC-041 / RFC-043 / RFC-045) ----
+  { method: 'GET', path: '/api/memories' },
+  { method: 'POST', path: '/api/memories' },
+  { method: 'GET', path: '/api/memories/:id' },
+  { method: 'PATCH', path: '/api/memories/:id' },
+  { method: 'DELETE', path: '/api/memories/:id' },
+  { method: 'POST', path: '/api/memories/:id/archive' },
+  { method: 'POST', path: '/api/memories/:id/unarchive' },
+  { method: 'POST', path: '/api/memories/:id/promote' },
+
+  // ---- memory-distill-jobs (RFC-043) ----
+  { method: 'GET', path: '/api/memory-distill-jobs' },
+  { method: 'GET', path: '/api/memory-distill-jobs/:id' },
+  { method: 'GET', path: '/api/memory-distill-jobs/:id/session' },
+  { method: 'POST', path: '/api/memory-distill-jobs/:id/retry' },
+  { method: 'POST', path: '/api/memory-distill-jobs/:id/cancel' },
+
+  // ---- taskFeedback (RFC-044 ish) ----
+  { method: 'GET', path: '/api/tasks/:taskId/feedback' },
+  { method: 'POST', path: '/api/tasks/:taskId/feedback' },
+
+  // ---- users (RFC-036) ----
+  { method: 'GET', path: '/api/users' },
+  { method: 'GET', path: '/api/users/search' },
+  { method: 'GET', path: '/api/users/:id' },
+  { method: 'POST', path: '/api/users' },
+  { method: 'PATCH', path: '/api/users/:id' },
+  { method: 'DELETE', path: '/api/users/:id' },
+  { method: 'POST', path: '/api/users/:id/reset-password' },
+
+  // ---- config (admin) ----
+  {
+    method: 'GET',
+    path: '/api/config',
+    happy: { schema: z.object({}).passthrough() },
+  },
+  { method: 'PUT', path: '/api/config' },
+
+  // ---- runtime ----
+  {
+    method: 'GET',
+    path: '/api/runtime/opencode',
+    happy: { schema: z.object({}).passthrough() },
+  },
+  { method: 'GET', path: '/api/runtime/models' },
+
+  // ---- backup ----
+  { method: 'POST', path: '/api/backup' },
+]
+
+// ----------------------------------------------------------------------------
+// Re-export for tests + small helpers.
+// ----------------------------------------------------------------------------
+
+export { ErrorResponseSchema, JsonValue }
+
+/** Endpoints that should respond 401 when called without auth. */
+export const AUTH_REQUIRED_ENDPOINTS = ENDPOINTS.filter((e) => !e.public)
+
+/** Public endpoints (no 401 expected). */
+export const PUBLIC_ENDPOINTS = ENDPOINTS.filter((e) => e.public === true)
