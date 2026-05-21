@@ -1,7 +1,7 @@
 # RFC-052 — review retry-cascade 卡死（任务分解）
 
 > 配套 [proposal.md](./proposal.md) + [design.md](./design.md)。
-> 当前状态：**Draft**，等用户批准后进入实现。
+> 当前状态：**Done**（fix landed in commit `be93be7`，2026-05-21）。
 
 ## 总体策略
 

@@ -1,6 +1,6 @@
 # RFC-055 Proposal — Fanout（agent-multi）节点分片策略 Inspector 表单
 
-> 状态：Draft（2026-05-21）
+> 状态：Done（landed in commit `e9f6dcb`，2026-05-21）
 > Owner：—
 > 关联文档：[design.md](./design.md)、[plan.md](./plan.md)
 > 修订基线：[RFC-015](../RFC-015-fanout-source-port-drag/proposal.md)（fanout sourcePort 拖拽）、[RFC-035](../RFC-035-ux-consistency/proposal.md)（前台 UI 统一）

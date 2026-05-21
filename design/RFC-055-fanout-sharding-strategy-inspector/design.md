@@ -1,6 +1,6 @@
 # RFC-055 Design — Fanout 分片策略 Inspector 表单
 
-> 状态：Draft（2026-05-21）
+> 状态：Done（landed in commit `e9f6dcb`，2026-05-21）
 > 上游：[proposal.md](./proposal.md)
 > 下游：[plan.md](./plan.md)
 

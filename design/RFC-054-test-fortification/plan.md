@@ -1,7 +1,7 @@
 # RFC-054 — 测试防护加固（任务分解）
 
 > 配套 [proposal.md](./proposal.md) + [design.md](./design.md)。
-> 当前状态：**Draft**，等用户批准后进入实现。
+> 当前状态：**Done**（Wave 1 8/8 + Wave 2/3 12/12 共 20 PR 落地；KNOWN_GAP 5 处全修于 `321831c`，2026-05-21）。
 
 ## PR 与依赖图
 

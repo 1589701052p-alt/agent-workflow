@@ -1,6 +1,6 @@
 # RFC-055 Plan — 任务分解与 PR 拆分
 
-> 状态：Draft（2026-05-21）
+> 状态：Done（landed in commit `e9f6dcb`，2026-05-21）
 > 上游：[proposal.md](./proposal.md) / [design.md](./design.md)
 
 ## 0. 一句话范围
