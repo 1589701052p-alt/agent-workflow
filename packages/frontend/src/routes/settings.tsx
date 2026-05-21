@@ -506,13 +506,13 @@ export function AppearanceTab({ config }: TabProps) {
   )
 }
 
-// RFC-050 — Memory tab. For now hosts only the distill output language;
-// future distiller knobs (e.g. memoryDistillerEnabled / memoryDistillModel /
-// per-scope inject budgets) can move here in follow-ups so the JSON-only
-// config surface gets a visible home.
+// RFC-050 — Memory tab. Hosts the distill output language + the distiller
+// model override (RFC-041 T5.3). Future distiller knobs
+// (e.g. memoryDistillerEnabled / per-scope inject budgets) can move here in
+// follow-ups so the JSON-only config surface gets a visible home.
 export function MemoryTab({ config }: TabProps) {
   const { t } = useTranslation()
-  const { state, setState, save } = useTabState(config, ['memoryDistillLang'])
+  const { state, setState, save } = useTabState(config, ['memoryDistillLang', 'memoryDistillModel'])
   return (
     <SectionForm
       onSave={save.mutate}
@@ -520,6 +520,15 @@ export function MemoryTab({ config }: TabProps) {
       error={save.error}
       success={save.isSuccess && save.error === null ? 'saved' : null}
     >
+      <Field
+        label={t('settings.memoryDistillModelLabel')}
+        hint={t('settings.memoryDistillModelHint')}
+      >
+        <ModelSelect
+          value={state.memoryDistillModel}
+          onChange={(v) => setState({ ...state, memoryDistillModel: v })}
+        />
+      </Field>
       <Field
         label={t('settings.memoryDistillLangLabel')}
         hint={t('settings.memoryDistillLangHint')}

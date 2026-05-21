@@ -415,6 +415,9 @@ export const enUS: Resources = {
     memoryDistillLangDefault: 'Default (English)',
     memoryDistillLangZhCN: '简体中文',
     memoryDistillLangEnUS: 'English',
+    memoryDistillModelLabel: 'Memory distill model',
+    memoryDistillModelHint:
+      "Model the distiller agent uses to extract memory candidates. Leave empty to fall back to opencode's installed default (RFC-041 baseline). Independent from the runtime default model.",
     restartRequiredTitle: 'Daemon restart required',
     restartRequiredHint:
       'The new value was written to config.json, but bind host / bind port only apply on the next agent-workflow start. Run `agent-workflow stop` and then `agent-workflow start` in your terminal.',

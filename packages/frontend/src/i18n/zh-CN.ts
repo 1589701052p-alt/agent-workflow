@@ -526,6 +526,8 @@ export interface Resources {
     memoryDistillLangDefault: string
     memoryDistillLangZhCN: string
     memoryDistillLangEnUS: string
+    memoryDistillModelLabel: string
+    memoryDistillModelHint: string
     restartRequiredTitle: string
     restartRequiredHint: string
     renderingPlantumlEndpointLabel: string
@@ -2085,6 +2087,9 @@ export const zhCN: Resources = {
     memoryDistillLangDefault: '跟随默认（English）',
     memoryDistillLangZhCN: '简体中文',
     memoryDistillLangEnUS: 'English',
+    memoryDistillModelLabel: '记忆提炼模型',
+    memoryDistillModelHint:
+      '记忆提炼 agent 使用的模型，留空时跟随 opencode 的安装默认（RFC-041 基线行为）。与运行时默认模型独立配置。',
     restartRequiredTitle: '需要重启守护进程',
     restartRequiredHint:
       '新值已写入 config.json，但 bind host / bind port 仅在下次 agent-workflow start 时生效。请在终端先 agent-workflow stop，再 agent-workflow start。',
