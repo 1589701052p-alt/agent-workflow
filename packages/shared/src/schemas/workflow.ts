@@ -34,6 +34,23 @@ export const NODE_KIND = [
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
 
+// RFC-052: kinds that actually spawn a process / hold a per-attempt node_run
+// row the scheduler dispatches. Used by retry cascades to decide whether to
+// mint a `retryIndex+1` placeholder for a downstream node — the non-process
+// kinds (input/output/review/clarify) have no process state to retry; their
+// runOneNode paths are either no-ops (input/output) or driven by external
+// events (review → user decision, clarify → agent envelope). Cascading
+// retries onto them only produces stale `queued for retry` placeholder rows
+// that confuse downstream `isFresherNodeRun` selection.
+export function isProcessNodeKind(kind: NodeKind): boolean {
+  return (
+    kind === 'agent-single' ||
+    kind === 'agent-multi' ||
+    kind === 'wrapper-git' ||
+    kind === 'wrapper-loop'
+  )
+}
+
 // RFC-020: 'upload' joins as a sibling of 'files'. `files` picks paths
 // already inside the worktree; `upload` writes user-selected local files
 // into the worktree at a per-input `targetDir`. Packed value is identical

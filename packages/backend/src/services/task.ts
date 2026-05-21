@@ -2,6 +2,7 @@
 // Cancel/resume/retry land in P-1-15 + M3 (P-3-08, P-3-09).
 
 import type {
+  NodeKind,
   NodeRun,
   NodeRunEvent,
   NodeRunEventsResponse,
@@ -12,6 +13,7 @@ import type {
   TaskNodeRuns,
   TaskSummary,
 } from '@agent-workflow/shared'
+import { isProcessNodeKind } from '@agent-workflow/shared'
 import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm'
 import { existsSync } from 'node:fs'
 import { ulid } from 'ulid'
@@ -584,9 +586,22 @@ export async function retryNode(
   }
 
   // Identify downstream nodeIds from the workflow snapshot's edges.
+  // RFC-052: also build a nodeId → kind map so the cascade can skip non-process
+  // kinds (input/output/review/clarify) when minting `retryIndex+1` placeholders.
+  // Those kinds have no per-attempt process state — their runOneNode paths
+  // are either no-ops or driven by external events — and the stale placeholder
+  // rows were the source of dispatchReviewNode picking the wrong latest row
+  // and resetting approved reviews back to awaiting_review.
   const downstream = new Set<string>()
+  const kindOf = new Map<string, NodeKind>()
   if (cascade) {
     const snap = parseSnapshot(task.workflowSnapshot)
+    const nodes = Array.isArray(snap?.nodes) ? snap.nodes : []
+    for (const n of nodes as Array<{ id?: string; kind?: string }>) {
+      if (typeof n?.id === 'string' && typeof n?.kind === 'string') {
+        kindOf.set(n.id, n.kind as NodeKind)
+      }
+    }
     const edges = Array.isArray(snap?.edges) ? snap.edges : []
     const adj = new Map<string, string[]>()
     for (const e of edges as Array<{
@@ -638,8 +653,19 @@ export async function retryNode(
   // explicitly retried target the source-of-truth is `runRow` (the row the
   // user picked); for cascaded downstream nodes we inherit from each node's
   // own latest row.
+  // RFC-052: skip downstream non-process kinds (input/output/review/clarify).
+  // The user-picked node (`runRow.nodeId`) is included unconditionally — if
+  // someone retries a review/clarify node directly, that's a different
+  // operation handled elsewhere (or a no-op the user explicitly chose).
+  // Unknown kinds (snapshot missing / older schema) default to "process" to
+  // preserve the legacy behavior.
   const targets = new Set<string>([runRow.nodeId])
-  for (const id of downstream) targets.add(id)
+  for (const id of downstream) {
+    const k = kindOf.get(id)
+    if (k === undefined || isProcessNodeKind(k)) {
+      targets.add(id)
+    }
+  }
   for (const nodeId of targets) {
     const existing = await db
       .select()

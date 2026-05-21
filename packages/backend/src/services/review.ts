@@ -395,7 +395,35 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  const reuse = reviewRuns.find((r) => r.parentNodeRunId === null)
+  // RFC-052: a review for the current iteration is "decided" the moment ANY
+  // top-level row reaches `done` (approve sets status=done) — regardless of
+  // what other rows at higher retryIndex / clarifyIteration claim. The
+  // pre-RFC-052 bug:
+  //   1. user clicks Retry on upstream agent → retryNode cascade mints a
+  //      retryIndex+1 'failed/queued for retry' placeholder row for this
+  //      review node;
+  //   2. scheduler.latestPerNode uses isFresherNodeRun (clarifyIter →
+  //      retryIndex → ulid) which prefers the placeholder over the
+  //      retry=0 approved row;
+  //   3. dispatchReviewNode used `Array.find` to pick whichever row came
+  //      first in SQL insertion order (usually retry=0), then unconditionally
+  //      reset its status back to awaiting_review and minted a phantom
+  //      v(n+1) pending doc_version.
+  // With T2 in place the cascade no longer mints those placeholders, but
+  // this short-circuit is the defense-in-depth that also handles existing
+  // stuck DBs and any other future path that produces extra rows: if a
+  // done row exists for this review at this iteration, the review has been
+  // approved and the scheduler should treat the node as completed.
+  let reuse: (typeof reviewRuns)[number] | undefined
+  let alreadyDone = false
+  for (const r of reviewRuns) {
+    if (r.parentNodeRunId !== null) continue
+    if (r.status === 'done') alreadyDone = true
+    if (isFresherNodeRun(r, reuse)) reuse = r
+  }
+  if (alreadyDone) {
+    return { kind: 'ok', summary: '', message: '' }
+  }
 
   let reviewNodeRunId: string
   let reviewIteration: number
@@ -1138,10 +1166,33 @@ export async function submitReviewDecision(
       sourceNodeId: dv.sourceNodeId,
       sourcePortName: dv.sourcePortName,
     })
-    await args.db.insert(nodeRunOutputs).values([
-      { nodeRunId: args.nodeRunId, portName: 'approved_doc', content: approvedDocContent },
-      { nodeRunId: args.nodeRunId, portName: 'approval_meta', content: meta },
-    ])
+    // RFC-052: upsert outputs instead of plain insert. The original code threw
+    // SqliteError(UNIQUE) on the (nodeRunId, portName) PK when the user
+    // approved a phantom v(n+1) that the buggy dispatchReviewNode had minted
+    // after a first approve — and the throw skipped the `status='done'`
+    // update + `resumeRequired` return, leaving the node_run in a half-
+    // decided middle state forever. With T1 + T2 in place this path
+    // shouldn't be re-entered with already-existing outputs, but keep upsert
+    // as a defense-in-depth: any future edge that reaches the approved
+    // branch twice no longer corrupts node_run state.
+    await args.db
+      .insert(nodeRunOutputs)
+      .values({
+        nodeRunId: args.nodeRunId,
+        portName: 'approved_doc',
+        content: approvedDocContent,
+      })
+      .onConflictDoUpdate({
+        target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
+        set: { content: approvedDocContent },
+      })
+    await args.db
+      .insert(nodeRunOutputs)
+      .values({ nodeRunId: args.nodeRunId, portName: 'approval_meta', content: meta })
+      .onConflictDoUpdate({
+        target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
+        set: { content: meta },
+      })
     await args.db
       .update(nodeRuns)
       .set({ status: 'done', finishedAt: decidedAt })
