@@ -168,9 +168,13 @@ jobs:
         # native bindings, stripped permissions). Exec the binary to catch
         # those before the artifact ships. `doctor` exercises opencode PATH
         # resolution end-to-end and is fast.
+        #
+        # `find` instead of `ls | head` to satisfy actionlint's embedded
+        # shellcheck (SC2012) — robust under names with whitespace even
+        # though the canonical asset names here never contain any.
         run: |
           set -euxo pipefail
-          bin=$(ls dist/agent-workflow-* | head -n 1)
+          bin=$(find dist -maxdepth 1 -type f -name 'agent-workflow-*' | head -n 1)
           chmod +x "$bin"
           "$bin" --version
           "$bin" doctor

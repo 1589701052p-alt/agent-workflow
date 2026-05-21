@@ -56,7 +56,7 @@ jobs:
         id: stage
         run: |
           set -euo pipefail
-          file=$(ls dist/agent-workflow-* | head -n 1)
+          file=$(find dist -maxdepth 1 -type f -name 'agent-workflow-*' | head -n 1)
           echo "asset=$file" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$file")" >> "$GITHUB_OUTPUT"
 
