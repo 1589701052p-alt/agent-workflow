@@ -82,6 +82,14 @@ export const errorHandler: ErrorHandler = (err, c) => {
   if (err instanceof DomainError) {
     return c.json(err.toPayload(), err.status)
   }
+  // RFC-053 PR-B — IllegalNodeRunTransition (defined in shared/lifecycle.ts
+  // as plain `extends Error` to keep the shared layer free of backend
+  // dependencies). At the HTTP boundary it is a 422 (caller asked for a
+  // transition that the state machine doesn't allow), structurally
+  // identical to ValidationError on the wire.
+  if (isIllegalNodeRunTransition(err)) {
+    return c.json<ErrorPayload>({ ok: false, code: err.code, message: err.message }, 422)
+  }
   log.error('unhandled error', {
     name: err.name,
     message: err.message,
@@ -91,4 +99,10 @@ export const errorHandler: ErrorHandler = (err, c) => {
     { ok: false, code: 'internal-error', message: 'internal server error' },
     500,
   )
+}
+
+function isIllegalNodeRunTransition(
+  err: unknown,
+): err is { code: 'illegal-node-run-transition'; message: string } {
+  return err instanceof Error && (err as { code?: unknown }).code === 'illegal-node-run-transition'
 }
