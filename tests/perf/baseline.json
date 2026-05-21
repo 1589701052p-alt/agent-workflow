@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-05-21T14:33:23.499Z",
+  "platform": "darwin-arm64",
+  "runtime": "bun-1.3.13",
+  "samples": {
+    "workflow-parse-v3": {
+      "median_ms": 0.018,
+      "p50_ms": 0.018,
+      "p95_ms": 0.048,
+      "iterations": 200
+    },
+    "envelope-extract-and-parse": {
+      "median_ms": 0.003,
+      "p50_ms": 0.003,
+      "p95_ms": 0.011,
+      "iterations": 200
+    },
+    "secret-redact-long-text": {
+      "median_ms": 0.003,
+      "p50_ms": 0.003,
+      "p95_ms": 0.006,
+      "iterations": 500
+    },
+    "safe-join-clean-path": {
+      "median_ms": 0.001,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "iterations": 1000
+    },
+    "safe-join-traversal-reject": {
+      "median_ms": 0.001,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "iterations": 1000
+    }
+  }
+}
