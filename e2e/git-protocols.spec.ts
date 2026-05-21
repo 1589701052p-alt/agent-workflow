@@ -55,7 +55,7 @@ test.afterAll(async () => {
 test.describe('RFC-054 W3-4 — git protocols against real Gitea', () => {
   test.skip(SKIP, 'gitea fixture not configured (see scripts/git-protocols/README.md)')
 
-  test('HTTPS: daemon can clone a public repo via a credentialed URL (+ KNOWN_GAP: repoUrl persisted unredacted)', async () => {
+  test('HTTPS: daemon can clone a public repo via a credentialed URL + persisted repoUrl is redacted', async () => {
     // POST a task targeting the gitea URL. The daemon's gitRepoCache
     // does the actual clone. We only check that the response indicates
     // a successful resolution (no clone-failure error).
@@ -141,22 +141,13 @@ test.describe('RFC-054 W3-4 — git protocols against real Gitea', () => {
     const task = (await taskRes.json()) as { id: string; repoUrl: string | null }
     expect(task.id).toBeTruthy()
 
-    // KNOWN_GAP — surfaced by W3-4 first run: the daemon stores the
-    // credentialed input URL VERBATIM in `tasks.repoUrl`. Anyone with
-    // task-read access to the row sees the cleartext token, defeating
-    // the redactor on every other path (logs / errors / WS frames all
-    // pass through `redactGitUrl`, but the persistence layer doesn't).
-    //
-    // Root cause: `services/task.ts` line 201 / 303 assigns `repoUrl:
-    // input.repoUrl` straight onto the row without running redactGitUrl
-    // first. Fix direction: stash the credentialed URL ONLY in
-    // ephemeral `gitRepoCache` (for the clone) and persist the
-    // redacted form. Until that lands, this test LOCKS the current
-    // (buggy) behaviour so a future PR that fixes the gap automatically
-    // fires here → switch the assertion negation. Same pattern as
-    // W3-5 redactGitUrl ssh-gap and W2-4 /ws/tasks RBAC-gap.
+    // Post-fix (KNOWN_GAP resolved): services/task.ts now runs
+    // redactGitUrl on input.repoUrl before persisting. The cleartext
+    // token must NOT appear in the persisted row; the redacted form
+    // (`***@host`) must be visible to anyone with task-read access.
     expect(task.repoUrl).toBeTruthy()
-    expect(task.repoUrl).toContain(GITEA_ADMIN_TOKEN)
+    expect(task.repoUrl).not.toContain(GITEA_ADMIN_TOKEN)
+    expect(task.repoUrl).toContain('***')
   })
 
   test('HTTPS: bogus URL is rejected with a clear error (no daemon crash)', async () => {

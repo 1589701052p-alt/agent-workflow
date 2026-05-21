@@ -29,7 +29,8 @@ import { and, eq, gt, asc } from 'drizzle-orm'
 import type { Actor } from '@/auth/actor'
 import { resolveActor } from '@/auth/session'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRuns } from '@/db/schema'
+import { nodeRunEvents, nodeRuns, tasks } from '@/db/schema'
+import { canViewTask } from '@/services/taskCollab'
 import { createLogger } from '@/util/log'
 import {
   MEMORY_CHANNEL,
@@ -58,11 +59,23 @@ interface ConnectionData {
     | { kind: 'memory-distill-jobs' }
   /**
    * The resolved actor that owns this connection. Pinned at upgrade time so
-   * per-actor logging / future per-user channel filtering doesn't need a
-   * second DB round-trip on every broadcast.
+   * per-actor logging / per-user channel filtering doesn't need a second
+   * DB round-trip on every broadcast.
    */
   actor: Actor
   unsubscribe: () => void
+  /**
+   * RFC-054 W2-4 fix — per-task visibility cache for the `/ws/tasks` list
+   * channel. The broadcaster fires every task event globally; this cache
+   * remembers whether the connection's actor is allowed to see each
+   * taskId mentioned in an outgoing frame, so we only do the canViewTask
+   * DB lookup once per (connection, taskId) pair. Cleared on close.
+   *
+   * For the per-task `/ws/tasks/{taskId}` channel a single visibility
+   * check at upgrade time gates the WHOLE connection (see tryUpgrade);
+   * no cache needed.
+   */
+  visibilityCache: Map<string, boolean>
 }
 
 export interface WebSocketAdapterDeps {
@@ -181,18 +194,69 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         { status: 401, headers: { 'Content-Type': 'application/json' } },
       )
     }
+    // RFC-054 W2-4 fix — per-task channel upgrade is gated by
+    // canViewTask. The tasks-list channel does per-frame filtering
+    // (see handleOpen below) because the channel itself enumerates
+    // all tasks system-wide.
+    if (channel.kind === 'task') {
+      const visible = await isTaskVisibleTo(deps.db, actor, channel.taskId)
+      if (!visible) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 'task-not-visible',
+              message: 'task not visible to current actor',
+            },
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+    }
     const data: ConnectionData = {
       channel,
       actor,
       unsubscribe: () => {
         /* set on open */
       },
+      visibilityCache: new Map<string, boolean>(),
     }
     const ok = server.upgrade(req, { data })
     if (!ok) {
       return new Response('upgrade-failed', { status: 426 })
     }
     return true
+  }
+
+  /**
+   * Look up a task's ownerUserId once and ask canViewTask. Returns false
+   * if the task no longer exists (e.g. just got deleted between
+   * broadcaster fire + this handler running).
+   */
+  async function isTaskVisibleTo(db: DbClient, actor: Actor, taskId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: tasks.id, ownerUserId: tasks.ownerUserId })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+    if (rows.length === 0) return false
+    return canViewTask(db, actor, rows[0]!)
+  }
+
+  /**
+   * Cached variant: stores the result per-connection so a hot task
+   * status stream doesn't N+1 the DB. The cache is bounded by the
+   * number of distinct tasks the connection sees, which is bounded by
+   * the system's total task count — acceptable for v1.
+   */
+  async function cachedIsTaskVisible(
+    ws: ServerWebSocket<ConnectionData>,
+    taskId: string,
+  ): Promise<boolean> {
+    const cached = ws.data.visibilityCache.get(taskId)
+    if (cached !== undefined) return cached
+    const visible = await isTaskVisibleTo(deps.db, ws.data.actor, taskId)
+    ws.data.visibilityCache.set(taskId, visible)
+    return visible
   }
 
   async function handleOpen(ws: ServerWebSocket<ConnectionData>): Promise<void> {
@@ -215,9 +279,35 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         return
       }
       case 'tasks-list': {
+        // RFC-054 W2-4 fix — per-frame RBAC filter. Every TasksListWsMessage
+        // mentions exactly one task; pull the task id, run canViewTask
+        // (cached per connection), and drop the frame if not visible.
+        // Admins (`tasks:read:all`) shortcut to true inside canViewTask
+        // so this stays O(1) DB lookup for the global view.
         ws.data.unsubscribe = tasksListBroadcaster.subscribe(
           TASKS_LIST_CHANNEL,
-          (msg: TasksListWsMessage) => safeSend(ws, msg),
+          (msg: TasksListWsMessage) => {
+            const taskId = extractTaskIdFromListMessage(msg)
+            if (taskId === null) {
+              // Defensive: future TasksListWsMessage variants without a
+              // taskId would skip the gate. We default to NOT sending
+              // unknown shapes — safer than leaking by accident.
+              return
+            }
+            // Fire-and-forget the async check; if visible, send. If the
+            // check throws (DB blip), fall back to NOT sending — same
+            // safer-default as the unknown-shape branch above.
+            cachedIsTaskVisible(ws, taskId)
+              .then((visible) => {
+                if (visible) safeSend(ws, msg)
+              })
+              .catch((err) => {
+                log.warn('tasks-list visibility check threw', {
+                  taskId,
+                  err: err instanceof Error ? err.message : String(err),
+                })
+              })
+          },
         )
         safeSend(ws, { type: 'hello', channel: 'tasks' } satisfies WsControlMessage)
         return
@@ -322,6 +412,32 @@ async function replayTaskEvents(
       payload,
     }
     safeSend(ws, msg)
+  }
+}
+
+/**
+ * Extract the task id a TasksListWsMessage refers to. Each shape in the
+ * discriminated union mentions exactly one task; if the union grows a
+ * new variant in the future, the default-null branch causes the WS
+ * server to DROP the frame (safer than leaking by accident — see
+ * RFC-054 W2-4 fix in handleOpen for `tasks-list`).
+ */
+function extractTaskIdFromListMessage(msg: TasksListWsMessage): string | null {
+  switch (msg.type) {
+    case 'task.created':
+      return msg.task.id
+    case 'task.status':
+      return msg.taskId
+    case 'task.deleted':
+      return msg.taskId
+    case 'lifecycle.alert':
+      // lifecycle.alert carries the alert payload's taskId.
+      // Defensive narrowing — payload shape may evolve.
+      return typeof (msg as unknown as { taskId?: string }).taskId === 'string'
+        ? (msg as unknown as { taskId: string }).taskId
+        : null
+    default:
+      return null
   }
 }
 

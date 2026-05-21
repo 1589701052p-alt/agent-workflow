@@ -18,6 +18,19 @@ export function safeJoin(root: string, relPath: string): string {
   if (isAbsolute(relPath)) {
     throw new ValidationError('path-absolute', 'path must be relative')
   }
+  // RFC-054 W3-5 KNOWN_GAP fix: reject any backslash on POSIX too.
+  // node:path on macOS/Linux treats `\` as a literal character, so
+  // `\windows\system32` and `..\..\etc` are accepted as weird-but-
+  // relative filenames. That's semantically safe on POSIX-only
+  // deployments today, but it's a portability landmine for future
+  // Windows binaries (where `\` IS a path separator and these would
+  // be real traversals). Rejecting backslash defensively now means
+  // the daemon's path-safety contract is cross-platform, and surface
+  // legitimate "filenames containing backslash" attempts loudly
+  // rather than silently passing them through.
+  if (relPath.includes('\\')) {
+    throw new ValidationError('path-backslash', 'path must not contain backslash characters')
+  }
   const target = resolve(root, normalize(relPath))
   const rootResolved = resolve(root)
   const rootPrefix = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep

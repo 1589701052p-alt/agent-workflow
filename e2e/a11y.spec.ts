@@ -58,24 +58,16 @@ async function primeAuth(page: Page, d: DaemonHandle): Promise<void> {
  * Pre-W2-6 known violations that exist in production today. Listed here
  * with a TODO + tracking note rather than failing the suite — new PRs
  * that introduce additional violations still go red, but landing W2-6
- * doesn't require fixing pre-existing ones in the same diff (which would
- * balloon scope into UI design work).
+ * doesn't require fixing pre-existing ones in the same diff.
  *
- * To lift an entry: fix the underlying CSS / DOM and remove the key.
- * The second test below ('allowlist matches reality') catches stale
- * entries — if a violation is fixed but its allowlist key stays, CI red.
+ * Empty post-fix: RFC-054 W2-6 KNOWN_VIOLATIONS entries for /memory +
+ * /settings color-contrast were lifted after the muted token in
+ * styles.css was darkened from #6b7180 to #5b6271 (ratio 4.34 → 5.56),
+ * clearing the WCAG AA 4.5:1 threshold.
  *
- * Format: `<route>::<rule-id>`. Future audits add a tracking issue link
- * in code comments when filing one.
+ * Format: `<route>::<rule-id>`.
  */
-const KNOWN_VIOLATIONS = new Set<string>([
-  // RFC-054 W2-6 surfaced these on first run. Both are contrast issues
-  // on the muted-secondary text used in metadata rows (timestamps,
-  // counts). Fix needs the design palette to bump the muted token from
-  // current ratio ~4.4:1 to ≥ 4.5:1 (WCAG AA threshold).
-  '/memory::color-contrast',
-  '/settings::color-contrast',
-])
+const KNOWN_VIOLATIONS = new Set<string>()
 
 /**
  * Scan a single page for axe violations and fail the test if any critical
@@ -115,7 +107,13 @@ async function expectNoCriticalOrSeriousAxeViolations(
   if (blocking.length > 0) {
     const lines = blocking.map(
       (v) =>
-        `  [${v.impact}] ${v.id} (${v.nodes.length} node${v.nodes.length === 1 ? '' : 's'}): ${v.help}\n     ${v.helpUrl}`,
+        `  [${v.impact}] ${v.id} (${v.nodes.length} node${v.nodes.length === 1 ? '' : 's'}): ${v.help}\n     ${v.helpUrl}\n` +
+        v.nodes
+          .map(
+            (n) =>
+              `       at: ${n.target.join(' ')}\n       ${n.failureSummary?.slice(0, 200) ?? ''}`,
+          )
+          .join('\n'),
     )
     throw new Error(
       `axe-core found ${blocking.length} unallowlisted critical+serious violations on ${pageLabel}:\n${lines.join('\n')}\n\nIf this is an intentional regression please fix the UI; if it's a known issue, add the key '<route>::<rule-id>' to KNOWN_VIOLATIONS with a TODO and tracking comment.`,

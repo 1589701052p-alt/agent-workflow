@@ -300,7 +300,13 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     workflowId: workflow.id,
     workflowSnapshot: JSON.stringify(workflow.definition),
     repoPath: source.repoPath,
-    repoUrl: source.repoUrl,
+    // RFC-054 W3-4 KNOWN_GAP fix: never persist the credentialed URL.
+    // gitRepoCache has already used the cleartext form to clone (line
+    // 197 above); from this point onward the daemon only needs the
+    // redacted form (for display, WS broadcast, error messages). The
+    // cleartext URL is reachable only ephemerally via the cache key
+    // hash, so even DB-level access can't reconstruct it.
+    repoUrl: source.repoUrl !== null ? redactGitUrl(source.repoUrl) : null,
     worktreePath,
     baseBranch: source.baseBranch ?? '',
     branch: branch !== '' ? branch : `agent-workflow/${taskId}`,

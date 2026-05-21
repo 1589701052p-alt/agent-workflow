@@ -109,27 +109,28 @@ describe('RFC-054 W3-5 — path-traversal fuzz on safeJoin', () => {
     }
   })
 
-  test('KNOWN_GAP: Windows-style backslash payloads are NOT rejected on POSIX (documented)', () => {
-    // safeJoin uses node:path POSIX semantics on macOS/Linux, where `\`
-    // is a literal character, not a separator. Payloads like
-    // `\\windows\\system32` and `..\\..\\foo` are therefore treated as
-    // single relative file/dir names and DO end up under the root —
-    // semantically safe on POSIX, but the daemon would have to grow
-    // explicit Win32 handling if it ever ships a Windows binary.
-    //
-    // This test locks the current behaviour so a future PR can't
-    // accidentally start rejecting names that contain backslashes
-    // (which would be a regression for users naming files weirdly on
-    // POSIX). When daemonshipping Windows, replace this with the
-    // negative form ('should reject backslash traversal') and update
-    // safeJoin.
-    const root = mkdtempSync(join(tmpdir(), 'aw-fuzz-path-known-gap-'))
+  test('Windows-style backslash payloads ARE rejected on POSIX (post-fix)', () => {
+    // Post-fix (W3-5 KNOWN_GAP resolved): safeJoin defensively rejects
+    // any path containing a backslash, regardless of platform. On POSIX
+    // backslash was previously a legal literal character — but in
+    // practice nobody legitimately names a file with `\`, and a future
+    // Windows binary would otherwise see these as real path traversals.
+    // Rejecting now closes the portability gap.
+    const root = mkdtempSync(join(tmpdir(), 'aw-fuzz-path-backslash-'))
     try {
-      // These ALL must resolve cleanly (no throw) AND land under root.
-      const acceptedPayloads = ['\\windows\\system32', '..\\..\\foo']
-      for (const payload of acceptedPayloads) {
-        const out = safeJoin(root, payload)
-        expect(out.startsWith(root)).toBe(true)
+      const backslashPayloads = ['\\windows\\system32', '..\\..\\foo', 'file\\with\\slashes']
+      for (const payload of backslashPayloads) {
+        let thrown: unknown
+        try {
+          safeJoin(root, payload)
+        } catch (err) {
+          thrown = err
+        }
+        if (!(thrown instanceof ValidationError)) {
+          throw new Error(
+            `expected ValidationError for backslash payload ${JSON.stringify(payload)}, got ${thrown === undefined ? 'no throw' : String(thrown)}`,
+          )
+        }
       }
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -226,25 +227,26 @@ describe('RFC-054 W3-5 — git URL credential redaction fuzz', () => {
     )
   })
 
-  test('KNOWN_GAP: ssh:// / git+https:// scheme URLs are NOT yet redacted (documented)', () => {
-    // redactGitUrl's regex `(https?:\/\/)[^/@\s]+@/gi` only matches http
-    // and https. Surfaced by W3-5 fuzz (counterexample seed=920122281
-    // shrunk to `ssh://-:0000@github.com/-`). Real risk: ssh URLs with
-    // password-style credentials appear in some on-prem gitea / self-
-    // hosted setups; redaction must grow to cover them.
-    //
-    // This test locks the current behaviour so refactors don't
-    // accidentally regress it further, and acts as a TODO marker: when
-    // redactGitUrl is fixed (extend regex to `(?:https?|ssh|git\+\w+):\/\/`),
-    // flip the assertion's negation and lift this entry off the
-    // KNOWN_GAP bucket.
-    //
-    // The actual cleartext check guards against this gap closing
-    // SILENTLY — if a future PR fixes redactGitUrl, the assertion below
-    // will start failing (password no longer in output), which is the
-    // signal to switch the test to positive form.
-    const sample = 'ssh://alice:p4ssw0rd@gitea.local/repo.git'
-    expect(redactGitUrl(sample)).toContain('p4ssw0rd')
+  test('ssh:// + git+https:// scheme URLs with passwords ARE redacted (post-fix)', () => {
+    // Post-fix (KNOWN_GAP from W3-5 first run resolved): redactGitUrl
+    // now redacts `<scheme>://user:pass@` for any scheme, not just
+    // http(s). The cleartext password must NOT appear in the output.
+    // `ssh://git@host` (no colon → no password) still passes through
+    // unmangled because the login name `git` is not a secret.
+    const sshSample = 'ssh://alice:p4ssw0rd@gitea.local/repo.git'
+    const redactedSsh = redactGitUrl(sshSample)
+    expect(redactedSsh).not.toContain('p4ssw0rd')
+    expect(redactedSsh).toContain('***')
+
+    const gitPlusSample = 'git+https://bob:secretToken@gitlab.local/path.git'
+    const redactedGitPlus = redactGitUrl(gitPlusSample)
+    expect(redactedGitPlus).not.toContain('secretToken')
+
+    // Plain `ssh://git@host` (no password) is preserved — `git` is the
+    // canonical login name, not a credential, and stripping it would
+    // distort the URL past diagnostic value.
+    const plainSsh = 'ssh://git@github.com/owner/repo.git'
+    expect(redactGitUrl(plainSsh)).toBe(plainSsh)
   })
 
   test('URLs without userinfo pass through unchanged (no false positives)', () => {

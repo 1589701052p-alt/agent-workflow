@@ -9,8 +9,16 @@
   --panel: #ffffff;
   --border: #e3e5ea;
   --text: #1f2328;
-  --muted: #6b7180;
-  --accent: #2f6feb;
+  /* RFC-054 W2-6 KNOWN_VIOLATIONS fix: bumped #6b7180 → #5b6271 to clear
+     the WCAG 2.1 AA contrast threshold of 4.5:1 on --bg / --panel.
+     Old ratio 4.34:1 was 0.16 below threshold; new 5.56:1 passes. */
+  --muted: #5b6271;
+  /* RFC-054 W2-6 KNOWN_VIOLATIONS fix #2: bumped #2f6feb → #1f5fda to
+     clear the same AA threshold for `.tabs__tab--active { color: var(--accent) }`
+     and similar accent-on-bg text. Old ratio ~4.33:1 axe-measured (just
+     under); new ~5.3:1. Brand blue stays close — small darkening,
+     same hue family. */
+  --accent: #1f5fda;
   --danger: #d12c2c;
 
   /* RFC-035 design tokens. New code MUST use these tokens instead of magic

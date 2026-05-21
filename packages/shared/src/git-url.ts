@@ -144,16 +144,34 @@ export function parseGitUrl(input: string): GitUrl | null {
 }
 
 /**
- * Mask credentials in a URL so it's safe to log / display. We only mask
- * `http(s)://user[:pass]@` segments — the SSH `user@` component is the login
- * name (typically `git`), not a secret, and stripping it would distort the URL
- * past recognition. Pure string substitution: preserves trailing whitespace,
- * fragments, and other surrounding context so this can run over arbitrary log
- * lines or stderr output.
+ * Mask credentials in a URL so it's safe to log / display. Two passes:
+ *   1. `http(s)://user[:pass]@` — redact the entire userinfo. Legacy
+ *      behavior, preserved so token-as-username flows
+ *      (e.g. GitHub fine-grained PATs that put the token in the user
+ *      field) still get masked when no `:` is present.
+ *   2. Any OTHER scheme with `user:pass@` (e.g. `ssh://`, `git+https://`,
+ *      `git://`) — redact only when a `:` indicates a password. This
+ *      preserves `ssh://git@host` (the login name `git` is not a secret
+ *      and stripping it would distort the URL past recognition) while
+ *      catching `ssh://alice:secret@host` which IS a credential leak.
+ *
+ * Pure string substitution: preserves trailing whitespace, fragments, and
+ * other surrounding context so this can run over arbitrary log lines or
+ * stderr output.
+ *
+ * RFC-054 W3-5 surfaced the original ssh-leak gap; this is the fix.
  */
 export function redactGitUrl(input: string): string {
   if (typeof input !== 'string') return ''
-  return input.replace(/(https?:\/\/)[^/@\s]+@/gi, '$1***@')
+  // Pass 1: http(s) — redact entire userinfo (legacy).
+  let out = input.replace(/(https?:\/\/)[^/@\s]+@/gi, '$1***@')
+  // Pass 2: other schemes — redact only `user:pass@` (preserve plain
+  // `user@` for SSH login names that aren't secrets).
+  // Excludes http(s) by virtue of pass 1 already producing `***@` which
+  // doesn't contain a colon — pattern below requires `:` between user
+  // and password, so it can't re-match pass-1 output.
+  out = out.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi, '$1***:***@')
+  return out
 }
 
 /**

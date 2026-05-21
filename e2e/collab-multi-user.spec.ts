@@ -292,32 +292,16 @@ test("two browsers, two users: bob CANNOT navigate to alice's task detail (403)"
   await ctxBob.close()
 })
 
-test('KNOWN_GAP: /ws/tasks list channel currently broadcasts every task to every subscriber (server-side RBAC filter missing)', async ({
-  browser,
-}) => {
-  // Surfaced by W2-4 first-run: bob's /ws/tasks subscription receives
-  // alice's task.created + subsequent task.status frames (verified with
-  // raw payload inspection — task ID matches alice's task). Counter-
-  // example: 3 leaking frames in a single 2-second window.
+test('/ws/tasks list channel filters per-frame by canViewTask (post-fix)', async ({ browser }) => {
+  // Post-fix (RFC-054 W2-4 KNOWN_GAP resolved): the WS server now runs
+  // a per-frame canViewTask gate against the subscriber's actor. Bob's
+  // /ws/tasks subscription must NOT receive frames mentioning alice's
+  // task id — server-side dropping happens before send, so the bytes
+  // never cross the wire.
   //
-  // Root cause: `tasksListBroadcaster` (packages/backend/src/ws/
-  // broadcaster.ts:83) is a single global channel; the WS server in
-  // `src/ws/server.ts` subscribes every authenticated client without
-  // re-checking task-level RBAC per outgoing frame. The REST API path
-  // (`canViewTask`) DOES filter (W1-5 locked that), but the WS push
-  // bypass is a parallel surface.
-  //
-  // Real risk: regular user can mine the WS stream and learn task IDs
-  // / workflowIds / repoPaths of other users' tasks — not the task
-  // BODIES (those land via the per-task channel which IS gated by
-  // taskId), but enough to leak workflow naming patterns / activity
-  // intelligence.
-  //
-  // Fix direction: WS server should filter outgoing frames against
-  // `canViewTask(actor, taskId)` before send. Until then, this test
-  // LOCKS the current behaviour (frames DO leak) so a future PR that
-  // fixes the gap automatically fires here → switch the assertion
-  // negation. (Same pattern as W3-5 redactGitUrl KNOWN_GAP.)
+  // See packages/backend/src/ws/server.ts handleOpen('tasks-list') for
+  // the gate + extractTaskIdFromListMessage for the per-message taskId
+  // extraction (drops unknown-shape variants by default).
   const alice = await createUserAndLogin({
     username: 'alice-collab-3',
     password: 'AliceCollab3#1',
@@ -350,10 +334,7 @@ test('KNOWN_GAP: /ws/tasks list channel currently broadcasts every task to every
   await bPage.waitForTimeout(2000)
 
   const leakingFrames = wsFrames.filter((f) => f.payload.includes(aliceTaskId))
-  // KNOWN_GAP: filter NOT yet implemented. Expect leaks today.
-  // When the fix lands, this assertion will fail (no leaks) → flip
-  // to toHaveLength(0) and lift this entry off KNOWN_GAP.
-  expect(leakingFrames.length).toBeGreaterThan(0)
+  expect(leakingFrames).toHaveLength(0)
 
   await ctxBob.close()
 })
