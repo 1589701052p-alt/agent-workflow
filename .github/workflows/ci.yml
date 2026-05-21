@@ -116,10 +116,18 @@ jobs:
 
       - name: shellcheck (shell script lint)
         uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          # Exclude vendor / artefact dirs — without this the action recurses
+          # into node_modules (playwright-core's xdg-open has SC2145 errors,
+          # cytoscape's release scripts have SC2086 etc) and we'd be linting
+          # code we don't own. Restrict to the repo's own scripts.
+          ignore_paths: node_modules dist .git
         env:
-          # Start strict — current scripts (`e2e/fixtures/*.sh`, hooks, fake-npm)
-          # are all `set -eu` clean. Loosen with SHELLCHECK_OPTS only if a
-          # legitimately unfixable warning appears.
+          # Start strict on our own scripts — current ones
+          # (`e2e/fixtures/*.sh`, scripts/git-hooks/*, tests/fixtures/fake-npm.sh)
+          # are all `set -eu` clean. Loosen via SHELLCHECK_OPTS / per-file
+          # `# shellcheck disable=...` only if a legitimately unfixable
+          # warning appears.
           SHELLCHECK_SEVERITY: error
 
       - name: gitleaks (secret scanning)
