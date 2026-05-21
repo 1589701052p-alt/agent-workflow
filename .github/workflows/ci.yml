@@ -251,12 +251,20 @@ jobs:
     # downloading the artifact because download-artifact strips +x and
     # the binary needs to stay executable. The build is incremental
     # against the same workspace so the second run is fast.
-    name: Playwright e2e
+    #
+    # RFC-054 W1-8 — `shard` matrix splits the suite into 4 buckets per OS
+    # so total e2e wall-clock drops from ~50s (single runner) to ~15s per
+    # shard runner running in parallel. Each shard runner uses Playwright's
+    # built-in `--shard=N/M` flag (which distributes test files round-robin
+    # at file granularity, so a single file's tests stay co-located and
+    # `test.beforeAll` semantics hold).
+    name: Playwright e2e (shard ${{ matrix.shard }}/4)
     needs: build-binary
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -275,16 +283,19 @@ jobs:
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
-      - name: Run e2e
+      - name: Run e2e (shard ${{ matrix.shard }}/4)
         env:
           CI: 'true'
-        run: bun run e2e
+        run: bun run e2e -- --shard=${{ matrix.shard }}/4
 
       - name: Upload Playwright trace on failure
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-trace-${{ matrix.os }}
+          # Shard in the artifact name so all 8 shards' traces can coexist
+          # in the same workflow run when multiple fail (otherwise the
+          # later one would overwrite the earlier).
+          name: playwright-trace-${{ matrix.os }}-shard${{ matrix.shard }}
           path: |
             test-results/
             playwright-report/

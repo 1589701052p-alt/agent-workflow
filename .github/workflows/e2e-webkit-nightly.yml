@@ -1,0 +1,89 @@
+# RFC-054 W1-8 — nightly cross-browser sanity sweep.
+#
+# Why a separate workflow:
+#   * Webkit re-runs the full e2e suite which doubles CI cost; we want
+#     this signal but not on every PR. Decoupling lets PR ci.yml stay
+#     chromium-only (~22s/shard) while webkit drift still surfaces with
+#     ≤ 24h latency.
+#   * Failures here open a regression issue to be triaged separately —
+#     they don't gate merging. (`fail-fast: false` on the matrix so all
+#     four shards report their state even when one is red.)
+#
+# Trigger:
+#   * `schedule` — 07:00 UTC every day (~midnight Pacific / 16:00 JST).
+#   * `workflow_dispatch` — manual button on the Actions tab when a PR
+#     touches focus-trap / animation / selector code and the author wants
+#     pre-merge webkit feedback.
+#
+# Coverage parity with PR `e2e` job:
+#   * Same matrix shape (`os × shard`), same build-binary path, same
+#     stub-opencode wiring.
+#   * Extra env `PLAYWRIGHT_WEBKIT=1` registers the webkit project in
+#     `playwright.config.ts`; `--project=webkit` filters Playwright to
+#     that project only (no chromium re-run — chromium is covered by the
+#     PR gate).
+
+name: e2e-webkit-nightly
+
+on:
+  schedule:
+    # 07:00 UTC daily. GitHub-hosted runners do not guarantee sub-15-min
+    # cron precision; this can fire anywhere in a ~07:00–07:30 window.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-webkit:
+    name: Playwright webkit (shard ${{ matrix.shard }}/4)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3, 4]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.x'
+
+      - name: Install opencode (for build smoke parity)
+        run: |
+          bun install -g opencode-ai
+          export PATH="$HOME/.bun/bin:$PATH"
+          opencode --version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build single-binary
+        run: bun run build:binary
+
+      - name: Install Playwright browsers (webkit)
+        # `--with-deps` installs the system libs webkit needs on
+        # ubuntu-latest (`libwebkit2gtk-4.0`, fonts, etc.). On macOS the
+        # WebKit engine ships with the OS so only the playwright binary
+        # is downloaded.
+        run: bunx playwright install --with-deps webkit
+
+      - name: Run e2e (webkit, shard ${{ matrix.shard }}/4)
+        env:
+          CI: 'true'
+          PLAYWRIGHT_WEBKIT: '1'
+        run: bun run e2e -- --project=webkit --shard=${{ matrix.shard }}/4
+
+      - name: Upload Playwright trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-trace-webkit-${{ matrix.os }}-shard${{ matrix.shard }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
