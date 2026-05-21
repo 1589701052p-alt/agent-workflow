@@ -8,8 +8,17 @@
 // Loop wrappers keep the RFC-003 catch-all inbound handle as a tolerant
 // drop target; the legacy named left input ports are removed — they had no
 // runtime semantics in scheduler.ts and only misled users.
+//
+// Wrapper output ports (git_diff for wrapper-git, outputBindings.name[] for
+// wrapper-loop) render along the BOTTOM edge, centered. Right-side rendering
+// (the shared `<PortHandles side="right">` path used by agent nodes) doesn't
+// fit wrappers — the wrapper's `padding: 0` (required so the visible rect
+// matches the bbox xyflow uses for child clipping) means the default
+// right-handle offset of -14px pushes the dot outside the wrapper. A
+// bottom-centered layout also reads more naturally for a container whose
+// "output" semantically belongs to the whole group, not a side row.
 
-import type { NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
@@ -79,7 +88,23 @@ export function GroupWrapperNode({ data, selected }: Props) {
       {kind === 'loop' ? (
         <PortHandles side="left" ports={[]} catchAll={{ id: INBOUND_HANDLE_ID }} />
       ) : null}
-      <PortHandles side="right" ports={data.outputPorts} />
+      {data.outputPorts.length > 0 ? (
+        <div className="canvas-node__bottom-ports">
+          {data.outputPorts.map((p) => (
+            <div key={p} className="canvas-node__bottom-port">
+              <span className="canvas-node__port-label" title={p}>
+                {p}
+              </span>
+              <Handle
+                type="source"
+                position={Position.Bottom}
+                id={p}
+                className="canvas-node__handle"
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -4344,6 +4344,45 @@ code {
   left: auto !important;
 }
 
+/* Wrapper output ports — bottom-centered. Right-side rendering (the shared
+ * `.canvas-node__port-rows--right` path used by agent nodes) doesn't fit
+ * wrappers: wrapper-group carries `padding: 0` so the visible rect lines up
+ * with the bbox xyflow uses for child clipping, and the default `-14px`
+ * right-handle offset would push the dot outside the wrapper. Instead the
+ * wrapper renders its output ports along the bottom edge, centered. Each
+ * port is a column (label above, handle below); the row is absolutely
+ * anchored to the wrapper's bottom edge so xyflow's default
+ * `Position.Bottom` handle (bottom: -3px, left: 50%) lands centered on the
+ * wrapper's outer edge regardless of inner content height. */
+.canvas-node__bottom-ports {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 0 10px;
+  pointer-events: none;
+}
+.canvas-node__bottom-port {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+  /* The label sits inside the wrapper just above the bottom edge. A subtle
+   * panel-tinted background lifts it off the dashed wrapper border so the
+   * text stays readable when an inner node sits flush to the bottom. */
+}
+.canvas-node__bottom-port .canvas-node__port-label {
+  padding: 0 4px 4px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border-radius: 3px;
+}
+
 .canvas-node__port-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   max-width: 140px;

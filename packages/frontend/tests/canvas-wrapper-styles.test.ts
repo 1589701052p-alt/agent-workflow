@@ -48,6 +48,23 @@ describe('styles.css wrapper rule migration', () => {
     const css = await styles()
     expect(css).toMatch(/\.wrapper-header-pill\s*\{/)
   })
+
+  // Regression: wrapper output ports (git_diff, loop outputBindings) are
+  // rendered along the BOTTOM edge centered, NOT on the right side. The
+  // shared right-side port-rows path doesn't fit wrappers — wrapper-group
+  // carries `padding: 0` (so the visible rect matches the bbox xyflow uses
+  // for child clipping), and the default -14px right-handle offset would
+  // push the dot outside the wrapper. JSDOM doesn't run layout, so we lock
+  // the CSS source.
+  test('bottom-port rule for wrapper output ports is defined', async () => {
+    const css = await styles()
+    expect(css).toMatch(/\.canvas-node__bottom-ports\s*\{/)
+    expect(css).toMatch(/\.canvas-node__bottom-port\s*\{/)
+    // Anchored to the wrapper bottom edge with horizontal centering.
+    expect(css).toMatch(
+      /\.canvas-node__bottom-ports\s*\{[^}]*position:\s*absolute[^}]*bottom:\s*0[^}]*justify-content:\s*center/s,
+    )
+  })
 })
 
 describe('WrapperNodes.tsx component-level guards', () => {
@@ -67,5 +84,15 @@ describe('WrapperNodes.tsx component-level guards', () => {
     expect(src).toMatch(/INBOUND_HANDLE_ID/)
     // The legacy `side="left" ports={data.inputPorts}` invocation is gone.
     expect(src).not.toMatch(/side="left"\s+ports={data\.inputPorts}/)
+  })
+
+  test('output ports render along bottom edge (Position.Bottom), not via PortHandles side="right"', async () => {
+    const src = await wrapperNodes()
+    // Bottom-port column rendering present.
+    expect(src).toMatch(/canvas-node__bottom-ports/)
+    expect(src).toMatch(/Position\.Bottom/)
+    // The previous `<PortHandles side="right" ports={data.outputPorts} />`
+    // invocation is gone — wrappers must NOT use the shared right-side path.
+    expect(src).not.toMatch(/side="right"\s+ports={data\.outputPorts}/)
   })
 })
