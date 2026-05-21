@@ -990,3 +990,33 @@ export const taskFeedback = sqliteTable(
     taskIdx: index('idx_task_feedback_task').on(t.taskId, t.createdAt),
   }),
 )
+
+// -----------------------------------------------------------------------------
+// RFC-053 P-3 lifecycle_alerts — open / resolved lifecycle-invariant findings
+// found by the periodic scan (services/lifecycleInvariants.ts).
+// One row per (task_id, rule) is "open" at a time (resolved_at IS NULL).
+// Resolved history is kept for diagnose UI / debug.
+// rule values: 'R1' / 'R2' / 'C1' / 'T1' / 'T2' / 'T3' / 'U1'
+//   (PR-E may add 'S1'/'S2'/'S3'/'S4' for stuck-task detection).
+// severity: 'warning' for the first 24h after detected_at; promoted to
+// 'error' on the next scan past that boundary.
+// detail: JSON payload naming the affected rows (varies per rule).
+// -----------------------------------------------------------------------------
+export const lifecycleAlerts = sqliteTable(
+  'lifecycle_alerts',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    rule: text('rule').notNull(),
+    severity: text('severity').notNull(),
+    detail: text('detail').notNull(),
+    detectedAt: integer('detected_at').notNull(),
+    resolvedAt: integer('resolved_at'),
+  },
+  (t) => ({
+    taskIdx: index('idx_lifecycle_alerts_task').on(t.taskId, t.detectedAt),
+    openIdx: index('idx_lifecycle_alerts_open').on(t.resolvedAt, t.severity),
+  }),
+)

@@ -93,32 +93,48 @@ PR-B P-1 状态机化  ──┬───────►├──► PR-C P-2 ki
 - retryNode 不再含 hardcoded `NON_PROCESS_KINDS` Set
 - 新加 NodeKind 时不填表 → `bun run typecheck` 报错
 
-### RFC-053-T4（PR-D）— P-3 双层 invariant 启动+周期扫
+### RFC-053-T4（PR-D）— P-3 双层 invariant 启动+周期扫 — **DONE**
 
-- migration `db/migrations/0028_lifecycle_alerts.sql` + drizzle
-  schema 更新
-- 新文件 `services/lifecycleInvariants.ts`（R1/R2/C1/T1/T2/T3/U1 七条
-  invariant 各一个纯函数 + 入口 `runLifecycleInvariants()`）
-- 调度：daemon 启动 5s 后跑一次 `{all: true}`；
-  `services/backgroundTasks.ts` 增加每小时 `{since: now-2h}` 调用
-- 新路由 `POST /api/tasks/{id}/diagnose` → 调
-  `runLifecycleInvariants({ taskScope: { taskId } })` 返回结构化
-  alerts
-- 新 WS 事件 `tasksListBroadcaster.emit('lifecycle.alert', ...)`
-- 新单测：
-  - `tests/lifecycle-invariants-review.test.ts`（R1/R2 各 satisfied
-    + violated）
-  - `tests/lifecycle-invariants-clarify.test.ts`（C1 同上）
-  - `tests/lifecycle-invariants-task.test.ts`（T1/T2/T3/U1 同上）
-  - `tests/migration-0028.test.ts`（lifecycle_alerts 表结构 + index）
-  - `tests/api-tasks-diagnose.test.ts`（端到端调路由 → 返回 alerts）
+- ✅ migration `db/migrations/0028_rfc053_lifecycle_alerts.sql` + drizzle
+  schema `lifecycleAlerts` 表（id/task_id/rule/severity/detail/
+  detected_at/resolved_at + 2 个 index + tasks FK cascade）
+- ✅ 新文件 `services/lifecycleInvariants.ts`（R1/R2/C1/T1/T2/T3/U1 七条
+  invariant 各一个纯函数 + 入口 `runLifecycleInvariants({db, scope,
+  now, onAlert})` 跑 3 种 scope `{taskId} | {since} | {all:true}` +
+  增量 reconcile 走 (taskId, rule) 唯一性键 + 24h grace 升级 + 跨
+  边界一次性 `'promoted'` callback）
+- ✅ 调度：`startLifecycleInvariantsLoop` 启动 `bootDelayMs=5000`
+  跑全量 + `intervalMs=1h` `{since: now-2h}` 增量；wire 在
+  `cli/start.ts` 与 shutdown 串联
+- ✅ 新路由 `POST /api/tasks/:id/diagnose` → 调
+  `runLifecycleInvariants({scope: {taskId}})` 返回结构化 alerts
+- ✅ 新 WS 事件：shared `TasksListWsMessage` 增 `lifecycle.alert` 变体
+  (taskId+rule+severity+transition)；`onAlert` 注入接到
+  `tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, ...)`
+- ✅ 新单测（5 文件 / 36 case 全绿）：
+  - `tests/lifecycle-invariants-review.test.ts`（R1 satisfied + R1
+    violated RFC-052 shape + R1 warning→error 24h promotion 4 时间点
+    + R1 resolve + R2 satisfied + R2 rejected-only + R2 no-dv +
+    open-row uniqueness，8 case）
+  - `tests/lifecycle-invariants-clarify.test.ts`（C1 satisfied done
+    / running / awaiting-session-allowed / answered+stuck-violated /
+    canceled+stuck-violated / resolve，6 case）
+  - `tests/lifecycle-invariants-task.test.ts`（T1 sat/violated + T2
+    sat/violated + T3 sat/violated/vacuous + U1 sat/violated/
+    iter-disambig/shard-disambig + 3 scope selector，14 case）
+  - `tests/migration-0028.test.ts`（DDL 列 + 2 index 存在 + cascade
+    delete，3 case）
+  - `tests/api-tasks-diagnose.test.ts`（401 no-auth + 200 clean
+    task + 200 + R1 alert + WS lifecycle.alert broadcast 形态 +
+    未知 taskId 不 5xx，5 case）
 
 **完工标准**：
-- PR-A + PR-B + PR-C 全绿
-- 启动扫见证：本地 daemon 启动后 log "[lifecycle] scanned N tasks,
-  M alerts"
-- 旧 task（如有遗留 stuck task）首次扫为 severity='warning'，24h 后
-  切 'error'
+- ✅ PR-A + PR-B + PR-C + PR-D 全绿（68 + 17 + 8 + 36 = 129 case）
+- ✅ 全 backend 1892 pass / 8 known flake / 0 new fail；typecheck /
+  lint / format 全绿
+- 启动扫见证：本地 daemon 启动 ~5s 后 log "[lifecycle.invariants]
+  scan complete scanned=N findings=M ..."
+- 旧 task 首次扫 severity='warning'，next scan past 24h 切 'error'
 
 ### RFC-053-T5（PR-E）— P-6 stuck-task detector + 前端 UI
 

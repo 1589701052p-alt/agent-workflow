@@ -4,6 +4,7 @@
 // POST   /api/tasks/:id/cancel             abort in-flight task
 // GET    /api/tasks/:id/node-runs          per-node run rows + captured outputs
 // GET    /api/tasks/:id/diff               cumulative git diff in the worktree
+// POST   /api/tasks/:id/diagnose           RFC-053 P-3 live invariant scan
 //
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
@@ -48,7 +49,9 @@ import {
 } from '@/services/upload'
 import { getSessionTree } from '@/services/sessionView'
 import { getInventorySnapshot } from '@/services/inventory'
+import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { getWorkflow } from '@/services/workflow'
+import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { Paths } from '@/util/paths'
 import { NotFoundError, ValidationError } from '@/util/errors'
 
@@ -247,6 +250,27 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/tasks/:id/diff', async (c) => {
     return c.json(await getTaskDiff(deps.db, c.req.param('id')))
+  })
+
+  // RFC-053 P-3: on-demand invariant scan for the diagnose panel. Reads
+  // live (not the cached lifecycle_alerts table) so a stuck-task report
+  // reflects the current DB state without waiting for the next hourly tick.
+  app.post('/api/tasks/:id/diagnose', async (c) => {
+    const taskId = c.req.param('id')
+    const result = await runLifecycleInvariants({
+      db: deps.db,
+      scope: { taskId },
+      onAlert: (row, transition) => {
+        tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+          type: 'lifecycle.alert',
+          taskId: row.taskId,
+          rule: row.rule,
+          severity: row.severity,
+          transition,
+        })
+      },
+    })
+    return c.json(result)
   })
 
   app.post('/api/tasks/:id/resume', async (c) => {

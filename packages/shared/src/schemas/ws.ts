@@ -148,6 +148,17 @@ export const TasksListWsMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('task.created'), task: TaskSummarySchema }),
   z.object({ type: z.literal('task.status'), taskId: z.string(), status: TaskStatusSchema }),
   z.object({ type: z.literal('task.deleted'), taskId: z.string() }),
+  // RFC-053 P-3: the lifecycle invariant scan emitted a new finding (or
+  // promoted an existing 'warning' to 'error'). Subscribers (the list page
+  // + the future detail-page banner in PR-E) invalidate the per-task alerts
+  // query so the red chip reflects current state without polling.
+  z.object({
+    type: z.literal('lifecycle.alert'),
+    taskId: z.string(),
+    rule: z.string(),
+    severity: z.enum(['warning', 'error']),
+    transition: z.enum(['new', 'promoted']),
+  }),
 ])
 export type TasksListWsMessage = z.infer<typeof TasksListWsMessageSchema>
 

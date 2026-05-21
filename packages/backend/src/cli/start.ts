@@ -10,12 +10,14 @@ import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
+import { startLifecycleInvariantsLoop } from '@/services/lifecycleInvariants'
 import { startBatchImportGc } from '@/services/repoBatchImport'
 import {
   setMemoryDistillLangProvider,
   startMemoryDistillLoop,
 } from '@/services/memoryDistillScheduler'
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
+import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
 import {
   MAX_OPENCODE_VERSION_EXCLUSIVE,
@@ -243,6 +245,23 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     sourceContextBudget: batchImportCfg.memoryDistillSourceContext,
   })
 
+  // RFC-053 P-3 — lifecycle invariant scan. Boot-time scan (~5s after the
+  // listener comes up) catches historic stuck tasks; hourly incremental
+  // scan keeps the open-alerts feed live. New findings broadcast on the
+  // tasks-list channel so the UI banner / detail diagnose panel can react.
+  const lifecycleInvariantsTicker = startLifecycleInvariantsLoop({
+    db,
+    onAlert: (row, transition) => {
+      tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+        type: 'lifecycle.alert',
+        taskId: row.taskId,
+        rule: row.rule,
+        severity: row.severity,
+        transition,
+      })
+    },
+  })
+
   // 9. Graceful shutdown (P-4-06).
   //
   // SIGTERM/SIGINT:
@@ -276,6 +295,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     archiveTicker.stop()
     batchImportGcTicker.stop()
     memoryDistillTicker.stop()
+    lifecycleInvariantsTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {
