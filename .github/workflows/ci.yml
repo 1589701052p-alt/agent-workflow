@@ -10,13 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Opt JavaScript actions still pinned to Node 20 (codecov-action@v5 →
-# github-script@v7, gitleaks-action@v2) into the Node 24 runtime now, ahead of
-# the 2026-06-02 default flip. Silences the upstream-driven deprecation
-# warnings without forking those actions.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   check:
     name: Lint + Typecheck + Test
@@ -70,7 +63,7 @@ jobs:
         # Tokenless upload works for public repos. Only upload from one OS to
         # avoid double-counting the same lines; ubuntu is the canonical leg.
         if: matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
@@ -141,10 +134,19 @@ jobs:
           severity: error
 
       - name: gitleaks (secret scanning)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          # Free for public repos; no GITLEAKS_LICENSE needed.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # gitleaks/gitleaks-action@v2 still ships `using: "node20"` and has no
+        # Node 24 release, which triggers a runner-level deprecation warning on
+        # every CI run. Install the upstream binary directly instead — same
+        # scan, no JS-action runtime involved. Pin a known version so the
+        # behavior is reproducible; bump when needed.
+        run: |
+          set -euo pipefail
+          version=8.30.1
+          tmp=$(mktemp -d)
+          curl -fsSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \
+            | tar -xz -C "$tmp" gitleaks
+          "$tmp/gitleaks" detect --source . --no-banner --redact --verbose
 
       - name: drizzle-kit check (DB schema/migration drift)
         # The SQLite DB is the platform's source of truth; an inconsistent
