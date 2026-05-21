@@ -3,6 +3,7 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { loadConfig } from '@/config'
+import { countEmbeddedSqlMigrations, IS_EMBEDDED } from '@/embed'
 import {
   compareSemver,
   extractVersion,
@@ -146,15 +147,65 @@ function checkTokenFileMode(): CheckResult {
 }
 
 function checkMigrations(): CheckResult {
-  if (!existsSync(Paths.migrationsDir)) {
+  if (IS_EMBEDDED) {
+    return evaluateMigrationsStatus({
+      embedded: true,
+      embeddedSqlCount: countEmbeddedSqlMigrations(),
+      fsExists: false,
+      fsSqlCount: 0,
+      fsPath: Paths.migrationsDir,
+    })
+  }
+  const fsExists = existsSync(Paths.migrationsDir)
+  const fsSqlCount = fsExists
+    ? readdirSync(Paths.migrationsDir).filter((f) => f.endsWith('.sql')).length
+    : 0
+  return evaluateMigrationsStatus({
+    embedded: false,
+    embeddedSqlCount: 0,
+    fsExists,
+    fsSqlCount,
+    fsPath: Paths.migrationsDir,
+  })
+}
+
+/**
+ * Pure decision for the `migrations folder` check — no fs / no IS_EMBEDDED
+ * lookup, so tests can cover every combination directly (an installed single
+ * binary can't be exercised in dev tests because `bun --compile` rewrites
+ * `import.meta.dirname` and `IS_EMBEDDED` only flips inside the embedded
+ * runtime). Exported for `cli-doctor-migrations.test.ts`.
+ */
+export function evaluateMigrationsStatus(input: {
+  embedded: boolean
+  embeddedSqlCount: number
+  fsExists: boolean
+  fsSqlCount: number
+  fsPath: string
+}): CheckResult {
+  if (input.embedded) {
+    if (input.embeddedSqlCount === 0) {
+      return {
+        name: 'migrations folder',
+        ok: false,
+        message:
+          'single binary ships zero embedded migrations — build is broken (check scripts/build-binary.ts MIGRATION_FILES generation)',
+      }
+    }
+    return {
+      name: 'migrations folder',
+      ok: true,
+      message: `${input.embeddedSqlCount} migration${input.embeddedSqlCount === 1 ? '' : 's'} embedded in binary`,
+    }
+  }
+  if (!input.fsExists) {
     return {
       name: 'migrations folder',
       ok: false,
-      message: `${Paths.migrationsDir} missing; run \`bun run --filter '@agent-workflow/backend' db:generate\``,
+      message: `${input.fsPath} missing; run \`bun run --filter '@agent-workflow/backend' db:generate\``,
     }
   }
-  const sqls = readdirSync(Paths.migrationsDir).filter((f) => f.endsWith('.sql'))
-  if (sqls.length === 0) {
+  if (input.fsSqlCount === 0) {
     return {
       name: 'migrations folder',
       ok: false,
@@ -164,7 +215,7 @@ function checkMigrations(): CheckResult {
   return {
     name: 'migrations folder',
     ok: true,
-    message: `${sqls.length} migration${sqls.length === 1 ? '' : 's'} bundled`,
+    message: `${input.fsSqlCount} migration${input.fsSqlCount === 1 ? '' : 's'} bundled`,
   }
 }
 

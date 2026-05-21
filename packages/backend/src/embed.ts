@@ -19,6 +19,23 @@ export function listEmbeddedFrontendPaths(): string[] {
   return Object.keys(FRONTEND_FILES)
 }
 
+/**
+ * Count the .sql files embedded in the binary. `doctor` uses this when
+ * IS_EMBEDDED=true to check that the binary actually carries migrations,
+ * since the on-disk `Paths.migrationsDir` is meaningless in that mode
+ * (`import.meta.dirname` gets baked into `/` by `bun build --compile`).
+ *
+ * Mirror filtering used by `start.ts`'s dbVersion calculation (.sql only —
+ * `meta/_journal.json` is metadata, not a migration).
+ */
+export function countEmbeddedSqlMigrations(): number {
+  let count = 0
+  for (const rel of Object.keys(MIGRATION_FILES)) {
+    if (rel.endsWith('.sql')) count++
+  }
+  return count
+}
+
 export async function getEmbeddedAsset(
   urlPath: string,
 ): Promise<{ body: ArrayBuffer; contentType: string } | null> {
