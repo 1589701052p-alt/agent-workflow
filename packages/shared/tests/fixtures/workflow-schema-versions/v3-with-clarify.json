@@ -1,0 +1,36 @@
+{
+  "$schema_version": 3,
+  "inputs": [{ "kind": "text", "key": "topic", "label": "Topic", "required": true }],
+  "nodes": [
+    { "id": "in_1", "kind": "input", "inputKey": "topic" },
+    {
+      "id": "designer_1",
+      "kind": "agent-single",
+      "agentName": "v3-designer",
+      "promptTemplate": "Design for {{topic}}."
+    },
+    {
+      "id": "clarify_1",
+      "kind": "clarify",
+      "title": "Clarify on v3 fixture"
+    },
+    {
+      "id": "out_1",
+      "kind": "output",
+      "ports": [{ "name": "answer", "bind": { "nodeId": "designer_1", "portName": "answer" } }]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": { "nodeId": "in_1", "portName": "topic" },
+      "target": { "nodeId": "designer_1", "portName": "topic" }
+    },
+    {
+      "id": "e2",
+      "source": { "nodeId": "designer_1", "portName": "answer" },
+      "target": { "nodeId": "out_1", "portName": "answer" }
+    }
+  ],
+  "outputs": []
+}

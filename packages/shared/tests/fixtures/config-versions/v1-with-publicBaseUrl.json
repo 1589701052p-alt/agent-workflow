@@ -1,0 +1,17 @@
+{
+  "$schema_version": 1,
+  "maxConcurrentNodes": 8,
+  "multiProcessSubprocessConcurrency": 4,
+  "defaultPerTaskMaxDurationMs": 7200000,
+  "defaultPerTaskMaxTotalTokens": 500000,
+  "defaultPerNodeTimeoutMs": 1800000,
+  "worktreeAutoGc": { "enabled": true, "maxAgeDays": 30 },
+  "eventsArchiveThresholds": { "perNodeRunRows": 100000, "globalRows": 5000000 },
+  "largeOutputThresholdBytes": 2097152,
+  "bindHost": "0.0.0.0",
+  "bindPort": 4567,
+  "language": "en-US",
+  "theme": "dark",
+  "logLevel": "debug",
+  "publicBaseUrl": "https://workflow.example.com"
+}

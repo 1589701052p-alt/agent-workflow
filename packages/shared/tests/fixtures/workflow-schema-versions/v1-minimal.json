@@ -1,0 +1,31 @@
+{
+  "$schema_version": 1,
+  "inputs": [{ "kind": "text", "key": "topic", "label": "Topic", "required": true }],
+  "nodes": [
+    { "id": "in_1", "kind": "input", "inputKey": "topic" },
+    {
+      "id": "agent_1",
+      "kind": "agent-single",
+      "agentName": "v1-agent",
+      "promptTemplate": "Describe {{topic}}."
+    },
+    {
+      "id": "out_1",
+      "kind": "output",
+      "ports": [{ "name": "answer", "bind": { "nodeId": "agent_1", "portName": "answer" } }]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": { "nodeId": "in_1", "portName": "topic" },
+      "target": { "nodeId": "agent_1", "portName": "topic" }
+    },
+    {
+      "id": "e2",
+      "source": { "nodeId": "agent_1", "portName": "answer" },
+      "target": { "nodeId": "out_1", "portName": "answer" }
+    }
+  ],
+  "outputs": []
+}

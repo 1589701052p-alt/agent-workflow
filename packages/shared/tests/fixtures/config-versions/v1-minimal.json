@@ -1,0 +1,15 @@
+{
+  "$schema_version": 1,
+  "maxConcurrentNodes": 4,
+  "multiProcessSubprocessConcurrency": 4,
+  "defaultPerTaskMaxDurationMs": 3600000,
+  "defaultPerTaskMaxTotalTokens": 0,
+  "defaultPerNodeTimeoutMs": 1800000,
+  "worktreeAutoGc": { "enabled": false },
+  "eventsArchiveThresholds": { "perNodeRunRows": 50000, "globalRows": 1000000 },
+  "largeOutputThresholdBytes": 1048576,
+  "bindHost": "127.0.0.1",
+  "language": "zh-CN",
+  "theme": "system",
+  "logLevel": "info"
+}

@@ -1,0 +1,41 @@
+{
+  "$schema_version": 2,
+  "inputs": [{ "kind": "text", "key": "draft", "label": "Draft text", "required": true }],
+  "nodes": [
+    { "id": "in_1", "kind": "input", "inputKey": "draft" },
+    {
+      "id": "writer_1",
+      "kind": "agent-single",
+      "agentName": "v2-writer",
+      "promptTemplate": "Improve {{draft}}."
+    },
+    {
+      "id": "review_1",
+      "kind": "review",
+      "title": "Human review of v2 fixture"
+    },
+    {
+      "id": "out_1",
+      "kind": "output",
+      "ports": [{ "name": "answer", "bind": { "nodeId": "writer_1", "portName": "answer" } }]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": { "nodeId": "in_1", "portName": "draft" },
+      "target": { "nodeId": "writer_1", "portName": "draft" }
+    },
+    {
+      "id": "e2",
+      "source": { "nodeId": "writer_1", "portName": "answer" },
+      "target": { "nodeId": "review_1", "portName": "answer" }
+    },
+    {
+      "id": "e3",
+      "source": { "nodeId": "review_1", "portName": "answer" },
+      "target": { "nodeId": "out_1", "portName": "answer" }
+    }
+  ],
+  "outputs": []
+}
