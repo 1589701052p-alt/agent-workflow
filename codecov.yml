@@ -1,0 +1,34 @@
+# Codecov config — controls the patch/project coverage status checks
+# rendered on each PR. Receives lcov from the `Upload coverage to Codecov`
+# step in .github/workflows/ci.yml (`check` job, ubuntu leg only).
+#
+# Patch coverage is the diff-only number — the percentage of the LINES
+# THIS PR ADDS that are covered by tests. It is the mechanical enforcement
+# of CLAUDE.md's "test-with-every-change" rule:
+#   - 70% target = new code without tests gets flagged.
+#   - target_low margin not set, so the check is binary: pass or fail.
+#
+# Project coverage tracks the total — kept on `auto` (compared to base
+# commit) with a 1% drop threshold so trivial refactors that move a few
+# lines around don't trip it.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 70%
+        threshold: 0%
+        # `if_no_uploads: error` would be stricter, but the frontend
+        # vitest leg currently doesn't upload (would require pulling in
+        # @vitest/coverage-v8); leave at default `pass` so a backend-only
+        # report still reports a real patch number.
+
+# Only post one comment per PR; replace it on subsequent pushes.
+comment:
+  layout: 'diff, files'
+  behavior: default
+  require_changes: true

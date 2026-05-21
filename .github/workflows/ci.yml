@@ -139,6 +139,47 @@ jobs:
           # Free for public repos; no GITLEAKS_LICENSE needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: drizzle-kit check (DB schema/migration drift)
+        # The SQLite DB is the platform's source of truth; an inconsistent
+        # migrations folder (re-numbered, duplicated, or missing journal
+        # entries after a bad rebase) silently corrupts every user's DB on
+        # next `start`. `db:check` (= `drizzle-kit check`) validates the
+        # migrations folder is internally consistent — no orphan SQL files,
+        # journal in sync, no version collisions. Runs in <1s.
+        run: bun run --filter @agent-workflow/backend db:check
+
+  docs:
+    # Catch broken links / dead RFC cross-references before they rot the
+    # design docs. design/ has 50+ RFC dirs with relative `../RFC-NNN/...`
+    # paths and external pointers (multica / opencode source) — easy for
+    # any of them to silently break. Skips blog/ (drafts may carry
+    # placeholder URLs) and root README (points at future PRs / external
+    # integrations on purpose).
+    name: Markdown link check (design/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lychee — fail on broken links in design/
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # 403 / 429 are accepted because some sites (GitHub anonymous,
+          # Wikipedia rate limits) block CI runners — those aren't
+          # actionable as "broken links". 200 / 206 cover normal + range.
+          args: >-
+            --no-progress
+            --max-concurrency 4
+            --accept 200,206,403,429
+            'design/**/*.md'
+          fail: true
+          jobSummary: true
+        env:
+          # Use the workflow token for github.com requests so lychee gets
+          # authenticated rate limits (5000/hr) instead of anonymous
+          # (60/hr) — otherwise GitHub links will randomly red on busy
+          # PRs even when valid.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-binary:
     name: Build single-binary (smoke)
     needs: check

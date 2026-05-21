@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
     "perf:sweep": "bun run scripts/perf-sweep.ts"
   },
   "dependencies": {
