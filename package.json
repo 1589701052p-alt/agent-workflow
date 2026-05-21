@@ -23,6 +23,7 @@
     "depcheck": "depcruise --config .dependency-cruiser.cjs packages/frontend/src packages/backend/src packages/shared/src"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
     "@eslint/js": "^9.17.0",
     "@playwright/test": "^1.50.0",
     "@types/bun": "latest",
