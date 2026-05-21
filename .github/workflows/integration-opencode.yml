@@ -1,0 +1,109 @@
+# RFC-054 W2-1 — live opencode + LLM integration sweep.
+#
+# Why a separate workflow (vs. extending ci.yml):
+#   * These tests make real LLM calls — they cost money and take 30-60s
+#     wall-clock. Running them on every PR would burn ~$100/mo and slow
+#     the gate by ~50%.
+#   * They probe upstream drift, not the PR. A nightly cadence + a
+#     targeted path-filter (PRs that touch the daemon's opencode-facing
+#     code) catches the right things at the right time.
+#   * They REQUIRE secrets (ANTHROPIC_API_KEY / OPENCODE_AUTH_CONTENT).
+#     If unconfigured the workflow stays green — the gate tests pass and
+#     the LLM tests skip. That's the desired graceful-degrade behaviour.
+#
+# Trigger:
+#   * `schedule` — 07:30 UTC daily (15-min offset from the webkit
+#     nightly so they don't queue behind each other on the free runner
+#     pool).
+#   * `workflow_dispatch` — manual button for ad-hoc verification after
+#     bumping `MIN_OPENCODE_VERSION` etc.
+#   * `pull_request` — only when the PR diff touches the daemon's
+#     opencode interface or this workflow itself. Path filter is the
+#     tightest gate possible: every other PR skips this workflow
+#     entirely.
+#
+# Matrix: ubuntu-only (macOS LLM parity covered by the daemon's PR e2e),
+# two opencode versions — the pinned MIN_OPENCODE_VERSION (1.15.5) and
+# `latest`. The pinned leg catches "our framework regressed for the
+# version we ship"; the latest leg catches "a new opencode release
+# broke compat".
+
+name: integration-opencode
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/backend/src/services/runner.ts'
+      - 'packages/backend/src/services/envelope.ts'
+      - 'packages/backend/src/services/protocol.ts'
+      - 'packages/backend/src/opencode-plugin/**'
+      - 'packages/backend/tests/integration-opencode/**'
+      - '.github/workflows/integration-opencode.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: opencode ${{ matrix.opencode }} (ubuntu)
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel the pinned leg when latest goes red — we want to see
+      # both signals.
+      fail-fast: false
+      matrix:
+        opencode:
+          # Bump this when MIN_OPENCODE_VERSION moves. See
+          # packages/backend/src/util/opencodeVersion.ts.
+          - '1.15.5'
+          - 'latest'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.x'
+
+      - name: Install opencode-ai@${{ matrix.opencode }}
+        run: |
+          bun install -g opencode-ai@${{ matrix.opencode }}
+          export PATH="$HOME/.bun/bin:$PATH"
+          opencode --version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run integration suite
+        env:
+          # If either secret is set, the gate flips on. Both are
+          # optional — without them the LLM tests skip and the gate
+          # tests still pass (graceful degrade, see
+          # tests/integration-opencode/README.md §Setting up CI secrets).
+          RUN_OPENCODE_INTEGRATION: '1'
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_CONTENT }}
+          # Keep opencode noisy in case a case fails — stderr is the
+          # primary debug channel for live LLM issues.
+          OPENCODE_LOG_LEVEL: 'info'
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          # Filter to just the integration directory so bunfig.toml's
+          # default root selection doesn't drag in the entire backend
+          # suite — only the live ones run here.
+          bun test packages/backend/tests/integration-opencode/
+
+      - name: Upload integration logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: integration-opencode-${{ matrix.opencode }}
+          path: |
+            **/*.log
+            packages/backend/tests/integration-opencode/**/*.txt
+          if-no-files-found: ignore
