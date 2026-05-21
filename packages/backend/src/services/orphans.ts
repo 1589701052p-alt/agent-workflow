@@ -13,6 +13,10 @@
 import { eq, inArray } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { nodeRuns, tasks } from '@/db/schema'
+import { transitionNodeRunStatus } from '@/services/lifecycle'
+import { createLogger } from '@/util/log'
+
+const log = createLogger('orphans')
 
 export interface ReapResult {
   tasks: number
@@ -42,11 +46,25 @@ export async function reapOrphanRuns(db: DbClient): Promise<ReapResult> {
       })
       .where(eq(tasks.id, t.id))
   }
+  let runsReaped = 0
   for (const r of runningRuns) {
-    await db
-      .update(nodeRuns)
-      .set({ status: 'interrupted', finishedAt: now })
-      .where(eq(nodeRuns.id, r.id))
+    try {
+      await transitionNodeRunStatus({
+        db,
+        nodeRunId: r.id,
+        event: { kind: 'mark-interrupted' },
+        extra: { finishedAt: now },
+      })
+      runsReaped += 1
+    } catch (err) {
+      // CAS lost / row already terminal: another writer beat us (e.g.
+      // graceful shutdown landed first). Skip silently — orphans reap is
+      // best-effort cleanup.
+      log.warn('orphan-reap skipped row', {
+        nodeRunId: r.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
-  return { tasks: runningTasks.length, runs: runningRuns.length }
+  return { tasks: runningTasks.length, runs: runsReaped }
 }

@@ -52,6 +52,7 @@ import {
 } from '@/db/schema'
 import { resolvePortContentDetailed } from '@/services/envelope'
 import { isFresherNodeRun } from '@/services/scheduler'
+import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { rollbackToSnapshot } from '@/util/git'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -431,10 +432,17 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
     reviewNodeRunId = reuse.id
     reviewIteration = reuse.reviewIteration
     if (reuse.status !== 'awaiting_review') {
-      await db
-        .update(nodeRuns)
-        .set({ status: 'awaiting_review', startedAt: reuse.startedAt ?? Date.now() })
-        .where(eq(nodeRuns.id, reviewNodeRunId))
+      // pending → awaiting_review (post-iterate / post-reject / fresh).
+      // RFC-053: state machine helper enforces legal transition; if reuse
+      // is somehow already in a terminal-non-done state the helper will
+      // refuse and the dispatch result surfaces failed instead of silently
+      // overwriting.
+      await transitionNodeRunStatus({
+        db,
+        nodeRunId: reviewNodeRunId,
+        event: { kind: 'park-review' },
+        extra: { startedAt: reuse.startedAt ?? Date.now() },
+      })
     }
   } else {
     reviewNodeRunId = ulid()
@@ -1193,10 +1201,15 @@ export async function submitReviewDecision(
         target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
         set: { content: meta },
       })
-    await args.db
-      .update(nodeRuns)
-      .set({ status: 'done', finishedAt: decidedAt })
-      .where(eq(nodeRuns.id, args.nodeRunId))
+    // RFC-053: approve-review enforces awaiting_review → done at the helper.
+    // Pre-check at line ~1045 also catches non-awaiting; this is the
+    // belt-and-suspenders write.
+    await transitionNodeRunStatus({
+      db: args.db,
+      nodeRunId: args.nodeRunId,
+      event: { kind: 'approve-review' },
+      extra: { finishedAt: decidedAt },
+    })
     // RFC-041: feed the approved decision into the memory distill queue.
     // Best-effort — never blocks the decision return path.
     await enqueueDistillJob(args.db, {
@@ -1300,14 +1313,25 @@ export async function submitReviewDecision(
     // preSnapshot". Substring matches like `.toContain('superseded-by-review-iterated')`
     // still work either way.
     const supersedeMarker = `superseded-by-review-${args.decision}${rolledBack ? '-rollback' : ''}`
-    await args.db
-      .update(nodeRuns)
-      .set({
-        status: 'canceled',
+    // RFC-053: supersede must be able to cancel BOTH live rows (pending /
+    // running / awaiting_*) AND a `done` row (typical case — agent already
+    // finished before the review decision triggered an iterate). We use
+    // setNodeRunStatus with an explicit allowedFrom including 'done' +
+    // allowTerminal=true to document the intentional terminal-rewrite —
+    // future readers see the semantic exception explicitly rather than
+    // hidden behind a raw db.update.
+    await setNodeRunStatus({
+      db: args.db,
+      nodeRunId: latest.id,
+      to: 'canceled',
+      allowedFrom: ['pending', 'running', 'awaiting_review', 'awaiting_human', 'done'],
+      allowTerminal: true,
+      reason: supersedeMarker,
+      extra: {
         finishedAt: latest.finishedAt ?? Date.now(),
         errorMessage: `${supersedeMarker}: Replaced by retry_index ${nextRetryIndex} due to review ${args.decision} of ${dv.reviewNodeId}`,
-      })
-      .where(eq(nodeRuns.id, latest.id))
+      },
+    })
     await args.db.insert(nodeRuns).values({
       id: ulid(),
       taskId: dv.taskId,
@@ -1358,11 +1382,14 @@ export async function submitReviewDecision(
   }
 
   // Bump this review's reviewIteration + status=pending so scheduler re-runs.
+  // RFC-053: iterate-review / reject-review enforce awaiting_review → pending.
   const nextIter = run.reviewIteration + 1
-  await args.db
-    .update(nodeRuns)
-    .set({ status: 'pending', reviewIteration: nextIter })
-    .where(eq(nodeRuns.id, args.nodeRunId))
+  await transitionNodeRunStatus({
+    db: args.db,
+    nodeRunId: args.nodeRunId,
+    event: args.decision === 'iterated' ? { kind: 'iterate-review' } : { kind: 'reject-review' },
+    extra: { reviewIteration: nextIter },
+  })
 
   // RFC-041: same as the approve path — feed the (reject / iterate)
   // decision into the distill queue. Best-effort.
@@ -1481,10 +1508,20 @@ async function cascadeSiblingReviews(args: CascadeSiblingArgs): Promise<void> {
           })
           .where(eq(docVersions.id, d.id))
       }
-      await args.db
-        .update(nodeRuns)
-        .set({ status: 'pending', reviewIteration: s.reviewIteration + 1 })
-        .where(eq(nodeRuns.id, s.id))
+      // RFC-053: sibling cascade can pull a sibling back from any prior
+      // state — typically awaiting_review, but also `done` if the sibling
+      // was already approved when reject hit. Use setNodeRunStatus with
+      // allowTerminal=true so the intentional "overwrite a terminal" is
+      // visible in code.
+      await setNodeRunStatus({
+        db: args.db,
+        nodeRunId: s.id,
+        to: 'pending',
+        allowedFrom: ['pending', 'running', 'awaiting_review', 'awaiting_human', 'done'],
+        allowTerminal: true,
+        reason: 'review-sibling-cascade',
+        extra: { reviewIteration: s.reviewIteration + 1 },
+      })
     }
   }
 }

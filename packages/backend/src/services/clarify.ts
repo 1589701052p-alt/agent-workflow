@@ -61,6 +61,7 @@ import {
 import type { DbClient } from '@/db/client'
 import { clarifySessions, nodeRuns, tasks } from '@/db/schema'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
+import { transitionNodeRunStatus } from '@/services/lifecycle'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { rollbackToSnapshot } from '@/util/git'
 import { createLogger } from '@/util/log'
@@ -155,10 +156,13 @@ export async function createClarifySession(
   if (existingClarifyRun) {
     clarifyNodeRunId = existingClarifyRun.id
     if (existingClarifyRun.status !== 'awaiting_human') {
-      await db
-        .update(nodeRuns)
-        .set({ status: 'awaiting_human', startedAt: existingClarifyRun.startedAt ?? now() })
-        .where(eq(nodeRuns.id, clarifyNodeRunId))
+      // RFC-053: park-human enforces pending|running → awaiting_human.
+      await transitionNodeRunStatus({
+        db,
+        nodeRunId: clarifyNodeRunId,
+        event: { kind: 'park-human' },
+        extra: { startedAt: existingClarifyRun.startedAt ?? now() },
+      })
     }
   } else {
     clarifyNodeRunId = ulid()
@@ -338,11 +342,14 @@ export async function submitClarifyAnswers(
     })
     .where(eq(clarifySessions.id, sessionRow.id))
 
-  // Close the clarify node_run.
-  await db
-    .update(nodeRuns)
-    .set({ status: 'done', finishedAt: answeredAt })
-    .where(eq(nodeRuns.id, clarifyNodeRunId))
+  // Close the clarify node_run. RFC-053: resume-clarify enforces
+  // awaiting_human → done.
+  await transitionNodeRunStatus({
+    db,
+    nodeRunId: clarifyNodeRunId,
+    event: { kind: 'resume-clarify' },
+    extra: { finishedAt: answeredAt },
+  })
 
   // Mint the source-agent rerun.
   const taskRow = (await db.select().from(tasks).where(eq(tasks.id, sessionRow.taskId)).limit(1))[0]

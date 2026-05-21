@@ -50,6 +50,7 @@ import {
 import { renderUserPrompt } from './protocol'
 import { captureChildSessions } from './sessionCapture'
 import { startLiveSubagentCapture } from './subagentLiveCapture'
+import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
 import { isAgentRunKind, readSnapshotFromRunDir } from './inventory'
 import {
   injectMemoryForRun,
@@ -551,14 +552,17 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
           ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),
         })
 
-  await opts.db
-    .update(nodeRuns)
-    .set({
-      promptText: prompt,
-      status: 'running',
-      startedAt: Date.now(),
-    })
-    .where(eq(nodeRuns.id, opts.nodeRunId))
+  // Write promptText FIRST (no status change). RFC-053: the status flip
+  // pending → running goes through transitionNodeRunStatus below.
+  // rfc053-allow-direct-status-write -- writing non-status field
+  await opts.db.update(nodeRuns).set({ promptText: prompt }).where(eq(nodeRuns.id, opts.nodeRunId))
+  // RFC-053: mark-running enforces pending → running.
+  await transitionNodeRunStatus({
+    db: opts.db,
+    nodeRunId: opts.nodeRunId,
+    event: { kind: 'mark-running' },
+    extra: { startedAt: Date.now() },
+  })
 
   // 4. Spawn opencode.
   const cmd = buildCommand(opts, prompt)
@@ -1004,32 +1008,42 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   }
 
   // 11. Update node_runs final state.
-  await opts.db
-    .update(nodeRuns)
-    .set({
-      status,
+  // RFC-053: setNodeRunStatus enforces the runtime-determined transition
+  // running → {done, failed, canceled}. Non-status fields are batched in
+  // `extra`. Two writes: status via CAS helper, then the columns lifecycle
+  // doesn't know about (inventory / token usage / portValidation / etc.).
+  await setNodeRunStatus({
+    db: opts.db,
+    nodeRunId: opts.nodeRunId,
+    to: status,
+    allowedFrom: ['running'],
+    reason: 'runner-exit',
+    extra: {
       finishedAt: Date.now(),
       exitCode: exitCode ?? null,
       errorMessage: errorMessage ?? null,
-      inventorySnapshotJson: inventoryJson,
-      // RFC-046: persist the post-budget-clip snapshot captured at inject
-      // time (or copied from attempt 0 on the envelope-followup path).
-      // NULL when inject was skipped or resolved to zero memories — see
-      // RFC-046 design.md §3.2.3.
-      injectedMemoriesJson: injectedSnapshot === null ? null : JSON.stringify(injectedSnapshot),
-      // RFC-049: structured port-validation failure payload, or NULL when
-      // the run succeeded / failed for some other reason. Scheduler reads
-      // this column to decide whether to schedule a same-session follow-up
-      // and to populate per-kind repair blocks in the followup prompt.
-      portValidationFailuresJson:
-        portValidationFailures.length > 0
-          ? serializePortValidationFailures(portValidationFailures)
-          : null,
       tokInput: tokenUsage.input,
       tokOutput: tokenUsage.output,
       tokCacheCreate: tokenUsage.cacheCreate,
       tokCacheRead: tokenUsage.cacheRead,
       tokTotal: tokenUsage.total,
+    },
+  })
+  // Runner-specific JSON fields not in NodeRunStatusUpdateExtra — write
+  // them as a follow-up non-status update.
+  // rfc053-allow-direct-status-write -- writing non-status fields
+  await opts.db
+    .update(nodeRuns)
+    .set({
+      inventorySnapshotJson: inventoryJson,
+      // RFC-046: persist the post-budget-clip snapshot captured at inject
+      // time (or copied from attempt 0 on the envelope-followup path).
+      injectedMemoriesJson: injectedSnapshot === null ? null : JSON.stringify(injectedSnapshot),
+      // RFC-049: structured port-validation failure payload.
+      portValidationFailuresJson:
+        portValidationFailures.length > 0
+          ? serializePortValidationFailures(portValidationFailures)
+          : null,
     })
     .where(eq(nodeRuns.id, opts.nodeRunId))
 

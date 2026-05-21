@@ -47,6 +47,7 @@ import {
   type ClarifyInlineFallbackReason,
 } from '@/services/clarifyFallback'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
+import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
@@ -1287,9 +1288,21 @@ async function markWrapperTerminal(
   status: 'done' | 'failed' | 'canceled' | 'exhausted',
   errorMessage?: string,
 ): Promise<void> {
-  const set: Record<string, unknown> = { status, finishedAt: Date.now() }
-  if (errorMessage !== undefined) set.errorMessage = errorMessage
-  await db.update(nodeRuns).set(set).where(eq(nodeRuns.id, wrapperRunId))
+  // RFC-053: wrapper finalize is a runtime-determined transition into one of
+  // four terminal states. setNodeRunStatus with allowedFrom=['running'] is
+  // the typical legal source; awaiting_* is also legal when a wrapper bubbled
+  // up an awaiting child and is now being short-circuited by cancel.
+  await setNodeRunStatus({
+    db,
+    nodeRunId: wrapperRunId,
+    to: status,
+    allowedFrom: ['pending', 'running', 'awaiting_review', 'awaiting_human'],
+    reason: 'wrapper-finalize',
+    extra: {
+      finishedAt: Date.now(),
+      ...(errorMessage !== undefined ? { errorMessage } : {}),
+    },
+  })
   // Note: wrapperProgressJson is left in place after terminal transitions —
   // it's debug breadcrumb for "where did this wrapper park last" and is
   // never read again by the scheduler once status is terminal.
@@ -1351,7 +1364,14 @@ async function runLoopWrapperNode(
       startIter = 0
     }
     if (existing.status !== 'running') {
-      await db.update(nodeRuns).set({ status: 'running' }).where(eq(nodeRuns.id, wrapperRunId))
+      // RFC-053: wrapper enter-running — resumes from awaiting_* / pending.
+      await setNodeRunStatus({
+        db,
+        nodeRunId: wrapperRunId,
+        to: 'running',
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human'],
+        reason: 'wrapper-resume',
+      })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
     }
   } else {
@@ -1400,7 +1420,13 @@ async function runLoopWrapperNode(
         phase: 'awaiting',
       })
       const newStatus = subRes.kind === 'awaiting_human' ? 'awaiting_human' : 'awaiting_review'
-      await db.update(nodeRuns).set({ status: newStatus }).where(eq(nodeRuns.id, wrapperRunId))
+      // RFC-053: wrapper bubbles inner awaiting_* — park-human / park-review
+      // enforces pending|running → awaiting_*.
+      await transitionNodeRunStatus({
+        db,
+        nodeRunId: wrapperRunId,
+        event: subRes.kind === 'awaiting_human' ? { kind: 'park-human' } : { kind: 'park-review' },
+      })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, newStatus)
       return {
         kind: subRes.kind,
@@ -1489,7 +1515,14 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
       baseline = await captureHead(task.worktreePath)
     }
     if (existing.status !== 'running') {
-      await db.update(nodeRuns).set({ status: 'running' }).where(eq(nodeRuns.id, wrapperRunId))
+      // RFC-053: wrapper enter-running — resumes from awaiting_* / pending.
+      await setNodeRunStatus({
+        db,
+        nodeRunId: wrapperRunId,
+        to: 'running',
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human'],
+        reason: 'wrapper-resume',
+      })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
     }
   } else {
@@ -1532,7 +1565,13 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
       phase: 'awaiting',
     })
     const newStatus = subRes.kind === 'awaiting_human' ? 'awaiting_human' : 'awaiting_review'
-    await db.update(nodeRuns).set({ status: newStatus }).where(eq(nodeRuns.id, wrapperRunId))
+    // RFC-053: wrapper-git bubbles inner awaiting_*; same semantics as
+    // wrapper-loop above.
+    await transitionNodeRunStatus({
+      db,
+      nodeRunId: wrapperRunId,
+      event: subRes.kind === 'awaiting_human' ? { kind: 'park-human' } : { kind: 'park-review' },
+    })
     broadcastNodeStatus(taskId, wrapperRunId, node.id, newStatus)
     return {
       kind: subRes.kind,
@@ -1616,10 +1655,17 @@ async function runFanOutNode(
     await db
       .insert(nodeRunOutputs)
       .values({ nodeRunId: parentRunId, portName: 'errors', content: '' })
-    await db
-      .update(nodeRuns)
-      .set({ status: 'done', finishedAt: Date.now() })
-      .where(eq(nodeRuns.id, parentRunId))
+    // RFC-053: fan-out parent finishes when no shards exist. The parent row
+    // is created as 'pending' (see allocateFanOutParent above) and never
+    // transitions through 'running' — the empty path goes straight to done.
+    await setNodeRunStatus({
+      db,
+      nodeRunId: parentRunId,
+      to: 'done',
+      allowedFrom: ['pending', 'running'],
+      reason: 'fanout-empty',
+      extra: { finishedAt: Date.now() },
+    })
     broadcastNodeStatus(taskId, parentRunId, node.id, 'done')
     return { kind: 'ok', summary: '', message: '' }
   }
@@ -1828,7 +1874,13 @@ async function runFanOutNode(
   // skipping the re-spawn.
   const awaitingShards = children.filter((c) => c.clarifyAwaiting === true)
   if (awaitingShards.length > 0) {
-    await db.update(nodeRuns).set({ status: 'awaiting_human' }).where(eq(nodeRuns.id, parentRunId))
+    // RFC-053: agent-multi parent bubbles to awaiting_human when any shard
+    // child is in clarify. park-human enforces pending|running → awaiting_human.
+    await transitionNodeRunStatus({
+      db,
+      nodeRunId: parentRunId,
+      event: { kind: 'park-human' },
+    })
     broadcastNodeStatus(taskId, parentRunId, node.id, 'awaiting_human')
     return {
       kind: 'awaiting_human',
@@ -1857,11 +1909,18 @@ async function runFanOutNode(
   const finalStatus: NodeStatus = allFailed ? 'failed' : 'done'
   // P-4-05: aggregate child tok_total into the parent so resource-limit ticks
   // and the UI's per-node stats reflect actual cost.
+  // RFC-053: fan-out parent finalize. The parent row stays in 'pending' DB
+  // status throughout shard execution (children carry the actual progress),
+  // so allowedFrom=['pending', 'running'] — `running` covers the case where
+  // some future change flips parent to running during fan-out.
   const childTok = await sumChildTokens(db, parentRunId)
-  await db
-    .update(nodeRuns)
-    .set({
-      status: finalStatus,
+  await setNodeRunStatus({
+    db,
+    nodeRunId: parentRunId,
+    to: finalStatus,
+    allowedFrom: ['pending', 'running', 'awaiting_human'],
+    reason: 'fanout-aggregate',
+    extra: {
       finishedAt: Date.now(),
       tokInput: childTok.input,
       tokOutput: childTok.output,
@@ -1869,8 +1928,8 @@ async function runFanOutNode(
       tokCacheRead: childTok.cacheRead,
       tokTotal: childTok.total,
       ...(allFailed ? { errorMessage: 'all shards failed' } : {}),
-    })
-    .where(eq(nodeRuns.id, parentRunId))
+    },
+  })
   broadcastNodeStatus(taskId, parentRunId, node.id, finalStatus)
   if (allFailed) {
     return {
