@@ -4,6 +4,7 @@
 // POST   /api/tasks/:id/cancel             abort in-flight task
 // GET    /api/tasks/:id/node-runs          per-node run rows + captured outputs
 // GET    /api/tasks/:id/diff               cumulative git diff in the worktree
+// GET    /api/tasks/:id/alerts             RFC-053 P-6 open lifecycle alerts
 // POST   /api/tasks/:id/diagnose           RFC-053 P-3 live invariant scan
 //
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
@@ -50,6 +51,7 @@ import {
 import { getSessionTree } from '@/services/sessionView'
 import { getInventorySnapshot } from '@/services/inventory'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
+import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { Paths } from '@/util/paths'
@@ -250,6 +252,16 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/tasks/:id/diff', async (c) => {
     return c.json(await getTaskDiff(deps.db, c.req.param('id')))
+  })
+
+  // RFC-053 P-6: list currently-open lifecycle_alerts (invariant + stuck)
+  // for this task. Powers the StuckTaskBanner — banners only render when
+  // the response has at least one row. Empty list = healthy task = no
+  // banner at all.
+  app.get('/api/tasks/:id/alerts', async (c) => {
+    const taskId = c.req.param('id')
+    const alerts = await listOpenLifecycleAlertsForTask(deps.db, taskId)
+    return c.json({ alerts })
   })
 
   // RFC-053 P-3: on-demand invariant scan for the diagnose panel. Reads

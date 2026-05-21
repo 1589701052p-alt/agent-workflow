@@ -2185,6 +2185,36 @@ code {
   word-break: break-word;
 }
 
+/* RFC-053 P-6 — warning variant (warning severity uses --warning instead
+   of --danger). Banner copy + button match. */
+.task-error-banner--warning {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.diagnose-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.diagnose-table th,
+.diagnose-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.diagnose-table__detail {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 360px;
+}
+
 /* ---- Settings ---- */
 
 .settings-grid {

@@ -11,6 +11,7 @@ import { reapOrphanRuns } from '@/services/orphans'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
 import { startLifecycleInvariantsLoop } from '@/services/lifecycleInvariants'
+import { startStuckTaskDetectorLoop } from '@/services/stuckTaskDetector'
 import { startBatchImportGc } from '@/services/repoBatchImport'
 import {
   setMemoryDistillLangProvider,
@@ -249,17 +250,32 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // listener comes up) catches historic stuck tasks; hourly incremental
   // scan keeps the open-alerts feed live. New findings broadcast on the
   // tasks-list channel so the UI banner / detail diagnose panel can react.
+  const broadcastAlert = (
+    row: { taskId: string; rule: string; severity: 'warning' | 'error' },
+    transition: 'new' | 'promoted',
+  ): void => {
+    tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+      type: 'lifecycle.alert',
+      taskId: row.taskId,
+      rule: row.rule,
+      severity: row.severity,
+      transition,
+    })
+  }
   const lifecycleInvariantsTicker = startLifecycleInvariantsLoop({
     db,
-    onAlert: (row, transition) => {
-      tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
-        type: 'lifecycle.alert',
-        taskId: row.taskId,
-        rule: row.rule,
-        severity: row.severity,
-        transition,
-      })
-    },
+    onAlert: broadcastAlert,
+  })
+
+  // RFC-053 P-6 — stuck-task detector. Runs every 5 min looking for tasks
+  // that are parked in a non-terminal status past their threshold without
+  // matching evidence (S1: awaiting_review w/o pending dv; S2:
+  // awaiting_human w/o open clarify_session; S3: running w/ no active
+  // node_runs; S4: pending > 5 min). Shares the lifecycle_alerts table
+  // and the WS lifecycle.alert event so banner UI reacts uniformly.
+  const stuckDetectorTicker = startStuckTaskDetectorLoop({
+    db,
+    onAlert: broadcastAlert,
   })
 
   // 9. Graceful shutdown (P-4-06).
@@ -296,6 +312,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     batchImportGcTicker.stop()
     memoryDistillTicker.stop()
     lifecycleInvariantsTicker.stop()
+    stuckDetectorTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {

@@ -20,6 +20,11 @@ export function useTasksSync(enabled: boolean = true): void {
         msg.type === 'task.deleted'
       ) {
         void qc.invalidateQueries({ queryKey: ['tasks'] })
+      } else if (msg.type === 'lifecycle.alert') {
+        // RFC-053 P-6: the banner on the detail page subscribes to
+        // ['tasks', taskId, 'alerts']; refresh that query so a stuck
+        // task lights up without waiting for the 30s poll fallback.
+        void qc.invalidateQueries({ queryKey: ['tasks', msg.taskId, 'alerts'] })
       }
     },
   })

@@ -24,11 +24,7 @@ import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 import type { DbClient } from '../src/db/client'
 import { createInMemoryDb } from '../src/db/client'
 import { docVersions, lifecycleAlerts, nodeRuns, tasks, workflows } from '../src/db/schema'
-import {
-  runLifecycleInvariants,
-  type InvariantRule,
-  type LifecycleAlertRow,
-} from '../src/services/lifecycleInvariants'
+import { runLifecycleInvariants, type LifecycleAlertRow } from '../src/services/lifecycleInvariants'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const HOUR_MS = 3_600_000
@@ -134,7 +130,7 @@ async function insertDoc(
   return id
 }
 
-function rulesOf(alerts: LifecycleAlertRow[]): InvariantRule[] {
+function rulesOf(alerts: LifecycleAlertRow[]): string[] {
   return alerts.map((a) => a.rule).sort()
 }
 

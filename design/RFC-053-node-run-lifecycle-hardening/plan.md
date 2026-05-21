@@ -136,34 +136,54 @@ PR-B P-1 状态机化  ──┬───────►├──► PR-C P-2 ki
   scan complete scanned=N findings=M ..."
 - 旧 task 首次扫 severity='warning'，next scan past 24h 切 'error'
 
-### RFC-053-T5（PR-E）— P-6 stuck-task detector + 前端 UI
+### RFC-053-T5（PR-E）— P-6 stuck-task detector + 前端 UI — **DONE**
 
-- 后端：
-  - 新文件 `services/stuckTaskDetector.ts`（S1/S2/S3/S4 检测 + 写
-    `lifecycle_alerts`）
-  - `backgroundTasks.ts` 每 5 min 调用
-  - 路由 `GET /api/tasks/{id}/alerts` 返当前 task 的开放 alerts
-- 前端：
-  - 新组件 `components/task/StuckTaskBanner.tsx`（红章 + 描述 + 按钮）
-  - 新组件 `components/task/TaskDiagnosePanel.tsx`（弹窗，调
-    `/diagnose` 路由展示实时检查结果）
-  - `routes/tasks.detail.tsx` 顶部接入 Banner
-  - `i18n/zh-CN.ts` + `en-US.ts` 新增 `tasks.diagnose.*` 段（对称
-    检查走 i18n-keys-symmetry test）
-- 新单测：
-  - `tests/stuck-task-detector.test.ts`（S1/S2/S3/S4 各 satisfied +
-    not-stuck）
-  - `tests/api-tasks-alerts.test.ts`（路由返回 + 鉴权）
-  - frontend `tests/stuck-task-banner.test.tsx`（有 alerts vs 无 alerts
-    渲染，i18n key 命中）
-  - frontend `tests/task-diagnose-panel.test.tsx`（按钮触发 → fetch
-    `/diagnose` → 渲染结果表格）
+- ✅ 后端：
+  - ✅ 新文件 `services/stuckTaskDetector.ts`（S1/S2/S3/S4 检测 + 写
+    `lifecycle_alerts`；30 min 默认 threshold + node_run_events
+    freshness gate；S4 用 5 min pending threshold 不走 freshness）
+  - ✅ `startStuckTaskDetectorLoop` 每 5 min 调用（wire 在 cli/start.ts）
+  - ✅ PR-D 抽出共享 `reconcileLifecycleAlerts({ownedRules})`：两个写者
+    （invariants `INVARIANT_RULES` + stuck `STUCK_RULES`）互不干扰
+  - ✅ 新 helper `services/taskAlerts.ts` `listOpenLifecycleAlertsForTask`
+    返开放 alerts（detail JSON 解析失败降级 `{raw}`）
+  - ✅ 路由 `GET /api/tasks/:id/alerts` 返当前 task 的开放 alerts
+    （detected_at ASC 排序）
+- ✅ 前端：
+  - ✅ 新组件 `components/tasks/StuckTaskBanner.tsx`（30s poll + 接 WS
+    invalidate；hasError 切 danger 否则 warning；details 展开列规则码；
+    "Diagnose" 按钮打开 panel；empty alerts → return null）
+  - ✅ 新组件 `components/tasks/TaskDiagnosePanel.tsx`（Dialog modal；
+    open 时自动 POST /diagnose 实时扫；表格渲 rule × severity × detail
+    JSON；Re-scan / Close 按钮；testid hooks）
+  - ✅ 新 types `types/lifecycle.ts`（11 规则码 type union）
+  - ✅ `routes/tasks.detail.tsx` header 后插入 `<StuckTaskBanner taskId={id}/>`
+  - ✅ `hooks/useTasksSync.ts` 收 `lifecycle.alert` → invalidate
+    `['tasks', taskId, 'alerts']`
+  - ✅ `i18n/zh-CN.ts` + `en-US.ts` `tasks.diagnose.*` 全段（banner /
+    panel / col / severity / rule×11 / rescan / close）；i18n-keys-symmetry
+    test 仍绿
+  - ✅ `styles.css` `.task-error-banner--warning` 变体 + `.diagnose-table`
+- ✅ 新单测（4 文件 / 27 case 全绿）：
+  - ✅ 后端 `tests/stuck-task-detector.test.ts` 15 case（S1 stuck/has-pending-dv/
+    freshness-gate + S2 stuck/has-open-session/closed-not-saving + S3
+    stuck/has-active/empty-vacuous + S4 stuck/not-stuck + reconcile
+    second-scan-no-dup/resolution/onAlert/ownedRules-guard 不 resolve
+    invariant 行）
+  - ✅ 后端 `tests/api-tasks-alerts.test.ts` 4 case（401 + empty + ASC
+    order + malformed-detail-degrades）
+  - ✅ 前端 `tests/stuck-task-banner.test.tsx` 4 case（empty hides /
+    warning chrome / danger chrome / Diagnose opens panel）
+  - ✅ 前端 `tests/task-diagnose-panel.test.tsx` 4 case（empty state /
+    table rows + severity / Re-scan triggers 2nd POST / open=false
+    no fetch）
 
 **完工标准**：
-- PR-A + PR-B + PR-C + PR-D 全绿
+- ✅ PR-A + PR-B + PR-C + PR-D + PR-E 全绿（68 + 17 + 8 + 36 + 27 = 156 case）
+- ✅ 全 backend 1911 pass / 8 known flake / 0 new fail；全 frontend 1906
+  pass / 0 fail；typecheck / lint / format 全绿；i18n-keys-symmetry 绿
 - 手动复现：本地起 daemon，故意构造一个 stuck task（修 DB），等 5 min
   后 UI 顶部出红章 + 点 Diagnose 看到 invariant 报告
-- i18n-keys-symmetry test 不退化
 
 ## 验收清单
 

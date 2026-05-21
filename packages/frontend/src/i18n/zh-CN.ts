@@ -775,6 +775,43 @@ export interface Resources {
     resumeLaunchLink: string
     failedBanner: string
     jumpToFailed: string
+    diagnose: {
+      bannerErrorTitle: string
+      bannerWarningTitle: string
+      bannerCount_one: string
+      bannerCount_other: string
+      bannerRulesSummary: string
+      bannerButton: string
+      panelTitle: string
+      rescan: string
+      rescanning: string
+      close: string
+      loading: string
+      empty: string
+      col: {
+        rule: string
+        severity: string
+        detectedAt: string
+        detail: string
+      }
+      severity: {
+        warning: string
+        error: string
+      }
+      rule: {
+        R1: string
+        R2: string
+        C1: string
+        T1: string
+        T2: string
+        T3: string
+        U1: string
+        S1: string
+        S2: string
+        S3: string
+        S4: string
+      }
+    }
     reviewButton: string
     clarifyButton: string
     worktreePreserved: string
@@ -2435,6 +2472,43 @@ export const zhCN: Resources = {
     resumeLaunchLink: '启动新任务 →',
     failedBanner: '任务失败。',
     jumpToFailed: '跳到失败节点 ({{nodeId}})',
+    diagnose: {
+      bannerErrorTitle: '检测到任务生命周期问题。',
+      bannerWarningTitle: '检测到任务生命周期警告。',
+      bannerCount_one: '{{count}} 条未解决告警。',
+      bannerCount_other: '{{count}} 条未解决告警。',
+      bannerRulesSummary: '触发的规则',
+      bannerButton: '诊断',
+      panelTitle: '任务生命周期诊断',
+      rescan: '重新扫描',
+      rescanning: '扫描中…',
+      close: '关闭',
+      loading: '正在运行不变量扫描…',
+      empty: '该任务当前没有未解决的生命周期告警。',
+      col: {
+        rule: '规则',
+        severity: '严重级别',
+        detectedAt: '首次发现',
+        detail: '详情',
+      },
+      severity: {
+        warning: '警告',
+        error: '错误',
+      },
+      rule: {
+        R1: '文档已审核通过，但 review node_run 未落 done',
+        R2: 'review node_run 已完成，但找不到 approved 的 doc_version',
+        C1: 'clarify_session 已关闭，但对应 clarify node_run 仍在 awaiting_human',
+        T1: 'task 处于 awaiting_review，但没有任何 node_run 处于 awaiting_review',
+        T2: 'task 处于 awaiting_human，但没有任何 node_run 处于 awaiting_human',
+        T3: 'task 已 done，但仍有 output 节点没有 done 的 node_run',
+        U1: '同一 (nodeId, iteration, shard) 上存在多个活跃 node_run',
+        S1: 'task 在 awaiting_review 长时间无 pending doc_version',
+        S2: 'task 在 awaiting_human 长时间无开放 clarify_session',
+        S3: 'task 状态 running，但所有 node_run 都已落终态',
+        S4: 'task 长时间处于 pending，调度器未拣选',
+      },
+    },
     reviewButton: '去审核',
     clarifyButton: '去回答',
     worktreePreserved:

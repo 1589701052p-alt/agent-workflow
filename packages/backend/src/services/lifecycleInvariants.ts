@@ -47,7 +47,20 @@ const GRACE_MS = 24 * HOUR_MS
 
 export type InvariantRule = 'R1' | 'R2' | 'C1' | 'T1' | 'T2' | 'T3' | 'U1'
 
+/** RFC-053 P-6 stuck-task detector emits these. Shares lifecycle_alerts table. */
+export type StuckRule = 'S1' | 'S2' | 'S3' | 'S4'
+
+/** Union of every rule kind that can appear in lifecycle_alerts.rule. */
+export type LifecycleAlertRule = InvariantRule | StuckRule
+
 export type InvariantSeverity = 'warning' | 'error'
+
+/** Canonical list of the seven invariant rules — used as `ownedRules` so
+ *  the invariants reconcile only touches their own open rows. */
+export const INVARIANT_RULES: readonly InvariantRule[] = ['R1', 'R2', 'C1', 'T1', 'T2', 'T3', 'U1']
+
+/** Canonical list of the four stuck-task rules. */
+export const STUCK_RULES: readonly StuckRule[] = ['S1', 'S2', 'S3', 'S4']
 
 export interface LifecycleInvariantFinding {
   taskId: string
@@ -56,10 +69,19 @@ export interface LifecycleInvariantFinding {
   detail: Record<string, unknown>
 }
 
+/** Generic finding used by `reconcileLifecycleAlerts`; PR-D / PR-E both
+ *  pass their own narrowed flavors (`LifecycleInvariantFinding` /
+ *  `StuckTaskFinding`). */
+export interface LifecycleAlertFinding {
+  taskId: string
+  rule: LifecycleAlertRule
+  detail: Record<string, unknown>
+}
+
 export interface LifecycleAlertRow {
   id: string
   taskId: string
-  rule: InvariantRule
+  rule: LifecycleAlertRule
   severity: InvariantSeverity
   detail: Record<string, unknown>
   detectedAt: number
@@ -418,33 +440,55 @@ async function checkU1(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInv
 // reconciliation: diff findings against currently-open alerts
 // =============================================================================
 
-interface ReconcileResult {
+export interface ReconcileLifecycleAlertsResult {
   newAlerts: number
   promotedAlerts: number
   resolvedAlerts: number
   openAlerts: LifecycleAlertRow[]
 }
 
-async function reconcile(
-  db: DbClient,
-  taskIds: string[],
-  findings: LifecycleInvariantFinding[],
-  now: number,
-  onAlert?: (row: LifecycleAlertRow, transition: 'new' | 'promoted') => void,
-): Promise<ReconcileResult> {
-  // Load all currently-open alerts in scope.
+/**
+ * Diff `findings` against the currently-open `lifecycle_alerts` rows in
+ * scope, then upsert: existing rows whose finding still appears are
+ * touched (detail refresh + 24h-grace severity promotion warning→error);
+ * existing rows whose finding has gone are flipped to `resolved_at=now`;
+ * new findings are inserted at severity='warning'.
+ *
+ * `ownedRules` is the key correctness gate when multiple sources write to
+ * the same `lifecycle_alerts` table (PR-D invariants + PR-E stuck
+ * detector). Reconcile only "owns" rows whose `rule` is in this set; rows
+ * outside the set are left alone (their owner does its own reconcile
+ * pass). Without this guard the second module's scan would mark the
+ * first's findings as resolved.
+ */
+export async function reconcileLifecycleAlerts(args: {
+  db: DbClient
+  taskIds: string[]
+  findings: LifecycleAlertFinding[]
+  now: number
+  ownedRules: readonly LifecycleAlertRule[]
+  onAlert?: (row: LifecycleAlertRow, transition: 'new' | 'promoted') => void
+}): Promise<ReconcileLifecycleAlertsResult> {
+  const { db, taskIds, findings, now, ownedRules, onAlert } = args
+  // Load currently-open alerts in scope whose rule is owned by this pass.
   const openRows =
-    taskIds.length === 0
+    taskIds.length === 0 || ownedRules.length === 0
       ? []
       : await db
           .select()
           .from(lifecycleAlerts)
-          .where(and(inArray(lifecycleAlerts.taskId, taskIds), isNull(lifecycleAlerts.resolvedAt)))
+          .where(
+            and(
+              inArray(lifecycleAlerts.taskId, taskIds),
+              inArray(lifecycleAlerts.rule, ownedRules as string[]),
+              isNull(lifecycleAlerts.resolvedAt),
+            ),
+          )
 
   const openByKey = new Map<string, (typeof openRows)[number]>()
   for (const r of openRows) openByKey.set(keyOf(r.taskId, r.rule), r)
 
-  const findingByKey = new Map<string, LifecycleInvariantFinding>()
+  const findingByKey = new Map<string, LifecycleAlertFinding>()
   for (const f of findings) findingByKey.set(keyOf(f.taskId, f.rule), f)
 
   let newCount = 0
@@ -567,7 +611,14 @@ export async function runLifecycleInvariants(
     findings.push(...(await checkU1(args.db, ctx)))
   }
 
-  const reconciled = await reconcile(args.db, taskIds, findings, now, args.onAlert)
+  const reconciled = await reconcileLifecycleAlerts({
+    db: args.db,
+    taskIds,
+    findings,
+    now,
+    ownedRules: INVARIANT_RULES,
+    onAlert: args.onAlert,
+  })
 
   log.info('scan complete', {
     scanned: taskIds.length,

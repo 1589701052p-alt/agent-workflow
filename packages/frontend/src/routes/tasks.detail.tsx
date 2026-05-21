@@ -18,6 +18,7 @@ import { api, ApiError } from '@/api/client'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
@@ -157,6 +158,7 @@ function TaskDetailPage() {
           )}
         </div>
       </header>
+      <StuckTaskBanner taskId={id} />
       {cancel.error !== null && cancel.error !== undefined && (
         <div className="error-box">{describeError(cancel.error)}</div>
       )}
