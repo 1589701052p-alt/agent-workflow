@@ -22,6 +22,7 @@ import type {
   ClarifyPromptContext,
   ClarifyQuestion,
   ClarifyTruncationWarning,
+  CrossClarifyPromptContext,
   Mcp,
   Plugin,
   ReviewPromptContext,
@@ -124,6 +125,17 @@ export interface RunNodeOptions {
    */
   clarifyContext?: ClarifyPromptContext
   /**
+   * RFC-056: External Feedback context for designers being rerun by a
+   * cross-clarify node. Built by services/crossClarify.buildExternalFeedbackContext.
+   * Substitutes {{__external_feedback__}} / {{__external_feedback_iteration__}} /
+   * {{__external_feedback_sources__}} and auto-appends the
+   * `## External Feedback` section at the user prompt tail (between the
+   * RFC-023 `## Self Clarify Q&A` section and the RFC-039 protocol block).
+   * Absent on first runs and on runs whose designer never received
+   * cross-agent feedback.
+   */
+  crossClarifyContext?: CrossClarifyPromptContext
+  /**
    * RFC-023 + RFC-039: when true (scheduler computed
    * `agentHasClarifyChannel(definition, agentNodeId)` from the workflow
    * definition), the renderer emits a bi-modal trailing block. RFC-039
@@ -134,6 +146,17 @@ export interface RunNodeOptions {
    * pre-RFC-023.
    */
   hasClarifyChannel?: boolean
+  /**
+   * RFC-056: when this agent's `__clarify__` source port is wired to a
+   * `clarify-cross-agent` node (rather than the RFC-023 self-clarify node),
+   * the runner's envelope parser must NOT truncate at the RFC-023 default
+   * (`CLARIFY_MAX_QUESTIONS=5`) — cross-clarify deliberately lifts that cap
+   * (questions can be 1..N). The scheduler computes this by looking at the
+   * workflow definition (`findCrossClarifyNodeForQuestioner`) and threads it
+   * here so the runner doesn't need the definition. Default `'self'` keeps
+   * RFC-023 byte-for-byte semantics.
+   */
+  clarifyMode?: 'self' | 'cross'
   /** Skills used by this agent. */
   skills: ResolvedSkill[]
   /**
@@ -549,6 +572,9 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
             : {}),
           ...(opts.reviewContext !== undefined ? { reviewContext: opts.reviewContext } : {}),
           ...(opts.clarifyContext !== undefined ? { clarifyContext: opts.clarifyContext } : {}),
+          ...(opts.crossClarifyContext !== undefined
+            ? { crossClarifyContext: opts.crossClarifyContext }
+            : {}),
           ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),
         })
 
@@ -859,7 +885,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         'clarify-and-output-both-present: agent reply contained BOTH <workflow-output> and <workflow-clarify>; the framework requires exactly one'
     } else if (kind === 'clarify') {
       const body = extractClarifyEnvelopeBody(accumulatedText)
-      const parsed = body !== null ? parseClarifyEnvelopeBody(body) : null
+      // RFC-056: cross-clarify path disables the RFC-023 5-question cap.
+      const parseOpts =
+        opts.clarifyMode === 'cross' ? { maxQuestions: Number.POSITIVE_INFINITY } : {}
+      const parsed = body !== null ? parseClarifyEnvelopeBody(body, parseOpts) : null
       if (parsed === null || parsed.body === null) {
         const firstErr = parsed?.errors[0]
         status = 'failed'

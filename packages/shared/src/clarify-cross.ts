@@ -5,7 +5,20 @@
 // designer rerun trigger), but the envelope schema and the per-answer synthesis
 // are reused verbatim from RFC-023. No Bun / Node / DB imports — pure module.
 
-import type { ClarifyCrossAgentNode, ClarifyCrossAgentSessionMode } from './schemas/workflow'
+import type {
+  ClarifyCrossAgentNode,
+  ClarifyCrossAgentSessionMode,
+  WorkflowDefinition,
+  WorkflowEdge,
+} from './schemas/workflow'
+import {
+  CLARIFY_SOURCE_PORT_NAME,
+  CLARIFY_RESPONSE_TARGET_PORT_NAME,
+  CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  CROSS_CLARIFY_INPUT_PORT_NAME,
+  CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
+  CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+} from './schemas/workflow'
 import {
   parseClarifyEnvelopeBody,
   type ParseClarifyEnvelopeResult,
@@ -147,4 +160,153 @@ export function resolveCrossClarifySessionMode(
     return node.sessionModeForDesigner ?? 'isolated'
   }
   return node.sessionModeForQuestioner ?? 'isolated'
+}
+
+// -----------------------------------------------------------------------------
+// definition-level topology helpers — used by scheduler / runner / canvas drag.
+// -----------------------------------------------------------------------------
+
+/**
+ * RFC-056: locate the cross-clarify node attached to a given questioner via
+ * the auto-edge `questioner.__clarify__ → newNode.questions`. Returns the
+ * cross-clarify nodeId, or `undefined` when the questioner has no cross-
+ * clarify channel wired. The runner uses this to decide whether the asking
+ * agent's `<workflow-clarify>` envelope feeds the RFC-023 self-clarify path
+ * or the RFC-056 cross-clarify path (when both target kinds exist on the
+ * same agent's `__clarify__` source port, the cross-clarify path wins by
+ * design — see design.md §4.2 mode 标识).
+ */
+export function findCrossClarifyNodeForQuestioner(
+  definition: WorkflowDefinition,
+  questionerNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const nodes = definition.nodes ?? []
+  for (const e of edges) {
+    if (e.source.nodeId !== questionerNodeId) continue
+    if (e.source.portName !== CLARIFY_SOURCE_PORT_NAME) continue
+    if (e.target.portName !== CROSS_CLARIFY_INPUT_PORT_NAME) continue
+    const tgt = nodes.find((n) => n.id === e.target.nodeId)
+    if (tgt?.kind === 'clarify-cross-agent') return tgt.id
+  }
+  return undefined
+}
+
+/**
+ * RFC-056: check whether an agent node (any kind) has at least one inbound
+ * `__external_feedback__` system port edge — meaning some cross-clarify
+ * node's `to_designer` output targets it. The prompt renderer auto-appends
+ * the `## External Feedback` section only when this is true on the agent
+ * being run.
+ */
+export function agentHasExternalFeedbackChannel(
+  definition: WorkflowDefinition,
+  agentNodeId: string,
+): boolean {
+  const edges = definition.edges ?? []
+  return edges.some(
+    (e) =>
+      e.target.nodeId === agentNodeId && e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  )
+}
+
+/**
+ * RFC-056: resolve the designer NodeId pointed at by a cross-clarify node's
+ * `to_designer` output. Returns `undefined` when no manual edge exists (the
+ * validator already emits `cross-clarify-manual-edge-missing` warning in
+ * the editor; at runtime we surface the missing target via the error code
+ * `cross-clarify-designer-target-missing-at-runtime`).
+ */
+export function findDesignerNodeForCrossClarify(
+  definition: WorkflowDefinition,
+  crossClarifyNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.source.nodeId === crossClarifyNodeId &&
+      e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT &&
+      e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  )
+  return edge?.target.nodeId
+}
+
+/**
+ * RFC-056: enumerate every cross-clarify node whose `to_designer` manual edge
+ * targets `designerNodeId`. Used by the multi-source aggregation in
+ * `evaluateDesignerRerunReadiness` to decide when ALL feedback sources have
+ * been resolved (submit or reject) before triggering the designer rerun.
+ * Order is preserved from `definition.nodes` for caller convenience; the
+ * service sorts by `source_questioner_node_id` separately when building the
+ * prompt.
+ */
+export function findCrossClarifyNodesPointingToDesigner(
+  definition: WorkflowDefinition,
+  designerNodeId: string,
+): string[] {
+  const edges = definition.edges ?? []
+  const targeting = new Set<string>()
+  for (const e of edges) {
+    if (e.target.nodeId !== designerNodeId) continue
+    if (e.target.portName !== CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT) continue
+    if (e.source.portName !== CROSS_CLARIFY_OUT_TO_DESIGNER_PORT) continue
+    targeting.add(e.source.nodeId)
+  }
+  // Preserve workflow.nodes declaration order for deterministic traversal.
+  const order = new Map<string, number>()
+  ;(definition.nodes ?? []).forEach((n, idx) => order.set(n.id, idx))
+  return Array.from(targeting).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+}
+
+/**
+ * RFC-056: resolve the QUESTIONER NodeId attached to a cross-clarify node via
+ * the auto-edge `questioner.__clarify__ → crossClarify.questions`. Returns
+ * `undefined` when no such edge exists (validator fail
+ * `cross-clarify-input-source-missing`). Used by `triggerQuestionerStopRerun`
+ * + scheduler cascade reset.
+ */
+export function findQuestionerNodeForCrossClarify(
+  definition: WorkflowDefinition,
+  crossClarifyNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.target.nodeId === crossClarifyNodeId &&
+      e.target.portName === CROSS_CLARIFY_INPUT_PORT_NAME &&
+      e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+  )
+  return edge?.source.nodeId
+}
+
+/**
+ * Helper for the canvas reverse-drag interaction. Returns the two edges to
+ * splice into definition.edges when the user drags from a cross-clarify
+ * node's input handle onto an agent node:
+ *
+ *   questioner.__clarify__       → crossClarify.questions       (system question channel)
+ *   crossClarify.to_questioner   → questioner.__clarify_response__ (visual completion)
+ *
+ * The second edge can be deleted by the user without breaking answer
+ * injection (the runtime ties session ↔ questioner via cross_clarify_session
+ * rows, not via this edge). It exists for canvas legibility, mirroring
+ * RFC-023 `buildClarifyEdges`.
+ */
+export function buildCrossClarifyAutoEdges(
+  questionerNodeId: string,
+  crossClarifyNodeId: string,
+): WorkflowEdge[] {
+  const base = `e_${questionerNodeId}_${crossClarifyNodeId}`
+  return [
+    {
+      id: `${base}_clarify`,
+      source: { nodeId: questionerNodeId, portName: CLARIFY_SOURCE_PORT_NAME },
+      target: { nodeId: crossClarifyNodeId, portName: CROSS_CLARIFY_INPUT_PORT_NAME },
+    },
+    {
+      id: `${base}_to_questioner`,
+      source: { nodeId: crossClarifyNodeId, portName: CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT },
+      target: { nodeId: questionerNodeId, portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
+    },
+  ]
 }

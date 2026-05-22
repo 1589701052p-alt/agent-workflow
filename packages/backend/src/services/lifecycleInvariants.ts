@@ -31,13 +31,20 @@
 // All seven invariants are read-only against the source tables; only
 // `lifecycle_alerts` is written.
 
-import { and, eq, gte, inArray, isNull, or } from 'drizzle-orm'
+import { and, eq, gt, gte, inArray, isNull, isNotNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { WorkflowDefinition, NodeKind } from '@agent-workflow/shared'
 
 import type { DbClient } from '@/db/client'
-import { clarifySessions, docVersions, lifecycleAlerts, nodeRuns, tasks } from '@/db/schema'
+import {
+  clarifySessions,
+  crossClarifySessions,
+  docVersions,
+  lifecycleAlerts,
+  nodeRuns,
+  tasks,
+} from '@/db/schema'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('lifecycle.invariants')
@@ -45,7 +52,7 @@ const log = createLogger('lifecycle.invariants')
 const HOUR_MS = 3_600_000
 const GRACE_MS = 24 * HOUR_MS
 
-export type InvariantRule = 'R1' | 'R2' | 'C1' | 'T1' | 'T2' | 'T3' | 'U1'
+export type InvariantRule = 'R1' | 'R2' | 'C1' | 'T1' | 'T2' | 'T3' | 'U1' | 'CR-1'
 
 /** RFC-053 P-6 stuck-task detector emits these. Shares lifecycle_alerts table. */
 export type StuckRule = 'S1' | 'S2' | 'S3' | 'S4'
@@ -57,7 +64,16 @@ export type InvariantSeverity = 'warning' | 'error'
 
 /** Canonical list of the seven invariant rules — used as `ownedRules` so
  *  the invariants reconcile only touches their own open rows. */
-export const INVARIANT_RULES: readonly InvariantRule[] = ['R1', 'R2', 'C1', 'T1', 'T2', 'T3', 'U1']
+export const INVARIANT_RULES: readonly InvariantRule[] = [
+  'R1',
+  'R2',
+  'C1',
+  'T1',
+  'T2',
+  'T3',
+  'U1',
+  'CR-1',
+]
 
 /** Canonical list of the four stuck-task rules. */
 export const STUCK_RULES: readonly StuckRule[] = ['S1', 'S2', 'S3', 'S4']
@@ -436,6 +452,84 @@ async function checkU1(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInv
   return out
 }
 
+async function checkCR1(
+  db: DbClient,
+  ctx: TaskScanContext,
+  now: number,
+): Promise<LifecycleInvariantFinding[]> {
+  // CR-1 (RFC-056 §10): cross_clarify_session answered+continue + parent task
+  // failed + no consuming designer node_run (i.e. no done designer run with
+  // cross_clarify_iteration >= session.iteration) ⟹ upgrade to 'abandoned'.
+  //
+  // Unlike R1/R2/C1/T*/U1, this rule is "auto-upgrade": the violation IS the
+  // signal — we flip the row to abandoned in this pass so the next scan
+  // sees nothing. The lifecycle_alerts breadcrumb is still emitted (with
+  // detail.message = "...upgraded to abandoned") so operators see the
+  // upgrade for audit / debug.
+  if (ctx.taskStatus !== 'failed') return []
+  const stuck = await db
+    .select({
+      id: crossClarifySessions.id,
+      crossClarifyNodeId: crossClarifySessions.crossClarifyNodeId,
+      targetDesignerNodeId: crossClarifySessions.targetDesignerNodeId,
+      iteration: crossClarifySessions.iteration,
+      directive: crossClarifySessions.directive,
+      status: crossClarifySessions.status,
+    })
+    .from(crossClarifySessions)
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, ctx.taskId),
+        eq(crossClarifySessions.status, 'answered'),
+        eq(crossClarifySessions.directive, 'continue'),
+        isNotNull(crossClarifySessions.targetDesignerNodeId),
+      ),
+    )
+  if (stuck.length === 0) return []
+
+  const out: LifecycleInvariantFinding[] = []
+  for (const s of stuck) {
+    if (s.targetDesignerNodeId === null) continue
+    // Is there a designer node_run with cross_clarify_iteration >= session.iteration
+    // that reached 'done'? If yes, the feedback was consumed → not abandoned.
+    const consumed = (
+      await db
+        .select({ id: nodeRuns.id })
+        .from(nodeRuns)
+        .where(
+          and(
+            eq(nodeRuns.taskId, ctx.taskId),
+            eq(nodeRuns.nodeId, s.targetDesignerNodeId),
+            gt(nodeRuns.crossClarifyIteration, s.iteration),
+            eq(nodeRuns.status, 'done'),
+          ),
+        )
+        .limit(1)
+    )[0]
+    if (consumed !== undefined) continue
+
+    // Upgrade in place.
+    await db
+      .update(crossClarifySessions)
+      .set({ status: 'abandoned', abandonedAt: now })
+      .where(eq(crossClarifySessions.id, s.id))
+
+    out.push({
+      taskId: ctx.taskId,
+      rule: 'CR-1',
+      detail: {
+        rule: 'CR-1',
+        message: 'cross_clarify_session answered+continue with task failed; upgraded to abandoned',
+        crossClarifySessionId: s.id,
+        crossClarifyNodeId: s.crossClarifyNodeId,
+        targetDesignerNodeId: s.targetDesignerNodeId,
+        iteration: s.iteration,
+      },
+    })
+  }
+  return out
+}
+
 // =============================================================================
 // reconciliation: diff findings against currently-open alerts
 // =============================================================================
@@ -609,6 +703,7 @@ export async function runLifecycleInvariants(
     findings.push(...(await checkT2(args.db, ctx)))
     findings.push(...(await checkT3(args.db, ctx)))
     findings.push(...(await checkU1(args.db, ctx)))
+    findings.push(...(await checkCR1(args.db, ctx, now)))
   }
 
   const reconciled = await reconcileLifecycleAlerts({

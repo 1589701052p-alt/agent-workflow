@@ -137,6 +137,52 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     rerunNodeRunId: z.string(),
     session: ClarifySessionSchema,
   }),
+  // -------------------------------------------------------------------------
+  // RFC-056 cross-clarify events. Parallel to clarify.created / clarify.answered
+  // but for the cross-agent path (different node kind + multi-source aggregation
+  // + reject persistence). Subscribers route invalidation:
+  //   - cross-clarify.created           → /api/clarify list (mixed) + detail.
+  //   - cross-clarify.answered          → list + detail; UI may show "multi-source
+  //                                       waiting" banner from the response.
+  //   - cross-clarify.rejected          → same; UI flips the cross-clarify form
+  //                                       to read-only + tells user reject took effect.
+  //   - cross-clarify.designer-rerun-batched → task detail nodeRuns tab; the
+  //                                       new designer node_run is now pending.
+  // -------------------------------------------------------------------------
+  z.object({
+    id: z.number().int(),
+    type: z.literal('cross-clarify.created'),
+    nodeRunId: z.string(),
+    crossClarifyNodeId: z.string(),
+    sessionId: z.string(),
+    iteration: z.number().int().nonnegative(),
+    sourceQuestionerNodeId: z.string(),
+    targetDesignerNodeId: z.string().nullable(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('cross-clarify.answered'),
+    nodeRunId: z.string(),
+    sessionId: z.string(),
+    iteration: z.number().int().nonnegative(),
+    directive: z.enum(['continue', 'stop']),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('cross-clarify.rejected'),
+    nodeRunId: z.string(),
+    sessionId: z.string(),
+    /** Freshly minted questioner rerun row carrying STOP CLARIFYING. */
+    questionerNodeRunId: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('cross-clarify.designer-rerun-batched'),
+    /** Freshly minted designer rerun row at cross_clarify_iteration + 1. */
+    designerNodeRunId: z.string(),
+    /** Cross-clarify source questioner NodeIds whose sessions fed this batch. */
+    sourceQuestionerNodeIds: z.array(z.string()).min(1),
+  }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>
 

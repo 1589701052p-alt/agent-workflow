@@ -25,7 +25,10 @@ import type {
 import {
   WorkflowDefinitionSchema,
   agentHasClarifyChannel,
+  agentHasExternalFeedbackChannel,
   findClarifyNodeForAgent,
+  findCrossClarifyNodeForQuestioner,
+  findDesignerNodeForCrossClarify,
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -41,6 +44,11 @@ import {
   createClarifySession,
   findClarifyNode,
 } from '@/services/clarify'
+import {
+  buildExternalFeedbackContext,
+  createCrossClarifySession,
+  dispatchCrossClarifyNode,
+} from '@/services/crossClarify'
 import {
   decideResumeSessionId,
   detectSessionNotFoundFromStderr,
@@ -158,7 +166,8 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
       node.kind !== 'wrapper-git' &&
       node.kind !== 'wrapper-loop' &&
       node.kind !== 'review' && // RFC-005
-      node.kind !== 'clarify' // RFC-023
+      node.kind !== 'clarify' && // RFC-023
+      node.kind !== 'clarify-cross-agent' // RFC-056
     ) {
       await failTask(
         db,
@@ -701,6 +710,49 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     return { kind: 'ok', summary: '', message: '' }
   }
 
+  if (node.kind === 'clarify-cross-agent') {
+    // RFC-056: cross-clarify nodes are activated by the questioner emitting
+    // <workflow-clarify> (the runner forwards into createCrossClarifySession),
+    // EXCEPT when this node already has a persistent directive='stop' session
+    // — in that case the scheduler short-circuits the dispatch by marking
+    // the node_run done so the workflow keeps moving and the questioner's
+    // own cascade rerun picks up the STOP CLARIFYING anchor via the
+    // cross-clarify path on the questioner side.
+    const stopRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+    const res = await dispatchCrossClarifyNode({
+      db,
+      taskId,
+      crossClarifyNodeId: node.id,
+      nodeRunId: stopRunId,
+      definition,
+    })
+    if (res.kind === 'short-circuit-stop') {
+      broadcastNodeStatus(taskId, stopRunId, node.id, 'done')
+      return { kind: 'ok', summary: '', message: 'cross-clarify-persistent-stop' }
+    }
+    if (res.kind === 'no-questioner') {
+      // Validator should have flagged; defensive runtime fail.
+      await setNodeRunStatus({
+        db,
+        nodeRunId: stopRunId,
+        to: 'failed',
+        allowedFrom: ['pending'],
+        reason: 'cross-clarify-input-source-missing-at-runtime',
+        extra: { finishedAt: Date.now() },
+      })
+      return {
+        kind: 'failed',
+        summary: `cross-clarify node ${node.id} has no questioner input`,
+        message: 'cross-clarify-input-source-missing-at-runtime',
+      }
+    }
+    // 'awaiting' — leave the freshly-minted pending node_run; the runner
+    // path will park it via createCrossClarifySession when the questioner
+    // emits <workflow-clarify>. The pending row is fine for the moment —
+    // it will be replaced (or upgraded to awaiting_human) by the runner.
+    return { kind: 'ok', summary: '', message: '' }
+  }
+
   if (node.kind === 'input') {
     const inputKey = pickString(node, 'inputKey')
     if (inputKey === null) {
@@ -778,6 +830,17 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // hasClarifyChannel is true, regardless of whether there's prior context
   // (the agent needs to know it MAY ask back even on the first round).
   const hasClarifyChannel = agentHasClarifyChannel(definition, node.id)
+  // RFC-056: the questioner's __clarify__ port may be wired into a
+  // clarify-cross-agent node instead of (or as well as) a RFC-023 clarify
+  // node. When at least one cross-clarify target exists we instruct the
+  // runner to disable the 5-question cap on the envelope parser.
+  const clarifyMode: 'self' | 'cross' =
+    findCrossClarifyNodeForQuestioner(definition, node.id) !== undefined ? 'cross' : 'self'
+  // RFC-056: designer agents may receive External Feedback from one or more
+  // cross-clarify nodes via the system port __external_feedback__. When the
+  // current rerun has crossClarifyIteration > 0 the scheduler builds a
+  // prompt context that the renderer auto-appends as ## External Feedback.
+  const hasExternalFeedbackChannel = agentHasExternalFeedbackChannel(definition, node.id)
 
   // Pick up an existing pending node_run at this iteration; otherwise create
   // a fresh run with retry_index = max-existing-in-iter + 1 (or 0).
@@ -1046,6 +1109,21 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               applyLatestDirective: isClarifyRerun,
             })
           : undefined
+        // RFC-056: when this designer has External Feedback channel + has
+        // already been rerun by cross-clarify (crossClarifyIteration > 0),
+        // build the External Feedback prompt block sourced from every
+        // directive='continue' session targeting it.
+        const currentCrossClarifyIteration = currentRunRow?.crossClarifyIteration ?? 0
+        const crossClarifyContext = hasExternalFeedbackChannel
+          ? await buildExternalFeedbackContext({
+              db,
+              taskId,
+              designerNodeId: node.id,
+              loopIter: iteration,
+              designerCrossClarifyIteration: currentCrossClarifyIteration,
+              definition,
+            })
+          : undefined
         // RFC-023 directive iteration: when the last answered session was
         // submitted with directive='stop', this single rerun MUST NOT see
         // the <workflow-clarify> protocol block — the answersBlock already
@@ -1094,6 +1172,8 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
           ...(reviewContext !== undefined ? { reviewContext } : {}),
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
+          ...(crossClarifyContext !== undefined ? { crossClarifyContext } : {}),
+          ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
           ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
           ...(effectiveResumeSessionId !== undefined
             ? { resumeSessionId: effectiveResumeSessionId }
@@ -1205,6 +1285,45 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // bubbles up and the task transitions to status='awaiting_human' until the
   // user POSTs answers via /api/clarify.
   if (lastResult.clarify !== undefined) {
+    // RFC-056: prefer the cross-clarify route if the questioner's
+    // __clarify__ port is wired to a clarify-cross-agent node. The
+    // shared helper short-circuits when no cross-clarify target exists,
+    // falling through to the RFC-023 self-clarify path below.
+    const crossClarifyNodeId = findCrossClarifyNodeForQuestioner(definition, node.id)
+    if (crossClarifyNodeId !== undefined) {
+      const currentRunRowXc = (
+        await db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+      )[0]
+      const designerNodeId = findDesignerNodeForCrossClarify(definition, crossClarifyNodeId)
+      // Defensive: persistent stop would have been short-circuited at
+      // dispatch already. If the questioner still emitted clarify, treat
+      // as protocol violation. Caller's retries (RFC-042) kick in.
+      const persistentRow = await db
+        .select({ id: nodeRuns.id })
+        .from(nodeRuns)
+        .where(eq(nodeRuns.taskId, taskId))
+        .limit(1)
+      void persistentRow
+      await createCrossClarifySession({
+        db,
+        taskId,
+        crossClarifyNodeId,
+        sourceQuestionerNodeId: node.id,
+        sourceQuestionerNodeRunId: nodeRunId,
+        targetDesignerNodeId: designerNodeId ?? null,
+        loopIter: currentRunRowXc?.iteration ?? 0,
+        questions: lastResult.clarify.questions,
+        ...(lastResult.clarify.truncationWarnings.length > 0
+          ? { truncationWarnings: lastResult.clarify.truncationWarnings }
+          : {}),
+      })
+      return {
+        kind: 'awaiting_human',
+        summary: `questioner ${node.id} asked back via cross-clarify node ${crossClarifyNodeId}`,
+        message: 'cross-clarify-awaiting-human',
+      }
+    }
+
     const clarifyNodeId = findClarifyNodeForAgent(definition, node.id)
     if (clarifyNodeId === undefined) {
       // Agent emitted clarify but has no clarify channel — protocol abuse.
@@ -2323,11 +2442,17 @@ function topologicalOrder(
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
   const inDegree = new Map<string, number>()
   for (const n of nodes) inDegree.set(n.id, 0)
-  // RFC-023: ignore clarify channel edges when computing topology. They form
-  // an explicit cycle (agent → clarify → agent) by design, and the cycle is
-  // resolved out-of-band via clarify_session prompt injection.
+  // RFC-023 + RFC-056: ignore clarify-channel edges when computing topology.
+  // They form explicit cycles (agent → clarify → agent for RFC-023,
+  // questioner → cross-clarify → designer / questioner for RFC-056) by design.
+  // The cycle is resolved out-of-band via clarify_session /
+  // cross_clarify_session prompt injection.
   const isClarifyEdge = (e: WorkflowEdge): boolean =>
-    e.source.portName === '__clarify__' || e.target.portName === '__clarify_response__'
+    e.source.portName === '__clarify__' ||
+    e.target.portName === '__clarify_response__' ||
+    e.target.portName === '__external_feedback__' ||
+    e.source.portName === 'to_designer' ||
+    e.source.portName === 'to_questioner'
   for (const e of edges) {
     if (!nodeById.has(e.source.nodeId) || !nodeById.has(e.target.nodeId)) continue
     if (isClarifyEdge(e)) continue
@@ -2550,12 +2675,19 @@ function buildScopeUpstreams(
   for (const e of edges) {
     if (!ids.has(e.target.nodeId)) continue
     if (!ids.has(e.source.nodeId)) continue
-    // RFC-023: clarify channel edges are not dataflow deps; they're
-    // out-of-band, handled by services/clarify.ts. Skipping them prevents
-    // a cycle (agent -> clarify -> agent) and keeps the clarify node off
-    // the agent's upstream list (the answer arrives via prompt injection,
-    // not the answers→agent edge).
-    if (e.source.portName === '__clarify__' || e.target.portName === '__clarify_response__') {
+    // RFC-023 + RFC-056: clarify-channel edges are not dataflow deps;
+    // they're out-of-band, handled by services/clarify.ts /
+    // services/crossClarify.ts. Skipping them prevents cycles
+    // (RFC-023: agent → clarify → agent; RFC-056: questioner ↔ cross →
+    // designer) and keeps these nodes off the upstream list (answers /
+    // External Feedback arrive via prompt injection, not via the edges).
+    if (
+      e.source.portName === '__clarify__' ||
+      e.target.portName === '__clarify_response__' ||
+      e.target.portName === '__external_feedback__' ||
+      e.source.portName === 'to_designer' ||
+      e.source.portName === 'to_questioner'
+    ) {
       continue
     }
     const list = m.get(e.target.nodeId) ?? []

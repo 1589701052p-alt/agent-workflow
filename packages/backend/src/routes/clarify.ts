@@ -17,7 +17,7 @@ import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import { actorOf, type Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
-import { clarifySessions, nodeRuns, tasks as tasksTable } from '@/db/schema'
+import { clarifySessions, crossClarifySessions, nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
 import {
   countPendingClarifications,
@@ -25,6 +25,11 @@ import {
   listClarifySummaries,
   submitClarifyAnswers,
 } from '@/services/clarify'
+import {
+  getCrossClarifyDetail,
+  listCrossClarifySummaries,
+  submitCrossClarifyAnswers,
+} from '@/services/crossClarify'
 import { isAssignedClarifyTarget } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
 import { Paths } from '@/util/paths'
@@ -52,41 +57,82 @@ async function ensureClarifyAnswerAuth(
   actor: Actor,
 ): Promise<void> {
   if (actor.permissions.has('tasks:read:all')) return
-  // node_runs.id → taskId + nodeId (the clarify node's own id, which is the
-  // assignment key on node_assignments).
+  // RFC-023: lookup self-clarify session first.
   const sess = await deps.db
     .select()
     .from(clarifySessions)
     .where(eq(clarifySessions.clarifyNodeRunId, clarifyNodeRunId))
     .limit(1)
-  if (!sess[0]) {
-    // Fallback to node_runs lookup so the 404 is still correctly attributed.
-    const runs = await deps.db
-      .select()
-      .from(nodeRuns)
-      .where(eq(nodeRuns.id, clarifyNodeRunId))
-      .limit(1)
-    if (!runs[0]) {
-      throw new NotFoundError('clarify-session-not-found', 'clarify session not found')
+  if (sess[0]) {
+    const taskRow = (
+      await deps.db.select().from(tasksTable).where(eq(tasksTable.id, sess[0].taskId)).limit(1)
+    )[0]
+    if (!taskRow) {
+      throw new NotFoundError('task-not-found', `task '${sess[0].taskId}' not found`)
     }
-    return // no clarify session yet → service will throw its own error
+    if (taskRow.ownerUserId === actor.user.id) return
+    if (
+      await isAssignedClarifyTarget(deps.db, sess[0].taskId, sess[0].clarifyNodeId, actor.user.id)
+    ) {
+      return
+    }
+    throw new ForbiddenError(
+      'not-clarify-target',
+      'only the assigned clarify target, task owner, or admin can submit this answer',
+    )
   }
-  const taskRow = (
-    await deps.db.select().from(tasksTable).where(eq(tasksTable.id, sess[0].taskId)).limit(1)
-  )[0]
-  if (!taskRow) {
-    throw new NotFoundError('task-not-found', `task '${sess[0].taskId}' not found`)
+  // RFC-056: cross-clarify session auth fallback. Same shape as RFC-023 —
+  // owner / assigned clarify_target / admin only.
+  const xc = await deps.db
+    .select()
+    .from(crossClarifySessions)
+    .where(eq(crossClarifySessions.crossClarifyNodeRunId, clarifyNodeRunId))
+    .limit(1)
+  if (xc[0]) {
+    const taskRow = (
+      await deps.db.select().from(tasksTable).where(eq(tasksTable.id, xc[0].taskId)).limit(1)
+    )[0]
+    if (!taskRow) {
+      throw new NotFoundError('task-not-found', `task '${xc[0].taskId}' not found`)
+    }
+    if (taskRow.ownerUserId === actor.user.id) return
+    if (
+      await isAssignedClarifyTarget(deps.db, xc[0].taskId, xc[0].crossClarifyNodeId, actor.user.id)
+    ) {
+      return
+    }
+    throw new ForbiddenError(
+      'not-clarify-target',
+      'only the assigned clarify target, task owner, or admin can submit this answer',
+    )
   }
-  if (taskRow.ownerUserId === actor.user.id) return
-  if (
-    await isAssignedClarifyTarget(deps.db, sess[0].taskId, sess[0].clarifyNodeId, actor.user.id)
-  ) {
-    return
+  // Neither — let the service path produce the 404.
+  const runs = await deps.db
+    .select()
+    .from(nodeRuns)
+    .where(eq(nodeRuns.id, clarifyNodeRunId))
+    .limit(1)
+  if (!runs[0]) {
+    throw new NotFoundError('clarify-session-not-found', 'clarify session not found')
   }
-  throw new ForbiddenError(
-    'not-clarify-target',
-    'only the assigned clarify target, task owner, or admin can submit this answer',
-  )
+}
+
+/** RFC-056: extract a node's `kind` field from a serialized
+ *  WorkflowDefinition snapshot. Returns `undefined` when the JSON is
+ *  malformed or the node id is absent (the caller falls through to
+ *  RFC-023 self-clarify path by default). */
+function nodeKindFromSnapshot(snapshotJson: string, nodeId: string): string | undefined {
+  try {
+    const snap = JSON.parse(snapshotJson) as { nodes?: Array<{ id?: unknown; kind?: unknown }> }
+    const nodes = snap?.nodes
+    if (!Array.isArray(nodes)) return undefined
+    for (const n of nodes) {
+      if (n?.id === nodeId && typeof n.kind === 'string') return n.kind
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
 }
 
 export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
@@ -109,8 +155,28 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
     if (q.data.status !== undefined) filter.status = q.data.status
     if (q.data.taskId !== undefined) filter.taskId = q.data.taskId
     if (q.data.limit !== undefined) filter.limit = q.data.limit
-    const out = await listClarifySummaries(deps.db, filter)
-    return c.json(out)
+    // RFC-023 self-clarify summaries (canonical shape).
+    const selfRows = await listClarifySummaries(deps.db, filter)
+    const selfTagged = selfRows.map((r) => ({ ...r, kind: 'self' as const }))
+
+    // RFC-056 cross-clarify summaries — status enum here is
+    // 'awaiting_human' | 'answered' | 'abandoned' (no 'canceled') so we
+    // only forward status when it matches the cross-clarify enum.
+    const crossStatus =
+      filter.status === undefined || filter.status === 'canceled'
+        ? undefined
+        : (filter.status as 'awaiting_human' | 'answered' | 'all')
+    const crossFilter: { taskId?: string; status?: typeof crossStatus; limit?: number } = {}
+    if (filter.taskId !== undefined) crossFilter.taskId = filter.taskId
+    if (crossStatus !== undefined) crossFilter.status = crossStatus
+    if (filter.limit !== undefined) crossFilter.limit = filter.limit
+    const crossRows = await listCrossClarifySummaries(deps.db, crossFilter)
+    const crossTagged = crossRows.map((r) => ({ ...r, kind: 'cross' as const }))
+
+    // Mixed list sorted by createdAt descending, capped by the original limit.
+    const merged = [...selfTagged, ...crossTagged].sort((a, b) => b.createdAt - a.createdAt)
+    const cap = filter.limit ?? 100
+    return c.json(merged.slice(0, cap))
   })
 
   app.get('/api/clarify/pending-count', async (c) => {
@@ -120,6 +186,26 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/clarify/:nodeRunId', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
+    // RFC-056: detail branch is decided by node_run kind. Self-clarify
+    // payload is preserved byte-for-byte (returns ClarifySession directly);
+    // cross-clarify payload returns CrossClarifySession. The two are
+    // disambiguated by the presence of `clarifyNodeId` vs
+    // `crossClarifyNodeId` on the response object.
+    const nrRow = (
+      await deps.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+    )[0]
+    if (nrRow !== undefined) {
+      const taskRow = (
+        await deps.db.select().from(tasksTable).where(eq(tasksTable.id, nrRow.taskId)).limit(1)
+      )[0]
+      if (
+        taskRow !== undefined &&
+        nodeKindFromSnapshot(taskRow.workflowSnapshot, nrRow.nodeId) === 'clarify-cross-agent'
+      ) {
+        const detail = await getCrossClarifyDetail(deps.db, nodeRunId)
+        return c.json(detail)
+      }
+    }
     const detail = await getClarifyDetail(deps.db, nodeRunId)
     return c.json(detail)
   })
@@ -144,6 +230,48 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
     // RFC-036: clarify_target / task owner / admin only.
     const actor = actorOf(c)
     await ensureClarifyAnswerAuth(deps, nodeRunId, actor)
+
+    // RFC-056: branch by node kind. Cross-clarify routes through
+    // submitCrossClarifyAnswers which knows the 'continue' (submit) +
+    // 'stop' (reject) directives.
+    const nrRow = (
+      await deps.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+    )[0]
+    const ownerTask = nrRow
+      ? (await deps.db.select().from(tasksTable).where(eq(tasksTable.id, nrRow.taskId)).limit(1))[0]
+      : undefined
+    const nodeKind =
+      nrRow && ownerTask
+        ? nodeKindFromSnapshot(ownerTask.workflowSnapshot, nrRow.nodeId)
+        : undefined
+    if (nodeKind === 'clarify-cross-agent') {
+      const ccResult = await submitCrossClarifyAnswers({
+        db: deps.db,
+        crossClarifyNodeRunId: nodeRunId,
+        answers: parsed.data.answers,
+        directive: parsed.data.directive,
+        answeredBy: actor.user.id,
+        ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
+      })
+      const opencodeCmdCC = resolveOpencodeCmd(deps.configPath)
+      const resumeDepsCC: Parameters<typeof resumeTask>[2] = {
+        db: deps.db,
+        appHome: Paths.root,
+        ...(opencodeCmdCC ? { opencodeCmd: opencodeCmdCC } : {}),
+      }
+      void resumeTask(deps.db, ccResult.session.taskId, resumeDepsCC).catch((err) => {
+        if (err instanceof ConflictError && err.code === 'task-not-resumable') {
+          log.info('cross-clarify resume deferred', { taskId: ccResult.session.taskId })
+          return
+        }
+        log.warn('cross-clarify resume threw', {
+          taskId: ccResult.session.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+      return c.json({ ok: true, kind: 'cross' as const, ...ccResult })
+    }
+
     const result = await submitClarifyAnswers({
       db: deps.db,
       clarifyNodeRunId: nodeRunId,
