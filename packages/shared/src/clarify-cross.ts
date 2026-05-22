@@ -248,6 +248,27 @@ export function resolveCrossClarifySessionMode(
   return node.sessionModeForQuestioner ?? 'isolated'
 }
 
+/**
+ * RFC-023 + RFC-056: classify an edge as a "clarify-channel" edge — the kind
+ * that connects the self-clarify cycle (`__clarify__` → clarify, clarify
+ * → `__clarify_response__`) or the cross-clarify cycle (`__clarify__` →
+ * cross-clarify input, cross-clarify `to_designer` / `to_questioner` →
+ * `__external_feedback__`). These edges intentionally form cycles in the
+ * static workflow graph (the agent asks back to itself / a peer) so any
+ * DAG-flavoured walk — topological order, downstream cascade — must skip
+ * them. Shared between scheduler.topologicalOrder and the cross-clarify
+ * sibling-cascade helper so both walk the same graph.
+ */
+export function isClarifyChannelEdge(e: WorkflowEdge): boolean {
+  return (
+    e.source.portName === CLARIFY_SOURCE_PORT_NAME ||
+    e.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME ||
+    e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT ||
+    e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
+    e.source.portName === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT
+  )
+}
+
 // -----------------------------------------------------------------------------
 // definition-level topology helpers — used by scheduler / runner / canvas drag.
 // -----------------------------------------------------------------------------

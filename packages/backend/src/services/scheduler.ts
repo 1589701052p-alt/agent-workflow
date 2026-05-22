@@ -31,6 +31,7 @@ import {
   findCrossClarifyNodeForQuestioner,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
+  isClarifyChannelEdge,
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -48,6 +49,7 @@ import {
 } from '@/services/clarify'
 import {
   buildExternalFeedbackContext,
+  buildQuestionerCrossClarifyContext,
   createCrossClarifySession,
   hasPersistentStop,
 } from '@/services/crossClarify'
@@ -451,6 +453,38 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     }
   }
 
+  // RFC-056 patch 2026-05-22 — cross-clarify freshness invariant (Layer B
+  // defense-in-depth). For each node currently in `completed`, if any of
+  // its in-scope upstreams has a STRICTLY greater cross_clarify_iteration
+  // than the node's own latest row, that downstream row is stale: it was
+  // captured against an older designer round than the upstream now
+  // carries. Mint a fresh pending row inheriting the upstream's iteration
+  // so the scheduler's normal rescan loop picks it up.
+  //
+  // Why this is needed alongside the cascade in `triggerDesignerRerun`:
+  //   - The cascade is the primary mechanism for the cross-clarify-submit
+  //     path and handles full transitive downstream walk.
+  //   - This invariant catches OTHER paths that bump cross_clarify_iter on
+  //     an upstream without going through triggerDesignerRerun (manual
+  //     retry, future queue-replay, raw DB patches). It runs every scope
+  //     entry so a stale downstream that slipped through the cracks gets
+  //     re-dispatched on the next attempt.
+  //   - Single-pass on purpose: chained cascade (rev → questioner → rev)
+  //     is the cascade's job; Layer B fires once per scope entry and
+  //     trusts the cascade + rescan to handle multi-hop.
+  await applyCrossClarifyFreshnessInvariant({
+    db,
+    taskId,
+    iteration,
+    scopeNodes,
+    upstreamsOf,
+    priorRuns,
+    latestPerNode,
+    completed,
+    remaining,
+    log,
+  })
+
   // Cross-batch aggregation: collect awaiting / failure signals across every
   // batch instead of short-circuiting on the first failure. Background: a
   // wrapper-loop sibling failing fast used to swallow a parallel branch's
@@ -575,6 +609,114 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     return { kind: 'failed', detail: firstFailureDetail }
   }
   return { kind: 'ok' }
+}
+
+/**
+ * RFC-056 patch 2026-05-22 — Layer B freshness invariant.
+ *
+ * Walk every node currently in `completed`. If any of its in-scope
+ * upstreams has a strictly greater `crossClarifyIteration` than the node's
+ * own latest row, mint a fresh pending node_run carrying the upstream's
+ * iteration and demote the node back to `remaining`. Defense-in-depth for
+ * cases where a designer rerun happened OUTSIDE the `triggerDesignerRerun`
+ * sibling-cascade path (manual retry, future queue-replay, raw DB patches).
+ *
+ * Fixed-point iteration: re-runs until no further demotion happens or a
+ * conservative safety cap (= scope node count + 1) is hit. Without the
+ * loop, a fresh upstream → stale A → stale B chain would only demote A on
+ * the first pass and silently leave B stale. The fixed-point shape
+ * mirrors how Layer A's cascade in `cascadeDownstreamFromDesigner` walks
+ * transitive downstream in one shot — Layer B does the same when entered
+ * cold (e.g. resuming a failed task after the patch landed but before
+ * the cascade was minted, or any future code path that bumps an upstream's
+ * crossClarifyIteration without going through triggerDesignerRerun).
+ */
+export async function applyCrossClarifyFreshnessInvariant(ctx: {
+  db: DbClient
+  taskId: string
+  iteration: number
+  scopeNodes: WorkflowNode[]
+  upstreamsOf: Map<string, string[]>
+  priorRuns: ReadonlyArray<typeof nodeRuns.$inferSelect>
+  latestPerNode: Map<string, typeof nodeRuns.$inferSelect>
+  completed: Set<string>
+  remaining: Map<string, WorkflowNode>
+  log: Logger
+}): Promise<void> {
+  const demoted: string[] = []
+  // Safety cap: each pass demotes at least one node; the worst possible
+  // chain length is the number of scope nodes. +1 for headroom.
+  const maxPasses = ctx.scopeNodes.length + 1
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let demotedThisPass = 0
+    for (const nodeId of Array.from(ctx.completed)) {
+      const myRow = ctx.latestPerNode.get(nodeId)
+      if (myRow === undefined) continue
+      const myIter = myRow.crossClarifyIteration ?? 0
+      let upstreamMaxIter = myIter
+      for (const upId of ctx.upstreamsOf.get(nodeId) ?? []) {
+        const upRow = ctx.latestPerNode.get(upId)
+        if (upRow === undefined) continue
+        const upIter = upRow.crossClarifyIteration ?? 0
+        if (upIter > upstreamMaxIter) upstreamMaxIter = upIter
+      }
+      if (upstreamMaxIter <= myIter) continue
+      // Stale: mint a fresh pending row carrying upstream's iteration.
+      // Same template / retry_index-bump logic as the cascade in
+      // crossClarify.cascadeDownstreamFromDesigner so the freshness
+      // rules stay consistent across both layers.
+      const allRows = ctx.priorRuns.filter(
+        (r) => r.nodeId === nodeId && r.iteration === ctx.iteration && r.parentNodeRunId === null,
+      )
+      if (allRows.length === 0) continue
+      // Idempotency: skip when some row already carries the upstream's
+      // iteration. Without this we'd double-mint when called twice in
+      // tight succession (e.g. a runScope rescan that picked up a Layer
+      // A cascade row, then runScope re-entered).
+      if (allRows.some((r) => (r.crossClarifyIteration ?? 0) >= upstreamMaxIter)) continue
+      const newRetryIndex = Math.max(...allRows.map((r) => r.retryIndex)) + 1
+      const newId = ulid()
+      const newRow: typeof nodeRuns.$inferSelect = {
+        ...myRow,
+        id: newId,
+        status: 'pending',
+        retryIndex: newRetryIndex,
+        crossClarifyIteration: upstreamMaxIter,
+        startedAt: null,
+        finishedAt: null,
+      }
+      await ctx.db.insert(nodeRuns).values({
+        id: newId,
+        taskId: ctx.taskId,
+        nodeId,
+        status: 'pending',
+        retryIndex: newRetryIndex,
+        iteration: myRow.iteration,
+        parentNodeRunId: null,
+        shardKey: myRow.shardKey ?? null,
+        reviewIteration: myRow.reviewIteration,
+        clarifyIteration: myRow.clarifyIteration,
+        crossClarifyIteration: upstreamMaxIter,
+        preSnapshot: myRow.preSnapshot,
+      })
+      ctx.completed.delete(nodeId)
+      const node = ctx.scopeNodes.find((n) => n.id === nodeId)
+      if (node !== undefined) ctx.remaining.set(nodeId, node)
+      // Update latestPerNode to the freshly-minted pending so the next
+      // pass sees the new iteration when walking downstream chains.
+      ctx.latestPerNode.set(nodeId, newRow)
+      demoted.push(nodeId)
+      demotedThisPass += 1
+    }
+    if (demotedThisPass === 0) break
+  }
+  if (demoted.length > 0) {
+    ctx.log.info('cross-clarify freshness invariant demoted stale downstream', {
+      taskId: ctx.taskId,
+      iteration: ctx.iteration,
+      nodes: demoted,
+    })
+  }
 }
 
 /**
@@ -1171,29 +1313,52 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         }
         const historyCutoffClarifyIteration = priorDoneDesigner?.clarifyIteration
 
+        // RFC-056 §5.4 §6.4: when the about-to-run node is a cross-clarify
+        // questioner AND this rerun was triggered by a cross-clarify resolve
+        // (crossClarifyIteration > 0 + retryIndex === 0), pull the questioner's
+        // own Q&A from `cross_clarify_sessions` instead of the self-clarify
+        // table. The result is the same `ClarifyPromptContext` shape so the
+        // renderer emits `## Clarify Q&A` + standing directive verbatim.
+        //
+        // Without this branch the questioner reruns blind — having no record
+        // of having asked anything — and the agent re-emits the SAME
+        // `<workflow-clarify>` envelope, looping back into cross-clarify
+        // forever. The 2026-05-22 cross-clarify-downstream-cascade patch
+        // pairs with this so the cascade actually makes the workflow advance.
+        const isQuestionerCrossClarifyRerun =
+          clarifyMode === 'cross' &&
+          currentCrossClarifyIteration > 0 &&
+          (currentRunRow?.retryIndex ?? 0) === 0
         const clarifyContext = hasClarifyChannel
-          ? await buildClarifyPromptContext({
-              db,
-              definition,
-              taskId,
-              agentNodeId: node.id,
-              targetIteration: currentClarifyIteration,
-              shardKey: currentShardKey,
-              ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-              // RFC-023 originally claimed `directive='stop'` "naturally scopes
-              // to one rerun", but only the clarify-driven rerun
-              // (clarifyIteration just bumped, retryIndex=0) actually
-              // satisfies that. Review-iterate / process-retry reruns inherit
-              // clarifyIteration without producing a new answered session, so
-              // the prior 'stop' directive would drag along and tell the
-              // agent to skip clarify even when answering NEW reviewer
-              // comments. Gate the directive propagation on isClarifyRerun
-              // so 'stop' truly only suppresses the immediate next rerun.
-              applyLatestDirective: isClarifyRerun,
-              ...(historyCutoffClarifyIteration !== undefined
-                ? { historyCutoffClarifyIteration }
-                : {}),
-            })
+          ? isQuestionerCrossClarifyRerun
+            ? await buildQuestionerCrossClarifyContext({
+                db,
+                taskId,
+                questionerNodeId: node.id,
+                targetCrossClarifyIteration: currentCrossClarifyIteration,
+              })
+            : await buildClarifyPromptContext({
+                db,
+                definition,
+                taskId,
+                agentNodeId: node.id,
+                targetIteration: currentClarifyIteration,
+                shardKey: currentShardKey,
+                ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
+                // RFC-023 originally claimed `directive='stop'` "naturally scopes
+                // to one rerun", but only the clarify-driven rerun
+                // (clarifyIteration just bumped, retryIndex=0) actually
+                // satisfies that. Review-iterate / process-retry reruns inherit
+                // clarifyIteration without producing a new answered session, so
+                // the prior 'stop' directive would drag along and tell the
+                // agent to skip clarify even when answering NEW reviewer
+                // comments. Gate the directive propagation on isClarifyRerun
+                // so 'stop' truly only suppresses the immediate next rerun.
+                applyLatestDirective: isClarifyRerun,
+                ...(historyCutoffClarifyIteration !== undefined
+                  ? { historyCutoffClarifyIteration }
+                  : {}),
+              })
           : undefined
         // RFC-056: build the External Feedback context + (if update-mode)
         // the prior output block. Both are part of the same
@@ -2554,15 +2719,9 @@ function topologicalOrder(
   // questioner → cross-clarify → designer / questioner for RFC-056) by design.
   // The cycle is resolved out-of-band via clarify_session /
   // cross_clarify_session prompt injection.
-  const isClarifyEdge = (e: WorkflowEdge): boolean =>
-    e.source.portName === '__clarify__' ||
-    e.target.portName === '__clarify_response__' ||
-    e.target.portName === '__external_feedback__' ||
-    e.source.portName === 'to_designer' ||
-    e.source.portName === 'to_questioner'
   for (const e of edges) {
     if (!nodeById.has(e.source.nodeId) || !nodeById.has(e.target.nodeId)) continue
-    if (isClarifyEdge(e)) continue
+    if (isClarifyChannelEdge(e)) continue
     inDegree.set(e.target.nodeId, (inDegree.get(e.target.nodeId) ?? 0) + 1)
   }
   const queue: string[] = []
@@ -2576,7 +2735,7 @@ function topologicalOrder(
     for (const e of edges) {
       if (e.source.nodeId !== id) continue
       if (!nodeById.has(e.target.nodeId)) continue
-      if (isClarifyEdge(e)) continue
+      if (isClarifyChannelEdge(e)) continue
       const next = (inDegree.get(e.target.nodeId) ?? 0) - 1
       inDegree.set(e.target.nodeId, next)
       if (next === 0) queue.push(e.target.nodeId)

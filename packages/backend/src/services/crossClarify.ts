@@ -53,20 +53,24 @@ import {
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  buildClarifyPromptBlock,
   buildExternalFeedbackBlock,
   findCrossClarifyNodesPointingToDesigner,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
+  isClarifyChannelEdge,
+  renderClarifyQuestionsBlock,
   resolveCrossClarifySessionMode,
   type ClarifyAnswer,
   type ClarifyCrossAgentNode,
   type ClarifyDirective,
+  type ClarifyPromptContext,
   type ClarifyQuestion,
   type ClarifyTruncationWarning,
   type CrossClarifySourceContext,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -429,6 +433,7 @@ export async function submitCrossClarifyAnswers(
     sources: readiness.sources,
     loopIter: row.loopIter,
     worktreePath: taskRow.worktreePath,
+    definition,
     now,
   })
   // Stamp designer_run_triggered_at on every consumed session for audit.
@@ -576,6 +581,11 @@ export interface TriggerDesignerRerunArgs {
   sources: DesignerRerunReadinessSource[]
   loopIter: number
   worktreePath: string
+  /** RFC-056 §5.2 step 4 (patch 2026-05-22) sibling cascade walks the
+   *  workflow's edges. Threading the definition from the caller avoids a
+   *  second DB hop for the workflow snapshot; the helper falls back to
+   *  loading from `tasks.workflow_snapshot` when omitted. */
+  definition?: WorkflowDefinition
   now?: () => number
 }
 
@@ -645,29 +655,189 @@ export async function triggerDesignerRerun(
     preSnapshot: lastDesigner.preSnapshot,
   })
 
-  // Sibling cascade: every downstream node_run that's beyond designer in
-  // the DAG and is currently terminal must be considered stale. The actual
-  // sibling cascade machinery (review iterate / clarify iterate) lives in
-  // RFC-014 — for cross-clarify we use the lightweight "reset latest
-  // terminal node_run to pending" pattern: rather than implementing
-  // graph-walk here, we let the scheduler's rescan + ready-edge logic
-  // pick up the new pending designer row and run downstream nodes by
-  // re-evaluating freshness via cross_clarify_iteration. The cascade is
-  // therefore implicit: stale outputs from prior runs are overwritten
-  // by the next dispatch pass.
+  // Sibling cascade (RFC-056 design §5.2 step 4 — patch 2026-05-22):
   //
-  // NOTE: the persistent-stop dispatch branch in dispatchCrossClarifyNode
-  // is what ensures already-stopped cross-clarify nodes stay non-awaiting
-  // when the scheduler re-encounters them.
+  // Why the explicit cascade is needed:
+  //   The original implementation comment claimed "stale outputs from prior
+  //   runs are overwritten by the next dispatch pass" — but the scheduler's
+  //   freshness comparator (isFresherNodeRun) keys on (clarifyIteration,
+  //   retryIndex, id) only, NOT on cross_clarify_iteration. So a downstream
+  //   node whose latest done row has crossClarifyIteration=0 stays
+  //   "completed" in the scheduler's scope even after the designer reruns
+  //   at crossClarifyIteration=1. The result: review nodes downstream of a
+  //   cross-clarify questioner that emitted only `<workflow-clarify>` (no
+  //   `<workflow-output>`) trip `review-source-port-missing` at dispatch,
+  //   failing the entire task. See design/RFC-056-clarify-cross-agent/
+  //   patch-2026-05-22-downstream-cascade.md.
+  //
+  // What the cascade does:
+  //   BFS from designerNodeId through `definition.edges`, skipping every
+  //   clarify-channel edge (isClarifyChannelEdge — shared with
+  //   scheduler.topologicalOrder so both walk the SAME graph). For each
+  //   reachable node, mint a NEW pending node_run carrying the bumped
+  //   crossClarifyIteration. Idempotent: nodes that already carry the new
+  //   iteration are skipped, and nodes that never ran (no rows at all) are
+  //   left alone — the scheduler will dispatch them naturally as soon as
+  //   their upstream landing fresh outputs arrives.
+  //
+  //   The new pending row's retry_index = max(existing) + 1 so
+  //   isFresherNodeRun ALWAYS picks it over the prior done row, even when
+  //   the prior path went through RFC-042 same-session retries that
+  //   inflated retry_index above 0.
+  const definition = args.definition ?? (await loadDefinitionForTask(args.db, args.taskId))
+  const cascadeMinted = await cascadeDownstreamFromDesigner({
+    db: args.db,
+    taskId: args.taskId,
+    designerNodeId: args.designerNodeId,
+    designerIteration: lastDesigner.iteration,
+    newCrossClarifyIteration: (lastDesigner.crossClarifyIteration ?? 0) + 1,
+    definition,
+  })
 
   log.info('cross-clarify designer rerun triggered', {
     taskId: args.taskId,
     designerNodeId: args.designerNodeId,
     designerNodeRunId,
     sourceCount: args.sources.length,
+    cascadedNodeIds: cascadeMinted,
   })
 
   return { designerNodeRunId, triggeredAt: now }
+}
+
+// ---------------------------------------------------------------------------
+// Downstream sibling cascade — RFC-056 design §5.2 step 4 (patch 2026-05-22).
+// ---------------------------------------------------------------------------
+
+interface CascadeDownstreamArgs {
+  db: DbClient
+  taskId: string
+  designerNodeId: string
+  /** wrapper-loop iteration index (inherited from the prior designer row).
+   *  We only cascade rows at the same iteration: cross-clarify is per-iter
+   *  by design. */
+  designerIteration: number
+  /** The bumped cross_clarify_iteration that every cascaded pending row
+   *  inherits. */
+  newCrossClarifyIteration: number
+  definition: WorkflowDefinition
+}
+
+/**
+ * BFS downstream from `designerNodeId` (skipping clarify-channel edges) and
+ * mint a fresh pending node_run for every reachable node whose latest top-
+ * level row has a stale cross_clarify_iteration. Returns the list of
+ * cascaded node ids for log / test introspection.
+ *
+ * NOT called for the questioner's stop / reject path — that flow goes
+ * through `triggerQuestionerStopRerun` which is single-node by design.
+ */
+async function cascadeDownstreamFromDesigner(args: CascadeDownstreamArgs): Promise<string[]> {
+  const { db, taskId, designerNodeId, designerIteration, newCrossClarifyIteration, definition } =
+    args
+  // Build forward adjacency over the data graph (no clarify-channel edges).
+  const adjOut = new Map<string, string[]>()
+  for (const e of definition.edges) {
+    if (isClarifyChannelEdge(e)) continue
+    const list = adjOut.get(e.source.nodeId) ?? []
+    list.push(e.target.nodeId)
+    adjOut.set(e.source.nodeId, list)
+  }
+  // BFS from designer. The designer itself is NOT included — its pending
+  // row is minted by the caller. `downstream` is the strict downstream set.
+  const downstream = new Set<string>()
+  const queue: string[] = [designerNodeId]
+  while (queue.length > 0) {
+    const cur = queue.shift()
+    if (cur === undefined) break
+    for (const next of adjOut.get(cur) ?? []) {
+      if (downstream.has(next) || next === designerNodeId) continue
+      downstream.add(next)
+      queue.push(next)
+    }
+  }
+  if (downstream.size === 0) return []
+
+  const minted: string[] = []
+  for (const nodeId of downstream) {
+    const rows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
+    // Top-level rows only — fan-out children inherit from their parent run
+    // and would just confuse the cascade if we minted siblings for them.
+    const topLevel = rows.filter(
+      (r) => r.parentNodeRunId === null && r.iteration === designerIteration,
+    )
+    if (topLevel.length === 0) {
+      // Node never ran at this iteration. Scheduler will dispatch it
+      // naturally once upstream lands — no row to mint here.
+      continue
+    }
+    // Idempotency: if some row already carries the new cross_clarify_iteration
+    // (regardless of status), the cascade has already fired for this node.
+    // Cross-clarify resolves can be triggered multiple times in flight on
+    // multi-tab UIs; this guard keeps the cascade safe to invoke twice.
+    if (topLevel.some((r) => r.crossClarifyIteration >= newCrossClarifyIteration)) {
+      continue
+    }
+    // Template row: the latest top-level row. We inherit its iteration /
+    // shardKey / parentNodeRunId / reviewIteration / clarifyIteration /
+    // preSnapshot — the only field we bump is crossClarifyIteration. Using
+    // started_at desc + id desc as the picker matches "most recent first";
+    // status is irrelevant (we just need template values to inherit).
+    // started_at can be NULL on freshly-minted pending rows that never
+    // started; we coerce NULL → 0 so they sort to the bottom of the
+    // descending list while still being valid candidates.
+    const template = topLevel.slice().sort((a, b) => {
+      const aTs = a.startedAt ?? 0
+      const bTs = b.startedAt ?? 0
+      if (aTs !== bTs) return bTs - aTs
+      return b.id.localeCompare(a.id)
+    })[0]!
+    // retry_index must beat every existing row at this (node, iteration) so
+    // isFresherNodeRun picks the new pending over any prior done — even
+    // when an RFC-042 follow-up inflated retry_index on a prior attempt.
+    const newRetryIndex = Math.max(...topLevel.map((r) => r.retryIndex)) + 1
+    const newId = ulid()
+    await db.insert(nodeRuns).values({
+      id: newId,
+      taskId,
+      nodeId,
+      status: 'pending',
+      retryIndex: newRetryIndex,
+      iteration: template.iteration,
+      parentNodeRunId: null,
+      shardKey: template.shardKey ?? null,
+      reviewIteration: template.reviewIteration,
+      clarifyIteration: template.clarifyIteration,
+      crossClarifyIteration: newCrossClarifyIteration,
+      preSnapshot: template.preSnapshot,
+    })
+    minted.push(nodeId)
+  }
+  return minted
+}
+
+/**
+ * Resolve the workflow definition snapshot for `taskId` from the tasks
+ * table. Used by the cross-clarify sibling cascade — kept private here so
+ * we don't drag the definition-loading dependency across crossClarify.ts's
+ * other call sites that already receive a definition from their caller.
+ */
+async function loadDefinitionForTask(db: DbClient, taskId: string): Promise<WorkflowDefinition> {
+  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0]
+  if (row === undefined) {
+    throw new NotFoundError('task-not-found', `task ${taskId} not found`)
+  }
+  const definition = parseDefinitionFromSnapshot(row.workflowSnapshot)
+  if (definition === null) {
+    throw new NotFoundError(
+      'workflow-snapshot-malformed',
+      `task ${taskId} workflow snapshot is unparseable`,
+    )
+  }
+  return definition
 }
 
 // ---------------------------------------------------------------------------
@@ -895,6 +1065,101 @@ export async function buildExternalFeedbackContext(
     block,
     iteration: String(args.designerCrossClarifyIteration),
     sourcesCsv: csv,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Questioner cross-clarify Q&A prompt assembly — RFC-056 §5.4 §6.4.
+// ---------------------------------------------------------------------------
+
+export interface BuildQuestionerCrossClarifyContextArgs {
+  db: DbClient
+  taskId: string
+  /** The questioner agent node being re-spawned. */
+  questionerNodeId: string
+  /** The questioner's about-to-run `crossClarifyIteration`. Values ≤ 0
+   *  return undefined (first ever run has no prior Q&A to surface). */
+  targetCrossClarifyIteration: number
+}
+
+/**
+ * RFC-056 §5.4 §6.4: build a ClarifyPromptContext for the questioner's
+ * cross-clarify rerun. Reuses the RFC-023 prompt shape (`questionsBlock` /
+ * `answersBlock` / `iteration` / `directive`) so `renderUserPrompt` emits
+ * the same `## Clarify Q&A` / `## Prior Rounds (Questions)` sections — the
+ * agent reads its own past questions + the designer's answers + the standing
+ * directive (continue → ask-bias preamble; stop → STOP CLARIFYING trailer)
+ * without any new template wiring.
+ *
+ * Differs from `buildClarifyPromptContext` only in the data source: pulls
+ * from `cross_clarify_sessions WHERE source_questioner_node_id=?` instead of
+ * `clarify_sessions WHERE source_agent_node_id=?`. Both tables share the
+ * RFC-023 envelope schema so the rendering helpers (`renderClarifyQuestionsBlock`
+ * / `buildClarifyPromptBlock`) work verbatim.
+ *
+ * Returns `undefined` when the questioner has no answered sessions yet (a
+ * first cross-clarify dispatch, or a node that never went through cross-
+ * clarify) — the renderer then degrades to no `## Clarify Q&A` section.
+ */
+export async function buildQuestionerCrossClarifyContext(
+  args: BuildQuestionerCrossClarifyContextArgs,
+): Promise<ClarifyPromptContext | undefined> {
+  if (args.targetCrossClarifyIteration <= 0) return undefined
+
+  const rows = await args.db
+    .select()
+    .from(crossClarifySessions)
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, args.taskId),
+        eq(crossClarifySessions.sourceQuestionerNodeId, args.questionerNodeId),
+        eq(crossClarifySessions.status, 'answered'),
+      ),
+    )
+    .orderBy(asc(crossClarifySessions.iteration))
+
+  if (rows.length === 0) return undefined
+
+  const questionParts: string[] = []
+  const answerParts: string[] = []
+  // `directive='stop'` from any session this round flips the questioner's
+  // prompt to the STOP CLARIFYING trailer per §5.4. We pick the LAST row's
+  // directive — sessions arrive in iteration order so the latest is the
+  // standing instruction.
+  let latestDirective: ClarifyDirective = 'continue'
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!
+    let questions: ClarifyQuestion[]
+    let answers: ClarifyAnswer[]
+    try {
+      questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
+      answers = row.answersJson !== null ? (JSON.parse(row.answersJson) as ClarifyAnswer[]) : []
+    } catch (err) {
+      log.warn('cross-clarify questioner context JSON parse failed; skipping round', {
+        sessionId: row.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      continue
+    }
+    const isLast = i === rows.length - 1
+    const directive = (row.directive ?? 'continue') as ClarifyDirective
+    if (isLast) latestDirective = directive
+    const roundLabel = `### Round ${row.iteration + 1}`
+    questionParts.push(`${roundLabel}\n${renderClarifyQuestionsBlock(questions)}`)
+    answerParts.push(
+      `${roundLabel}\n${buildClarifyPromptBlock(questions, answers, isLast ? directive : undefined)}`,
+    )
+  }
+
+  if (questionParts.length === 0) return undefined
+
+  return {
+    questionsBlock: questionParts.join('\n\n'),
+    answersBlock: answerParts.join('\n\n'),
+    iteration: String(args.targetCrossClarifyIteration),
+    remaining: '',
+    directive: latestDirective,
   }
 }
 
