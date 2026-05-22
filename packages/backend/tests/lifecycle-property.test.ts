@@ -334,6 +334,14 @@ async function applyEvent(h: Harness, ev: Event): Promise<boolean> {
 }
 
 describe('RFC-053 PR-A T1h — property-based: random sequences preserve invariants', () => {
+  // Per-test timeout 15s — same flake shape + same fix as the `stress`
+  // test below: each fc.asyncProperty iteration spawns 3× `runGit`
+  // subprocesses inside `buildHarness()` (macos GHA: ~30-80ms each) +
+  // runs the DB migration set, and numRuns=30 stacks against bun:test's
+  // default 5s ceiling. f37ef44 widened the budget on the stress test
+  // but missed this case (CI run 26302009314 macos timed out at
+  // 5006.84ms / 5000ms default). Property-based tests want shrink-time
+  // budget, so we give it 15s here too.
   test('after any sequence of 1-8 events, R1/R2/T1/U1 hold', async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(eventArbitrary, { minLength: 1, maxLength: 8 }), async (seq) => {
@@ -354,7 +362,7 @@ describe('RFC-053 PR-A T1h — property-based: random sequences preserve invaria
       }),
       { numRuns: 30 },
     )
-  })
+  }, 15000)
 
   test('after long sequences (10-15 events), invariants still hold', async () => {
     await fc.assert(
