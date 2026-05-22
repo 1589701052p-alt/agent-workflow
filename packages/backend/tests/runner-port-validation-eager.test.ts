@@ -25,7 +25,7 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { nodeRuns, tasks, workflows } from '../src/db/schema'
+import { nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runNode } from '../src/services/runner'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -177,6 +177,18 @@ describe('RFC-049 runner eager port-validation', () => {
     expect(parsed[0]!.kind).toBe('markdown_file')
     expect(parsed[0]!.subReason).toBe('missing-file')
     expect(parsed[0]!.detail).toContain("'report.md'")
+
+    // Validate-before-insert ordering: when a port fails validation, the
+    // runner MUST NOT have persisted a row into node_run_outputs for it.
+    // The clarify-history cutoff in scheduler.ts treats outputs-table
+    // presence as the ground-truth signal for "agent successfully produced
+    // output" — a ghost row here would silently drop prior clarify Q&A on
+    // the next attempt.
+    const outputs = await h.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, nodeRunId))
+    expect(outputs).toHaveLength(0)
   })
 
   test('markdown_file port content + file actually on disk → status=done, column stays NULL', async () => {
@@ -209,6 +221,17 @@ describe('RFC-049 runner eager port-validation', () => {
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]!
     expect(row.status).toBe('done')
     expect(row.portValidationFailuresJson).toBeNull()
+
+    // Validation passed → the runner persists the port row. Pairs with the
+    // missing-file test above to lock the validate-before-insert ordering
+    // in both directions.
+    const outputs = await h.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, nodeRunId))
+    expect(outputs).toHaveLength(1)
+    expect(outputs[0]!.portName).toBe('docpath')
+    expect(outputs[0]!.content).toBe('report.md')
   })
 
   test('markdown_file port content has wrong extension → wrong-extension subReason captured', async () => {

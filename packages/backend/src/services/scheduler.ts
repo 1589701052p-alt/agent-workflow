@@ -34,7 +34,7 @@ import {
   isClarifyChannelEdge,
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
@@ -1311,7 +1311,66 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
             if (isFresherNodeRun(r, priorDoneDesigner)) priorDoneDesigner = r
           }
         }
-        const historyCutoffClarifyIteration = priorDoneDesigner?.clarifyIteration
+
+        // GENERAL clarify-history cutoff: whenever this node previously
+        // produced captured `<workflow-output>` ports, the self-clarify
+        // rounds baked into that run's prompt are already folded into the
+        // output content / opencode session memory. Re-feeding them on a
+        // later rerun (review-iterate, cross-clarify resolve, daemon-restart
+        // resume, etc.) wastes tokens and re-anchors the agent on resolved
+        // decisions. Cutoff = priorCompletedTopLevelRun.clarifyIteration
+        // drops sessions with iterationIndex < cutoff.
+        //
+        // Single signal: presence of `node_run_outputs` rows. runner.ts
+        // INSERTs into the table only AFTER port-content validation passes
+        // (RFC-049, services/runner.ts §parseEnvelope), so a row's mere
+        // existence proves the agent produced an `<workflow-output>`
+        // envelope whose every port also passed its kind handler (incl.
+        // markdown_file file-exists / file-not-empty checks).
+        //
+        // Decoupled from `node_runs.status` on purpose:
+        //   - clean `<workflow-clarify>` replies keep status='done' but
+        //     write no outputs row — outputs-only correctly skips them;
+        //   - review-iterate flips done→canceled while preserving the
+        //     outputs rows — outputs-only correctly catches them as
+        //     cutoff sources.
+        // The cross-clarify rerun path (priorDoneDesigner above) was the
+        // first instance of this rule; this block generalises it to every
+        // rerun trigger.
+        let priorCompletedTopLevelRun: typeof nodeRuns.$inferSelect | undefined
+        {
+          const candidates = await db
+            .select()
+            .from(nodeRuns)
+            .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, node.id)))
+          const currentShardKeyForFilter = currentRunRow?.shardKey ?? null
+          const eligible: Array<typeof nodeRuns.$inferSelect> = []
+          for (const r of candidates) {
+            if (r.id === nodeRunId) continue
+            if (r.parentNodeRunId !== null) continue
+            if ((r.shardKey ?? null) !== currentShardKeyForFilter) continue
+            if (currentRunRow !== undefined && !isFresherNodeRun(currentRunRow, r)) continue
+            eligible.push(r)
+          }
+          if (eligible.length > 0) {
+            const outputsRows = await db
+              .select({ nodeRunId: nodeRunOutputs.nodeRunId })
+              .from(nodeRunOutputs)
+              .where(
+                inArray(
+                  nodeRunOutputs.nodeRunId,
+                  eligible.map((r) => r.id),
+                ),
+              )
+            const haveOutputs = new Set<string>(outputsRows.map((o) => o.nodeRunId))
+            for (const r of eligible) {
+              if (!haveOutputs.has(r.id)) continue
+              if (isFresherNodeRun(r, priorCompletedTopLevelRun)) priorCompletedTopLevelRun = r
+            }
+          }
+        }
+        const historyCutoffClarifyIteration =
+          priorCompletedTopLevelRun?.clarifyIteration ?? priorDoneDesigner?.clarifyIteration
 
         // RFC-056 §5.4 §6.4: when the about-to-run node is a cross-clarify
         // questioner AND this rerun was triggered by a cross-clarify resolve

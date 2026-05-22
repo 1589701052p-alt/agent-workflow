@@ -925,15 +925,6 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       } else {
         const parsed = parseEnvelope(envelope, opts.agent.outputs)
         outputs = Object.fromEntries(parsed.ports)
-        for (const [name, content] of parsed.ports) {
-          await opts.db
-            .insert(nodeRunOutputs)
-            .values({ nodeRunId: opts.nodeRunId, portName: name, content })
-            .onConflictDoUpdate({
-              target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
-              set: { content },
-            })
-        }
         if (parsed.missingDeclared.length > 0) {
           log.warn('agent omitted declared ports', {
             missing: parsed.missingDeclared,
@@ -948,11 +939,19 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         }
 
         // RFC-049: eagerly validate port content against the declared
-        // OutputKindHandler. Failures here surface the producer's session
-        // immediately so the scheduler can drive a same-session followup
-        // (consumer-side validation would only see the failure after the
-        // producer's session is already gone). Fail-fast — first failure
-        // wins, see RFC-049 design.md §7 for the rationale.
+        // OutputKindHandler BEFORE persisting to node_run_outputs. Failures
+        // here surface the producer's session immediately so the scheduler
+        // can drive a same-session followup (consumer-side validation would
+        // only see the failure after the producer's session is already
+        // gone). Fail-fast — first failure wins, see RFC-049 design.md §7.
+        //
+        // Validation runs BEFORE the node_run_outputs INSERT below so that
+        // the table only ever contains rows that passed validation. This
+        // makes "node_run_outputs has rows for this node_run" a clean
+        // ground-truth signal for "agent successfully produced output"
+        // (consumed by the clarify-history cutoff in scheduler.ts), and
+        // prevents a markdown_file port with a missing on-disk file from
+        // leaving a ghost row that downstream readers might misuse.
         const outputKinds = opts.agent.outputKinds
         if (outputKinds !== undefined) {
           for (const [name, content] of parsed.ports) {
@@ -975,6 +974,22 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
               // Unknown errors fall through to the standard catch path.
               throw err
             }
+          }
+        }
+
+        // Persist ports only on successful validation. The fail-fast loop
+        // above bails on the first invalid port without setting status back
+        // to 'done', so this branch runs iff every declared port passed
+        // (status still 'done').
+        if (status === 'done') {
+          for (const [name, content] of parsed.ports) {
+            await opts.db
+              .insert(nodeRunOutputs)
+              .values({ nodeRunId: opts.nodeRunId, portName: name, content })
+              .onConflictDoUpdate({
+                target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
+                set: { content },
+              })
           }
         }
       }
