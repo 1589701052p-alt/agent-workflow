@@ -18,6 +18,7 @@
 // The kind pill defaults to '⚡ cross-clarify'.
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { useTranslation } from 'react-i18next'
 import {
   CROSS_CLARIFY_INPUT_PORT_NAME,
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
@@ -38,8 +39,11 @@ interface Props extends NodeProps {
 }
 
 export function CrossClarifyNode({ data, selected }: Props) {
+  const { t } = useTranslation()
   const status: CrossClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
   const labelText = data.kindLabel ?? '⚡ cross-clarify'
+  const toQuestionerLabel = t('crossClarify.canvas.handleLabel.toQuestioner')
+  const toDesignerLabel = t('crossClarify.canvas.handleLabel.toDesigner')
   return (
     <div
       className={
@@ -70,7 +74,16 @@ export function CrossClarifyNode({ data, selected }: Props) {
           `to_designer` handle is the user's manual wiring to an upstream
           designer. RFC-007 reverse-drag UX: dragging FROM either handle
           onto a peer agent fires the cross-clarify connection classifier.
-          */}
+          The two adjacent labels — only shown on this node — disambiguate
+          which output is which (2026-05-22 bug report: 输出的两个节点没有
+          标识). Labels are absolutely positioned to mirror the Handle's
+          inline `top:` so they vertically line up. */}
+      <div
+        className="canvas-node__cross-clarify-handle-label canvas-node__cross-clarify-handle-label--to-questioner"
+        data-testid="cross-clarify-handle-label-to-questioner"
+      >
+        {toQuestionerLabel}
+      </div>
       <Handle
         type="source"
         position={Position.Right}
@@ -79,6 +92,12 @@ export function CrossClarifyNode({ data, selected }: Props) {
         aria-label="cross-clarify-to-questioner"
         style={{ top: '40%' }}
       />
+      <div
+        className="canvas-node__cross-clarify-handle-label canvas-node__cross-clarify-handle-label--to-designer"
+        data-testid="cross-clarify-handle-label-to-designer"
+      >
+        {toDesignerLabel}
+      </div>
       <Handle
         type="source"
         position={Position.Right}

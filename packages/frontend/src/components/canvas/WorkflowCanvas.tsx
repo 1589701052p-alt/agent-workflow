@@ -49,6 +49,7 @@ import {
 import {
   applyCrossClarifyDesignerDrag,
   applyCrossClarifyQuestionerReverseDrag,
+  cascadeRemoveCrossClarifyChannel,
   classifyCrossClarifyConnection,
   clearCrossClarifyEdgesForRemovedNodes,
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
@@ -207,6 +208,12 @@ function CanvasInner({
       // down the whole channel.
       if (deleted.length > 0) {
         staged = cascadeRemoveClarifyChannel(staged, deleted)
+        // RFC-056 mirror of the RFC-023 cascade: deleting one half of the
+        // cross-clarify ask/ans pair on its own would leave a half-wired
+        // questioner channel. Sweep the sibling so single-edge delete
+        // cleanly tears down the channel. The `designer` half is a single
+        // edge with no sibling and is intentionally not cascaded here.
+        staged = cascadeRemoveCrossClarifyChannel(staged, deleted)
       }
       const synced = syncInputDefs(staged.inputs ?? [], staged.nodes)
       if (synced !== (staged.inputs ?? [])) staged = { ...staged, inputs: synced }

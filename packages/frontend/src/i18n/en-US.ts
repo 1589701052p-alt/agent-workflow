@@ -1628,11 +1628,29 @@ export const enUS: Resources = {
       sessionModeInline: 'Inline (resume)',
       sessionModeHint:
         'Inline lets the rerun reuse the prior opencode session; falls back to isolated on auth/session errors.',
+      fieldLinkedQuestioner: 'Linked questioner',
+      linkedQuestionerMissing:
+        'Not linked to any questioner yet — drag from the input handle onto the downstream questioner agent to wire it.',
+      linkedQuestionerHint:
+        'The agent asking the questions; only one cross-clarify channel is allowed per questioner agent.',
+      fieldLinkedDesigner: 'Linked designer',
+      linkedDesignerMissing:
+        'Not linked to any designer yet — drag from the to_designer handle onto the upstream designer agent; without it submit has no rerun target.',
+      linkedDesignerHint:
+        'The upstream agent rerun on submit; typically a topological ancestor of the questioner.',
+      fieldInLoop: 'Wrapped in a loop',
+      inLoopYes: '✔ Inside a wrapper-loop — multiple clarify rounds are accumulated.',
+      inLoopNo:
+        '⚠ Not inside a wrapper-loop — clarify rounds are uncapped; consider wrapping in one.',
     },
     canvas: {
       paletteLabel: '⚡ Cross Clarify',
       paletteHint:
         'Drag onto a downstream questioner agent; then connect to_designer → an upstream designer.',
+      handleLabel: {
+        toQuestioner: '→ questioner',
+        toDesigner: '→ designer',
+      },
       error: {
         targetNotAgentSingle: 'Cross-clarify target must be an agent-single node (v1 limitation).',
         designerNotAgentSingle: 'to_designer must target an agent-single node.',

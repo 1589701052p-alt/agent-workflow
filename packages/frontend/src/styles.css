@@ -4199,10 +4199,18 @@ code {
  * so all three human-in-the-loop kinds read as one visual family on the
  * canvas. The 2 output handles (to_questioner @ 40% / to_designer @ 70%)
  * inherit the base `.canvas-node__handle` style and pin to the right
- * edge via inline `top` style on the Handle component. */
+ * edge via inline `top` style on the Handle component.
+ *
+ * `padding-right` reserves a column on the right edge for the two handle
+ * labels (`→ 反问者` / `→ 设计者`) — without it the title would word-break
+ * into the same vertical band as the absolutely-positioned labels and
+ * overlap them (2026-05-22 follow-up). `min-width` is widened to keep the
+ * remaining title column readable after the reservation. */
 .canvas-node--clarify-cross-agent {
   background: color-mix(in srgb, #d97706 10%, var(--panel));
   border-color: color-mix(in srgb, #d97706 45%, var(--border));
+  min-width: 240px;
+  padding-right: 88px;
 }
 .canvas-node--clarify-cross-agent .canvas-node__kind {
   color: #b45309;
@@ -4220,6 +4228,35 @@ code {
 .canvas-node--clarify-cross-agent-abandoned,
 .canvas-node--clarify-cross-agent-failed {
   border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+/* Right-edge labels next to the two output handles on cross-clarify nodes.
+ * Without these the two handles look identical (2026-05-22 bug report). The
+ * `top:` values mirror the inline style on the Handle components in
+ * CrossClarifyNode.tsx (`40%` for to_questioner, `70%` for to_designer).
+ * Translate up by 50% so the label baseline lines up with the handle dot.
+ *
+ * Sits inside the reserved `padding-right: 88px` column on
+ * `.canvas-node--clarify-cross-agent` so the title/description text never
+ * collides with these labels (2026-05-22 follow-up). `right` is measured
+ * from the inner padding edge — 8px of clearance from the handle dot is
+ * enough to keep them visually separated. */
+.canvas-node__cross-clarify-handle-label {
+  position: absolute;
+  right: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: color-mix(in srgb, #b45309 80%, var(--muted));
+  font-weight: 500;
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+.canvas-node__cross-clarify-handle-label--to-questioner {
+  top: 40%;
+}
+.canvas-node__cross-clarify-handle-label--to-designer {
+  top: 70%;
 }
 
 /* RFC-016: wrapper group container — replaces the old 240px placeholder

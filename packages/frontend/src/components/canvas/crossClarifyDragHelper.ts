@@ -238,12 +238,18 @@ export function classifyCrossClarifyConnection(
       }
     }
   }
-  // questioner-reverse via forward direction: drop cross.to_questioner →
-  // agent.__clarify_response__.
-  if (
-    conn.sourceHandle === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT &&
-    conn.targetHandle === CLARIFY_RESPONSE_TARGET_PORT_NAME
-  ) {
+  // questioner-reverse via forward direction: drop cross.to_questioner onto
+  // an agent. The classifier intentionally does NOT require the drop to land
+  // on the `__clarify_response__` system target handle: that handle is only
+  // rendered AFTER the channel exists (see WorkflowCanvas.computePorts
+  // fallback), so a fresh agent has nowhere to land the drop except its
+  // catch-all input strip. Without this loosened match, the drop falls
+  // through to the defensive guard which rejects any `to_questioner` source
+  // — and the user sees the connection silently fail (2026-05-22 bug
+  // report: "从 cross-clarify 右侧 output 拖到 agent 左侧拖不上"). Validity
+  // (agent-single kind, no duplicate channel) is enforced in
+  // applyCrossClarifyQuestionerReverseDrag + isValidConnection downstream.
+  if (conn.sourceHandle === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT) {
     const src = def.nodes.find((n) => n.id === conn.source)
     if (src !== undefined && src.kind === 'clarify-cross-agent') {
       return {
@@ -253,7 +259,10 @@ export function classifyCrossClarifyConnection(
       }
     }
   }
-  // designer-forward: drop cross.to_designer onto agent.__external_feedback__.
+  // designer-forward: drop cross.to_designer onto an agent. Same shape as
+  // `to_questioner` above — we accept the drop regardless of which target
+  // handle xyflow picked, because `__external_feedback__` is also a
+  // synthetic-on-edge port and isn't visible on a fresh agent.
   if (conn.sourceHandle === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT) {
     const src = def.nodes.find((n) => n.id === conn.source)
     if (src !== undefined && src.kind === 'clarify-cross-agent') {
@@ -311,6 +320,46 @@ export function describeCrossClarifyChannelEdge(edge: WorkflowEdge):
     }
   }
   return null
+}
+
+/**
+ * Bug-fix cascade (2026-05-22): the cross-clarify questioner channel is a
+ * (ask, ans) pair persisted as two edges. Deleting either half on its own
+ * would leave a half-wired channel — the scheduler keys off the ask edge
+ * and would still try to cycle, but the canvas no longer shows the answer
+ * arrow back (or vice-versa). Whenever `removedEdges` contains a
+ * cross-clarify ask/ans edge, look up its sibling in `def.edges` and drop
+ * it too. The `designer` half is a single edge with no sibling, so it is
+ * NOT cascaded (deleting it just severs the designer feedback link).
+ *
+ * Returns `def` by reference when no cross-clarify channel edges were
+ * removed (React effects short-circuit on `===`).
+ */
+export function cascadeRemoveCrossClarifyChannel(
+  def: WorkflowDefinition,
+  removedEdges: ReadonlyArray<WorkflowEdge>,
+): WorkflowDefinition {
+  if (removedEdges.length === 0) return def
+  const brokenPairs = new Set<string>()
+  for (const e of removedEdges) {
+    const desc = describeCrossClarifyChannelEdge(e)
+    if (desc !== null && (desc.half === 'ask' || desc.half === 'ans')) {
+      brokenPairs.add(`${desc.questionerNodeId}|${desc.crossClarifyNodeId}`)
+    }
+  }
+  if (brokenPairs.size === 0) return def
+  let changed = false
+  const nextEdges = def.edges.filter((e) => {
+    const desc = describeCrossClarifyChannelEdge(e)
+    if (desc === null || desc.half === 'designer') return true
+    const key = `${desc.questionerNodeId}|${desc.crossClarifyNodeId}`
+    if (brokenPairs.has(key)) {
+      changed = true
+      return false
+    }
+    return true
+  })
+  return changed ? { ...def, edges: nextEdges } : def
 }
 
 /** Cascade-remove cross-clarify edges when the user deletes a node. */

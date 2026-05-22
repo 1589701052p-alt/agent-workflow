@@ -1499,10 +1499,20 @@ export interface Resources {
       sessionModeIsolated: string
       sessionModeInline: string
       sessionModeHint: string
+      fieldLinkedQuestioner: string
+      linkedQuestionerMissing: string
+      linkedQuestionerHint: string
+      fieldLinkedDesigner: string
+      linkedDesignerMissing: string
+      linkedDesignerHint: string
+      fieldInLoop: string
+      inLoopYes: string
+      inLoopNo: string
     }
     canvas: {
       paletteLabel: string
       paletteHint: string
+      handleLabel: { toQuestioner: string; toDesigner: string }
       error: { targetNotAgentSingle: string; designerNotAgentSingle: string }
     }
   }
@@ -3268,10 +3278,25 @@ export const zhCN: Resources = {
       sessionModeInline: '续接（resume）',
       sessionModeHint:
         '续接模式让重跑复用上一轮 opencode session；auth/session 失败时自动回退为独立模式。',
+      fieldLinkedQuestioner: '已挂接的反问者 (questioner)',
+      linkedQuestionerMissing:
+        '尚未挂接 questioner — 从本节点左侧 input 端往下游反问 agent 拖一条线。',
+      linkedQuestionerHint: '反问的发起方；同一个 questioner agent 只允许挂一个跨反问节点。',
+      fieldLinkedDesigner: '已挂接的设计者 (designer)',
+      linkedDesignerMissing:
+        '尚未挂接 designer — 从本节点 to_designer 端往上游 designer agent 拖一条线，否则提交后没有重跑对象。',
+      linkedDesignerHint: '收到反馈后重跑的上游 agent；通常是 questioner 的拓扑上游。',
+      fieldInLoop: 'wrapper-loop 包裹',
+      inLoopYes: '✔ 在 loop 内，可累计多轮反问。',
+      inLoopNo: '⚠ 未在 wrapper-loop 内 — 反问轮数不会被限制，建议套一层 loop。',
     },
     canvas: {
       paletteLabel: '⚡ 跨 agent 反问',
       paletteHint: '拖到下游反问 agent 上自动建反问通道；再手动连 to_designer → 上游 designer。',
+      handleLabel: {
+        toQuestioner: '→ 反问者',
+        toDesigner: '→ 设计者',
+      },
       error: {
         targetNotAgentSingle: '跨 agent 反问节点的输入端只能连 agent-single（v1 限制）。',
         designerNotAgentSingle: 'to_designer 必须连到 agent-single 节点。',
