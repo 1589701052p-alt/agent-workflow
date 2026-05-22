@@ -432,7 +432,7 @@ function ReviewDetailPage() {
   // controlled textarea (reason). When `null`, no dialog is open.
   const [decisionDialog, setDecisionDialog] = useState<
     | null
-    | { kind: 'approve'; draftCount: number }
+    | { kind: 'approve'; draftCount: number; commentCount: number }
     | { kind: 'iterate'; willRerun: string; noComments: boolean }
     | { kind: 'reject'; willRerun: string; reason: string; reasonError: boolean }
   >(null)
@@ -446,8 +446,13 @@ function ReviewDetailPage() {
         docVersionId: detail.data.currentVersion.id,
       })
     ).filter((d) => d.text.trim().length > 0).length
-    if (draftCount > 0) {
-      setDecisionDialog({ kind: 'approve', draftCount })
+    const commentCount = detail.data.comments.length
+    // Show the confirm dialog whenever the reviewer has any open
+    // signal — submitted comments or unsubmitted drafts. Approving
+    // silently while comments exist surprised users (they expect a
+    // "are you sure?" prompt since the comments look like blockers).
+    if (draftCount > 0 || commentCount > 0) {
+      setDecisionDialog({ kind: 'approve', draftCount, commentCount })
       return
     }
     await submitDecision.mutateAsync({
@@ -1368,7 +1373,7 @@ function ReviewDetailPage() {
 // prompt. Reject carries a controlled textarea + inline reason-required
 // hint; approve and iterate are pure confirms with kind-specific copy.
 type DecisionDialogState =
-  | { kind: 'approve'; draftCount: number }
+  | { kind: 'approve'; draftCount: number; commentCount: number }
   | { kind: 'iterate'; willRerun: string; noComments: boolean }
   | { kind: 'reject'; willRerun: string; reason: string; reasonError: boolean }
 
@@ -1420,7 +1425,12 @@ function DecisionDialog({
     >
       {state.kind === 'approve' && (
         <>
-          <p>{t('reviews.approveDraftWarning', { count: state.draftCount })}</p>
+          {state.commentCount > 0 && (
+            <p>{t('reviews.approveCommentWarning', { count: state.commentCount })}</p>
+          )}
+          {state.draftCount > 0 && (
+            <p>{t('reviews.approveDraftWarning', { count: state.draftCount })}</p>
+          )}
           <p>{t('reviews.approveDraftConfirm')}</p>
         </>
       )}

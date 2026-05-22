@@ -132,8 +132,10 @@ export const enUS: Resources = {
     iterateConfirm: 'Re-run based on submitted comments: {{willRerun}}. Continue?',
     iterateNoCommentsWarning:
       'No comments submitted yet. Iterating will send the agent an empty comments list. Continue?',
-    approveDraftWarning: 'You have {{count}} unsubmitted comment(s).',
-    approveDraftConfirm: 'Approve will discard these drafts. Continue?',
+    approveDraftWarning:
+      'You have {{count}} unsubmitted draft comment(s); approving will discard them.',
+    approveDraftConfirm: 'Are you sure you want to approve this review?',
+    approveCommentWarning: 'This review has {{count}} submitted comment(s).',
     popoverPlaceholder: 'Write your review comment…',
     popoverSubmit: 'Submit',
     popoverCancel: 'Cancel',

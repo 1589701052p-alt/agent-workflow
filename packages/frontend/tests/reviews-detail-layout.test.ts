@@ -113,6 +113,32 @@ describe('review detail decision dialog — replaces window.confirm / prompt / a
   })
 })
 
+describe('review detail decision dialog — approve confirms when submitted comments exist', () => {
+  // BUG (fixed): on the markdown review page, when the doc carried any
+  // submitted review comments and the user clicked "通过" / "Approve",
+  // the action fired immediately with no confirm prompt. Users expected
+  // a "are you sure?" dialog whenever there are open review signals on
+  // the doc, not only when there are unsubmitted drafts. The fix routes
+  // both `draftCount > 0` AND `commentCount > 0` through DecisionDialog.
+  // Locking the source-text shape here so a future refactor that drops
+  // the commentCount branch re-introduces the regression visibly.
+  test('onApprove counts submitted comments alongside drafts and triggers the dialog when either > 0', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    expect(tsx).toMatch(/const commentCount = detail\.data\.comments\.length/)
+    expect(tsx).toMatch(/if \(draftCount > 0 \|\| commentCount > 0\)/)
+    expect(tsx).toMatch(/setDecisionDialog\(\{ kind: 'approve', draftCount, commentCount \}\)/)
+  })
+
+  test('approve dialog body renders the new approveCommentWarning copy', () => {
+    const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')
+    expect(tsx).toMatch(/reviews\.approveCommentWarning/)
+    // Both warnings sit behind their respective count guards so the
+    // dialog never shows "0 条" copy.
+    expect(tsx).toMatch(/state\.commentCount > 0 &&/)
+    expect(tsx).toMatch(/state\.draftCount > 0 &&/)
+  })
+})
+
 describe('review detail sidebar — ▲/▼ jump buttons mirror the J/K shortcut', () => {
   test('reviews.detail.tsx renders the up/down jump buttons in the sidebar header', () => {
     const tsx = readFileSync(REVIEWS_DETAIL_TSX, 'utf8')

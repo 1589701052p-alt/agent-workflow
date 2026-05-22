@@ -272,6 +272,7 @@ export interface Resources {
     iterateNoCommentsWarning: string
     approveDraftWarning: string
     approveDraftConfirm: string
+    approveCommentWarning: string
     popoverPlaceholder: string
     popoverSubmit: string
     popoverCancel: string
@@ -1846,8 +1847,9 @@ export const zhCN: Resources = {
     iterateConfirm: '将基于上方评审意见重跑：{{willRerun}}。继续？',
     iterateNoCommentsWarning:
       '当前未提交任何评审意见。继续迭代会让 agent 收到空意见列表 — 仍然继续吗？',
-    approveDraftWarning: '还有 {{count}} 条未提交评审意见。',
-    approveDraftConfirm: 'Approve 将丢弃这些草稿。确定继续吗？',
+    approveDraftWarning: '还有 {{count}} 条未提交评审意见，通过将丢弃这些草稿。',
+    approveDraftConfirm: '确定通过此次评审吗？',
+    approveCommentWarning: '本次评审有 {{count}} 条评审意见。',
     popoverPlaceholder: '写下你的评审意见…',
     popoverSubmit: '提交',
     popoverCancel: '取消',
