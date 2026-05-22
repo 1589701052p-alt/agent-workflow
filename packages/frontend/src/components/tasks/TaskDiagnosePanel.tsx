@@ -1,21 +1,20 @@
 // RFC-053 P-6 — diagnose panel.
+// RFC-057 — added per-alert "Repair…" action that opens
+//   <RepairChoiceDialog> + <RepairConfirmModal>.
 //
 // Modal launched from <StuckTaskBanner>. On open it POSTs to
 // `/api/tasks/:id/diagnose`, which runs the invariant scan live for that
 // task and returns the current findings. Renders the alerts as a table
 // of (rule × severity × detail JSON), enough for an operator to
 // understand the issue without going to the DB.
-//
-// Non-goal: this panel does not offer "fix" actions. Recovery still
-// flows through fixup scripts (RFC-052 template). The UI's only job is
-// to make the wedge visible.
 
-import { useMutation } from '@tanstack/react-query'
-import { useEffect, type ReactElement } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { api } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
+import { RepairChoiceDialog } from '@/components/tasks/RepairChoiceDialog'
 import type { LifecycleAlertRule, LifecycleAlertSeverity } from '@/types/lifecycle'
 
 interface DiagnoseAlertRow {
@@ -44,10 +43,17 @@ export interface TaskDiagnosePanelProps {
 
 export function TaskDiagnosePanel(props: TaskDiagnosePanelProps): ReactElement {
   const { t } = useTranslation()
+  const qc = useQueryClient()
   const m = useMutation<DiagnoseResponse>({
     mutationFn: () =>
       api.post<DiagnoseResponse>(`/api/tasks/${encodeURIComponent(props.taskId)}/diagnose`),
   })
+
+  // Repair flow state — which alert (if any) is being repaired right now.
+  const [repairTarget, setRepairTarget] = useState<{
+    alertId: string
+    rule: LifecycleAlertRule
+  } | null>(null)
 
   // Auto-run the scan when the panel opens — operators rarely want a stale
   // view of "diagnose". Reset state when the modal closes so the next open
@@ -57,6 +63,7 @@ export function TaskDiagnosePanel(props: TaskDiagnosePanelProps): ReactElement {
       m.mutate()
     } else {
       m.reset()
+      setRepairTarget(null)
     }
     // We intentionally don't depend on `m` here — the linter would call
     // for it, but `mutate`/`reset` are stable references from react-query.
@@ -65,41 +72,74 @@ export function TaskDiagnosePanel(props: TaskDiagnosePanelProps): ReactElement {
   }, [props.open, props.taskId])
 
   return (
-    <Dialog
-      open={props.open}
-      onClose={props.onClose}
-      title={t('tasks.diagnose.panelTitle')}
-      size="lg"
-      data-testid="task-diagnose-panel"
-      footer={
-        <div className="dialog__footer">
-          <button
-            type="button"
-            className="btn btn--sm"
-            onClick={() => m.mutate()}
-            disabled={m.isPending}
-            data-testid="task-diagnose-rescan"
-          >
-            {m.isPending ? t('tasks.diagnose.rescanning') : t('tasks.diagnose.rescan')}
-          </button>
-          <button type="button" className="btn btn--sm" onClick={props.onClose}>
-            {t('tasks.diagnose.close')}
-          </button>
-        </div>
-      }
-    >
-      {m.isPending && <div className="muted">{t('tasks.diagnose.loading')}</div>}
-      {m.error !== null && m.error !== undefined && (
-        <div className="error-box">
-          {m.error instanceof Error ? m.error.message : String(m.error)}
-        </div>
+    <>
+      <Dialog
+        open={props.open && repairTarget === null}
+        onClose={props.onClose}
+        title={t('tasks.diagnose.panelTitle')}
+        size="lg"
+        data-testid="task-diagnose-panel"
+        footer={
+          <div className="dialog__footer">
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => m.mutate()}
+              disabled={m.isPending}
+              data-testid="task-diagnose-rescan"
+            >
+              {m.isPending ? t('tasks.diagnose.rescanning') : t('tasks.diagnose.rescan')}
+            </button>
+            <button type="button" className="btn btn--sm" onClick={props.onClose}>
+              {t('tasks.diagnose.close')}
+            </button>
+          </div>
+        }
+      >
+        {m.isPending && <div className="muted">{t('tasks.diagnose.loading')}</div>}
+        {m.error !== null && m.error !== undefined && (
+          <div className="error-box">
+            {m.error instanceof Error ? m.error.message : String(m.error)}
+          </div>
+        )}
+        {m.data !== undefined && (
+          <DiagnoseTable
+            response={m.data}
+            onRepair={(row) => setRepairTarget({ alertId: row.id, rule: row.rule })}
+          />
+        )}
+      </Dialog>
+      {repairTarget !== null && (
+        <RepairChoiceDialog
+          taskId={props.taskId}
+          alertId={repairTarget.alertId}
+          alertRule={repairTarget.rule}
+          open={true}
+          onClose={() => setRepairTarget(null)}
+          onApplied={() => {
+            // Re-run the scan so the table reflects what's resolved /
+            // newly surfaced. Invalidate task list + repair-options cache
+            // so banners + future opens refetch instead of replaying stale
+            // bytes from the previous request.
+            m.mutate()
+            void qc.invalidateQueries({ queryKey: ['tasks', props.taskId, 'alerts'] })
+            void qc.invalidateQueries({
+              queryKey: ['tasks', props.taskId, 'alerts', repairTarget.alertId, 'repair-options'],
+            })
+            setRepairTarget(null)
+          }}
+        />
       )}
-      {m.data !== undefined && <DiagnoseTable response={m.data} />}
-    </Dialog>
+    </>
   )
 }
 
-function DiagnoseTable({ response }: { response: DiagnoseResponse }): ReactElement {
+interface DiagnoseTableProps {
+  response: DiagnoseResponse
+  onRepair: (row: DiagnoseAlertRow) => void
+}
+
+function DiagnoseTable({ response, onRepair }: DiagnoseTableProps): ReactElement {
   const { t } = useTranslation()
   if (response.openAlerts.length === 0) {
     return (
@@ -116,6 +156,7 @@ function DiagnoseTable({ response }: { response: DiagnoseResponse }): ReactEleme
           <th>{t('tasks.diagnose.col.severity')}</th>
           <th>{t('tasks.diagnose.col.detectedAt')}</th>
           <th>{t('tasks.diagnose.col.detail')}</th>
+          <th>{t('tasks.diagnose.col.actions')}</th>
         </tr>
       </thead>
       <tbody>
@@ -136,7 +177,20 @@ function DiagnoseTable({ response }: { response: DiagnoseResponse }): ReactEleme
             </td>
             <td>{new Date(a.detectedAt).toLocaleString()}</td>
             <td>
-              <pre className="diagnose-table__detail">{JSON.stringify(a.detail, null, 2)}</pre>
+              <details className="diagnose-table__detail-disclosure">
+                <summary>{t('tasks.diagnose.detailDisclosureLabel')}</summary>
+                <pre className="diagnose-table__detail">{JSON.stringify(a.detail, null, 2)}</pre>
+              </details>
+            </td>
+            <td>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => onRepair(a)}
+                data-testid={`task-diagnose-repair-${a.rule}`}
+              >
+                {t('tasks.diagnose.repair.openButton')}
+              </button>
             </td>
           </tr>
         ))}

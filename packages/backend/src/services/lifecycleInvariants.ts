@@ -34,7 +34,11 @@
 import { and, eq, gt, gte, inArray, isNull, isNotNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
-import type { WorkflowDefinition, NodeKind } from '@agent-workflow/shared'
+import type {
+  LifecycleAlertRule as SharedLifecycleAlertRule,
+  WorkflowDefinition,
+  NodeKind,
+} from '@agent-workflow/shared'
 
 import type { DbClient } from '@/db/client'
 import {
@@ -57,8 +61,27 @@ export type InvariantRule = 'R1' | 'R2' | 'C1' | 'T1' | 'T2' | 'T3' | 'U1' | 'CR
 /** RFC-053 P-6 stuck-task detector emits these. Shares lifecycle_alerts table. */
 export type StuckRule = 'S1' | 'S2' | 'S3' | 'S4'
 
-/** Union of every rule kind that can appear in lifecycle_alerts.rule. */
-export type LifecycleAlertRule = InvariantRule | StuckRule
+/** Union of every rule kind that can appear in lifecycle_alerts.rule.
+ *
+ * RFC-057: canonical list lives in `@agent-workflow/shared/lifecycle-alerts`
+ * so the diagnose-repair option taxonomy can `satisfies Record<...>` it.
+ * `InvariantRule | StuckRule` here is structurally identical; a compile-time
+ * assignability check below catches drift if either list is edited in
+ * isolation. */
+export type LifecycleAlertRule = SharedLifecycleAlertRule
+
+// Compile-time guard: backend's local union must equal shared's union.
+type _AssertBackendSubsetOfShared = InvariantRule | StuckRule extends SharedLifecycleAlertRule
+  ? true
+  : never
+type _AssertSharedSubsetOfBackend = SharedLifecycleAlertRule extends InvariantRule | StuckRule
+  ? true
+  : never
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _LIFECYCLE_RULE_UNION_GUARD: [_AssertBackendSubsetOfShared, _AssertSharedSubsetOfBackend] = [
+  true,
+  true,
+]
 
 export type InvariantSeverity = 'warning' | 'error'
 

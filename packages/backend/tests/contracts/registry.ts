@@ -245,6 +245,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/tasks/:id/resume' },
   { method: 'POST', path: '/api/tasks/:id/diagnose' },
   { method: 'GET', path: '/api/tasks/:id/alerts' },
+  // RFC-057: Diagnose-Panel repair options.
+  { method: 'GET', path: '/api/tasks/:id/alerts/:alertId/repair-options' },
+  { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },
   { method: 'GET', path: '/api/tasks/:id/diff' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/events' },

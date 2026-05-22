@@ -1104,3 +1104,33 @@ export const lifecycleAlerts = sqliteTable(
     openIdx: index('idx_lifecycle_alerts_open').on(t.resolvedAt, t.severity),
   }),
 )
+
+// -----------------------------------------------------------------------------
+// RFC-057 lifecycle_repair_audit — append-only audit of Diagnose-Panel repair
+// actions. No FK to tasks / lifecycle_alerts on purpose: the audit row outlives
+// both the alert row (which gets stamped resolved_at on repair) and the task
+// (which may be GC'd). before/after snapshots are scoped to the rows the
+// repair option actually touched, so the audit is self-describing without
+// joining live tables.
+// -----------------------------------------------------------------------------
+export const lifecycleRepairAudit = sqliteTable(
+  'lifecycle_repair_audit',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id').notNull(),
+    alertId: text('alert_id'),
+    alertRule: text('alert_rule').notNull(),
+    alertDetailJson: text('alert_detail_json').notNull(),
+    optionId: text('option_id').notNull(),
+    actorUserId: text('actor_user_id'),
+    beforeSnapshotJson: text('before_snapshot_json').notNull(),
+    afterSnapshotJson: text('after_snapshot_json').notNull(),
+    outcome: text('outcome').notNull(),
+    outcomeMessage: text('outcome_message'),
+    appliedAt: integer('applied_at').notNull(),
+  },
+  (t) => ({
+    taskIdx: index('idx_lifecycle_repair_audit_task').on(t.taskId, t.appliedAt),
+    ruleIdx: index('idx_lifecycle_repair_audit_rule').on(t.alertRule, t.appliedAt),
+  }),
+)

@@ -1,5 +1,17 @@
 // RFC-052 — one-off fixup for tasks stuck in `awaiting_review` after the
-// review-retry-cascade bug. Symptom is:
+// review-retry-cascade bug.
+//
+// ⚠ DEPRECATED (RFC-057): for tasks that surface this shape today, prefer
+// the UI's diagnose-panel "Repair…" buttons. The same R1 wedge is exposed
+// by the lifecycle invariant scan and recoverable via
+// `R1.approve-run` (when the latest doc is already approved — equivalent
+// to step 2 below) or `R1.unapprove-doc` (when approval itself was wrong)
+// without ever stopping the daemon. This script is preserved for
+// pre-RFC-053 DBs that don't have the `lifecycle_alerts` /
+// `lifecycle_repair_audit` tables — once those migrations have run, use
+// the panel instead.
+//
+// Symptom is:
 //
 //   - tasks.status = 'awaiting_review'
 //   - the review node_run row has status='awaiting_review' but its newest

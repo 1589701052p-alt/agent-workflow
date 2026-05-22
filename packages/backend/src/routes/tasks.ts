@@ -10,6 +10,7 @@
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
 import {
+  RepairRequestSchema,
   StartTaskSchema,
   TaskStatusSchema,
   UploadInputSchema,
@@ -51,6 +52,7 @@ import {
 import { getSessionTree } from '@/services/sessionView'
 import { getInventorySnapshot } from '@/services/inventory'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
+import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
@@ -294,6 +296,64 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
     })
     return c.json(task)
+  })
+
+  // RFC-057: Diagnose-Panel repair options.
+  app.get('/api/tasks/:id/alerts/:alertId/repair-options', async (c) => {
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
+    const actor = actorOf(c)
+    const result = await listRepairOptionsForAlert({
+      db: deps.db,
+      taskId: c.req.param('id'),
+      alertId: c.req.param('alertId'),
+      actorUserId: actor.user.id,
+      appHome: Paths.root,
+      deps: {
+        db: deps.db,
+        ...(opencodeCmd ? { opencodeCmd } : {}),
+        ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+      },
+    })
+    return c.json(result)
+  })
+
+  app.post('/api/tasks/:id/alerts/:alertId/repair', async (c) => {
+    const bodyJson = (await c.req.json().catch(() => ({}))) as unknown
+    const parsed = RepairRequestSchema.safeParse(bodyJson)
+    if (!parsed.success) {
+      throw new ValidationError(
+        'confirm-required',
+        'POST body must be `{ optionId: string, confirm: true }`',
+        parsed.error.issues,
+      )
+    }
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
+    const actor = actorOf(c)
+    const result = await applyRepairOption({
+      db: deps.db,
+      taskId: c.req.param('id'),
+      alertId: c.req.param('alertId'),
+      optionId: parsed.data.optionId,
+      actorUserId: actor.user.id,
+      appHome: Paths.root,
+      deps: {
+        db: deps.db,
+        ...(opencodeCmd ? { opencodeCmd } : {}),
+        ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+      },
+      onAlert: (row, transition) => {
+        tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
+          type: 'lifecycle.alert',
+          taskId: row.taskId,
+          rule: row.rule,
+          severity: row.severity,
+          transition,
+        })
+      },
+    })
+    return c.json(result)
   })
 
   app.post('/api/tasks/:id/nodes/:nodeRunId/retry', async (c) => {

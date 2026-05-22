@@ -791,11 +791,13 @@ export interface Resources {
       close: string
       loading: string
       empty: string
+      detailDisclosureLabel: string
       col: {
         rule: string
         severity: string
         detectedAt: string
         detail: string
+        actions: string
       }
       severity: {
         warning: string
@@ -813,6 +815,31 @@ export interface Resources {
         S2: string
         S3: string
         S4: string
+      }
+      // RFC-057: UI strings for the repair dialog + confirm modal. The
+      // option-specific labels (R1.approveRun.label / etc.) live at root
+      // `diagnose.repair.*` to match what backend emits.
+      repair: {
+        openButton: string
+        dialogTitle: string
+        confirmTitle: string
+        confirmLead: string
+        confirmApply: string
+        applying: string
+        cancel: string
+        next: string
+        loading: string
+        empty: string
+        optionPickerLabel: string
+        destructive: string
+        risk: {
+          low: string
+          medium: string
+          high: string
+        }
+        unavailable: {
+          generic: string
+        }
       }
     }
     reviewButton: string
@@ -1727,6 +1754,113 @@ export interface Resources {
   detail: {
     memories: string
   }
+  // RFC-057: backend-emitted repair option labels/descriptions/unavailable
+  // reasons. Each option's labelKey/descriptionKey points to a leaf string
+  // here; UI calls `t(option.labelKey)` directly without templating.
+  diagnose: {
+    repair: {
+      R1: {
+        approveRun: { label: string; desc: string }
+        unapproveDoc: { label: string; desc: string }
+        markTaskFailed: { label: string; desc: string }
+        unavailable: {
+          detailDrift: string
+          docNotApproved: string
+          runAlreadyDone: string
+          taskTerminal: string
+        }
+      }
+      R2: {
+        demoteRunToAwaiting: { label: string; desc: string }
+        markTaskFailed: { label: string; desc: string }
+        unavailable: {
+          detailDrift: string
+          runNotDone: string
+          taskTerminal: string
+        }
+      }
+      C1: {
+        resumeRun: { label: string; desc: string }
+        reopenSession: { label: string; desc: string }
+        unavailable: {
+          detailDrift: string
+          runNotAwaitingHuman: string
+          sessionNotClosed: string
+        }
+      }
+      T1: {
+        demoteTask: { label: string; desc: string }
+        resurrectReviewRun: {
+          label: string
+          desc: string
+          unavailable: { noCandidate: string }
+        }
+        unavailable: { taskNotAwaitingReview: string }
+      }
+      T2: {
+        demoteTask: { label: string; desc: string }
+        resurrectClarifyRun: {
+          label: string
+          desc: string
+          unavailable: { noCandidate: string; noOpenSession: string }
+        }
+        unavailable: { taskNotAwaitingHuman: string }
+      }
+      T3: {
+        demoteTask: { label: string; desc: string }
+        markTaskFailed: { label: string; desc: string }
+        unavailable: { taskNotDone: string }
+      }
+      U1: {
+        cancelOlderKeepNewest: { label: string; desc: string }
+        cancelNewerKeepOldest: { label: string; desc: string }
+        unavailable: { detailMissingIds: string; notMultipleActive: string }
+      }
+      CR1: {
+        acknowledge: { label: string; desc: string }
+        retryDesignerRerun: { label: string; desc: string }
+        unavailable: { taskNotFailed: string }
+      }
+      S1: {
+        recreateDocVersion: { label: string; desc: string }
+        demoteTask: { label: string; desc: string }
+        unavailable: { taskNotAwaitingReview: string }
+      }
+      S2: {
+        demoteTask: { label: string; desc: string }
+        reopenSession: {
+          label: string
+          desc: string
+          unavailable: {
+            noClosedSession: string
+            sessionAlreadyOpen: string
+            noAwaitingRun: string
+          }
+        }
+        unavailable: { taskNotAwaitingHuman: string }
+      }
+      S3: {
+        resurrectReviewRun: {
+          label: string
+          desc: string
+          unavailable: { noCandidate: string }
+        }
+        resurrectClarifyRun: {
+          label: string
+          desc: string
+          unavailable: { noCandidate: string }
+        }
+        demoteTask: { label: string; desc: string }
+        markTaskFailed: { label: string; desc: string }
+        unavailable: { taskNotRunning: string }
+      }
+      S4: {
+        kickTask: { label: string; desc: string }
+        cancelTask: { label: string; desc: string }
+        unavailable: { taskNotPending: string }
+      }
+    }
+  }
 }
 
 export const zhCN: Resources = {
@@ -2540,11 +2674,13 @@ export const zhCN: Resources = {
       close: '关闭',
       loading: '正在运行不变量扫描…',
       empty: '该任务当前没有未解决的生命周期告警。',
+      detailDisclosureLabel: '查看详情',
       col: {
         rule: '规则',
         severity: '严重级别',
         detectedAt: '首次发现',
         detail: '详情',
+        actions: '操作',
       },
       severity: {
         warning: '警告',
@@ -2562,6 +2698,28 @@ export const zhCN: Resources = {
         S2: 'task 在 awaiting_human 长时间无开放 clarify_session',
         S3: 'task 状态 running，但所有 node_run 都已落终态',
         S4: 'task 长时间处于 pending，调度器未拣选',
+      },
+      repair: {
+        openButton: '修复…',
+        dialogTitle: '修复生命周期告警 ({{rule}})',
+        confirmTitle: '确认修复操作',
+        confirmLead: '即将执行：{{option}}。',
+        confirmApply: '确认应用',
+        applying: '应用中…',
+        cancel: '取消',
+        next: '下一步',
+        loading: '加载修复选项中…',
+        empty: '当前告警没有可用的修复选项。',
+        optionPickerLabel: '选择修复方案',
+        destructive: '破坏性',
+        risk: {
+          low: '低风险',
+          medium: '中等风险',
+          high: '高风险',
+        },
+        unavailable: {
+          generic: '该选项当前不可用。',
+        },
       },
     },
     reviewButton: '去审核',
@@ -3508,5 +3666,203 @@ export const zhCN: Resources = {
   },
   detail: {
     memories: '记忆',
+  },
+  diagnose: {
+    repair: {
+      R1: {
+        approveRun: {
+          label: '把 review node_run 标为 done',
+          desc: 'doc 已审核通过但 node_run 卡在 awaiting_review。将 node_run 推进到 done，让调度器继续。',
+        },
+        unapproveDoc: {
+          label: '撤销该 doc_version 审批',
+          desc: 'doc 不应已批准——把 doc_version.decision 退回 pending，重新走审核流程。',
+        },
+        markTaskFailed: {
+          label: '把任务标为失败',
+          desc: '该任务已无法恢复，把它直接标为 failed 让用户重新启动新任务。',
+        },
+        unavailable: {
+          detailDrift: '告警的 detail 字段已与现状不匹配，请重新扫描后再操作。',
+          docNotApproved: '关联的 doc_version 已不在 approved 状态，无须再修。',
+          runAlreadyDone: 'node_run 已经是 done，无须再推进。',
+          taskTerminal: '任务已是终态，无须再标为 failed。',
+        },
+      },
+      R2: {
+        demoteRunToAwaiting: {
+          label: '把 done 的 review node_run 退回 awaiting_review',
+          desc: 'node_run 已 done 但没有 approved doc。退回 awaiting_review 让用户重新决策。',
+        },
+        markTaskFailed: {
+          label: '把任务标为失败',
+          desc: '无法补 doc 时直接放弃任务。',
+        },
+        unavailable: {
+          detailDrift: '告警 detail 与现状已不一致，请先重新扫描。',
+          runNotDone: '关联 node_run 已不在 done 状态。',
+          taskTerminal: '任务已是终态。',
+        },
+      },
+      C1: {
+        resumeRun: {
+          label: '把 clarify node_run 推进到 done',
+          desc: 'session 已关闭但 run 卡在 awaiting_human。推进 run 并让调度器接管。',
+        },
+        reopenSession: {
+          label: '重新打开 clarify_session',
+          desc: 'run 仍需用户回答，重新打开 session 让用户继续作答。',
+        },
+        unavailable: {
+          detailDrift: '告警 detail 与现状已不一致。',
+          runNotAwaitingHuman: 'node_run 已不在 awaiting_human。',
+          sessionNotClosed: 'session 仍在开放，C1 不再适用。',
+        },
+      },
+      T1: {
+        demoteTask: {
+          label: '把任务退回 running',
+          desc: '没有任何 node_run 处于 awaiting_review，任务不该停在 awaiting_review。退回 running 让调度器重新拣选。',
+        },
+        resurrectReviewRun: {
+          label: '把已终止的 review node_run 推回 awaiting_review',
+          desc: '存在 review run 已被中断，但仍是当前最佳候选。把它推回 awaiting_review，让用户继续审核。',
+          unavailable: {
+            noCandidate: '没有找到可以推回的 review node_run 候选。',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingReview: '任务已经不在 awaiting_review 状态。',
+        },
+      },
+      T2: {
+        demoteTask: {
+          label: '把任务退回 running',
+          desc: '没有任何 clarify node_run 在 awaiting_human，任务不该停在 awaiting_human。退回 running 让调度器重新拣选。',
+        },
+        resurrectClarifyRun: {
+          label: '把已终止的 clarify node_run 推回 awaiting_human',
+          desc: '存在 clarify run 已被中断且仍有开放 session。把它推回 awaiting_human，让用户继续回答。',
+          unavailable: {
+            noCandidate: '没有找到可以推回的 clarify node_run 候选。',
+            noOpenSession: '候选 run 没有对应的开放 clarify_session。',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingHuman: '任务已经不在 awaiting_human 状态。',
+        },
+      },
+      T3: {
+        demoteTask: {
+          label: '把任务退回 running',
+          desc: 'output 节点还没有 done 的 node_run，task 不该已 done。退回 running 让调度器把剩余节点跑完。',
+        },
+        markTaskFailed: {
+          label: '把任务标为失败',
+          desc: '若 output 节点无法再产出，把任务标为 failed。',
+        },
+        unavailable: {
+          taskNotDone: '任务已经不是 done 状态。',
+        },
+      },
+      U1: {
+        cancelOlderKeepNewest: {
+          label: '保留最新的活跃 run，取消其余',
+          desc: '同一节点上多个活跃 run，保留 startedAt 最新的、把其余 run 标为 canceled。',
+        },
+        cancelNewerKeepOldest: {
+          label: '保留最旧的活跃 run，取消其余',
+          desc: '同一节点上多个活跃 run，保留 startedAt 最旧的、把其余 run 标为 canceled。',
+        },
+        unavailable: {
+          detailMissingIds: '告警 detail 缺少 run id 列表，无法精确选择。',
+          notMultipleActive: '当前不再存在多个活跃 run。',
+        },
+      },
+      CR1: {
+        acknowledge: {
+          label: '确认已知悉（不改 DB）',
+          desc: '将告警关闭，但不修改任何业务数据。适用于已离线手工处理完毕的场景。',
+        },
+        retryDesignerRerun: {
+          label: '让 designer 重跑',
+          desc: '通过把 designer node_run 推回 pending 让调度器重跑该节点。',
+        },
+        unavailable: {
+          taskNotFailed: '任务尚未进入 failed，CR-1 重跑不适用。',
+        },
+      },
+      S1: {
+        recreateDocVersion: {
+          label: '重新派发 review 节点生成 doc_version',
+          desc: '任务卡在 awaiting_review 但找不到 pending doc，重新派发 review 节点生成 doc。',
+        },
+        demoteTask: {
+          label: '把任务退回 running',
+          desc: '当 review 节点已无法补 doc 时，把任务退回 running 让用户决定。',
+        },
+        unavailable: {
+          taskNotAwaitingReview: '任务不在 awaiting_review，S1 不再适用。',
+        },
+      },
+      S2: {
+        demoteTask: {
+          label: '把任务退回 running',
+          desc: '当 clarify session 已无法恢复时，把任务退回 running。',
+        },
+        reopenSession: {
+          label: '重新打开 clarify_session',
+          desc: '存在已关闭的 clarify_session 仍可继续作答，重新打开它。',
+          unavailable: {
+            noClosedSession: '没有找到可以重新打开的 closed clarify_session。',
+            sessionAlreadyOpen: '已存在开放 session，S2 不再适用。',
+            noAwaitingRun: '没有任何 clarify node_run 在 awaiting_human。',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingHuman: '任务不在 awaiting_human，S2 不再适用。',
+        },
+      },
+      S3: {
+        resurrectReviewRun: {
+          label: '把已终止的 review run 推回 awaiting_review',
+          desc: '任务在 running 但所有 node_run 已终态。存在 review run 可以推回，让用户继续审核。',
+          unavailable: {
+            noCandidate: '没有找到合适的 review node_run 候选。',
+          },
+        },
+        resurrectClarifyRun: {
+          label: '把已终止的 clarify run 推回 awaiting_human',
+          desc: '任务在 running 但所有 node_run 已终态。存在 clarify run 可以推回，让用户继续回答。',
+          unavailable: {
+            noCandidate: '没有找到合适的 clarify node_run 候选。',
+          },
+        },
+        demoteTask: {
+          label: '把任务退回 interrupted',
+          desc: '没有可恢复的 node_run。把任务退回 interrupted，由用户决定是否 resume。',
+        },
+        markTaskFailed: {
+          label: '把任务标为失败',
+          desc: '该任务已无法恢复，直接标为 failed。',
+        },
+        unavailable: {
+          taskNotRunning: '任务已经不是 running 状态。',
+        },
+      },
+      S4: {
+        kickTask: {
+          label: '触发一次调度器拣选',
+          desc: '任务长时间停在 pending，直接踢一次调度器。',
+        },
+        cancelTask: {
+          label: '取消该任务',
+          desc: '不再期待该任务跑起来，直接取消。',
+        },
+        unavailable: {
+          taskNotPending: '任务已经不是 pending 状态。',
+        },
+      },
+    },
   },
 }

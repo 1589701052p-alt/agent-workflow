@@ -57,6 +57,12 @@ export interface RunStuckTaskDetectorArgs {
   pendingThresholdMs?: number
   /** Receives newly-detected / promoted alerts; wired in cli/start.ts. */
   onAlert?: (row: LifecycleAlertRow, transition: 'new' | 'promoted') => void
+  /**
+   * RFC-057: narrow the candidate set to a specific task subset. Used by the
+   * repair engine to re-scan only the just-modified task after an apply().
+   * Omitted ⟹ scan every non-terminal task (existing behavior).
+   */
+  taskIdFilter?: readonly string[]
 }
 
 export interface RunStuckTaskDetectorResult {
@@ -73,10 +79,14 @@ interface StuckCandidate {
   startedAt: number
 }
 
-async function loadCandidates(db: DbClient): Promise<StuckCandidate[]> {
+async function loadCandidates(db: DbClient, filter?: readonly string[]): Promise<StuckCandidate[]> {
   // Only non-terminal task statuses are candidates. Terminal tasks
   // (done/failed/canceled/interrupted) never "stick" in the operational
   // sense — they're a final state.
+  const baseWhere = and(
+    isNull(tasks.deletedAt),
+    inArray(tasks.status, ['pending', 'running', 'awaiting_review', 'awaiting_human']),
+  )
   const rows = await db
     .select({
       id: tasks.id,
@@ -85,10 +95,9 @@ async function loadCandidates(db: DbClient): Promise<StuckCandidate[]> {
     })
     .from(tasks)
     .where(
-      and(
-        isNull(tasks.deletedAt),
-        inArray(tasks.status, ['pending', 'running', 'awaiting_review', 'awaiting_human']),
-      ),
+      filter === undefined || filter.length === 0
+        ? baseWhere
+        : and(baseWhere, inArray(tasks.id, filter as string[])),
     )
   return rows.map((r) => ({ taskId: r.id, status: r.status, startedAt: r.startedAt }))
 }
@@ -201,6 +210,7 @@ async function checkOne(
   if (c.status === 'awaiting_review') {
     const hasPending = await hasPendingDocVersion(db, c.taskId)
     if (!hasPending) {
+      const hint = await findRepairHint(db, c.taskId, 'review-awaiting')
       out.push({
         taskId: c.taskId,
         rule: 'S1',
@@ -209,12 +219,14 @@ async function checkOne(
           message: 'task awaiting_review with no pending doc_version',
           inactiveForMs,
           thresholdMs: stuckThresholdMs,
+          ...(hint ? { repairHint: hint } : {}),
         },
       })
     }
   } else if (c.status === 'awaiting_human') {
     const hasOpen = await hasOpenClarifySession(db, c.taskId)
     if (!hasOpen) {
+      const hint = await findRepairHint(db, c.taskId, 'clarify-awaiting')
       out.push({
         taskId: c.taskId,
         rule: 'S2',
@@ -223,6 +235,7 @@ async function checkOne(
           message: 'task awaiting_human with no open clarify_session',
           inactiveForMs,
           thresholdMs: stuckThresholdMs,
+          ...(hint ? { repairHint: hint } : {}),
         },
       })
     }
@@ -233,6 +246,7 @@ async function checkOne(
     // belongs to a different layer — scheduler bootstrap — so we require
     // counts.total > 0 here to be conservative).
     if (counts.total > 0 && counts.active === 0) {
+      const hint = await findRepairHint(db, c.taskId, 'terminal-non-done')
       out.push({
         taskId: c.taskId,
         rule: 'S3',
@@ -243,11 +257,93 @@ async function checkOne(
           thresholdMs: stuckThresholdMs,
           totalRuns: counts.total,
           terminalRuns: counts.terminal,
+          ...(hint ? { repairHint: hint } : {}),
         },
       })
     }
   }
   return out
+}
+
+// RFC-057: pick the most-recent review or clarify node_run that fits the
+// requested shape so the Diagnose Panel can prepopulate the repair option
+// preview. Best-effort: returns `null` when no candidate is found.
+async function findRepairHint(
+  db: DbClient,
+  taskId: string,
+  mode: 'review-awaiting' | 'clarify-awaiting' | 'terminal-non-done',
+): Promise<{ kind: 'review' | 'clarify'; nodeRunId: string } | null> {
+  const snapRows = await db
+    .select({ snap: tasks.workflowSnapshot })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (snapRows.length === 0) return null
+  let nodes: Array<{ id?: string; kind?: string }> = []
+  try {
+    const parsed = JSON.parse(snapRows[0]!.snap) as { nodes?: unknown }
+    if (Array.isArray(parsed?.nodes)) nodes = parsed.nodes as typeof nodes
+  } catch {
+    return null
+  }
+  const reviewIds = new Set<string>()
+  const clarifyIds = new Set<string>()
+  for (const n of nodes) {
+    if (typeof n?.id !== 'string' || typeof n?.kind !== 'string') continue
+    if (n.kind === 'review') reviewIds.add(n.id)
+    if (n.kind === 'clarify' || n.kind === 'clarify-cross-agent') clarifyIds.add(n.id)
+  }
+  if (reviewIds.size === 0 && clarifyIds.size === 0) return null
+
+  if (mode === 'review-awaiting' && reviewIds.size > 0) {
+    const rows = await db
+      .select({ id: nodeRuns.id })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.status, 'awaiting_review'),
+          inArray(nodeRuns.nodeId, [...reviewIds]),
+        ),
+      )
+      .limit(1)
+    if (rows.length > 0) return { kind: 'review', nodeRunId: rows[0]!.id }
+  }
+  if (mode === 'clarify-awaiting' && clarifyIds.size > 0) {
+    const rows = await db
+      .select({ id: nodeRuns.id })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.status, 'awaiting_human'),
+          inArray(nodeRuns.nodeId, [...clarifyIds]),
+        ),
+      )
+      .limit(1)
+    if (rows.length > 0) return { kind: 'clarify', nodeRunId: rows[0]!.id }
+  }
+  if (mode === 'terminal-non-done') {
+    const targetSet = new Set<string>([...reviewIds, ...clarifyIds])
+    if (targetSet.size === 0) return null
+    const rows = await db
+      .select({ id: nodeRuns.id, nodeId: nodeRuns.nodeId, status: nodeRuns.status })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          inArray(nodeRuns.status, ['failed', 'canceled', 'interrupted', 'exhausted']),
+          inArray(nodeRuns.nodeId, [...targetSet]),
+        ),
+      )
+    if (rows.length === 0) return null
+    const row = rows.find((r) => reviewIds.has(r.nodeId)) ?? rows[0]!
+    return {
+      kind: reviewIds.has(row.nodeId) ? 'review' : 'clarify',
+      nodeRunId: row.id,
+    }
+  }
+  return null
 }
 
 export async function runStuckTaskDetector(
@@ -256,7 +352,7 @@ export async function runStuckTaskDetector(
   const now = (args.now ?? Date.now)()
   const stuckMs = args.stuckThresholdMs ?? DEFAULT_STUCK_THRESHOLD_MS
   const pendingMs = args.pendingThresholdMs ?? DEFAULT_PENDING_THRESHOLD_MS
-  const candidates = await loadCandidates(args.db)
+  const candidates = await loadCandidates(args.db, args.taskIdFilter)
   if (candidates.length === 0) {
     return { scanned: 0, newAlerts: 0, promotedAlerts: 0, resolvedAlerts: 0, openAlerts: [] }
   }

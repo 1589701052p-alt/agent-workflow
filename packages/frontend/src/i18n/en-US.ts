@@ -847,11 +847,13 @@ export const enUS: Resources = {
       close: 'Close',
       loading: 'Running invariant scan…',
       empty: 'No open lifecycle alerts for this task.',
+      detailDisclosureLabel: 'Show detail',
       col: {
         rule: 'Rule',
         severity: 'Severity',
         detectedAt: 'Detected',
         detail: 'Detail',
+        actions: 'Actions',
       },
       severity: {
         warning: 'Warning',
@@ -869,6 +871,28 @@ export const enUS: Resources = {
         S2: 'Task awaiting_human with no open clarify_session',
         S3: 'Task running but every node_run is terminal',
         S4: 'Task pending without scheduler pickup',
+      },
+      repair: {
+        openButton: 'Repair…',
+        dialogTitle: 'Repair lifecycle alert ({{rule}})',
+        confirmTitle: 'Confirm repair action',
+        confirmLead: 'You are about to apply: {{option}}.',
+        confirmApply: 'Apply',
+        applying: 'Applying…',
+        cancel: 'Cancel',
+        next: 'Next',
+        loading: 'Loading repair options…',
+        empty: 'No repair options are available for this alert.',
+        optionPickerLabel: 'Choose a repair option',
+        destructive: 'Destructive',
+        risk: {
+          low: 'Low risk',
+          medium: 'Medium risk',
+          high: 'High risk',
+        },
+        unavailable: {
+          generic: 'This option is not available right now.',
+        },
       },
     },
     reviewButton: 'Review',
@@ -1865,5 +1889,203 @@ export const enUS: Resources = {
   },
   detail: {
     memories: 'Memories',
+  },
+  diagnose: {
+    repair: {
+      R1: {
+        approveRun: {
+          label: 'Mark the review node_run as done',
+          desc: 'The doc is already approved but the node_run is stuck in awaiting_review. Push the node_run to done so the scheduler resumes.',
+        },
+        unapproveDoc: {
+          label: 'Revert the doc_version approval',
+          desc: 'The doc should not have been approved — set its decision back to pending so the review cycle continues.',
+        },
+        markTaskFailed: {
+          label: 'Mark task as failed',
+          desc: 'The task can no longer recover. Mark it failed so the user can launch a fresh task.',
+        },
+        unavailable: {
+          detailDrift: 'Alert detail no longer matches reality — re-scan first.',
+          docNotApproved: 'The referenced doc_version is no longer approved.',
+          runAlreadyDone: 'The node_run is already done; nothing to push.',
+          taskTerminal: 'Task is already terminal — no need to mark failed.',
+        },
+      },
+      R2: {
+        demoteRunToAwaiting: {
+          label: 'Demote done review node_run back to awaiting_review',
+          desc: 'The node_run is done but no approved doc exists. Demote it so the user can decide again.',
+        },
+        markTaskFailed: {
+          label: 'Mark task as failed',
+          desc: 'Give up on producing an approved doc and fail the task.',
+        },
+        unavailable: {
+          detailDrift: 'Alert detail no longer matches reality.',
+          runNotDone: 'The referenced node_run is no longer done.',
+          taskTerminal: 'Task is already terminal.',
+        },
+      },
+      C1: {
+        resumeRun: {
+          label: 'Push clarify node_run to done',
+          desc: 'The session is already closed but the run is stuck in awaiting_human. Advance the run so the scheduler picks up.',
+        },
+        reopenSession: {
+          label: 'Reopen the clarify_session',
+          desc: 'The run still needs an answer — reopen the session so the user can keep responding.',
+        },
+        unavailable: {
+          detailDrift: 'Alert detail no longer matches reality.',
+          runNotAwaitingHuman: 'The node_run is no longer awaiting_human.',
+          sessionNotClosed: 'The session is still open — C1 no longer applies.',
+        },
+      },
+      T1: {
+        demoteTask: {
+          label: 'Demote task back to running',
+          desc: 'No node_run is awaiting_review, so the task should not be parked there. Demote it back to running so the scheduler can pick up.',
+        },
+        resurrectReviewRun: {
+          label: 'Resurrect a terminated review node_run',
+          desc: 'A review run was interrupted but is still the best candidate. Push it back to awaiting_review so the user can keep reviewing.',
+          unavailable: {
+            noCandidate: 'No review node_run candidate found to resurrect.',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingReview: 'Task is no longer awaiting_review.',
+        },
+      },
+      T2: {
+        demoteTask: {
+          label: 'Demote task back to running',
+          desc: 'No clarify node_run is awaiting_human. Demote the task so the scheduler picks up the next node.',
+        },
+        resurrectClarifyRun: {
+          label: 'Resurrect a terminated clarify node_run',
+          desc: 'A clarify run was interrupted while a session is still open. Push the run back to awaiting_human so the user can finish answering.',
+          unavailable: {
+            noCandidate: 'No clarify node_run candidate found to resurrect.',
+            noOpenSession: 'No open clarify_session exists for the candidate run.',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingHuman: 'Task is no longer awaiting_human.',
+        },
+      },
+      T3: {
+        demoteTask: {
+          label: 'Demote task back to running',
+          desc: 'An output node has no done node_run yet, so the task should not be marked done. Demote it so the scheduler finishes the remaining nodes.',
+        },
+        markTaskFailed: {
+          label: 'Mark task as failed',
+          desc: 'If the output node cannot produce, fail the task outright.',
+        },
+        unavailable: {
+          taskNotDone: 'Task is no longer in the done state.',
+        },
+      },
+      U1: {
+        cancelOlderKeepNewest: {
+          label: 'Keep newest active run, cancel the rest',
+          desc: 'Multiple active runs exist on the same node — keep the one with the latest startedAt, mark the rest canceled.',
+        },
+        cancelNewerKeepOldest: {
+          label: 'Keep oldest active run, cancel the rest',
+          desc: 'Multiple active runs exist on the same node — keep the one with the earliest startedAt, mark the rest canceled.',
+        },
+        unavailable: {
+          detailMissingIds: 'Alert detail is missing the run-id list and cannot disambiguate.',
+          notMultipleActive: 'No multiple-active state remains.',
+        },
+      },
+      CR1: {
+        acknowledge: {
+          label: 'Acknowledge (no DB change)',
+          desc: 'Resolve the alert without modifying any state. Use this when the situation has already been handled out-of-band.',
+        },
+        retryDesignerRerun: {
+          label: 'Retry the designer node',
+          desc: 'Reset the designer node_run to pending so the scheduler reruns it.',
+        },
+        unavailable: {
+          taskNotFailed: 'Task has not entered failed yet — CR-1 retry does not apply.',
+        },
+      },
+      S1: {
+        recreateDocVersion: {
+          label: 'Re-dispatch review node to recreate doc_version',
+          desc: 'The task is stuck in awaiting_review without a pending doc — re-dispatch the review node to regenerate one.',
+        },
+        demoteTask: {
+          label: 'Demote task back to running',
+          desc: 'If recreating the doc is not viable, demote the task so the user decides next steps.',
+        },
+        unavailable: {
+          taskNotAwaitingReview: 'Task is no longer awaiting_review — S1 no longer applies.',
+        },
+      },
+      S2: {
+        demoteTask: {
+          label: 'Demote task back to running',
+          desc: 'If the clarify session cannot be recovered, demote the task back to running.',
+        },
+        reopenSession: {
+          label: 'Reopen the clarify_session',
+          desc: 'A closed clarify_session can still be answered. Reopen it for the user.',
+          unavailable: {
+            noClosedSession: 'No closed clarify_session available to reopen.',
+            sessionAlreadyOpen: 'A clarify_session is already open — S2 no longer applies.',
+            noAwaitingRun: 'No clarify node_run is currently awaiting_human.',
+          },
+        },
+        unavailable: {
+          taskNotAwaitingHuman: 'Task is no longer awaiting_human — S2 no longer applies.',
+        },
+      },
+      S3: {
+        resurrectReviewRun: {
+          label: 'Resurrect a terminated review run to awaiting_review',
+          desc: 'Task is running but every node_run is terminal. A review run can be pushed back so the user keeps reviewing.',
+          unavailable: {
+            noCandidate: 'No review node_run candidate found.',
+          },
+        },
+        resurrectClarifyRun: {
+          label: 'Resurrect a terminated clarify run to awaiting_human',
+          desc: 'Task is running but every node_run is terminal. A clarify run can be pushed back so the user keeps answering.',
+          unavailable: {
+            noCandidate: 'No clarify node_run candidate found.',
+          },
+        },
+        demoteTask: {
+          label: 'Demote task to interrupted',
+          desc: 'No node_run can be revived — demote the task so the user decides whether to resume.',
+        },
+        markTaskFailed: {
+          label: 'Mark task as failed',
+          desc: 'The task cannot recover; mark it failed directly.',
+        },
+        unavailable: {
+          taskNotRunning: 'Task is no longer in the running state.',
+        },
+      },
+      S4: {
+        kickTask: {
+          label: 'Kick the scheduler to pick this task up',
+          desc: 'Task has been pending too long — nudge the scheduler.',
+        },
+        cancelTask: {
+          label: 'Cancel the task',
+          desc: 'Stop expecting this task to start and cancel it outright.',
+        },
+        unavailable: {
+          taskNotPending: 'Task is no longer pending.',
+        },
+      },
+    },
   },
 }
