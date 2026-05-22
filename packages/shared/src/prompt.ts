@@ -239,6 +239,22 @@ const BUILTIN_VARS = new Set([
 ])
 
 /**
+ * System ports the framework injects via DEDICATED prompt sections instead of
+ * the generic `## ${port_name}` auto-append loop. They appear in
+ * `definition.edges` as system-channel targets (RFC-023 clarify channel /
+ * RFC-056 cross-clarify channel) so the canvas can render handles + the
+ * scheduler can track wiring, but the actual prompt content arrives via the
+ * `## Clarify Q&A — Prior Rounds` / `## External Feedback` blocks rendered
+ * below. Skipping these here keeps the auto-append from emitting empty,
+ * misleading `## __port_name__` headers that make the human reader (and
+ * the agent) think the cross-channel content is missing.
+ */
+const SYSTEM_PORT_NAMES = new Set<string>([
+  '__clarify_response__', // RFC-023 self-clarify answers target
+  '__external_feedback__', // RFC-056 cross-clarify designer feedback target
+])
+
+/**
  * Compose the user-prompt string sent to opencode for one node invocation:
  *
  *   1. Node-level template with `{{port_name}}` + built-in substitutions.
@@ -324,6 +340,14 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     // RFC-026: inline mode — skip the `## ${port}` auto-append for the same
     // reason input substitution above drops to ''.
     if (inlineMode) continue
+    // System ports (`__clarify_response__`, `__external_feedback__`, etc.)
+    // are framework-injected via dedicated prompt blocks below
+    // (`## Clarify Q&A — Prior Rounds (Answers)` / `## External Feedback`),
+    // not via real edge dataflow. Rendering them as `## __port_name__`
+    // sections produces empty / misleading headers that imply the
+    // cross-clarify or self-clarify content is missing when it's actually
+    // present further down. Skip the auto-append entry for them.
+    if (SYSTEM_PORT_NAMES.has(name)) continue
     sections += `\n\n## ${name}\n${content}`
   }
 
