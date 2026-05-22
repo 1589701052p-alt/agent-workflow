@@ -29,6 +29,7 @@ import {
   findClarifyNodeForAgent,
   findCrossClarifyNodeForQuestioner,
   findDesignerNodeForCrossClarify,
+  findQuestionerNodeForCrossClarify,
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -47,7 +48,7 @@ import {
 import {
   buildExternalFeedbackContext,
   createCrossClarifySession,
-  dispatchCrossClarifyNode,
+  hasPersistentStop,
 } from '@/services/crossClarify'
 import {
   decideResumeSessionId,
@@ -712,29 +713,48 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
 
   if (node.kind === 'clarify-cross-agent') {
     // RFC-056: cross-clarify nodes are activated by the questioner emitting
-    // <workflow-clarify> (the runner forwards into createCrossClarifySession),
-    // EXCEPT when this node already has a persistent directive='stop' session
-    // — in that case the scheduler short-circuits the dispatch by marking
-    // the node_run done so the workflow keeps moving and the questioner's
-    // own cascade rerun picks up the STOP CLARIFYING anchor via the
-    // cross-clarify path on the questioner side.
-    const stopRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
-    const res = await dispatchCrossClarifyNode({
-      db,
-      taskId,
-      crossClarifyNodeId: node.id,
-      nodeRunId: stopRunId,
-      definition,
-    })
-    if (res.kind === 'short-circuit-stop') {
-      broadcastNodeStatus(taskId, stopRunId, node.id, 'done')
-      return { kind: 'ok', summary: '', message: 'cross-clarify-persistent-stop' }
+    // <workflow-clarify> — the runner forwards into createCrossClarifySession
+    // which mints a fresh node_run row and parks it at 'awaiting_human'. The
+    // scheduler should NOT eagerly insert a pending row on every scan; doing
+    // so accumulates orphan pending rows (one per scheduler tick, the user
+    // saw 21 pile up on a parked task) because nothing consumes them — the
+    // runner path always inserts its OWN row via createCrossClarifySession
+    // rather than upgrading whatever the scheduler pre-baked.
+    //
+    // Two legitimate scheduler responsibilities remain:
+    //   1. Persistent-stop short-circuit: if this node has a prior
+    //      directive='stop' session, mark a fresh done row so cascade
+    //      reruns of the cross-clarify branch can advance past it without
+    //      parking awaiting_human.
+    //   2. Missing-questioner runtime defense: validator should catch
+    //      this earlier, but if the workflow snapshot has no questioner
+    //      wired, fail explicitly.
+    //
+    // For the common case (no stop, has questioner), do NOTHING — the
+    // runner will create the node_run when the questioner emits clarify.
+    // If a live row already exists (pending or awaiting_human) from a
+    // prior runner-side creation, also do nothing — idempotency guard.
+    const liveRows = await db
+      .select({ status: nodeRuns.status })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.nodeId, node.id),
+          eq(nodeRuns.iteration, iteration),
+        ),
+      )
+    const hasLive = liveRows.some((r) => r.status === 'pending' || r.status === 'awaiting_human')
+    if (hasLive) {
+      return { kind: 'ok', summary: '', message: 'cross-clarify-live-row-exists' }
     }
-    if (res.kind === 'no-questioner') {
-      // Validator should have flagged; defensive runtime fail.
+    // Validator runtime defense: a node without a questioner means the
+    // workflow is malformed — fail and let the user see it in the UI.
+    if (findQuestionerNodeForCrossClarify(definition, node.id) === undefined) {
+      const failId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
       await setNodeRunStatus({
         db,
-        nodeRunId: stopRunId,
+        nodeRunId: failId,
         to: 'failed',
         allowedFrom: ['pending'],
         reason: 'cross-clarify-input-source-missing-at-runtime',
@@ -746,10 +766,28 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         message: 'cross-clarify-input-source-missing-at-runtime',
       }
     }
-    // 'awaiting' — leave the freshly-minted pending node_run; the runner
-    // path will park it via createCrossClarifySession when the questioner
-    // emits <workflow-clarify>. The pending row is fine for the moment —
-    // it will be replaced (or upgraded to awaiting_human) by the runner.
+    // Persistent-stop check: if a prior directive='stop' session exists for
+    // this cross-clarify node, mint a done row immediately so the workflow
+    // advances past this point without parking awaiting_human.
+    const stopped = await hasPersistentStop(db, taskId, node.id)
+    if (stopped) {
+      const stopRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+      await setNodeRunStatus({
+        db,
+        nodeRunId: stopRunId,
+        to: 'done',
+        allowedFrom: ['pending'],
+        reason: 'cross-clarify-persistent-stop',
+        extra: { finishedAt: Date.now() },
+      })
+      broadcastNodeStatus(taskId, stopRunId, node.id, 'done')
+      return { kind: 'ok', summary: '', message: 'cross-clarify-persistent-stop' }
+    }
+    // Common path: no live row, no persistent stop, questioner valid. Don't
+    // pre-create — the runner's createCrossClarifySession will create a row
+    // when the questioner emits <workflow-clarify>. Return ok so the
+    // dispatcher marks this node "scheduled for this pass"; the lifecycle
+    // hand-off to awaiting_human happens later via the runner path.
     return { kind: 'ok', summary: '', message: '' }
   }
 
@@ -2672,17 +2710,34 @@ function buildScopeUpstreams(
   const ids = new Set(scopeNodes.map((n) => n.id))
   const m = new Map<string, string[]>()
   for (const n of scopeNodes) m.set(n.id, [])
+  // Build a quick node-kind lookup so the channel-edge skip can
+  // distinguish RFC-023 clarify targets (skip the edge — clarify nodes
+  // are dispatched out-of-band by the runner) from RFC-056 cross-clarify
+  // targets (KEEP the edge — the cross-clarify node legitimately
+  // depends on the questioner reaching a terminal state).
+  const kindById = new Map<string, string>()
+  for (const n of scopeNodes) kindById.set(n.id, n.kind)
   for (const e of edges) {
     if (!ids.has(e.target.nodeId)) continue
     if (!ids.has(e.source.nodeId)) continue
-    // RFC-023 + RFC-056: clarify-channel edges are not dataflow deps;
-    // they're out-of-band, handled by services/clarify.ts /
-    // services/crossClarify.ts. Skipping them prevents cycles
-    // (RFC-023: agent → clarify → agent; RFC-056: questioner ↔ cross →
-    // designer) and keeps these nodes off the upstream list (answers /
-    // External Feedback arrive via prompt injection, not via the edges).
+    // RFC-023: agent.__clarify__ → clarify.questions is a channel edge
+    // (clarify node is dispatched by the runner via createClarifySession,
+    // not by the scheduler's dataflow walk); skip to prevent agent→clarify
+    // → agent cycles. RFC-056 cross-clarify TARGETS are NOT skipped here:
+    // a cross-clarify node legitimately waits for its questioner to
+    // complete before runtime activates it (see 2026-05-22 bug: skipping
+    // this edge made cross-clarify a no-upstream leaf, dispatcher
+    // re-fired it every scheduler tick, accumulating orphan pending rows).
+    if (e.source.portName === '__clarify__') {
+      const tgtKind = kindById.get(e.target.nodeId)
+      if (tgtKind === 'clarify') continue
+      // tgtKind === 'clarify-cross-agent' → fall through, KEEP edge as
+      // dataflow dep so cross-clarify waits for questioner.
+    }
+    // Other channel edges (RFC-023 answer / RFC-056 back-channels) stay
+    // skipped — they're injected via prompt context, not consumed as
+    // dataflow inputs.
     if (
-      e.source.portName === '__clarify__' ||
       e.target.portName === '__clarify_response__' ||
       e.target.portName === '__external_feedback__' ||
       e.source.portName === 'to_designer' ||
