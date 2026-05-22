@@ -646,7 +646,16 @@ describe('rule 4b: review node (RFC-005)', () => {
     expect(codes).toContain('review-rerunnable-out-of-scope')
   })
 
-  test('warning: rerunnableOnReject empty (default would have been non-empty)', () => {
+  test('rerunnableOnReject empty does NOT emit `review-rerunnable-empty-on-reject` — runtime always re-runs direct upstream', () => {
+    // 2026-05-22 UI bug fix: this warning used to fire when
+    // rerunnableOnReject was empty, with the misleading message
+    // "reject will have nothing to re-run". But the runtime
+    // (services/review.ts:1254 — "direct upstream always rerunnable,
+    // regardless of config") always adds dv.sourceNodeId into the rerun
+    // set, so empty is fully functional. The warning had no semantic
+    // value (false claim + spurious noise) and was removed; this test
+    // pins the code to never fire so a regression that reinstates it
+    // shows up immediately.
     const designer = agentWithKinds('designer', ['design'], { design: 'markdown' })
     const def = makeDef({
       $schema_version: 2,
@@ -663,9 +672,7 @@ describe('rule 4b: review node (RFC-005)', () => {
     })
     const res = validateWorkflowDef(def, { agents: [designer], skills: [] })
     const empty = res.issues.find((i) => i.code === 'review-rerunnable-empty-on-reject')
-    expect(empty).toBeDefined()
-    expect(empty?.severity).toBe('warning')
-    // Warning alone does not flip ok to false.
+    expect(empty).toBeUndefined()
     expect(res.ok).toBe(true)
   })
 

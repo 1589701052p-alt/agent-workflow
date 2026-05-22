@@ -638,8 +638,14 @@ export function validateWorkflowDef(
   // - rerunnableOnReject / rerunnableOnIterate must be subsets of the set of
   //   nodes reachable upstream from the review's input node (BFS along
   //   reversed edges).
-  // - rerunnableOnReject empty → warning (default is non-empty; user-set
-  //   empty likely is a misconfiguration).
+  // - rerunnableOnReject empty: NOT a warning. The runtime
+  //   (`review.ts:1254 — "direct upstream always rerunnable, regardless
+  //   of config"`) always adds the review's direct upstream into the
+  //   rerun set, so an empty array is fully functional (reject re-runs
+  //   the direct upstream agent). The legacy warning here told users
+  //   "reject will have nothing to re-run" which is a false claim about
+  //   runtime behavior — see 2026-05-22 UI bug report. Users who want
+  //   transitive cascade still list extra ancestor nodes explicitly.
   {
     const reverseAdj = new Map<string, string[]>()
     for (const e of edges) {
@@ -728,14 +734,8 @@ export function validateWorkflowDef(
           })
         }
       }
-      if (rerunReject.length === 0) {
-        issues.push({
-          code: 'review-rerunnable-empty-on-reject',
-          message: `review node '${node.id}' rerunnableOnReject is empty — reject will have nothing to re-run`,
-          pointer: node.id,
-          severity: 'warning',
-        })
-      }
+      // (rerunnableOnReject empty is intentional + functional — runtime
+      //  re-runs the direct upstream regardless. No warning emitted.)
     }
   }
 
