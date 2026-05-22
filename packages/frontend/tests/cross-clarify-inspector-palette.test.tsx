@@ -125,6 +125,69 @@ describe('RFC-056 NodeInspector — clarify-cross-agent', () => {
   })
 })
 
+// Locks the parity between same-node clarify (RFC-023) and cross-clarify
+// (RFC-056) inspector layouts: the cross-clarify panel must surface the same
+// read-only status fields (linked questioner / linked designer / in-loop)
+// the same-node clarify panel exposes. Without these the two detail panels
+// drift apart (user-reported regression 2026-05-22). If any of these go red
+// the inspector lost a status field — restore before relaxing the lock.
+describe('RFC-056 NodeInspector parity with RFC-023 clarify — status fields', () => {
+  test('missing wiring: shows linked-questioner-missing + linked-designer-missing + in-loop-warning', () => {
+    const def = mkDef()
+    renderInspector(def, vi.fn())
+    expect(
+      document.querySelector('[data-testid="cross-clarify-linked-questioner-missing"]'),
+    ).not.toBeNull()
+    expect(
+      document.querySelector('[data-testid="cross-clarify-linked-designer-missing"]'),
+    ).not.toBeNull()
+    expect(document.querySelector('[data-testid="cross-clarify-in-loop-warning"]')).not.toBeNull()
+  })
+
+  test('shows linked-questioner / linked-designer chips when their edges exist, and in-loop chip when wrapped', () => {
+    const def: WorkflowDefinition = {
+      $schema_version: 4,
+      inputs: [],
+      nodes: [
+        { id: 'q1', kind: 'agent-single' } as unknown as WorkflowNode,
+        { id: 'd1', kind: 'agent-single' } as unknown as WorkflowNode,
+        { id: 'cc1', kind: 'clarify-cross-agent', title: '', description: '' },
+        {
+          id: 'loop1',
+          kind: 'wrapper-loop',
+          nodeIds: ['cc1'],
+          maxIterations: 3,
+          exitCondition: { kind: 'port-empty' },
+        } as unknown as WorkflowNode,
+      ],
+      edges: [
+        {
+          id: 'e_q_ask',
+          source: { nodeId: 'q1', portName: '__clarify__' },
+          target: { nodeId: 'cc1', portName: 'questions' },
+        },
+        {
+          id: 'e_cc_to_d',
+          source: { nodeId: 'cc1', portName: 'to_designer' },
+          target: { nodeId: 'd1', portName: '__external_feedback__' },
+        },
+      ],
+      outputs: [],
+    }
+    renderInspector(def, vi.fn())
+    const q = document.querySelector(
+      '[data-testid="cross-clarify-linked-questioner"]',
+    ) as HTMLElement | null
+    const d = document.querySelector(
+      '[data-testid="cross-clarify-linked-designer"]',
+    ) as HTMLElement | null
+    expect(q?.textContent).toBe('q1')
+    expect(d?.textContent).toBe('d1')
+    expect(document.querySelector('[data-testid="cross-clarify-in-loop"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="cross-clarify-in-loop-warning"]')).toBeNull()
+  })
+})
+
 describe('RFC-056 palette catalog', () => {
   test('buildPalette includes a clarify-cross-agent item in the Human section', () => {
     const sections = buildPalette([], (key) => key)

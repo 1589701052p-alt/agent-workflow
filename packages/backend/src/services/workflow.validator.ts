@@ -866,6 +866,7 @@ export function validateWorkflowDef(
       list.push(e.source.nodeId)
       reverseAdj.set(e.target.nodeId, list)
     }
+    const crossLoopMembership = buildLoopMembership(nodes)
     for (const node of nodes) {
       if (node.kind !== 'clarify-cross-agent') continue
 
@@ -923,6 +924,20 @@ export function validateWorkflowDef(
         issues.push({
           code: 'cross-clarify-manual-edge-missing',
           message: `clarify-cross-agent node '${node.id}' has no outbound edge on 'to_designer' port; submit will have no designer to trigger a rerun on`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // warning: not inside a wrapper-loop (mirrors RFC-023 same-node
+      // 'clarify-no-iteration-cap'). Without an enclosing loop's
+      // max_iterations the questioner can keep raising clarify rounds and
+      // never converge — the editor's cross-clarify inspector surfaces the
+      // same hint via the In-Loop status chip.
+      if (!crossLoopMembership.has(node.id)) {
+        issues.push({
+          code: 'cross-clarify-no-iteration-cap',
+          message: `clarify-cross-agent node '${node.id}' is not inside a wrapper-loop — questioner may keep asking indefinitely; consider wrapping in a wrapper-loop with max_iterations`,
           pointer: node.id,
           severity: 'warning',
         })

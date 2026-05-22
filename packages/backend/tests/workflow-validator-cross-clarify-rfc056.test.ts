@@ -266,6 +266,64 @@ describe('RFC-056 cross-clarify validator rules', () => {
     expect(res.ok).toBe(true)
   })
 
+  // RFC-056 post-RFC patch — mirrors RFC-023 'clarify-no-iteration-cap'. The
+  // inspector's wrapper-loop status chip ([[cross-clarify-no-iteration-cap]])
+  // is backed by the same rule on both clarify kinds. If you tighten/loosen
+  // this rule, also update the same-node clarify branch so the parity holds.
+  test('cross-clarify-no-iteration-cap (warning): cross-clarify not inside a wrapper-loop', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        ...buildAutoEdges('q1', 'cc1'),
+        buildManualToDesigner('cc1', 'd1'),
+      ],
+    })
+    const res = validateWorkflowDef(def, { agents: [designer, questioner], skills: [] })
+    const warningIssue = res.issues.find((i) => i.code === 'cross-clarify-no-iteration-cap')
+    expect(warningIssue).toBeDefined()
+    expect(warningIssue?.severity).toBe('warning')
+    // warnings only — task can still launch.
+    expect(res.ok).toBe(true)
+  })
+
+  test('cross-clarify-no-iteration-cap NOT emitted when cross-clarify is wrapped by a wrapper-loop', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+        {
+          id: 'loop1',
+          kind: 'wrapper-loop',
+          nodeIds: ['cc1'],
+          maxIterations: 3,
+          exitCondition: { kind: 'port-empty' },
+        } as unknown as WorkflowDefinition['nodes'][number],
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        ...buildAutoEdges('q1', 'cc1'),
+        buildManualToDesigner('cc1', 'd1'),
+      ],
+    })
+    const res = validateWorkflowDef(def, { agents: [designer, questioner], skills: [] })
+    const codes = res.issues.map((i) => i.code)
+    expect(codes).not.toContain('cross-clarify-no-iteration-cap')
+  })
+
   test('topology cycle exemption: feedback loop via cross-clarify does NOT trigger topology-cycle', () => {
     // The feedback edges (cross → designer + designer → ... → questioner → cross)
     // form a cycle. The validator must NOT flag it as a topology error since the

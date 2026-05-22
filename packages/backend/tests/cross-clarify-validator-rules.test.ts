@@ -38,16 +38,20 @@ const CROSS_CLARIFY_RULE_CODES = [
   'cross-clarify-input-source-missing',
   'cross-clarify-target-not-agent-single',
   'cross-clarify-has-downstream',
-  // WARNING (4)
+  // WARNING (5) — RFC-056 §2.1.15 originally shipped 4 warnings (3 fail + 4
+  // warning = 7); `cross-clarify-no-iteration-cap` is a post-RFC patch that
+  // mirrors RFC-023's same-node `clarify-no-iteration-cap` so the inspector's
+  // wrapper-loop status chip is backed by the same rule on both clarify kinds.
   'cross-clarify-manual-edge-missing',
   'cross-clarify-target-not-ancestor',
   'cross-clarify-auto-edge-deleted',
   'cross-clarify-self-review-warning',
+  'cross-clarify-no-iteration-cap',
 ] as const
 
-describe('RFC-056 C6 — 7 validator rules enumeration', () => {
-  test('exactly 7 cross-clarify rules are declared (matches RFC §2.1.15 contract)', () => {
-    expect(CROSS_CLARIFY_RULE_CODES).toHaveLength(7)
+describe('RFC-056 C6 — cross-clarify validator rules enumeration', () => {
+  test('cross-clarify rules: 3 fail + 5 warning (RFC §2.1.15 contract + no-iteration-cap patch)', () => {
+    expect(CROSS_CLARIFY_RULE_CODES).toHaveLength(8)
   })
 
   for (const code of CROSS_CLARIFY_RULE_CODES) {
