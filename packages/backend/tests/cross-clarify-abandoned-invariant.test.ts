@@ -20,7 +20,7 @@
 // If any of these go red the abandoned-state safety net for cross-clarify
 // is broken — investigate before relaxing.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
