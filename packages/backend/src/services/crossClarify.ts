@@ -638,14 +638,32 @@ export async function triggerDesignerRerun(
   }
 
   // Mint a fresh designer node_run. cross_clarify_iteration increments by 1
-  // off the latest existing value; retry_index resets to 0.
+  // off the latest existing value; retry_index = max(existing top-level rows
+  // at this iteration) + 1 so the scheduler's `isFresherNodeRun` (keyed on
+  // clarifyIteration + retryIndex + id, NOT crossClarifyIteration) ALWAYS
+  // picks the new pending row over any prior done row at the same
+  // clarifyIteration. Without this bump, a designer that ran many self-
+  // clarify rounds + RFC-042 same-session retries (retry_index inflated to,
+  // say, 9) would have its new pending row at retry_index=0 silently
+  // shadowed by the old done row — `latestPerNode` treats the node as
+  // "completed", the scheduler never dispatches the new row, and only the
+  // questioner's cascade-minted row (which DOES use max+1 in
+  // cascadeDownstreamFromDesigner) gets re-executed. See live task
+  // 01KS86DPCSERV7S41GQA5Y81RN + patch-2026-05-23-designer-retry-index.md.
+  const topLevelDesignerRows = designerRows.filter(
+    (r) => r.parentNodeRunId === null && r.iteration === lastDesigner.iteration,
+  )
+  const newDesignerRetryIndex =
+    topLevelDesignerRows.length === 0
+      ? 0
+      : Math.max(...topLevelDesignerRows.map((r) => r.retryIndex)) + 1
   const designerNodeRunId = ulid()
   await args.db.insert(nodeRuns).values({
     id: designerNodeRunId,
     taskId: args.taskId,
     nodeId: args.designerNodeId,
     status: 'pending',
-    retryIndex: 0,
+    retryIndex: newDesignerRetryIndex,
     iteration: lastDesigner.iteration,
     parentNodeRunId: lastDesigner.parentNodeRunId ?? null,
     shardKey: lastDesigner.shardKey ?? null,

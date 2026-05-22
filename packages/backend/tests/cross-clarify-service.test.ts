@@ -627,7 +627,12 @@ describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', 
 })
 
 describe('RFC-056 triggerDesignerRerun', () => {
-  test('mints new designer node_run with cross_clarify_iteration+1, retry_index=0; stamps designer_run_triggered_at', async () => {
+  test('mints new designer node_run with cross_clarify_iteration+1, retry_index=max(existing)+1; stamps designer_run_triggered_at', async () => {
+    // Patch 2026-05-23: retry_index is now max(existing top-level rows at
+    // this iteration) + 1 (not hardcoded 0) so the scheduler's
+    // `isFresherNodeRun` ALWAYS picks the new pending row over any prior
+    // done row at the same clarifyIteration. With a single prior designer
+    // row at retry_index=0 the bump yields retry_index=1.
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     const qRunId = await seedQuestionerRun(db, taskId)
@@ -655,7 +660,7 @@ describe('RFC-056 triggerDesignerRerun', () => {
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, ret.outcome.designerNodeRunId))
     )[0]
     expect(newDesigner?.crossClarifyIteration).toBe(1)
-    expect(newDesigner?.retryIndex).toBe(0)
+    expect(newDesigner?.retryIndex).toBe(1)
     expect(newDesigner?.status).toBe('pending')
 
     // The consumed session has designer_run_triggered_at set.
