@@ -87,29 +87,29 @@ export function Dialog(props: DialogProps): ReactElement | null {
     }
   }, [props.open, props.initialFocusRef])
 
-  // Focus trap — keep Tab / Shift+Tab cycling within the panel.
+  // Focus trap — yank focus back whenever it lands outside the panel.
+  // The previous implementation intercepted Tab/Shift+Tab keydowns and
+  // wrapped at `active === last` / `active === first` boundaries. That
+  // breaks on WebKit (macOS Safari + Playwright webkit) because Safari's
+  // default Tab key skips non-form-control elements — focus walks past
+  // our `last` button into form fields on the page outside the dialog
+  // before the keydown handler ever sees `active === last`, so the trap
+  // never fires. The `focusin` redirect below is the cross-browser
+  // primitive: it activates AFTER focus actually moves, so it works
+  // regardless of what key (or programmatic .focus()) caused the move.
+  // Locked by tests/dialog.test.tsx and e2e/keyboard-flows.spec.ts.
   useEffect(() => {
     if (!props.open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || panelRef.current === null) return
-      const focusables = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
-      if (focusables.length === 0) {
-        e.preventDefault()
-        return
-      }
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      const active = document.activeElement as HTMLElement | null
-      if (e.shiftKey && active === first) {
-        e.preventDefault()
-        last?.focus?.()
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault()
-        first?.focus?.()
-      }
+    const onFocusIn = (e: FocusEvent) => {
+      const panel = panelRef.current
+      if (panel === null) return
+      const target = e.target as Node | null
+      if (target !== null && panel.contains(target)) return
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
+      ;(focusables[0] ?? panel).focus?.()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
   }, [props.open])
 
   if (!props.open) return null

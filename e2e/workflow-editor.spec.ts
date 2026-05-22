@@ -230,11 +230,19 @@ test.describe('RFC-054 W2-3 — workflow editor interactions', () => {
   test('Shift+click extends node selection (xyflow multi-select default)', async ({ page }) => {
     await openEditor(page)
     const nodes = page.locator('.react-flow__node')
-    await nodes.nth(0).click()
+    // `force: true` skips Playwright's actionability hit-test. xyflow
+    // wraps each node with overlapping handle / toolbar layers whose
+    // pointer-events visibility WebKit evaluates more strictly than
+    // Chromium — the center-of-node click target's `elementFromPoint`
+    // returns a handle div, so Playwright's strict hit-test waits 15s
+    // then times out on webkit. We're testing the multi-select
+    // contract (Shift modifier → both nodes get `.selected`), not
+    // pixel-perfect aim — bypassing the hit-test is the right tradeoff.
+    await nodes.nth(0).click({ force: true })
     // xyflow's default multiSelectionKeyCode is 'Shift' (on non-mac) /
     // 'Meta' (on mac). Playwright on darwin maps Shift correctly via
     // the modifier system; the Shift key works cross-platform.
-    await nodes.nth(1).click({ modifiers: ['Shift'] })
+    await nodes.nth(1).click({ force: true, modifiers: ['Shift'] })
     await expect(nodes.nth(0)).toHaveClass(/selected/)
     await expect(nodes.nth(1)).toHaveClass(/selected/)
   })

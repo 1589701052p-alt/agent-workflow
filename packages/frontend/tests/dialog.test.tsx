@@ -139,6 +139,60 @@ describe('<Dialog />', () => {
     expect(document.querySelector('[data-testid="footer-btn"]')).not.toBeNull()
   })
 
+  // Locks the focusin-based focus trap introduced after webkit-nightly
+  // run 26282474062: programmatically moving focus to an element OUTSIDE
+  // the open dialog must be redirected back to the panel's first
+  // focusable. Previously the trap intercepted Tab keydowns at the
+  // `active === last` boundary, which never fired on macOS WebKit (Safari
+  // skips non-form-control elements during native Tab) — focus would
+  // leak out before the keydown branch saw `active === last`. Switching
+  // to `focusin` redirection fixes WebKit AND tightens the contract for
+  // every browser (any caller that calls `outsideButton.focus()` while
+  // the dialog is open gets pulled back, not just Tab navigation).
+  test('focusin redirect: programmatic focus on an outside element snaps back inside the panel', () => {
+    function Probe(): ReactElement {
+      return (
+        <>
+          <button data-testid="outside-btn">Outside</button>
+          <Dialog open onClose={() => {}} title="t">
+            <button data-testid="inside-1">Inside 1</button>
+            <button data-testid="inside-2">Inside 2</button>
+          </Dialog>
+        </>
+      )
+    }
+    render(<Probe />)
+    const outside = document.querySelector<HTMLButtonElement>('[data-testid="outside-btn"]')
+    const panel = document.querySelector<HTMLElement>('[role="dialog"]')
+    expect(outside).not.toBeNull()
+    expect(panel).not.toBeNull()
+    outside?.focus()
+    // happy-dom dispatches `focusin` synchronously from `.focus()`. The
+    // dialog's listener should yank focus to the first focusable in the
+    // panel (which happens to be the built-in dialog__close × button),
+    // NOT leave it on the outside button. We assert "inside the panel"
+    // rather than a specific testid so future header / footer changes
+    // don't drift this lock.
+    const ae = document.activeElement
+    expect(ae).not.toBe(outside)
+    expect(ae).not.toBe(document.body)
+    expect(panel?.contains(ae)).toBe(true)
+  })
+
+  test('focusin redirect: focusing inside the panel is a no-op (does not bounce focus around)', () => {
+    render(
+      <Dialog open onClose={() => {}} title="t">
+        <button data-testid="inside-1">Inside 1</button>
+        <button data-testid="inside-2">Inside 2</button>
+      </Dialog>,
+    )
+    const inside2 = document.querySelector<HTMLButtonElement>('[data-testid="inside-2"]')
+    inside2?.focus()
+    // Must NOT redirect to inside-1 — focus is already inside the panel,
+    // the trap stays out of the way.
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('inside-2')
+  })
+
   test('body overflow is locked while open and restored on close', () => {
     const orig = document.body.style.overflow
     const { unmount } = render(

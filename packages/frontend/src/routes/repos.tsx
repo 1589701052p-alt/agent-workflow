@@ -74,6 +74,12 @@ function ReposPage() {
           type="button"
           className="btn btn--primary"
           data-testid="repos-batch-import-button"
+          // Safari/WebKit doesn't focus <button> on click (only form
+          // controls); without an explicit focus here, the Dialog's
+          // `restoreRef = document.activeElement` captures <body> and
+          // closes can't restore focus to this trigger on webkit.
+          // Locked by e2e/keyboard-flows.spec.ts (Escape→restore-focus).
+          onPointerDown={(e) => e.currentTarget.focus()}
           onClick={() => setBatchImportOpen(true)}
         >
           {t('repos.batchImport.button')}

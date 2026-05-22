@@ -3,6 +3,8 @@
 // either the button or the dialog blows up here.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { setBaseUrl, setToken } from '../src/stores/auth'
@@ -72,6 +74,19 @@ describe('/repos page batch import button (RFC-033)', () => {
     await new Promise((r) => setTimeout(r, 10))
     fireEvent.click(screen.getByTestId('repos-batch-import-button'))
     expect(screen.getByTestId('batch-import-dialog')).toBeTruthy()
+  })
+
+  // Locks in the webkit-nightly fix (run 26282474062): Safari does NOT
+  // focus <button> on click, so without an explicit pointerdown self-
+  // focus, the Dialog's `restoreRef = document.activeElement` captures
+  // <body> and Escape→focus-restore fails. The pointerdown handler is
+  // a one-line trigger-side workaround that keeps the Dialog primitive
+  // unchanged. Sourceless DOM event simulation skipped — happy-dom's
+  // synthetic pointer events don't always reflect the real focus
+  // behavior we're locking, so we assert at the JSX source level.
+  test('trigger button carries onPointerDown self-focus for Safari/WebKit focus restoration', () => {
+    const src = readFileSync(resolve(__dirname, '..', 'src', 'routes', 'repos.tsx'), 'utf8')
+    expect(src).toMatch(/onPointerDown=\{\(e\)\s*=>\s*e\.currentTarget\.focus\(\)\}/)
   })
 
   // Locks in the top-right placement aligned with /agents "新建代理" button
