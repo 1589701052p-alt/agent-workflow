@@ -7,6 +7,7 @@
 //   * v1 (M1 baseline) — minimal shape (input / agent-single / output).
 //   * v2 (RFC-005) — adds 'review' node kind.
 //   * v3 (RFC-023) — adds 'clarify' node kind.
+//   * v4 (RFC-056) — adds 'clarify-cross-agent' node kind.
 //
 // Why fixture files vs. inline literals: the fixture format IS the
 // migration contract. Committing the artifacts means future engineers see
@@ -30,7 +31,7 @@ const FIXTURES_DIR = join(HERE, 'fixtures', 'workflow-schema-versions')
 
 interface Fixture {
   filename: string
-  schemaVersion: 1 | 2 | 3
+  schemaVersion: 1 | 2 | 3 | 4
   raw: unknown
 }
 
@@ -39,10 +40,10 @@ function loadFixtures(): Fixture[] {
   return files.map((filename) => {
     const raw = JSON.parse(readFileSync(join(FIXTURES_DIR, filename), 'utf-8'))
     const v = (raw as { $schema_version: number }).$schema_version
-    if (v !== 1 && v !== 2 && v !== 3) {
+    if (v !== 1 && v !== 2 && v !== 3 && v !== 4) {
       throw new Error(`fixture ${filename}: unexpected $schema_version ${v}`)
     }
-    return { filename, schemaVersion: v as 1 | 2 | 3, raw }
+    return { filename, schemaVersion: v as 1 | 2 | 3 | 4, raw }
   })
 }
 
@@ -89,6 +90,13 @@ describe('RFC-054 W3-3 — workflow schema version compatibility matrix', () => 
     const parsed = WorkflowDefinitionSchema.parse(v3.raw)
     const clarifyNodes = parsed.nodes.filter((n) => n.kind === 'clarify')
     expect(clarifyNodes.length).toBeGreaterThan(0)
+  })
+
+  test('v4 fixture surfaces a `clarify-cross-agent` node kind (RFC-056 invariant)', () => {
+    const v4 = fixtures.find((f) => f.schemaVersion === 4)!
+    const parsed = WorkflowDefinitionSchema.parse(v4.raw)
+    const crossNodes = parsed.nodes.filter((n) => n.kind === 'clarify-cross-agent')
+    expect(crossNodes.length).toBeGreaterThan(0)
   })
 
   test('current schema version constant matches highest supported', () => {

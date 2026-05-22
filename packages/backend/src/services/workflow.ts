@@ -210,6 +210,12 @@ export function migrateDefinitionToLatest(def: WorkflowDefinition): WorkflowDefi
   if (current.$schema_version === 2) {
     current = { ...current, $schema_version: 3 }
   }
+  // RFC-056: pure metadata bump for the new 'clarify-cross-agent' NodeKind.
+  // Old v3 docs never carry the new node, so the upgrade is structurally
+  // safe — same pattern as the v2 → v3 bump that introduced RFC-023 clarify.
+  if (current.$schema_version === 3) {
+    current = { ...current, $schema_version: 4 }
+  }
   if (current.$schema_version !== WORKFLOW_SCHEMA_VERSION) {
     // Forward-compat: an unknown future version (e.g. v4 stored by a newer
     // daemon, read by an older one) round-trips unchanged. The validator

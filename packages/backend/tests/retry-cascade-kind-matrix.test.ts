@@ -34,6 +34,7 @@ const DOWNSTREAM_KINDS_MINT = [
 const DOWNSTREAM_KINDS_SKIP = [
   'review',
   'clarify',
+  'clarify-cross-agent',
   'output',
   'input',
 ] as const satisfies readonly NodeKind[]
@@ -104,6 +105,12 @@ async function seedTaskWithEdge(
         }
       case 'clarify':
         return { id: downstreamNodeId, kind: 'clarify' }
+      case 'clarify-cross-agent':
+        // RFC-056 — cross-clarify shares the non-process retry-cascade
+        // behaviour with RFC-023 clarify (skip placeholder mint). Wiring the
+        // 1-in / 2-out node here just exercises the dispatch path; the
+        // upstream agent's retry never spawns a placeholder on it.
+        return { id: downstreamNodeId, kind: 'clarify-cross-agent' }
       case 'output':
         return { id: downstreamNodeId, kind: 'output' }
       case 'input':

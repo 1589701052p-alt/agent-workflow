@@ -1,5 +1,6 @@
 // P-4-08: workflow YAML import / export.
 
+import { WORKFLOW_SCHEMA_VERSION } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { parse as parseYaml } from 'yaml'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -71,10 +72,10 @@ describe('GET /api/workflows/:id/export', () => {
     expect(parsed.id).toBe(id)
     expect(parsed.name).toBe('Audit Pipeline')
     const def = parsed.definition as Record<string, unknown>
-    // RFC-005 / RFC-023: createWorkflow normalizes incoming v1 → latest on
-    // write, so the YAML export reflects the latest schema even when the
-    // fixture posted v1. Latest as of RFC-023 is 3.
-    expect(def.$schema_version).toBe(3)
+    // RFC-005 / RFC-023 / RFC-056: createWorkflow normalizes incoming v1 →
+    // latest on write, so the YAML export reflects the latest schema even
+    // when the fixture posted v1. Latest tracks WORKFLOW_SCHEMA_VERSION.
+    expect(def.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
   })
 
   test('404 for unknown workflow', async () => {

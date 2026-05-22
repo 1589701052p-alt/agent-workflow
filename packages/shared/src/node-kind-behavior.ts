@@ -172,6 +172,20 @@ export const NODE_KIND_BEHAVIORS = {
     gc: 'gc-with-task',
     shutdown: 'no-op',
   },
+  // RFC-056 — cross-agent clarify shares the same five-dimensional row as
+  // RFC-023 clarify: no process to retry, no time budget to enforce, awaiting_*
+  // rows survive daemon restart (the human is the source of progress), normal
+  // GC, no subprocess to abort on shutdown. The distinct runtime semantics
+  // (multi-source aggregation, reject persistence, designer rerun trigger)
+  // live in services/crossClarify.ts and the scheduler hook, not in this
+  // cross-cutting table.
+  'clarify-cross-agent': {
+    retryCascade: 'skip',
+    limits: 'opt-out',
+    orphanReap: 'leave-alone',
+    gc: 'gc-with-task',
+    shutdown: 'no-op',
+  },
   input: {
     retryCascade: 'skip',
     limits: 'opt-out',

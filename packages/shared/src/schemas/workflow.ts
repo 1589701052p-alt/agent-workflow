@@ -11,13 +11,19 @@
 // kind (agent-initiated clarification questions). v1 / v2 documents stay
 // readable; both upgrade transparently — no clarify node ever appeared in
 // older versions, so the upgrade is purely a metadata bump.
+//
+// RFC-056: $schema_version bumped from 3 to 4 for the new 'clarify-cross-agent'
+// node kind (downstream questioner agent reverse-feeds an upstream designer
+// agent via human-gated submit/reject). v1 / v2 / v3 documents stay readable;
+// the transparent v3 → v4 upgrade lives in the workflow GET path. Old docs
+// never carry the new node kind, so the upgrade is a metadata bump.
 
 import { z } from 'zod'
 
 /** Currently-written schema version. New writes always set this value. */
-export const WORKFLOW_SCHEMA_VERSION = 3
-/** Set of versions GET can return; v1/v2 are read-only and auto-upgraded on access. */
-export const WORKFLOW_SCHEMA_VERSIONS = [1, 2, 3] as const
+export const WORKFLOW_SCHEMA_VERSION = 4
+/** Set of versions GET can return; v1/v2/v3 are read-only and auto-upgraded on access. */
+export const WORKFLOW_SCHEMA_VERSIONS = [1, 2, 3, 4] as const
 
 // --- enums shared across multiple shapes ---
 
@@ -30,6 +36,7 @@ export const NODE_KIND = [
   'wrapper-loop',
   'review', // RFC-005: human-in-the-loop review gate
   'clarify', // RFC-023: agent-initiated clarification questions
+  'clarify-cross-agent', // RFC-056: downstream questioner reverse-feeds upstream designer via human gate
 ] as const
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
@@ -151,7 +158,7 @@ export const WorkflowDefinitionSchema = z.object({
    * read. New writes always set the latest version — the GET path transparently
    * upgrades older docs (see backend services/workflow.ts).
    */
-  $schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  $schema_version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   inputs: z.array(WorkflowInputSchema).default([]),
   nodes: z.array(WorkflowNodeSchema).default([]),
   edges: z.array(WorkflowEdgeSchema).default([]),
@@ -273,3 +280,69 @@ export const ClarifyNodeSchema = z
   })
   .passthrough()
 export type ClarifyNode = z.infer<typeof ClarifyNodeSchema>
+
+// --- RFC-056 Cross-Agent Clarify node ---------------------------------------
+//
+// Leaf node, 1 input port ('questions') + 2 output ports ('to_designer'
+// manual / 'to_questioner' auto). Wired by reverse-drag from the input
+// handle onto a downstream agent-single questioner (auto-mints two edges
+// using the questioner's `__clarify__` + `__clarify_response__` system
+// ports — same mechanism as RFC-023). The third edge — newNode.to_designer
+// → designer.__external_feedback__ — is wired MANUALLY by the user to an
+// agent-single ancestor (the designer agent). The designer's
+// `__external_feedback__` is a system-injected target port (only visible on
+// the canvas while ≥1 cross-clarify manual-edge points to it; never in
+// agent.outputs / DB).
+
+/** Hard-coded port names on the cross-clarify node. Do not rename without
+ *  coordinating with packages/shared/src/clarify-cross.ts + the canvas drag
+ *  helper. */
+export const CROSS_CLARIFY_INPUT_PORT_NAME = 'questions' as const
+export const CROSS_CLARIFY_OUT_TO_DESIGNER_PORT = 'to_designer' as const
+export const CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT = 'to_questioner' as const
+
+/** Agent-side system port synthesised when a cross-clarify manual-edge lands
+ *  on a designer agent. Mirrors the RFC-023 `__clarify_response__` pattern:
+ *  the port exists only in workflow.definition.edges, never in agent.outputs
+ *  / DB. The validator adds it to the agent's inbound port set so edges
+ *  validate cleanly. */
+export const CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT = '__external_feedback__' as const
+
+/**
+ * RFC-056: opencode session reuse mode per re-run direction. Two independent
+ * fields on the cross-clarify node — one for the designer's rerun on submit,
+ * one for the questioner's rerun on reject + cascade. Both inherit RFC-026
+ * semantics (isolated = fresh process every rerun; inline = `--session <id>`).
+ * Missing field is resolved to `'isolated'` via the helper in
+ * shared/clarify-cross.ts (`resolveCrossClarifySessionMode`).
+ */
+export const ClarifyCrossAgentSessionModeSchema = z.enum(['isolated', 'inline'])
+export type ClarifyCrossAgentSessionMode = z.infer<typeof ClarifyCrossAgentSessionModeSchema>
+
+export const ClarifyCrossAgentNodeSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.literal('clarify-cross-agent'),
+    position: XYSchema.optional(),
+    /** Display title in the canvas / inspector. */
+    title: z.string().default(''),
+    /** Free-form description for canvas authors; not used at runtime. */
+    description: z.string().default(''),
+    /** Reserved for future per-user assignment; UI does not expose it in v1. */
+    assignee: z.string().optional(),
+    /**
+     * RFC-056 + RFC-026: opencode session reuse mode for the DESIGNER agent's
+     * rerun triggered when the human submits answers. Optional; missing field
+     * resolves to `'isolated'` (default — fresh opencode process each rerun).
+     */
+    sessionModeForDesigner: ClarifyCrossAgentSessionModeSchema.optional(),
+    /**
+     * RFC-056 + RFC-026: opencode session reuse mode for the QUESTIONER agent's
+     * rerun triggered when the human rejects (or when cascade reset re-dispatches
+     * a persistent-stop questioner). Optional; missing field resolves to
+     * `'isolated'`.
+     */
+    sessionModeForQuestioner: ClarifyCrossAgentSessionModeSchema.optional(),
+  })
+  .passthrough()
+export type ClarifyCrossAgentNode = z.infer<typeof ClarifyCrossAgentNodeSchema>

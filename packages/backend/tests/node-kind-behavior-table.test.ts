@@ -55,6 +55,8 @@ describe('RFC-053 PR-C — NODE_KIND_BEHAVIORS matrix', () => {
       'wrapper-loop',
       'review',
       'clarify',
+      // RFC-056 — cross-agent clarify joins the non-process row.
+      'clarify-cross-agent',
     ]
     const tableKeys = Object.keys(NODE_KIND_BEHAVIORS).sort()
     expect(tableKeys).toEqual(expectedKinds.sort())

@@ -2,7 +2,7 @@
 //
 // LOCKS: a daemon home stopped at an old migration must (a) accept the
 // current migrations folder on startup and apply the missing migrations
-// idempotently, (b) end up with the HEAD schema (all 28 entries in
+// idempotently, (b) end up with the HEAD schema (all 29 entries in
 // `__drizzle_migrations` + all current tables present), and (c) remain
 // operationally functional — a fresh task driven by the scheduler runs
 // through to `done`. A regression in any of these three means existing
@@ -228,10 +228,11 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
   })
   afterEach(() => h?.cleanup())
 
-  test('HEAD journal has 28 entries (sanity — locks the freeze target indices)', () => {
+  test('HEAD journal has 29 entries (sanity — locks the freeze target indices)', () => {
     // If a future migration is added, raise FREEZE_TARGETS' upper index
-    // accordingly or this assertion will block the cascade.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(28)
+    // accordingly or this assertion will block the cascade. RFC-056 bumped
+    // to 29 with migration 0029_rfc056_cross_clarify_sessions.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(29)
   })
 
   for (const target of FREEZE_TARGETS) {

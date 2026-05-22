@@ -3,6 +3,8 @@
 // drag helper / prompt preview pane. No Bun / Node / DB imports — keep this
 // module easy to test in either runtime.
 
+import { z } from 'zod'
+
 import type {
   ClarifyNode,
   ClarifySessionMode,
@@ -17,6 +19,7 @@ import {
 } from './schemas/workflow'
 import {
   ClarifyEnvelopeBodySchema,
+  ClarifyQuestionSchema,
   CLARIFY_MAX_QUESTIONS,
   CLARIFY_MAX_OPTIONS_PER_QUESTION,
   type ClarifyAnswer,
@@ -39,16 +42,35 @@ export interface ParseClarifyEnvelopeResult {
   errors: ClarifyTruncationWarning[]
 }
 
+/** Options accepted by `parseClarifyEnvelopeBody`. RFC-023 self-clarify nodes
+ *  pass nothing (or `maxQuestions: 5`); RFC-056 cross-clarify nodes pass
+ *  `maxQuestions: Number.POSITIVE_INFINITY` to disable the question-count
+ *  truncation entirely. Default preserves RFC-023 behavior byte-for-byte. */
+export interface ParseClarifyEnvelopeOptions {
+  /** Maximum question count before the parser truncates + emits a warning.
+   *  Defaults to {@link CLARIFY_MAX_QUESTIONS} (5). Pass
+   *  `Number.POSITIVE_INFINITY` for the RFC-056 cross-clarify path. */
+  maxQuestions?: number
+}
+
 /**
  * Parse the JSON body found inside `<workflow-clarify>...</workflow-clarify>`.
  * Permissive: questions > MAX are truncated to the first MAX, options > MAX
  * per question are truncated, and each truncation produces a warning. Hard
  * failures (JSON.parse error, missing questions array, empty title, kind not
  * single/multi, options < MIN, options non-string) produce errors and body=null.
+ *
+ * RFC-056: optional `maxQuestions` lifts the question-count cap for the
+ * cross-clarify path. Self-clarify callers pass no opts and keep the legacy
+ * 5-question truncation behavior unchanged.
  */
-export function parseClarifyEnvelopeBody(jsonText: string): ParseClarifyEnvelopeResult {
+export function parseClarifyEnvelopeBody(
+  jsonText: string,
+  opts: ParseClarifyEnvelopeOptions = {},
+): ParseClarifyEnvelopeResult {
   const warnings: ClarifyTruncationWarning[] = []
   const errors: ClarifyTruncationWarning[] = []
+  const maxQuestions = opts.maxQuestions ?? CLARIFY_MAX_QUESTIONS
 
   let raw: unknown
   try {
@@ -79,12 +101,12 @@ export function parseClarifyEnvelopeBody(jsonText: string): ParseClarifyEnvelope
   }
 
   let questions = qList
-  if (questions.length > CLARIFY_MAX_QUESTIONS) {
+  if (questions.length > maxQuestions) {
     warnings.push({
       code: 'clarify-questions-too-many',
-      detail: `got ${questions.length} questions, truncated to ${CLARIFY_MAX_QUESTIONS}`,
+      detail: `got ${questions.length} questions, truncated to ${maxQuestions}`,
     })
-    questions = questions.slice(0, CLARIFY_MAX_QUESTIONS)
+    questions = questions.slice(0, maxQuestions)
   }
 
   const normalised: unknown[] = []
@@ -113,7 +135,18 @@ export function parseClarifyEnvelopeBody(jsonText: string): ParseClarifyEnvelope
     return { body: null, warnings, errors }
   }
 
-  const result = ClarifyEnvelopeBodySchema.safeParse({ questions: normalised })
+  // RFC-056: when `maxQuestions` lifts the question-count cap (cross-clarify
+  // path), the static `.max(CLARIFY_MAX_QUESTIONS)` constraint on
+  // `ClarifyEnvelopeBodySchema` would still reject the array. Build a parser
+  // schema with the dynamic upper bound — questions individually still parse
+  // through `ClarifyQuestionSchema`, so per-question validation is unchanged.
+  const dynamicSchema =
+    maxQuestions === CLARIFY_MAX_QUESTIONS
+      ? ClarifyEnvelopeBodySchema
+      : z.object({
+          questions: z.array(ClarifyQuestionSchema).min(1).max(maxQuestions),
+        })
+  const result = dynamicSchema.safeParse({ questions: normalised })
   if (!result.success) {
     const flat = result.error.flatten()
     for (const issue of result.error.issues) {

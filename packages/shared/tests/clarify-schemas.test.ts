@@ -31,8 +31,11 @@ describe('RFC-023 NODE_KIND + WORKFLOW_SCHEMA_VERSION', () => {
     expect(NodeKindSchema.safeParse('clarify').success).toBe(true)
   })
 
-  test('WORKFLOW_SCHEMA_VERSION bumped to 3 and read-set includes 1/2/3', () => {
-    expect(WORKFLOW_SCHEMA_VERSION).toBe(3)
+  test('WORKFLOW_SCHEMA_VERSION ≥ 3 and read-set includes 1/2/3', () => {
+    // RFC-056 bumped this to 4. Older read-set entries 1/2/3 must remain
+    // accepted for transparent v3 → latest upgrade. The exact current
+    // version is asserted by RFC-056's dedicated cross-clarify test.
+    expect(WORKFLOW_SCHEMA_VERSION).toBeGreaterThanOrEqual(3)
     expect([...WORKFLOW_SCHEMA_VERSIONS]).toContain(1)
     expect([...WORKFLOW_SCHEMA_VERSIONS]).toContain(2)
     expect([...WORKFLOW_SCHEMA_VERSIONS]).toContain(3)

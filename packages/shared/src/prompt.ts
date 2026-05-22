@@ -113,6 +113,42 @@ export interface ClarifyPromptContext {
   currentRoundOnly?: boolean
 }
 
+/**
+ * RFC-056 cross-clarify-driven re-run context (designer side).
+ *
+ * Filled when an agent is being re-spawned because the cross-clarify scheduler
+ * has aggregated submitted answers from one or more downstream questioner
+ * nodes and is now triggering the designer rerun. All fields are pre-rendered
+ * strings — the structured-to-markdown serialization lives in
+ * shared/clarify-cross.ts so this module stays a pure substitution engine.
+ *
+ * Builtin tokens populated from this context:
+ *   {{__external_feedback__}}            ← block (markdown body produced by
+ *                                          buildExternalFeedbackBlock)
+ *   {{__external_feedback_iteration__}}  ← iteration (string form of
+ *                                          designer's crossClarifyIteration)
+ *   {{__external_feedback_sources__}}    ← sourcesCsv (comma-separated source
+ *                                          questioner node ids, dictionary order)
+ *
+ * Templates that don't reference these tokens get framework-auto-appended
+ * sections at the tail of the user prompt — same auto-append pattern as the
+ * RFC-005 review context and RFC-023 clarify context.
+ */
+export interface CrossClarifyPromptContext {
+  /** Pre-rendered markdown body listing every source's Q&A for this batch
+   *  (dictionary-sorted by source questioner nodeId — see
+   *  `buildExternalFeedbackBlock`). */
+  block?: string
+  /** Designer's current `cross_clarify_iteration` as string. '0' means the
+   *  designer has never been triggered by external feedback; '1' is the
+   *  first answers-received rerun; '2' is the second, etc. */
+  iteration?: string
+  /** Comma-separated list of source questioner nodeIds the current batch
+   *  drew Q&A from. Lets agent templates reference "you are being reviewed
+   *  by {{__external_feedback_sources__}} this round". */
+  sourcesCsv?: string
+}
+
 export interface RenderPromptInput {
   /** Node-level prompt template. May be undefined or empty. */
   promptTemplate?: string
@@ -151,6 +187,9 @@ export interface RenderPromptInput {
   /** RFC-023 clarify-driven re-run context. Absent for first runs and runs
    *  where the agent's clarify channel is wired but it hasn't yet asked. */
   clarifyContext?: ClarifyPromptContext
+  /** RFC-056 cross-clarify-driven designer re-run context. Absent for first
+   *  runs and runs that were not triggered by a cross-clarify submit batch. */
+  crossClarifyContext?: CrossClarifyPromptContext
   /**
    * RFC-023 + RFC-039: when true, the trailing protocol block is rewritten
    * as a bi-modal preamble. RFC-039 made the basetone "default to (B)
@@ -189,6 +228,14 @@ const BUILTIN_VARS = new Set([
   '__clarify_answers__',
   '__clarify_iteration__',
   '__clarify_remaining__',
+  // RFC-056 cross-clarify context tokens. Stable names; renaming is a
+  // contract break — see packages/shared/tests/clarify-cross-rfc056.test.ts
+  // for the grep guard on `CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE` +
+  // packages/backend/tests/cross-clarify-prompt-injection-rfc056.test.ts
+  // for the per-token presence guard.
+  '__external_feedback__',
+  '__external_feedback_iteration__',
+  '__external_feedback_sources__',
 ])
 
 /**
@@ -204,6 +251,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   const referenced = new Set<string>()
   const rc = input.reviewContext
   const cc = input.clarifyContext
+  const xcc = input.crossClarifyContext
   // RFC-026: inline-mode clarify reruns send opencode a SECOND message in an
   // already-loaded session. The original first-round user prompt — template
   // body + every input port value — is already in opencode's transcript and
@@ -255,6 +303,12 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return cc?.iteration ?? ''
         case '__clarify_remaining__':
           return cc?.remaining ?? ''
+        case '__external_feedback__':
+          return xcc?.block ?? ''
+        case '__external_feedback_iteration__':
+          return xcc?.iteration ?? ''
+        case '__external_feedback_sources__':
+          return xcc?.sourcesCsv ?? ''
       }
     }
     // RFC-026: drop input port values from inline-mode reruns (see comment
@@ -338,6 +392,24 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           ? 'Clarify Q&A — User Answers (Current Round)'
           : 'Clarify Q&A — Prior Rounds (Answers)'
       sections += `\n\n## ${heading}\n${cc.answersBlock}`
+    }
+  }
+
+  // RFC-056: auto-append the External Feedback section when the designer's
+  // template didn't reference `{{__external_feedback__}}` directly. Placed
+  // after RFC-023 self-clarify auto-append so a designer that has BOTH
+  // sources of feedback in the same rerun shows them in stable order:
+  //   ## Self Clarify Q&A (RFC-023, if any)
+  //   ## External Feedback (RFC-056, if any)
+  // Two iteration counters (clarifyIteration / crossClarifyIteration) run
+  // orthogonally — see RFC-056 design.md §6.3.
+  if (xcc !== undefined) {
+    if (
+      xcc.block !== undefined &&
+      xcc.block.trim().length > 0 &&
+      !referenced.has('__external_feedback__')
+    ) {
+      sections += `\n\n## External Feedback\n${xcc.block}`
     }
   }
 

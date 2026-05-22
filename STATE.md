@@ -2,7 +2,7 @@
 
 > 这份文件让新 session 能立刻接上进度。每完成一批 issue 就更新它，与远端同步推送。
 
-**进行中 RFC**：（无 — RFC-001..RFC-055 全部 Done，2026-05-21）
+**进行中 RFC**：[RFC-056 Cross-Agent Clarify](design/RFC-056-clarify-cross-agent/proposal.md) — 跨 agent 反问：新 NodeKind `clarify-cross-agent`（1 input + 2 outputs `to_designer`(manual) / `to_questioner`(auto)）把 RFC-023 self-clarify 扩成跨 agent 反馈环，下游 questioner 反问、人 submit / reject 二选一、submit 触发上游 designer 带 `## External Feedback` 段重跑（多源汇总），reject 跨轮持久（cross_clarify_sessions.directive='stop' + RFC-039 STOP 注入 questioner cascade rerun）。三件套已落档（2026-05-22，commit 待提）：[proposal.md](design/RFC-056-clarify-cross-agent/proposal.md) / [design.md](design/RFC-056-clarify-cross-agent/design.md) / [plan.md](design/RFC-056-clarify-cross-agent/plan.md)。4 PR 待启动（PR-A shared+DB / PR-B backend runtime / PR-C frontend UI / PR-D e2e + 9 条 C1-C9 守门 + 完工记录），测试 ≥ +58。
 
 ## Wave 2/3 现状（本会话累计推 8 个 PR）
 

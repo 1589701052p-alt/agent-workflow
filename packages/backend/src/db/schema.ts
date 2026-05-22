@@ -371,6 +371,19 @@ export const nodeRuns = sqliteTable(
      * tracks that shard alone.
      */
     clarifyIteration: integer('clarify_iteration').notNull().default(0),
+    /**
+     * RFC-056: counts cross-clarify-driven regenerations on the DESIGNER
+     * side (downstream questioner agent emitted a `<workflow-clarify>` via
+     * a clarify-cross-agent node + human submitted answers → designer is
+     * rerun once per multi-source batch). Orthogonal to retryIndex,
+     * reviewIteration, AND clarifyIteration — a designer that ALSO has its
+     * own RFC-023 self-clarify channel sees two independent counters.
+     *
+     * For the questioner side, clarifyIteration continues to be the active
+     * counter (the questioner IS asking back). For nodes that never act as
+     * designer in a cross-clarify cycle the column stays at its default 0.
+     */
+    crossClarifyIteration: integer('cross_clarify_iteration').notNull().default(0),
     status: text('status', {
       enum: [
         'pending',
@@ -658,6 +671,77 @@ export const clarifySessions = sqliteTable(
     ),
     sourceRunIdx: index('idx_clarify_sessions_source_run').on(t.sourceAgentNodeRunId),
     nodeShardIdx: index('idx_clarify_sessions_node_shard').on(t.clarifyNodeId, t.sourceShardKey),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// RFC-056 cross_clarify_sessions — one row per cross-clarify human-gated
+// envelope batch. Mirrors clarify_sessions but the source / target sit on
+// DIFFERENT agents:
+//   * source = questioner agent (the one that emits <workflow-clarify>)
+//   * target = designer agent   (the one rerun on submit via __external_feedback__)
+// The clarify-cross-agent node itself is the human-gated form node parked
+// in awaiting_human between the two. See design/RFC-056-clarify-cross-agent/
+// design.md §3.2 + §5 for the full lifecycle.
+// -----------------------------------------------------------------------------
+export const crossClarifySessions = sqliteTable(
+  'cross_clarify_sessions',
+  {
+    id: text('id').primaryKey(), // ULID
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // clarify-cross-agent NodeId in workflow.definition (stable anchor across
+    // reruns; the node_run id below points at the row currently parked).
+    crossClarifyNodeId: text('cross_clarify_node_id').notNull(),
+    crossClarifyNodeRunId: text('cross_clarify_node_run_id')
+      .notNull()
+      .references(() => nodeRuns.id, { onDelete: 'cascade' }),
+    // questioner agent (the source of <workflow-clarify>).
+    sourceQuestionerNodeId: text('source_questioner_node_id').notNull(),
+    sourceQuestionerNodeRunId: text('source_questioner_node_run_id')
+      .notNull()
+      .references(() => nodeRuns.id, { onDelete: 'cascade' }),
+    // designer agent (the manual-edge target). Nullable — manual edge may
+    // be missing at runtime (validator emits cross-clarify-manual-edge-missing
+    // warning earlier in the editor; the runtime row records the gap).
+    targetDesignerNodeId: text('target_designer_node_id'),
+    // wrapper-loop iteration index when nested; 0 for non-loop placement.
+    // Reject persistence carries across loop_iter (queried by node_id
+    // alone); Q&A history resets per loop_iter.
+    loopIter: integer('loop_iter').notNull().default(0),
+    // Per-(node, loop_iter) cumulative cross-clarify iteration counter.
+    iteration: integer('iteration').notNull().default(0),
+    questionsJson: text('questions_json').notNull(), // ClarifyQuestion[]
+    answersJson: text('answers_json'), // ClarifyAnswer[]; NULL while awaiting_human.
+    // Submit → 'continue' (questions feed designer rerun External Feedback).
+    // Reject → 'stop' (questioner gets STOP CLARIFYING; cross-clarify node
+    //                  never re-enters awaiting_human in this task).
+    directive: text('directive', { enum: ['continue', 'stop'] }),
+    status: text('status', {
+      enum: ['awaiting_human', 'answered', 'abandoned'],
+    })
+      .notNull()
+      .default('awaiting_human'),
+    // Stamped at designer rerun spawn time (the moment scheduler triggered
+    // the batch). Stays NULL on reject-only sessions and abandoned sessions
+    // that never made it to the designer.
+    designerRunTriggeredAt: integer('designer_run_triggered_at'),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    answeredAt: integer('answered_at'),
+    abandonedAt: integer('abandoned_at'),
+  },
+  (t) => ({
+    taskIdx: index('idx_cross_clarify_sessions_task').on(t.taskId),
+    nodeIdx: index('idx_cross_clarify_sessions_node').on(
+      t.crossClarifyNodeId,
+      t.loopIter,
+      t.iteration,
+    ),
+    designerIdx: index('idx_cross_clarify_sessions_designer').on(t.targetDesignerNodeId, t.status),
+    statusIdx: index('idx_cross_clarify_sessions_status').on(t.status),
   }),
 )
 

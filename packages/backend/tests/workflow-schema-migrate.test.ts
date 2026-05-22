@@ -14,6 +14,7 @@
 // packages/shared/src/schemas/workflow.ts in lock-step.
 
 import type { Workflow, WorkflowDefinition } from '@agent-workflow/shared'
+import { WORKFLOW_SCHEMA_VERSION } from '@agent-workflow/shared'
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -40,8 +41,9 @@ describe('migrateDefinitionToLatest pure helper', () => {
       edges: [],
     }
     const out = migrateDefinitionToLatest(v1)
-    // RFC-023: latest is 3. The intermediate (v2) is invisible to callers.
-    expect(out.$schema_version).toBe(3)
+    // RFC-023 bumped the latest to 3; RFC-056 bumped again to 4. Intermediate
+    // versions (v2, v3) are invisible to callers — the walk runs through them.
+    expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     expect(out.inputs).toEqual(v1.inputs)
     expect(out.nodes).toEqual(v1.nodes)
     expect(out.edges).toEqual(v1.edges)
@@ -49,13 +51,13 @@ describe('migrateDefinitionToLatest pure helper', () => {
 
   test('latest → latest is idempotent (no upgrade, no surprise mutation)', () => {
     const latest: WorkflowDefinition = {
-      $schema_version: 3,
+      $schema_version: WORKFLOW_SCHEMA_VERSION,
       inputs: [],
       nodes: [],
       edges: [],
     }
     const out = migrateDefinitionToLatest(latest)
-    expect(out.$schema_version).toBe(3)
+    expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     expect(out.inputs).toEqual(latest.inputs)
     expect(out.nodes).toEqual(latest.nodes)
     expect(out.edges).toEqual(latest.edges)
@@ -70,7 +72,7 @@ describe('migrateDefinitionToLatest pure helper', () => {
     }
     const out = migrateDefinitionToLatest(v1)
     expect(v1.$schema_version).toBe(1) // original untouched
-    expect(out.$schema_version).toBe(3)
+    expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     expect(out).not.toBe(v1)
   })
 })
@@ -110,7 +112,7 @@ describe('GET path: legacy row → latest definition returned by getWorkflow', (
     const got = await getWorkflow(db, id)
     expect(got).not.toBeNull()
     const wf = got as Workflow
-    expect(wf.definition.$schema_version).toBe(3)
+    expect(wf.definition.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     // Shape otherwise unchanged.
     expect(wf.definition.inputs).toHaveLength(1)
     expect(wf.definition.nodes).toHaveLength(1)
@@ -212,7 +214,7 @@ describe('POST / PUT paths normalize older versions → latest on write', () => 
     // directly to confirm the on-disk shape lands at the latest version.
     const rows = await db.select().from(workflows).where(eq(workflows.id, created.id))
     const raw = JSON.parse(rows[0]!.definition) as { $schema_version: number }
-    expect(raw.$schema_version).toBe(3)
+    expect(raw.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
   })
 
   test('updateWorkflow with v1 def patch → DB row stores latest version', async () => {
@@ -220,7 +222,7 @@ describe('POST / PUT paths normalize older versions → latest on write', () => 
     const created = await createWorkflow(db, {
       name: 'flow',
       description: '',
-      definition: { $schema_version: 3, inputs: [], nodes: [], edges: [] },
+      definition: { $schema_version: WORKFLOW_SCHEMA_VERSION, inputs: [], nodes: [], edges: [] },
     })
 
     // PUT with a v1 patch — could happen from an older client.
@@ -238,7 +240,7 @@ describe('POST / PUT paths normalize older versions → latest on write', () => 
       $schema_version: number
       inputs: Array<{ kind: string; key: string; label: string }>
     }
-    expect(raw.$schema_version).toBe(3)
+    expect(raw.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     expect(raw.inputs).toEqual([{ kind: 'text', key: 'k', label: 'k' }])
   })
 })

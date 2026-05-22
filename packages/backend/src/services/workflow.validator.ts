@@ -181,6 +181,13 @@ export function validateWorkflowDef(
         // ins-from-edges sweep.
         outs.add('__clarify__')
         ins.add('__clarify_response__')
+        // RFC-056: when a cross-clarify node's `to_designer` manual-edge lands
+        // on this agent it targets the system-injected `__external_feedback__`
+        // inbound port. Accept it pre-emptively on every agent-{single,multi}
+        // node — the canvas hides the handle until at least one edge points
+        // there, but the validator should never flag a wired manual-edge as
+        // having an unknown target port.
+        ins.add('__external_feedback__')
         // Inputs are derived from incoming edges (handled in rule 1 / 5).
         break
       }
@@ -206,6 +213,16 @@ export function validateWorkflowDef(
         // RFC-023: fixed 1-in / 1-out shape — port names are hard-coded.
         ins.add('questions')
         outs.add('answers')
+        break
+      }
+      case 'clarify-cross-agent': {
+        // RFC-056: fixed 1-in / 2-out shape — port names are hard-coded.
+        //   in:  questions         (auto-mints alongside reverse-drag)
+        //   out: to_questioner     (auto-mints alongside reverse-drag)
+        //   out: to_designer       (manual edge to a designer ancestor)
+        ins.add('questions')
+        outs.add('to_designer')
+        outs.add('to_questioner')
         break
       }
     }
@@ -295,6 +312,12 @@ export function validateWorkflowDef(
     const lTo = loopOf.get(edge.target.nodeId)
     if (lFrom !== undefined && lFrom === lTo) continue
     if (srcNode.kind === 'clarify' || tgtNode.kind === 'clarify') continue
+    // RFC-056: cross-agent clarify forms intentional feedback cycles too —
+    // newNode.to_designer → designer.__external_feedback__ loops back upstream,
+    // and newNode.to_questioner → questioner.__clarify_response__ loops back
+    // down. Strip any edge touching a clarify-cross-agent node from the DAG
+    // check the same way RFC-023 clarify edges are stripped above.
+    if (srcNode.kind === 'clarify-cross-agent' || tgtNode.kind === 'clarify-cross-agent') continue
     filtered.push({ from: edge.source.nodeId, to: edge.target.nodeId })
   }
   if (
@@ -817,6 +840,144 @@ export function validateWorkflowDef(
           pointer: node.id,
           severity: 'warning',
         })
+      }
+    }
+  }
+
+  // 4d. clarify-cross-agent (RFC-056) -----------------------------------------
+  // - exactly one inbound edge on the `questions` port; source must be an
+  //   agent-single (v1 restriction — agent-multi questioner deferred to a
+  //   later RFC).
+  // - no outbound edges OTHER than from the two legal output ports
+  //   (`to_designer`, `to_questioner`).
+  // - `to_designer` must be wired (warning if missing — the node still parks
+  //   awaiting_human at runtime, but submit then has nowhere to send Q&A).
+  // - `to_designer` target should be a topological upstream ancestor of the
+  //   questioner; runtime tolerates other targets but the canvas-author intent
+  //   is "feed back to the agent that produced what was reviewed".
+  // - `to_questioner` should be wired to questioner.__clarify_response__
+  //   (auto-mints alongside the reverse-drag); warning if user deletes it.
+  // - designer agent === questioner agent (same agent.md name) → warning
+  //   "consider RFC-023 self-clarify instead".
+  {
+    const reverseAdj = new Map<string, string[]>()
+    for (const e of edges) {
+      const list = reverseAdj.get(e.target.nodeId) ?? []
+      list.push(e.source.nodeId)
+      reverseAdj.set(e.target.nodeId, list)
+    }
+    for (const node of nodes) {
+      if (node.kind !== 'clarify-cross-agent') continue
+
+      // inbound on 'questions'
+      const inboundOnQuestions = edges.filter(
+        (e) => e.target.nodeId === node.id && e.target.portName === 'questions',
+      )
+      let questionerId: string | undefined
+      let questionerAgentName: string | undefined
+      if (inboundOnQuestions.length === 0) {
+        issues.push({
+          code: 'cross-clarify-input-source-missing',
+          message: `clarify-cross-agent node '${node.id}' has no inbound edge on 'questions' port; reverse-drag from the input handle onto an agent-single questioner to wire it`,
+          pointer: node.id,
+        })
+      } else {
+        for (const e of inboundOnQuestions) {
+          const src = nodeById.get(e.source.nodeId)
+          if (src === undefined) {
+            issues.push({
+              code: 'cross-clarify-input-source-missing',
+              message: `clarify-cross-agent node '${node.id}' inbound edge references unknown node '${e.source.nodeId}'`,
+              pointer: node.id,
+            })
+            continue
+          }
+          if (src.kind !== 'agent-single') {
+            issues.push({
+              code: 'cross-clarify-target-not-agent-single',
+              message: `clarify-cross-agent node '${node.id}' must connect to an agent-single questioner (got kind '${src.kind}' on '${src.id}'); agent-multi is deferred to a follow-up RFC`,
+              pointer: node.id,
+            })
+            continue
+          }
+          questionerId = src.id
+          questionerAgentName = readString(src, 'agentName')
+        }
+      }
+
+      // any outgoing edge MUST originate from one of the two legal output ports.
+      const outboundEdges = edges.filter((e) => e.source.nodeId === node.id)
+      for (const e of outboundEdges) {
+        if (e.source.portName !== 'to_designer' && e.source.portName !== 'to_questioner') {
+          issues.push({
+            code: 'cross-clarify-has-downstream',
+            message: `clarify-cross-agent node '${node.id}' has an outgoing edge from non-system port '${e.source.portName}'; only 'to_designer' and 'to_questioner' are allowed`,
+            pointer: node.id,
+          })
+        }
+      }
+
+      // `to_designer` wired? (warning if not)
+      const toDesignerOut = outboundEdges.filter((e) => e.source.portName === 'to_designer')
+      if (toDesignerOut.length === 0) {
+        issues.push({
+          code: 'cross-clarify-manual-edge-missing',
+          message: `clarify-cross-agent node '${node.id}' has no outbound edge on 'to_designer' port; submit will have no designer to trigger a rerun on`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // ancestor relation for each to_designer target (warning if not an ancestor).
+      if (questionerId !== undefined) {
+        const ancestors = collectReachableUpstream(questionerId, reverseAdj)
+        for (const e of toDesignerOut) {
+          if (e.target.nodeId === questionerId) continue // self-target = self-review case, handled below
+          if (!ancestors.has(e.target.nodeId)) {
+            issues.push({
+              code: 'cross-clarify-target-not-ancestor',
+              message: `clarify-cross-agent node '${node.id}' to_designer target '${e.target.nodeId}' is not a topological upstream ancestor of questioner '${questionerId}'; the designer rerun feedback loop may not close`,
+              pointer: node.id,
+              severity: 'warning',
+            })
+          }
+        }
+      }
+
+      // `to_questioner` auto-edge present? Looks for an edge from this node's
+      // to_questioner port back to questioner.__clarify_response__. The
+      // reverse-drag mints it; user-deletion is allowed (the runtime injects
+      // answers via cross_clarify_sessions, not via this edge) but the canvas
+      // hides the closed feedback loop and that warrants a warning.
+      const toQuestionerOut = outboundEdges.filter((e) => e.source.portName === 'to_questioner')
+      const properlyWiredAutoEdge = toQuestionerOut.some(
+        (e) => e.target.nodeId === questionerId && e.target.portName === '__clarify_response__',
+      )
+      if (!properlyWiredAutoEdge && questionerId !== undefined) {
+        issues.push({
+          code: 'cross-clarify-auto-edge-deleted',
+          message: `clarify-cross-agent node '${node.id}' has no 'to_questioner' → '${questionerId}.__clarify_response__' edge; answer injection still flows via the session, but the canvas hides the feedback loop`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // designer === questioner same agent.md → warning to consider RFC-023.
+      if (questionerAgentName !== undefined && questionerAgentName.length > 0) {
+        for (const e of toDesignerOut) {
+          const tgt = nodeById.get(e.target.nodeId)
+          if (tgt === undefined) continue
+          if (tgt.kind !== 'agent-single') continue
+          const designerAgentName = readString(tgt, 'agentName')
+          if (designerAgentName === questionerAgentName) {
+            issues.push({
+              code: 'cross-clarify-self-review-warning',
+              message: `clarify-cross-agent node '${node.id}' wires the same agent '${designerAgentName}' as both designer and questioner; consider RFC-023 self-clarify instead`,
+              pointer: node.id,
+              severity: 'warning',
+            })
+          }
+        }
       }
     }
   }

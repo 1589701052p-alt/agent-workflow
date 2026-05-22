@@ -31,23 +31,22 @@ describe('migrateDefinitionToLatest (RFC-023 v2→v3 transparent upgrade)', () =
   test('v1 doc walks all the way to v3', () => {
     const out = migrateDefinitionToLatest(linearDef(1))
     expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
-    expect(out.$schema_version).toBe(3)
     // shape preserved (no clarify nodes injected — v1 never had them)
     expect(out.nodes.map((n) => n.kind)).toEqual(['input', 'agent-single'])
   })
 
   test('v2 doc upgrades to v3 with shape preserved', () => {
     const out = migrateDefinitionToLatest(linearDef(2))
-    expect(out.$schema_version).toBe(3)
+    expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
     expect(out.nodes.length).toBe(2)
     expect(out.edges.length).toBe(1)
   })
 
-  test('v3 doc is returned untouched (identity for already-latest)', () => {
+  test('v3 doc walks to the latest version (RFC-056 v3→v4 pure metadata bump preserves shape)', () => {
     const v3 = linearDef(3)
     const out = migrateDefinitionToLatest(v3)
-    expect(out.$schema_version).toBe(3)
-    // Nodes / edges round-trip without surprise mutation.
+    expect(out.$schema_version).toBe(WORKFLOW_SCHEMA_VERSION)
+    // Nodes / edges round-trip without surprise mutation (v3→v4 is metadata-only).
     expect(out.nodes).toEqual(v3.nodes)
     expect(out.edges).toEqual(v3.edges)
   })
