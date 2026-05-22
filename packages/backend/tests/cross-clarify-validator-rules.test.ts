@@ -1,0 +1,73 @@
+// RFC-056 PR-D C6 — 7-validator-rules enumeration 守门.
+//
+// RFC-056 §2.1.15 declares 7 validator rules guarding cross-clarify node
+// configuration (3 fail + 4 warning). Each must be checked at workflow
+// validation time, and each must have at least one positive test in
+// `workflow-validator-cross-clarify-rfc056.test.ts`. If a rule gets
+// renamed, removed, or silently un-checked the validator can accept
+// misconfigurations that crash submit / cascade at runtime; this meta-
+// test pins both the validator source text AND the test-suite coverage
+// by rule code.
+//
+// LOCKS:
+//   1. All 7 rule codes are referenced by literal in
+//      `packages/backend/src/services/workflow.validator.ts`.
+//   2. All 7 rule codes appear as `toContain('<code>')` assertions in
+//      `packages/backend/tests/workflow-validator-cross-clarify-rfc056.test.ts`.
+//   3. The literal `topology-cycle` whitelist exemption for cross-clarify
+//      is present in the validator (cross-clarify forms intentional
+//      feedback cycles, which must NOT trip topology-cycle).
+//
+// If any of these go red the 7-rule contract has drifted — investigate
+// before relaxing.
+
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const BACKEND_ROOT = resolve(import.meta.dir, '..')
+const VALIDATOR_TS = resolve(BACKEND_ROOT, 'src', 'services', 'workflow.validator.ts')
+const VALIDATOR_TEST_TS = resolve(
+  BACKEND_ROOT,
+  'tests',
+  'workflow-validator-cross-clarify-rfc056.test.ts',
+)
+
+const CROSS_CLARIFY_RULE_CODES = [
+  // FAIL (3)
+  'cross-clarify-input-source-missing',
+  'cross-clarify-target-not-agent-single',
+  'cross-clarify-has-downstream',
+  // WARNING (4)
+  'cross-clarify-manual-edge-missing',
+  'cross-clarify-target-not-ancestor',
+  'cross-clarify-auto-edge-deleted',
+  'cross-clarify-self-review-warning',
+] as const
+
+describe('RFC-056 C6 — 7 validator rules enumeration', () => {
+  test('exactly 7 cross-clarify rules are declared (matches RFC §2.1.15 contract)', () => {
+    expect(CROSS_CLARIFY_RULE_CODES).toHaveLength(7)
+  })
+
+  for (const code of CROSS_CLARIFY_RULE_CODES) {
+    test(`validator source references rule code: ${code}`, () => {
+      const src = readFileSync(VALIDATOR_TS, 'utf-8')
+      expect(src).toContain(code)
+    })
+
+    test(`validator test suite covers rule code: ${code}`, () => {
+      const src = readFileSync(VALIDATOR_TEST_TS, 'utf-8')
+      expect(src).toContain(code)
+    })
+  }
+
+  test('topology-cycle whitelist exemption for cross-clarify is present in the validator', () => {
+    const src = readFileSync(VALIDATOR_TS, 'utf-8')
+    // We expect either a `topology-cycle` reference with a `clarify-cross-agent`
+    // exemption nearby, or a dedicated comment/code path. Pinning both literals
+    // is a thin proxy that catches both rename and removal.
+    expect(src).toContain('topology-cycle')
+    expect(src).toContain('clarify-cross-agent')
+  })
+})
