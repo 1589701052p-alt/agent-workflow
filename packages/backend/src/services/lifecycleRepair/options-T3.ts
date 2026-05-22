@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm'
 
 import { tasks } from '@/db/schema'
 
-import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
+import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const T3_DEMOTE_TASK: RepairOptionDef = {
   id: 'T3.demote-task',

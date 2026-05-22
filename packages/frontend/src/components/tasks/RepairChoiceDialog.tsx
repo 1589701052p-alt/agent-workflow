@@ -26,7 +26,7 @@ import type {
   RepairResponse,
 } from '@agent-workflow/shared'
 
-import { ApiError, api } from '@/api/client'
+import { api, type ApiError } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
@@ -60,7 +60,13 @@ export function RepairChoiceDialog(props: RepairChoiceDialogProps): ReactElement
       ),
   })
 
-  const options = query.data?.options ?? []
+  // Wrap in useMemo so the array identity is stable across renders — without
+  // this the `?? []` fallback creates a new array literal every render and
+  // every downstream useEffect/useMemo that lists it as a dep re-runs.
+  const options = useMemo<ReadonlyArray<RepairOption>>(
+    () => query.data?.options ?? [],
+    [query.data],
+  )
 
   // Default selection: the first available option, else the first option.
   // Resetting whenever a fresh fetch lands keeps the dropdown synced to

@@ -77,7 +77,6 @@ type _AssertBackendSubsetOfShared = InvariantRule | StuckRule extends SharedLife
 type _AssertSharedSubsetOfBackend = SharedLifecycleAlertRule extends InvariantRule | StuckRule
   ? true
   : never
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _LIFECYCLE_RULE_UNION_GUARD: [_AssertBackendSubsetOfShared, _AssertSharedSubsetOfBackend] = [
   true,
   true,

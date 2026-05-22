@@ -11,7 +11,7 @@ import { and, desc, eq } from 'drizzle-orm'
 
 import { clarifySessions, nodeRuns, tasks } from '@/db/schema'
 
-import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
+import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const S2_DEMOTE_TASK: RepairOptionDef = {
   id: 'S2.demote-task',

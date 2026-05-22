@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { RepairOption, RepairRequest, RepairResponse } from '@agent-workflow/shared'
 
-import { ApiError, api } from '@/api/client'
+import { api, type ApiError } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 

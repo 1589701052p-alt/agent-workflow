@@ -14,7 +14,7 @@ import { eq } from 'drizzle-orm'
 
 import { tasks } from '@/db/schema'
 
-import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
+import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const S4_KICK_TASK: RepairOptionDef = {
   id: 'S4.kick-task',

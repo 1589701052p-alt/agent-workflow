@@ -20,7 +20,7 @@ import { eq } from 'drizzle-orm'
 
 import { tasks } from '@/db/schema'
 
-import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
+import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const CR1_ACKNOWLEDGE: RepairOptionDef = {
   id: 'CR-1.acknowledge',
