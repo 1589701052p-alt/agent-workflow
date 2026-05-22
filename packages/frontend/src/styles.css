@@ -6535,16 +6535,21 @@ mark.comment-anchor[data-active='true'] {
 }
 
 /* ---------------------------------------------------------------------------
-   RFC-023 Clarify channel system ports on agent nodes
+   RFC-023 Clarify + RFC-056 Cross-Clarify channel system ports on agent nodes
    ---------------------------------------------------------------------------
-   The agent's `__clarify__` source port + `__clarify_response__` target
-   port are rendered as normal port rows so xyflow can draw the two
-   clarify channel edges. The system port name is noisy though — swap
-   the visible label for a friendlier badge and tint the row so reviewers
-   immediately see "this row IS the clarify channel".
+   Three system ports get rendered as normal port rows so xyflow can draw the
+   channel edges:
+     - `__clarify__`           (RFC-023 ask source)
+     - `__clarify_response__`  (RFC-023 answer target / RFC-056 answer target)
+     - `__external_feedback__` (RFC-056 designer receives external feedback)
+   The raw port names are noisy, so swap the visible label for a friendlier
+   badge and tint the row so reviewers immediately see "this row IS the
+   clarify channel". RFC-056 reuses the same visual family (accent color +
+   inherited sans font + small emoji badge) so all three read as one group.
 */
 .canvas-node__port-row .canvas-node__port-label[title='__clarify__'],
-.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'] {
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'],
+.canvas-node__port-row .canvas-node__port-label[title='__external_feedback__'] {
   font-family: inherit;
   color: var(--accent);
   font-weight: 500;
@@ -6555,12 +6560,17 @@ mark.comment-anchor[data-active='true'] {
 .canvas-node__port-row .canvas-node__port-label[title='__clarify_response__']::after {
   content: '💬 clarify answer';
 }
+.canvas-node__port-row .canvas-node__port-label[title='__external_feedback__']::after {
+  content: '📥 external feedback';
+}
 .canvas-node__port-row .canvas-node__port-label[title='__clarify__'],
-.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'] {
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__'],
+.canvas-node__port-row .canvas-node__port-label[title='__external_feedback__'] {
   font-size: 0;
 }
 .canvas-node__port-row .canvas-node__port-label[title='__clarify__']::after,
-.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__']::after {
+.canvas-node__port-row .canvas-node__port-label[title='__clarify_response__']::after,
+.canvas-node__port-row .canvas-node__port-label[title='__external_feedback__']::after {
   font-size: 11px;
 }
 

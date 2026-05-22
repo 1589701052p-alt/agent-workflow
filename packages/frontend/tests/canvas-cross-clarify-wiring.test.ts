@@ -110,4 +110,22 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
     expect(css).toMatch(/\.canvas-node--clarify-cross-agent\s*\{/)
     expect(css).toMatch(/\.canvas-node--clarify-cross-agent\s+\.canvas-node__kind\s*\{/)
   })
+
+  test('styles.css renders __external_feedback__ port row with the same friendly badge styling as __clarify__/__clarify_response__', () => {
+    // UI bug 2026-05-22 follow-up: __external_feedback__ port label
+    // showed raw monospace `__external_feedback__` while the RFC-023
+    // clarify system ports show `❓ clarify ask` / `💬 clarify answer`
+    // badges (sans-serif accent-color, font-size:0 + ::after rewrite).
+    // The fix extends the RFC-023 rule list to cover the RFC-056 port.
+    // Locking all 3 port-name literals so future refactors can't drop
+    // __external_feedback__ from the badge family.
+    const STYLES_CSS = resolve(FRONTEND_SRC, 'styles.css')
+    const css = readFileSync(STYLES_CSS, 'utf8')
+    expect(css).toContain("[title='__clarify__']")
+    expect(css).toContain("[title='__clarify_response__']")
+    expect(css).toContain("[title='__external_feedback__']")
+    // The 📥 badge is the visible swap-in; if it gets renamed at least
+    // catch the literal string.
+    expect(css).toContain('📥 external feedback')
+  })
 })
