@@ -886,6 +886,9 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     retryIndex: r.retryIndex,
     reviewIteration: r.reviewIteration,
     clarifyIteration: r.clarifyIteration,
+    // RFC-056: surface cross-clarify rerun iteration counter (orthogonal to
+    // clarifyIteration; see §C8 cascade isolation).
+    crossClarifyIteration: r.crossClarifyIteration,
     status: r.status,
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,

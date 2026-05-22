@@ -222,6 +222,14 @@ export const NodeRunSchema = z.object({
    * agent-multi shard child node_run, the value is per-shard.
    */
   clarifyIteration: z.number().int().nonnegative().default(0),
+  /**
+   * RFC-056: bumped each time a designer agent is re-spawned by a cross-clarify
+   * submit (multi-source aggregation completion). Orthogonal to clarifyIteration
+   * (RFC-023 self-clarify rounds) so both feedback channels can accumulate on
+   * the same agent without colliding — see RFC-056 §C8 cascade isolation.
+   * Default 0 for pre-RFC-056 rows + agent runs never touched by cross-clarify.
+   */
+  crossClarifyIteration: z.number().int().nonnegative().default(0),
   status: NodeRunStatusSchema,
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),

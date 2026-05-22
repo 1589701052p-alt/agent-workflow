@@ -42,6 +42,7 @@ function run(partial: Partial<NodeRun> & { id: string }): NodeRun {
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
     clarifyIteration: partial.clarifyIteration ?? 0,
+    crossClarifyIteration: partial.crossClarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? 1700_000_000_000,
     finishedAt: partial.finishedAt ?? 1700_000_001_000,
