@@ -900,6 +900,103 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
         </div>
       )
     }
+    case 'clarify-cross-agent': {
+      // RFC-056 cross-clarify node inspector — title + description (same as
+      // RFC-023) plus two segmented `sessionModeFor*` selectors.
+      const description = typeof rec.description === 'string' ? rec.description : ''
+      const sessionModeForDesigner =
+        typeof rec.sessionModeForDesigner === 'string' &&
+        (rec.sessionModeForDesigner === 'inline' || rec.sessionModeForDesigner === 'isolated')
+          ? (rec.sessionModeForDesigner as 'inline' | 'isolated')
+          : 'isolated'
+      const sessionModeForQuestioner =
+        typeof rec.sessionModeForQuestioner === 'string' &&
+        (rec.sessionModeForQuestioner === 'inline' || rec.sessionModeForQuestioner === 'isolated')
+          ? (rec.sessionModeForQuestioner as 'inline' | 'isolated')
+          : 'isolated'
+
+      function patchCrossClarify(delta: Record<string, unknown>): void {
+        onPatch({ ...(node as Record<string, unknown>), ...delta } as unknown as WorkflowNode)
+      }
+
+      return (
+        <div className="form-grid" data-testid="cross-clarify-inspector">
+          {titleField}
+          <Field
+            label={t('inspector.fieldClarifyDescription')}
+            hint={t('inspector.fieldClarifyDescriptionHint')}
+          >
+            <TextArea
+              value={description}
+              rows={2}
+              onChange={(v) => patchCrossClarify({ description: v })}
+            />
+          </Field>
+          <Field
+            label={t('crossClarify.inspector.sessionModeForDesigner')}
+            hint={t('crossClarify.inspector.sessionModeHint')}
+            group
+          >
+            <div
+              className="segmented"
+              role="radiogroup"
+              aria-label={t('crossClarify.inspector.sessionModeForDesigner')}
+              data-testid="cross-clarify-session-mode-designer"
+            >
+              {(['isolated', 'inline'] as const).map((mode) => {
+                const active = sessionModeForDesigner === mode
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={'segmented__option' + (active ? ' segmented__option--active' : '')}
+                    data-testid={`cross-clarify-session-mode-designer-${mode}`}
+                    onClick={() => patchCrossClarify({ sessionModeForDesigner: mode })}
+                  >
+                    {mode === 'isolated'
+                      ? t('crossClarify.inspector.sessionModeIsolated')
+                      : t('crossClarify.inspector.sessionModeInline')}
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+          <Field
+            label={t('crossClarify.inspector.sessionModeForQuestioner')}
+            hint={t('crossClarify.inspector.sessionModeHint')}
+            group
+          >
+            <div
+              className="segmented"
+              role="radiogroup"
+              aria-label={t('crossClarify.inspector.sessionModeForQuestioner')}
+              data-testid="cross-clarify-session-mode-questioner"
+            >
+              {(['isolated', 'inline'] as const).map((mode) => {
+                const active = sessionModeForQuestioner === mode
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={'segmented__option' + (active ? ' segmented__option--active' : '')}
+                    data-testid={`cross-clarify-session-mode-questioner-${mode}`}
+                    onClick={() => patchCrossClarify({ sessionModeForQuestioner: mode })}
+                  >
+                    {mode === 'isolated'
+                      ? t('crossClarify.inspector.sessionModeIsolated')
+                      : t('crossClarify.inspector.sessionModeInline')}
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+        </div>
+      )
+    }
     case 'agent-single':
     case 'agent-multi': {
       const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''

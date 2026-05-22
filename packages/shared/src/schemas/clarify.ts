@@ -221,6 +221,68 @@ export const ClarifySessionSummarySchema = z.object({
 })
 export type ClarifySessionSummary = z.infer<typeof ClarifySessionSummarySchema>
 
+// ---------------------------------------------------------------------------
+// RFC-056 cross-clarify wire shapes.
+// ---------------------------------------------------------------------------
+
+/** RFC-056: cross_clarify_sessions.status enum. No 'canceled' value (the
+ *  cross-clarify path doesn't have a canceled state — only awaiting_human,
+ *  answered, or abandoned). */
+export const CrossClarifySessionStatusSchema = z.enum(['awaiting_human', 'answered', 'abandoned'])
+export type CrossClarifySessionStatus = z.infer<typeof CrossClarifySessionStatusSchema>
+
+/** Compact entry returned by GET /api/clarify when `kind=='cross'`. The
+ *  list endpoint mixes self + cross summaries on the same wire; clients
+ *  branch on `kind` (or on the presence of `crossClarifyNodeId` vs
+ *  `clarifyNodeId`). */
+export const CrossClarifySessionSummarySchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  /** RFC-037 parity: display name of the owning task. Lets the mixed inbox
+   *  group rows by task name regardless of whether the row is self or cross. */
+  taskName: z.string(),
+  crossClarifyNodeId: z.string(),
+  crossClarifyNodeRunId: z.string(),
+  sourceQuestionerNodeId: z.string(),
+  targetDesignerNodeId: z.string().nullable(),
+  loopIter: z.number().int().nonnegative(),
+  iteration: z.number().int().nonnegative(),
+  questionCount: z.number().int().nonnegative(),
+  status: CrossClarifySessionStatusSchema,
+  directive: ClarifyDirectiveSchema.nullable(),
+  createdAt: z.number().int(),
+  answeredAt: z.number().int().nullable(),
+})
+export type CrossClarifySessionSummary = z.infer<typeof CrossClarifySessionSummarySchema>
+
+/** Full RFC-056 cross-clarify session (returned by GET /api/clarify/:nodeRunId
+ *  when the node is `clarify-cross-agent`). */
+export const CrossClarifySessionSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  crossClarifyNodeId: z.string(),
+  crossClarifyNodeRunId: z.string(),
+  sourceQuestionerNodeId: z.string(),
+  sourceQuestionerNodeRunId: z.string(),
+  targetDesignerNodeId: z.string().nullable(),
+  loopIter: z.number().int().nonnegative(),
+  iteration: z.number().int().nonnegative(),
+  questions: z.array(ClarifyQuestionSchema),
+  answers: z.array(ClarifyAnswerSchema).optional(),
+  directive: ClarifyDirectiveSchema.nullable(),
+  status: CrossClarifySessionStatusSchema,
+  designerRunTriggeredAt: z.number().int().nullable(),
+  createdAt: z.number().int(),
+  answeredAt: z.number().int().nullable(),
+  abandonedAt: z.number().int().nullable(),
+})
+export type CrossClarifySession = z.infer<typeof CrossClarifySessionSchema>
+
+/** RFC-056: tagged union returned by GET /api/clarify (mixed self + cross). */
+export type ClarifyInboxEntry =
+  | (ClarifySessionSummary & { kind: 'self' })
+  | (CrossClarifySessionSummary & { kind: 'cross' })
+
 export const ListClarifyQuerySchema = z.object({
   taskId: z.string().optional(),
   status: z.union([ClarifySessionStatusSchema, z.literal('all')]).optional(),

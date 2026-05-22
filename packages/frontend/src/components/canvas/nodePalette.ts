@@ -15,6 +15,7 @@ export type PaletteItem =
   | { kind: 'wrapper-loop' }
   | { kind: 'review' }
   | { kind: 'clarify' }
+  | { kind: 'clarify-cross-agent' }
 
 /** mime carried in HTML5 dataTransfer. Custom to avoid colliding with files. */
 export const PALETTE_MIME = 'application/x-agent-workflow-node'
@@ -41,6 +42,7 @@ export function deserialize(raw: string): PaletteItem | null {
       case 'wrapper-loop':
       case 'review':
       case 'clarify':
+      case 'clarify-cross-agent':
         return { kind: rec.kind } as PaletteItem
       default:
         return null
@@ -119,6 +121,18 @@ export function makeNode(
         title: '',
         description: '',
       } as unknown as WorkflowNode
+    case 'clarify-cross-agent':
+      // RFC-056 — fresh cross-clarify node has no wiring; user reverse-drags
+      // questioner side (auto 2 edges) + manually drags to_designer →
+      // designer. Validator rules `cross-clarify-input-source-missing` and
+      // `cross-clarify-manual-edge-missing` cover the gap.
+      return {
+        id,
+        kind: 'clarify-cross-agent',
+        position: pos,
+        title: '',
+        description: '',
+      } as unknown as WorkflowNode
   }
 }
 
@@ -143,6 +157,7 @@ const SHORT: Record<PaletteItem['kind'], string> = {
   'wrapper-loop': 'wrap_loop',
   review: 'rev',
   clarify: 'clarify',
+  'clarify-cross-agent': 'cross_clarify',
 }
 
 function uniqueInputKey(existing: Set<string>): string {
@@ -231,6 +246,13 @@ export function buildPalette(agents: Agent[], t: PaletteTranslator): PaletteSect
           item: { kind: 'clarify' } as PaletteItem,
           label: t('editor.paletteClarifyLabel'),
           description: t('editor.paletteClarifyDesc'),
+        },
+        {
+          // RFC-056 cross-clarify node — questioner reverse-drag + manual
+          // to_designer wire. i18n labels live under `crossClarify.canvas.*`.
+          item: { kind: 'clarify-cross-agent' } as PaletteItem,
+          label: t('crossClarify.canvas.paletteLabel'),
+          description: t('crossClarify.canvas.paletteHint'),
         },
       ],
     },

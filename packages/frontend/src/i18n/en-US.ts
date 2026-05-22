@@ -1540,6 +1540,9 @@ export const enUS: Resources = {
       openButton: 'Open',
       statusAwaiting: 'Awaiting',
       statusAnswered: 'Answered',
+      // RFC-056: chips distinguish self-clarify (RFC-023 same-agent
+      // self-ask) from cross-clarify (RFC-056 questioner asks designer).
+      chip: { self: 'Self-clarify', cross: 'Cross-clarify' },
     },
     detail: {
       contextCard: 'Asked by agent {{name}} · round {{n}}',
@@ -1595,6 +1598,44 @@ export const enUS: Resources = {
         'Inline session unavailable this round (reason: {{reason}}); fell back to isolated mode',
     },
     node: { chip: { inline: 'session=inline' } },
+  },
+  // RFC-056 cross-agent clarify — strings unique to the cross-clarify path.
+  // Reused: RFC-023 clarify list / detail header / questions form / draft
+  // indicator. The cross-clarify form lives on the SAME /clarify/$nodeRunId
+  // route as RFC-023 and only the footer + a status banner differ.
+  crossClarify: {
+    contextCard: 'Asked by questioner {{name}} · round {{n}}',
+    targetDesigner: 'Feedback target: {{name}}',
+    button: { reject: 'Reject (stop asking)' },
+    rejectModal: {
+      title: 'Reject this set of questions?',
+      body: 'The questioner will not raise more questions for this node in the current task — even across loop iterations. This decision cannot be undone; you will have to launch a new task to revisit.',
+      confirm: 'Confirm reject',
+    },
+    multiSourceBanner:
+      'Submitted. Waiting for {{remaining}} more cross-clarify node(s) before the designer reruns.',
+    multiSourcePendingLinkLabel: 'Open',
+    abandonedChip: 'Feedback not delivered (abandoned)',
+    abandonedTooltip:
+      'The designer task failed before this feedback could be consumed. Relaunch the task to retry.',
+    inspector: {
+      title: 'Cross Clarify',
+      sessionModeForDesigner: 'Designer rerun session',
+      sessionModeForQuestioner: 'Questioner rerun session',
+      sessionModeIsolated: 'Isolated (fresh)',
+      sessionModeInline: 'Inline (resume)',
+      sessionModeHint:
+        'Inline lets the rerun reuse the prior opencode session; falls back to isolated on auth/session errors.',
+    },
+    canvas: {
+      paletteLabel: 'Cross Clarify',
+      paletteHint:
+        'Drag onto a downstream questioner agent; then connect to_designer → an upstream designer.',
+      error: {
+        targetNotAgentSingle: 'Cross-clarify target must be an agent-single node (v1 limitation).',
+        designerNotAgentSingle: 'to_designer must target an agent-single node.',
+      },
+    },
   },
   sidebar: {
     languageGroupLabel: 'Switch UI language',

@@ -46,7 +46,21 @@ import {
   hasExistingClarifyChannel,
   isValidClarifyTarget,
 } from './clarifyDragHelper'
+import {
+  applyCrossClarifyDesignerDrag,
+  applyCrossClarifyQuestionerReverseDrag,
+  classifyCrossClarifyConnection,
+  clearCrossClarifyEdgesForRemovedNodes,
+  CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  CROSS_CLARIFY_INPUT_PORT_NAME,
+  CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
+  CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+  crossClarifyHasDesignerEdge,
+  isValidCrossClarifyQuestioner,
+  questionerHasExistingClarifyChannel,
+} from './crossClarifyDragHelper'
 import { ClarifyNode } from './nodes/ClarifyNode'
+import { CrossClarifyNode } from './nodes/CrossClarifyNode'
 import { applyConnectionForReviewOutput, applyDisconnectForReviewOutput } from './connectionSync'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
@@ -87,6 +101,7 @@ const NODE_TYPES = {
   'wrapper-loop': GroupWrapperNode,
   review: ReviewNode,
   clarify: ClarifyNode,
+  'clarify-cross-agent': CrossClarifyNode,
 }
 
 export interface WorkflowCanvasProps {
@@ -423,6 +438,29 @@ function CanvasInner({
         if (next !== definition) commitChange(next)
         return
       }
+      // RFC-056 cross-clarify drops. Two shapes:
+      //   - questioner-reverse: reverse-drag onto cross.questions → 2 edges
+      //     (questioner.__clarify__ → cross.questions /
+      //      cross.to_questioner → questioner.__clarify_response__).
+      //   - designer-forward: forward-drag cross.to_designer → designer →
+      //     1 edge with target on the synthetic __external_feedback__ port.
+      const crossDrop = classifyCrossClarifyConnection(definition, conn)
+      if (crossDrop !== null) {
+        let next = definition
+        if (crossDrop.kind === 'questioner-reverse') {
+          next = applyCrossClarifyQuestionerReverseDrag(definition, {
+            questionerNodeId: crossDrop.questionerNodeId,
+            crossClarifyNodeId: crossDrop.crossClarifyNodeId,
+          })
+        } else {
+          next = applyCrossClarifyDesignerDrag(definition, {
+            crossClarifyNodeId: crossDrop.crossClarifyNodeId,
+            designerNodeId: crossDrop.designerNodeId,
+          })
+        }
+        if (next !== definition) commitChange(next)
+        return
+      }
       // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
       // on a specific named handle" BEFORE translateInboundConnection rewrites
       // targetHandle. Output's catch-all path always appends a new port (with
@@ -483,6 +521,37 @@ function CanvasInner({
       if (
         conn.targetHandle === CLARIFY_INPUT_PORT_NAME ||
         conn.sourceHandle === CLARIFY_OUTPUT_PORT_NAME
+      ) {
+        return false
+      }
+      // RFC-056 cross-clarify pre-flight. Mirrors the RFC-023 path —
+      // fail-fast on self-loops, non-agent-single counterparts, and
+      // already-wired channels. xyflow draws the red dashed reject UI.
+      const crossDrop = classifyCrossClarifyConnection(definition, guardConn)
+      if (crossDrop !== null) {
+        if (crossDrop.kind === 'questioner-reverse') {
+          if (crossDrop.questionerNodeId === crossDrop.crossClarifyNodeId) return false
+          const q = definition.nodes.find((n) => n.id === crossDrop.questionerNodeId)
+          if (!isValidCrossClarifyQuestioner(q)) return false
+          if (questionerHasExistingClarifyChannel(definition, crossDrop.questionerNodeId))
+            return false
+          return true
+        }
+        // designer-forward
+        if (crossDrop.crossClarifyNodeId === crossDrop.designerNodeId) return false
+        const d = definition.nodes.find((n) => n.id === crossDrop.designerNodeId)
+        if (d === undefined || d.kind !== 'agent-single') return false
+        if (crossClarifyHasDesignerEdge(definition, crossDrop.crossClarifyNodeId)) return false
+        return true
+      }
+      // Same defensive guard as RFC-023 — drops carrying cross-clarify
+      // port handles that the classifier rejected MUST NOT fall through
+      // to the generic catch-all path.
+      if (
+        conn.targetHandle === CROSS_CLARIFY_INPUT_PORT_NAME ||
+        conn.sourceHandle === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT ||
+        conn.sourceHandle === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
+        conn.targetHandle === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT
       ) {
         return false
       }
@@ -572,6 +641,10 @@ function CanvasInner({
     // (Above filter already drops edges whose endpoint nodes were removed,
     // but routing through the helper documents the dependency.)
     nextDef = clearClarifyEdgesForRemovedNodes(nextDef, [...removedNodes])
+    // RFC-056: same cascade for cross-clarify nodes — drops any of the
+    // three edge half-shapes (ask / ans / designer) that referenced a
+    // removed node.
+    nextDef = clearCrossClarifyEdgesForRemovedNodes(nextDef, [...removedNodes])
     commitChange(nextDef)
     setSelection({ nodes: [], edges: [] })
     // Tell the parent route to drop its selection too — otherwise

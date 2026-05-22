@@ -22,15 +22,24 @@ import { useTranslation } from 'react-i18next'
 import type {
   ClarifyAnswer,
   ClarifyDirective,
+  ClarifyInboxEntry,
   ClarifySession,
-  ClarifySessionSummary,
+  CrossClarifySession,
   SubmitClarifyAnswersResponse,
 } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
+import { Dialog } from '@/components/Dialog'
 import { useClarifyWs } from '@/hooks/useClarifyWs'
 import { deleteClarifyDraft, getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
 import { Route as RootRoute } from './__root'
+
+/** Cross-clarify detail wraps the legacy ClarifySession in a discriminated
+ *  union so the same component renders both. We narrow at the top of the
+ *  page via the field `crossClarifyNodeId` (cross) vs `clarifyNodeId` (self). */
+type ClarifyDetailEntry =
+  | ({ kind: 'self' } & ClarifySession)
+  | ({ kind: 'cross' } & CrossClarifySession)
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -47,9 +56,22 @@ export function ClarifyDetailPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
 
-  const session = useQuery<ClarifySession>({
+  const session = useQuery<ClarifyDetailEntry>({
     queryKey: ['clarify', 'detail', nodeRunId],
-    queryFn: ({ signal }) => api.get(`/api/clarify/${nodeRunId}`, undefined, signal),
+    queryFn: async ({ signal }) => {
+      // RFC-056: the endpoint returns either a ClarifySession (RFC-023
+      // self-clarify) or a CrossClarifySession (RFC-056). Distinguish by
+      // the presence of `crossClarifyNodeId` (cross) vs `clarifyNodeId`
+      // (self) and tag with kind so downstream code can branch cleanly.
+      const raw = (await api.get(`/api/clarify/${nodeRunId}`, undefined, signal)) as Record<
+        string,
+        unknown
+      >
+      if (typeof raw.crossClarifyNodeId === 'string') {
+        return { kind: 'cross' as const, ...(raw as unknown as CrossClarifySession) }
+      }
+      return { kind: 'self' as const, ...(raw as unknown as ClarifySession) }
+    },
     refetchOnWindowFocus: false,
   })
 
@@ -144,7 +166,8 @@ export function ClarifyDetailPage() {
       return
     }
     // Try to restore the IDB draft (if any) for this session.
-    const key = { taskId: s.taskId, clarifyNodeRunId: s.clarifyNodeRunId, sessionId: s.id }
+    const ownerNodeRunId = s.kind === 'cross' ? s.crossClarifyNodeRunId : s.clarifyNodeRunId
+    const key = { taskId: s.taskId, clarifyNodeRunId: ownerNodeRunId, sessionId: s.id }
     getClarifyDraft(key)
       .then((stored) => {
         if (stored !== null) {
@@ -176,8 +199,9 @@ export function ClarifyDetailPage() {
             customText: '',
           },
       )
+      const ownerNodeRunId = s.kind === 'cross' ? s.crossClarifyNodeRunId : s.clarifyNodeRunId
       void setClarifyDraft(
-        { taskId: s.taskId, clarifyNodeRunId: s.clarifyNodeRunId, sessionId: s.id },
+        { taskId: s.taskId, clarifyNodeRunId: ownerNodeRunId, sessionId: s.id },
         arr,
       ).finally(() => setDraftSaving(false))
     }, DRAFT_DEBOUNCE_MS)
@@ -187,15 +211,19 @@ export function ClarifyDetailPage() {
   }, [answers, draftLoaded, session.data])
 
   // ----------------------------------------------------------------------
-  // shard switcher — peer awaiting_human sessions for the same task +
+  // RFC-023 shard switcher — peer awaiting_human sessions for the same task +
   // clarifyNodeId. Only renders when there are ≥ 2 in scope.
+  // RFC-056 multi-source banner — peer awaiting_human CROSS-clarify sessions
+  // for the same task pointing at the same designer. Reuses the same /api/clarify
+  // list endpoint (mixed self+cross) and filters client-side.
   // ----------------------------------------------------------------------
 
-  const peers = useQuery<ClarifySessionSummary[]>({
-    queryKey: ['clarify', 'peers', session.data?.taskId, session.data?.clarifyNodeId],
+  const peerScopeTaskId = session.data?.taskId
+  const peers = useQuery<ClarifyInboxEntry[]>({
+    queryKey: ['clarify', 'peers', peerScopeTaskId],
     queryFn: ({ signal }) => {
-      const taskId = session.data?.taskId ?? ''
-      return api.get<ClarifySessionSummary[]>(
+      const taskId = peerScopeTaskId ?? ''
+      return api.get<ClarifyInboxEntry[]>(
         `/api/clarify?status=awaiting_human&taskId=${encodeURIComponent(taskId)}`,
         undefined,
         signal,
@@ -205,16 +233,53 @@ export function ClarifyDetailPage() {
     refetchInterval: 10000,
   })
 
-  const shardPeers: ClarifySessionSummary[] = useMemo(() => {
-    if (session.data === undefined) return []
-    const list = (peers.data ?? []).filter((p) => p.clarifyNodeId === session.data!.clarifyNodeId)
+  const shardPeers = useMemo(() => {
+    if (session.data === undefined || session.data.kind !== 'self') return []
+    const me = session.data
+    // Older payloads (and the unit-test fixtures predating the mixed-list
+    // PR-B) don't carry the discriminator `kind` field. Treat any peer
+    // with `clarifyNodeId` set (RFC-023 shape) as a self-clarify entry
+    // for compat.
+    const list = (peers.data ?? []).filter(
+      (p): p is Extract<ClarifyInboxEntry, { kind: 'self' }> => {
+        const kindOrLegacy = p.kind ?? ('clarifyNodeId' in p ? 'self' : null)
+        return (
+          kindOrLegacy === 'self' &&
+          (p as Extract<ClarifyInboxEntry, { kind: 'self' }>).clarifyNodeId === me.clarifyNodeId
+        )
+      },
+    )
     if (list.length < 2) return []
     return [...list].sort((a, b) => (a.sourceShardKey ?? '').localeCompare(b.sourceShardKey ?? ''))
+  }, [peers.data, session.data])
+
+  /** RFC-056: cross-clarify peers — awaiting cross sessions targeting the
+   *  same designer. Used to render the multi-source waiting banner after
+   *  the user submits THIS cross-clarify but ≥ 1 sibling is still awaiting. */
+  const crossPeers = useMemo(() => {
+    if (session.data === undefined || session.data.kind !== 'cross') return []
+    const me = session.data
+    if (me.targetDesignerNodeId === null) return []
+    return (peers.data ?? []).filter(
+      (p): p is Extract<ClarifyInboxEntry, { kind: 'cross' }> =>
+        p.kind === 'cross' &&
+        p.crossClarifyNodeRunId !== me.crossClarifyNodeRunId &&
+        p.targetDesignerNodeId === me.targetDesignerNodeId &&
+        p.status === 'awaiting_human',
+    )
   }, [peers.data, session.data])
 
   // ----------------------------------------------------------------------
   // submit
   // ----------------------------------------------------------------------
+
+  // RFC-056: when the cross-clarify submit lands but the multi-source
+  // readiness scan is still waiting on siblings, the server returns
+  // outcome.kind='designer-waiting' with the pending nodeIds. We stash that
+  // here so the banner renders even after navigation back to this page (the
+  // list refetch fills in the data otherwise). For self-clarify this stays
+  // false and the legacy redirect-to-task-detail behavior is preserved.
+  const [crossWaiting, setCrossWaiting] = useState<{ pending: string[] } | null>(null)
 
   const submitMut = useMutation<SubmitClarifyAnswersResponse, Error, ClarifyDirective>({
     mutationFn: async (directive) => {
@@ -229,21 +294,38 @@ export function ClarifyDetailPage() {
             customText: '',
           },
       )
+      const ownerNodeRunId = s.kind === 'cross' ? s.crossClarifyNodeRunId : s.clarifyNodeRunId
+      const ifMatchIteration = s.kind === 'cross' ? s.iteration : s.iterationIndex
       const resp = await api.post<SubmitClarifyAnswersResponse>(
-        `/api/clarify/${s.clarifyNodeRunId}/answers`,
-        { answers: arr, ifMatchIteration: s.iterationIndex, directive },
+        `/api/clarify/${ownerNodeRunId}/answers`,
+        { answers: arr, ifMatchIteration, directive },
       )
       // Clear the IDB draft; the answer is committed server-side.
       await deleteClarifyDraft({
         taskId: s.taskId,
-        clarifyNodeRunId: s.clarifyNodeRunId,
+        clarifyNodeRunId: ownerNodeRunId,
         sessionId: s.id,
       })
       return resp
     },
-    onSuccess: () => {
+    onSuccess: (resp) => {
       void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
+      // RFC-056: cross-clarify "designer-waiting" outcome — stay on the
+      // page and surface the multi-source banner; don't navigate away.
+      // The waiting banner tells the user another cross-clarify is still
+      // open and the designer rerun is pending the batch.
+      const respMaybeCross = resp as unknown as {
+        kind?: string
+        outcome?: { kind: string; pendingCrossClarifyNodeIds?: string[] }
+      }
+      if (respMaybeCross.kind === 'cross' && respMaybeCross.outcome?.kind === 'designer-waiting') {
+        setCrossWaiting({
+          pending: respMaybeCross.outcome.pendingCrossClarifyNodeIds ?? [],
+        })
+        void qc.invalidateQueries({ queryKey: ['clarify', 'detail', nodeRunId] })
+        return
+      }
       // RFC-023 bugfix #8 — after answering, take the user to the task
       // detail page so they immediately see the agent re-run kick off
       // (via the WS `clarify.answered` → node-runs invalidation in
@@ -261,6 +343,11 @@ export function ClarifyDetailPage() {
       }
     },
   })
+
+  // RFC-056: confirm modal state for the cross-clarify Reject button. Modal
+  // opens on Reject click; user must explicitly confirm to fire the 'stop'
+  // directive. Cancel returns to the form unchanged.
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
 
   // RFC-023 iter #2: the per-question `recommended` flag was deprecated when
   // "recommended" moved to the option level. All questions are now optional
@@ -332,9 +419,30 @@ export function ClarifyDetailPage() {
   if (s === undefined) return null
 
   const readonly = s.status !== 'awaiting_human'
+  // Normalized fields — RFC-023 (self) and RFC-056 (cross) carry the same
+  // logical data under different field names. Keep the JSX below readable
+  // by deriving the shared shape here.
+  const nodeId = s.kind === 'cross' ? s.crossClarifyNodeId : s.clarifyNodeId
+  const nodeTitle =
+    s.kind === 'self' &&
+    typeof s.clarifyNodeTitle === 'string' &&
+    s.clarifyNodeTitle.length > 0 &&
+    s.clarifyNodeTitle !== s.clarifyNodeId
+      ? s.clarifyNodeTitle
+      : null
+  const sourceName = s.kind === 'cross' ? s.sourceQuestionerNodeId : s.sourceAgentNodeId
+  const iteration = s.kind === 'cross' ? s.iteration : s.iterationIndex
+  const shardKey = s.kind === 'cross' ? null : s.sourceShardKey
+  const truncationWarnings = s.kind === 'self' ? s.truncationWarnings : undefined
+  const isCross = s.kind === 'cross'
 
   return (
-    <div className="page" data-testid="clarify-detail-page" data-status={s.status}>
+    <div
+      className="page"
+      data-testid="clarify-detail-page"
+      data-status={s.status}
+      data-kind={s.kind}
+    >
       <header className="page__header">
         <Link to="/clarify" className="link">
           {t('clarify.detail.back')}
@@ -343,15 +451,11 @@ export function ClarifyDetailPage() {
             loaded), then the clarify node title (workflowSnapshot's
             `WorkflowNode.title`) with a fall-back to the clarify node id —
             same pattern as the review detail page so the two surfaces read
-            identically. */}
+            identically. RFC-056: cross-clarify doesn't expose nodeTitle, so
+            the label is just the cross-clarify nodeId. */}
         <h1>
           {(() => {
-            const nodeLabel =
-              typeof s.clarifyNodeTitle === 'string' &&
-              s.clarifyNodeTitle.length > 0 &&
-              s.clarifyNodeTitle !== s.clarifyNodeId
-                ? s.clarifyNodeTitle
-                : s.clarifyNodeId
+            const nodeLabel = nodeTitle ?? nodeId
             const hasTaskName =
               typeof taskQuery.data?.name === 'string' && taskQuery.data.name.length > 0
             return hasTaskName ? `${taskQuery.data!.name} / ${nodeLabel}` : nodeLabel
@@ -365,21 +469,31 @@ export function ClarifyDetailPage() {
           </div>
         )}
         <p className="page__hint" data-testid="clarify-context-card">
-          {t('clarify.detail.contextCard', { name: s.sourceAgentNodeId, n: s.iterationIndex })}
-          {s.sourceShardKey !== null && (
+          {isCross
+            ? t('crossClarify.contextCard', { name: sourceName, n: iteration })
+            : t('clarify.detail.contextCard', { name: sourceName, n: iteration })}
+          {isCross && s.targetDesignerNodeId !== null && (
+            <>
+              {' · '}
+              <span data-testid="cross-clarify-target-designer">
+                {t('crossClarify.targetDesigner', { name: s.targetDesignerNodeId })}
+              </span>
+            </>
+          )}
+          {!isCross && shardKey !== null && (
             <>
               {' · '}
               <span data-testid="clarify-context-shard">
-                {t('clarify.detail.contextCardShard', { shard: s.sourceShardKey })}
+                {t('clarify.detail.contextCardShard', { shard: shardKey })}
               </span>
             </>
           )}
         </p>
       </header>
 
-      {s.truncationWarnings !== undefined && s.truncationWarnings.length > 0 && (
+      {truncationWarnings !== undefined && truncationWarnings.length > 0 && (
         <div className="error-box" data-testid="clarify-truncation-warning">
-          {s.truncationWarnings.map((w) => (
+          {truncationWarnings.map((w) => (
             <div key={w.code}>
               [{w.code}] {w.detail}
             </div>
@@ -387,7 +501,7 @@ export function ClarifyDetailPage() {
         </div>
       )}
 
-      {shardPeers.length > 0 && (
+      {!isCross && shardPeers.length > 0 && (
         <section className="clarify-shard-switcher" data-testid="clarify-shard-switcher">
           <span className="muted">{t('clarify.detail.shardSwitcherLabel')}:</span>{' '}
           {shardPeers.map((p) => (
@@ -397,7 +511,9 @@ export function ClarifyDetailPage() {
               params={{ nodeRunId: p.clarifyNodeRunId }}
               className={
                 'tabs__tab' +
-                (p.clarifyNodeRunId === s.clarifyNodeRunId ? ' tabs__tab--active' : '')
+                (p.clarifyNodeRunId === (s as ClarifySession).clarifyNodeRunId
+                  ? ' tabs__tab--active'
+                  : '')
               }
               data-shard-key={p.sourceShardKey ?? ''}
               data-testid={`clarify-shard-${p.sourceShardKey ?? 'main'}`}
@@ -406,6 +522,57 @@ export function ClarifyDetailPage() {
             </Link>
           ))}
         </section>
+      )}
+
+      {/* RFC-056: multi-source waiting banner — appears after this
+          cross-clarify has been answered but sibling cross-clarify nodes
+          targeting the same designer are still awaiting. Sources its data
+          either from the just-submitted response (crossWaiting state) or
+          from the peers query. */}
+      {isCross &&
+        (crossWaiting !== null || crossPeers.length > 0) &&
+        (() => {
+          const pending = crossWaiting?.pending ?? crossPeers.map((p) => p.crossClarifyNodeId)
+          const pendingPeers = crossPeers.filter((p) => pending.includes(p.crossClarifyNodeId))
+          if (pending.length === 0) return null
+          return (
+            <section
+              className="error-box"
+              role="status"
+              data-testid="cross-clarify-multi-source-banner"
+            >
+              <div>{t('crossClarify.multiSourceBanner', { remaining: pending.length })}</div>
+              {pendingPeers.length > 0 && (
+                <ul>
+                  {pendingPeers.map((p) => (
+                    <li key={p.id}>
+                      <Link
+                        to="/clarify/$nodeRunId"
+                        params={{ nodeRunId: p.crossClarifyNodeRunId }}
+                        className="link"
+                        data-testid={`cross-clarify-multi-source-link-${p.crossClarifyNodeId}`}
+                      >
+                        {t('crossClarify.multiSourcePendingLinkLabel')}: {p.crossClarifyNodeId}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )
+        })()}
+
+      {/* RFC-056: abandoned chip — surfaces when the session was answered
+          but its parent task failed before the designer consumed the
+          feedback. The CR-1 invariant flipped status='abandoned'. */}
+      {isCross && s.status === 'abandoned' && (
+        <div
+          className="status-chip status-chip--red"
+          data-testid="cross-clarify-abandoned-chip"
+          title={t('crossClarify.abandonedTooltip')}
+        >
+          {t('crossClarify.abandonedChip')}
+        </div>
       )}
 
       {!readonly && (
@@ -451,16 +618,33 @@ export function ClarifyDetailPage() {
           >
             {t('clarify.detail.submitContinue')}
           </button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={readonly || submitMut.isPending || requiredMissing}
-            onClick={() => submitMut.mutate('stop')}
-            data-testid="clarify-submit-stop"
-            data-directive="stop"
-          >
-            {t('clarify.detail.submitStop')}
-          </button>
+          {/* RFC-023 self-clarify shows "submit & stop clarifying";
+              RFC-056 cross-clarify replaces it with a Reject button + 2nd
+              confirm modal because reject is a much heavier decision
+              (persistent across loop iters, can't be undone in-task). */}
+          {isCross ? (
+            <button
+              type="button"
+              className="btn btn--danger"
+              disabled={readonly || submitMut.isPending || requiredMissing}
+              onClick={() => setRejectModalOpen(true)}
+              data-testid="cross-clarify-reject"
+              data-directive="stop"
+            >
+              {t('crossClarify.button.reject')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={readonly || submitMut.isPending || requiredMissing}
+              onClick={() => submitMut.mutate('stop')}
+              data-testid="clarify-submit-stop"
+              data-directive="stop"
+            >
+              {t('clarify.detail.submitStop')}
+            </button>
+          )}
         </div>
         {requiredMissing && (
           <span className="error-box" data-testid="clarify-required-missing">
@@ -471,6 +655,43 @@ export function ClarifyDetailPage() {
           <div className="error-box">{(submitMut.error as Error).message}</div>
         )}
       </footer>
+
+      {/* RFC-056 cross-clarify reject confirm modal. Two-step interaction
+          so an accidental click in the footer can't push the questioner
+          into persistent STOP CLARIFYING mode. */}
+      {isCross && (
+        <Dialog
+          open={rejectModalOpen}
+          onClose={() => setRejectModalOpen(false)}
+          title={t('crossClarify.rejectModal.title')}
+          data-testid="cross-clarify-reject-modal"
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setRejectModalOpen(false)}
+                data-testid="cross-clarify-reject-cancel"
+              >
+                {t('clarify.detail.back')}
+              </button>
+              <button
+                type="button"
+                className="btn btn--danger"
+                onClick={() => {
+                  setRejectModalOpen(false)
+                  submitMut.mutate('stop')
+                }}
+                data-testid="cross-clarify-reject-confirm"
+              >
+                {t('crossClarify.rejectModal.confirm')}
+              </button>
+            </>
+          }
+        >
+          <p>{t('crossClarify.rejectModal.body')}</p>
+        </Dialog>
+      )}
     </div>
   )
 }

@@ -30,7 +30,20 @@ export function useClarifyWs({ taskId, clarifyNodeRunId }: UseClarifyWsOpts): vo
     enabled: taskId !== null,
     onMessage: (raw) => {
       const msg = raw as TaskWsMessage
-      if (msg.type !== 'clarify.created' && msg.type !== 'clarify.answered') return
+      const isSelfClarify = msg.type === 'clarify.created' || msg.type === 'clarify.answered'
+      // RFC-056: cross-clarify events route through the same hook so the
+      // /clarify list + detail (now mixed) stay in sync on the same WS
+      // channel. designer-rerun-batched also invalidates the focused
+      // detail because the cross-clarify form needs to flip to read-only
+      // once the designer is mid-rerun (the source-of-truth is the
+      // session's `status` which moves answered → designerRunTriggered
+      // implicitly).
+      const isCrossClarify =
+        msg.type === 'cross-clarify.created' ||
+        msg.type === 'cross-clarify.answered' ||
+        msg.type === 'cross-clarify.rejected' ||
+        msg.type === 'cross-clarify.designer-rerun-batched'
+      if (!isSelfClarify && !isCrossClarify) return
       // Refetch the focused session detail if it's the one being currently
       // viewed (or if the WS event targets any other session — we still
       // invalidate the list so the badge / list view updates).

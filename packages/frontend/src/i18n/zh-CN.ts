@@ -1427,6 +1427,8 @@ export interface Resources {
       openButton: string
       statusAwaiting: string
       statusAnswered: string
+      // RFC-056: per-row chip label.
+      chip: { self: string; cross: string }
     }
     detail: {
       contextCard: string
@@ -1477,6 +1479,30 @@ export interface Resources {
       chip: {
         inline: string
       }
+    }
+  }
+  // RFC-056 cross-clarify UI strings.
+  crossClarify: {
+    contextCard: string
+    targetDesigner: string
+    button: { reject: string }
+    rejectModal: { title: string; body: string; confirm: string }
+    multiSourceBanner: string
+    multiSourcePendingLinkLabel: string
+    abandonedChip: string
+    abandonedTooltip: string
+    inspector: {
+      title: string
+      sessionModeForDesigner: string
+      sessionModeForQuestioner: string
+      sessionModeIsolated: string
+      sessionModeInline: string
+      sessionModeHint: string
+    }
+    canvas: {
+      paletteLabel: string
+      paletteHint: string
+      error: { targetNotAgentSingle: string; designerNotAgentSingle: string }
     }
   }
   sidebar: {
@@ -3158,6 +3184,8 @@ export const zhCN: Resources = {
       openButton: '打开',
       statusAwaiting: '待回答',
       statusAnswered: '已回答',
+      // RFC-056: 列表项 chip 区分两种反问通道。
+      chip: { self: '自反问', cross: '跨 agent 反问' },
     },
     detail: {
       contextCard: '由 agent {{name}} 发起 · 第 {{n}} 轮反问',
@@ -3212,6 +3240,41 @@ export const zhCN: Resources = {
       fallbackToIsolated: '本轮 inline session 不可用（原因：{{reason}}），自动回退为独立 session',
     },
     node: { chip: { inline: 'session=inline' } },
+  },
+  // RFC-056 跨 agent 反问 — 仅特有于 cross-clarify 路径的文案。
+  // 复用：RFC-023 的列表 / 详情头 / QuestionForm / 草稿状态条。
+  // cross-clarify 表单与 RFC-023 共用 /clarify/$nodeRunId 路由，仅 footer
+  // 与多源等待 banner 不一样。
+  crossClarify: {
+    contextCard: '由反问 agent {{name}} 发起 · 第 {{n}} 轮',
+    targetDesigner: '反馈对象：{{name}}',
+    button: { reject: '拒绝（让反问者闭嘴）' },
+    rejectModal: {
+      title: '确认拒绝反问？',
+      body: '反问 agent 将不再在本 task 上对该节点产生问题——跨 loop 迭代也持久生效。该决策不可撤销，如需重提请重启 task。',
+      confirm: '确认拒绝',
+    },
+    multiSourceBanner: '已提交。等待另外 {{remaining}} 个反问节点处理完，designer 才会重跑。',
+    multiSourcePendingLinkLabel: '打开',
+    abandonedChip: '反馈未送达 (abandoned)',
+    abandonedTooltip: 'designer 任务在反馈被消费前已失败。需重启任务才能重试。',
+    inspector: {
+      title: '跨 agent 反问节点',
+      sessionModeForDesigner: 'designer 重跑 session',
+      sessionModeForQuestioner: 'questioner 重跑 session',
+      sessionModeIsolated: '独立（每轮新进程）',
+      sessionModeInline: '续接（resume）',
+      sessionModeHint:
+        '续接模式让重跑复用上一轮 opencode session；auth/session 失败时自动回退为独立模式。',
+    },
+    canvas: {
+      paletteLabel: '跨 agent 反问',
+      paletteHint: '拖到下游反问 agent 上自动建反问通道；再手动连 to_designer → 上游 designer。',
+      error: {
+        targetNotAgentSingle: '跨 agent 反问节点的输入端只能连 agent-single（v1 限制）。',
+        designerNotAgentSingle: 'to_designer 必须连到 agent-single 节点。',
+      },
+    },
   },
   sidebar: {
     languageGroupLabel: '切换界面语言',

@@ -109,6 +109,9 @@ export interface CrossClarifySession {
 export interface CrossClarifySessionSummary {
   id: string
   taskId: string
+  /** RFC-037 parity: display name of the owning task. Required so the
+   *  mixed inbox can group rows by task name regardless of kind. */
+  taskName: string
   crossClarifyNodeId: string
   crossClarifyNodeRunId: string
   sourceQuestionerNodeId: string
@@ -910,7 +913,17 @@ export async function listCrossClarifySummaries(
     return true
   })
   const limit = filter.limit ?? 100
-  return filtered.slice(0, limit).map(rowToSummary)
+  const sliced = filtered.slice(0, limit)
+  // RFC-037 parity: bulk-fetch task names for the included rows so each
+  // summary carries a non-empty taskName (mirrors listClarifySummaries).
+  const taskIds = Array.from(new Set(sliced.map((r) => r.taskId)))
+  const taskNameByTaskId = new Map<string, string>()
+  if (taskIds.length > 0) {
+    const taskRows = await db.select({ id: tasks.id, name: tasks.name }).from(tasks)
+    const wanted = new Set(taskIds)
+    for (const r of taskRows) if (wanted.has(r.id)) taskNameByTaskId.set(r.id, r.name)
+  }
+  return sliced.map((r) => rowToSummary(r, taskNameByTaskId.get(r.taskId) ?? ''))
 }
 
 export async function getCrossClarifyDetail(
@@ -1007,7 +1020,10 @@ function rowToSession(row: typeof crossClarifySessions.$inferSelect): CrossClari
   return out
 }
 
-function rowToSummary(row: typeof crossClarifySessions.$inferSelect): CrossClarifySessionSummary {
+function rowToSummary(
+  row: typeof crossClarifySessions.$inferSelect,
+  taskName = '',
+): CrossClarifySessionSummary {
   let questionCount = 0
   try {
     const qs = JSON.parse(row.questionsJson) as ClarifyQuestion[]
@@ -1018,6 +1034,7 @@ function rowToSummary(row: typeof crossClarifySessions.$inferSelect): CrossClari
   return {
     id: row.id,
     taskId: row.taskId,
+    taskName,
     crossClarifyNodeId: row.crossClarifyNodeId,
     crossClarifyNodeRunId: row.crossClarifyNodeRunId,
     sourceQuestionerNodeId: row.sourceQuestionerNodeId,
