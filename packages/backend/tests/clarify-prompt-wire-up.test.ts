@@ -111,4 +111,21 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
     expect(src).toContain('applyLatestDirective: isClarifyRerun')
   })
+
+  // RFC-058 T13 + T17 — aging-single-source grep guard.
+  //
+  // Locks that scheduler.ts has exactly one cutoff entry — the
+  // `computeHistoryCutoff` call — and does NOT carry the ~30-line inline
+  // lookup that pre-RFC-058 lived at scheduler.ts:1372-1405. The inline
+  // pattern is uniquely identifiable by the combo `eligible.push(r)` +
+  // `haveOutputs` SET membership filter; if either reappears here a
+  // duplicate aging implementation has crept back and divergence between
+  // the self path and cross-questioner path becomes possible again (the
+  // exact regression RFC-058 缺口 1 was about).
+  test('scheduler.ts sources GENERAL aging cutoff from computeHistoryCutoff only (RFC-058 缺口 1 single-source lock)', () => {
+    const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
+    expect(src).toContain('computeHistoryCutoff')
+    expect(src).not.toMatch(/eligible\.push\(r\)/)
+    expect(src).not.toMatch(/haveOutputs\.has\(r\.id\)/)
+  })
 })
