@@ -4413,23 +4413,55 @@ code {
   background: color-mix(in srgb, var(--panel) 85%, transparent);
   border-radius: 3px;
 }
-/* Label needs inner padding so the handle dot (sitting on the wrapper's
- * border) doesn't overlap the port name. */
-.canvas-node--wrapper-group--fanout .canvas-node__port-rows--left .canvas-node__port-row {
-  padding: 0 6px 0 12px;
+/* RFC-060 §3 — wrapper-fanout boundary rows straddle the wrapper border.
+ *
+ * Each row is a small flex pill with one Handle on each end and the label
+ * (+ optional shard tag) between them. The row is CENTERED on the wrapper's
+ * left (or right) edge via `transform: translateX(±50%)`, so the label's
+ * midpoint sits exactly on the border. With both Handles flowing inline
+ * (overrides further down) the result is:
+ *
+ *   wrapper border
+ *        │
+ *  [target dot] │ docs │ [source dot]        ← left input row
+ *        │
+ *  outer (incoming)   inner (boundary-input to inner nodes)
+ *
+ * Mirrored on the right side for output rows. This is the "对外连接点和对内
+ * 连接点分布于包装器边缘两侧" layout — both connection directions are visible
+ * and reachable from the same row. */
+.canvas-node--wrapper-group--fanout .canvas-node__port-row--boundary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: max-content;
 }
-.canvas-node--wrapper-group--fanout .canvas-node__port-rows--right .canvas-node__port-row {
-  padding: 0 12px 0 6px;
+.canvas-node--wrapper-group--fanout .canvas-node__port-rows--left .canvas-node__port-row--boundary {
+  transform: translateX(-50%);
 }
-/* Pin the handle dot's CENTER on the wrapper's outer border (left: 0 / right: 0
- * of the row + xyflow's translate(-50%, -50%) = dot centered on the edge). */
-.canvas-node--wrapper-group--fanout .canvas-node__port-rows--left .react-flow__handle-left {
-  left: 0 !important;
-  right: auto !important;
+.canvas-node--wrapper-group--fanout
+  .canvas-node__port-rows--right
+  .canvas-node__port-row--boundary {
+  transform: translateX(50%);
 }
-.canvas-node--wrapper-group--fanout .canvas-node__port-rows--right .react-flow__handle-right {
-  right: 0 !important;
+/* Both boundary handles flow inline within the pill instead of xyflow's
+ * default absolute placement. The selector is intentionally specific
+ * (3 classes) so it overrides the catch-all `.canvas-node__port-row
+ * .react-flow__handle-left/right { left|right: -14px !important }` rules
+ * further down (specificity 0,2,0 vs ours 0,3,0). */
+.canvas-node--wrapper-group--fanout .canvas-node__port-row .canvas-node__handle--boundary-outer,
+.canvas-node--wrapper-group--fanout .canvas-node__port-row .canvas-node__handle--boundary-inner {
+  position: relative !important;
+  top: auto !important;
   left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: none !important;
+  flex-shrink: 0;
 }
 /* Shard-source row chrome — amber accent stripe (matches the wrapper-fanout
  * container hue) + a small "shard" tag pill. Authors see at a glance which
@@ -4753,6 +4785,7 @@ code {
   background: var(--panel) !important;
   border: 1.5px dashed var(--muted) !important;
 }
+
 .canvas-node__bottom-port--signal .canvas-node__port-label {
   color: var(--muted);
   font-style: italic;

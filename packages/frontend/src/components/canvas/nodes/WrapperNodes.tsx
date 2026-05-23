@@ -123,16 +123,34 @@ export function GroupWrapperNode({ data, selected }: Props) {
               {data.inputPorts.map((p) => {
                 const isShardSource = p === data.shardSourcePort
                 return (
+                  /* RFC-060 §3 — boundary port row. Layout straddles the
+                   * wrapper's left border so authors can wire BOTH directions
+                   * from the same row:
+                   *
+                   *   [outer dot] [label (+ optional shard tag)] [inner dot]
+                   *        ↑                ↑                          ↑
+                   *   outside wrapper   centered on edge         inside wrapper
+                   *      (target)                                 (source →
+                   *      external edges                            boundary-input
+                   *      land here)                                edges into inner
+                   *                                                nodes start here)
+                   *
+                   * CSS in styles.css (.canvas-node__port-row--boundary)
+                   * centers each row on the wrapper's left edge via
+                   * `transform: translateX(-50%)`. The two Handles flow
+                   * inline (position: relative) instead of xyflow's default
+                   * absolute placement so the row visually reads as one
+                   * coherent pill with dots on each end. */
                   <div
                     key={p}
-                    className={`canvas-node__port-row canvas-node__port-row--left${isShardSource ? ' canvas-node__port-row--shard-source' : ''}`}
+                    className={`canvas-node__port-row canvas-node__port-row--left canvas-node__port-row--boundary${isShardSource ? ' canvas-node__port-row--shard-source' : ''}`}
                     data-shard-source={isShardSource ? 'true' : undefined}
                   >
                     <Handle
                       type="target"
                       position={Position.Left}
                       id={p}
-                      className="canvas-node__handle"
+                      className="canvas-node__handle canvas-node__handle--boundary-outer"
                     />
                     <span className="canvas-node__port-label" title={p}>
                       {p}
@@ -145,6 +163,16 @@ export function GroupWrapperNode({ data, selected }: Props) {
                         {t('wrapperNode.shardSourceTagShort')}
                       </span>
                     ) : null}
+                    {/* Inner-source Handle — drag from here to wire boundary-
+                     * input edges into inner nodes. `position={Position.Right}`
+                     * makes xyflow draw the edge tangent pointing INWARD
+                     * (rightward, into the wrapper interior). */}
+                    <Handle
+                      type="source"
+                      position={Position.Right}
+                      id={p}
+                      className="canvas-node__handle canvas-node__handle--boundary-inner"
+                    />
                   </div>
                 )
               })}
@@ -162,11 +190,38 @@ export function GroupWrapperNode({ data, selected }: Props) {
           {data.outputPorts.map((p) => {
             const isSignal = p === '__done__'
             return (
+              /* RFC-060 §3 — symmetric boundary row on the right edge.
+               * Layout straddles the wrapper's right border:
+               *
+               *   [inner dot] [label] [outer dot]
+               *        ↑          ↑         ↑
+               *   inside wrapper  edge   outside wrapper
+               *      (target →           (source →
+               *      boundary-output      downstream edges
+               *      edges from inner     to consumer nodes
+               *      aggregator land      start here)
+               *      here)
+               *
+               * The inner target Handle is what makes the boundary-output
+               * drag-author UX work: dragging from an inner aggregator's
+               * output port onto this Handle mints an inner-to-wrapper
+               * edge tagged `boundary: 'wrapper-output'`. Without it, the
+               * only authoring route is hand-edited YAML. */
               <div
                 key={p}
-                className={`canvas-node__port-row canvas-node__port-row--right${isSignal ? ' canvas-node__port-row--signal' : ''}`}
+                className={`canvas-node__port-row canvas-node__port-row--right canvas-node__port-row--boundary${isSignal ? ' canvas-node__port-row--signal' : ''}`}
                 data-signal={isSignal ? 'true' : undefined}
               >
+                {/* Inner-target Handle — drag-drop landing pad for
+                 * boundary-output edges from the inner aggregator agent.
+                 * `position={Position.Left}` so the tangent points OUTWARD
+                 * from the inner node toward this dot. */}
+                <Handle
+                  type="target"
+                  position={Position.Left}
+                  id={p}
+                  className={`canvas-node__handle canvas-node__handle--boundary-inner${isSignal ? ' canvas-node__handle--signal' : ''}`}
+                />
                 <span className="canvas-node__port-label" title={p}>
                   {p}
                 </span>
@@ -174,7 +229,7 @@ export function GroupWrapperNode({ data, selected }: Props) {
                   type="source"
                   position={Position.Right}
                   id={p}
-                  className={`canvas-node__handle${isSignal ? ' canvas-node__handle--signal' : ''}`}
+                  className={`canvas-node__handle canvas-node__handle--boundary-outer${isSignal ? ' canvas-node__handle--signal' : ''}`}
                 />
               </div>
             )

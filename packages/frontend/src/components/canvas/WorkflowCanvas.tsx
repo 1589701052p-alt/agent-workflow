@@ -478,8 +478,21 @@ function CanvasInner({
       // output node can collect many independent upstreams; named-handle
       // drops keep the explicit single-port rebind semantics.
       const viaCatchAll = conn.targetHandle === INBOUND_HANDLE_ID
-      const built = buildEdgeFromConnection(definition, translateInboundConnection(conn))
-      if (built === null) return
+      const builtRaw = buildEdgeFromConnection(definition, translateInboundConnection(conn))
+      if (builtRaw === null) return
+      // RFC-060 §3 — when the user drags between a wrapper-fanout boundary
+      // port and an inner node, the resulting edge is a boundary edge
+      // (`boundary: 'wrapper-input'` for outer→inner, `'wrapper-output'`
+      // for inner→outer). Tag it here so the scheduler / aggregator paths
+      // pick it up — `services/fanout.ts` iterates only edges with the
+      // correct boundary marker; without the tag the edge would render on
+      // the canvas but never fan out / aggregate at runtime. The two
+      // helpers are mutually exclusive (an edge can only match one
+      // direction), so chaining them is safe.
+      const built = markBoundaryWrapperOutput(
+        definition,
+        markBoundaryWrapperInput(definition, builtRaw),
+      )
       const withEdge = { ...definition, edges: [...definition.edges, built] }
       const synced = applyConnectionForReviewOutput(withEdge, built, { viaCatchAll })
       // RFC-060 — wrapper-fanout inputs[] is the single source of truth for
@@ -1155,8 +1168,22 @@ export function computePorts(
 
   // Inputs derived from inbound edges (any target node) so users can see
   // which prompt vars / output ports are wired up on this node.
+  //
+  // RFC-060 §3 — skip `boundary: 'wrapper-output'` edges. Their target is
+  // conceptually an OUTPUT port of the wrapper-fanout (re-used as a target
+  // so the inner aggregator can drag boundary-output edges onto it); the
+  // declared output is already surfaced by the wrapper-fanout case of the
+  // switch below. Without this skip the boundary-output edge would also
+  // append the output port name to `inputs[]`, drawing a phantom INPUT
+  // port row on the wrapper's left side that mirrors the output port name
+  // — symmetric to the inputs-leak-into-outputs bug fixed in the outputs
+  // fallback at the bottom of this function.
   for (const e of definition.edges) {
-    if (e.target.nodeId === node.id && !inputs.includes(e.target.portName)) {
+    if (
+      e.target.nodeId === node.id &&
+      e.boundary !== 'wrapper-output' &&
+      !inputs.includes(e.target.portName)
+    ) {
       inputs.push(e.target.portName)
     }
   }
@@ -1230,8 +1257,22 @@ export function computePorts(
   // (stale snapshot vs edited agent/wrapper definition) still needs a Handle
   // so xyflow can route the edge. Without this, the edge silently disappears
   // and the console fills with "Couldn't create edge for source handle id".
+  //
+  // RFC-060 §3 — skip `boundary: 'wrapper-input'` edges here. Their source
+  // is conceptually an INPUT port of the wrapper-fanout (re-used as a source
+  // so users can drag boundary-input edges into inner nodes); appending the
+  // input port name to `outputs[]` would render a phantom OUTPUT port on the
+  // wrapper's right side that mirrors the input port name (the duplicate
+  // user-visible bug after the dual-purpose-handle landing). The matching
+  // left-side input Handle is already declared above (case 'wrapper-fanout'
+  // / `declaredInputs` loop), so xyflow can route the edge without this
+  // fallback.
   for (const e of definition.edges) {
-    if (e.source.nodeId === node.id && !outputs.includes(e.source.portName)) {
+    if (
+      e.source.nodeId === node.id &&
+      e.boundary !== 'wrapper-input' &&
+      !outputs.includes(e.source.portName)
+    ) {
       outputs.push(e.source.portName)
     }
   }
@@ -1610,6 +1651,58 @@ export function buildEdgeFromConnection(
  * Returns `prev` by reference when no change is needed so React effects
  * short-circuit on `===`.
  */
+/**
+ * RFC-060 §3 — tag an edge whose source is a wrapper-fanout node and whose
+ * target lives inside that wrapper's `nodeIds[]` as a
+ * `boundary: 'wrapper-input'` edge. The scheduler's fanout dispatcher
+ * (services/fanout.ts) keys off this flag to inject shards / broadcast
+ * values into inner-node prompts; an untagged edge would render on the
+ * canvas but be ignored at runtime.
+ *
+ * Returns `edge` by reference when no tagging is needed.
+ */
+export function markBoundaryWrapperInput(
+  def: WorkflowDefinition,
+  edge: WorkflowEdge,
+): WorkflowEdge {
+  if (edge.boundary !== undefined) return edge
+  const source = def.nodes.find((n) => n.id === edge.source.nodeId)
+  if (source === undefined || source.kind !== 'wrapper-fanout') return edge
+  const innerIds = (source as Record<string, unknown>).nodeIds
+  const memberIds = Array.isArray(innerIds)
+    ? innerIds.filter((s): s is string => typeof s === 'string')
+    : []
+  if (!memberIds.includes(edge.target.nodeId)) return edge
+  return { ...edge, boundary: 'wrapper-input' }
+}
+
+/**
+ * RFC-060 §3 — symmetric mirror of {@link markBoundaryWrapperInput}.
+ * Tags an edge whose target is a wrapper-fanout node and whose source
+ * lives inside that wrapper's `nodeIds[]` as a
+ * `boundary: 'wrapper-output'` edge. The runtime aggregator path
+ * (services/fanout.ts) treats inner-to-wrapper-output edges as
+ * promotions of the aggregator's per-shard outputs to the wrapper's
+ * outlet; without this tag the edge would render but the runtime
+ * would treat it as a non-boundary edge and refuse to project.
+ *
+ * Returns `edge` by reference when no tagging is needed.
+ */
+export function markBoundaryWrapperOutput(
+  def: WorkflowDefinition,
+  edge: WorkflowEdge,
+): WorkflowEdge {
+  if (edge.boundary !== undefined) return edge
+  const target = def.nodes.find((n) => n.id === edge.target.nodeId)
+  if (target === undefined || target.kind !== 'wrapper-fanout') return edge
+  const innerIds = (target as Record<string, unknown>).nodeIds
+  const memberIds = Array.isArray(innerIds)
+    ? innerIds.filter((s): s is string => typeof s === 'string')
+    : []
+  if (!memberIds.includes(edge.source.nodeId)) return edge
+  return { ...edge, boundary: 'wrapper-output' }
+}
+
 export function ensureWrapperFanoutInputForEdge(
   prev: WorkflowDefinition,
   edge: WorkflowEdge,

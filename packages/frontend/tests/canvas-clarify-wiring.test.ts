@@ -72,7 +72,12 @@ describe('RFC-023 bugfix source-level wiring guard', () => {
     // block inside the switch; the function body grew so the slice window
     // bumps from 3000 → 4500 to keep the fallback edge-pass at function
     // end inside the slice.
-    const body = src.slice(fnIdx, fnIdx + 4500)
+    //
+    // 2026-05-24: the RFC-060 §3 boundary-input/output skip comments + the
+    // refactor that split the two loops into multi-line conditionals
+    // pushed the function past 5000 chars; bump to 5500 to keep the
+    // fallback edge-pass inside the slice.
+    const body = src.slice(fnIdx, fnIdx + 5500)
     expect(body).toMatch(
       /for \(const e of definition\.edges\)[\s\S]*?e\.source\.nodeId === node\.id[\s\S]*?outputs\.push\(e\.source\.portName\)/,
     )

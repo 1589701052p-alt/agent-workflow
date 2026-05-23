@@ -184,8 +184,10 @@ describe('GroupWrapperNode', () => {
         '.canvas-node__port-rows--wrapper-fanout .canvas-node__port-row',
       )
       expect(port?.classList.contains('canvas-node__port-row--signal')).toBe(true)
-      const handle = port?.querySelector('.canvas-node__handle')
-      expect(handle?.classList.contains('canvas-node__handle--signal')).toBe(true)
+      // Either the inner-target or outer-source carries the signal-chrome
+      // class — at least one Handle in the row must.
+      const handle = port?.querySelector('.canvas-node__handle--signal')
+      expect(handle).not.toBeNull()
     })
     test('fanout output: aggregator-derived port renders as plain data handle (matches git_diff)', () => {
       const { container } = renderNode(fanoutData({ outputPorts: ['summary'] }))
@@ -197,8 +199,8 @@ describe('GroupWrapperNode', () => {
       // what unifies the visual with wrapper-git's `git_diff` (both render
       // as plain data handles, just on different edges).
       expect(port?.classList.contains('canvas-node__port-row--signal')).toBe(false)
-      const handle = port?.querySelector('.canvas-node__handle')
-      expect(handle?.classList.contains('canvas-node__handle--signal')).toBe(false)
+      const signalHandle = port?.querySelector('.canvas-node__handle--signal')
+      expect(signalHandle).toBeNull()
     })
     test('fanout wrapper places outputs on the RIGHT, not the bottom strip', () => {
       const { container } = renderNode(fanoutData({ outputPorts: ['summary'] }))
@@ -212,11 +214,120 @@ describe('GroupWrapperNode', () => {
     // is unreachable from upstream on the canvas.
     test('fanout wrapper renders a target handle for each declared input port', () => {
       const { container } = renderNode(fanoutData({ inputPorts: ['docs'] }))
-      const leftHandles = container.querySelectorAll(
-        '.canvas-node__port-rows--left .canvas-node__handle',
+      const leftRow = container.querySelector(
+        '.canvas-node__port-rows--left .canvas-node__port-row',
       )
-      expect(leftHandles.length).toBe(1)
-      expect(leftHandles[0]?.getAttribute('data-handleid')).toBe('docs')
+      expect(leftRow).not.toBeNull()
+      const targetHandle = leftRow?.querySelector('.react-flow__handle-left[data-handlepos="left"]')
+      // At least one handle with id 'docs' must exist on the left row.
+      const handlesById = leftRow?.querySelectorAll('[data-handleid="docs"]')
+      expect((handlesById?.length ?? 0) > 0).toBe(true)
+      expect(targetHandle).not.toBeNull()
+    })
+    // RFC-060 §3 — wrapper-fanout input ports are dual-purpose: target for
+    // upstream edges arriving from outside the wrapper, AND source for
+    // boundary-input edges drag-authored INTO inner nodes. Without the
+    // overlapping source-typed Handle the drag-from-input path is unreachable
+    // on the canvas (the user only has the inspector form left). The
+    // assertions below lock the contract so a future refactor that drops the
+    // second Handle flips them red — see WorkflowCanvas.handleConnect's
+    // markBoundaryWrapperInput tagger which depends on this drag actually
+    // firing.
+    test('fanout input port also exposes a source handle so drag-to-inner works', () => {
+      const { container } = renderNode(fanoutData({ inputPorts: ['docs'] }))
+      const leftRow = container.querySelector(
+        '.canvas-node__port-rows--left .canvas-node__port-row',
+      )
+      expect(leftRow).not.toBeNull()
+      const handlesForPort = leftRow?.querySelectorAll('[data-handleid="docs"]') ?? []
+      // Expect both a target Handle (for incoming external edges) and a
+      // source Handle (for boundary-input drags into inner nodes).
+      expect(handlesForPort.length).toBe(2)
+      const innerMarker = leftRow?.querySelector('.canvas-node__handle--boundary-inner')
+      expect(innerMarker).not.toBeNull()
+      expect(innerMarker?.getAttribute('data-handleid')).toBe('docs')
+    })
+    // 2026-05-24 — boundary-input edges must exit the wrapper port tangent
+    // pointing INWARD (rightward, into the wrapper interior) so the edge
+    // arrow visibly goes toward the inner node it connects to. xyflow
+    // encodes the tangent direction in `data-handlepos`; the inner-source
+    // Handle uses `Position.Right` to flip the tangent inward.
+    test('fanout input inner-source handle has data-handlepos=right (edge exits inward)', () => {
+      const { container } = renderNode(fanoutData({ inputPorts: ['docs'] }))
+      const innerMarker = container.querySelector(
+        '.canvas-node__handle--boundary-inner',
+      ) as HTMLElement | null
+      expect(innerMarker).not.toBeNull()
+      expect(innerMarker?.getAttribute('data-handlepos')).toBe('right')
+      // Outer target Handle keeps `data-handlepos="left"` so external
+      // upstream edges arrive at the wrapper from the left as before.
+      const leftRow = container.querySelector(
+        '.canvas-node__port-rows--left .canvas-node__port-row',
+      )
+      const outerHandle = leftRow?.querySelector('[data-handleid="docs"][data-handlepos="left"]')
+      expect(outerHandle).not.toBeNull()
+      expect(outerHandle?.classList.contains('canvas-node__handle--boundary-outer')).toBe(true)
+    })
+    // 2026-05-24 — boundary row layout (input): outer dot → label
+    // (+ optional shard tag) → inner dot, all centered on the wrapper's
+    // left border via CSS `translateX(-50%)`. Locks the per-row DOM order
+    // so a future regression that moves either Handle into the wrong slot
+    // (or back to the absolute-positioned layout) flips red.
+    test('fanout input row order: outer (target) → label → inner (source)', () => {
+      const { container } = renderNode(fanoutData({ inputPorts: ['docs'] }))
+      const leftRow = container.querySelector(
+        '.canvas-node__port-rows--left .canvas-node__port-row',
+      )
+      expect(leftRow?.classList.contains('canvas-node__port-row--boundary')).toBe(true)
+      const children = Array.from(leftRow?.children ?? [])
+      // Three direct children for a non-shard port: outer Handle, label,
+      // inner Handle. (Shard-tag span pushes count to 4 — verified below.)
+      expect(children.length).toBe(3)
+      expect(children[0]?.classList.contains('canvas-node__handle--boundary-outer')).toBe(true)
+      expect(children[0]?.getAttribute('data-handlepos')).toBe('left')
+      expect(children[1]?.classList.contains('canvas-node__port-label')).toBe(true)
+      expect(children[2]?.classList.contains('canvas-node__handle--boundary-inner')).toBe(true)
+      expect(children[2]?.getAttribute('data-handlepos')).toBe('right')
+    })
+    // 2026-05-24 — shard-source tag sits BETWEEN the label and the inner
+    // dot, not after it — so the user's "分片源 几个字被连接点盖住了"
+    // regression (tag covered by the dot) can't come back. This depends on
+    // the JSX emitting the shard-tag span BEFORE the inner Handle.
+    test('fanout shard-source row: outer dot → label → shard tag → inner dot', () => {
+      const { container } = renderNode(
+        fanoutData({ inputPorts: ['docs'], shardSourcePort: 'docs' }),
+      )
+      const leftRow = container.querySelector(
+        '.canvas-node__port-rows--left .canvas-node__port-row',
+      )
+      const children = Array.from(leftRow?.children ?? [])
+      expect(children.length).toBe(4)
+      expect(children[0]?.classList.contains('canvas-node__handle--boundary-outer')).toBe(true)
+      expect(children[1]?.classList.contains('canvas-node__port-label')).toBe(true)
+      expect(children[2]?.classList.contains('canvas-node__port-tag--shard')).toBe(true)
+      expect(children[3]?.classList.contains('canvas-node__handle--boundary-inner')).toBe(true)
+    })
+    // 2026-05-24 — symmetric output-side row: inner (target) →
+    // label → outer (source). The inner Handle is what makes the
+    // boundary-output drag-author UX work (inner aggregator → wrapper
+    // output port). Same structure as the input side, mirrored.
+    test('fanout output row order: inner (target) → label → outer (source)', () => {
+      const { container } = renderNode(fanoutData({ outputPorts: ['summary'] }))
+      const rightRow = container.querySelector(
+        '.canvas-node__port-rows--right .canvas-node__port-row',
+      )
+      expect(rightRow?.classList.contains('canvas-node__port-row--boundary')).toBe(true)
+      const children = Array.from(rightRow?.children ?? [])
+      expect(children.length).toBe(3)
+      expect(children[0]?.classList.contains('canvas-node__handle--boundary-inner')).toBe(true)
+      expect(children[0]?.getAttribute('data-handlepos')).toBe('left')
+      expect(children[1]?.classList.contains('canvas-node__port-label')).toBe(true)
+      expect(children[2]?.classList.contains('canvas-node__handle--boundary-outer')).toBe(true)
+      expect(children[2]?.getAttribute('data-handlepos')).toBe('right')
+      // Both Handles share the same id so edges drag-authored from either
+      // side land on the same declared output port.
+      const handlesForPort = rightRow?.querySelectorAll('[data-handleid="summary"]') ?? []
+      expect(handlesForPort.length).toBe(2)
     })
     test('fanout wrapper also exposes the catch-all left strip for tolerant drops', () => {
       const { container } = renderNode(fanoutData({ inputPorts: ['docs'] }))
