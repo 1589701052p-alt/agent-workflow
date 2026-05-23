@@ -91,7 +91,7 @@ import {
   resolveMembershipOnDragStop,
   type WrapperHitInput,
 } from './wrapperMembership'
-import { DEFAULT_NODE_SIZE_BY_KIND } from './wrapperFit'
+import { DEFAULT_NODE_SIZE_BY_KIND, fitWrapperToInner } from './wrapperFit'
 import { clearWrapperSize, deleteWrapperWithChildren } from './wrapperOps'
 
 const NODE_TYPES = {
@@ -1097,6 +1097,37 @@ function CanvasInner({
               wrappers,
             })
             nextDef = applyMembershipPatch(nextDef, patch)
+          }
+          // Re-fit wrappers whose still-inner dragged child may now sit
+          // too close OR too far from the wrapper border. We look up each
+          // dragged node's post-patch parent wrapper in nextDef (so
+          // wrappers the node *left* are correctly skipped —
+          // applyMembershipPatch already dropped their persisted size and
+          // the next render re-fits them from scratch). The fit helper is
+          // bidirectional (grows if crowded, shrinks if overgrown) and is
+          // a no-op when the wrapper has no persisted size, is sizeLocked,
+          // or already matches the target clearance.
+          const wrapperParentOf = new Map<string, string>()
+          for (const wn of nextDef.nodes) {
+            if (
+              wn.kind !== 'wrapper-git' &&
+              wn.kind !== 'wrapper-loop' &&
+              wn.kind !== 'wrapper-fanout'
+            )
+              continue
+            const innerIds = (wn as unknown as { nodeIds?: unknown }).nodeIds
+            if (!Array.isArray(innerIds)) continue
+            for (const id of innerIds) {
+              if (typeof id === 'string') wrapperParentOf.set(id, wn.id)
+            }
+          }
+          const toFit = new Set<string>()
+          for (const dn of draggedNodes) {
+            const wid = wrapperParentOf.get(dn.id)
+            if (wid !== undefined) toFit.add(wid)
+          }
+          for (const wid of toFit) {
+            nextDef = fitWrapperToInner(nextDef, wid, measured)
           }
           commitChange(nextDef)
         }}

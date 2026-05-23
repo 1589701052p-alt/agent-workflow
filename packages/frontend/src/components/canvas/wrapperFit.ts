@@ -8,7 +8,7 @@
 // a wrapper that has no persisted `size`, on inner-node add/remove, and on
 // "Fit to children" right-click.
 
-import type { NodeKind, WorkflowNode } from '@agent-workflow/shared'
+import type { NodeKind, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 /** Default fallback dimensions per node kind. Used when the inner node has no
  * recorded `size` AND xyflow has not yet measured it. Values err on the
@@ -130,4 +130,132 @@ export function computeFitBounds(
     y: Math.round(minY - padding - WRAPPER_HEADER_HEIGHT),
   }
   return { width, height, offset }
+}
+
+/** Target clearance from each inner-node edge to the wrapper's visible
+ * border, enforced on drag-stop by `fitWrapperToInner`. Mirrors the
+ * constants computeFitBounds uses on initial fit, so a wrapper that
+ * re-fits after a drag ends up with the same breathing room as one that
+ * was just rebuilt via "Fit to children".
+ *
+ * Why two horizontal numbers: handles are pinned at -14px outside the node
+ * edge (RFC-006), so the visible inner-node bbox actually extends past
+ * `node.x + node.width` by HANDLE_SLACK. The top number folds in the
+ * wrapper header strip so the inner node doesn't tuck under the chip row.
+ */
+const AUTO_FIT_HANDLE_SLACK = 16
+const AUTO_FIT_LEFT_CLEARANCE = WRAPPER_DEFAULT_PADDING + AUTO_FIT_HANDLE_SLACK
+const AUTO_FIT_RIGHT_CLEARANCE = WRAPPER_DEFAULT_PADDING + AUTO_FIT_HANDLE_SLACK
+const AUTO_FIT_TOP_CLEARANCE = WRAPPER_DEFAULT_PADDING + WRAPPER_HEADER_HEIGHT
+const AUTO_FIT_BOTTOM_CLEARANCE = WRAPPER_DEFAULT_PADDING
+
+/** Snap the wrapper's persisted `position` + `size` so each side sits
+ * exactly the target clearance from the inner-node bbox — grows when an
+ * inner node has been dragged too close to the border, AND shrinks when
+ * the nearest inner node sits too far from the border (e.g. after the
+ * user drags a node back toward the wrapper centre). This is the
+ * drag-stop counterpart to computeFitBounds' from-scratch fit; both
+ * produce the same final rect for a given set of inner positions, so a
+ * wrapper edited by either path is visually indistinguishable.
+ *
+ * Returns prevDef by reference when no change is needed so React effects
+ * can short-circuit.
+ *
+ * Skips when:
+ *   - the target id is missing / not a wrapper
+ *   - `size.sizeLocked === true` (user has manually pinned the wrapper)
+ *   - the wrapper has no persisted `size` yet (computeFitBounds already
+ *     produces an adequately-padded rect for the initial render, so
+ *     there is nothing to re-fit against)
+ *   - the wrapper has zero inner nodes (the persisted size is the
+ *     empty-fallback; shrinking it further has nothing to anchor to)
+ *   - the current rect already matches the target clearance
+ *
+ * Inner-node absolute positions are NOT moved — only the wrapper's
+ * top-left + size shift. Because xyflow renders children at
+ * (childAbs - wrapperAbs), shifting the wrapper top-left automatically
+ * updates the child's parent-relative offset, keeping the visible
+ * inner-node positions stable.
+ */
+export function fitWrapperToInner(
+  prevDef: WorkflowDefinition,
+  wrapperId: string,
+  measuredSizes?: Map<string, { width: number; height: number }>,
+): WorkflowDefinition {
+  const target = prevDef.nodes.find((n) => n.id === wrapperId)
+  if (target === undefined) return prevDef
+  if (
+    target.kind !== 'wrapper-git' &&
+    target.kind !== 'wrapper-loop' &&
+    target.kind !== 'wrapper-fanout'
+  )
+    return prevDef
+  const rec = target as Record<string, unknown>
+  const sizeRec = rec.size as
+    | { width?: unknown; height?: unknown; sizeLocked?: unknown }
+    | undefined
+  if (sizeRec === undefined) return prevDef
+  if (sizeRec.sizeLocked === true) return prevDef
+  if (typeof sizeRec.width !== 'number' || typeof sizeRec.height !== 'number') return prevDef
+
+  const innerIdsRaw = rec.nodeIds
+  const innerIds = Array.isArray(innerIdsRaw)
+    ? innerIdsRaw.filter((s): s is string => typeof s === 'string')
+    : []
+  if (innerIds.length === 0) return prevDef
+  const innerIdSet = new Set(innerIds)
+  const inner = prevDef.nodes.filter((n) => innerIdSet.has(n.id))
+  if (inner.length === 0) return prevDef
+
+  // Inner-node bbox in absolute coordinates.
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const n of inner) {
+    const p = n.position ?? { x: 0, y: 0 }
+    const size = nodeSize(n, measuredSizes)
+    if (p.x < minX) minX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.x + size.width > maxX) maxX = p.x + size.width
+    if (p.y + size.height > maxY) maxY = p.y + size.height
+  }
+
+  // Snap each side to exactly inner_extreme ± clearance — bidirectional.
+  const needLeft = minX - AUTO_FIT_LEFT_CLEARANCE
+  const needTop = minY - AUTO_FIT_TOP_CLEARANCE
+  const needRight = maxX + AUTO_FIT_RIGHT_CLEARANCE
+  const needBottom = maxY + AUTO_FIT_BOTTOM_CLEARANCE
+
+  const pos = target.position ?? { x: 0, y: 0 }
+  const curLeft = pos.x
+  const curTop = pos.y
+  const curRight = pos.x + sizeRec.width
+  const curBottom = pos.y + sizeRec.height
+  if (
+    needLeft === curLeft &&
+    needTop === curTop &&
+    needRight === curRight &&
+    needBottom === curBottom
+  ) {
+    return prevDef
+  }
+
+  const newPos = { x: Math.round(needLeft), y: Math.round(needTop) }
+  const newSize = {
+    width: Math.round(needRight - needLeft),
+    height: Math.round(needBottom - needTop),
+  }
+  const nextNodes = prevDef.nodes.map((n) => {
+    if (n.id !== wrapperId) return n
+    const r = n as Record<string, unknown>
+    const prevSize = r.size as { sizeLocked?: unknown } | undefined
+    const sizeLocked = prevSize?.sizeLocked === true
+    return {
+      ...r,
+      position: newPos,
+      size: sizeLocked ? { ...newSize, sizeLocked: true } : newSize,
+    } as unknown as WorkflowNode
+  })
+  return { ...prevDef, nodes: nextNodes }
 }
