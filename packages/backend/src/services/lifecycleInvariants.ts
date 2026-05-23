@@ -489,23 +489,31 @@ async function checkCR1(
   // sees nothing. The lifecycle_alerts breadcrumb is still emitted (with
   // detail.message = "...upgraded to abandoned") so operators see the
   // upgrade for audit / debug.
+  //
+  // RFC-058 T15: read path switched to `clarify_rounds WHERE kind='cross'`
+  // (unified table). Column projection keeps the legacy field names so the
+  // detail payload + downstream code path stays byte-identical for the
+  // diagnose panel. UPDATE side still dual-writes to legacy
+  // cross_clarify_sessions + clarify_rounds (kept until T14/T16 finish
+  // reader migration); migration 0032 will drop the legacy table.
   if (ctx.taskStatus !== 'failed') return []
   const stuck = await db
     .select({
-      id: crossClarifySessions.id,
-      crossClarifyNodeId: crossClarifySessions.crossClarifyNodeId,
-      targetDesignerNodeId: crossClarifySessions.targetDesignerNodeId,
-      iteration: crossClarifySessions.iteration,
-      directive: crossClarifySessions.directive,
-      status: crossClarifySessions.status,
+      id: clarifyRounds.id,
+      crossClarifyNodeId: clarifyRounds.intermediaryNodeId,
+      targetDesignerNodeId: clarifyRounds.targetConsumerNodeId,
+      iteration: clarifyRounds.iteration,
+      directive: clarifyRounds.directive,
+      status: clarifyRounds.status,
     })
-    .from(crossClarifySessions)
+    .from(clarifyRounds)
     .where(
       and(
-        eq(crossClarifySessions.taskId, ctx.taskId),
-        eq(crossClarifySessions.status, 'answered'),
-        eq(crossClarifySessions.directive, 'continue'),
-        isNotNull(crossClarifySessions.targetDesignerNodeId),
+        eq(clarifyRounds.taskId, ctx.taskId),
+        eq(clarifyRounds.kind, 'cross'),
+        eq(clarifyRounds.status, 'answered'),
+        eq(clarifyRounds.directive, 'continue'),
+        isNotNull(clarifyRounds.targetConsumerNodeId),
       ),
     )
   if (stuck.length === 0) return []

@@ -30,7 +30,7 @@ import { ulid } from 'ulid'
 import type { WorkflowDefinition } from '@agent-workflow/shared'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -130,6 +130,13 @@ async function seedSession(
     retryIndex: 0,
     iteration: 0,
   })
+  const directive = opts.directive === undefined ? 'continue' : opts.directive
+  const status = opts.status ?? 'answered'
+  const iteration = opts.iteration ?? 0
+  const targetDesignerNodeId =
+    opts.targetDesignerNodeId === undefined ? 'designer' : opts.targetDesignerNodeId
+  const createdAt = Date.now() - 50_000
+  const answeredAt = Date.now() - 30_000
   await db.insert(crossClarifySessions).values({
     id: sessionId,
     taskId,
@@ -137,16 +144,41 @@ async function seedSession(
     crossClarifyNodeRunId,
     sourceQuestionerNodeId: 'questioner',
     sourceQuestionerNodeRunId: questionerRunId,
-    targetDesignerNodeId:
-      opts.targetDesignerNodeId === undefined ? 'designer' : opts.targetDesignerNodeId,
+    targetDesignerNodeId,
     loopIter: 0,
-    iteration: opts.iteration ?? 0,
+    iteration,
     questionsJson: '[{"id":"q1","title":"t","kind":"single","recommended":false,"options":[]}]',
     answersJson: '[]',
-    directive: opts.directive === undefined ? 'continue' : opts.directive,
-    status: opts.status ?? 'answered',
-    createdAt: Date.now() - 50_000,
-    answeredAt: Date.now() - 30_000,
+    directive,
+    status,
+    createdAt,
+    answeredAt,
+  })
+  // RFC-058 T15: CR-1 invariant now reads `clarify_rounds WHERE kind='cross'`
+  // — mirror the seed onto the unified table so the rule observes it (matches
+  // the dual-write that createCrossClarifySession does in production).
+  await db.insert(clarifyRounds).values({
+    id: sessionId,
+    taskId,
+    kind: 'cross',
+    askingNodeId: 'questioner',
+    askingNodeRunId: questionerRunId,
+    askingShardKey: null,
+    intermediaryNodeId: 'cross1',
+    intermediaryNodeRunId: crossClarifyNodeRunId,
+    targetConsumerNodeId: targetDesignerNodeId,
+    loopIter: 0,
+    iteration,
+    questionsJson: '[{"id":"q1","title":"t","kind":"single","recommended":false,"options":[]}]',
+    answersJson: '[]',
+    directive,
+    status,
+    truncationWarningsJson: null,
+    designerRunTriggeredAt: null,
+    abandonedAt: null,
+    createdAt,
+    answeredAt,
+    answeredBy: null,
   })
   return sessionId
 }
