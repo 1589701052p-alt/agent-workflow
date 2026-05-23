@@ -45,3 +45,8 @@ export * from './kindParser'
 export * from './shardingRegistry'
 export * from './signalPromptGuard'
 export * from './wrapperFanout'
+// RFC-061 PR-A: event-sourced execution model — types only in PR-A; PR-B
+// fills in the concrete handler implementations.
+export * from './events'
+export * from './handlers'
+export * from './promptFromEvents'

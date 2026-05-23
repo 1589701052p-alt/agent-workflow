@@ -26,9 +26,9 @@ describe('NODE_KIND enum', () => {
   })
 
   test('still includes existing kinds (no removals)', () => {
+    // RFC-060 PR-E removed 'agent-multi' (superseded by 'wrapper-fanout').
     for (const kind of [
       'agent-single',
-      'agent-multi',
       'input',
       'output',
       'wrapper-git',
@@ -48,7 +48,8 @@ describe('isProcessNodeKind', () => {
   })
 
   test('existing process kinds remain process kinds', () => {
-    for (const kind of ['agent-single', 'agent-multi', 'wrapper-git', 'wrapper-loop'] as const) {
+    // RFC-060 PR-E removed 'agent-multi'.
+    for (const kind of ['agent-single', 'wrapper-git', 'wrapper-loop'] as const) {
       expect(isProcessNodeKind(kind)).toBe(true)
     }
   })
