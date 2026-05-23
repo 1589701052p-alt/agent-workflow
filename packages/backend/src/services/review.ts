@@ -268,6 +268,69 @@ export function docVersionRelativePath(
 }
 
 // ---------------------------------------------------------------------------
+// Review-run picking helpers (RFC-052 reuse + RFC-056 patch-2026-05-26 cci
+// alignment). Exported so the patch's unit tests can lock the behavior
+// independently of dispatchReviewNode's surrounding state machine.
+// ---------------------------------------------------------------------------
+
+export interface ReviewRunsPicked {
+  /** Freshest top-level review row by isFresherNodeRun. Used as the reuse
+   *  candidate the dispatcher transitions toward awaiting_review. */
+  reuse: typeof nodeRuns.$inferSelect | undefined
+  /** Freshest top-level review row whose status is `done`. Used solely for
+   *  the cci-alignment short-circuit; NOT the reuse target — the cascade-
+   *  minted pending row is the dispatch target when alignment fails. */
+  latestDone: typeof nodeRuns.$inferSelect | undefined
+}
+
+/**
+ * Pick the freshest top-level review row (`reuse`) and the freshest
+ * top-level `done` review row (`latestDone`) from a list of review_runs
+ * for one (taskId, nodeId, iteration). Skips fan-out child rows.
+ * Comparator is `isFresherNodeRun` (clarifyIteration → retryIndex → ulid)
+ * — same one the scheduler picks `latestPerNode` with.
+ */
+export function pickFreshestReviewRun(
+  reviewRuns: ReadonlyArray<typeof nodeRuns.$inferSelect>,
+): ReviewRunsPicked {
+  let reuse: typeof nodeRuns.$inferSelect | undefined
+  let latestDone: typeof nodeRuns.$inferSelect | undefined
+  for (const r of reviewRuns) {
+    if (r.parentNodeRunId !== null) continue
+    if (isFresherNodeRun(r, reuse)) reuse = r
+    if (r.status === 'done' && isFresherNodeRun(r, latestDone)) latestDone = r
+  }
+  return { reuse, latestDone }
+}
+
+/**
+ * RFC-056 patch-2026-05-26: a review's prior `done` approval covers the
+ * upstream state at THAT row's `crossClarifyIteration`. When the upstream
+ * source agent has subsequently re-run via cross-clarify cascade and now
+ * sits at a higher cci, the prior approval is stale and the cascade-
+ * minted pending review row MUST run — even though RFC-052 declared
+ * "any done row in this iteration is decisive".
+ *
+ * Returns true iff `latestDone` exists AND its cci is at least as fresh
+ * as the upstream source row's cci (i.e. the approval still covers the
+ * upstream output the review would now be looking at). Returns false
+ * when latestDone is undefined (no prior approval) OR when upstream cci
+ * has advanced past the approval — in that case dispatchReviewNode
+ * declines the short-circuit and re-parks the cascade pending row as
+ * awaiting_review so the user can re-approve on the refreshed upstream.
+ *
+ * The cci=0 baseline (workflows that never see cross-clarify) reduces
+ * to `latestDone !== undefined`, i.e. RFC-052's original short-circuit.
+ */
+export function isReviewCciAlignedWithUpstream(
+  latestDone: typeof nodeRuns.$inferSelect | undefined,
+  sourceRun: typeof nodeRuns.$inferSelect,
+): boolean {
+  if (latestDone === undefined) return false
+  return (latestDone.crossClarifyIteration ?? 0) >= (sourceRun.crossClarifyIteration ?? 0)
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler entry point.
 // ---------------------------------------------------------------------------
 
@@ -396,33 +459,22 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  // RFC-052: a review for the current iteration is "decided" the moment ANY
-  // top-level row reaches `done` (approve sets status=done) — regardless of
-  // what other rows at higher retryIndex / clarifyIteration claim. The
-  // pre-RFC-052 bug:
-  //   1. user clicks Retry on upstream agent → retryNode cascade mints a
-  //      retryIndex+1 'failed/queued for retry' placeholder row for this
-  //      review node;
-  //   2. scheduler.latestPerNode uses isFresherNodeRun (clarifyIter →
-  //      retryIndex → ulid) which prefers the placeholder over the
-  //      retry=0 approved row;
-  //   3. dispatchReviewNode used `Array.find` to pick whichever row came
-  //      first in SQL insertion order (usually retry=0), then unconditionally
-  //      reset its status back to awaiting_review and minted a phantom
-  //      v(n+1) pending doc_version.
-  // With T2 in place the cascade no longer mints those placeholders, but
-  // this short-circuit is the defense-in-depth that also handles existing
-  // stuck DBs and any other future path that produces extra rows: if a
-  // done row exists for this review at this iteration, the review has been
-  // approved and the scheduler should treat the node as completed.
-  let reuse: (typeof reviewRuns)[number] | undefined
-  let alreadyDone = false
-  for (const r of reviewRuns) {
-    if (r.parentNodeRunId !== null) continue
-    if (r.status === 'done') alreadyDone = true
-    if (isFresherNodeRun(r, reuse)) reuse = r
-  }
-  if (alreadyDone) {
+  // RFC-052: a review for the current iteration is "decided" the moment a
+  // top-level row reaches `done` (approve sets status=done) — defense-in-
+  // depth against placeholder rows produced by retry cascades (T2 cascade
+  // no longer mints those; pre-T2 stuck DBs still rely on this).
+  //
+  // RFC-056 patch-2026-05-26 narrows the short-circuit with a cross-clarify
+  // freshness check: the existing `done` approval is only authoritative
+  // when its `crossClarifyIteration` covers the upstream source row's
+  // current cci. When upstream has advanced via `cascadeDownstreamFromDesigner`
+  // (cci bumped) but the latest done review is still at the pre-cascade
+  // cci, the cascade-minted pending review row MUST dispatch so the user
+  // re-approves on the refreshed upstream. See
+  // design/RFC-056-clarify-cross-agent/patch-2026-05-26-review-dispatch-
+  // respects-cci.md and the live-task evidence trail referenced there.
+  const { reuse, latestDone } = pickFreshestReviewRun(reviewRuns)
+  if (isReviewCciAlignedWithUpstream(latestDone, sourceRun)) {
     return { kind: 'ok', summary: '', message: '' }
   }
 
