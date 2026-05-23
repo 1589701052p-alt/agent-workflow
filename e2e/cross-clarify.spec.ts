@@ -34,13 +34,20 @@ const here = dirname(fileURLToPath(import.meta.url))
 const stubCrossClarify = resolve(here, 'fixtures', 'stub-opencode-cross-clarify.sh')
 
 interface CrossClarifyInboxEntry {
+  // RFC-058 T14/T16: REST /api/clarify now returns ClarifyRoundSummary
+  // (unified shape). The cross-clarify rows carry `kind: 'cross'` and the
+  // legacy field names map as follows:
+  //   crossClarifyNodeId   → intermediaryNodeId
+  //   crossClarifyNodeRunId→ intermediaryNodeRunId
+  //   sourceQuestionerNodeId → askingNodeId
+  //   targetDesignerNodeId → targetConsumerNodeId
   kind: 'cross'
   id: string
   taskId: string
-  crossClarifyNodeId: string
-  crossClarifyNodeRunId: string
-  sourceQuestionerNodeId: string
-  targetDesignerNodeId: string | null
+  intermediaryNodeId: string
+  intermediaryNodeRunId: string
+  askingNodeId: string
+  targetConsumerNodeId: string | null
   iteration: number
   questionCount: number
   status: string
@@ -297,14 +304,14 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     // 3. /api/clarify list surfaces a cross-tagged entry.
     const row = await pollCrossClarifyAwaiting(daemon, taskId, 10_000)
     expect(row.kind).toBe('cross')
-    expect(row.crossClarifyNodeId).toBe('cross1')
-    expect(row.sourceQuestionerNodeId).toBe('questioner')
-    expect(row.targetDesignerNodeId).toBe('designer')
+    expect(row.intermediaryNodeId).toBe('cross1')
+    expect(row.askingNodeId).toBe('questioner')
+    expect(row.targetConsumerNodeId).toBe('designer')
     expect(row.questionCount).toBe(1)
 
     // 4. POST answers (directive='continue').
     const submitRes = await fetch(
-      `${daemon.baseUrl}/api/clarify/${row.crossClarifyNodeRunId}/answers`,
+      `${daemon.baseUrl}/api/clarify/${row.intermediaryNodeRunId}/answers`,
       {
         method: 'POST',
         headers,

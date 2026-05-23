@@ -36,13 +36,20 @@ const here = dirname(fileURLToPath(import.meta.url))
 const stubClarify = resolve(here, 'fixtures', 'stub-opencode-clarify.sh')
 
 interface ClarifySessionRow {
+  // RFC-058 T14/T16: REST returns ClarifyRoundSummary; field paths renamed:
+  //   sourceAgentNodeId  → askingNodeId
+  //   sourceShardKey     → askingShardKey
+  //   clarifyNodeId      → intermediaryNodeId
+  //   clarifyNodeRunId   → intermediaryNodeRunId
+  //   iterationIndex     → iteration
   id: string
   taskId: string
-  sourceAgentNodeId: string
-  sourceShardKey: string | null
-  clarifyNodeId: string
-  clarifyNodeRunId: string
-  iterationIndex: number
+  kind: 'self' | 'cross'
+  askingNodeId: string
+  askingShardKey: string | null
+  intermediaryNodeId: string
+  intermediaryNodeRunId: string
+  iteration: number
   questionCount: number
   status: string
   createdAt: number
@@ -311,14 +318,14 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
     const rows = await pollClarifySession(daemon, taskId, (r) => r.length >= 1, 5_000)
     expect(rows.length).toBe(1)
     const session = rows[0]!
-    expect(session.sourceAgentNodeId).toBe('designer')
-    expect(session.clarifyNodeId).toBe(fixtures.clarifyNodeId)
-    expect(session.sourceShardKey).toBeNull()
-    expect(session.iterationIndex).toBe(0)
+    expect(session.askingNodeId).toBe('designer')
+    expect(session.intermediaryNodeId).toBe(fixtures.clarifyNodeId)
+    expect(session.askingShardKey).toBeNull()
+    expect(session.iteration).toBe(0)
     expect(session.questionCount).toBe(2)
 
     // 4. Detail endpoint returns both questions with options + recommended flag.
-    const detailRes = await fetch(`${daemon.baseUrl}/api/clarify/${session.clarifyNodeRunId}`, {
+    const detailRes = await fetch(`${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
     })
     expectOk(detailRes, 'GET clarify detail')
@@ -343,7 +350,7 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
 
     // 5. Submit answers — pick Postgres + check TypeScript.
     const submitRes = await fetch(
-      `${daemon.baseUrl}/api/clarify/${session.clarifyNodeRunId}/answers`,
+      `${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}/answers`,
       {
         method: 'POST',
         headers,
@@ -362,7 +369,7 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
               customText: '',
             },
           ],
-          ifMatchIteration: session.iterationIndex,
+          ifMatchIteration: session.iteration,
         }),
       },
     )
@@ -590,12 +597,12 @@ test.describe('RFC-023 clarify e2e — agent-multi shard fanout', () => {
     const rows = await pollClarifySession(daemon, taskId, (r) => r.length >= 1, 10_000)
     expect(rows.length).toBe(1)
     const session = rows[0]!
-    expect(session.sourceAgentNodeId).toBe('fanout')
-    expect(session.sourceShardKey).toBe('b/x.md')
+    expect(session.askingNodeId).toBe('fanout')
+    expect(session.askingShardKey).toBe('b/x.md')
 
     // 4. Submit answers — Postgres + TypeScript.
     expectOk(
-      await fetch(`${daemon.baseUrl}/api/clarify/${session.clarifyNodeRunId}/answers`, {
+      await fetch(`${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}/answers`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -613,7 +620,7 @@ test.describe('RFC-023 clarify e2e — agent-multi shard fanout', () => {
               customText: '',
             },
           ],
-          ifMatchIteration: session.iterationIndex,
+          ifMatchIteration: session.iteration,
         }),
       }),
       'POST clarify answers (multi)',
@@ -790,7 +797,7 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
     // 3. Submit answers.
     const session = rows[0]!
     expectOk(
-      await fetch(`${daemon.baseUrl}/api/clarify/${session.clarifyNodeRunId}/answers`, {
+      await fetch(`${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}/answers`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -802,7 +809,7 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
               customText: '',
             },
           ],
-          ifMatchIteration: session.iterationIndex,
+          ifMatchIteration: session.iteration,
         }),
       }),
       'POST inline clarify answers',
