@@ -33,6 +33,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
+import { deriveWrapperFanoutOutputs } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
 import { AgentNode } from './nodes/AgentNode'
 import { applyPaste, buildSlice, getClipboard, setClipboard } from './canvasClipboard'
@@ -727,7 +728,12 @@ function CanvasInner({
       if (onChange === undefined || readOnly === true) return
       const node = definition.nodes.find((n) => n.id === wrapperId)
       if (node === undefined) return
-      if (node.kind !== 'wrapper-git' && node.kind !== 'wrapper-loop') return
+      if (
+        node.kind !== 'wrapper-git' &&
+        node.kind !== 'wrapper-loop' &&
+        node.kind !== 'wrapper-fanout'
+      )
+        return
       const inner = (node as Record<string, unknown>).nodeIds
       const innerIds = Array.isArray(inner)
         ? inner.filter((s): s is string => typeof s === 'string')
@@ -1023,7 +1029,12 @@ function CanvasInner({
           const absoluteNodes = projectXyflowPositionsToAbsolute(definition, nodes, measured)
           const wrappers: WrapperHitInput[] = []
           for (const fn of nodes) {
-            if (fn.type !== 'wrapper-git' && fn.type !== 'wrapper-loop') continue
+            if (
+              fn.type !== 'wrapper-git' &&
+              fn.type !== 'wrapper-loop' &&
+              fn.type !== 'wrapper-fanout'
+            )
+              continue
             const style = fn.style as { width?: unknown; height?: unknown } | undefined
             const w = typeof style?.width === 'number' ? style.width : 200
             const h = typeof style?.height === 'number' ? style.height : 120
@@ -1045,7 +1056,12 @@ function CanvasInner({
           for (const dn of draggedNodes) {
             // Wrapper-on-wrapper or non-wrapper-into-wrapper both go through
             // the same path. Wrapper-on-itself is excluded inside resolve().
-            if (dn.type === 'wrapper-git' || dn.type === 'wrapper-loop') continue
+            if (
+              dn.type === 'wrapper-git' ||
+              dn.type === 'wrapper-loop' ||
+              dn.type === 'wrapper-fanout'
+            )
+              continue
             const absNode = absoluteNodes.find((n) => n.id === dn.id)
             if (absNode === undefined) continue
             const m = measured.get(dn.id)
@@ -1174,6 +1190,17 @@ export function computePorts(
       }
       break
     }
+    case 'wrapper-fanout': {
+      // RFC-060 — wrapper-fanout outputs are DERIVED at render time:
+      // either the inner aggregator agent's renamed outputs OR the
+      // implicit `__done__` signal outlet. We import the helper lazily via
+      // the agent map already on hand.
+      const derived = deriveWrapperFanoutOutputs(definition, node.id, agentByName)
+      for (const p of derived) {
+        if (!outputs.includes(p.name)) outputs.push(p.name)
+      }
+      break
+    }
     case 'review': {
       // RFC-005: review nodes publish two ports downstream after approve.
       outputs.push('approved_doc')
@@ -1219,7 +1246,7 @@ function toFlowNodes(
       if (s !== undefined) data.status = s
     }
     if (loopBodyIds.has(n.id)) data.loopBody = true
-    if (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop') {
+    if (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop' || n.kind === 'wrapper-fanout') {
       const inner = (n as unknown as { nodeIds?: string[] }).nodeIds
       ;(data as CanvasNodeData & { innerCount?: number }).innerCount = inner?.length ?? 0
     }
@@ -1452,7 +1479,11 @@ function toDefinition(
       // RFC-016: persist wrapper.size when xyflow has resolved it (either
       // from our projection layer or a user-driven NodeResizer drag). Only
       // wrapper nodes get this; non-wrappers leave size untouched.
-      if (out.kind === 'wrapper-git' || out.kind === 'wrapper-loop') {
+      if (
+        out.kind === 'wrapper-git' ||
+        out.kind === 'wrapper-loop' ||
+        out.kind === 'wrapper-fanout'
+      ) {
         const style = fn.style as { width?: unknown; height?: unknown } | undefined
         const w = typeof style?.width === 'number' ? style.width : undefined
         const h = typeof style?.height === 'number' ? style.height : undefined
@@ -1527,7 +1558,10 @@ export function buildEdgeFromConnection(
 function isWrapperNode(def: WorkflowDefinition, nodeId: string | null): boolean {
   if (nodeId === null) return false
   const n = def.nodes.find((x) => x.id === nodeId)
-  return n !== undefined && (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop')
+  return (
+    n !== undefined &&
+    (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop' || n.kind === 'wrapper-fanout')
+  )
 }
 
 // Test helpers (exported but underscored).

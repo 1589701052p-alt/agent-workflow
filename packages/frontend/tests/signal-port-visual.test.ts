@@ -1,0 +1,52 @@
+// RFC-060 PR-F F.T2 — signal-port visual distinction.
+//
+// Locks the canvas-side rendering contract: wrapper-fanout outlets whose
+// port name is the implicit `__done__` signal carry the `--signal`
+// modifier class on both the bottom-port wrapper and the handle, so the
+// dashed-handle / dimmed-label styling lands at render time.
+//
+// The actual CSS rules live in styles.css (`.canvas-node__handle--signal`,
+// `.canvas-node__bottom-port--signal`). This file pins the source-text
+// contract (CSS classes exist + WrapperNodes emits them) without booting a
+// real React tree — same source-lock strategy as scheduler-fanout-sharding
+// + scheduler-wrapper-fanout-routing.
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, test } from 'vitest'
+
+const REPO = resolve(import.meta.dirname, '..', '..', '..')
+
+const wrapperNodesSrc = readFileSync(
+  resolve(REPO, 'packages/frontend/src/components/canvas/nodes/WrapperNodes.tsx'),
+  'utf-8',
+)
+const stylesCss = readFileSync(resolve(REPO, 'packages/frontend/src/styles.css'), 'utf-8')
+
+describe('RFC-060 F.T2 — wrapper-fanout signal-port visual contract', () => {
+  test('WrapperNodes branches on `__done__` to apply --signal modifier', () => {
+    expect(wrapperNodesSrc).toContain("const isSignal = p === '__done__'")
+    expect(wrapperNodesSrc).toContain('canvas-node__bottom-port--signal')
+    expect(wrapperNodesSrc).toContain('canvas-node__handle--signal')
+  })
+
+  test('data-signal data attribute exposes the variant for test selectors', () => {
+    expect(wrapperNodesSrc).toContain("data-signal={isSignal ? 'true' : undefined}")
+  })
+
+  test('styles.css declares dashed-handle + dimmed-label rules for --signal', () => {
+    expect(stylesCss).toContain('.canvas-node__handle--signal')
+    expect(stylesCss).toContain('.canvas-node__bottom-port--signal')
+    // dashed + muted-border ring (mirrors the shard-source styling family)
+    expect(stylesCss).toMatch(/\.canvas-node__handle--signal[^}]*border[^}]*dashed/s)
+  })
+
+  test('WorkflowCanvas computePorts emits derived wrapper-fanout outputs', () => {
+    const canvasSrc = readFileSync(
+      resolve(REPO, 'packages/frontend/src/components/canvas/WorkflowCanvas.tsx'),
+      'utf-8',
+    )
+    expect(canvasSrc).toContain("case 'wrapper-fanout':")
+    expect(canvasSrc).toContain('deriveWrapperFanoutOutputs(definition, node.id, agentByName)')
+  })
+})

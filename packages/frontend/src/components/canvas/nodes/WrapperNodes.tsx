@@ -27,7 +27,9 @@ import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 export interface WrapperNodeData extends CanvasNodeData {
   /** Number of direct inner nodes (for the header pill summary). */
   innerCount?: number
-  /** Loop only — surfaced to render the "× N · kind" pill. */
+  /** Loop only — kept on the node data so future header/inspector affordances
+   * can surface the iteration parameters; the pill itself no longer reads
+   * them (it carries a kind label only, parallel to git/fanout). */
   maxIterations?: number
   exitConditionKind?: 'port-empty' | 'port-not-empty' | 'port-equals' | 'port-count-lt' | string
 }
@@ -36,33 +38,38 @@ interface Props extends NodeProps {
   data: WrapperNodeData
 }
 
-/** Header pill component — shows git "snapshot" or loop iteration summary. */
-function WrapperHeaderPill({ data, kind }: { data: WrapperNodeData; kind: 'git' | 'loop' }) {
+/** Header pill — a short kind badge that mirrors the wrapper type
+ *  ("snapshot" / "loop" / "fanout"). Parameters like maxIterations + exit
+ *  condition show in the Inspector, not the canvas chip — keeping all three
+ *  wrapper pills parallel keeps the canvas legible at a glance and avoids
+ *  the cryptic "× 3 · port-empty" dump the loop pill used to surface. */
+function WrapperHeaderPill({ kind }: { kind: 'git' | 'loop' | 'fanout' }) {
   const { t } = useTranslation()
-  if (kind === 'git') {
-    return (
-      <span className="wrapper-header-pill wrapper-header-pill--git">
-        {t('wrapperNode.pillGit')}
-      </span>
-    )
-  }
-  const max = typeof data.maxIterations === 'number' ? data.maxIterations : 1
-  const exitKind = data.exitConditionKind ?? 'port-empty'
+  const labelKey =
+    kind === 'git'
+      ? 'wrapperNode.pillGit'
+      : kind === 'loop'
+        ? 'wrapperNode.pillLoop'
+        : 'wrapperNode.pillFanout'
   return (
-    <span className="wrapper-header-pill wrapper-header-pill--loop">
-      {t('wrapperNode.pillLoop', { max, kind: exitKind })}
-    </span>
+    <span className={`wrapper-header-pill wrapper-header-pill--${kind}`}>{t(labelKey)}</span>
   )
 }
 
-/** Unified group container component for wrapper-git and wrapper-loop.
- * Branches on data.kind to pick label + icon + whether to render the
- * loop-only catch-all left handle. */
+/** Unified group container component for wrapper-git / wrapper-loop /
+ *  wrapper-fanout (RFC-060). Branches on data.kind to pick label + icon +
+ *  whether to render the loop-only catch-all left handle. */
 export function GroupWrapperNode({ data, selected }: Props) {
   const { t } = useTranslation()
-  const kind: 'git' | 'loop' = data.kind === 'wrapper-loop' ? 'loop' : 'git'
-  const label = kind === 'git' ? t('wrapperNode.labelGit') : t('wrapperNode.labelLoop')
-  const icon = kind === 'git' ? '⎈' : '⟳'
+  const kind: 'git' | 'loop' | 'fanout' =
+    data.kind === 'wrapper-loop' ? 'loop' : data.kind === 'wrapper-fanout' ? 'fanout' : 'git'
+  const label =
+    kind === 'loop'
+      ? t('wrapperNode.labelLoop')
+      : kind === 'fanout'
+        ? t('wrapperNode.labelFanout')
+        : t('wrapperNode.labelGit')
+  const icon = kind === 'loop' ? '⟳' : kind === 'fanout' ? '⫶' : '⎈'
   return (
     <div
       className={[
@@ -80,7 +87,7 @@ export function GroupWrapperNode({ data, selected }: Props) {
         <span className="canvas-node__kind">
           {icon} {label}
         </span>
-        <WrapperHeaderPill data={data} kind={kind} />
+        <WrapperHeaderPill kind={kind} />
       </div>
       {data.innerCount === 0 ? (
         <div className="canvas-node__wrapper-empty-hint">{t('wrapperNode.dropHere')}</div>
@@ -90,19 +97,32 @@ export function GroupWrapperNode({ data, selected }: Props) {
       ) : null}
       {data.outputPorts.length > 0 ? (
         <div className="canvas-node__bottom-ports">
-          {data.outputPorts.map((p) => (
-            <div key={p} className="canvas-node__bottom-port">
-              <span className="canvas-node__port-label" title={p}>
-                {p}
-              </span>
-              <Handle
-                type="source"
-                position={Position.Bottom}
-                id={p}
-                className="canvas-node__handle"
-              />
-            </div>
-          ))}
+          {data.outputPorts.map((p) => {
+            // RFC-060 F.T2: the implicit `__done__` outlet is a
+            // signal-kind port — control-flow only, no data payload.
+            // Render it with the dashed-handle / dimmed-label variant
+            // so authors visually distinguish data edges from signal
+            // edges at a glance. Future signal-kind ports (PR-D2 will
+            // promote agent.signal outputs) reuse the same class.
+            const isSignal = p === '__done__'
+            return (
+              <div
+                key={p}
+                className={`canvas-node__bottom-port${isSignal ? ' canvas-node__bottom-port--signal' : ''}`}
+                data-signal={isSignal ? 'true' : undefined}
+              >
+                <span className="canvas-node__port-label" title={p}>
+                  {p}
+                </span>
+                <Handle
+                  type="source"
+                  position={Position.Bottom}
+                  id={p}
+                  className={`canvas-node__handle${isSignal ? ' canvas-node__handle--signal' : ''}`}
+                />
+              </div>
+            )
+          })}
         </div>
       ) : null}
     </div>

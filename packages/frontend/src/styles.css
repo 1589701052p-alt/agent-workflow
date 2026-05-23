@@ -4375,6 +4375,12 @@ code {
   background-color: color-mix(in srgb, #7a4ea6 6%, var(--panel));
   border-color: color-mix(in srgb, #7a4ea6 55%, transparent);
 }
+/* RFC-060 — wrapper-fanout container chrome: distinct hue (warm amber) so it
+ * reads apart from wrapper-git (blue) and wrapper-loop (purple) at a glance. */
+.canvas-node--wrapper-group--fanout {
+  background-color: color-mix(in srgb, #b87333 6%, var(--panel));
+  border-color: color-mix(in srgb, #b87333 55%, transparent);
+}
 .canvas-node--wrapper-group--drop-hover {
   background-color: color-mix(in srgb, var(--accent) 14%, var(--panel)) !important;
   border-color: var(--accent) !important;
@@ -4404,6 +4410,13 @@ code {
   background: color-mix(in srgb, var(--panel) 70%, transparent);
   color: var(--muted);
   white-space: nowrap;
+}
+/* RFC-060 — fanout badge in the wrapper header (matches the amber container
+ * accent so the pill reads as a member of the fanout kind, not a generic
+ * neutral chip). */
+.wrapper-header-pill--fanout {
+  background: color-mix(in srgb, #b87333 22%, transparent);
+  color: color-mix(in srgb, #b87333 85%, var(--text));
 }
 /* ValidationPanel inline Auto-fit action (RFC-016 T9). */
 .validation-panel__action {
@@ -4594,10 +4607,17 @@ code {
   transform: none !important;
 }
 
-/* RFC-015: agent-multi nodes carry a top-side target Handle for sourcePort
- * drag-to-set. Unconnected state is a dashed muted ring (an explicit
- * "drop me an upstream output" affordance); connected state fills with the
- * accent color so the user immediately sees the field is set. */
+/* RFC-060 PR-E: RFC-015 agent-multi sourcePort handle styles are kept as
+ * fanoutSourceSync stub remnants — no NodeKind renders them any more. They
+ * stay as orphaned CSS until a future cleanup PR sweeps them out (low-risk
+ * since the matching DOM is no longer emitted).
+ *
+ * RFC-060 F.T2: signal-kind ports on wrapper-fanout (notably the implicit
+ * `__done__` outlet when no aggregator is wired) render with a dashed
+ * handle ring + dimmed label so authors visually distinguish control-flow
+ * edges from data edges at a glance. Future signal-kind agent outputs
+ * (RFC-060 PR-D2) reuse the same class.
+ */
 .canvas-node__handle--shard-source {
   background: var(--panel) !important;
   border: 1.5px dashed var(--muted) !important;
@@ -4605,6 +4625,17 @@ code {
 .canvas-node__handle--shard-source.is-connected {
   background: var(--accent) !important;
   border: 1.5px solid var(--accent) !important;
+}
+.canvas-node__handle--signal {
+  background: var(--panel) !important;
+  border: 1.5px dashed var(--muted) !important;
+}
+.canvas-node__bottom-port--signal .canvas-node__port-label {
+  color: var(--muted);
+  font-style: italic;
+}
+.canvas-node__bottom-port--signal {
+  opacity: 0.85;
 }
 
 /* RFC-015: synthetic display edge that visually connects each fanout
