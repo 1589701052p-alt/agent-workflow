@@ -283,6 +283,121 @@ export type ClarifyInboxEntry =
   | (ClarifySessionSummary & { kind: 'self' })
   | (CrossClarifySessionSummary & { kind: 'cross' })
 
+// ---------------------------------------------------------------------------
+// RFC-058 unified clarify_rounds schema (replaces both ClarifySession and
+// CrossClarifySession in the upcoming refactor). Kept additive in PR-B's
+// T9 step so the existing wire / services keep compiling while the migration
+// + service merge land in T11/T12. The old types are removed when PR-B
+// concludes (T17 grep guard).
+// ---------------------------------------------------------------------------
+
+/** RFC-058: which kind of clarify round this row represents. */
+export const ClarifyRoundKindSchema = z.enum(['self', 'cross'])
+export type ClarifyRoundKind = z.infer<typeof ClarifyRoundKindSchema>
+
+/** RFC-058: unified status enum union. `'canceled'` is reachable only when
+ *  kind='self' (RFC-023 task-cancel path); `'abandoned'` is reachable only
+ *  when kind='cross' (RFC-056 CR-1 invariant upgrade). The DB CHECK constraint
+ *  in migration 0031 enforces the cross-domain rule so application code does
+ *  not need to re-validate. */
+export const ClarifyRoundStatusSchema = z.enum([
+  'awaiting_human',
+  'answered',
+  'canceled',
+  'abandoned',
+])
+export type ClarifyRoundStatus = z.infer<typeof ClarifyRoundStatusSchema>
+
+/** RFC-058: a single clarify round (Q&A turn). Replaces both
+ *  {@link ClarifySession} and {@link CrossClarifySession}. The `kind`
+ *  discriminator decides which fields are populated:
+ *    - kind='self'  → `targetConsumerNodeId` is null; `askingNodeId` IS the
+ *                     consuming agent (asking agent itself reads the answers
+ *                     in its next rerun).
+ *    - kind='cross' → `askingNodeId` is the questioner; `targetConsumerNodeId`
+ *                     is the designer that receives the External Feedback;
+ *                     `askingShardKey` is always null (RFC-056 v1 keeps
+ *                     cross-clarify on agent-single).
+ */
+export const ClarifyRoundSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  kind: ClarifyRoundKindSchema,
+
+  askingNodeId: z.string(),
+  askingNodeRunId: z.string(),
+  /** Asking-side shard key — agent-multi child shard for kind='self'; null for
+   *  kind='cross' (RFC-056 v1 limits cross-clarify to agent-single). */
+  askingShardKey: z.string().nullable().default(null),
+
+  /** The clarify / clarify-cross-agent node id (the human-gated form node). */
+  intermediaryNodeId: z.string(),
+  intermediaryNodeRunId: z.string(),
+  /** Display name from the workflow snapshot (parallel to RFC-037 task name). */
+  intermediaryNodeTitle: z.string().nullable().optional(),
+
+  /** Designer node id that receives External Feedback when kind='cross'. Null
+   *  for kind='self' (the asking agent itself is the consumer). */
+  targetConsumerNodeId: z.string().nullable().default(null),
+
+  /** wrapper-loop iter (RFC-056 partial persistence). 0 for kind='self' or
+   *  cross outside a loop. */
+  loopIter: z.number().int().nonnegative().default(0),
+
+  /** Monotonic round counter scoped to (intermediaryNodeId, loopIter). Matches
+   *  RFC-023 `iterationIndex` when kind='self' and RFC-056 `iteration` when
+   *  kind='cross'. */
+  iteration: z.number().int().nonnegative(),
+
+  questions: z.array(ClarifyQuestionSchema),
+  answers: z.array(ClarifyAnswerSchema).optional(),
+  directive: ClarifyDirectiveSchema.nullable().default(null),
+  status: ClarifyRoundStatusSchema,
+
+  truncationWarnings: z.array(ClarifyTruncationWarningSchema).optional(),
+
+  /** RFC-026 inline session mode (kind='self' only; cross-clarify node
+   *  carries the inline flag on the workflow node definition). */
+  sessionMode: z.enum(['isolated', 'inline']).nullable().default(null),
+
+  /** RFC-056 cross-clarify only. NULL for kind='self'. */
+  designerRunTriggeredAt: z.number().int().nullable().default(null),
+  abandonedAt: z.number().int().nullable().default(null),
+
+  createdAt: z.number().int(),
+  answeredAt: z.number().int().nullable().default(null),
+  answeredBy: z.string().nullable().default(null),
+})
+export type ClarifyRound = z.infer<typeof ClarifyRoundSchema>
+
+/** RFC-058: compact list-entry shape (replaces both ClarifySessionSummary and
+ *  CrossClarifySessionSummary). */
+export const ClarifyRoundSummarySchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  /** Owning task name (RFC-037 parity). */
+  taskName: z.string(),
+  kind: ClarifyRoundKindSchema,
+
+  askingNodeId: z.string(),
+  askingNodeTitle: z.string().nullable().optional(),
+  askingShardKey: z.string().nullable(),
+
+  intermediaryNodeId: z.string(),
+  intermediaryNodeTitle: z.string().nullable().optional(),
+  intermediaryNodeRunId: z.string(),
+
+  targetConsumerNodeId: z.string().nullable(),
+  loopIter: z.number().int().nonnegative(),
+  iteration: z.number().int().nonnegative(),
+  questionCount: z.number().int().nonnegative(),
+  status: ClarifyRoundStatusSchema,
+  directive: ClarifyDirectiveSchema.nullable(),
+  createdAt: z.number().int(),
+  answeredAt: z.number().int().nullable(),
+})
+export type ClarifyRoundSummary = z.infer<typeof ClarifyRoundSummarySchema>
+
 export const ListClarifyQuerySchema = z.object({
   taskId: z.string().optional(),
   status: z.union([ClarifySessionStatusSchema, z.literal('all')]).optional(),

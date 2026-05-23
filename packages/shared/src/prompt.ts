@@ -3,7 +3,7 @@
 // imports. Mirrors design.md §7.2.
 
 import type { AgentOutputKindsMap } from './schemas/agent'
-import { CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT } from './clarify-cross'
+import { CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT } from './clarify'
 import { groupPortsByKind } from './outputKinds'
 
 /**

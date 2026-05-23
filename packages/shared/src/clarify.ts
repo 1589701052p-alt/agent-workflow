@@ -1,11 +1,19 @@
-// Pure functions and constants for the RFC-023 clarify node. Shared between
-// the backend runner / scheduler / clarify service and the frontend canvas
-// drag helper / prompt preview pane. No Bun / Node / DB imports — keep this
-// module easy to test in either runtime.
+// Pure functions and constants for the RFC-023 clarify node + RFC-056
+// cross-clarify node. Shared between the backend runner / scheduler / clarify
+// service and the frontend canvas drag helper / prompt preview pane. No Bun
+// / Node / DB imports — keep this module easy to test in either runtime.
+//
+// RFC-058 merged the previous standalone `clarify-cross.ts` module into this
+// file so the two clarify modes share a single source of truth (envelope
+// parser, prompt block render, channel-edge detection). The cross-clarify
+// helpers retain their `CROSS_CLARIFY_*` naming so external grep patterns
+// keep working; only the import path changed.
 
 import { z } from 'zod'
 
 import type {
+  ClarifyCrossAgentNode,
+  ClarifyCrossAgentSessionMode,
   ClarifyNode,
   ClarifySessionMode,
   WorkflowDefinition,
@@ -16,6 +24,10 @@ import {
   CLARIFY_OUTPUT_PORT_NAME,
   CLARIFY_SOURCE_PORT_NAME,
   CLARIFY_RESPONSE_TARGET_PORT_NAME,
+  CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  CROSS_CLARIFY_INPUT_PORT_NAME,
+  CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
+  CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
 } from './schemas/workflow'
 import {
   ClarifyEnvelopeBodySchema,
@@ -376,6 +388,257 @@ export function buildClarifyEdges(
       id: `${base}_answers`,
       source: { nodeId: clarifyNodeId, portName: CLARIFY_OUTPUT_PORT_NAME },
       target: { nodeId: sourceAgentNodeId, portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
+    },
+  ]
+}
+
+// =============================================================================
+// RFC-056 cross-clarify — pure helpers (merged from clarify-cross.ts via
+// RFC-058 T10).
+// =============================================================================
+
+/** Title used by the auto-appended External Feedback section in the designer's
+ *  user prompt. */
+export const CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE = '## External Feedback' as const
+
+/** RFC-056 §6 update mode (2026-05-22 amendment) heading constants. */
+export const CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE = '## Prior Output (to be updated)' as const
+export const CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE = '## Update Directive' as const
+
+/** Stable English directive text that primes the designer for update mode. */
+export const CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT = [
+  'Your goal this round is to **update** the prior output above to incorporate the',
+  'External Feedback Q&A. Do NOT regenerate the output from scratch. Preserve every',
+  'detail of the prior output that the External Feedback does not contradict; only',
+  'change the parts the cross-clarify answers require. Treat the External Feedback',
+  'as the source of changes, the prior output as the working draft.',
+].join(' ')
+
+/**
+ * RFC-056: parse the JSON body of a `<workflow-clarify>` envelope produced by a
+ * questioner agent wired through a cross-clarify node. Reuses the RFC-023
+ * parser end-to-end; the only difference is `maxQuestions = +Infinity` which
+ * disables the question-count truncation.
+ */
+export function parseCrossClarifyEnvelopeBody(jsonText: string): ParseClarifyEnvelopeResult {
+  return parseClarifyEnvelopeBody(jsonText, { maxQuestions: Number.POSITIVE_INFINITY })
+}
+
+/** One source's contribution to the designer's External Feedback batch. */
+export interface CrossClarifySourceContext {
+  sourceQuestionerNodeId: string
+  crossClarifyNodeId: string
+  iteration: number
+  questions: ClarifyQuestion[]
+  answers: ClarifyAnswer[]
+}
+
+/**
+ * Render the designer-facing `## External Feedback` body. Sources sort by
+ * questioner nodeId (dictionary order); each source becomes a
+ * `### From '{nodeId}' (round {iteration})` sub-section with the full question
+ * detail (via {@link renderClarifyQuestionsBlock}) shifted from `### Q` to
+ * `#### Q` so the markdown outline stays coherent.
+ */
+export function buildExternalFeedbackBlock(sources: CrossClarifySourceContext[]): string {
+  if (sources.length === 0) return ''
+  const sorted = [...sources].sort((a, b) =>
+    a.sourceQuestionerNodeId.localeCompare(b.sourceQuestionerNodeId),
+  )
+  const lines: string[] = []
+  for (const src of sorted) {
+    lines.push(`### From '${src.sourceQuestionerNodeId}' (round ${src.iteration})`)
+    lines.push('')
+    const questionsBlock = renderClarifyQuestionsBlock(src.questions)
+    lines.push(questionsBlock.replace(/^### Q/gm, '#### Q'))
+    lines.push('')
+    const byId = new Map(src.answers.map((a) => [a.questionId, a]))
+    lines.push('Answers:')
+    src.questions.forEach((q, idx) => {
+      const a = byId.get(q.id)
+      lines.push(
+        `- Q${idx + 1} (${q.title}): ${a === undefined ? 'User did not answer this question.' : summariseClarifyAnswer(q, a)}`,
+      )
+    })
+    lines.push('')
+  }
+  return lines.join('\n').trimEnd()
+}
+
+/** Render a single source's contribution. */
+export function renderCrossClarifySource(src: CrossClarifySourceContext): string {
+  return buildExternalFeedbackBlock([src])
+}
+
+/**
+ * RFC-056 §6 update mode: render the designer's last done output verbatim so
+ * the agent can read the working draft instead of regenerating from scratch.
+ */
+export function buildPriorOutputBlock(
+  outputs: ReadonlyArray<{
+    portName: string
+    content: string
+  }>,
+): string {
+  if (outputs.length === 0) return ''
+  const lines: string[] = []
+  for (const o of outputs) {
+    if (o.content.trim().length === 0) continue
+    lines.push(`### ${o.portName}`)
+    lines.push('')
+    lines.push(o.content)
+    lines.push('')
+  }
+  return lines.join('\n').trimEnd()
+}
+
+/**
+ * Convenience deterministic synthesis for a single (question, answer) pair.
+ * RFC-056 reuses the RFC-023 implementation verbatim.
+ */
+export function summariseCrossAnswer(question: ClarifyQuestion, answer: ClarifyAnswer): string {
+  return summariseClarifyAnswer(question, answer)
+}
+
+/**
+ * RFC-056 + RFC-026: resolve which sessionMode to use for a particular rerun
+ * direction off a cross-clarify node.
+ */
+export function resolveCrossClarifySessionMode(
+  node: ClarifyCrossAgentNode,
+  direction: 'designer' | 'questioner',
+): ClarifyCrossAgentSessionMode {
+  if (direction === 'designer') {
+    return node.sessionModeForDesigner ?? 'isolated'
+  }
+  return node.sessionModeForQuestioner ?? 'isolated'
+}
+
+/**
+ * RFC-023 + RFC-056: classify an edge as a "clarify-channel" edge — the kind
+ * that connects the self-clarify cycle or the cross-clarify cycle.
+ */
+export function isClarifyChannelEdge(e: WorkflowEdge): boolean {
+  return (
+    e.source.portName === CLARIFY_SOURCE_PORT_NAME ||
+    e.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME ||
+    e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT ||
+    e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
+    e.source.portName === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT
+  )
+}
+
+/**
+ * RFC-056: locate the cross-clarify node attached to a given questioner via
+ * the auto-edge `questioner.__clarify__ → newNode.questions`.
+ */
+export function findCrossClarifyNodeForQuestioner(
+  definition: WorkflowDefinition,
+  questionerNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const nodes = definition.nodes ?? []
+  for (const e of edges) {
+    if (e.source.nodeId !== questionerNodeId) continue
+    if (e.source.portName !== CLARIFY_SOURCE_PORT_NAME) continue
+    if (e.target.portName !== CROSS_CLARIFY_INPUT_PORT_NAME) continue
+    const tgt = nodes.find((n) => n.id === e.target.nodeId)
+    if (tgt?.kind === 'clarify-cross-agent') return tgt.id
+  }
+  return undefined
+}
+
+/**
+ * RFC-056: check whether an agent node has at least one inbound
+ * `__external_feedback__` system port edge.
+ */
+export function agentHasExternalFeedbackChannel(
+  definition: WorkflowDefinition,
+  agentNodeId: string,
+): boolean {
+  const edges = definition.edges ?? []
+  return edges.some(
+    (e) =>
+      e.target.nodeId === agentNodeId && e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  )
+}
+
+/**
+ * RFC-056: resolve the designer NodeId pointed at by a cross-clarify node's
+ * `to_designer` output.
+ */
+export function findDesignerNodeForCrossClarify(
+  definition: WorkflowDefinition,
+  crossClarifyNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.source.nodeId === crossClarifyNodeId &&
+      e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT &&
+      e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
+  )
+  return edge?.target.nodeId
+}
+
+/**
+ * RFC-056: enumerate every cross-clarify node whose `to_designer` manual edge
+ * targets `designerNodeId`. Order is preserved from `definition.nodes`.
+ */
+export function findCrossClarifyNodesPointingToDesigner(
+  definition: WorkflowDefinition,
+  designerNodeId: string,
+): string[] {
+  const edges = definition.edges ?? []
+  const targeting = new Set<string>()
+  for (const e of edges) {
+    if (e.target.nodeId !== designerNodeId) continue
+    if (e.target.portName !== CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT) continue
+    if (e.source.portName !== CROSS_CLARIFY_OUT_TO_DESIGNER_PORT) continue
+    targeting.add(e.source.nodeId)
+  }
+  const order = new Map<string, number>()
+  ;(definition.nodes ?? []).forEach((n, idx) => order.set(n.id, idx))
+  return Array.from(targeting).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+}
+
+/**
+ * RFC-056: resolve the QUESTIONER NodeId attached to a cross-clarify node.
+ */
+export function findQuestionerNodeForCrossClarify(
+  definition: WorkflowDefinition,
+  crossClarifyNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.target.nodeId === crossClarifyNodeId &&
+      e.target.portName === CROSS_CLARIFY_INPUT_PORT_NAME &&
+      e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+  )
+  return edge?.source.nodeId
+}
+
+/**
+ * Helper for the canvas reverse-drag interaction. Returns the two edges to
+ * splice into definition.edges when the user drags from a cross-clarify
+ * node's input handle onto an agent node.
+ */
+export function buildCrossClarifyAutoEdges(
+  questionerNodeId: string,
+  crossClarifyNodeId: string,
+): WorkflowEdge[] {
+  const base = `e_${questionerNodeId}_${crossClarifyNodeId}`
+  return [
+    {
+      id: `${base}_clarify`,
+      source: { nodeId: questionerNodeId, portName: CLARIFY_SOURCE_PORT_NAME },
+      target: { nodeId: crossClarifyNodeId, portName: CROSS_CLARIFY_INPUT_PORT_NAME },
+    },
+    {
+      id: `${base}_to_questioner`,
+      source: { nodeId: crossClarifyNodeId, portName: CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT },
+      target: { nodeId: questionerNodeId, portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
     },
   ]
 }

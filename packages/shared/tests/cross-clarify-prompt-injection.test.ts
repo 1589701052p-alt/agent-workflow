@@ -29,7 +29,10 @@ import { CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE } from '@agent-workflow/sha
 
 const SHARED_ROOT = resolve(import.meta.dir, '..')
 const PROMPT_TS = resolve(SHARED_ROOT, 'src', 'prompt.ts')
-const CLARIFY_CROSS_TS = resolve(SHARED_ROOT, 'src', 'clarify-cross.ts')
+// RFC-058: clarify-cross.ts content was merged into clarify.ts. Keep grep
+// guard pointing at clarify.ts where the External Feedback heading literal
+// now lives.
+const CLARIFY_CROSS_TS = resolve(SHARED_ROOT, 'src', 'clarify.ts')
 
 describe('RFC-056 C2 — prompt token + auto-append literal grep guard', () => {
   test('packages/shared/src/prompt.ts references {{__external_feedback__}}', () => {
@@ -47,7 +50,7 @@ describe('RFC-056 C2 — prompt token + auto-append literal grep guard', () => {
     expect(src).toContain('__external_feedback_sources__')
   })
 
-  test('packages/shared/src/clarify-cross.ts contains the `## External Feedback` block title literal', () => {
+  test('packages/shared/src/clarify.ts contains the `## External Feedback` block title literal (post-RFC-058 merge)', () => {
     const src = readFileSync(CLARIFY_CROSS_TS, 'utf-8')
     expect(src).toContain('## External Feedback')
   })
