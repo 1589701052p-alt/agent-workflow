@@ -28,7 +28,11 @@ import type { WorkflowDefinition } from '@agent-workflow/shared'
 import { computeFitBounds } from './wrapperFit'
 
 function isWrapperKind(kind: string): boolean {
-  return kind === 'wrapper-git' || kind === 'wrapper-loop'
+  // RFC-060 — wrapper-fanout is a real container too; without it here, the
+  // projection layer never stamps style.width/height on the xyflow node so
+  // a freshly dragged-out fanout wrapper renders at its intrinsic content
+  // size (just header), making it visibly smaller than wrapper-git / loop.
+  return kind === 'wrapper-git' || kind === 'wrapper-loop' || kind === 'wrapper-fanout'
 }
 
 /** Build the {nodeId → measured size} map that the projection layer uses to

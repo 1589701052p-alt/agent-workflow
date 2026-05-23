@@ -164,6 +164,38 @@ describe('coordProjection', () => {
     expect(orderIndex('nested')).toBeLessThan(orderIndex('na'))
   })
 
+  // RFC-060 — wrapper-fanout must be a real wrapper from the projection
+  // layer's POV. Locks in the 2026-05-24 bug: isWrapperKind() used to only
+  // accept git/loop, so a freshly dragged-out wrapper-fanout never had
+  // style.width/height stamped and rendered at intrinsic content size
+  // (visibly smaller than its sibling wrapper kinds). If a regression
+  // re-narrows isWrapperKind, the assertions below flip red.
+  test('wrapper-fanout: projection stamps style.width/height like git/loop', () => {
+    const d: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [],
+      nodes: [
+        {
+          id: 'fan1',
+          kind: 'wrapper-fanout',
+          position: { x: 200, y: 200 },
+          nodeIds: [],
+          inputs: [{ name: 'docs', kind: 'list<path<md>>', isShardSource: true }],
+        } as unknown as WorkflowNode,
+      ],
+      edges: [],
+    }
+    const flow: Node[] = [flowNode('fan1', 'wrapper-fanout', { x: 200, y: 200 })]
+    const projected = projectDefinitionForXyflow(d, flow)
+    const fan = projected.find((n) => n.id === 'fan1')!
+    expect(fan.style?.width).toBeGreaterThan(0)
+    expect(fan.style?.height).toBeGreaterThan(0)
+    // resolveWrappers must also see it — buildParentMap depends on it for
+    // membership of inner nodes.
+    const wrappers = resolveWrappers(d)
+    expect(wrappers.has('fan1')).toBe(true)
+  })
+
   test('resolveWrappers + buildParentMap: one node has exactly one parent', () => {
     const d = def([
       wrap('w1', 'wrapper-git', ['a1', 'a2'], { size: { width: 400, height: 300 } }),

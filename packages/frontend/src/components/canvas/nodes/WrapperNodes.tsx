@@ -51,9 +51,7 @@ function WrapperHeaderPill({ kind }: { kind: 'git' | 'loop' | 'fanout' }) {
       : kind === 'loop'
         ? 'wrapperNode.pillLoop'
         : 'wrapperNode.pillFanout'
-  return (
-    <span className={`wrapper-header-pill wrapper-header-pill--${kind}`}>{t(labelKey)}</span>
-  )
+  return <span className={`wrapper-header-pill wrapper-header-pill--${kind}`}>{t(labelKey)}</span>
 }
 
 /** Unified group container component for wrapper-git / wrapper-loop /

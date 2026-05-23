@@ -82,7 +82,8 @@ export function applyMembershipPatch(
   if (patch.joinWrapperId === null && patch.leaveWrapperId === null) return prevDef
   let touched = false
   const nodes = prevDef.nodes.map((n) => {
-    if (n.kind !== 'wrapper-git' && n.kind !== 'wrapper-loop') return n
+    if (n.kind !== 'wrapper-git' && n.kind !== 'wrapper-loop' && n.kind !== 'wrapper-fanout')
+      return n
     if (n.id !== patch.joinWrapperId && n.id !== patch.leaveWrapperId) return n
     const rec = n as Record<string, unknown>
     const prevIds = Array.isArray(rec.nodeIds)
