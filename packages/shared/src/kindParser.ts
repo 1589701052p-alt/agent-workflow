@@ -1,0 +1,216 @@
+// RFC-060 PR-A — AgentOutputKind 字符串字面值解析器。
+//
+// 升级前：AgentOutputKind 是 'string' | 'markdown' | 'markdown_file' 三选枚举
+// （`schemas/review.ts`），handler 按字面字符串注册。
+//
+// 升级后：字符串字面值可表达参数化 kind：
+//
+//   base       ::= [a-z][a-z0-9_]*           // 'string' | 'markdown' | 'signal' | ...
+//   parametric ::= 'path' '<' ext '>'        // path<*>, path<md>, path<markdown>
+//                | 'list' '<' kind '>'       // list<path<md>>, list<string>, list<list<int>>
+//   ext        ::= '*' | [a-z][a-z0-9]*      // wildcard or simple ext name (no dot)
+//
+// 兼容别名：字面值 'markdown_file' 解析为 { kind: 'path', ext: 'md' }，与
+// `path<md>` 等价；用于保留 RFC-049 + 历史 agent.md frontmatter 文件 + YAML
+// fixture 的 round-trip 读取能力。stringifyKind 永远不会输出 'markdown_file'，
+// 仓库内部统一输出 'path<md>'——逐步替换历史字面值时不要把它再倒回去。
+//
+// 解析失败抛 KindParseError；调用方负责把它转成 validator 的
+// `agent-output-kind-malformed` 错误码或上层 toast。
+
+export type ParsedKind =
+  | { kind: 'base'; name: string }
+  | { kind: 'path'; ext: '*' | string }
+  | { kind: 'list'; item: ParsedKind }
+
+export class KindParseError extends Error {
+  constructor(
+    message: string,
+    public readonly input: string,
+  ) {
+    super(message)
+    this.name = 'KindParseError'
+  }
+}
+
+// 命名规则：base/路径段名只允许小写字母 + 数字 + 下划线；首字符必须字母。
+const BASE_NAME_RE = /^[a-z][a-z0-9_]*$/
+// path 的 ext 段：'*' 通配或简单单词（无下划线，无点号——dot 由 handler 自加）。
+const PATH_EXT_RE = /^[a-z][a-z0-9]*$/
+
+/**
+ * Parse a kind string into a ParsedKind tree.
+ *
+ * Idempotent: `stringifyKind(parseKind(s))` is byte-equal to a normalized
+ * form of `s` (whitespace stripped, alias 'markdown_file' replaced by
+ * 'path<md>'). For arbitrary roundtrips use this contract:
+ *
+ *   parseKind(stringifyKind(p)) deep-equals p
+ *
+ * Inputs that don't satisfy the grammar throw KindParseError.
+ */
+export function parseKind(text: string): ParsedKind {
+  if (typeof text !== 'string') {
+    throw new KindParseError(`kind must be a string, got ${typeof text}`, String(text))
+  }
+  const trimmed = text.trim()
+  if (trimmed.length === 0) {
+    throw new KindParseError('kind string is empty', text)
+  }
+  // 别名：markdown_file ≡ path<md>。此分支必须在 BASE_NAME_RE 判断前——
+  // markdown_file 字面值匹配 BASE_NAME_RE，但语义上是 path<md>。
+  if (trimmed === 'markdown_file') {
+    return { kind: 'path', ext: 'md' }
+  }
+
+  const ltIdx = trimmed.indexOf('<')
+  if (ltIdx === -1) {
+    // 没有 '<' → 必为 base kind。
+    if (!BASE_NAME_RE.test(trimmed)) {
+      throw new KindParseError(`invalid base kind name '${text}'`, text)
+    }
+    return { kind: 'base', name: trimmed }
+  }
+
+  // 有 '<' → parametric kind。要求 head 形如 BASE_NAME_RE，末尾必须 '>'。
+  if (!trimmed.endsWith('>')) {
+    throw new KindParseError(`expected '>' at end of '${text}'`, text)
+  }
+  const head = trimmed.slice(0, ltIdx)
+  const body = trimmed.slice(ltIdx + 1, -1)
+  if (head.length === 0) {
+    throw new KindParseError(`missing parametric kind head before '<' in '${text}'`, text)
+  }
+  if (!BASE_NAME_RE.test(head)) {
+    throw new KindParseError(`invalid parametric kind head '${head}' in '${text}'`, text)
+  }
+  // body 内必须括号配平——否则下面把 list<int>> 误读成 list<int> + trailing >。
+  if (!bracketsBalanced(body)) {
+    throw new KindParseError(`unbalanced '<' / '>' inside '${text}'`, text)
+  }
+
+  if (head === 'list') {
+    if (body.trim().length === 0) {
+      throw new KindParseError(`list<...> body is empty in '${text}'`, text)
+    }
+    return { kind: 'list', item: parseKind(body) }
+  }
+  if (head === 'path') {
+    const bt = body.trim()
+    if (bt === '*') return { kind: 'path', ext: '*' }
+    if (PATH_EXT_RE.test(bt)) return { kind: 'path', ext: bt }
+    throw new KindParseError(`invalid path ext '${body}' in '${text}'`, text)
+  }
+  throw new KindParseError(`unknown parametric kind head '${head}' in '${text}'`, text)
+}
+
+/**
+ * Render a ParsedKind tree back to its canonical string form.
+ *
+ * Canonical form: no whitespace, alias 'markdown_file' never emitted (always
+ * 'path<md>' so the repository converges on a single representation).
+ */
+export function stringifyKind(k: ParsedKind): string {
+  switch (k.kind) {
+    case 'base':
+      return k.name
+    case 'path':
+      return `path<${k.ext}>`
+    case 'list':
+      return `list<${stringifyKind(k.item)}>`
+  }
+}
+
+/**
+ * `parseKind` wrapper that never throws — returns null on malformed input.
+ * Use this on hot validation paths where you'd rather get a boolean than
+ * pay for an exception throw + catch.
+ */
+export function tryParseKind(text: string): ParsedKind | null {
+  try {
+    return parseKind(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True if the given kind string parses (syntax-only check). Use this for
+ * places that only need to ensure the input is grammatically a kind
+ * expression — not for full AgentOutputKind admission, which also checks the
+ * base name allowlist (see `isRegisteredKindString`).
+ */
+export function isValidKindString(text: string): boolean {
+  return tryParseKind(text) !== null
+}
+
+/**
+ * Base kind names recognized by the shared schemas as valid
+ * AgentOutputKind ingredients. PR-A locks in 'string' and 'markdown';
+ * PR-B (RFC-060) will add 'signal'; future RFCs may extend this set.
+ *
+ * Kept as a const Set so additions are visible to any consumer that does
+ * `REGISTERED_BASE_KINDS.has(name)`. Don't import this in PR-A consumers
+ * other than the kindParser itself — the only public hook is
+ * `isRegisteredKindString`.
+ */
+const REGISTERED_BASE_KINDS: ReadonlySet<string> = new Set<string>(['string', 'markdown'])
+
+/**
+ * Stricter sibling of `isValidKindString`: parses successfully AND every
+ * base name it mentions is a member of `REGISTERED_BASE_KINDS`. This is
+ * what `AgentOutputKindSchema.refine` calls.
+ *
+ * The 'markdown_file' alias still passes because it folds to `path<md>`
+ * at parse time; `path<ext>` doesn't carry a base name, so it never trips
+ * the allowlist check.
+ */
+export function isRegisteredKindString(text: string): boolean {
+  const parsed = tryParseKind(text)
+  if (parsed === null) return false
+  return allBasesRegistered(parsed, REGISTERED_BASE_KINDS)
+}
+
+function allBasesRegistered(p: ParsedKind, registered: ReadonlySet<string>): boolean {
+  switch (p.kind) {
+    case 'base':
+      return registered.has(p.name)
+    case 'path':
+      return true
+    case 'list':
+      return allBasesRegistered(p.item, registered)
+  }
+}
+
+/**
+ * Deep structural equality on ParsedKind trees. Used by tests + validator
+ * for "is this port the same kind as that one" checks; does not collapse
+ * `markdown_file` vs `path<md>` (they collapse at parse time, not here).
+ */
+export function kindsEqual(a: ParsedKind, b: ParsedKind): boolean {
+  if (a.kind !== b.kind) return false
+  switch (a.kind) {
+    case 'base':
+      return a.name === (b as { name: string }).name
+    case 'path':
+      return a.ext === (b as { ext: string }).ext
+    case 'list':
+      return kindsEqual(a.item, (b as { item: ParsedKind }).item)
+  }
+}
+
+// -----------------------------------------------------------------------------
+// internal helpers
+// -----------------------------------------------------------------------------
+
+function bracketsBalanced(s: string): boolean {
+  let depth = 0
+  for (const ch of s) {
+    if (ch === '<') depth++
+    else if (ch === '>') {
+      depth--
+      if (depth < 0) return false
+    }
+  }
+  return depth === 0
+}

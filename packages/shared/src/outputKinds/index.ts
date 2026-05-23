@@ -140,3 +140,8 @@ export function composePerKindRepairBlocks(
 
 export { stringHandler, markdownHandler, markdownFileHandler }
 export * from './types'
+
+// RFC-060 PR-A — sibling parametric registry. Co-exists with the legacy
+// HANDLERS Record above; PR-D switches runtime callers over and removes
+// the legacy entries.
+export * from './registry'

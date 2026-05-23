@@ -10,6 +10,7 @@
 // will consume.
 
 import { z } from 'zod'
+import { isRegisteredKindString } from '../kindParser'
 import { PortRefSchema } from './workflow'
 
 // -----------------------------------------------------------------------------
@@ -21,11 +22,33 @@ import { PortRefSchema } from './workflow'
 // 'markdown_file' means the content is a worktree-relative path that the
 // framework reads from disk before passing downstream.
 //
-// Only ports declared `kind ∈ {markdown, markdown_file}` may be the input
-// source of a review node (enforced by workflow.validator.ts in T3).
+// RFC-060 PR-A upgrade: AgentOutputKind is now a STRING LITERAL accepting
+// any base / path<ext> / list<...> kind that parses + uses a registered
+// base name (see `kindParser.ts`). The three legacy enum values
+// 'string' / 'markdown' / 'markdown_file' remain valid: 'string' and
+// 'markdown' parse as base kinds in the registered allowlist; 'markdown_file'
+// folds into 'path<md>' at parse time. New parametric kinds like
+// 'path<md>' / 'list<path<md>>' / 'list<string>' are now also accepted by
+// the schema.
+//
+// The legacy AGENT_OUTPUT_KIND array is kept as an explicit anchor for the
+// RFC-049 OutputKindHandler registry coverage test (HANDLERS table must map
+// these three literals 1:1). Don't extend this array for new wrapper-fanout
+// kinds — extend `REGISTERED_BASE_KINDS` (kindParser.ts) for new base names
+// and the kindParser grammar already covers path<*> / list<...>.
+//
+// Only ports declared as some form of markdown body (parsed kind is base
+// 'markdown' or path<md>) may be the input source of a review node
+// (enforced by workflow.validator.ts in T3 + RFC-060 §10.2).
 // -----------------------------------------------------------------------------
 export const AGENT_OUTPUT_KIND = ['string', 'markdown', 'markdown_file'] as const
-export const AgentOutputKindSchema = z.enum(AGENT_OUTPUT_KIND)
+export type LegacyAgentOutputKind = (typeof AGENT_OUTPUT_KIND)[number]
+
+export const AgentOutputKindSchema = z.string().refine(isRegisteredKindString, {
+  message:
+    "kind must be a registered base kind, 'path<ext>', or 'list<...>' " +
+    '(see RFC-060 kindParser.ts)',
+})
 export type AgentOutputKind = z.infer<typeof AgentOutputKindSchema>
 
 // -----------------------------------------------------------------------------
