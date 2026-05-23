@@ -48,9 +48,20 @@ export function clearSourcePortsForSyntheticIds(
   return def
 }
 
-/** No-op: drop guard is always false (no NodeKind has a sourcePort handle). */
+/**
+ * No-op pass-guard. Pre-RFC-060 PR-E this gated the agent-multi sourcePort
+ * top-handle drop; with agent-multi removed there is no such handle, so the
+ * guard must let every connection through.
+ *
+ * The caller in WorkflowCanvas.isValidConnection is written as
+ *   `if (!isValidSourcePortConnection(...)) return false`
+ * — i.e. **false from this function rejects the connection entirely**.
+ * The previous stub returned `false`, which silently broke every single
+ * drag-to-connect on the canvas (wrapper outputs, agent-to-agent, etc.).
+ * Returning `true` here is the correct no-op semantics.
+ */
 export function isValidSourcePortConnection(_def: WorkflowDefinition, _conn: Connection): boolean {
-  return false
+  return true
 }
 
 /** No-op: returns null since no edge id can carry the legacy prefix. */
