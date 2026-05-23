@@ -1112,6 +1112,7 @@ export const enUS: Resources = {
     fanoutInputShardSourceMustBeList: 'shard source kind must be list<T>',
     fanoutInputAdd: '+ add input',
     fanoutInputRemove: 'remove input',
+    fanoutInputUnwired: '(not wired)',
     fanoutDerivedOutputs: 'Derived outputs',
     fanoutDerivedOutputsHint:
       'Auto-derived from the wrapper-fanout body: aggregator agent outputs (when present), or a single __done__ signal port (no aggregator).',
@@ -1543,6 +1544,8 @@ export const enUS: Resources = {
     pillGit: 'snapshot',
     pillLoop: 'loop',
     pillFanout: 'fanout',
+    shardSourceTag: 'Shard source — drives one inner-subgraph execution per list element',
+    shardSourceTagShort: 'shard',
     dropHere: 'Drop nodes here',
     fitToChildren: 'Fit to children',
     unwrap: 'Unwrap',

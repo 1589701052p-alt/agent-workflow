@@ -678,43 +678,65 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               {inputsList.map((p, idx) => {
                 const parsed = tryParseKind(p.kind)
                 const isShardKindOk = parsed?.kind === 'list'
+                // Find inbound edges wired to this port. The user asked us
+                // NOT to split "inbound edges" into its own panel — surface
+                // each edge inline on the corresponding input row so the
+                // inputs[] list is the single source of truth.
+                const wiredFrom = definition.edges.filter(
+                  (e) => e.target.nodeId === node.id && e.target.portName === p.name,
+                )
                 return (
-                  <div key={idx} className="fanout-input-row">
-                    <TextInput
-                      value={p.name}
-                      onChange={(v) => patchInput(idx, { name: v })}
-                      placeholder={t('inspector.fanoutInputNamePlaceholder')}
-                    />
-                    <TextInput
-                      value={p.kind}
-                      onChange={(v) => patchInput(idx, { kind: v })}
-                      placeholder="list<path<md>>"
-                    />
-                    <Switch
-                      checked={p.isShardSource === true}
-                      onChange={(v) => {
-                        // Mark this one as shardSource and clear others (singleton invariant).
-                        const next = inputsList.map((q, i) => ({
-                          ...q,
-                          isShardSource: i === idx ? v : false,
-                        }))
-                        setInputs(next)
-                      }}
-                      label={t('inspector.fanoutInputShardSource')}
-                    />
+                  <div key={idx} className="fanout-input-row-wrap">
+                    <div className="fanout-input-row">
+                      <TextInput
+                        value={p.name}
+                        onChange={(v) => patchInput(idx, { name: v })}
+                        placeholder={t('inspector.fanoutInputNamePlaceholder')}
+                      />
+                      <TextInput
+                        value={p.kind}
+                        onChange={(v) => patchInput(idx, { kind: v })}
+                        placeholder="list<path<md>>"
+                      />
+                      <Switch
+                        checked={p.isShardSource === true}
+                        onChange={(v) => {
+                          // Mark this one as shardSource and clear others (singleton invariant).
+                          const next = inputsList.map((q, i) => ({
+                            ...q,
+                            isShardSource: i === idx ? v : false,
+                          }))
+                          setInputs(next)
+                        }}
+                        label={t('inspector.fanoutInputShardSource')}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn--xs"
+                        onClick={() => removeInput(idx)}
+                        aria-label={t('inspector.fanoutInputRemove')}
+                      >
+                        ×
+                      </button>
+                    </div>
                     {p.isShardSource === true && !isShardKindOk ? (
                       <div className="muted muted--warn">
                         {t('inspector.fanoutInputShardSourceMustBeList')}
                       </div>
                     ) : null}
-                    <button
-                      type="button"
-                      className="btn btn--xs"
-                      onClick={() => removeInput(idx)}
-                      aria-label={t('inspector.fanoutInputRemove')}
-                    >
-                      ×
-                    </button>
+                    <div className="fanout-input-wired">
+                      {wiredFrom.length === 0 ? (
+                        <span className="muted">{t('inspector.fanoutInputUnwired')}</span>
+                      ) : (
+                        wiredFrom.map((e) => (
+                          <span key={e.id} className="fanout-input-wired__src">
+                            ← <code>{e.source.nodeId}</code>
+                            <span>.</span>
+                            <code>{e.source.portName}</code>
+                          </span>
+                        ))
+                      )}
+                    </div>
                   </div>
                 )
               })}

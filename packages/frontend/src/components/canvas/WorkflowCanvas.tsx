@@ -482,7 +482,14 @@ function CanvasInner({
       if (built === null) return
       const withEdge = { ...definition, edges: [...definition.edges, built] }
       const synced = applyConnectionForReviewOutput(withEdge, built, { viaCatchAll })
-      commitChange(synced)
+      // RFC-060 — wrapper-fanout inputs[] is the single source of truth for
+      // declared ports. If the user dragged an edge that lands on a port
+      // name not in inputs[], auto-append it so the inspector and the
+      // canvas stay in sync (without this, the canvas shows the wired
+      // handle but the inspector's inputs[] list is missing the entry, and
+      // the validator would emit a port-mismatch on next save).
+      const reconciled = ensureWrapperFanoutInputForEdge(synced, built)
+      commitChange(reconciled)
     },
     [commitChange, definition, onChange, readOnly],
   )
@@ -1295,6 +1302,24 @@ function toFlowNodes(
       }
     }
     // RFC-060 PR-E: agent-multi sourcePort mirroring removed.
+    if (n.kind === 'wrapper-fanout') {
+      // Surface the shard-source input port name (if any) so WrapperNodes
+      // can render that left-side row with shard-source chrome — gives
+      // authors a glance-distinguishable cue for which input port drives
+      // the fan-out vs which ones broadcast.
+      const declaredInputs = Array.isArray((n as Record<string, unknown>).inputs)
+        ? ((n as Record<string, unknown>).inputs as Array<{
+            name?: unknown
+            isShardSource?: unknown
+          }>)
+        : []
+      const shardSrc = declaredInputs.find(
+        (p) => p.isShardSource === true && typeof p.name === 'string',
+      )
+      if (shardSrc !== undefined && typeof shardSrc.name === 'string') {
+        ;(data as CanvasNodeData & { shardSourcePort?: string }).shardSourcePort = shardSrc.name
+      }
+    }
     return {
       id: n.id,
       type: n.kind,
@@ -1564,6 +1589,50 @@ export function buildEdgeFromConnection(
     source: { nodeId: source, portName: sourcePort },
     target: { nodeId: target, portName: targetPort },
   }
+}
+
+/**
+ * RFC-060 — when an edge is dropped on a wrapper-fanout target whose port
+ * name is not (yet) in the wrapper's `inputs[]`, auto-append the port. The
+ * inspector's Inputs list is the single source of truth for wrapper-fanout
+ * declared ports — without this reconciliation, drag-creating an inbound
+ * edge would create a "phantom" port that's visible on the canvas but
+ * missing from the declared list (and would trip the validator on next
+ * save).
+ *
+ * Default kind for the auto-added port:
+ *   - If the wrapper currently has no shardSource, mark the new port as
+ *     shardSource with kind `list<string>` (it's the most common drop —
+ *     authors first wire up the iteration source, then add broadcast
+ *     ports later via the inspector).
+ *   - Otherwise, add a non-shard port with kind `string`.
+ *
+ * Returns `prev` by reference when no change is needed so React effects
+ * short-circuit on `===`.
+ */
+export function ensureWrapperFanoutInputForEdge(
+  prev: WorkflowDefinition,
+  edge: WorkflowEdge,
+): WorkflowDefinition {
+  const target = prev.nodes.find((n) => n.id === edge.target.nodeId)
+  if (target === undefined || target.kind !== 'wrapper-fanout') return prev
+  const rec = target as unknown as Record<string, unknown>
+  const inputs = Array.isArray(rec.inputs)
+    ? (rec.inputs as Array<{ name?: unknown; kind?: unknown; isShardSource?: unknown }>)
+    : []
+  if (inputs.some((p) => p.name === edge.target.portName)) return prev
+  const hasShardSource = inputs.some((p) => p.isShardSource === true)
+  const newPort = hasShardSource
+    ? { name: edge.target.portName, kind: 'string' }
+    : { name: edge.target.portName, kind: 'list<string>', isShardSource: true }
+  const nextNodes = prev.nodes.map((n) => {
+    if (n.id !== edge.target.nodeId) return n
+    return {
+      ...(n as Record<string, unknown>),
+      inputs: [...inputs, newPort],
+    } as unknown as WorkflowNode
+  })
+  return { ...prev, nodes: nextNodes }
 }
 
 function isWrapperNode(def: WorkflowDefinition, nodeId: string | null): boolean {

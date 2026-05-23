@@ -48,4 +48,12 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * (RFC-015 §5.3). Other node kinds leave this `undefined`.
    */
   sourcePort?: { nodeId: string; portName: string }
+  /**
+   * RFC-060 wrapper-fanout only: name of the single input port marked
+   * `isShardSource: true` in the WorkflowNode's `inputs[]`. WrapperNodes
+   * uses this to render that port row with shard-source chrome (accent
+   * stripe + "shard" badge) so authors see at a glance which port drives
+   * the fan-out. Undefined on every other node kind.
+   */
+  shardSourcePort?: string
 }

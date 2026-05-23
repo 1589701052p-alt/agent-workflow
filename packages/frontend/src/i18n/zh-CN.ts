@@ -1045,6 +1045,8 @@ export interface Resources {
     fanoutInputShardSourceMustBeList: string
     fanoutInputAdd: string
     fanoutInputRemove: string
+    /** RFC-060 — placeholder shown on a fanout input row with no inbound edge. */
+    fanoutInputUnwired: string
     fanoutDerivedOutputs: string
     fanoutDerivedOutputsHint: string
     none: string
@@ -1454,6 +1456,10 @@ export interface Resources {
     pillLoop: string
     /** RFC-060 — wrapper-fanout header pill (short status text beside the kind label). */
     pillFanout: string
+    /** RFC-060 — tooltip / accessible label on the shard-source port row. */
+    shardSourceTag: string
+    /** RFC-060 — short visible tag on the shard-source port row (e.g. "shard"). */
+    shardSourceTagShort: string
     dropHere: string
     fitToChildren: string
     unwrap: string
@@ -2985,6 +2991,7 @@ export const zhCN: Resources = {
     fanoutInputShardSourceMustBeList: '分片源的 kind 必须是 list<T>',
     fanoutInputAdd: '+ 添加输入',
     fanoutInputRemove: '删除输入',
+    fanoutInputUnwired: '（未连接）',
     fanoutDerivedOutputs: '推导出的输出',
     fanoutDerivedOutputsHint:
       '由 wrapper-fanout 内部自动推导：若有 aggregator agent 则用其 outputs；否则单一 __done__ signal 端口。',
@@ -3393,6 +3400,8 @@ export const zhCN: Resources = {
     pillGit: '快照',
     pillLoop: '循环',
     pillFanout: '分片',
+    shardSourceTag: '分片源 — 列表中每个元素触发一次内部子图执行',
+    shardSourceTagShort: '分片源',
     dropHere: '把节点拖到这里',
     fitToChildren: '自适应内部节点',
     unwrap: '解散包装器',

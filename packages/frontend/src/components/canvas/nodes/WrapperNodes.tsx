@@ -32,6 +32,9 @@ export interface WrapperNodeData extends CanvasNodeData {
    * them (it carries a kind label only, parallel to git/fanout). */
   maxIterations?: number
   exitConditionKind?: 'port-empty' | 'port-not-empty' | 'port-equals' | 'port-count-lt' | string
+  /** Fanout only — name of the shard-source input port (singleton); used to
+   * tag the corresponding port row with shard-source chrome. */
+  shardSourcePort?: string
 }
 
 interface Props extends NodeProps {
@@ -98,9 +101,56 @@ export function GroupWrapperNode({ data, selected }: Props) {
        *  fanout wrapper has no canvas affordance for drag-connect of
        *  upstream edges. The catch-all lets the first drop land on the
        *  shardSource (typical case); precise per-port drops still hit
-       *  named handles via z-index priority. */}
+       *  named handles via z-index priority.
+       *
+       *  Inline (not PortHandles) because we need to tag the shard-source
+       *  row with its own modifier class — PortHandles doesn't support
+       *  per-port customization and adding it just for this would
+       *  complicate the shared component. */}
       {kind === 'fanout' ? (
-        <PortHandles side="left" ports={data.inputPorts} catchAll={{ id: INBOUND_HANDLE_ID }} />
+        <>
+          <div className="canvas-node__inbound-catchall">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={INBOUND_HANDLE_ID}
+              className="canvas-node__handle canvas-node__handle--catchall"
+              aria-hidden="true"
+            />
+          </div>
+          {data.inputPorts.length > 0 ? (
+            <div className="canvas-node__port-rows canvas-node__port-rows--left canvas-node__port-rows--wrapper-fanout">
+              {data.inputPorts.map((p) => {
+                const isShardSource = p === data.shardSourcePort
+                return (
+                  <div
+                    key={p}
+                    className={`canvas-node__port-row canvas-node__port-row--left${isShardSource ? ' canvas-node__port-row--shard-source' : ''}`}
+                    data-shard-source={isShardSource ? 'true' : undefined}
+                  >
+                    <Handle
+                      type="target"
+                      position={Position.Left}
+                      id={p}
+                      className="canvas-node__handle"
+                    />
+                    <span className="canvas-node__port-label" title={p}>
+                      {p}
+                    </span>
+                    {isShardSource ? (
+                      <span
+                        className="canvas-node__port-tag canvas-node__port-tag--shard"
+                        title={t('wrapperNode.shardSourceTag')}
+                      >
+                        {t('wrapperNode.shardSourceTagShort')}
+                      </span>
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
+          ) : null}
+        </>
       ) : null}
       {/* Fanout outputs render on the RIGHT (mirrors the agent-node layout
        *  so the wrapper reads as an agent-shaped block at a glance): inputs
