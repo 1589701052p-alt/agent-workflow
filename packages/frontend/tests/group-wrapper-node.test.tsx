@@ -162,5 +162,34 @@ describe('GroupWrapperNode', () => {
         setLanguage('en-US')
       }
     })
+
+    // 2026-05-24: locks the "output port styling matches git's once an
+    // aggregator is wired" contract the user asked for. Without an
+    // aggregator the wrapper exposes the implicit `__done__` signal
+    // outlet — that one keeps the dashed/dimmed signal chrome (existing
+    // signal-port-visual.test.ts source-locks the branch). The moment the
+    // author drops in an aggregator agent, deriveWrapperFanoutOutputs
+    // surfaces the agent's renamed outputs instead of `__done__`, and the
+    // bottom-port renderer must render them as plain data handles — the
+    // same way wrapper-git renders `git_diff`. Otherwise the wrapper's
+    // outputs would visually diverge from git's, which is the bug the
+    // user just reported about pre-aggregator state.
+    test('fanout output: __done__ gets signal chrome (no-aggregator case)', () => {
+      const { container } = renderNode(fanoutData({ outputPorts: ['__done__'] }))
+      const port = container.querySelector('.canvas-node__bottom-port')
+      expect(port?.classList.contains('canvas-node__bottom-port--signal')).toBe(true)
+      const handle = container.querySelector('.canvas-node__handle')
+      expect(handle?.classList.contains('canvas-node__handle--signal')).toBe(true)
+    })
+    test('fanout output: aggregator-derived port renders as plain data handle (matches git_diff)', () => {
+      const { container } = renderNode(fanoutData({ outputPorts: ['summary'] }))
+      const port = container.querySelector('.canvas-node__bottom-port')
+      expect(port).not.toBeNull()
+      // No --signal modifier when the port is a real data output — that's
+      // what unifies the visual with wrapper-git's `git_diff`.
+      expect(port?.classList.contains('canvas-node__bottom-port--signal')).toBe(false)
+      const handle = container.querySelector('.canvas-node__handle')
+      expect(handle?.classList.contains('canvas-node__handle--signal')).toBe(false)
+    })
   })
 })
