@@ -419,7 +419,14 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
 // T29 — agent-multi shard fanout: 1 of 3 shards asks back.
 // ---------------------------------------------------------------------------
 
-test.describe('RFC-023 clarify e2e — agent-multi shard fanout', () => {
+// RFC-060 PR-E: agent-multi was removed; this suite exercises per-shard
+// clarify which was explicitly deferred from PR-D to PR-D2 (wrapper-fanout
+// v1 inner subgraph only supports agent-single — no clarify/review/wrapper
+// kinds inside). The shard-key fanout + 1-shard-asks-back semantics still
+// exist on the wrapper-fanout container, but the runner-side per-shard
+// clarify mint isn't wired yet. Revive (rewrite for wrapper-fanout +
+// agent-single inner) when PR-D2 lands per-shard clarify (RFC-060 D.T5).
+test.describe.skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred to RFC-060 PR-D2 per-shard clarify)', () => {
   let daemon: DaemonHandle
   let repoDir: string
   let stubState: string
