@@ -186,10 +186,24 @@ function runSql(sql: string): void {
 }
 
 /** Plant a real S3 violation: task running but a node_run that was once
- * active is now terminal (interrupted), and the task hasn't been demoted. */
-function plantS3Violation(taskId: string): { reviewRunId: string } {
+ * active is now terminal (interrupted), and the task hasn't been demoted.
+ *
+ * Also seeds the lifecycle_alerts row directly. The production
+ * stuckTaskDetector only flags S3 after 30 minutes of inactivity (see
+ * DEFAULT_STUCK_THRESHOLD_MS in stuckTaskDetector.ts), and the
+ * `/api/tasks/:id/diagnose` route only runs the invariant scan — not
+ * the stuck detector. So we mimic what the periodic 5-min scan would
+ * have written once the threshold elapsed. */
+function plantS3Violation(taskId: string): { reviewRunId: string; alertId: string } {
   const reviewRunId = `nr_s3_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const alertId = `al_s3_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const now = Date.now()
+  const detail = JSON.stringify({
+    rule: 'S3',
+    message: 'task running but every node_run is terminal',
+    repairHint: { kind: 'review', nodeRunId: reviewRunId },
+  })
+    .replace(/'/g, "''")
   runSql(`
     UPDATE tasks SET status='running' WHERE id='${taskId}';
     INSERT INTO node_runs (id, task_id, node_id, parent_node_run_id, iteration,
@@ -197,8 +211,11 @@ function plantS3Violation(taskId: string): { reviewRunId: string } {
       started_at, finished_at)
     VALUES ('${reviewRunId}', '${taskId}', 'rev_s3', NULL, 0, NULL, 0, 0, 0,
       'interrupted', ${now - 5000}, ${now - 1000});
+    INSERT INTO lifecycle_alerts
+      (id, task_id, rule, severity, detail, detected_at, resolved_at)
+    VALUES ('${alertId}', '${taskId}', 'S3', 'warning', '${detail}', ${now}, NULL);
   `)
-  return { reviewRunId }
+  return { reviewRunId, alertId }
 }
 
 function plantR1Violation(taskId: string): { nodeRunId: string; docVersionId: string } {
