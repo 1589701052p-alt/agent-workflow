@@ -6617,6 +6617,28 @@ mark.comment-anchor[data-active='true'] {
   margin: 16px 0 24px;
 }
 
+/* RFC-059 — per-question wrapper holds the scope picker above the QuestionForm.
+   On self-clarify the wrapper still exists but only contains the QuestionForm,
+   so layout stays identical to RFC-023 baseline. */
+.clarify-question-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clarify-question-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.clarify-question-scope .segmented {
+  /* Tighter than the inspector default to fit two short options without
+     pushing the question title down. */
+  flex-shrink: 0;
+}
+
 .clarify-detail__footer {
   display: flex;
   align-items: center;

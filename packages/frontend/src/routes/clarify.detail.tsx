@@ -22,10 +22,13 @@ import { useTranslation } from 'react-i18next'
 import type {
   ClarifyAnswer,
   ClarifyDirective,
+  ClarifyQuestionScope,
   ClarifyRound,
   ClarifyRoundSummary,
+  SubmitClarifyAnswers,
   SubmitClarifyAnswersResponse,
 } from '@agent-workflow/shared'
+import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { Dialog } from '@/components/Dialog'
@@ -82,6 +85,11 @@ export function ClarifyDetailPage() {
   // ----------------------------------------------------------------------
 
   const [answers, setAnswers] = useState<Record<string, ClarifyAnswer>>({})
+  // RFC-059: per-question scope decisions for cross-clarify sessions. Map
+  // questionId → 'designer' | 'questioner'. Empty for self-clarify (the
+  // asking agent is itself the consumer, so there's no designer/questioner
+  // split; the submit body does NOT include this field on the self path).
+  const [scopes, setScopes] = useState<Record<string, ClarifyQuestionScope>>({})
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftSaving, setDraftSaving] = useState(false)
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -110,6 +118,7 @@ export function ClarifyDetailPage() {
   // same taskId on every clarify swap, which is wasteful and racy.
   useEffect(() => {
     setAnswers({})
+    setScopes({})
     setDraftLoaded(false)
     initialFocusedRef.current = false
     if (draftTimerRef.current !== null) {
@@ -117,6 +126,25 @@ export function ClarifyDetailPage() {
       draftTimerRef.current = null
     }
   }, [nodeRunId])
+
+  // RFC-059: seed `scopes` from the session (kind='cross' only).
+  //   - awaiting_human + no persisted scopes → every question defaults to
+  //     'designer' (preserves RFC-056 byte-level behaviour).
+  //   - sealed (answered/abandoned) with persisted scopes → restore them so
+  //     the readonly chip shows what the user actually selected.
+  //   - sealed with NULL scopes (rows from before RFC-059) → fall back to
+  //     'designer' so the chip says "designer" — matches the runtime path.
+  //   - self-clarify → never seed; `scopes` stays `{}` and the UI does not
+  //     render any scope control.
+  useEffect(() => {
+    const s = session.data
+    if (s === undefined || s.kind !== 'cross') return
+    const initial: Record<string, ClarifyQuestionScope> = {}
+    for (const q of s.questions) {
+      initial[q.id] = s.questionScopes?.[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
+    }
+    setScopes(initial)
+  }, [session.data])
 
   useEffect(() => {
     const s = session.data
@@ -270,9 +298,20 @@ export function ClarifyDetailPage() {
             customText: '',
           },
       )
+      const body: SubmitClarifyAnswers = {
+        answers: arr,
+        ifMatchIteration: s.iteration,
+        directive,
+      }
+      // RFC-059: only send questionScopes on cross-clarify (self-clarify
+      // submit ignores the field; sending it would be wasted bytes + tempt
+      // future readers into thinking self-clarify has scope semantics).
+      if (s.kind === 'cross') {
+        body.questionScopes = scopes
+      }
       const resp = await api.post<SubmitClarifyAnswersResponse>(
         `/api/clarify/${s.intermediaryNodeRunId}/answers`,
-        { answers: arr, ifMatchIteration: s.iteration, directive },
+        body,
       )
       // Clear the IDB draft; the answer is committed server-side.
       await deleteClarifyDraft({
@@ -554,20 +593,79 @@ export function ClarifyDetailPage() {
         {s.questions.map((q, idx) => {
           const a = answers[q.id]
           if (a === undefined) return null
+          const scope: ClarifyQuestionScope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
           return (
-            <QuestionForm
-              key={q.id}
-              ref={(h) => {
-                if (h === null) questionRefs.current.delete(q.id)
-                else questionRefs.current.set(q.id, h)
-              }}
-              question={q}
-              value={a}
-              index={idx + 1}
-              disabled={readonly || submitMut.isPending}
-              onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
-              onAdvance={() => advanceFromQuestion(q.id)}
-            />
+            <div key={q.id} className="clarify-question-wrapper">
+              {/* RFC-059: per-question scope picker. Only rendered for
+                  cross-clarify nodes (self-clarify has no scope split).
+                  In awaiting_human → editable Segmented; in sealed states
+                  (answered/abandoned) → readonly chip. */}
+              {isCross && (
+                <div className="clarify-question-scope" data-testid={`clarify-scope-${q.id}`}>
+                  <span className="muted">{t('crossClarify.questionScope.label')}:</span>
+                  {readonly ? (
+                    <span
+                      className={
+                        'status-chip status-chip--' + (scope === 'questioner' ? 'blue' : 'neutral')
+                      }
+                      data-testid={`clarify-scope-chip-${q.id}`}
+                    >
+                      {scope === 'questioner'
+                        ? t('crossClarify.questionScope.questioner')
+                        : t('crossClarify.questionScope.designer')}
+                    </span>
+                  ) : (
+                    <div
+                      className="segmented"
+                      role="radiogroup"
+                      aria-label={t('crossClarify.questionScope.label')}
+                      data-testid={`clarify-scope-segmented-${q.id}`}
+                    >
+                      {(['designer', 'questioner'] as const).map((mode) => {
+                        const active = scope === mode
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            className={
+                              'segmented__option' + (active ? ' segmented__option--active' : '')
+                            }
+                            data-testid={`clarify-scope-${q.id}-${mode}`}
+                            disabled={submitMut.isPending}
+                            title={t(
+                              mode === 'designer'
+                                ? 'crossClarify.questionScope.designerTooltip'
+                                : 'crossClarify.questionScope.questionerTooltip',
+                            )}
+                            onClick={() => {
+                              setScopes((prev) => ({ ...prev, [q.id]: mode }))
+                            }}
+                          >
+                            {mode === 'designer'
+                              ? t('crossClarify.questionScope.designer')
+                              : t('crossClarify.questionScope.questioner')}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              <QuestionForm
+                ref={(h) => {
+                  if (h === null) questionRefs.current.delete(q.id)
+                  else questionRefs.current.set(q.id, h)
+                }}
+                question={q}
+                value={a}
+                index={idx + 1}
+                disabled={readonly || submitMut.isPending}
+                onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
+                onAdvance={() => advanceFromQuestion(q.id)}
+              />
+            </div>
           )
         })}
       </section>
@@ -576,6 +674,36 @@ export function ClarifyDetailPage() {
         <span className="muted" data-testid="clarify-draft-indicator">
           {draftSaving ? t('clarify.detail.draftSaving') : t('clarify.detail.draftSaved')}
         </span>
+        {/* RFC-059: scope-distribution hint right above the submit row, only
+            for cross-clarify in awaiting_human. Three variants
+            (allDesigner / allQuestioner / mixed) make the routing decision
+            visible BEFORE the user hits submit. */}
+        {isCross &&
+          !readonly &&
+          (() => {
+            const total = s.questions.length
+            const designerCount = s.questions.filter(
+              (q) => (scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT) === 'designer',
+            ).length
+            const questionerCount = total - designerCount
+            let hintKey: string
+            let hintData: Record<string, number>
+            if (designerCount === 0) {
+              hintKey = 'crossClarify.submitHint.allQuestioner'
+              hintData = { n: questionerCount }
+            } else if (questionerCount === 0) {
+              hintKey = 'crossClarify.submitHint.allDesigner'
+              hintData = { n: designerCount }
+            } else {
+              hintKey = 'crossClarify.submitHint.mixed'
+              hintData = { d: designerCount, q: questionerCount, total }
+            }
+            return (
+              <p className="muted" data-testid="cross-clarify-submit-hint" data-hint-kind={hintKey}>
+                {t(hintKey, hintData)}
+              </p>
+            )
+          })()}
         <div className="clarify-detail__submit-group" data-testid="clarify-submit-group">
           <button
             ref={submitContinueRef}
