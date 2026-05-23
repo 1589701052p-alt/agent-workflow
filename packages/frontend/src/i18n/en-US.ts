@@ -1539,14 +1539,20 @@ export const enUS: Resources = {
     innerNodes: '{{n}} inner node(s)',
     labelGit: 'Git Wrapper',
     labelLoop: 'Loop Wrapper',
+    labelFanout: 'Fanout Wrapper',
     pillGit: 'snapshot',
-    pillLoop: '× {{max}} · {{kind}}',
+    pillLoop: 'loop',
+    pillFanout: 'fanout',
     dropHere: 'Drop nodes here',
     fitToChildren: 'Fit to children',
     unwrap: 'Unwrap',
     deleteWithInner: 'Delete wrapper and inner nodes',
     confirmDeleteWithInner:
       'Delete this wrapper and all {{count}} inner node(s)? This cannot be undone.',
+  },
+  ioNode: {
+    labelInput: 'Input',
+    labelOutput: 'Output',
   },
   errors: {
     'http-401': 'Unauthorized — please sign in again.',

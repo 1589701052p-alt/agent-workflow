@@ -64,4 +64,26 @@ describe('Phase C bundles', () => {
     expect(i18n.t('wrapperNode.innerNodes', { n: 5 })).toBe('5 个内部节点')
     expect(i18n.t('enumPicker.add')).toBe('添加')
   })
+
+  // Locks in the 2026-05-24 i18n fix: wrapper-fanout previously fell through
+  // to wrapperNode.labelGit because GroupWrapperNode's kind union only knew
+  // 'git' / 'loop'; IO node chip labels were hardcoded English strings. Both
+  // surfaces now need translation keys that resolve in both locales.
+  test('wrapperNode.labelFanout + pillFanout reachable both locales', () => {
+    setLanguage('en-US')
+    expect(i18n.t('wrapperNode.labelFanout')).toBe('Fanout Wrapper')
+    expect(i18n.t('wrapperNode.pillFanout')).toBe('fanout')
+    setLanguage('zh-CN')
+    expect(i18n.t('wrapperNode.labelFanout')).toBe('分片包装器')
+    expect(i18n.t('wrapperNode.pillFanout')).toBe('分片')
+  })
+
+  test('ioNode.labelInput + labelOutput reachable both locales', () => {
+    setLanguage('en-US')
+    expect(i18n.t('ioNode.labelInput')).toBe('Input')
+    expect(i18n.t('ioNode.labelOutput')).toBe('Output')
+    setLanguage('zh-CN')
+    expect(i18n.t('ioNode.labelInput')).toBe('输入')
+    expect(i18n.t('ioNode.labelOutput')).toBe('输出')
+  })
 })

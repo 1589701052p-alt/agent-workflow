@@ -10,6 +10,7 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { GroupWrapperNode, type WrapperNodeData } from '../src/components/canvas/nodes/WrapperNodes'
 import { INBOUND_HANDLE_ID } from '../src/components/canvas/nodes/types'
 import '../src/i18n'
+import { setLanguage } from '../src/i18n'
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -49,6 +50,17 @@ function loopData(overrides: Partial<WrapperNodeData> = {}): WrapperNodeData {
     ...overrides,
   }
 }
+function fanoutData(overrides: Partial<WrapperNodeData> = {}): WrapperNodeData {
+  return {
+    nodeId: 'fan1',
+    kind: 'wrapper-fanout',
+    title: 'fan1',
+    inputPorts: [],
+    outputPorts: [],
+    innerCount: 1,
+    ...overrides,
+  }
+}
 
 describe('GroupWrapperNode', () => {
   test('git wrapper carries the wrapper-group--git modifier class', () => {
@@ -70,13 +82,19 @@ describe('GroupWrapperNode', () => {
     expect(pill?.textContent).toContain('snapshot')
   })
 
-  test('loop pill renders × maxIterations · exit condition kind', () => {
+  // 2026-05-24: loop pill harmonized with the git/fanout pills — now a short
+  // kind label ("loop") instead of the cryptic "× 7 · port-empty" parameter
+  // dump. The detailed maxIterations + exit condition info still surfaces in
+  // the Inspector. If a regression re-introduces the parameter-dump format,
+  // these assertions flip red.
+  test('loop pill renders a plain kind label, not a parameter dump', () => {
     const { container } = renderNode(
       loopData({ maxIterations: 7, exitConditionKind: 'port-empty' }),
     )
     const pill = container.querySelector('.wrapper-header-pill')
-    expect(pill?.textContent).toContain('× 7')
-    expect(pill?.textContent).toContain('port-empty')
+    expect(pill?.textContent).toContain('loop')
+    expect(pill?.textContent ?? '').not.toContain('× 7')
+    expect(pill?.textContent ?? '').not.toContain('port-empty')
   })
 
   test('loop wrapper keeps the catch-all inbound handle (RFC-003)', () => {
@@ -108,5 +126,41 @@ describe('GroupWrapperNode', () => {
   test('non-empty wrapper does NOT show the drop-here hint', () => {
     const { container } = renderNode(gitData({ innerCount: 2 }))
     expect((container.textContent ?? '').includes('Drop nodes here')).toBe(false)
+  })
+
+  // Locks in the i18n bug fix from 2026-05-24: wrapper-fanout used to silently
+  // fall through to the git label/icon because the kind branch only knew
+  // about 'git' and 'loop'. The three assertions below pin the fanout chip
+  // chrome (icon + label + pill) so a future regression that re-collapses
+  // wrapper-fanout into git would flip them red immediately.
+  describe('wrapper-fanout (RFC-060)', () => {
+    test('fanout wrapper renders the fanout label, not the git label', () => {
+      setLanguage('en-US')
+      const { container } = renderNode(fanoutData())
+      const kindChip = container.querySelector('.canvas-node__kind')
+      expect(kindChip?.textContent).toContain('Fanout Wrapper')
+      expect(kindChip?.textContent ?? '').not.toContain('Git Wrapper')
+    })
+    test('fanout pill renders the localized "fanout" badge', () => {
+      setLanguage('en-US')
+      const { container } = renderNode(fanoutData())
+      const pill = container.querySelector('.wrapper-header-pill')
+      expect(pill?.textContent).toContain('fanout')
+      // Must NOT collapse into the git "snapshot" pill.
+      expect(pill?.textContent ?? '').not.toContain('snapshot')
+      expect(pill?.classList.contains('wrapper-header-pill--fanout')).toBe(true)
+    })
+    test('fanout wrapper shows the Chinese label under zh-CN', () => {
+      setLanguage('zh-CN')
+      try {
+        const { container } = renderNode(fanoutData())
+        const kindChip = container.querySelector('.canvas-node__kind')
+        expect(kindChip?.textContent).toContain('分片包装器')
+        const pill = container.querySelector('.wrapper-header-pill')
+        expect(pill?.textContent).toContain('分片')
+      } finally {
+        setLanguage('en-US')
+      }
+    })
   })
 })

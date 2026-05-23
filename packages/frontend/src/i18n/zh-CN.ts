@@ -1448,13 +1448,24 @@ export interface Resources {
     innerNodes: string
     labelGit: string
     labelLoop: string
+    /** RFC-060 — wrapper-fanout container label rendered in the canvas chip. */
+    labelFanout: string
     pillGit: string
     pillLoop: string
+    /** RFC-060 — wrapper-fanout header pill (short status text beside the kind label). */
+    pillFanout: string
     dropHere: string
     fitToChildren: string
     unwrap: string
     deleteWithInner: string
     confirmDeleteWithInner: string
+  }
+  /** Localized chip labels for the IO node family (input / output). The
+   *  palette already carries its own `paletteInputLabel` / `paletteOutputLabel`
+   *  keys; these are the labels rendered on the canvas node itself. */
+  ioNode: {
+    labelInput: string
+    labelOutput: string
   }
   errors: Record<string, string>
   // RFC-023 clarify feature (PR-C).
@@ -3360,13 +3371,19 @@ export const zhCN: Resources = {
     innerNodes: '{{n}} 个内部节点',
     labelGit: 'Git 包装器',
     labelLoop: '循环包装器',
+    labelFanout: '分片包装器',
     pillGit: '快照',
-    pillLoop: '× {{max}} · {{kind}}',
+    pillLoop: '循环',
+    pillFanout: '分片',
     dropHere: '把节点拖到这里',
     fitToChildren: '自适应内部节点',
     unwrap: '解散包装器',
     deleteWithInner: '连同内部节点一起删除',
     confirmDeleteWithInner: '确定连同 {{count}} 个内部节点一起删除该包装器？此操作不可撤销。',
+  },
+  ioNode: {
+    labelInput: '输入',
+    labelOutput: '输出',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {
