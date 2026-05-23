@@ -42,6 +42,7 @@ import type {
 
 import type { DbClient } from '@/db/client'
 import {
+  clarifyRounds,
   clarifySessions,
   crossClarifySessions,
   docVersions,
@@ -535,6 +536,12 @@ async function checkCR1(
       .update(crossClarifySessions)
       .set({ status: 'abandoned', abandonedAt: now })
       .where(eq(crossClarifySessions.id, s.id))
+
+    // RFC-058 T12 dual-write — mirror CR-1 abandoned upgrade to clarify_rounds.
+    await db
+      .update(clarifyRounds)
+      .set({ status: 'abandoned', abandonedAt: now })
+      .where(eq(clarifyRounds.id, s.id))
 
     out.push({
       taskId: ctx.taskId,

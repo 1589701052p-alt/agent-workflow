@@ -74,7 +74,7 @@ import { and, asc, desc, eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
-import { crossClarifySessions, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
+import { clarifyRounds, crossClarifySessions, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
 import { sealAnswersServerSide } from '@/services/clarify'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -208,6 +208,7 @@ export async function createCrossClarifySession(
   })
 
   const sessionId = ulid()
+  const questionsJson = JSON.stringify(args.questions)
   await args.db.insert(crossClarifySessions).values({
     id: sessionId,
     taskId: args.taskId,
@@ -218,7 +219,7 @@ export async function createCrossClarifySession(
     targetDesignerNodeId: args.targetDesignerNodeId,
     loopIter: args.loopIter,
     iteration,
-    questionsJson: JSON.stringify(args.questions),
+    questionsJson,
     answersJson: null,
     directive: null,
     status: 'awaiting_human',
@@ -226,6 +227,32 @@ export async function createCrossClarifySession(
     createdAt,
     answeredAt: null,
     abandonedAt: null,
+  })
+
+  // RFC-058 T12 dual-write — mirror to clarify_rounds with kind='cross'.
+  // RFC-056 v1 keeps cross-clarify on agent-single, so askingShardKey = null.
+  await args.db.insert(clarifyRounds).values({
+    id: sessionId,
+    taskId: args.taskId,
+    kind: 'cross',
+    askingNodeId: args.sourceQuestionerNodeId,
+    askingNodeRunId: args.sourceQuestionerNodeRunId,
+    askingShardKey: null,
+    intermediaryNodeId: args.crossClarifyNodeId,
+    intermediaryNodeRunId: crossClarifyNodeRunId,
+    targetConsumerNodeId: args.targetDesignerNodeId,
+    loopIter: args.loopIter,
+    iteration,
+    questionsJson,
+    answersJson: null,
+    directive: null,
+    status: 'awaiting_human',
+    truncationWarningsJson: null,
+    designerRunTriggeredAt: null,
+    abandonedAt: null,
+    createdAt,
+    answeredAt: null,
+    answeredBy: null,
   })
 
   if (args.truncationWarnings && args.truncationWarnings.length > 0) {
@@ -347,15 +374,27 @@ export async function submitCrossClarifyAnswers(
   const questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
   const sealedAnswers = sealAnswersServerSide(questions, args.answers)
 
+  const answersJson = JSON.stringify(sealedAnswers)
   await args.db
     .update(crossClarifySessions)
     .set({
-      answersJson: JSON.stringify(sealedAnswers),
+      answersJson,
       status: 'answered',
       directive: args.directive,
       answeredAt,
     })
     .where(eq(crossClarifySessions.id, row.id))
+
+  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds.
+  await args.db
+    .update(clarifyRounds)
+    .set({
+      answersJson,
+      status: 'answered',
+      directive: args.directive,
+      answeredAt,
+    })
+    .where(eq(clarifyRounds.id, row.id))
 
   // RFC-053: resume-clarify enforces awaiting_human → done. Cross-clarify
   // shares the same transition shape so we reuse the event kind.
@@ -442,6 +481,11 @@ export async function submitCrossClarifyAnswers(
       .update(crossClarifySessions)
       .set({ designerRunTriggeredAt: rerun.triggeredAt })
       .where(eq(crossClarifySessions.id, src.sessionId))
+    // RFC-058 T12 dual-write — mirror designer_run_triggered_at stamp.
+    await args.db
+      .update(clarifyRounds)
+      .set({ designerRunTriggeredAt: rerun.triggeredAt })
+      .where(eq(clarifyRounds.id, src.sessionId))
   }
   broadcastCrossClarifyAnswered(row.taskId, sessionAfter)
   broadcastDesignerRerunBatched(
@@ -1306,6 +1350,10 @@ export async function cleanupCrossClarifySessionsForTask(
   taskId: string,
 ): Promise<void> {
   await db.delete(crossClarifySessions).where(eq(crossClarifySessions.taskId, taskId))
+  // RFC-058 T12 dual-write — mirror cleanup on clarify_rounds (cross slice).
+  await db
+    .delete(clarifyRounds)
+    .where(and(eq(clarifyRounds.taskId, taskId), eq(clarifyRounds.kind, 'cross')))
 }
 
 // ---------------------------------------------------------------------------

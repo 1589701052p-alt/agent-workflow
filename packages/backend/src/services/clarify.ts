@@ -59,7 +59,7 @@ import {
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
-import { clarifySessions, nodeRuns, tasks } from '@/db/schema'
+import { clarifyRounds, clarifySessions, nodeRuns, tasks } from '@/db/schema'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { transitionNodeRunStatus } from '@/services/lifecycle'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -194,6 +194,9 @@ export async function createClarifySession(
 
   const sessionId = ulid()
   const createdAt = now()
+  const questionsJson = JSON.stringify(validated.questions)
+  const truncationWarningsJson =
+    truncationWarnings && truncationWarnings.length > 0 ? JSON.stringify(truncationWarnings) : null
   await db.insert(clarifySessions).values({
     id: sessionId,
     taskId,
@@ -203,13 +206,39 @@ export async function createClarifySession(
     clarifyNodeId,
     clarifyNodeRunId,
     iterationIndex,
-    questionsJson: JSON.stringify(validated.questions),
+    questionsJson,
     answersJson: null,
     status: 'awaiting_human',
-    truncationWarningsJson:
-      truncationWarnings && truncationWarnings.length > 0
-        ? JSON.stringify(truncationWarnings)
-        : null,
+    truncationWarningsJson,
+    createdAt,
+    answeredAt: null,
+    answeredBy: null,
+  })
+
+  // RFC-058 T12 — dual-write to clarify_rounds so the unified service
+  // (services/clarifyRounds.ts) sees every new self-clarify round. The
+  // legacy clarify_sessions row above is still authoritative for reads;
+  // T17 drops the legacy table once all readers migrate. Schema mapping
+  // mirrors migration 0031's INSERT FROM clauses verbatim.
+  await db.insert(clarifyRounds).values({
+    id: sessionId,
+    taskId,
+    kind: 'self',
+    askingNodeId: sourceAgentNodeId,
+    askingNodeRunId: sourceAgentNodeRunId,
+    askingShardKey: sourceShardKey,
+    intermediaryNodeId: clarifyNodeId,
+    intermediaryNodeRunId: clarifyNodeRunId,
+    targetConsumerNodeId: null,
+    loopIter: 0,
+    iteration: iterationIndex,
+    questionsJson,
+    answersJson: null,
+    directive: null,
+    status: 'awaiting_human',
+    truncationWarningsJson,
+    designerRunTriggeredAt: null,
+    abandonedAt: null,
     createdAt,
     answeredAt: null,
     answeredBy: null,
@@ -343,16 +372,31 @@ export async function submitClarifyAnswers(
   const sealedAnswers = sealAnswersServerSide(questions, args.answers)
 
   const answeredAt = now()
+  const answersJson = JSON.stringify(sealedAnswers)
   await db
     .update(clarifySessions)
     .set({
-      answersJson: JSON.stringify(sealedAnswers),
+      answersJson,
       status: 'answered',
       answeredAt,
       answeredBy,
       directive,
     })
     .where(eq(clarifySessions.id, sessionRow.id))
+
+  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds so
+  // the unified service (services/clarifyRounds.ts) sees the latest Q&A
+  // history. Idempotent: row exists from createClarifySession's dual-write.
+  await db
+    .update(clarifyRounds)
+    .set({
+      answersJson,
+      status: 'answered',
+      answeredAt,
+      answeredBy,
+      directive,
+    })
+    .where(eq(clarifyRounds.id, sessionRow.id))
 
   // Close the clarify node_run. RFC-053: resume-clarify enforces
   // awaiting_human → done.
@@ -860,6 +904,11 @@ export async function getClarifyDetail(
  */
 export async function cleanupSessionsForTask(db: DbClient, taskId: string): Promise<void> {
   await db.delete(clarifySessions).where(eq(clarifySessions.taskId, taskId))
+  // RFC-058 T12 dual-write — mirror cleanup on clarify_rounds so the unified
+  // table doesn't accumulate orphaned rows after task delete.
+  await db
+    .delete(clarifyRounds)
+    .where(and(eq(clarifyRounds.taskId, taskId), eq(clarifyRounds.kind, 'self')))
 }
 
 // ---------------------------------------------------------------------------
