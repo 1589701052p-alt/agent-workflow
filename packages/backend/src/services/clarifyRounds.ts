@@ -28,7 +28,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, nodeRunOutputs, nodeRuns } from '@/db/schema'
+import { clarifyRounds, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
 import {
   applyAgingCutoff,
   buildClarifyPromptBlock,
@@ -37,8 +37,11 @@ import {
   type ClarifyDirective,
   type ClarifyPromptContext,
   type ClarifyQuestion,
+  type ClarifyRound,
+  type ClarifyRoundSummary,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
+import { NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('clarify-rounds')
@@ -404,4 +407,224 @@ export async function listClarifyRounds(
     return true
   })
   return filter.limit !== undefined ? filtered.slice(0, filter.limit) : filtered
+}
+
+// ---------------------------------------------------------------------------
+// listClarifyRoundSummaries + getClarifyRoundDetail — REST projectors.
+//
+// RFC-058 T14: unified REST returns single ClarifyRoundSummary[] / ClarifyRound
+// shapes (collapses legacy ClarifySession + CrossClarifySession into one).
+// Title resolution mirrors the legacy listClarifySummaries behavior — task
+// name from `tasks.name` + node titles from `tasks.workflowSnapshot`.
+// ---------------------------------------------------------------------------
+
+export interface ListClarifyRoundSummariesFilter {
+  taskId?: string
+  kind?: 'self' | 'cross' | 'all'
+  status?: 'awaiting_human' | 'answered' | 'canceled' | 'abandoned' | 'all'
+  limit?: number
+}
+
+/**
+ * Compact ClarifyRoundSummary projection of clarify_rounds rows for the
+ * REST `/api/clarify` inbox endpoint. Resolves the owning task name (RFC-037
+ * parity) and the asking + intermediary node titles from
+ * `tasks.workflowSnapshot`. Sort: createdAt descending.
+ */
+export async function listClarifyRoundSummaries(
+  db: DbClient,
+  filter: ListClarifyRoundSummariesFilter = {},
+): Promise<ClarifyRoundSummary[]> {
+  const all = await db.select().from(clarifyRounds).orderBy(desc(clarifyRounds.createdAt))
+  const desiredKind = filter.kind ?? 'all'
+  const desiredStatus = filter.status ?? 'awaiting_human'
+  const filtered = all.filter((r) => {
+    if (filter.taskId !== undefined && r.taskId !== filter.taskId) return false
+    if (desiredKind !== 'all' && r.kind !== desiredKind) return false
+    if (desiredStatus !== 'all' && r.status !== desiredStatus) return false
+    return true
+  })
+  const limit = filter.limit ?? 100
+  const sliced = filtered.slice(0, limit)
+
+  const taskIds = Array.from(new Set(sliced.map((r) => r.taskId)))
+  const taskNameByTaskId = await loadTaskNamesByTaskId(db, taskIds)
+  const titleByTaskAndNode = await loadNodeTitlesByTask(db, taskIds)
+
+  return sliced.map((row) => rowToSummary(row, taskNameByTaskId, titleByTaskAndNode))
+}
+
+/**
+ * Fetch the ClarifyRound detail keyed by intermediary node_run id (matches
+ * the REST path `/api/clarify/:nodeRunId` semantics for both kind variants).
+ * Throws NotFoundError when no matching row exists.
+ */
+export async function getClarifyRoundDetail(
+  db: DbClient,
+  intermediaryNodeRunId: string,
+): Promise<ClarifyRound> {
+  const rows = await db
+    .select()
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.intermediaryNodeRunId, intermediaryNodeRunId))
+    .orderBy(desc(clarifyRounds.createdAt))
+    .limit(1)
+  const row = rows[0]
+  if (row === undefined) {
+    throw new NotFoundError(
+      'clarify-round-not-found',
+      `no clarify_round for intermediary node_run ${intermediaryNodeRunId}`,
+    )
+  }
+  const titlesByTaskAndNode = await loadNodeTitlesByTask(db, [row.taskId])
+  return rowToDetail(row, titlesByTaskAndNode)
+}
+
+function rowToSummary(
+  row: typeof clarifyRounds.$inferSelect,
+  taskNameByTaskId: Map<string, string>,
+  titlesByTaskAndNode: Map<string, Map<string, string>>,
+): ClarifyRoundSummary {
+  const titles = titlesByTaskAndNode.get(row.taskId)
+  const askingTitle = titles?.get(row.askingNodeId)
+  const intermediaryTitle = titles?.get(row.intermediaryNodeId)
+  let questionCount = 0
+  try {
+    const parsed = JSON.parse(row.questionsJson) as ClarifyQuestion[]
+    questionCount = Array.isArray(parsed) ? parsed.length : 0
+  } catch {
+    /* leave 0 */
+  }
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    taskName: taskNameByTaskId.get(row.taskId) ?? '',
+    kind: row.kind as 'self' | 'cross',
+    askingNodeId: row.askingNodeId,
+    askingNodeTitle: typeof askingTitle === 'string' && askingTitle.length > 0 ? askingTitle : null,
+    askingShardKey: row.askingShardKey,
+    intermediaryNodeId: row.intermediaryNodeId,
+    intermediaryNodeTitle:
+      typeof intermediaryTitle === 'string' && intermediaryTitle.length > 0
+        ? intermediaryTitle
+        : null,
+    intermediaryNodeRunId: row.intermediaryNodeRunId,
+    targetConsumerNodeId: row.targetConsumerNodeId,
+    loopIter: row.loopIter,
+    iteration: row.iteration,
+    questionCount,
+    status: row.status as 'awaiting_human' | 'answered' | 'canceled' | 'abandoned',
+    directive: (row.directive ?? null) as ClarifyDirective | null,
+    createdAt: row.createdAt,
+    answeredAt: row.answeredAt,
+  }
+}
+
+function rowToDetail(
+  row: typeof clarifyRounds.$inferSelect,
+  titlesByTaskAndNode: Map<string, Map<string, string>>,
+): ClarifyRound {
+  const titles = titlesByTaskAndNode.get(row.taskId)
+  const intermediaryTitle = titles?.get(row.intermediaryNodeId)
+  let questions: ClarifyQuestion[] = []
+  let answers: ClarifyAnswer[] | undefined
+  let truncationWarnings: ClarifyRound['truncationWarnings']
+  try {
+    questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
+  } catch {
+    /* keep empty */
+  }
+  if (row.answersJson !== null) {
+    try {
+      answers = JSON.parse(row.answersJson) as ClarifyAnswer[]
+    } catch {
+      /* keep undefined */
+    }
+  }
+  if (row.truncationWarningsJson !== null) {
+    try {
+      truncationWarnings = JSON.parse(
+        row.truncationWarningsJson,
+      ) as ClarifyRound['truncationWarnings']
+    } catch {
+      /* keep undefined */
+    }
+  }
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    kind: row.kind as 'self' | 'cross',
+    askingNodeId: row.askingNodeId,
+    askingNodeRunId: row.askingNodeRunId,
+    askingShardKey: row.askingShardKey,
+    intermediaryNodeId: row.intermediaryNodeId,
+    intermediaryNodeRunId: row.intermediaryNodeRunId,
+    intermediaryNodeTitle:
+      typeof intermediaryTitle === 'string' && intermediaryTitle.length > 0
+        ? intermediaryTitle
+        : null,
+    targetConsumerNodeId: row.targetConsumerNodeId,
+    loopIter: row.loopIter,
+    iteration: row.iteration,
+    questions,
+    ...(answers !== undefined ? { answers } : {}),
+    directive: (row.directive ?? null) as ClarifyDirective | null,
+    status: row.status as 'awaiting_human' | 'answered' | 'canceled' | 'abandoned',
+    ...(truncationWarnings !== undefined ? { truncationWarnings } : {}),
+    sessionMode: null,
+    designerRunTriggeredAt: row.designerRunTriggeredAt,
+    abandonedAt: row.abandonedAt,
+    createdAt: row.createdAt,
+    answeredAt: row.answeredAt,
+    answeredBy: row.answeredBy,
+  }
+}
+
+async function loadTaskNamesByTaskId(
+  db: DbClient,
+  taskIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (taskIds.length === 0) return out
+  const taskRows = await db.select().from(tasks)
+  const wanted = new Set(taskIds)
+  for (const t of taskRows) {
+    if (!wanted.has(t.id)) continue
+    out.set(t.id, t.name)
+  }
+  return out
+}
+
+async function loadNodeTitlesByTask(
+  db: DbClient,
+  taskIds: string[],
+): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>()
+  if (taskIds.length === 0) return out
+  const taskRows = await db.select().from(tasks)
+  const wanted = new Set(taskIds)
+  for (const t of taskRows) {
+    if (!wanted.has(t.id)) continue
+    const inner = new Map<string, string>()
+    try {
+      const def = JSON.parse(t.workflowSnapshot) as WorkflowDefinition
+      for (const node of def.nodes ?? []) {
+        const rec = node as Record<string, unknown>
+        if (
+          rec.kind !== 'agent-single' &&
+          rec.kind !== 'agent-multi' &&
+          rec.kind !== 'clarify' &&
+          rec.kind !== 'clarify-cross-agent'
+        )
+          continue
+        const title = typeof rec.title === 'string' ? rec.title.trim() : ''
+        if (title.length === 0) continue
+        inner.set(node.id, title)
+      }
+    } catch {
+      /* leave inner empty */
+    }
+    out.set(t.id, inner)
+  }
+  return out
 }

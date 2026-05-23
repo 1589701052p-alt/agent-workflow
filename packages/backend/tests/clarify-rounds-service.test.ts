@@ -22,9 +22,12 @@ import { clarifyRounds, nodeRunOutputs, nodeRuns, tasks, workflows } from '../sr
 import {
   buildPromptContext,
   computeHistoryCutoff,
+  getClarifyRoundDetail,
+  listClarifyRoundSummaries,
   listClarifyRounds,
   selectAnsweredRoundsForConsumer,
 } from '../src/services/clarifyRounds'
+import { NotFoundError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
@@ -956,5 +959,230 @@ describe('RFC-058 T12 — listClarifyRounds filter dispatch', () => {
     // Explicit limit cap
     const limited = await listClarifyRounds(db, { taskId, status: 'all', limit: 1 })
     expect(limited.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// RFC-058 T14 — REST projector helpers
+// ---------------------------------------------------------------------------
+
+async function seedNodeRun(
+  db: DbClient,
+  taskId: string,
+  id: string,
+  nodeId: string,
+): Promise<void> {
+  await db.insert(nodeRuns).values({
+    id,
+    taskId,
+    nodeId,
+    status: 'done',
+    retryIndex: 0,
+    iteration: 0,
+  })
+}
+
+describe('RFC-058 T14 — listClarifyRoundSummaries (REST projector)', () => {
+  test('projects clarify_rounds row to ClarifyRoundSummary with task name + node titles', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await seedNodeRun(db, taskId, 'nr_d', 'designer')
+    await seedNodeRun(db, taskId, 'nr_c', 'clarify1')
+    await db.insert(clarifyRounds).values({
+      id: 'r1',
+      taskId,
+      kind: 'self',
+      askingNodeId: 'designer',
+      askingNodeRunId: 'nr_d',
+      askingShardKey: null,
+      intermediaryNodeId: 'clarify1',
+      intermediaryNodeRunId: 'nr_c',
+      targetConsumerNodeId: null,
+      loopIter: 0,
+      iteration: 0,
+      questionsJson: sampleQuestionsJson('S1'),
+      answersJson: null,
+      directive: null,
+      status: 'awaiting_human',
+      truncationWarningsJson: null,
+      designerRunTriggeredAt: null,
+      abandonedAt: null,
+      createdAt: 1000,
+      answeredAt: null,
+      answeredBy: null,
+    })
+    const out = await listClarifyRoundSummaries(db, { taskId })
+    expect(out.length).toBe(1)
+    expect(out[0]).toMatchObject({
+      id: 'r1',
+      taskId,
+      taskName: 'rounds-test',
+      kind: 'self',
+      askingNodeId: 'designer',
+      intermediaryNodeId: 'clarify1',
+      intermediaryNodeRunId: 'nr_c',
+      intermediaryNodeTitle: 'Clarify',
+      loopIter: 0,
+      iteration: 0,
+      questionCount: 1,
+      status: 'awaiting_human',
+      directive: null,
+    })
+  })
+
+  test('filters by status and limits result count', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await seedNodeRun(db, taskId, 'nr_d', 'designer')
+    await seedNodeRun(db, taskId, 'nr_c1', 'clarify1')
+    await seedNodeRun(db, taskId, 'nr_c2', 'clarify1')
+    await db.insert(clarifyRounds).values([
+      {
+        id: 'r_open',
+        taskId,
+        kind: 'self',
+        askingNodeId: 'designer',
+        askingNodeRunId: 'nr_d',
+        intermediaryNodeId: 'clarify1',
+        intermediaryNodeRunId: 'nr_c1',
+        iteration: 0,
+        questionsJson: sampleQuestionsJson('Q open'),
+        status: 'awaiting_human',
+        createdAt: 1000,
+      },
+      {
+        id: 'r_done',
+        taskId,
+        kind: 'self',
+        askingNodeId: 'designer',
+        askingNodeRunId: 'nr_d',
+        intermediaryNodeId: 'clarify1',
+        intermediaryNodeRunId: 'nr_c2',
+        iteration: 1,
+        questionsJson: sampleQuestionsJson('Q done'),
+        answersJson: sampleAnswersJson(),
+        directive: 'continue',
+        status: 'answered',
+        createdAt: 2000,
+      },
+    ])
+    const onlyOpen = await listClarifyRoundSummaries(db, { taskId })
+    expect(onlyOpen.length).toBe(1)
+    expect(onlyOpen[0]?.status).toBe('awaiting_human')
+    const all = await listClarifyRoundSummaries(db, { taskId, status: 'all' })
+    expect(all.length).toBe(2)
+    const limited = await listClarifyRoundSummaries(db, { taskId, status: 'all', limit: 1 })
+    expect(limited.length).toBe(1)
+  })
+
+  test('filters by kind (self / cross / all)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await seedNodeRun(db, taskId, 'nr_d', 'designer')
+    await seedNodeRun(db, taskId, 'nr_q', 'questioner')
+    await seedNodeRun(db, taskId, 'nr_c1', 'clarify1')
+    await seedNodeRun(db, taskId, 'nr_cc1', 'cc1')
+    await db.insert(clarifyRounds).values([
+      {
+        id: 'r_self',
+        taskId,
+        kind: 'self',
+        askingNodeId: 'designer',
+        askingNodeRunId: 'nr_d',
+        intermediaryNodeId: 'clarify1',
+        intermediaryNodeRunId: 'nr_c1',
+        iteration: 0,
+        questionsJson: sampleQuestionsJson('self Q'),
+        status: 'awaiting_human',
+        createdAt: 1000,
+      },
+      {
+        id: 'r_cross',
+        taskId,
+        kind: 'cross',
+        askingNodeId: 'questioner',
+        askingNodeRunId: 'nr_q',
+        intermediaryNodeId: 'cc1',
+        intermediaryNodeRunId: 'nr_cc1',
+        targetConsumerNodeId: 'designer',
+        iteration: 0,
+        questionsJson: sampleQuestionsJson('cross Q'),
+        status: 'awaiting_human',
+        createdAt: 2000,
+      },
+    ])
+    const justSelf = await listClarifyRoundSummaries(db, { taskId, kind: 'self' })
+    expect(justSelf.map((r) => r.id)).toEqual(['r_self'])
+    const justCross = await listClarifyRoundSummaries(db, { taskId, kind: 'cross' })
+    expect(justCross.map((r) => r.id)).toEqual(['r_cross'])
+    // 'all' returns both, sorted by createdAt desc (cross first since newer)
+    const both = await listClarifyRoundSummaries(db, { taskId, kind: 'all' })
+    expect(both.map((r) => r.id)).toEqual(['r_cross', 'r_self'])
+  })
+})
+
+describe('RFC-058 T14 — getClarifyRoundDetail (REST projector)', () => {
+  test('projects clarify_rounds row to ClarifyRound with questions parsed', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await seedNodeRun(db, taskId, 'nr_d', 'designer')
+    await seedNodeRun(db, taskId, 'nr_c', 'clarify1')
+    await db.insert(clarifyRounds).values({
+      id: 'r1',
+      taskId,
+      kind: 'self',
+      askingNodeId: 'designer',
+      askingNodeRunId: 'nr_d',
+      intermediaryNodeId: 'clarify1',
+      intermediaryNodeRunId: 'nr_c',
+      iteration: 0,
+      questionsJson: sampleQuestionsJson('Detail Q'),
+      answersJson: null,
+      status: 'awaiting_human',
+      createdAt: 1000,
+    })
+    const detail = await getClarifyRoundDetail(db, 'nr_c')
+    expect(detail.id).toBe('r1')
+    expect(detail.kind).toBe('self')
+    expect(detail.intermediaryNodeId).toBe('clarify1')
+    expect(detail.intermediaryNodeTitle).toBe('Clarify')
+    expect(detail.questions.length).toBe(1)
+    expect(detail.questions[0]?.title).toBe('Detail Q')
+    expect(detail.answers).toBeUndefined()
+    expect(detail.status).toBe('awaiting_human')
+  })
+
+  test('parses answersJson when present', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db)
+    await seedNodeRun(db, taskId, 'nr_d', 'designer')
+    await seedNodeRun(db, taskId, 'nr_c', 'clarify1')
+    await db.insert(clarifyRounds).values({
+      id: 'r_ans',
+      taskId,
+      kind: 'self',
+      askingNodeId: 'designer',
+      askingNodeRunId: 'nr_d',
+      intermediaryNodeId: 'clarify1',
+      intermediaryNodeRunId: 'nr_c',
+      iteration: 0,
+      questionsJson: sampleQuestionsJson('Q'),
+      answersJson: sampleAnswersJson(),
+      directive: 'continue',
+      status: 'answered',
+      createdAt: 1000,
+      answeredAt: 2000,
+    })
+    const detail = await getClarifyRoundDetail(db, 'nr_c')
+    expect(detail.answers).toBeDefined()
+    expect(detail.answers?.length).toBe(1)
+    expect(detail.directive).toBe('continue')
+    expect(detail.answeredAt).toBe(2000)
+  })
+
+  test('throws NotFoundError when intermediary node_run id has no row', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db)
+    await expect(getClarifyRoundDetail(db, 'does-not-exist')).rejects.toThrow(NotFoundError)
   })
 })
