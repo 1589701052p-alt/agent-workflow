@@ -89,14 +89,16 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
   test('palette label carries an icon prefix in both i18n bundles', () => {
     // UI bug 2026-05-22 issue 1: cross-clarify palette item had no emoji
     // prefix, making it look orphaned next to `⚖ Review node` / `⚡ Clarify`.
-    // This grep locks the icon — if someone strips the emoji to make the
-    // label "cleaner", this test catches it.
+    // 2026-05-24 follow-up harmonized the human palette labels (dropped
+    // "node" suffix, lowercased the en-US wording, and rewrote the zh-CN
+    // mid-string English "agent" to 代理). The icon prefix is still locked
+    // here so a future i18n sweep that strips the emoji would still fail.
     const EN_TS = resolve(FRONTEND_SRC, 'i18n', 'en-US.ts')
     const ZH_TS = resolve(FRONTEND_SRC, 'i18n', 'zh-CN.ts')
     const en = readFileSync(EN_TS, 'utf8')
     const zh = readFileSync(ZH_TS, 'utf8')
-    expect(en).toContain("paletteLabel: '⚡ Cross Clarify'")
-    expect(zh).toContain("paletteLabel: '⚡ 跨 agent 反问'")
+    expect(en).toContain("paletteLabel: '⚡ cross-clarify'")
+    expect(zh).toContain("paletteLabel: '⚡ 跨代理反问'")
   })
 
   test('styles.css declares .canvas-node--clarify-cross-agent matching the clarify family palette', () => {

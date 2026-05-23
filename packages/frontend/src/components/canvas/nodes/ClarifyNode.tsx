@@ -11,10 +11,13 @@
 //
 // `data.statusOverlay` overlays whatever status the runtime assigned; when
 // undefined the node falls back to data.status (legacy CanvasNodeData
-// behavior). The header pill text is i18n-driven via data.kindLabel so the
-// caller controls localization (default 'Clarify' for English-leaning tests).
+// behavior). The header pill text is i18n-driven via data.kindLabel when the
+// caller wants to override the default; with no override the renderer pulls
+// the localized label through `t('clarifyNode.label')` so the chip aligns
+// with the rest of the canvas (Chinese under zh-CN, English under en-US).
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { useTranslation } from 'react-i18next'
 import { CLARIFY_INPUT_PORT_NAME, CLARIFY_OUTPUT_PORT_NAME } from '@agent-workflow/shared'
 import type { CanvasNodeData } from './types'
 
@@ -23,7 +26,8 @@ export type ClarifyStatus = 'pending' | 'awaiting_human' | 'answered' | 'failed'
 export interface ClarifyNodeData extends CanvasNodeData {
   /** Overrides data.status with a clarify-specific palette. Optional. */
   statusOverlay?: ClarifyStatus
-  /** Display label inside the kind pill. Defaults to '⚡ clarify'. */
+  /** Display label inside the kind pill. When unset, the chip resolves
+   *  to `⚡ {t('clarifyNode.label')}`. */
   kindLabel?: string
   /** Description (passes through from node config; rendered below the title). */
   description?: string
@@ -34,11 +38,12 @@ interface Props extends NodeProps {
 }
 
 export function ClarifyNode({ data, selected }: Props) {
+  const { t } = useTranslation()
   // Prefer the clarify-specific overlay when present; otherwise fall through
   // to the standard data.status (e.g. node-run-coloring on the task detail
   // canvas may pass through 'done' for the answered case).
   const status: ClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? '⚡ clarify'
+  const labelText = data.kindLabel ?? `⚡ ${t('clarifyNode.label')}`
   return (
     <div
       className={

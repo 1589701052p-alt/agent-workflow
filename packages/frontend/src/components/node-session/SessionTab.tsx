@@ -42,15 +42,20 @@ export function SessionTab({ taskId, runs, nodeId, selectedRunId, workflowNodeKi
     setPickedId(selectedRunId)
   }, [selectedRunId])
 
-  if (!isPromptCapableKind(workflowNodeKind)) {
-    return <div className="muted">{t('nodeDrawer.sessionNotApplicable')}</div>
-  }
   if (attempts.length === 0) {
     return <div className="muted">{t('nodeDrawer.sessionPending')}</div>
   }
 
   const picked = attempts.find((a) => a.id === pickedId) ?? attempts[attempts.length - 1]!
   const fanoutParent = isFanoutParentRun(picked, attempts)
+  // RFC-060 PR-E: wrapper-fanout containers aren't prompt-capable themselves
+  // (no opencode session of their own) but they ARE fan-out parents whose
+  // inner shard rows carry the actual sessions — surface the shard picker.
+  // Non-agent / non-fan-out kinds (input, output, review, clarify, plain
+  // wrapper-git, wrapper-loop) still get "session not applicable".
+  if (!isPromptCapableKind(workflowNodeKind) && !fanoutParent) {
+    return <div className="muted">{t('nodeDrawer.sessionNotApplicable')}</div>
+  }
 
   return (
     <div className="session-history">

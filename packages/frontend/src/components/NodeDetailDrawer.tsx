@@ -285,15 +285,18 @@ function PromptTab({
     setPickedId(selectedRunId)
   }, [selectedRunId])
 
-  if (!isPromptCapableKind(workflowNodeKind)) {
-    return <div className="muted">{t('nodeDrawer.promptNotApplicable')}</div>
-  }
   if (attempts.length === 0) {
     return <div className="muted">{t('nodeDrawer.promptPending')}</div>
   }
 
   const picked = attempts.find((a) => a.id === pickedId) ?? attempts[attempts.length - 1]!
   const fanoutParent = isFanoutParentRun(picked, attempts)
+  // RFC-060 PR-E: wrapper-fanout containers aren't prompt-capable themselves
+  // (no prompt) but they ARE fan-out parents — let the picker surface to
+  // route into inner-shard prompts. Other non-prompt kinds still gate out.
+  if (!isPromptCapableKind(workflowNodeKind) && !fanoutParent) {
+    return <div className="muted">{t('nodeDrawer.promptNotApplicable')}</div>
+  }
 
   return (
     <div className="prompt-history">

@@ -68,7 +68,11 @@ describe('RFC-023 bugfix source-level wiring guard', () => {
     // anchor and xyflow logs "Couldn't create edge for source handle id".
     const fnIdx = src.indexOf('export function computePorts')
     expect(fnIdx).toBeGreaterThan(-1)
-    const body = src.slice(fnIdx, fnIdx + 3000)
+    // RFC-060 PR-F: wrapper-fanout case added a deriveWrapperFanoutOutputs
+    // block inside the switch; the function body grew so the slice window
+    // bumps from 3000 → 4500 to keep the fallback edge-pass at function
+    // end inside the slice.
+    const body = src.slice(fnIdx, fnIdx + 4500)
     expect(body).toMatch(
       /for \(const e of definition\.edges\)[\s\S]*?e\.source\.nodeId === node\.id[\s\S]*?outputs\.push\(e\.source\.portName\)/,
     )

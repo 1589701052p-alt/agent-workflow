@@ -1467,6 +1467,24 @@ export interface Resources {
     labelInput: string
     labelOutput: string
   }
+  /** Canvas chip label for agent-single nodes — pairs with a leading ⚙ icon
+   *  so the chip lines up visually with the wrapper / IO / human-category
+   *  chips, which all carry an icon prefix. */
+  agentNode: {
+    label: string
+  }
+  /** Canvas chip label for review nodes (⚖ icon). */
+  reviewNode: {
+    label: string
+  }
+  /** Canvas chip label fallback for clarify / cross-clarify nodes — used
+   *  when the renderer is invoked without an explicit `data.kindLabel`. */
+  clarifyNode: {
+    label: string
+  }
+  crossClarifyNode: {
+    label: string
+  }
   errors: Record<string, string>
   // RFC-023 clarify feature (PR-C).
   clarify: {
@@ -2830,23 +2848,23 @@ export const zhCN: Resources = {
     paletteAgents: '代理',
     paletteFanOut: 'Fan-out',
     paletteFanOutDesc: '多进程（按 sourcePort 分片）',
-    paletteAgentFallbackDesc: 'agent',
+    paletteAgentFallbackDesc: '代理节点',
     paletteWrappers: '包装器',
-    paletteWrapperGitLabel: 'git wrapper',
+    paletteWrapperGitLabel: '⎈ Git 包装器',
     paletteWrapperGitDesc: '在子节点前后快照 diff',
-    paletteWrapperLoopLabel: 'loop wrapper',
+    paletteWrapperLoopLabel: '⟳ 循环包装器',
     paletteWrapperLoopDesc: '重复执行子节点直到退出条件满足',
-    paletteWrapperFanoutLabel: '分片包装器',
+    paletteWrapperFanoutLabel: '⫶ 分片包装器',
     paletteWrapperFanoutDesc: '把 list<T> 端口的每个元素分配给内部子图独立执行；用聚合 agent 收口',
     paletteIo: 'IO',
-    paletteInputLabel: 'input',
+    paletteInputLabel: '↳ 输入',
     paletteInputDesc: 'launcher 表单值',
-    paletteOutputLabel: 'output',
+    paletteOutputLabel: '⤴ 输出',
     paletteOutputDesc: '任务详情页输出面板',
     paletteHuman: '人工',
-    paletteReviewLabel: '⚖ 评审节点',
+    paletteReviewLabel: '⚖ 评审',
     paletteReviewDesc: '挂在 markdown port 下游，让人评审后再继续。',
-    paletteClarifyLabel: '⚡ 反问澄清',
+    paletteClarifyLabel: '⚡ 反问',
     paletteClarifyDesc: '让 agent 在无法决断时主动反问；从节点左侧 input 端往 agent 上拖即可挂接。',
     menuPaste: '粘贴',
     menuSelectAll: '全选',
@@ -3385,6 +3403,18 @@ export const zhCN: Resources = {
     labelInput: '输入',
     labelOutput: '输出',
   },
+  agentNode: {
+    label: '代理',
+  },
+  reviewNode: {
+    label: '评审',
+  },
+  clarifyNode: {
+    label: '反问',
+  },
+  crossClarifyNode: {
+    label: '跨反问',
+  },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {
     'http-401': '未授权 — 请重新登录并粘贴 token。',
@@ -3533,7 +3563,7 @@ export const zhCN: Resources = {
       inLoopNo: '⚠ 未在 wrapper-loop 内 — 反问轮数不会被限制，建议套一层 loop。',
     },
     canvas: {
-      paletteLabel: '⚡ 跨 agent 反问',
+      paletteLabel: '⚡ 跨代理反问',
       paletteHint: '拖到下游反问 agent 上自动建反问通道；再手动连 to_designer → 上游 designer。',
       handleLabel: {
         toQuestioner: '→ 反问者',

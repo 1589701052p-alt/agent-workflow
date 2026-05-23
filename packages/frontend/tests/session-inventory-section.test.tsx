@@ -128,7 +128,9 @@ describe('RuntimeInventorySection', () => {
   test('default closed', async () => {
     mockInventory('t1', 'r1', CAPTURED)
     render(
-      withQc(<RuntimeInventorySection taskId="t1" nodeRunId="r1" workflowNodeKind="agent-multi" />),
+      withQc(
+        <RuntimeInventorySection taskId="t1" nodeRunId="r1" workflowNodeKind="agent-single" />,
+      ),
     )
     const det = await screen.findByTestId('runtime-inventory-section')
     expect((det as HTMLDetailsElement).open).toBe(false)

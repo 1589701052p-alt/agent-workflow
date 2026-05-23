@@ -41,7 +41,7 @@ interface Props extends NodeProps {
 export function CrossClarifyNode({ data, selected }: Props) {
   const { t } = useTranslation()
   const status: CrossClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? '⚡ cross-clarify'
+  const labelText = data.kindLabel ?? `⚡ ${t('crossClarifyNode.label')}`
   const toQuestionerLabel = t('crossClarify.canvas.handleLabel.toQuestioner')
   const toDesignerLabel = t('crossClarify.canvas.handleLabel.toDesigner')
   return (

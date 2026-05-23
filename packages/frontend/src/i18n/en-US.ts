@@ -963,23 +963,23 @@ export const enUS: Resources = {
     paletteFanOutDesc: 'multi-process (shards sourcePort)',
     paletteAgentFallbackDesc: 'agent',
     paletteWrappers: 'Wrappers',
-    paletteWrapperGitLabel: 'git wrapper',
+    paletteWrapperGitLabel: '⎈ git wrapper',
     paletteWrapperGitDesc: 'snapshot diff before+after children',
-    paletteWrapperLoopLabel: 'loop wrapper',
+    paletteWrapperLoopLabel: '⟳ loop wrapper',
     paletteWrapperLoopDesc: 'rerun children until exit condition',
-    paletteWrapperFanoutLabel: 'fanout wrapper',
+    paletteWrapperFanoutLabel: '⫶ fanout wrapper',
     paletteWrapperFanoutDesc:
       'shard a list<T> port across the inner subgraph; converge via aggregator agent',
     paletteIo: 'IO',
-    paletteInputLabel: 'input',
+    paletteInputLabel: '↳ input',
     paletteInputDesc: 'launcher form value',
-    paletteOutputLabel: 'output',
+    paletteOutputLabel: '⤴ output',
     paletteOutputDesc: 'task-detail outputs panel',
     paletteHuman: 'Human',
-    paletteReviewLabel: '⚖ Review node',
+    paletteReviewLabel: '⚖ review',
     paletteReviewDesc:
       'Sits downstream of a markdown port and pauses the workflow until a human decides.',
-    paletteClarifyLabel: '⚡ Clarify',
+    paletteClarifyLabel: '⚡ clarify',
     paletteClarifyDesc:
       'Lets an agent ask back when stuck; drag from this node’s input handle onto the agent to wire it.',
     menuPaste: 'Paste',
@@ -1554,6 +1554,18 @@ export const enUS: Resources = {
     labelInput: 'Input',
     labelOutput: 'Output',
   },
+  agentNode: {
+    label: 'agent',
+  },
+  reviewNode: {
+    label: 'review',
+  },
+  clarifyNode: {
+    label: 'clarify',
+  },
+  crossClarifyNode: {
+    label: 'cross-clarify',
+  },
   errors: {
     'http-401': 'Unauthorized — please sign in again.',
     'http-404': 'Not found.',
@@ -1715,7 +1727,7 @@ export const enUS: Resources = {
         '⚠ Not inside a wrapper-loop — clarify rounds are uncapped; consider wrapping in one.',
     },
     canvas: {
-      paletteLabel: '⚡ Cross Clarify',
+      paletteLabel: '⚡ cross-clarify',
       paletteHint:
         'Drag onto a downstream questioner agent; then connect to_designer → an upstream designer.',
       handleLabel: {

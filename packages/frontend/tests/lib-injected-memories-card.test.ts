@@ -56,9 +56,8 @@ function run(overrides: Partial<NodeRun> = {}): NodeRun {
 }
 
 describe('isAgentKind', () => {
-  test('agent-single and agent-multi return true', () => {
+  test('only agent-single returns true (RFC-060 PR-E removed agent-multi)', () => {
     expect(isAgentKind('agent-single')).toBe(true)
-    expect(isAgentKind('agent-multi')).toBe(true)
   })
   test('non-agent kinds and null/undefined return false', () => {
     expect(isAgentKind('input')).toBe(false)

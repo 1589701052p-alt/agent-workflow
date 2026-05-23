@@ -91,7 +91,7 @@ describe('<InjectedMemoriesCard>', () => {
       snap({ id: 'g1', scopeType: 'global', scopeId: null, title: 'Global rule' }),
     ]
     const r = run({ injectedMemories: list })
-    render(<InjectedMemoriesCard run={r} attempts={[r]} workflowNodeKind="agent-multi" />)
+    render(<InjectedMemoriesCard run={r} attempts={[r]} workflowNodeKind="agent-single" />)
     expect(screen.getByText(/Injected memories \(3\)/)).toBeTruthy()
     expect(screen.getByText('Agent rule')).toBeTruthy()
     expect(screen.getByText('Workflow rule')).toBeTruthy()

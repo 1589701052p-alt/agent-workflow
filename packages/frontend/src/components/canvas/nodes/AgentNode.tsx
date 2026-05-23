@@ -1,6 +1,7 @@
 // Renderer for agent-single nodes. (RFC-060 PR-E removed agent-multi.)
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
@@ -9,6 +10,7 @@ interface Props extends NodeProps {
 }
 
 export function AgentNode({ data, selected }: Props) {
+  const { t } = useTranslation()
   return (
     <div
       className={`canvas-node canvas-node--agent ${selected ? 'canvas-node--selected' : ''}`}
@@ -16,7 +18,7 @@ export function AgentNode({ data, selected }: Props) {
       data-loop-body={data.loopBody ? 'true' : undefined}
     >
       <div className="canvas-node__header">
-        <span className="canvas-node__kind">agent</span>
+        <span className="canvas-node__kind">⚙ {t('agentNode.label')}</span>
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>

@@ -207,7 +207,11 @@ export function buildPalette(agents: Agent[], t: PaletteTranslator): PaletteSect
       label: t('editor.paletteAgents'),
       items: agents.map((a) => ({
         item: { kind: 'agent-single', agentName: a.name } as PaletteItem,
-        label: a.name,
+        // Prefix with the agent kind icon so each row in the palette starts
+        // with a glyph that mirrors the canvas chip (⚙ for agent). This
+        // keeps the leading-icon column consistent across Agents / Wrappers
+        // / IO / Human sections — see 2026-05-24 chip-alignment fix.
+        label: `⚙ ${a.name}`,
         description: a.description || t('editor.paletteAgentFallbackDesc'),
       })),
     },

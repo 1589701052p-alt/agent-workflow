@@ -139,12 +139,15 @@ describe('RFC-027 NodeDetailDrawer Session tab', () => {
   })
 
   test('fan-out parent (no own session) shows the "pick a shard" hint', () => {
+    // RFC-060 PR-E: fan-out parent rows are now wrapper-fanout containers.
+    // The drawer still drives the "pick a shard" branch when the row has no
+    // promptText and at least one parentNodeRunId-keyed shard child.
     const parent = run({ id: 'p', promptText: null })
     const shard = run({ id: 's1', parentNodeRunId: 'p', shardKey: 'src/foo.ts' })
     renderDrawer({
       nodeRunId: parent.id,
       nodeId: parent.nodeId,
-      workflowNodeKind: 'agent-multi',
+      workflowNodeKind: 'wrapper-fanout',
       runs: [parent, shard],
     })
     expect(screen.getByText(/pick a shard/i)).toBeTruthy()

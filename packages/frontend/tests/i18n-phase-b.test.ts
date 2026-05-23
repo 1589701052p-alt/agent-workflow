@@ -60,11 +60,16 @@ describe('buildPalette with real i18n', () => {
     setLanguage('en-US')
     const t = i18n.t.bind(i18n)
     const sections = buildPalette([], t)
-    expect(sections.map((s) => s.label)).toEqual(['Agents', 'Fan-out', 'Wrappers', 'IO', 'Human'])
+    // RFC-060 PR-E removed the standalone Fan-out section (fan-out now lives
+    // inside the Wrappers section as `wrapper-fanout`); 2026-05-24 follow-up
+    // updates the IO labels to ship a leading kind-icon glyph so every
+    // palette row starts with an icon column.
+    expect(sections.map((s) => s.label)).toEqual(['Agents', 'Wrappers', 'IO', 'Human'])
     // Built-in wrapper + IO labels come through too.
-    const ioItems = sections[3]?.items.map((i) => i.label) ?? []
-    expect(ioItems).toContain('input')
-    expect(ioItems).toContain('output')
+    const ioSection = sections.find((s) => s.label === 'IO')
+    const ioItems = ioSection?.items.map((i) => i.label) ?? []
+    expect(ioItems).toContain('↳ input')
+    expect(ioItems).toContain('⤴ output')
     setLanguage('zh-CN')
   })
 })

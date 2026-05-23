@@ -74,13 +74,19 @@ describe('RFC-011 sortNodeRunsForPromptHistory', () => {
 })
 
 describe('RFC-011 isPromptCapableKind', () => {
-  test('agent-single + agent-multi are capable', () => {
+  test('only agent-single is capable (RFC-060 PR-E removed agent-multi)', () => {
     expect(isPromptCapableKind('agent-single')).toBe(true)
-    expect(isPromptCapableKind('agent-multi')).toBe(true)
   })
 
   test('input / output / wrappers / review are NOT capable', () => {
-    for (const k of ['input', 'output', 'wrapper-git', 'wrapper-loop', 'review']) {
+    for (const k of [
+      'input',
+      'output',
+      'wrapper-git',
+      'wrapper-loop',
+      'wrapper-fanout',
+      'review',
+    ]) {
       expect(isPromptCapableKind(k)).toBe(false)
     }
   })

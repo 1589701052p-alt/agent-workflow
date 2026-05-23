@@ -200,7 +200,7 @@ describe('Session attempts dropdown picker', () => {
     renderDrawer({
       nodeRunId: shardA.id,
       nodeId: parent.nodeId,
-      workflowNodeKind: 'agent-multi',
+      workflowNodeKind: 'agent-single',
       runs: [parent, shardA, shardB],
     })
     openCombobox()
@@ -288,7 +288,7 @@ describe('Session attempts dropdown picker', () => {
     renderDrawer({
       nodeRunId: shardZ.id,
       nodeId: parent.nodeId,
-      workflowNodeKind: 'agent-multi',
+      workflowNodeKind: 'agent-single',
       runs: [parent, shardA, shardZ],
     })
     openCombobox()
