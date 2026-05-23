@@ -838,8 +838,8 @@ async function loadNodeTitlesByTask(
       const def = JSON.parse(t.workflowSnapshot) as WorkflowDefinition
       for (const node of def.nodes ?? []) {
         const rec = node as Record<string, unknown>
-        if (rec.kind !== 'agent-single' && rec.kind !== 'agent-multi' && rec.kind !== 'clarify')
-          continue
+        // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+        if (rec.kind !== 'agent-single' && rec.kind !== 'clarify') continue
         const title = typeof rec.title === 'string' ? rec.title.trim() : ''
         if (title.length === 0) continue
         inner.set(node.id, title)

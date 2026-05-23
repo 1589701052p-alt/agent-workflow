@@ -29,7 +29,7 @@ interface AgentSummary {
 function deriveTitle(node: WorkflowNode, agents: AgentSummary[]): string {
   const rec = node as Record<string, unknown>
   if (typeof rec.title === 'string' && rec.title.length > 0) return rec.title
-  if (node.kind === 'agent-single' || node.kind === 'agent-multi') {
+  if (node.kind === 'agent-single') {
     const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
     if (agentName.length > 0) return agentName
   }
@@ -43,7 +43,7 @@ function deriveTitle(node: WorkflowNode, agents: AgentSummary[]): string {
 }
 
 function deriveOutputPorts(node: WorkflowNode, agents: AgentSummary[]): string[] {
-  if (node.kind === 'agent-single' || node.kind === 'agent-multi') {
+  if (node.kind === 'agent-single') {
     const rec = node as Record<string, unknown>
     const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
     const agent = agents.find((a) => a.name === agentName)

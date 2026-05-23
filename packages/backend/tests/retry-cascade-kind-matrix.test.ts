@@ -2,7 +2,8 @@
 //
 // For every NodeKind, verify retryNode's cascade behavior when that kind is
 // DOWNSTREAM of the user-clicked target:
-//   - agent-single / agent-multi / wrapper-git / wrapper-loop → mint placeholder
+//   - agent-single / wrapper-git / wrapper-loop / wrapper-fanout → mint placeholder
+//     (RFC-060 PR-E: agent-multi removed)
 //   - review / clarify / output / input                       → SKIP
 //
 // The user-clicked target (`runRow.nodeId`) is always minted regardless of
@@ -26,9 +27,9 @@ const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const DOWNSTREAM_KINDS_MINT = [
   'agent-single',
-  'agent-multi',
   'wrapper-git',
   'wrapper-loop',
+  'wrapper-fanout',
 ] as const satisfies readonly NodeKind[]
 
 const DOWNSTREAM_KINDS_SKIP = [
@@ -78,15 +79,7 @@ async function seedTaskWithEdge(
     switch (downstreamKind) {
       case 'agent-single':
         return { id: downstreamNodeId, kind: 'agent-single', agentName: 'x', promptTemplate: '' }
-      case 'agent-multi':
-        return {
-          id: downstreamNodeId,
-          kind: 'agent-multi',
-          agentName: 'x',
-          promptTemplate: '',
-          sourcePort: { nodeId: 'agent_a', portName: 'out' },
-          shardingStrategy: { kind: 'per-file' },
-        }
+      // RFC-060 PR-E: 'agent-multi' was removed; fan-out is wrapper-fanout now.
       case 'wrapper-git':
         return { id: downstreamNodeId, kind: 'wrapper-git', nodeIds: [] }
       case 'wrapper-loop':

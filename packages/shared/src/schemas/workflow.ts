@@ -29,7 +29,6 @@ export const WORKFLOW_SCHEMA_VERSIONS = [1, 2, 3, 4] as const
 
 export const NODE_KIND = [
   'agent-single',
-  'agent-multi',
   'input',
   'output',
   'wrapper-git',
@@ -39,6 +38,10 @@ export const NODE_KIND = [
   'clarify', // RFC-023: agent-initiated clarification questions
   'clarify-cross-agent', // RFC-056: downstream questioner reverse-feeds upstream designer via human gate
 ] as const
+// RFC-060 PR-E: 'agent-multi' was the M3 fan-out kind; superseded by
+// wrapper-fanout (RFC-060). Its node_runs / row shape are no longer minted by
+// any code path. Historical fixtures containing the kind fail validator with
+// `unknown-node-kind`.
 export const NodeKindSchema = z.enum(NODE_KIND)
 export type NodeKind = z.infer<typeof NodeKindSchema>
 
@@ -57,7 +60,6 @@ export type NodeKind = z.infer<typeof NodeKindSchema>
 export function isProcessNodeKind(kind: NodeKind): boolean {
   return (
     kind === 'agent-single' ||
-    kind === 'agent-multi' ||
     kind === 'wrapper-git' ||
     kind === 'wrapper-loop' ||
     kind === 'wrapper-fanout'

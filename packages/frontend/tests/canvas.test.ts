@@ -79,13 +79,8 @@ describe('computePorts', () => {
     expect(ports.inputs).toEqual(['req'])
   })
 
-  test('agent-multi: outputs + auto-appended errors port', () => {
-    const ports = computePorts({ id: 'm1', kind: 'agent-multi', agentName: 'auditor' }, byName, {
-      ...DEF,
-      nodes: [],
-    })
-    expect(ports.outputs).toEqual(['findings', 'errors'])
-  })
+  // RFC-060 PR-E: agent-multi removed. wrapper-fanout (covered in PR-D
+  // tests) replaces it; no auto-appended errors port on agent-single.
 
   test('output node: inputs from ports[].name', () => {
     const ports = computePorts(DEF.nodes[2]!, byName, DEF)

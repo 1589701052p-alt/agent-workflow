@@ -39,12 +39,12 @@ describe('serialize/deserialize', () => {
     expect(deserialize(raw)).toEqual({ kind: 'agent-single', agentName: 'coder' })
   })
 
-  test('agent-multi requires agentName; missing → null', () => {
+  // RFC-060 PR-E: agent-multi removed from the palette. deserialize now
+  // returns null for the legacy serialized form so old workflow.yaml imports
+  // surface as "unknown kind" instead of silently re-introducing it.
+  test('agent-multi (legacy) deserializes to null', () => {
     expect(deserialize(JSON.stringify({ kind: 'agent-multi' }))).toBeNull()
-    expect(deserialize(JSON.stringify({ kind: 'agent-multi', agentName: 'x' }))).toEqual({
-      kind: 'agent-multi',
-      agentName: 'x',
-    })
+    expect(deserialize(JSON.stringify({ kind: 'agent-multi', agentName: 'x' }))).toBeNull()
   })
 
   test('wrapper / io kinds round-trip without extra fields', () => {
@@ -74,14 +74,9 @@ describe('makeNode', () => {
     expect(n.id.startsWith('agent_')).toBe(true)
   })
 
-  test('agent-multi gets fan_ prefix', () => {
-    const n = makeNode(
-      { kind: 'agent-multi', agentName: 'auditor' },
-      { x: 0, y: 0 },
-      { existingIds: new Set() },
-    )
-    expect(n.id.startsWith('fan_')).toBe(true)
-  })
+  // RFC-060 PR-E: agent-multi removed from the palette; the prior fan_ id
+  // prefix is no longer minted. Users drop a wrapper-fanout (wrap_fan prefix)
+  // instead.
 
   test('input node gets unique requirement key', () => {
     const n = makeNode({ kind: 'input' }, { x: 0, y: 0 }, { existingIds: new Set() })
@@ -135,18 +130,16 @@ describe('buildPalette', () => {
   // pin the exact i18n keys this module emits without booting the bundle.
   const identityT = (key: string) => key
 
-  test('groups agents into Agents + Fan-out sections (i18n key labels)', () => {
+  test('groups agents into Agents + Wrappers + IO + Human sections (RFC-060 PR-E dropped Fan-out)', () => {
     const sections = buildPalette([AGENT_A], identityT)
     const labels = sections.map((s) => s.label)
     expect(labels).toEqual([
       'editor.paletteAgents',
-      'editor.paletteFanOut',
       'editor.paletteWrappers',
       'editor.paletteIo',
       'editor.paletteHuman',
     ])
     expect(sections[0]?.items[0]?.item).toEqual({ kind: 'agent-single', agentName: 'coder' })
-    expect(sections[1]?.items[0]?.item).toEqual({ kind: 'agent-multi', agentName: 'coder' })
   })
 
   test('always includes wrapper + IO entries regardless of agents', () => {

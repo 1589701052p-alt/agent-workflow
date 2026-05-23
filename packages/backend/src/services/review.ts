@@ -1983,7 +1983,7 @@ async function loadUpstreamPortKind(
 ): Promise<AgentOutputKind | undefined> {
   const node = definition.nodes.find((n) => n.id === nodeId)
   if (node === undefined) return undefined
-  if (node.kind !== 'agent-single' && node.kind !== 'agent-multi') return undefined
+  if (node.kind !== 'agent-single') return undefined
   const agentName = (node as Record<string, unknown>).agentName
   if (typeof agentName !== 'string') return undefined
   const rows = await db.select().from(agentsTable).where(eq(agentsTable.name, agentName)).limit(1)

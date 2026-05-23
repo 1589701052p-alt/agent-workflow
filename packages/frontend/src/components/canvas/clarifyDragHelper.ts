@@ -40,14 +40,14 @@ export {
 
 /**
  * True when the given workflow node can host a clarify channel. v1 accepts
- * agent-single + agent-multi only. Wrapper-git / wrapper-loop / review /
- * output / input / another clarify are all rejected (the validator emits
- * `clarify-target-not-agent` for the same set; this fn keeps the canvas
- * pre-flight check in sync).
+ * agent-single only (RFC-060 PR-E removed agent-multi). Wrapper-git /
+ * wrapper-loop / wrapper-fanout / review / output / input / another clarify
+ * are all rejected (the validator emits `clarify-target-not-agent` for the
+ * same set; this fn keeps the canvas pre-flight check in sync).
  */
 export function isValidClarifyTarget(node: WorkflowNode | undefined): boolean {
   if (node === undefined) return false
-  return node.kind === 'agent-single' || node.kind === 'agent-multi'
+  return node.kind === 'agent-single'
 }
 
 /**
@@ -98,7 +98,7 @@ export function buildClarifyEdges(
  * short-circuit on `===`.
  *
  *   - clarifyNodeId / sourceAgentNodeId not in def        → reject
- *   - source is not agent-single / agent-multi             → reject
+ *   - source is not agent-single                            → reject
  *   - the agent already has another clarify wired          → reject
  *   - otherwise: append both edges and return new def
  */

@@ -115,26 +115,9 @@ describe('RFC-056 cross-clarify validator rules', () => {
     expect(res.ok).toBe(false)
   })
 
-  test('cross-clarify-target-not-agent-single (fail): inbound source is agent-multi', () => {
-    const def = makeDef({
-      nodes: [
-        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
-        { id: 'q1', kind: 'agent-multi', agentName: 'questioner' },
-        { id: 'cc1', kind: 'clarify-cross-agent' },
-      ],
-      edges: [
-        {
-          id: 'e_q1_cc1_questions',
-          source: { nodeId: 'q1', portName: '__clarify__' },
-          target: { nodeId: 'cc1', portName: 'questions' },
-        },
-      ],
-    })
-    const res = validateWorkflowDef(def, { agents: [designer, questioner], skills: [] })
-    const codes = res.issues.map((i) => i.code)
-    expect(codes).toContain('cross-clarify-target-not-agent-single')
-    expect(res.ok).toBe(false)
-  })
+  // RFC-060 PR-E: agent-multi removed; the prior "cross-clarify on agent-multi
+  // questioner is rejected" case is now unreachable. The wrapper-git case
+  // below still exercises the cross-clarify-target-not-agent-single rule.
 
   test('cross-clarify-target-not-agent-single (fail): inbound source is wrapper-git', () => {
     const def = makeDef({

@@ -181,7 +181,11 @@ describe('wrapper-fanout end-to-end (D.T2 / D.T3 / D.T8 happy path)', () => {
     expect(innerRows.length).toBe(0)
   })
 
-  test('2. v1-unsupported inner-kind (agent-multi inside) → wrapper failed with v1-unsupported-inner-kind', async () => {
+  test('2. v1-unsupported inner-kind (wrapper-git inside) → wrapper failed with v1-unsupported-inner-kind', async () => {
+    // RFC-060 PR-E: agent-multi was removed, so we exercise the v1-inner-kind
+    // restriction using a nested wrapper-git instead — same rejection path
+    // (wrapper-fanout-v1-unsupported-inner-kind) since v1 wrapper-fanout
+    // inner subgraphs only accept agent-single.
     await seedAgent(h.db, 'worker', ['result'])
     const def: WorkflowDefinition = {
       $schema_version: 4,
@@ -196,9 +200,8 @@ describe('wrapper-fanout end-to-end (D.T2 / D.T3 / D.T8 happy path)', () => {
         },
         {
           id: 'inner',
-          kind: 'agent-multi',
-          agentName: 'worker',
-          sourcePort: { nodeId: 'inp', portName: 'docs' },
+          kind: 'wrapper-git',
+          nodeIds: [],
         },
       ] as unknown as WorkflowDefinition['nodes'],
       edges: [

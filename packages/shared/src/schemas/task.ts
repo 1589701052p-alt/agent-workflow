@@ -218,8 +218,8 @@ export const NodeRunSchema = z.object({
   /**
    * RFC-023: bumped each time the user submits clarify answers and the agent
    * is re-spawned for another round. Orthogonal to retryIndex (technical
-   * retries) and reviewIteration (post-output review rounds). For an
-   * agent-multi shard child node_run, the value is per-shard.
+   * retries) and reviewIteration (post-output review rounds). For a
+   * wrapper-fanout shard child node_run, the value is per-shard.
    */
   clarifyIteration: z.number().int().nonnegative().default(0),
   /**

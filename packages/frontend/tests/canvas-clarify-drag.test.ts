@@ -63,14 +63,14 @@ describe('buildClarifyEdges', () => {
 })
 
 describe('isValidClarifyTarget', () => {
-  it('accepts agent-single + agent-multi only', () => {
+  it('accepts agent-single only (RFC-060 PR-E removed agent-multi)', () => {
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'agent-single' }))).toBe(true)
-    expect(isValidClarifyTarget(node({ id: 'a', kind: 'agent-multi' }))).toBe(true)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'review' }))).toBe(false)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'output' }))).toBe(false)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'input' }))).toBe(false)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'wrapper-git' }))).toBe(false)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'wrapper-loop' }))).toBe(false)
+    expect(isValidClarifyTarget(node({ id: 'a', kind: 'wrapper-fanout' }))).toBe(false)
     expect(isValidClarifyTarget(node({ id: 'a', kind: 'clarify' }))).toBe(false)
     expect(isValidClarifyTarget(undefined)).toBe(false)
   })
@@ -150,14 +150,9 @@ describe('applyClarifyReverseDrag', () => {
     expect(next).toBe(def)
   })
 
-  it('accepts agent-multi (per design.md §2.3 — clarify-target-not-agent rejects only non-agents)', () => {
-    const def = defOf([node({ id: 'm', kind: 'agent-multi' }), node({ id: 'c', kind: 'clarify' })])
-    const next = applyClarifyReverseDrag(def, {
-      sourceAgentNodeId: 'm',
-      clarifyNodeId: 'c',
-    })
-    expect(next.edges.length).toBe(2)
-  })
+  // RFC-060 PR-E: agent-multi removed; the prior "agent-multi → clarify
+  // reverse-drag accepted" case is no longer applicable. agent-single drag
+  // is covered by the test above.
 })
 
 describe('classifyClarifyConnection (RFC-023 bugfix #2)', () => {

@@ -17,7 +17,6 @@ import type { NodeKind, WorkflowNode } from '@agent-workflow/shared'
  * projection layer prefers those over these. */
 export const DEFAULT_NODE_SIZE_BY_KIND: Record<NodeKind, { width: number; height: number }> = {
   'agent-single': { width: 280, height: 180 },
-  'agent-multi': { width: 280, height: 200 },
   input: { width: 220, height: 120 },
   output: { width: 220, height: 140 },
   review: { width: 280, height: 180 },

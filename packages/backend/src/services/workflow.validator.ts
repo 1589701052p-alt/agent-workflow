@@ -27,11 +27,7 @@ import type {
   WorkflowValidationIssue,
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
-import {
-  countFanoutAggregators,
-  tryParseKind,
-  validateShardingStrategy,
-} from '@agent-workflow/shared'
+import { countFanoutAggregators, tryParseKind } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { listAgents } from '@/services/agent'
 import { listPlugins } from '@/services/plugin'
@@ -260,11 +256,9 @@ export function validateWorkflowDef(
         for (const p of ports) ins.add(p.name)
         break
       }
-      case 'agent-single':
-      case 'agent-multi': {
+      case 'agent-single': {
         const agent = agentByName.get(readString(node, 'agentName') ?? '')
         for (const o of agent?.outputs ?? []) outs.add(o)
-        if (node.kind === 'agent-multi') outs.add('errors')
         // RFC-023: when an outbound edge wires this agent's __clarify__ system
         // port, accept it as a valid output port. The corresponding
         // __clarify_response__ inbound is added below alongside the
@@ -273,10 +267,10 @@ export function validateWorkflowDef(
         ins.add('__clarify_response__')
         // RFC-056: when a cross-clarify node's `to_designer` manual-edge lands
         // on this agent it targets the system-injected `__external_feedback__`
-        // inbound port. Accept it pre-emptively on every agent-{single,multi}
-        // node — the canvas hides the handle until at least one edge points
-        // there, but the validator should never flag a wired manual-edge as
-        // having an unknown target port.
+        // inbound port. Accept it pre-emptively on every agent-single node —
+        // the canvas hides the handle until at least one edge points there,
+        // but the validator should never flag a wired manual-edge as having
+        // an unknown target port. (RFC-060 PR-E removed agent-multi.)
         ins.add('__external_feedback__')
         // Inputs are derived from incoming edges (handled in rule 1 / 5).
         break
@@ -424,7 +418,7 @@ export function validateWorkflowDef(
 
   // 4. reference-resolution ---------------------------------------------------
   for (const node of nodes) {
-    if (node.kind === 'agent-single' || node.kind === 'agent-multi') {
+    if (node.kind === 'agent-single') {
       const name = readString(node, 'agentName') ?? ''
       const agent = agentByName.get(name)
       if (agent === undefined) {
@@ -537,65 +531,9 @@ export function validateWorkflowDef(
         }
         for (const next of dep.dependsOn) closureQueue.push(next)
       }
-      if (node.kind === 'agent-multi') {
-        const sp = (node as Record<string, unknown>).sourcePort
-        if (sp === undefined || sp === null || typeof sp !== 'object') {
-          issues.push({
-            code: 'agent-multi-source-port-missing',
-            message: `agent-multi node '${node.id}' missing sourcePort`,
-            pointer: node.id,
-          })
-        } else {
-          const refNode = (sp as Record<string, unknown>).nodeId
-          const refPort = (sp as Record<string, unknown>).portName
-          if (typeof refNode !== 'string' || typeof refPort !== 'string') {
-            issues.push({
-              code: 'agent-multi-source-port-invalid',
-              message: `agent-multi node '${node.id}' sourcePort must be {nodeId, portName}`,
-              pointer: node.id,
-            })
-          } else if (!nodeById.has(refNode)) {
-            issues.push({
-              code: 'agent-multi-source-port-missing',
-              message: `agent-multi node '${node.id}' sourcePort references unknown node '${refNode}'`,
-              pointer: node.id,
-            })
-          } else {
-            const outs = outputPorts.get(refNode) ?? new Set()
-            if (!outs.has(refPort)) {
-              issues.push({
-                code: 'agent-multi-source-port-missing',
-                message: `agent-multi node '${node.id}' sourcePort references unknown port '${refPort}' on '${refNode}'`,
-                pointer: node.id,
-              })
-            }
-          }
-        }
-        // RFC-055 — shardingStrategy field.
-        // Missing field is a warning, not an error: the scheduler falls back
-        // to per-file when undefined (services/scheduler.ts:1680), so old
-        // workflows / yaml-edited fixtures still run. UI writes are always
-        // explicit, so any user-edited workflow that lacks this field has
-        // skipped the inspector for a reason worth flagging.
-        const ss = (node as Record<string, unknown>).shardingStrategy
-        if (ss === undefined) {
-          issues.push({
-            code: 'agent-multi-sharding-missing',
-            message: `agent-multi node '${node.id}' missing shardingStrategy (will fall back to per-file)`,
-            pointer: node.id,
-            severity: 'warning',
-          })
-        } else {
-          const r = validateShardingStrategy(ss)
-          if (!r.ok) {
-            issues.push({
-              code: 'agent-multi-sharding-invalid',
-              message: shardingInvalidMessage(node.id, r.code),
-              pointer: node.id,
-            })
-          }
-        }
-      }
+      // RFC-060 PR-E: agent-multi removed; its sourcePort + shardingStrategy
+      // validation rules deleted. wrapper-fanout (validated above in rule 4d)
+      // is now the sole fan-out mechanism.
     }
     if (node.kind === 'output') {
       const bindings = readBindings(node, 'ports')
@@ -812,7 +750,7 @@ export function validateWorkflowDef(
       // parse time, so the alias survives). Rejects list<T> with the
       // separate `review-input-list-kind-not-supported` code — per-item
       // review must live INSIDE a wrapper-fanout.
-      if (src.kind === 'agent-single' || src.kind === 'agent-multi') {
+      if (src.kind === 'agent-single') {
         const agentName = readString(src, 'agentName') ?? ''
         const agent = agentByName.get(agentName)
         const kind = agent?.outputKinds?.[srcPort]
@@ -873,8 +811,8 @@ export function validateWorkflowDef(
   // 4c. clarify (RFC-023) -----------------------------------------------------
   // - exactly one inbound edge on the `questions` port (the reverse-drag mints
   //   exactly one).
-  // - inbound source must be an agent-single OR agent-multi node (other kinds
-  //   rejected with clarify-target-not-agent).
+  // - inbound source must be an agent-single node (RFC-060 PR-E removed
+  //   agent-multi; clarify-target-not-agent fires for anything else).
   // - no two clarify nodes connected to the same agent.
   // - clarify.answers must not loop back to the clarify node itself.
   // - bare clarify (not inside a wrapper-loop) emits a warning to nudge users
@@ -911,10 +849,10 @@ export function validateWorkflowDef(
           })
           continue
         }
-        if (src.kind !== 'agent-single' && src.kind !== 'agent-multi') {
+        if (src.kind !== 'agent-single') {
           issues.push({
             code: 'clarify-target-not-agent',
-            message: `clarify node '${node.id}' must connect to an agent-single or agent-multi node (got kind '${src.kind}' on '${src.id}')`,
+            message: `clarify node '${node.id}' must connect to an agent-single node (got kind '${src.kind}' on '${src.id}')`,
             pointer: node.id,
           })
           continue
@@ -977,8 +915,10 @@ export function validateWorkflowDef(
 
   // 4d. clarify-cross-agent (RFC-056) -----------------------------------------
   // - exactly one inbound edge on the `questions` port; source must be an
-  //   agent-single (v1 restriction — agent-multi questioner deferred to a
-  //   later RFC).
+  //   agent-single (RFC-060 PR-E removed agent-multi entirely; the only
+  //   way to attach cross-clarify to a fanned-out questioner is to wrap
+  //   it in a wrapper-fanout — questioner placement inside fanout is a
+  //   follow-up RFC).
   // - no outbound edges OTHER than from the two legal output ports
   //   (`to_designer`, `to_questioner`).
   // - `to_designer` must be wired (warning if missing — the node still parks
@@ -1027,7 +967,7 @@ export function validateWorkflowDef(
           if (src.kind !== 'agent-single') {
             issues.push({
               code: 'cross-clarify-target-not-agent-single',
-              message: `clarify-cross-agent node '${node.id}' must connect to an agent-single questioner (got kind '${src.kind}' on '${src.id}'); agent-multi is deferred to a follow-up RFC`,
+              message: `clarify-cross-agent node '${node.id}' must connect to an agent-single questioner (got kind '${src.kind}' on '${src.id}')`,
               pointer: node.id,
             })
             continue
@@ -1215,20 +1155,15 @@ export function validateWorkflowDef(
 
   // 5. prompt-template --------------------------------------------------------
   for (const node of nodes) {
-    if (node.kind !== 'agent-single' && node.kind !== 'agent-multi') continue
+    if (node.kind !== 'agent-single') continue
     const template = readString(node, 'promptTemplate')
     if (template === undefined || template === '') continue
     const refs = extractTemplateVars(template)
     const inboundPorts = inbound.get(node.id) ?? new Set<string>()
-    // agent-multi shards a port automatically; the sourcePort isn't an
-    // inbound edge in the user-authored graph.
-    if (node.kind === 'agent-multi') {
-      const sp = (node as Record<string, unknown>).sourcePort
-      if (sp !== null && typeof sp === 'object') {
-        const portName = (sp as Record<string, unknown>).portName
-        if (typeof portName === 'string') inboundPorts.add(portName)
-      }
-    }
+    // RFC-060 PR-E: agent-multi removed; sourcePort handling deleted. Inside
+    // wrapper-fanout, the inner agent-single picks up its shard value via a
+    // boundary-input edge — that edge already lives in the graph, so the
+    // standard inbound-port set captures the reference correctly.
     for (const ref of refs) {
       if (BUILTIN_PROMPT_VARS.has(ref)) continue
       if (!inboundPorts.has(ref)) {
@@ -1249,21 +1184,8 @@ export function validateWorkflowDef(
 // helpers
 // -----------------------------------------------------------------------------
 
-function shardingInvalidMessage(
-  nodeId: string,
-  code: 'kind-invalid' | 'n-missing' | 'n-out-of-range' | 'depth-out-of-range',
-): string {
-  switch (code) {
-    case 'kind-invalid':
-      return `agent-multi node '${nodeId}' shardingStrategy.kind must be one of per-file / per-n-files / per-directory`
-    case 'n-missing':
-      return `agent-multi node '${nodeId}' shardingStrategy per-n-files requires 'n' (integer ≥ 1)`
-    case 'n-out-of-range':
-      return `agent-multi node '${nodeId}' shardingStrategy per-n-files 'n' must be an integer ≥ 1`
-    case 'depth-out-of-range':
-      return `agent-multi node '${nodeId}' shardingStrategy per-directory 'depth' must be an integer ≥ 1`
-  }
-}
+// RFC-060 PR-E: shardingInvalidMessage removed alongside RFC-055
+// agent-multi shardingStrategy validator rule.
 
 interface WrapperFanoutInputView {
   name: string

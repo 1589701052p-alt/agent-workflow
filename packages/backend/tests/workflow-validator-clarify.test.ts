@@ -59,19 +59,10 @@ describe('RFC-023 clarify validator rules', () => {
     expect(res.ok).toBe(true)
   })
 
-  test('agent-multi → clarify is allowed (per the user decision)', () => {
-    const def = makeDef({
-      nodes: [
-        { id: 'a1', kind: 'agent-multi', agentName: 'designer' },
-        { id: 'c1', kind: 'clarify' },
-      ],
-      edges: buildClarifyEdges('a1', 'c1'),
-    })
-    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] }).issues.map(
-      (i) => i.code,
-    )
-    expect(codes).not.toContain('clarify-target-not-agent')
-  })
+  // RFC-060 PR-E: agent-multi removed. Pre-RFC-060 this test asserted that
+  // 'agent-multi → clarify' was allowed; the equivalent today is "place the
+  // agent-single inside a wrapper-fanout and wire its clarify channel" —
+  // covered elsewhere in PR-D's wrapper-fanout test suite.
 
   test('non-agent upstream (wrapper-git) → clarify is rejected', () => {
     const def = makeDef({

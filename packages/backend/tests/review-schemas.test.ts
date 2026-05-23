@@ -33,18 +33,15 @@ describe('RFC-005 NODE_KIND + WORKFLOW_SCHEMA_VERSION', () => {
     expect(NODE_KIND).toContain('review')
   })
 
-  test('original six kinds still present', () => {
-    const expected = [
-      'agent-single',
-      'agent-multi',
-      'input',
-      'output',
-      'wrapper-git',
-      'wrapper-loop',
-    ] as const
+  test('original kinds still present (RFC-060 PR-E removed agent-multi)', () => {
+    const expected = ['agent-single', 'input', 'output', 'wrapper-git', 'wrapper-loop'] as const
     for (const k of expected) {
       expect(NODE_KIND).toContain(k)
     }
+  })
+
+  test('RFC-060 PR-E — agent-multi has been removed from NODE_KIND', () => {
+    expect(NODE_KIND).not.toContain('agent-multi' as never)
   })
 
   // Note: when this test was written (RFC-005), WORKFLOW_SCHEMA_VERSION was

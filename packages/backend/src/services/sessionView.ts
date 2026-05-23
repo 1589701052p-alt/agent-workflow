@@ -27,7 +27,8 @@ import { DomainError, NotFoundError } from '@/util/errors'
  * tab; the route returns 410 for those so the frontend can show a
  * "session not applicable" hint instead of an empty tree.
  */
-const PROMPT_CAPABLE_KINDS = new Set(['agent-single', 'agent-multi'])
+// RFC-060 PR-E: agent-multi removed; agent-single is the only prompt-capable kind.
+const PROMPT_CAPABLE_KINDS = new Set(['agent-single'])
 
 export async function getSessionTree(
   db: DbClient,

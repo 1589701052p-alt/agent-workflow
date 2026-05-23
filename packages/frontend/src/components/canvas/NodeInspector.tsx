@@ -3,8 +3,10 @@
 // and Preview (live prompt assembly).
 //
 // Field set is kind-specific:
-//   - agent-single / agent-multi: agentName, promptTemplate, retries,
-//     timeoutMs, temperature override, model override, variant override
+//   - agent-single: agentName, promptTemplate, retries, timeoutMs,
+//     temperature override, model override, variant override
+//     (RFC-060 PR-E removed agent-multi; fan-out work goes through
+//      wrapper-fanout, which has its own inspector branch below.)
 //   - input: inputKey
 //   - output: ports list (name + binding)
 //   - wrappers: inner node ids (read-only in this drawer — wire-up moves
@@ -13,13 +15,7 @@
 // The drawer mutates the workflow definition in place; the parent route
 // owns the dirty/save bookkeeping.
 
-import type {
-  Agent,
-  ShardingStrategy,
-  WorkflowDefinition,
-  WorkflowInput,
-  WorkflowNode,
-} from '@agent-workflow/shared'
+import type { Agent, WorkflowDefinition, WorkflowInput, WorkflowNode } from '@agent-workflow/shared'
 import {
   CLARIFY_SOURCE_PORT_NAME,
   deriveWrapperFanoutOutputs,
@@ -34,7 +30,6 @@ import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Fo
 import { ModelSelect } from '@/components/ModelSelect'
 import { computePorts } from './WorkflowCanvas'
 import { REVIEW_INPUT_HANDLE_ID, syncEdgeFromFormField } from './connectionSync'
-import { ShardingStrategyField } from './ShardingStrategyField'
 import { patchInputDef, renameInputKey } from './syncInputDefs'
 import { PromptPreview } from './PromptPreview'
 import { loopMemberCandidates } from './wrapperCandidates'
@@ -69,7 +64,7 @@ export function NodeInspector({ definition, selectedNodeId, agents, onChange, on
   // confusion. Force the active tab back to edit when previewing isn't
   // available so a stale `tab === 'preview'` from a prior agent selection
   // doesn't render an empty pane.
-  const hasPreview = node.kind === 'agent-single' || node.kind === 'agent-multi'
+  const hasPreview = node.kind === 'agent-single'
   const activeTab: Tab = !hasPreview ? 'edit' : tab
 
   function patch(next: WorkflowNode) {
@@ -1197,8 +1192,7 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
         </div>
       )
     }
-    case 'agent-single':
-    case 'agent-multi': {
+    case 'agent-single': {
       const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
       const promptTemplate = typeof rec.promptTemplate === 'string' ? rec.promptTemplate : ''
       const retries = typeof rec.retries === 'number' ? rec.retries : undefined
@@ -1217,11 +1211,10 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
       return (
         <div className="form-grid">
           {titleField}
-          <Field
-            label={t('inspector.fieldAgent')}
-            required
-            hint={node.kind === 'agent-multi' ? t('inspector.fieldAgentHint') : ''}
-          >
+          {/* RFC-060 PR-E: agent-multi removed — its sourcePort + sharding
+              strategy inspector sections are deleted; agent-single is now the
+              only agent node kind. Fan-out work goes through wrapper-fanout. */}
+          <Field label={t('inspector.fieldAgent')} required>
             <select
               className="form-input"
               value={agentName}
@@ -1235,28 +1228,6 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               ))}
             </select>
           </Field>
-
-          {node.kind === 'agent-multi' && (
-            <Field label={t('inspector.fieldSourcePort')} required>
-              <SourcePortField
-                value={(rec.sourcePort as { nodeId?: string; portName?: string } | undefined) ?? {}}
-                onChange={(sp) => update({ sourcePort: sp })}
-                definition={definition}
-                agents={agents}
-                selfNodeId={node.id}
-              />
-              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                {t('inspector.sourcePortDragHint')}
-              </p>
-            </Field>
-          )}
-
-          {node.kind === 'agent-multi' && (
-            <ShardingStrategyField
-              value={rec.shardingStrategy as ShardingStrategy | undefined}
-              onChange={(sp) => update({ shardingStrategy: sp })}
-            />
-          )}
 
           <Field
             label={t('inspector.fieldPromptTemplate')}
@@ -1379,109 +1350,10 @@ function PortRefList({ ports }: { ports: string[] }) {
   )
 }
 
-/**
- * Candidate upstream nodes an `agent-multi` can shard over. Each entry is
- * a real node that produces at least one output port, sorted by node id
- * for stable rendering. The agent-multi node itself is excluded (you
- * can't fan-out over your own output — the validator rejects it
- * downstream anyway, and offering it as an option just invites the
- * `agent-multi-source-port-missing` we're trying to prevent).
- *
- * Exported for unit tests.
- */
-export function sourcePortOptions(
-  definition: WorkflowDefinition,
-  agents: Agent[],
-  selfNodeId: string,
-): Array<{ nodeId: string; kind: string; outputs: string[] }> {
-  const agentByName = new Map(agents.map((a) => [a.name, a]))
-  const out: Array<{ nodeId: string; kind: string; outputs: string[] }> = []
-  for (const n of definition.nodes) {
-    if (n.id === selfNodeId) continue
-    const { outputs } = computePorts(n, agentByName, definition)
-    if (outputs.length === 0) continue
-    out.push({ nodeId: n.id, kind: n.kind, outputs })
-  }
-  out.sort((a, b) => a.nodeId.localeCompare(b.nodeId))
-  return out
-}
-
-function SourcePortField({
-  value,
-  onChange,
-  definition,
-  agents,
-  selfNodeId,
-}: {
-  value: { nodeId?: string; portName?: string }
-  onChange: (next: { nodeId: string; portName: string }) => void
-  definition: WorkflowDefinition
-  agents: Agent[]
-  selfNodeId: string
-}) {
-  const { t } = useTranslation()
-  const options = sourcePortOptions(definition, agents, selfNodeId)
-  const currentNodeId = value.nodeId ?? ''
-  const currentPort = value.portName ?? ''
-  const matched = options.find((o) => o.nodeId === currentNodeId)
-  // Show the saved-but-unresolvable selection inline as a "(missing)"
-  // option so the user can SEE the broken state instead of silently
-  // seeing the dropdown jump to the placeholder — they'd otherwise lose
-  // the breadcrumb that pointed them to the bad value in the first place.
-  const showOrphanNode = currentNodeId !== '' && matched === undefined
-  const portList = matched?.outputs ?? []
-  const showOrphanPort =
-    currentPort !== '' && matched !== undefined && !portList.includes(currentPort)
-
-  return (
-    <div className="form-grid form-grid--cols-2">
-      <select
-        className="form-input"
-        value={currentNodeId}
-        onChange={(e) => {
-          const nextId = e.target.value
-          const nextOpt = options.find((o) => o.nodeId === nextId)
-          // Keep the existing port name when the new node also exposes
-          // it; otherwise reset so the user is forced to make a fresh
-          // choice instead of carrying a stale port forward.
-          const keepPort =
-            currentPort !== '' && nextOpt !== undefined && nextOpt.outputs.includes(currentPort)
-          onChange({ nodeId: nextId, portName: keepPort ? currentPort : '' })
-        }}
-      >
-        <option value="">{t('inspector.sourcePortNodePlaceholder')}</option>
-        {options.map((o) => (
-          <option key={o.nodeId} value={o.nodeId}>
-            {o.nodeId} ({o.kind})
-          </option>
-        ))}
-        {showOrphanNode && (
-          <option
-            value={currentNodeId}
-          >{`${currentNodeId} ${t('inspector.sourcePortMissingSuffix')}`}</option>
-        )}
-      </select>
-      <select
-        className="form-input"
-        value={currentPort}
-        onChange={(e) => onChange({ nodeId: currentNodeId, portName: e.target.value })}
-        disabled={currentNodeId === '' || (matched === undefined && !showOrphanNode)}
-      >
-        <option value="">{t('inspector.sourcePortPlaceholder')}</option>
-        {portList.map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-        {showOrphanPort && (
-          <option
-            value={currentPort}
-          >{`${currentPort} ${t('inspector.sourcePortMissingSuffix')}`}</option>
-        )}
-      </select>
-    </div>
-  )
-}
+// RFC-060 PR-E: sourcePortOptions + SourcePortField (the RFC-015
+// agent-multi sourcePort dropdowns) were removed alongside the agent-multi
+// NodeKind. wrapper-fanout uses real boundary-input edges on the canvas
+// instead, so no equivalent inspector field is needed.
 
 // ---------------------------------------------------------------------------
 // Preview tab
@@ -1495,7 +1367,7 @@ interface PreviewProps {
 
 function PreviewPane({ node, agents, definition }: PreviewProps) {
   const { t } = useTranslation()
-  if (node.kind !== 'agent-single' && node.kind !== 'agent-multi') {
+  if (node.kind !== 'agent-single') {
     return <div className="muted">{t('inspector.previewOnlyAgent')}</div>
   }
   const agentName = (node as Record<string, unknown>).agentName as string | undefined

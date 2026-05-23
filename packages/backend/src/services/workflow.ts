@@ -11,11 +11,7 @@ import type {
   WorkflowDefinition,
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
-import {
-  WORKFLOW_SCHEMA_VERSION,
-  WorkflowDefinitionSchema,
-  applyShardingBackfill,
-} from '@agent-workflow/shared'
+import { WORKFLOW_SCHEMA_VERSION, WorkflowDefinitionSchema } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -164,12 +160,9 @@ function rowToWorkflow(row: WorkflowRow): Workflow {
       error: (err as Error).message,
     })
   }
-  // RFC-055 — backfill agent-multi nodes' missing/invalid shardingStrategy
-  // with the per-file default so the UI never starts on an empty Select.
-  // Idempotent: returns the same reference when nothing changes. Read-only
-  // path; PUT still accepts any legal shape and validator surfaces the
-  // missing/invalid signals on raw YAML imports.
-  definition = applyShardingBackfill(definition)
+  // RFC-060 PR-E: agent-multi removed, so the RFC-055 sharding-backfill
+  // call is no longer needed. wrapper-fanout carries its inputs[]/nodeIds
+  // shape directly in the schema with no backfill.
   return {
     id: row.id,
     name: row.name,

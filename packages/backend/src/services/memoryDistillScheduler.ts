@@ -141,7 +141,8 @@ export function extractAgentNamesFromSnapshot(workflowSnapshot: string): string[
   for (const node of parsed.nodes ?? []) {
     if (typeof node !== 'object' || node === null) continue
     const kind = typeof node.kind === 'string' ? node.kind : null
-    if (kind !== 'agent-single' && kind !== 'agent-multi') continue
+    // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+    if (kind !== 'agent-single') continue
     // Workflow snapshots use either `agentName` (frontend canvas) or
     // `agent` (older YAML imports). Accept both.
     const name =

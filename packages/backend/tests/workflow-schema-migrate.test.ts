@@ -138,52 +138,11 @@ describe('GET path: legacy row → latest definition returned by getWorkflow', (
     expect(raw.$schema_version).toBe(1)
   })
 
-  // RFC-055 — getWorkflow returns agent-multi nodes with shardingStrategy
-  // backfilled to per-file when the stored row omits the field, so the
-  // inspector form never starts on an empty Select. The on-disk row stays
-  // unmodified (heal-on-next-PUT, same pattern as the schema upgrade above).
-  test('legacy agent-multi node without shardingStrategy → GET fills per-file (RFC-055)', async () => {
-    const id = ulid()
-    const now = Date.now()
-    await db.insert(workflows).values({
-      id,
-      name: 'legacy',
-      description: '',
-      definition: JSON.stringify({
-        $schema_version: 3,
-        inputs: [],
-        nodes: [
-          { id: 'wg', kind: 'wrapper-git', nodeIds: ['x'] },
-          { id: 'x', kind: 'input', inputKey: 'topic' },
-          {
-            id: 'm1',
-            kind: 'agent-multi',
-            agentName: 'auditor',
-            sourcePort: { nodeId: 'wg', portName: 'git_diff' },
-            // shardingStrategy intentionally omitted
-          },
-          { id: 's1', kind: 'agent-single', agentName: 'reviewer' },
-        ],
-        edges: [],
-      }),
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-    })
-    const wf = (await getWorkflow(db, id)) as Workflow
-    const m1 = wf.definition.nodes.find((n) => n.id === 'm1') as Record<string, unknown>
-    expect(m1.shardingStrategy).toEqual({ kind: 'per-file' })
-    // Non-agent-multi nodes are untouched.
-    const s1 = wf.definition.nodes.find((n) => n.id === 's1') as Record<string, unknown>
-    expect(s1.shardingStrategy).toBeUndefined()
-    // On-disk row still lacks the field — heal-on-edit pattern.
-    const rows = await db.select().from(workflows).where(eq(workflows.id, id))
-    const raw = JSON.parse(rows[0]!.definition) as {
-      nodes: Array<Record<string, unknown>>
-    }
-    const rawM1 = raw.nodes.find((n) => n.id === 'm1') as Record<string, unknown>
-    expect(rawM1.shardingStrategy).toBeUndefined()
-  })
+  // RFC-060 PR-E: the RFC-055 agent-multi shardingStrategy backfill was
+  // removed alongside the agent-multi NodeKind. A legacy DB row that still
+  // mentions `kind: 'agent-multi'` will now surface as an unknown-node-kind
+  // validator failure at task-launch time (covered by the agent-multi-grep
+  // guard test).
 })
 
 describe('POST / PUT paths normalize older versions → latest on write', () => {

@@ -294,76 +294,9 @@ describe('scheduler forwards node-level overrides to runner', () => {
     expect(rows[0]?.model).toBe('anthropic/claude-haiku-4-5')
   })
 
-  test('agent-multi (fan-out): every shard child receives the override', async () => {
-    await seedAgentWithDefaults(h.db, 'src', ['git_diff'], {
-      model: 'anthropic/claude-haiku-4-5',
-    })
-    await seedAgentWithDefaults(h.db, 'auditor', ['findings'], {
-      model: 'anthropic/claude-haiku-4-5',
-    })
-    const TWO_FILE_DIFF = [
-      'diff --git a/src/a.ts b/src/a.ts',
-      '@@ -1 +1 @@',
-      '-1',
-      '+1',
-      'diff --git a/src/b.ts b/src/b.ts',
-      '@@ -1 +1 @@',
-      '-2',
-      '+2',
-    ].join('\n')
-
-    const def: WorkflowDefinition = {
-      $schema_version: 1,
-      inputs: [{ kind: 'text', key: 'requirement', label: 'r' }],
-      nodes: [
-        { id: 'in', kind: 'input', inputKey: 'requirement' },
-        { id: 'src', kind: 'agent-single', agentName: 'src' },
-        {
-          id: 'audit',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'src', portName: 'git_diff' },
-          overrides: { model: 'anthropic/claude-opus-4-7' },
-        } as unknown as WorkflowDefinition['nodes'][number],
-      ],
-      edges: [
-        {
-          id: 'e1',
-          source: { nodeId: 'in', portName: 'requirement' },
-          target: { nodeId: 'src', portName: 'requirement' },
-        },
-      ],
-    }
-    const taskId = await seedWorkflowAndTask(h, def, { requirement: 'audit' })
-
-    await withEnv(
-      {
-        MOCK_OPENCODE_OUTPUTS: JSON.stringify({
-          git_diff: TWO_FILE_DIFF,
-          findings: 'noted',
-        }),
-        MOCK_OPENCODE_CAPTURE_CONFIG_TO: h.capturePath,
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
-    )
-
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('done')
-
-    const rows = readCapture(h.capturePath)
-    // 1 src + 2 audit shards = 3 spawns.
-    const srcRow = rows.find((r) => r.agent === 'src')
-    const auditRows = rows.filter((r) => r.agent === 'auditor')
-    expect(srcRow?.model).toBe('anthropic/claude-haiku-4-5') // src node has no override
-    expect(auditRows.length).toBe(2)
-    for (const r of auditRows) {
-      expect(r.model).toBe('anthropic/claude-opus-4-7')
-    }
-  })
+  // RFC-060 PR-E: agent-multi removed; the per-shard-child overrides test is
+  // no longer applicable. wrapper-fanout inner agents receive overrides
+  // through the same agent-single path (covered by the agent-single override
+  // test above) — see services/scheduler.ts:dispatchFanoutShard, which
+  // forwards `pickOverrides(innerNode)` into `runNode(...)`.
 })

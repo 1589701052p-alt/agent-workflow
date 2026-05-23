@@ -844,54 +844,7 @@ describe('scheduler RFC-023 clarify dispatch', () => {
   })
 })
 
-describe('agent-multi clarify per shard', () => {
-  let h: Harness
-  beforeEach(async () => {
-    h = await buildHarness()
-  })
-  afterEach(() => h.cleanup())
-
-  // Note: full agent-multi shard pickup of clarify envelopes is exercised
-  // end-to-end via e2e/clarify.spec.ts. Here we lock the simpler invariant
-  // that when no clarify channel is wired AND the agent-multi parent runs
-  // through normally, the parent's status is 'done' (no regression to the
-  // pre-RFC-023 flow). A real per-shard clarify scenario requires a
-  // workflow with a wrapper-git providing a diff for the fanout split; the
-  // e2e harness handles that. The scheduler-level dispatch logic is unit-
-  // tested above (agent-single path) and the agent-multi shard branch is
-  // the same code path (createClarifySession + return awaiting_human).
-  test('non-clarify agent-multi with no upstream diff completes with empty aggregate', async () => {
-    await seedAgent(h.db, 'auditor', ['findings'])
-    const def: WorkflowDefinition = {
-      $schema_version: 3,
-      inputs: [{ kind: 'text', key: 'diff', label: 'd' }],
-      nodes: [
-        { id: 'in', kind: 'input', inputKey: 'diff' } as WorkflowNode,
-        {
-          id: 'm',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'in', portName: 'diff' },
-        } as WorkflowNode,
-      ],
-      edges: [
-        {
-          id: 'e_in',
-          source: { nodeId: 'in', portName: 'diff' },
-          target: { nodeId: 'm', portName: 'diff' },
-        },
-      ],
-    }
-    const { taskId } = await seedWorkflowAndTask(h, def, { diff: '' })
-
-    await runTask({
-      taskId,
-      db: h.db,
-      appHome: h.appHome,
-      opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-    })
-
-    const taskRow = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(taskRow?.status).toBe('done')
-  })
-})
+// RFC-060 PR-E: agent-multi removed; the prior per-shard clarify dispatch
+// suite is no longer applicable. wrapper-fanout per-shard clarify (D.T5) is
+// deferred to PR-D2 by design — see runFanoutWrapperNode v1 inner-kind
+// limitation in scheduler.ts.

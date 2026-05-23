@@ -184,7 +184,7 @@ export const ClarifySessionSchema = z.object({
   taskId: z.string(),
   sourceAgentNodeId: z.string(),
   sourceAgentNodeRunId: z.string(),
-  /** Shard key when the asking agent is an agent-multi child; null otherwise. */
+  /** Shard key when the asking agent is a wrapper-fanout shard child; null otherwise. */
   sourceShardKey: z.string().nullable().default(null),
   clarifyNodeId: z.string(),
   /**
@@ -361,7 +361,7 @@ export const ClarifyRoundSchema = z.object({
 
   askingNodeId: z.string(),
   askingNodeRunId: z.string(),
-  /** Asking-side shard key — agent-multi child shard for kind='self'; null for
+  /** Asking-side shard key — wrapper-fanout shard child for kind='self'; null for
    *  kind='cross' (RFC-056 v1 limits cross-clarify to agent-single). */
   askingShardKey: z.string().nullable().default(null),
 

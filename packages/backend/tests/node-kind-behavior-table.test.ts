@@ -16,7 +16,12 @@ import {
 
 describe('RFC-053 PR-C — NODE_KIND_BEHAVIORS matrix', () => {
   test('process kinds (agent / wrapper) get the "live process" row', () => {
-    const processKinds: NodeKind[] = ['agent-single', 'agent-multi', 'wrapper-git', 'wrapper-loop']
+    const processKinds: NodeKind[] = [
+      'agent-single',
+      'wrapper-git',
+      'wrapper-loop',
+      'wrapper-fanout',
+    ]
     for (const k of processKinds) {
       const b = NODE_KIND_BEHAVIORS[k]
       expect({ k, ...b }).toEqual({
@@ -48,7 +53,6 @@ describe('RFC-053 PR-C — NODE_KIND_BEHAVIORS matrix', () => {
   test('every NodeKind has an entry (exhaustiveness via satisfies Record)', () => {
     const expectedKinds: NodeKind[] = [
       'agent-single',
-      'agent-multi',
       'input',
       'output',
       'wrapper-git',
@@ -101,11 +105,11 @@ describe('RFC-053 PR-C — NODE_KIND_BEHAVIORS matrix', () => {
 })
 
 describe('RFC-053 PR-C — retryNode uses the table (RFC-052 cascade behavior preserved)', () => {
-  test('mint-placeholder kinds: agent-single, agent-multi, wrapper-git, wrapper-loop', () => {
+  test('mint-placeholder kinds: agent-single, wrapper-git, wrapper-loop, wrapper-fanout', () => {
     expect(nodeKindParticipatesInRetryCascade('agent-single')).toBe(true)
-    expect(nodeKindParticipatesInRetryCascade('agent-multi')).toBe(true)
     expect(nodeKindParticipatesInRetryCascade('wrapper-git')).toBe(true)
     expect(nodeKindParticipatesInRetryCascade('wrapper-loop')).toBe(true)
+    expect(nodeKindParticipatesInRetryCascade('wrapper-fanout')).toBe(true)
   })
 
   test('skip kinds: input, output, review, clarify (the RFC-052 fix)', () => {

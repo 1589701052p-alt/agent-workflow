@@ -34,7 +34,8 @@ export function sortNodeRunsForPromptHistory(runs: readonly NodeRun[]): NodeRun[
 }
 
 export function isPromptCapableKind(kind: string | null | undefined): boolean {
-  return kind === 'agent-single' || kind === 'agent-multi'
+  // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+  return kind === 'agent-single'
 }
 
 /**

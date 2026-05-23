@@ -87,24 +87,11 @@ describe('aggregator-agent-outside-fanout — PR-B placement guard', () => {
     expect(aggIssue?.pointer).toBe('n1')
   })
 
-  test('aggregator agent on agent-multi node → also flagged (PR-B blanket rule)', () => {
-    const aggregator = agent('merger', 'aggregator')
-    const def = makeDef({
-      nodes: [
-        {
-          id: 'n1',
-          kind: 'agent-multi',
-          agentName: 'merger',
-          sourcePort: { nodeId: 'x', portName: 'y' },
-        },
-      ],
-    })
-    const codes = validateWorkflowDef(def, {
-      agents: [aggregator],
-      skills: EMPTY_SKILLS,
-    }).issues.map((i) => i.code)
-    expect(codes).toContain('aggregator-agent-outside-fanout')
-  })
+  // RFC-060 PR-E: agent-multi was removed, so the prior "aggregator on
+  // agent-multi node also flagged" case no longer applies — there is no
+  // agent-multi NodeKind to place an aggregator on. The PR-C aggregator-
+  // outside-fanout rule still fires for any agent-single placement outside
+  // a wrapper-fanout (covered by the test above).
 
   test('missing agent referenced by node → only agent-not-found, no aggregator check', () => {
     const def = makeDef({

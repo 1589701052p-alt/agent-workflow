@@ -326,6 +326,64 @@ export async function gitDiffSnapshot(worktreePath: string, fromCommit: string):
 }
 
 /**
+ * RFC-060 PR-E — wrapper-git output kind upgrade. Returns the
+ * newline-separated list of paths that differ between `fromCommit` and the
+ * current worktree (committed-but-uncommitted + untracked files). The
+ * wrapper-git node's `git_diff` outlet now carries this `list<path>` value
+ * instead of a full unified diff, so it can feed a downstream wrapper-fanout
+ * as a shardSource directly.
+ *
+ * Implementation:
+ *   - `git diff --name-only <fromCommit>` for tracked changes
+ *   - `git ls-files --others --exclude-standard` for untracked paths
+ *   - `core.quotepath=false` so non-ASCII paths survive unescaped (mirrors
+ *     gitDiffSnapshot).
+ *
+ * Empty when nothing changed (`fromCommit === HEAD` of a clean worktree).
+ */
+export async function gitChangedFiles(worktreePath: string, fromCommit: string): Promise<string[]> {
+  const tracked = await runGit(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'diff',
+    '--name-only',
+    fromCommit,
+    '--',
+  ])
+  if (tracked.exitCode !== 0) {
+    throw new DomainError(
+      'worktree-diff-failed',
+      `git diff --name-only failed: ${tracked.stderr.trim()}`,
+      500,
+    )
+  }
+  const untracked = await runGit(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+  ])
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const line of tracked.stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    if (seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  for (const line of untracked.stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    if (seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+/**
  * Capped variant of `gitDiffSnapshot` for the HTTP response in
  * `GET /api/tasks/:id/diff`. v1 caps at 1 MiB to keep the network round-trip
  * predictable; multi-process sharding uses the uncapped form.

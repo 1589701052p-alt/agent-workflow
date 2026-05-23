@@ -553,94 +553,12 @@ describe('runTask: linear DAG (M1)', () => {
     expect(runs.every((r) => r.status === 'failed')).toBe(true)
   })
 
-  test('agent-multi fans out per-file and aggregates outputs sorted by shard_key', async () => {
-    await seedReadonlyAgent(h.db, 'src', ['git_diff'], true)
-    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
-    const def: WorkflowDefinition = {
-      $schema_version: 1,
-      inputs: [{ kind: 'text', key: 'requirement', label: 'r' }],
-      nodes: [
-        { id: 'in', kind: 'input', inputKey: 'requirement' },
-        { id: 'src', kind: 'agent-single', agentName: 'src' },
-        {
-          id: 'audit',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'src', portName: 'git_diff' },
-        } as unknown as WorkflowDefinition['nodes'][number],
-      ],
-      edges: [
-        {
-          id: 'e1',
-          // RFC-004: input.portName === inputKey.
-          source: { nodeId: 'in', portName: 'requirement' },
-          target: { nodeId: 'src', portName: 'requirement' },
-        },
-      ],
-    }
-    const { taskId } = await seedWorkflowAndTask(h, def, { requirement: 'audit two files' })
+  // RFC-060 PR-E: agent-multi removed; the per-file fan-out + shard-key
+  // ordering invariant is now exercised end-to-end via
+  // scheduler-wrapper-fanout-e2e.test.ts (PR-D, wrapper-fanout). The
+  // agent-multi-specific harness above is no longer applicable.
 
-    // src outputs a 2-file diff; auditor returns "findings" per shard.
-    const TWO_FILE_DIFF = [
-      'diff --git a/src/a.ts b/src/a.ts',
-      '@@ -1 +1 @@',
-      '-1',
-      '+1',
-      'diff --git a/src/b.ts b/src/b.ts',
-      '@@ -1 +1 @@',
-      '-2',
-      '+2',
-    ].join('\n')
-
-    // For src node we want it to emit the diff; for auditor we want
-    // distinct findings per shard. The mock returns the same body each
-    // invocation, so per-shard divergence is harder — what we can verify
-    // is the aggregation joins by shard_key dictionary order.
-    await withEnv(
-      {
-        MOCK_OPENCODE_OUTPUTS: JSON.stringify({
-          git_diff: TWO_FILE_DIFF,
-          findings: 'audited',
-        }),
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
-    )
-
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('done')
-
-    const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    // parent (audit) + 2 children + src + in = 5 rows.
-    const auditRuns = runs.filter((r) => r.nodeId === 'audit')
-    expect(auditRuns.length).toBe(3) // parent + 2 children
-    const parent = auditRuns.find((r) => r.parentNodeRunId === null)
-    const children = auditRuns.filter((r) => r.parentNodeRunId !== null)
-    expect(parent).toBeDefined()
-    expect(children.length).toBe(2)
-    expect(new Set(children.map((c) => c.shardKey))).toEqual(new Set(['src/a.ts', 'src/b.ts']))
-
-    // Aggregated findings = "audited\naudited" (2 children, sorted).
-    const findings = await h.db
-      .select()
-      .from(nodeRunOutputs)
-      .where(and(eq(nodeRunOutputs.nodeRunId, parent!.id), eq(nodeRunOutputs.portName, 'findings')))
-    expect(findings[0]?.content).toBe('audited\naudited')
-
-    // No failures → errors port is empty.
-    const errors = await h.db
-      .select()
-      .from(nodeRunOutputs)
-      .where(and(eq(nodeRunOutputs.nodeRunId, parent!.id), eq(nodeRunOutputs.portName, 'errors')))
-    expect(errors[0]?.content).toBe('')
-  })
-
-  test('wrapper-git emits combined diff of inner node writes', async () => {
+  test('wrapper-git emits changed-file path list as git_diff (RFC-060 PR-E list<path>)', async () => {
     // Build a real git repo to give the wrapper a meaningful baseline.
     const repoDir = h.worktreePath
     await runGit(repoDir, ['init', '-q', '-b', 'main'])
@@ -662,10 +580,8 @@ describe('runTask: linear DAG (M1)', () => {
     }
     const { taskId } = await seedWorkflowAndTask(h, def)
     // The writer doesn't really change the worktree (mock-opencode just
-    // returns an envelope). Simulate a write by inserting an extra file
-    // mid-run via a custom step is hard; instead append after the writer
-    // exits but before the wrapper runs. We do it the simple way: pre-edit
-    // the worktree so gitDiffSnapshot picks up something on the wrapper.
+    // returns an envelope). Simulate a write by pre-editing the worktree
+    // so gitChangedFiles picks something up on wrapper-git finalize.
     writeFileSync(join(repoDir, 'src.txt'), 'after writer\n')
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'done' }) }, () =>
@@ -693,51 +609,15 @@ describe('runTask: linear DAG (M1)', () => {
           and(eq(nodeRunOutputs.nodeRunId, wrapRun!.id), eq(nodeRunOutputs.portName, 'git_diff')),
         )
     )[0]
-    expect(diffPort?.content).toContain('after writer')
-    expect(diffPort?.content).toContain('src.txt')
+    // RFC-060 PR-E: git_diff is now a newline-separated path list, not a
+    // unified diff. Assert the modified file appears in the list.
+    const paths = (diffPort?.content ?? '').split('\n').filter((p) => p.length > 0)
+    expect(paths).toContain('src.txt')
   })
 
-  test('agent-multi with empty sourcePort completes immediately', async () => {
-    await seedReadonlyAgent(h.db, 'src', ['git_diff'], true)
-    await seedReadonlyAgent(h.db, 'auditor', ['findings'], true)
-    const def: WorkflowDefinition = {
-      $schema_version: 1,
-      inputs: [],
-      nodes: [
-        { id: 'src', kind: 'agent-single', agentName: 'src' },
-        {
-          id: 'audit',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'src', portName: 'git_diff' },
-        } as unknown as WorkflowDefinition['nodes'][number],
-      ],
-      edges: [],
-    }
-    const { taskId } = await seedWorkflowAndTask(h, def)
-    await withEnv(
-      {
-        // Empty diff → fan-out short-circuit to done with empty outputs.
-        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ git_diff: '', findings: '' }),
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        }),
-    )
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('done')
-    const auditRuns = await h.db
-      .select()
-      .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'audit')))
-    // No children for an empty diff.
-    expect(auditRuns.length).toBe(1)
-    expect(auditRuns[0]?.parentNodeRunId).toBeNull()
-  })
+  // RFC-060 PR-E: agent-multi removed; the empty-sourcePort short-circuit is
+  // now exercised in scheduler-wrapper-fanout-e2e.test.ts case 1 ("empty
+  // shardSource short-circuits to done with empty __done__ signal").
 
   test('two write agents at the same level serialize through the write semaphore', async () => {
     await seedReadonlyAgent(h.db, 'w1', ['summary'], false)

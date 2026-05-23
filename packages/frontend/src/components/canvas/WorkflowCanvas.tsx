@@ -94,8 +94,8 @@ import { DEFAULT_NODE_SIZE_BY_KIND } from './wrapperFit'
 import { clearWrapperSize, deleteWrapperWithChildren } from './wrapperOps'
 
 const NODE_TYPES = {
+  // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
   'agent-single': AgentNode,
-  'agent-multi': AgentNode,
   input: InputNode,
   output: OutputNode,
   'wrapper-git': GroupWrapperNode,
@@ -1151,12 +1151,10 @@ export function computePorts(
       }
       break
     }
-    case 'agent-single':
-    case 'agent-multi': {
+    case 'agent-single': {
       const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
       const agent = agentByName.get(agentName)
       for (const o of agent?.outputs ?? []) outputs.push(o)
-      if (node.kind === 'agent-multi') outputs.push('errors')
       // RFC-023 bugfix (now generalized): when an outbound edge references a
       // port the live agent no longer declares — frozen task snapshots vs
       // edited agent.outputs, or the `__clarify__` channel — render a
@@ -1258,18 +1256,7 @@ function toFlowNodes(
         ).inputSource = { nodeId, portName }
       }
     }
-    if (n.kind === 'agent-multi') {
-      // RFC-015: mirror sourcePort into node data so AgentNode's top-handle
-      // can flip the `is-connected` class based on whether a source has been
-      // chosen (drag-set or form-set, both flow through the same field).
-      const raw = (n as unknown as { sourcePort?: { nodeId?: unknown; portName?: unknown } })
-        .sourcePort
-      if (raw !== undefined) {
-        const nodeId = typeof raw.nodeId === 'string' ? raw.nodeId : ''
-        const portName = typeof raw.portName === 'string' ? raw.portName : ''
-        data.sourcePort = { nodeId, portName }
-      }
-    }
+    // RFC-060 PR-E: agent-multi sourcePort mirroring removed.
     return {
       id: n.id,
       type: n.kind,
@@ -1290,7 +1277,7 @@ export function nodeTitle(n: WorkflowNode): string {
   if (typeof rec.title === 'string' && rec.title.length > 0) {
     return rec.title
   }
-  if (n.kind === 'agent-single' || n.kind === 'agent-multi') {
+  if (n.kind === 'agent-single') {
     return typeof rec.agentName === 'string' ? rec.agentName : '(unset agent)'
   }
   if (n.kind === 'input') {

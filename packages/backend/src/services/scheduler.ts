@@ -78,8 +78,10 @@ import {
 } from '@/services/wrapperProgress'
 import { emitTaskStatus, getTask } from '@/services/task'
 import { createLogger, type Logger } from '@/util/log'
-import { splitDiffPerDirectory, splitDiffPerFile, splitDiffPerNFiles } from '@/util/diffSplit'
-import { gitDiffSnapshot, gitStashSnapshot, rollbackToSnapshot, runGit } from '@/util/git'
+// RFC-060 PR-E: splitDiff* imports removed — they were used only by the
+// agent-multi fan-out path (now deleted). wrapper-fanout consumes a `list<T>`
+// shardSource instead of slicing a string diff.
+import { gitChangedFiles, gitStashSnapshot, rollbackToSnapshot, runGit } from '@/util/git'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -181,7 +183,6 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     if (
       node.kind !== 'input' &&
       node.kind !== 'agent-single' &&
-      node.kind !== 'agent-multi' &&
       node.kind !== 'output' &&
       node.kind !== 'wrapper-git' &&
       node.kind !== 'wrapper-loop' &&
@@ -987,10 +988,8 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     return { kind: 'failed', summary: `agent '${agentName}' not found`, message: 'agent-not-found' }
   }
 
-  if (node.kind === 'agent-multi') {
-    return runFanOutNode(state, args, agent)
-  }
-
+  // RFC-060 PR-E: agent-multi NodeKind was removed in favor of wrapper-fanout.
+  // The agent-single path below is now the sole agent dispatch path.
   const upstreamInputs = await resolveUpstreamInputs(
     db,
     taskId,
@@ -2802,368 +2801,29 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     }
   }
 
-  // subRes.kind === 'ok' — compute diff against persisted baseline.
-  let diff = ''
+  // subRes.kind === 'ok' — emit changed-file list against persisted baseline.
+  // RFC-060 PR-E: git_diff outlet is now `list<path>` (newline-joined file
+  // paths) instead of a full unified diff. Downstream wrapper-fanout can
+  // consume it directly as a shardSource. Authors who still want the raw
+  // diff can run `git diff` themselves in a downstream agent — or wait for
+  // the planned `git_diff_full` companion outlet.
+  let paths: string[] = []
   try {
-    diff = await gitDiffSnapshot(task.worktreePath, baseline || 'HEAD')
+    paths = await gitChangedFiles(task.worktreePath, baseline || 'HEAD')
   } catch {
-    diff = ''
+    paths = []
   }
   await db
     .insert(nodeRunOutputs)
-    .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: diff })
+    .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: paths.join('\n') })
   await markWrapperTerminal(db, wrapperRunId, 'done')
   broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
   return { kind: 'ok', summary: '', message: '' }
 }
 
-// -----------------------------------------------------------------------------
-// fan-out (P-3-02), kept structurally identical to M3 except for iteration.
-// -----------------------------------------------------------------------------
-
-async function runFanOutNode(
-  state: SchedulerState,
-  args: OneNodeArgs,
-  agent: Agent,
-): Promise<OneNodeResult> {
-  const { db, task, taskId, definition, opts, subprocessSem, log } = state
-  const { node, iteration } = args
-
-  const sourcePort = (node as Record<string, unknown>).sourcePort as
-    | { nodeId?: unknown; portName?: unknown }
-    | undefined
-  if (
-    sourcePort === undefined ||
-    typeof sourcePort.nodeId !== 'string' ||
-    typeof sourcePort.portName !== 'string'
-  ) {
-    return {
-      kind: 'failed',
-      summary: `agent-multi node ${node.id} missing sourcePort`,
-      message: 'sourcePort required',
-    }
-  }
-
-  // Latest source-node run not narrower than current iteration; prefer in-iter
-  // run, otherwise fall back to most recent run from a prior iteration.
-  const sourceRun = await pickLatestSourceRun(db, taskId, sourcePort.nodeId as string, iteration)
-  if (sourceRun === null) {
-    return {
-      kind: 'failed',
-      summary: `agent-multi node ${node.id} sourcePort ${sourcePort.nodeId as string} has no completed run`,
-      message: 'source-not-ready',
-    }
-  }
-  const sourceOuts = await db
-    .select()
-    .from(nodeRunOutputs)
-    .where(
-      and(
-        eq(nodeRunOutputs.nodeRunId, sourceRun.id),
-        eq(nodeRunOutputs.portName, sourcePort.portName as string),
-      ),
-    )
-  const sourceContent = sourceOuts[0]?.content ?? ''
-
-  const parentRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
-  broadcastNodeStatus(taskId, parentRunId, node.id, 'running')
-
-  if (sourceContent.trim() === '') {
-    for (const port of agent.outputs) {
-      await db
-        .insert(nodeRunOutputs)
-        .values({ nodeRunId: parentRunId, portName: port, content: '' })
-    }
-    await db
-      .insert(nodeRunOutputs)
-      .values({ nodeRunId: parentRunId, portName: 'errors', content: '' })
-    // RFC-053: fan-out parent finishes when no shards exist. The parent row
-    // is created as 'pending' (see allocateFanOutParent above) and never
-    // transitions through 'running' — the empty path goes straight to done.
-    await setNodeRunStatus({
-      db,
-      nodeRunId: parentRunId,
-      to: 'done',
-      allowedFrom: ['pending', 'running'],
-      reason: 'fanout-empty',
-      extra: { finishedAt: Date.now() },
-    })
-    broadcastNodeStatus(taskId, parentRunId, node.id, 'done')
-    return { kind: 'ok', summary: '', message: '' }
-  }
-
-  const strategy = (node as Record<string, unknown>).shardingStrategy as
-    | { kind: 'per-file' }
-    | { kind: 'per-n-files'; n: number }
-    | { kind: 'per-directory'; depth?: number }
-    | undefined
-  let shards
-  try {
-    if (strategy === undefined || strategy.kind === 'per-file') {
-      shards = splitDiffPerFile(sourceContent)
-    } else if (strategy.kind === 'per-n-files') {
-      shards = splitDiffPerNFiles(sourceContent, strategy.n)
-    } else {
-      shards = splitDiffPerDirectory(sourceContent, strategy.depth ?? 1)
-    }
-  } catch (err) {
-    return {
-      kind: 'failed',
-      summary: `shard split failed for node ${node.id}`,
-      message: err instanceof Error ? err.message : String(err),
-    }
-  }
-
-  const upstreamInputs = await resolveUpstreamInputs(
-    db,
-    taskId,
-    definition.edges,
-    node.id,
-    iteration,
-    log,
-  )
-  // RFC-022: same closure expansion as the single-agent path — every shard
-  // subprocess gets the full closure + skills union (design.md §4.2 #2).
-  const injection = await prepareNodeRunInjection(db, opts.appHome, agent, log)
-  if (injection.kind === 'failed') return injection
-  const { dependents, resolvedSkills, mcps, plugins } = injection
-  const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
-  const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
-  const nodeOverrides = pickOverrides(node)
-  // RFC-005 review-driven re-run context — same plumbing as the single-agent
-  // path. Each shard child inherits the parent fan-out node's review context
-  // so an iterate decision pinned to the aggregator's port re-feeds review
-  // comments to every spawned child on the next pass.
-  const reviewContext = await buildReviewPromptContext(db, opts.appHome, node.id, taskId, iteration)
-
-  interface ChildResult {
-    shardKey: string
-    runId: string
-    status: RunResult['status']
-    outputs: Record<string, string>
-    errorMessage?: string
-    /** RFC-023: when set, this shard's child agent asked back. The aggregate
-     *  pass below skips its outputs and surfaces 'awaiting_human' on the
-     *  parent. */
-    clarifyAwaiting?: boolean
-  }
-
-  const hasClarifyChannel = agentHasClarifyChannel(definition, node.id)
-  const clarifyNodeIdForFanout = hasClarifyChannel
-    ? findClarifyNodeForAgent(definition, node.id)
-    : undefined
-
-  const children = await Promise.all(
-    shards.map((shard) =>
-      subprocessSem.run<ChildResult>(async () => {
-        const childRunId = ulid()
-        await db.insert(nodeRuns).values({
-          id: childRunId,
-          taskId,
-          nodeId: node.id,
-          status: 'pending',
-          retryIndex: 0,
-          iteration,
-          parentNodeRunId: parentRunId,
-          shardKey: shard.shardKey,
-          startedAt: Date.now(),
-        })
-        broadcastNodeStatus(taskId, childRunId, node.id, 'pending')
-
-        const shardInputs: Record<string, string> = {
-          ...upstreamInputs,
-          [sourcePort.portName as string]: shard.content,
-        }
-        try {
-          // RFC-023: per-shard clarify context — surfaces this shard's prior
-          // round Q&A (if any) without bleeding shards into each other.
-          // RFC-058 T13: unified via buildPromptContext (consumerKind='self').
-          const clarifyContext = hasClarifyChannel
-            ? await buildPromptContext({
-                db,
-                definition,
-                taskId,
-                consumerKind: 'self',
-                consumerNodeId: node.id,
-                targetIteration: 0, // first run; rerun rows are minted by clarify service
-                shardKey: shard.shardKey,
-              })
-            : undefined
-          // RFC-023 directive iteration: stop suppresses the protocol block
-          // for the shard's rerun (clarify service mints a fresh per-shard
-          // run before calling resumeTask, so this branch only sees stop
-          // when the new run inherits an answered session with directive=stop).
-          const effectiveHasClarifyChannel =
-            hasClarifyChannel && clarifyContext?.directive !== 'stop'
-          const result = await runNode({
-            taskId,
-            nodeRunId: childRunId,
-            nodeId: node.id,
-            agent,
-            inputs: shardInputs,
-            worktreePath: task.worktreePath,
-            templateMeta: {
-              repoPath: task.repoPath,
-              baseBranch: task.baseBranch,
-              taskId,
-              nodeId: node.id,
-              iteration,
-              shardKey: shard.shardKey,
-            },
-            ...(promptTemplate !== undefined ? { promptTemplate } : {}),
-            ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-            ...(reviewContext !== undefined ? { reviewContext } : {}),
-            ...(clarifyContext !== undefined ? { clarifyContext } : {}),
-            ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
-            hasClarifyChannel: effectiveHasClarifyChannel,
-            skills: resolvedSkills,
-            dependents,
-            mcps,
-            plugins,
-            appHome: opts.appHome,
-            ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
-            db,
-            log: log.child('fanout'),
-            ...(opts.signal ? { signal: opts.signal } : {}),
-            ...(opts.subagentLiveCapture !== undefined
-              ? { subagentLiveCapture: opts.subagentLiveCapture }
-              : {}),
-          })
-          // RFC-026: persist opencode session id for this shard so a future
-          // clarify-inline rerun on the same shard chain can resume. Captured
-          // even when the run failed — opencode often still emits a session
-          // id before bailing — so the next attempt can resume regardless.
-          if (result.sessionId !== undefined && result.sessionId !== '') {
-            await db
-              .update(nodeRuns)
-              .set({ opencodeSessionId: result.sessionId })
-              .where(eq(nodeRuns.id, childRunId))
-          }
-          // RFC-023: shard child emitted clarify — mint the per-shard
-          // session, mark this child clarifyAwaiting (it does NOT count as
-          // done; the parent waits for all shards including answered-then-
-          // rerun shards before aggregating).
-          if (result.clarify !== undefined && clarifyNodeIdForFanout !== undefined) {
-            await createClarifySession({
-              db,
-              taskId,
-              sourceAgentNodeId: node.id,
-              sourceAgentNodeRunId: childRunId,
-              sourceShardKey: shard.shardKey,
-              clarifyNodeId: clarifyNodeIdForFanout,
-              iterationIndex: 0,
-              questions: result.clarify.questions,
-              ...(result.clarify.truncationWarnings.length > 0
-                ? { truncationWarnings: result.clarify.truncationWarnings }
-                : {}),
-              parentNodeRunId: parentRunId,
-            })
-            broadcastNodeStatus(taskId, childRunId, node.id, 'awaiting_human')
-            return {
-              shardKey: shard.shardKey,
-              runId: childRunId,
-              status: result.status,
-              outputs: {},
-              clarifyAwaiting: true,
-            }
-          }
-          broadcastNodeStatus(taskId, childRunId, node.id, result.status)
-          return {
-            shardKey: shard.shardKey,
-            runId: childRunId,
-            status: result.status,
-            outputs: result.outputs,
-            ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          broadcastNodeStatus(taskId, childRunId, node.id, 'failed')
-          return {
-            shardKey: shard.shardKey,
-            runId: childRunId,
-            status: 'failed',
-            outputs: {},
-            errorMessage: msg,
-          }
-        }
-      }),
-    ),
-  )
-
-  // RFC-023: if ANY shard is awaiting clarification, the agent-multi parent
-  // does not aggregate — the task pauses awaiting_human until each pending
-  // shard's user answers land + their rerun children re-complete. The
-  // parent's eventual aggregation will be triggered by resumeTask, which
-  // re-enters runFanOutNode and finds prior shard rows in 'done' status,
-  // skipping the re-spawn.
-  const awaitingShards = children.filter((c) => c.clarifyAwaiting === true)
-  if (awaitingShards.length > 0) {
-    // RFC-053: agent-multi parent bubbles to awaiting_human when any shard
-    // child is in clarify. park-human enforces pending|running → awaiting_human.
-    await transitionNodeRunStatus({
-      db,
-      nodeRunId: parentRunId,
-      event: { kind: 'park-human' },
-    })
-    broadcastNodeStatus(taskId, parentRunId, node.id, 'awaiting_human')
-    return {
-      kind: 'awaiting_human',
-      summary: `agent-multi ${node.id}: ${awaitingShards.length}/${children.length} shards asked back`,
-      message: 'clarify-awaiting-human',
-    }
-  }
-
-  const sorted = [...children].sort((a, b) => a.shardKey.localeCompare(b.shardKey))
-  for (const port of agent.outputs) {
-    const content = sorted
-      .filter((c) => c.status === 'done')
-      .map((c) => c.outputs[port] ?? '')
-      .join('\n')
-    await db.insert(nodeRunOutputs).values({ nodeRunId: parentRunId, portName: port, content })
-  }
-  const failed = sorted.filter((c) => c.status !== 'done')
-  const errorsBody = failed
-    .map((c) => `## ${c.shardKey} (${c.status})\n${c.errorMessage ?? ''}`)
-    .join('\n\n')
-  await db
-    .insert(nodeRunOutputs)
-    .values({ nodeRunId: parentRunId, portName: 'errors', content: errorsBody })
-
-  const allFailed = sorted.length > 0 && sorted.every((c) => c.status !== 'done')
-  const finalStatus: NodeStatus = allFailed ? 'failed' : 'done'
-  // P-4-05: aggregate child tok_total into the parent so resource-limit ticks
-  // and the UI's per-node stats reflect actual cost.
-  // RFC-053: fan-out parent finalize. The parent row stays in 'pending' DB
-  // status throughout shard execution (children carry the actual progress),
-  // so allowedFrom=['pending', 'running'] — `running` covers the case where
-  // some future change flips parent to running during fan-out.
-  const childTok = await sumChildTokens(db, parentRunId)
-  await setNodeRunStatus({
-    db,
-    nodeRunId: parentRunId,
-    to: finalStatus,
-    allowedFrom: ['pending', 'running', 'awaiting_human'],
-    reason: 'fanout-aggregate',
-    extra: {
-      finishedAt: Date.now(),
-      tokInput: childTok.input,
-      tokOutput: childTok.output,
-      tokCacheCreate: childTok.cacheCreate,
-      tokCacheRead: childTok.cacheRead,
-      tokTotal: childTok.total,
-      ...(allFailed ? { errorMessage: 'all shards failed' } : {}),
-    },
-  })
-  broadcastNodeStatus(taskId, parentRunId, node.id, finalStatus)
-  if (allFailed) {
-    return {
-      kind: 'failed',
-      summary: `agent-multi ${node.id} all ${sorted.length} shards failed`,
-      message: errorsBody,
-    }
-  }
-  return { kind: 'ok', summary: '', message: '' }
-}
+// RFC-060 PR-E: runFanOutNode (the M3 agent-multi fan-out implementation)
+// was removed. wrapper-fanout (RFC-060) is now the sole fan-out mechanism;
+// see runFanoutWrapperNode above for the replacement.
 
 // -----------------------------------------------------------------------------
 // helpers
@@ -3436,48 +3096,9 @@ async function resolveUpstreamInputs(
   return result
 }
 
-async function pickLatestSourceRun(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-  iteration: number,
-): Promise<typeof nodeRuns.$inferSelect | null> {
-  const rows = await db
-    .select()
-    .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-  const candidates = rows
-    .filter((r) => r.iteration <= iteration && r.parentNodeRunId === null)
-    .sort((a, b) => {
-      if (b.iteration !== a.iteration) return b.iteration - a.iteration
-      return b.retryIndex - a.retryIndex
-    })
-  return candidates[0] ?? null
-}
-
-async function sumChildTokens(
-  db: DbClient,
-  parentRunId: string,
-): Promise<{
-  input: number
-  output: number
-  cacheCreate: number
-  cacheRead: number
-  total: number
-}> {
-  const rows = await db.select().from(nodeRuns).where(eq(nodeRuns.parentNodeRunId, parentRunId))
-  let input = 0
-  let output = 0
-  let cacheCreate = 0
-  let cacheRead = 0
-  for (const r of rows) {
-    input += r.tokInput ?? 0
-    output += r.tokOutput ?? 0
-    cacheCreate += r.tokCacheCreate ?? 0
-    cacheRead += r.tokCacheRead ?? 0
-  }
-  return { input, output, cacheCreate, cacheRead, total: input + output + cacheCreate + cacheRead }
-}
+// RFC-060 PR-E: pickLatestSourceRun + sumChildTokens were used only by the
+// agent-multi runFanOutNode path (now removed). Deleted alongside the fan-out
+// implementation.
 
 async function readPortAtIteration(
   db: DbClient,
@@ -3795,16 +3416,9 @@ function buildScopeUpstreams(
     if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
     m.set(e.target.nodeId, list)
   }
-  // agent-multi's sourcePort.nodeId is an extra dep if both ends are in scope.
+  // RFC-060 PR-E: agent-multi removed; its sourcePort dep handling deleted
+  // (wrapper-fanout uses boundary edges instead, which are real graph edges).
   for (const n of scopeNodes) {
-    if (n.kind === 'agent-multi') {
-      const sp = (n as Record<string, unknown>).sourcePort as { nodeId?: unknown } | undefined
-      if (sp === undefined || typeof sp.nodeId !== 'string') continue
-      if (!ids.has(sp.nodeId)) continue
-      const list = m.get(n.id) ?? []
-      if (!list.includes(sp.nodeId)) list.push(sp.nodeId)
-      m.set(n.id, list)
-    }
     // RFC-005: review.inputSource.nodeId is an implicit upstream dep — it
     // isn't an edge in the user-authored graph, but the scheduler must wait
     // for the source node before parking the review at awaiting_review.

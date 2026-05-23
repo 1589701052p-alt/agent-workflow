@@ -104,11 +104,11 @@ describe('buildDebounceKey', () => {
 })
 
 describe('extractAgentNamesFromSnapshot', () => {
-  test('returns unique agent names from agent-single / agent-multi nodes', () => {
+  test('returns unique agent names from agent-single nodes (RFC-060 PR-E removed agent-multi)', () => {
     const snap = JSON.stringify({
       nodes: [
         { id: 'a', kind: 'agent-single', agentName: 'codegen' },
-        { id: 'b', kind: 'agent-multi', agent: 'auditor' },
+        { id: 'b', kind: 'agent-single', agentName: 'auditor' },
         { id: 'c', kind: 'wrapper-git' },
         { id: 'd', kind: 'agent-single', agentName: 'codegen' }, // dup → squashed
       ],

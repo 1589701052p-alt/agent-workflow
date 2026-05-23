@@ -314,33 +314,10 @@ describe('rule 4: reference resolution', () => {
     expect(codes).toContain('input-key-duplicate')
   })
 
-  test('invalid: agent-multi missing sourcePort', () => {
-    const a = agent('auditor', ['findings'])
-    const def = makeDef({
-      nodes: [{ id: 'a1', kind: 'agent-multi', agentName: 'auditor' }],
-    })
-    const codes = validateWorkflowDef(def, { agents: [a], skills: [] }).issues.map((i) => i.code)
-    expect(codes).toContain('agent-multi-source-port-missing')
-  })
-
-  test('invalid: agent-multi sourcePort references unknown port', () => {
-    const a = agent('auditor', ['findings'])
-    const def = makeDef({
-      inputs: [{ kind: 'text', key: 'unused', label: 'unused' }],
-      nodes: [
-        { id: 'wg', kind: 'wrapper-git', nodeIds: ['x'] },
-        { id: 'x', kind: 'input', inputKey: 'unused' },
-        {
-          id: 'a1',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'wg', portName: 'not_a_port' },
-        },
-      ],
-    })
-    const codes = validateWorkflowDef(def, { agents: [a], skills: [] }).issues.map((i) => i.code)
-    expect(codes).toContain('agent-multi-source-port-missing')
-  })
+  // RFC-060 PR-E: agent-multi removed; agent-multi-source-port-missing and
+  // the matching shardingStrategy rules went away. wrapper-fanout's
+  // shardSource validation (covered in workflow-validator-aggregator-placement
+  // / wrapper-fanout-* tests) is the replacement.
 })
 
 // ---------------------------------------------------------------------------
@@ -389,25 +366,10 @@ describe('rule 5: prompt template', () => {
     expect(codes).toContain('prompt-template-unresolved')
   })
 
-  test('agent-multi can reference its sourcePort name in the template', () => {
-    const a = agent('auditor', ['findings'])
-    const def = makeDef({
-      inputs: [{ kind: 'text', key: 'x', label: 'x' }],
-      nodes: [
-        { id: 'wg', kind: 'wrapper-git', nodeIds: ['unused'] },
-        { id: 'unused', kind: 'input', inputKey: 'x' },
-        {
-          id: 'a1',
-          kind: 'agent-multi',
-          agentName: 'auditor',
-          sourcePort: { nodeId: 'wg', portName: 'git_diff' },
-          promptTemplate: 'audit:\n{{git_diff}}',
-        },
-      ],
-    })
-    const codes = validateWorkflowDef(def, { agents: [a], skills: [] }).issues.map((i) => i.code)
-    expect(codes).not.toContain('prompt-template-unresolved')
-  })
+  // RFC-060 PR-E: agent-multi removed; the sourcePort-as-template-var case
+  // is no longer applicable. wrapper-fanout puts the shard value into the
+  // inner node's inbound port via a boundary-input edge, so the standard
+  // inbound-port lookup already covers it.
 })
 
 // ---------------------------------------------------------------------------

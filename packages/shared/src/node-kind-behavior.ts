@@ -122,8 +122,9 @@ export interface NodeKindBehavior {
  * error.
  *
  * "Process kinds" (those that actually spawn subprocesses) — agent-single,
- * agent-multi, wrapper-git, wrapper-loop — share the same row: cascade,
- * enforce limits, reap on orphan, GC with task, graceful abort.
+ * wrapper-git, wrapper-loop, wrapper-fanout — share the same row: cascade,
+ * enforce limits, reap on orphan, GC with task, graceful abort. (RFC-060
+ * PR-E removed agent-multi.)
  *
  * "Non-process kinds" — input, output, review, clarify — share the dual
  * row: no cascade (RFC-052), opt-out of time budgets, leave-alone on
@@ -131,13 +132,6 @@ export interface NodeKindBehavior {
  */
 export const NODE_KIND_BEHAVIORS = {
   'agent-single': {
-    retryCascade: 'mint-placeholder',
-    limits: 'enforce-time-budget',
-    orphanReap: 'mark-interrupted',
-    gc: 'gc-with-task',
-    shutdown: 'graceful-abort',
-  },
-  'agent-multi': {
     retryCascade: 'mint-placeholder',
     limits: 'enforce-time-budget',
     orphanReap: 'mark-interrupted',

@@ -6,9 +6,10 @@
 import type { Agent, WorkflowNode } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
 
+// RFC-060 PR-E: agent-multi removed from the palette — fan-out is now done
+// via wrapper-fanout (which lives in the Wrappers section).
 export type PaletteItem =
   | { kind: 'agent-single'; agentName: string }
-  | { kind: 'agent-multi'; agentName: string }
   | { kind: 'input' }
   | { kind: 'output' }
   | { kind: 'wrapper-git' }
@@ -33,7 +34,6 @@ export function deserialize(raw: string): PaletteItem | null {
     if (typeof rec.kind !== 'string') return null
     switch (rec.kind) {
       case 'agent-single':
-      case 'agent-multi':
         return typeof rec.agentName === 'string'
           ? ({ kind: rec.kind, agentName: rec.agentName } as PaletteItem)
           : null
@@ -63,8 +63,7 @@ export function makeNode(
   const id = nextId(item.kind, ctx.existingIds)
   const pos = { x: Math.round(position.x), y: Math.round(position.y) }
   switch (item.kind) {
-    case 'agent-single':
-    case 'agent-multi': {
+    case 'agent-single': {
       const node: WorkflowNode = {
         id,
         kind: item.kind,
@@ -166,7 +165,6 @@ function nextId(kind: PaletteItem['kind'], existing: Set<string>): string {
 
 const SHORT: Record<PaletteItem['kind'], string> = {
   'agent-single': 'agent',
-  'agent-multi': 'fan',
   input: 'in',
   output: 'out',
   'wrapper-git': 'wrap_git',
@@ -213,14 +211,9 @@ export function buildPalette(agents: Agent[], t: PaletteTranslator): PaletteSect
         description: a.description || t('editor.paletteAgentFallbackDesc'),
       })),
     },
-    {
-      label: t('editor.paletteFanOut'),
-      items: agents.map((a) => ({
-        item: { kind: 'agent-multi', agentName: a.name } as PaletteItem,
-        label: `🔀 ${a.name}`,
-        description: t('editor.paletteFanOutDesc'),
-      })),
-    },
+    // RFC-060 PR-E: removed the "agent-multi fanout" palette section —
+    // fan-out is now done via wrapper-fanout (a Wrappers entry). Drop a
+    // wrapper-fanout, then drag the agent-single nodes you want into it.
     {
       label: t('editor.paletteWrappers'),
       items: [

@@ -12,7 +12,8 @@ import type { InjectedMemorySnapshot, NodeRun } from '@agent-workflow/shared'
  */
 export function isAgentKind(kind: string | null | undefined): boolean {
   if (kind === null || kind === undefined) return false
-  return kind === 'agent-single' || kind === 'agent-multi'
+  // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+  return kind === 'agent-single'
 }
 
 /**

@@ -30,7 +30,8 @@ import { DomainError, NotFoundError } from '@/util/errors'
  * gets one edit instead of N.
  */
 export function isAgentRunKind(nodeKind: string | undefined): boolean {
-  return nodeKind === 'agent-single' || nodeKind === 'agent-multi'
+  // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+  return nodeKind === 'agent-single'
 }
 
 export interface ReadSnapshotOptions {
@@ -121,7 +122,8 @@ function errorMessage(err: unknown): string | null {
 // GET /api/tasks/:taskId/node-runs/:nodeRunId/inventory — REST helper.
 // ---------------------------------------------------------------------------
 
-const PROMPT_CAPABLE_KINDS = new Set(['agent-single', 'agent-multi'])
+// RFC-060 PR-E: agent-multi removed; agent-single is the only prompt-capable kind.
+const PROMPT_CAPABLE_KINDS = new Set(['agent-single'])
 
 /**
  * Look up a stored inventory snapshot by node_run id. Mirrors the route

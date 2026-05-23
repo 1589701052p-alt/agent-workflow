@@ -91,12 +91,14 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
   // (the user explicitly asked for it not to appear), so this grep guard is
   // the cheapest way to lock the contract without spinning up a full
   // scheduler integration test.
-  test('scheduler.ts gates hasClarifyChannel on clarifyContext.directive !== "stop" at both sites', () => {
+  test('scheduler.ts gates hasClarifyChannel on clarifyContext.directive !== "stop"', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
     expect(src).toContain("clarifyContext?.directive !== 'stop'")
     const occurrences = src.match(/effectiveHasClarifyChannel/g) ?? []
-    // Two declarations + two passes into runNode → expect ≥ 4 mentions.
-    expect(occurrences.length).toBeGreaterThanOrEqual(4)
+    // RFC-060 PR-E removed the agent-multi fan-out call site (was one of the
+    // two declarations + passes). The agent-single path still owns one
+    // declaration + one pass into runNode → expect ≥ 2 mentions.
+    expect(occurrences.length).toBeGreaterThanOrEqual(2)
   })
 
   // The agent-single buildClarifyPromptContext call MUST pass

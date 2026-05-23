@@ -638,9 +638,9 @@ async function loadNodeTitlesByTask(
       const def = JSON.parse(t.workflowSnapshot) as WorkflowDefinition
       for (const node of def.nodes ?? []) {
         const rec = node as Record<string, unknown>
+        // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
         if (
           rec.kind !== 'agent-single' &&
-          rec.kind !== 'agent-multi' &&
           rec.kind !== 'clarify' &&
           rec.kind !== 'clarify-cross-agent'
         )

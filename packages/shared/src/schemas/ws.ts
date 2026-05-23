@@ -116,11 +116,11 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
   z.object({
     id: z.number().int(),
     type: z.literal('clarify.created'),
-    /** node_runs.id of the clarify node instance (one per shard for agent-multi). */
+    /** node_runs.id of the clarify node instance (one per shard for wrapper-fanout inner agents). */
     nodeRunId: z.string(),
     /** Workflow node id of the clarify node. */
     clarifyNodeId: z.string(),
-    /** Source-agent shard key when applicable; null for agent-single. */
+    /** Source-agent shard key when applicable; null for non-sharded agents. */
     sourceShardKey: z.string().nullable(),
     /** New iterationIndex for this clarify_session. */
     iterationIndex: z.number().int().nonnegative(),

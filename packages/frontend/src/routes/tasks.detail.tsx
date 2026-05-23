@@ -732,7 +732,8 @@ export function resolveNodeNameFromSnapshot(
     }
     if (node.id !== nodeId) continue
     if (typeof node.title === 'string' && node.title.length > 0) return node.title
-    if (node.kind === 'agent-single' || node.kind === 'agent-multi') {
+    if (node.kind === 'agent-single') {
+      // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
       if (typeof node.agentName === 'string' && node.agentName.length > 0) return node.agentName
     }
     if (node.kind === 'input') {
@@ -755,7 +756,8 @@ export function resolveAgentNameFromSnapshot(
     if (typeof n !== 'object' || n === null) continue
     const node = n as { id?: unknown; kind?: unknown; agentName?: unknown }
     if (node.id !== nodeId) continue
-    if (node.kind !== 'agent-single' && node.kind !== 'agent-multi') return null
+    // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+    if (node.kind !== 'agent-single') return null
     return typeof node.agentName === 'string' ? node.agentName : null
   }
   return null

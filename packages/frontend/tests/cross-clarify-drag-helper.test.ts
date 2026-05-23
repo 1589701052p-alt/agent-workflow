@@ -75,21 +75,8 @@ describe('RFC-056 applyCrossClarifyQuestionerReverseDrag', () => {
     expect(next.edges[1]?.source.portName).toBe('to_questioner')
   })
 
-  test('rejects when questioner is agent-multi (v1 strict)', () => {
-    const def = {
-      ...baseDef(),
-      nodes: [
-        { id: 'designer', kind: 'agent-single', agentName: 'designer' as string },
-        { id: 'questioner', kind: 'agent-multi', agentName: 'questioner' as string },
-        { id: 'cross1', kind: 'clarify-cross-agent' as const },
-      ],
-    } as unknown as WorkflowDefinition
-    const next = applyCrossClarifyQuestionerReverseDrag(def, {
-      questionerNodeId: 'questioner',
-      crossClarifyNodeId: 'cross1',
-    })
-    expect(next).toBe(def)
-  })
+  // RFC-060 PR-E: agent-multi removed; the prior "questioner=agent-multi
+  // rejected" case is no longer applicable.
 
   test('rejects when the questioner already has another cross-clarify wired (would be duplicate cross-clarify)', () => {
     const def = baseDef()
@@ -149,17 +136,8 @@ describe('RFC-056 applyCrossClarifyDesignerDrag', () => {
     expect(next.edges[0]?.target.portName).toBe('__external_feedback__')
   })
 
-  test('rejects when designer is agent-multi (v1 strict)', () => {
-    const def = baseDef() as WorkflowDefinition
-    def.nodes = def.nodes.map((n) =>
-      n.id === 'designer' ? { ...n, kind: 'agent-multi' as const } : n,
-    )
-    const next = applyCrossClarifyDesignerDrag(def, {
-      crossClarifyNodeId: 'cross1',
-      designerNodeId: 'designer',
-    })
-    expect(next).toBe(def)
-  })
+  // RFC-060 PR-E: agent-multi removed; the prior "designer=agent-multi
+  // rejected" case is no longer applicable.
 
   test('rejects when cross-clarify already has another to_designer edge', () => {
     let def = baseDef()

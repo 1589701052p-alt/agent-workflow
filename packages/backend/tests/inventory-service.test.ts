@@ -17,14 +17,14 @@ afterEach(() => {
 })
 
 describe('isAgentRunKind', () => {
-  test('only agent-single / agent-multi return true', () => {
+  test('only agent-single returns true (RFC-060 PR-E removed agent-multi)', () => {
     expect(isAgentRunKind('agent-single')).toBe(true)
-    expect(isAgentRunKind('agent-multi')).toBe(true)
     for (const k of [
       'input',
       'output',
       'wrapper-git',
       'wrapper-loop',
+      'wrapper-fanout',
       'review',
       'clarify',
       undefined,
@@ -133,7 +133,8 @@ describe('readSnapshotFromRunDir — file reading', () => {
     )
     const snap = await readSnapshotFromRunDir({
       runDir: dir,
-      nodeKind: 'agent-multi',
+      // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
+      nodeKind: 'agent-single',
       pureMode: false,
     })
     expect(snap.captured).toBe(true)
