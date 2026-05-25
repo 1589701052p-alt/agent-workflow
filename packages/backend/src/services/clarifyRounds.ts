@@ -130,9 +130,13 @@ export async function computeHistoryCutoff(
 /**
  * Local copy of scheduler's `isFresherNodeRun` semantics so this module
  * does not introduce a cycle with scheduler.ts. Order:
- *   1. clarifyIteration desc (newer round wins)
- *   2. retryIndex desc (later attempt wins)
- *   3. id desc (last-inserted ULID wins)
+ *   1. clarifyIteration desc (newer self-clarify round wins)
+ *   2. crossClarifyIteration desc (newer cross-clarify round wins) —
+ *      RFC-056 patch-2026-05-25-fresher-noderun-includes-cci. Without this
+ *      rank a cci-bumped post-submit row would be shadowed by a (cci=0,
+ *      retryIndex=N) row and the aging cutoff would leak prior rounds.
+ *   3. retryIndex desc (later process-retry attempt wins)
+ *   4. id desc (last-inserted ULID wins)
  */
 function isFresherForCutoff(
   candidate: typeof nodeRuns.$inferSelect,
@@ -141,6 +145,9 @@ function isFresherForCutoff(
   if (incumbent === undefined) return true
   if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
     return candidate.clarifyIteration > incumbent.clarifyIteration
+  }
+  if (candidate.crossClarifyIteration !== incumbent.crossClarifyIteration) {
+    return candidate.crossClarifyIteration > incumbent.crossClarifyIteration
   }
   if (candidate.retryIndex !== incumbent.retryIndex) {
     return candidate.retryIndex > incumbent.retryIndex

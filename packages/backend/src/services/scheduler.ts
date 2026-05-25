@@ -307,22 +307,37 @@ interface ScopeArgs {
  *
  * Why this ordering specifically:
  *   - `clarifyIteration` is the user-facing counter that grows whenever the
- *     user answers a clarify session (submitClarifyAnswers mints retry=0 with
- *     clarifyIteration+1 to keep the process-retry budget intact). Putting it
- *     first means a fresh clarify rerun ALWAYS beats prior runs of the same
- *     node — even if process-retries previously inflated retryIndex above 0.
- *   - Within the same clarify round, higher retryIndex wins (newer process
+ *     user answers a self-clarify session (submitClarifyAnswers mints retry=0
+ *     with clarifyIteration+1 to keep the process-retry budget intact).
+ *     Putting it first means a fresh self-clarify rerun ALWAYS beats prior
+ *     runs of the same node — even if process-retries previously inflated
+ *     retryIndex above 0.
+ *   - `crossClarifyIteration` is the cross-clarify analogue (RFC-056). When
+ *     the user submits a cross-clarify (designer or questioner side), the
+ *     mint helper bumps cci above every peer in the chain. Putting cci right
+ *     after cli means a fresh cross-clarify rerun ALWAYS beats prior runs
+ *     too — even when the prior path went through RFC-042 same-session
+ *     followup retries that inflated retryIndex above 0. Without this rank,
+ *     a (cli=0, cci=0, retry=1) `<workflow-clarify>`-only done row would
+ *     shadow the (cli=0, cci=1, retry=0) post-submit pending row, the
+ *     downstream review picks the stale done row, sees no real port output,
+ *     and fails the task with `review-source-port-missing`. See
+ *     design/RFC-056-clarify-cross-agent/patch-2026-05-25-fresher-noderun-
+ *     includes-cci.md (live task `01KS7FAW50V9KV2SPH859NV8ER`).
+ *   - Within the same (cli, cci), higher retryIndex wins (newer process
  *     retry attempt).
- *   - When (clarifyIteration, retryIndex) tie — which CAN happen: e.g. an
- *     old round of clarifyIteration=1 plus a fresh rerun whose source's
- *     clarifyIteration was 0 collide at (0, 1) — ULID id is the monotonic
- *     tie-break; the newer insert wins. Without this tie-break the comparator
- *     is non-deterministic on ties.
+ *   - When (cli, cci, retryIndex) tie — which CAN happen: e.g. two rows
+ *     collide at (0, 0, 0) — ULID id is the monotonic tie-break; the newer
+ *     insert wins. Without this tie-break the comparator is non-deterministic
+ *     on ties.
  *
- * Locks in the fix for the bug where a directive=continue clarify rerun was
- * silently shadowed by a (retryIndex=N, clarifyIteration=0) done row from an
- * earlier single-node-retry storm, causing the task to be marked done while
- * the freshly-minted pending rerun row never ran.
+ * Locks in TWO fixes:
+ *   1. The original bug where a directive=continue self-clarify rerun was
+ *      silently shadowed by a (retryIndex=N, clarifyIteration=0) done row
+ *      from an earlier single-node-retry storm.
+ *   2. The cross-clarify analogue (patch-2026-05-25-fresher-noderun-includes-
+ *      cci): a cci-bumped post-submit pending row shadowed by a (cci=0,
+ *      retry=N) `<workflow-clarify>`-only done row.
  */
 export function isFresherNodeRun(
   candidate: typeof nodeRuns.$inferSelect,
@@ -331,6 +346,9 @@ export function isFresherNodeRun(
   if (incumbent === undefined) return true
   if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
     return candidate.clarifyIteration > incumbent.clarifyIteration
+  }
+  if (candidate.crossClarifyIteration !== incumbent.crossClarifyIteration) {
+    return candidate.crossClarifyIteration > incumbent.crossClarifyIteration
   }
   if (candidate.retryIndex !== incumbent.retryIndex) {
     return candidate.retryIndex > incumbent.retryIndex
