@@ -855,8 +855,16 @@ export interface Resources {
     tabNodeRuns: string
     tabDetails: string
     tabOutputs: string
+    tabWorktreeFiles: string
     tabWorktreeDiff: string
     tabFeedback: string
+    worktreeFilesEmpty: string
+    worktreeFilesNoWorktree: string
+    worktreeFilesOversized: string
+    worktreeFilesTruncated: string
+    worktreeFilesLoadError: string
+    worktreeFilesFileError: string
+    worktreeFilesSizeHeader: string
     noWorkflowSnapshot: string
     noBaseCommit: string
     loadingDiff: string
@@ -2802,8 +2810,16 @@ export const zhCN: Resources = {
     tabNodeRuns: '节点运行',
     tabDetails: '详细信息',
     tabOutputs: '输出',
-    tabWorktreeDiff: 'Worktree diff',
+    tabWorktreeFiles: '工作目录',
+    tabWorktreeDiff: '工作目录 diff',
     tabFeedback: '留言',
+    worktreeFilesEmpty: '从左侧选择一个文件以预览。',
+    worktreeFilesNoWorktree: '该任务没有可用的工作目录。',
+    worktreeFilesOversized: '文件过大（{{size}}），超过 {{limit}} 阈值，未预览。',
+    worktreeFilesTruncated: '该目录条目过多，仅展示前 {{limit}} 项。',
+    worktreeFilesLoadError: '目录加载失败。',
+    worktreeFilesFileError: '文件加载失败。',
+    worktreeFilesSizeHeader: '大小：{{size}}',
     noWorkflowSnapshot: '没有工作流快照。',
     noBaseCommit: '未记录 base commit；diff 不可用。',
     loadingDiff: '加载 diff 中…',
