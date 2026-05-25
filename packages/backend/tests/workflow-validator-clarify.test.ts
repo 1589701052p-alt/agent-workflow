@@ -174,6 +174,72 @@ describe('RFC-023 clarify validator rules', () => {
     )
     expect(codes).toContain('clarify-answers-port-disconnected')
   })
+
+  // RFC-063 G1: dedup-by-NodeId; same agent on two edges is one agent.
+  test('one clarify with duplicate __clarify__ edges from same agent is allowed (G1 dedup)', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'a1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'c1', kind: 'clarify' },
+      ],
+      edges: [
+        // Two separate edge IDs but both source the SAME agent's __clarify__
+        // into c1.questions — dedup keeps agentSourceIds at size 1.
+        {
+          id: 'e_dup_1',
+          source: { nodeId: 'a1', portName: '__clarify__' },
+          target: { nodeId: 'c1', portName: 'questions' },
+        },
+        {
+          id: 'e_dup_2',
+          source: { nodeId: 'a1', portName: '__clarify__' },
+          target: { nodeId: 'c1', portName: 'questions' },
+        },
+        // Closing the answers loop so we don't trip the disconnected warning.
+        {
+          id: 'e_answers',
+          source: { nodeId: 'c1', portName: 'answers' },
+          target: { nodeId: 'a1', portName: '__clarify_response__' },
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, { agents: [designer], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+    expect(codes).not.toContain('clarify-multiple-source-agents')
+  })
+
+  // RFC-063 G1: two distinct agents on one clarify node is rejected.
+  test('one clarify attached to two different agents is rejected (G1)', () => {
+    const second = agent('reviewer', ['review'])
+    const def = makeDef({
+      nodes: [
+        { id: 'a1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'a2', kind: 'agent-single', agentName: 'reviewer' },
+        { id: 'c1', kind: 'clarify' },
+      ],
+      edges: [
+        {
+          id: 'e_a1',
+          source: { nodeId: 'a1', portName: '__clarify__' },
+          target: { nodeId: 'c1', portName: 'questions' },
+        },
+        {
+          id: 'e_a2',
+          source: { nodeId: 'a2', portName: '__clarify__' },
+          target: { nodeId: 'c1', portName: 'questions' },
+        },
+      ],
+    })
+    const result = validateWorkflowDef(def, { agents: [designer, second], skills: [] })
+    const codes = result.issues.map((i) => i.code)
+    expect(codes).toContain('clarify-multiple-source-agents')
+    const issue = result.issues.find((i) => i.code === 'clarify-multiple-source-agents')!
+    expect(issue.message).toContain('a1')
+    expect(issue.message).toContain('a2')
+    expect(issue.pointer).toBe('c1')
+    expect(result.ok).toBe(false)
+  })
 })
 
 describe('RFC-023 clarify-target-validator regression guard', () => {

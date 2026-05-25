@@ -34,10 +34,15 @@ const VALIDATOR_TEST_TS = resolve(
 )
 
 const CROSS_CLARIFY_RULE_CODES = [
-  // FAIL (3)
+  // FAIL (5) — RFC-056 §2.1.15 originally shipped 3 fail codes; RFC-063 adds 2
+  // multiplicity rules (G2 + G3) that lift "1 questioner / 1 designer per
+  // cross-clarify" from an implicit design assumption to a hard schema-time
+  // constraint.
   'cross-clarify-input-source-missing',
   'cross-clarify-target-not-agent-single',
   'cross-clarify-has-downstream',
+  'cross-clarify-multiple-questioners', // RFC-063 G2
+  'cross-clarify-multiple-designers', // RFC-063 G3
   // WARNING (5) — RFC-056 §2.1.15 originally shipped 4 warnings (3 fail + 4
   // warning = 7); `cross-clarify-no-iteration-cap` is a post-RFC patch that
   // mirrors RFC-023's same-node `clarify-no-iteration-cap` so the inspector's
@@ -50,8 +55,8 @@ const CROSS_CLARIFY_RULE_CODES = [
 ] as const
 
 describe('RFC-056 C6 — cross-clarify validator rules enumeration', () => {
-  test('cross-clarify rules: 3 fail + 5 warning (RFC §2.1.15 contract + no-iteration-cap patch)', () => {
-    expect(CROSS_CLARIFY_RULE_CODES).toHaveLength(8)
+  test('cross-clarify rules: 5 fail + 5 warning (RFC-056 §2.1.15 contract + no-iteration-cap patch + RFC-063 G2/G3)', () => {
+    expect(CROSS_CLARIFY_RULE_CODES).toHaveLength(10)
   })
 
   for (const code of CROSS_CLARIFY_RULE_CODES) {

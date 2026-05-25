@@ -101,6 +101,9 @@ describe('RFC-056 cross-clarify validator rules', () => {
     expect(codes).not.toContain('cross-clarify-target-not-ancestor')
     expect(codes).not.toContain('cross-clarify-auto-edge-deleted')
     expect(codes).not.toContain('cross-clarify-self-review-warning')
+    // RFC-063 G2/G3: a 1q+1d wiring must not trip the multiplicity rules.
+    expect(codes).not.toContain('cross-clarify-multiple-questioners')
+    expect(codes).not.toContain('cross-clarify-multiple-designers')
     expect(res.ok).toBe(true)
   })
 
@@ -330,5 +333,222 @@ describe('RFC-056 cross-clarify validator rules', () => {
     const res = validateWorkflowDef(def, { agents: [designer, questioner], skills: [] })
     const codes = res.issues.map((i) => i.code)
     expect(codes).not.toContain('topology-cycle')
+  })
+})
+
+describe('RFC-063 cross-clarify multiplicity rules', () => {
+  // G2 — questioner singularity. Duplicate edges from the same questioner agent
+  // dedup by NodeId; G2 only fires on ≥ 2 distinct agents.
+  test('one cross-clarify with duplicate questions edges from same questioner is allowed (G2 dedup)', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        // Two separate edge IDs sourcing the same questioner __clarify__ —
+        // dedup keeps questioner candidate set at size 1.
+        {
+          id: 'e_q1_cc1_dup1',
+          source: { nodeId: 'q1', portName: '__clarify__' },
+          target: { nodeId: 'cc1', portName: 'questions' },
+        },
+        {
+          id: 'e_q1_cc1_dup2',
+          source: { nodeId: 'q1', portName: '__clarify__' },
+          target: { nodeId: 'cc1', portName: 'questions' },
+        },
+        {
+          id: 'e_cc1_q1',
+          source: { nodeId: 'cc1', portName: 'to_questioner' },
+          target: { nodeId: 'q1', portName: '__clarify_response__' },
+        },
+        buildManualToDesigner('cc1', 'd1'),
+      ],
+    })
+    const codes = validateWorkflowDef(def, {
+      agents: [designer, questioner],
+      skills: [],
+    }).issues.map((i) => i.code)
+    expect(codes).not.toContain('cross-clarify-multiple-questioners')
+  })
+
+  test('one cross-clarify with questions edges from two different agents is rejected (G2)', () => {
+    const questioner2 = agent('questioner2', ['main'])
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'q2', kind: 'agent-single', agentName: 'questioner2' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        {
+          id: 'e_d1_q2',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q2', portName: 'design' },
+        },
+        // Two DIFFERENT questioners feeding the same cross-clarify.
+        {
+          id: 'e_q1_cc1',
+          source: { nodeId: 'q1', portName: '__clarify__' },
+          target: { nodeId: 'cc1', portName: 'questions' },
+        },
+        {
+          id: 'e_q2_cc1',
+          source: { nodeId: 'q2', portName: '__clarify__' },
+          target: { nodeId: 'cc1', portName: 'questions' },
+        },
+        buildManualToDesigner('cc1', 'd1'),
+      ],
+    })
+    const result = validateWorkflowDef(def, {
+      agents: [designer, questioner, questioner2],
+      skills: [],
+    })
+    const codes = result.issues.map((i) => i.code)
+    expect(codes).toContain('cross-clarify-multiple-questioners')
+    const issue = result.issues.find((i) => i.code === 'cross-clarify-multiple-questioners')!
+    expect(issue.message).toContain('q1')
+    expect(issue.message).toContain('q2')
+    expect(issue.pointer).toBe('cc1')
+    expect(result.ok).toBe(false)
+  })
+
+  // G3 — designer singularity. Two edges to the SAME designer dedup; G3 only
+  // fires on ≥ 2 distinct designer agents.
+  test('one cross-clarify with two to_designer edges to same designer is allowed (G3 dedup)', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        ...buildAutoEdges('q1', 'cc1'),
+        // Two edges, both targeting the same designer NodeId — dedup keeps
+        // designer target set at size 1.
+        {
+          id: 'e_cc1_d1_dup1',
+          source: { nodeId: 'cc1', portName: 'to_designer' },
+          target: { nodeId: 'd1', portName: '__external_feedback__' },
+        },
+        {
+          id: 'e_cc1_d1_dup2',
+          source: { nodeId: 'cc1', portName: 'to_designer' },
+          target: { nodeId: 'd1', portName: '__external_feedback__' },
+        },
+      ],
+    })
+    const codes = validateWorkflowDef(def, {
+      agents: [designer, questioner],
+      skills: [],
+    }).issues.map((i) => i.code)
+    expect(codes).not.toContain('cross-clarify-multiple-designers')
+  })
+
+  test('one cross-clarify with two to_designer edges to different designers is rejected (G3)', () => {
+    const designer2 = agent('designer2', ['design'])
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'd2', kind: 'agent-single', agentName: 'designer2' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        // Make both designers reachable upstream of the questioner so we don't
+        // also trip the unrelated `cross-clarify-target-not-ancestor` warning
+        // (it would still fire as warning-only; this just keeps the assertion
+        // matrix tight on G3 alone).
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        {
+          id: 'e_d2_q1',
+          source: { nodeId: 'd2', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        ...buildAutoEdges('q1', 'cc1'),
+        // Two distinct designer agents on to_designer.
+        {
+          id: 'e_cc1_d1',
+          source: { nodeId: 'cc1', portName: 'to_designer' },
+          target: { nodeId: 'd1', portName: '__external_feedback__' },
+        },
+        {
+          id: 'e_cc1_d2',
+          source: { nodeId: 'cc1', portName: 'to_designer' },
+          target: { nodeId: 'd2', portName: '__external_feedback__' },
+        },
+      ],
+    })
+    const result = validateWorkflowDef(def, {
+      agents: [designer, designer2, questioner],
+      skills: [],
+    })
+    const codes = result.issues.map((i) => i.code)
+    expect(codes).toContain('cross-clarify-multiple-designers')
+    const issue = result.issues.find((i) => i.code === 'cross-clarify-multiple-designers')!
+    expect(issue.message).toContain('d1')
+    expect(issue.message).toContain('d2')
+    expect(issue.pointer).toBe('cc1')
+    expect(result.ok).toBe(false)
+  })
+
+  // RFC-056 §6 "multi-source banner" regression lock — multiple cross-clarify
+  // nodes pointing to the SAME designer is the inverse N:1 shape and stays
+  // legal; each cross-clarify's own to_designer set is still size 1.
+  test('two cross-clarify nodes pointing to the same designer is allowed (multi-source banner mode)', () => {
+    const questioner2 = agent('questioner2', ['main'])
+    const def = makeDef({
+      nodes: [
+        { id: 'd1', kind: 'agent-single', agentName: 'designer' },
+        { id: 'q1', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'q2', kind: 'agent-single', agentName: 'questioner2' },
+        { id: 'cc1', kind: 'clarify-cross-agent' },
+        { id: 'cc2', kind: 'clarify-cross-agent' },
+      ],
+      edges: [
+        {
+          id: 'e_d1_q1',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q1', portName: 'design' },
+        },
+        {
+          id: 'e_d1_q2',
+          source: { nodeId: 'd1', portName: 'design' },
+          target: { nodeId: 'q2', portName: 'design' },
+        },
+        ...buildAutoEdges('q1', 'cc1'),
+        ...buildAutoEdges('q2', 'cc2'),
+        buildManualToDesigner('cc1', 'd1'),
+        buildManualToDesigner('cc2', 'd1'),
+      ],
+    })
+    const codes = validateWorkflowDef(def, {
+      agents: [designer, questioner, questioner2],
+      skills: [],
+    }).issues.map((i) => i.code)
+    expect(codes).not.toContain('cross-clarify-multiple-questioners')
+    expect(codes).not.toContain('cross-clarify-multiple-designers')
   })
 })

@@ -860,6 +860,18 @@ export function validateWorkflowDef(
         agentSourceIds.add(src.id)
       }
 
+      // RFC-063 G1: a single clarify node must attach to at most one agent.
+      // Reverse rule (one agent → many clarify) is `clarify-multiple-clarify-on-same-agent`
+      // below. This forward rule catches the inverse direction.
+      if (agentSourceIds.size > 1) {
+        const sorted = [...agentSourceIds].sort()
+        issues.push({
+          code: 'clarify-multiple-source-agents',
+          message: `clarify node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one agent may be attached to a clarify node`,
+          pointer: node.id,
+        })
+      }
+
       // multi-clarify on the same agent
       for (const agentId of agentSourceIds) {
         const otherClarifyOnSameAgent = edges.filter(
@@ -945,6 +957,14 @@ export function validateWorkflowDef(
       const inboundOnQuestions = edges.filter(
         (e) => e.target.nodeId === node.id && e.target.portName === 'questions',
       )
+      // RFC-063 G2: collect questioner candidates into a Set so duplicate edges
+      // from the same agent don't inflate the count, and so we can flag
+      // multi-questioner configurations. Downstream rules (ancestor, self-review,
+      // auto-edge) consume a single questionerId — when there are ≥ 2 candidates
+      // we pick the dictionary-minimum for stable downstream evaluation while
+      // G2 surfaces the multiplicity error.
+      const questionerCandidateIds = new Set<string>()
+      const questionerAgentNamesById = new Map<string, string | undefined>()
       let questionerId: string | undefined
       let questionerAgentName: string | undefined
       if (inboundOnQuestions.length === 0) {
@@ -972,8 +992,20 @@ export function validateWorkflowDef(
             })
             continue
           }
-          questionerId = src.id
-          questionerAgentName = readString(src, 'agentName')
+          questionerCandidateIds.add(src.id)
+          questionerAgentNamesById.set(src.id, readString(src, 'agentName'))
+        }
+        if (questionerCandidateIds.size > 1) {
+          const sorted = [...questionerCandidateIds].sort()
+          issues.push({
+            code: 'cross-clarify-multiple-questioners',
+            message: `clarify-cross-agent node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one questioner agent allowed per cross-clarify node`,
+            pointer: node.id,
+          })
+        }
+        if (questionerCandidateIds.size >= 1) {
+          questionerId = [...questionerCandidateIds].sort()[0]
+          questionerAgentName = questionerAgentNamesById.get(questionerId!)
         }
       }
 
@@ -998,6 +1030,29 @@ export function validateWorkflowDef(
           pointer: node.id,
           severity: 'warning',
         })
+      }
+
+      // RFC-063 G3: a single cross-clarify must direct to_designer at most one
+      // designer agent. RFC-056 §6 "multi-source banner" mode (multiple
+      // cross-clarify nodes pointing to the same designer) is the inverse N:1
+      // shape and stays legal — each cross-clarify's own to_designer target
+      // set is still size 1.
+      {
+        const toDesignerTargetIds = new Set<string>()
+        for (const e of toDesignerOut) {
+          const tgt = nodeById.get(e.target.nodeId)
+          if (tgt === undefined) continue // unknown-target already reported elsewhere
+          if (tgt.kind !== 'agent-single') continue // non-agent target reported elsewhere
+          toDesignerTargetIds.add(tgt.id)
+        }
+        if (toDesignerTargetIds.size > 1) {
+          const sorted = [...toDesignerTargetIds].sort()
+          issues.push({
+            code: 'cross-clarify-multiple-designers',
+            message: `clarify-cross-agent node '${node.id}' has 'to_designer' edges to multiple agents (${sorted.join(', ')}); only one designer agent allowed per cross-clarify node`,
+            pointer: node.id,
+          })
+        }
       }
 
       // warning: not inside a wrapper-loop (mirrors RFC-023 same-node
