@@ -10,6 +10,7 @@ export type TaskDetailTab =
   | 'node-runs'
   | 'details'
   | 'outputs'
+  | 'worktree-files'
   | 'worktree-diff'
   | 'feedback'
 
@@ -24,6 +25,7 @@ export const TAB_ORDER: readonly TaskDetailTab[] = [
   'node-runs',
   'details',
   'outputs',
+  'worktree-files',
   'worktree-diff',
   'feedback',
 ] as const

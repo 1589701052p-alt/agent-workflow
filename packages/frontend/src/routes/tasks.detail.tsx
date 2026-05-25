@@ -24,6 +24,7 @@ import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
+import { WorktreeFilesPanel } from '@/components/WorktreeFilesPanel'
 import { classifyCanceled, displayNoderunStatusKey } from '@/lib/noderun-status'
 import { availableTabs, nextTabForFailedJump, type TaskDetailTab } from '@/lib/task-detail-tabs'
 import { useTaskSync } from '@/hooks/useTaskSync'
@@ -336,6 +337,15 @@ function TaskDetailPage() {
           </div>
         )}
 
+        {/* RFC-065 — worktree files browser, between outputs and worktree-diff. */}
+        <div className="task-detail__pane" hidden={tab !== 'worktree-files'}>
+          {tk.worktreePath === '' ? (
+            <div className="muted">{t('tasks.worktreeFilesNoWorktree')}</div>
+          ) : (
+            <WorktreeFilesPanel taskId={tk.id} />
+          )}
+        </div>
+
         <div className="task-detail__pane" hidden={tab !== 'worktree-diff'}>
           {tk.baseCommit === null ? (
             <div className="muted">{t('tasks.noBaseCommit')}</div>
@@ -371,6 +381,8 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabDetails')
     case 'outputs':
       return t('tasks.tabOutputs')
+    case 'worktree-files':
+      return t('tasks.tabWorktreeFiles')
     case 'worktree-diff':
       return t('tasks.tabWorktreeDiff')
     case 'feedback':

@@ -51,6 +51,7 @@ import {
 } from '@/services/upload'
 import { getSessionTree } from '@/services/sessionView'
 import { getInventorySnapshot } from '@/services/inventory'
+import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
@@ -435,6 +436,41 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   // opencode plugin produced inside the per-run dir.
   app.get('/api/tasks/:id/node-runs/:nodeRunId/inventory', async (c) => {
     return c.json(await getInventorySnapshot(deps.db, c.req.param('id'), c.req.param('nodeRunId')))
+  })
+
+  // RFC-065 — task detail page "工作目录" tab.
+  //
+  // List one directory's direct children (lazy load). `path` query param is
+  // relative to the task's worktreePath; empty string = root.
+  app.get('/api/tasks/:id/worktree-tree', async (c) => {
+    const id = c.req.param('id')
+    const task = await getTask(deps.db, id)
+    if (task === null) {
+      throw new NotFoundError('task-not-found', `task '${id}' not found`)
+    }
+    if (task.worktreePath === '') {
+      throw new NotFoundError('task-worktree-missing', `task '${id}' has no worktree`)
+    }
+    const rel = c.req.query('path') ?? ''
+    const { entries, truncated } = await listWorktreeDir(task.worktreePath, rel)
+    return c.json({ path: rel, entries, truncated })
+  })
+
+  // RFC-065 — read one worktree file's text content. Server enforces the
+  // 2 MiB cap; oversized returns `{oversized:true, content:''}` with the
+  // real size so the UI can render an "too large" hint.
+  app.get('/api/tasks/:id/worktree-file', async (c) => {
+    const id = c.req.param('id')
+    const task = await getTask(deps.db, id)
+    if (task === null) {
+      throw new NotFoundError('task-not-found', `task '${id}' not found`)
+    }
+    if (task.worktreePath === '') {
+      throw new NotFoundError('task-worktree-missing', `task '${id}' has no worktree`)
+    }
+    const rel = c.req.query('path') ?? ''
+    const result = await readWorktreeFile(task.worktreePath, rel)
+    return c.json({ path: rel, ...result })
   })
 }
 

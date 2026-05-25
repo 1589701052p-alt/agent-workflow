@@ -256,6 +256,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/nodes/:nodeRunId/stdout' },
   { method: 'POST', path: '/api/tasks/:id/nodes/:nodeRunId/retry' },
   { method: 'PATCH', path: '/api/tasks/:id/assignments/:nodeId' },
+  // RFC-065: task detail page "工作目录" tab — list + read worktree files.
+  { method: 'GET', path: '/api/tasks/:id/worktree-tree' },
+  { method: 'GET', path: '/api/tasks/:id/worktree-file' },
 
   // ---- worktree-files ----
   { method: 'GET', path: '/api/worktree-files/:taskId' },

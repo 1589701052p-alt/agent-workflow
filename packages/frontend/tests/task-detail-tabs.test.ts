@@ -39,45 +39,60 @@ function makeRun(over: Partial<NodeRun>): NodeRun {
 }
 
 describe('TAB_ORDER', () => {
-  test('is the canonical 6-tab order from the RFC', () => {
-    // `feedback` is the RFC-041 reflective tab. It sits last because it's a
-    // companion to the run, not part of the run-monitoring flow above.
+  test('is the canonical 7-tab order from the RFC (RFC-065 inserted worktree-files)', () => {
+    // RFC-065 added `worktree-files` between `outputs` and `worktree-diff`.
+    // `feedback` remains last as the RFC-041 reflective tab.
     expect(TAB_ORDER).toEqual([
       'workflow-status',
       'node-runs',
       'details',
       'outputs',
+      'worktree-files',
       'worktree-diff',
       'feedback',
     ])
   })
 
   test('is readonly (frozen at the type level — defense against accidental sort)', () => {
-    // The `readonly` annotation is enforced at compile time. We still
-    // sanity-check length here so a future reorder via .sort would
-    // surface a failed length assertion if it accidentally dropped a tab.
-    expect(TAB_ORDER).toHaveLength(6)
+    expect(TAB_ORDER).toHaveLength(7)
+  })
+
+  test('worktree-files sits immediately after outputs and before worktree-diff', () => {
+    const outIdx = TAB_ORDER.indexOf('outputs')
+    const filesIdx = TAB_ORDER.indexOf('worktree-files')
+    const diffIdx = TAB_ORDER.indexOf('worktree-diff')
+    expect(filesIdx).toBe(outIdx + 1)
+    expect(diffIdx).toBe(filesIdx + 1)
   })
 })
 
 describe('availableTabs', () => {
-  test('returns all 6 tabs when the workflow declares outputs', () => {
+  test('returns all 7 tabs when the workflow declares outputs', () => {
     expect(availableTabs({ hasOutputs: true })).toEqual([
       'workflow-status',
       'node-runs',
       'details',
       'outputs',
+      'worktree-files',
       'worktree-diff',
       'feedback',
     ])
   })
 
-  test('hides only the outputs tab when no output nodes exist; feedback always present', () => {
+  test('hides only the outputs tab when no output nodes exist; worktree-files + feedback always present', () => {
     const tabs = availableTabs({ hasOutputs: false })
-    expect(tabs).toEqual(['workflow-status', 'node-runs', 'details', 'worktree-diff', 'feedback'])
+    expect(tabs).toEqual([
+      'workflow-status',
+      'node-runs',
+      'details',
+      'worktree-files',
+      'worktree-diff',
+      'feedback',
+    ])
     expect(tabs.includes('outputs' as never)).toBe(false)
-    // Feedback is unconditional — letting the user reflect on a finished
-    // or failed task is the whole point of distillation.
+    // worktree-files is unconditional — a task's worktree is always worth
+    // browsing, even when no output ports are declared.
+    expect(tabs).toContain('worktree-files')
     expect(tabs).toContain('feedback')
   })
 })
