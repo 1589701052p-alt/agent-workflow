@@ -95,6 +95,28 @@ export function crossClarifyHasDesignerEdge(
   )
 }
 
+/**
+ * RFC-063 — true when the cross-clarify node already has a questioner
+ * attached via the reverse-drag pattern (inbound edge on `questions`
+ * from a `__clarify__` source port). Used to short-circuit a second-agent
+ * reverse-drag before the schema-level `cross-clarify-multiple-questioners`
+ * validator rule catches it on save. Mirrors RFC-023's
+ * `clarifyHasAttachedAgent` — canvas-level inverse of
+ * `questionerHasExistingClarifyChannel`: that one blocks "one questioner →
+ * many cross-clarify"; this blocks "one cross-clarify → many questioners".
+ */
+export function crossClarifyHasAttachedQuestioner(
+  def: WorkflowDefinition,
+  crossClarifyNodeId: string,
+): boolean {
+  return def.edges.some(
+    (e) =>
+      e.target.nodeId === crossClarifyNodeId &&
+      e.target.portName === CROSS_CLARIFY_INPUT_PORT_NAME &&
+      e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // builders — reverse-drag & manual-drag
 // ---------------------------------------------------------------------------
@@ -162,6 +184,9 @@ export function applyCrossClarifyQuestionerReverseDrag(
   if (crossNode === undefined || crossNode.kind !== 'clarify-cross-agent') return def
   if (!isValidCrossClarifyQuestioner(agentNode)) return def
   if (questionerHasExistingClarifyChannel(def, questionerNodeId)) return def
+  // RFC-063: a single cross-clarify node may only attach to one questioner.
+  // Block a second-agent reverse-drag before the validator catches it on save.
+  if (crossClarifyHasAttachedQuestioner(def, crossClarifyNodeId)) return def
   const [ask, ans] = buildCrossClarifyQuestionerEdges(questionerNodeId, crossClarifyNodeId)
   return { ...def, edges: [...def.edges, ask, ans] }
 }

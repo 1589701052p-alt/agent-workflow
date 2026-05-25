@@ -63,6 +63,25 @@ export function hasExistingClarifyChannel(def: WorkflowDefinition, agentNodeId: 
 }
 
 /**
+ * RFC-063 — true when the given clarify node already has an agent attached
+ * via the reverse-drag pattern (inbound edge on `questions` from an
+ * `__clarify__` source port). Used by the drag handler to short-circuit
+ * a second-agent drop before the schema-level
+ * `clarify-multiple-source-agents` validator rule would catch it on save.
+ * This is the canvas-level mirror of `hasExistingClarifyChannel`: that one
+ * blocks the reverse direction (one agent → many clarify); this blocks the
+ * forward direction (one clarify → many agents).
+ */
+export function clarifyHasAttachedAgent(def: WorkflowDefinition, clarifyNodeId: string): boolean {
+  return def.edges.some(
+    (e) =>
+      e.target.nodeId === clarifyNodeId &&
+      e.target.portName === CLARIFY_INPUT_PORT_NAME &&
+      e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+  )
+}
+
+/**
  * Build the pair of edges that materialise a clarify channel between a
  * source agent and a clarify node. Caller is expected to splice both into
  * `definition.edges[]` in one commit so the canvas never momentarily shows
@@ -112,6 +131,9 @@ export function applyClarifyReverseDrag(
   if (clarifyNode === undefined || clarifyNode.kind !== 'clarify') return def
   if (!isValidClarifyTarget(agentNode)) return def
   if (hasExistingClarifyChannel(def, sourceAgentNodeId)) return def
+  // RFC-063: a single clarify node may only attach to one agent. Block a
+  // second-agent reverse-drag before the validator catches it on save.
+  if (clarifyHasAttachedAgent(def, clarifyNodeId)) return def
   const [ask, ans] = buildClarifyEdges(sourceAgentNodeId, clarifyNodeId)
   return { ...def, edges: [...def.edges, ask, ans] }
 }

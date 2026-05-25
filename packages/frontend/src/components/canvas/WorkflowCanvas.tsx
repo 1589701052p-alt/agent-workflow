@@ -43,6 +43,7 @@ import {
   classifyClarifyConnection,
   CLARIFY_INPUT_PORT_NAME,
   CLARIFY_OUTPUT_PORT_NAME,
+  clarifyHasAttachedAgent,
   clearClarifyEdgesForRemovedNodes,
   hasExistingClarifyChannel,
   isValidClarifyTarget,
@@ -57,6 +58,7 @@ import {
   CROSS_CLARIFY_INPUT_PORT_NAME,
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+  crossClarifyHasAttachedQuestioner,
   crossClarifyHasDesignerEdge,
   isValidCrossClarifyQuestioner,
   questionerHasExistingClarifyChannel,
@@ -541,6 +543,10 @@ function CanvasInner({
         const agent = definition.nodes.find((n) => n.id === clarifyDrop.sourceAgentNodeId)
         if (!isValidClarifyTarget(agent)) return false
         if (hasExistingClarifyChannel(definition, clarifyDrop.sourceAgentNodeId)) return false
+        // RFC-063: a single clarify node may attach to at most one agent.
+        // Block the second-agent reverse-drag with the same red-dashed UX
+        // that already covers the inverse direction.
+        if (clarifyHasAttachedAgent(definition, clarifyDrop.clarifyNodeId)) return false
         return true
       }
       // RFC-056 cross-clarify pre-flight. Must run BEFORE the merged
@@ -558,6 +564,11 @@ function CanvasInner({
           const q = definition.nodes.find((n) => n.id === crossDrop.questionerNodeId)
           if (!isValidCrossClarifyQuestioner(q)) return false
           if (questionerHasExistingClarifyChannel(definition, crossDrop.questionerNodeId))
+            return false
+          // RFC-063: one cross-clarify node may attach to at most one
+          // questioner. Block a second-questioner reverse-drag with the
+          // same red-dashed UX that already covers the inverse direction.
+          if (crossClarifyHasAttachedQuestioner(definition, crossDrop.crossClarifyNodeId))
             return false
           return true
         }

@@ -28,6 +28,7 @@ import {
   buildCrossClarifyQuestionerEdges,
   classifyCrossClarifyConnection,
   clearCrossClarifyEdgesForRemovedNodes,
+  crossClarifyHasAttachedQuestioner,
   crossClarifyHasDesignerEdge,
 } from '../src/components/canvas/crossClarifyDragHelper'
 
@@ -93,6 +94,25 @@ describe('RFC-056 applyCrossClarifyQuestionerReverseDrag', () => {
     expect(next).toBe(def)
   })
 
+  // RFC-063 — one cross-clarify node may only attach to one questioner agent.
+  // The second-questioner reverse-drag must short-circuit; the validator's
+  // `cross-clarify-multiple-questioners` rule catches the saved state, but the
+  // canvas should never let the user draw the bad state.
+  test('rejects when the cross-clarify already has another questioner attached (RFC-063)', () => {
+    const def = baseDef()
+    def.nodes.push({ id: 'questioner2', kind: 'agent-single', agentName: 'questioner2' })
+    def.edges.push({
+      id: 'pre',
+      source: { nodeId: 'questioner', portName: '__clarify__' },
+      target: { nodeId: 'cross1', portName: 'questions' },
+    })
+    const next = applyCrossClarifyQuestionerReverseDrag(def, {
+      questionerNodeId: 'questioner2',
+      crossClarifyNodeId: 'cross1',
+    })
+    expect(next).toBe(def)
+  })
+
   test('ALLOWS coexistence with an existing RFC-023 clarify (per RFC-056 design.md §4.2: cross-clarify wins at runtime)', () => {
     // An agent CAN have both a plain `clarify` target AND a
     // `clarify-cross-agent` target on the same `__clarify__` source port.
@@ -122,6 +142,20 @@ describe('RFC-056 applyCrossClarifyQuestionerReverseDrag', () => {
     expect(
       next.edges.some((e) => e.source.portName === '__clarify__' && e.target.nodeId === 'cross1'),
     ).toBe(true)
+  })
+})
+
+describe('RFC-063 crossClarifyHasAttachedQuestioner', () => {
+  test('detects an existing __clarify__ → questions inbound edge on the cross-clarify node', () => {
+    const def = baseDef()
+    def.edges.push({
+      id: 'pre',
+      source: { nodeId: 'questioner', portName: '__clarify__' },
+      target: { nodeId: 'cross1', portName: 'questions' },
+    })
+    expect(crossClarifyHasAttachedQuestioner(def, 'cross1')).toBe(true)
+    expect(crossClarifyHasAttachedQuestioner(def, 'other')).toBe(false)
+    expect(crossClarifyHasAttachedQuestioner(baseDef(), 'cross1')).toBe(false)
   })
 })
 

@@ -18,6 +18,7 @@ import {
   applyClarifyReverseDrag,
   buildClarifyEdges,
   cascadeRemoveClarifyChannel,
+  clarifyHasAttachedAgent,
   classifyClarifyConnection,
   CLARIFY_INPUT_PORT_NAME,
   CLARIFY_OUTPUT_PORT_NAME,
@@ -150,9 +151,71 @@ describe('applyClarifyReverseDrag', () => {
     expect(next).toBe(def)
   })
 
+  // RFC-063 — one clarify node may only attach to one agent. The second
+  // reverse-drag onto a DIFFERENT agent must short-circuit instead of
+  // appending a second pair of edges; the validator's
+  // `clarify-multiple-source-agents` rule catches the saved state, but the
+  // canvas should never let the user draw the bad state in the first place.
+  it('rejects (returns by ref) when the clarify node already has another agent attached (RFC-063)', () => {
+    const def = defOf(
+      [
+        node({ id: 'a1', kind: 'agent-single' }),
+        node({ id: 'a2', kind: 'agent-single' }),
+        node({ id: 'c', kind: 'clarify' }),
+      ],
+      [
+        // a1 already attached to c via the standard ask edge
+        {
+          id: 'pre_ask',
+          source: { nodeId: 'a1', portName: CLARIFY_SOURCE_PORT_NAME },
+          target: { nodeId: 'c', portName: CLARIFY_INPUT_PORT_NAME },
+        },
+      ],
+    )
+    const next = applyClarifyReverseDrag(def, {
+      sourceAgentNodeId: 'a2',
+      clarifyNodeId: 'c',
+    })
+    expect(next).toBe(def)
+  })
+
   // RFC-060 PR-E: agent-multi removed; the prior "agent-multi → clarify
   // reverse-drag accepted" case is no longer applicable. agent-single drag
   // is covered by the test above.
+})
+
+describe('clarifyHasAttachedAgent (RFC-063)', () => {
+  it('detects an existing __clarify__ → questions inbound edge on the clarify node', () => {
+    const def = defOf(
+      [node({ id: 'a', kind: 'agent-single' }), node({ id: 'c', kind: 'clarify' })],
+      [
+        {
+          id: 'pre',
+          source: { nodeId: 'a', portName: CLARIFY_SOURCE_PORT_NAME },
+          target: { nodeId: 'c', portName: CLARIFY_INPUT_PORT_NAME },
+        },
+      ],
+    )
+    expect(clarifyHasAttachedAgent(def, 'c')).toBe(true)
+    expect(clarifyHasAttachedAgent(def, 'other')).toBe(false)
+    expect(clarifyHasAttachedAgent(defOf([]), 'c')).toBe(false)
+  })
+
+  it('does not count answer-channel-only edges as attachment', () => {
+    // Edge with answer-channel ports but no ask-channel inbound → clarify
+    // is not actually "attached" to an agent in the canvas sense.
+    const def = defOf(
+      [node({ id: 'a', kind: 'agent-single' }), node({ id: 'c', kind: 'clarify' })],
+      [
+        {
+          id: 'ans_only',
+          source: { nodeId: 'c', portName: CLARIFY_OUTPUT_PORT_NAME },
+          target: { nodeId: 'a', portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
+        },
+      ],
+    )
+    expect(clarifyHasAttachedAgent(def, 'c')).toBe(false)
+  })
 })
 
 describe('classifyClarifyConnection (RFC-023 bugfix #2)', () => {
