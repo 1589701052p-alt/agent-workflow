@@ -23,7 +23,6 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { ulid } from 'ulid'
 import { createInMemoryDb } from '../src/db/client'
 import type { DbClient } from '../src/db/client'
 import { tasks } from '../src/db/schema'
