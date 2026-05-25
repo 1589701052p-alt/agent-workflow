@@ -321,6 +321,87 @@ describe('RFC-059 C4 — fast-path isolation', () => {
     expect(designerRuns.length).toBe(1)
   })
 
+  // RFC-056 / RFC-059 regression — locks the bug from task
+  // 01KSESDVXQVRQX1FXG6N432C52 (2026-05-25):
+  //
+  //   With all questions scoped to the questioner and the user clicking
+  //   "Submit and keep clarifying", `triggerQuestionerContinueRerun`
+  //   minted a new questioner node_run that INHERITED the prior cci
+  //   instead of bumping it. The scheduler's `isQuestionerCrossClarifyRerun`
+  //   gate (`scheduler.ts:1425`: `cci > 0`) then fell through to
+  //   `consumerKind='self'`, which finds zero self-clarify rounds for the
+  //   cross-questioner, so `clarifyContext = undefined`. The questioner
+  //   reran with NO record of having asked the user anything — re-emitted
+  //   the same <workflow-clarify> envelope, the user got the same
+  //   questions again. The reject path had the symmetric bug, masked at
+  //   runtime by `hasPersistentStop` short-circuiting before a new
+  //   session is created.
+  //
+  // Why this is a SCHEDULER-PATH guard, not a buildPromptContext one:
+  // `cross-clarify-question-scope-prompt.test.ts` already covered the
+  // pure-function `buildPromptContext({ targetIteration: 1 })` branch
+  // and passed, hiding the gap that the cci=0 row never gets routed
+  // through that branch in production. This test asserts the persisted
+  // row directly so any future refactor that drops the bump (or moves
+  // it to a wrapper that the helper bypasses) fails here even if the
+  // unit-level prompt tests stay green.
+  test('fast path (all-questioner continue) bumps the new questioner cci above existing peers', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTwoSource(db)
+    const aRunId = await spawnSession(db, taskId, {
+      questionerNodeId: 'q_a',
+      questionerRunId: 'nr_q_a',
+      ccNodeId: 'cc_a',
+      questions: [mkQ('a1', 'a-first')],
+    })
+    const aResult = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: aRunId,
+      answers: [
+        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
+      ],
+      directive: 'continue',
+      questionScopes: { a1: 'questioner' } as Record<string, ClarifyQuestionScope>,
+    })
+    expect(aResult.outcome.kind).toBe('questioner-continue-triggered')
+    if (aResult.outcome.kind !== 'questioner-continue-triggered') return
+    const newRunRow = (
+      await db.select().from(nodeRuns).where(eq(nodeRuns.id, aResult.outcome.questionerNodeRunId))
+    )[0]
+    expect(newRunRow?.status).toBe('pending')
+    // The cross-clarify session itself was created at iteration=0 + the
+    // node_run for the cross-clarify node landed at cci=0. The new
+    // questioner row must land STRICTLY above every participant — so
+    // cci >= 1, matching the maxParticipantCci + 1 algorithm shared
+    // with triggerDesignerRerun.
+    expect(newRunRow?.crossClarifyIteration ?? 0).toBeGreaterThan(0)
+  })
+
+  test('reject path (questioner-stop-triggered) also bumps the new questioner cci', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTwoSource(db)
+    const aRunId = await spawnSession(db, taskId, {
+      questionerNodeId: 'q_a',
+      questionerRunId: 'nr_q_a',
+      ccNodeId: 'cc_a',
+      questions: [mkQ('a1', 'spurious?')],
+    })
+    const aResult = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: aRunId,
+      answers: [
+        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
+      ],
+      directive: 'stop',
+    })
+    expect(aResult.outcome.kind).toBe('questioner-stop-triggered')
+    if (aResult.outcome.kind !== 'questioner-stop-triggered') return
+    const newRunRow = (
+      await db.select().from(nodeRuns).where(eq(nodeRuns.id, aResult.outcome.questionerNodeRunId))
+    )[0]
+    expect(newRunRow?.crossClarifyIteration ?? 0).toBeGreaterThan(0)
+  })
+
   test('peer A fast path: clarify_rounds row carries questionScopesJson same as cross_clarify_sessions', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTwoSource(db)

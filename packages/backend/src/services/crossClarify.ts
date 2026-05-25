@@ -1113,6 +1113,27 @@ export async function triggerQuestionerContinueRerun(
  * difference (STOP CLARIFYING anchor injection) lives at prompt-render
  * time, controlled by the session's persisted directive — the rerun's
  * dispatch path is identical.
+ *
+ * crossClarifyIteration MUST bump (mirroring `triggerDesignerRerun` §2 at
+ * line ~826): the scheduler's `isQuestionerCrossClarifyRerun` gate
+ * (scheduler.ts:1425) only routes through the `cross-questioner`
+ * consumerKind branch when `currentCrossClarifyIteration > 0`. Inheriting
+ * the prior cci unchanged makes the fast-path / reject mint land at cci=0
+ * for the first round, the scheduler falls back to `consumerKind='self'`
+ * (which finds zero kind='self' rows for this asking node), the resulting
+ * `clarifyContext = undefined`, and the questioner reruns BLIND — having
+ * no record of having asked anything — so it just re-emits the same
+ * `<workflow-clarify>` envelope and the cycle repeats. Reject path is
+ * symptomatically masked by `hasPersistentStop` short-circuiting the
+ * cross-clarify node to done before a new session is created, but the
+ * prompt-level STOP CLARIFYING trailer was never reaching the questioner
+ * either. Bumping cci here fixes both paths.
+ *
+ * Live evidence: task 01KSESDVXQVRQX1FXG6N432C52 — session
+ * 01KSETFZVRV5AE9TY53940RP8F submit (4/4 questioner-scope, continue) ⇒
+ * questioner run 01KSETHZPGANSGRR24W7834BEY minted at cci=0, scheduler
+ * fell through to self-clarify, agent re-emitted the same envelope,
+ * cross_clarify session 01KSETKNNT3TMPKCCJ6M980BSS reopened.
  */
 async function mintQuestionerRerun(args: {
   db: DbClient
@@ -1128,6 +1149,34 @@ async function mintQuestionerRerun(args: {
       `questioner node_run ${args.questionerNodeRunId} not found`,
     )
   }
+
+  // Compute newCci as max(participant cci, session iteration) + 1 across
+  // the questioner's loopIter — identical algorithm to triggerDesignerRerun
+  // so the questioner lands above every peer in the cross-clarify chain
+  // (designer, sibling questioners, prior cross-clarify sessions). lastRun.
+  // iteration is the loopIter for nodes inside a wrapper-loop (and 0 for
+  // top-level nodes), matching how createCrossClarifySession derives it.
+  const loopIter = lastRun.iteration
+  const peerRunsAtIter = await args.db
+    .select({ c: nodeRuns.crossClarifyIteration })
+    .from(nodeRuns)
+    .where(and(eq(nodeRuns.taskId, args.taskId), eq(nodeRuns.iteration, loopIter)))
+  const sessionRowsAtIter = await args.db
+    .select({ iter: crossClarifySessions.iteration })
+    .from(crossClarifySessions)
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, args.taskId),
+        eq(crossClarifySessions.loopIter, loopIter),
+      ),
+    )
+  const maxParticipantCci = Math.max(
+    0,
+    ...peerRunsAtIter.map((r) => r.c ?? 0),
+    ...sessionRowsAtIter.map((r) => r.iter ?? 0),
+  )
+  const newCrossClarifyIteration = maxParticipantCci + 1
+
   const newId = ulid()
   await args.db.insert(nodeRuns).values({
     id: newId,
@@ -1140,7 +1189,7 @@ async function mintQuestionerRerun(args: {
     shardKey: lastRun.shardKey ?? null,
     reviewIteration: lastRun.reviewIteration,
     clarifyIteration: lastRun.clarifyIteration,
-    crossClarifyIteration: lastRun.crossClarifyIteration ?? 0,
+    crossClarifyIteration: newCrossClarifyIteration,
     preSnapshot: lastRun.preSnapshot,
   })
   return { questionerNodeRunId: newId }
