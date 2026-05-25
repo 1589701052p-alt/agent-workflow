@@ -3,7 +3,7 @@
 > 状态：Draft（2026-05-26）
 > Owner：—
 > 关联文档：[design.md](./design.md)、[plan.md](./plan.md)
-> 基线 RFC：[RFC-023 agent-clarify](../RFC-023-agent-clarify/proposal.md)、[RFC-026 clarify-inline-session](../RFC-026-clarify-inline-session/proposal.md)、[RFC-039 clarify-ask-bias](../RFC-039-clarify-ask-bias/proposal.md)、[RFC-042 in-attempt retry](../RFC-042-in-attempt-retry/proposal.md)、[RFC-053 lifecycle hardening](../RFC-053-node-run-lifecycle-hardening/proposal.md)、[RFC-056 clarify-cross-agent](../RFC-056-clarify-cross-agent/proposal.md)（含 patch-2026-05-22..27 共 9 个 patch）、[RFC-058 clarify sessions unification](../RFC-058-clarify-sessions-unification/proposal.md)、[RFC-059 cross-clarify per-question scope](../RFC-059-cross-clarify-question-scope/proposal.md)
+> 基线 RFC：[RFC-023 agent-clarify](../RFC-023-agent-clarify/proposal.md)、[RFC-026 clarify-inline-session](../RFC-026-clarify-inline-session/proposal.md)、[RFC-039 clarify-ask-bias](../RFC-039-clarify-ask-bias/proposal.md)、[RFC-042 envelope follow-up recovery](../RFC-042-envelope-followup-recover/proposal.md)、[RFC-053 lifecycle hardening](../RFC-053-node-run-lifecycle-hardening/proposal.md)、[RFC-056 clarify-cross-agent](../RFC-056-clarify-cross-agent/proposal.md)（含 patch-2026-05-22..27 共 9 个 patch）、[RFC-058 clarify sessions unification](../RFC-058-clarify-sessions-unification/proposal.md)、[RFC-059 cross-clarify per-question scope](../RFC-059-cross-clarify-question-scope/proposal.md)
 
 ## 1. 背景
 

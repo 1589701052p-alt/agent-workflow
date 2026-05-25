@@ -2,7 +2,7 @@
 
 > 状态：Draft（2026-05-26）
 > 关联文档：[proposal.md](./proposal.md)、[plan.md](./plan.md)
-> 复用基线：[RFC-023](../RFC-023-agent-clarify/design.md)、[RFC-026](../RFC-026-clarify-inline-session/design.md)、[RFC-039](../RFC-039-clarify-ask-bias/design.md)、[RFC-042](../RFC-042-in-attempt-retry/design.md)、[RFC-053](../RFC-053-node-run-lifecycle-hardening/design.md)、[RFC-056](../RFC-056-clarify-cross-agent/design.md) + 9 patch、[RFC-058](../RFC-058-clarify-sessions-unification/design.md)、[RFC-059](../RFC-059-cross-clarify-question-scope/design.md)
+> 复用基线：[RFC-023](../RFC-023-agent-clarify/design.md)、[RFC-026](../RFC-026-clarify-inline-session/design.md)、[RFC-039](../RFC-039-clarify-ask-bias/design.md)、[RFC-042](../RFC-042-envelope-followup-recover/design.md)、[RFC-053](../RFC-053-node-run-lifecycle-hardening/design.md)、[RFC-056](../RFC-056-clarify-cross-agent/design.md) + 9 patch、[RFC-058](../RFC-058-clarify-sessions-unification/design.md)、[RFC-059](../RFC-059-cross-clarify-question-scope/design.md)
 
 ## 1. 概览
 
