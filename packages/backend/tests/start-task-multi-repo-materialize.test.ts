@@ -13,7 +13,7 @@
 //       to legacy single-repo path: same worktree layout, same tasks.*
 //       columns, same single task_repos row at repo_index=0.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

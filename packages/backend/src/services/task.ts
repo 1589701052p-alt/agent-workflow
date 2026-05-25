@@ -298,27 +298,6 @@ async function resolveRepoSourceSingle(
   }
 }
 
-/**
- * RFC-024: legacy single-repo entry point — kept for callers that still
- * thread a `StartTask` (e.g. the multipart upload path materializes the
- * worktree before `startTask` consolidation lands). Internally delegates
- * to `resolveRepoSourceSingle` with the legacy fields wrapped into a
- * single-repo spec.
- */
-async function resolveRepoSource(
-  input: StartTask,
-  deps: StartTaskDeps,
-): Promise<ResolvedRepoSource> {
-  const specs = normalizeStartTaskRepos(input)
-  if (specs.length !== 1) {
-    throw new ValidationError(
-      'start-task-source-required',
-      'resolveRepoSource expects a single-repo body; use the multi-repo branch instead',
-    )
-  }
-  return resolveRepoSourceSingle(specs[0]!, input, deps)
-}
-
 interface MaterializedRepo {
   repoIndex: number
   repoPath: string
