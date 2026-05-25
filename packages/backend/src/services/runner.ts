@@ -297,6 +297,21 @@ export interface RunNodeOptions {
    * BFS. Scheduler / cli plumb `config.subagentLiveCapture` through here.
    */
   subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
+  /**
+   * RFC-067: per-task Git commit identity. When BOTH `gitUserName` and
+   * `gitUserEmail` are non-empty strings, the runner injects all four env
+   * vars (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_NAME` /
+   * `GIT_COMMITTER_EMAIL`) at opencode spawn time so any `git commit`
+   * invocation in the agent inherits the task-scoped identity. The runner
+   * defensively re-checks the pair here (StartTaskSchema's superRefine
+   * already rejected the half-set case at write time) — if either side is
+   * empty / null / undefined the env vars are NOT injected, preserving the
+   * pre-RFC-067 default of resolving identity from the daemon's git config.
+   * env injected here outranks any inherited `GIT_AUTHOR_*` from the daemon
+   * process (later-write wins inside the spawn env dict).
+   */
+  gitUserName?: string | null
+  gitUserEmail?: string | null
 }
 
 export type RunFinalStatus = 'done' | 'failed' | 'canceled'
@@ -691,6 +706,24 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // accidentally hijacking the path.
   if (inventoryOutPath !== undefined) {
     env.OPENCODE_AW_INVENTORY_OUT = inventoryOutPath
+  }
+
+  // RFC-067: inject the per-task Git commit identity into the spawn env so
+  // any `git commit` invocation by the agent (opencode shell tool transmits
+  // process.env wholesale per opencode src/tool/shell.ts:419) inherits the
+  // task-scoped author + committer. Author + committer are set together —
+  // if either side is empty/null the entire block is skipped so the daemon's
+  // existing identity resolution (inherited `GIT_AUTHOR_*` from parent shell
+  // or `git config user.*`) keeps working unchanged. This defensive `&&`
+  // guard is the second line of defense after StartTaskSchema's XOR
+  // superRefine — both must be true before we mint a half-identity env.
+  const gitName = typeof opts.gitUserName === 'string' ? opts.gitUserName : ''
+  const gitEmail = typeof opts.gitUserEmail === 'string' ? opts.gitUserEmail : ''
+  if (gitName.length > 0 && gitEmail.length > 0) {
+    env.GIT_AUTHOR_NAME = gitName
+    env.GIT_AUTHOR_EMAIL = gitEmail
+    env.GIT_COMMITTER_NAME = gitName
+    env.GIT_COMMITTER_EMAIL = gitEmail
   }
 
   const child = Bun.spawn({

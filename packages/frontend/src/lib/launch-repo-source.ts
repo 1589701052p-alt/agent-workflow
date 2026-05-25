@@ -6,7 +6,19 @@
 import { parseGitUrl } from '@agent-workflow/shared'
 
 export type RepoSource =
-  | { kind: 'path'; repoPath: string; baseBranch: string }
+  | {
+      kind: 'path'
+      repoPath: string
+      baseBranch: string
+      /**
+       * RFC-068 — opt-in `git fetch --all --prune --tags` against the user's
+       * local repo before the worktree is materialized. Never `pull` /
+       * `merge` — only refreshes remote-tracking refs so the user can pick
+       * `origin/<branch>` as a base ref. Default false to preserve legacy
+       * (no-fetch) behavior. UI persists last value to localStorage.
+       */
+      fetchBeforeLaunch?: boolean
+    }
   | { kind: 'url'; repoUrl: string; ref: string }
 
 export interface LaunchCommonPayload {
@@ -19,6 +31,16 @@ export interface LaunchCommonPayload {
    */
   name: string
   inputs: Record<string, string>
+  /**
+   * RFC-067: optional per-task Git commit identity. Caller has already
+   * trimmed; both must be non-empty together or both omitted (XOR enforced
+   * client-side via the launcher's `gitIdentityOk` gate + server-side via
+   * StartTaskSchema's superRefine). When present, the helper writes both
+   * keys into the body; when undefined or blank, the helper omits both keys
+   * so the wire is byte-identical to pre-RFC-067 launches.
+   */
+  gitUserName?: string
+  gitUserEmail?: string
 }
 
 /**
@@ -31,14 +53,30 @@ export function buildLaunchBody(
   source: RepoSource,
   common: LaunchCommonPayload,
 ): Record<string, unknown> {
+  // RFC-067: identity pair-check echoes superRefine. Drop both keys if
+  // either side is blank — the helper never emits a half-identity wire.
+  const hasGitIdentity =
+    typeof common.gitUserName === 'string' &&
+    common.gitUserName.length > 0 &&
+    typeof common.gitUserEmail === 'string' &&
+    common.gitUserEmail.length > 0
   if (source.kind === 'path') {
-    return {
+    const out: Record<string, unknown> = {
       workflowId: common.workflowId,
       name: common.name,
       repoPath: source.repoPath,
       baseBranch: source.baseBranch,
       inputs: common.inputs,
     }
+    // RFC-068: only set when explicitly true so legacy bodies stay byte-
+    // identical (`undefined` field would survive JSON serialization
+    // anyway, but explicit gate keeps the wire format clean).
+    if (source.fetchBeforeLaunch === true) out.fetchBeforeLaunch = true
+    if (hasGitIdentity) {
+      out.gitUserName = common.gitUserName
+      out.gitUserEmail = common.gitUserEmail
+    }
+    return out
   }
   const out: Record<string, unknown> = {
     workflowId: common.workflowId,
@@ -47,6 +85,10 @@ export function buildLaunchBody(
     inputs: common.inputs,
   }
   if (source.ref.trim().length > 0) out.ref = source.ref.trim()
+  if (hasGitIdentity) {
+    out.gitUserName = common.gitUserName
+    out.gitUserEmail = common.gitUserEmail
+  }
   return out
 }
 

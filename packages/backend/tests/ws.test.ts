@@ -239,6 +239,8 @@ describe('WebSocket channels', () => {
       expiresAt: null,
       deletedAt: null,
       schemaVersion: 1,
+      gitUserName: null,
+      gitUserEmail: null,
     })
 
     await new Promise((r) => setTimeout(r, 50))

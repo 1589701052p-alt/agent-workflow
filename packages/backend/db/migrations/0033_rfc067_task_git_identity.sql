@@ -1,0 +1,28 @@
+-- RFC-067 — Per-task Git commit identity. Two nullable TEXT columns on the
+-- `tasks` table. NULL on both columns means "no per-task identity recorded",
+-- which is byte-identical to pre-RFC-067 behaviour: the runner does not
+-- inject any `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env at opencode spawn time
+-- and the worktree's `.git/config` is not augmented with a `[user]` section,
+-- so `git commit` resolves the identity from the daemon's inherited
+-- `~/.gitconfig` / repo-local config exactly like before.
+--
+-- Both columns set means the launcher recorded a paired (name, email) at
+-- task start time; the runner injects all four env vars (author + committer)
+-- AND `services/task.ts` writes `user.name` / `user.email` into the
+-- worktree's `.git/config` as a fallback for any git invocation that does
+-- not inherit the spawn env.
+--
+-- XOR (only one of the two set) is rejected at the `StartTaskSchema`
+-- superRefine stage and never persisted, so this column-level definition
+-- has no CHECK constraint — DB-level enforcement would have to span two
+-- columns and is unnecessary defense in depth given the application-level
+-- XOR is hit on every write path.
+--
+-- Historical rows: both columns default to NULL, no backfill needed.
+-- "Recovered" old tasks (RFC-042 retry, resumeTask after daemon restart)
+-- read NULL → behave exactly like before.
+--
+-- See design/RFC-067-task-git-identity/design.md §2 for the full rationale.
+ALTER TABLE `tasks` ADD COLUMN `git_user_name` text;
+--> statement-breakpoint
+ALTER TABLE `tasks` ADD COLUMN `git_user_email` text;

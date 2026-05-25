@@ -52,6 +52,12 @@ function LaunchPage() {
 
   // RFC-037: user-supplied display name for this task. Required for submit.
   const [taskName, setTaskName] = useState('')
+  // RFC-067: optional per-task Git commit identity. Both blank → daemon
+  // default (legacy behavior). Both set → runner injects GIT_AUTHOR_* /
+  // GIT_COMMITTER_*. Half-set → blocked client-side (matches StartTaskSchema
+  // XOR superRefine).
+  const [gitUserName, setGitUserName] = useState('')
+  const [gitUserEmail, setGitUserEmail] = useState('')
   // RFC-024: repo source can be a local path OR a remote git URL.
   const [source, setSource] = useState<RepoSource>({
     kind: 'path',
@@ -105,13 +111,24 @@ function LaunchPage() {
       // RFC-037: user-supplied display name. Trim before stamping into the
       // body so the frontend doesn't waste a 422 round-trip on stray spaces.
       const name = taskName.trim()
+      // RFC-067: trim + pair-check the optional Git commit identity.
+      // canSubmit gate already blocks half-set; the trim values feed straight
+      // into buildLaunchBody, which omits the keys when blank.
+      const trimGitName = gitUserName.trim()
+      const trimGitEmail = gitUserEmail.trim()
+      const launchCommon = {
+        workflowId: id,
+        name,
+        inputs,
+        ...(trimGitName !== '' && trimGitEmail !== ''
+          ? { gitUserName: trimGitName, gitUserEmail: trimGitEmail }
+          : {}),
+      }
       if (source.kind === 'path' && (hasUploadKind || hasUploads)) {
         const payload = {
-          workflowId: id,
-          name,
+          ...launchCommon,
           repoPath: source.repoPath,
           baseBranch: source.baseBranch,
-          inputs,
         }
         return api.postMultipart<Task>('/api/tasks', buildLaunchFormData(payload, uploads))
       }
@@ -120,10 +137,10 @@ function LaunchPage() {
         // multipart envelope for parity, backend will 422 us politely.
         return api.postMultipart<Task>(
           '/api/tasks',
-          buildLaunchFormDataV2(source, { workflowId: id, name, inputs }, uploads),
+          buildLaunchFormDataV2(source, launchCommon, uploads),
         )
       }
-      return api.post<Task>('/api/tasks', buildLaunchBody(source, { workflowId: id, name, inputs }))
+      return api.post<Task>('/api/tasks', buildLaunchBody(source, launchCommon))
     },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
@@ -153,8 +170,23 @@ function LaunchPage() {
   // RFC-037: task name is required; mirror backend trim semantics here so the
   // Start button stays disabled for whitespace-only input.
   const nameReady = taskName.trim().length > 0
+  // RFC-067: pair + format check for the optional Git identity. Mirrors
+  // StartTaskSchema's superRefine so the user gets immediate feedback
+  // instead of a 422 round-trip.
+  const gitNameTrim = gitUserName.trim()
+  const gitEmailTrim = gitUserEmail.trim()
+  const gitBoth = gitNameTrim !== '' && gitEmailTrim !== ''
+  const gitNeither = gitNameTrim === '' && gitEmailTrim === ''
+  const gitPairingError = !gitBoth && !gitNeither
+  const gitEmailFormatError = gitEmailTrim !== '' && !/^[^\s@]+@[^\s@]+$/.test(gitEmailTrim)
+  const gitIdentityOk = gitNeither || (gitBoth && !gitEmailFormatError)
   const canSubmit =
-    nameReady && sourceReady && !missingRequired && repoIssue === null && !start.isPending
+    nameReady &&
+    sourceReady &&
+    !missingRequired &&
+    repoIssue === null &&
+    gitIdentityOk &&
+    !start.isPending
 
   return (
     <div className="page">
@@ -185,6 +217,39 @@ function LaunchPage() {
             data-testid="launch-task-name"
           />
         </Field>
+
+        {/* RFC-067: optional per-task Git commit identity. Both blank → daemon
+            default (legacy). Both filled → runner injects GIT_AUTHOR_* /
+            GIT_COMMITTER_*. Half-filled is blocked client-side + server-side. */}
+        <details className="launch-collapsible" data-testid="launch-git-identity">
+          <summary>{t('launch.gitIdentity.toggle')}</summary>
+          <div className="launch-collapsible__body">
+            <Field label={t('launch.gitIdentity.name')} hint={t('launch.gitIdentity.hint')}>
+              <TextInput
+                value={gitUserName}
+                onChange={setGitUserName}
+                maxLength={255}
+                data-testid="launch-git-user-name"
+              />
+            </Field>
+            <Field
+              label={t('launch.gitIdentity.email')}
+              {...(gitEmailFormatError ? { hint: t('launch.gitIdentity.emailInvalid') } : {})}
+            >
+              <TextInput
+                value={gitUserEmail}
+                onChange={setGitUserEmail}
+                maxLength={255}
+                data-testid="launch-git-user-email"
+              />
+            </Field>
+            {gitPairingError && (
+              <div className="error-text" role="alert" data-testid="launch-git-pair-error">
+                {t('launch.gitIdentity.pairingError')}
+              </div>
+            )}
+          </div>
+        </details>
 
         <RepoSourceTabs source={source} onChange={setSource} />
 

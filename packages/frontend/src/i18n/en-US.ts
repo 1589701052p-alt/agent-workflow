@@ -1045,6 +1045,22 @@ export const enUS: Resources = {
       refPlaceholder: 'main / v1.2.0 / a3f9c…',
       recentUrlsPlaceholder: '— pick a cached repo —',
       cloningHint: 'First-time clone may take a few minutes; subsequent launches reuse the cache.',
+      urlAutoSync:
+        'Cached mirror auto-syncs to remote before launch (fetch + fast-forward of the selected branch).',
+    },
+    gitIdentity: {
+      toggle: 'Git commit identity (optional)',
+      name: 'Git user name',
+      email: 'Git user email',
+      hint: 'Leave blank to use the system default identity',
+      pairingError: 'Name and email must both be set or both be blank',
+      emailInvalid: 'Enter a valid email address (must include @)',
+    },
+    pathFetch: {
+      label: 'Refresh remote refs before launch',
+      switchLabel: 'Run `git fetch --all --prune --tags` before starting the task',
+      switchHint:
+        'Refreshes remote-tracking refs only. Never `pull` / `merge` / `checkout` — your working tree and current branch are untouched.',
     },
   },
   inspector: {

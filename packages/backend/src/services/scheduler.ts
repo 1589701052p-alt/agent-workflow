@@ -1577,6 +1577,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           agent,
           inputs: upstreamInputs,
           worktreePath: task.worktreePath,
+          // RFC-067: thread per-task Git commit identity through to the runner
+          // so `git commit` invocations inside the agent inherit the
+          // task-scoped author + committer. Both NULL → runner skips
+          // injection and falls back to daemon's default git config.
+          gitUserName: task.gitUserName,
+          gitUserEmail: task.gitUserEmail,
           templateMeta: {
             repoPath: task.repoPath,
             baseBranch: task.baseBranch,
@@ -2515,6 +2521,9 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       agent: innerAgent,
       inputs,
       worktreePath: task.worktreePath,
+      // RFC-067: per-task Git identity threaded through fanout shard dispatch.
+      gitUserName: task.gitUserName,
+      gitUserEmail: task.gitUserEmail,
       templateMeta: {
         repoPath: task.repoPath,
         baseBranch: task.baseBranch,
@@ -2680,6 +2689,9 @@ async function dispatchFanoutAggregator(
       agent: aggAgent,
       inputs: aggInputs,
       worktreePath: task.worktreePath,
+      // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.
+      gitUserName: task.gitUserName,
+      gitUserEmail: task.gitUserEmail,
       templateMeta: {
         repoPath: task.repoPath,
         baseBranch: task.baseBranch,

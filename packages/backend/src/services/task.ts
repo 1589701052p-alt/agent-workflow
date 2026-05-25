@@ -170,21 +170,48 @@ export async function materializeWorktree(opts: {
   }
 }
 
+interface ResolvedRepoSource {
+  repoPath: string
+  baseBranch: string | undefined
+  repoUrl: string | null
+  /** RFC-068: path-mode opt-in fetch error message. null when feature was off or succeeded. */
+  pathFetchError: string | null
+  /** RFC-068: URL-mode FF warnings. Empty when nothing relevant. */
+  ffWarnings: Array<{ branch: string; warning: string }>
+}
+
 /**
  * RFC-024: resolve `StartTask` to the local path + ref the worktree machinery
  * needs. Path mode is pass-through; URL mode triggers `resolveCachedRepo`
  * (clone-or-reuse) and folds in the cache's default branch when the caller
  * didn't specify a ref.
+ *
+ * RFC-068 additions:
+ *  - Path mode + `fetchBeforeLaunch=true` → run `git fetch --all --prune --tags`
+ *    against the user repo (never `pull` / `merge`). Failures WARN + proceed.
+ *  - URL mode → pass the launcher-selected base ref to `resolveCachedRepo`
+ *    as a `syncBranches` candidate so the warm path fast-forwards the local
+ *    branch to `origin/<branch>` before the worktree is materialized. When
+ *    the launcher leaves `ref` blank, a second cheap resolve re-runs FF for
+ *    the detected default branch (fetch already happened, no double round-trip).
  */
 async function resolveRepoSource(
   input: StartTask,
   deps: StartTaskDeps,
-): Promise<{ repoPath: string; baseBranch: string | undefined; repoUrl: string | null }> {
+): Promise<ResolvedRepoSource> {
   if (input.repoPath) {
+    let pathFetchError: string | null = null
+    if (input.fetchBeforeLaunch === true) {
+      const { fetchPathRepoBeforeLaunch } = await import('@/services/repo')
+      const r = await fetchPathRepoBeforeLaunch(input.repoPath)
+      if (!r.ok) pathFetchError = r.error
+    }
     return {
       repoPath: input.repoPath,
       baseBranch: input.baseBranch,
       repoUrl: null,
+      pathFetchError,
+      ffWarnings: [],
     }
   }
   if (!input.repoUrl) {
@@ -194,11 +221,46 @@ async function resolveRepoSource(
     )
   }
   const appHome = deps.appHome ?? Paths.root
-  const resolved = await resolveCachedRepo({ db: deps.db, appHome }, { url: input.repoUrl })
+  const syncCandidates = [input.ref].filter((s): s is string => typeof s === 'string')
+  const resolved = await resolveCachedRepo(
+    { db: deps.db, appHome, syncBranches: syncCandidates },
+    { url: input.repoUrl },
+  )
+  const baseBranch = input.ref ?? resolved.cached.defaultBranch ?? undefined
+  let ffWarnings: Array<{ branch: string; warning: string }> = resolved.ffOutcomes
+    .filter((o) => o.warning !== null)
+    .map((o) => ({ branch: o.branch, warning: o.warning as string }))
+  // When launcher left ref blank AND we hit the warm path, the first
+  // resolveCachedRepo call didn't get a chance to FF the default branch
+  // (syncBranches was empty). A second cheap call with fetchOnReuse=false
+  // runs FF using the now-known default branch.
+  if (
+    !resolved.cold &&
+    syncCandidates.length === 0 &&
+    typeof resolved.cached.defaultBranch === 'string' &&
+    resolved.cached.defaultBranch.length > 0
+  ) {
+    const second = await resolveCachedRepo(
+      {
+        db: deps.db,
+        appHome,
+        syncBranches: [resolved.cached.defaultBranch],
+        fetchOnReuse: false,
+      },
+      { url: input.repoUrl },
+    )
+    ffWarnings = ffWarnings.concat(
+      second.ffOutcomes
+        .filter((o) => o.warning !== null)
+        .map((o) => ({ branch: o.branch, warning: o.warning as string })),
+    )
+  }
   return {
     repoPath: resolved.cached.localPath,
-    baseBranch: input.ref ?? resolved.cached.defaultBranch ?? undefined,
+    baseBranch,
     repoUrl: input.repoUrl,
+    pathFetchError: null,
+    ffWarnings,
   }
 }
 
@@ -231,7 +293,21 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   // URL mode may trigger a `git clone` here (caller is responsible for any
   // user-facing "cloning in progress" UI). For multipart (RFC-020) the
   // resolved repo info is reused via deps.preCreatedWorktree below.
+  // RFC-068: also runs opt-in path fetch / URL-mode FF; warnings logged but
+  // never fatal — task still launches.
   const source = await resolveRepoSource(input, deps)
+  if (source.pathFetchError !== null) {
+    log.warn('rfc068/path-fetch-failed', {
+      repoPath: source.repoPath,
+      error: source.pathFetchError,
+    })
+  }
+  if (source.ffWarnings.length > 0) {
+    log.warn('rfc068/ff-warnings', {
+      repoUrl: source.repoUrl,
+      warnings: source.ffWarnings,
+    })
+  }
 
   // RFC-020: multipart-upload flow creates the worktree before this call so
   // it can write user files into it. JSON-body flow takes the original path:
@@ -292,6 +368,17 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     }
   }
 
+  // RFC-067: trim and pair-validate the optional Git commit identity.
+  // StartTaskSchema's superRefine already rejected the half-set case, but we
+  // re-derive defensively here so even a hand-crafted bypass cannot land a
+  // single-field row into the DB.
+  const trimGitName = input.gitUserName?.trim() ?? ''
+  const trimGitEmail = input.gitUserEmail?.trim() ?? ''
+  const persistedGitUserName =
+    trimGitName.length > 0 && trimGitEmail.length > 0 ? trimGitName : null
+  const persistedGitUserEmail =
+    trimGitName.length > 0 && trimGitEmail.length > 0 ? trimGitEmail : null
+
   const now = Date.now()
   await deps.db.insert(tasks).values({
     id: taskId,
@@ -315,6 +402,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     inputs: JSON.stringify(input.inputs),
     maxDurationMs: input.maxDurationMs ?? null,
     maxTotalTokens: input.maxTotalTokens ?? null,
+    // RFC-067: per-task Git commit identity (NULL when omitted or only
+    // half-set; runner.ts skips env injection when these are NULL).
+    gitUserName: persistedGitUserName,
+    gitUserEmail: persistedGitUserEmail,
     startedAt: now,
     finishedAt: earlyError === null ? null : now,
     errorSummary: earlyError !== null ? `worktree creation failed: ${earlyError}` : null,
@@ -322,6 +413,19 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
     ownerUserId: deps.actorUserId ?? null,
   })
+
+  // RFC-067 NOTE: an earlier draft of this RFC also wrote `user.name` /
+  // `user.email` into the worktree's local `.git/config` as a defense-in-
+  // depth fallback for git invocations that bypass the runner's spawn env.
+  // We dropped that path: by default `git config <key> <value>` inside a
+  // worktree writes to the PARENT repo's shared `.git/config`, so two
+  // concurrent tasks against the same source repo race-overwrite each
+  // other's identity. Per-worktree config via `extensions.worktreeConfig=
+  // true` would have to be enabled on the parent repo (a global flag we do
+  // not own). Pure spawn-env injection (in services/runner.ts) is therefore
+  // the single source of truth for task identity; agents that bypass the
+  // runner fall back to the parent repo's default user, matching
+  // pre-RFC-067 behaviour.
 
   // RFC-036: record collaborators + node assignments. ensureValidAssignments
   // has already been run by the caller against the user-provided payload.
@@ -1122,6 +1226,9 @@ function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null):
     expiresAt: row.expiresAt,
     deletedAt: row.deletedAt,
     schemaVersion: row.schemaVersion,
+    // RFC-067: per-task Git commit identity (NULL = no override → daemon default).
+    gitUserName: row.gitUserName ?? null,
+    gitUserEmail: row.gitUserEmail ?? null,
   }
 }
 

@@ -72,6 +72,15 @@ export const TaskSchema = z.object({
   expiresAt: z.number().int().nullable(),
   deletedAt: z.number().int().nullable(),
   schemaVersion: z.number().int(),
+  /**
+   * RFC-067: per-task Git commit identity. Both NULL → daemon default
+   * (legacy behavior, byte-identical to pre-RFC-067). Both set → runner
+   * injects `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env at opencode spawn time
+   * AND startTask writes `[user]` into the worktree's `.git/config`. XOR
+   * rejected at StartTaskSchema superRefine and never persisted.
+   */
+  gitUserName: z.string().nullable(),
+  gitUserEmail: z.string().nullable(),
 })
 export type Task = z.infer<typeof TaskSchema>
 
@@ -139,6 +148,25 @@ export const StartTaskSchema = z
      * field is for "share with me" peers without an assignment role.
      */
     collaboratorUserIds: z.array(z.string().min(1)).optional(),
+    /**
+     * RFC-068 — path mode opt-in: when true, the daemon runs
+     * `git fetch --all --prune --tags` against the user-supplied `repoPath`
+     * before materializing the worktree. Never `pull` / `merge` / `checkout`
+     * the user's current branch — this only refreshes remote-tracking refs
+     * so the launcher can pick `origin/<branch>` as a base. Ignored in URL
+     * mode (cached mirrors always auto-fetch + fast-forward).
+     */
+    fetchBeforeLaunch: z.boolean().optional(),
+    /**
+     * RFC-067 — optional per-task Git commit identity. Both must be set
+     * together or both omitted (XOR enforced in superRefine). When both set,
+     * the runner injects `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` /
+     * `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` at opencode spawn time
+     * AND the launcher writes `user.name` / `user.email` into the worktree's
+     * `.git/config` as a fallback for non-opencode git invocations.
+     */
+    gitUserName: z.string().min(1).max(255).optional(),
+    gitUserEmail: z.string().min(1).max(255).optional(),
   })
   .superRefine((value, ctx) => {
     const hasPath = typeof value.repoPath === 'string' && value.repoPath.length > 0
@@ -162,6 +190,29 @@ export const StartTaskSchema = z
         code: z.ZodIssueCode.custom,
         message: 'baseBranch is required in path mode',
         path: ['baseBranch'],
+      })
+    }
+    // RFC-067: Git identity XOR + format check. Trim before testing so the
+    // user can't sneak through with whitespace-only strings. Loose email
+    // check: must contain `@`, no whitespace on either side. We intentionally
+    // do NOT validate TLD / DNS — git itself accepts any `Name <email>`
+    // shape, so the framework should not be stricter than git.
+    const trimName = value.gitUserName?.trim() ?? ''
+    const trimEmail = value.gitUserEmail?.trim() ?? ''
+    const hasName = trimName.length > 0
+    const hasEmail = trimEmail.length > 0
+    if (hasName !== hasEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'git-identity-incomplete',
+        path: hasName ? ['gitUserEmail'] : ['gitUserName'],
+      })
+    }
+    if (hasEmail && !/^[^\s@]+@[^\s@]+$/.test(trimEmail)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'git-identity-email-invalid',
+        path: ['gitUserEmail'],
       })
     }
   })

@@ -988,6 +988,28 @@ export interface Resources {
       refPlaceholder: string
       recentUrlsPlaceholder: string
       cloningHint: string
+      /** RFC-068: hint shown under the URL-mode ref field. */
+      urlAutoSync: string
+    }
+    /** RFC-068 — path-mode opt-in `git fetch` switch (default off). */
+    pathFetch: {
+      label: string
+      switchLabel: string
+      switchHint: string
+    }
+    /**
+     * RFC-067 — optional per-task Git commit identity. Toggle is rendered
+     * collapsed by default. Both fields blank → daemon default identity;
+     * both filled → runner injects GIT_AUTHOR_* / GIT_COMMITTER_*.
+     * pairingError / emailInvalid surface as inline alerts.
+     */
+    gitIdentity: {
+      toggle: string
+      name: string
+      email: string
+      hint: string
+      pairingError: string
+      emailInvalid: string
     }
   }
   inspector: {
@@ -2942,6 +2964,21 @@ export const zhCN: Resources = {
       refPlaceholder: 'main / v1.2.0 / a3f9c…',
       recentUrlsPlaceholder: '— 从已缓存仓里挑一个 —',
       cloningHint: '首次克隆可能耗时数分钟；下次启动会复用本地缓存。',
+      urlAutoSync: '本地镜像会在启动前自动同步到远端（fetch + 所选分支 fast-forward）。',
+    },
+    gitIdentity: {
+      toggle: 'Git 提交身份（可选）',
+      name: 'Git 用户名',
+      email: 'Git 邮箱',
+      hint: '留空则使用系统默认身份',
+      pairingError: '用户名和邮箱必须同时填或同时留空',
+      emailInvalid: '请输入合法的邮箱（含 @）',
+    },
+    pathFetch: {
+      label: '启动前刷新远端引用',
+      switchLabel: '启动前先 `git fetch --all --prune --tags`',
+      switchHint:
+        '仅刷新远端跟踪 ref；不会 `pull` / `merge` / `checkout`，工作目录与当前分支保持原样。',
     },
   },
   inspector: {
