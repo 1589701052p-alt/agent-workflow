@@ -342,11 +342,68 @@ export const tasks = sqliteTable(
     // and never persisted.
     gitUserName: text('git_user_name'),
     gitUserEmail: text('git_user_email'),
+    /**
+     * RFC-066: count of `task_repos` rows for this task. Always ≥ 1.
+     * Single-repo tasks have value 1 (and the legacy `repo_path` /
+     * `worktree_path` / `base_branch` / `branch` / `base_commit` / `repo_url`
+     * columns are byte-identical to pre-RFC-066). Multi-repo tasks have
+     * value > 1 and the legacy columns mirror `task_repos[0]` for legacy
+     * API back-compat. Migrated rows default to 1 (1-row backfill in
+     * migration 0034).
+     */
+    repoCount: integer('repo_count').notNull().default(1),
   },
   (t) => ({
     statusIdx: index('idx_tasks_status').on(t.status, t.startedAt),
     workflowIdx: index('idx_tasks_workflow').on(t.workflowId, t.startedAt),
     ownerIdx: index('idx_tasks_owner').on(t.ownerUserId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// task_repos — RFC-066. One row per repo in a task. Single-repo tasks have
+// one entry (mirrors `tasks.*` legacy columns); multi-repo tasks have N
+// entries sorted by `repo_index` ascending. Migration 0034 backfills a
+// single row per existing task. The `tasks.repo_*` / `tasks.worktree_*` /
+// `tasks.base_*` / `tasks.branch` columns are kept as mirrors of
+// `task_repos[0]` for legacy API compatibility.
+// -----------------------------------------------------------------------------
+export const taskRepos = sqliteTable(
+  'task_repos',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    /** 0..N-1; 0 = primary (mirrors `tasks.*` legacy columns). */
+    repoIndex: integer('repo_index').notNull(),
+    /** Absolute path. URL-mode entries store the cached_repos.localPath. */
+    repoPath: text('repo_path').notNull(),
+    /** RFC-024 redacted URL; NULL for path-mode entries. */
+    repoUrl: text('repo_url'),
+    baseBranch: text('base_branch').notNull().default(''),
+    /** 'agent-workflow/{taskId}' — each per-source-repo worktree gets the
+     * same branch name (the branches live in different source repos, so
+     * names cannot collide). */
+    branch: text('branch').notNull(),
+    baseCommit: text('base_commit'),
+    worktreePath: text('worktree_path').notNull(),
+    /**
+     * Sub-directory basename inside `tasks.worktree_path` for multi-repo
+     * tasks (`utils` / `utils-2` / `utils-3` after auto-suffix collision
+     * resolution). Empty string for single-repo tasks where
+     * `tasks.worktree_path` is the repo worktree itself.
+     */
+    worktreeDirName: text('worktree_dir_name').notNull().default(''),
+    /** RFC-034: per-repo submodule init telemetry. NULL for legacy rows. */
+    hasSubmodules: integer('has_submodules', { mode: 'boolean' }),
+    submoduleInitOk: integer('submodule_init_ok', { mode: 'boolean' }),
+    submoduleInitError: text('submodule_init_error'),
+    schemaVersion: integer('schema_version').notNull().default(1),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.repoIndex] }),
+    repoPathIdx: index('idx_task_repos_repo_path').on(t.repoPath),
+    repoUrlIdx: index('idx_task_repos_repo_url').on(t.repoUrl),
   }),
 )
 
@@ -474,6 +531,17 @@ export const nodeRuns = sqliteTable(
      * failed for any non-port-validation reason, and pre-RFC-049 rows.
      */
     portValidationFailuresJson: text('port_validation_failures_json'),
+    /**
+     * RFC-066: per-repo stash sha map for multi-repo tasks, serialized as
+     * `{ "<worktree_dir_name>": "<git-stash-sha>", ... }`. Replaces the
+     * single-string `pre_snapshot` column for multi-repo tasks; single-repo
+     * tasks continue to write `pre_snapshot` and leave this NULL.
+     * `rollbackForResume` reads this column preferentially when
+     * `task.repoCount > 1`; single-repo tasks read `pre_snapshot` as before
+     * (byte-for-byte unchanged from pre-RFC-066). Defense in depth: when
+     * `task.repoCount === 1` this column is always NULL.
+     */
+    preSnapshotReposJson: text('pre_snapshot_repos_json'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),

@@ -60,7 +60,9 @@ describe('StartTaskSchema (RFC-024)', () => {
     })
     expect(r.success).toBe(false)
     if (!r.success) {
-      expect(r.error.issues.some((i) => /one of repoPath or repoUrl/.test(i.message))).toBe(true)
+      // RFC-066 widened the message to mention the new `repos[]` field too.
+      // Keep the assertion broad enough to survive that text change.
+      expect(r.error.issues.some((i) => /one of repoPath.*repoUrl/.test(i.message))).toBe(true)
     }
   })
 

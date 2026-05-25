@@ -651,9 +651,30 @@ async function handleMultipartTaskStart(
       'multipart uploads currently require launching with a local repoPath; URL launches are JSON-only',
     )
   }
+  // RFC-066: multi-repo + multipart uploads is not supported in v1. The
+  // upload pipeline writes files into a single worktree; with N sibling
+  // worktrees there's no obvious target. Gate at the route so the caller
+  // sees a structured 422 instead of a misleading downstream error. The
+  // mirror gate in `services/task.ts` startTask catches direct callers
+  // that bypass this route.
+  if (Array.isArray(startInput.repos) && startInput.repos.length > 1) {
+    throw new ValidationError(
+      'multi-repo-upload-unsupported',
+      'multipart upload inputs are not supported in multi-repo tasks (v1)',
+      { repoCount: startInput.repos.length },
+    )
+  }
+  // RFC-066: accept the v2 single-entry `repos:[{...}]` body shape in addition
+  // to the legacy top-level `repoPath`/`baseBranch` fields. The multi-repo
+  // case (length > 1) was already rejected above; here we just normalize so
+  // materializeWorktree always sees a concrete repoPath even when the caller
+  // used the new shape.
+  const multipartRepoPath =
+    startInput.repoPath ?? (startInput.repos?.[0]?.repoPath as string | undefined)
+  const multipartBaseBranch = startInput.baseBranch ?? startInput.repos?.[0]?.baseBranch
   const wt = await materializeWorktree({
-    repoPath: startInput.repoPath as string,
-    baseBranch: startInput.baseBranch,
+    repoPath: multipartRepoPath as string,
+    baseBranch: multipartBaseBranch,
     taskId,
     appHome,
   })

@@ -241,6 +241,9 @@ describe('WebSocket channels', () => {
       schemaVersion: 1,
       gitUserName: null,
       gitUserEmail: null,
+      // RFC-066: TaskSchema now requires per-task repo metadata.
+      repoCount: 1,
+      repos: [],
     })
 
     await new Promise((r) => setTimeout(r, 50))

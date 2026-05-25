@@ -8,14 +8,17 @@ import type {
   NodeRunEventsResponse,
   NodeRunOutput,
   StartTask,
+  StartTaskRepo,
   Task,
   TaskDiff,
   TaskNodeRuns,
+  TaskRepo,
   TaskSummary,
 } from '@agent-workflow/shared'
 import { NODE_KIND_BEHAVIORS } from '@agent-workflow/shared'
 import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import {
@@ -23,6 +26,7 @@ import {
   nodeRunOutputs,
   nodeRuns,
   taskCollaborators,
+  taskRepos,
   tasks,
   workflows,
 } from '@/db/schema'
@@ -131,6 +135,14 @@ export async function materializeWorktree(opts: {
   baseBranch: string | undefined
   taskId: string
   appHome: string
+  /**
+   * RFC-066: when provided, the worktree lands at this absolute path
+   * instead of the default `{appHome}/worktrees/{repoSlug}/{taskId}` layout.
+   * The multi-repo branch supplies per-repo paths under
+   * `{appHome}/worktrees/multi/{taskId}/<basename>/`; the single-repo
+   * branch leaves this undefined to inherit the legacy layout byte-for-byte.
+   */
+  overrideWorktreePath?: string
 }): Promise<{
   worktreePath: string
   branch: string
@@ -147,6 +159,9 @@ export async function materializeWorktree(opts: {
       taskId: opts.taskId,
       ...(opts.baseBranch !== undefined ? { baseBranch: opts.baseBranch } : {}),
       appHome: opts.appHome,
+      ...(opts.overrideWorktreePath !== undefined
+        ? { overrideWorktreePath: opts.overrideWorktreePath }
+        : {}),
     })
     return {
       worktreePath: wt.worktreePath,
@@ -181,59 +196,78 @@ interface ResolvedRepoSource {
 }
 
 /**
- * RFC-024: resolve `StartTask` to the local path + ref the worktree machinery
- * needs. Path mode is pass-through; URL mode triggers `resolveCachedRepo`
- * (clone-or-reuse) and folds in the cache's default branch when the caller
- * didn't specify a ref.
- *
- * RFC-068 additions:
- *  - Path mode + `fetchBeforeLaunch=true` → run `git fetch --all --prune --tags`
- *    against the user repo (never `pull` / `merge`). Failures WARN + proceed.
- *  - URL mode → pass the launcher-selected base ref to `resolveCachedRepo`
- *    as a `syncBranches` candidate so the warm path fast-forwards the local
- *    branch to `origin/<branch>` before the worktree is materialized. When
- *    the launcher leaves `ref` blank, a second cheap resolve re-runs FF for
- *    the detected default branch (fetch already happened, no double round-trip).
+ * RFC-066: collapse a `StartTask` body into the canonical per-repo spec list
+ * the rest of `startTask` walks. Legacy single-repo bodies (top-level
+ * `repoPath` / `repoUrl` / `baseBranch` / `ref` fields) are converted to a
+ * length-1 array so the downstream code path is uniform; v2 bodies that
+ * already supplied `repos: [...]` pass through verbatim. `fetchBeforeLaunch`
+ * is left on `input` (a single top-level flag covers every repo in a
+ * multi-repo task by design — see RFC-068 §"多仓" interaction notes).
  */
-async function resolveRepoSource(
+function normalizeStartTaskRepos(input: StartTask): StartTaskRepo[] {
+  if (Array.isArray(input.repos) && input.repos.length > 0) {
+    return input.repos
+  }
+  // Legacy single-repo body → length-1 array. Drop undefined fields so the
+  // StartTaskRepoSchema's superRefine sees the same shape it would for v2.
+  const entry: StartTaskRepo = {
+    ...(input.repoPath !== undefined ? { repoPath: input.repoPath } : {}),
+    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {}),
+    ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
+    ...(input.ref !== undefined ? { ref: input.ref } : {}),
+  }
+  return [entry]
+}
+
+/**
+ * RFC-024 + RFC-066: per-repo source resolution. Carved out of the original
+ * `resolveRepoSource` so the multi-repo launcher can call it N times in a
+ * loop without re-implementing the path/URL fork. Single-repo path is
+ * byte-for-byte identical to the pre-RFC-066 inline implementation — that
+ * baseline is locked by `tests/source/start-task-single-path-baseline.test.ts`.
+ *
+ * RFC-068 wiring is automatic: the path-mode opt-in fetch runs when
+ * `input.fetchBeforeLaunch === true` (top-level flag, applies to every
+ * repo entry in multi-repo mode), and URL-mode FF fires inside
+ * `resolveCachedRepo` per (cacheDir, syncBranch) pair so each multi-repo
+ * URL entry hits its own cached mirror with no cross-talk.
+ */
+async function resolveRepoSourceSingle(
+  spec: StartTaskRepo,
   input: StartTask,
   deps: StartTaskDeps,
 ): Promise<ResolvedRepoSource> {
-  if (input.repoPath) {
+  if (spec.repoPath) {
     let pathFetchError: string | null = null
     if (input.fetchBeforeLaunch === true) {
       const { fetchPathRepoBeforeLaunch } = await import('@/services/repo')
-      const r = await fetchPathRepoBeforeLaunch(input.repoPath)
+      const r = await fetchPathRepoBeforeLaunch(spec.repoPath)
       if (!r.ok) pathFetchError = r.error
     }
     return {
-      repoPath: input.repoPath,
-      baseBranch: input.baseBranch,
+      repoPath: spec.repoPath,
+      baseBranch: spec.baseBranch,
       repoUrl: null,
       pathFetchError,
       ffWarnings: [],
     }
   }
-  if (!input.repoUrl) {
+  if (!spec.repoUrl) {
     throw new ValidationError(
       'start-task-source-required',
       'one of repoPath or repoUrl is required',
     )
   }
   const appHome = deps.appHome ?? Paths.root
-  const syncCandidates = [input.ref].filter((s): s is string => typeof s === 'string')
+  const syncCandidates = [spec.ref].filter((s): s is string => typeof s === 'string')
   const resolved = await resolveCachedRepo(
     { db: deps.db, appHome, syncBranches: syncCandidates },
-    { url: input.repoUrl },
+    { url: spec.repoUrl },
   )
-  const baseBranch = input.ref ?? resolved.cached.defaultBranch ?? undefined
+  const baseBranch = spec.ref ?? resolved.cached.defaultBranch ?? undefined
   let ffWarnings: Array<{ branch: string; warning: string }> = resolved.ffOutcomes
     .filter((o) => o.warning !== null)
     .map((o) => ({ branch: o.branch, warning: o.warning as string }))
-  // When launcher left ref blank AND we hit the warm path, the first
-  // resolveCachedRepo call didn't get a chance to FF the default branch
-  // (syncBranches was empty). A second cheap call with fetchOnReuse=false
-  // runs FF using the now-known default branch.
   if (
     !resolved.cold &&
     syncCandidates.length === 0 &&
@@ -247,7 +281,7 @@ async function resolveRepoSource(
         syncBranches: [resolved.cached.defaultBranch],
         fetchOnReuse: false,
       },
-      { url: input.repoUrl },
+      { url: spec.repoUrl },
     )
     ffWarnings = ffWarnings.concat(
       second.ffOutcomes
@@ -258,10 +292,58 @@ async function resolveRepoSource(
   return {
     repoPath: resolved.cached.localPath,
     baseBranch,
-    repoUrl: input.repoUrl,
+    repoUrl: spec.repoUrl,
     pathFetchError: null,
     ffWarnings,
   }
+}
+
+/**
+ * RFC-024: legacy single-repo entry point — kept for callers that still
+ * thread a `StartTask` (e.g. the multipart upload path materializes the
+ * worktree before `startTask` consolidation lands). Internally delegates
+ * to `resolveRepoSourceSingle` with the legacy fields wrapped into a
+ * single-repo spec.
+ */
+async function resolveRepoSource(
+  input: StartTask,
+  deps: StartTaskDeps,
+): Promise<ResolvedRepoSource> {
+  const specs = normalizeStartTaskRepos(input)
+  if (specs.length !== 1) {
+    throw new ValidationError(
+      'start-task-source-required',
+      'resolveRepoSource expects a single-repo body; use the multi-repo branch instead',
+    )
+  }
+  return resolveRepoSourceSingle(specs[0]!, input, deps)
+}
+
+interface MaterializedRepo {
+  repoIndex: number
+  repoPath: string
+  repoUrl: string | null
+  baseBranch: string
+  branch: string
+  baseCommit: string | null
+  worktreePath: string
+  worktreeDirName: string
+  submoduleInitOk: boolean
+  submoduleInitError: string | null
+  hasSubmodules: boolean
+}
+
+/**
+ * RFC-066: compute the per-repo sub-directory basename for a multi-repo
+ * task, applying `-2`/`-3` collision suffixes when the raw basename is
+ * already in use. Mirrors the frontend `computePreviewDirNames` behavior
+ * so the launcher's preview chip matches what the daemon actually mounts.
+ */
+function resolveMultiRepoDirName(rawBasename: string, used: Set<string>): string {
+  if (!used.has(rawBasename)) return rawBasename
+  let suffix = 2
+  while (used.has(`${rawBasename}-${suffix}`)) suffix += 1
+  return `${rawBasename}-${suffix}`
 }
 
 export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<Task> {
@@ -269,6 +351,44 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const workflow = await getWorkflow(deps.db, input.workflowId)
   if (workflow === null) {
     throw new NotFoundError('workflow-not-found', `workflow '${input.workflowId}' not found`)
+  }
+
+  // RFC-066: collapse legacy and v2 bodies into a uniform per-repo spec list.
+  const repoSpecs = normalizeStartTaskRepos(input)
+
+  // RFC-066: multi-repo gates. Reject up-front BEFORE the static workflow
+  // validation step (which may itself reject the workflow for unrelated
+  // reasons) so the failure code unambiguously points at the multi-repo
+  // mismatch. The workflow snapshot is the source of truth; workflow edits
+  // after this point cannot retroactively introduce a wrapper-git / upload
+  // node into an already-started task. Single-repo launches keep their
+  // existing behavior (workflows containing wrapper-git / upload are still
+  // launchable as today, gated by the static validation rules only).
+  if (repoSpecs.length > 1) {
+    const wrapperGitNodes = (
+      (workflow.definition.nodes as Array<{ id: string; kind: string }>) ?? []
+    )
+      .filter((n) => n.kind === 'wrapper-git')
+      .map((n) => n.id)
+    if (wrapperGitNodes.length > 0) {
+      throw new ValidationError(
+        'multi-repo-wrapper-git-unsupported',
+        'wrapper-git nodes are not supported in multi-repo tasks (v1)',
+        { wrapperGitNodes },
+      )
+    }
+    const uploadInputs = (
+      (workflow.definition.inputs as Array<{ key: string; kind: string }>) ?? []
+    )
+      .filter((i) => i.kind === 'upload')
+      .map((i) => i.key)
+    if (uploadInputs.length > 0) {
+      throw new ValidationError(
+        'multi-repo-upload-unsupported',
+        'multipart upload inputs are not supported in multi-repo tasks (v1)',
+        { uploadInputs },
+      )
+    }
   }
 
   // Static validation gate (proposal.md §静态校验): "校验失败不阻止保存，但阻止启动 task".
@@ -289,24 +409,25 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
 
   const appHome = deps.appHome ?? Paths.root
 
-  // RFC-024: resolve URL or path mode to a concrete local repoPath + ref.
-  // URL mode may trigger a `git clone` here (caller is responsible for any
-  // user-facing "cloning in progress" UI). For multipart (RFC-020) the
-  // resolved repo info is reused via deps.preCreatedWorktree below.
-  // RFC-068: also runs opt-in path fetch / URL-mode FF; warnings logged but
-  // never fatal — task still launches.
-  const source = await resolveRepoSource(input, deps)
-  if (source.pathFetchError !== null) {
-    log.warn('rfc068/path-fetch-failed', {
-      repoPath: source.repoPath,
-      error: source.pathFetchError,
-    })
-  }
-  if (source.ffWarnings.length > 0) {
-    log.warn('rfc068/ff-warnings', {
-      repoUrl: source.repoUrl,
-      warnings: source.ffWarnings,
-    })
+  // RFC-066: per-repo source resolution. Each spec independently runs
+  // path-mode opt-in fetch (RFC-068) or URL-mode FF; warnings collected per
+  // repo and surfaced after materialization.
+  const resolvedSources: ResolvedRepoSource[] = []
+  for (const spec of repoSpecs) {
+    const r = await resolveRepoSourceSingle(spec, input, deps)
+    if (r.pathFetchError !== null) {
+      log.warn('rfc068/path-fetch-failed', {
+        repoPath: r.repoPath,
+        error: r.pathFetchError,
+      })
+    }
+    if (r.ffWarnings.length > 0) {
+      log.warn('rfc068/ff-warnings', {
+        repoUrl: r.repoUrl,
+        warnings: r.ffWarnings,
+      })
+    }
+    resolvedSources.push(r)
   }
 
   // RFC-020: multipart-upload flow creates the worktree before this call so
@@ -317,14 +438,46 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   let branch: string
   let baseCommit: string | null
   let earlyError: string | null
+  let materializedRepos: MaterializedRepo[]
   if (deps.preCreatedWorktree !== undefined) {
+    // Multipart-upload flow is single-repo only. RFC-066 routes/tasks.ts
+    // wires a multi-repo + upload combo to 422 via T6's gate well before
+    // this code path runs; the assertion is belt-and-suspenders.
+    if (repoSpecs.length !== 1) {
+      throw new ValidationError(
+        'multi-repo-upload-unsupported',
+        'preCreatedWorktree path can only be used with single-repo bodies',
+      )
+    }
     taskId = deps.preCreatedWorktree.taskId
     worktreePath = deps.preCreatedWorktree.worktreePath
     branch = deps.preCreatedWorktree.branch
     baseCommit = deps.preCreatedWorktree.baseCommit
     earlyError = null
-  } else {
+    const onlySource = resolvedSources[0]!
+    materializedRepos = [
+      {
+        repoIndex: 0,
+        repoPath: onlySource.repoPath,
+        repoUrl: onlySource.repoUrl,
+        baseBranch: onlySource.baseBranch ?? '',
+        branch,
+        baseCommit,
+        worktreePath,
+        worktreeDirName: '',
+        submoduleInitOk: true,
+        submoduleInitError: null,
+        hasSubmodules: false,
+      },
+    ]
+  } else if (repoSpecs.length === 1) {
+    // RFC-066: single-path byte-baseline branch — pre-RFC-066 behavior
+    // preserved bit-for-bit. The G1 grep guard in
+    // tests/source/start-task-single-path-baseline.test.ts pins this
+    // comment so a future multi-path refactor cannot silently delete the
+    // single-repo path.
     taskId = ulid()
+    const source = resolvedSources[0]!
     const wt = await materializeWorktree({
       repoPath: source.repoPath,
       baseBranch: source.baseBranch,
@@ -336,11 +489,6 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     baseCommit = wt.baseCommit
     earlyError = wt.earlyError
 
-    // RFC-034: worktree creation succeeded but post-`worktree add` submodule
-    // init may have failed. We warn and continue — agents see empty submodule
-    // dirs but task lifecycle is unaffected. UI surface lives in /repos page
-    // for URL mode (via cached_repos.last_submodule_sync_*); path mode users
-    // see warn logs only.
     if (earlyError === null && !wt.submoduleInitOk) {
       const { createLogger } = await import('@/util/log')
       const log = createLogger('task')
@@ -351,9 +499,6 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       })
     }
 
-    // URL mode: a `worktree-base-invalid` from createWorktree usually means
-    // the user-supplied ref doesn't exist in the cached mirror. Rewrap it
-    // with the available refs so the launcher can render a helpful list.
     if (
       earlyError !== null &&
       source.repoUrl !== null &&
@@ -365,6 +510,101 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
         `ref '${input.ref ?? source.baseBranch ?? '(default)'}' not found in ${redactGitUrl(source.repoUrl)}`,
         { url: redactGitUrl(source.repoUrl), ref: input.ref ?? null, availableRefs: available },
       )
+    }
+    materializedRepos = [
+      {
+        repoIndex: 0,
+        repoPath: source.repoPath,
+        repoUrl: source.repoUrl,
+        baseBranch: source.baseBranch ?? '',
+        branch: branch !== '' ? branch : `agent-workflow/${taskId}`,
+        baseCommit,
+        worktreePath,
+        worktreeDirName: '',
+        submoduleInitOk: wt.submoduleInitOk,
+        submoduleInitError: wt.submoduleInitError,
+        hasSubmodules: wt.hasSubmodules,
+      },
+    ]
+  } else {
+    // RFC-066: multi-repo materialize branch. cwd is the parent dir; each
+    // source repo becomes a per-basename sibling worktree under it. The
+    // legacy `tasks.*` repo/worktree/branch columns mirror repos[0] for
+    // back-compat with API consumers that haven't adopted `repos[]` yet.
+    taskId = ulid()
+    const parentWorktree = join(appHome, 'worktrees', 'multi', taskId)
+    mkdirSync(parentWorktree, { recursive: true })
+    worktreePath = parentWorktree
+    earlyError = null
+    materializedRepos = []
+    const usedDirNames = new Set<string>()
+    for (let i = 0; i < resolvedSources.length; i++) {
+      const source = resolvedSources[i]!
+      const rawName = basename(source.repoPath)
+      const dirName = resolveMultiRepoDirName(rawName, usedDirNames)
+      usedDirNames.add(dirName)
+      const wt = await materializeWorktree({
+        repoPath: source.repoPath,
+        baseBranch: source.baseBranch,
+        taskId,
+        appHome,
+        overrideWorktreePath: join(parentWorktree, dirName),
+      })
+      if (wt.earlyError !== null) {
+        earlyError = `repo[${i}] (${dirName}) failed: ${wt.earlyError}`
+        // URL mode: rewrap missing-ref into the legacy `repo-ref-not-found`
+        // error shape so the launcher's existing helpful-list UI continues
+        // to work for the first failing repo.
+        if (
+          source.repoUrl !== null &&
+          /worktree-base-invalid|cannot resolve base ref/i.test(wt.earlyError)
+        ) {
+          const available = await listAvailableRefs(source.repoPath, 10)
+          throw new ValidationError(
+            'repo-ref-not-found',
+            `ref '${repoSpecs[i]!.ref ?? source.baseBranch ?? '(default)'}' not found in ${redactGitUrl(source.repoUrl)}`,
+            {
+              url: redactGitUrl(source.repoUrl),
+              ref: repoSpecs[i]!.ref ?? null,
+              availableRefs: available,
+              repoIndex: i,
+            },
+          )
+        }
+        break
+      }
+      if (!wt.submoduleInitOk) {
+        const { createLogger } = await import('@/util/log')
+        const log = createLogger('task')
+        log.warn('[rfc034/submodule-init-failed] worktree submodule init failed', {
+          taskId,
+          worktreePath: wt.worktreePath,
+          repoIndex: i,
+          stderr: wt.submoduleInitError ?? '',
+        })
+      }
+      materializedRepos.push({
+        repoIndex: i,
+        repoPath: source.repoPath,
+        repoUrl: source.repoUrl,
+        baseBranch: source.baseBranch ?? '',
+        branch: wt.branch,
+        baseCommit: wt.baseCommit,
+        worktreePath: wt.worktreePath,
+        worktreeDirName: dirName,
+        submoduleInitOk: wt.submoduleInitOk,
+        submoduleInitError: wt.submoduleInitError,
+        hasSubmodules: wt.hasSubmodules,
+      })
+    }
+    // Mirror repos[0] into the legacy `tasks.*` columns for API back-compat.
+    if (materializedRepos.length > 0) {
+      const head = materializedRepos[0]!
+      branch = head.branch
+      baseCommit = head.baseCommit
+    } else {
+      branch = ''
+      baseCommit = null
     }
   }
 
@@ -379,6 +619,19 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const persistedGitUserEmail =
     trimGitName.length > 0 && trimGitEmail.length > 0 ? trimGitEmail : null
 
+  // RFC-066: `tasks.*` legacy columns mirror `materializedRepos[0]` for back-
+  // compat. When materialize failed early (only possible in multi-repo path —
+  // single-repo failures still produce a `materializedRepos[0]` so the
+  // legacy "failed task row with worktree path empty" surface is preserved),
+  // fall back to the resolved-source view so we never write `undefined`.
+  const head: MaterializedRepo | undefined = materializedRepos[0]
+  const fallbackSource: ResolvedRepoSource | undefined = resolvedSources[0]
+  const headRepoPath = head?.repoPath ?? fallbackSource?.repoPath ?? ''
+  const headRepoUrl = head?.repoUrl ?? fallbackSource?.repoUrl ?? null
+  const headBaseBranch = head?.baseBranch ?? fallbackSource?.baseBranch ?? ''
+  const headBranch = head?.branch ?? (branch !== '' ? branch : `agent-workflow/${taskId}`)
+  const headBaseCommit = head?.baseCommit ?? baseCommit
+
   const now = Date.now()
   await deps.db.insert(tasks).values({
     id: taskId,
@@ -386,18 +639,18 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     name: input.name,
     workflowId: workflow.id,
     workflowSnapshot: JSON.stringify(workflow.definition),
-    repoPath: source.repoPath,
+    repoPath: headRepoPath,
     // RFC-054 W3-4 KNOWN_GAP fix: never persist the credentialed URL.
     // gitRepoCache has already used the cleartext form to clone (line
     // 197 above); from this point onward the daemon only needs the
     // redacted form (for display, WS broadcast, error messages). The
     // cleartext URL is reachable only ephemerally via the cache key
     // hash, so even DB-level access can't reconstruct it.
-    repoUrl: source.repoUrl !== null ? redactGitUrl(source.repoUrl) : null,
+    repoUrl: headRepoUrl !== null ? redactGitUrl(headRepoUrl) : null,
     worktreePath,
-    baseBranch: source.baseBranch ?? '',
-    branch: branch !== '' ? branch : `agent-workflow/${taskId}`,
-    baseCommit,
+    baseBranch: headBaseBranch,
+    branch: headBranch !== '' ? headBranch : `agent-workflow/${taskId}`,
+    baseCommit: headBaseCommit,
     status: earlyError === null ? 'pending' : 'failed',
     inputs: JSON.stringify(input.inputs),
     maxDurationMs: input.maxDurationMs ?? null,
@@ -406,6 +659,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     // half-set; runner.ts skips env injection when these are NULL).
     gitUserName: persistedGitUserName,
     gitUserEmail: persistedGitUserEmail,
+    // RFC-066: count of `task_repos` rows. Single-repo path always = 1;
+    // multi-repo populates with the materialized count (zero only when the
+    // first repo failed before any task_repos row was minted).
+    repoCount: Math.max(1, materializedRepos.length),
     startedAt: now,
     finishedAt: earlyError === null ? null : now,
     errorSummary: earlyError !== null ? `worktree creation failed: ${earlyError}` : null,
@@ -413,6 +670,31 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
     ownerUserId: deps.actorUserId ?? null,
   })
+
+  // RFC-066: persist per-repo metadata. Single-repo tasks land one row at
+  // repo_index=0 mirroring the legacy columns above; multi-repo tasks land
+  // N rows sorted by repo_index. The list view's `repoCount` chip is driven
+  // by `tasks.repo_count`; the detail page's `Task.repos[]` array is hydrated
+  // from this table by `getTask`.
+  if (materializedRepos.length > 0) {
+    await deps.db.insert(taskRepos).values(
+      materializedRepos.map((r) => ({
+        taskId,
+        repoIndex: r.repoIndex,
+        repoPath: r.repoPath,
+        repoUrl: r.repoUrl !== null ? redactGitUrl(r.repoUrl) : null,
+        baseBranch: r.baseBranch,
+        branch: r.branch,
+        baseCommit: r.baseCommit,
+        worktreePath: r.worktreePath,
+        worktreeDirName: r.worktreeDirName,
+        hasSubmodules: r.hasSubmodules,
+        submoduleInitOk: r.submoduleInitOk,
+        submoduleInitError: r.submoduleInitError,
+        schemaVersion: 1,
+      })),
+    )
+  }
 
   // RFC-067 NOTE: an earlier draft of this RFC also wrote `user.name` /
   // `user.email` into the worktree's local `.git/config` as a defense-in-
@@ -448,13 +730,17 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     }
   }
 
-  // Mirror this repo into the recent-repos cache — best-effort, never blocks.
-  // RFC-024: only path-mode tasks belong in `recent_repos` (URL-mode tasks
-  // are tracked via `cached_repos` instead).
-  if (source.repoUrl === null) {
-    upsertRecentRepo(deps.db, source.repoPath).catch((err) => {
-      log.warn('upsertRecentRepo failed', { error: (err as Error).message })
-    })
+  // Mirror every path-mode repo into recent-repos — best-effort, never blocks.
+  // RFC-024: only path-mode entries belong in `recent_repos` (URL-mode tasks
+  // are tracked via `cached_repos` instead). RFC-066: in multi-repo tasks
+  // this runs N times so each user-picked path shows up in the next launch's
+  // dropdown.
+  for (const r of materializedRepos) {
+    if (r.repoUrl === null) {
+      upsertRecentRepo(deps.db, r.repoPath).catch((err) => {
+        log.warn('upsertRecentRepo failed', { error: (err as Error).message })
+      })
+    }
   }
 
   const task = (await getTask(deps.db, taskId)) as Task
@@ -472,6 +758,9 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,
       errorSummary: task.errorSummary,
+      // RFC-066: source of truth is the freshly-loaded Task (which read
+      // `tasks.repo_count` directly). Single-repo = 1; multi-repo = N.
+      repoCount: task.repoCount,
     },
   })
 
@@ -906,7 +1195,19 @@ export async function getTask(db: DbClient, id: string): Promise<Task | null> {
     .where(eq(tasks.id, id))
     .limit(1)
   const row = rows[0]
-  return row ? rowToTask(row.task, row.workflowName) : null
+  if (!row) return null
+  // RFC-066: hydrate per-repo metadata. Defensive fallback when task_repos is
+  // empty (legacy rows that landed before migration 0034 backfill, or the
+  // ultra-rare mid-migration crash): synthesize a single repo entry from the
+  // legacy `tasks.*` mirror columns so callers always see at least one entry.
+  const repoRows = await db
+    .select()
+    .from(taskRepos)
+    .where(eq(taskRepos.taskId, id))
+    .orderBy(asc(taskRepos.repoIndex))
+  const repos: TaskRepo[] =
+    repoRows.length > 0 ? repoRows.map(mapTaskRepoRow) : [synthesizeRepoFromTaskRow(row.task)]
+  return rowToTask(row.task, row.workflowName, repos)
 }
 
 export interface ListTasksFilters {
@@ -1189,7 +1490,11 @@ export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDif
   return { diff, baseCommit: task.baseCommit, truncated }
 }
 
-function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null): Task {
+function rowToTask(
+  row: typeof tasks.$inferSelect,
+  workflowName: string | null,
+  repos: TaskRepo[],
+): Task {
   let snapshot: unknown
   try {
     snapshot = JSON.parse(row.workflowSnapshot)
@@ -1229,6 +1534,11 @@ function rowToTask(row: typeof tasks.$inferSelect, workflowName: string | null):
     // RFC-067: per-task Git commit identity (NULL = no override → daemon default).
     gitUserName: row.gitUserName ?? null,
     gitUserEmail: row.gitUserEmail ?? null,
+    // RFC-066: per-task repo metadata. `repoCount` is sourced from the
+    // denormalized column on `tasks` (cheap for list queries); `repos[]` is
+    // hydrated by the caller from `task_repos` ordered by `repo_index`.
+    repoCount: row.repoCount,
+    repos,
   }
 }
 
@@ -1244,5 +1554,52 @@ function rowToSummary(row: typeof tasks.$inferSelect, workflowName: string | nul
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     errorSummary: row.errorSummary,
+    // RFC-066: source-of-truth `tasks.repo_count`. Migration 0034 defaulted
+    // every existing row to 1; multi-repo launches set it explicitly.
+    repoCount: row.repoCount,
+  }
+}
+
+/**
+ * RFC-066: project a `task_repos` row into the wire `TaskRepo` shape. Boolean
+ * columns are stored as 0/1 integers in SQLite; drizzle's `mode: 'boolean'`
+ * surfaces them as JS booleans, but we coerce nullable booleans defensively.
+ */
+function mapTaskRepoRow(row: typeof taskRepos.$inferSelect): TaskRepo {
+  return {
+    repoIndex: row.repoIndex,
+    repoPath: row.repoPath,
+    repoUrl: row.repoUrl ?? null,
+    baseBranch: row.baseBranch,
+    branch: row.branch,
+    baseCommit: row.baseCommit ?? null,
+    worktreePath: row.worktreePath,
+    worktreeDirName: row.worktreeDirName,
+    hasSubmodules: row.hasSubmodules ?? null,
+    submoduleInitOk: row.submoduleInitOk ?? null,
+    submoduleInitError: row.submoduleInitError ?? null,
+  }
+}
+
+/**
+ * RFC-066: defensive fallback when `getTask` finds zero `task_repos` rows
+ * (only reachable for ultra-rare mid-migration crashes — every existing
+ * task got a row backfilled by migration 0034 INSERT FROM ... SELECT).
+ * Synthesizes a single entry from the legacy `tasks.*` mirror columns so
+ * downstream consumers always see at least one repo.
+ */
+function synthesizeRepoFromTaskRow(row: typeof tasks.$inferSelect): TaskRepo {
+  return {
+    repoIndex: 0,
+    repoPath: row.repoPath,
+    repoUrl: row.repoUrl ?? null,
+    baseBranch: row.baseBranch,
+    branch: row.branch,
+    baseCommit: row.baseCommit ?? null,
+    worktreePath: row.worktreePath,
+    worktreeDirName: '',
+    hasSubmodules: null,
+    submoduleInitOk: null,
+    submoduleInitError: null,
   }
 }

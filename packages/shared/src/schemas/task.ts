@@ -35,6 +35,85 @@ export const TaskNameSchema = z
   .min(1, 'name is required (1..255 chars after trim)')
   .max(TASK_NAME_MAX, `name must be ≤ ${TASK_NAME_MAX} chars`)
 
+/**
+ * RFC-066: maximum repos per multi-repo task. Hard cap to bound the
+ * concurrent `git worktree add` work and submodule init storm. 8 covers all
+ * realistic cross-repo workflows we've seen; raising it later only requires
+ * touching this constant.
+ */
+export const MULTI_REPO_MAX = 8
+
+/**
+ * RFC-066: single repo entry inside `StartTask.repos[]`. Same path/url mutex
+ * + baseBranch-required-in-path-mode rules as the legacy `StartTask` top
+ * level — kept identical so legacy single-repo bodies stay byte-for-byte
+ * equivalent to a length-1 `repos` array.
+ */
+export const StartTaskRepoSchema = z
+  .object({
+    repoPath: z.string().min(1).optional(),
+    baseBranch: z.string().min(1).optional(),
+    repoUrl: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasPath = typeof value.repoPath === 'string' && value.repoPath.length > 0
+    const hasUrl = typeof value.repoUrl === 'string' && value.repoUrl.length > 0
+    if (hasPath && hasUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'repoPath and repoUrl are mutually exclusive',
+        path: ['repoUrl'],
+      })
+    }
+    if (!hasPath && !hasUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'one of repoPath or repoUrl is required',
+        path: ['repoPath'],
+      })
+    }
+    if (hasPath && (!value.baseBranch || value.baseBranch.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'baseBranch is required in path mode',
+        path: ['baseBranch'],
+      })
+    }
+  })
+export type StartTaskRepo = z.infer<typeof StartTaskRepoSchema>
+
+/**
+ * RFC-066: one row of `task_repos`, returned as `Task.repos[i]`. Single-repo
+ * tasks have a 1-element array mirroring `Task.repoPath` / `worktreePath` /
+ * `baseBranch` / `branch` / `baseCommit` / `repoUrl`. Multi-repo tasks have
+ * N entries (sorted by `repoIndex`); `Task.*` top-level columns mirror
+ * `repos[0]` for legacy API compatibility.
+ */
+export const TaskRepoSchema = z.object({
+  /** 0..N-1; entry at index 0 is the "primary" repo (mirrors Task.* columns). */
+  repoIndex: z.number().int().nonnegative(),
+  repoPath: z.string(),
+  /** RFC-024 redacted; null for path-mode entries. */
+  repoUrl: z.string().nullable(),
+  baseBranch: z.string(),
+  branch: z.string(),
+  baseCommit: z.string().nullable(),
+  worktreePath: z.string(),
+  /**
+   * Sub-directory basename inside `Task.worktreePath` for multi-repo tasks
+   * (`utils` / `utils-2` / `utils-3` after auto-suffix collision resolution).
+   * Empty string for single-repo tasks where `Task.worktreePath` is the repo
+   * worktree itself.
+   */
+  worktreeDirName: z.string(),
+  /** RFC-034: post-`worktree add` submodule init telemetry per repo. */
+  hasSubmodules: z.boolean().nullable(),
+  submoduleInitOk: z.boolean().nullable(),
+  submoduleInitError: z.string().nullable(),
+})
+export type TaskRepo = z.infer<typeof TaskRepoSchema>
+
 /** Full task row as returned by GET /api/tasks/:id. */
 export const TaskSchema = z.object({
   id: z.string(),
@@ -81,6 +160,22 @@ export const TaskSchema = z.object({
    */
   gitUserName: z.string().nullable(),
   gitUserEmail: z.string().nullable(),
+  /**
+   * RFC-066: count of `task_repos` rows for this task. Always ≥ 1. Single
+   * repo tasks have value 1 (and `repos` is a length-1 array mirroring the
+   * top-level `repoPath` / `worktreePath` / `baseBranch` / `branch` /
+   * `baseCommit` / `repoUrl` columns). Multi-repo tasks have value > 1, with
+   * `repos` containing all entries sorted by `repoIndex` ascending. The
+   * top-level columns continue to mirror `repos[0]` for legacy API callers.
+   *
+   * Defaulted to 1 / [] here so existing callsites that synthesize a Task
+   * row before backend mapping (legacy fixtures, in-flight backend code
+   * during PR-A T2/T3/T4) keep parsing. The backend `getTask` mapper always
+   * populates both explicitly after PR-A T4 lands.
+   */
+  repoCount: z.number().int().positive().default(1),
+  /** RFC-066: per-repo detail, length == repoCount, sorted by repoIndex asc. */
+  repos: z.array(TaskRepoSchema).default([]),
 })
 export type Task = z.infer<typeof TaskSchema>
 
@@ -99,6 +194,12 @@ export const TaskSummarySchema = z.object({
   startedAt: z.number().int(),
   finishedAt: z.number().int().nullable(),
   errorSummary: z.string().nullable(),
+  /**
+   * RFC-066: surfaced in list view so the UI can render a "N repos" chip
+   * without joining `task_repos`. Always ≥ 1. Defaulted to 1 so fixtures
+   * predating PR-A T4 keep parsing.
+   */
+  repoCount: z.number().int().positive().default(1),
 })
 export type TaskSummary = z.infer<typeof TaskSummarySchema>
 
@@ -167,25 +268,54 @@ export const StartTaskSchema = z
      */
     gitUserName: z.string().min(1).max(255).optional(),
     gitUserEmail: z.string().min(1).max(255).optional(),
+    /**
+     * RFC-066: multi-repo task launch. Length ∈ [1, MULTI_REPO_MAX]. When
+     * present, the legacy top-level `repoPath` / `repoUrl` / `baseBranch` /
+     * `ref` fields MUST be absent (mutex enforced in superRefine). Length-1
+     * arrays are equivalent to the legacy body and walk the single-repo code
+     * path byte-for-byte; length > 1 triggers the multi-repo materialize
+     * branch (parent dir + per-repo sub-worktrees under
+     * `~/.agent-workflow/worktrees/multi/{taskId}/`).
+     */
+    repos: z.array(StartTaskRepoSchema).min(1).max(MULTI_REPO_MAX).optional(),
   })
   .superRefine((value, ctx) => {
-    const hasPath = typeof value.repoPath === 'string' && value.repoPath.length > 0
-    const hasUrl = typeof value.repoUrl === 'string' && value.repoUrl.length > 0
-    if (hasPath && hasUrl) {
+    const hasLegacyPath = typeof value.repoPath === 'string' && value.repoPath.length > 0
+    const hasLegacyUrl = typeof value.repoUrl === 'string' && value.repoUrl.length > 0
+    const hasLegacy = hasLegacyPath || hasLegacyUrl
+    const hasRepos = Array.isArray(value.repos) && value.repos.length > 0
+
+    // RFC-066: legacy ↔ v2 mutex. Mixed body → reject (caller must pick one).
+    if (hasLegacy && hasRepos) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'start-task-source-conflict',
+        path: ['repos'],
+      })
+      return
+    }
+
+    // RFC-066: at least one of legacy fields or repos[] must be provided.
+    if (!hasLegacy && !hasRepos) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'one of repoPath, repoUrl, or repos[] is required',
+        path: ['repos'],
+      })
+      return
+    }
+
+    // Legacy-only validation (single repo via top-level fields).
+    // Skipped when hasRepos === true; per-entry validation lives in
+    // StartTaskRepoSchema's own superRefine.
+    if (hasLegacyPath && hasLegacyUrl) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'repoPath and repoUrl are mutually exclusive',
         path: ['repoUrl'],
       })
     }
-    if (!hasPath && !hasUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'one of repoPath or repoUrl is required',
-        path: ['repoPath'],
-      })
-    }
-    if (hasPath && (!value.baseBranch || value.baseBranch.length === 0)) {
+    if (hasLegacyPath && (!value.baseBranch || value.baseBranch.length === 0)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'baseBranch is required in path mode',

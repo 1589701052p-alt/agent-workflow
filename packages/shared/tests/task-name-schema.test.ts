@@ -125,6 +125,8 @@ describe('TaskSchema and TaskSummarySchema include name', () => {
       startedAt: 0,
       finishedAt: null,
       errorSummary: null,
+      // RFC-066: TaskSummarySchema now also requires repoCount.
+      repoCount: 1,
     })
     expect(ok.success).toBe(true)
     const missing = TaskSummarySchema.safeParse({
@@ -137,6 +139,7 @@ describe('TaskSchema and TaskSummarySchema include name', () => {
       startedAt: 0,
       finishedAt: null,
       errorSummary: null,
+      repoCount: 1,
     })
     expect(missing.success).toBe(false)
   })

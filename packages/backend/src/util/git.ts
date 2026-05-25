@@ -233,6 +233,16 @@ export interface CreateWorktreeOptions {
   submoduleMode?: 'auto' | 'always' | 'never'
   /** RFC-034: --jobs N for the submodule init. Defaults to 4. */
   submoduleJobs?: number
+  /**
+   * RFC-066: when provided, use this absolute path as the worktree directory
+   * instead of the default `{appHome}/worktrees/{repoSlug}/{taskId}` layout.
+   * Used by the multi-repo materialize branch to place per-repo worktrees as
+   * siblings under a parent `multi/{taskId}/` directory (with auto-suffix
+   * collision-resolved basenames). Single-repo path-mode + URL-mode callers
+   * MUST NOT pass this so the legacy `{repoSlug}/{taskId}` layout stays
+   * byte-for-byte identical.
+   */
+  overrideWorktreePath?: string
 }
 
 export interface CreatedWorktree {
@@ -256,8 +266,13 @@ export interface CreatedWorktree {
 
 export async function createWorktree(opts: CreateWorktreeOptions): Promise<CreatedWorktree> {
   await requireGitRepo(opts.repoPath)
+  // RFC-066: caller can override the auto-composed path (multi-repo branches
+  // place worktrees under `multi/{taskId}/<basename>/`). Single-repo callers
+  // omit this and inherit the legacy `{repoSlug}/{taskId}` layout — locked
+  // by the G3 grep guard in tests/source/start-task-single-path-baseline.test.ts.
   const slug = repoSlug(opts.repoPath)
-  const worktreePath = join(opts.appHome, 'worktrees', slug, opts.taskId)
+  const worktreePath =
+    opts.overrideWorktreePath ?? join(opts.appHome, 'worktrees', slug, opts.taskId)
   const branch = `agent-workflow/${opts.taskId}`
 
   // Pick base ref. Falls back to HEAD when caller didn't specify.

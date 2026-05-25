@@ -30,6 +30,8 @@ function fakeTask(id: string, status: TaskStatus): TaskSummary {
     startedAt: 1_700_000_000_000,
     finishedAt: null,
     errorSummary: null,
+    // RFC-066: TaskSummarySchema now exposes repoCount.
+    repoCount: 1,
   }
 }
 
