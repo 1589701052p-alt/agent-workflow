@@ -3428,7 +3428,7 @@ export const zhCN: Resources = {
     label: '反问',
   },
   crossClarifyNode: {
-    label: '跨反问',
+    label: '跨代理反问',
   },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {

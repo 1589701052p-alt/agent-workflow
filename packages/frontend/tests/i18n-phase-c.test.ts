@@ -134,6 +134,6 @@ describe('Phase C bundles', () => {
     expect(i18n.t('agentNode.label')).toBe('代理')
     expect(i18n.t('reviewNode.label')).toBe('评审')
     expect(i18n.t('clarifyNode.label')).toBe('反问')
-    expect(i18n.t('crossClarifyNode.label')).toBe('跨反问')
+    expect(i18n.t('crossClarifyNode.label')).toBe('跨代理反问')
   })
 })

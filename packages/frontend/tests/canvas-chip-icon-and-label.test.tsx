@@ -176,7 +176,7 @@ describe('Human-category chips resolve through i18n', () => {
       const { container } = mountCrossClarify(crossClarifyData())
       const chip = container.querySelector('.canvas-node__kind')
       expect(chip?.textContent).toContain('⚡')
-      expect(chip?.textContent).toContain('跨反问')
+      expect(chip?.textContent).toContain('跨代理反问')
       expect(chip?.textContent ?? '').not.toContain('cross-clarify')
     } finally {
       setLanguage('en-US')
