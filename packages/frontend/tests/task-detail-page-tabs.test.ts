@@ -56,12 +56,13 @@ describe('TaskDetailPage tab structure', () => {
     expect(SRC).not.toMatch(/<DiffViewer\b/)
   })
 
-  test('emits all six tab i18n labels via the tabLabel switch', () => {
+  test('emits all seven tab i18n labels via the tabLabel switch (RFC-065 added worktree-files)', () => {
     for (const key of [
       'tabWorkflowStatus',
       'tabNodeRuns',
       'tabDetails',
       'tabOutputs',
+      'tabWorktreeFiles',
       'tabWorktreeDiff',
       'tabFeedback',
     ]) {
@@ -72,8 +73,9 @@ describe('TaskDetailPage tab structure', () => {
   test('every pane sits inside .task-detail__panes (overflow container)', () => {
     // Counts panes vs occurrences of the panes wrapper — the wrapper
     // should appear exactly once and contain every `.task-detail__pane`.
+    // RFC-065 added the worktree-files pane between outputs and worktree-diff.
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(6)
+    expect(paneCount).toBe(7)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })
