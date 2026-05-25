@@ -1410,13 +1410,31 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // Single source of truth for the GENERAL aging rule — same semantics
         // (outputs-presence + isFresherNodeRun shadow ordering), now shared
         // between self-clarify and cross-clarify consumer paths.
+        //
+        // RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci): the cutoff
+        // returned must use the SAME iteration counter as the rounds the
+        // consumer reads. For the questioner-side cross-clarify rerun the
+        // rounds in `clarify_rounds` (kind='cross') carry the cross-clarify
+        // session iteration (= the questioner run's crossClarifyIteration),
+        // not clarifyIteration. Passing a clarifyIteration-based cutoff into
+        // `applyAgingCutoff` against cross rounds is a unit mismatch — it
+        // silently keeps EVERY prior cross round once any review-iterate /
+        // downstream rerun fires, so the questioner re-injects archived
+        // Q&A every iteration after it has already produced its
+        // `<workflow-output>`. clarify-rounds-service.test.ts:644 already
+        // locks the helper's behavior under cci-based cutoff; the bug was
+        // strictly that the scheduler never produced one.
+        const isQuestionerCrossClarifyRerun =
+          clarifyMode === 'cross' && currentCrossClarifyIteration > 0
         const priorCompletedCutoff = await computeHistoryCutoff({
           db,
           taskId,
           nodeId: node.id,
           shardKey: currentRunRow?.shardKey ?? null,
           ...(currentRunRow !== undefined ? { currentRunRow } : {}),
-          iterationField: 'clarifyIteration',
+          iterationField: isQuestionerCrossClarifyRerun
+            ? 'crossClarifyIteration'
+            : 'clarifyIteration',
         })
         const historyCutoffClarifyIteration =
           priorCompletedCutoff ?? priorDoneDesigner?.clarifyIteration
@@ -1440,8 +1458,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // designer-retry-index patch can in principle propagate retry_index
         // bumps to questioner reruns minted by the downstream cascade; we
         // must not let the gate silently miss those.
-        const isQuestionerCrossClarifyRerun =
-          clarifyMode === 'cross' && currentCrossClarifyIteration > 0
+        //
+        // `isQuestionerCrossClarifyRerun` is hoisted above the
+        // `computeHistoryCutoff` call so it can switch the cutoff field —
+        // see RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci).
         // RFC-058 T13: unified buildPromptContext via consumerKind dispatch.
         // 'cross-questioner' path additionally fixes RFC-058 缺口 1 (questioner
         // aging gap) and 缺口 2 (wrapper-loop loop_iter isolation) by routing

@@ -583,7 +583,11 @@ describe('RFC-056 patch 2026-05-23 — scheduler source guard against `retryInde
 
   test('isQuestionerCrossClarifyRerun gate has no retry_index check', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    const m = src.match(/const isQuestionerCrossClarifyRerun =[^;]+;?\s*\n\s*const clarifyContext/)
+    // RFC-056 patch-2026-05-27 hoisted the declaration above
+    // `computeHistoryCutoff` so it can pick the iterationField for the
+    // cross-questioner branch — match the declaration line itself instead
+    // of its (now moved) trailing context.
+    const m = src.match(/const isQuestionerCrossClarifyRerun =[\s\S]*?>\s*0\b/)
     expect(m, 'must find the isQuestionerCrossClarifyRerun assignment').not.toBeNull()
     const gateText = m![0]
     expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
