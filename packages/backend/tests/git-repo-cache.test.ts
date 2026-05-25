@@ -211,3 +211,215 @@ describe('gitRepoCache (RFC-024 T3)', () => {
     expect(db.select().from(cachedRepos).all().length).toBe(0)
   })
 })
+
+// -----------------------------------------------------------------------------
+// RFC-068 — fast-forward base branch to origin on warm path
+// -----------------------------------------------------------------------------
+
+async function advanceFixtureRemote(bareUrl: string): Promise<string> {
+  // `bareUrl` is "file://<absPath>". Re-derive the bare path, clone it
+  // temporarily, push a new commit, return the new HEAD sha for assertions.
+  const barePath = bareUrl.replace(/^file:\/\//, '')
+  const workRoot = mkdtempSync(join(tmpdir(), 'aw-grc-advance-'))
+  try {
+    const work = join(workRoot, 'work')
+    await spawnGitInit(workRoot, 'clone', barePath, work)
+    await spawnGitInit(work, '-C', work, 'config', 'user.email', 'aw-test@example.com')
+    await spawnGitInit(work, '-C', work, 'config', 'user.name', 'AW Test')
+    writeFileSync(join(work, 'NEW.md'), '# new\n', 'utf-8')
+    await spawnGitInit(work, '-C', work, 'add', '.')
+    await spawnGitInit(work, '-C', work, 'commit', '-m', 'second commit on main')
+    await spawnGitInit(work, '-C', work, 'push', 'origin', 'main')
+    const r = await runGit(work, ['rev-parse', 'HEAD'])
+    return r.stdout.trim()
+  } finally {
+    try {
+      rmSync(workRoot, { recursive: true, force: true })
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+describe('gitRepoCache RFC-068 fast-forward', () => {
+  let db: DbClient
+  let appHome: string
+  let remoteDir: string
+  let remoteUrl: string
+
+  beforeEach(async () => {
+    db = createInMemoryDb(MIGRATIONS)
+    appHome = mkdtempSync(join(tmpdir(), 'aw-grc-068-home-'))
+    const r = await buildFixtureRemote()
+    remoteDir = r.dir
+    remoteUrl = r.url
+  })
+
+  afterEach(() => {
+    try {
+      rmSync(appHome, { recursive: true, force: true })
+    } catch {
+      /* noop */
+    }
+    try {
+      rmSync(remoteDir, { recursive: true, force: true })
+    } catch {
+      /* noop */
+    }
+  })
+
+  test('BC-01 cold clone returns empty ffOutcomes (no FF on first launch)', async () => {
+    const r = await resolveCachedRepo({ db, appHome, syncBranches: ['main'] }, { url: remoteUrl })
+    expect(r.cold).toBe(true)
+    expect(r.ffOutcomes).toEqual([])
+  })
+
+  test('BC-02 warm reuse + origin advanced → FF moves local branch and surfaces toSha', async () => {
+    const first = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['main'] },
+      { url: remoteUrl },
+    )
+    // Pre-advance: local main equals origin/main at clone time.
+    const beforeLocal = (await runGit(first.cached.localPath, ['rev-parse', 'main'])).stdout.trim()
+    const newSha = await advanceFixtureRemote(remoteUrl)
+    expect(newSha).not.toBe(beforeLocal)
+
+    const second = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['main'] },
+      { url: remoteUrl },
+    )
+    expect(second.cold).toBe(false)
+    expect(second.fetchOk).toBe(true)
+    expect(second.ffOutcomes.length).toBe(1)
+    const fo = second.ffOutcomes[0]!
+    expect(fo.branch).toBe('main')
+    expect(fo.advanced).toBe(true)
+    expect(fo.fromSha).toBe(beforeLocal)
+    expect(fo.toSha).toBe(newSha)
+    expect(fo.warning).toBeNull()
+
+    // Local main is now at newSha (subsequent rev-parse picks up the FF).
+    const afterLocal = (await runGit(first.cached.localPath, ['rev-parse', 'main'])).stdout.trim()
+    expect(afterLocal).toBe(newSha)
+  })
+
+  test('BC-02b same warm reuse but origin unchanged → ffOutcome.advanced=false', async () => {
+    await resolveCachedRepo({ db, appHome, syncBranches: ['main'] }, { url: remoteUrl })
+    const r = await resolveCachedRepo({ db, appHome, syncBranches: ['main'] }, { url: remoteUrl })
+    expect(r.ffOutcomes.length).toBe(1)
+    expect(r.ffOutcomes[0]!.advanced).toBe(false)
+    expect(r.ffOutcomes[0]!.warning).toBeNull()
+  })
+
+  test('BC-04 tag base ref is skipped (no FF attempt)', async () => {
+    const first = await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    await runGit(first.cached.localPath, ['tag', 'v1.0', 'main'])
+    const r = await resolveCachedRepo({ db, appHome, syncBranches: ['v1.0'] }, { url: remoteUrl })
+    expect(r.ffOutcomes).toEqual([])
+  })
+
+  test('BC-05 sha base ref is skipped (no FF attempt)', async () => {
+    const first = await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    const sha = (await runGit(first.cached.localPath, ['rev-parse', 'main'])).stdout.trim()
+    const r = await resolveCachedRepo({ db, appHome, syncBranches: [sha] }, { url: remoteUrl })
+    expect(r.ffOutcomes).toEqual([])
+  })
+
+  test('BC-03 origin/<branch> base ref is skipped (already remote-tracking)', async () => {
+    await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    const r = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['origin/main'] },
+      { url: remoteUrl },
+    )
+    expect(r.ffOutcomes).toEqual([])
+  })
+
+  test('BC-07 fetch failed (mock by yanking remote) → ffOutcomes stays empty, fetchOk=false', async () => {
+    const first = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['main'] },
+      { url: remoteUrl },
+    )
+    // Nuke the bare remote so subsequent fetch fails.
+    rmSync(remoteDir, { recursive: true, force: true })
+    const r = await resolveCachedRepo({ db, appHome, syncBranches: ['main'] }, { url: remoteUrl })
+    expect(r.fetchOk).toBe(false)
+    // FF must be skipped entirely when fetch failed (no new origin commits).
+    expect(r.ffOutcomes).toEqual([])
+    // Cache row still returned, baseCommit-style queries still work against
+    // the stale clone — proves the task can still launch.
+    const head = await runGit(first.cached.localPath, ['rev-parse', 'main'])
+    expect(head.exitCode).toBe(0)
+  })
+
+  test('BC-10 mirror has no origin/<branch> → warning=origin-ref-missing, no advance', async () => {
+    const first = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['main'] },
+      { url: remoteUrl },
+    )
+    // Create a local-only branch (no origin/feature in the remote).
+    await runGit(first.cached.localPath, ['branch', 'feature/local-only', 'main'])
+    const r = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['feature/local-only'] },
+      { url: remoteUrl },
+    )
+    expect(r.ffOutcomes.length).toBe(1)
+    expect(r.ffOutcomes[0]!.advanced).toBe(false)
+    expect(r.ffOutcomes[0]!.warning).toBe('origin-ref-missing')
+  })
+
+  test('BC-06 branch name containing slash works', async () => {
+    // Create a slash-named branch in the working clone, push, then exercise FF.
+    const workRoot = mkdtempSync(join(tmpdir(), 'aw-grc-068-slash-'))
+    try {
+      const work = join(workRoot, 'work')
+      const barePath = remoteUrl.replace(/^file:\/\//, '')
+      await spawnGitInit(workRoot, 'clone', barePath, work)
+      await spawnGitInit(work, '-C', work, 'config', 'user.email', 'aw-test@example.com')
+      await spawnGitInit(work, '-C', work, 'config', 'user.name', 'AW Test')
+      await spawnGitInit(work, '-C', work, 'checkout', '-b', 'feature/foo')
+      writeFileSync(join(work, 'FOO.md'), '# foo\n', 'utf-8')
+      await spawnGitInit(work, '-C', work, 'add', '.')
+      await spawnGitInit(work, '-C', work, 'commit', '-m', 'foo')
+      await spawnGitInit(work, '-C', work, 'push', 'origin', 'feature/foo')
+    } finally {
+      rmSync(workRoot, { recursive: true, force: true })
+    }
+    // First resolve clones the cache. classifyBaseRef on cold-clone won't see
+    // the local branch yet — but warm path will. Run twice.
+    await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    // Manually create the local branch in the cache so classifyBaseRef sees
+    // it as 'branch' (otherwise it'd be 'unknown' and the FF still runs but
+    // wouldn't actually advance an existing ref). We mimic what a real user
+    // path would do: select 'feature/foo' (matches remote-tracking) → ref
+    // dropdown picks the launcher-canonical name. Either way, FF works.
+    const before = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['feature/foo'] },
+      { url: remoteUrl },
+    )
+    expect(before.ffOutcomes.length).toBe(1)
+    expect(before.ffOutcomes[0]!.branch).toBe('feature/foo')
+    expect(before.ffOutcomes[0]!.warning).toBeNull()
+    // Re-resolve: local feature/foo now exists, FF is now a happy no-op
+    // (advanced=false) since origin didn't move further.
+    const second = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['feature/foo'] },
+      { url: remoteUrl },
+    )
+    expect(second.ffOutcomes[0]!.warning).toBeNull()
+  })
+
+  test('BC-09 deduplicates same branch listed twice in syncBranches', async () => {
+    await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    const r = await resolveCachedRepo(
+      { db, appHome, syncBranches: ['main', 'main'] },
+      { url: remoteUrl },
+    )
+    expect(r.ffOutcomes.length).toBe(1)
+  })
+
+  test('BC-11 syncBranches undefined → empty ffOutcomes (RFC-024 callers unaffected)', async () => {
+    await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    const r = await resolveCachedRepo({ db, appHome }, { url: remoteUrl })
+    expect(r.ffOutcomes).toEqual([])
+  })
+})

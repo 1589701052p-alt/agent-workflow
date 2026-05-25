@@ -6,8 +6,29 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { CachedRepo, RecentRepo, RepoRefsResponse } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { Field, TextInput } from '@/components/Form'
+import { Field, Switch, TextInput } from '@/components/Form'
 import { validateRepoUrl, type RepoSource } from '@/lib/launch-repo-source'
+
+// RFC-068: persist the user's "fetch before launch" preference so it survives
+// page reloads. Keyed locally (not in user settings) since remote access
+// reachability varies per repo.
+const FETCH_BEFORE_LAUNCH_LS_KEY = 'agent-workflow.launcher.pathFetch'
+function loadFetchBeforeLaunchPref(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(FETCH_BEFORE_LAUNCH_LS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function saveFetchBeforeLaunchPref(v: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(FETCH_BEFORE_LAUNCH_LS_KEY, v ? '1' : '0')
+  } catch {
+    /* noop */
+  }
+}
 
 export interface RepoSourceTabsProps {
   source: RepoSource
@@ -36,7 +57,12 @@ export function RepoSourceTabs({ source, onChange }: RepoSourceTabsProps) {
   const switchTo = (kind: 'path' | 'url') => {
     if (kind === source.kind) return
     if (kind === 'path') {
-      onChange({ kind: 'path', repoPath: '', baseBranch: '' })
+      onChange({
+        kind: 'path',
+        repoPath: '',
+        baseBranch: '',
+        fetchBeforeLaunch: loadFetchBeforeLaunchPref(),
+      })
     } else {
       onChange({ kind: 'url', repoUrl: '', ref: '' })
     }
@@ -119,6 +145,18 @@ export function RepoSourceTabs({ source, onChange }: RepoSourceTabsProps) {
               />
             )}
           </Field>
+          {/* RFC-068: opt-in fetch BEFORE launch, never pull/merge. */}
+          <Field label={t('launch.pathFetch.label')}>
+            <Switch
+              checked={source.fetchBeforeLaunch === true}
+              onChange={(v) => {
+                saveFetchBeforeLaunchPref(v)
+                onChange({ ...source, fetchBeforeLaunch: v })
+              }}
+              label={t('launch.pathFetch.switchLabel')}
+              hint={t('launch.pathFetch.switchHint')}
+            />
+          </Field>
         </>
       ) : (
         <>
@@ -166,6 +204,10 @@ export function RepoSourceTabs({ source, onChange }: RepoSourceTabsProps) {
               placeholder={t('launch.repoSource.refPlaceholder')}
             />
           </Field>
+          {/* RFC-068: in URL mode FF is always automatic — make that visible. */}
+          <div className="form-field__hint" data-testid="repo-source-url-auto-sync">
+            {t('launch.repoSource.urlAutoSync')}
+          </div>
         </>
       )}
     </div>

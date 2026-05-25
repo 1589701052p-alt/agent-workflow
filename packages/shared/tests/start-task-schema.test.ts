@@ -77,3 +77,55 @@ describe('StartTaskSchema (RFC-024)', () => {
     }
   })
 })
+
+describe('StartTaskSchema fetchBeforeLaunch (RFC-068)', () => {
+  test('accepts fetchBeforeLaunch=true in path mode', () => {
+    const r = StartTaskSchema.safeParse({
+      workflowId: 'wf-1',
+      name: 'fixture-task',
+      repoPath: '/tmp/repo',
+      baseBranch: 'main',
+      fetchBeforeLaunch: true,
+      inputs: {},
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.fetchBeforeLaunch).toBe(true)
+  })
+
+  test('accepts fetchBeforeLaunch=false', () => {
+    const r = StartTaskSchema.safeParse({
+      workflowId: 'wf-1',
+      name: 'fixture-task',
+      repoPath: '/tmp/repo',
+      baseBranch: 'main',
+      fetchBeforeLaunch: false,
+      inputs: {},
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.fetchBeforeLaunch).toBe(false)
+  })
+
+  test('fetchBeforeLaunch omitted leaves field undefined (legacy bodies)', () => {
+    const r = StartTaskSchema.safeParse({
+      workflowId: 'wf-1',
+      name: 'fixture-task',
+      repoPath: '/tmp/repo',
+      baseBranch: 'main',
+      inputs: {},
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.fetchBeforeLaunch).toBeUndefined()
+  })
+
+  test('rejects non-boolean fetchBeforeLaunch', () => {
+    const r = StartTaskSchema.safeParse({
+      workflowId: 'wf-1',
+      name: 'fixture-task',
+      repoPath: '/tmp/repo',
+      baseBranch: 'main',
+      fetchBeforeLaunch: 'yes' as unknown as boolean,
+      inputs: {},
+    })
+    expect(r.success).toBe(false)
+  })
+})

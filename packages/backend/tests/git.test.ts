@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  classifyBaseRef,
   createWorktree,
   currentBranch,
   defaultBranch,
@@ -199,5 +200,62 @@ describe('worktree create + remove', () => {
       await removeWorktree({ repoPath, worktreePath: a.worktreePath })
       await removeWorktree({ repoPath, worktreePath: b.worktreePath })
     }
+  })
+})
+
+describe('classifyBaseRef (RFC-068)', () => {
+  test('classifies local branch as branch', async () => {
+    const kind = await classifyBaseRef(repoPath, 'main')
+    expect(kind).toBe('branch')
+  })
+
+  test('classifies branch with slash in name', async () => {
+    const kind = await classifyBaseRef(repoPath, 'feature/x')
+    expect(kind).toBe('branch')
+  })
+
+  test('classifies tag as tag', async () => {
+    const kind = await classifyBaseRef(repoPath, 'v1.0')
+    expect(kind).toBe('tag')
+  })
+
+  test('classifies remote-tracking ref as remote-tracking', async () => {
+    const head = await runGit(repoPath, ['rev-parse', 'HEAD'])
+    expect(head.exitCode).toBe(0)
+    const sha = head.stdout.trim()
+    await runGit(repoPath, ['update-ref', 'refs/remotes/origin/main', sha])
+    const kind = await classifyBaseRef(repoPath, 'origin/main')
+    expect(kind).toBe('remote-tracking')
+  })
+
+  test('classifies hex commit sha as sha', async () => {
+    const head = await runGit(repoPath, ['rev-parse', 'HEAD'])
+    expect(head.exitCode).toBe(0)
+    const sha = head.stdout.trim()
+    const kind = await classifyBaseRef(repoPath, sha)
+    expect(kind).toBe('sha')
+  })
+
+  test('classifies short hex commit prefix as sha', async () => {
+    const head = await runGit(repoPath, ['rev-parse', 'HEAD'])
+    const short = head.stdout.trim().slice(0, 8)
+    const kind = await classifyBaseRef(repoPath, short)
+    expect(kind).toBe('sha')
+  })
+
+  test('classifies unknown ref as unknown', async () => {
+    const kind = await classifyBaseRef(repoPath, 'no-such-ref')
+    expect(kind).toBe('unknown')
+  })
+
+  test('classifies empty / HEAD as unknown (caller short-circuit)', async () => {
+    expect(await classifyBaseRef(repoPath, '')).toBe('unknown')
+    expect(await classifyBaseRef(repoPath, 'HEAD')).toBe('unknown')
+  })
+
+  test('branch wins over same-named tag (launcher UX preserves intent)', async () => {
+    await runGit(repoPath, ['tag', 'feature/x'])
+    const kind = await classifyBaseRef(repoPath, 'feature/x')
+    expect(kind).toBe('branch')
   })
 })

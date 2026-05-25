@@ -116,3 +116,72 @@ describe('workflows.launch.tsx wiring (RFC-024 source-level)', () => {
     expect(SRC).toContain('launch.repoSource.cloningHint')
   })
 })
+
+// -----------------------------------------------------------------------------
+// RFC-068 — fetchBeforeLaunch wiring + path-mode opt-in switch
+// -----------------------------------------------------------------------------
+
+describe('buildLaunchBody fetchBeforeLaunch (RFC-068)', () => {
+  test('path mode + fetchBeforeLaunch=true → body includes fetchBeforeLaunch=true', () => {
+    const src: RepoSource = {
+      kind: 'path',
+      repoPath: '/tmp/r',
+      baseBranch: 'main',
+      fetchBeforeLaunch: true,
+    }
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 't', inputs: {} })
+    expect(body.fetchBeforeLaunch).toBe(true)
+  })
+
+  test('path mode + fetchBeforeLaunch=false → body omits fetchBeforeLaunch (legacy bytes)', () => {
+    const src: RepoSource = {
+      kind: 'path',
+      repoPath: '/tmp/r',
+      baseBranch: 'main',
+      fetchBeforeLaunch: false,
+    }
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 't', inputs: {} })
+    expect('fetchBeforeLaunch' in body).toBe(false)
+  })
+
+  test('path mode + fetchBeforeLaunch undefined → body omits fetchBeforeLaunch', () => {
+    const src: RepoSource = { kind: 'path', repoPath: '/tmp/r', baseBranch: 'main' }
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 't', inputs: {} })
+    expect('fetchBeforeLaunch' in body).toBe(false)
+  })
+
+  test('url mode → body never carries fetchBeforeLaunch (auto FF is server-side)', () => {
+    const src: RepoSource = { kind: 'url', repoUrl: 'git@h:o/r.git', ref: 'main' }
+    const body = buildLaunchBody(src, { workflowId: 'wf-1', name: 't', inputs: {} })
+    expect('fetchBeforeLaunch' in body).toBe(false)
+  })
+})
+
+describe('RepoSourceTabs RFC-068 source-level wiring', () => {
+  const SRC = readFileSync(
+    resolve(import.meta.dirname, '..', 'src', 'components', 'launch', 'RepoSourceTabs.tsx'),
+    'utf-8',
+  )
+
+  test('imports Switch (path-mode opt-in toggle uses it)', () => {
+    expect(SRC).toMatch(/import\s*\{[^}]*\bSwitch\b[^}]*\}\s*from\s*['"]@\/components\/Form['"]/)
+  })
+
+  test('persists fetchBeforeLaunch to localStorage', () => {
+    expect(SRC).toContain('agent-workflow.launcher.pathFetch')
+    expect(SRC).toContain('localStorage')
+  })
+
+  test('renders path-mode switch label key from i18n', () => {
+    expect(SRC).toContain('launch.pathFetch.switchLabel')
+    expect(SRC).toContain('launch.pathFetch.switchHint')
+  })
+
+  test('renders URL-mode auto-sync hint', () => {
+    expect(SRC).toContain('launch.repoSource.urlAutoSync')
+  })
+
+  test('source switch defaults path mode fetchBeforeLaunch from loaded pref', () => {
+    expect(SRC).toContain('loadFetchBeforeLaunchPref')
+  })
+})

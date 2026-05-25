@@ -144,6 +144,65 @@ export async function listFiles(repoPath: string): Promise<string[]> {
 }
 
 // -----------------------------------------------------------------------------
+// RFC-068 — base ref classification
+// -----------------------------------------------------------------------------
+
+/**
+ * Kind of a base ref the launcher passed in. Used by RFC-068 to decide whether
+ * to fast-forward a mirror's local branch to its remote-tracking counterpart
+ * before materializing a worktree.
+ *
+ * - 'branch' — local branch (`refs/heads/<name>`). FF candidate.
+ * - 'remote-tracking' — `refs/remotes/<remote>/<name>`. Already points at the
+ *   remote-side commit; no FF needed.
+ * - 'tag' — `refs/tags/<name>`. Fixed object; FF inapplicable.
+ * - 'sha' — looks like a hex commit sha and resolves to a commit. FF
+ *   inapplicable.
+ * - 'unknown' — none of the above. Callers should treat as "try as branch"
+ *   (the FF attempt will silently skip if there's no matching origin ref).
+ */
+export type BaseRefKind = 'branch' | 'remote-tracking' | 'tag' | 'sha' | 'unknown'
+
+const HEX_SHA_RE = /^[0-9a-f]{4,40}$/i
+
+/**
+ * Classify a base ref against the local repo's ref store. Read-only, side-
+ * effect free; runs `git for-each-ref` once + an optional `rev-parse` probe.
+ *
+ * Priority: branch > tag > remote-tracking > sha > unknown. We rank `branch`
+ * above `tag` so that a `git tag` with the same name as an existing branch
+ * does not accidentally short-circuit FF (this matches launcher UX — users
+ * pick branch names from the branches dropdown).
+ */
+export async function classifyBaseRef(repoPath: string, ref: string): Promise<BaseRefKind> {
+  if (ref === '' || ref === 'HEAD') return 'unknown'
+
+  const probe = await runGit(repoPath, [
+    'for-each-ref',
+    '--format=%(refname)',
+    `refs/heads/${ref}`,
+    `refs/tags/${ref}`,
+    `refs/remotes/${ref}`,
+  ])
+  if (probe.exitCode === 0) {
+    const lines = probe.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+    if (lines.some((l) => l.startsWith('refs/heads/'))) return 'branch'
+    if (lines.some((l) => l.startsWith('refs/tags/'))) return 'tag'
+    if (lines.some((l) => l.startsWith('refs/remotes/'))) return 'remote-tracking'
+  }
+
+  if (HEX_SHA_RE.test(ref)) {
+    const r = await runGit(repoPath, ['rev-parse', '--verify', `${ref}^{commit}`])
+    if (r.exitCode === 0) return 'sha'
+  }
+
+  return 'unknown'
+}
+
+// -----------------------------------------------------------------------------
 // Worktree management (P-1-12)
 // -----------------------------------------------------------------------------
 

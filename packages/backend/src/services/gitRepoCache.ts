@@ -31,7 +31,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { cachedRepos, tasks } from '@/db/schema'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
-import { nonInteractiveGitEnv, runGit } from '@/util/git'
+import { classifyBaseRef, nonInteractiveGitEnv, runGit } from '@/util/git'
 import { createLogger } from '@/util/log'
 import { Paths } from '@/util/paths'
 import { getCachedGitCapabilities } from '@/services/gitVersion'
@@ -133,6 +133,15 @@ export interface GitRepoCacheDeps {
    * local git is older than 2.13.
    */
   submoduleJobs?: number
+  /**
+   * RFC-068 — branches to fast-forward to `origin/<branch>` on warm path
+   * after fetch. Caller passes the launcher-selected base ref (when it's a
+   * branch name) plus the detected default branch. tag / sha / remote-
+   * tracking refs are skipped automatically via `classifyBaseRef`. Empty /
+   * undefined → no FF (cold clones skip FF unconditionally since they're
+   * already at origin/HEAD).
+   */
+  syncBranches?: string[]
 }
 
 export interface ResolveCachedRepoInput {
@@ -148,6 +157,25 @@ export interface ResolveCachedRepoResult {
   submoduleSyncOk: boolean
   submoduleSyncError: string | null
   hasSubmodules: boolean
+  /**
+   * RFC-068 — fast-forward outcomes on warm path. Empty on cold path. Each
+   * entry corresponds to one branch from `deps.syncBranches` (after filtering
+   * via `classifyBaseRef`). Caller uses the redacted form to emit a task
+   * warning event when interesting.
+   */
+  ffOutcomes: FastForwardOutcome[]
+}
+
+export interface FastForwardOutcome {
+  branch: string
+  /** True iff `refs/heads/<branch>` actually moved (origin advanced). */
+  advanced: boolean
+  /** Pre-FF sha; null if branch didn't exist locally. */
+  fromSha: string | null
+  /** Post-FF sha; null if FF failed or origin/<branch> doesn't exist. */
+  toSha: string | null
+  /** Redacted stderr / explanation when FF was attempted but couldn't proceed. */
+  warning: string | null
 }
 
 function rowToCached(row: typeof cachedRepos.$inferSelect, referencingTaskCount = 0): CachedRepo {
@@ -164,6 +192,72 @@ function rowToCached(row: typeof cachedRepos.$inferSelect, referencingTaskCount 
     lastSubmoduleSyncOk: row.lastSubmoduleSyncOk ?? null,
     lastSubmoduleSyncError: row.lastSubmoduleSyncError ?? null,
   }
+}
+
+/**
+ * RFC-068 — fast-forward `refs/heads/<branch>` to `refs/remotes/origin/<branch>`
+ * in a mirror cache repo. Caller MUST hold withUrlLock(hash) for the cacheDir.
+ *
+ * `git update-ref` is preferred over `git pull` here because the mirror's
+ * working tree is never used at runtime (worker processes get their own
+ * worktrees via `git worktree add`), so there's no value in checking files
+ * out — that would only risk locking other concurrent worktree operations.
+ *
+ * Returns FastForwardOutcome documenting whether the ref moved, plus any
+ * warning string when the FF could not proceed (origin/<branch> missing,
+ * non-FF divergence, etc.). On warning the caller falls back to using the
+ * remote-tracking ref directly.
+ */
+export async function syncBranchToRemote(
+  cacheDir: string,
+  branch: string,
+): Promise<FastForwardOutcome> {
+  if (branch === '' || branch === 'HEAD') {
+    return { branch, advanced: false, fromSha: null, toSha: null, warning: 'invalid-branch' }
+  }
+  // Resolve origin/<branch>; missing → skip (mirror may have a branch with no
+  // upstream, like detached HEAD configs).
+  const originRef = `refs/remotes/origin/${branch}`
+  const originSha = await runGit(cacheDir, ['rev-parse', '--verify', `${originRef}^{commit}`])
+  if (originSha.exitCode !== 0) {
+    return {
+      branch,
+      advanced: false,
+      fromSha: null,
+      toSha: null,
+      warning: 'origin-ref-missing',
+    }
+  }
+  const target = originSha.stdout.trim()
+
+  // Local sha (may not exist if branch was never checked out — that's fine,
+  // update-ref will create it).
+  const localRef = `refs/heads/${branch}`
+  const localShaRes = await runGit(cacheDir, ['rev-parse', '--verify', `${localRef}^{commit}`])
+  const fromSha = localShaRes.exitCode === 0 ? localShaRes.stdout.trim() : null
+
+  if (fromSha === target) {
+    return { branch, advanced: false, fromSha, toSha: target, warning: null }
+  }
+
+  // Mirror caches are platform-exclusive: no hand-commits land in
+  // refs/heads/<branch> beyond what fetch did, so a non-FF should never
+  // happen. Still: when fromSha exists, gate the update with `--create-reflog`
+  // + the previous oldvalue so a surprise divergence is reported, not
+  // silently overwritten.
+  const args = ['update-ref', '--create-reflog', localRef, target]
+  if (fromSha !== null) args.push(fromSha)
+  const upd = await runGit(cacheDir, args)
+  if (upd.exitCode !== 0) {
+    return {
+      branch,
+      advanced: false,
+      fromSha,
+      toSha: null,
+      warning: upd.stderr.trim() || 'update-ref-failed',
+    }
+  }
+  return { branch, advanced: true, fromSha, toSha: target, warning: null }
 }
 
 /**
@@ -249,6 +343,39 @@ export async function resolveCachedRepo(
           log.warn('git fetch on reuse failed', { url: redacted, stderr: fetchError })
         }
       }
+      // RFC-068: fast-forward each requested base branch to its origin
+      // tracking ref so `git rev-parse <branch>` downstream picks up the
+      // freshly-fetched commit. tag / sha / origin-tracking refs are
+      // filtered out via classifyBaseRef (no FF applicable). Failures are
+      // surfaced as warnings; caller may fall back to origin/<branch>
+      // directly. Whole FF block is best-effort — skipped entirely when
+      // fetch failed (no new origin commits to FF to).
+      const ffOutcomes: FastForwardOutcome[] = []
+      if (fetchOk) {
+        const seen = new Set<string>()
+        for (const candidate of deps.syncBranches ?? []) {
+          if (seen.has(candidate)) continue
+          seen.add(candidate)
+          const kind = await classifyBaseRef(row.localPath, candidate)
+          if (kind !== 'branch' && kind !== 'unknown') continue
+          const outcome = await syncBranchToRemote(row.localPath, candidate)
+          ffOutcomes.push(outcome)
+          if (outcome.warning !== null) {
+            log.warn('rfc068/ff-failed', {
+              url: redacted,
+              branch: candidate,
+              warning: outcome.warning,
+            })
+          } else if (outcome.advanced) {
+            log.info('rfc068/ff-advanced', {
+              url: redacted,
+              branch: candidate,
+              fromSha: outcome.fromSha,
+              toSha: outcome.toSha,
+            })
+          }
+        }
+      }
       // RFC-034: refresh submodule working dirs to whatever the parent's
       // gitlink pointers say. Failures here are warnings — fetch is still
       // considered successful and `last_fetched_at` still advances.
@@ -288,6 +415,7 @@ export async function resolveCachedRepo(
         submoduleSyncOk: sub.ok,
         submoduleSyncError: sub.error,
         hasSubmodules: sub.hasGitmodules,
+        ffOutcomes,
       }
     }
 
@@ -400,6 +528,7 @@ export async function resolveCachedRepo(
       submoduleSyncOk: true,
       submoduleSyncError: null,
       hasSubmodules: hasGitmodules,
+      ffOutcomes: [],
     }
   })
 
