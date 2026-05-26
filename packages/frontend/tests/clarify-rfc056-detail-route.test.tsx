@@ -1,19 +1,25 @@
 // RFC-056 PR-C T8 — locks /clarify/$nodeRunId detail page cross-clarify branch.
 //
-// LOCKS:
-//   1. Detail page renders the Reject button on cross-clarify sessions
-//      (data-testid='cross-clarify-reject').
-//   2. Clicking Reject opens the 2nd-step confirm modal
-//      (data-testid='cross-clarify-reject-modal').
-//   3. Self-clarify sessions still render the legacy "submit & stop"
-//      button instead of Reject.
-//   4. Cross-clarify detail page surfaces the targetDesigner in the
-//      context card.
-//   5. Reject modal Cancel closes without submitting; Confirm fires
-//      submit with directive='stop'.
+// 2026-05-26 update: unified the secondary "stop" button across self- and
+// cross-clarify pages. Cross no longer has its own red Reject button; both
+// pages render `clarify-submit-stop` (ghost) + share one confirm dialog
+// `clarify-stop-modal`. The dialog's in-modal copy still differs (cross
+// keeps the cross-loop persistence warning text via
+// `crossClarify.rejectModal.{title,body,confirm}`).
 //
-// Source-text grep guards at the bottom: the i18n keys, testids, and
-// the directive value reach the source file.
+// LOCKS:
+//   1. Cross-clarify session renders the unified stop button
+//      (data-testid='clarify-submit-stop').
+//   2. Clicking stop opens the unified confirm modal
+//      (data-testid='clarify-stop-modal').
+//   3. Cross-clarify detail page surfaces the targetDesigner in the
+//      context card.
+//   4. Stop-modal Cancel closes without submitting; Confirm fires submit
+//      with directive='stop'.
+//
+// Source-text grep guards at the bottom: the cross-specific i18n copy is
+// still referenced (so we keep the stronger warning text), the unified
+// testids reach the source file.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -194,36 +200,40 @@ function renderRoute(initialPath: string) {
 }
 
 describe('RFC-056 /clarify/$nodeRunId — cross-clarify branch', () => {
-  test('renders the Reject button instead of "submit & stop" for cross-clarify sessions', async () => {
+  test('cross-clarify renders the unified stop button (shared with self-clarify)', async () => {
     mockApi({ session: crossSession() })
     renderRoute('/clarify/nr_cross_1')
-    await waitFor(() => screen.getByTestId('cross-clarify-reject'))
-    expect(screen.queryByTestId('clarify-submit-stop')).toBeNull()
+    await waitFor(() => screen.getByTestId('clarify-submit-stop'))
+    // The old kind-specific testid is gone after the 2026-05-26 unification.
+    expect(screen.queryByTestId('cross-clarify-reject')).toBeNull()
+    const stop = screen.getByTestId('clarify-submit-stop')
+    expect(stop.className).toContain('btn--ghost')
+    expect(stop.getAttribute('data-directive')).toBe('stop')
   })
 
-  test('clicking Reject opens the confirm modal; Cancel closes it without submitting', async () => {
+  test('clicking stop opens the confirm modal; Cancel closes it without submitting', async () => {
     const captured: { url?: string; body?: unknown } = {}
     mockApi({ session: crossSession(), capturePost: captured })
     renderRoute('/clarify/nr_cross_1')
-    await waitFor(() => screen.getByTestId('cross-clarify-reject'))
-    fireEvent.click(screen.getByTestId('cross-clarify-reject'))
-    await waitFor(() => screen.getByTestId('cross-clarify-reject-modal'))
-    fireEvent.click(screen.getByTestId('cross-clarify-reject-cancel'))
+    await waitFor(() => screen.getByTestId('clarify-submit-stop'))
+    fireEvent.click(screen.getByTestId('clarify-submit-stop'))
+    await waitFor(() => screen.getByTestId('clarify-stop-modal'))
+    fireEvent.click(screen.getByTestId('clarify-stop-cancel'))
     await waitFor(() => {
-      expect(screen.queryByTestId('cross-clarify-reject-modal')).toBeNull()
+      expect(screen.queryByTestId('clarify-stop-modal')).toBeNull()
     })
     expect(captured.body).toBeUndefined()
   })
 
-  test('Confirm in the reject modal POSTs with directive="stop"', async () => {
+  test('Confirm in the stop modal POSTs with directive="stop"', async () => {
     const captured: { url?: string; body?: unknown } = {}
     mockApi({ session: crossSession(), capturePost: captured })
     renderRoute('/clarify/nr_cross_1')
-    await waitFor(() => screen.getByTestId('cross-clarify-reject'))
-    fireEvent.click(screen.getByTestId('cross-clarify-reject'))
-    await waitFor(() => screen.getByTestId('cross-clarify-reject-confirm'))
+    await waitFor(() => screen.getByTestId('clarify-submit-stop'))
+    fireEvent.click(screen.getByTestId('clarify-submit-stop'))
+    await waitFor(() => screen.getByTestId('clarify-stop-confirm'))
     await act(async () => {
-      fireEvent.click(screen.getByTestId('cross-clarify-reject-confirm'))
+      fireEvent.click(screen.getByTestId('clarify-stop-confirm'))
     })
     await waitFor(() => {
       expect(captured.body).toBeDefined()
@@ -257,16 +267,20 @@ describe('RFC-056 /clarify/$nodeRunId — cross-clarify branch', () => {
 })
 
 describe('RFC-056 detail source-code grep guards', () => {
-  test('clarify.detail.tsx references the crossClarify i18n keys + Reject + modal data-testids', () => {
+  test('clarify.detail.tsx references the unified stop testids + cross-specific modal copy', () => {
     const src = readFileSync(DETAIL_TSX, 'utf-8')
-    expect(src).toContain('crossClarify.button.reject')
+    // Cross-specific modal copy is still consulted by the unified dialog
+    // when the session is cross-clarify (kept so the cross-loop persistence
+    // warning text is not silently dropped).
     expect(src).toContain('crossClarify.rejectModal.title')
     expect(src).toContain('crossClarify.rejectModal.body')
     expect(src).toContain('crossClarify.rejectModal.confirm')
     expect(src).toContain('crossClarify.multiSourceBanner')
-    expect(src).toContain('cross-clarify-reject')
-    expect(src).toContain('cross-clarify-reject-modal')
-    expect(src).toContain('cross-clarify-reject-confirm')
+    // Unified stop-modal testids shared by self- and cross-clarify.
+    expect(src).toContain('clarify-submit-stop')
+    expect(src).toContain('clarify-stop-modal')
+    expect(src).toContain('clarify-stop-cancel')
+    expect(src).toContain('clarify-stop-confirm')
     expect(src).toContain('cross-clarify-multi-source-banner')
   })
 })

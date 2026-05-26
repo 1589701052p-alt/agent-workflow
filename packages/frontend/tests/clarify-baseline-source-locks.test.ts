@@ -45,10 +45,15 @@ describe('RFC-058 baseline T7 — list page chip + row data-testid contract', ()
   })
 })
 
-describe('RFC-058 baseline T7 — detail page reject modal + submit hook', () => {
-  test('detail page has rejectModalOpen state for the two-step Reject confirmation flow', () => {
-    expect(DETAIL_SRC).toContain('rejectModalOpen')
-    expect(DETAIL_SRC).toContain('setRejectModalOpen')
+describe('RFC-058 baseline T7 — detail page stop modal + submit hook', () => {
+  // 2026-05-26: unified the two pages' bottom-right secondary buttons.
+  // Self- and cross-clarify now share one `stopModalOpen` state (renamed
+  // from `rejectModalOpen`) and one `clarify-stop-modal` confirmation
+  // dialog; only the in-modal copy still differs per kind. Locked here so
+  // a future PR that removes the confirm flow on either page fires red.
+  test('detail page has stopModalOpen state for the two-step stop confirmation flow', () => {
+    expect(DETAIL_SRC).toContain('stopModalOpen')
+    expect(DETAIL_SRC).toContain('setStopModalOpen')
   })
 
   test('detail page renders detail-page data-testid + back / context card + truncation warning testids', () => {

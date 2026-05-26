@@ -384,11 +384,17 @@ describe('/clarify/$nodeRunId directive submit buttons (RFC-023 iter)', () => {
     expect(capturedPosts[0]?.directive).toBe('continue')
     unmount()
 
-    // Second render: click stop.
+    // Second render: click stop → confirm in the unified stop modal.
+    // 2026-05-26: self- and cross-clarify share one confirm-modal flow now
+    // (testid `clarify-stop-modal`); a bare stop click only opens the
+    // modal, the directive does not fire until Confirm.
     capturedPosts = []
     renderRoute()
     await waitFor(() => screen.getByTestId('clarify-submit-stop'))
     fireEvent.click(screen.getByTestId('clarify-submit-stop'))
+    await waitFor(() => screen.getByTestId('clarify-stop-modal'))
+    expect(capturedPosts.length).toBe(0)
+    fireEvent.click(screen.getByTestId('clarify-stop-confirm'))
     await waitFor(() => expect(capturedPosts.length).toBe(1))
     expect(capturedPosts[0]?.directive).toBe('stop')
   })
