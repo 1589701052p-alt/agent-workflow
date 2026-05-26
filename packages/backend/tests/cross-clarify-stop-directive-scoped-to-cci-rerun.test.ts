@@ -245,12 +245,15 @@ describe("cross-questioner 'stop' directive scoped to the cci-driven rerun only"
 })
 
 describe('scheduler wiring: cross-questioner buildPromptContext must pass applyLatestDirective gated on retryIndex', () => {
-  test("scheduler.ts cross-questioner branch sets applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0", () => {
+  test('scheduler.ts cross-questioner branch sets applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0', () => {
     // Source-text guard: catches a future refactor that drops the gate
     // back to the default (true). The same kind of guard the codebase
     // uses elsewhere for behaviors that span runtime + render layers
     // (see e.g. canvas-edge-changes.test.ts).
-    const source = readFileSync(resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
+    const source = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
+      'utf8',
+    )
     // Locate the cross-questioner branch by its consumerKind literal.
     const idx = source.indexOf("consumerKind: 'cross-questioner'")
     expect(idx).toBeGreaterThan(-1)
@@ -258,7 +261,7 @@ describe('scheduler wiring: cross-questioner buildPromptContext must pass applyL
     // followed by `: await buildPromptContext` (the self branch). Slice
     // the cross-questioner call body and assert the gate is present.
     const tail = source.slice(idx)
-    const selfBranchIdx = tail.indexOf(": await buildPromptContext({")
+    const selfBranchIdx = tail.indexOf(': await buildPromptContext({')
     expect(selfBranchIdx).toBeGreaterThan(-1)
     const crossBranchBody = tail.slice(0, selfBranchIdx)
     expect(crossBranchBody).toContain('applyLatestDirective')
