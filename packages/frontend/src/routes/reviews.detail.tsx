@@ -463,7 +463,13 @@ function ReviewDetailPage() {
 
   const onReject = useCallback(() => {
     if (detail.data === undefined) return
-    const willRerun = detail.data.rerunnableOnReject.join(', ') || '(none)'
+    // Fallback mirrors `onIterate` below: when rerunnableOnReject is empty,
+    // services/review.ts still adds dv.sourceNodeId into the rerun set
+    // ("direct upstream always rerunnable, regardless of config" — see
+    // review.ts:1315 + workflow-validator.test.ts "rerunnableOnReject
+    // empty does NOT emit `review-rerunnable-empty-on-reject`"). Showing
+    // "(none)" here told users nothing would re-run, which was a lie.
+    const willRerun = detail.data.rerunnableOnReject.join(', ') || '(direct upstream)'
     setDecisionDialog({ kind: 'reject', willRerun, reason: '', reasonError: false })
   }, [detail.data])
 
