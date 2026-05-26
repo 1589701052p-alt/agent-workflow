@@ -105,6 +105,20 @@ export interface RunNodeOptions {
     nodeId?: string
     iteration?: number
     shardKey?: string
+    /**
+     * RFC-066: per-repo metadata for the multi-repo placeholders. Always
+     * non-empty; single-repo tasks pass a length-1 array mirroring the
+     * legacy `repoPath` / `baseBranch` fields with `worktreeDirName = ''`
+     * so `{{__repo_names__}}` renders empty (byte-baseline). The runner
+     * just forwards this to `renderUserPrompt`; the scheduler is the
+     * source of truth.
+     */
+    repos?: Array<{
+      repoPath: string
+      worktreePath: string
+      worktreeDirName: string
+      baseBranch: string
+    }>
   }
   promptTemplate?: string
   /**

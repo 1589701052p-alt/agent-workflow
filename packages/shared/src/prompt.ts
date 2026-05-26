@@ -179,6 +179,21 @@ export interface RenderPromptInput {
     iteration?: number
     /** Shard key for multi-process nodes. Only present in child runs. */
     shardKey?: string
+    /**
+     * RFC-066: per-repo metadata for the multi-repo placeholders. Single-repo
+     * tasks (legacy default) pass a length-1 array whose entry mirrors
+     * `repoPath` / `baseBranch` with `worktreeDirName === ''` so the
+     * `{{__repo_names__}}` placeholder renders an empty string (byte-baseline
+     * for templates that don't use the new tokens). When absent, the legacy
+     * `{{__repo_path__}}` / `{{__base_branch__}}` substitutions still work and
+     * the three new tokens render to ''.
+     */
+    repos?: Array<{
+      repoPath: string
+      worktreePath: string
+      worktreeDirName: string
+      baseBranch: string
+    }>
   }
   /** Declared outputs for the protocol block instructions. */
   agentOutputs: string[]
@@ -250,6 +265,14 @@ const BUILTIN_VARS = new Set([
   '__external_feedback__',
   '__external_feedback_iteration__',
   '__external_feedback_sources__',
+  // RFC-066 multi-repo placeholders. Single-repo runs render
+  // `__repo_names__` as the empty string (length-1 array, worktreeDirName='');
+  // `__repos__` becomes the single worktreePath; `__repo_count__` is '1'.
+  // Templates that never reference them stay byte-baseline against
+  // pre-RFC-066 outputs.
+  '__repos__',
+  '__repo_names__',
+  '__repo_count__',
 ])
 
 /**
@@ -339,6 +362,12 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return xcc?.iteration ?? ''
         case '__external_feedback_sources__':
           return xcc?.sourcesCsv ?? ''
+        case '__repos__':
+          return (input.meta.repos ?? []).map((r) => r.worktreePath).join('\n')
+        case '__repo_names__':
+          return (input.meta.repos ?? []).map((r) => r.worktreeDirName).join('\n')
+        case '__repo_count__':
+          return String((input.meta.repos ?? []).length)
       }
     }
     // RFC-026: drop input port values from inline-mode reruns (see comment

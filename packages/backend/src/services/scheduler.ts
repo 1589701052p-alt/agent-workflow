@@ -49,7 +49,7 @@ import {
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRunOutputs, nodeRuns, skills, tasks } from '@/db/schema'
+import { nodeRunEvents, nodeRunOutputs, nodeRuns, skills, taskRepos, tasks } from '@/db/schema'
 import { getAgent } from '@/services/agent'
 import { resolveDependsClosure } from '@/services/agentDeps'
 import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
@@ -146,6 +146,22 @@ interface SchedulerState {
   containerOf: Map<string, string>
   /** Top-level scope set of node ids. */
   topLevelIds: Set<string>
+  /**
+   * RFC-066: per-repo metadata loaded once at scheduler entry, threaded
+   * through every templateMeta dispatch + the multi-repo
+   * `pre_snapshot_repos_json` write path. Single-repo tasks get a length-1
+   * array mirroring the legacy `task.repoPath` / `task.baseBranch` columns
+   * (`worktreeDirName: ''`, so `{{__repo_names__}}` renders empty — the
+   * single-repo byte-baseline is preserved). Always non-empty; defensive
+   * fallback in runTask handles the ultra-rare task row that predates
+   * migration 0034's INSERT FROM backfill.
+   */
+  repos: Array<{
+    repoPath: string
+    worktreePath: string
+    worktreeDirName: string
+    baseBranch: string
+  }>
 }
 
 /**
@@ -163,6 +179,39 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     log.error('runTask: task not found', { taskId })
     return
   }
+
+  // RFC-066 PR-B T9: load per-repo metadata once at the top so every runner
+  // dispatch site can thread it through `templateMeta.repos` without an extra
+  // round-trip. Single-repo tasks get a length-1 array mirroring the legacy
+  // `tasks.*` columns (`worktreeDirName === ''` → `{{__repo_names__}}`
+  // renders empty, byte-baseline). Defensive fallback handles the ultra-rare
+  // case of a task row predating migration 0034's INSERT FROM backfill.
+  const repoRows = await db
+    .select()
+    .from(taskRepos)
+    .where(eq(taskRepos.taskId, taskId))
+    .orderBy(asc(taskRepos.repoIndex))
+  const repos: Array<{
+    repoPath: string
+    worktreePath: string
+    worktreeDirName: string
+    baseBranch: string
+  }> =
+    repoRows.length > 0
+      ? repoRows.map((r) => ({
+          repoPath: r.repoPath,
+          worktreePath: r.worktreePath,
+          worktreeDirName: r.worktreeDirName,
+          baseBranch: r.baseBranch,
+        }))
+      : [
+          {
+            repoPath: task.repoPath,
+            worktreePath: task.worktreePath,
+            worktreeDirName: '',
+            baseBranch: task.baseBranch,
+          },
+        ]
 
   // 2. Parse workflow snapshot.
   let definition: WorkflowDefinition
@@ -197,6 +246,25 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
         `scheduler does not yet support ${node.kind} nodes`,
         `node kind ${node.kind} unsupported`,
         node.id,
+      )
+      return
+    }
+  }
+
+  // RFC-066 PR-B T9: scheduler-side defense-in-depth gate. T6 already
+  // rejects multi-repo + wrapper-git at launch time, but a hypothetical
+  // direct insert into `tasks` (skipping the route layer) or a future
+  // resume path could in principle hand us a wrapper-git node with
+  // repoCount > 1. Catch it here before any inner-scope work runs.
+  if (task.repoCount > 1) {
+    const wgNode = definition.nodes.find((n) => n.kind === 'wrapper-git')
+    if (wgNode !== undefined) {
+      await failTask(
+        db,
+        taskId,
+        'multi-repo-wrapper-git-unsupported',
+        `wrapper-git node ${wgNode.id} not allowed in multi-repo task (repoCount=${task.repoCount})`,
+        wgNode.id,
       )
       return
     }
@@ -243,6 +311,8 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     subprocessSem: new Semaphore(opts.multiProcessSubprocessConcurrency ?? 4),
     containerOf,
     topLevelIds,
+    // RFC-066: thread per-repo metadata through every inner dispatch.
+    repos,
   }
 
   // 8. Drive the top-level scope.
@@ -1251,8 +1321,36 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       // opencode's session view matches disk).
       if (!agent.readonly && !followupDecision.followup) {
         try {
-          const sha = await gitStashSnapshot(task.worktreePath)
-          await db.update(nodeRuns).set({ preSnapshot: sha }).where(eq(nodeRuns.id, nodeRunId))
+          if (task.repoCount === 1) {
+            // RFC-066: single-path byte-baseline branch — `pre_snapshot`
+            // remains the single-string column the resume path has always
+            // read.
+            const sha = await gitStashSnapshot(task.worktreePath)
+            await db.update(nodeRuns).set({ preSnapshot: sha }).where(eq(nodeRuns.id, nodeRunId))
+          } else {
+            // RFC-066: multi-repo per-repo stash map. Each sub-worktree
+            // gets its own `git stash create` sha; the resume path reads
+            // back this JSON and rolls each repo independently. Repos with
+            // a failed snapshot are recorded as empty strings so resume's
+            // rollback skips them rather than crashing.
+            const stashMap: Record<string, string> = {}
+            for (const repo of state.repos) {
+              try {
+                stashMap[repo.worktreeDirName] = await gitStashSnapshot(repo.worktreePath)
+              } catch (err) {
+                log.warn('pre-snapshot per-repo failed', {
+                  nodeRunId,
+                  worktreeDirName: repo.worktreeDirName,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+                stashMap[repo.worktreeDirName] = ''
+              }
+            }
+            await db
+              .update(nodeRuns)
+              .set({ preSnapshotReposJson: JSON.stringify(stashMap) })
+              .where(eq(nodeRuns.id, nodeRunId))
+          }
         } catch (err) {
           log.warn('pre-snapshot failed', {
             nodeRunId,
@@ -1589,6 +1687,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
             taskId,
             nodeId: node.id,
             iteration,
+            // RFC-066: per-repo metadata for the {{__repos__}} /
+            // {{__repo_names__}} / {{__repo_count__}} placeholders.
+            repos: state.repos,
           },
           ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
@@ -2531,6 +2632,8 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
         nodeId: innerNode.id,
         iteration,
         ...(shard !== null ? { shardKey } : {}),
+        // RFC-066: per-repo metadata for prompt placeholders.
+        repos: state.repos,
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
@@ -2698,6 +2801,8 @@ async function dispatchFanoutAggregator(
         taskId,
         nodeId: aggNode.id,
         iteration,
+        // RFC-066: per-repo metadata for prompt placeholders.
+        repos: state.repos,
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),

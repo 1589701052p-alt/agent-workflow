@@ -36,7 +36,7 @@ import { listSkills } from '@/services/skill'
 import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
 import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
-import { createWorktree, rollbackToSnapshot, worktreeDiff } from '@/util/git'
+import { createWorktree, gitDiffSnapshot, rollbackToSnapshot, worktreeDiff } from '@/util/git'
 import { redactGitUrl } from '@agent-workflow/shared'
 import { ConflictError, DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { readArchivedEvents } from '@/services/eventsArchive'
@@ -787,6 +787,70 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
  *
  * Rejects if the task is already terminal.
  */
+/**
+ * RFC-066 PR-B T13: roll back the worktree state before a node_run for the
+ * resume / single-node-retry paths. Two strategies depending on `task.repoCount`:
+ *
+ *  - Single-repo (repoCount === 1): read the legacy `preSnapshot` column
+ *    (a single git-stash sha) and roll back `task.worktreePath`.
+ *    Byte-baseline equivalent to pre-RFC-066 behavior.
+ *  - Multi-repo (repoCount > 1): read the new `preSnapshotReposJson` column
+ *    (`{<worktreeDirName>: <stashSha>}` map) and roll each per-repo sub-
+ *    worktree independently. Defensive fallback to the single-string
+ *    `preSnapshot` for any task_repos row that happens to predate PR-B
+ *    (e.g. multi-repo task created before T13 landed); same `task.worktreePath`
+ *    rollback path is used as a last-ditch attempt in that case.
+ *
+ * Errors per repo are warn-and-continue; we never abort the resume because
+ * one of N repos' stash applies failed. Caller decides next step.
+ */
+async function rollbackNodeRunForResume(
+  task: Task,
+  run: { id: string; preSnapshot: string | null; preSnapshotReposJson: string | null },
+  log: ReturnType<typeof createLogger>,
+): Promise<void> {
+  // Multi-repo path: prefer the per-repo map when present.
+  if (task.repoCount > 1 && run.preSnapshotReposJson !== null && task.repos.length > 0) {
+    let map: Record<string, string> = {}
+    try {
+      map = JSON.parse(run.preSnapshotReposJson) as Record<string, string>
+    } catch (err) {
+      log.warn('preSnapshotReposJson parse failed; falling back to legacy single-stash rollback', {
+        nodeRunId: run.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      // Fall through to single-repo path below.
+    }
+    for (const repo of task.repos) {
+      const sha = map[repo.worktreeDirName] ?? ''
+      if (sha === '') continue
+      try {
+        await rollbackToSnapshot(repo.worktreePath, sha)
+      } catch (err) {
+        log.warn('resume rollback per-repo failed', {
+          nodeRunId: run.id,
+          worktreeDirName: repo.worktreeDirName,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    return
+  }
+
+  // Single-repo path (or multi-repo defensive fallback when the per-repo
+  // map is unparseable / absent). Byte-baseline equivalent to pre-RFC-066.
+  if (run.preSnapshot !== null && run.preSnapshot !== '' && task.worktreePath !== '') {
+    try {
+      await rollbackToSnapshot(task.worktreePath, run.preSnapshot)
+    } catch (err) {
+      log.warn('resume rollback failed', {
+        nodeRunId: run.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+}
+
 export async function cancelTask(db: DbClient, id: string): Promise<Task> {
   const task = await getTask(db, id)
   if (task === null) {
@@ -869,16 +933,7 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
   )
 
   for (const r of toRollback) {
-    if (r.preSnapshot !== null && r.preSnapshot !== '' && task.worktreePath !== '') {
-      try {
-        await rollbackToSnapshot(task.worktreePath, r.preSnapshot)
-      } catch (err) {
-        log.warn('resume rollback failed', {
-          nodeRunId: r.id,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
+    await rollbackNodeRunForResume(task, r, log)
     // The scheduler creates a new node_run with retry_index = max+1 on its
     // own when it sees no pending run for the node, so we just leave the
     // failed row as historical and clear errors on the task.
@@ -1007,16 +1062,7 @@ export async function retryNode(
   // Rollback to the snapshot before the node_run started. The single-node
   // retry uses THIS run's snapshot (not the latest, since the user picked
   // this specific historical attempt).
-  if (runRow.preSnapshot !== null && runRow.preSnapshot !== '' && task.worktreePath !== '') {
-    try {
-      await rollbackToSnapshot(task.worktreePath, runRow.preSnapshot)
-    } catch (err) {
-      log.warn('node retry rollback failed', {
-        nodeRunId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
+  await rollbackNodeRunForResume(task, runRow, log)
 
   // Flip target + downstream node_runs from done → failed so the resumer
   // re-runs them. We do this by inserting a fresh failed row at retry_index
@@ -1443,21 +1489,67 @@ export async function getNodeRunStdout(
 /**
  * Cumulative diff in the worktree since the task started.
  *
+ * Single-repo tasks (the legacy default and `task.repoCount === 1`): return
+ * the unchanged 1 MiB-capped `worktreeDiff` of `task.worktreePath` against
+ * `task.baseCommit`. Byte-baseline equivalent to pre-RFC-066 callers.
+ *
+ * Multi-repo tasks (RFC-066 PR-B T12, `task.repoCount > 1`): walk each
+ * `task_repos` row in `repoIndex` order, compute the per-repo diff against
+ * that repo's own `base_commit`, and concatenate the results with a
+ * `# === Repo: <worktreeDirName> ===` header per repo. Empty diffs are
+ * skipped (no header for repos that didn't change). The combined output is
+ * capped at the same 1 MiB total budget; `truncated: true` is returned if a
+ * later repo's diff would overflow, in which case the partial header + as
+ * many bytes as fit are still emitted so the user sees what's there. The
+ * top-level `baseCommit` field is null in multi-repo (no single commit
+ * represents the whole task — the per-repo commits live inside the diff
+ * text headers).
+ *
  * Throws ValidationError if baseCommit wasn't captured (task failed before
- * worktree creation) or if the worktree directory has been removed.
+ * worktree creation) or if the worktree directory has been removed. In
+ * multi-repo mode the gate is per-repo: a missing parent dir still throws,
+ * but an individual repo with `base_commit IS NULL` is skipped (its diff
+ * would be undefined). At least one repo must have a usable base_commit
+ * for the call to succeed.
  */
+const TASK_DIFF_MAX_BYTES = 1024 * 1024 // 1 MiB — same cap as worktreeDiff.
+
 export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDiff> {
   const task = await getTask(db, taskId)
   if (task === null) {
     throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
   }
-  if (task.baseCommit === null) {
-    throw new DomainError(
-      'task-no-base-commit',
-      `task '${taskId}' has no base commit recorded; cannot compute diff`,
-      409,
-    )
+
+  if (task.repoCount === 1) {
+    // RFC-066: single-path byte-baseline branch — pre-RFC-066 callers see
+    // the same response shape, the same error codes, and the same order
+    // of checks (baseCommit first → no-base-commit 409, then worktree
+    // existence → worktree-missing 410). Reordering would shift a small
+    // class of failure modes between the two error codes for failed-tasks
+    // that never materialized a worktree.
+    if (task.baseCommit === null) {
+      throw new DomainError(
+        'task-no-base-commit',
+        `task '${taskId}' has no base commit recorded; cannot compute diff`,
+        409,
+      )
+    }
+    if (!existsSync(task.worktreePath)) {
+      throw new DomainError(
+        'task-worktree-missing',
+        `worktree '${task.worktreePath}' does not exist; cannot compute diff`,
+        410,
+      )
+    }
+    const { diff, truncated } = await worktreeDiff(task.worktreePath, task.baseCommit)
+    return { diff, baseCommit: task.baseCommit, truncated }
   }
+
+  // RFC-066: multi-repo concat. The parent worktree directory must exist
+  // (it's the cwd for opencode children); at least one per-repo entry must
+  // have a usable base_commit so we have something to diff against.
+  // Per-repo missing-base / missing-worktree entries are skipped so we
+  // never short the whole call for one bad shard.
   if (!existsSync(task.worktreePath)) {
     throw new DomainError(
       'task-worktree-missing',
@@ -1465,8 +1557,44 @@ export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDif
       410,
     )
   }
-  const { diff, truncated } = await worktreeDiff(task.worktreePath, task.baseCommit)
-  return { diff, baseCommit: task.baseCommit, truncated }
+  const usable = task.repos.filter(
+    (r) => r.baseCommit !== null && r.baseCommit !== '' && existsSync(r.worktreePath),
+  )
+  if (usable.length === 0) {
+    throw new DomainError(
+      'task-no-base-commit',
+      `task '${taskId}' has no repo with a recorded base commit; cannot compute diff`,
+      409,
+    )
+  }
+  let out = ''
+  let truncated = false
+  for (const repo of usable) {
+    const oneRaw = await gitDiffSnapshot(repo.worktreePath, repo.baseCommit as string)
+    if (oneRaw === '') continue
+    const header = `# === Repo: ${repo.worktreeDirName || repo.repoPath} ===\n`
+    const remaining = TASK_DIFF_MAX_BYTES - out.length
+    if (remaining <= 0) {
+      truncated = true
+      break
+    }
+    if (header.length >= remaining) {
+      // Even the header doesn't fit — emit what we can and stop.
+      out += header.slice(0, remaining)
+      truncated = true
+      break
+    }
+    out += header
+    const bodyBudget = TASK_DIFF_MAX_BYTES - out.length
+    if (oneRaw.length > bodyBudget) {
+      out += oneRaw.slice(0, bodyBudget)
+      truncated = true
+      break
+    }
+    out += oneRaw
+    if (!out.endsWith('\n')) out += '\n'
+  }
+  return { diff: out, baseCommit: null, truncated }
 }
 
 function rowToTask(
