@@ -6938,6 +6938,74 @@ mark.comment-anchor[data-active='true'] {
   border-left: 1px solid var(--border);
 }
 
+/* RFC-066 PR-C — multi-repo launcher container + per-row stack. */
+.repo-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+.repo-source-list__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.repo-source-list__max-hint {
+  font-size: 12px;
+}
+.repo-source-list__banner {
+  font-size: 13px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger, #c0392b);
+  border-radius: 6px;
+  background: var(--surface-2, transparent);
+}
+.repo-source-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1, transparent);
+}
+.repo-source-row__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.repo-source-row__remove {
+  flex-shrink: 0;
+}
+.repo-source-row__preview {
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+
+/* RFC-066 PR-C — task detail multi-repo summary block. Single-repo tasks
+   render nothing here (byte-baseline). */
+.task-detail__multi-repo {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2, transparent);
+}
+.task-detail__multi-repo summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.task-detail__multi-repo-list {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+.task-detail__multi-repo-list li {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 /* RFC-024 — cached repos management page. */
 .repos-page {
   display: flex;

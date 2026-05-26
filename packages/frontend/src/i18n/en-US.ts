@@ -826,6 +826,8 @@ export const enUS: Resources = {
     metaStarted: 'Started',
     metaFinished: 'Finished',
     metaError: 'Error',
+    // RFC-066: multi-repo summary on the task detail page.
+    multiRepoSummary: '{{count}} repositories',
     cancelButton: 'Cancel task',
     resumeButton: 'Resume task',
     resuming: 'Resuming…',
@@ -1047,6 +1049,17 @@ export const enUS: Resources = {
       cloningHint: 'First-time clone may take a few minutes; subsequent launches reuse the cache.',
       urlAutoSync:
         'Cached mirror auto-syncs to remote before launch (fetch + fast-forward of the selected branch).',
+      // RFC-066 multi-repo controls.
+      add: '+ Add repository',
+      remove: '− Remove repository',
+      previewDirName: 'Will mount as {{name}}/',
+      maxReached: 'Reached the maximum of {{max}} repos per task.',
+      multiRepoBlocked: {
+        'wrapper-git':
+          'wrapper-git nodes are not supported in multi-repo tasks (v1); remove them in the editor or launch with a single repository.',
+        upload:
+          'multipart upload inputs are not supported in multi-repo tasks (v1); remove them in the editor or launch with a single repository.',
+      },
     },
     gitIdentity: {
       toggle: 'Git commit identity (optional)',

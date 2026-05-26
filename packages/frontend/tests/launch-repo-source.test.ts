@@ -98,8 +98,12 @@ describe('workflows.launch.tsx wiring (RFC-024 source-level)', () => {
     'utf-8',
   )
 
-  test('imports RepoSourceTabs', () => {
-    expect(SRC).toContain('RepoSourceTabs')
+  test('imports RepoSourceList (RFC-066: multi-repo container; back-compat shim RepoSourceTabs still exists)', () => {
+    // The launch route now renders the multi-repo container directly.
+    // The old `RepoSourceTabs` is a thin back-compat shim around
+    // `RepoSourceRow` (see launch-repo-source-list.test.tsx + repo-source-
+    // tabs-field-parity.test.ts for the full coverage of both surfaces).
+    expect(SRC).toContain('RepoSourceList')
   })
 
   test('uses buildLaunchBody (not the old inline payload)', () => {
@@ -158,8 +162,13 @@ describe('buildLaunchBody fetchBeforeLaunch (RFC-068)', () => {
 })
 
 describe('RepoSourceTabs RFC-068 source-level wiring', () => {
+  // RFC-066 PR-C: the path/url switching body moved into RepoSourceRow.tsx
+  // when the multi-repo container was carved out. RepoSourceTabs.tsx is
+  // now a thin back-compat wrapper that delegates to RepoSourceRow; the
+  // RFC-068 wiring (Switch import, localStorage key, switch labels,
+  // url-auto-sync hint, fetchBeforeLaunch default) lives in the row file.
   const SRC = readFileSync(
-    resolve(import.meta.dirname, '..', 'src', 'components', 'launch', 'RepoSourceTabs.tsx'),
+    resolve(import.meta.dirname, '..', 'src', 'components', 'launch', 'RepoSourceRow.tsx'),
     'utf-8',
   )
 

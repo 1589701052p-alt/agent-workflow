@@ -16,7 +16,11 @@ const CASES: Array<{ file: string; modifier: string }> = [
   { file: 'components/NodeDetailDrawer.tsx', modifier: 'tabs--inspector' },
   { file: 'components/canvas/NodeInspector.tsx', modifier: 'tabs--inspector' },
   { file: 'components/AgentImportDialog.tsx', modifier: 'tabs--inline' },
-  { file: 'components/launch/RepoSourceTabs.tsx', modifier: 'tabs--segment' },
+  // RFC-066 PR-C: the path/url segmented tabs moved into `RepoSourceRow.tsx`
+  // when the multi-repo container was carved out. RepoSourceTabs.tsx now
+  // just delegates to RepoSourceRow inside the legacy `.repo-source-tabs`
+  // wrapper, so the segment markup grep guard moved with the file.
+  { file: 'components/launch/RepoSourceRow.tsx', modifier: 'tabs--segment' },
 ]
 
 describe('RFC-035 .tabs retrofit grep guard', () => {
@@ -41,13 +45,14 @@ describe('RFC-035 .tabs retrofit grep guard', () => {
     // remove them once the <Dialog> retrofit lands in PR3).
     expect(bodies['components/AgentImportDialog.tsx']!.includes('agent-import__tabs')).toBe(false)
     expect(bodies['components/AgentImportDialog.tsx']!.includes('agent-import__tab"')).toBe(false)
-    // RepoSourceTabs: outer wrapper class .repo-source-tabs still exists
-    // so legacy CSS rules keep working; the bar + tab class names are
-    // gone.
-    expect(bodies['components/launch/RepoSourceTabs.tsx']!.includes('repo-source-tabs__bar')).toBe(
+    // RepoSourceTabs (now a thin wrapper) + RepoSourceRow (the body, post
+    // RFC-066 PR-C extraction): outer wrapper class .repo-source-tabs
+    // still exists so legacy CSS rules keep working; the bar + tab class
+    // names are gone from BOTH files.
+    expect(bodies['components/launch/RepoSourceRow.tsx']!.includes('repo-source-tabs__bar')).toBe(
       false,
     )
-    expect(bodies['components/launch/RepoSourceTabs.tsx']!.includes('repo-source-tabs__tab')).toBe(
+    expect(bodies['components/launch/RepoSourceRow.tsx']!.includes('repo-source-tabs__tab')).toBe(
       false,
     )
   })

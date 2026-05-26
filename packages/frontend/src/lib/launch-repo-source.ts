@@ -131,3 +131,112 @@ export function validateRepoUrl(input: string): 'empty' | 'invalid' | null {
   if (parseGitUrl(v) === null) return 'invalid'
   return null
 }
+
+/**
+ * RFC-066 PR-C — default `RepoSource` for a newly-added row. Defaults to
+ * path mode with empty values so the user gets the same blank form they
+ * already know from the single-repo launcher.
+ */
+export function defaultRepoSource(): RepoSource {
+  return { kind: 'path', repoPath: '', baseBranch: '' }
+}
+
+/**
+ * RFC-066 PR-C — derive the sub-worktree basename each row will land on,
+ * applying `-2` / `-3` collision suffixes the same way the backend does
+ * in `services/task.ts` `resolveMultiRepoDirName`. Lets the UI show a
+ * "Will mount as utils-2/" preview chip per row.
+ *
+ * Pure function — no side effects, no hooks. Single-repo callers (length
+ * 1) get a `['']` array so the row's `previewDirName` prop renders as
+ * `null` upstream (sentinel for "no preview, single-repo mode").
+ *
+ * For URL-mode entries with `repoUrl: ''` (placeholder), basename is
+ * derived from the URL host or empty string. UI suppresses preview chips
+ * with empty / falsy values.
+ */
+export function computePreviewDirNames(repos: RepoSource[]): string[] {
+  if (repos.length <= 1) return repos.map(() => '')
+  const used = new Set<string>()
+  const out: string[] = []
+  for (const r of repos) {
+    const raw = basenameForRepoSource(r)
+    if (raw === '') {
+      out.push('')
+      continue
+    }
+    let name = raw
+    let suffix = 2
+    while (used.has(name)) {
+      name = `${raw}-${suffix}`
+      suffix += 1
+    }
+    used.add(name)
+    out.push(name)
+  }
+  return out
+}
+
+/**
+ * Compute the basename a `RepoSource` will land under inside the parent
+ * multi-repo worktree. Mirrors `path.basename` for path mode; for URL mode,
+ * pulls the trailing path segment of the repo URL (strips `.git` suffix
+ * the way `git clone` does).
+ */
+function basenameForRepoSource(src: RepoSource): string {
+  if (src.kind === 'path') {
+    if (src.repoPath === '') return ''
+    const parts = src.repoPath.split('/').filter((p) => p.length > 0)
+    return parts.length === 0 ? '' : parts[parts.length - 1]!
+  }
+  // url
+  const u = src.repoUrl.trim()
+  if (u === '') return ''
+  // Strip query / fragment / trailing slashes.
+  let stripped = u.replace(/[?#].*$/, '').replace(/\/+$/, '')
+  // SSH form like `git@host:owner/repo.git` → take after the last `:` or `/`.
+  const lastSep = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf(':'))
+  if (lastSep >= 0) stripped = stripped.slice(lastSep + 1)
+  return stripped.replace(/\.git$/i, '')
+}
+
+/**
+ * RFC-066 PR-C — compose the JSON body for a multi-repo POST /api/tasks.
+ * Emits the v2 `repos: [...]` shape; legacy single-repo callers (length 1)
+ * should keep using `buildLaunchBody` to stay byte-baseline against
+ * pre-RFC-066 fixtures. RFC-067 git identity + RFC-068 fetchBeforeLaunch
+ * are handled the same way as the single-repo helper.
+ */
+export function buildLaunchBodyMultiRepo(
+  repos: RepoSource[],
+  common: LaunchCommonPayload,
+): Record<string, unknown> {
+  const hasGitIdentity =
+    typeof common.gitUserName === 'string' &&
+    common.gitUserName.length > 0 &&
+    typeof common.gitUserEmail === 'string' &&
+    common.gitUserEmail.length > 0
+  // RFC-068: same top-level flag covers every path-mode entry. The body
+  // includes it whenever ANY path-mode row opted in — the backend ignores
+  // it for URL-mode entries automatically.
+  const anyFetchBeforeLaunch = repos.some((r) => r.kind === 'path' && r.fetchBeforeLaunch === true)
+  const out: Record<string, unknown> = {
+    workflowId: common.workflowId,
+    name: common.name,
+    inputs: common.inputs,
+    repos: repos.map((r) => {
+      if (r.kind === 'path') {
+        return { repoPath: r.repoPath, baseBranch: r.baseBranch }
+      }
+      const entry: Record<string, unknown> = { repoUrl: r.repoUrl }
+      if (r.ref.trim().length > 0) entry.ref = r.ref.trim()
+      return entry
+    }),
+  }
+  if (anyFetchBeforeLaunch) out.fetchBeforeLaunch = true
+  if (hasGitIdentity) {
+    out.gitUserName = common.gitUserName
+    out.gitUserEmail = common.gitUserEmail
+  }
+  return out
+}

@@ -21,11 +21,13 @@ import { FilesPicker } from '@/components/launch/FilesPicker'
 import { GitPicker } from '@/components/launch/GitPicker'
 import { UploadPicker } from '@/components/launch/UploadPicker'
 import { buildLaunchFormData } from '@/components/launch/buildLaunchFormData'
-import { RepoSourceTabs } from '@/components/launch/RepoSourceTabs'
+import { RepoSourceList, type MultiRepoBlockedReason } from '@/components/launch/RepoSourceList'
 import { Field, TextInput } from '@/components/Form'
 import {
   buildLaunchBody,
+  buildLaunchBodyMultiRepo,
   buildLaunchFormDataV2,
+  defaultRepoSource,
   validateRepoUrl,
   type RepoSource,
 } from '@/lib/launch-repo-source'
@@ -58,12 +60,12 @@ function LaunchPage() {
   // XOR superRefine).
   const [gitUserName, setGitUserName] = useState('')
   const [gitUserEmail, setGitUserEmail] = useState('')
-  // RFC-024: repo source can be a local path OR a remote git URL.
-  const [source, setSource] = useState<RepoSource>({
-    kind: 'path',
-    repoPath: '',
-    baseBranch: '',
-  })
+  // RFC-024 + RFC-066: 1..N repo sources. Single-row state is byte-baseline
+  // against pre-RFC-066 (default = one empty path-mode row, recents
+  // auto-fills the first row); the `+ Add` button in `<RepoSourceList>`
+  // grows the array, the `−` button shrinks it.
+  const [repos, setRepos] = useState<RepoSource[]>([defaultRepoSource()])
+  const primarySource: RepoSource = repos[0] ?? defaultRepoSource()
   const [inputs, setInputs] = useState<Record<string, string>>({})
   // RFC-020: parallel state for `kind: 'upload'` inputs; key → picked Files.
   const [uploads, setUploads] = useState<Record<string, File[]>>({})
@@ -76,27 +78,36 @@ function LaunchPage() {
       seeded[i.key] = inputs[i.key] ?? ''
     }
     setInputs(seeded)
-    // Auto-pick the most recent repo as default (path mode only).
+    // Auto-pick the most recent repo as default for the FIRST row only —
+    // multi-repo mode (length > 1) leaves any added blank rows alone so
+    // the user isn't surprised by recent-repo prefill.
     if (
-      source.kind === 'path' &&
-      source.repoPath === '' &&
+      repos.length === 1 &&
+      repos[0]!.kind === 'path' &&
+      repos[0]!.repoPath === '' &&
       recent.data !== undefined &&
       recent.data[0] !== undefined
     ) {
-      setSource({
-        kind: 'path',
-        repoPath: recent.data[0].path,
-        baseBranch: recent.data[0].defaultBranch ?? '',
-      })
+      setRepos([
+        {
+          kind: 'path',
+          repoPath: recent.data[0].path,
+          baseBranch: recent.data[0].defaultBranch ?? '',
+        },
+      ])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.data, recent.data])
 
   const refs = useQuery<RepoRefsResponse>({
-    queryKey: ['repos', 'refs', source.kind === 'path' ? source.repoPath : ''],
+    queryKey: ['repos', 'refs', primarySource.kind === 'path' ? primarySource.repoPath : ''],
     queryFn: ({ signal }) =>
-      api.get('/api/repos/refs', { path: source.kind === 'path' ? source.repoPath : '' }, signal),
-    enabled: source.kind === 'path' && source.repoPath !== '',
+      api.get(
+        '/api/repos/refs',
+        { path: primarySource.kind === 'path' ? primarySource.repoPath : '' },
+        signal,
+      ),
+    enabled: primarySource.kind === 'path' && primarySource.repoPath !== '',
   })
 
   const hasUploads = Object.values(uploads).some((arr) => arr.length > 0)
@@ -124,23 +135,32 @@ function LaunchPage() {
           ? { gitUserName: trimGitName, gitUserEmail: trimGitEmail }
           : {}),
       }
-      if (source.kind === 'path' && (hasUploadKind || hasUploads)) {
+      // RFC-066: multi-repo (length > 1) → always JSON post via the v2 body
+      // helper. Multi-repo + uploads is gated by T6's `canSubmit` predicate
+      // BEFORE reaching this branch; this path is unreachable when uploads
+      // and multi-repo coexist. Single-repo (length === 1) keeps the
+      // legacy byte-baseline branching against `primarySource`.
+      if (repos.length > 1) {
+        return api.post<Task>('/api/tasks', buildLaunchBodyMultiRepo(repos, launchCommon))
+      }
+      const onlySource = primarySource
+      if (onlySource.kind === 'path' && (hasUploadKind || hasUploads)) {
         const payload = {
           ...launchCommon,
-          repoPath: source.repoPath,
-          baseBranch: source.baseBranch,
+          repoPath: onlySource.repoPath,
+          baseBranch: onlySource.baseBranch,
         }
         return api.postMultipart<Task>('/api/tasks', buildLaunchFormData(payload, uploads))
       }
-      if (source.kind === 'url' && (hasUploadKind || hasUploads)) {
+      if (onlySource.kind === 'url' && (hasUploadKind || hasUploads)) {
         // RFC-024: URL + uploads not supported by the backend yet — keep the
         // multipart envelope for parity, backend will 422 us politely.
         return api.postMultipart<Task>(
           '/api/tasks',
-          buildLaunchFormDataV2(source, launchCommon, uploads),
+          buildLaunchFormDataV2(onlySource, launchCommon, uploads),
         )
       }
-      return api.post<Task>('/api/tasks', buildLaunchBody(source, launchCommon))
+      return api.post<Task>('/api/tasks', buildLaunchBody(onlySource, launchCommon))
     },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
@@ -162,11 +182,24 @@ function LaunchPage() {
     }
     return def.required === true && (inputs[def.key] ?? '').trim() === ''
   })
-  const repoIssue = source.kind === 'path' ? repoLaunchIssue(refs.data ?? null) : null
-  const sourceReady =
-    source.kind === 'path'
-      ? source.repoPath !== '' && source.baseBranch !== ''
-      : validateRepoUrl(source.repoUrl) === null
+  const repoIssue = primarySource.kind === 'path' ? repoLaunchIssue(refs.data ?? null) : null
+  // RFC-066: every row must be filled (path mode requires repoPath +
+  // baseBranch; url mode requires a parseable URL). The Start button stays
+  // disabled until all rows pass their per-row gate.
+  const sourceReady = repos.every((r) =>
+    r.kind === 'path'
+      ? r.repoPath !== '' && r.baseBranch !== ''
+      : validateRepoUrl(r.repoUrl) === null,
+  )
+  // RFC-066: multi-repo + wrapper-git / upload combos are explicitly gated
+  // BEFORE the Start button. Surface the reason in a banner so the user
+  // knows what to fix; canSubmit folds the gate in.
+  const hasWrapperGitNode = (workflow.data.definition.nodes ?? []).some(
+    (n) => n.kind === 'wrapper-git',
+  )
+  const hasUploadInput = inputDefs.some((d) => d.kind === 'upload')
+  const multiRepoBlockedReason: MultiRepoBlockedReason | null =
+    repos.length > 1 ? (hasWrapperGitNode ? 'wrapper-git' : hasUploadInput ? 'upload' : null) : null
   // RFC-037: task name is required; mirror backend trim semantics here so the
   // Start button stays disabled for whitespace-only input.
   const nameReady = taskName.trim().length > 0
@@ -186,6 +219,8 @@ function LaunchPage() {
     !missingRequired &&
     repoIssue === null &&
     gitIdentityOk &&
+    // RFC-066: multi-repo + wrapper-git / upload → Start disabled.
+    multiRepoBlockedReason === null &&
     !start.isPending
 
   return (
@@ -251,9 +286,13 @@ function LaunchPage() {
           </div>
         </details>
 
-        <RepoSourceTabs source={source} onChange={setSource} />
+        <RepoSourceList
+          repos={repos}
+          onChange={setRepos}
+          multiRepoBlockedReason={multiRepoBlockedReason}
+        />
 
-        {source.kind === 'url' && start.isPending && (
+        {primarySource.kind === 'url' && start.isPending && (
           <div className="muted" data-testid="launch-cloning-hint">
             {t('launch.repoSource.cloningHint')}
           </div>
@@ -277,7 +316,7 @@ function LaunchPage() {
             ) : (
               <DynamicInput
                 def={def}
-                repoPath={source.kind === 'path' ? source.repoPath : ''}
+                repoPath={primarySource.kind === 'path' ? primarySource.repoPath : ''}
                 value={inputs[def.key] ?? ''}
                 onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
               />

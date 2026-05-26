@@ -17,7 +17,10 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const file = path.resolve(here, '../src/components/launch/RepoSourceTabs.tsx')
+// RFC-066 PR-C: the path/url field markup moved into RepoSourceRow.tsx
+// when the multi-repo container was carved out of RepoSourceTabs. The
+// field-parity assertions follow the markup to the new file.
+const file = path.resolve(here, '../src/components/launch/RepoSourceRow.tsx')
 const src = readFileSync(file, 'utf8')
 
 describe('RepoSourceTabs — Local path / Remote URL field parity', () => {
@@ -41,7 +44,10 @@ describe('RepoSourceTabs — Local path / Remote URL field parity', () => {
     const urlFieldEnd = src.indexOf('</Field>', urlFieldStart)
     expect(urlFieldEnd, 'Git URL Field must close').toBeGreaterThan(urlFieldStart)
     const block = src.slice(urlFieldStart, urlFieldEnd)
-    expect(block).toContain('data-testid="repo-source-recent-urls"')
+    // RFC-066 PR-C: the testid is now templated with an optional per-row
+    // index suffix (`repo-source-recent-urls${idxSuffix}`); match both the
+    // bare and the templated form.
+    expect(/repo-source-recent-urls(?:\$\{idxSuffix\}|")/.test(block)).toBe(true)
     expect(block).toContain("placeholder={t('launch.repoSource.urlPlaceholder')}")
   })
 

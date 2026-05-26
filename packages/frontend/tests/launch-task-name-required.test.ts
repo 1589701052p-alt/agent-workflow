@@ -30,13 +30,16 @@ describe('workflows.launch.tsx — RFC-037 task name wiring', () => {
     expect(SRC).toMatch(/canSubmit\s*=[\s\S]*nameReady/)
   })
 
-  test('all three submit branches stamp name into the body', () => {
+  test('all four submit branches stamp name into the body', () => {
     // RFC-067 refactor: name is hoisted into `launchCommon` (alongside the
     // optional RFC-067 gitUserName / gitUserEmail), then every submit branch
-    // spreads launchCommon. The contract `name reaches the body` still holds.
+    // spreads launchCommon. RFC-066 PR-C adds a 4th branch for multi-repo.
     expect(SRC).toMatch(/launchCommon\s*=\s*\{[\s\S]*?\bname\b[\s\S]*?\}/)
-    // JSON path — passes launchCommon directly
-    expect(SRC).toMatch(/buildLaunchBody\(\s*source,\s*launchCommon\s*\)/)
+    // RFC-066 PR-C: multi-repo JSON path
+    expect(SRC).toMatch(/buildLaunchBodyMultiRepo\(\s*repos,\s*launchCommon\s*\)/)
+    // legacy JSON path — single source variable renamed `onlySource` in the
+    // PR-C refactor so the multi-repo branch keeps the outer `repos` array.
+    expect(SRC).toMatch(/buildLaunchBody\(\s*onlySource,\s*launchCommon\s*\)/)
     // path-multipart — payload spreads launchCommon
     expect(SRC).toMatch(/buildLaunchFormData\([\s\S]*?launchCommon[\s\S]*?\)/)
     // url-multipart — passes launchCommon directly

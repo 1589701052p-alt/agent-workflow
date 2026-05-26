@@ -272,6 +272,27 @@ function TaskDetailPage() {
         </div>
 
         <div className="task-detail__pane" hidden={tab !== 'details'}>
+          {/* RFC-066: multi-repo summary. Single-repo tasks (repoCount === 1)
+              render nothing here — byte-baseline visual against pre-RFC-066.
+              Multi-repo shows a collapsible block listing every repo's
+              sub-dir name, baseBranch, and (when present) redacted URL. */}
+          {tk.repoCount > 1 && (
+            <details className="task-detail__multi-repo" data-testid="task-detail-multi-repo">
+              <summary>{t('tasks.multiRepoSummary', { count: tk.repoCount })}</summary>
+              <ul className="task-detail__multi-repo-list">
+                {tk.repos.map((r) => (
+                  <li key={r.repoIndex} data-testid={`task-detail-multi-repo-row-${r.repoIndex}`}>
+                    <code>{r.worktreeDirName || r.repoPath}</code>
+                    {' @ '}
+                    <code>{r.baseBranch || t('common.emDash')}</code>
+                    {r.repoUrl !== null && r.repoUrl !== '' && (
+                      <span className="data-table__muted"> · {redactGitUrl(r.repoUrl)}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <dl className="task-meta">
             <dt>{t('tasks.metaWorkflow')}</dt>
             <dd>

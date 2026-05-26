@@ -771,6 +771,8 @@ export interface Resources {
     metaStarted: string
     metaFinished: string
     metaError: string
+    /** RFC-066: multi-repo summary `<details>` label on the task detail page. */
+    multiRepoSummary: string
     cancelButton: string
     resumeButton: string
     resuming: string
@@ -990,6 +992,18 @@ export interface Resources {
       cloningHint: string
       /** RFC-068: hint shown under the URL-mode ref field. */
       urlAutoSync: string
+      /** RFC-066: + button label and remove button label per row. */
+      add: string
+      remove: string
+      /** RFC-066: "Will mount as <name>/" preview chip shown only in multi-repo mode. */
+      previewDirName: string
+      /** RFC-066: + button disabled hint at MULTI_REPO_MAX. */
+      maxReached: string
+      /** RFC-066: banner under the list explaining why multi-repo combos are gated. */
+      multiRepoBlocked: {
+        'wrapper-git': string
+        upload: string
+      }
     }
     /** RFC-068 — path-mode opt-in `git fetch` switch (default off). */
     pathFetch: {
@@ -2752,6 +2766,8 @@ export const zhCN: Resources = {
     metaStarted: '开始',
     metaFinished: '完成',
     metaError: '错误',
+    // RFC-066: multi-repo summary on the task detail page.
+    multiRepoSummary: '{{count}} 个仓库',
     cancelButton: '取消任务',
     resumeButton: '继续任务',
     resuming: '继续中…',
@@ -2965,6 +2981,17 @@ export const zhCN: Resources = {
       recentUrlsPlaceholder: '— 从已缓存仓里挑一个 —',
       cloningHint: '首次克隆可能耗时数分钟；下次启动会复用本地缓存。',
       urlAutoSync: '本地镜像会在启动前自动同步到远端（fetch + 所选分支 fast-forward）。',
+      // RFC-066 multi-repo controls.
+      add: '+ 增加仓库',
+      remove: '− 删除仓库',
+      previewDirName: '将挂载为 {{name}}/',
+      maxReached: '已到达单任务最多 {{max}} 个仓库的上限',
+      multiRepoBlocked: {
+        'wrapper-git':
+          'v1 多仓任务不支持 wrapper-git 节点；请回到工作流编辑器移除，或改用单仓启动。',
+        upload:
+          'v1 多仓任务不支持 multipart 上传输入；请回到工作流编辑器移除上传节点，或改用单仓启动。',
+      },
     },
     gitIdentity: {
       toggle: 'Git 提交身份（可选）',
