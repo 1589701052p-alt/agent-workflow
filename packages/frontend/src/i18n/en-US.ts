@@ -918,6 +918,7 @@ export const enUS: Resources = {
     worktreeFilesLoadError: 'Failed to load directory.',
     worktreeFilesFileError: 'Failed to load file.',
     worktreeFilesSizeHeader: 'Size: {{size}}',
+    worktreeFilesRefresh: 'Refresh',
     noWorkflowSnapshot: 'No workflow snapshot available.',
     noBaseCommit: 'No base commit recorded; diff is unavailable.',
     loadingDiff: 'Loading diff…',

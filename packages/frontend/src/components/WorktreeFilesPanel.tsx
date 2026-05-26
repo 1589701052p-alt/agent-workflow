@@ -11,7 +11,7 @@
 // expand/select state for the lifetime of the task-detail mount.
 
 import { useMemo, useState, type ReactElement } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import { api } from '@/api/client'
@@ -74,6 +74,8 @@ async function fetchFile(
 // ---------- Components ----------
 
 export function WorktreeFilesPanel({ taskId }: { taskId: string }): ReactElement {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   // expand state lives here so it survives subtree unmount/remount as the
   // user collapses/expands intermediate folders.
@@ -88,18 +90,39 @@ export function WorktreeFilesPanel({ taskId }: { taskId: string }): ReactElement
     })
   }
 
+  // The tree + file queries use staleTime/gcTime Infinity (intentional — see
+  // DirChildren below). That means data fetched while the worktree was empty
+  // is otherwise stuck forever. Refresh invalidates every cached tree level
+  // for this task plus the currently previewed file.
+  function refresh(): void {
+    void qc.invalidateQueries({ queryKey: ['worktreeTree', taskId] })
+    void qc.invalidateQueries({ queryKey: ['worktreeFile', taskId] })
+  }
+
   return (
     <div className="worktree-files-panel" data-testid="worktree-files-panel">
-      <div className="worktree-files-panel__tree" role="tree" aria-label="worktree files">
-        <DirChildren
-          taskId={taskId}
-          dirPath=""
-          depth={0}
-          expanded={expanded}
-          onToggle={toggle}
-          selectedPath={selectedPath}
-          onSelectFile={setSelectedPath}
-        />
+      <div className="worktree-files-panel__tree">
+        <div className="worktree-files-panel__tree-header">
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={refresh}
+            data-testid="worktree-files-refresh"
+          >
+            {t('tasks.worktreeFilesRefresh')}
+          </button>
+        </div>
+        <div className="worktree-files-panel__tree-body" role="tree" aria-label="worktree files">
+          <DirChildren
+            taskId={taskId}
+            dirPath=""
+            depth={0}
+            expanded={expanded}
+            onToggle={toggle}
+            selectedPath={selectedPath}
+            onSelectFile={setSelectedPath}
+          />
+        </div>
       </div>
       <div className="worktree-files-panel__preview">
         <WorktreeFilePreview taskId={taskId} path={selectedPath} />

@@ -8952,9 +8952,23 @@ mark.comment-anchor[data-active='true'] {
 }
 
 .worktree-files-panel__tree {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--border);
   padding-right: var(--space-2);
+  min-height: 0;
+}
+
+.worktree-files-panel__tree-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0 var(--space-2) 0;
+  flex: 0 0 auto;
+}
+
+.worktree-files-panel__tree-body {
+  overflow: auto;
+  flex: 1 1 auto;
   min-height: 0;
 }
 

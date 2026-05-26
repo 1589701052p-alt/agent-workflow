@@ -269,6 +269,114 @@ describe('WorktreeFilesPanel', () => {
     await screen.findByTestId('worktree-tree-file-src/hello.ts')
   })
 
+  test('refresh button re-fetches expanded tree levels even with staleTime: Infinity', async () => {
+    // Regression: on 2026-05-26 a user opened the worktree-files tab at task
+    // start when the worker hadn't written any files yet. The query
+    // (staleTime/gcTime Infinity) cached `entries: []` forever and never
+    // refetched, so the tree stayed empty even after files appeared. The
+    // refresh button must invalidate the cached tree levels (and any open
+    // file preview) for the task and trigger a re-fetch.
+    let rootCallNo = 0
+    let subCallNo = 0
+    let fileCallNo = 0
+    installFetch(
+      new Map<string, () => unknown>([
+        [
+          'worktree-tree?path=src',
+          () => {
+            subCallNo++
+            return {
+              path: 'src',
+              truncated: false,
+              entries: subCallNo === 1 ? [] : [{ name: 'hello.ts', kind: 'file', size: 12 }],
+            }
+          },
+        ],
+        [
+          'worktree-tree',
+          () => {
+            rootCallNo++
+            return {
+              path: '',
+              truncated: false,
+              entries: rootCallNo === 1 ? [] : [{ name: 'src', kind: 'directory', size: null }],
+            }
+          },
+        ],
+        [
+          'worktree-file?path=README.md',
+          () => {
+            fileCallNo++
+            return {
+              path: 'README.md',
+              size: 3,
+              oversized: false,
+              content: fileCallNo === 1 ? 'OLD' : 'NEW',
+            }
+          },
+        ],
+      ]),
+    )
+    wrap()
+    // Wait for the first root fetch to settle — tree is empty.
+    await waitFor(() => {
+      expect(rootCallNo).toBe(1)
+    })
+    expect(screen.queryByTestId('worktree-tree-dir-src')).toBeNull()
+    // Click refresh — root must re-fetch and now reveal `src/`.
+    fireEvent.click(screen.getByTestId('worktree-files-refresh'))
+    const dirBtn = await screen.findByTestId('worktree-tree-dir-src')
+    expect(rootCallNo).toBe(2)
+    // Expand the subdir — first call still returns []
+    fireEvent.click(dirBtn)
+    await waitFor(() => {
+      expect(subCallNo).toBe(1)
+    })
+    expect(screen.queryByTestId('worktree-tree-file-src/hello.ts')).toBeNull()
+    // Refresh again — every cached tree level for the task is invalidated,
+    // including the open subdir, so hello.ts shows up.
+    fireEvent.click(screen.getByTestId('worktree-files-refresh'))
+    await screen.findByTestId('worktree-tree-file-src/hello.ts')
+    expect(subCallNo).toBe(2)
+  })
+
+  test('refresh button re-fetches the currently previewed file', async () => {
+    let fileCallNo = 0
+    installFetch(
+      new Map<string, () => unknown>([
+        [
+          'worktree-tree',
+          () => ({
+            path: '',
+            truncated: false,
+            entries: [{ name: 'README.md', kind: 'file', size: 3 }],
+          }),
+        ],
+        [
+          'worktree-file?path=README.md',
+          () => {
+            fileCallNo++
+            return {
+              path: 'README.md',
+              size: 3,
+              oversized: false,
+              content: fileCallNo === 1 ? 'OLD' : 'NEW',
+            }
+          },
+        ],
+      ]),
+    )
+    wrap()
+    fireEvent.click(await screen.findByTestId('worktree-tree-file-README.md'))
+    await waitFor(() => {
+      expect(screen.getByTestId('worktree-files-preview-body').textContent ?? '').toContain('OLD')
+    })
+    fireEvent.click(screen.getByTestId('worktree-files-refresh'))
+    await waitFor(() => {
+      expect(screen.getByTestId('worktree-files-preview-body').textContent ?? '').toContain('NEW')
+    })
+  })
+
   test('selecting one file then another swaps the right pane content', async () => {
     installFetch(
       new Map<string, () => unknown>([
