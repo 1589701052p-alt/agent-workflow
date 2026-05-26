@@ -178,7 +178,8 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
   z.object({
     id: z.number().int(),
     type: z.literal('cross-clarify.designer-rerun-batched'),
-    /** Freshly minted designer rerun row at cross_clarify_iteration + 1. */
+    /** Freshly minted designer rerun row at clarifyIteration + 1
+     *  (RFC-064 unified counter; event name + payload shape unchanged). */
     designerNodeRunId: z.string(),
     /** Cross-clarify source questioner NodeIds whose sessions fed this batch. */
     sourceQuestionerNodeIds: z.array(z.string()).min(1),

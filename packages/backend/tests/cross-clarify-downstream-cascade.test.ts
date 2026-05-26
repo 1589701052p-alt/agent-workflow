@@ -3,7 +3,7 @@
 // The original `triggerDesignerRerun` (commit pre-2026-05-22) minted ONLY the
 // designer's new pending node_run and relied on an "implicit cascade via
 // freshness" — but the scheduler's `isFresherNodeRun` doesn't look at
-// `cross_clarify_iteration`, so downstream rows stayed `done` and the
+// `clarify_iteration`, so downstream rows stayed `done` and the
 // scheduler proceeded to dispatch the next review with stale upstream
 // outputs, tripping `review-source-port-missing` and failing the entire
 // task (see live task 01KS7GQ3PACG3YX6S9ZH8QC0WV in production debugging).
@@ -12,7 +12,7 @@
 // continue resolves and the designer rerun fires, EVERY downstream node
 // (reachable via the data graph — i.e. ignoring clarify-channel edges)
 // must have a fresh pending `node_run` minted at the bumped
-// crossClarifyIteration. The downstream rows' `latestPerNode` row, as seen
+// clarifyIteration. The downstream rows' `latestPerNode` row, as seen
 // by the next scheduler pass, will be the new pending, not the old done.
 //
 // Cascade walked graph (snake-game-style fixture mirroring the production
@@ -26,7 +26,7 @@
 //                               clarify-channel edges; SKIP)
 //
 // Expected: rev1, questioner, rev2, out all get NEW pending rows with
-// crossClarifyIteration = designerNew.crossClarifyIteration. The IN node
+// clarifyIteration = designerNew.clarifyIteration. The IN node
 // (no upstream of designer) is NOT cascaded — it's strictly upstream.
 //
 // If this test goes red the cascade contract drifted; investigate before
@@ -163,7 +163,6 @@ async function seedDoneRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     ...fields,
   })
   return id
@@ -177,7 +176,7 @@ afterAll(() => {
 })
 
 describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', () => {
-  test('every reachable downstream node gets a fresh pending row at the bumped crossClarifyIteration', async () => {
+  test('every reachable downstream node gets a fresh pending row at the bumped clarifyIteration', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     // Seed a done designer + done downstream chain mirroring the
@@ -207,29 +206,29 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
     })
     expect(ret.outcome.kind).toBe('designer-rerun-triggered')
 
-    // Designer's new pending row carries crossClarifyIteration=1.
+    // Designer's new pending row carries clarifyIteration=1.
     const designerRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
     expect(designerRows.length).toBe(2)
     const designerFresh = designerRows.find((r) => r.status === 'pending')
-    expect(designerFresh?.crossClarifyIteration).toBe(1)
+    expect(designerFresh?.clarifyIteration).toBe(1)
 
     // CASCADE LOCK: rev1 + questioner each got a NEW pending row at
-    // crossClarifyIteration=1. Their old done rows still exist at iter=0.
+    // clarifyIteration=1. Their old done rows still exist at iter=0.
     for (const nodeId of ['rev1', 'questioner']) {
       const rows = await db
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-      const pendingFresh = rows.find((r) => r.status === 'pending' && r.crossClarifyIteration === 1)
+      const pendingFresh = rows.find((r) => r.status === 'pending' && r.clarifyIteration === 1)
       expect(
         pendingFresh,
-        `${nodeId} should have a pending row at crossClarifyIteration=1`,
+        `${nodeId} should have a pending row at clarifyIteration=1`,
       ).toBeDefined()
       // Old done row preserved (no destructive update — append-only).
-      const oldDone = rows.find((r) => r.status === 'done' && r.crossClarifyIteration === 0)
+      const oldDone = rows.find((r) => r.status === 'done' && r.clarifyIteration === 0)
       expect(oldDone, `${nodeId} should still have its old done row`).toBeDefined()
     }
 
@@ -324,7 +323,7 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
     expect(crossRows.length, 'cross-clarify node should NOT receive a cascade-minted row').toBe(1)
   })
 
-  test('cascade preserves shardKey / clarifyIteration / preSnapshot template values; only crossClarifyIteration bumps', async () => {
+  test('cascade preserves shardKey / clarifyIteration / preSnapshot template values; only clarifyIteration bumps', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedDoneRun(db, taskId, 'designer')
@@ -361,9 +360,14 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev1')))
     const rev1Pending = rev1Rows.find((r) => r.status === 'pending')
-    expect(rev1Pending?.clarifyIteration, 'clarifyIteration preserved').toBe(3)
+    // RFC-064: the unified clarifyIteration is the single counter — the
+    // cascade-minted row's value is the bumped max(participant, session)+1.
+    // Pre-RFC-064 this test asserted "self-clarify preserved at 3 AND cross
+    // bumped to 1"; under unification the new row's clarifyIteration is the
+    // max-and-bump result (4 in this scenario: max(rev1=3, designer=0,
+    // questioner=1, session iter=0)+1=4).
     expect(rev1Pending?.preSnapshot, 'preSnapshot preserved').toBe('snap-r1-final')
-    expect(rev1Pending?.crossClarifyIteration, 'crossClarifyIteration bumped to 1').toBe(1)
+    expect(rev1Pending?.clarifyIteration, 'clarifyIteration bumped').toBeGreaterThan(3)
     // retry_index must beat the prior max (=2) so isFresherNodeRun picks
     // the new pending over the old done — without this the scheduler
     // would re-evaluate the old done as latest and fail the cascade.

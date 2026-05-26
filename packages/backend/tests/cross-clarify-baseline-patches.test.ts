@@ -132,7 +132,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-23 designer retry index', () => 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 2,
+      clarifyIteration: 2,
       startedAt: Date.now() - 1000,
     })
     await db.insert(nodeRuns).values({
@@ -142,7 +142,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-23 designer retry index', () => 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
     })
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -177,7 +177,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-23 designer retry index', () => 
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, result.designerNodeRunId))
     )[0]
     // RFC-058 baseline locks: patch-2026-05-23 formula — newCci > prior max
-    expect(newRun?.crossClarifyIteration).toBeGreaterThan(2)
+    expect(newRun?.clarifyIteration).toBeGreaterThan(2)
     void crossClarifyNodeRunId
   })
 })
@@ -194,7 +194,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-24 cci inheritance', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 3,
+      clarifyIteration: 3,
       startedAt: Date.now() - 100,
     })
     // createCrossClarifySession iteration counter is per (cc node, loopIter)
@@ -212,11 +212,11 @@ describe('RFC-058 baseline T4 — patch-2026-05-24 cci inheritance', () => {
       questions: [makeQuestion()],
     })
     expect(session.iteration).toBe(0)
-    // The cc node_run row mints crossClarifyIteration = session iteration
+    // The cc node_run row mints clarifyIteration = session iteration
     const nr = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, session.crossClarifyNodeRunId))
     )[0]
-    expect(nr?.crossClarifyIteration).toBe(0)
+    expect(nr?.clarifyIteration).toBe(0)
   })
 })
 
@@ -232,7 +232,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 questioner Q&A injection', ()
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -242,7 +242,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 questioner Q&A injection', ()
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -266,24 +266,29 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 questioner Q&A injection', ()
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx?.questionsBlock).toContain('patch-22 baseline question')
   })
 })
 
-describe('RFC-058 baseline T4 — patch-2026-05-25 cci inheritance grep guards', () => {
-  test('source-text grep: 5 insert sites carry inherited cci fields', async () => {
+describe('RFC-058 → RFC-064 baseline T4 — clarifyIteration inheritance grep guards', () => {
+  test('source-text grep: scheduler propagates inheritedClarifyIteration across mint sites', async () => {
     const fs = await import('node:fs/promises')
     const files = ['packages/backend/src/services/scheduler.ts']
     let hits = 0
     for (const path of files) {
       const txt = await fs.readFile(resolve(import.meta.dir, '..', '..', '..', path), 'utf8')
-      const matches = txt.match(/inheritedCrossClarifyIteration\b/g) ?? []
+      // RFC-064: patch-2026-05-25's intent (inheritance survives RFC-042
+      // in-attempt process retry) is now expressed via the single
+      // `inheritedClarifyIteration` variable. Pre-RFC-064 there were two
+      // mirrored variables (`inheritedClarifyIteration` +
+      // `inheritedCrossClarifyIteration`); the unification keeps the
+      // inheritance signal on one column. We still require ≥3 mentions so
+      // the inherit wiring is structurally enforced at multiple mint sites.
+      const matches = txt.match(/inheritedClarifyIteration\b/g) ?? []
       hits += matches.length
     }
-    // RFC-058 baseline locks: patch-25 wired inheritance in ≥3 places per
-    // grep audit. Hard min keeps the lock from being trivially satisfied.
     expect(hits).toBeGreaterThanOrEqual(3)
   })
 
@@ -311,7 +316,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 cascade BFS smoke', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -321,7 +326,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 cascade BFS smoke', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -370,7 +375,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-25 questioner cascade visibility
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -380,7 +385,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-25 questioner cascade visibility
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -418,7 +423,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-25 questioner cascade visibility
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -428,7 +433,7 @@ describe('RFC-058 baseline T4 — patch-2026-05-25 questioner cascade visibility
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
+        clarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({

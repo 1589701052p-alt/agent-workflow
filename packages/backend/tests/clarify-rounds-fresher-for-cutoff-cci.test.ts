@@ -1,10 +1,10 @@
 // RFC-056 patch 2026-05-25 — `isFresherForCutoff` (local copy of
 // `isFresherNodeRun` in clarifyRounds.ts) must also consult
-// crossClarifyIteration.
+// clarifyIteration.
 //
 // `computeHistoryCutoff` walks all node_runs of the consumer node and
 // uses `isFresherForCutoff` to pick the freshest prior-completed row.
-// Pre-patch the comparator skipped `crossClarifyIteration`, so a
+// Pre-patch the comparator skipped `clarifyIteration`, so a
 // (cli=0, cci=1, retry=0) prior cross-clarify done row would be
 // shadowed by a (cli=0, cci=0, retry=1) `<workflow-clarify>`-only done
 // row from an earlier RFC-042 followup — the cutoff would return 0
@@ -64,7 +64,7 @@ async function seedTask(db: ReturnType<typeof createInMemoryDb>): Promise<string
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
-describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult crossClarifyIteration', () => {
+describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult clarifyIteration', () => {
   test('cci-bumped done with outputs beats prior cci=0 retry-bumped done with outputs', async () => {
     // Seed two prior done rows on `designer`:
     //   - cci=0, retry=1, has outputs (pre-cross-clarify RFC-042 followup
@@ -87,7 +87,6 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult crossClar
       retryIndex: 1,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 2000,
       finishedAt: Date.now() - 1500,
     })
@@ -105,7 +104,6 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult crossClar
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
     })
@@ -123,7 +121,6 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult crossClar
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 2,
     })
     const current = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_current')))[0]!
 
@@ -131,7 +128,6 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult crossClar
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'crossClarifyIteration',
       currentRunRow: current,
       shardKey: null,
     })

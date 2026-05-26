@@ -397,20 +397,18 @@ export const NodeRunSchema = z.object({
    */
   reviewIteration: z.number().int().nonnegative().default(0),
   /**
-   * RFC-023: bumped each time the user submits clarify answers and the agent
-   * is re-spawned for another round. Orthogonal to retryIndex (technical
-   * retries) and reviewIteration (post-output review rounds). For a
-   * wrapper-fanout shard child node_run, the value is per-shard.
+   * RFC-023 + RFC-064: bumped each time the agent is re-spawned because of a
+   * clarify round — covers BOTH self-clarify (RFC-023, asking_node ==
+   * target_consumer) and cross-clarify (RFC-056, asking_node !=
+   * target_consumer) flows after RFC-064 unified the two counters. The
+   * `kind` column on `clarify_rounds` is the only "self vs cross"
+   * discriminator the runtime needs; nodes that participate in a new round
+   * as either asking_node or target_consumer_node see this counter bump
+   * (see services/clarify.ts §3 mint algorithm). Orthogonal to retryIndex
+   * (technical retries) and reviewIteration (post-output review rounds).
+   * For a wrapper-fanout shard child node_run, the value is per-shard.
    */
   clarifyIteration: z.number().int().nonnegative().default(0),
-  /**
-   * RFC-056: bumped each time a designer agent is re-spawned by a cross-clarify
-   * submit (multi-source aggregation completion). Orthogonal to clarifyIteration
-   * (RFC-023 self-clarify rounds) so both feedback channels can accumulate on
-   * the same agent without colliding — see RFC-056 §C8 cascade isolation.
-   * Default 0 for pre-RFC-056 rows + agent runs never touched by cross-clarify.
-   */
-  crossClarifyIteration: z.number().int().nonnegative().default(0),
   status: NodeRunStatusSchema,
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),

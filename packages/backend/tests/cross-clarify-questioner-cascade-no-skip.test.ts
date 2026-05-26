@@ -2,14 +2,14 @@
 //
 // Live failure shape: production task 01KS86DPCSERV7S41GQA5Y81RN ended with
 // `review-source-port-missing` on `rev_cbkatx` because its upstream questioner
-// `agent_b48d63` had a `done` row at crossClarifyIteration=1 whose stdout was
+// `agent_b48d63` had a `done` row at clarifyIteration=1 whose stdout was
 // ONLY a `<workflow-clarify>` envelope (asking the designer questions) — no
 // `<workflow-output>` and therefore no rows in `node_run_outputs`. After the
 // second cross-clarify session continued, two independent layers failed to
 // re-dispatch the questioner:
 //
 //   §2.1  cascadeDownstreamFromDesigner (crossClarify.ts:795-801) skipped the
-//         questioner because its existing row's crossClarifyIteration matched
+//         questioner because its existing row's clarifyIteration matched
 //         the cascade's `newCrossClarifyIteration` — but that row was the
 //         clarify-only one that CAUSED the session, not a row that consumed
 //         the answers.
@@ -21,7 +21,7 @@
 //         triggering §2.1's skip.
 //
 //   §2.3  Five `db.insert(nodeRuns)` callsites (task.ts:690, clarify.ts:169 /
-//         :406, review.ts:451 / :1335) silently default crossClarifyIteration
+//         :406, review.ts:451 / :1335) silently default clarifyIteration
 //         to 0. Any of them firing AFTER the questioner advances to cci ≥ 1
 //         creates a zero-cci row that then gets picked as `latestExisting` by
 //         scheduleAgentNode's freshest-row inheritance (keyed on
@@ -227,7 +227,6 @@ async function seedRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     startedAt: now,
     finishedAt: now,
     ...fields,
@@ -274,7 +273,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     const questionerV1 = await seedRun(db, taskId, 'questioner', {
       id: 'questioner_v1',
       retryIndex: 3,
-      crossClarifyIteration: 1,
       preSnapshot: 'snap-questioner-v1',
       // Intentionally no node_run_outputs row — this is the "emitted only
       // <workflow-clarify>" state the patch addresses.
@@ -290,7 +288,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 120_000,
       finishedAt: Date.now() - 90_000,
     })
@@ -347,7 +344,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     const designerFresh = designerRows.find((r) => r.status === 'pending')
     expect(designerFresh, 'designer must have a fresh pending row after rerun').toBeDefined()
     expect(
-      designerFresh?.crossClarifyIteration,
+      designerFresh?.clarifyIteration,
       'Fix B — designer rerun cci must be max(designer.cci, questioner.cci) + 1 = 2',
     ).toBe(2)
 
@@ -370,19 +367,19 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       (qFresh?.retryIndex ?? -1) > 3,
       'questioner retryIndex must beat existing max so isFresherNodeRun picks it',
     ).toBe(true)
-    expect(qFresh?.crossClarifyIteration, 'questioner cascade row carries the bumped cci=2').toBe(2)
+    expect(qFresh?.clarifyIteration, 'questioner cascade row carries the bumped cci=2').toBe(2)
 
     // Sanity: prior questioner_v1 row is preserved (append-only).
     const qPriorRow = qRows.find((r) => r.id === questionerV1)
     expect(qPriorRow?.status).toBe('done')
-    expect(qPriorRow?.crossClarifyIteration).toBe(1)
+    expect(qPriorRow?.clarifyIteration).toBe(1)
   })
 
   // -----------------------------------------------------------------------
   // §2.3 — Fix C, clarify.ts:406 path (self-clarify rerun mint).
   // -----------------------------------------------------------------------
 
-  test('§2.3 — submitClarifyAnswers rerun mint preserves crossClarifyIteration', async () => {
+  test('§2.3 — submitClarifyAnswers rerun mint preserves clarifyIteration', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const def = selfClarifyDef()
     const taskId = await seedTask(db, def)
@@ -395,7 +392,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       id: 'agent_x_v1',
       retryIndex: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
       preSnapshot: 'snap-x-v1',
     })
 
@@ -430,8 +426,8 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       )
     expect(rerunRows.length).toBe(1)
     expect(
-      rerunRows[0]?.crossClarifyIteration,
-      'Fix C — clarify.ts:406 rerun mint must inherit crossClarifyIteration from source row',
+      rerunRows[0]?.clarifyIteration,
+      'Fix C — clarify.ts:406 rerun mint must inherit clarifyIteration from source row',
     ).toBe(1)
     // Sanity: clarifyIteration bumps as before.
     expect(rerunRows[0]?.clarifyIteration).toBe(1)
@@ -454,7 +450,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     await seedRun(db, taskId, 'in')
     const designerV1 = await seedRun(db, taskId, 'designer', {
       retryIndex: 5,
-      crossClarifyIteration: 1,
       preSnapshot: 'snap-d-v1',
     })
     await db.insert(nodeRunOutputs).values({
@@ -462,10 +457,8 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       portName: 'docpath',
       content: 'docs/v1.md',
     })
-    await seedRun(db, taskId, 'rev1', { crossClarifyIteration: 1 })
     const questionerV1 = await seedRun(db, taskId, 'questioner', {
       retryIndex: 2,
-      crossClarifyIteration: 1,
       // Clarify-only — empty outputs.
     })
 
@@ -502,7 +495,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
   // §2.3 — source-text guards for every insert site enumerated in the patch.
   // -----------------------------------------------------------------------
 
-  describe('§2.3 source-text guards — every node_runs insert preserves crossClarifyIteration', () => {
+  describe('§2.3 source-text guards — every node_runs insert preserves clarifyIteration', () => {
     test('crossClarify.ts:799 idempotency uses output existence, not bare cci comparison', () => {
       const src = readFileSync(CROSS_CLARIFY_SOURCE, 'utf8')
       // The new guard either consults `nodeRunOutputs` directly, or uses a
@@ -519,31 +512,30 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       ).toBe(true)
     })
 
-    test('task.ts:690 retry-from-interrupt placeholder inserts crossClarifyIteration', () => {
+    test('task.ts:690 retry-from-interrupt placeholder inserts clarifyIteration', () => {
       const src = readFileSync(TASK_SOURCE, 'utf8')
       // The retry-from-interrupt mint is the only insert(nodeRuns) in
       // task.ts; the post-patch values block must contain
-      // `crossClarifyIteration:`.
       const insertWindow = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/)
       expect(insertWindow, 'task.ts must contain an insert(nodeRuns) block').not.toBeNull()
-      expect(insertWindow?.[0].includes('crossClarifyIteration'), insertWindow?.[0]).toBe(true)
+      expect(insertWindow?.[0].includes('clarifyIteration'), insertWindow?.[0]).toBe(true)
     })
 
-    test('clarify.ts:169 + :406 clarify-related inserts include crossClarifyIteration', () => {
+    test('clarify.ts:169 + :406 clarify-related inserts include clarifyIteration', () => {
       const src = readFileSync(CLARIFY_SOURCE, 'utf8')
       const insertMatches = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/g)
       expect(insertMatches, 'clarify.ts must contain insert(nodeRuns) blocks').not.toBeNull()
       for (const block of insertMatches ?? []) {
-        expect(block.includes('crossClarifyIteration'), block).toBe(true)
+        expect(block.includes('clarifyIteration'), block).toBe(true)
       }
     })
 
-    test('review.ts:451 + :1335 review-related inserts include crossClarifyIteration', () => {
+    test('review.ts:451 + :1335 review-related inserts include clarifyIteration', () => {
       const src = readFileSync(REVIEW_SOURCE, 'utf8')
       const insertMatches = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/g)
       expect(insertMatches, 'review.ts must contain insert(nodeRuns) blocks').not.toBeNull()
       for (const block of insertMatches ?? []) {
-        expect(block.includes('crossClarifyIteration'), block).toBe(true)
+        expect(block.includes('clarifyIteration'), block).toBe(true)
       }
     })
 
@@ -554,7 +546,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       const body = triggerWindow?.[0] ?? ''
       // The new computation either uses `Math.max(...)` with multiple
       // sources, or a named helper like `computeNextCrossClarifyIteration`.
-      // A bare `(lastDesigner.crossClarifyIteration ?? 0) + 1` is the
+      // A bare `(lastDesigner.clarifyIteration ?? 0) + 1` is the
       // pre-patch shape and must NOT be the sole driver of the cascade
       // newCci value.
       expect(

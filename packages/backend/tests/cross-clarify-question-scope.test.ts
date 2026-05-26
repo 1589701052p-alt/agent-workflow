@@ -155,7 +155,6 @@ async function seedDesigner(db: DbClient, taskId: string): Promise<void> {
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now() - 1000,
   })
 }
@@ -177,7 +176,6 @@ async function spawnSession(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
   })
   const { crossClarifyNodeRunId } = await createCrossClarifySession({

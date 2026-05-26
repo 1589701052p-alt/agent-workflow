@@ -93,7 +93,6 @@ async function seedTask(db: DbClient, taskId: string): Promise<WorkflowDefinitio
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now() - 1000,
   })
   return def
@@ -125,7 +124,6 @@ async function runSubmit(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
   })
   const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -177,7 +175,7 @@ describe('RFC-059 C1 — NULL-scopes path is byte-equivalent to all-designer-sco
       taskId: 'task_A',
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition: defA,
     })
     const ctxB = await buildExternalFeedbackContext({
@@ -185,7 +183,7 @@ describe('RFC-059 C1 — NULL-scopes path is byte-equivalent to all-designer-sco
       taskId: 'task_B',
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition: defB,
     })
     expect(ctxA).toBeDefined()
@@ -245,7 +243,6 @@ describe('RFC-059 C1 — NULL-scopes path is byte-equivalent to all-designer-sco
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now(),
       })
       const { crossClarifyNodeRunId } = await createCrossClarifySession({

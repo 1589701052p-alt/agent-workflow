@@ -56,12 +56,6 @@ export interface ComputeHistoryCutoffArgs {
   taskId: string
   nodeId: string
   /**
-   * `'clarifyIteration'` for kind='self' rerun paths (RFC-023);
-   * `'crossClarifyIteration'` for kind='cross' designer / questioner reruns
-   * (RFC-056 §6 update mode + §5.4 questioner cascade).
-   */
-  iterationField: 'clarifyIteration' | 'crossClarifyIteration'
-  /**
    * The about-to-run node_run row. Excluded from the prior lookup; also
    * supplies the freshness comparator (parent / shardKey).
    */
@@ -82,9 +76,10 @@ export interface ComputeHistoryCutoffArgs {
  * Returns `undefined` when no such prior run exists — the GENERAL no-op case
  * where the entire Q&A history should still feed the next prompt.
  *
- * Mirrors scheduler.ts:1372-1405 inline logic verbatim so the move is
- * byte-equivalent for kind='self'; the kind='cross' case (using
- * `crossClarifyIteration`) is the new GENERAL extension.
+ * RFC-064: the prior `iterationField` parameter is gone — the unified
+ * `clarifyIteration` covers both self and cross rerun paths. Patch
+ * 2026-05-27 (questioner-cutoff-uses-cci) is structurally preserved: the
+ * unified field aligns with `clarify_rounds.iteration` for both kinds.
  */
 export async function computeHistoryCutoff(
   args: ComputeHistoryCutoffArgs,
@@ -122,21 +117,18 @@ export async function computeHistoryCutoff(
   }
   if (priorCompleted === undefined) return undefined
 
-  return args.iterationField === 'clarifyIteration'
-    ? priorCompleted.clarifyIteration
-    : priorCompleted.crossClarifyIteration
+  return priorCompleted.clarifyIteration
 }
 
 /**
  * Local copy of scheduler's `isFresherNodeRun` semantics so this module
- * does not introduce a cycle with scheduler.ts. Order:
- *   1. clarifyIteration desc (newer self-clarify round wins)
- *   2. crossClarifyIteration desc (newer cross-clarify round wins) —
- *      RFC-056 patch-2026-05-25-fresher-noderun-includes-cci. Without this
- *      rank a cci-bumped post-submit row would be shadowed by a (cci=0,
- *      retryIndex=N) row and the aging cutoff would leak prior rounds.
- *   3. retryIndex desc (later process-retry attempt wins)
- *   4. id desc (last-inserted ULID wins)
+ * does not introduce a cycle with scheduler.ts. Order (post-RFC-064
+ * unification):
+ *   1. clarifyIteration desc (newer clarify round wins — covers self AND
+ *      cross, structurally eliminating the "missed-mirror rank" class of
+ *      bug that patch-2026-05-25-fresher-noderun-includes-cci fixed)
+ *   2. retryIndex desc (later process-retry attempt wins)
+ *   3. id desc (last-inserted ULID wins)
  */
 function isFresherForCutoff(
   candidate: typeof nodeRuns.$inferSelect,
@@ -145,9 +137,6 @@ function isFresherForCutoff(
   if (incumbent === undefined) return true
   if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
     return candidate.clarifyIteration > incumbent.clarifyIteration
-  }
-  if (candidate.crossClarifyIteration !== incumbent.crossClarifyIteration) {
-    return candidate.crossClarifyIteration > incumbent.crossClarifyIteration
   }
   if (candidate.retryIndex !== incumbent.retryIndex) {
     return candidate.retryIndex > incumbent.retryIndex

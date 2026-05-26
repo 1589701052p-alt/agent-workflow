@@ -127,7 +127,8 @@ export interface ClarifyPromptContext {
  *   {{__external_feedback__}}            ← block (markdown body produced by
  *                                          buildExternalFeedbackBlock)
  *   {{__external_feedback_iteration__}}  ← iteration (string form of
- *                                          designer's crossClarifyIteration)
+ *                                          designer's clarifyIteration when
+ *                                          triggered by external feedback)
  *   {{__external_feedback_sources__}}    ← sourcesCsv (comma-separated source
  *                                          questioner node ids, dictionary order)
  *
@@ -140,8 +141,9 @@ export interface CrossClarifyPromptContext {
    *  (dictionary-sorted by source questioner nodeId — see
    *  `buildExternalFeedbackBlock`). */
   block?: string
-  /** Designer's current `cross_clarify_iteration` as string. '0' means the
-   *  designer has never been triggered by external feedback; '1' is the
+  /** Designer's current `clarifyIteration` as string (when triggered by an
+   *  external feedback round — runtime API unchanged after RFC-064). '0' means
+   *  the designer has never been triggered by external feedback; '1' is the
    *  first answers-received rerun; '2' is the second, etc. */
   iteration?: string
   /** Comma-separated list of source questioner nodeIds the current batch
@@ -470,8 +472,10 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   //   ## Prior Output (to be updated) (RFC-056 update mode, if any)
   //   ## External Feedback (RFC-056, if any)
   //   ## Update Directive (RFC-056 update mode, if any)
-  // Two iteration counters (clarifyIteration / crossClarifyIteration) run
-  // orthogonally — see RFC-056 design.md §6.3 + 2026-05-22 amendment.
+  // A single `clarifyIteration` counter covers both self-clarify and
+  // cross-clarify rounds via RFC-064 unification (the `kind` column on
+  // `clarify_rounds` is the only "self vs cross" discriminator the runtime
+  // needs); see RFC-064 design.md §3 + RFC-056 design.md §6.3.
   if (xcc !== undefined) {
     // §6 update-mode prior-output section (renders BEFORE External Feedback
     // so the agent reads "here's the draft you're updating" → "here's what

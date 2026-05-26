@@ -13,7 +13,7 @@
 //   2. Submitting 2 of 3 → still 'designer-waiting', last 1 listed.
 //   3. Submitting all 3 → outcome 'designer-rerun-triggered' with
 //      sourceCount=3.
-//   4. Designer node_runs do NOT gain a new (cross_clarify_iteration+1)
+//   4. Designer node_runs do NOT gain a new (clarify_iteration+1)
 //      row until the final submit lands.
 //   5. Final designer rerun consumes ALL three sessions
 //      (designer_run_triggered_at non-null on each).
@@ -136,7 +136,6 @@ async function seedQRun(db: DbClient, taskId: string, nodeId: string): Promise<s
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
   })
   return id
 }
@@ -151,7 +150,6 @@ async function seedDesignerRun(db: DbClient, taskId: string): Promise<string> {
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     preSnapshot: 'snap-c3',
   })
   return id
@@ -251,7 +249,7 @@ describe('RFC-056 C3 — multi-source wait', () => {
     }
   })
 
-  test('partial submit does NOT create a new designer node_run at higher cross_clarify_iteration', async () => {
+  test('partial submit does NOT create a new designer node_run at higher clarify_iteration', async () => {
     const { db, taskId, sec, ux } = await buildHarness()
     await submitCrossClarifyAnswers({
       db,
@@ -268,7 +266,7 @@ describe('RFC-056 C3 — multi-source wait', () => {
     const elevatedDesigner = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.crossClarifyIteration, 0)))
+      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.clarifyIteration, 0)))
     expect(elevatedDesigner.length).toBe(0)
     void taskId
   })
@@ -322,9 +320,9 @@ describe('RFC-056 C3 — multi-source wait', () => {
     const elevatedDesigner = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.crossClarifyIteration, 0)))
+      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.clarifyIteration, 0)))
     expect(elevatedDesigner.length).toBe(1)
-    expect(elevatedDesigner[0]?.crossClarifyIteration).toBe(1)
+    expect(elevatedDesigner[0]?.clarifyIteration).toBe(1)
 
     const consumed = await db
       .select()

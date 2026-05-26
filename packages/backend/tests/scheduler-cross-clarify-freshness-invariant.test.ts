@@ -5,7 +5,7 @@
 // node when a cross-clarify resolve fires. Layer B is the defense-in-depth
 // invariant inside `runScope`: for every node currently treated as
 // `completed` (its latest row is `done`), if any in-scope upstream has a
-// strictly greater `cross_clarify_iteration`, the node's done row is
+// strictly greater `clarify_iteration`, the node's done row is
 // considered stale and a fresh pending row is minted carrying the
 // upstream's iteration. The node is demoted from `completed` back to
 // `remaining`.
@@ -18,10 +18,10 @@
 // failure we just fixed for the cascade case.
 //
 // LOCKS:
-//   1. downstream `done` with cross_clarify_iteration < upstream's
-//      cross_clarify_iteration → mint a fresh pending row carrying
+//   1. downstream `done` with clarify_iteration < upstream's
+//      clarify_iteration → mint a fresh pending row carrying
 //      upstream's iteration; demote node back to `remaining`.
-//   2. downstream `done` with cross_clarify_iteration >= upstream's →
+//   2. downstream `done` with clarify_iteration >= upstream's →
 //      stays `completed`, NO new row minted (idempotent).
 //   3. node with no prior runs at this iteration → skipped (nothing to
 //      demote).
@@ -33,7 +33,7 @@ import { and, eq } from 'drizzle-orm'
 import type { WorkflowNode } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { applyCrossClarifyFreshnessInvariant } from '../src/services/scheduler'
+import { applyClarifyFreshnessInvariant } from '../src/services/scheduler'
 import { createLogger } from '../src/util/log'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
@@ -82,7 +82,6 @@ async function seedRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     ...fields,
   })
   const rows = await db.select().from(nodeRuns).where(eq(nodeRuns.id, id))
@@ -100,14 +99,14 @@ afterAll(() => {
   resetBroadcastersForTests()
 })
 
-describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
+describe('RFC-056 Layer B — applyClarifyFreshnessInvariant', () => {
   test('stale downstream done → fresh pending minted + demoted out of completed', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    // Upstream designer ran at crossClarifyIteration=1 (e.g. SQL-patched
+    // Upstream designer ran at clarifyIteration=1 (e.g. SQL-patched
     // or manual retry — Layer A wasn't called).
-    const designer = await seedRun(db, taskId, 'designer', { crossClarifyIteration: 1 })
-    // Downstream review at crossClarifyIteration=0 — stale relative to
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
+    // Downstream review at clarifyIteration=0 — stale relative to
     // the upstream now.
     const reviewRow = await seedRun(db, taskId, 'review')
     const priorRuns = [designer, reviewRow]
@@ -122,7 +121,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
       ['designer', []],
       ['review', ['designer']],
     ])
-    await applyCrossClarifyFreshnessInvariant({
+    await applyClarifyFreshnessInvariant({
       db,
       taskId,
       iteration: 0,
@@ -137,14 +136,14 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
     // Review demoted out of completed, back into remaining.
     expect(completed.has('review')).toBe(false)
     expect(remaining.has('review')).toBe(true)
-    // Fresh pending row exists in the DB at crossClarifyIteration=1.
+    // Fresh pending row exists in the DB at clarifyIteration=1.
     const allReviewRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'review')))
     expect(allReviewRows.length).toBe(2) // old done + new pending
     const pendingFresh = allReviewRows.find(
-      (r) => r.status === 'pending' && r.crossClarifyIteration === 1,
+      (r) => r.status === 'pending' && r.clarifyIteration === 1,
     )
     expect(pendingFresh).toBeDefined()
   })
@@ -152,8 +151,8 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
   test('downstream already at upstream iteration → no demotion, no mint (idempotent)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    const designer = await seedRun(db, taskId, 'designer', { crossClarifyIteration: 1 })
-    const reviewRow = await seedRun(db, taskId, 'review', { crossClarifyIteration: 1 })
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
+    const reviewRow = await seedRun(db, taskId, 'review', { clarifyIteration: 1 })
     const priorRuns = [designer, reviewRow]
     const latestPerNode = new Map([
       ['designer', designer],
@@ -166,7 +165,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
       ['designer', []],
       ['review', ['designer']],
     ])
-    await applyCrossClarifyFreshnessInvariant({
+    await applyClarifyFreshnessInvariant({
       db,
       taskId,
       iteration: 0,
@@ -189,7 +188,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
   test('node with no prior runs at this iteration → skipped silently', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    const designer = await seedRun(db, taskId, 'designer', { crossClarifyIteration: 1 })
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
     // `review` has NO rows at all. It shouldn't be in `completed` in
     // practice — but the invariant tolerates it. (Defensive.)
     const priorRuns = [designer]
@@ -201,7 +200,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
       ['designer', []],
       ['review', ['designer']],
     ])
-    await applyCrossClarifyFreshnessInvariant({
+    await applyClarifyFreshnessInvariant({
       db,
       taskId,
       iteration: 0,
@@ -223,19 +222,19 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
 
   test('multi-hop chain (designer→A→B→C) gets fully demoted in ONE invocation (fixed-point iteration)', async () => {
     // Live failure shape: cross-clarify resolved → designer reran at
-    // crossClarifyIteration=1, but Layer A's cascade was never minted
+    // clarifyIteration=1, but Layer A's cascade was never minted
     // (pre-patch state in the DB). When the freshness invariant fires on
     // resume, it must walk the full transitive downstream chain — not
     // just the first hop — so the operator doesn't have to manually
     // re-run anything.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    const designer = await seedRun(db, taskId, 'designer', { crossClarifyIteration: 1 })
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
     const reviewA = await seedRun(db, taskId, 'reviewA')
     const reviewB = await seedRun(db, taskId, 'reviewB')
     const reviewC = await seedRun(db, taskId, 'reviewC')
 
-    await applyCrossClarifyFreshnessInvariant({
+    await applyClarifyFreshnessInvariant({
       db,
       taskId,
       iteration: 0,
@@ -270,7 +269,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-      const pendingFresh = rows.find((r) => r.status === 'pending' && r.crossClarifyIteration === 1)
+      const pendingFresh = rows.find((r) => r.status === 'pending' && r.clarifyIteration === 1)
       expect(pendingFresh, `${nodeId} should have pending row at iter=1`).toBeDefined()
     }
   })
@@ -278,7 +277,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
   test('idempotent across two consecutive invocations — second pass does not double-mint', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    const designer = await seedRun(db, taskId, 'designer', { crossClarifyIteration: 1 })
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
     const reviewRow = await seedRun(db, taskId, 'review')
     const buildCtx = () => {
       // Rebuild the ctx fresh each call to mirror how the scheduler
@@ -303,7 +302,7 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
         log,
       }
     }
-    await applyCrossClarifyFreshnessInvariant(buildCtx())
+    await applyClarifyFreshnessInvariant(buildCtx())
     const afterFirst = await db
       .select()
       .from(nodeRuns)
@@ -316,8 +315,8 @@ describe('RFC-056 Layer B — applyCrossClarifyFreshnessInvariant', () => {
     const designerLatest = allRunsNow.find((r) => r.nodeId === 'designer')!
     const reviewLatest = allRunsNow
       .filter((r) => r.nodeId === 'review')
-      .sort((a, b) => (b.crossClarifyIteration ?? 0) - (a.crossClarifyIteration ?? 0))[0]!
-    await applyCrossClarifyFreshnessInvariant({
+      .sort((a, b) => (b.clarifyIteration ?? 0) - (a.clarifyIteration ?? 0))[0]!
+    await applyClarifyFreshnessInvariant({
       db,
       taskId,
       iteration: 0,

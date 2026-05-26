@@ -25,9 +25,13 @@ export function nodeRunHistory(current: NodeRun, runs: readonly NodeRun[]): Node
     .sort((a, b) => {
       if (a.iteration !== b.iteration) return a.iteration - b.iteration
       if (a.reviewIteration !== b.reviewIteration) return a.reviewIteration - b.reviewIteration
+      // RFC-064: unified clarifyIteration covers both self-clarify (RFC-023)
+      // and cross-clarify (RFC-056) rounds; the per-kind label split has been
+      // collapsed (option D1 from design.md §10.5). Mint helpers
+      // (mintQuestionerRerun / triggerDesignerRerun / cascadeDownstream...)
+      // now bump the single field, so the all-zero branch in
+      // formatIterationLabel correctly excludes any minted rerun row.
       if (a.clarifyIteration !== b.clarifyIteration) return a.clarifyIteration - b.clarifyIteration
-      if (a.crossClarifyIteration !== b.crossClarifyIteration)
-        return a.crossClarifyIteration - b.crossClarifyIteration
       if (a.retryIndex !== b.retryIndex) return a.retryIndex - b.retryIndex
       const at = a.startedAt ?? Number.POSITIVE_INFINITY
       const bt = b.startedAt ?? Number.POSITIVE_INFINITY
@@ -40,16 +44,15 @@ interface IterationLabelOpts {
 }
 
 /**
- * Joins the non-zero loop / review / clarify / cross-clarify counters into a
- * single label. Retry index is appended only when >0 (process retry within
- * that tuple). All-zero tuple → `initial` — the very first attempt, no
- * iteration counter ever bumped.
+ * Joins the non-zero loop / review / clarify counters into a single label.
+ * Retry index is appended only when >0 (process retry within that tuple).
+ * All-zero tuple → `initial` — the very first attempt, no iteration counter
+ * ever bumped.
  *
- * `crossClarifyIteration` MUST be checked alongside the other counters or
- * a questioner re-run minted by `mintQuestionerRerun` (which bumps cci but
- * leaves loop/review/clarify/retry at 0) would fall into the "all-zero"
- * branch and render as `初次 / initial`, hiding the new attempt from the
- * Stats history list and the Session-tab attempt picker.
+ * RFC-064: under the unified clarifyIteration, the previously-separate
+ * `crossClarifyIteration` chip is gone — the renderer no longer
+ * distinguishes self vs cross clarify rounds at the label level (design.md
+ * §10.5 option D1). The label `iterClarify` covers both flows.
  */
 export function formatIterationLabel(run: NodeRun, opts: IterationLabelOpts): string {
   const parts: string[] = []
@@ -58,8 +61,6 @@ export function formatIterationLabel(run: NodeRun, opts: IterationLabelOpts): st
     parts.push(opts.t('nodeDrawer.iterReview', { n: run.reviewIteration }))
   if (run.clarifyIteration > 0)
     parts.push(opts.t('nodeDrawer.iterClarify', { n: run.clarifyIteration }))
-  if (run.crossClarifyIteration > 0)
-    parts.push(opts.t('nodeDrawer.iterCrossClarify', { n: run.crossClarifyIteration }))
   if (parts.length === 0) parts.push(opts.t('nodeDrawer.iterInitial'))
   if (run.retryIndex > 0) parts.push(opts.t('nodeDrawer.iterRetry', { n: run.retryIndex }))
   return parts.join(' · ')

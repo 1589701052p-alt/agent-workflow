@@ -531,7 +531,7 @@ async function checkCR1(
           and(
             eq(nodeRuns.taskId, ctx.taskId),
             eq(nodeRuns.nodeId, s.targetDesignerNodeId),
-            gt(nodeRuns.crossClarifyIteration, s.iteration),
+            gt(nodeRuns.clarifyIteration, s.iteration),
             eq(nodeRuns.status, 'done'),
           ),
         )

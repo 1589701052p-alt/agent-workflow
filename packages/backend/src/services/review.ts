@@ -304,30 +304,32 @@ export function pickFreshestReviewRun(
 }
 
 /**
- * RFC-056 patch-2026-05-26: a review's prior `done` approval covers the
- * upstream state at THAT row's `crossClarifyIteration`. When the upstream
- * source agent has subsequently re-run via cross-clarify cascade and now
- * sits at a higher cci, the prior approval is stale and the cascade-
- * minted pending review row MUST run — even though RFC-052 declared
- * "any done row in this iteration is decisive".
+ * RFC-056 patch-2026-05-26 + RFC-064: a review's prior `done` approval
+ * covers the upstream state at THAT row's `clarifyIteration` (unified
+ * counter). When the upstream source agent has subsequently re-run via
+ * clarify cascade (self or cross) and now sits at a higher
+ * clarifyIteration, the prior approval is stale and the cascade-minted
+ * pending review row MUST run — even though RFC-052 declared "any done
+ * row in this iteration is decisive".
  *
- * Returns true iff `latestDone` exists AND its cci is at least as fresh
- * as the upstream source row's cci (i.e. the approval still covers the
- * upstream output the review would now be looking at). Returns false
- * when latestDone is undefined (no prior approval) OR when upstream cci
+ * Returns true iff `latestDone` exists AND its clarifyIteration is at
+ * least as fresh as the upstream source row's (i.e. the approval still
+ * covers the upstream output the review would now be looking at). Returns
+ * false when latestDone is undefined (no prior approval) OR when upstream
  * has advanced past the approval — in that case dispatchReviewNode
  * declines the short-circuit and re-parks the cascade pending row as
  * awaiting_review so the user can re-approve on the refreshed upstream.
  *
- * The cci=0 baseline (workflows that never see cross-clarify) reduces
- * to `latestDone !== undefined`, i.e. RFC-052's original short-circuit.
+ * The clarifyIteration=0 baseline (workflows that never see clarify)
+ * reduces to `latestDone !== undefined`, i.e. RFC-052's original
+ * short-circuit.
  */
-export function isReviewCciAlignedWithUpstream(
+export function isReviewClarifyAlignedWithUpstream(
   latestDone: typeof nodeRuns.$inferSelect | undefined,
   sourceRun: typeof nodeRuns.$inferSelect,
 ): boolean {
   if (latestDone === undefined) return false
-  return (latestDone.crossClarifyIteration ?? 0) >= (sourceRun.crossClarifyIteration ?? 0)
+  return (latestDone.clarifyIteration ?? 0) >= (sourceRun.clarifyIteration ?? 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +476,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
   // design/RFC-056-clarify-cross-agent/patch-2026-05-26-review-dispatch-
   // respects-cci.md and the live-task evidence trail referenced there.
   const { reuse, latestDone } = pickFreshestReviewRun(reviewRuns)
-  if (isReviewCciAlignedWithUpstream(latestDone, sourceRun)) {
+  if (isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)) {
     return { kind: 'ok', summary: '', message: '' }
   }
 
@@ -500,10 +502,10 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
     reviewNodeRunId = ulid()
     reviewIteration = 0
     const now = Date.now()
-    // RFC-056 patch 2026-05-25 §2.3 — carry the upstream source-agent's
-    // crossClarifyIteration onto the review's awaiting_review row so the
-    // cross-clarify scope walker (Layer B freshness invariant) sees a
-    // continuous iteration across the data graph. Default 0 is preserved
+    // RFC-056 patch 2026-05-25 §2.3 + RFC-064: carry the upstream source-
+    // agent's clarifyIteration (unified counter) onto the review's
+    // awaiting_review row so the Layer B freshness invariant sees a
+    // continuous iteration across the data graph. Default 0 preserved
     // when sourceRun lookup turns up empty (initial dispatch without an
     // upstream run, which shouldn't happen but stay defensive).
     await db.insert(nodeRuns).values({
@@ -514,7 +516,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
       retryIndex: 0,
       iteration,
       reviewIteration: 0,
-      crossClarifyIteration: sourceRun.crossClarifyIteration ?? 0,
+      clarifyIteration: sourceRun.clarifyIteration ?? 0,
       startedAt: now,
     })
   }
@@ -1407,13 +1409,10 @@ export async function submitReviewDecision(
       // into a brand-new doc_version — the "version refreshed without rerun"
       // bug from task 01KS1N8WVZWE8FTR4K9WSETRNW (贪吃蛇). Locked by
       // review-iterate-inherits-clarify-iteration.test.ts.
+      // RFC-064: under the unified clarifyIteration the previously-separate
+      // crossClarifyIteration mirror (patch-2026-05-25 §2.3) is gone — the
+      // single inherit below covers both self + cross cascade signals.
       clarifyIteration: latest.clarifyIteration,
-      // RFC-056 patch 2026-05-25 §2.3 — preserve crossClarifyIteration on
-      // the review-iterate placeholder so the cross-clarify counter
-      // doesn't silently regress when a user requests changes on a
-      // post-cross-clarify designer/questioner output. See
-      // patch-2026-05-25-questioner-cascade-no-skip.md §2.3.
-      crossClarifyIteration: latest.crossClarifyIteration ?? 0,
     })
   }
 

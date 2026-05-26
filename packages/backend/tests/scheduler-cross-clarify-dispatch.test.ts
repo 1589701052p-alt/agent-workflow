@@ -11,7 +11,7 @@
 //   3. Persistent stop on the cross-clarify node short-circuits the next
 //      dispatch (cross-clarify node_run flips pending → done, no awaiting
 //      row), and the questioner can re-run via runner.
-//   4. Designer rerun via cross-clarify path: when cross_clarify_iteration
+//   4. Designer rerun via cross-clarify path: when clarify_iteration
 //      is bumped (after submit), the runner's user prompt picks up the
 //      External Feedback context (## External Feedback section appears
 //      in node_runs.promptText).
@@ -424,7 +424,6 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const out = await dispatchCrossClarifyNode({
       db: h.db,
@@ -438,7 +437,7 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     expect(fresh?.status).toBe('done')
   })
 
-  test('designer rerun (cross_clarify_iteration > 0) prompt contains ## External Feedback section', async () => {
+  test('designer rerun (clarify_iteration > 0) prompt contains ## External Feedback section', async () => {
     await seedAgent(h.db, 'designer', ['design'])
     await seedAgent(h.db, 'questioner', ['main'])
     const def: WorkflowDefinition = {
@@ -484,7 +483,6 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { session } = await createCrossClarifySession({
       db: h.db,

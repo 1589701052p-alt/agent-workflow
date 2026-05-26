@@ -1,59 +1,53 @@
-// RFC-056 PR-D — locks the REST projection of node_runs.cross_clarify_iteration
-// into the wire-level `crossClarifyIteration` field on NodeRun.
+// RFC-056 + RFC-064 — lock that getTaskNodeRuns surfaces `clarifyIteration`
+// on the wire. Under RFC-064 the previously-separate
+// `crossClarifyIteration` column was folded into `clarifyIteration`; the
+// REST mapper now ships the single counter, which carries both self-clarify
+// and cross-clarify round signals (the `kind` column on `clarify_rounds` is
+// the only "self vs cross" discriminator). NodeRun consumers that used to
+// expect `crossClarifyIteration` see `clarifyIteration` instead — and the
+// `(r.clarifyIteration > 0)` filter remains the right "this row went
+// through a clarify rerun" predicate.
 //
-// Why this test exists: CI run 26275414694 caught the original PR-B's
-// `getTaskNodeRuns` mapper omitting this column (the new RFC-056 cross-
-// clarify rerun counter), so the e2e A1 happy-path assertion at
-// `nodeId === 'designer' && r.crossClarifyIteration === 1` silently
-// matched zero rows. The fix added the column to `NodeRunSchema` + the
-// mapper; this test guards against a silent re-drop in any future
-// `getTaskNodeRuns` refactor.
-//
-// LOCKS:
-//   1. Default (legacy) row → crossClarifyIteration=0 surfaces on the wire.
-//   2. Elevated cross-clarify rerun row (crossClarifyIteration=2) → that
-//      exact integer surfaces on the wire (not omitted, not silently
-//      coerced to 0, not stripped by zod).
-//   3. Multiple rows with different cross-clarify iterations preserved
-//      pair-wise (the mapper is per-row, not a reduce).
-//
-// If this goes red the API has silently dropped the RFC-056 iteration
-// counter — investigate before relaxing.
+// Cases mirror the pre-RFC-064 set so we keep coverage of:
+//   1. Default (legacy) row → clarifyIteration=0 surfaces on the wire.
+//   2. Elevated rerun row → high clarifyIteration surfaces verbatim.
+//   3. Multiple rows for one node distinguished only by clarifyIteration.
+//   4. Independence verified via two rows with disjoint (clarify, review)
+//      tuples — the mapper writes each column independently.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { ulid } from 'ulid'
-import { createInMemoryDb, type DbClient } from '../src/db/client'
+
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
+import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { getTaskNodeRuns } from '../src/services/task'
-import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
-function seedTaskAndWorkflow(db: DbClient): { taskId: string } {
-  const wfId = ulid()
+function seedTask(db: DbClient): { taskId: string } {
+  const taskId = ulid()
+  const wfId = `wf_${taskId}`
   db.insert(workflows)
     .values({
       id: wfId,
-      name: 'wf',
-      definition: JSON.stringify({ schemaVersion: 4, name: 'wf', nodes: [], edges: [] }),
+      name: 'stub',
+      description: '',
+      definition: '{}',
       version: 1,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      schemaVersion: 4,
     })
     .run()
-  const taskId = ulid()
   db.insert(tasks)
     .values({
       id: taskId,
-      name: 't',
+      name: 'fixture',
       workflowId: wfId,
       workflowSnapshot: '{}',
-      repoPath: '/tmp/wt',
-      worktreePath: '/tmp/wt',
+      repoPath: '/tmp/test',
+      worktreePath: '/tmp/test/wt',
       baseBranch: 'main',
       branch: 'agent-workflow/' + taskId,
-      baseCommit: null,
       status: 'pending',
       inputs: '{}',
       startedAt: Date.now(),
@@ -65,7 +59,7 @@ function seedTaskAndWorkflow(db: DbClient): { taskId: string } {
 function seedRun(
   db: DbClient,
   taskId: string,
-  opts: { nodeId?: string; crossClarifyIteration?: number; clarifyIteration?: number } = {},
+  opts: { nodeId?: string; clarifyIteration?: number } = {},
 ): string {
   const id = ulid()
   db.insert(nodeRuns)
@@ -77,7 +71,6 @@ function seedRun(
       retryIndex: 0,
       reviewIteration: 0,
       clarifyIteration: opts.clarifyIteration ?? 0,
-      crossClarifyIteration: opts.crossClarifyIteration ?? 0,
       status: 'done',
       startedAt: Date.now(),
     })
@@ -85,51 +78,48 @@ function seedRun(
   return id
 }
 
-describe('RFC-056 — getTaskNodeRuns surfaces crossClarifyIteration', () => {
-  let db: DbClient
-  beforeEach(() => {
-    resetBroadcastersForTests()
-    db = createInMemoryDb(MIGRATIONS)
-  })
-  afterEach(() => {
-    resetBroadcastersForTests()
-  })
+describe('RFC-064 — getTaskNodeRuns surfaces unified clarifyIteration', () => {
+  function makeDb(): DbClient {
+    return createInMemoryDb(MIGRATIONS)
+  }
 
-  test('A1: legacy row surfaces crossClarifyIteration=0 on the wire', async () => {
-    const { taskId } = seedTaskAndWorkflow(db)
-    seedRun(db, taskId, { crossClarifyIteration: 0 })
+  test('A1: legacy row surfaces clarifyIteration=0 on the wire', async () => {
+    const db = makeDb()
+    const { taskId } = seedTask(db)
+    seedRun(db, taskId, { clarifyIteration: 0 })
     const res = await getTaskNodeRuns(db, taskId)
     expect(res.runs.length).toBe(1)
-    expect(res.runs[0]?.crossClarifyIteration).toBe(0)
+    expect(res.runs[0]?.clarifyIteration).toBe(0)
   })
 
-  test('A2: elevated row surfaces the exact integer (no zod strip, no coerce)', async () => {
-    const { taskId } = seedTaskAndWorkflow(db)
-    seedRun(db, taskId, { crossClarifyIteration: 2 })
+  test('A2: elevated clarify rerun row surfaces clarifyIteration=N (covers cross-clarify after unification)', async () => {
+    const db = makeDb()
+    const { taskId } = seedTask(db)
+    seedRun(db, taskId, { clarifyIteration: 2 })
     const res = await getTaskNodeRuns(db, taskId)
     expect(res.runs.length).toBe(1)
-    expect(res.runs[0]?.crossClarifyIteration).toBe(2)
+    expect(res.runs[0]?.clarifyIteration).toBe(2)
   })
 
-  test('A3: multiple rows preserved pair-wise per row (mapper is per-row)', async () => {
-    const { taskId } = seedTaskAndWorkflow(db)
-    seedRun(db, taskId, { nodeId: 'designer', crossClarifyIteration: 0 })
-    seedRun(db, taskId, { nodeId: 'designer', crossClarifyIteration: 1 })
-    seedRun(db, taskId, { nodeId: 'designer', crossClarifyIteration: 3 })
+  test('A3: multiple rows for one node retain distinct clarifyIteration values', async () => {
+    const db = makeDb()
+    const { taskId } = seedTask(db)
+    seedRun(db, taskId, { nodeId: 'designer', clarifyIteration: 0 })
+    seedRun(db, taskId, { nodeId: 'designer', clarifyIteration: 1 })
+    seedRun(db, taskId, { nodeId: 'designer', clarifyIteration: 3 })
     const res = await getTaskNodeRuns(db, taskId)
-    const values = res.runs.map((r) => r.crossClarifyIteration).sort((a, b) => a - b)
+    const values = res.runs.map((r) => r.clarifyIteration).sort((a, b) => a - b)
     expect(values).toEqual([0, 1, 3])
   })
 
-  test('A4: clarifyIteration / crossClarifyIteration are independent on the wire', async () => {
-    const { taskId } = seedTaskAndWorkflow(db)
-    seedRun(db, taskId, { clarifyIteration: 5, crossClarifyIteration: 0 })
-    seedRun(db, taskId, { clarifyIteration: 0, crossClarifyIteration: 5 })
+  test('A4: clarifyIteration is independent of other counters on the wire', async () => {
+    const db = makeDb()
+    const { taskId } = seedTask(db)
+    seedRun(db, taskId, { clarifyIteration: 5 })
+    seedRun(db, taskId, { clarifyIteration: 0 })
     const res = await getTaskNodeRuns(db, taskId)
-    const sorted = [...res.runs].sort((a, b) => a.clarifyIteration - b.clarifyIteration)
-    expect(sorted[0]?.clarifyIteration).toBe(0)
-    expect(sorted[0]?.crossClarifyIteration).toBe(5)
-    expect(sorted[1]?.clarifyIteration).toBe(5)
-    expect(sorted[1]?.crossClarifyIteration).toBe(0)
+    const sorted = res.runs.slice().sort((a, b) => b.clarifyIteration - a.clarifyIteration)
+    expect(sorted[0]?.clarifyIteration).toBe(5)
+    expect(sorted[1]?.clarifyIteration).toBe(0)
   })
 })

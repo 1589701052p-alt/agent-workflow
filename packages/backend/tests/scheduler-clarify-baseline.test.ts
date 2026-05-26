@@ -200,7 +200,6 @@ describe('RFC-058 baseline T5 — cross-clarify designer dispatch path', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -210,7 +209,6 @@ describe('RFC-058 baseline T5 — cross-clarify designer dispatch path', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -235,7 +233,7 @@ describe('RFC-058 baseline T5 — cross-clarify designer dispatch path', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition: ccDef,
     })
     expect(ctx?.block).toContain('### From')
@@ -282,7 +280,6 @@ describe('RFC-058 baseline T5 — cross-clarify questioner dispatch path', () =>
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -292,7 +289,6 @@ describe('RFC-058 baseline T5 — cross-clarify questioner dispatch path', () =>
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -316,7 +312,7 @@ describe('RFC-058 baseline T5 — cross-clarify questioner dispatch path', () =>
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx?.questionsBlock).toContain('cross Q for questioner')
   })

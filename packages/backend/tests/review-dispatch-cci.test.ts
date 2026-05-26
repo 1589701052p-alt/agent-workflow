@@ -1,4 +1,4 @@
-// RFC-056 patch 2026-05-26 — review dispatch must respect crossClarifyIteration.
+// RFC-056 patch 2026-05-26 — review dispatch must respect clarifyIteration.
 //
 // Symptom (live task 01KS86DPCSERV7S41GQA5Y81RN, fifth visit on the same
 // workflow `01KS7C0K5ZRJ29AZD7J13C42C2` "跨节点反问"): designer agent_m7p3n1
@@ -10,13 +10,13 @@
 //
 // Root cause: `dispatchReviewNode` line 418-427 (pre-patch) short-circuited
 // to `kind: 'ok'` the moment ANY top-level done row existed for that review
-// at that iteration — regardless of crossClarifyIteration. So every
+// at that iteration — regardless of clarifyIteration. So every
 // cascade-minted pending review row at cci=N was silently treated as
 // "already approved" by the scheduler and never dispatched.
 //
 // This file locks the patch's three contracts:
 //   1. Unit tests for the new exported helpers `pickFreshestReviewRun` and
-//      `isReviewCciAlignedWithUpstream`. The helpers are the single source
+//      `isReviewClarifyAlignedWithUpstream`. The helpers are the single source
 //      of truth for short-circuit logic.
 //   2. Behavioural tests for the cci-aware short-circuit (alignment true =
 //      short-circuit fires verbatim like RFC-052 / alignment false =
@@ -44,7 +44,7 @@ import {
 } from '../src/db/schema'
 import {
   dispatchReviewNode,
-  isReviewCciAlignedWithUpstream,
+  isReviewClarifyAlignedWithUpstream,
   pickFreshestReviewRun,
 } from '../src/services/review'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -76,7 +76,6 @@ function row(
     retryIndex: 0,
     reviewIteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     startedAt: null,
     finishedAt: null,
     pid: null,
@@ -149,40 +148,40 @@ describe('RFC-056 patch-2026-05-26 — pickFreshestReviewRun', () => {
   })
 })
 
-describe('RFC-056 patch-2026-05-26 — isReviewCciAlignedWithUpstream', () => {
-  const upstream = (cci: number) => row({ id: 'src', status: 'done', crossClarifyIteration: cci })
-  const done = (cci: number) => row({ id: 'done', status: 'done', crossClarifyIteration: cci })
+describe('RFC-056 patch-2026-05-26 — isReviewClarifyAlignedWithUpstream', () => {
+  const upstream = (cci: number) => row({ id: 'src', status: 'done', clarifyIteration: cci })
+  const done = (cci: number) => row({ id: 'done', status: 'done', clarifyIteration: cci })
 
   test('returns false when no latestDone (no prior approval)', () => {
-    expect(isReviewCciAlignedWithUpstream(undefined, upstream(0))).toBe(false)
-    expect(isReviewCciAlignedWithUpstream(undefined, upstream(5))).toBe(false)
+    expect(isReviewClarifyAlignedWithUpstream(undefined, upstream(0))).toBe(false)
+    expect(isReviewClarifyAlignedWithUpstream(undefined, upstream(5))).toBe(false)
   })
 
   test('cci=0 / cci=0 → aligned (RFC-052 baseline, no cross-clarify ever)', () => {
-    expect(isReviewCciAlignedWithUpstream(done(0), upstream(0))).toBe(true)
+    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(0))).toBe(true)
   })
 
   test('upstream cci=1, done cci=0 → NOT aligned (cascade pending must dispatch)', () => {
     // This is the live-task 01KS86DPCSERV7S41GQA5Y81RN failure mode.
-    expect(isReviewCciAlignedWithUpstream(done(0), upstream(1))).toBe(false)
+    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(1))).toBe(false)
   })
 
   test('upstream cci=4, done cci=0 → NOT aligned (multi-round cascade)', () => {
-    expect(isReviewCciAlignedWithUpstream(done(0), upstream(4))).toBe(false)
+    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(4))).toBe(false)
   })
 
   test('upstream cci=1, done cci=1 → aligned (review already covered the cascade)', () => {
-    expect(isReviewCciAlignedWithUpstream(done(1), upstream(1))).toBe(true)
+    expect(isReviewClarifyAlignedWithUpstream(done(1), upstream(1))).toBe(true)
   })
 
   test('upstream cci=1, done cci=2 → aligned (done covers more than upstream needs)', () => {
-    expect(isReviewCciAlignedWithUpstream(done(2), upstream(1))).toBe(true)
+    expect(isReviewClarifyAlignedWithUpstream(done(2), upstream(1))).toBe(true)
   })
 
-  test('null / undefined crossClarifyIteration coerce to 0 on both sides', () => {
-    const upstreamNullCci = row({ id: 'src', status: 'done' }) // crossClarifyIteration = 0 by default
+  test('null / undefined clarifyIteration coerce to 0 on both sides', () => {
+    const upstreamNullCci = row({ id: 'src', status: 'done' }) // clarifyIteration = 0 by default
     const doneNullCci = row({ id: 'done', status: 'done' })
-    expect(isReviewCciAlignedWithUpstream(doneNullCci, upstreamNullCci)).toBe(true)
+    expect(isReviewClarifyAlignedWithUpstream(doneNullCci, upstreamNullCci)).toBe(true)
   })
 })
 
@@ -284,7 +283,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -301,7 +300,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -337,7 +336,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 9,
       iteration: 0,
-      crossClarifyIteration: 4,
+      clarifyIteration: 4,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -354,7 +353,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now() - 5000,
       finishedAt: Date.now() - 4000,
     })
@@ -367,7 +366,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'pending',
       retryIndex: 1,
       iteration: 0,
-      crossClarifyIteration: 4,
+      clarifyIteration: 4,
     })
 
     const result = await dispatchReviewNode({
@@ -389,7 +388,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev')))
     expect(allReviewRows.length).toBe(2)
-    const oldDone = allReviewRows.find((r) => r.crossClarifyIteration === 0)
+    const oldDone = allReviewRows.find((r) => r.clarifyIteration === 0)
     expect(oldDone?.status).toBe('done')
     const versions = await db
       .select()
@@ -410,7 +409,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -426,7 +425,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
     })
@@ -438,7 +437,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'pending',
       retryIndex: 1,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
     })
 
     const result = await dispatchReviewNode({
@@ -465,7 +464,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -503,16 +502,16 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
 describe('RFC-056 patch-2026-05-26 — source-text guards', () => {
   const src = readFileSync(REVIEW_SOURCE_PATH, 'utf8')
 
-  test('review.ts exports pickFreshestReviewRun + isReviewCciAlignedWithUpstream', () => {
+  test('review.ts exports pickFreshestReviewRun + isReviewClarifyAlignedWithUpstream', () => {
     expect(src).toContain('export function pickFreshestReviewRun(')
-    expect(src).toContain('export function isReviewCciAlignedWithUpstream(')
+    expect(src).toContain('export function isReviewClarifyAlignedWithUpstream(')
   })
 
   test('dispatchReviewNode calls the cci-aware helper (no naked alreadyDone)', () => {
-    expect(src).toContain('isReviewCciAlignedWithUpstream(latestDone, sourceRun)')
+    expect(src).toContain('isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)')
     // The pre-patch literal must NOT survive. If you legitimately need to
     // re-introduce a variable called alreadyDone here, fold it through
-    // isReviewCciAlignedWithUpstream so the cci-aware contract stays
+    // isReviewClarifyAlignedWithUpstream so the cci-aware contract stays
     // single-sourced — and update this guard with a comment explaining why.
     expect(src.includes('let alreadyDone =')).toBe(false)
     expect(src.includes('alreadyDone = true')).toBe(false)
@@ -521,7 +520,7 @@ describe('RFC-056 patch-2026-05-26 — source-text guards', () => {
   test('patch md exists and references the cci-aware short-circuit contract', () => {
     const md = readFileSync(PATCH_MD_PATH, 'utf8')
     expect(md).toContain('patch 2026-05-26')
-    expect(md).toContain('isReviewCciAlignedWithUpstream')
+    expect(md).toContain('isReviewClarifyAlignedWithUpstream')
     expect(md).toContain('pickFreshestReviewRun')
     expect(md).toContain('01KS86DPCSERV7S41GQA5Y81RN')
   })

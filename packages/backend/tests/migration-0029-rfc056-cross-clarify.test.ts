@@ -105,22 +105,24 @@ describe('RFC-056 — migration 0029 cross_clarify_sessions', () => {
   })
 })
 
-describe('RFC-056 — migration 0029 node_runs.cross_clarify_iteration column', () => {
-  test('column added with default 0', async () => {
+describe('RFC-056 → RFC-064 — node_runs.cross_clarify_iteration column lifecycle', () => {
+  // RFC-056 migration 0029 originally added `cross_clarify_iteration` to
+  // `node_runs`. RFC-064 migration 0035 max-merges that column into
+  // `clarify_iteration` and DROPs it. After the full migration sequence runs
+  // on a fresh DB the column is gone — we lock its absence here so any
+  // future revival of the two-counter design is caught loudly.
+  test('after RFC-064 the column is absent from node_runs', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const cols = (await db.all(sql`PRAGMA table_info(node_runs)`)) as ColumnInfo[]
     const col = cols.find((c) => c.name === 'cross_clarify_iteration')
-    expect(col).toBeDefined()
-    expect(col?.type.toUpperCase()).toBe('INTEGER')
-    expect(col?.notnull).toBe(1)
-    expect(String(col?.dflt_value)).toContain('0')
+    expect(col).toBeUndefined()
   })
 
-  test('orthogonal to clarify_iteration / review_iteration / retry_index', async () => {
+  test('clarify_iteration / review_iteration / retry_index all remain', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const cols = (await db.all(sql`PRAGMA table_info(node_runs)`)) as ColumnInfo[]
     const names = new Set(cols.map((c) => c.name))
-    expect(names.has('cross_clarify_iteration')).toBe(true)
+    expect(names.has('cross_clarify_iteration')).toBe(false)
     expect(names.has('clarify_iteration')).toBe(true)
     expect(names.has('review_iteration')).toBe(true)
     expect(names.has('retry_index')).toBe(true)

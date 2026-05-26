@@ -154,7 +154,6 @@ describe('RFC-056 scheduler — no runaway pending cross-clarify rows', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
 
     // Re-import the scheduler module to call its internals. The dispatch
@@ -222,7 +221,6 @@ describe('RFC-056 scheduler — no runaway pending cross-clarify rows', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     await db.insert(crossClarifySessions).values({
       id: ulid(),

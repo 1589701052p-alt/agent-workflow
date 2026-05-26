@@ -118,7 +118,6 @@ async function seedTask(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now() - 1000,
   })
   return { taskId, definition: def }
@@ -165,7 +164,6 @@ async function spawnAndSubmit(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
   })
   const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -218,7 +216,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -241,7 +239,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -264,7 +262,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -302,7 +300,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -328,7 +326,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx).toBeUndefined()

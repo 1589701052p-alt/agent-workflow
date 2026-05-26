@@ -20,7 +20,6 @@ function makeRun(over: Partial<NodeRun>): NodeRun {
     retryIndex: 0,
     reviewIteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     status: 'done',
     startedAt: null,
     finishedAt: null,

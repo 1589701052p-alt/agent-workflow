@@ -146,7 +146,6 @@ async function seedCrossClarifySession(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
   })
   const { session, crossClarifyNodeRunId } = await createCrossClarifySession({
     db,

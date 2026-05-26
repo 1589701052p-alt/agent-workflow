@@ -70,13 +70,15 @@ describe('RFC-066 PR-A — source guards', () => {
     const rfc066 = files.find((f) => f.startsWith('0034_'))
     expect(rfc066).toBeDefined()
     expect(rfc066).toBe('0034_rfc066_task_repos.sql')
-    // Also verify the journal has an entry pointing at it.
+    // Also verify the journal includes an entry pointing at it. After
+    // RFC-064 added migration 0035, the journal's last entry is no longer
+    // RFC-066; we look up by tag instead.
     const journal = JSON.parse(
       readFileSync(join(MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf-8'),
     ) as { entries: Array<{ idx: number; tag: string }> }
-    const last = journal.entries[journal.entries.length - 1]!
-    expect(last.idx).toBe(33)
-    expect(last.tag).toBe('0034_rfc066_task_repos')
+    const rfc066Entry = journal.entries.find((e) => e.tag === '0034_rfc066_task_repos')
+    expect(rfc066Entry).toBeDefined()
+    expect(rfc066Entry!.idx).toBe(33)
   })
 
   test('G5 services/task.ts multi-repo gate emits the canonical error codes', () => {

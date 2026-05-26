@@ -42,7 +42,6 @@ function run(partial: Partial<NodeRun> & { id: string }): NodeRun {
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
     clarifyIteration: partial.clarifyIteration ?? 0,
-    crossClarifyIteration: partial.crossClarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? 1700_000_000_000,
     finishedAt: partial.finishedAt ?? 1700_000_001_000,
@@ -179,7 +178,7 @@ describe('Session attempts dropdown picker', () => {
       clarifyIteration: 3,
       startedAt: 400,
     })
-    // RFC-056 questioner-rerun row: only crossClarifyIteration bumped.
+    // RFC-056 questioner-rerun row: only clarifyIteration bumped.
     // Without the cci branch in iterLabel, this option collapses back to
     // "initial" and the picker hides the new attempt from the user.
     const cross = run({
@@ -187,7 +186,6 @@ describe('Session attempts dropdown picker', () => {
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
       startedAt: 500,
     })
     renderDrawer({

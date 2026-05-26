@@ -104,7 +104,6 @@ async function seedTwoSource(db: DbClient): Promise<{ taskId: string; def: Workf
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now() - 1000,
   })
   return { taskId, def }
@@ -140,7 +139,6 @@ async function spawnSession(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
   })
   const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -374,7 +372,7 @@ describe('RFC-059 C4 — fast-path isolation', () => {
     // questioner row must land STRICTLY above every participant — so
     // cci >= 1, matching the maxParticipantCci + 1 algorithm shared
     // with triggerDesignerRerun.
-    expect(newRunRow?.crossClarifyIteration ?? 0).toBeGreaterThan(0)
+    expect(newRunRow?.clarifyIteration ?? 0).toBeGreaterThan(0)
   })
 
   test('reject path (questioner-stop-triggered) also bumps the new questioner cci', async () => {
@@ -399,7 +397,7 @@ describe('RFC-059 C4 — fast-path isolation', () => {
     const newRunRow = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, aResult.outcome.questionerNodeRunId))
     )[0]
-    expect(newRunRow?.crossClarifyIteration ?? 0).toBeGreaterThan(0)
+    expect(newRunRow?.clarifyIteration ?? 0).toBeGreaterThan(0)
   })
 
   test('peer A fast path: clarify_rounds row carries questionScopesJson same as cross_clarify_sessions', async () => {

@@ -159,7 +159,6 @@ async function seedQuestionerRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
   })
   return id
 }
@@ -167,7 +166,7 @@ async function seedQuestionerRun(
 async function seedDesignerRun(
   db: DbClient,
   taskId: string,
-  opts: { id?: string; nodeId?: string; crossClarifyIteration?: number; status?: string } = {},
+  opts: { id?: string; nodeId?: string; clarifyIteration?: number; status?: string } = {},
 ): Promise<string> {
   const id = opts.id ?? `nr_d_${Math.random().toString(36).slice(2, 8)}`
   await db.insert(nodeRuns).values({
@@ -177,8 +176,7 @@ async function seedDesignerRun(
     status: (opts.status ?? 'done') as 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
-    crossClarifyIteration: opts.crossClarifyIteration ?? 0,
+    clarifyIteration: opts.clarifyIteration ?? 0,
     preSnapshot: 'stub-snapshot',
   })
   return id
@@ -224,7 +222,7 @@ describe('RFC-056 createCrossClarifySession', () => {
 
     const nr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, crossClarifyNodeRunId)))[0]
     expect(nr?.status).toBe('awaiting_human')
-    expect(nr?.crossClarifyIteration).toBe(0)
+    expect(nr?.clarifyIteration).toBe(0)
 
     expect(received.length).toBe(1)
     expect(received[0]?.type).toBe('cross-clarify.created')
@@ -392,9 +390,7 @@ describe('RFC-056 submitCrossClarifyAnswers — directive="stop" (reject)', () =
     expect(pendingQuestioner).toBeDefined()
 
     // No new designer node_run at cross_clarify_iteration=1 should exist.
-    const newDesigner = qRuns.find(
-      (r) => r.nodeId === 'designer' && (r.crossClarifyIteration ?? 0) >= 1,
-    )
+    const newDesigner = qRuns.find((r) => r.nodeId === 'designer' && (r.clarifyIteration ?? 0) >= 1)
     expect(newDesigner).toBeUndefined()
   })
 })
@@ -636,7 +632,7 @@ describe('RFC-056 triggerDesignerRerun', () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId, { crossClarifyIteration: 0 })
+    await seedDesignerRun(db, taskId, { clarifyIteration: 0 })
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
       taskId,
@@ -659,7 +655,7 @@ describe('RFC-056 triggerDesignerRerun', () => {
     const newDesigner = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, ret.outcome.designerNodeRunId))
     )[0]
-    expect(newDesigner?.crossClarifyIteration).toBe(1)
+    expect(newDesigner?.clarifyIteration).toBe(1)
     expect(newDesigner?.retryIndex).toBe(1)
     expect(newDesigner?.status).toBe('pending')
 
@@ -683,7 +679,7 @@ describe('RFC-056 triggerDesignerRerun', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       preSnapshot: 'snap',
       parentNodeRunId: 'parent-x',
       shardKey: 'shardA',
@@ -701,7 +697,7 @@ describe('RFC-056 triggerDesignerRerun', () => {
     )[0]
     expect(fresh?.shardKey).toBe('shardA')
     expect(fresh?.parentNodeRunId).toBe('parent-x')
-    expect(fresh?.crossClarifyIteration).toBe(1)
+    expect(fresh?.clarifyIteration).toBe(1)
   })
 })
 
@@ -753,7 +749,7 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
     })
     const out = await dispatchCrossClarifyNode({
       db,
@@ -779,7 +775,7 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
     })
     const out = await dispatchCrossClarifyNode({
       db,
@@ -823,7 +819,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition: def,
     })
     expect(ctx).toBeDefined()
@@ -833,7 +829,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
     expect(ctx?.sourcesCsv).toBe('questioner')
   })
 
-  test('returns undefined when designerCrossClarifyIteration=0 (first run)', async () => {
+  test('returns undefined when designerClarifyIteration=0 (first run)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const def = defaultDef()
     const { taskId } = await seedTask(db, { definition: def })
@@ -842,7 +838,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 0,
+      designerClarifyIteration: 0,
       definition: def,
     })
     expect(ctx).toBeUndefined()
@@ -875,7 +871,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition: def,
     })
     expect(ctx).toBeUndefined()

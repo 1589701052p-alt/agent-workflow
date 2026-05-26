@@ -429,25 +429,18 @@ export const nodeRuns = sqliteTable(
      */
     reviewIteration: integer('review_iteration').notNull().default(0),
     /**
-     * RFC-023: counts clarify-driven regenerations (agent asked + user
-     * answered + agent re-spawned). Orthogonal to both retryIndex and
-     * reviewIteration. For an agent-multi shard child node_run, the value
-     * tracks that shard alone.
+     * RFC-023 + RFC-064: counts clarify-driven regenerations for BOTH
+     * self-clarify (RFC-023) and cross-clarify (RFC-056) flows after
+     * RFC-064 unified the two counters. The `kind` column on
+     * `clarify_rounds` is the only discriminator between self / cross at
+     * runtime; this counter is bumped on a node_run whenever the node
+     * participates in a new round as either the asking_node or the
+     * target_consumer_node (see services/clarify.ts §3 mint algorithm).
+     * Orthogonal to retryIndex (technical retries) and reviewIteration
+     * (post-output review rounds). For an agent-multi shard child
+     * node_run, the value tracks that shard alone.
      */
     clarifyIteration: integer('clarify_iteration').notNull().default(0),
-    /**
-     * RFC-056: counts cross-clarify-driven regenerations on the DESIGNER
-     * side (downstream questioner agent emitted a `<workflow-clarify>` via
-     * a clarify-cross-agent node + human submitted answers → designer is
-     * rerun once per multi-source batch). Orthogonal to retryIndex,
-     * reviewIteration, AND clarifyIteration — a designer that ALSO has its
-     * own RFC-023 self-clarify channel sees two independent counters.
-     *
-     * For the questioner side, clarifyIteration continues to be the active
-     * counter (the questioner IS asking back). For nodes that never act as
-     * designer in a cross-clarify cycle the column stays at its default 0.
-     */
-    crossClarifyIteration: integer('cross_clarify_iteration').notNull().default(0),
     status: text('status', {
       enum: [
         'pending',

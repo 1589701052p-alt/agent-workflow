@@ -25,7 +25,7 @@
 // (designer update-mode AND questioner cross-clarify Q&A injection)
 // because retry_index can no longer distinguish "fresh cross-clarify
 // rerun" from "in-attempt RFC-042 retry" — only the
-// crossClarifyIteration signal can. This file locks the three lines of
+// clarifyIteration signal can. This file locks the three lines of
 // defence:
 //   1. Live-shaped DB state (designer prior done at retry_index=9) →
 //      scheduler-style priorDoneDesigner lookup resolves it correctly.
@@ -176,7 +176,6 @@ async function seedRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
     ...fields,
   })
@@ -204,7 +203,7 @@ async function assembleDesignerCrossClarifyContext(args: {
     await db.select().from(nodeRuns).where(eq(nodeRuns.id, designerNodeRunId)).limit(1)
   )[0]
   if (currentRunRow === undefined) return {}
-  const currentCrossClarifyIteration = currentRunRow.crossClarifyIteration ?? 0
+  const currentCrossClarifyIteration = currentRunRow.clarifyIteration ?? 0
   // Gate mirrors scheduler.ts:1287-1291 (post-patch — NO retry_index gate).
   const isCrossClarifyTriggeredRerun = currentCrossClarifyIteration > 0
   let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
@@ -220,7 +219,7 @@ async function assembleDesignerCrossClarifyContext(args: {
         ),
       )
     for (const r of priorRows) {
-      if (r.crossClarifyIteration >= currentCrossClarifyIteration) continue
+      if (r.clarifyIteration >= currentCrossClarifyIteration) continue
       if (r.parentNodeRunId !== null) continue
       if (isFresherNodeRun(r, priorDoneDesigner)) priorDoneDesigner = r
     }
@@ -230,7 +229,7 @@ async function assembleDesignerCrossClarifyContext(args: {
     taskId,
     designerNodeId,
     loopIter,
-    designerCrossClarifyIteration: currentCrossClarifyIteration,
+    designerClarifyIteration: currentCrossClarifyIteration,
     definition,
   })
   if (ctx === undefined) return {}
@@ -262,7 +261,7 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     // its latest done at retry_index=9 with a captured `<workflow-output>`
     // for port `docpath`. Cross-clarify submit mints a NEW pending designer
     // row at retry_index=10 (max+1, per patch-2026-05-23-designer-retry-
-    // index). The post-patch scheduler gate (`crossClarifyIteration > 0`
+    // index). The post-patch scheduler gate (`clarifyIteration > 0`
     // only — no retry_index === 0 sub-gate) must still let update-mode
     // injection through. Pre-patch this returned no priorOutputBlock and
     // the rendered prompt dropped the `## Prior Output (to be updated)` +
@@ -270,12 +269,14 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRun(db, taskId, 'in', { status: 'done' })
+    // RFC-064: seed designer at clarifyIteration=0 so the cross-clarify
+    // submit's bump produces a deterministic +1; under the unified counter
+    // the bump algorithm is max(participant clarify, session iter) + 1.
     // Prior designer done — the working draft we expect to see in the prompt.
     const priorDesignerId = await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 9,
-      clarifyIteration: 6,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -287,7 +288,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       status: 'done',
       retryIndex: 2,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
     })
 
     const sess = await createCrossClarifySession({
@@ -321,7 +321,7 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, newDesignerNodeRunId!)).limit(1)
     )[0]
     expect(newRow?.retryIndex).toBeGreaterThan(0)
-    expect(newRow?.crossClarifyIteration).toBe(1)
+    expect(newRow?.clarifyIteration).toBe(1)
 
     const ctx = await assembleDesignerCrossClarifyContext({
       db,
@@ -352,7 +352,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       status: 'done',
       retryIndex: 9,
       clarifyIteration: 6,
-      crossClarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -443,7 +442,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       status: 'done',
       retryIndex: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -504,7 +502,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       status: 'done',
       retryIndex: 3,
       clarifyIteration: 2,
-      crossClarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     // Intentionally no node_run_outputs row for the prior designer run.
@@ -568,31 +565,31 @@ describe('RFC-056 patch 2026-05-23 — scheduler source guard against `retryInde
   // it back the runtime symptom is silent — the rendered prompt simply
   // drops the §6 sections. We grep the source so silent re-introduction
   // becomes a hard CI fail.
-  test('isCrossClarifyTriggeredRerun gate has no retry_index check', () => {
+  test('isCrossClarifyTriggeredRerun gate has no retry_index check (RFC-064: gate keys on clarifyIteration)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // Capture the assignment expression spanning the gate condition.
+    // RFC-064: the gate now keys on the unified clarifyIteration (the cross
+    // signal was previously on a separate column). Patch-2026-05-23's "no
+    // retry_index sub-gate" intent stays — adding it back would silently
+    // drop the §6 sections under in-attempt RFC-042 retries.
     const m = src.match(/const isCrossClarifyTriggeredRerun =[^;]+;?\s*\n\s*let priorDoneDesigner/)
     expect(m, 'must find the isCrossClarifyTriggeredRerun assignment').not.toBeNull()
     const gateText = m![0]
     expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
     expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
-    // Positive lock: the surviving signals are still the two we expect.
     expect(gateText).toContain('hasExternalFeedbackChannel')
-    expect(gateText).toContain('currentCrossClarifyIteration')
+    expect(gateText).toContain('currentClarifyIteration')
   })
 
-  test('isQuestionerCrossClarifyRerun gate has no retry_index check', () => {
+  test('isQuestionerCrossClarifyRerun gate has no retry_index check (RFC-064: gate keys on clarifyIteration)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // RFC-056 patch-2026-05-27 hoisted the declaration above
-    // `computeHistoryCutoff` so it can pick the iterationField for the
-    // cross-questioner branch — match the declaration line itself instead
-    // of its (now moved) trailing context.
+    // RFC-056 patch-2026-05-27 + RFC-064: hoisted declaration; the cross
+    // signal is now on `currentClarifyIteration` under the unified counter.
     const m = src.match(/const isQuestionerCrossClarifyRerun =[\s\S]*?>\s*0\b/)
     expect(m, 'must find the isQuestionerCrossClarifyRerun assignment').not.toBeNull()
     const gateText = m![0]
     expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
     expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
     expect(gateText).toContain("clarifyMode === 'cross'")
-    expect(gateText).toContain('currentCrossClarifyIteration')
+    expect(gateText).toContain('currentClarifyIteration')
   })
 })

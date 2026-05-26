@@ -165,7 +165,6 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { session, crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -183,7 +182,7 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
     expect(session.loopIter).toBe(0)
     const nr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, crossClarifyNodeRunId)))[0]
     expect(nr?.status).toBe('awaiting_human')
-    expect(nr?.crossClarifyIteration).toBe(0)
+    expect(nr?.clarifyIteration).toBe(0)
   })
 
   test('same (node, loopIter): iteration increments to 1 after another mint', async () => {
@@ -196,7 +195,6 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     await createCrossClarifySession({
       db,
@@ -231,7 +229,6 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { session: i0 } = await createCrossClarifySession({
       db,
@@ -270,7 +267,6 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { session: a } = await createCrossClarifySession({
       db,
@@ -318,7 +314,6 @@ describe('RFC-058 baseline T3 — submitCrossClarifyAnswers outcomes', () => {
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     const crossClarifyNodeRunIds: string[] = []
@@ -335,7 +330,6 @@ describe('RFC-058 baseline T3 — submitCrossClarifyAnswers outcomes', () => {
           status: 'done',
           retryIndex: 0,
           iteration: 0,
-          crossClarifyIteration: 0,
         })
       }
       const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -492,7 +486,6 @@ describe('RFC-058 baseline T3 — evaluateDesignerRerunReadiness ready/pending l
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     for (const [qid, ccid] of [
@@ -507,7 +500,6 @@ describe('RFC-058 baseline T3 — evaluateDesignerRerunReadiness ready/pending l
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       })
       await createCrossClarifySession({
         db,
@@ -560,7 +552,6 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     await db.insert(nodeRunOutputs).values({
@@ -575,7 +566,6 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -599,7 +589,7 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 1,
+      designerClarifyIteration: 1,
       definition,
     })
     expect(ctx?.block).toContain('### From')
@@ -612,7 +602,7 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
     expect(ctx?.priorOutputBlock).toBeUndefined()
   })
 
-  test('designerCrossClarifyIteration<=0 → undefined (first designer run)', async () => {
+  test('designerClarifyIteration<=0 → undefined (first designer run)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, definition } = await seedCrossClarifyTask(db)
     const ctx = await buildExternalFeedbackContext({
@@ -620,7 +610,7 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: 0,
+      designerClarifyIteration: 0,
       definition,
     })
     expect(ctx).toBeUndefined()
@@ -639,7 +629,6 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     await db.insert(nodeRuns).values({
@@ -649,7 +638,6 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -672,7 +660,7 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx).toBeDefined()
     // RFC-058 baseline: PR-A locks current behavior — full history surfaces in
@@ -688,12 +676,12 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 0,
+      targetClarifyIteration: 0,
     })
     expect(ctx).toBeUndefined()
   })
 
-  test('targetCrossClarifyIteration=0 path → undefined', async () => {
+  test('targetClarifyIteration=0 path → undefined', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedCrossClarifyTask(db)
     await db.insert(nodeRuns).values([
@@ -704,7 +692,6 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -714,7 +701,6 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -738,7 +724,7 @@ describe('RFC-058 baseline T3 — buildQuestionerCrossClarifyContext (questioner
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 0,
+      targetClarifyIteration: 0,
     })
     expect(ctx).toBeUndefined()
   })
@@ -765,7 +751,6 @@ describe('RFC-058 baseline T3 — hasPersistentStop reject persistence', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
       {
         id: 'nr_qb',
@@ -774,7 +759,6 @@ describe('RFC-058 baseline T3 — hasPersistentStop reject persistence', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId: cnrStop } = await createCrossClarifySession({

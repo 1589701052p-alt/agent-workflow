@@ -186,7 +186,6 @@ describe('RFC-058 baseline T6 — list summaries shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     await createCrossClarifySession({
       db,
@@ -229,7 +228,6 @@ describe('RFC-058 baseline T6 — list summaries shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     await createClarifySession({
@@ -305,7 +303,6 @@ describe('RFC-058 baseline T6 — detail wire shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -367,7 +364,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
@@ -397,7 +393,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -407,7 +402,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
@@ -446,7 +440,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
         startedAt: Date.now() - 100,
       },
       {
@@ -456,7 +449,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        crossClarifyIteration: 0,
       },
     ])
     const { crossClarifyNodeRunId } = await createCrossClarifySession({

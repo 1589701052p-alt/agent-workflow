@@ -109,7 +109,6 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'clarifyIteration',
       shardKey: null,
     })
     expect(cutoff).toBeUndefined()
@@ -127,7 +126,6 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 2,
-      crossClarifyIteration: 0,
       startedAt: Date.now() - 1000,
     })
     await db.insert(nodeRunOutputs).values({
@@ -150,7 +148,6 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'clarifyIteration',
       currentRunRow: current,
       shardKey: null,
     })
@@ -184,16 +181,20 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'clarifyIteration',
       currentRunRow: current,
       shardKey: null,
     })
     expect(cutoff).toBeUndefined()
   })
 
-  test('iterationField=crossClarifyIteration returns cci of prior cross-clarify done run', async () => {
+  test('cutoff returns prior cross-clarify done run clarifyIteration (unified counter post-RFC-064)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
+    // RFC-064: previously this case seeded a prior done at
+    // crossClarifyIteration=1 (clarifyIteration=0) and asked for the cutoff
+    // via `iterationField: 'crossClarifyIteration'`. Under the unified
+    // counter, the cross signal lives on the same column, so we set
+    // clarifyIteration=1 on the prior done row directly.
     await db.insert(nodeRuns).values({
       id: 'nr_cross_prior',
       taskId,
@@ -201,8 +202,7 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
-      crossClarifyIteration: 1,
+      clarifyIteration: 1,
       startedAt: Date.now() - 1000,
     })
     await db.insert(nodeRunOutputs).values({
@@ -217,7 +217,7 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       status: 'pending',
       retryIndex: 1,
       iteration: 0,
-      crossClarifyIteration: 2,
+      clarifyIteration: 2,
     })
     const current = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_cross_current'))
@@ -226,7 +226,6 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'crossClarifyIteration',
       currentRunRow: current,
       shardKey: null,
     })
@@ -267,7 +266,6 @@ describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
       db,
       taskId,
       nodeId: 'designer',
-      iterationField: 'clarifyIteration',
       shardKey: null,
     })
     expect(cutoff).toBeUndefined()

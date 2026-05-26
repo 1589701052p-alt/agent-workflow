@@ -131,14 +131,14 @@ afterAll(() => {
 })
 
 describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
-  test('targetCrossClarifyIteration <= 0 → undefined (first ever questioner run has no history)', async () => {
+  test('targetClarifyIteration <= 0 → undefined (first ever questioner run has no history)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     const ctx = await buildQuestionerCrossClarifyContext({
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 0,
+      targetClarifyIteration: 0,
     })
     expect(ctx).toBeUndefined()
   })
@@ -155,7 +155,7 @@ describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx).toBeUndefined()
   })
@@ -171,7 +171,7 @@ describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx).toBeDefined()
     if (ctx === undefined) return
@@ -202,7 +202,7 @@ describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 2,
+      targetClarifyIteration: 2,
     })
     expect(ctx).toBeDefined()
     if (ctx === undefined) return
@@ -253,7 +253,7 @@ describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx).toBeDefined()
     if (ctx === undefined) return
@@ -276,7 +276,7 @@ describe('RFC-056 Layer A.5 — buildQuestionerCrossClarifyContext', () => {
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: 1,
+      targetClarifyIteration: 1,
     })
     expect(ctx).toBeDefined()
     if (ctx === undefined) return

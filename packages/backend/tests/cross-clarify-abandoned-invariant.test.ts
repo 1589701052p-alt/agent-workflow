@@ -6,7 +6,7 @@
 //   AND target_designer_node_id IS NOT NULL
 //   AND task.status = 'failed'
 //   AND no designer node_run exists with status='done'
-//       AND cross_clarify_iteration >= session.iteration
+//       AND clarify_iteration >= session.iteration
 //   ⟹ AUTO-UPGRADE session to status='abandoned' + abandoned_at=now()
 //
 // LOCKS:
@@ -120,7 +120,6 @@ async function seedSession(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    crossClarifyIteration: opts.iteration ?? 0,
   })
   await db.insert(nodeRuns).values({
     id: questionerRunId,
@@ -251,7 +250,7 @@ describe('RFC-056 CR-1 invariant', () => {
     expect(row?.abandonedAt).toBeNull()
   })
 
-  test('does NOT mis-upgrade when a consuming designer node_run exists at cross_clarify_iteration > session.iteration', async () => {
+  test('does NOT mis-upgrade when a consuming designer node_run exists at clarify_iteration > session.iteration', async () => {
     h = await buildHarness('failed')
     const sessionId = await seedSession(h.db, h.taskId, {
       status: 'answered',
@@ -266,7 +265,6 @@ describe('RFC-056 CR-1 invariant', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 1,
     })
     await runLifecycleInvariants({ db: h.db, scope: { taskId: h.taskId } })
     const row = (

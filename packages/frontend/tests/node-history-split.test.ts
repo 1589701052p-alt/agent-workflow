@@ -32,7 +32,6 @@ function makeRun(partial: Partial<NodeRun> & { id: string }): NodeRun {
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
     clarifyIteration: partial.clarifyIteration ?? 0,
-    crossClarifyIteration: partial.crossClarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? null,
     finishedAt: partial.finishedAt ?? null,
@@ -112,14 +111,12 @@ describe('nodeRunHistory', () => {
     const oldDone = makeRun({
       id: 'old',
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       retryIndex: 0,
       startedAt: 100,
     })
     const newPending = makeRun({
       id: 'new',
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
       retryIndex: 0,
       status: 'pending',
       startedAt: 200,
@@ -175,29 +172,14 @@ describe('formatIterationLabel', () => {
     expect(formatIterationLabel(run, { t })).toBe('nodeDrawer.iterInitial · nodeDrawer.iterRetry=1')
   })
 
-  // RFC-056 questioner-rerun bug repro: mintQuestionerRerun bumps cci
-  // only. Without the cci branch in this helper, the new node_run lands
-  // on the all-zero fallthrough and renders identically to the original
-  // "初次" row, making the rerun invisible in the Stats history list.
-  test('only crossClarifyIteration non-zero → "cross-clarify#N", NOT "initial"', () => {
-    expect(formatIterationLabel(makeRun({ id: 'x', crossClarifyIteration: 1 }), { t })).toBe(
-      'nodeDrawer.iterCrossClarify=1',
-    )
-  })
-
-  test('clarify + cross-clarify both non-zero → both chunks in canonical order', () => {
-    const run = makeRun({ id: 'x', clarifyIteration: 2, crossClarifyIteration: 1 })
-    expect(formatIterationLabel(run, { t })).toBe(
-      'nodeDrawer.iterClarify=2 · nodeDrawer.iterCrossClarify=1',
-    )
-  })
-
-  test('crossClarifyIteration > 0 with retryIndex > 0 → "cross-clarify#N · retry#M"', () => {
-    const run = makeRun({ id: 'x', crossClarifyIteration: 1, retryIndex: 2 })
-    expect(formatIterationLabel(run, { t })).toBe(
-      'nodeDrawer.iterCrossClarify=1 · nodeDrawer.iterRetry=2',
-    )
-  })
+  // RFC-064: previously this section had 3 cases pinning a separate
+  // `crossClarifyIteration` chip / fallthrough. Under the unified
+  // clarifyIteration counter, mintQuestionerRerun / triggerDesignerRerun
+  // now bump the single field on the same axis as self-clarify (design.md
+  // §10.5 option D1), so the cross-specific label branch was deleted along
+  // with its tests. The "clarify counter > 0 wins over initial" semantics
+  // is now covered uniformly by the existing clarifyIteration cases above
+  // — equally valid for both self and cross flows.
 })
 
 describe('NodeDetailDrawer run-history list', () => {

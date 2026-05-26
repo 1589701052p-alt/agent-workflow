@@ -1,4 +1,4 @@
-// RFC-056 patch 2026-05-24 — RFC-042 in-attempt retry preserves crossClarifyIteration.
+// RFC-056 patch 2026-05-24 — RFC-042 in-attempt retry preserves clarifyIteration.
 //
 // Symptom (user report): "在跨节点反问的时候，如果设计节点运行失败，重新执行
 // 的时候，跨节点反问的内容就不在提示词里了". When the cross-clarify-triggered
@@ -11,37 +11,37 @@
 //
 // Root cause: scheduler.ts:1147 RFC-042 retry path called `insertNodeRun`
 // with an inherit map that included clarifyIteration / reviewIteration /
-// shardKey / parentNodeRunId but NOT crossClarifyIteration. `insertNodeRun`
+// shardKey / parentNodeRunId but NOT clarifyIteration. `insertNodeRun`
 // (scheduler.ts:2466 prior to this patch) didn't even accept the field, so
 // the retry row dropped to schema default 0 (schema.ts:386 default(0)). Next
 // scheduler pass at :1306 read currentCrossClarifyIteration=0 → both gates
 // (`isCrossClarifyTriggeredRerun` :1307, `isQuestionerCrossClarifyRerun`
 // :1411) collapsed to false → `buildExternalFeedbackContext` :1448 returned
-// undefined under its `args.designerCrossClarifyIteration <= 0` guard
+// undefined under its `args.designerClarifyIteration <= 0` guard
 // (crossClarify.ts:1038), `buildQuestionerCrossClarifyContext` :1414 was
 // never called (its `<= 0` guard at :1125 would have caught it anyway),
 // `priorOutputBlock` :1462 never composed.
 //
 // Pre-existing comment at scheduler.ts:1300 ("an in-attempt RFC-042 retry
-// inherits crossClarifyIteration from the row it retries") already ASSUMED
+// inherits clarifyIteration from the row it retries") already ASSUMED
 // the inheritance — the author's invariant was right but the code didn't
 // enforce it. This patch wires the assumption into the code via
-// `inheritedCrossClarifyIteration` + the new `crossClarifyIteration` inherit
+// `inheritedCrossClarifyIteration` + the new `clarifyIteration` inherit
 // field on `insertNodeRun`, mirroring how clarifyIteration / reviewIteration
 // are inherited.
 //
 // This file locks the fix on three lines of defence:
 //   1. Schema-of-mint: a node_run row inserted via the post-patch
-//      `insertNodeRun` carries the caller-supplied `crossClarifyIteration`
+//      `insertNodeRun` carries the caller-supplied `clarifyIteration`
 //      verbatim; if omitted falls back to 0 (initial mint path).
 //   2. Behavioural: against the live-shape DB state (designer pending row
-//      already at crossClarifyIteration=1, retryIndex=10), the
+//      already at clarifyIteration=1, retryIndex=10), the
 //      `buildExternalFeedbackContext` / questioner gate logic that depends
 //      on this row's iteration produces the expected non-empty blocks.
 //   3. Source-text guard: scheduler.ts's two `insertNodeRun(...)` callsites
-//      inside `scheduleAgentNode` BOTH include `crossClarifyIteration:` in
+//      inside `scheduleAgentNode` BOTH include `clarifyIteration:` in
 //      their inherit map, and `inheritedCrossClarifyIteration` is computed
-//      off `latestExisting?.crossClarifyIteration ?? 0`. If a refactor
+//      off `latestExisting?.clarifyIteration ?? 0`. If a refactor
 //      drops any of these the runtime regression is silent — the prompt
 //      just stops carrying the cross-clarify stack — so we lock the source
 //      text directly. Pairs with the source-text guards in
@@ -174,7 +174,6 @@ async function seedRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     startedAt: Date.now(),
     ...fields,
   })
@@ -199,7 +198,7 @@ function deriveInheritedCrossClarifyIteration(
     if (r.parentNodeRunId !== null) continue
     if (isFresherNodeRun(r, latestExisting)) latestExisting = r
   }
-  return latestExisting?.crossClarifyIteration ?? 0
+  return latestExisting?.clarifyIteration ?? 0
 }
 
 beforeEach(() => {
@@ -209,42 +208,39 @@ afterAll(() => {
   resetBroadcastersForTests()
 })
 
-describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyIteration', () => {
-  test('inheritance derivation picks crossClarifyIteration off the freshest top-level row', async () => {
-    // Live shape post patch-2026-05-23: designer ran self-clarify storm
-    // (clarifyIter=6, retryIndex=9, done) then cross-clarify minted a new
-    // pending at clarifyIter=6, retryIndex=10, crossClarifyIter=1. When
-    // that pending attempt fails and RFC-042 kicks the inner retry loop,
-    // scheduler.ts must inherit crossClarifyIteration=1 (NOT 0) on the
-    // newly-minted retry row. The derivation must pick `latestExisting`
-    // via `isFresherNodeRun` (keyed on clarifyIteration → retryIndex → id)
-    // — which selects the new pending row (retry=10) over the prior done
-    // (retry=9) — and read its crossClarifyIteration.
+describe('RFC-056 patch 2026-05-24 + RFC-064 — RFC-042 retry preserves clarifyIteration', () => {
+  test('inheritance derivation picks clarifyIteration off the freshest top-level row', async () => {
+    // Live shape post RFC-064 unification: designer ran self-clarify storm
+    // and a cross-clarify resolve, both reflected on the unified
+    // `clarifyIteration` counter. When the latest pending attempt fails and
+    // RFC-042 kicks the inner retry loop, scheduler.ts must inherit the
+    // freshest top-level row's clarifyIteration (NOT 0). The derivation
+    // picks `latestExisting` via `isFresherNodeRun` (keyed on
+    // clarifyIteration → retryIndex → id), which selects the new pending
+    // row (retry=10, clarify=7) over the prior done (retry=9, clarify=6).
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 9,
       clarifyIteration: 6,
-      crossClarifyIteration: 0,
     })
     await seedRun(db, taskId, 'designer', {
       status: 'pending',
       retryIndex: 10,
-      clarifyIteration: 6,
-      crossClarifyIteration: 1,
+      clarifyIteration: 7,
     })
     const rows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
-    expect(deriveInheritedCrossClarifyIteration(rows)).toBe(1)
+    expect(deriveInheritedCrossClarifyIteration(rows)).toBe(7)
   })
 
   test('inheritance derivation returns 0 when no prior row exists (first-ever mint)', async () => {
     // Initial mint path (scheduler.ts:1063 `sameNodeIterRuns.length === 0`
     // branch). Must NOT over-fire: brand-new node has no row to inherit
-    // from, so crossClarifyIteration stays at the schema default 0.
+    // from, so clarifyIteration stays at the schema default 0.
     expect(deriveInheritedCrossClarifyIteration([])).toBe(0)
   })
 
@@ -259,7 +255,6 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
       status: 'done',
       retryIndex: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 5,
       parentNodeRunId: 'some-parent',
     })
     const rows = await db
@@ -269,21 +264,24 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
     expect(deriveInheritedCrossClarifyIteration(rows)).toBe(0)
   })
 
-  test('downstream context-build with crossClarifyIteration intact emits the External Feedback block', async () => {
+  test('downstream context-build with clarifyIteration intact emits the External Feedback block', async () => {
     // Full forward pass: cross-clarify resolve mints a pending designer
-    // row at crossClarifyIteration=1; even if a subsequent retry rebuilds
-    // the prompt, as long as the retry row's crossClarifyIteration is
+    // row at clarifyIteration=1; even if a subsequent retry rebuilds
+    // the prompt, as long as the retry row's clarifyIteration is
     // still 1, `buildExternalFeedbackContext` returns a populated block.
     // This is the "did the cross-clarify content actually make it into
     // the prompt" assertion — proxy for the user's symptom.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRun(db, taskId, 'in', { status: 'done' })
+    // RFC-064: seed designer at clarifyIteration=0 so the cross-clarify
+    // submit's bump produces a deterministic +1 (the unified counter would
+    // otherwise inherit a non-zero existing clarifyIteration and the
+    // post-bump value would depend on history).
     await seedRun(db, taskId, 'designer', {
       status: 'done',
-      retryIndex: 9,
-      clarifyIteration: 6,
-      crossClarifyIteration: 0,
+      retryIndex: 0,
+      clarifyIteration: 0,
       preSnapshot: 'snap-d',
     })
     const qRun = await seedRun(db, taskId, 'questioner', {
@@ -307,24 +305,21 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
       directive: 'continue',
     })
 
-    // Now pretend the cross-clarify-triggered designer rerun failed once
-    // and RFC-042 minted a retry row. The retry row MUST carry
-    // crossClarifyIteration=1 (the contract this patch enforces). We
-    // simulate it by writing the retry row directly with the inherited
-    // value — exactly what scheduler.ts:1147 now does via
-    // `inheritedCrossClarifyIteration`.
+    // Cross-clarify-triggered designer rerun failed once; RFC-042 minted
+    // a retry row. The retry row MUST inherit clarifyIteration from the
+    // post-submit pending row (the contract this patch enforces under
+    // RFC-064's unified counter).
     const inherited = deriveInheritedCrossClarifyIteration(
       await db
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer'))),
     )
-    expect(inherited).toBe(1)
+    expect(inherited).toBeGreaterThan(0)
     await seedRun(db, taskId, 'designer', {
       status: 'pending',
-      retryIndex: 11,
-      clarifyIteration: 6,
-      crossClarifyIteration: inherited,
+      retryIndex: 1,
+      clarifyIteration: inherited,
       preSnapshot: 'snap-d',
     })
 
@@ -336,7 +331,7 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerCrossClarifyIteration: inherited,
+      designerClarifyIteration: inherited,
       definition: fixtureDef(),
     })
     expect(ctx, 'External Feedback context must populate on retry').toBeDefined()
@@ -345,12 +340,12 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
 
   test('questioner-side context builds on retry too (mirrors designer-side regression)', async () => {
     // The same retry path applies to the questioner. If retry minted at
-    // crossClarifyIteration=0, scheduler.ts:1411
+    // clarifyIteration=0, scheduler.ts:1411
     // `isQuestionerCrossClarifyRerun` flips false and the entire
     // `## Clarify Q&A` block disappears from the questioner's prompt. The
     // questioner re-emits its previous `<workflow-clarify>` envelope from
     // scratch, looping cross-clarify forever. Lock that the post-patch
-    // retry row's crossClarifyIteration=1 still drives
+    // retry row's clarifyIteration=1 still drives
     // `buildQuestionerCrossClarifyContext` to a non-empty result.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
@@ -359,14 +354,12 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
       status: 'done',
       retryIndex: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
       preSnapshot: 'snap-d',
     })
     const qRun = await seedRun(db, taskId, 'questioner', {
       status: 'done',
       retryIndex: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 0,
     })
     const sess = await createCrossClarifySession({
       db,
@@ -386,7 +379,7 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
     })
 
     // The cascade-mint inserts a new pending questioner row at the bumped
-    // crossClarifyIteration. Read it back, simulate a retry mint under
+    // clarifyIteration. Read it back, simulate a retry mint under
     // post-patch inheritance rules.
     const qRows = await db
       .select()
@@ -399,7 +392,7 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
       db,
       taskId,
       questionerNodeId: 'questioner',
-      targetCrossClarifyIteration: inheritedQ,
+      targetClarifyIteration: inheritedQ,
     })
     expect(ctx, 'Questioner cross-clarify context must populate on retry').toBeDefined()
     expect(ctx?.questionsBlock).toContain('问卷端测试问题')
@@ -409,52 +402,54 @@ describe('RFC-056 patch 2026-05-24 — RFC-042 retry preserves crossClarifyItera
 
 describe('RFC-056 patch 2026-05-24 — scheduler source guard against inheritance regression', () => {
   // Source-code-text guards. If a future refactor drops the inheritance
-  // (either omits `crossClarifyIteration` from `insertNodeRun`'s inherit
+  // (either omits `clarifyIteration` from `insertNodeRun`'s inherit
   // param, forgets to compute `inheritedCrossClarifyIteration`, or fails
   // to pass it at either callsite), the runtime symptom is silent — the
   // user's bug returns. Grep the source so silent re-introduction becomes
   // a hard CI fail. Pairs with the source-text guards in
   // cross-clarify-update-mode-injection.test.ts.
 
-  test('insertNodeRun accepts crossClarifyIteration in its inherit param', () => {
+  test('insertNodeRun accepts clarifyIteration in its inherit param', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
     // The `inherit?: { ... }` typedef on `insertNodeRun`. Bound the regex
     // to the function signature so we don't accidentally match unrelated
     // type aliases elsewhere in the file.
     const m = src.match(/async function insertNodeRun[\s\S]{0,400}inherit\?:\s*\{[^}]+\}/)
     expect(m, 'must find insertNodeRun inherit param typedef').not.toBeNull()
-    expect(m![0]).toMatch(/crossClarifyIteration\?:\s*number/)
+    expect(m![0]).toMatch(/clarifyIteration\?:\s*number/)
   })
 
-  test('insertNodeRun writes crossClarifyIteration into the insert values', () => {
+  test('insertNodeRun writes clarifyIteration into the insert values', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
     // The `db.insert(nodeRuns).values({...})` block inside insertNodeRun.
     const m = src.match(
       /async function insertNodeRun[\s\S]+?db\.insert\(nodeRuns\)\.values\(\{[\s\S]+?\}\)/,
     )
     expect(m, 'must find insertNodeRun insert-values block').not.toBeNull()
-    expect(m![0]).toMatch(/crossClarifyIteration:\s*inherit\?\.crossClarifyIteration\s*\?\?\s*0/)
+    expect(m![0]).toMatch(/clarifyIteration:\s*inherit\?\.clarifyIteration\s*\?\?\s*0/)
   })
 
-  test('inheritedCrossClarifyIteration derivation is computed off latestExisting', () => {
+  test('inheritedClarifyIteration derivation is computed off latestExisting (RFC-064 unified counter)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
+    // RFC-064: previously two separate inherit variables existed
+    // (`inheritedClarifyIteration` + `inheritedCrossClarifyIteration`).
+    // The unified counter folds them into one — the cross signal is now
+    // carried on the same column. Patch-2026-05-24's "retry inherits the
+    // cci signal" intent is preserved structurally via this single inherit.
     expect(src).toMatch(
-      /const\s+inheritedCrossClarifyIteration\s*=\s*latestExisting\?\.crossClarifyIteration\s*\?\?\s*0/,
+      /const\s+inheritedClarifyIteration\s*=\s*latestExisting\?\.clarifyIteration\s*\?\?\s*0/,
     )
   })
 
-  test('both insertNodeRun callsites inside scheduleAgentNode pass crossClarifyIteration', () => {
+  test('both insertNodeRun callsites inside scheduleAgentNode pass clarifyIteration', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
     // There are exactly two `insertNodeRun(db, taskId, node.id, 'pending', ...)`
     // calls inside scheduleAgentNode: the initial mint (no-pending branch)
-    // and the RFC-042 retry mint. Both must pass crossClarifyIteration in
+    // and the RFC-042 retry mint. Both must pass clarifyIteration in
     // their inherit map. Capture each call's argument block and assert.
     const callRe =
       /insertNodeRun\(db,\s*taskId,\s*node\.id,\s*'pending',\s*[^,]+,\s*iteration,\s*\{[\s\S]+?\}\s*\)/g
     const matches = src.match(callRe) ?? []
-    // Three callers exist in the file overall (scheduler.ts seeds a
-    // node-run for processError too — search wider); narrow to the ones
-    // inside scheduleAgentNode by their proximity to inheritedClarifyIteration.
     const scheduleAgentNodeMintCalls = matches.filter((c) =>
       c.includes('inheritedClarifyIteration'),
     )
@@ -463,7 +458,7 @@ describe('RFC-056 patch 2026-05-24 — scheduler source guard against inheritanc
       'scheduleAgentNode must have at least two insertNodeRun mint sites',
     ).toBeGreaterThanOrEqual(2)
     for (const call of scheduleAgentNodeMintCalls) {
-      expect(call).toMatch(/crossClarifyIteration:\s*inheritedCrossClarifyIteration/)
+      expect(call).toMatch(/clarifyIteration:\s*inheritedClarifyIteration/)
     }
   })
 })

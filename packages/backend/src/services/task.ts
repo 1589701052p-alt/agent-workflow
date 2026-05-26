@@ -1112,14 +1112,12 @@ export async function retryNode(
       status: 'failed',
       retryIndex: nextRetry,
       iteration: inherit?.iteration ?? 0,
+      // RFC-064: the inherited clarifyIteration alone now covers both self
+      // + cross signals (no more separate crossClarifyIteration mirror to
+      // worry about — patch-2026-05-25 §2.3's intent is structurally
+      // preserved by the unified counter).
       clarifyIteration: inherit?.clarifyIteration ?? 0,
       reviewIteration: inherit?.reviewIteration ?? 0,
-      // RFC-056 patch 2026-05-25 §2.3 — inherit crossClarifyIteration so the
-      // single-node retry placeholder doesn't silently regress the
-      // cross-clarify round counter. Without this the next dispatch reads
-      // currentCrossClarifyIteration=0 and the freshness invariant can't
-      // detect the inversion (its guard only fires on upstream > my cci).
-      crossClarifyIteration: inherit?.crossClarifyIteration ?? 0,
       shardKey: inherit?.shardKey ?? null,
       parentNodeRunId: inherit?.parentNodeRunId ?? null,
       preSnapshot: inherit?.preSnapshot ?? null,
@@ -1321,10 +1319,9 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     shardKey: r.shardKey,
     retryIndex: r.retryIndex,
     reviewIteration: r.reviewIteration,
+    // RFC-023 + RFC-064: unified clarifyIteration covers BOTH self-clarify
+    // and cross-clarify rounds (single counter post-RFC-064).
     clarifyIteration: r.clarifyIteration,
-    // RFC-056: surface cross-clarify rerun iteration counter (orthogonal to
-    // clarifyIteration; see §C8 cascade isolation).
-    crossClarifyIteration: r.crossClarifyIteration,
     status: r.status,
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,

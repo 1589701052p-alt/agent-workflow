@@ -167,16 +167,11 @@ export async function createClarifySession(
   } else {
     clarifyNodeRunId = ulid()
     // RFC-056 patch 2026-05-25 §2.3 — carry the source agent's
-    // crossClarifyIteration onto the clarify node_run so the cross-clarify
-    // scope walker sees a continuous iteration across the clarify channel.
-    // Without this the clarify node's row reads cci=0, the scheduler's Layer
-    // B freshness invariant compares it as an upstream of the source agent's
-    // own re-run, and we get spurious "stale" flags. Pull from the source
-    // agent's latest run (already loaded one frame up as `sourceAgentNodeRunId`'s
-    // owner).
-    const sourceForCci = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, sourceAgentNodeRunId)).limit(1)
-    )[0]
+    // RFC-064: under the unified clarifyIteration counter the source
+    // agent's value is folded directly into the clarify node_run; there's
+    // no longer a separate cross-clarify counter to mirror. The Layer B
+    // freshness invariant (scheduler.applyClarifyFreshnessInvariant) keys
+    // on this single column.
     await db.insert(nodeRuns).values({
       id: clarifyNodeRunId,
       taskId,
@@ -185,7 +180,6 @@ export async function createClarifySession(
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: iterationIndex,
-      crossClarifyIteration: sourceForCci?.crossClarifyIteration ?? 0,
       parentNodeRunId: parentNodeRunId ?? null,
       shardKey: sourceShardKey,
       startedAt: now(),
@@ -472,15 +466,13 @@ export async function submitClarifyAnswers(
     parentNodeRunId: sourceRunRow.parentNodeRunId ?? null,
     shardKey: sourceRunRow.shardKey ?? null,
     reviewIteration: sourceRunRow.reviewIteration,
+    // RFC-064: self-clarify rerun bumps the unified clarifyIteration by 1.
+    // Pre-RFC-064 we also mirrored a separate crossClarifyIteration column;
+    // both signals now live on this single field, so the bump suffices for
+    // every downstream freshness / cutoff / cascade rule. Patch 2026-05-25
+    // §2.3 behavior preserved structurally — there's no longer a counter
+    // that could silently roll back to 0.
     clarifyIteration: sourceRunRow.clarifyIteration + 1,
-    // RFC-056 patch 2026-05-25 §2.3 — preserve crossClarifyIteration on the
-    // clarify-driven rerun. Without this the agent's self-clarify cycles
-    // silently roll the cross-clarify counter back to 0, the Layer B
-    // freshness invariant can't detect the regression (its guard is
-    // upstream > my cci, not the inverse), and downstream review reads a
-    // stale upstream → review-source-port-missing. See
-    // patch-2026-05-25-questioner-cascade-no-skip.md §2.3.
-    crossClarifyIteration: sourceRunRow.crossClarifyIteration ?? 0,
     preSnapshot: sourceRunRow.preSnapshot,
   })
 

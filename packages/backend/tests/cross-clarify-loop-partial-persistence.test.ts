@@ -7,7 +7,7 @@
 //     iterations: once rejected, the questioner never produces another
 //     awaiting_human row for that node id in this task — even in the next
 //     loop iteration.
-//   * Q&A history (continue submissions) + `cross_clarify_iteration`
+//   * Q&A history (continue submissions) + `clarify_iteration`
 //     counters are PER-loop-iter — they reset when the loop steps to a
 //     new iteration so the body re-runs from a clean slate.
 //
@@ -138,7 +138,6 @@ async function seedQRun(
     retryIndex: 0,
     iteration: loopIter,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
   })
   return id
 }
@@ -147,7 +146,7 @@ async function seedDesignerRun(
   db: DbClient,
   taskId: string,
   loopIter = 0,
-  crossClarifyIteration = 0,
+  clarifyIteration = 0,
 ): Promise<string> {
   const id = `nr_d_${loopIter}_${Math.random().toString(36).slice(2, 6)}`
   await db.insert(nodeRuns).values({
@@ -157,8 +156,7 @@ async function seedDesignerRun(
     status: 'done',
     retryIndex: 0,
     iteration: loopIter,
-    clarifyIteration: 0,
-    crossClarifyIteration,
+    clarifyIteration,
     preSnapshot: 'snap-c5',
   })
   return id
@@ -266,7 +264,6 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 1,
-      crossClarifyIteration: 0,
     })
     const ret = await dispatchCrossClarifyNode({
       db,

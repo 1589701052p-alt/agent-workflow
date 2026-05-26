@@ -377,37 +377,31 @@ interface ScopeArgs {
  *
  * Why this ordering specifically:
  *   - `clarifyIteration` is the user-facing counter that grows whenever the
- *     user answers a self-clarify session (submitClarifyAnswers mints retry=0
- *     with clarifyIteration+1 to keep the process-retry budget intact).
- *     Putting it first means a fresh self-clarify rerun ALWAYS beats prior
+ *     user answers a clarify session — for both self-clarify (RFC-023, asking
+ *     node == target consumer) and cross-clarify (RFC-056, distinct asking +
+ *     target_consumer nodes) flows after RFC-064 unified the two counters.
+ *     Putting it first means a fresh clarify-driven rerun ALWAYS beats prior
  *     runs of the same node — even if process-retries previously inflated
- *     retryIndex above 0.
- *   - `crossClarifyIteration` is the cross-clarify analogue (RFC-056). When
- *     the user submits a cross-clarify (designer or questioner side), the
- *     mint helper bumps cci above every peer in the chain. Putting cci right
- *     after cli means a fresh cross-clarify rerun ALWAYS beats prior runs
- *     too — even when the prior path went through RFC-042 same-session
- *     followup retries that inflated retryIndex above 0. Without this rank,
- *     a (cli=0, cci=0, retry=1) `<workflow-clarify>`-only done row would
- *     shadow the (cli=0, cci=1, retry=0) post-submit pending row, the
- *     downstream review picks the stale done row, sees no real port output,
- *     and fails the task with `review-source-port-missing`. See
- *     design/RFC-056-clarify-cross-agent/patch-2026-05-25-fresher-noderun-
- *     includes-cci.md (live task `01KS7FAW50V9KV2SPH859NV8ER`).
- *   - Within the same (cli, cci), higher retryIndex wins (newer process
+ *     retryIndex above 0. Before RFC-064 a second counter
+ *     (`crossClarifyIteration`) sat between this layer and `retryIndex`;
+ *     unifying it removed the entire class of "missed-mirror" bugs where a
+ *     codepath touched only one counter and not the other (see RFC-064
+ *     proposal.md §1 — 10 dated patches).
+ *   - Within the same clarifyIteration, higher retryIndex wins (newer process
  *     retry attempt).
- *   - When (cli, cci, retryIndex) tie — which CAN happen: e.g. two rows
- *     collide at (0, 0, 0) — ULID id is the monotonic tie-break; the newer
+ *   - When (clarifyIteration, retryIndex) tie — which CAN happen: e.g. two
+ *     rows collide at (0, 0) — ULID id is the monotonic tie-break; the newer
  *     insert wins. Without this tie-break the comparator is non-deterministic
  *     on ties.
  *
- * Locks in TWO fixes:
+ * Locks in TWO fixes (both now expressed via the unified clarifyIteration):
  *   1. The original bug where a directive=continue self-clarify rerun was
  *      silently shadowed by a (retryIndex=N, clarifyIteration=0) done row
  *      from an earlier single-node-retry storm.
  *   2. The cross-clarify analogue (patch-2026-05-25-fresher-noderun-includes-
- *      cci): a cci-bumped post-submit pending row shadowed by a (cci=0,
- *      retry=N) `<workflow-clarify>`-only done row.
+ *      cci, now covered by the unified counter): a clarify-bumped post-submit
+ *      pending row shadowed by a (clarifyIteration=0, retry=N) `<workflow-
+ *      clarify>`-only done row.
  */
 export function isFresherNodeRun(
   candidate: typeof nodeRuns.$inferSelect,
@@ -416,9 +410,6 @@ export function isFresherNodeRun(
   if (incumbent === undefined) return true
   if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
     return candidate.clarifyIteration > incumbent.clarifyIteration
-  }
-  if (candidate.crossClarifyIteration !== incumbent.crossClarifyIteration) {
-    return candidate.crossClarifyIteration > incumbent.crossClarifyIteration
   }
   if (candidate.retryIndex !== incumbent.retryIndex) {
     return candidate.retryIndex > incumbent.retryIndex
@@ -561,16 +552,16 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
 
   // RFC-056 patch 2026-05-22 — cross-clarify freshness invariant (Layer B
   // defense-in-depth). For each node currently in `completed`, if any of
-  // its in-scope upstreams has a STRICTLY greater cross_clarify_iteration
-  // than the node's own latest row, that downstream row is stale: it was
-  // captured against an older designer round than the upstream now
-  // carries. Mint a fresh pending row inheriting the upstream's iteration
-  // so the scheduler's normal rescan loop picks it up.
+  // its in-scope upstreams has a STRICTLY greater clarifyIteration than the
+  // node's own latest row, that downstream row is stale: it was captured
+  // against an older clarify round than the upstream now carries. Mint a
+  // fresh pending row inheriting the upstream's iteration so the
+  // scheduler's normal rescan loop picks it up.
   //
   // Why this is needed alongside the cascade in `triggerDesignerRerun`:
   //   - The cascade is the primary mechanism for the cross-clarify-submit
   //     path and handles full transitive downstream walk.
-  //   - This invariant catches OTHER paths that bump cross_clarify_iter on
+  //   - This invariant catches OTHER paths that bump clarifyIteration on
   //     an upstream without going through triggerDesignerRerun (manual
   //     retry, future queue-replay, raw DB patches). It runs every scope
   //     entry so a stale downstream that slipped through the cracks gets
@@ -578,7 +569,7 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
   //   - Single-pass on purpose: chained cascade (rev → questioner → rev)
   //     is the cascade's job; Layer B fires once per scope entry and
   //     trusts the cascade + rescan to handle multi-hop.
-  await applyCrossClarifyFreshnessInvariant({
+  await applyClarifyFreshnessInvariant({
     db,
     taskId,
     iteration,
@@ -718,26 +709,29 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
 }
 
 /**
- * RFC-056 patch 2026-05-22 — Layer B freshness invariant.
+ * RFC-056 patch 2026-05-22 + RFC-064 — Layer B freshness invariant.
  *
  * Walk every node currently in `completed`. If any of its in-scope
- * upstreams has a strictly greater `crossClarifyIteration` than the node's
- * own latest row, mint a fresh pending node_run carrying the upstream's
+ * upstreams has a strictly greater `clarifyIteration` than the node's own
+ * latest row, mint a fresh pending node_run carrying the upstream's
  * iteration and demote the node back to `remaining`. Defense-in-depth for
- * cases where a designer rerun happened OUTSIDE the `triggerDesignerRerun`
- * sibling-cascade path (manual retry, future queue-replay, raw DB patches).
+ * cases where a clarify-driven rerun happened OUTSIDE the
+ * `triggerDesignerRerun` sibling-cascade path (manual retry, future queue-
+ * replay, raw DB patches).
  *
  * Fixed-point iteration: re-runs until no further demotion happens or a
  * conservative safety cap (= scope node count + 1) is hit. Without the
  * loop, a fresh upstream → stale A → stale B chain would only demote A on
- * the first pass and silently leave B stale. The fixed-point shape
- * mirrors how Layer A's cascade in `cascadeDownstreamFromDesigner` walks
- * transitive downstream in one shot — Layer B does the same when entered
- * cold (e.g. resuming a failed task after the patch landed but before
- * the cascade was minted, or any future code path that bumps an upstream's
- * crossClarifyIteration without going through triggerDesignerRerun).
+ * the first pass and silently leave B stale. The fixed-point shape mirrors
+ * how Layer A's cascade in `cascadeDownstreamFromDesigner` walks transitive
+ * downstream in one shot — Layer B does the same when entered cold (e.g.
+ * resuming a failed task after the patch landed but before the cascade was
+ * minted, or any future code path that bumps an upstream's clarifyIteration
+ * without going through triggerDesignerRerun). RFC-064 unified the two
+ * counters; this invariant now sees both self + cross bumps on the single
+ * column.
  */
-export async function applyCrossClarifyFreshnessInvariant(ctx: {
+export async function applyClarifyFreshnessInvariant(ctx: {
   db: DbClient
   taskId: string
   iteration: number
@@ -758,12 +752,12 @@ export async function applyCrossClarifyFreshnessInvariant(ctx: {
     for (const nodeId of Array.from(ctx.completed)) {
       const myRow = ctx.latestPerNode.get(nodeId)
       if (myRow === undefined) continue
-      const myIter = myRow.crossClarifyIteration ?? 0
+      const myIter = myRow.clarifyIteration ?? 0
       let upstreamMaxIter = myIter
       for (const upId of ctx.upstreamsOf.get(nodeId) ?? []) {
         const upRow = ctx.latestPerNode.get(upId)
         if (upRow === undefined) continue
-        const upIter = upRow.crossClarifyIteration ?? 0
+        const upIter = upRow.clarifyIteration ?? 0
         if (upIter > upstreamMaxIter) upstreamMaxIter = upIter
       }
       if (upstreamMaxIter <= myIter) continue
@@ -779,7 +773,7 @@ export async function applyCrossClarifyFreshnessInvariant(ctx: {
       // iteration. Without this we'd double-mint when called twice in
       // tight succession (e.g. a runScope rescan that picked up a Layer
       // A cascade row, then runScope re-entered).
-      if (allRows.some((r) => (r.crossClarifyIteration ?? 0) >= upstreamMaxIter)) continue
+      if (allRows.some((r) => (r.clarifyIteration ?? 0) >= upstreamMaxIter)) continue
       const newRetryIndex = Math.max(...allRows.map((r) => r.retryIndex)) + 1
       const newId = ulid()
       const newRow: typeof nodeRuns.$inferSelect = {
@@ -787,7 +781,7 @@ export async function applyCrossClarifyFreshnessInvariant(ctx: {
         id: newId,
         status: 'pending',
         retryIndex: newRetryIndex,
-        crossClarifyIteration: upstreamMaxIter,
+        clarifyIteration: upstreamMaxIter,
         startedAt: null,
         finishedAt: null,
       }
@@ -801,8 +795,7 @@ export async function applyCrossClarifyFreshnessInvariant(ctx: {
         parentNodeRunId: null,
         shardKey: myRow.shardKey ?? null,
         reviewIteration: myRow.reviewIteration,
-        clarifyIteration: myRow.clarifyIteration,
-        crossClarifyIteration: upstreamMaxIter,
+        clarifyIteration: upstreamMaxIter,
         preSnapshot: myRow.preSnapshot,
       })
       ctx.completed.delete(nodeId)
@@ -817,7 +810,7 @@ export async function applyCrossClarifyFreshnessInvariant(ctx: {
     if (demotedThisPass === 0) break
   }
   if (demoted.length > 0) {
-    ctx.log.info('cross-clarify freshness invariant demoted stale downstream', {
+    ctx.log.info('clarify freshness invariant demoted stale downstream', {
       taskId: ctx.taskId,
       iteration: ctx.iteration,
       nodes: demoted,
@@ -1124,10 +1117,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // runner to disable the 5-question cap on the envelope parser.
   const clarifyMode: 'self' | 'cross' =
     findCrossClarifyNodeForQuestioner(definition, node.id) !== undefined ? 'cross' : 'self'
-  // RFC-056: designer agents may receive External Feedback from one or more
-  // cross-clarify nodes via the system port __external_feedback__. When the
-  // current rerun has crossClarifyIteration > 0 the scheduler builds a
-  // prompt context that the renderer auto-appends as ## External Feedback.
+  // RFC-056 + RFC-064: designer agents may receive External Feedback from
+  // one or more cross-clarify nodes via the system port __external_feedback__.
+  // When the current rerun has clarifyIteration > 0 (RFC-064 unified counter
+  // covers cross-clarify rounds too) AND a cross-clarify round answered
+  // since the last designer done row, the scheduler builds a prompt context
+  // that the renderer auto-appends as ## External Feedback.
   const hasExternalFeedbackChannel = agentHasExternalFeedbackChannel(definition, node.id)
 
   // Pick up an existing pending node_run at this iteration; otherwise create
@@ -1156,17 +1151,15 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     if (r.parentNodeRunId !== null) continue // skip fan-out children
     if (isFresherNodeRun(r, latestExisting)) latestExisting = r
   }
+  // RFC-064: the previously-separate `inheritedCrossClarifyIteration`
+  // variable is gone — the unified clarifyIteration carries both self +
+  // cross rerun signals. RFC-056 patch-2026-05-24 (inherit latest top-level
+  // row's cci so an RFC-042 in-attempt process retry keeps the cross-clarify
+  // rerun signal alive) is now expressed by the single inheritedClarifyIteration
+  // below; the entire External Feedback / Prior Output / Update Directive /
+  // questioner Q&A stack stays alive across retries via that one counter.
   const inheritedClarifyIteration = latestExisting?.clarifyIteration ?? 0
   const inheritedReviewIteration = latestExisting?.reviewIteration ?? 0
-  // RFC-056 patch-2026-05-24: inherit the latest top-level row's
-  // crossClarifyIteration so an RFC-042 in-attempt process retry (and the
-  // initial-mint branch below) keeps the cross-clarify rerun signal alive.
-  // Without it the retry row dropped to schema default 0 and the entire
-  // External Feedback / Prior Output / Update Directive / questioner Q&A
-  // stack disappeared from the next attempt's prompt. See
-  // design/RFC-056-clarify-cross-agent/patch-2026-05-24-retry-preserves-
-  // cross-clarify-iteration.md.
-  const inheritedCrossClarifyIteration = latestExisting?.crossClarifyIteration ?? 0
   const inheritedShardKey = latestExisting?.shardKey ?? null
   const inheritedParentNodeRunId = latestExisting?.parentNodeRunId ?? null
   const pendingExisting = sameNodeIterRuns.find(
@@ -1181,7 +1174,6 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', retryIndex, iteration, {
       clarifyIteration: inheritedClarifyIteration,
       reviewIteration: inheritedReviewIteration,
-      crossClarifyIteration: inheritedCrossClarifyIteration,
       shardKey: inheritedShardKey,
       parentNodeRunId: inheritedParentNodeRunId,
     })
@@ -1264,7 +1256,6 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', attempt, iteration, {
           clarifyIteration: inheritedClarifyIteration,
           reviewIteration: inheritedReviewIteration,
-          crossClarifyIteration: inheritedCrossClarifyIteration,
           shardKey: inheritedShardKey,
           parentNodeRunId: inheritedParentNodeRunId,
         })
@@ -1426,36 +1417,38 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         //      token waste + mis-anchors the agent to regenerate).
         //
         // Trigger condition: hasExternalFeedbackChannel + this row's
-        // crossClarifyIteration > 0 (i.e. NOT the first ever designer run).
+        // clarifyIteration > 0 (i.e. NOT the first ever designer run), under
+        // the RFC-064 unified counter. The previous separate
+        // `crossClarifyIteration` column was folded into clarifyIteration
+        // (every clarify-driven rerun — self or cross — bumps the same
+        // counter) so this gate now triggers when ANY clarify round has
+        // landed; the topology gate `hasExternalFeedbackChannel` filters
+        // out cases where the node has no incoming cross-clarify edge.
         //
-        // Patch 2026-05-23 (paired with patch-2026-05-23-designer-retry-index):
-        // we used to gate this ALSO on `retryIndex === 0` to distinguish
-        // "fresh cross-clarify rerun" from "in-attempt RFC-042 retry". That
-        // distinction broke the moment `triggerDesignerRerun` started
-        // minting the new designer row at `retry_index = max(existing) + 1`
-        // (required so `isFresherNodeRun` picks it over a prior done row
-        // whose retry_index was already inflated by self-clarify rounds /
-        // RFC-042 retries). Post-patch, every cross-clarify designer rerun
-        // has retry_index ≥ 1, so the old gate silently dropped update-mode
-        // injection — `## Prior Output (to be updated)` + `## Update
-        // Directive` vanished from the prompt, leaving only `## External
-        // Feedback` and pushing the designer back into regenerate-from-
-        // scratch mode (defeats RFC-056 §6 update mode entirely). The
-        // priorDoneDesigner lookup below uses `crossClarifyIteration <
-        // current` as its filter — that's the real "this is a cross-clarify
-        // rerun" signal, NOT retry_index. An in-attempt RFC-042 retry
-        // inherits crossClarifyIteration from the row it retries (made
-        // explicit by patch-2026-05-24 via `inheritedCrossClarifyIteration`
-        // → `insertNodeRun` inherit param; before that patch the retry row
-        // silently dropped to default 0 and the gate below collapsed),
-        // so it simply won't find a strictly-lesser priorDoneDesigner (or
-        // will find one but the update-mode block is still semantically
-        // correct for it — the agent should still see the draft +
-        // directive). Drop the retryIndex gate; let priorDoneDesigner
-        // existence drive it.
-        const currentCrossClarifyIteration = currentRunRow?.crossClarifyIteration ?? 0
+        // Patch 2026-05-23 (paired with patch-2026-05-23-designer-retry-
+        // index): we used to gate this ALSO on `retryIndex === 0` to
+        // distinguish "fresh cross-clarify rerun" from "in-attempt RFC-042
+        // retry". That distinction broke the moment `triggerDesignerRerun`
+        // started minting the new designer row at `retry_index = max
+        // (existing) + 1` (required so `isFresherNodeRun` picks it over a
+        // prior done row whose retry_index was already inflated by self-
+        // clarify rounds / RFC-042 retries). Post-patch, every cross-clarify
+        // designer rerun has retry_index ≥ 1, so the old gate silently
+        // dropped update-mode injection — `## Prior Output (to be updated)`
+        // + `## Update Directive` vanished from the prompt, leaving only
+        // `## External Feedback` and pushing the designer back into
+        // regenerate-from-scratch mode (defeats RFC-056 §6 update mode
+        // entirely). The priorDoneDesigner lookup below uses
+        // `clarifyIteration < current` as its filter — that's the real
+        // "this is a clarify-driven rerun" signal, NOT retry_index. An
+        // in-attempt RFC-042 retry inherits clarifyIteration from the row
+        // it retries (via the `inheritedClarifyIteration` path above) so it
+        // simply won't find a strictly-lesser priorDoneDesigner (or will
+        // find one but the update-mode block is still semantically correct
+        // for it — the agent should still see the draft + directive). Drop
+        // the retryIndex gate; let priorDoneDesigner existence drive it.
         const isCrossClarifyTriggeredRerun =
-          hasExternalFeedbackChannel && currentCrossClarifyIteration > 0
+          hasExternalFeedbackChannel && currentClarifyIteration > 0
         let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
         if (isCrossClarifyTriggeredRerun) {
           const priorRows = await db
@@ -1468,12 +1461,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 eq(nodeRuns.status, 'done'),
               ),
             )
-          // Latest done row with crossClarifyIteration < current is the one
-          // whose output became the working draft for this cross-clarify
+          // Latest done row with clarifyIteration < current is the one
+          // whose output became the working draft for this clarify-driven
           // rerun. Pick by isFresherNodeRun for the same reason
           // readPortAtIteration does (RFC-040 clarify shadowing bug).
           for (const r of priorRows) {
-            if (r.crossClarifyIteration >= currentCrossClarifyIteration) continue
+            if (r.clarifyIteration >= currentClarifyIteration) continue
             if (r.parentNodeRunId !== null) continue
             if (isFresherNodeRun(r, priorDoneDesigner)) priorDoneDesigner = r
           }
@@ -1509,30 +1502,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // (outputs-presence + isFresherNodeRun shadow ordering), now shared
         // between self-clarify and cross-clarify consumer paths.
         //
-        // RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci): the cutoff
-        // returned must use the SAME iteration counter as the rounds the
-        // consumer reads. For the questioner-side cross-clarify rerun the
-        // rounds in `clarify_rounds` (kind='cross') carry the cross-clarify
-        // session iteration (= the questioner run's crossClarifyIteration),
-        // not clarifyIteration. Passing a clarifyIteration-based cutoff into
-        // `applyAgingCutoff` against cross rounds is a unit mismatch — it
-        // silently keeps EVERY prior cross round once any review-iterate /
-        // downstream rerun fires, so the questioner re-injects archived
-        // Q&A every iteration after it has already produced its
-        // `<workflow-output>`. clarify-rounds-service.test.ts:644 already
-        // locks the helper's behavior under cci-based cutoff; the bug was
-        // strictly that the scheduler never produced one.
-        const isQuestionerCrossClarifyRerun =
-          clarifyMode === 'cross' && currentCrossClarifyIteration > 0
+        // RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci) + RFC-064:
+        // the cutoff returned must use the same iteration counter as the
+        // rounds the consumer reads. Under RFC-064's unified counter, BOTH
+        // self and cross clarify_rounds are aligned with `clarifyIteration`
+        // on `node_runs` (the unified `nodeRuns.clarifyIteration` is the
+        // sole signal; the per-kind separation lives on
+        // `clarify_rounds.kind`). The single `clarifyIteration` cutoff
+        // works for both the self and cross-questioner consumer branches —
+        // the `iterationField` parameter that 05-27 added is no longer
+        // necessary (see services/clarifyRounds.ts).
+        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross' && currentClarifyIteration > 0
         const priorCompletedCutoff = await computeHistoryCutoff({
           db,
           taskId,
           nodeId: node.id,
           shardKey: currentRunRow?.shardKey ?? null,
           ...(currentRunRow !== undefined ? { currentRunRow } : {}),
-          iterationField: isQuestionerCrossClarifyRerun
-            ? 'crossClarifyIteration'
-            : 'clarifyIteration',
         })
         const historyCutoffClarifyIteration =
           priorCompletedCutoff ?? priorDoneDesigner?.clarifyIteration
@@ -1564,6 +1550,17 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // 'cross-questioner' path additionally fixes RFC-058 缺口 1 (questioner
         // aging gap) and 缺口 2 (wrapper-loop loop_iter isolation) by routing
         // through the same cutoff + loopIter filter pipeline the self path uses.
+        // RFC-064: the two branches' applyLatestDirective gates are merged
+        // into the common `isClarifyRerun` variable (defined ~scheduler.ts:1381,
+        // `clarifyIteration > 0 && retryIndex === 0`). The pre-RFC-064 self
+        // branch used `isClarifyRerun` directly and the cross-questioner
+        // branch had a separately spelled-out `(retryIndex ?? 0) === 0`
+        // literal — semantically equivalent (the cross-questioner branch's
+        // entry condition `clarifyMode === 'cross' && clarifyIteration > 0`
+        // already implies `clarifyIteration > 0`). Merging to a single
+        // variable structurally eliminates the "missed-mirror gate" bug
+        // class that 747dcae fixed: any future tweak to the gate now lands
+        // in both branches with one edit. See RFC-064 design.md §5.5.
         const clarifyContext = hasClarifyChannel
           ? isQuestionerCrossClarifyRerun
             ? await buildPromptContext({
@@ -1572,18 +1569,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 taskId,
                 consumerKind: 'cross-questioner',
                 consumerNodeId: node.id,
-                targetIteration: currentCrossClarifyIteration,
+                targetIteration: currentClarifyIteration,
                 loopIter: iteration,
-                // Symmetric to the self branch's `applyLatestDirective: isClarifyRerun`
-                // gate below. `isQuestionerCrossClarifyRerun` only checks
-                // `cci > 0` (line ~1525-1526) — review-iterate / process-retry
-                // reruns that bump retryIndex still land in this branch, and
-                // without the gate the prior 'stop' directive drags into the
-                // new rerun, telling the questioner to STOP CLARIFYING when
-                // the user is actually asking it to address fresh reviewer
-                // comments. Mirror the self-side retry_index==0 check so 'stop'
-                // truly scopes to the one cross-clarify-driven rerun.
-                applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0,
+                // RFC-064: shared gate with the self branch — 747dcae's
+                // `(retryIndex ?? 0) === 0` literal merged into the common
+                // `isClarifyRerun` variable. Review-iterate / process-retry
+                // reruns still land in this branch (clarifyMode=='cross' &&
+                // clarifyIteration > 0 doesn't filter them out); without the
+                // gate the prior 'stop' directive would drag into the new
+                // rerun, telling the questioner to STOP CLARIFYING when the
+                // user is actually asking it to address fresh reviewer
+                // comments. The unified gate properly scopes 'stop' to the
+                // one clarify-driven rerun on both branches.
+                applyLatestDirective: isClarifyRerun,
                 ...(historyCutoffClarifyIteration !== undefined
                   ? { historyCutoff: historyCutoffClarifyIteration }
                   : {}),
@@ -1622,7 +1620,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               taskId,
               designerNodeId: node.id,
               loopIter: iteration,
-              designerCrossClarifyIteration: currentCrossClarifyIteration,
+              designerClarifyIteration: currentClarifyIteration,
               definition,
             })
           : undefined
@@ -3024,13 +3022,19 @@ async function insertNodeRun(
   inherit?: {
     clarifyIteration?: number
     reviewIteration?: number
-    crossClarifyIteration?: number
     shardKey?: string | null
     parentNodeRunId?: string | null
   },
 ): Promise<string> {
   const id = ulid()
   const now = Date.now()
+  // RFC-056 patch-2026-05-24 + RFC-064: the previously-separate
+  // crossClarifyIteration inherit slot is gone — the unified
+  // `clarifyIteration` field carries both self + cross clarify signals.
+  // RFC-042 in-attempt process retries that previously dropped the cross
+  // counter (and with it the entire External Feedback / Prior Output /
+  // Update Directive / questioner Q&A stack) now persist via the single
+  // clarifyIteration inherit; same end-to-end behavior.
   await db.insert(nodeRuns).values({
     id,
     taskId,
@@ -3040,16 +3044,6 @@ async function insertNodeRun(
     iteration,
     clarifyIteration: inherit?.clarifyIteration ?? 0,
     reviewIteration: inherit?.reviewIteration ?? 0,
-    // RFC-056 patch-2026-05-24: crossClarifyIteration MUST be inherited
-    // on every fresh row scheduleAgentNode mints — most importantly the
-    // RFC-042 in-attempt process retry. Without this, the retry row
-    // silently drops to schema default 0, the next scheduler pass sees
-    // currentCrossClarifyIteration=0, every cross-clarify prompt block
-    // (External Feedback / Prior Output / Update Directive / questioner
-    // Q&A) vanishes, and the designer regenerates from scratch. See
-    // design/RFC-056-clarify-cross-agent/patch-2026-05-24-retry-
-    // preserves-cross-clarify-iteration.md.
-    crossClarifyIteration: inherit?.crossClarifyIteration ?? 0,
     shardKey: inherit?.shardKey ?? null,
     parentNodeRunId: inherit?.parentNodeRunId ?? null,
     startedAt: now,

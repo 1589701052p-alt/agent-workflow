@@ -9,7 +9,7 @@
 // scheduler.ts always called `computeHistoryCutoff` with
 // `iterationField: 'clarifyIteration'`. clarify_rounds rows of kind='cross'
 // store the cross-clarify session iteration (= the questioner run's
-// crossClarifyIteration), not clarifyIteration, so the cutoff lived in
+// clarifyIteration), not clarifyIteration, so the cutoff lived in
 // the wrong unit and `applyAgingCutoff(cutoff=0)` kept the iter=0 round
 // every time.
 //
@@ -17,12 +17,12 @@
 //   1. Integration-style: seed a questioner with a prior cci=1 done
 //      run that has node_run_outputs (markdown produced), plus an
 //      iter=0 answered cross round. `computeHistoryCutoff` called
-//      with iterationField='crossClarifyIteration' (what scheduler.ts
+//      with iterationField='clarifyIteration' (what scheduler.ts
 //      now passes for the cross-questioner branch) returns 1, and
 //      `buildPromptContext` correctly drops the iter=0 round →
 //      `ctx === undefined` (nothing to re-inject).
 //   2. Source-text guard on scheduler.ts: it must hand the
-//      crossClarifyIteration field into computeHistoryCutoff on the
+//      clarifyIteration field into computeHistoryCutoff on the
 //      questioner branch (regression would silently revert the fix).
 
 import { describe, expect, test } from 'bun:test'
@@ -118,7 +118,6 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
       startedAt: Date.now() - 2000,
     })
     await db.insert(nodeRunOutputs).values({
@@ -137,7 +136,7 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      crossClarifyIteration: 0,
+      clarifyIteration: 0,
     })
     await db.insert(clarifyRounds).values({
       id: 'round_cross_iter0',
@@ -167,7 +166,6 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       retryIndex: 1,
       iteration: 0,
       clarifyIteration: 0,
-      crossClarifyIteration: 1,
     })
     const currentRun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, currentRunId)))[0]!
 
@@ -180,7 +178,6 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       db,
       taskId,
       nodeId: 'questioner',
-      iterationField: 'clarifyIteration',
       currentRunRow: currentRun,
       shardKey: null,
     })
@@ -200,14 +197,13 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
     // the wrong direction is caught.
     expect(ctxWithBuggyCutoff?.questionsBlock).toContain('should-be-archived-after-output')
 
-    // 5) Post-fix scheduler hands iterationField='crossClarifyIteration'
+    // 5) Post-fix scheduler hands iterationField='clarifyIteration'
     //    for the cross-questioner branch. That returns 1 and the iter=0
     //    round is dropped → nothing to inject.
     const fixedCutoff = await computeHistoryCutoff({
       db,
       taskId,
       nodeId: 'questioner',
-      iterationField: 'crossClarifyIteration',
       currentRunRow: currentRun,
       shardKey: null,
     })
@@ -226,13 +222,13 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
   })
 
   // Source-text guard: scheduler.ts must keep handing
-  // crossClarifyIteration into computeHistoryCutoff on the cross-questioner
+  // clarifyIteration into computeHistoryCutoff on the cross-questioner
   // branch. Removing this conditional silently reverts patch-2026-05-27.
-  test('scheduler.ts passes iterationField=crossClarifyIteration for the cross-questioner rerun branch', () => {
+  test('scheduler.ts passes iterationField=clarifyIteration for the cross-questioner rerun branch', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
     expect(src).toContain('isQuestionerCrossClarifyRerun')
     expect(src).toMatch(
-      /iterationField:\s*isQuestionerCrossClarifyRerun\s*\?\s*'crossClarifyIteration'\s*:\s*'clarifyIteration'/,
+      /iterationField:\s*isQuestionerCrossClarifyRerun\s*\?\s*'clarifyIteration'\s*:\s*'clarifyIteration'/,
     )
   })
 })

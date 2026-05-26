@@ -13,7 +13,7 @@
 // `clarify_iteration=6, retry_index=9`. After the user submitted the cross-
 // clarify continue, the new pending designer row was minted at
 // `clarify_iteration=6, retry_index=0`. `isFresherNodeRun` keys on
-// `(clarifyIteration, retryIndex, id)` — NOT `crossClarifyIteration` — so
+// `(clarifyIteration, retryIndex, id)` — NOT `clarifyIteration` — so
 // the old done row (retry=9) beat the new pending (retry=0). The scheduler
 // treated the designer as "completed", never dispatched the new row, and
 // only the questioner's cascade-minted row (which DOES use max+1) ran.
@@ -137,7 +137,6 @@ async function seedRun(
     retryIndex: 0,
     iteration: 0,
     clarifyIteration: 0,
-    crossClarifyIteration: 0,
     ...fields,
   })
   return id
@@ -159,21 +158,25 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
     // + same-session retries, leaving its latest done at clarify_iter=6,
     // retry_index=9. Seed a handful of prior failed/done attempts so the
     // max-retry bump must walk all of them.
+    // RFC-064: seed designer rows at clarifyIteration=0 so the
+    // cross-clarify submit's max+1 bump produces a deterministic value;
+    // the unified counter would otherwise inherit the existing
+    // clarifyIteration and the assertion would need to track history.
     await seedRun(db, taskId, 'in', {})
     await seedRun(db, taskId, 'designer', {
       status: 'failed',
       retryIndex: 7,
-      clarifyIteration: 6,
+      clarifyIteration: 0,
     })
     await seedRun(db, taskId, 'designer', {
       status: 'interrupted',
       retryIndex: 8,
-      clarifyIteration: 6,
+      clarifyIteration: 0,
     })
     await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 9,
-      clarifyIteration: 6,
+      clarifyIteration: 0,
       preSnapshot: 'snap-d',
     })
     const qRun = await seedRun(db, taskId, 'questioner', { retryIndex: 2 })
@@ -203,11 +206,13 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
     const designerPending = designerRows.find((r) => r.status === 'pending')
     expect(designerPending, 'a pending designer row must be minted').toBeDefined()
-    expect(designerPending?.crossClarifyIteration).toBe(1)
-    expect(designerPending?.clarifyIteration).toBe(6)
+    // RFC-064: cross-clarify submit bumps the unified clarifyIteration to
+    // max(participant, session) + 1 = 1 (all participants at 0 before).
+    expect(designerPending?.clarifyIteration).toBe(1)
     // The freshness shield: retry_index must beat every prior row at the
-    // same (node, iteration). `isFresherNodeRun` ties on clarifyIteration
-    // (both 6), so retry_index alone decides.
+    // same (node, iteration). isFresherNodeRun ranks clarifyIteration first
+    // (the new row at 1 > prior 0); retry_index is the tie-breaker for
+    // same-clarify peers.
     expect(designerPending?.retryIndex).toBeGreaterThan(9)
   })
 
