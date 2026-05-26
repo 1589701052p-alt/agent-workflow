@@ -1665,6 +1665,12 @@ export const enUS: Resources = {
       historyEmpty: 'No previous rounds.',
       submitContinue: 'Submit & keep clarifying',
       submitStop: 'Submit & stop clarifying',
+      stopModal: {
+        title: 'Stop clarifying from this node?',
+        body: 'After submitting, this node will not raise further clarifying questions in the current iteration. Choose "Submit & keep clarifying" if you want it to ask again.',
+        confirm: 'Confirm stop',
+        cancel: 'Cancel',
+      },
       submitDisabledRequired: 'Answer every "Recommended" question first',
       draftSaving: 'Saving draft…',
       draftSaved: 'Draft saved (safe to close the tab)',
@@ -1717,7 +1723,6 @@ export const enUS: Resources = {
   crossClarify: {
     contextCard: 'Asked by questioner {{name}} · round {{n}}',
     targetDesigner: 'Feedback target: {{name}}',
-    button: { reject: 'Reject (stop asking)' },
     rejectModal: {
       title: 'Reject this set of questions?',
       body: 'The questioner will not raise more questions for this node in the current task — even across loop iterations. This decision cannot be undone; you will have to launch a new task to revisit.',
@@ -1739,6 +1744,7 @@ export const enUS: Resources = {
         'Answer is sent to both the designer (to update the doc) and the questioner.',
       questionerTooltip:
         'Answer is sent only to the questioner; the designer is not notified or rerun.',
+      shortcutHint: 'Press Q / W to set the current question scope (Q = designer, W = asker)',
     },
     submitHint: {
       allDesigner:

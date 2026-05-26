@@ -90,7 +90,14 @@ export const QuestionForm = forwardRef<QuestionFormHandle, QuestionFormProps>(fu
         // scrolls as far as it can — matching the "scroll to top
         // unless we're already at the bottom" UX.
         el.focus({ preventScroll: true })
-        el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        // Scroll the wrapper (which on cross-clarify carries the scope
+        // picker above this card) so the per-question scope segmented
+        // control stays in view — otherwise the auto-scroll clipped it
+        // off the top and reviewers couldn't see which scope was set.
+        // Self-clarify wraps with the same class but only contains this
+        // QuestionForm, so the behaviour is identical to before.
+        const scrollTarget = el.closest('.clarify-question-wrapper') ?? el
+        scrollTarget.scrollIntoView({ block: 'start', behavior: 'smooth' })
       },
     }),
     [],

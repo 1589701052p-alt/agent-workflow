@@ -1570,6 +1570,7 @@ export interface Resources {
       historyEmpty: string
       submitContinue: string
       submitStop: string
+      stopModal: { title: string; body: string; confirm: string; cancel: string }
       submitDisabledRequired: string
       draftSaving: string
       draftSaved: string
@@ -1615,7 +1616,6 @@ export interface Resources {
   crossClarify: {
     contextCard: string
     targetDesigner: string
-    button: { reject: string }
     rejectModal: { title: string; body: string; confirm: string }
     multiSourceBanner: string
     multiSourcePendingLinkLabel: string
@@ -1627,6 +1627,7 @@ export interface Resources {
       questioner: string
       designerTooltip: string
       questionerTooltip: string
+      shortcutHint: string
     }
     submitHint: {
       allDesigner: string
@@ -3564,6 +3565,12 @@ export const zhCN: Resources = {
       historyEmpty: '没有历史反问。',
       submitContinue: '提交并继续反问',
       submitStop: '提交并停止反问',
+      stopModal: {
+        title: '确认停止本节点反问？',
+        body: '提交后本节点在当前迭代不会再向你发起反问。如需继续提问可点击"提交并继续反问"。',
+        confirm: '确认停止',
+        cancel: '取消',
+      },
       submitDisabledRequired: '请先回答所有"推荐"题',
       draftSaving: '正在保存草稿…',
       draftSaved: '草稿已保存（关 tab 不丢）',
@@ -3615,7 +3622,6 @@ export const zhCN: Resources = {
   crossClarify: {
     contextCard: '由反问 agent {{name}} 发起 · 第 {{n}} 轮',
     targetDesigner: '反馈对象：{{name}}',
-    button: { reject: '拒绝（让反问者闭嘴）' },
     rejectModal: {
       title: '确认拒绝反问？',
       body: '反问 agent 将不再在本 task 上对该节点产生问题——跨 loop 迭代也持久生效。该决策不可撤销，如需重提请重启 task。',
@@ -3632,6 +3638,7 @@ export const zhCN: Resources = {
       questioner: '反问者',
       designerTooltip: '答案同时送达设计者与反问者（设计者用来更新文档）',
       questionerTooltip: '答案只发给反问者；设计者不被通知、不重跑',
+      shortcutHint: 'Q/W 切换当前题的作用域（Q=设计者，W=反问者）',
     },
     submitHint: {
       allDesigner: '提交后将触发设计者重跑（设计者收到全部 {{n}} 题），反问者随后用全部 Q&A 重跑',

@@ -457,4 +457,37 @@ describe('QuestionForm — focus() handle scrolls active card to top', () => {
     const arg = scrollSpy.mock.calls[0]?.[0] as ScrollIntoViewOptions
     expect(arg.block).toBe('start')
   })
+
+  // Cross-clarify regression: the per-question scope picker is rendered
+  // INSIDE `.clarify-question-wrapper` ABOVE the QuestionForm card. If
+  // focus() scrolls the inner `.clarify-question` to the viewport top, the
+  // scope segmented control above it is pushed above the fold and reviewers
+  // can no longer see which scope is currently set. The handle must scroll
+  // the wrapper instead so the segmented stays visible. Self-clarify uses
+  // the same wrapper class with no scope picker inside, so the change is a
+  // no-op there visually.
+  test('when wrapped in .clarify-question-wrapper, scrollIntoView targets the wrapper', () => {
+    let scrolledOn: Element | null = null
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolledOn = this
+    } as typeof Element.prototype.scrollIntoView
+    const ref = createRef<QuestionFormHandle>()
+    render(
+      <div className="clarify-question-wrapper" data-testid="wrapper">
+        <div className="clarify-question-scope">scope picker placeholder</div>
+        <QuestionForm
+          ref={ref}
+          question={SINGLE_Q}
+          value={emptyAnswer('q-db')}
+          index={1}
+          onChange={() => {}}
+        />
+      </div>,
+    )
+    ref.current!.focus()
+    expect(scrolledOn).not.toBeNull()
+    expect(
+      (scrolledOn as unknown as HTMLElement).classList.contains('clarify-question-wrapper'),
+    ).toBe(true)
+  })
 })

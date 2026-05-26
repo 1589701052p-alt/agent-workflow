@@ -2031,6 +2031,30 @@ code {
   opacity: 0.6;
   cursor: progress;
 }
+/* Inline keyboard-shortcut hint chip rendered after a segmented option's
+   label (e.g. "反问者 Q" / "设计者 W"). Visually demoted so the label
+   stays primary; on the active option it borrows the white foreground
+   from `--active` so contrast stays readable. */
+.segmented__option .segmented__shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 0 4px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+.segmented__option--active .segmented__shortcut {
+  background: color-mix(in srgb, #fff 30%, transparent);
+}
 
 .content {
   padding: 24px 32px;

@@ -357,10 +357,13 @@ export function ClarifyDetailPage() {
     },
   })
 
-  // RFC-056: confirm modal state for the cross-clarify Reject button. Modal
-  // opens on Reject click; user must explicitly confirm to fire the 'stop'
-  // directive. Cancel returns to the form unchanged.
-  const [rejectModalOpen, setRejectModalOpen] = useState(false)
+  // Unified stop-confirm modal state. Both self-clarify and cross-clarify
+  // route the secondary "submit & stop" button through this two-step
+  // confirmation: click opens the modal, explicit Confirm fires the 'stop'
+  // directive, Cancel returns to the form unchanged. Cross-clarify variant
+  // uses stronger copy (cross-loop persistence warning); self-clarify uses
+  // the milder iteration-scoped copy.
+  const [stopModalOpen, setStopModalOpen] = useState(false)
 
   // RFC-023 iter #2: the per-question `recommended` flag was deprecated when
   // "recommended" moved to the option level. All questions are now optional
@@ -417,6 +420,51 @@ export function ClarifyDetailPage() {
       initialFocusedRef.current = true
     })
   }, [answers, draftLoaded, session.data])
+
+  // Cross-clarify only: Q / W shortcut for the per-question scope picker.
+  // Q → questioner, W → designer. The shortcut targets the question that
+  // currently owns keyboard focus (walk up from `document.activeElement`
+  // to a `[data-question-wrapper-id]` wrapper). When focus is outside any
+  // question (e.g. after a stray click), fall back to the first question
+  // so the keypress is never a silent no-op. Does NOT advance to the next
+  // question — the reviewer may want to toggle the same question's scope
+  // twice while comparing tooltips, and per spec this only sets scope.
+  useEffect(() => {
+    const s = session.data
+    if (s === undefined) return
+    if (s.kind !== 'cross') return
+    if (s.status !== 'awaiting_human') return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target !== null) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+      const k = e.key.toLowerCase()
+      let mode: ClarifyQuestionScope | null = null
+      // Q / W mirror the visual order of the segmented control (Designer
+      // is rendered left, Questioner right) so the keyboard row matches
+      // page order.
+      if (k === 'q') mode = 'designer'
+      else if (k === 'w') mode = 'questioner'
+      if (mode === null) return
+      if (submitMut.isPending) return
+      const active = document.activeElement
+      const wrapper =
+        active instanceof HTMLElement ? active.closest('[data-question-wrapper-id]') : null
+      const qid =
+        wrapper instanceof HTMLElement
+          ? wrapper.getAttribute('data-question-wrapper-id')
+          : (s.questions[0]?.id ?? null)
+      if (qid === null || qid === undefined || qid.length === 0) return
+      e.preventDefault()
+      const nextMode = mode
+      setScopes((prev) => ({ ...prev, [qid]: nextMode }))
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [session.data, submitMut.isPending])
 
   // ----------------------------------------------------------------------
   // render
@@ -587,6 +635,7 @@ export function ClarifyDetailPage() {
       {!readonly && (
         <p className="muted clarify-detail__keyboard-hint" data-testid="clarify-keyboard-hint">
           {t('clarify.detail.keyboardHint')}
+          {isCross && <> · {t('crossClarify.questionScope.shortcutHint')}</>}
         </p>
       )}
       <section className="clarify-questions">
@@ -595,7 +644,7 @@ export function ClarifyDetailPage() {
           if (a === undefined) return null
           const scope: ClarifyQuestionScope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
           return (
-            <div key={q.id} className="clarify-question-wrapper">
+            <div key={q.id} className="clarify-question-wrapper" data-question-wrapper-id={q.id}>
               {/* RFC-059: per-question scope picker. Only rendered for
                   cross-clarify nodes (self-clarify has no scope split).
                   In awaiting_human → editable Segmented; in sealed states
@@ -646,6 +695,13 @@ export function ClarifyDetailPage() {
                             {mode === 'designer'
                               ? t('crossClarify.questionScope.designer')
                               : t('crossClarify.questionScope.questioner')}
+                            <kbd
+                              className="segmented__shortcut"
+                              aria-hidden="true"
+                              data-testid={`clarify-scope-${q.id}-${mode}-kbd`}
+                            >
+                              {mode === 'designer' ? 'Q' : 'W'}
+                            </kbd>
                           </button>
                         )
                       })}
@@ -716,33 +772,22 @@ export function ClarifyDetailPage() {
           >
             {t('clarify.detail.submitContinue')}
           </button>
-          {/* RFC-023 self-clarify shows "submit & stop clarifying";
-              RFC-056 cross-clarify replaces it with a Reject button + 2nd
-              confirm modal because reject is a much heavier decision
-              (persistent across loop iters, can't be undone in-task). */}
-          {isCross ? (
-            <button
-              type="button"
-              className="btn btn--danger"
-              disabled={readonly || submitMut.isPending || requiredMissing}
-              onClick={() => setRejectModalOpen(true)}
-              data-testid="cross-clarify-reject"
-              data-directive="stop"
-            >
-              {t('crossClarify.button.reject')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={readonly || submitMut.isPending || requiredMissing}
-              onClick={() => submitMut.mutate('stop')}
-              data-testid="clarify-submit-stop"
-              data-directive="stop"
-            >
-              {t('clarify.detail.submitStop')}
-            </button>
-          )}
+          {/* Both self- and cross-clarify share one secondary button:
+              ghost-styled "Submit & stop clarifying" that opens a confirm
+              modal before actually firing the 'stop' directive. The modal
+              copy differs per kind (cross is irreversible across loop
+              iterations; self is iteration-scoped) but the button surface
+              is identical so the two pages read the same. */}
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={readonly || submitMut.isPending || requiredMissing}
+            onClick={() => setStopModalOpen(true)}
+            data-testid="clarify-submit-stop"
+            data-directive="stop"
+          >
+            {t('clarify.detail.submitStop')}
+          </button>
         </div>
         {requiredMissing && (
           <span className="error-box" data-testid="clarify-required-missing">
@@ -754,42 +799,42 @@ export function ClarifyDetailPage() {
         )}
       </footer>
 
-      {/* RFC-056 cross-clarify reject confirm modal. Two-step interaction
-          so an accidental click in the footer can't push the questioner
-          into persistent STOP CLARIFYING mode. */}
-      {isCross && (
-        <Dialog
-          open={rejectModalOpen}
-          onClose={() => setRejectModalOpen(false)}
-          title={t('crossClarify.rejectModal.title')}
-          data-testid="cross-clarify-reject-modal"
-          footer={
-            <>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setRejectModalOpen(false)}
-                data-testid="cross-clarify-reject-cancel"
-              >
-                {t('clarify.detail.back')}
-              </button>
-              <button
-                type="button"
-                className="btn btn--danger"
-                onClick={() => {
-                  setRejectModalOpen(false)
-                  submitMut.mutate('stop')
-                }}
-                data-testid="cross-clarify-reject-confirm"
-              >
-                {t('crossClarify.rejectModal.confirm')}
-              </button>
-            </>
-          }
-        >
-          <p>{t('crossClarify.rejectModal.body')}</p>
-        </Dialog>
-      )}
+      {/* Unified stop-confirm modal. Both kinds share the same dialog
+          shell + testids so the two pages look and behave identically;
+          only the title / body / confirm-label i18n differs (cross keeps
+          the RFC-056 cross-loop persistence warning, self uses milder
+          iteration-scoped copy). */}
+      <Dialog
+        open={stopModalOpen}
+        onClose={() => setStopModalOpen(false)}
+        title={t(isCross ? 'crossClarify.rejectModal.title' : 'clarify.detail.stopModal.title')}
+        data-testid="clarify-stop-modal"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setStopModalOpen(false)}
+              data-testid="clarify-stop-cancel"
+            >
+              {t('clarify.detail.stopModal.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => {
+                setStopModalOpen(false)
+                submitMut.mutate('stop')
+              }}
+              data-testid="clarify-stop-confirm"
+            >
+              {t(isCross ? 'crossClarify.rejectModal.confirm' : 'clarify.detail.stopModal.confirm')}
+            </button>
+          </>
+        }
+      >
+        <p>{t(isCross ? 'crossClarify.rejectModal.body' : 'clarify.detail.stopModal.body')}</p>
+      </Dialog>
     </div>
   )
 }
