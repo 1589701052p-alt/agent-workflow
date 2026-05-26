@@ -467,9 +467,9 @@ describe('QuestionForm — focus() handle scrolls active card to top', () => {
   // the same wrapper class with no scope picker inside, so the change is a
   // no-op there visually.
   test('when wrapped in .clarify-question-wrapper, scrollIntoView targets the wrapper', () => {
-    let scrolledOn: Element | null = null
+    const scrolledOn: Element[] = []
     Element.prototype.scrollIntoView = function (this: Element) {
-      scrolledOn = this
+      scrolledOn.push(this)
     } as typeof Element.prototype.scrollIntoView
     const ref = createRef<QuestionFormHandle>()
     render(
@@ -485,9 +485,8 @@ describe('QuestionForm — focus() handle scrolls active card to top', () => {
       </div>,
     )
     ref.current!.focus()
-    expect(scrolledOn).not.toBeNull()
-    expect(
-      (scrolledOn as unknown as HTMLElement).classList.contains('clarify-question-wrapper'),
-    ).toBe(true)
+    expect(scrolledOn.length).toBeGreaterThan(0)
+    const target = scrolledOn[0] as HTMLElement
+    expect(target.classList.contains('clarify-question-wrapper')).toBe(true)
   })
 })
