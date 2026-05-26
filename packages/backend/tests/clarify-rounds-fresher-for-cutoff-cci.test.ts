@@ -67,14 +67,14 @@ afterAll(() => resetBroadcastersForTests())
 describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult clarifyIteration', () => {
   test('cci-bumped done with outputs beats prior cci=0 retry-bumped done with outputs', async () => {
     // Seed two prior done rows on `designer`:
-    //   - cci=0, retry=1, has outputs (pre-cross-clarify RFC-042 followup
-    //     storm — outputs present so it doesn't get filtered for lack of
-    //     port content)
-    //   - cci=1, retry=0, has outputs (post-cross-clarify rerun's output)
-    // The about-to-run row sits at cci=2 (e.g. a second cross-clarify
-    // round). The cutoff must return the newer cci=1 row's value, so the
-    // aging filter drops every clarify_rounds row with iteration < 1.
-    // Pre-patch the comparator picked retry=1 over cci=1 → cutoff=0 →
+    //   - clarify=0, retry=1, has outputs (pre-cross-clarify RFC-042
+    //     followup storm — outputs present so it doesn't get filtered)
+    //   - clarify=1, retry=0, has outputs (post-cross-clarify rerun's
+    //     output — clarifyIteration bumped by the unified counter)
+    // The about-to-run row sits at clarify=2 (a second cross-clarify
+    // round). The cutoff must return the newer clarify=1 row's value, so
+    // the aging filter drops every clarify_rounds row with iteration < 1.
+    // Pre-patch the comparator picked retry=1 over clarify=1 → cutoff=0 →
     // leaked the entire prior history back into the prompt.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
@@ -103,7 +103,7 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult clarifyIt
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
+      clarifyIteration: 1,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
     })
@@ -120,7 +120,7 @@ describe('RFC-056 patch 2026-05-25 — isFresherForCutoff must consult clarifyIt
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
+      clarifyIteration: 2,
     })
     const current = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_current')))[0]!
 

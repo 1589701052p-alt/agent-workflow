@@ -107,8 +107,12 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, definition } = await seedTask(db)
 
-    // 1) Prior questioner node_run at cci=1, done, with node_run_outputs
-    //    (i.e. <workflow-output> markdown was captured).
+    // RFC-064: under the unified counter, the prior questioner's
+    // post-submit row sits at clarifyIteration=1 (was crossClarifyIteration=1
+    // pre-RFC-064). The clarify_rounds row's `iteration=0` is the round's
+    // own counter — independent of node_runs.clarifyIteration. The aging
+    // cutoff should still drop the iter=0 round once the questioner's
+    // clarifyIteration=1 done row has outputs.
     const priorQuestionerRunId = 'nr_q_prior_cci1'
     await db.insert(nodeRuns).values({
       id: priorQuestionerRunId,
@@ -117,7 +121,7 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
+      clarifyIteration: 1,
       startedAt: Date.now() - 2000,
     })
     await db.insert(nodeRunOutputs).values({
@@ -156,7 +160,7 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
     })
 
     // 3) The about-to-run questioner row (e.g. minted by review-iterate)
-    //    inherits cci=1, retry_index bumped.
+    //    inherits clarifyIteration=1, retry_index bumped.
     const currentRunId = 'nr_q_current_cci1_ri1'
     await db.insert(nodeRuns).values({
       id: currentRunId,
@@ -165,49 +169,23 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
       status: 'pending',
       retryIndex: 1,
       iteration: 0,
-      clarifyIteration: 0,
+      clarifyIteration: 1,
     })
     const currentRun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, currentRunId)))[0]!
 
-    // 4) Pre-fix scheduler called `computeHistoryCutoff` with
-    //    iterationField='clarifyIteration' for both self and cross
-    //    consumers. That returned 0 (priorCompleted.clarifyIteration === 0),
-    //    so applyAgingCutoff would keep the iter=0 cross round
-    //    (0 >= 0). Lock that pre-fix would re-inject:
-    const buggyCutoff = await computeHistoryCutoff({
+    // RFC-064: post-unification, computeHistoryCutoff returns the prior
+    // done's unified clarifyIteration directly. With the prior questioner
+    // at clarifyIteration=1, the cutoff is 1 and the iter=0 cross round
+    // gets filtered by applyAgingCutoff (0 < 1).
+    const cutoff = await computeHistoryCutoff({
       db,
       taskId,
       nodeId: 'questioner',
       currentRunRow: currentRun,
       shardKey: null,
     })
-    expect(buggyCutoff).toBe(0)
-    const ctxWithBuggyCutoff = await buildPromptContext({
-      db,
-      definition,
-      taskId,
-      consumerKind: 'cross-questioner',
-      consumerNodeId: 'questioner',
-      targetIteration: 1,
-      historyCutoff: buggyCutoff,
-      loopIter: 0,
-    })
-    // Pre-fix would surface the archived round verbatim. This branch is
-    // here purely so a future change that "fixes" applyAgingCutoff in
-    // the wrong direction is caught.
-    expect(ctxWithBuggyCutoff?.questionsBlock).toContain('should-be-archived-after-output')
-
-    // 5) Post-fix scheduler hands iterationField='clarifyIteration'
-    //    for the cross-questioner branch. That returns 1 and the iter=0
-    //    round is dropped → nothing to inject.
-    const fixedCutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'questioner',
-      currentRunRow: currentRun,
-      shardKey: null,
-    })
-    expect(fixedCutoff).toBe(1)
+    expect(cutoff).toBe(1)
+    const fixedCutoff = cutoff
     const ctxAfterFix = await buildPromptContext({
       db,
       definition,
@@ -221,14 +199,17 @@ describe('RFC-056 patch-2026-05-27 questioner cutoff uses cci', () => {
     expect(ctxAfterFix).toBeUndefined()
   })
 
-  // Source-text guard: scheduler.ts must keep handing
-  // clarifyIteration into computeHistoryCutoff on the cross-questioner
-  // branch. Removing this conditional silently reverts patch-2026-05-27.
-  test('scheduler.ts passes iterationField=clarifyIteration for the cross-questioner rerun branch', () => {
+  // RFC-064: patch-2026-05-27's intent (cutoff uses the right counter for
+  // the cross-questioner branch) is preserved structurally — the unified
+  // clarifyIteration is the only counter, so the `iterationField` parameter
+  // was removed entirely. We lock the surviving contract: scheduler still
+  // computes `isQuestionerCrossClarifyRerun` and calls computeHistoryCutoff
+  // without an explicit field-picker (the helper hard-codes clarifyIteration).
+  test('scheduler.ts cross-questioner branch invokes computeHistoryCutoff under unified clarifyIteration', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
     expect(src).toContain('isQuestionerCrossClarifyRerun')
-    expect(src).toMatch(
-      /iterationField:\s*isQuestionerCrossClarifyRerun\s*\?\s*'clarifyIteration'\s*:\s*'clarifyIteration'/,
-    )
+    // `iterationField` parameter must NOT exist anywhere; the unified
+    // counter removed it.
+    expect(src).not.toMatch(/iterationField\s*:/)
   })
 })

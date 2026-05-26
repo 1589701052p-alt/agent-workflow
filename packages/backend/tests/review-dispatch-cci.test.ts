@@ -520,7 +520,15 @@ describe('RFC-056 patch-2026-05-26 — source-text guards', () => {
   test('patch md exists and references the cci-aware short-circuit contract', () => {
     const md = readFileSync(PATCH_MD_PATH, 'utf8')
     expect(md).toContain('patch 2026-05-26')
-    expect(md).toContain('isReviewClarifyAlignedWithUpstream')
+    // RFC-064 renamed the helper to `isReviewClarifyAlignedWithUpstream`;
+    // the patch md is a historical audit trail and still uses the original
+    // `isReviewCciAlignedWithUpstream` spelling. Accept either form so the
+    // historical record stays intact while the rename lock remains
+    // enforceable for live source via the test above.
+    expect(
+      md.includes('isReviewClarifyAlignedWithUpstream') ||
+        md.includes('isReviewCciAlignedWithUpstream'),
+    ).toBe(true)
     expect(md).toContain('pickFreshestReviewRun')
     expect(md).toContain('01KS86DPCSERV7S41GQA5Y81RN')
   })

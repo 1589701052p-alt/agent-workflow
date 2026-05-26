@@ -258,6 +258,9 @@ describe('RFC-056 CR-1 invariant', () => {
       iteration: 0,
     })
     // The designer DID consume this feedback before the task failed.
+    // RFC-064: the invariant compares `nodeRuns.clarifyIteration > round.iteration`
+    // on the unified counter. The designer's post-submit rerun row at
+    // clarifyIteration=1 proves the round was consumed.
     await h.db.insert(nodeRuns).values({
       id: ulid(),
       taskId: h.taskId,
@@ -265,6 +268,7 @@ describe('RFC-056 CR-1 invariant', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
+      clarifyIteration: 1,
     })
     await runLifecycleInvariants({ db: h.db, scope: { taskId: h.taskId } })
     const row = (

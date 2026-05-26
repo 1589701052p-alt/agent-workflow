@@ -480,9 +480,11 @@ async function checkCR1(
   ctx: TaskScanContext,
   now: number,
 ): Promise<LifecycleInvariantFinding[]> {
-  // CR-1 (RFC-056 §10): cross_clarify_session answered+continue + parent task
-  // failed + no consuming designer node_run (i.e. no done designer run with
-  // cross_clarify_iteration >= session.iteration) ⟹ upgrade to 'abandoned'.
+  // CR-1 (RFC-056 §10 + RFC-064): cross-clarify round answered+continue +
+  // parent task failed + no consuming designer node_run (i.e. no done
+  // designer run with clarifyIteration >= round.iteration) ⟹ upgrade to
+  // 'abandoned'. RFC-064 unified the counter, so the consumption check
+  // now compares on `clarifyIteration` only.
   //
   // Unlike R1/R2/C1/T*/U1, this rule is "auto-upgrade": the violation IS the
   // signal — we flip the row to abandoned in this pass so the next scan
@@ -521,7 +523,7 @@ async function checkCR1(
   const out: LifecycleInvariantFinding[] = []
   for (const s of stuck) {
     if (s.targetDesignerNodeId === null) continue
-    // Is there a designer node_run with cross_clarify_iteration >= session.iteration
+    // Is there a designer node_run with clarifyIteration >= round.iteration
     // that reached 'done'? If yes, the feedback was consumed → not abandoned.
     const consumed = (
       await db

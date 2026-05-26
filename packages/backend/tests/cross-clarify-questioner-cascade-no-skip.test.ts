@@ -273,6 +273,9 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     const questionerV1 = await seedRun(db, taskId, 'questioner', {
       id: 'questioner_v1',
       retryIndex: 3,
+      // RFC-064: under the unified counter, the questioner's prior round
+      // sits at clarifyIteration=1 (was crossClarifyIteration=1 pre-unify).
+      clarifyIteration: 1,
       preSnapshot: 'snap-questioner-v1',
       // Intentionally no node_run_outputs row — this is the "emitted only
       // <workflow-clarify>" state the patch addresses.
