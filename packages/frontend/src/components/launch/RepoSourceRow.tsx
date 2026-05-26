@@ -181,6 +181,7 @@ export function RepoSourceRow({
             {refs.data !== undefined ? (
               <select
                 className="form-input"
+                data-testid={`repo-source-base-branch${idxSuffix}`}
                 value={source.baseBranch}
                 onChange={(e) => onChange({ ...source, baseBranch: e.target.value })}
               >
@@ -196,6 +197,7 @@ export function RepoSourceRow({
                 value={source.baseBranch}
                 onChange={(v) => onChange({ ...source, baseBranch: v })}
                 placeholder={t('launch.baseBranchPlaceholder')}
+                data-testid={`repo-source-base-branch${idxSuffix}`}
               />
             )}
           </Field>

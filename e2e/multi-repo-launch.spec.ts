@@ -246,10 +246,25 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
 
     // Fill row 1 path manually (recent-repo auto-fill only seeds row 0).
     // The path TextInput sits as the second child of the row's Repo Field;
-    // we target it by index.
+    // we target it by index. The baseBranch field has its own stable
+    // `repo-source-base-branch-1` testid so we don't race the
+    // <input>→<select> swap that happens when /api/repos/refs resolves.
     const row1 = page.getByTestId('repo-source-row-1')
-    await row1.locator('input.form-input[placeholder*="paste"], input.form-input').first().fill(repoB.repoDir)
-    await row1.locator('input.form-input').nth(1).fill('main')
+    await row1
+      .locator('input.form-input[placeholder*="paste"], input.form-input')
+      .first()
+      .fill(repoB.repoDir)
+    const branch1 = page.getByTestId('repo-source-base-branch-1')
+    await branch1.waitFor({ state: 'visible', timeout: 10_000 })
+    // Whether refs has resolved or not, both <select> and <input> respond to
+    // either `selectOption` (if <select>) or `fill` (if <input>). Try select
+    // first; fall back to fill when the element is still a TextInput.
+    const branchTag = await branch1.evaluate((el) => el.tagName.toLowerCase())
+    if (branchTag === 'select') {
+      await branch1.selectOption('main')
+    } else {
+      await branch1.fill('main')
+    }
 
     // Topic input.
     await page
@@ -300,7 +315,16 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     await expect(page.getByTestId('repo-source-row-1')).toBeVisible()
     const row1 = page.getByTestId('repo-source-row-1')
     await row1.locator('input.form-input').first().fill(repoB.repoDir)
-    await row1.locator('input.form-input').nth(1).fill('main')
+    // Use the stable baseBranch testid (RFC-066 PR-C follow-up) to avoid
+    // racing the <input>→<select> swap when /api/repos/refs resolves.
+    const branch1 = page.getByTestId('repo-source-base-branch-1')
+    await branch1.waitFor({ state: 'visible', timeout: 10_000 })
+    const branchTag = await branch1.evaluate((el) => el.tagName.toLowerCase())
+    if (branchTag === 'select') {
+      await branch1.selectOption('main')
+    } else {
+      await branch1.fill('main')
+    }
 
     // Banner is visible.
     const banner = page.getByTestId('repo-source-multi-banner')
