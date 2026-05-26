@@ -27,7 +27,11 @@ import type {
   WorkflowValidationIssue,
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
-import { countFanoutAggregators, tryParseKind } from '@agent-workflow/shared'
+import {
+  CLARIFY_SOURCE_PORT_NAME,
+  countFanoutAggregators,
+  tryParseKind,
+} from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { listAgents } from '@/services/agent'
 import { listPlugins } from '@/services/plugin'
@@ -808,6 +812,14 @@ export function validateWorkflowDef(
     }
   }
 
+  // 4b.5 RFC-069 — agent-level clarify attachment multiplicity (NodeKind-
+  // agnostic pre-pass). Runs before §4c/§4d so attachment errors surface
+  // first and per-NodeKind topology checks can assume baseline attachment
+  // correctness. Closes RFC-064 §7.1 gap: workflows with only cross-clarify
+  // nodes (no self-clarify) where an agent attached to ≥ 2 cross-clarify
+  // previously slipped through silently.
+  issues.push(...validateAgentClarifyMultiplicity({ nodes, edges }))
+
   // 4c. clarify (RFC-023) -----------------------------------------------------
   // - exactly one inbound edge on the `questions` port (the reverse-drag mints
   //   exactly one).
@@ -860,34 +872,13 @@ export function validateWorkflowDef(
         agentSourceIds.add(src.id)
       }
 
-      // RFC-063 G1: a single clarify node must attach to at most one agent.
-      // Reverse rule (one agent → many clarify) is `clarify-multiple-clarify-on-same-agent`
-      // below. This forward rule catches the inverse direction.
-      if (agentSourceIds.size > 1) {
-        const sorted = [...agentSourceIds].sort()
-        issues.push({
-          code: 'clarify-multiple-source-agents',
-          message: `clarify node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one agent may be attached to a clarify node`,
-          pointer: node.id,
-        })
-      }
-
-      // multi-clarify on the same agent
-      for (const agentId of agentSourceIds) {
-        const otherClarifyOnSameAgent = edges.filter(
-          (e) =>
-            e.source.nodeId === agentId &&
-            e.source.portName === '__clarify__' &&
-            e.target.nodeId !== node.id,
-        )
-        if (otherClarifyOnSameAgent.length > 0) {
-          issues.push({
-            code: 'clarify-multiple-clarify-on-same-agent',
-            message: `agent '${agentId}' already has a clarify channel; remove the other clarify node before adding '${node.id}'`,
-            pointer: node.id,
-          })
-        }
-      }
+      // RFC-069: G1 `clarify-multiple-source-agents` + `clarify-multiple-
+      // clarify-on-same-agent` moved to validateAgentClarifyMultiplicity()
+      // pre-pass — see §4b.5 above. agentSourceIds derived set retained
+      // because it documents the per-kind attachment topology even though
+      // no §4c-local rule consumes it post-RFC-069 (the dedup walk above
+      // also runs the `clarify-input-source-missing` / `clarify-target-
+      // not-agent` per-edge emits we keep).
 
       // self-loop on answers
       const answersOut = edges.filter(
@@ -995,14 +986,11 @@ export function validateWorkflowDef(
           questionerCandidateIds.add(src.id)
           questionerAgentNamesById.set(src.id, readString(src, 'agentName'))
         }
-        if (questionerCandidateIds.size > 1) {
-          const sorted = [...questionerCandidateIds].sort()
-          issues.push({
-            code: 'cross-clarify-multiple-questioners',
-            message: `clarify-cross-agent node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one questioner agent allowed per cross-clarify node`,
-            pointer: node.id,
-          })
-        }
+        // RFC-069: G2 `cross-clarify-multiple-questioners` moved to
+        // validateAgentClarifyMultiplicity() pre-pass — see §4b.5.
+        // questionerCandidateIds is retained because downstream rules (ancestor,
+        // self-review-warning, auto-edge-deleted) consume the dictionary-minimum
+        // candidate as a stable questioner id.
         if (questionerCandidateIds.size >= 1) {
           questionerId = [...questionerCandidateIds].sort()[0]
           questionerAgentName = questionerAgentNamesById.get(questionerId!)
@@ -1379,4 +1367,110 @@ export function extractTemplateVars(template: string): string[] {
     out.add(m[1] ?? '')
   }
   return [...out].filter((s) => s !== '')
+}
+
+/**
+ * RFC-069: NodeKind-agnostic pre-pass for agent-level clarify attachment
+ * multiplicity rules. Invoked from validateWorkflowDef §4b.5 — runs before
+ * §4c (self-clarify) and §4d (clarify-cross-agent) so attachment errors are
+ * reported first and per-NodeKind topology checks downstream can assume
+ * baseline attachment topology correctness.
+ *
+ * Three rule types emitted (all FAIL severity):
+ *
+ *   1. `clarify-multiple-clarify-on-same-agent` — agent has ≥ 2 outbound
+ *      `__clarify__` edges to distinct clarify NodeKind targets (self-clarify
+ *      and clarify-cross-agent combined). Closes RFC-064 §7.1 gap: workflows
+ *      with ONLY cross-clarify nodes (no self-clarify) where an agent attached
+ *      to ≥ 2 cross-clarify nodes previously slipped through silently.
+ *
+ *   2. `clarify-multiple-source-agents` — self-clarify node `questions` port
+ *      has ≥ 2 distinct agent-single source NodeIds (RFC-063 G1).
+ *
+ *   3. `cross-clarify-multiple-questioners` — clarify-cross-agent node
+ *      `questions` port has ≥ 2 distinct agent-single source NodeIds
+ *      (RFC-063 G2).
+ *
+ * Not handled here:
+ *
+ *   - G3 `cross-clarify-multiple-designers` — `to_designer` outbound edge
+ *     rule on clarify-cross-agent (designer-side multiplicity), not agent
+ *     attachment. Stays in §4d alongside the other to_designer checks.
+ *   - per-NodeKind topology rules (self-loop / not-in-loop / ancestor /
+ *     input-source-missing / target-not-agent) — stay in their case blocks.
+ */
+export function validateAgentClarifyMultiplicity(args: {
+  nodes: WorkflowDefinition['nodes']
+  edges: WorkflowDefinition['edges']
+}): WorkflowValidationIssue[] {
+  const issues: WorkflowValidationIssue[] = []
+  const nodesById = new Map(args.nodes.map((n) => [n.id, n]))
+
+  // Rule 1: agent has ≥ 2 outbound `__clarify__` edges to distinct targets.
+  // Walk all edges, group by source NodeId, dedup target NodeIds so duplicate
+  // edges to the same target don't inflate the count (matches original §4c
+  // semantics where each clarify iteration filtered "OTHER" clarify edges).
+  // Note: source NodeKind is intentionally not constrained here — rule 1 fires
+  // even when source is non-agent (e.g. wrapper-git outputting on `__clarify__`,
+  // an upstream config error). The per-NodeKind `clarify-input-must-be-agent`
+  // / `cross-clarify-target-not-agent-single` checks report the source-kind
+  // error separately; both errors coexist correctly.
+  const clarifyTargetIdsByAgent = new Map<string, Set<string>>()
+  for (const e of args.edges) {
+    if (e.source.portName !== CLARIFY_SOURCE_PORT_NAME) continue
+    const set = clarifyTargetIdsByAgent.get(e.source.nodeId) ?? new Set<string>()
+    set.add(e.target.nodeId)
+    clarifyTargetIdsByAgent.set(e.source.nodeId, set)
+  }
+  for (const [agentId, targetSet] of clarifyTargetIdsByAgent) {
+    if (targetSet.size < 2) continue
+    const sortedTargets = [...targetSet].sort()
+    // Pointer = dictionary-min target so editor can jump to a concrete node.
+    // Message echoes the original §4c template byte-for-byte (only the
+    // emitter has changed); the dict-min target replaces the original
+    // "current iterated node" since the pre-pass is NodeKind-agnostic.
+    issues.push({
+      code: 'clarify-multiple-clarify-on-same-agent',
+      message: `agent '${agentId}' already has a clarify channel; remove the other clarify node before adding '${sortedTargets[0]}'`,
+      pointer: sortedTargets[0],
+    })
+  }
+
+  // Rule 2 + 3: clarify NodeKind node has ≥ 2 distinct agent-single sources
+  // on its `questions` port. G1 (self-clarify) + G2 (clarify-cross-agent)
+  // folded — they share predicate structure; the code/message branch by
+  // NodeKind to preserve byte-level message templates from RFC-063.
+  for (const node of args.nodes) {
+    if (node.kind !== 'clarify' && node.kind !== 'clarify-cross-agent') continue
+    const sourceAgents = new Set<string>()
+    for (const e of args.edges) {
+      if (e.target.nodeId !== node.id) continue
+      if (e.target.portName !== 'questions') continue
+      const srcNode = nodesById.get(e.source.nodeId)
+      if (srcNode === undefined) continue
+      // Only agent-single sources count — non-agent sources are reported by
+      // the per-NodeKind `clarify-target-not-agent` / `cross-clarify-target-
+      // not-agent-single` rules and would otherwise inflate the source set
+      // with kind-error nodes.
+      if (srcNode.kind !== 'agent-single') continue
+      sourceAgents.add(srcNode.id)
+    }
+    if (sourceAgents.size <= 1) continue
+    const sorted = [...sourceAgents].sort()
+    if (node.kind === 'clarify') {
+      issues.push({
+        code: 'clarify-multiple-source-agents',
+        message: `clarify node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one agent may be attached to a clarify node`,
+        pointer: node.id,
+      })
+    } else {
+      issues.push({
+        code: 'cross-clarify-multiple-questioners',
+        message: `clarify-cross-agent node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one questioner agent allowed per cross-clarify node`,
+        pointer: node.id,
+      })
+    }
+  }
+
+  return issues
 }
