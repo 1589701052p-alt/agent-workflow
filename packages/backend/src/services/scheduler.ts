@@ -1574,6 +1574,16 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 consumerNodeId: node.id,
                 targetIteration: currentCrossClarifyIteration,
                 loopIter: iteration,
+                // Symmetric to the self branch's `applyLatestDirective: isClarifyRerun`
+                // gate below. `isQuestionerCrossClarifyRerun` only checks
+                // `cci > 0` (line ~1525-1526) — review-iterate / process-retry
+                // reruns that bump retryIndex still land in this branch, and
+                // without the gate the prior 'stop' directive drags into the
+                // new rerun, telling the questioner to STOP CLARIFYING when
+                // the user is actually asking it to address fresh reviewer
+                // comments. Mirror the self-side retry_index==0 check so 'stop'
+                // truly scopes to the one cross-clarify-driven rerun.
+                applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0,
                 ...(historyCutoffClarifyIteration !== undefined
                   ? { historyCutoff: historyCutoffClarifyIteration }
                   : {}),
