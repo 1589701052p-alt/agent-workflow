@@ -61,7 +61,7 @@ describe('RFC-056 — migration 0029 cross_clarify_sessions', () => {
     }
   })
 
-  test('FK to tasks + node_runs(2) with cascade delete', async () => {
+  test('FK to tasks + node_runs(4 — including RFC-070 consumed_by columns) with cascade delete', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const rows = (await db.all(
       sql`SELECT sql FROM sqlite_master WHERE name='cross_clarify_sessions'`,
@@ -69,10 +69,17 @@ describe('RFC-056 — migration 0029 cross_clarify_sessions', () => {
     const ddl = (rows[0]!.sql ?? '').toLowerCase()
     expect(ddl.includes('references `tasks`(`id`)')).toBe(true)
     expect(ddl.includes('references `node_runs`(`id`)')).toBe(true)
-    // Two FKs to node_runs — cross_clarify_node_run_id + source_questioner_node_run_id
+    // Four FKs to node_runs:
+    //   - cross_clarify_node_run_id (RFC-056)
+    //   - source_questioner_node_run_id (RFC-056)
+    //   - consumed_by_consumer_run_id (RFC-070)
+    //   - consumed_by_questioner_run_id (RFC-070)
     const nodeRunRefs = ddl.match(/references `node_runs`/g) ?? []
-    expect(nodeRunRefs.length).toBe(2)
+    expect(nodeRunRefs.length).toBe(4)
     expect(ddl.includes('on delete cascade')).toBe(true)
+    // The RFC-070 columns use SET NULL, not CASCADE (retry history may need
+    // the Q&A row even after its consumer node_run is removed).
+    expect(ddl.includes('on delete set null')).toBe(true)
   })
 
   test('all 4 indexes exist', async () => {

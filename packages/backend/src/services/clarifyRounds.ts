@@ -1,11 +1,5 @@
 // RFC-058 T12 — unified clarify_rounds service helpers. Provides the
-// kind-discriminated read APIs that the scheduler + REST routes will switch
-// to in T13+. Designed for incremental migration:
-//
-//   - `computeHistoryCutoff` is the single backend entry point for the GENERAL
-//     aging rule. Replaces the inline calculation in scheduler.ts:1372-1405.
-//     `iterationField` argument lets one call cover both clarifyIteration
-//     (RFC-023 self path) and crossClarifyIteration (RFC-056 cross path).
+// kind-discriminated read APIs that the scheduler + REST routes use.
 //
 //   - `selectAnsweredRoundsForConsumer` reads from clarify_rounds with the
 //     right WHERE clause per `consumerKind` ∈ {self | cross-designer |
@@ -13,24 +7,23 @@
 //     RFC-056 缺口 2 (iter ≥ 2 reading prior iter Q&A) is structurally fixed.
 //
 //   - `buildPromptContext` composes the `ClarifyPromptContext` from the
-//     selected rows, applying the GENERAL aging cutoff via shared
-//     `applyAgingCutoff`. Replaces both `buildClarifyPromptContext` (RFC-023)
+//     selected rows. Replaces both `buildClarifyPromptContext` (RFC-023)
 //     and `buildQuestionerCrossClarifyContext` (RFC-056) — three
-//     consumerKind branches share one render path. The cutoff-driven aging
-//     gap (RFC-056 缺口 1) is auto-fixed for cross-questioner too.
+//     consumerKind branches share one render path.
 //
-// Writes to clarify_rounds (createClarifyRound, submitClarifyRoundAnswers)
-// land in a follow-up — for now writes still flow through the legacy
-// services/clarify.ts + services/crossClarify.ts paths. The plan is to
-// add a dual-write so clarify_rounds stays in sync until T17 drops the
-// legacy tables.
+//   - `markClarifyRoundsConsumedBy` (RFC-070) is the post-done stamp helper:
+//     when a consumer agent finishes 'done' with at least one captured
+//     `<workflow-output>` row, every Q&A row this run consumed has its
+//     `consumed_by_..._run_id` column stamped with the run's id. The aging
+//     filter then becomes a plain `IS NULL` predicate on subsequent reads,
+//     eliminating the cross-iteration vs unified-clarifyIteration counter
+//     mismatch class of bugs (see RFC-070 proposal §1).
 
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
+import { clarifyRounds, clarifySessions, crossClarifySessions, tasks } from '@/db/schema'
 import {
-  applyAgingCutoff,
   buildClarifyPromptBlock,
   renderClarifyQuestionsBlock,
   type ClarifyAnswer,
@@ -48,100 +41,139 @@ import { createLogger } from '@/util/log'
 const log = createLogger('clarify-rounds')
 
 // ---------------------------------------------------------------------------
-// computeHistoryCutoff — GENERAL aging rule single source of truth.
+// markClarifyRoundsConsumedBy (RFC-070) — stamp Q&A rows this run consumed.
 // ---------------------------------------------------------------------------
 
-export interface ComputeHistoryCutoffArgs {
-  db: DbClient
+export interface MarkClarifyRoundsConsumedByArgs {
+  /** ULID of the consumer node_run that just finished 'done' with at least
+   *  one captured `<workflow-output>` row. */
+  id: string
   taskId: string
+  /** Workflow node id of the consumer (e.g. designer agent, self-clarify
+   *  asking agent, questioner asking agent on cascade rerun). */
   nodeId: string
-  /**
-   * The about-to-run node_run row. Excluded from the prior lookup; also
-   * supplies the freshness comparator (parent / shardKey).
-   */
-  currentRunRow?: typeof nodeRuns.$inferSelect
-  /**
-   * Shard key when the about-to-run node is an agent-multi child; null
-   * otherwise. Prior runs in a different shard never feed the cutoff.
-   */
+  /** Shard key when the consumer is an agent-multi child; null otherwise.
+   *  Only used to restrict self-clarify stamps to the matching shard so
+   *  sibling-shard Q&A rounds aren't stamped by an unrelated shard's done. */
   shardKey: string | null
 }
 
 /**
- * Return the iteration of the latest fresher done node_run that produced a
- * captured `<workflow-output>` row in `node_run_outputs`. Used by
- * `buildPromptContext` to drop clarify rounds whose answers are already baked
- * into a prior output (RFC-056 §6 amendment, generalised to every rerun).
+ * Stamp `consumed_by_..._run_id` on every Q&A row this consumer node_run
+ * just baked into a `<workflow-output>`. Subsequent reruns reading the same
+ * tables filter on `IS NULL` — the row is gone from the prompt without any
+ * counter math.
  *
- * Returns `undefined` when no such prior run exists — the GENERAL no-op case
- * where the entire Q&A history should still feed the next prompt.
+ * Three predicate branches (run in one call; cheap UPDATE-where on indexed
+ * columns):
  *
- * RFC-064: the prior `iterationField` parameter is gone — the unified
- * `clarifyIteration` covers both self and cross rerun paths. Patch
- * 2026-05-27 (questioner-cutoff-uses-cci) is structurally preserved: the
- * unified field aligns with `clarify_rounds.iteration` for both kinds.
+ *   1. Self-clarify path — the consumer IS the asking agent. Stamp every
+ *      answered kind='self' row keyed on (taskId, askingNodeId, shardKey),
+ *      plus its `clarify_sessions` mirror.
+ *
+ *   2. Cross-clarify designer path — the consumer is the designer
+ *      (target_consumer_node_id). Stamp every answered+continue kind='cross'
+ *      row whose target points at this node, plus its `cross_clarify_sessions`
+ *      mirror.
+ *
+ *   3. Cross-clarify questioner path — the consumer is the questioner
+ *      (asking agent) on its cascade rerun. Stamp every answered kind='cross'
+ *      row whose asking points at this node, plus its `cross_clarify_sessions`
+ *      mirror.
+ *
+ * All UPDATEs include `consumed_by_..._run_id IS NULL` so concurrent done
+ * runs never double-stamp; the first run to grab a row wins.
+ *
+ * Call site: invoked by runner.ts at the tail of `runNode`, after
+ * `setNodeRunStatus({to:'done'})` succeeds AND at least one
+ * `node_run_outputs` row was just inserted. Clarify-only / no-output paths
+ * do not call this helper so their rows stay consumed=NULL.
  */
-export async function computeHistoryCutoff(
-  args: ComputeHistoryCutoffArgs,
-): Promise<number | undefined> {
-  const candidates = await args.db
-    .select()
-    .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, args.taskId), eq(nodeRuns.nodeId, args.nodeId)))
-
-  const eligible: Array<typeof nodeRuns.$inferSelect> = []
-  for (const r of candidates) {
-    if (args.currentRunRow !== undefined && r.id === args.currentRunRow.id) continue
-    if (r.parentNodeRunId !== null) continue
-    if ((r.shardKey ?? null) !== args.shardKey) continue
-    if (args.currentRunRow !== undefined && !isFresherForCutoff(args.currentRunRow, r)) continue
-    eligible.push(r)
-  }
-  if (eligible.length === 0) return undefined
-
-  const outputsRows = await args.db
-    .select({ nodeRunId: nodeRunOutputs.nodeRunId })
-    .from(nodeRunOutputs)
+export async function markClarifyRoundsConsumedBy(
+  db: DbClient,
+  run: MarkClarifyRoundsConsumedByArgs,
+): Promise<void> {
+  const shardKey = run.shardKey
+  // --- 1. self-clarify (clarify_rounds + clarify_sessions mirror) ---
+  await db
+    .update(clarifyRounds)
+    .set({ consumedByConsumerRunId: run.id })
     .where(
-      inArray(
-        nodeRunOutputs.nodeRunId,
-        eligible.map((r) => r.id),
+      and(
+        eq(clarifyRounds.taskId, run.taskId),
+        eq(clarifyRounds.kind, 'self'),
+        eq(clarifyRounds.askingNodeId, run.nodeId),
+        eq(clarifyRounds.status, 'answered'),
+        isNull(clarifyRounds.consumedByConsumerRunId),
+        shardKey === null
+          ? isNull(clarifyRounds.askingShardKey)
+          : eq(clarifyRounds.askingShardKey, shardKey),
       ),
     )
-  const haveOutputs = new Set<string>(outputsRows.map((o) => o.nodeRunId))
-
-  let priorCompleted: typeof nodeRuns.$inferSelect | undefined
-  for (const r of eligible) {
-    if (!haveOutputs.has(r.id)) continue
-    if (isFresherForCutoff(r, priorCompleted)) priorCompleted = r
-  }
-  if (priorCompleted === undefined) return undefined
-
-  return priorCompleted.clarifyIteration
-}
-
-/**
- * Local copy of scheduler's `isFresherNodeRun` semantics so this module
- * does not introduce a cycle with scheduler.ts. Order (post-RFC-064
- * unification):
- *   1. clarifyIteration desc (newer clarify round wins — covers self AND
- *      cross, structurally eliminating the "missed-mirror rank" class of
- *      bug that patch-2026-05-25-fresher-noderun-includes-cci fixed)
- *   2. retryIndex desc (later process-retry attempt wins)
- *   3. id desc (last-inserted ULID wins)
- */
-function isFresherForCutoff(
-  candidate: typeof nodeRuns.$inferSelect,
-  incumbent: typeof nodeRuns.$inferSelect | undefined,
-): boolean {
-  if (incumbent === undefined) return true
-  if (candidate.clarifyIteration !== incumbent.clarifyIteration) {
-    return candidate.clarifyIteration > incumbent.clarifyIteration
-  }
-  if (candidate.retryIndex !== incumbent.retryIndex) {
-    return candidate.retryIndex > incumbent.retryIndex
-  }
-  return candidate.id > incumbent.id
+  await db
+    .update(clarifySessions)
+    .set({ consumedByConsumerRunId: run.id })
+    .where(
+      and(
+        eq(clarifySessions.taskId, run.taskId),
+        eq(clarifySessions.sourceAgentNodeId, run.nodeId),
+        eq(clarifySessions.status, 'answered'),
+        isNull(clarifySessions.consumedByConsumerRunId),
+        shardKey === null
+          ? isNull(clarifySessions.sourceShardKey)
+          : eq(clarifySessions.sourceShardKey, shardKey),
+      ),
+    )
+  // --- 2. cross-clarify designer (clarify_rounds + cross_clarify_sessions mirror) ---
+  await db
+    .update(clarifyRounds)
+    .set({ consumedByConsumerRunId: run.id })
+    .where(
+      and(
+        eq(clarifyRounds.taskId, run.taskId),
+        eq(clarifyRounds.kind, 'cross'),
+        eq(clarifyRounds.targetConsumerNodeId, run.nodeId),
+        eq(clarifyRounds.status, 'answered'),
+        eq(clarifyRounds.directive, 'continue'),
+        isNull(clarifyRounds.consumedByConsumerRunId),
+      ),
+    )
+  await db
+    .update(crossClarifySessions)
+    .set({ consumedByConsumerRunId: run.id })
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, run.taskId),
+        eq(crossClarifySessions.targetDesignerNodeId, run.nodeId),
+        eq(crossClarifySessions.status, 'answered'),
+        eq(crossClarifySessions.directive, 'continue'),
+        isNull(crossClarifySessions.consumedByConsumerRunId),
+      ),
+    )
+  // --- 3. cross-clarify questioner (clarify_rounds + cross_clarify_sessions mirror) ---
+  await db
+    .update(clarifyRounds)
+    .set({ consumedByQuestionerRunId: run.id })
+    .where(
+      and(
+        eq(clarifyRounds.taskId, run.taskId),
+        eq(clarifyRounds.kind, 'cross'),
+        eq(clarifyRounds.askingNodeId, run.nodeId),
+        eq(clarifyRounds.status, 'answered'),
+        isNull(clarifyRounds.consumedByQuestionerRunId),
+      ),
+    )
+  await db
+    .update(crossClarifySessions)
+    .set({ consumedByQuestionerRunId: run.id })
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, run.taskId),
+        eq(crossClarifySessions.sourceQuestionerNodeId, run.nodeId),
+        eq(crossClarifySessions.status, 'answered'),
+        isNull(crossClarifySessions.consumedByQuestionerRunId),
+      ),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +222,10 @@ export async function selectAnsweredRoundsForConsumer(
           eq(clarifyRounds.kind, 'self'),
           eq(clarifyRounds.askingNodeId, args.consumerNodeId),
           eq(clarifyRounds.status, 'answered'),
+          // RFC-070: drop rows already baked into a prior done-with-output
+          // node_run. No iteration math; the mark helper writes this stamp
+          // when the consumer agent finishes 'done' with a captured port.
+          isNull(clarifyRounds.consumedByConsumerRunId),
         ),
       )
     const shardKey = args.shardKey ?? null
@@ -212,6 +248,9 @@ export async function selectAnsweredRoundsForConsumer(
           eq(clarifyRounds.status, 'answered'),
           eq(clarifyRounds.directive, 'continue'),
           eq(clarifyRounds.loopIter, loopIter),
+          // RFC-070: designer-side aging — drop rows already baked into a
+          // prior designer done-with-output run.
+          isNull(clarifyRounds.consumedByConsumerRunId),
         ),
       )
     // Per intermediary node, keep only the highest-iteration row.
@@ -239,6 +278,9 @@ export async function selectAnsweredRoundsForConsumer(
         eq(clarifyRounds.askingNodeId, args.consumerNodeId),
         eq(clarifyRounds.status, 'answered'),
         eq(clarifyRounds.loopIter, loopIter),
+        // RFC-070: questioner-side aging — drop rows already baked into a
+        // prior questioner done-with-output run (cascade rerun path).
+        isNull(clarifyRounds.consumedByQuestionerRunId),
       ),
     )
   return rows.sort((a, b) => a.iteration - b.iteration)
@@ -259,16 +301,11 @@ export interface BuildPromptContextArgs {
    * The about-to-run node_run's iteration counter — interpretation depends on
    * consumerKind:
    *   - self           → consumer's clarifyIteration
-   *   - cross-designer → consumer's crossClarifyIteration
-   *   - cross-questioner → consumer's crossClarifyIteration
+   *   - cross-designer → consumer's clarifyIteration
+   *   - cross-questioner → consumer's clarifyIteration
    * Values <= 0 short-circuit to `undefined` (first run, nothing to surface).
    */
   targetIteration: number
-  /**
-   * RFC-058 single aging entry. Computed by `computeHistoryCutoff`. Undefined
-   * = full history.
-   */
-  historyCutoff?: number
   shardKey?: string | null
   loopIter?: number
   /** RFC-026 inline collapses to single-most-recent round + tags ctx.mode. */
@@ -282,11 +319,11 @@ export interface BuildPromptContextArgs {
  * Compose the ClarifyPromptContext for the consumer's about-to-run prompt.
  * Returns `undefined` when there is no prior answered round to surface.
  *
- * Goes through the unified clarify_rounds table; the cutoff is applied once
- * via shared `applyAgingCutoff`. RFC-058 缺口 1 (questioner aging gap) and
- * RFC-058 缺口 2 (wrapper-loop loop_iter isolation) are both structurally
- * fixed: the cutoff + loopIter filter live in the SAME pipeline, so neither
- * branch can forget to apply them.
+ * RFC-070: aging is row-state (`consumed_by_..._run_id IS NULL`) rather than
+ * an iteration counter cutoff. `selectAnsweredRoundsForConsumer` already
+ * applies the filter; this function just renders what comes back. RFC-058
+ * 缺口 1 + 2 (questioner aging gap + wrapper-loop loop_iter isolation) stay
+ * structurally fixed via the per-consumerKind SELECT predicates.
  */
 export async function buildPromptContext(
   args: BuildPromptContextArgs,
@@ -304,15 +341,13 @@ export async function buildPromptContext(
 
   // Restrict to rounds whose iteration is strictly less than the consumer's
   // about-to-run iteration. Matches the RFC-023 + RFC-056 semantics
-  // (iterationIndex < targetIteration).
+  // (iterationIndex < targetIteration); guards against the in-flight
+  // round (iteration === targetIteration) leaking before it's answered.
   const priorRounds = allRows.filter((r) => r.iteration < args.targetIteration)
   if (priorRounds.length === 0) return undefined
 
-  const postCutoffRows = applyAgingCutoff(priorRounds, args.historyCutoff)
-  if (postCutoffRows.length === 0) return undefined
-
   const inlineMode = args.sessionMode === 'inline'
-  const rows = inlineMode ? postCutoffRows.slice(-1) : postCutoffRows
+  const rows = inlineMode ? priorRounds.slice(-1) : priorRounds
 
   const questionParts: string[] = []
   const answerParts: string[] = []

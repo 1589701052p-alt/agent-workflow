@@ -19,7 +19,7 @@ import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import {
   buildClarifyPromptContext,
   createClarifySession,
@@ -318,57 +318,10 @@ describe('RFC-058 baseline T5 — cross-clarify questioner dispatch path', () =>
   })
 })
 
-describe('RFC-058 baseline T5 — GENERAL aging cutoff signal (prior done + outputs)', () => {
-  test('historyCutoffClarifyIteration uses prior done node_run with node_run_outputs row', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, definition } = await seedSelfClarifyTask(db)
-    // Round 0 done + outputs (this is the cutoff signal)
-    await db.insert(nodeRuns).values({
-      id: 'nr_round0',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 1,
-    })
-    await db.insert(nodeRunOutputs).values({
-      nodeRunId: 'nr_round0',
-      portName: 'plan',
-      content: 'output',
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_round0',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion({ title: 'pre-output round' })],
-    })
-    await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    // Mimic scheduler: prune rounds with iterationIndex < 1 (the prior done
-    // run's clarifyIteration).
-    const ctx = await buildClarifyPromptContext({
-      db,
-      definition,
-      taskId,
-      agentNodeId: 'designer',
-      targetIteration: 2,
-      shardKey: null,
-      historyCutoffClarifyIteration: 1,
-    })
-    // pre-output round has iterationIndex=0 < cutoff=1 → pruned
-    expect(ctx).toBeUndefined()
-  })
-})
+// RFC-070: GENERAL aging cutoff is replaced by per-row consumed-by-run
+// stamps. The behavior locks moved to `rfc070-aging-stamp-behavior.test.ts`
+// (mark gate + IS NULL filter) and `rfc070-aging-stamp-grep-guards.test.ts`
+// (scheduler.ts no longer threads historyCutoff).
 
 describe('RFC-058 baseline T5 — scheduler dispatch gate grep guards', () => {
   test('source grep: scheduler routes through buildPromptContext consumerKind dispatch when cci>0', async () => {
@@ -383,6 +336,8 @@ describe('RFC-058 baseline T5 — scheduler dispatch gate grep guards', () => {
     expect(txt).toContain("consumerKind: 'cross-questioner'")
     expect(txt).toContain('isQuestionerCrossClarifyRerun')
     expect(txt).toContain('hasExternalFeedbackChannel')
-    expect(txt).toContain('historyCutoffClarifyIteration')
+    // RFC-070: `historyCutoffClarifyIteration` deleted; row-state aging
+    // replaces iteration cutoff.
+    expect(txt).not.toContain('historyCutoffClarifyIteration')
   })
 })

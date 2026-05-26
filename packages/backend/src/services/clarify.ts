@@ -34,7 +34,7 @@
 //     This module assumes the envelope it receives is already validated as
 //     clarify-only.
 
-import { and, asc, count, desc, eq } from 'drizzle-orm'
+import { and, asc, count, desc, eq, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import {
   CLARIFY_INPUT_PORT_NAME,
@@ -572,21 +572,6 @@ export interface BuildClarifyPromptContextArgs {
    * Locked by clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
    */
   applyLatestDirective?: boolean
-  /**
-   * RFC-056 §6 update mode (2026-05-22 amendment): when set to a non-negative
-   * integer, only self-clarify sessions with `iterationIndex >= cutoff` are
-   * surfaced — older sessions are considered "already baked into a prior
-   * done output" and dropped from the prompt. The scheduler computes this
-   * cutoff as `latestDoneDesigner.clarifyIteration` when a cross-clarify
-   * submit triggered the current rerun, so the designer reading the prompt
-   * gets the prior output as the working draft + ONLY the new self-clarify
-   * Q&A since that output (if any) — never the redundant full Q&A history
-   * already embodied in that draft.
-   *
-   * Default `undefined` preserves the full-history behaviour for normal
-   * self-clarify reruns / review-iterate / process-retry paths.
-   */
-  historyCutoffClarifyIteration?: number
 }
 
 /**
@@ -613,21 +598,18 @@ export async function buildClarifyPromptContext(
   // status = 'answered' + iterationIndex < targetIteration so an in-flight
   // unanswered session never bleeds into the next prompt; only sealed
   // answers feed the agent.
+  // RFC-070: drop sessions already baked into a prior consumer done-with-output
+  // run (consumed_by_consumer_run_id stamp), so the prompt doesn't re-anchor
+  // the agent on resolved decisions and rerun reasons (review-iterate /
+  // process-retry / freshness top-up) don't keep re-injecting old Q&A. No
+  // iteration-cutoff math; the mark helper writes this stamp at done time.
   const allRows = await db_selectAnsweredSessionsForRerun(args)
   if (allRows.length === 0) return undefined
 
-  // RFC-056 §6 update mode: when a cross-clarify rerun is in progress, drop
-  // self-clarify rounds with iterationIndex < cutoff. Those rounds' answers
-  // are already baked into the prior done output (surfaced separately via
-  // `priorOutputBlock`); repeating them here would waste tokens AND mis-anchor
-  // the designer to regenerate. If the cutoff prunes all rows, return
-  // undefined so no clarify section emits — the agent reads only Prior
-  // Output + External Feedback + Update Directive that round.
-  const cutoff = args.historyCutoffClarifyIteration
-  const postCutoffRows =
-    cutoff !== undefined && cutoff >= 0
-      ? allRows.filter((r) => r.iterationIndex >= cutoff)
-      : allRows
+  // RFC-070: aging is row-state — selectAnsweredSessionsForRerun already
+  // filtered out consumed rows via `IS NULL` predicate. No further cutoff
+  // applies here.
+  const postCutoffRows = allRows
   if (postCutoffRows.length === 0) return undefined
 
   // RFC-026: inline mode collapses the dump to the single most-recent round.
@@ -702,6 +684,10 @@ async function db_selectAnsweredSessionsForRerun(
         eq(clarifySessions.taskId, args.taskId),
         eq(clarifySessions.sourceAgentNodeId, args.agentNodeId),
         eq(clarifySessions.status, 'answered'),
+        // RFC-070: row-state aging — drop sessions already baked into a prior
+        // consumer done-with-output run. Replaces the legacy iteration-based
+        // aging cutoff (RFC-070 §3.3) — no counter math.
+        isNull(clarifySessions.consumedByConsumerRunId),
       ),
     )
   const filtered = rows.filter(

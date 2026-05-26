@@ -729,6 +729,13 @@ export const clarifySessions = sqliteTable(
     answeredAt: integer('answered_at'),
     answeredBy: text('answered_by'),
     directive: text('directive', { enum: ['continue', 'stop'] }),
+    // RFC-070: stamped when a consumer (asking == consumer for self) node_run
+    // transitions to 'done' with at least one captured `<workflow-output>`.
+    // NULL = not yet consumed; aging filter is `IS NULL` rather than an
+    // iteration-counter comparison.
+    consumedByConsumerRunId: text('consumed_by_consumer_run_id').references(() => nodeRuns.id, {
+      onDelete: 'set null',
+    }),
   },
   (t) => ({
     taskIdx: index('idx_clarify_sessions_task').on(t.taskId),
@@ -738,6 +745,9 @@ export const clarifySessions = sqliteTable(
     ),
     sourceRunIdx: index('idx_clarify_sessions_source_run').on(t.sourceAgentNodeRunId),
     nodeShardIdx: index('idx_clarify_sessions_node_shard').on(t.clarifyNodeId, t.sourceShardKey),
+    consumedConsumerIdx: index('idx_clarify_sessions_consumed_consumer').on(
+      t.consumedByConsumerRunId,
+    ),
   }),
 )
 
@@ -783,6 +793,20 @@ export const crossClarifySessions = sqliteTable(
     // 'designer'" via `resolveQuestionScope` (preserves RFC-056/058 behavior).
     // Dual-write target: mirrors `clarifyRounds.questionScopesJson`.
     questionScopesJson: text('question_scopes_json'),
+    // RFC-070: stamped when the cross-clarify designer (target consumer) runs
+    // 'done' with captured output. Aging filter for designer External Feedback
+    // is `IS NULL` instead of an iteration cutoff (closes
+    // `01KSHDCASXA5GDKN3KDZVXYYT0` incident — see RFC-070 proposal §1.4).
+    consumedByConsumerRunId: text('consumed_by_consumer_run_id').references(() => nodeRuns.id, {
+      onDelete: 'set null',
+    }),
+    // RFC-070: stamped when the questioner (asking) runs 'done' with captured
+    // output. Aging filter for questioner cascade rerun history is `IS NULL`.
+    // Independent from `consumedByConsumerRunId`: designer + questioner are
+    // two distinct consumers that bake-in the Q&A at different times.
+    consumedByQuestionerRunId: text('consumed_by_questioner_run_id').references(() => nodeRuns.id, {
+      onDelete: 'set null',
+    }),
   },
   (t) => ({
     taskIdx: index('idx_cross_clarify_sessions_task').on(t.taskId),
@@ -793,6 +817,12 @@ export const crossClarifySessions = sqliteTable(
     ),
     designerIdx: index('idx_cross_clarify_sessions_designer').on(t.targetDesignerNodeId, t.status),
     statusIdx: index('idx_cross_clarify_sessions_status').on(t.status),
+    consumedConsumerIdx: index('idx_cross_clarify_sessions_consumed_consumer').on(
+      t.consumedByConsumerRunId,
+    ),
+    consumedQuestionerIdx: index('idx_cross_clarify_sessions_consumed_questioner').on(
+      t.consumedByQuestionerRunId,
+    ),
   }),
 )
 
@@ -869,6 +899,22 @@ export const clarifyRounds = sqliteTable(
     // by the submit handler dual-write. Always NULL for kind='self' rows;
     // may be NULL for kind='cross' rows when client did not send the map.
     questionScopesJson: text('question_scopes_json'),
+    // RFC-070: stamped when the consumer node_run finishes 'done' with at
+    // least one captured `<workflow-output>`. For kind='self' the consumer
+    // is the asking agent; for kind='cross' the consumer is
+    // target_consumer_node_id (the designer). Aging filter is `IS NULL`
+    // instead of `iteration < cutoff`, eliminating the cross-iteration vs
+    // unified-clarifyIteration mismatch class of bugs.
+    consumedByConsumerRunId: text('consumed_by_consumer_run_id').references(() => nodeRuns.id, {
+      onDelete: 'set null',
+    }),
+    // RFC-070: stamped when the kind='cross' questioner (asking_node_id) re-
+    // runs 'done' with captured output, so the questioner's cascade rerun
+    // history filter is also `IS NULL` instead of a counter comparison.
+    // Always NULL for kind='self' rows.
+    consumedByQuestionerRunId: text('consumed_by_questioner_run_id').references(() => nodeRuns.id, {
+      onDelete: 'set null',
+    }),
   },
   (t) => ({
     taskIdx: index('idx_clarify_rounds_task').on(t.taskId),
@@ -882,6 +928,12 @@ export const clarifyRounds = sqliteTable(
     targetConsumerIdx: index('idx_clarify_rounds_target_consumer').on(
       t.targetConsumerNodeId,
       t.status,
+    ),
+    consumedConsumerIdx: index('idx_clarify_rounds_consumed_consumer').on(
+      t.consumedByConsumerRunId,
+    ),
+    consumedQuestionerIdx: index('idx_clarify_rounds_consumed_questioner').on(
+      t.consumedByQuestionerRunId,
     ),
   }),
 )

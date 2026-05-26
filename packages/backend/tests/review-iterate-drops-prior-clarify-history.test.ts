@@ -278,6 +278,23 @@ async function buildHarness(): Promise<Harness> {
   })
   await db.delete(nodeRuns).where(eq(nodeRuns.id, answerResult.rerunNodeRunId))
   await db.update(nodeRuns).set({ clarifyIteration: 1 }).where(eq(nodeRuns.id, designerDone.id))
+  // RFC-070: under the consumed-by-run aging model, the post-clarify done
+  // designer run (designerDone) is also the consumer that baked the answered
+  // round into its `<workflow-output>`. In real flow runner.ts stamps this
+  // automatically (services/runner.ts mark gate); the test bypasses runner
+  // for the seeded round so we mirror the stamp here. Without this, the
+  // round would be NULL-consumed and the IS NULL filter would surface it
+  // again on the iterate rerun — the exact regression this test prevents
+  // for the iteration-cutoff era is now governed by the consumed stamp.
+  const { clarifyRounds: cr2, clarifySessions: cs2 } = await import('../src/db/schema')
+  await db
+    .update(cr2)
+    .set({ consumedByConsumerRunId: designerDone.id })
+    .where(eq(cr2.taskId, task.id))
+  await db
+    .update(cs2)
+    .set({ consumedByConsumerRunId: designerDone.id })
+    .where(eq(cs2.taskId, task.id))
 
   return {
     db,

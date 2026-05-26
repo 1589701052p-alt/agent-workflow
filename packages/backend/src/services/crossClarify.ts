@@ -76,7 +76,7 @@ import {
   type CrossClarifySourceContext,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -1301,19 +1301,6 @@ export interface BuildExternalFeedbackArgs {
    *  the iteration the agent is about to run. */
   designerClarifyIteration: number
   definition: WorkflowDefinition
-  /**
-   * RFC-064 §3.4 unified GENERAL aging cutoff. Drop every cross-clarify
-   * source whose round `iteration < historyCutoff` because that Q&A is
-   * already baked into a prior done designer node_run's captured
-   * `<workflow-output>` (signalled by `node_run_outputs` rows). Single
-   * source of truth with the self + cross-questioner branches that
-   * scheduler.ts:1582-1606 thread through `buildPromptContext` —
-   * `computeHistoryCutoff` returns the same number for all three
-   * consumer kinds under the unified `clarifyIteration` counter.
-   * `undefined` = no-op (preserves pre-fix call-shape for any unwired
-   * callsite).
-   */
-  historyCutoff?: number
 }
 
 export interface ExternalFeedbackPromptContext {
@@ -1363,24 +1350,19 @@ export async function buildExternalFeedbackContext(
           eq(crossClarifySessions.loopIter, args.loopIter),
           eq(crossClarifySessions.status, 'answered'),
           eq(crossClarifySessions.directive, 'continue'),
+          // RFC-070: drop sources already baked into a prior designer
+          // done-with-output run. Replaces the iteration-counter cutoff that
+          // mis-fired when self-clarify rounds pushed the unified
+          // clarifyIteration past cross_clarify_sessions.iteration's local
+          // counter — see RFC-070 proposal §1.4 (task
+          // `01KSHDCASXA5GDKN3KDZVXYYT0`).
+          isNull(crossClarifySessions.consumedByConsumerRunId),
         ),
       )
       .orderBy(desc(crossClarifySessions.iteration))
       .limit(1)
     const latest = rows[0]
     if (latest === undefined) continue
-    // RFC-064 §3.4 GENERAL aging cutoff: drop the source when its round
-    // iteration is already baked into a prior done designer node_run's
-    // captured `<workflow-output>`. Same semantics scheduler.ts threads
-    // into the self + cross-questioner consumer kinds via
-    // `clarifyRounds.buildPromptContext` → `applyAgingCutoff`. Without
-    // this, a designer rerun (review-iterate / process-retry / freshness
-    // top-up) keeps re-injecting the same cross-clarify Q&A after the
-    // designer already ingested it, wasting tokens and re-anchoring the
-    // agent on resolved decisions. Live failure: task
-    // 01KSHDCASXA5GDKN3KDZVXYYT0 (cc iter=1 vs designer clarifyIteration=5
-    // with outputs).
-    if (args.historyCutoff !== undefined && latest.iteration < args.historyCutoff) continue
     const questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
     const answers =
       latest.answersJson !== null ? (JSON.parse(latest.answersJson) as ClarifyAnswer[]) : []
@@ -1472,6 +1454,10 @@ export async function buildQuestionerCrossClarifyContext(
         eq(crossClarifySessions.taskId, args.taskId),
         eq(crossClarifySessions.sourceQuestionerNodeId, args.questionerNodeId),
         eq(crossClarifySessions.status, 'answered'),
+        // RFC-070: questioner-side row-state aging — drop rounds already
+        // baked into a prior questioner done-with-output run on the cascade
+        // path.
+        isNull(crossClarifySessions.consumedByQuestionerRunId),
       ),
     )
     .orderBy(asc(crossClarifySessions.iteration))

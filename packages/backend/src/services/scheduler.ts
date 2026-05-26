@@ -60,7 +60,7 @@ import {
   createCrossClarifySession,
   hasPersistentStop,
 } from '@/services/crossClarify'
-import { buildPromptContext, computeHistoryCutoff } from '@/services/clarifyRounds'
+import { buildPromptContext } from '@/services/clarifyRounds'
 import {
   decideResumeSessionId,
   detectSessionNotFoundFromStderr,
@@ -1472,113 +1472,22 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           }
         }
 
-        // GENERAL clarify-history cutoff: whenever this node previously
-        // produced captured `<workflow-output>` ports, the self-clarify
-        // rounds baked into that run's prompt are already folded into the
-        // output content / opencode session memory. Re-feeding them on a
-        // later rerun (review-iterate, cross-clarify resolve, daemon-restart
-        // resume, etc.) wastes tokens and re-anchors the agent on resolved
-        // decisions. Cutoff = priorCompletedTopLevelRun.clarifyIteration
-        // drops sessions with iterationIndex < cutoff.
+        // RFC-070: aging is row-state ("`consumed_by_..._run_id IS NULL`")
+        // applied inside each read path (`buildPromptContext` /
+        // `buildExternalFeedbackContext` / the legacy
+        // `buildClarifyPromptContext` self path). The scheduler no longer
+        // computes an iteration cutoff number — every previous mismatch
+        // between unified `clarifyIteration` and `cross_clarify_sessions`'
+        // local iteration counter is eliminated structurally.
         //
-        // Single signal: presence of `node_run_outputs` rows. runner.ts
-        // INSERTs into the table only AFTER port-content validation passes
-        // (RFC-049, services/runner.ts §parseEnvelope), so a row's mere
-        // existence proves the agent produced an `<workflow-output>`
-        // envelope whose every port also passed its kind handler (incl.
-        // markdown_file file-exists / file-not-empty checks).
-        //
-        // Decoupled from `node_runs.status` on purpose:
-        //   - clean `<workflow-clarify>` replies keep status='done' but
-        //     write no outputs row — outputs-only correctly skips them;
-        //   - review-iterate flips done→canceled while preserving the
-        //     outputs rows — outputs-only correctly catches them as
-        //     cutoff sources.
-        // The cross-clarify rerun path (priorDoneDesigner above) was the
-        // first instance of this rule; this block generalises it to every
-        // rerun trigger.
-        // RFC-058 T13: extracted to services/clarifyRounds.computeHistoryCutoff.
-        // Single source of truth for the GENERAL aging rule — same semantics
-        // (outputs-presence + isFresherNodeRun shadow ordering), now shared
-        // between self-clarify and cross-clarify consumer paths.
-        //
-        // RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci) + RFC-064:
-        // the cutoff returned must use the same iteration counter as the
-        // rounds the consumer reads. Under RFC-064's unified counter, BOTH
-        // self and cross clarify_rounds are aligned with `clarifyIteration`
-        // on `node_runs` (the unified `nodeRuns.clarifyIteration` is the
-        // sole signal; the per-kind separation lives on
-        // `clarify_rounds.kind`). The single `clarifyIteration` cutoff
-        // works for both the self and cross-questioner consumer branches —
-        // the `iterationField` parameter that 05-27 added is no longer
-        // necessary (see services/clarifyRounds.ts).
-        //
-        // Patch 2026-05-26 (no-cross-fallback): the previous version OR-ed
-        // in `priorDoneDesigner?.clarifyIteration` as a fallback. That
-        // fallback was a leftover from the original RFC-056 design where
-        // the cutoff lived inside the cross-clarify branch — when RFC-058
-        // generalised the rule via `computeHistoryCutoff`, the fallback
-        // became both redundant (when `priorDoneDesigner` has outputs the
-        // GENERAL rule already finds it) AND actively harmful (when it
-        // doesn't have outputs, using its clarifyIteration ages out rounds
-        // against a draft that never existed). The harmful case fires on
-        // any designer node that is topologically wired to a
-        // `__external_feedback__` edge AND has run self-clarify ≥ 2 times
-        // — `hasExternalFeedbackChannel` is purely topological, so the
-        // `isCrossClarifyTriggeredRerun=true` branch above runs even when
-        // no cross_clarify_sessions row exists. The bug dropped the very
-        // first answered self-clarify round from the rerun's prompt,
-        // making the agent re-ask resolved questions. Live failure:
-        // task 01KSHB1YHMZWFX85SHQ4KM2HKX. Locked by
-        // tests/clarify-history-cutoff-no-cross-fallback.test.ts.
-        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross' && currentClarifyIteration > 0
-        const priorCompletedCutoff = await computeHistoryCutoff({
-          db,
-          taskId,
-          nodeId: node.id,
-          shardKey: currentRunRow?.shardKey ?? null,
-          ...(currentRunRow !== undefined ? { currentRunRow } : {}),
-        })
-        const historyCutoffClarifyIteration = priorCompletedCutoff
-
         // RFC-056 §5.4 §6.4: when the about-to-run node is a cross-clarify
         // questioner AND this rerun was triggered by a cross-clarify resolve
-        // (crossClarifyIteration > 0), pull the questioner's own Q&A from
-        // `cross_clarify_sessions` instead of the self-clarify table. The
-        // result is the same `ClarifyPromptContext` shape so the renderer
-        // emits `## Clarify Q&A` + standing directive verbatim.
-        //
-        // Without this branch the questioner reruns blind — having no record
-        // of having asked anything — and the agent re-emits the SAME
-        // `<workflow-clarify>` envelope, looping back into cross-clarify
-        // forever. The 2026-05-22 cross-clarify-downstream-cascade patch
-        // pairs with this so the cascade actually makes the workflow advance.
-        //
-        // Patch 2026-05-23: dropped the legacy `retryIndex === 0` sub-gate
-        // for the same reason the designer-side update-mode gate dropped
-        // it (see comment above on `isCrossClarifyTriggeredRerun`). The
-        // designer-retry-index patch can in principle propagate retry_index
-        // bumps to questioner reruns minted by the downstream cascade; we
-        // must not let the gate silently miss those.
-        //
-        // `isQuestionerCrossClarifyRerun` is hoisted above the
-        // `computeHistoryCutoff` call so it can switch the cutoff field —
-        // see RFC-056 patch-2026-05-27 (questioner-cutoff-uses-cci).
-        // RFC-058 T13: unified buildPromptContext via consumerKind dispatch.
-        // 'cross-questioner' path additionally fixes RFC-058 缺口 1 (questioner
-        // aging gap) and 缺口 2 (wrapper-loop loop_iter isolation) by routing
-        // through the same cutoff + loopIter filter pipeline the self path uses.
-        // RFC-064: the two branches' applyLatestDirective gates are merged
-        // into the common `isClarifyRerun` variable (defined ~scheduler.ts:1381,
-        // `clarifyIteration > 0 && retryIndex === 0`). The pre-RFC-064 self
-        // branch used `isClarifyRerun` directly and the cross-questioner
-        // branch had a separately spelled-out `(retryIndex ?? 0) === 0`
-        // literal — semantically equivalent (the cross-questioner branch's
-        // entry condition `clarifyMode === 'cross' && clarifyIteration > 0`
-        // already implies `clarifyIteration > 0`). Merging to a single
-        // variable structurally eliminates the "missed-mirror gate" bug
-        // class that 747dcae fixed: any future tweak to the gate now lands
-        // in both branches with one edit. See RFC-064 design.md §5.5.
+        // (clarifyIteration > 0 under the unified counter), pull the
+        // questioner's own Q&A from kind='cross' rows via the cross-questioner
+        // consumer branch. Otherwise (self path) read kind='self'. Both
+        // branches share the `applyLatestDirective: isClarifyRerun` gate
+        // RFC-064 §5.5 unified.
+        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross' && currentClarifyIteration > 0
         const clarifyContext = hasClarifyChannel
           ? isQuestionerCrossClarifyRerun
             ? await buildPromptContext({
@@ -1589,20 +1498,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 consumerNodeId: node.id,
                 targetIteration: currentClarifyIteration,
                 loopIter: iteration,
-                // RFC-064: shared gate with the self branch — 747dcae's
-                // `(retryIndex ?? 0) === 0` literal merged into the common
-                // `isClarifyRerun` variable. Review-iterate / process-retry
-                // reruns still land in this branch (clarifyMode=='cross' &&
-                // clarifyIteration > 0 doesn't filter them out); without the
-                // gate the prior 'stop' directive would drag into the new
-                // rerun, telling the questioner to STOP CLARIFYING when the
-                // user is actually asking it to address fresh reviewer
-                // comments. The unified gate properly scopes 'stop' to the
-                // one clarify-driven rerun on both branches.
                 applyLatestDirective: isClarifyRerun,
-                ...(historyCutoffClarifyIteration !== undefined
-                  ? { historyCutoff: historyCutoffClarifyIteration }
-                  : {}),
               })
             : await buildPromptContext({
                 db,
@@ -1613,25 +1509,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 targetIteration: currentClarifyIteration,
                 shardKey: currentShardKey,
                 ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-                // RFC-023 originally claimed `directive='stop'` "naturally scopes
-                // to one rerun", but only the clarify-driven rerun
-                // (clarifyIteration just bumped, retryIndex=0) actually
-                // satisfies that. Review-iterate / process-retry reruns inherit
-                // clarifyIteration without producing a new answered session, so
-                // the prior 'stop' directive would drag along and tell the
-                // agent to skip clarify even when answering NEW reviewer
-                // comments. Gate the directive propagation on isClarifyRerun
-                // so 'stop' truly only suppresses the immediate next rerun.
                 applyLatestDirective: isClarifyRerun,
-                ...(historyCutoffClarifyIteration !== undefined
-                  ? { historyCutoff: historyCutoffClarifyIteration }
-                  : {}),
               })
           : undefined
         // RFC-056: build the External Feedback context + (if update-mode)
-        // the prior output block. Both are part of the same
-        // CrossClarifyPromptContext so renderUserPrompt emits Prior Output
-        // → External Feedback → Update Directive in stable order.
+        // the prior output block. RFC-070: aging applied inside
+        // `buildExternalFeedbackContext` via `consumed_by_consumer_run_id
+        // IS NULL`.
         const crossClarifyContext = hasExternalFeedbackChannel
           ? await buildExternalFeedbackContext({
               db,
@@ -1640,15 +1524,6 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               loopIter: iteration,
               designerClarifyIteration: currentClarifyIteration,
               definition,
-              // RFC-064 §3.4 GENERAL aging — feed the SAME cutoff the self
-              // + cross-questioner branches consume above. Without it, a
-              // designer rerun (review-iterate / process-retry / freshness
-              // top-up) keeps re-injecting cross-clarify Q&A that the
-              // prior done node_run's `<workflow-output>` already baked in.
-              // Closes the last consumer-kind gap §3.4 promised to unify.
-              ...(historyCutoffClarifyIteration !== undefined
-                ? { historyCutoff: historyCutoffClarifyIteration }
-                : {}),
             })
           : undefined
         // Compose the prior-output block from the latest done designer's

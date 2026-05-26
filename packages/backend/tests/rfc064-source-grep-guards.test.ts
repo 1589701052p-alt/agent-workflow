@@ -78,26 +78,12 @@ describe('RFC-064 C3 — cross-clarify counter absent from live source code', ()
   })
 })
 
-describe('RFC-064 C6 — isFresherForCutoff 3-layer sort key', () => {
-  test('services/clarifyRounds.ts isFresherForCutoff has 3 layers (clarifyIteration → retryIndex → id)', () => {
-    const src = readFileSync(
-      resolve(REPO_ROOT, 'packages/backend/src/services/clarifyRounds.ts'),
-      'utf8',
-    )
-    const idx = src.indexOf('function isFresherForCutoff(')
-    expect(idx).toBeGreaterThan(-1)
-    // Capture the function body.
-    const body = src.slice(idx, idx + 1500)
-    // 3 layers — accept order: clarifyIteration, retryIndex, id.
-    expect(body).toContain('candidate.clarifyIteration !== incumbent.clarifyIteration')
-    expect(body).toContain('candidate.retryIndex !== incumbent.retryIndex')
-    expect(body).toContain('candidate.id > incumbent.id')
-    // Layer count check: the function MUST NOT contain a 4th counter
-    // comparison (e.g. crossClarifyIteration). The post-RFC-064 contract
-    // is exactly 3 conditional layers + the undefined incumbent guard.
-    expect(body).not.toContain('crossClarifyIteration')
-  })
-})
+// RFC-064 C6 — `isFresherForCutoff` is gone under RFC-070 along with the rest
+// of the iteration-cutoff code path (see RFC-070 §3 / migration 0036). The
+// freshness-comparator role is no longer needed because aging is now per-row
+// state (`consumed_by_..._run_id IS NULL`), not a numeric cutoff. The grep
+// guard that locked the 3-layer sort key would now fail vacuously; the
+// `rfc070-aging-stamp-grep-guards.test.ts` C-group locks the new contract.
 
 describe('RFC-064 C9 — applyLatestDirective gate merged into shared isClarifyRerun', () => {
   test('scheduler.ts has at least 2 applyLatestDirective occurrences (self + cross-questioner branches)', () => {

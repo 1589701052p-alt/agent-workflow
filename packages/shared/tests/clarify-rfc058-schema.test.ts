@@ -15,7 +15,6 @@ import {
   ClarifyRoundSchema,
   ClarifyRoundStatusSchema,
   ClarifyRoundSummarySchema,
-  applyAgingCutoff,
 } from '../src/index'
 
 describe('RFC-058 ClarifyRoundKindSchema', () => {
@@ -148,28 +147,7 @@ describe('RFC-058 ClarifyRoundSummarySchema', () => {
   })
 })
 
-describe('RFC-058 applyAgingCutoff', () => {
-  const sample = [
-    { iteration: 0, id: 'a' },
-    { iteration: 1, id: 'b' },
-    { iteration: 2, id: 'c' },
-  ]
-
-  test('undefined cutoff is a no-op (returns shallow copy)', () => {
-    const r = applyAgingCutoff(sample, undefined)
-    expect(r).toEqual(sample)
-    expect(r).not.toBe(sample) // shallow copy
-  })
-
-  test('cutoff=0 keeps all rows (iteration >= 0)', () => {
-    expect(applyAgingCutoff(sample, 0)).toEqual(sample)
-  })
-
-  test('cutoff=1 drops iteration=0', () => {
-    expect(applyAgingCutoff(sample, 1)).toEqual([sample[1]!, sample[2]!])
-  })
-
-  test('cutoff=5 prunes everything', () => {
-    expect(applyAgingCutoff(sample, 5)).toEqual([])
-  })
-})
+// RFC-070: `applyAgingCutoff` helper deleted. Aging is row-state via
+// `consumed_by_..._run_id IS NULL` predicates inside the SELECT (no
+// iteration math). The aging-rule baseline cases moved to
+// `packages/backend/tests/rfc070-aging-stamp-behavior.test.ts` (B-group).

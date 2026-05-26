@@ -15,13 +15,11 @@
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
-import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { clarifyRounds, nodeRuns, tasks, workflows } from '../src/db/schema'
 import {
   buildPromptContext,
-  computeHistoryCutoff,
   getClarifyRoundDetail,
   listClarifyRoundSummaries,
   listClarifyRounds,
@@ -101,176 +99,12 @@ function sampleAnswersJson(): string {
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
-describe('RFC-058 T12 — computeHistoryCutoff (GENERAL aging rule)', () => {
-  test('returns undefined when no prior done run exists', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const cutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'designer',
-      shardKey: null,
-    })
-    expect(cutoff).toBeUndefined()
-  })
-
-  test('returns prior done run clarifyIteration when outputs row exists', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    // Prior done run with outputs — this is the cutoff source
-    await db.insert(nodeRuns).values({
-      id: 'nr_prior',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 2,
-      startedAt: Date.now() - 1000,
-    })
-    await db.insert(nodeRunOutputs).values({
-      nodeRunId: 'nr_prior',
-      portName: 'plan',
-      content: 'output content',
-    })
-    // Current node_run at clarifyIteration 3 (the about-to-run)
-    await db.insert(nodeRuns).values({
-      id: 'nr_current',
-      taskId,
-      nodeId: 'designer',
-      status: 'pending',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 3,
-    })
-    const current = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_current')))[0]!
-    const cutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'designer',
-      currentRunRow: current,
-      shardKey: null,
-    })
-    expect(cutoff).toBe(2)
-  })
-
-  test('returns undefined when prior done run has no outputs row', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_prior_no_outputs',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 2,
-      startedAt: Date.now() - 1000,
-    })
-    await db.insert(nodeRuns).values({
-      id: 'nr_current',
-      taskId,
-      nodeId: 'designer',
-      status: 'pending',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 3,
-    })
-    const current = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_current')))[0]!
-    const cutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'designer',
-      currentRunRow: current,
-      shardKey: null,
-    })
-    expect(cutoff).toBeUndefined()
-  })
-
-  test('cutoff returns prior cross-clarify done run clarifyIteration (unified counter post-RFC-064)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    // RFC-064: previously this case seeded a prior done at
-    // crossClarifyIteration=1 (clarifyIteration=0) and asked for the cutoff
-    // via `iterationField: 'crossClarifyIteration'`. Under the unified
-    // counter, the cross signal lives on the same column, so we set
-    // clarifyIteration=1 on the prior done row directly.
-    await db.insert(nodeRuns).values({
-      id: 'nr_cross_prior',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 1,
-      startedAt: Date.now() - 1000,
-    })
-    await db.insert(nodeRunOutputs).values({
-      nodeRunId: 'nr_cross_prior',
-      portName: 'plan',
-      content: 'designer output',
-    })
-    await db.insert(nodeRuns).values({
-      id: 'nr_cross_current',
-      taskId,
-      nodeId: 'designer',
-      status: 'pending',
-      retryIndex: 1,
-      iteration: 0,
-      clarifyIteration: 2,
-    })
-    const current = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, 'nr_cross_current'))
-    )[0]!
-    const cutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'designer',
-      currentRunRow: current,
-      shardKey: null,
-    })
-    expect(cutoff).toBe(1)
-  })
-
-  test('child shard run is excluded from cutoff (parent_node_run_id != null)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_parent',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 0,
-      parentNodeRunId: null,
-    })
-    await db.insert(nodeRuns).values({
-      id: 'nr_child_shard',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 5,
-      parentNodeRunId: 'nr_parent',
-    })
-    await db.insert(nodeRunOutputs).values({
-      nodeRunId: 'nr_child_shard',
-      portName: 'plan',
-      content: 'shard output',
-    })
-    // The child shard's output is real but its row has parent_node_run_id;
-    // computeHistoryCutoff excludes it from the cutoff scan.
-    const cutoff = await computeHistoryCutoff({
-      db,
-      taskId,
-      nodeId: 'designer',
-      shardKey: null,
-    })
-    expect(cutoff).toBeUndefined()
-  })
-})
+// RFC-070: `computeHistoryCutoff` is gone — the GENERAL aging rule is now
+// row-state ("`consumed_by_..._run_id IS NULL`") rather than a numeric
+// iteration cutoff. The semantic guarantees that block was locking
+// (prior-done-with-outputs → drop older rounds) are now covered by
+// `rfc070-aging-stamp-behavior.test.ts` B-group cases against the mark
+// helper + the read-side `IS NULL` filter.
 
 describe('RFC-058 T12 — selectAnsweredRoundsForConsumer (read path)', () => {
   test('self: pulls kind=self rows for the asking agent + shardKey null', async () => {
@@ -574,123 +408,10 @@ describe('RFC-058 T12 — buildPromptContext composes round blocks + applies agi
     expect(ctx?.directive).toBe('continue')
   })
 
-  test('historyCutoff prunes rows with iteration < cutoff (GENERAL aging)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, definition } = await seedTask(db)
-    await db.insert(nodeRuns).values([
-      {
-        id: 'nr_d',
-        taskId,
-        nodeId: 'designer',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-      {
-        id: 'nr_c',
-        taskId,
-        nodeId: 'clarify1',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-    ])
-    await db.insert(clarifyRounds).values([
-      {
-        id: 'r_pre_cutoff',
-        taskId,
-        kind: 'self',
-        askingNodeId: 'designer',
-        askingNodeRunId: 'nr_d',
-        intermediaryNodeId: 'clarify1',
-        intermediaryNodeRunId: 'nr_c',
-        iteration: 0,
-        questionsJson: sampleQuestionsJson('pre-cutoff Q'),
-        answersJson: sampleAnswersJson(),
-        directive: 'continue',
-        status: 'answered',
-      },
-      {
-        id: 'r_post_cutoff',
-        taskId,
-        kind: 'self',
-        askingNodeId: 'designer',
-        askingNodeRunId: 'nr_d',
-        intermediaryNodeId: 'clarify1',
-        intermediaryNodeRunId: 'nr_c',
-        iteration: 1,
-        questionsJson: sampleQuestionsJson('post-cutoff Q'),
-        answersJson: sampleAnswersJson(),
-        directive: 'continue',
-        status: 'answered',
-      },
-    ])
-    const ctx = await buildPromptContext({
-      db,
-      definition,
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: 'designer',
-      targetIteration: 2,
-      shardKey: null,
-      historyCutoff: 1,
-    })
-    expect(ctx?.questionsBlock).not.toContain('pre-cutoff Q')
-    expect(ctx?.questionsBlock).toContain('post-cutoff Q')
-  })
-
-  test('cross-questioner aging fix (RFC-058 缺口 1): cutoff filters questioner side too', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, definition } = await seedTask(db)
-    await db.insert(nodeRuns).values([
-      {
-        id: 'nr_q',
-        taskId,
-        nodeId: 'questioner',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-      {
-        id: 'nr_cc',
-        taskId,
-        nodeId: 'cc1',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-    ])
-    // Questioner already produced an output at cci=1 — pre-cutoff round is
-    // baked into that output; cci=2 cascade rerun must not see it.
-    await db.insert(clarifyRounds).values({
-      id: 'r_q_iter0',
-      taskId,
-      kind: 'cross',
-      askingNodeId: 'questioner',
-      askingNodeRunId: 'nr_q',
-      intermediaryNodeId: 'cc1',
-      intermediaryNodeRunId: 'nr_cc',
-      targetConsumerNodeId: 'designer',
-      loopIter: 0,
-      iteration: 0,
-      questionsJson: sampleQuestionsJson('iter-0 questioner Q'),
-      answersJson: sampleAnswersJson(),
-      directive: 'continue',
-      status: 'answered',
-    })
-    const ctx = await buildPromptContext({
-      db,
-      definition,
-      taskId,
-      consumerKind: 'cross-questioner',
-      consumerNodeId: 'questioner',
-      targetIteration: 2,
-      historyCutoff: 1, // ← RFC-058: cross-questioner now respects this
-      loopIter: 0,
-    })
-    // The iter-0 row is pre-cutoff → pruned. No further rows → undefined.
-    expect(ctx).toBeUndefined()
-  })
+  // RFC-070: `historyCutoff` parameter is gone. The same behavior — drop
+  // rounds already baked into a prior done-with-output run — is now driven
+  // by `consumed_by_consumer_run_id IS NULL` predicates inside the SELECT.
+  // Covered end-to-end by `rfc070-aging-stamp-behavior.test.ts` B-group.
 
   test('inline mode collapses to last round + mode=inline tag', async () => {
     const db = createInMemoryDb(MIGRATIONS)
