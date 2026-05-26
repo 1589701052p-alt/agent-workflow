@@ -167,7 +167,7 @@ describe('Session attempts dropdown picker', () => {
     expect(after[1]!.getAttribute('aria-selected')).toBe('false')
   })
 
-  test('iter label distinguishes initial / retry / loop / clarify / cross-clarify rows', () => {
+  test('iter label distinguishes initial / retry / loop / clarify rows (unified counter after RFC-064)', () => {
     const initial = run({ id: 'a', retryIndex: 0, iteration: 0, clarifyIteration: 0 })
     const retry = run({ id: 'b', retryIndex: 1, iteration: 0, clarifyIteration: 0, startedAt: 200 })
     const loop = run({ id: 'c', retryIndex: 0, iteration: 2, clarifyIteration: 0, startedAt: 300 })
@@ -178,14 +178,17 @@ describe('Session attempts dropdown picker', () => {
       clarifyIteration: 3,
       startedAt: 400,
     })
-    // RFC-056 questioner-rerun row: only clarifyIteration bumped.
-    // Without the cci branch in iterLabel, this option collapses back to
-    // "initial" and the picker hides the new attempt from the user.
+    // RFC-064: the unified clarifyIteration covers both self-clarify and
+    // cross-clarify rerun rows (the previously-separate `crossClarifyIteration`
+    // chip was folded into `iterClarify` per design.md §10.5 D1). A
+    // questioner-rerun row that pre-RFC-064 had only cci bumped is now
+    // expressed via clarifyIteration on the same counter, so it shows up
+    // under the same "clarify#N" label rather than a distinct chip.
     const cross = run({
       id: 'e',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
+      clarifyIteration: 1,
       startedAt: 500,
     })
     renderDrawer({
@@ -200,7 +203,7 @@ describe('Session attempts dropdown picker', () => {
     expect(html).toMatch(/retry#1/i)
     expect(html).toMatch(/loop#2/i)
     expect(html).toMatch(/clarify#3/i)
-    expect(html).toMatch(/cross-clarify#1/i)
+    expect(html).toMatch(/clarify#1/i)
   })
 
   test('shard rows show the shardKey alongside the iter label', () => {
