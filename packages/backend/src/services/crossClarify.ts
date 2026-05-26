@@ -1301,6 +1301,19 @@ export interface BuildExternalFeedbackArgs {
    *  the iteration the agent is about to run. */
   designerClarifyIteration: number
   definition: WorkflowDefinition
+  /**
+   * RFC-064 §3.4 unified GENERAL aging cutoff. Drop every cross-clarify
+   * source whose round `iteration < historyCutoff` because that Q&A is
+   * already baked into a prior done designer node_run's captured
+   * `<workflow-output>` (signalled by `node_run_outputs` rows). Single
+   * source of truth with the self + cross-questioner branches that
+   * scheduler.ts:1582-1606 thread through `buildPromptContext` —
+   * `computeHistoryCutoff` returns the same number for all three
+   * consumer kinds under the unified `clarifyIteration` counter.
+   * `undefined` = no-op (preserves pre-fix call-shape for any unwired
+   * callsite).
+   */
+  historyCutoff?: number
 }
 
 export interface ExternalFeedbackPromptContext {
@@ -1356,6 +1369,18 @@ export async function buildExternalFeedbackContext(
       .limit(1)
     const latest = rows[0]
     if (latest === undefined) continue
+    // RFC-064 §3.4 GENERAL aging cutoff: drop the source when its round
+    // iteration is already baked into a prior done designer node_run's
+    // captured `<workflow-output>`. Same semantics scheduler.ts threads
+    // into the self + cross-questioner consumer kinds via
+    // `clarifyRounds.buildPromptContext` → `applyAgingCutoff`. Without
+    // this, a designer rerun (review-iterate / process-retry / freshness
+    // top-up) keeps re-injecting the same cross-clarify Q&A after the
+    // designer already ingested it, wasting tokens and re-anchoring the
+    // agent on resolved decisions. Live failure: task
+    // 01KSHDCASXA5GDKN3KDZVXYYT0 (cc iter=1 vs designer clarifyIteration=5
+    // with outputs).
+    if (args.historyCutoff !== undefined && latest.iteration < args.historyCutoff) continue
     const questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
     const answers =
       latest.answersJson !== null ? (JSON.parse(latest.answersJson) as ClarifyAnswer[]) : []

@@ -1640,6 +1640,15 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               loopIter: iteration,
               designerClarifyIteration: currentClarifyIteration,
               definition,
+              // RFC-064 §3.4 GENERAL aging — feed the SAME cutoff the self
+              // + cross-questioner branches consume above. Without it, a
+              // designer rerun (review-iterate / process-retry / freshness
+              // top-up) keeps re-injecting cross-clarify Q&A that the
+              // prior done node_run's `<workflow-output>` already baked in.
+              // Closes the last consumer-kind gap §3.4 promised to unify.
+              ...(historyCutoffClarifyIteration !== undefined
+                ? { historyCutoff: historyCutoffClarifyIteration }
+                : {}),
             })
           : undefined
         // Compose the prior-output block from the latest done designer's
