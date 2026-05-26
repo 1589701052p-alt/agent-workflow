@@ -18,8 +18,9 @@
 //   * Designer round 3's prompt (captured via CROSS_CLARIFY_PROMPT_LOG)
 //     contains `## External Feedback` — proves the framework injected
 //     the user's submitted Q&A into the rerun prompt.
-//   * cross_clarify_iteration on designer's second node_run is 1
-//     (preserves clarify_iteration parity with RFC-056 §C8).
+//   * clarifyIteration on designer's second node_run is bumped (>0) — under
+//     RFC-064 the previously-separate cross_clarify_iteration column was
+//     folded into clarify_iteration via the §3.2 max+1 mint algorithm.
 
 import { test, expect } from '@playwright/test'
 import { execSync } from 'node:child_process'
@@ -342,8 +343,13 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     expect(designerRound2, 'designer round 2 prompt was logged').not.toBeNull()
     expect(designerRound2![1]).toContain('## External Feedback')
 
-    // 7. Designer's elevated node_run carries cross_clarify_iteration=1 +
-    //    preserves clarify_iteration=0 (RFC-056 §C8 orthogonality).
+    // 7. Designer's elevated node_run carries clarifyIteration > 0 — under
+    //    the RFC-064 unified counter, cross-clarify rounds bump the same
+    //    column as self-clarify rounds. The §C8 "orthogonal counters"
+    //    invariant from RFC-056 has been replaced by the §3.2 max+1 mint
+    //    algorithm: the cross-clarify submit lifts the designer's
+    //    clarifyIteration above every prior participant's, and we assert
+    //    on the post-rerun row by its strictly-positive counter.
     const runsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
     })
@@ -352,15 +358,13 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
       runs: Array<{
         nodeId: string
         clarifyIteration: number
-        crossClarifyIteration: number
         status: string
       }>
     }
     const elevatedDesigner = runs.runs.find(
-      (r) => r.nodeId === 'designer' && r.crossClarifyIteration === 1,
+      (r) => r.nodeId === 'designer' && r.clarifyIteration > 0 && r.status === 'done',
     )
-    expect(elevatedDesigner, 'designer reran with crossClarifyIteration=1').toBeDefined()
-    expect(elevatedDesigner?.clarifyIteration).toBe(0)
+    expect(elevatedDesigner, 'designer reran with clarifyIteration > 0').toBeDefined()
     expect(elevatedDesigner?.status).toBe('done')
   })
 })
