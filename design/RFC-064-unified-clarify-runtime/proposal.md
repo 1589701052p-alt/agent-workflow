@@ -13,9 +13,9 @@
 哪些题只回反问者"在一套数据流里统一表达。
 
 **但运行时调度层、节点迭代计数器、service 文件仍是两套并行**。这条没合的边带来了
-最近 10 天 7 个连环 patch（2026-05-22 ~ 2026-05-27），其中 **6 个根因相同**：
+最近 10 天 **10 个 dated patch**（`design/RFC-056-clarify-cross-agent/patch-*.md` 9 个 + commit `747dcae` cross-questioner 'stop' directive 分支均衡，2026-05-22 ~ 2026-05-27），其中 **7 个根因相同**：
 `clarifyIteration` 与 `crossClarifyIteration` 两个独立计数器互相错位、
-任一 codepath（mint / inherit / freshness / cutoff / dispatch / cascade）漏镜像就漏一处行为。
+任一 codepath（mint / inherit / freshness / cutoff / dispatch / cascade / **prompt-render gate**）漏镜像就漏一处行为。
 
 | Patch 日期 | 根因 | 体现 |
 |---|---|---|
@@ -28,11 +28,13 @@
 | 2026-05-25 questioner-cascade-no-skip | cascade 幂等 | cascade 只看 cci 数值，clarify-only done 行被错误 skip |
 | 2026-05-25 questioner-rerun-bumps-cci | mint 不 bump | `mintQuestionerRerun` 写 cci=lastRun.cci 漏 +1 |
 | 2026-05-26 review-dispatch-respects-cci | dispatch 短路 | `dispatchReviewNode` `alreadyDone` 不看 cci，cascade pending 在更高 cci 永不 dispatch |
+| 2026-05-26 cross-questioner-stop-directive-scoped-to-cci-rerun（`747dcae`） | cross-questioner 分支漏 applyLatestDirective gate | RFC-058 T13 unify 时只在 self 分支接 `applyLatestDirective: isClarifyRerun`，cross-questioner 分支保持默认 true；`isQuestionerCrossClarifyRerun` 只看 `cci > 0`，review-iterate / process-retry 重跑因继承 cci 仍落入此分支并被 stale `directive='stop'` 沾染——`<workflow-clarify>` 协议块被 drop、`STOP CLARIFYING` 错误传染给"实际是回应 reviewer 新评论"的重跑 |
 | 2026-05-27 questioner-cutoff-uses-cci | cutoff 用错 field | `iterationField: 'clarifyIteration'` 永远不切到 `'crossClarifyIteration'` |
 
 **唯一不属于 cci/clarifyIteration 错位的是 22 号的"反问者 Q&A 注入"**——那也是同根：两套 prompt 构建函数
 （`buildClarifyPromptContext` vs `buildQuestionerCrossClarifyContext`）历史上是 RFC-023 / RFC-056 并行写的，
 RFC-058 已经把它合并成 `buildPromptContext`，本 RFC 完成 service / scheduler / 字段层的同样合并。
+**05-26 的 cross-questioner 'stop' directive 分支均衡（`747dcae`）也是同根的衍生**：RFC-058 unify 后 self 分支补了 `applyLatestDirective` gate，cross-questioner 分支因"已在 cci > 0 隐含里"被遗漏；本 RFC PR-B 重构**把两条分支的 gate 表达式合并为公共变量 `isClarifyRerun`**（scheduler.ts:1390 已存在该派生变量，统一计数器下 `clarifyIteration > 0 && retryIndex === 0` 在两分支语义等价；cross-questioner 进入条件隐含 clarifyIteration > 0，保留全表达式不会引入误判）。同步**扩 `cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts` 源码文本守门 pattern** 接受 `isClarifyRerun` 或旧字面量任一形态（详 §4 C9 + design.md §5.5 + §9 A 组 + §10），不许 silent drop gate。
 
 **B 组早期 fix（pre-dated-patch 时代散落 commit）**——同样属于 clarify / cross-clarify 健壮性维护，每个有自己专属
 测试文件、PR-A baseline 直接复用做回归锚点（design.md §9 详列）：
@@ -222,16 +224,25 @@ clarifyIteration（前 cci）重计——所有边界条件与 RFC-064 上线前
 
 **S8（migration 0033 硬切）**
 
-启动 daemon 跑过 RFC-058 / 059 / 7 个 patch 的开发期数据集 → daemon 关 → 跑 migration 0033 →
+启动 daemon 跑过 RFC-058 / 059 / 10 个 dated patch 的开发期数据集 → daemon 关 → 跑 migration 0033 →
 所有 node_runs 行 `clarify_iteration ← max(self, cross)` + cross 列 DROP → 重启 daemon → 任意 clarify
 inbox / 详情 / submit / agent rerun 行为字节级一致。migration test 覆盖 7 case。
+
+**S9（review-iterate 不被 stale STOP 沾染，byte-level 守恒）**
+
+`D → Q → cross → review`。第 1 轮 cross-clarify reject（directive='stop'）→ questioner cascade rerun 带 STOP CLARIFYING →
+output → review approve → done。后续用户在 review 节点点 iterate（reject），cascade reset 触发 D / Q 全链路重跑。
+
+- **RFC-064 上线前（含 commit `747dcae` 后的修复版）**：cross-questioner 分支调用 `buildPromptContext({consumerKind:'cross-questioner', applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0, ...})`——review-iterate 重跑 `retryIndex > 0` → applyLatestDirective=false → `<workflow-clarify>` 协议块在新轮回归、STOP CLARIFYING trailer 被剥离、但 Q&A body 完整保留（questioner 仍能看到自己历史问过的题 + 下游答案）。
+- **RFC-064 上线后**：PR-B 重构**把两分支表达式合并为公共变量** `applyLatestDirective: isClarifyRerun`（self + cross-questioner 两条分支同源、单点改动消除漏镜像可能性）；语义在统一 clarifyIteration 下完全等价（详 design.md §5.5 / §9 A 组 / §10 grep + §4 C9）。
+- **回归判据**：既有测试文件 `cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts`（4 case，含 1 条 scheduler.ts cross-questioner 分支源码文本守门）在 PR-B 同步扩 pattern 后 0 行为退化——pattern 改为接受 `isClarifyRerun` 或字面量 `(currentRunRow?.retryIndex ?? 0) === 0` 任一形态（**先扩测试再改代码**，详 plan.md T15 A 类）。
 
 ## 4. 验收标准
 
 ### 功能
 
 - **A1（self-clarify byte-level）**：RFC-023 happy / reject / multi-round / inline / cutoff / ask-bias 完整 path 字节级与 PR-A baseline 一致。
-- **A2（cross-clarify byte-level）**：RFC-056 happy / reject / multi-source / wrapper-loop / abandoned 完整 path + 7 个 patch 行为字节级一致。
+- **A2（cross-clarify byte-level）**：RFC-056 happy / reject / multi-source / wrapper-loop / abandoned 完整 path + **10 个 dated patch** 行为字节级一致（9 个 RFC-056 patch files + commit `747dcae` cross-questioner 'stop' directive 分支均衡）。
 - **A3（per-question scope byte-level）**：RFC-059 fast path / mixed / 设计者过滤字节级一致。
 - **A4（计数器单一）**：源代码层 grep 守门——`crossClarifyIteration` / `cross_clarify_iteration` 在 `packages/backend/src/` + `packages/shared/src/` + `packages/frontend/src/` 共**0 处**命中（除 migration 0033 文件 + 文档外）。
 - **A5（service 文件合一）**：`packages/backend/src/services/crossClarify.ts` 物理删除；`services/clarify.ts` 接管全部 cross 路径 helper；`buildExternalFeedbackContext` 在合并后的 clarify.ts 内独立 export。
@@ -263,6 +274,7 @@ inbox / 详情 / submit / agent rerun 行为字节级一致。migration test 覆
 - **C6（freshness 排序简化）**：`packages/backend/tests/clarify-freshness-no-cci.test.ts`——`isFresherForCutoff` 测试矩阵确认只有 clarifyIteration → retryIndex → id 三层、删除 cci 中间档；patch-2026-05-25-fresher-noderun-includes-cci 行为通过新统一字段继续守恒（更高 clarifyIteration 优先）。
 - **C7（per-question scope 隔离不退化）**：复用 RFC-059 `cross-clarify-fast-path-isolation.test.ts` + `cross-clarify-question-scope.test.ts` 套件；新增 1 case：scope=questioner 全路径下 questioner.clarifyIteration += 1 / designer.clarifyIteration 不变。
 - **C8（canvas drag helpers 零改动守门）**：`packages/frontend/tests/canvas-drag-zero-touch-rfc064.test.ts`（新）——`packages/frontend/src/components/canvas/clarifyDragHelper.ts` + `crossClarifyDragHelper.ts` + `WorkflowCanvas.tsx` 三个文件相对 PR-A snapshot 在 PR-B 后只允许"内部 cci 名 → clarify 名"重命名（**实际上这些文件未引用 cci**——RFC-063 patch-2026-05-26 已确认）；A14 + 既有 5 case 测试零退化（canvas-clarify-drag.test.ts 3 + cross-clarify-drag-helper.test.ts 2）。复用既有源代码层 grep：`grep -n "crossClarifyIteration\|cross_clarify_iteration" packages/frontend/src/components/canvas/*` 在 PR-A / PR-B 都应 0 命中（已是 0）。
+- **C9（cross-questioner 'stop' directive 分支均衡守门，747dcae 不回退）**：既有测试文件 `packages/backend/tests/cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts`（commit `747dcae` 引入，4 case：3 条 service 行为 + 1 条 scheduler 源码文本守门）在 PR-B 后零行为退化。**PR-B 同步扩源码文本守门 pattern**：scheduler.ts 内"`consumerKind: 'cross-questioner'`"字面量与下一条"`: await buildPromptContext({`"之间的 ternary 第一分支体内必须出现 `applyLatestDirective`，且其值表达式属于以下二选一——(a) 旧字面量 `(currentRunRow?.retryIndex ?? 0) === 0`，或 (b) 新公共变量名 `isClarifyRerun`。PR-B 实施顺序硬约束：**先扩测试 pattern 再改源码**——`cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts:248-266` 的 toContain 改为 OR pattern（详 plan.md T15 A 类条目），打绿 PR-A baseline；然后 scheduler.ts 合并两分支的 gate 为 `applyLatestDirective: isClarifyRerun`。**不许反序，更不许 silent drop**。3 条 service 行为 case（service-level `buildPromptContext({applyLatestDirective:false})` 的 directive coerce / trailer strip / Q&A body 保留）在 PR-B 后完全不变。同时 C9 复用既有 `clarify-stop-directive-scoped-to-clarify-rerun.test.ts`（commit `7b20185`，self 分支同一 gate 的对偶守门）共同守。
 
 ## 5. 关键技术选型理由
 
@@ -288,7 +300,7 @@ inbox / 详情 / submit / agent rerun 行为字节级一致。migration test 覆
 - **RFC-039 ask-bias + STOP CLARIFYING**：anchor 文案 / appendTrailer 字节级保留。
 - **RFC-042 in-attempt retry**：patch-2026-05-24 引入的 `inheritedCrossClarifyIteration` 在本 RFC 删除；统一通过 `inheritedClarifyIteration` 表达，retry 路径字节级守恒。
 - **RFC-053 lifecycle hardening**：CR-1 abandoned 升级 invariant 查询条件不动；转移函数 / 7+1 条规则零改动。
-- **RFC-056 cross-clarify + 9 patch**：本 RFC 的直接重构对象。所有 cross-clarify 功能（cascade / freshness / aging / multi-source / abandoned / wrapper-loop / cci 继承）行为字节级守恒；patch chain 已合入主干、cci 错位类 bug 在本 RFC 后从源代码消除。
+- **RFC-056 cross-clarify + 9 patch files + commit `747dcae`**：本 RFC 的直接重构对象。所有 cross-clarify 功能（cascade / freshness / aging / multi-source / abandoned / wrapper-loop / cci 继承 / prompt-render gate 均衡）行为字节级守恒；patch chain 已合入主干、cci 错位类 bug 在本 RFC 后从源代码消除——包括 747dcae 描述的"两分支 gate 表达式漏镜像"类风险（合并为公共 `isClarifyRerun` 后单点改动两分支同时收）。
 - **RFC-058 clarify sessions unification**：本 RFC 的直接基础。RFC-058 的 `clarify_rounds` 表 / `kind` discriminator / `buildPromptContext` / `computeHistoryCutoff` 全部保留；本 RFC 仅在 RFC-058 留下的"两计数器并行 + 两 service 并行"上做最后合一。
 - **RFC-059 per-question scope**：本 RFC 通过 PR-A baseline 字节级守恒；scope 行为完全独立于计数器命名，重构零影响。
 - **RFC-060 fanout-as-wrapper**：6 PR 全部落地，与本 RFC 文件改动面错峰，并行不冲突。
@@ -298,7 +310,7 @@ inbox / 详情 / submit / agent rerun 行为字节级一致。migration test 覆
 
 | 风险 | 评估 | 缓解 |
 |---|---|---|
-| PR-A baseline 没覆盖到某个 patch 隐含行为 → PR-B 退化但 PR-A 没抓到 | 高：9 个 patch 累积行为细节繁多 | 逐 patch 抽 1-2 case 入 baseline（C2 含 7 patch 各案）；PR-B push 时跑全 baseline + RFC-056 + RFC-058 + RFC-059 全套并行防护 |
+| PR-A baseline 没覆盖到某个 patch 隐含行为 → PR-B 退化但 PR-A 没抓到 | 高：10 个 dated patch 累积行为细节繁多 | 逐 patch 抽 1-2 case 入 baseline（C2 含 10 patch 各案；C9 单独锁 747dcae 源码文本守门 + 服务层 3 case）；PR-B push 时跑全 baseline + RFC-056 + RFC-058 + RFC-059 全套并行防护 |
 | migration 0033 max-merge 算法在某种 dev 数据上写错 → 计数器跳变 | 中：max-merge 简单但需要测试覆盖空 / cci 单独大 / clarify 单独大 / 等值多种组合 | C5 5 case 覆盖；migration 前后 dump cci + clarify 两列对比 |
 | bun:sqlite 不支持 DROP COLUMN，12-step rebuild 在已落数据上失败 | 中：bun:sqlite 历史有 schema 重建踩坑 | 走 drizzle-kit `--break` 路径或手写 rebuild 脚本；migration test 覆盖空库与含数据库两类 |
 | frontend 12 callsite 改动遗漏 1 处 → typescript 编译过但运行时 undefined access | 低：TS strict + 类型字段删除后引用立即报错 | 删除 NodeRunSchema.crossClarifyIteration 后 typecheck 不绿不能 merge |

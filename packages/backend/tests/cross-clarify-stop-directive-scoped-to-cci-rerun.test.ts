@@ -245,11 +245,21 @@ describe("cross-questioner 'stop' directive scoped to the cci-driven rerun only"
 })
 
 describe('scheduler wiring: cross-questioner buildPromptContext must pass applyLatestDirective gated on retryIndex', () => {
-  test('scheduler.ts cross-questioner branch sets applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0', () => {
+  test('scheduler.ts cross-questioner branch sets applyLatestDirective gated on retryIndex (literal OR via isClarifyRerun)', () => {
     // Source-text guard: catches a future refactor that drops the gate
     // back to the default (true). The same kind of guard the codebase
     // uses elsewhere for behaviors that span runtime + render layers
     // (see e.g. canvas-edge-changes.test.ts).
+    //
+    // RFC-064 PR-B will merge the cross-questioner + self branches'
+    // applyLatestDirective gate into a shared `isClarifyRerun` variable
+    // (semantically equivalent under unified clarifyIteration; single-point
+    // change structurally eliminates the "missed-mirror gate" class of bug
+    // that 747dcae fixed). The OR pattern below accepts either the original
+    // literal (`(currentRunRow?.retryIndex ?? 0) === 0`) or the new common
+    // variable name (`isClarifyRerun`) — pre-PR-B both forms are valid;
+    // post-PR-B only the variable name remains. See RFC-064 design.md §5.5
+    // + plan.md T15 A-class for the implementation order constraint.
     const source = readFileSync(
       resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
       'utf8',
@@ -265,6 +275,9 @@ describe('scheduler wiring: cross-questioner buildPromptContext must pass applyL
     expect(selfBranchIdx).toBeGreaterThan(-1)
     const crossBranchBody = tail.slice(0, selfBranchIdx)
     expect(crossBranchBody).toContain('applyLatestDirective')
-    expect(crossBranchBody).toContain('(currentRunRow?.retryIndex ?? 0) === 0')
+    expect(
+      crossBranchBody.includes('(currentRunRow?.retryIndex ?? 0) === 0') ||
+        crossBranchBody.includes('isClarifyRerun'),
+    ).toBe(true)
   })
 })

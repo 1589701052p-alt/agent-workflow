@@ -6,7 +6,7 @@
 
 ## 1. 概览
 
-把 `node_runs.cross_clarify_iteration` 列折入 `clarify_iteration`、`services/crossClarify.ts` 物理删除并入 `services/clarify.ts`、scheduler 4 处 cci 派生改读 clarifyIteration / 新查询。所有 RFC-023 + RFC-056（含 9 patch）+ RFC-058 + RFC-059 用户可观察行为字节级守恒。
+把 `node_runs.cross_clarify_iteration` 列折入 `clarify_iteration`、`services/crossClarify.ts` 物理删除并入 `services/clarify.ts`、scheduler 4 处 cci 派生改读 clarifyIteration / 新查询、cross-questioner + self 两条 prompt-context 分支的 `applyLatestDirective` gate 合并为公共 `isClarifyRerun`（合并 747dcae 的字面量）。所有 RFC-023 + RFC-056（含 9 patch files + commit `747dcae`）+ RFC-058 + RFC-059 用户可观察行为字节级守恒。
 
 技术上分 7 块（依赖顺序）：
 
@@ -379,22 +379,56 @@ const inheritedCrossClarifyIteration = latestExisting?.crossClarifyIteration ?? 
 
 `buildPromptContext` 调用：
 
-**改前**：
+**改前**（含 commit `747dcae` 的 cross-questioner `applyLatestDirective` gate 补丁后）：
 ```ts
 isQuestionerCrossClarifyRerun
-  ? await buildPromptContext({ consumerKind: 'cross-questioner', targetIteration: currentCrossClarifyIteration, ... })
-  : await buildPromptContext({ consumerKind: 'self', targetIteration: currentClarifyIteration, ... })
+  ? await buildPromptContext({
+      consumerKind: 'cross-questioner',
+      targetIteration: currentCrossClarifyIteration,
+      // 747dcae: review-iterate / process-retry 继承 cci 后落入此分支，
+      // 必须把 stale 'stop' directive gate 掉，否则 STOP CLARIFYING 沾染
+      applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0,
+      ...
+    })
+  : await buildPromptContext({
+      consumerKind: 'self',
+      targetIteration: currentClarifyIteration,
+      applyLatestDirective: isClarifyRerun,  // = clarifyIteration>0 && retryIndex===0
+      ...
+    })
 ```
 
-**改后**：
+**改后**（PR-B 把两条分支的 gate 表达式**合并为公共变量** `isClarifyRerun`——统一计数器下两分支语义完全等价，单点改动消除漏镜像可能性）：
 ```ts
-const isCrossQuestioner = await isQuestionerCrossClarifyRerun({ db, taskId, questionerNodeId: node.id, currentRunRow })
+const isCrossQuestioner = await isQuestionerCrossClarifyRerun({
+  db, taskId, questionerNodeId: node.id, currentRunRow,
+})
+// 公共 gate：统一 clarifyIteration 下两分支语义等价。cross-questioner 进入
+// 条件已隐含 clarifyIteration > 0，保留全表达式 (clarifyIteration > 0
+// && retryIndex === 0) 不引入误判，反而消除"两分支 gate 表达式漏镜像"类风险（747dcae 根因）。
+const isClarifyRerun =
+  (currentRunRow?.clarifyIteration ?? 0) > 0 && (currentRunRow?.retryIndex ?? 0) === 0
 isCrossQuestioner
-  ? await buildPromptContext({ consumerKind: 'cross-questioner', targetIteration: currentRunRow.clarifyIteration, ... })
-  : await buildPromptContext({ consumerKind: 'self', targetIteration: currentRunRow.clarifyIteration, ... })
+  ? await buildPromptContext({
+      consumerKind: 'cross-questioner',
+      targetIteration: currentRunRow.clarifyIteration,
+      applyLatestDirective: isClarifyRerun,  // 合并 747dcae 的 `retryIndex === 0` 字面量
+      ...
+    })
+  : await buildPromptContext({
+      consumerKind: 'self',
+      targetIteration: currentRunRow.clarifyIteration,
+      applyLatestDirective: isClarifyRerun,
+      ...
+    })
 ```
 
-`buildExternalFeedbackContext` 调用类似——gate 改读新 `isCrossClarifyTriggeredRerun`，参数中的 `designerCrossClarifyIteration` 改名 `designerClarifyIteration`。
+**关键合并约束 + PR-B 实施顺序硬要求**：
+- cross-questioner 分支的 `applyLatestDirective` 表达式合并为公共 `isClarifyRerun` 变量后，与 self 分支完全一致；理由：747dcae 描述的"漏镜像 gate"在源代码层结构性消除——任何对 gate 表达式的未来改动一处生效两分支同时收。
+- **`cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts:248-266` 源码文本守门必须先扩 pattern 再改源码**：toContain 单字面量 `(currentRunRow?.retryIndex ?? 0) === 0` 改为 OR pattern——可匹配旧字面量或新 `isClarifyRerun` 变量名任一形态；扩测试 + 跑 PR-A baseline 全绿后再做 scheduler.ts 合并 commit。**实施顺序不可颠倒**，否则 PR-A baseline 不全绿即启 PR-B 等于消除回归网。详 plan.md T15 A 类条目。
+- 3 条 service 行为 case（`buildPromptContext({applyLatestDirective:false})` 的 directive coerce / trailer strip / Q&A body 保留）在合并后完全不变——`buildPromptContext` 的 service-level 契约本来就只看入参布尔值，不关心调用方表达式形态。
+
+`buildExternalFeedbackContext` 调用类似——gate 改读新 `isCrossClarifyTriggeredRerun`，参数中的 `designerCrossClarifyIteration` 改名 `designerClarifyIteration`。`buildExternalFeedbackContext` 路径不涉及 `applyLatestDirective`（它是 designer 侧 update-mode prompt 渲染，自己有独立的 directive 处理）——但同样的 retry_index 子门思想已在 §3.2 mint 算法中体现。
 
 ## 6. migration 0033 脚本
 
@@ -461,7 +495,7 @@ migration test `migration-0033-clarify-iteration-unify.test.ts`：
 
 ### 7.1 PR-A baseline（必须先 push CI 全绿）
 
-**目标**：在 PR-B 重构前，把 RFC-023 + RFC-056 + 9 patch + RFC-058 + RFC-059 全部用户可观察行为
+**目标**：在 PR-B 重构前，把 RFC-023 + RFC-056 + **10 个 dated patch**（9 个 RFC-056 patch files + commit `747dcae`）+ RFC-058 + RFC-059 全部用户可观察行为
 锁住，作为 PR-B refactor 的回归参照。
 
 **估算 80+ case**：
@@ -469,7 +503,7 @@ migration test `migration-0033-clarify-iteration-unify.test.ts`：
 - shared 6：existing schemas / envelope parse 已锁定，本 RFC 复用；新增 NodeRunSchema 字段集 spot check 2 case + applyAgingCutoff edge case 锁 4 case。
 - backend 60：
   - clarify-rfc064-bytelevel.test.ts（self-clarify 全 path）20 case
-  - cross-clarify-rfc064-bytelevel.test.ts（cross-clarify 全 path + 9 patch）30 case
+  - cross-clarify-rfc064-bytelevel.test.ts（cross-clarify 全 path + 10 个 dated patch，含 747dcae 服务层行为）30 case
   - clarify-iteration-bump-rules.test.ts（新 §3.2 算法）5 case
   - clarify-iteration-freshness-cutoff.test.ts（新 §3.3 / 3.4 / 3.5）5 case
 - frontend 14：
@@ -512,24 +546,25 @@ migration test `migration-0033-clarify-iteration-unify.test.ts`：
 ## 9. 与 patch chain 对齐
 
 下表确认每个 clarify / cross-clarify patch 在本 RFC 后的形态。**分两类**：
-- **A 组**：9 个 dated patch（design/RFC-056-clarify-cross-agent/patch-*.md 文件直接落档的）—— RFC-064 直接重构对象
+- **A 组**：10 个 dated patch（design/RFC-056-clarify-cross-agent/patch-*.md 文件直接落档的 9 个 + commit `747dcae` cross-questioner 'stop' directive 分支均衡）—— RFC-064 直接重构对象。下表共 12 行：除上述 10 个 dated patch 外，额外列入 2 行 22 May 相邻 fix 作 narrative 上下文（"questioner Q&A injection" 已由 RFC-058 baseline 覆盖；"freshness invariant" 实为 `patch-2026-05-22-downstream-cascade.md` 的内部拆分项，独立列出便于读者定位）。
 - **B 组**：6 个早期 fix（pre-RFC-058 时代 + 跨 RFC，散在 commit log，每个有自己专属测试文件）—— RFC-064 PR-A baseline 必须**复用既有测试文件作为回归锚点**，PR-B 不得退化
 
-### A 组（9 个 dated patch）
+### A 组（10 个 dated patch）
 
-| Patch | 旧实现 | RFC-064 后 |
-|---|---|---|
-| 2026-05-22 downstream cascade | 真正 BFS 下游 mint pending；isFresherNodeRun 不看 cci | BFS 不变；isFresherNodeRun 只看 clarifyIteration，已统一 |
-| 2026-05-22 questioner Q&A injection | `buildQuestionerCrossClarifyContext` 独立函数 | RFC-058 已合并到 `buildPromptContext`；本 RFC 删旧 helper export |
-| 2026-05-22 freshness invariant | `applyCrossClarifyFreshnessInvariant` | 改名 `applyClarifyFreshnessInvariant`，比较 clarifyIteration |
-| 2026-05-23 designer retry-index | 抬掉 retry_index=0 sub-gate | 行为不变；cci 引用切 clarifyIteration |
-| 2026-05-24 retry preserves cci | `inheritedCrossClarifyIteration` 显式继承 | 删除该变量；`inheritedClarifyIteration` 统一表达 |
-| 2026-05-25 fresher-noderun-includes-cci | 排序键 4 层 | 简化为 3 层（无 cci 中间档） |
-| 2026-05-25 history-label-includes-cci | 前端 attempts picker 含 cci 列 | label 改用 clarifyIteration 单值；行为不变 |
-| 2026-05-25 questioner-cascade-no-skip | cascade 幂等检查不只看 cci 数值 | 行为不变；DB 查询切 clarifyIteration |
-| 2026-05-25 questioner-rerun-bumps-cci | mintQuestionerRerun max+1 算法 | 算法搬入 §3.2 公共 helper；行为不变 |
-| 2026-05-26 review-dispatch-respects-cci | `isReviewCciAlignedWithUpstream` | 改名 `isReviewClarifyAlignedWithUpstream`；比较 clarifyIteration |
-| 2026-05-27 questioner-cutoff-uses-cci | `iterationField` 参数切 cci | 删 `iterationField` 参数；统一 clarifyIteration |
+| Patch | 旧实现 | RFC-064 后 | 回归锚点测试文件（PR-A baseline 复用） |
+|---|---|---|---|
+| 2026-05-22 downstream cascade | 真正 BFS 下游 mint pending；isFresherNodeRun 不看 cci | BFS 不变；isFresherNodeRun 只看 clarifyIteration，已统一 | (覆盖于 RFC-056 PR-A-D 既有套件) |
+| 2026-05-22 questioner Q&A injection | `buildQuestionerCrossClarifyContext` 独立函数 | RFC-058 已合并到 `buildPromptContext`；本 RFC 删旧 helper export | (覆盖于 RFC-058 baseline) |
+| 2026-05-22 freshness invariant | `applyCrossClarifyFreshnessInvariant` | 改名 `applyClarifyFreshnessInvariant`，比较 clarifyIteration | (覆盖于 RFC-056 PR-A-D 既有套件) |
+| 2026-05-23 designer retry-index | 抬掉 retry_index=0 sub-gate | 行为不变；cci 引用切 clarifyIteration | `cross-clarify-update-mode-injection.test.ts` |
+| 2026-05-24 retry preserves cci | `inheritedCrossClarifyIteration` 显式继承 | 删除该变量；`inheritedClarifyIteration` 统一表达 | `cross-clarify-retry-preserves-iteration.test.ts` |
+| 2026-05-25 fresher-noderun-includes-cci | 排序键 4 层 | 简化为 3 层（无 cci 中间档） | (覆盖于 patch-2026-05-22 测试) |
+| 2026-05-25 history-label-includes-cci | 前端 attempts picker 含 cci 列 | label 改用 clarifyIteration 单值；行为不变（D2/D3 路径下保留 self/cross 区分） | `node-history-clarify-iteration.test.ts` |
+| 2026-05-25 questioner-cascade-no-skip | cascade 幂等检查不只看 cci 数值 | 行为不变；DB 查询切 clarifyIteration | (覆盖于 RFC-056 cascade 套件) |
+| 2026-05-25 questioner-rerun-bumps-cci | mintQuestionerRerun max+1 算法 | 算法搬入 §3.2 公共 helper；行为不变 | `cross-clarify-fast-path-isolation.test.ts` |
+| 2026-05-26 review-dispatch-respects-cci | `isReviewCciAlignedWithUpstream` | 改名 `isReviewClarifyAlignedWithUpstream`；比较 clarifyIteration | `review-dispatch-cci.test.ts` |
+| **2026-05-26 cross-questioner-stop-directive-scoped-to-cci-rerun**（commit `747dcae`） | scheduler.ts cross-questioner 分支调用 `buildPromptContext` 时默认 `applyLatestDirective=true`，review-iterate / process-retry 继承 cci 落入此分支被 stale 'stop' 沾染 | scheduler §5.5 dispatch 切后**两条分支 gate 合并为公共 `applyLatestDirective: isClarifyRerun`**——统一 clarifyIteration 下表达式等价 + 单点改动消除"漏镜像 gate"类风险；C9 守门 test pattern 同步扩为 `(retryIndex ?? 0) === 0` 字面量或 `isClarifyRerun` 二选一 OR 模式 | `cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts`（4 case：3 service 行为不变 + 1 源码文本守门 PR-B 扩 OR pattern）|
+| 2026-05-27 questioner-cutoff-uses-cci | `iterationField` 参数切 cci | 删 `iterationField` 参数；统一 clarifyIteration | `cross-clarify-questioner-cutoff-cci.test.ts` |
 
 ### B 组（6 个早期 fix——专属测试文件复用为 PR-A baseline 回归锚点）
 
@@ -563,6 +598,13 @@ ls packages/backend/src/services/crossClarify.ts  # 应抛错：文件不存在
 ```bash
 grep -n "clarifyIteration" packages/backend/src/services/clarify.ts  # 合并后唯一 service
 grep -n "applyClarifyFreshnessInvariant" packages/backend/src/services/scheduler.ts  # 改名后
+
+# 747dcae 合并守门：cross-questioner + self 两条分支的 applyLatestDirective gate
+# PR-B 合并为公共变量 isClarifyRerun（语义等价，单点改动结构性消除漏镜像类风险）
+grep -c "applyLatestDirective" packages/backend/src/services/scheduler.ts  # 必须 ≥ 2（self + cross-questioner 各一处，两分支 gate 都在）
+grep -c "applyLatestDirective: isClarifyRerun" packages/backend/src/services/scheduler.ts  # 必须 ≥ 2（合并后两分支同一公共变量；与 cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts 扩 OR pattern 后联动）
+# 注：旧 `(currentRunRow?.retryIndex ?? 0) === 0` 字面量在 cross-questioner 分支的 grep 已废除——PR-B 合并后此字面量在 scheduler.ts 不再出现，
+# 但 isClarifyRerun 定义点（scheduler.ts:1390）的 `retryIndex === 0` 子句仍保留，整文件 grep 次数 ≥ 1（不强制硬断言）
 ```
 
 ## 10.5 i18n / UX label 决策点（需用户拍板）
