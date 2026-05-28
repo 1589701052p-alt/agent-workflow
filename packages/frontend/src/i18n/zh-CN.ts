@@ -868,6 +868,9 @@ export interface Resources {
     worktreeFilesFileError: string
     worktreeFilesSizeHeader: string
     worktreeFilesRefresh: string
+    worktreeFilesDownload: string
+    worktreeFilesDownloading: string
+    worktreeFilesDownloadError: string
     noWorkflowSnapshot: string
     noBaseCommit: string
     loadingDiff: string
@@ -2861,6 +2864,9 @@ export const zhCN: Resources = {
     worktreeFilesFileError: '文件加载失败。',
     worktreeFilesSizeHeader: '大小：{{size}}',
     worktreeFilesRefresh: '刷新',
+    worktreeFilesDownload: '下载',
+    worktreeFilesDownloading: '下载中…',
+    worktreeFilesDownloadError: '下载失败。',
     noWorkflowSnapshot: '没有工作流快照。',
     noBaseCommit: '未记录 base commit；diff 不可用。',
     loadingDiff: '加载 diff 中…',

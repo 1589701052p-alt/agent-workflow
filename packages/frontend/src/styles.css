@@ -9107,3 +9107,23 @@ mark.comment-anchor[data-active='true'] {
   gap: var(--space-2);
 }
 
+.worktree-files-preview__header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.worktree-files-preview__download {
+  white-space: nowrap;
+}
+
+.worktree-files-preview__download-error {
+  flex-basis: 100%;
+  text-align: right;
+  color: var(--danger);
+  font-size: var(--font-xs);
+}
+

@@ -14,19 +14,26 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { setBaseUrl, setToken } from '../src/stores/auth'
-import { WorktreeFilesPanel, formatBytes, joinRel } from '../src/components/WorktreeFilesPanel'
+import {
+  WorktreeFilesPanel,
+  downloadBaseName,
+  formatBytes,
+  joinRel,
+  worktreeFileDownloadUrl,
+} from '../src/components/WorktreeFilesPanel'
 import '../src/i18n'
 
 interface FetchCall {
   url: string
+  init?: RequestInit
 }
 
 function installFetch(handlers: Map<string, () => unknown>) {
   const calls: FetchCall[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(
-    async (input: RequestInfo | URL): Promise<Response> => {
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString()
-      calls.push({ url })
+      calls.push({ url, init })
       // Match by pathname + query string.
       for (const [pattern, fn] of handlers) {
         if (url.includes(pattern)) {
@@ -78,6 +85,28 @@ describe('pure helpers', () => {
     expect(joinRel('', 'src')).toBe('src')
     expect(joinRel('src', 'foo.ts')).toBe('src/foo.ts')
     expect(joinRel('a/b', 'c.txt')).toBe('a/b/c.txt')
+  })
+
+  test('worktreeFileDownloadUrl — encodes each segment, preserves slashes', () => {
+    expect(worktreeFileDownloadUrl('http://d.test', 'task_X', 'README.md')).toBe(
+      'http://d.test/api/worktree-files/task_X/README.md',
+    )
+    // spaces / '#' inside names are percent-encoded per-segment so the
+    // endpoint's single decodeURIComponent round-trips them.
+    expect(worktreeFileDownloadUrl('http://d.test', 'task_X', 'src/a b/c#1.ts')).toBe(
+      'http://d.test/api/worktree-files/task_X/src/a%20b/c%231.ts',
+    )
+    // base trailing slash collapses to a single origin-relative path.
+    expect(worktreeFileDownloadUrl('http://d.test/', 'task_X', 'a.txt')).toBe(
+      'http://d.test/api/worktree-files/task_X/a.txt',
+    )
+  })
+
+  test('downloadBaseName — nested / root / empty fallback', () => {
+    expect(downloadBaseName('src/foo/bar.ts')).toBe('bar.ts')
+    expect(downloadBaseName('README.md')).toBe('README.md')
+    expect(downloadBaseName('')).toBe('download')
+    expect(downloadBaseName('/')).toBe('download')
   })
 })
 
@@ -410,5 +439,128 @@ describe('WorktreeFilesPanel', () => {
     await waitFor(() => {
       expect(screen.getByTestId('worktree-files-preview-body').textContent ?? '').toContain('BBB')
     })
+  })
+})
+
+// RFC-071 — download button. The download reuses the RFC-005 raw-bytes endpoint
+// (/api/worktree-files/:taskId/*, no size cap), NOT the JSON preview endpoint,
+// so oversized files that can't be previewed must still download. Auth rides
+// the Authorization header (not a ?token= query) so it works cross-origin and
+// never leaks the token into the URL.
+describe('WorktreeFilePreview — download (RFC-071)', () => {
+  let createObjectURL: ReturnType<typeof vi.fn>
+  let revokeObjectURL: ReturnType<typeof vi.fn>
+  let downloadAttr: string | null
+
+  beforeEach(() => {
+    downloadAttr = null
+    createObjectURL = vi.fn(() => 'blob:mock-url')
+    revokeObjectURL = vi.fn()
+    // jsdom implements neither; assign them so saveBlob doesn't throw.
+    ;(URL as unknown as { createObjectURL: typeof createObjectURL }).createObjectURL =
+      createObjectURL
+    ;(URL as unknown as { revokeObjectURL: typeof revokeObjectURL }).revokeObjectURL =
+      revokeObjectURL
+    // A real anchor click would log "navigation not implemented" under jsdom;
+    // stub it and capture the filename the anchor was about to save as.
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloadAttr = this.download
+    })
+  })
+
+  afterEach(() => {
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
+    delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL
+  })
+
+  test('normal file: fetches raw-bytes endpoint with auth header, saves basename', async () => {
+    const calls = installFetch(
+      new Map<string, () => unknown>([
+        // Specific download pattern first; the preview endpoint is
+        // /api/tasks/.../worktree-file (no "/worktree-files/") so no overlap.
+        ['/worktree-files/', () => 'RAW BYTES'],
+        [
+          'worktree-tree',
+          () => ({
+            path: '',
+            truncated: false,
+            entries: [{ name: 'README.md', kind: 'file', size: 8 }],
+          }),
+        ],
+        [
+          'worktree-file?path=README.md',
+          () => ({ path: 'README.md', size: 8, oversized: false, content: '# title\n' }),
+        ],
+      ]),
+    )
+    wrap()
+    fireEvent.click(await screen.findByTestId('worktree-tree-file-README.md'))
+    fireEvent.click(await screen.findByTestId('worktree-files-download'))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+
+    const dl = calls.find((c) => c.url.includes('/worktree-files/'))
+    expect(dl?.url).toBe('http://daemon.test/api/worktree-files/task_X/README.md')
+    expect((dl?.init?.headers as Record<string, string>).Authorization).toBe('Bearer tok')
+    expect(createObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(Blob)
+    expect(downloadAttr).toBe('README.md')
+  })
+
+  test('oversized file: still downloadable even though preview is skipped', async () => {
+    const calls = installFetch(
+      new Map<string, () => unknown>([
+        ['/worktree-files/', () => 'RAW BIG BYTES'],
+        [
+          'worktree-tree',
+          () => ({
+            path: '',
+            truncated: false,
+            entries: [{ name: 'big.bin', kind: 'file', size: 5 * 1024 * 1024 }],
+          }),
+        ],
+        [
+          'worktree-file?path=big.bin',
+          () => ({ path: 'big.bin', size: 5 * 1024 * 1024, oversized: true, content: '' }),
+        ],
+      ]),
+    )
+    wrap()
+    fireEvent.click(await screen.findByTestId('worktree-tree-file-big.bin'))
+    // Oversized hint is shown (no <pre>), and the download button is present.
+    await screen.findByTestId('worktree-files-preview-oversized')
+    fireEvent.click(await screen.findByTestId('worktree-files-download'))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+    const dl = calls.find((c) => c.url.includes('/worktree-files/'))
+    expect(dl?.url).toBe('http://daemon.test/api/worktree-files/task_X/big.bin')
+    expect(downloadAttr).toBe('big.bin')
+  })
+
+  test('failed download shows an inline error and re-enables the button', async () => {
+    // No '/worktree-files/' handler → the download fetch falls through to the
+    // mock's default 404, so fetchWorktreeFileBlob throws and no blob is saved.
+    installFetch(
+      new Map<string, () => unknown>([
+        [
+          'worktree-tree',
+          () => ({
+            path: '',
+            truncated: false,
+            entries: [{ name: 'README.md', kind: 'file', size: 8 }],
+          }),
+        ],
+        [
+          'worktree-file?path=README.md',
+          () => ({ path: 'README.md', size: 8, oversized: false, content: 'x' }),
+        ],
+      ]),
+    )
+    wrap()
+    fireEvent.click(await screen.findByTestId('worktree-tree-file-README.md'))
+    const btn = await screen.findByTestId('worktree-files-download')
+    fireEvent.click(btn)
+    await screen.findByTestId('worktree-files-download-error')
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect((btn as HTMLButtonElement).disabled).toBe(false)
   })
 })

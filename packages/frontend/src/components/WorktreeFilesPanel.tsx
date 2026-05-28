@@ -14,9 +14,10 @@ import { useMemo, useState, type ReactElement } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
-import { api } from '@/api/client'
+import { ApiError, api } from '@/api/client'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { getBaseUrl, getToken } from '@/stores/auth'
 import {
   WORKTREE_DIR_MAX_ENTRIES,
   WORKTREE_FILE_MAX_BYTES,
@@ -41,6 +42,29 @@ export function formatBytes(n: number): string {
 /** Join a parent rel-path and a child name into a posix rel-path. */
 export function joinRel(parent: string, name: string): string {
   return parent === '' ? name : `${parent}/${name}`
+}
+
+/**
+ * Absolute URL of the raw-bytes download endpoint (RFC-005
+ * `GET /api/worktree-files/:taskId/*`) for one worktree file. Unlike the JSON
+ * preview endpoint this one has no 2 MiB cap, so oversized files download in
+ * full. Each path segment is encodeURIComponent'd then rejoined with a literal
+ * '/', which round-trips correctly through the endpoint's single
+ * decodeURIComponent — spaces / '#' / '?' / '%' in names are all safe.
+ */
+export function worktreeFileDownloadUrl(baseUrl: string, taskId: string, relPath: string): string {
+  const segments = relPath
+    .split('/')
+    .filter((s) => s.length > 0)
+    .map(encodeURIComponent)
+  const path = `/api/worktree-files/${encodeURIComponent(taskId)}/${segments.join('/')}`
+  return new URL(path, baseUrl).toString()
+}
+
+/** The basename a download should be saved as; '/'-only or empty → 'download'. */
+export function downloadBaseName(relPath: string): string {
+  const segments = relPath.split('/').filter((s) => s.length > 0)
+  return segments.length > 0 ? (segments[segments.length - 1] as string) : 'download'
 }
 
 // ---------- API client wrappers ----------
@@ -268,6 +292,85 @@ function indentFor(depth: number): string {
   return `${depth * 16}px`
 }
 
+// Fetch the file as a Blob through the authenticated channel. The token rides
+// the Authorization header (not a `?token=` query) so it never leaks into the
+// URL, and a blob works cross-origin too — a plain <a download> pointing at a
+// remote-daemon base URL would have its `download` attribute ignored.
+async function fetchWorktreeFileBlob(taskId: string, relPath: string): Promise<Blob> {
+  const token = getToken()
+  const headers: Record<string, string> = {}
+  if (token !== null) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(worktreeFileDownloadUrl(getBaseUrl(), taskId, relPath), { headers })
+  if (!res.ok) {
+    throw new ApiError(res.status, `http-${res.status}`, res.statusText || 'download failed')
+  }
+  return res.blob()
+}
+
+/** Save a Blob to disk via a transient object-URL anchor. */
+function saveBlob(blob: Blob, fileName: string): void {
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = fileName
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+// Top-right download button shown for the opened file in both the normal and
+// the oversized preview states — oversized files can't be previewed but must
+// still be downloadable (RFC-071).
+function DownloadFileButton({ taskId, path }: { taskId: string; path: string }): ReactElement {
+  const { t } = useTranslation()
+  const [downloading, setDownloading] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  async function onClick(): Promise<void> {
+    if (downloading) return
+    setDownloading(true)
+    setFailed(false)
+    try {
+      const blob = await fetchWorktreeFileBlob(taskId, path)
+      saveBlob(blob, downloadBaseName(path))
+    } catch {
+      setFailed(true)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--sm worktree-files-preview__download"
+        disabled={downloading}
+        onClick={() => void onClick()}
+        data-testid="worktree-files-download"
+        title={t('tasks.worktreeFilesDownload')}
+      >
+        <span aria-hidden="true">↓</span>{' '}
+        {downloading ? t('tasks.worktreeFilesDownloading') : t('tasks.worktreeFilesDownload')}
+      </button>
+      {failed && (
+        <span
+          className="worktree-files-preview__download-error"
+          role="alert"
+          data-testid="worktree-files-download-error"
+        >
+          {t('tasks.worktreeFilesDownloadError')}
+        </span>
+      )}
+    </>
+  )
+}
+
 export function WorktreeFilePreview({
   taskId,
   path,
@@ -307,8 +410,11 @@ export function WorktreeFilePreview({
         className="worktree-files-preview__oversized"
         data-testid="worktree-files-preview-oversized"
       >
-        <div className="worktree-files-preview__path">
-          <code>{path}</code>
+        <div className="worktree-files-preview__header">
+          <code className="worktree-files-preview__path">{path}</code>
+          <div className="worktree-files-preview__header-actions">
+            <DownloadFileButton taskId={taskId} path={path} />
+          </div>
         </div>
         <p className="muted">
           {t('tasks.worktreeFilesOversized', {
@@ -323,9 +429,12 @@ export function WorktreeFilePreview({
     <div className="worktree-files-preview__body" data-testid="worktree-files-preview-body">
       <div className="worktree-files-preview__header">
         <code className="worktree-files-preview__path">{path}</code>
-        <span className="worktree-files-preview__size muted">
-          {t('tasks.worktreeFilesSizeHeader', { size: sizeLabelData ?? '' })}
-        </span>
+        <div className="worktree-files-preview__header-actions">
+          <span className="worktree-files-preview__size muted">
+            {t('tasks.worktreeFilesSizeHeader', { size: sizeLabelData ?? '' })}
+          </span>
+          <DownloadFileButton taskId={taskId} path={path} />
+        </div>
       </div>
       <pre className="worktree-files-preview__pre">{data.content}</pre>
     </div>
