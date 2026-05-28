@@ -229,6 +229,7 @@ export function BatchImportDialog({
       panelClassName="batch-import-dialog"
       data-testid="batch-import-dialog"
       footer={footer}
+      initialFocusRef={textareaRef}
       triggerRef={triggerRef}
     >
       <div>

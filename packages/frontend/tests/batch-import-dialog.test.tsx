@@ -143,6 +143,22 @@ describe('BatchImportDialog (RFC-033)', () => {
     expect(start.disabled).toBe(false)
   })
 
+  // Regression: opening the dialog must land focus IN the URL textarea so the
+  // user can type immediately. The shared <Dialog> auto-focuses the first
+  // focusable element via a setTimeout(0); without an explicit initialFocusRef
+  // that target was the header × close button, which overrode the component's
+  // own textarea-focus effect — typing went to a button (and Space closed the
+  // dialog) instead of the textarea. Bug report: "批量导入文本框无法输入文字".
+  // `fireEvent.change` in the other tests masks this because it sets the value
+  // programmatically, bypassing focus entirely.
+  test('input view: opening the dialog focuses the URL textarea (not the × close button)', async () => {
+    renderDialog()
+    const ta = screen.getByTestId('batch-import-textarea') as HTMLTextAreaElement
+    // Wait past the <Dialog> initial-focus setTimeout(0).
+    await new Promise((r) => setTimeout(r, 5))
+    expect(document.activeElement).toBe(ta)
+  })
+
   test('clicking Start posts urls + switches to progress view', async () => {
     const snap = mkSnap()
     ;(api.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce(snap)
