@@ -237,8 +237,9 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     // RFC-066 PR-A T2 bumped to 34 with migration 0034_rfc066_task_repos;
     // RFC-064 T9 bumped to 35 with migration 0035_rfc064_unify_clarify_iteration;
     // RFC-070 T4 bumped to 36 with migration 0036_rfc070_clarify_consumed_by_run;
-    // RFC-072 T1 bumped to 37 with migration 0037_rfc072_node_run_output_kind.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(37)
+    // RFC-072 T1 bumped to 37 with migration 0037_rfc072_node_run_output_kind;
+    // RFC-072 follow-up bumped to 38 with 0038_rfc072_backfill_review_output_kind.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(38)
   })
 
   for (const target of FREEZE_TARGETS) {

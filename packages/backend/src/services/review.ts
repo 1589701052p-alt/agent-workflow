@@ -1222,10 +1222,15 @@ export async function submitReviewDecision(
     const decidedAt = Date.now()
     const decidedBy = args.author ?? 'local'
     const sourcePath = dv.sourceFilePath ?? null
-    const approvedDocContent =
-      sourcePath !== null && sourcePath.trim().length > 0
-        ? sourcePath
-        : readDocVersionBody(args.appHome, dv)
+    const hasSourcePath = sourcePath !== null && sourcePath.trim().length > 0
+    const approvedDocContent = hasSourcePath
+      ? (sourcePath as string)
+      : readDocVersionBody(args.appHome, dv)
+    // RFC-072: when the approved doc is a passed-through file path (upstream
+    // port was kind markdown_file → sourceFilePath set), persist that kind so
+    // the task-detail Outputs tab offers a Download button. Inline-markdown
+    // approvals carry the body verbatim → no file kind, no download.
+    const approvedDocKind = hasSourcePath ? 'markdown_file' : null
     const meta = JSON.stringify({
       decision: 'approved',
       decidedAt,
@@ -1250,10 +1255,11 @@ export async function submitReviewDecision(
         nodeRunId: args.nodeRunId,
         portName: 'approved_doc',
         content: approvedDocContent,
+        kind: approvedDocKind,
       })
       .onConflictDoUpdate({
         target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
-        set: { content: approvedDocContent },
+        set: { content: approvedDocContent, kind: approvedDocKind },
       })
     await args.db
       .insert(nodeRunOutputs)

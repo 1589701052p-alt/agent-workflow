@@ -222,6 +222,9 @@ describe('RFC-053 PR-A T1g — review decision full-field assertions', () => {
     const byPort = new Map(outs.map((o) => [o.portName, o.content]))
     expect(byPort.has('approved_doc')).toBe(true)
     expect(byPort.has('approval_meta')).toBe(true)
+    // RFC-072: inline-markdown approval (no sourceFilePath) is not a file path,
+    // so approved_doc carries no file kind → no Download button in the UI.
+    expect(outs.find((o) => o.portName === 'approved_doc')?.kind ?? null).toBeNull()
     const meta = JSON.parse(byPort.get('approval_meta')!) as Record<string, unknown>
     expect(meta.decision).toBe('approved')
     expect(meta.versionIndex).toBe(1)
@@ -268,6 +271,9 @@ describe('RFC-053 PR-A T1g — review decision full-field assertions', () => {
     const approved = outs.find((o) => o.portName === 'approved_doc')!
     // approved_doc must mirror the source's shape — a path, not inline body.
     expect(approved.content).toBe('docs/design.md')
+    // RFC-072: file-path passthrough persists kind='markdown_file' so the
+    // task-detail Outputs tab renders a Download button for the approved doc.
+    expect(approved.kind).toBe('markdown_file')
   })
 
   test('A3 iterate full delta — node_run pending + reviewIteration bumped + comments archived + upstream re-mint', async () => {

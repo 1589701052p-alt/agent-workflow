@@ -261,12 +261,13 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   // the output card is visible. The tab itself only renders when
   // `collectPorts(workflowSnapshot).length > 0`, so its appearance also
   // doubles as a smoke check for hasOutputs detection.
-  await page
-    .locator('.task-detail__tab-bar [role="tab"]', { hasText: /Outputs|输出/ })
-    .click()
-  await expect(page.locator('.task-output-card__body', { hasText: 'stub e2e output' })).toBeVisible(
-    { timeout: 15_000 },
-  )
+  await page.locator('.task-detail__tab-bar [role="tab"]', { hasText: /Outputs|输出/ }).click()
+  // RFC-072: the Outputs tab is now a two-pane browser; the selected port's
+  // value renders in .task-outputs-panel__pre (single declared port → selected
+  // by default). Replaces the old per-card .task-output-card__body.
+  await expect(
+    page.locator('.task-outputs-panel__pre', { hasText: 'stub e2e output' }),
+  ).toBeVisible({ timeout: 15_000 })
 
   // 8. RFC-006 visual contract: every port label is rendered INSIDE the
   // bounding rectangle of its containing .canvas-node. The old strip-of-
@@ -651,9 +652,7 @@ test('RFC-033: batch import remote repos on /repos page', async ({ page }) => {
 // and assert that the tree renders all three rows (A as root, B + C nested).
 // The closure-preview endpoint is also pinged directly to lock its wire
 // shape from the browser's vantage point.
-test('RFC-022: agent form Dependency tree (preview) renders the full closure', async ({
-  page,
-}) => {
+test('RFC-022: agent form Dependency tree (preview) renders the full closure', async ({ page }) => {
   const headers = {
     Authorization: `Bearer ${daemon.token}`,
     'Content-Type': 'application/json',
