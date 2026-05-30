@@ -22,6 +22,12 @@
 //                                    temperature } pulled from OPENCODE_CONFIG_CONTENT.
 //                                    Lets tests assert per-node overrides survived the
 //                                    scheduler → runner → env-var → subprocess hop.
+//   MOCK_OPENCODE_CAPTURE_CONFIG_JSON_TO  path; if set, the mock writes the RAW
+//                                    OPENCODE_CONFIG_CONTENT string verbatim (overwrite,
+//                                    not append). RFC-073 tests assert the TOP-LEVEL
+//                                    permission ({"*":"allow","question":"deny"}) +
+//                                    its key order reached the subprocess. Raw (not
+//                                    re-serialized) so key order is preserved.
 //   MOCK_OPENCODE_CAPTURE_ARGV_TO    path; if set, the mock appends one JSON line per
 //                                    invocation containing the full argv array. RFC-026
 //                                    tests use this to assert that `--session <id>` (or
@@ -160,6 +166,20 @@ if (env.MOCK_OPENCODE_CAPTURE_CONFIG_TO) {
     appendFileSync(env.MOCK_OPENCODE_CAPTURE_CONFIG_TO, JSON.stringify(row) + '\n')
   } catch (e) {
     fail(`MOCK_OPENCODE_CAPTURE_CONFIG_TO write failed: ${(e as Error).message}`)
+  }
+}
+
+// RFC-073: dump the RAW OPENCODE_CONFIG_CONTENT so integration tests can assert
+// the TOP-LEVEL permission (global `*:allow` + `question:deny`) actually reached
+// the spawned subprocess — the buildInlineConfig → env-var → child hop, not just
+// buildInlineConfig's return value. Raw string (not re-parsed/re-serialized) so
+// the KEY ORDER survives end-to-end (question must stay after * for opencode's
+// Permission.disabled findLast — see AW_GLOBAL_PERMISSION in runner.ts).
+if (env.MOCK_OPENCODE_CAPTURE_CONFIG_JSON_TO) {
+  try {
+    writeFileSync(env.MOCK_OPENCODE_CAPTURE_CONFIG_JSON_TO, env.OPENCODE_CONFIG_CONTENT ?? '')
+  } catch (e) {
+    fail(`MOCK_OPENCODE_CAPTURE_CONFIG_JSON_TO write failed: ${(e as Error).message}`)
   }
 }
 
