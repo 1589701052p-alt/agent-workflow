@@ -1,6 +1,6 @@
 # RFC-073 opencode Subagent Permission / Question 交互死锁根治 — Proposal（产品视角）
 
-状态：**Draft**
+状态：**Done**
 
 ## 背景
 

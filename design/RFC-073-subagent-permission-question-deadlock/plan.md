@@ -1,6 +1,6 @@
 # RFC-073 opencode Subagent Permission / Question 交互死锁根治 — Plan（任务分解）
 
-状态：**Draft**
+状态：**Done**
 
 单 PR。改动集中在 `services/runner.ts` + 测试，无 migration / 前端 / schema 变更。
 

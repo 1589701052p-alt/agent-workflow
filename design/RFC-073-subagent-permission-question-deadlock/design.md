@@ -1,6 +1,6 @@
 # RFC-073 opencode Subagent Permission / Question 交互死锁根治 — Design（技术设计）
 
-状态：**Draft**
+状态：**Done**
 
 > 本 RFC 涉及 opencode 运行时行为，所有断言均以本机 opencode 源码核实，下文标注 `文件:行号`。实现前请按 [opencode 源码自取规则] 复核一遍当前版本未漂移。
 
