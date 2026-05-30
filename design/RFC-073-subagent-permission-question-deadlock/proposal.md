@@ -59,5 +59,5 @@ env = append(env, `OPENCODE_PERMISSION={"*":"allow"}`)
 
 ## 关联
 
-- 与 [RFC-023](../RFC-023-clarify-node/proposal.md)（clarify）正交：本 RFC 禁的是 opencode `question` 工具，clarify 走 `<workflow-clarify>` envelope，两者实现路径完全独立。
+- 与 [RFC-023](../RFC-023-agent-clarify/proposal.md)（clarify）正交：本 RFC 禁的是 opencode `question` 工具，clarify 走 `<workflow-clarify>` envelope，两者实现路径完全独立。
 - 后续可选增强（不在本 RFC 范围）：server 模式 + 自建 responder（拿完整可观测性 / 人工审批 / 彻底覆盖 question），参考 multica 给 codex 的 ACP `handleServerRequest` 模式（`server/pkg/agent/codex.go:636-654`）。
