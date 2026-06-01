@@ -355,7 +355,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
   // ---------------------------------------------------------------------------
   // RED on current code (reproduces 01KSHVXCH6RQ5F5P64MZ4FZVN6). skip keeps the
   // shared tree green; flips to live `test` + green under RFC-074 provenance.
-  test.skip('S3 [KNOWN-INCIDENT]: approve after iterate+clarify reruns must not re-open review on the same content', async () => {
+  test('S3 [KNOWN-INCIDENT]: approve after iterate+clarify reruns must not re-open review on the same content', async () => {
     await makeDesigner(c)
     // designer plan: call0 output v1; call1 clarify; call2 clarify; call3 output v2
     writePlan(c, {
@@ -669,7 +669,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
   // S6 — does the incident class extend to the REJECT path (not just iterate)?
   // ---------------------------------------------------------------------------
   // RED on current code [NEW FINDING: bug class extends to the reject path].
-  test.skip('S6 probe: reject + clarify reruns then approve must not re-open review on the same content', async () => {
+  test('S6 probe: reject + clarify reruns then approve must not re-open review on the same content', async () => {
     await makeDesigner(c)
     writePlan(c, {
       designer: [
@@ -771,7 +771,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
   // spurious re-review after the first approval, because the intermediate agent
   // is dispatched fresh at cci=0 while its upstream sits at cci=1. No
   // iterate/reject needed — just ask-clarify-then-proceed + a 2-hop chain].
-  test.skip('S8 multi-hop: A→B→review with A clarify-before-output completes cleanly', async () => {
+  test('S8 multi-hop: A→B→review with A clarify-before-output completes cleanly', async () => {
     await makeDesigner(c, 'agentA', ['a'])
     await makeDesigner(c, 'agentB', ['b'])
     writePlan(c, {
@@ -1151,7 +1151,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
   // sibling re-runs (builderDoneRows=2) purely because builder.cci lagged
   // designer's post-clarify cci. No user-visible re-review, but wasted execution
   // (and a non-readonly sibling could churn worktree files for nothing).
-  test.skip('S12 diamond: approving the reviewed branch must not silently re-run the sibling builder branch', async () => {
+  test('S12 diamond: approving the reviewed branch must not silently re-run the sibling builder branch', async () => {
     await makeDesigner(c)
     await makeDesigner(c, 'builder', ['build'])
     writePlan(c, {

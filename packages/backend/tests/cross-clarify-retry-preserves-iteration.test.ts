@@ -378,14 +378,17 @@ describe('RFC-056 patch 2026-05-24 + RFC-064 — RFC-042 retry preserves clarify
       directive: 'continue',
     })
 
-    // The cascade-mint inserts a new pending questioner row at the bumped
-    // clarifyIteration. Read it back, simulate a retry mint under
-    // post-patch inheritance rules.
-    const qRows = await db
+    // RFC-074: the eager downstream cascade is gone, so no questioner pending
+    // row is pre-minted. The round being processed is identified by the
+    // designer rerun's bumped clarifyIteration (triggerDesignerRerun still mints
+    // that). The thing under test is unchanged: buildQuestionerCrossClarifyContext
+    // must populate the Q&A block for that round.
+    const designerRows = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
-    const inheritedQ = deriveInheritedCrossClarifyIteration(qRows)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
+    const designerFresh = designerRows.find((r) => r.status === 'pending')
+    const inheritedQ = designerFresh?.clarifyIteration ?? 0
     expect(inheritedQ).toBe(1)
 
     const ctx = await buildQuestionerCrossClarifyContext({

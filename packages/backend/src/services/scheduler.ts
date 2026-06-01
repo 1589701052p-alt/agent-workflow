@@ -69,6 +69,7 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
+import { isNodeRunFresh } from '@/services/freshness'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
 import { runCommitPush } from '@/services/commitPushRunner'
@@ -566,44 +567,26 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
       latestPerNode.set(r.nodeId, r)
     }
   }
+  // RFC-074: freshestDonePerNode — each in-scope node's freshest DONE top-level
+  // row at THIS iteration (design §3.2). A node is provenance-fresh iff every
+  // upstream run it consumed is still that upstream's freshest done here;
+  // cross-loop-boundary inputs (lower iteration, absent from this map) are
+  // treated as still-fresh by isNodeRunFresh.
+  const freshestDonePerNode = buildFreshestDonePerNode(priorRuns, scopeIds, iteration)
+  // A node is `completed` iff its latest row is done AND provenance-fresh.
+  // Stale-done nodes stay in `remaining` and get re-dispatched (recording fresh
+  // consumed) once their upstreams are ready — NO speculative mint, which is
+  // why dead pending rows structurally disappear (§4.2). This replaces both the
+  // old unconditional done→completed AND the two cascade layers (Layer A
+  // cascadeDownstreamFromDesigner + Layer B applyClarifyFreshnessInvariant);
+  // mid-batch downstream propagation is handled by recomputeFreshnessAndDemote
+  // after each batch (§4.3 / D9).
   for (const [nodeId, r] of latestPerNode) {
-    if (r.status === 'done') {
+    if (r.status === 'done' && isNodeRunFresh(r, freshestDonePerNode)) {
       completed.add(nodeId)
       remaining.delete(nodeId)
     }
   }
-
-  // RFC-056 patch 2026-05-22 — cross-clarify freshness invariant (Layer B
-  // defense-in-depth). For each node currently in `completed`, if any of
-  // its in-scope upstreams has a STRICTLY greater clarifyIteration than the
-  // node's own latest row, that downstream row is stale: it was captured
-  // against an older clarify round than the upstream now carries. Mint a
-  // fresh pending row inheriting the upstream's iteration so the
-  // scheduler's normal rescan loop picks it up.
-  //
-  // Why this is needed alongside the cascade in `triggerDesignerRerun`:
-  //   - The cascade is the primary mechanism for the cross-clarify-submit
-  //     path and handles full transitive downstream walk.
-  //   - This invariant catches OTHER paths that bump clarifyIteration on
-  //     an upstream without going through triggerDesignerRerun (manual
-  //     retry, future queue-replay, raw DB patches). It runs every scope
-  //     entry so a stale downstream that slipped through the cracks gets
-  //     re-dispatched on the next attempt.
-  //   - Single-pass on purpose: chained cascade (rev → questioner → rev)
-  //     is the cascade's job; Layer B fires once per scope entry and
-  //     trusts the cascade + rescan to handle multi-hop.
-  await applyClarifyFreshnessInvariant({
-    db,
-    taskId,
-    iteration,
-    scopeNodes,
-    upstreamsOf,
-    priorRuns,
-    latestPerNode,
-    completed,
-    remaining,
-    log,
-  })
 
   // Cross-batch aggregation: collect awaiting / failure signals across every
   // batch instead of short-circuiting on the first failure. Background: a
@@ -640,7 +623,15 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
         completed,
         remaining,
       })
-      if (added > 0) continue
+      // RFC-074 §4.3: also demote any completed node whose consumed upstream
+      // advanced — re-dispatching it can unblock the apparent stall.
+      const demoted = await recomputeFreshnessAndDemote(state, args, {
+        scopeNodes,
+        latestPerNode,
+        completed,
+        remaining,
+      })
+      if (added > 0 || demoted > 0) continue
       // If a prior batch parked a node in awaiting_human / awaiting_review,
       // the downstream is blocked WAITING for a human, not stalled. Bubble
       // the awaiting signal up so runTask can transition the task chip
@@ -727,6 +718,16 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     // sit pending forever (scope's initial `latestPerNode` snapshot was
     // already stale).
     await rescanScopeForNewPendingRows(state, args, {
+      scopeNodes,
+      latestPerNode,
+      completed,
+      remaining,
+    })
+    // RFC-074 §4.3 (D9): the load-bearing piece. After a batch's nodes finish,
+    // demote any completed node whose consumed upstream now has a fresher done
+    // row, so multi-hop downstream propagation advances one hop per batch
+    // (replacing Layer A's eager cascade with lazy, provenance-driven re-runs).
+    await recomputeFreshnessAndDemote(state, args, {
       scopeNodes,
       latestPerNode,
       completed,
@@ -1014,6 +1015,84 @@ export async function applyClarifyFreshnessInvariant(ctx: {
 }
 
 /**
+ * RFC-074 §3.2 / §4.2: each in-scope node's freshest DONE top-level row at the
+ * given scope iteration, keyed by nodeId. This is the map `isNodeRunFresh`
+ * consults — a consumed upstream run is "still fresh" iff it equals the id of
+ * that upstream's entry here. Upstreams with no done row at this iteration
+ * (e.g. settled cross-loop-boundary inputs) are simply absent, so
+ * `isNodeRunFresh` treats them as not-stale (defensive).
+ */
+function buildFreshestDonePerNode(
+  rows: ReadonlyArray<typeof nodeRuns.$inferSelect>,
+  scopeIds: Set<string>,
+  iteration: number,
+): Map<string, typeof nodeRuns.$inferSelect> {
+  const m = new Map<string, typeof nodeRuns.$inferSelect>()
+  for (const r of rows) {
+    if (r.iteration !== iteration) continue
+    if (!scopeIds.has(r.nodeId)) continue
+    if (r.parentNodeRunId !== null) continue
+    if (r.status !== 'done') continue
+    if (isFresherNodeRun(r, m.get(r.nodeId))) m.set(r.nodeId, r)
+  }
+  return m
+}
+
+/**
+ * RFC-074 §4.3 (decision D9) — per-batch fixed-point freshness recompute. This
+ * is the load-bearing replacement for Layer A's pre-mint RESPONSIBILITY
+ * (mid-loop multi-hop downstream propagation), not just Layer B's entry
+ * invariant. After each batch — and in the ready-empty stall guard — re-read
+ * node_runs, rebuild latest + freshestDone, and for every node currently in
+ * `completed` recompute `isNodeRunFresh` against the run it consumed. A node
+ * that went stale (an upstream produced a fresher done row in this batch) is
+ * demoted out of `completed` back into `remaining` — with NO mint; it
+ * re-dispatches naturally on a later batch and records fresh consumed then.
+ *
+ * Each call advances downstream propagation one hop (A done → demote B; next
+ * batch runs B → demote C; …); the surrounding `while (remaining.size > 0)`
+ * batch loop is the outer fixed-point. Returns the number of nodes demoted.
+ */
+async function recomputeFreshnessAndDemote(
+  state: SchedulerState,
+  args: ScopeArgs,
+  ctx: {
+    scopeNodes: WorkflowNode[]
+    latestPerNode: Map<string, typeof nodeRuns.$inferSelect>
+    completed: Set<string>
+    remaining: Map<string, WorkflowNode>
+  },
+): Promise<number> {
+  const { db, taskId } = state
+  const { iteration, scopeIds, log } = args
+  const fresh = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const newLatest = new Map<string, (typeof fresh)[number]>()
+  for (const r of fresh) {
+    if (r.iteration !== iteration) continue
+    if (!scopeIds.has(r.nodeId)) continue
+    if (r.parentNodeRunId !== null) continue
+    if (isFresherNodeRun(r, newLatest.get(r.nodeId))) newLatest.set(r.nodeId, r)
+  }
+  const freshestDone = buildFreshestDonePerNode(fresh, scopeIds, iteration)
+  const demoted: string[] = []
+  for (const nodeId of Array.from(ctx.completed)) {
+    const r = newLatest.get(nodeId)
+    if (r === undefined || r.status !== 'done') continue
+    if (!isNodeRunFresh(r, freshestDone)) {
+      ctx.completed.delete(nodeId)
+      const node = ctx.scopeNodes.find((n) => n.id === nodeId)
+      if (node !== undefined) ctx.remaining.set(nodeId, node)
+      ctx.latestPerNode.set(nodeId, r)
+      demoted.push(nodeId)
+    }
+  }
+  if (demoted.length > 0) {
+    log.info('rfc074 freshness demote (upstream advanced)', { taskId, iteration, nodes: demoted })
+  }
+  return demoted.length
+}
+
+/**
  * RFC-023 bug 13: rescan node_runs for the current task + iteration looking
  * for fresh rows whose (retryIndex, clarifyIteration) tuple beats whatever
  * `latestPerNode` cached at scope entry (or after the prior batch). When a
@@ -1266,7 +1345,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
 
   // RFC-060 PR-E: agent-multi NodeKind was removed in favor of wrapper-fanout.
   // The agent-single path below is now the sole agent dispatch path.
-  const upstreamInputs = await resolveUpstreamInputs(
+  // RFC-074: resolveUpstreamInputs now also returns the provenance map of which
+  // upstream run each input was read from; recorded on every row this dispatch
+  // mints/reuses so read-time freshness can later tell if an upstream advanced.
+  const { inputs: upstreamInputs, consumed: consumedUpstream } = await resolveUpstreamInputs(
     db,
     taskId,
     definition.edges,
@@ -1274,6 +1356,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     iteration,
     log,
   )
+  const consumedUpstreamJson = JSON.stringify(consumedUpstream)
   // RFC-022: expand the agent.dependsOn closure before resolving skills so
   // closure-member skills get unioned into the same OPENCODE_CONFIG_DIR
   // staging dir. A cycle / missing-dep here is fatal — the agent.ts save
@@ -1363,6 +1446,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   if (pendingExisting !== undefined) {
     nodeRunId = pendingExisting.id
     retryIndex = pendingExisting.retryIndex
+    // RFC-074: a reused pending row (e.g. minted by clarify rerun) runs now with
+    // the inputs we just resolved — stamp its provenance to match what it reads.
+    await db
+      .update(nodeRuns)
+      .set({ consumedUpstreamRunsJson: consumedUpstreamJson })
+      .where(eq(nodeRuns.id, nodeRunId))
   } else {
     retryIndex =
       sameNodeIterRuns.length === 0 ? 0 : Math.max(...sameNodeIterRuns.map((r) => r.retryIndex)) + 1
@@ -1371,6 +1460,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       reviewIteration: inheritedReviewIteration,
       shardKey: inheritedShardKey,
       parentNodeRunId: inheritedParentNodeRunId,
+      consumedUpstreamRunsJson: consumedUpstreamJson,
     })
   }
   broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
@@ -1453,6 +1543,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           reviewIteration: inheritedReviewIteration,
           shardKey: inheritedShardKey,
           parentNodeRunId: inheritedParentNodeRunId,
+          consumedUpstreamRunsJson: consumedUpstreamJson,
         })
         broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
 
@@ -2332,7 +2423,7 @@ async function runFanoutWrapperNode(
   // wrapper's own input ports to inner nodes; the upstream shardSource value
   // arrives at the wrapper via a regular edge (target.nodeId = wrapper.id,
   // target.portName = shardPort.name).
-  const upstreamInputs = await resolveUpstreamInputs(
+  const { inputs: upstreamInputs, consumed: wrapperConsumed } = await resolveUpstreamInputs(
     db,
     taskId,
     definition.edges,
@@ -2341,6 +2432,14 @@ async function runFanoutWrapperNode(
     log,
   )
   const rawContent = upstreamInputs[shardPort.name] ?? ''
+  // RFC-074 §8 (D3): the fan-out wrapper is provenance-atomic — record which
+  // upstream runs the wrapper consumed on the wrapper row so freshness can
+  // re-run the whole wrapper when an upstream advances. Inner shard rows do NOT
+  // record provenance (treated as fresh within this wrapper run).
+  await db
+    .update(nodeRuns)
+    .set({ consumedUpstreamRunsJson: JSON.stringify(wrapperConsumed) })
+    .where(eq(nodeRuns.id, wrapperRunId))
 
   // 5. Derive wrapper outlets (aggregator outputs OR __done__ signal).
   const derivedOutputs = deriveWrapperFanoutOutputs(definition, node.id, agentsMap)
@@ -2447,7 +2546,9 @@ async function runFanoutWrapperNode(
     // Used to inject shard value into the inner's resolved inputs when an
     // edge binds wrapper.shardPort.name → inner.somePort.
     const boundaryEdges = findBoundaryEdgesToInner(definition, node.id, innerId)
-    const innerUpstream = await resolveUpstreamInputs(
+    // RFC-074 §8: inner shard nodes do NOT record provenance (fresh within the
+    // wrapper run); take only the resolved inputs.
+    const { inputs: innerUpstream } = await resolveUpstreamInputs(
       db,
       taskId,
       definition.edges,
@@ -3121,6 +3222,8 @@ async function insertNodeRun(
     reviewIteration?: number
     shardKey?: string | null
     parentNodeRunId?: string | null
+    /** RFC-074 provenance: JSON `{upstreamNodeId: nodeRunId}` this run consumed. */
+    consumedUpstreamRunsJson?: string | null
   },
 ): Promise<string> {
   const id = ulid()
@@ -3143,6 +3246,7 @@ async function insertNodeRun(
     reviewIteration: inherit?.reviewIteration ?? 0,
     shardKey: inherit?.shardKey ?? null,
     parentNodeRunId: inherit?.parentNodeRunId ?? null,
+    consumedUpstreamRunsJson: inherit?.consumedUpstreamRunsJson ?? null,
     startedAt: now,
     finishedAt: status === 'done' ? now : null,
   })
@@ -3307,11 +3411,10 @@ async function resolveSkills(
  * retry_index). This lets inner-scope nodes see top-level node outputs
  * (iteration=0) and same-iteration upstream outputs from earlier ready batches.
  */
-// RFC-074 PR-A: exported (was module-private) so the picker baseline test
-// `resolve-upstream-inputs-picker-baseline.test.ts` can lock its CURRENT
-// cci-blind `(iteration desc, retryIndex desc)` row selection before PR-B
-// unifies it with the freshness picker (design §5.1 / decision D10). Adding
-// `export` is behavior-preserving — no logic changes in PR-A.
+// RFC-074: exported (was module-private) for the picker baseline test. PR-B
+// unified the source-run picker with the freshness picker (done-only,
+// highest-iteration-then-isFresherNodeRun) and now returns `consumed`
+// provenance alongside the resolved inputs — see body + design §5.1 / D10.
 export async function resolveUpstreamInputs(
   db: DbClient,
   taskId: string,
@@ -3319,26 +3422,48 @@ export async function resolveUpstreamInputs(
   nodeId: string,
   iteration: number,
   log: Logger,
-): Promise<Record<string, string>> {
+): Promise<{ inputs: Record<string, string>; consumed: Record<string, string> }> {
   const grouped = new Map<string, string[]>()
   const incoming = edges.filter((e) => e.target.nodeId === nodeId)
+  // RFC-074 provenance: which upstream node_run each source edge actually read.
+  // Keyed by source nodeId — all edges from the same source resolve to the same
+  // picked run, so this stays consistent across multi-port fan-in.
+  const consumed: Record<string, string> = {}
 
   for (const edge of incoming) {
     const rows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, edge.source.nodeId)))
-    const candidates = rows
-      .filter((r) => r.iteration <= iteration && r.parentNodeRunId === null)
-      .sort((a, b) => {
-        if (b.iteration !== a.iteration) return b.iteration - a.iteration
-        return b.retryIndex - a.retryIndex
-      })
-    const run = candidates[0]
+    // RFC-074 (decision D10 / design §5.1): unify the source-run picker with
+    // the freshness picker. Previously this sorted by (iteration desc,
+    // retryIndex desc) with NO cci term and NO status filter — so it could read
+    // a STALE pre-clarify row (higher retryIndex, lower cci) or even a pending
+    // row's empty output while a done row carried the real content (the
+    // three-picker drift the RFC indicts; baseline PB1/PB2). Now: among
+    // top-level DONE rows within the iteration window, pick the highest
+    // iteration (cross-boundary "latest visible", e.g. git-wrapper / loop
+    // carry) and, within that iteration, the freshest by isFresherNodeRun.
+    const candidates = rows.filter(
+      (r) => r.iteration <= iteration && r.parentNodeRunId === null && r.status === 'done',
+    )
+    let run: (typeof candidates)[number] | undefined
+    for (const r of candidates) {
+      if (run === undefined) {
+        run = r
+        continue
+      }
+      if (r.iteration > run.iteration) {
+        run = r
+        continue
+      }
+      if (r.iteration === run.iteration && isFresherNodeRun(r, run)) run = r
+    }
     if (!run) {
       log.warn('upstream node_run not found', { taskId, sourceNodeId: edge.source.nodeId })
       continue
     }
+    consumed[edge.source.nodeId] = run.id
     const outRows = await db
       .select()
       .from(nodeRunOutputs)
@@ -3350,11 +3475,11 @@ export async function resolveUpstreamInputs(
     grouped.set(edge.target.portName, list)
   }
 
-  const result: Record<string, string> = {}
+  const inputs: Record<string, string> = {}
   for (const [name, values] of grouped) {
-    result[name] = values.length === 1 ? (values[0] ?? '') : values.join('\n\n---\n\n')
+    inputs[name] = values.length === 1 ? (values[0] ?? '') : values.join('\n\n---\n\n')
   }
-  return result
+  return { inputs, consumed }
 }
 
 // RFC-060 PR-E: pickLatestSourceRun + sumChildTokens were used only by the

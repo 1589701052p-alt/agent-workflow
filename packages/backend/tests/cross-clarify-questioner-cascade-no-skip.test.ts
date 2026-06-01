@@ -351,28 +351,21 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       'Fix B — designer rerun cci must be max(designer.cci, questioner.cci) + 1 = 2',
     ).toBe(2)
 
-    // Fix A — questioner must have a fresh pending row at retryIndex >
-    // existing max (i.e. > 3). Without the patch, cascade idempotency at
-    // crossClarify.ts:799 sees questioner_v1.cci=1 satisfying `>= newCci`
-    // (even if newCci is correctly bumped to 2 it would still pass with the
-    // new logic; but with Fix B's max-aware bump and Fix A's output-aware
-    // idempotency, both conditions cooperate to mint).
+    // RFC-074 (T-B8): the eager cascade is gone, so the questioner is NOT
+    // pre-minted a fresh pending row. It keeps its clarify-only done row at
+    // cci=1; the scheduler re-dispatches it lazily once the designer rerun
+    // produces a fresher done row. The original §2.1 "don't skip a clarify-only
+    // row" hazard no longer exists (nothing cascades), and the underlying
+    // review-source-port-missing risk is now prevented at read time by
+    // resolveUpstreamInputs' done-only freshest-row picker (B17).
     const qRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
     const qFresh = qRows.find((r) => r.status === 'pending')
-    expect(
-      qFresh,
-      'Fix A — questioner must get a fresh pending row even though its prior cci=1 row exists (it was clarify-only)',
-    ).toBeDefined()
-    expect(
-      (qFresh?.retryIndex ?? -1) > 3,
-      'questioner retryIndex must beat existing max so isFresherNodeRun picks it',
-    ).toBe(true)
-    expect(qFresh?.clarifyIteration, 'questioner cascade row carries the bumped cci=2').toBe(2)
+    expect(qFresh, 'questioner is NOT eagerly cascaded a pending row').toBeUndefined()
 
-    // Sanity: prior questioner_v1 row is preserved (append-only).
+    // Prior questioner_v1 row is left untouched.
     const qPriorRow = qRows.find((r) => r.id === questionerV1)
     expect(qPriorRow?.status).toBe('done')
     expect(qPriorRow?.clarifyIteration).toBe(1)
@@ -441,7 +434,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
   // "already cascaded" when it's clarify-only.
   // -----------------------------------------------------------------------
 
-  test('§2.1 — cascade does not skip a questioner whose prior row at target cci has empty node_run_outputs', async () => {
+  test('§2.1 (RFC-074) — a clarify-only questioner is NOT eagerly cascaded; lazy freshness owns its re-run', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const def = liveDef()
     const taskId = await seedTask(db, def)
@@ -488,10 +481,12 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
     const qFresh = qRows.find((r) => r.status === 'pending')
-    expect(
-      qFresh,
-      'cascade must mint a fresh questioner pending row even though prior row carries target cci (it had no outputs)',
-    ).toBeDefined()
+    // RFC-074: no cascade row is minted. The clarify-only questioner keeps its
+    // single done row; downstream re-run is lazy (scheduler freshness), and the
+    // empty-output row can never be mistaken for the upstream content because
+    // resolveUpstreamInputs only reads DONE rows that actually emit the port.
+    expect(qFresh, 'questioner is NOT eagerly cascaded').toBeUndefined()
+    expect(qRows.length, 'questioner keeps its single clarify-only done row').toBe(1)
   })
 
   // -----------------------------------------------------------------------

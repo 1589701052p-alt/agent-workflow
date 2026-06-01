@@ -1,0 +1,31 @@
+-- RFC-074 — Provenance-based node freshness (PR-B).
+--
+-- Replaces the scalar `clarify_iteration` (cci) watermark — used to encode
+-- "which upstream version did this node consume" — with explicit provenance.
+--
+--   * `node_runs.consumed_upstream_runs_json` (nullable TEXT): JSON map
+--     `{ upstreamNodeId: nodeRunId }` recording exactly which upstream
+--     node_run each row consumed at its single content read-point
+--     (resolveUpstreamInputs for agents, sourceRun for review nodes). A node
+--     is "fresh" iff every consumed run is still the freshest done row of its
+--     upstream — read-time computed by `isNodeRunFresh`, replacing the two
+--     speculative-mint cascade layers (cascadeDownstreamFromDesigner +
+--     applyClarifyFreshnessInvariant).
+--
+-- Migration is a HARD CUT (decision D4): historical rows default NULL, and
+-- `isNodeRunFresh` treats NULL consumed as fresh. No backfill — an in-flight
+-- legacy task that was mid-`awaiting` may leave a should-be-stale node treated
+-- as fresh (it won't spuriously re-review, the direction this RFC fixes);
+-- re-launching the task produces rows that all carry provenance. New tasks are
+-- unaffected.
+--
+-- `cci` column is intentionally KEPT in PR-B (still used only as the
+-- isFresherNodeRun sort key); PR-C retires it.
+--
+-- docVersions.decision gains a 'superseded' value (review awaiting-refresh,
+-- design §7). The column has no DB CHECK constraint (see 0002) — only a
+-- drizzle/shared TS enum — so no SQL change is needed here; the value is
+-- enabled at the type layer.
+--
+-- See design/RFC-074-provenance-node-freshness/design.md §3 / §9.1.
+ALTER TABLE `node_runs` ADD COLUMN `consumed_upstream_runs_json` text;

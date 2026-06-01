@@ -1,36 +1,26 @@
-// RFC-056 patch 2026-05-22 — Layer A sibling cascade lock.
+// RFC-074 (was RFC-056 patch 2026-05-22 "Layer A sibling cascade").
 //
-// The original `triggerDesignerRerun` (commit pre-2026-05-22) minted ONLY the
-// designer's new pending node_run and relied on an "implicit cascade via
-// freshness" — but the scheduler's `isFresherNodeRun` doesn't look at
-// `clarify_iteration`, so downstream rows stayed `done` and the
-// scheduler proceeded to dispatch the next review with stale upstream
-// outputs, tripping `review-source-port-missing` and failing the entire
-// task (see live task 01KS7GQ3PACG3YX6S9ZH8QC0WV in production debugging).
+// HISTORY: RFC-056 made `triggerDesignerRerun` eagerly mint a fresh pending
+// node_run for EVERY downstream node on a cross-clarify designer rerun, because
+// the scheduler's cci-based freshness couldn't propagate a rerun lazily and
+// downstream rows stayed `done` against stale upstream output.
 //
-// This test locks the FIX: after `submitCrossClarifyAnswers` directive=
-// continue resolves and the designer rerun fires, EVERY downstream node
-// (reachable via the data graph — i.e. ignoring clarify-channel edges)
-// must have a fresh pending `node_run` minted at the bumped
-// clarifyIteration. The downstream rows' `latestPerNode` row, as seen
-// by the next scheduler pass, will be the new pending, not the old done.
+// RFC-074 (PR-B, T-B8) REMOVES that eager cascade. Downstream propagation is now
+// lazy + provenance-driven: `triggerDesignerRerun` mints ONLY the designer's
+// own rerun row; the scheduler's per-batch `recomputeFreshnessAndDemote` demotes
+// a downstream node once the designer's rerun actually produces a fresher done
+// row (the node consumed the OLD designer run → stale → re-dispatched). The
+// eager pre-mint was exactly the speculative over-trigger the RFC eliminates.
 //
-// Cascade walked graph (snake-game-style fixture mirroring the production
-// failure shape):
+// These tests therefore now LOCK THE ABSENCE of the cascade: after
+// `submitCrossClarifyAnswers` directive=continue, the designer gets a rerun row
+// but downstream nodes (rev1, questioner, …) keep their existing rows untouched.
 //
 //   in → designer → rev1 → questioner → rev2 → out
-//                                  ↘
-//                                cross_clarify  (clarify-channel; SKIP)
-//                                  ↗
-//                              (cycles back to designer + questioner via
-//                               clarify-channel edges; SKIP)
+//                                  ↘  cross_clarify (clarify-channel; SKIP)
 //
-// Expected: rev1, questioner, rev2, out all get NEW pending rows with
-// clarifyIteration = designerNew.clarifyIteration. The IN node
-// (no upstream of designer) is NOT cascaded — it's strictly upstream.
-//
-// If this test goes red the cascade contract drifted; investigate before
-// relaxing.
+// End-to-end downstream re-run after a cross-clarify is covered by the
+// combination scenarios (S13/S15) running the real scheduler.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -175,8 +165,8 @@ afterAll(() => {
   resetBroadcastersForTests()
 })
 
-describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', () => {
-  test('every reachable downstream node gets a fresh pending row at the bumped clarifyIteration', async () => {
+describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () => {
+  test('submit mints ONLY the designer rerun; downstream nodes are NOT pre-cascaded', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     // Seed a done designer + done downstream chain mirroring the
@@ -215,26 +205,21 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
     const designerFresh = designerRows.find((r) => r.status === 'pending')
     expect(designerFresh?.clarifyIteration).toBe(1)
 
-    // CASCADE LOCK: rev1 + questioner each got a NEW pending row at
-    // clarifyIteration=1. Their old done rows still exist at iter=0.
+    // RFC-074 NO-CASCADE LOCK: rev1 + questioner are NOT pre-minted a pending
+    // row. Each keeps exactly its single done row from iteration 0; the
+    // scheduler will demote + re-dispatch them lazily once the designer rerun
+    // produces a fresher done row (provenance freshness, recomputeFreshnessAndDemote).
     for (const nodeId of ['rev1', 'questioner']) {
       const rows = await db
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-      const pendingFresh = rows.find((r) => r.status === 'pending' && r.clarifyIteration === 1)
-      expect(
-        pendingFresh,
-        `${nodeId} should have a pending row at clarifyIteration=1`,
-      ).toBeDefined()
-      // Old done row preserved (no destructive update — append-only).
-      const oldDone = rows.find((r) => r.status === 'done' && r.clarifyIteration === 0)
-      expect(oldDone, `${nodeId} should still have its old done row`).toBeDefined()
+      expect(rows.length, `${nodeId} should NOT be pre-cascaded (single done row)`).toBe(1)
+      expect(rows[0]?.status).toBe('done')
+      expect(rows[0]?.clarifyIteration).toBe(0)
     }
 
-    // Nodes that NEVER ran (rev2, out) are skipped — the scheduler will
-    // dispatch them naturally as upstream finishes. The cascade refuses
-    // to mint rows for nodes that have no prior runs to template from.
+    // Nodes that NEVER ran (rev2, out) have no rows either way.
     for (const nodeId of ['rev2', 'out']) {
       const rows = await db
         .select()
@@ -252,7 +237,7 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
     expect(inRows[0]?.status).toBe('done')
   })
 
-  test('cascade is idempotent — calling submit twice (multi-tab race) only mints rows once', async () => {
+  test('submit does not pre-mint a downstream rev1 row (no cascade to be idempotent about)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedDoneRun(db, taskId, 'designer')
@@ -275,18 +260,16 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
       answers: [makeAns('q1')],
       directive: 'continue',
     })
-    const countBefore = (
+    const rev1Count = (
       await db
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev1')))
     ).length
-    // Second submit on the same session ought to 409, but even if a
-    // direct re-trigger happened the cascade should NOT double-mint.
-    // (We exercise the idempotency guard at the cascade level by
-    // mirroring what the scheduler would do — direct call would require
-    // a second answered session in production.)
-    expect(countBefore).toBe(2) // 1 done + 1 pending
+    // RFC-074: no cascade row is minted on rev1 — it keeps its single done row.
+    // (The designer rerun row is the only thing submit mints; downstream
+    // re-runs are driven lazily by the scheduler's freshness recompute.)
+    expect(rev1Count).toBe(1)
   })
 
   test('clarify-channel edges are skipped — cascade does NOT mint a pending row on the cross-clarify node itself', async () => {
@@ -323,7 +306,7 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
     expect(crossRows.length, 'cross-clarify node should NOT receive a cascade-minted row').toBe(1)
   })
 
-  test('cascade preserves shardKey / clarifyIteration / preSnapshot template values; only clarifyIteration bumps', async () => {
+  test('a downstream rev1 with rich clarify/retry history is left untouched (no cascade overwrite)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedDoneRun(db, taskId, 'designer')
@@ -359,18 +342,14 @@ describe('RFC-056 Layer A — downstream sibling cascade after designer rerun', 
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev1')))
-    const rev1Pending = rev1Rows.find((r) => r.status === 'pending')
-    // RFC-064: the unified clarifyIteration is the single counter — the
-    // cascade-minted row's value is the bumped max(participant, session)+1.
-    // Pre-RFC-064 this test asserted "self-clarify preserved at 3 AND cross
-    // bumped to 1"; under unification the new row's clarifyIteration is the
-    // max-and-bump result (4 in this scenario: max(rev1=3, designer=0,
-    // questioner=1, session iter=0)+1=4).
-    expect(rev1Pending?.preSnapshot, 'preSnapshot preserved').toBe('snap-r1-final')
-    expect(rev1Pending?.clarifyIteration, 'clarifyIteration bumped').toBeGreaterThan(3)
-    // retry_index must beat the prior max (=2) so isFresherNodeRun picks
-    // the new pending over the old done — without this the scheduler
-    // would re-evaluate the old done as latest and fail the cascade.
-    expect(rev1Pending?.retryIndex).toBeGreaterThan(2)
+    // RFC-074: no cascade row is minted, so rev1's hard-won history (cci=3,
+    // retry=2, preSnapshot) is left exactly as-is — there is no append-only
+    // pending row to validate. The designer rerun + lazy freshness will
+    // re-dispatch rev1 later (recording fresh consumed) without destroying this.
+    expect(rev1Rows.length, 'rev1 keeps its single done row').toBe(1)
+    expect(rev1Rows[0]?.status).toBe('done')
+    expect(rev1Rows[0]?.preSnapshot).toBe('snap-r1-final')
+    expect(rev1Rows[0]?.clarifyIteration).toBe(3)
+    expect(rev1Rows[0]?.retryIndex).toBe(2)
   })
 })

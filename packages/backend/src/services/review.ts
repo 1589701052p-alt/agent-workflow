@@ -52,6 +52,7 @@ import {
 } from '@/db/schema'
 import { resolvePortContentDetailed } from '@/services/envelope'
 import { isFresherNodeRun } from '@/services/scheduler'
+import { parseConsumedJson } from '@/services/freshness'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { rollbackToSnapshot } from '@/util/git'
@@ -304,6 +305,13 @@ export function pickFreshestReviewRun(
 }
 
 /**
+ * RFC-074 PR-B: DEAD CODE — no longer called. `dispatchReviewNode`'s
+ * cci-alignment short-circuit was replaced by provenance freshness (the
+ * scheduler's completed-set gating + the consumed-source guard inside
+ * dispatch). Kept only because PR-A baseline + RFC-056/064 tests still lock its
+ * truth table; deleted together with cci retirement in PR-C (grep guard C11).
+ * Do NOT add new callers.
+ *
  * RFC-056 patch-2026-05-26 + RFC-064: a review's prior `done` approval
  * covers the upstream state at THAT row's `clarifyIteration` (unified
  * counter). When the upstream source agent has subsequently re-run via
@@ -461,53 +469,107 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  // RFC-052: a review for the current iteration is "decided" the moment a
-  // top-level row reaches `done` (approve sets status=done) — defense-in-
-  // depth against placeholder rows produced by retry cascades (T2 cascade
-  // no longer mints those; pre-T2 stuck DBs still rely on this).
-  //
-  // RFC-056 patch-2026-05-26 narrows the short-circuit with a cross-clarify
-  // freshness check: the existing `done` approval is only authoritative
-  // when its `crossClarifyIteration` covers the upstream source row's
-  // current cci. When upstream has advanced via `cascadeDownstreamFromDesigner`
-  // (cci bumped) but the latest done review is still at the pre-cascade
-  // cci, the cascade-minted pending review row MUST dispatch so the user
-  // re-approves on the refreshed upstream. See
-  // design/RFC-056-clarify-cross-agent/patch-2026-05-26-review-dispatch-
-  // respects-cci.md and the live-task evidence trail referenced there.
+  // RFC-074 (T-B4 / T-B9 / T-B10): provenance replaces the RFC-052 "any done
+  // short-circuits" + RFC-056 cci-alignment logic. A review row records the
+  // exact sourceRun it was produced against in consumed_upstream_runs_json. The
+  // SCHEDULER's completed-set gating (isNodeRunFresh) keeps a fresh done review
+  // out of dispatch entirely (so approve → no spurious re-review; §1.3 bug
+  // structurally gone). The branches here cover the cases that DO reach
+  // dispatch: a live awaiting row (resume / awaiting-refresh §7), a prior
+  // decision that still covers the source, or a (re-)open.
   const { reuse, latestDone } = pickFreshestReviewRun(reviewRuns)
-  if (isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)) {
-    return { kind: 'ok', summary: '', message: '' }
+  const consumedJson = JSON.stringify({ [sourceNodeId]: sourceRun.id })
+  // A review row "still covers" the current source iff it recorded consuming
+  // this exact source run, OR carries no provenance at all (legacy / null =
+  // fresh — migration hard-cut D4). Only a recorded DIFFERENT consumption is a
+  // genuine stale signal (RFC-005 US-2: upstream re-ran after the decision).
+  const coversSource = (row: typeof nodeRuns.$inferSelect): boolean => {
+    const c = parseConsumedJson(row.consumedUpstreamRunsJson)[sourceNodeId]
+    return c === undefined || c === sourceRun.id
   }
 
   let reviewNodeRunId: string
   let reviewIteration: number
-  if (reuse !== undefined) {
+  if (reuse !== undefined && reuse.status === 'awaiting_review') {
+    // A live awaiting_review row is the open review for this node. Reuse it and
+    // fall through to the doc_version find-or-create below, which re-broadcasts
+    // the parked version (resume idempotence, B18) or mints one if it is
+    // missing (e.g. the S1 repair "recreate doc_version" path).
     reviewNodeRunId = reuse.id
     reviewIteration = reuse.reviewIteration
-    if (reuse.status !== 'awaiting_review') {
-      // pending → awaiting_review (post-iterate / post-reject / fresh).
-      // RFC-053: state machine helper enforces legal transition; if reuse
-      // is somehow already in a terminal-non-done state the helper will
-      // refuse and the dispatch result surfaces failed instead of silently
-      // overwriting.
-      await transitionNodeRunStatus({
-        db,
-        nodeRunId: reviewNodeRunId,
-        event: { kind: 'park-review' },
-        extra: { startedAt: reuse.startedAt ?? Date.now() },
+    if (!coversSource(reuse)) {
+      // (T-B10 / §7) Awaiting on a STALE source — the user is mid-review and the
+      // upstream produced a fresher run. Refresh in place: retire the pending
+      // doc_version(s), drop their now-meaningless anchored comments, re-stamp
+      // the row's provenance. createDocVersion below makes v(n+1) on new body.
+      await db.transaction(async (tx) => {
+        const stale = await tx
+          .select({ id: docVersions.id })
+          .from(docVersions)
+          .where(
+            and(
+              eq(docVersions.reviewNodeRunId, reuse.id),
+              eq(docVersions.sourcePortName, sourcePortName),
+              eq(docVersions.decision, 'pending'),
+            ),
+          )
+        for (const s of stale) {
+          await tx.delete(reviewComments).where(eq(reviewComments.docVersionId, s.id))
+        }
+        await tx
+          .update(docVersions)
+          .set({
+            decision: 'superseded',
+            decisionReason: 'upstream-refreshed',
+            decidedBy: 'system',
+            decidedAt: Date.now(),
+          })
+          .where(
+            and(
+              eq(docVersions.reviewNodeRunId, reuse.id),
+              eq(docVersions.sourcePortName, sourcePortName),
+              eq(docVersions.decision, 'pending'),
+            ),
+          )
+        await tx
+          .update(nodeRuns)
+          .set({
+            consumedUpstreamRunsJson: consumedJson,
+            clarifyIteration: sourceRun.clarifyIteration ?? 0,
+          })
+          .where(eq(nodeRuns.id, reuse.id))
       })
     }
+  } else if (latestDone !== undefined && coversSource(latestDone)) {
+    // A prior decision (approve / reject / iterate) still covers the current
+    // source — nothing to do. This is RFC-052's "any done is decisive", now
+    // scoped to provenance: null/legacy consumed counts as covering (D4), so
+    // pre-RFC-074 approvals AND the terminal-state placeholder-row case (a
+    // higher-retry failed row sitting beside an approved done row) short-circuit
+    // exactly as before. Only a recorded-different consumption falls through to
+    // a US-2 re-review below.
+    return { kind: 'ok', summary: '', message: '' }
+  } else if (reuse !== undefined && reuse.status === 'pending') {
+    // Defensive (legacy cascade-minted pending row): park it as awaiting_review.
+    reviewNodeRunId = reuse.id
+    reviewIteration = reuse.reviewIteration
+    await transitionNodeRunStatus({
+      db,
+      nodeRunId: reviewNodeRunId,
+      event: { kind: 'park-review' },
+      extra: { startedAt: reuse.startedAt ?? Date.now() },
+    })
+    await db
+      .update(nodeRuns)
+      .set({ consumedUpstreamRunsJson: consumedJson })
+      .where(eq(nodeRuns.id, reviewNodeRunId))
   } else {
+    // No prior review row, OR the freshest is a terminal decision against an
+    // OLDER source (RFC-005 US-2 re-review: upstream re-ran after approve /
+    // reject / iterate). Mint a fresh awaiting_review row carrying the prior
+    // reviewIteration — same review round, re-evaluated on the new content.
     reviewNodeRunId = ulid()
-    reviewIteration = 0
-    const now = Date.now()
-    // RFC-056 patch 2026-05-25 §2.3 + RFC-064: carry the upstream source-
-    // agent's clarifyIteration (unified counter) onto the review's
-    // awaiting_review row so the Layer B freshness invariant sees a
-    // continuous iteration across the data graph. Default 0 preserved
-    // when sourceRun lookup turns up empty (initial dispatch without an
-    // upstream run, which shouldn't happen but stay defensive).
+    reviewIteration = reuse?.reviewIteration ?? 0
     await db.insert(nodeRuns).values({
       id: reviewNodeRunId,
       taskId,
@@ -515,9 +577,11 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
       status: 'awaiting_review',
       retryIndex: 0,
       iteration,
-      reviewIteration: 0,
+      reviewIteration,
+      // cci still mirrors the source for isFresherNodeRun ordering (PR-C drops it).
       clarifyIteration: sourceRun.clarifyIteration ?? 0,
-      startedAt: now,
+      consumedUpstreamRunsJson: consumedJson,
+      startedAt: Date.now(),
     })
   }
 

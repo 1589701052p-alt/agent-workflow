@@ -554,6 +554,13 @@ export const nodeRuns = sqliteTable(
      * `task.repoCount === 1` this column is always NULL.
      */
     preSnapshotReposJson: text('pre_snapshot_repos_json'),
+    /**
+     * RFC-074: provenance map `{ upstreamNodeId: nodeRunId }` — exactly which
+     * upstream node_run this row consumed at its content read-point. NULL on
+     * pre-RFC-074 rows and input/no-upstream nodes (treated as fresh). Drives
+     * read-time `isNodeRunFresh`, replacing the cci-watermark cascade.
+     */
+    consumedUpstreamRunsJson: text('consumed_upstream_runs_json'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),
@@ -614,7 +621,11 @@ export const docVersions = sqliteTable(
     bodyPath: text('body_path').notNull(), // relative to app home
     commentsJson: text('comments_json').notNull().default('[]'), // ReviewComment[] frozen at decision time
     decision: text('decision', {
-      enum: ['pending', 'approved', 'rejected', 'iterated'],
+      // RFC-074: 'superseded' — set by the system when an awaiting review's
+      // upstream produced a fresher run; the old doc_version is retired and a
+      // v(n+1) is minted (design §7). No DB CHECK exists on this column, so
+      // adding the value is a pure type-layer change.
+      enum: ['pending', 'approved', 'rejected', 'iterated', 'superseded'],
     })
       .notNull()
       .default('pending'),

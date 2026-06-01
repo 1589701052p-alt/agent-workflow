@@ -881,22 +881,19 @@ export async function triggerDesignerRerun(
   //   isFresherNodeRun ALWAYS picks it over the prior done row, even when
   //   the prior path went through RFC-042 same-session retries that
   //   inflated retry_index above 0.
-  const definition = args.definition ?? (await loadDefinitionForTask(args.db, args.taskId))
-  const cascadeMinted = await cascadeDownstreamFromDesigner({
-    db: args.db,
-    taskId: args.taskId,
-    designerNodeId: args.designerNodeId,
-    designerIteration: lastDesigner.iteration,
-    newClarifyIteration,
-    definition,
-  })
-
+  // RFC-074 (T-B8): the downstream sibling cascade is removed. Pre-minting
+  // downstream pending rows here was exactly the speculative-mint over-trigger
+  // RFC-074 eliminates. Provenance freshness now propagates the rerun lazily —
+  // once this designer rerun produces a fresh done row, the scheduler's
+  // per-batch recomputeFreshnessAndDemote demotes its now-stale downstream and
+  // re-dispatches them, recording fresh consumed. See design §4.3 / D9.
+  // (cascadeDownstreamFromDesigner + loadDefinitionForTask are now dead;
+  // deleted with cci retirement in PR-C.)
   log.info('cross-clarify designer rerun triggered', {
     taskId: args.taskId,
     designerNodeId: args.designerNodeId,
     designerNodeRunId,
     sourceCount: args.sources.length,
-    cascadedNodeIds: cascadeMinted,
   })
 
   return { designerNodeRunId, triggeredAt: now }
@@ -928,8 +925,15 @@ interface CascadeDownstreamArgs {
  *
  * NOT called for the questioner's stop / reject path — that flow goes
  * through `triggerQuestionerStopRerun` which is single-node by design.
+ *
+ * RFC-074 PR-B: DEAD CODE — the only caller (triggerDesignerRerun) no longer
+ * cascades; downstream propagation is now lazy via the scheduler's
+ * recomputeFreshnessAndDemote (§4.3). Exported solely so lint does not flag the
+ * unused private symbol; deleted with cci retirement in PR-C. Do NOT add callers.
  */
-async function cascadeDownstreamFromDesigner(args: CascadeDownstreamArgs): Promise<string[]> {
+export async function cascadeDownstreamFromDesigner(
+  args: CascadeDownstreamArgs,
+): Promise<string[]> {
   const { db, taskId, designerNodeId, designerIteration, newClarifyIteration, definition } = args
   // Build forward adjacency over the data graph (no clarify-channel edges).
   const adjOut = new Map<string, string[]>()
@@ -1039,12 +1043,15 @@ async function cascadeDownstreamFromDesigner(args: CascadeDownstreamArgs): Promi
 }
 
 /**
- * Resolve the workflow definition snapshot for `taskId` from the tasks
- * table. Used by the cross-clarify sibling cascade — kept private here so
- * we don't drag the definition-loading dependency across crossClarify.ts's
- * other call sites that already receive a definition from their caller.
+ * Resolve the workflow definition snapshot for `taskId` from the tasks table.
+ *
+ * RFC-074 PR-B: DEAD CODE — its only caller was the now-removed cascade.
+ * Exported so lint does not flag the unused private symbol; deleted in PR-C.
  */
-async function loadDefinitionForTask(db: DbClient, taskId: string): Promise<WorkflowDefinition> {
+export async function loadDefinitionForTask(
+  db: DbClient,
+  taskId: string,
+): Promise<WorkflowDefinition> {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0]
   if (row === undefined) {
     throw new NotFoundError('task-not-found', `task ${taskId} not found`)

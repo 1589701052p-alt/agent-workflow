@@ -127,7 +127,17 @@ export type ReviewDecisionKind = z.infer<typeof ReviewDecisionKindSchema>
 // at the moment the decision was made (so diff view can show "last round's
 // comments" without join chains).
 // -----------------------------------------------------------------------------
-export const DOC_VERSION_DECISION = ['pending', 'approved', 'rejected', 'iterated'] as const
+// RFC-074: 'superseded' — system-set when an awaiting review's upstream
+// produced a fresher run; the stale doc_version is retired and v(n+1) minted
+// (design §7). Not user-selectable (ReviewDecisionSchema stays approve/reject/
+// iterate); it only ever appears on a historical doc_version row.
+export const DOC_VERSION_DECISION = [
+  'pending',
+  'approved',
+  'rejected',
+  'iterated',
+  'superseded',
+] as const
 export const DocVersionDecisionSchema = z.enum(DOC_VERSION_DECISION)
 export type DocVersionDecision = z.infer<typeof DocVersionDecisionSchema>
 

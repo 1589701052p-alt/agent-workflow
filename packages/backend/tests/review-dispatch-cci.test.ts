@@ -323,29 +323,51 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
     expect(reviewRows[0]?.status).toBe('done')
   })
 
-  test('alignment FALSE (upstream.cci > latestDone.cci) → pending cascade row reparks as awaiting_review', async () => {
-    // This is the bug 01KS86DPCSERV7S41GQA5Y81RN exposed. With the patch,
-    // the cascade-minted pending row MUST become awaiting_review.
+  // RFC-074: superseded the cci-alignment + cascade-repark mechanism this test
+  // originally locked (a cascade pre-minted a pending review row; dispatch
+  // reparked it). Cascades are gone — re-review on a genuinely-advanced upstream
+  // is now driven by PROVENANCE: a done review that consumed an OLDER source
+  // run is stale when the source produces a fresher run, so dispatch mints a
+  // fresh awaiting_review (RFC-005 US-2). This rewrite asserts that behavior.
+  test('stale provenance: review consumed an older source → US-2 re-review (fresh awaiting_review)', async () => {
     const { taskId, task, definition, reviewNode } = await seed()
-    // Upstream designer done at cci=4 (cross-clarify cascade has run).
-    const designerRunId = ulid()
+    // Old designer done — the version the prior review approved.
+    const oldDesignerId = ulid()
     await db.insert(nodeRuns).values({
-      id: designerRunId,
+      id: oldDesignerId,
       taskId,
       nodeId: 'designer',
       status: 'done',
-      retryIndex: 9,
+      retryIndex: 0,
+      iteration: 0,
+      clarifyIteration: 0,
+      startedAt: Date.now() - 5000,
+      finishedAt: Date.now() - 4000,
+    })
+    await db.insert(nodeRunOutputs).values({
+      nodeRunId: oldDesignerId,
+      portName: 'docpath',
+      content: '# original body',
+    })
+    // Fresher designer done (e.g. a later rerun) — this is the current source.
+    const newDesignerId = ulid()
+    await db.insert(nodeRuns).values({
+      id: newDesignerId,
+      taskId,
+      nodeId: 'designer',
+      status: 'done',
+      retryIndex: 0,
       iteration: 0,
       clarifyIteration: 4,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
     await db.insert(nodeRunOutputs).values({
-      nodeRunId: designerRunId,
+      nodeRunId: newDesignerId,
       portName: 'docpath',
-      content: '# updated body after 4 cci rounds',
+      content: '# updated body',
     })
-    // Old review done at cci=0 (the original approval).
+    // Prior review done that CONSUMED the old designer run (stale provenance).
     await db.insert(nodeRuns).values({
       id: ulid(),
       taskId,
@@ -354,19 +376,9 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       retryIndex: 0,
       iteration: 0,
       clarifyIteration: 0,
+      consumedUpstreamRunsJson: JSON.stringify({ designer: oldDesignerId }),
       startedAt: Date.now() - 5000,
       finishedAt: Date.now() - 4000,
-    })
-    // Cascade-minted pending review row at cci=4.
-    const stuckId = ulid()
-    await db.insert(nodeRuns).values({
-      id: stuckId,
-      taskId,
-      nodeId: 'rev',
-      status: 'pending',
-      retryIndex: 1,
-      iteration: 0,
-      clarifyIteration: 4,
     })
 
     const result = await dispatchReviewNode({
@@ -378,22 +390,21 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       node: reviewNode,
       iteration: 0,
     })
+    // Upstream advanced past what the review consumed → fresh re-review opens.
     expect(result.kind).toBe('awaiting_review')
-    const stuckAfter = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, stuckId)).limit(1)
-    )[0]
-    expect(stuckAfter?.status).toBe('awaiting_review')
-    const allReviewRows = await db
+    const reviewRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev')))
-    expect(allReviewRows.length).toBe(2)
-    const oldDone = allReviewRows.find((r) => r.clarifyIteration === 0)
-    expect(oldDone?.status).toBe('done')
+    const fresh = reviewRows.find((r) => r.status === 'awaiting_review')
+    expect(fresh).toBeDefined()
+    // The fresh review row records consuming the NEW designer run.
+    expect(JSON.parse(fresh!.consumedUpstreamRunsJson ?? '{}').designer).toBe(newDesignerId)
+    // A v1 doc_version on the new review row was created against the updated body.
     const versions = await db
       .select()
       .from(docVersions)
-      .where(eq(docVersions.reviewNodeRunId, stuckId))
+      .where(eq(docVersions.reviewNodeRunId, fresh!.id))
     expect(versions.length).toBe(1)
     expect(versions[0]?.decision).toBe('pending')
   })
@@ -507,12 +518,15 @@ describe('RFC-056 patch-2026-05-26 — source-text guards', () => {
     expect(src).toContain('export function isReviewClarifyAlignedWithUpstream(')
   })
 
-  test('dispatchReviewNode calls the cci-aware helper (no naked alreadyDone)', () => {
-    expect(src).toContain('isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)')
-    // The pre-patch literal must NOT survive. If you legitimately need to
-    // re-introduce a variable called alreadyDone here, fold it through
-    // isReviewClarifyAlignedWithUpstream so the cci-aware contract stays
-    // single-sourced — and update this guard with a comment explaining why.
+  test('RFC-074: dispatchReviewNode uses provenance (coversSource), not the cci-aware helper', () => {
+    // RFC-074 (T-B9) replaced the cci-alignment short-circuit with provenance:
+    // dispatch no longer CALLS isReviewClarifyAlignedWithUpstream (the function
+    // lingers as dead code until PR-C). The decision now flows through
+    // coversSource + the recorded consumed_upstream_runs_json.
+    expect(src.includes('isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)')).toBe(false)
+    expect(src).toContain('coversSource')
+    expect(src).toContain('consumedUpstreamRunsJson')
+    // The pre-patch literal must NOT survive either.
     expect(src.includes('let alreadyDone =')).toBe(false)
     expect(src.includes('alreadyDone = true')).toBe(false)
   })

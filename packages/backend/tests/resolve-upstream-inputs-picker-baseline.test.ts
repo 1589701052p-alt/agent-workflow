@@ -1,23 +1,20 @@
-// RFC-074 PR-A baseline — `resolveUpstreamInputs` CURRENT row-selection, locked.
+// RFC-074 — `resolveUpstreamInputs` source-run picker (PR-A baseline → PR-B
+// unified). `resolveUpstreamInputs` is the SINGLE place an agent node reads its
+// upstream content AND the point where provenance (`consumed`) is captured.
 //
-// WHY THIS FILE EXISTS (regression intent, design §5.1 / decision D10):
-//   `resolveUpstreamInputs` is the SINGLE place an agent node reads its
-//   upstream content. Today it selects the source run by
-//   `(iteration desc, retryIndex desc)` — with NO cci term and NO status
-//   filter — whereas the freshness machinery (`isFresherNodeRun`,
-//   `latestPerNode`) selects by `(cci, retryIndex, id)`. That divergence is
-//   the "three-picker drift" the RFC indicts: the row a node ACTUALLY reads
-//   can differ from the row freshness believes is newest.
-//
-//   PR-B unifies this picker with `freshestDone` (and filters to done rows),
-//   which is a BEHAVIOR CHANGE that fixes a latent stale-read bug. Per D10 we
-//   must first LOCK the current selection so each flipped assertion in PR-B is
-//   audited as "corrected stale read" vs "regression". These tests therefore
-//   assert the CURRENT (cci-blind) behavior on purpose — including the bug.
-//   When PR-B makes them RED, that is the expected, audited flip.
-//
-//   `resolveUpstreamInputs` was made `export` in PR-A solely to enable this
-//   lock (behavior-preserving — see scheduler.ts).
+// PR-A locked the OLD cci-blind `(iteration desc, retryIndex desc)` picker
+// (with no status filter). PR-B (decision D10 / design §5.1) unified it with
+// the freshness picker: among top-level DONE rows in the iteration window, pick
+// the highest iteration then the freshest by isFresherNodeRun. The two
+// assertions below FLIPPED — each audited here as a "corrected stale read", not
+// a regression:
+//   * PB1: cci-blind picked the higher-retry PRE-clarify row; now reads the
+//     fresh clarify rerun.
+//   * PB2: a pending higher-retry row shadowed real done content (→ empty); the
+//     done-only filter now reads the real content.
+// PB3 (iteration windowing) and PB4 (multi-source join + child exclusion) keep
+// the same observable values. Every case also asserts the recorded `consumed`
+// provenance map — the new return field driving read-time freshness.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -108,13 +105,14 @@ function edge(
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
-describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,retryIndex) picker', () => {
-  // PB1 — THE HEADLINE LATENT BUG (design §5.1). Upstream has two top-level
-  // done rows at the same iteration: a retry-storm row at the OLD generation
-  // (cci=0, retry=5) and the post-clarify rerun (cci=1, retry=0). The picker
-  // sorts by retryIndex desc and IGNORES cci, so it reads the STALE
-  // pre-clarify content. PR-B flips this to the fresh row.
-  test('PB1: cci-blind — picks higher retryIndex (STALE pre-clarify) over fresh clarify rerun', async () => {
+describe('RFC-074 — resolveUpstreamInputs unified picker + consumed provenance', () => {
+  // PB1 — THE HEADLINE LATENT BUG, now FIXED (design §5.1). Upstream has two
+  // top-level done rows at the same iteration: a retry-storm row at the OLD
+  // generation (cci=0, retry=5) and the post-clarify rerun (cci=1, retry=0).
+  // The OLD picker sorted by retryIndex desc, IGNORED cci, and read the STALE
+  // pre-clarify content. The unified picker uses isFresherNodeRun within the
+  // iteration → reads the fresh clarify rerun, and records it as consumed.
+  test('PB1: unified picker reads the fresh clarify rerun (corrected stale read)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     // gen0 retry-storm done row — LARGER retryIndex.
@@ -133,7 +131,7 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       { id: '01FRESH', iteration: 0, retryIndex: 0, clarifyIteration: 1, status: 'done' },
       { spec: 'FRESH-post-clarify' },
     )
-    const inputs = await resolveUpstreamInputs(
+    const { inputs, consumed } = await resolveUpstreamInputs(
       db,
       taskId,
       [edge('designer', 'spec', 'review', 'doc')],
@@ -141,14 +139,16 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       0,
       log,
     )
-    // LOCKED CURRENT BEHAVIOR: the stale, higher-retry row wins. (PR-B: FRESH.)
-    expect(inputs.doc).toBe('STALE-pre-clarify')
+    // FLIPPED vs PR-A baseline: the fresh clarify rerun wins (corrected read).
+    expect(inputs.doc).toBe('FRESH-post-clarify')
+    // Provenance records the actual run read — the fresh one.
+    expect(consumed.designer).toBe('01FRESH')
   })
 
-  // PB2 — no status filter. A non-done row (here: a pending rerun with no
-  // output yet) at higher retryIndex shadows a done row with real content,
-  // yielding EMPTY input. PR-B's done-only filter fixes this.
-  test('PB2: no status filter — pending higher-retry row shadows done content (empty result)', async () => {
+  // PB2 — done-only filter, now FIXED. A pending rerun (no output yet) at
+  // higher retryIndex used to shadow the done row → empty input. The done-only
+  // filter now skips the pending row and reads the real content.
+  test('PB2: done-only filter reads real content (pending no longer shadows)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRunWithOutput(
@@ -166,7 +166,7 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       { id: '01PEND', iteration: 0, retryIndex: 1, status: 'pending' },
       {},
     )
-    const inputs = await resolveUpstreamInputs(
+    const { inputs, consumed } = await resolveUpstreamInputs(
       db,
       taskId,
       [edge('designer', 'spec', 'review', 'doc')],
@@ -174,8 +174,9 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       0,
       log,
     )
-    // LOCKED: picker chose the pending row → port missing → empty string.
-    expect(inputs.doc).toBe('')
+    // FLIPPED vs PR-A baseline: done row read, pending skipped (corrected read).
+    expect(inputs.doc).toBe('real-content')
+    expect(consumed.designer).toBe('01DONE')
   })
 
   // PB3 — iteration windowing. Rows with iteration > target are excluded; among
@@ -199,8 +200,8 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       { out: 'ITER1' },
     )
     const e = [edge('builder', 'out', 'sink', 'in')]
-    expect((await resolveUpstreamInputs(db, taskId, e, 'sink', 0, log)).in).toBe('ITER0')
-    expect((await resolveUpstreamInputs(db, taskId, e, 'sink', 1, log)).in).toBe('ITER1')
+    expect((await resolveUpstreamInputs(db, taskId, e, 'sink', 0, log)).inputs.in).toBe('ITER0')
+    expect((await resolveUpstreamInputs(db, taskId, e, 'sink', 1, log)).inputs.in).toBe('ITER1')
   })
 
   // PB4 — multi-source join + child-row exclusion. Two upstream nodes feed the
@@ -232,7 +233,7 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       { id: '01ACHILD', iteration: 0, retryIndex: 9, status: 'done', parentNodeRunId: '01A' },
       { o: 'CHILD-should-not-win' },
     )
-    const inputs = await resolveUpstreamInputs(
+    const { inputs, consumed } = await resolveUpstreamInputs(
       db,
       taskId,
       [edge('a', 'o', 'sink', 'merged'), edge('b', 'o', 'sink', 'merged')],
@@ -241,5 +242,43 @@ describe('RFC-074 PR-A baseline — resolveUpstreamInputs current (iteration,ret
       log,
     )
     expect(inputs.merged).toBe('AAA\n\n---\n\nBBB')
+    // Both top-level parents recorded as consumed; the child shard row excluded.
+    expect(consumed).toEqual({ a: '01A', b: '01B' })
+  })
+
+  // PB5 (B17) — clarify-only-no-output upstream. A questioner/agent that emitted
+  // only <workflow-clarify> finishes `done` with NO output for the port. After
+  // the answer, it reruns with real output. The freshest-done picker selects the
+  // OUTPUT-bearing rerun (higher cci) and reads its content — it never reads the
+  // clarify-only row, so a downstream review can't trip review-source-port-missing.
+  test('PB5 (B17): clarify-only done row is passed over for the output-bearing rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    // Clarify-only done row: no output for the port (the agent only asked).
+    await seedRunWithOutput(
+      db,
+      taskId,
+      'questioner',
+      { id: '01CLARIFYONLY', iteration: 0, retryIndex: 0, clarifyIteration: 1, status: 'done' },
+      {},
+    )
+    // Post-answer rerun: done WITH the real output, at a higher generation.
+    await seedRunWithOutput(
+      db,
+      taskId,
+      'questioner',
+      { id: '01WITHOUTPUT', iteration: 0, retryIndex: 1, clarifyIteration: 2, status: 'done' },
+      { spec: 'answered content' },
+    )
+    const { inputs, consumed } = await resolveUpstreamInputs(
+      db,
+      taskId,
+      [edge('questioner', 'spec', 'review', 'doc')],
+      'review',
+      0,
+      log,
+    )
+    expect(inputs.doc).toBe('answered content')
+    expect(consumed.questioner).toBe('01WITHOUTPUT')
   })
 })
