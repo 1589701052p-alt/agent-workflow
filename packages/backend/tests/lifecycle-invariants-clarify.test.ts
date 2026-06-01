@@ -71,7 +71,6 @@ async function insertClarifyRun(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status,
     startedAt: Date.now() - 100,
     finishedAt: status === 'done' || status === 'canceled' ? Date.now() : null,

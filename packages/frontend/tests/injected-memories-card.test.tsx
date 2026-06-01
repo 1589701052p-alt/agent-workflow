@@ -41,7 +41,6 @@ function run(overrides: Partial<NodeRun> = {}): NodeRun {
     shardKey: null,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'done',
     startedAt: 1,
     finishedAt: 2,

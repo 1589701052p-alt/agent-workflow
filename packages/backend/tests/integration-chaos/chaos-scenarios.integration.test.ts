@@ -82,7 +82,6 @@ async function seedRunningTask(db: DbClient, worktreePath: string): Promise<Seed
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'running',
     startedAt: Date.now(),
   })

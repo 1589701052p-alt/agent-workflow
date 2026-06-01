@@ -22,7 +22,6 @@ interface ClarifyRunCandidate {
   nodeRunId: string
   nodeId: string
   status: string
-  clarifyIteration: number
 }
 
 async function findClarifyResurrectionTarget(
@@ -50,30 +49,24 @@ async function findClarifyResurrectionTarget(
     arr.push(r)
     byNode.set(r.nodeId, arr)
   }
-  let best: ClarifyRunCandidate | null = null
+  // RFC-074 PR-C: generations are id-ordered, not clarifyIteration-grouped. Per
+  // clarify node the latest row (max id) is the current round; if it already
+  // reached 'done' the clarify resolved (skip), otherwise a terminal-non-done
+  // latest is a stuck round to resurrect. The best candidate across nodes is the
+  // most recently minted such row (max id) — the freshest stuck clarify.
+  let best: { cand: ClarifyRunCandidate; id: string } | null = null
   for (const [nodeId, rows] of byNode) {
-    const groups = new Map<number, Row[]>()
-    for (const r of rows) {
-      const arr = groups.get(r.clarifyIteration) ?? []
-      arr.push(r)
-      groups.set(r.clarifyIteration, arr)
-    }
-    for (const [clarifyIter, group] of groups) {
-      if (group.some((r) => r.status === 'done')) continue
-      const latest = group.reduce((acc, r) => (r.retryIndex > acc.retryIndex ? r : acc), group[0]!)
-      if (isTerminalNonDone(latest.status)) {
-        if (best === null || clarifyIter > best.clarifyIteration) {
-          best = {
-            nodeRunId: latest.id,
-            nodeId,
-            status: latest.status,
-            clarifyIteration: latest.clarifyIteration,
-          }
-        }
+    const latest = rows.reduce((acc, r) => (r.id > acc.id ? r : acc), rows[0]!)
+    if (latest.status === 'done') continue
+    if (!isTerminalNonDone(latest.status)) continue
+    if (best === null || latest.id > best.id) {
+      best = {
+        cand: { nodeRunId: latest.id, nodeId, status: latest.status },
+        id: latest.id,
       }
     }
   }
-  return best
+  return best?.cand ?? null
 }
 
 const T2_DEMOTE_TASK: RepairOptionDef = {
@@ -171,7 +164,7 @@ const T2_RESURRECT_CLARIFY_RUN: RepairOptionDef = {
     return {
       available: true,
       previewSteps: [
-        `setNodeRunStatus(${cand.nodeRunId}, 'awaiting_human', allowTerminal) — clarify node_run ${cand.nodeId} from '${cand.status}' → awaiting_human (clarifyIteration=${cand.clarifyIteration})`,
+        `setNodeRunStatus(${cand.nodeRunId}, 'awaiting_human', allowTerminal) — clarify node_run ${cand.nodeId} from '${cand.status}' → awaiting_human`,
         `Task remains 'awaiting_human'. Operator can answer via /clarify.`,
       ],
       ctx: { candidate: cand },

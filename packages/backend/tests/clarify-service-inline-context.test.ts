@@ -116,7 +116,6 @@ async function seedRound(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: iterationIndex,
   })
   const { clarifyNodeRunId } = await createClarifySession({
     db,

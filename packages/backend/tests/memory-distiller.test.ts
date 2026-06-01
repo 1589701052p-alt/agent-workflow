@@ -191,7 +191,6 @@ describe('loadSourceEvents + loadScopeContexts', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'awaiting_human',
       })
       .run()
@@ -204,7 +203,6 @@ describe('loadSourceEvents + loadScopeContexts', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'awaiting_human',
       })
       .run()

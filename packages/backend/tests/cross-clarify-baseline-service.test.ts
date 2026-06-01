@@ -182,7 +182,6 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
     expect(session.loopIter).toBe(0)
     const nr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, crossClarifyNodeRunId)))[0]
     expect(nr?.status).toBe('awaiting_human')
-    expect(nr?.clarifyIteration).toBe(0)
   })
 
   test('same (node, loopIter): iteration increments to 1 after another mint', async () => {
@@ -313,7 +312,6 @@ describe('RFC-058 baseline T3 — submitCrossClarifyAnswers outcomes', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     const crossClarifyNodeRunIds: string[] = []
@@ -551,7 +549,6 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 100,
     })
     await db.insert(nodeRunOutputs).values({
@@ -589,7 +586,7 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx?.block).toContain('### From')
@@ -610,7 +607,7 @@ describe('RFC-058 baseline T3 — buildExternalFeedbackContext (designer side pr
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 0,
+      designerGeneration: 0,
       definition,
     })
     expect(ctx).toBeUndefined()

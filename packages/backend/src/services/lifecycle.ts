@@ -44,7 +44,6 @@ export type NodeRunStatusUpdateExtra = Partial<
     | 'exitCode'
     | 'pid'
     | 'reviewIteration'
-    | 'clarifyIteration'
     | 'preSnapshot'
     | 'opencodeSessionId'
     | 'tokInput'

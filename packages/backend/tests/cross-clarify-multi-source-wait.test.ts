@@ -135,7 +135,6 @@ async function seedQRun(db: DbClient, taskId: string, nodeId: string): Promise<s
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   return id
 }
@@ -149,7 +148,6 @@ async function seedDesignerRun(db: DbClient, taskId: string): Promise<string> {
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     preSnapshot: 'snap-c3',
   })
   return id
@@ -266,7 +264,7 @@ describe('RFC-056 C3 — multi-source wait', () => {
     const elevatedDesigner = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.clarifyIteration, 0)))
+      .where(and(eq(nodeRuns.nodeId, 'designer'), eq(nodeRuns.status, 'pending')))
     expect(elevatedDesigner.length).toBe(0)
     void taskId
   })
@@ -320,9 +318,8 @@ describe('RFC-056 C3 — multi-source wait', () => {
     const elevatedDesigner = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.nodeId, 'designer'), gt(nodeRuns.clarifyIteration, 0)))
+      .where(and(eq(nodeRuns.nodeId, 'designer'), eq(nodeRuns.status, 'pending')))
     expect(elevatedDesigner.length).toBe(1)
-    expect(elevatedDesigner[0]?.clarifyIteration).toBe(1)
 
     const consumed = await db
       .select()

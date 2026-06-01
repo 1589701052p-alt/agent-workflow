@@ -166,12 +166,9 @@ export async function createClarifySession(
     }
   } else {
     clarifyNodeRunId = ulid()
-    // RFC-056 patch 2026-05-25 §2.3 — carry the source agent's
-    // RFC-064: under the unified clarifyIteration counter the source
-    // agent's value is folded directly into the clarify node_run; there's
-    // no longer a separate cross-clarify counter to mirror. The Layer B
-    // freshness invariant (scheduler.applyClarifyFreshnessInvariant) keys
-    // on this single column.
+    // RFC-074 PR-C: the clarify node_run no longer carries a clarifyIteration
+    // counter — freshness is pure id-order and the round index lives on the
+    // clarify_sessions / clarify_rounds rows (iterationIndex), not here.
     await db.insert(nodeRuns).values({
       id: clarifyNodeRunId,
       taskId,
@@ -179,7 +176,6 @@ export async function createClarifySession(
       status: 'awaiting_human',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: iterationIndex,
       parentNodeRunId: parentNodeRunId ?? null,
       shardKey: sourceShardKey,
       startedAt: now(),
@@ -466,13 +462,10 @@ export async function submitClarifyAnswers(
     parentNodeRunId: sourceRunRow.parentNodeRunId ?? null,
     shardKey: sourceRunRow.shardKey ?? null,
     reviewIteration: sourceRunRow.reviewIteration,
-    // RFC-064: self-clarify rerun bumps the unified clarifyIteration by 1.
-    // Pre-RFC-064 we also mirrored a separate crossClarifyIteration column;
-    // both signals now live on this single field, so the bump suffices for
-    // every downstream freshness / cutoff / cascade rule. Patch 2026-05-25
-    // §2.3 behavior preserved structurally — there's no longer a counter
-    // that could silently roll back to 0.
-    clarifyIteration: sourceRunRow.clarifyIteration + 1,
+    // RFC-074 PR-C: no clarifyIteration bump. This fresh insert is the latest
+    // id, so isFresherNodeRun (pure id-order) picks it over the prior done row
+    // automatically; the clarify generation is derived from prior-done id-order
+    // at dispatch time.
     preSnapshot: sourceRunRow.preSnapshot,
   })
 
@@ -900,18 +893,30 @@ async function findClarifyNodeRunForShard(
   shardKey: string | null,
   iterationIndex: number,
 ): Promise<typeof nodeRuns.$inferSelect | undefined> {
-  const rows = await db
-    .select()
-    .from(nodeRuns)
+  // RFC-074 PR-C: the clarify node_run no longer carries a clarifyIteration
+  // counter, so this round's existing clarify run is located via the
+  // clarify_sessions row that owns it — keyed by (clarifyNodeId,
+  // sourceShardKey, iterationIndex), which still carries the round index. A
+  // re-emit within the same round finds the prior session and reuses its node
+  // run; a new round has no session yet and falls through to a fresh mint.
+  const sessionRows = await db
+    .select({ clarifyNodeRunId: clarifySessions.clarifyNodeRunId })
+    .from(clarifySessions)
     .where(
       and(
-        eq(nodeRuns.taskId, taskId),
-        eq(nodeRuns.nodeId, clarifyNodeId),
-        eq(nodeRuns.clarifyIteration, iterationIndex),
+        eq(clarifySessions.taskId, taskId),
+        eq(clarifySessions.clarifyNodeId, clarifyNodeId),
+        eq(clarifySessions.iterationIndex, iterationIndex),
+        shardKey === null
+          ? isNull(clarifySessions.sourceShardKey)
+          : eq(clarifySessions.sourceShardKey, shardKey),
       ),
     )
-    .orderBy(asc(nodeRuns.startedAt))
-  return rows.find((r) => (r.shardKey ?? null) === shardKey)
+    .orderBy(asc(clarifySessions.createdAt))
+  const owningRunId = sessionRows[0]?.clarifyNodeRunId
+  if (owningRunId === undefined) return undefined
+  const runRows = await db.select().from(nodeRuns).where(eq(nodeRuns.id, owningRunId)).limit(1)
+  return runRows[0]
 }
 
 /**

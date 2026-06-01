@@ -370,17 +370,25 @@ export async function injectMemoryForRun(deps: {
 }
 
 /**
- * RFC-046: load the snapshot persisted on the retry_index=0 sibling row for
- * the given (task, node, iteration, shard, reviewIteration, clarifyIteration)
- * tuple. Used by runner.ts on the envelope-followup retry path — that path
- * skips inject so the model can resume the same opencode session (which
- * still has the original block in its transcript), but the UI's "what
- * memories did this attempt see" needs the original list.
+ * RFC-046: load the snapshot persisted on the retry_index=0 sibling row that
+ * ANCHORS the current run's clarify generation. Used by runner.ts on the
+ * envelope-followup retry path — that path skips inject so the model can resume
+ * the same opencode session (which still has the original block in its
+ * transcript), but the UI's "what memories did this attempt see" needs the
+ * original list.
+ *
+ * RFC-074 PR-C: the retired `clarifyIteration` counter used to identify the
+ * generation. We now anchor by id-order: the generation of the current run
+ * (id = `ctx.runId`) is the most recent retry_index=0 row whose id is ≤ the
+ * current run's id, scoped to (task, node, iteration, shard, reviewIteration).
+ * Every clarify rerun is minted at retry_index=0 (a fresh generation), so these
+ * retry=0 rows partition the attempts into generations; the one with the
+ * largest id ≤ runId starts the current generation and carries its inject
+ * snapshot.
  *
  * Returns null when:
- *   - the first-attempt row does not exist (race);
- *   - the first-attempt row's column is NULL (legacy / non-agent / zero
- *     memories);
+ *   - no anchor row exists (race);
+ *   - the anchor row's column is NULL (legacy / non-agent / zero memories);
  *   - the JSON parses but is structurally invalid (degrade gracefully).
  */
 export async function loadInjectedSnapshotFromFirstAttempt(
@@ -391,28 +399,31 @@ export async function loadInjectedSnapshotFromFirstAttempt(
     iteration: number
     shardKey: string | null
     reviewIteration: number
-    clarifyIteration: number
+    runId: string
   },
 ): Promise<InjectedMemorySnapshot[] | null> {
-  const row = (
-    await db
-      .select({ json: nodeRuns.injectedMemoriesJson })
-      .from(nodeRuns)
-      .where(
-        and(
-          eq(nodeRuns.taskId, ctx.taskId),
-          eq(nodeRuns.nodeId, ctx.nodeId),
-          eq(nodeRuns.iteration, ctx.iteration),
-          ctx.shardKey === null ? isNull(nodeRuns.shardKey) : eq(nodeRuns.shardKey, ctx.shardKey),
-          eq(nodeRuns.reviewIteration, ctx.reviewIteration),
-          eq(nodeRuns.clarifyIteration, ctx.clarifyIteration),
-          eq(nodeRuns.retryIndex, 0),
-        ),
-      )
-      .limit(1)
-  )[0]
-  if (row?.json == null) return null
-  return parseInjectedSnapshotJson(row.json)
+  const candidates = await db
+    .select({ id: nodeRuns.id, json: nodeRuns.injectedMemoriesJson })
+    .from(nodeRuns)
+    .where(
+      and(
+        eq(nodeRuns.taskId, ctx.taskId),
+        eq(nodeRuns.nodeId, ctx.nodeId),
+        eq(nodeRuns.iteration, ctx.iteration),
+        ctx.shardKey === null ? isNull(nodeRuns.shardKey) : eq(nodeRuns.shardKey, ctx.shardKey),
+        eq(nodeRuns.reviewIteration, ctx.reviewIteration),
+        eq(nodeRuns.retryIndex, 0),
+      ),
+    )
+  // The generation anchor is the retry=0 row with the largest id not exceeding
+  // the current run's id (the start of the current generation).
+  let anchor: { id: string; json: string | null } | undefined
+  for (const r of candidates) {
+    if (r.id > ctx.runId) continue
+    if (anchor === undefined || r.id > anchor.id) anchor = r
+  }
+  if (anchor?.json == null) return null
+  return parseInjectedSnapshotJson(anchor.json)
 }
 
 /**

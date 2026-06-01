@@ -147,7 +147,6 @@ describe('createClarifySession', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
 
     const received: TaskWsMessage[] = []
@@ -193,7 +192,6 @@ describe('createClarifySession', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
       shardKey: 'shard-A',
       parentNodeRunId: 'parent-multi-run',
     })
@@ -212,7 +210,6 @@ describe('createClarifySession', () => {
 
     const nr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, clarifyNodeRunId)))[0]
     expect(nr?.shardKey).toBe('shard-A')
-    expect(nr?.clarifyIteration).toBe(1)
     expect(nr?.parentNodeRunId).toBe('parent-multi-run')
 
     const sess = (
@@ -266,7 +263,6 @@ describe('submitClarifyAnswers', () => {
       status: 'done',
       retryIndex: 2,
       iteration: 0,
-      clarifyIteration: 0,
       reviewIteration: 1,
       preSnapshot: '',
     })
@@ -298,7 +294,6 @@ describe('submitClarifyAnswers', () => {
     expect(rerun?.nodeId).toBe('designer')
     expect(rerun?.status).toBe('pending')
     expect(rerun?.retryIndex).toBe(0)
-    expect(rerun?.clarifyIteration).toBe(1)
     expect(rerun?.reviewIteration).toBe(1) // passthrough
 
     // clarify node_run should be done now.
@@ -318,7 +313,6 @@ describe('submitClarifyAnswers', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 3,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -351,7 +345,6 @@ describe('submitClarifyAnswers', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -387,7 +380,6 @@ describe('submitClarifyAnswers', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       shardKey: 'shard-B',
       parentNodeRunId: 'parent-multi',
     })
@@ -440,7 +432,6 @@ describe('buildClarifyPromptContext', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -500,7 +491,6 @@ describe('buildClarifyPromptContext', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: iterationIndex,
       })
       const { clarifyNodeRunId } = await createClarifySession({
         db,
@@ -573,7 +563,6 @@ describe('buildClarifyPromptContext', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       shardKey: 'shard-X',
     })
     const { clarifyNodeRunId } = await createClarifySession({
@@ -628,7 +617,6 @@ describe('buildClarifyPromptContext', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -674,7 +662,6 @@ describe('buildClarifyPromptContext', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,

@@ -1,7 +1,24 @@
 # RFC-074 Plan — Provenance-Based Node Freshness
 
-> 状态：Draft（2026-05-27）
+> 状态：**Done（2026-06-01）** —— PR-A + PR-B + PR-C 全部落地。
 > 关联：[proposal.md](./proposal.md)、[design.md](./design.md)
+>
+> **PR-C 实施记录（2026-06-01，一体内聚单 commit）**：`isFresherNodeRun` 改纯 ULID id 排序；删 cci-bump
+> max+1（triggerDesignerRerun / mintQuestionerRerun / 自-clarify rerun）；scheduler 的 clarify 代际从
+> 派生而来（`priorDoneGenerationsForRun` = 同 (node,iteration,shardKey) 的 prior-done top-level 行按 id<current
+> 计数），`readPriorAgentSessionId` 改 id-order 取 prior 代；`clarifyRounds.buildPromptContext` 去 cci-scoping
+> 三 consumerKind 统一靠 RFC-070 consumed-by 戳；D11 身份键 id 化（`memoryInject` 代际锚=最大 id≤current 的
+> retry=0 行 / `lifecycleRepair` T2·S3 / `sessionView` prompt 排序 / 前端 `injected-memories-card`
+> `findFirstAttemptSibling`）；`lifecycleInvariants` U1 去 cci 维度 + CR-1 迁 RFC-070 `consumed_by_consumer_run_id`
+> 戳（D8）；shared `NodeRunSchema` 删 cci 字段；前端「第 N 轮」改 `clarifyRoundForRun` row 序号派生；migration
+> 0041 12-step rebuild DROP `node_runs.clarify_iteration`（journal→41）；物理删 4 个死函数
+> （`applyClarifyFreshnessInvariant` / `cascadeDownstreamFromDesigner` / `loadDefinitionForTask` /
+> `isReviewClarifyAlignedWithUpstream`）。C 组 `rfc074-prc-cci-retirement.test.ts`（C1-C12：id 排序 / DROP 列 /
+> grep 守门——src+shared+frontend 0 个 LIVE cci 用法 + 3 死函数 0 命中）。事故 `01KSHVXCH6` 回放重写为
+> provenance（`isNodeRunFresh`）口径。**门禁**：typecheck（3 包）+ format 全绿；后端零非-env 失败
+> （仅 daemon/ws/cli/mcp 环境前置失败，pristine main 同样红）；前端 2230 全绿。**测试基线等价口径**：所有
+> 旧的「靠 ulid() 调用序」或「手 seed 非因果 id」的 freshness 测试改因果 id / monotonicFactory（生产侧 rerun
+> 总在更晚 ms 由用户动作触发→id 单调，仅同步测试 seeding 需此处置）。
 
 ## 1. PR 拆分（3 PR 强序，决策 D7）
 

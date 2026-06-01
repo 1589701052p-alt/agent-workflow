@@ -115,7 +115,6 @@ async function seedSession(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: opts.iterationIndex ?? 0,
     shardKey: opts.sourceShardKey ?? null,
   })
   const { session, clarifyNodeRunId } = await createClarifySession({

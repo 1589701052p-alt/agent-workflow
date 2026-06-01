@@ -233,7 +233,11 @@ async function buildHarness(): Promise<Harness> {
   // Synthetic prior-round source row at clarifyIteration=0 (the run that
   // would have emitted `<workflow-clarify>` in a real flow). createClarifySession
   // looks up sourceAgentNodeRunId to pull display info; the row need only exist.
-  const priorAskingRunId = ulid()
+  // RFC-074 PR-C: freshness is pure ULID id-order. This canceled "asking" row
+  // is the OLDER generation (superseded by the post-clarify done row), so it
+  // must carry a SMALLER id than designerDone (which startTask minted as a real
+  // ULID). An explicit `0000…` id sorts before any 2026-era ULID.
+  const priorAskingRunId = '0000_prior_asking_designer'
   await db.insert(nodeRuns).values({
     id: priorAskingRunId,
     taskId: task.id,
@@ -241,7 +245,6 @@ async function buildHarness(): Promise<Harness> {
     status: 'canceled', // would be replaced by the clarify-rerun row in real flow
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     startedAt: Date.now() - 5000,
     finishedAt: Date.now() - 4500,
     errorMessage: 'clarify-rerun-superseded',
@@ -277,7 +280,6 @@ async function buildHarness(): Promise<Harness> {
     answers: [CLARIFY_ANSWER],
   })
   await db.delete(nodeRuns).where(eq(nodeRuns.id, answerResult.rerunNodeRunId))
-  await db.update(nodeRuns).set({ clarifyIteration: 1 }).where(eq(nodeRuns.id, designerDone.id))
   // RFC-070: under the consumed-by-run aging model, the post-clarify done
   // designer run (designerDone) is also the consumer that baked the answered
   // round into its `<workflow-output>`. In real flow runner.ts stamps this
@@ -355,7 +357,6 @@ describe('review-iterate rerun drops prior clarify Q&A from the prompt', () => {
     expect(supersededRow?.status).toBe('canceled')
     expect(supersededRow?.errorMessage ?? '').toContain('superseded-by-review-iterated')
     // Its clarifyIteration must still read 1 — the cutoff is read off this row.
-    expect(supersededRow?.clarifyIteration).toBe(1)
 
     await runTask({
       taskId: h.taskId,
@@ -370,7 +371,7 @@ describe('review-iterate rerun drops prior clarify Q&A from the prompt', () => {
       .where(and(eq(nodeRuns.taskId, h.taskId), eq(nodeRuns.nodeId, 'designer')))
     const tops = designerRuns
       .filter((r) => r.parentNodeRunId === null && r.id !== h.designerDoneRunId)
-      .filter((r) => r.clarifyIteration === 1 && r.retryIndex >= 1)
+      .filter((r) => r.retryIndex >= 1)
     expect(tops.length).toBeGreaterThanOrEqual(1)
     const fresh = tops.sort((a, b) => b.retryIndex - a.retryIndex)[0]!
     expect(fresh.promptText).not.toBeNull()

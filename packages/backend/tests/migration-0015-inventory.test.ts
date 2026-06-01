@@ -63,7 +63,6 @@ describe('migration 0015 (RFC-029 node_runs.inventory_snapshot_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
       })
       .run()
@@ -100,7 +99,6 @@ describe('migration 0015 (RFC-029 node_runs.inventory_snapshot_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         inventorySnapshotJson: JSON.stringify(snapshot),
       })

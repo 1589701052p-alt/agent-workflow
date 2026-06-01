@@ -152,7 +152,6 @@ async function seedDoneRun(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     ...fields,
   })
   return id
@@ -203,7 +202,6 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
     expect(designerRows.length).toBe(2)
     const designerFresh = designerRows.find((r) => r.status === 'pending')
-    expect(designerFresh?.clarifyIteration).toBe(1)
 
     // RFC-074 NO-CASCADE LOCK: rev1 + questioner are NOT pre-minted a pending
     // row. Each keeps exactly its single done row from iteration 0; the
@@ -216,7 +214,6 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
       expect(rows.length, `${nodeId} should NOT be pre-cascaded (single done row)`).toBe(1)
       expect(rows[0]?.status).toBe('done')
-      expect(rows[0]?.clarifyIteration).toBe(0)
     }
 
     // Nodes that NEVER ran (rev2, out) have no rows either way.
@@ -313,12 +310,10 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
     // rev1 had been through 3 self-clarify rounds + 2 retries by the time
     // cross-clarify fired — the cascade must not destroy this history.
     await seedDoneRun(db, taskId, 'rev1', {
-      clarifyIteration: 3,
       retryIndex: 2,
       preSnapshot: 'snap-r1-final',
     })
     const qRun = await seedDoneRun(db, taskId, 'questioner', {
-      clarifyIteration: 1,
       preSnapshot: 'snap-q-final',
     })
 
@@ -349,7 +344,6 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
     expect(rev1Rows.length, 'rev1 keeps its single done row').toBe(1)
     expect(rev1Rows[0]?.status).toBe('done')
     expect(rev1Rows[0]?.preSnapshot).toBe('snap-r1-final')
-    expect(rev1Rows[0]?.clarifyIteration).toBe(3)
     expect(rev1Rows[0]?.retryIndex).toBe(2)
   })
 })

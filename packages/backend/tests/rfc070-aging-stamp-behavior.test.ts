@@ -136,7 +136,6 @@ describe('RFC-070 B1 — incident reproducer (cross iter local counter < unified
         status: 'done',
         retryIndex: 6,
         iteration: 0,
-        clarifyIteration: 5,
         startedAt: 1779776655000,
         finishedAt: 1779776850000,
       },
@@ -147,7 +146,6 @@ describe('RFC-070 B1 — incident reproducer (cross iter local counter < unified
         status: 'pending',
         retryIndex: 7,
         iteration: 0,
-        clarifyIteration: 6,
         startedAt: 1779783865188,
       },
       {
@@ -157,7 +155,6 @@ describe('RFC-070 B1 — incident reproducer (cross iter local counter < unified
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: 0,
       },
       {
         id: 'nr_cc',
@@ -166,7 +163,6 @@ describe('RFC-070 B1 — incident reproducer (cross iter local counter < unified
         status: 'awaiting_human',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: 2,
       },
     ])
     // Three cross-clarify sessions: iter=0 + iter=1 consumed by prior done
@@ -247,7 +243,7 @@ describe('RFC-070 B1 — incident reproducer (cross iter local counter < unified
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 6,
+      designerGeneration: 6,
       definition,
     })
     // Under the OLD bug: ctx would be undefined (cross iter=2 dropped by
@@ -275,7 +271,6 @@ describe('RFC-070 B2 — multi self-clarify between cross-clarify rounds (no fal
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: 3,
         finishedAt: 200,
       },
       {
@@ -353,7 +348,7 @@ describe('RFC-070 B2 — multi self-clarify between cross-clarify rounds (no fal
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 4,
+      designerGeneration: 4,
       definition: def,
     })
     expect(ctx).toBeDefined()
@@ -372,7 +367,7 @@ describe('RFC-070 B3 — review-iterate rerun does not replay consumed self-clar
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_d_done', taskId, nodeId: 'd', status: 'done', clarifyIteration: 1 },
+      { id: 'nr_d_done', taskId, nodeId: 'd', status: 'done' },
       { id: 'nr_c', taskId, nodeId: 'c1', status: 'done' },
     ])
     await db.insert(clarifyRounds).values([
@@ -433,7 +428,7 @@ describe('RFC-070 B4 — legacy buildClarifyPromptContext respects consumed stam
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_d', taskId, nodeId: 'designer', status: 'done', clarifyIteration: 0 },
+      { id: 'nr_d', taskId, nodeId: 'designer', status: 'done' },
       { id: 'nr_c', taskId, nodeId: 'clarify1', status: 'done' },
     ])
     await db.insert(clarifySessions).values([
@@ -493,7 +488,7 @@ describe('RFC-070 B5 — cross-questioner cascade respects consumed_by_questione
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_q_done', taskId, nodeId: 'questioner', status: 'done', clarifyIteration: 1 },
+      { id: 'nr_q_done', taskId, nodeId: 'questioner', status: 'done' },
       { id: 'nr_cc', taskId, nodeId: 'cc1', status: 'awaiting_human' },
     ])
     await db.insert(clarifyRounds).values([
@@ -556,7 +551,7 @@ describe('RFC-070 B6/B7 — markClarifyRoundsConsumedBy stamps every consumer ki
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_d_done', taskId, nodeId: 'designer', status: 'done', clarifyIteration: 2 },
+      { id: 'nr_d_done', taskId, nodeId: 'designer', status: 'done' },
       { id: 'nr_c', taskId, nodeId: 'c1', status: 'done' },
     ])
     await db.insert(clarifyRounds).values({
@@ -606,7 +601,7 @@ describe('RFC-070 B6/B7 — markClarifyRoundsConsumedBy stamps every consumer ki
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_d_done', taskId, nodeId: 'designer', status: 'done', clarifyIteration: 1 },
+      { id: 'nr_d_done', taskId, nodeId: 'designer', status: 'done' },
       { id: 'nr_q', taskId, nodeId: 'questioner', status: 'done' },
       { id: 'nr_cc', taskId, nodeId: 'cc1', status: 'awaiting_human' },
     ])
@@ -661,7 +656,7 @@ describe('RFC-070 B6/B7 — markClarifyRoundsConsumedBy stamps every consumer ki
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await db.insert(nodeRuns).values([
-      { id: 'nr_q_done', taskId, nodeId: 'questioner', status: 'done', clarifyIteration: 1 },
+      { id: 'nr_q_done', taskId, nodeId: 'questioner', status: 'done' },
       { id: 'nr_cc', taskId, nodeId: 'cc1', status: 'awaiting_human' },
     ])
     await db.insert(clarifyRounds).values({

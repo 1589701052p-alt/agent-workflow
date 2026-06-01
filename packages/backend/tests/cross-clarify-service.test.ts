@@ -158,7 +158,6 @@ async function seedQuestionerRun(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   return id
 }
@@ -176,7 +175,6 @@ async function seedDesignerRun(
     status: (opts.status ?? 'done') as 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     preSnapshot: 'stub-snapshot',
   })
   return id
@@ -222,7 +220,6 @@ describe('RFC-056 createCrossClarifySession', () => {
 
     const nr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, crossClarifyNodeRunId)))[0]
     expect(nr?.status).toBe('awaiting_human')
-    expect(nr?.clarifyIteration).toBe(0)
 
     expect(received.length).toBe(1)
     expect(received[0]?.type).toBe('cross-clarify.created')
@@ -390,7 +387,7 @@ describe('RFC-056 submitCrossClarifyAnswers — directive="stop" (reject)', () =
     expect(pendingQuestioner).toBeDefined()
 
     // No new designer node_run at cross_clarify_iteration=1 should exist.
-    const newDesigner = qRuns.find((r) => r.nodeId === 'designer' && (r.clarifyIteration ?? 0) >= 1)
+    const newDesigner = qRuns.find((r) => r.nodeId === 'designer' && r.status === 'pending')
     expect(newDesigner).toBeUndefined()
   })
 })
@@ -655,7 +652,6 @@ describe('RFC-056 triggerDesignerRerun', () => {
     const newDesigner = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, ret.outcome.designerNodeRunId))
     )[0]
-    expect(newDesigner?.clarifyIteration).toBe(1)
     expect(newDesigner?.retryIndex).toBe(1)
     expect(newDesigner?.status).toBe('pending')
 
@@ -679,7 +675,6 @@ describe('RFC-056 triggerDesignerRerun', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       preSnapshot: 'snap',
       parentNodeRunId: 'parent-x',
       shardKey: 'shardA',
@@ -697,7 +692,6 @@ describe('RFC-056 triggerDesignerRerun', () => {
     )[0]
     expect(fresh?.shardKey).toBe('shardA')
     expect(fresh?.parentNodeRunId).toBe('parent-x')
-    expect(fresh?.clarifyIteration).toBe(1)
   })
 })
 
@@ -749,7 +743,6 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const out = await dispatchCrossClarifyNode({
       db,
@@ -775,7 +768,6 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const out = await dispatchCrossClarifyNode({
       db,
@@ -819,7 +811,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition: def,
     })
     expect(ctx).toBeDefined()
@@ -838,7 +830,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 0,
+      designerGeneration: 0,
       definition: def,
     })
     expect(ctx).toBeUndefined()
@@ -871,7 +863,7 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition: def,
     })
     expect(ctx).toBeUndefined()

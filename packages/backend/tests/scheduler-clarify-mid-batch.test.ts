@@ -24,7 +24,8 @@ import { and, eq } from 'drizzle-orm'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { ulid } from 'ulid'
+import { monotonicFactory } from 'ulid'
+const ulid = monotonicFactory() // RFC-074 PR-C: monotonic ids for synchronous test seeding (pure-id freshness)
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { agents, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
@@ -174,7 +175,6 @@ describe('runScope — mid-batch rescan + no-fail-fast (RFC-023 bug 13)', () => 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 1000,
     })
@@ -186,7 +186,6 @@ describe('runScope — mid-batch rescan + no-fail-fast (RFC-023 bug 13)', () => 
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
       startedAt: null,
     })
 

@@ -242,22 +242,22 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
     iteration?: number
     shardKey?: string | null
     reviewIteration?: number
-    clarifyIteration?: number
-  }): void {
+  }): string {
+    const id = ulid()
     db.insert(nodeRuns)
       .values({
-        id: ulid(),
+        id,
         taskId: opts.taskId,
         nodeId: opts.nodeId,
         iteration: opts.iteration ?? 0,
         shardKey: opts.shardKey ?? null,
         retryIndex: opts.retryIndex,
         reviewIteration: opts.reviewIteration ?? 0,
-        clarifyIteration: opts.clarifyIteration ?? 0,
         status: 'done',
         injectedMemoriesJson: opts.json,
       })
       .run()
+    return id
   }
 
   test('B6: returns parsed snapshot from retry_index=0 sibling', async () => {
@@ -275,14 +275,14 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
         approvedAt: 1,
       },
     ])
-    seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, json: payload })
+    const runId = seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, json: payload })
     const snap = await loadInjectedSnapshotFromFirstAttempt(db, {
       taskId,
       nodeId: 'agent-1',
       iteration: 0,
       shardKey: null,
       reviewIteration: 0,
-      clarifyIteration: 0,
+      runId,
     })
     expect(snap?.length).toBe(1)
     expect(snap?.[0]?.id).toBe('m1')
@@ -290,14 +290,14 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
 
   test('B7: attempt-0 column NULL → returns null (not throw)', async () => {
     const { taskId } = seedTask(db)
-    seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, json: null })
+    const runId = seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, json: null })
     const snap = await loadInjectedSnapshotFromFirstAttempt(db, {
       taskId,
       nodeId: 'agent-1',
       iteration: 0,
       shardKey: null,
       reviewIteration: 0,
-      clarifyIteration: 0,
+      runId,
     })
     expect(snap).toBeNull()
   })
@@ -330,15 +330,27 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
         approvedAt: null,
       },
     ])
-    seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, shardKey: 'shard-a', json: payloadA })
-    seedNodeRun({ taskId, nodeId: 'agent-1', retryIndex: 0, shardKey: 'shard-b', json: payloadB })
+    const runIdA = seedNodeRun({
+      taskId,
+      nodeId: 'agent-1',
+      retryIndex: 0,
+      shardKey: 'shard-a',
+      json: payloadA,
+    })
+    const runIdB = seedNodeRun({
+      taskId,
+      nodeId: 'agent-1',
+      retryIndex: 0,
+      shardKey: 'shard-b',
+      json: payloadB,
+    })
     const snapA = await loadInjectedSnapshotFromFirstAttempt(db, {
       taskId,
       nodeId: 'agent-1',
       iteration: 0,
       shardKey: 'shard-a',
       reviewIteration: 0,
-      clarifyIteration: 0,
+      runId: runIdA,
     })
     expect(snapA?.[0]?.id).toBe('mA')
     const snapB = await loadInjectedSnapshotFromFirstAttempt(db, {
@@ -347,7 +359,7 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
       iteration: 0,
       shardKey: 'shard-b',
       reviewIteration: 0,
-      clarifyIteration: 0,
+      runId: runIdB,
     })
     expect(snapB?.[0]?.id).toBe('mB')
   })

@@ -37,7 +37,6 @@ function run(overrides: Partial<NodeRun> = {}): NodeRun {
     shardKey: null,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'done',
     startedAt: 1,
     finishedAt: 2,
@@ -139,8 +138,13 @@ describe('findFirstAttemptSibling', () => {
     ).toBe('r0-iter1')
   })
   test('discriminates by shardKey', () => {
+    // RFC-074 PR-C: anchor = retry=0 row with the largest id ≤ the query run's
+    // id, so the retry=1 query row carries a causal id larger than 'shard-a'.
     expect(
-      findFirstAttemptSibling(run({ retryIndex: 1, shardKey: 'a', nodeId: 'n' }), runs)?.id,
+      findFirstAttemptSibling(
+        run({ id: 'shard-a-r1', retryIndex: 1, shardKey: 'a', nodeId: 'n' }),
+        runs,
+      )?.id,
     ).toBe('shard-a')
   })
   test('returns undefined when no sibling exists', () => {

@@ -250,7 +250,7 @@ describe('RFC-056 CR-1 invariant', () => {
     expect(row?.abandonedAt).toBeNull()
   })
 
-  test('does NOT mis-upgrade when a consuming designer node_run exists at clarify_iteration > session.iteration', async () => {
+  test('does NOT mis-upgrade when the round was consumed (RFC-070 consumed-by stamp present)', async () => {
     h = await buildHarness('failed')
     const sessionId = await seedSession(h.db, h.taskId, {
       status: 'answered',
@@ -258,18 +258,22 @@ describe('RFC-056 CR-1 invariant', () => {
       iteration: 0,
     })
     // The designer DID consume this feedback before the task failed.
-    // RFC-064: the invariant compares `nodeRuns.clarifyIteration > round.iteration`
-    // on the unified counter. The designer's post-submit rerun row at
-    // clarifyIteration=1 proves the round was consumed.
+    // RFC-074 PR-C / D8: "consumed" is the RFC-070 stamp, not a cci comparison —
+    // the designer's done-with-output run stamps the round's
+    // consumed_by_consumer_run_id. CR-1 must skip stamped rounds.
+    const designerRunId = ulid()
     await h.db.insert(nodeRuns).values({
-      id: ulid(),
+      id: designerRunId,
       taskId: h.taskId,
       nodeId: 'designer',
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
+    await h.db
+      .update(clarifyRounds)
+      .set({ consumedByConsumerRunId: designerRunId })
+      .where(eq(clarifyRounds.id, sessionId))
     await runLifecycleInvariants({ db: h.db, scope: { taskId: h.taskId } })
     const row = (
       await h.db.select().from(crossClarifySessions).where(eq(crossClarifySessions.id, sessionId))

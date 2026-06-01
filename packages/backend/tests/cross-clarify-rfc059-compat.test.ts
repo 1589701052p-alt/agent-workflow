@@ -175,7 +175,7 @@ describe('RFC-059 C1 — NULL-scopes path is byte-equivalent to all-designer-sco
       taskId: 'task_A',
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition: defA,
     })
     const ctxB = await buildExternalFeedbackContext({
@@ -183,7 +183,7 @@ describe('RFC-059 C1 — NULL-scopes path is byte-equivalent to all-designer-sco
       taskId: 'task_B',
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition: defB,
     })
     expect(ctxA).toBeDefined()

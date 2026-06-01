@@ -98,7 +98,6 @@ describe('RFC-053 — invariants + stuck-detector共存（同一 task 同时被�
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: T0,
     })
@@ -212,7 +211,6 @@ describe('RFC-053 — multi-task reconcile isolation', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review', // ← bug
       startedAt: T0,
     })
@@ -250,7 +248,6 @@ describe('RFC-053 — multi-task reconcile isolation', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: T0,
     })
@@ -318,7 +315,6 @@ describe('RFC-053 — deleted task is invisible to both modules', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: T0,
     })

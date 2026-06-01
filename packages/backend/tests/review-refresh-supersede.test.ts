@@ -111,7 +111,6 @@ describe('RFC-074 — review awaiting-refresh: supersede + recomment-drop + v(n+
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: cci,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -121,8 +120,8 @@ describe('RFC-074 — review awaiting-refresh: supersede + recomment-drop + v(n+
   test('awaiting review + fresher upstream → v1 superseded, comments dropped, v2 minted, consumed restamped', async () => {
     const { taskId, task, definition, reviewNode } = await seed()
     // Old source the review was opened against, plus a fresher source run.
-    await seedSrc(taskId, '01OLDDOC', 0, '# old body')
-    await seedSrc(taskId, '01NEWDOC', 4, '# new body after upstream rerun')
+    await seedSrc(taskId, '01A_OLD', 0, '# old body')
+    await seedSrc(taskId, '01B_NEW', 4, '# new body after upstream rerun')
 
     // The awaiting review row consumed the OLD source.
     const reviewRunId = ulid()
@@ -134,8 +133,7 @@ describe('RFC-074 — review awaiting-refresh: supersede + recomment-drop + v(n+
       retryIndex: 0,
       iteration: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
-      consumedUpstreamRunsJson: JSON.stringify({ src: '01OLDDOC' }),
+      consumedUpstreamRunsJson: JSON.stringify({ src: '01A_OLD' }),
       startedAt: Date.now(),
     })
     // A pending v1 doc_version with an anchored comment (mid-review state).
@@ -201,6 +199,6 @@ describe('RFC-074 — review awaiting-refresh: supersede + recomment-drop + v(n+
 
     // The review row's provenance is re-stamped to the NEW source run.
     const reviewAfter = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, reviewRunId)))[0]!
-    expect(JSON.parse(reviewAfter.consumedUpstreamRunsJson ?? '{}').src).toBe('01NEWDOC')
+    expect(JSON.parse(reviewAfter.consumedUpstreamRunsJson ?? '{}').src).toBe('01B_NEW')
   })
 })

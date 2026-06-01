@@ -17,7 +17,8 @@ import { eq } from 'drizzle-orm'
 import { readFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { ulid } from 'ulid'
+import { monotonicFactory } from 'ulid'
+const ulid = monotonicFactory() // RFC-074 PR-C: monotonic ids for synchronous seeding under pure-id freshness
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { memories, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runNode } from '../src/services/runner'
@@ -104,7 +105,6 @@ async function insertNodeRun(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     ...overrides,
   })
   return id

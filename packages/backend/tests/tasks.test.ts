@@ -722,7 +722,6 @@ describe('task HTTP routes', () => {
       status: 'failed',
       retryIndex: 0,
       iteration: 2,
-      clarifyIteration: 3,
       reviewIteration: 1,
       shardKey: 'shard-a',
       parentNodeRunId: null,
@@ -740,7 +739,6 @@ describe('task HTTP routes', () => {
     expect(fresh!.nodeId).toBe('agent1')
     expect(fresh!.retryIndex).toBe(1)
     // The fields that locked the bug:
-    expect(fresh!.clarifyIteration).toBe(3)
     expect(fresh!.iteration).toBe(2)
     expect(fresh!.reviewIteration).toBe(1)
     expect(fresh!.shardKey).toBe('shard-a')
@@ -793,7 +791,6 @@ describe('task HTTP routes', () => {
       status: 'failed',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 4,
       reviewIteration: 0,
       startedAt: Date.now() - 100,
       finishedAt: Date.now() - 50,
@@ -808,7 +805,6 @@ describe('task HTTP routes', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
       reviewIteration: 2,
       shardKey: 'b-shard',
       startedAt: Date.now() - 80,
@@ -822,10 +818,8 @@ describe('task HTTP routes', () => {
     expect(freshA).toBeDefined()
     expect(freshB).toBeDefined()
     // Target inherits from runRow (A's failed row): ci=4.
-    expect(freshA!.clarifyIteration).toBe(4)
     expect(freshA!.reviewIteration).toBe(0)
     // Downstream inherits from B's own latest, NOT A's ci=4.
-    expect(freshB!.clarifyIteration).toBe(1)
     expect(freshB!.reviewIteration).toBe(2)
     expect(freshB!.shardKey).toBe('b-shard')
   })
@@ -868,7 +862,6 @@ describe('task HTTP routes', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 2,
       startedAt: Date.now() - 200,
       finishedAt: Date.now() - 150,
     })
@@ -881,7 +874,6 @@ describe('task HTTP routes', () => {
       status: 'done',
       retryIndex: 1,
       iteration: 0,
-      clarifyIteration: 5,
       startedAt: Date.now() - 100,
       finishedAt: Date.now() - 50,
     })
@@ -895,6 +887,5 @@ describe('task HTTP routes', () => {
     const fresh = rows.find((r) => r.nodeId === 'agent1' && r.retryIndex === 2)
     expect(fresh).toBeDefined()
     // Critical: inherits from runRow (pickedId, ci=2), not from prev (ci=5).
-    expect(fresh!.clarifyIteration).toBe(2)
   })
 })

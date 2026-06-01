@@ -79,7 +79,6 @@ async function seedRunWithOutput(
     status: (fields.status ?? 'done') as 'done',
     retryIndex: fields.retryIndex ?? 0,
     iteration: fields.iteration ?? 0,
-    clarifyIteration: fields.clarifyIteration ?? 0,
     parentNodeRunId: fields.parentNodeRunId ?? null,
   })
   for (const [portName, content] of Object.entries(outputs)) {
@@ -115,20 +114,20 @@ describe('RFC-074 — resolveUpstreamInputs unified picker + consumed provenance
   test('PB1: unified picker reads the fresh clarify rerun (corrected stale read)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    // gen0 retry-storm done row — LARGER retryIndex.
+    // gen0 retry-storm done row — LARGER retryIndex, but minted EARLIER (smaller id).
     await seedRunWithOutput(
       db,
       taskId,
       'designer',
-      { id: '01STALE', iteration: 0, retryIndex: 5, clarifyIteration: 0, status: 'done' },
+      { id: '01A_STALE', iteration: 0, retryIndex: 5, clarifyIteration: 0, status: 'done' },
       { spec: 'STALE-pre-clarify' },
     )
-    // gen1 clarify rerun — freshest generation but retryIndex=0.
+    // gen1 clarify rerun — freshest generation, minted LATER (larger id).
     await seedRunWithOutput(
       db,
       taskId,
       'designer',
-      { id: '01FRESH', iteration: 0, retryIndex: 0, clarifyIteration: 1, status: 'done' },
+      { id: '01B_FRESH', iteration: 0, retryIndex: 0, clarifyIteration: 1, status: 'done' },
       { spec: 'FRESH-post-clarify' },
     )
     const { inputs, consumed } = await resolveUpstreamInputs(
@@ -142,7 +141,7 @@ describe('RFC-074 — resolveUpstreamInputs unified picker + consumed provenance
     // FLIPPED vs PR-A baseline: the fresh clarify rerun wins (corrected read).
     expect(inputs.doc).toBe('FRESH-post-clarify')
     // Provenance records the actual run read — the fresh one.
-    expect(consumed.designer).toBe('01FRESH')
+    expect(consumed.designer).toBe('01B_FRESH')
   })
 
   // PB2 — done-only filter, now FIXED. A pending rerun (no output yet) at

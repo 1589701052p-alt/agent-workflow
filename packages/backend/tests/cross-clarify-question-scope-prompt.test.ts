@@ -216,7 +216,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -239,7 +239,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -262,7 +262,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -300,7 +300,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx).toBeDefined()
@@ -326,7 +326,7 @@ describe('RFC-059 T4 — designer External Feedback filter', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition,
     })
     expect(ctx).toBeUndefined()

@@ -41,7 +41,6 @@ function run(partial: Partial<NodeRun> & { id: string }): NodeRun {
     shardKey: partial.shardKey ?? null,
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
-    clarifyIteration: partial.clarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? 1700_000_000_000,
     finishedAt: partial.finishedAt ?? 1700_000_001_000,
@@ -167,43 +166,29 @@ describe('Session attempts dropdown picker', () => {
     expect(after[1]!.getAttribute('aria-selected')).toBe('false')
   })
 
-  test('iter label distinguishes initial / retry / loop / clarify rows (unified counter after RFC-064)', () => {
-    const initial = run({ id: 'a', retryIndex: 0, iteration: 0, clarifyIteration: 0 })
-    const retry = run({ id: 'b', retryIndex: 1, iteration: 0, clarifyIteration: 0, startedAt: 200 })
-    const loop = run({ id: 'c', retryIndex: 0, iteration: 2, clarifyIteration: 0, startedAt: 300 })
-    const clarify = run({
-      id: 'd',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 3,
-      startedAt: 400,
-    })
-    // RFC-064: the unified clarifyIteration covers both self-clarify and
-    // cross-clarify rerun rows (the previously-separate `crossClarifyIteration`
-    // chip was folded into `iterClarify` per design.md §10.5 D1). A
-    // questioner-rerun row that pre-RFC-064 had only cci bumped is now
-    // expressed via clarifyIteration on the same counter, so it shows up
-    // under the same "clarify#N" label rather than a distinct chip.
-    const cross = run({
-      id: 'e',
-      retryIndex: 0,
-      iteration: 0,
-      clarifyIteration: 1,
-      startedAt: 500,
-    })
+  test('iter label distinguishes initial / retry / loop / clarify rows (id-order derivation, RFC-074 PR-C)', () => {
+    // RFC-074 PR-C: the clarify round is DERIVED from id-order (clarifyRoundForRun)
+    // — each clarify-driven rerun is a fresh retry=0 top-level insert with a
+    // larger ULID. Causal ids place generation 1 (01d) and generation 2 (01e)
+    // among the iter-0/retry-0 rows; the labels read clarify#1 / clarify#2.
+    const initial = run({ id: '01a', retryIndex: 0, iteration: 0 })
+    const retry = run({ id: '01b', retryIndex: 1, iteration: 0, startedAt: 200 })
+    const loop = run({ id: '01c', retryIndex: 0, iteration: 2, startedAt: 300 })
+    const clarify = run({ id: '01d', retryIndex: 0, iteration: 0, startedAt: 400 })
+    const clarify2 = run({ id: '01e', retryIndex: 0, iteration: 0, startedAt: 500 })
     renderDrawer({
       nodeRunId: clarify.id,
       nodeId: initial.nodeId,
       workflowNodeKind: 'agent-single',
-      runs: [initial, retry, loop, clarify, cross],
+      runs: [initial, retry, loop, clarify, clarify2],
     })
     openCombobox()
     const html = document.body.innerHTML
     expect(html).toMatch(/initial/i)
     expect(html).toMatch(/retry#1/i)
     expect(html).toMatch(/loop#2/i)
-    expect(html).toMatch(/clarify#3/i)
     expect(html).toMatch(/clarify#1/i)
+    expect(html).toMatch(/clarify#2/i)
   })
 
   test('shard rows show the shardKey alongside the iter label', () => {
@@ -242,19 +227,16 @@ describe('Session attempts dropdown picker', () => {
   test('inline-session siblings collapse into a single option labelled "inline · N rounds"', () => {
     const r0 = run({
       id: 'r0',
-      clarifyIteration: 0,
       opencodeSessionId: 'opc_inline_A',
       startedAt: 100,
     })
     const r1 = run({
       id: 'r1',
-      clarifyIteration: 1,
       opencodeSessionId: 'opc_inline_A',
       startedAt: 200,
     })
     const r2 = run({
       id: 'r2',
-      clarifyIteration: 2,
       opencodeSessionId: 'opc_inline_A',
       startedAt: 300,
     })
@@ -276,8 +258,8 @@ describe('Session attempts dropdown picker', () => {
   })
 
   test('isolated attempts (no opencodeSessionId) still render as separate options', () => {
-    const r0 = run({ id: 'r0', clarifyIteration: 0, opencodeSessionId: null })
-    const r1 = run({ id: 'r1', clarifyIteration: 1, opencodeSessionId: null, startedAt: 200 })
+    const r0 = run({ id: '01r0', opencodeSessionId: null })
+    const r1 = run({ id: '02r1', opencodeSessionId: null, startedAt: 200 })
     renderDrawer({
       nodeRunId: r1.id,
       nodeId: r0.nodeId,
@@ -340,13 +322,11 @@ describe('Session attempts dropdown picker', () => {
   test('mixed: an inline group + a follow-on isolated retry render as 2 options', () => {
     const r0 = run({
       id: 'r0',
-      clarifyIteration: 0,
       opencodeSessionId: 'opc_inline_B',
       startedAt: 100,
     })
     const r1 = run({
       id: 'r1',
-      clarifyIteration: 1,
       opencodeSessionId: 'opc_inline_B',
       startedAt: 200,
     })
@@ -354,7 +334,6 @@ describe('Session attempts dropdown picker', () => {
     const r2 = run({
       id: 'r2',
       retryIndex: 1,
-      clarifyIteration: 0,
       opencodeSessionId: null,
       startedAt: 300,
     })

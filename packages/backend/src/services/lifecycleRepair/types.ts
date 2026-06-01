@@ -29,7 +29,6 @@ export interface RepairNodeRunRow {
   status: string
   retryIndex: number
   reviewIteration: number
-  clarifyIteration: number
   shardKey: string | null
   iteration: number
 }

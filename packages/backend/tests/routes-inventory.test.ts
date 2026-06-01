@@ -94,7 +94,6 @@ async function seed(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'done',
     promptText: 'go',
     startedAt: 1000,

@@ -75,7 +75,6 @@ describe('migration 0022 (RFC-040 node_runs.wrapper_progress_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'awaiting_human',
         wrapperProgressJson: payload,
       })
@@ -89,7 +88,6 @@ describe('migration 0022 (RFC-040 node_runs.wrapper_progress_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         // wrapperProgressJson intentionally omitted — legacy / non-wrapper row
       })
@@ -119,7 +117,6 @@ describe('migration 0022 (RFC-040 node_runs.wrapper_progress_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'awaiting_review',
         wrapperProgressJson: payload,
       })

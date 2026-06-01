@@ -112,15 +112,16 @@ async function buildFixture(opts: {
   })
 
   // Stale process-retry row: ran BEFORE the clarify session opened. Higher
-  // retryIndex, but clarifyIteration=0.
-  const staleRunId = ulid()
+  // retryIndex. RFC-074 PR-C: freshness is pure id-order, so the ids are CAUSAL
+  // — the clarify rerun (minted later) gets the larger id. (Plain ulid() is not
+  // monotonic within a millisecond, so we pin explicit ordered ids.)
+  const staleRunId = '01A_STALE'
   await db.insert(nodeRuns).values({
     id: staleRunId,
     taskId,
     nodeId: 'doc',
     iteration: 0,
     retryIndex: 1,
-    clarifyIteration: 0,
     status: 'done',
     startedAt: Date.now() - 2000,
     finishedAt: Date.now() - 1500,
@@ -132,17 +133,16 @@ async function buildFixture(opts: {
     content: '# stale body — must NOT seed the new doc_version',
   })
 
-  // Clarify-driven rerun row: minted by submitClarifyAnswers at
-  // retryIndex=0 with clarifyIteration=1; this is the row whose output the
+  // Clarify-driven rerun row: minted by submitClarifyAnswers at retryIndex=0,
+  // later than the stale row (larger id); this is the row whose output the
   // current pending doc_version (v1) was created from.
-  const clarifyRunId = ulid()
+  const clarifyRunId = '01B_CLARIFY'
   await db.insert(nodeRuns).values({
     id: clarifyRunId,
     taskId,
     nodeId: 'doc',
     iteration: 0,
     retryIndex: 0,
-    clarifyIteration: 1,
     status: 'done',
     startedAt: Date.now() - 1000,
     finishedAt: Date.now() - 500,
@@ -162,7 +162,6 @@ async function buildFixture(opts: {
     nodeId: 'rev_1',
     iteration: 0,
     retryIndex: 0,
-    clarifyIteration: 0,
     reviewIteration: 0,
     status: 'awaiting_review',
     startedAt: Date.now() - 200,
@@ -258,7 +257,6 @@ describe('submitReviewDecision iterate/reject inherits clarifyIteration from lat
     // scheduler skips agent execution and dispatchReviewNode immediately
     // mints v2 from stale output.
     expect(fresh.status).toBe('pending')
-    expect(fresh.clarifyIteration).toBe(1)
     // retry_index = latest(clarify-rerun).retryIndex + 1 = 0 + 1 = 1.
     expect(fresh.retryIndex).toBe(1)
     expect(fresh.iteration).toBe(0)
@@ -302,7 +300,6 @@ describe('submitReviewDecision iterate/reject inherits clarifyIteration from lat
     expect(clarify.status).toBe('canceled')
     expect(clarify.errorMessage).toContain('superseded-by-review-rejected')
     expect(fresh.status).toBe('pending')
-    expect(fresh.clarifyIteration).toBe(1)
     expect(fresh.retryIndex).toBe(1)
   })
 })

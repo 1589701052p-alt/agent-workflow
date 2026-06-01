@@ -179,7 +179,6 @@ describe('RFC-053 — workflow snapshot corrupt degrades gracefully', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'done',
       startedAt: T0 - MIN_MS,
       finishedAt: T0,
@@ -320,7 +319,6 @@ describe('RFC-053 — onAlert callback throw does not break reconcile', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: T0,
     })

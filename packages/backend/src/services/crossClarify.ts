@@ -206,12 +206,6 @@ export async function createCrossClarifySession(
   // park-human enforces pending|running → awaiting_human; we mint at
   // 'awaiting_human' directly so the runner doesn't need a separate
   // pending->awaiting_human leg.
-  //
-  // RFC-064: `clarifyIteration` tracks the round (was `crossClarifyIteration`
-  // pre-unification). The cross-clarify node row itself isn't an agent run
-  // that participates in the mint algorithm (§3.2); we still set it to the
-  // round iteration so the row is searchable + ordered together with its
-  // siblings under the unified counter.
   const crossClarifyNodeRunId = ulid()
   await args.db.insert(nodeRuns).values({
     id: crossClarifyNodeRunId,
@@ -220,7 +214,6 @@ export async function createCrossClarifySession(
     status: 'awaiting_human',
     retryIndex: 0,
     iteration: args.loopIter,
-    clarifyIteration: iteration,
     startedAt: createdAt,
   })
 
@@ -782,18 +775,13 @@ export async function triggerDesignerRerun(
     }
   }
 
-  // Mint a fresh designer node_run. clarifyIteration increments by 1 off the
-  // latest existing value; retry_index = max(existing top-level rows at this
-  // iteration) + 1 so the scheduler's `isFresherNodeRun` (keyed on
-  // clarifyIteration + retryIndex + id) ALWAYS picks the new pending row over
-  // any prior done row at the same clarifyIteration. Without this bump, a
-  // designer that ran many self-clarify rounds + RFC-042 same-session retries
-  // (retry_index inflated to, say, 9) would have its new pending row at
-  // retry_index=0 silently shadowed by the old done row — `latestPerNode`
-  // treats the node as "completed", the scheduler never dispatches the new
-  // row, and only the questioner's cascade-minted row (which DOES use max+1
-  // in cascadeDownstreamFromDesigner) gets re-executed. See live task
-  // 01KS86DPCSERV7S41GQA5Y81RN + patch-2026-05-23-designer-retry-index.md.
+  // Mint a fresh designer node_run. RFC-074 PR-C: freshness is now pure ULID
+  // id-order, so the new row — being the latest insert — ALWAYS wins
+  // `isFresherNodeRun` over any prior done row. No clarifyIteration counter is
+  // computed or written. retry_index still tracks process attempts; we keep the
+  // max+1 bump so the attempts switcher / lineage stays monotonic, but it is no
+  // longer load-bearing for freshness (the entire cci-bump-over-all-participants
+  // machinery — the source of patch-2026-05-23/25 — is gone).
   const topLevelDesignerRows = designerRows.filter(
     (r) => r.parentNodeRunId === null && r.iteration === lastDesigner.iteration,
   )
@@ -801,38 +789,6 @@ export async function triggerDesignerRerun(
     topLevelDesignerRows.length === 0
       ? 0
       : Math.max(...topLevelDesignerRows.map((r) => r.retryIndex)) + 1
-  // RFC-056 patch 2026-05-25 §2.2 + RFC-064 §3.2 — the new clarifyIteration
-  // must land STRICTLY above every participant in the clarify chain (designer
-  // rows, questioner rows emitted at this iteration, any prior cross-clarify
-  // session iteration). The pre-patch formula `(lastDesigner + 1)` only
-  // accounted for the designer, missing the case where the questioner had
-  // already advanced past the designer via a prior cascade — e.g. live task
-  // 01KS86DPCSERV7S41GQA5Y81RN, designer at clarify=0 + questioner at
-  // clarify=1 after first session, new=1 = questioner.clarify → cascade
-  // idempotency at :799 then skipped the questioner. Querying all node_runs
-  // at this iteration is cheap (single indexed scan on task_id) and the +1
-  // guarantees the cascade always sees new > existing on every downstream
-  // node. RFC-064 unified the counter — same algorithm now operates on the
-  // single `clarifyIteration` column.
-  const allTaskRunsAtIter = await args.db
-    .select({ c: nodeRuns.clarifyIteration })
-    .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, args.taskId), eq(nodeRuns.iteration, lastDesigner.iteration)))
-  const sessionRows = await args.db
-    .select({ iter: crossClarifySessions.iteration })
-    .from(crossClarifySessions)
-    .where(
-      and(
-        eq(crossClarifySessions.taskId, args.taskId),
-        eq(crossClarifySessions.loopIter, args.loopIter),
-      ),
-    )
-  const maxParticipantClarify = Math.max(
-    0,
-    ...allTaskRunsAtIter.map((r) => r.c ?? 0),
-    ...sessionRows.map((r) => r.iter ?? 0),
-  )
-  const newClarifyIteration = maxParticipantClarify + 1
   const designerNodeRunId = ulid()
   await args.db.insert(nodeRuns).values({
     id: designerNodeRunId,
@@ -844,51 +800,15 @@ export async function triggerDesignerRerun(
     parentNodeRunId: lastDesigner.parentNodeRunId ?? null,
     shardKey: lastDesigner.shardKey ?? null,
     reviewIteration: lastDesigner.reviewIteration,
-    clarifyIteration: newClarifyIteration,
     preSnapshot: lastDesigner.preSnapshot,
   })
 
-  // Sibling cascade (RFC-056 design §5.2 step 4 — patch 2026-05-22, updated
-  // by RFC-064 unified counter):
-  //
-  // Why the explicit cascade is needed:
-  //   The original implementation comment claimed "stale outputs from prior
-  //   runs are overwritten by the next dispatch pass" — but the scheduler's
-  //   freshness comparator (isFresherNodeRun) keys on (clarifyIteration,
-  //   retryIndex, id) only. Before RFC-064 a downstream node whose latest
-  //   done row had crossClarifyIteration=0 stayed "completed" in the
-  //   scheduler's scope even after the designer reran at the bumped cross
-  //   counter — RFC-064 unified the two counters so the scheduler now sees
-  //   the bump on the single clarifyIteration column, but the explicit
-  //   cascade is still required to MINT the downstream pending rows under
-  //   the bumped clarifyIteration. Otherwise review nodes downstream of a
-  //   cross-clarify questioner that emitted only `<workflow-clarify>` (no
-  //   `<workflow-output>`) trip `review-source-port-missing` at dispatch,
-  //   failing the entire task. See design/RFC-056-clarify-cross-agent/
-  //   patch-2026-05-22-downstream-cascade.md.
-  //
-  // What the cascade does:
-  //   BFS from designerNodeId through `definition.edges`, skipping every
-  //   clarify-channel edge (isClarifyChannelEdge — shared with
-  //   scheduler.topologicalOrder so both walk the SAME graph). For each
-  //   reachable node, mint a NEW pending node_run carrying the bumped
-  //   clarifyIteration. Idempotent: nodes that already carry the new
-  //   iteration are skipped, and nodes that never ran (no rows at all) are
-  //   left alone — the scheduler will dispatch them naturally as soon as
-  //   their upstream landing fresh outputs arrives.
-  //
-  //   The new pending row's retry_index = max(existing) + 1 so
-  //   isFresherNodeRun ALWAYS picks it over the prior done row, even when
-  //   the prior path went through RFC-042 same-session retries that
-  //   inflated retry_index above 0.
-  // RFC-074 (T-B8): the downstream sibling cascade is removed. Pre-minting
-  // downstream pending rows here was exactly the speculative-mint over-trigger
-  // RFC-074 eliminates. Provenance freshness now propagates the rerun lazily —
-  // once this designer rerun produces a fresh done row, the scheduler's
-  // per-batch recomputeFreshnessAndDemote demotes its now-stale downstream and
+  // RFC-074 (T-B8): no downstream sibling cascade. Pre-minting downstream
+  // pending rows here was exactly the speculative-mint over-trigger RFC-074
+  // eliminates. Provenance freshness now propagates the rerun lazily — once this
+  // designer rerun produces a fresh done row, the scheduler's per-batch
+  // recomputeFreshnessAndDemote demotes its now-stale downstream and
   // re-dispatches them, recording fresh consumed. See design §4.3 / D9.
-  // (cascadeDownstreamFromDesigner + loadDefinitionForTask are now dead;
-  // deleted with cci retirement in PR-C.)
   log.info('cross-clarify designer rerun triggered', {
     taskId: args.taskId,
     designerNodeId: args.designerNodeId,
@@ -897,173 +817,6 @@ export async function triggerDesignerRerun(
   })
 
   return { designerNodeRunId, triggeredAt: now }
-}
-
-// ---------------------------------------------------------------------------
-// Downstream sibling cascade — RFC-056 design §5.2 step 4 (patch 2026-05-22).
-// ---------------------------------------------------------------------------
-
-interface CascadeDownstreamArgs {
-  db: DbClient
-  taskId: string
-  designerNodeId: string
-  /** wrapper-loop iteration index (inherited from the prior designer row).
-   *  We only cascade rows at the same iteration: cross-clarify is per-iter
-   *  by design. */
-  designerIteration: number
-  /** The bumped clarifyIteration (RFC-064 unified counter) that every cascaded
-   *  pending row inherits. */
-  newClarifyIteration: number
-  definition: WorkflowDefinition
-}
-
-/**
- * BFS downstream from `designerNodeId` (skipping clarify-channel edges) and
- * mint a fresh pending node_run for every reachable node whose latest top-
- * level row has a stale clarifyIteration. Returns the list of cascaded node
- * ids for log / test introspection.
- *
- * NOT called for the questioner's stop / reject path — that flow goes
- * through `triggerQuestionerStopRerun` which is single-node by design.
- *
- * RFC-074 PR-B: DEAD CODE — the only caller (triggerDesignerRerun) no longer
- * cascades; downstream propagation is now lazy via the scheduler's
- * recomputeFreshnessAndDemote (§4.3). Exported solely so lint does not flag the
- * unused private symbol; deleted with cci retirement in PR-C. Do NOT add callers.
- */
-export async function cascadeDownstreamFromDesigner(
-  args: CascadeDownstreamArgs,
-): Promise<string[]> {
-  const { db, taskId, designerNodeId, designerIteration, newClarifyIteration, definition } = args
-  // Build forward adjacency over the data graph (no clarify-channel edges).
-  const adjOut = new Map<string, string[]>()
-  for (const e of definition.edges) {
-    if (isClarifyChannelEdge(e)) continue
-    const list = adjOut.get(e.source.nodeId) ?? []
-    list.push(e.target.nodeId)
-    adjOut.set(e.source.nodeId, list)
-  }
-  // BFS from designer. The designer itself is NOT included — its pending
-  // row is minted by the caller. `downstream` is the strict downstream set.
-  const downstream = new Set<string>()
-  const queue: string[] = [designerNodeId]
-  while (queue.length > 0) {
-    const cur = queue.shift()
-    if (cur === undefined) break
-    for (const next of adjOut.get(cur) ?? []) {
-      if (downstream.has(next) || next === designerNodeId) continue
-      downstream.add(next)
-      queue.push(next)
-    }
-  }
-  if (downstream.size === 0) return []
-
-  const minted: string[] = []
-  for (const nodeId of downstream) {
-    const rows = await db
-      .select()
-      .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-    // Top-level rows only — fan-out children inherit from their parent run
-    // and would just confuse the cascade if we minted siblings for them.
-    const topLevel = rows.filter(
-      (r) => r.parentNodeRunId === null && r.iteration === designerIteration,
-    )
-    if (topLevel.length === 0) {
-      // Node never ran at this iteration. Scheduler will dispatch it
-      // naturally once upstream lands — no row to mint here.
-      continue
-    }
-    // Idempotency: if some row already carries the new clarifyIteration AND
-    // that row already produced at least one data output port
-    // (`node_run_outputs` row with a non-underscore port name), the cascade
-    // has already done its job for this node — skip to keep the cascade
-    // safe to invoke twice (multi-tab UI race etc.).
-    //
-    // RFC-056 patch 2026-05-25 §2.1 — the bare counter comparison the
-    // pre-patch code used was wrong for cross-clarify questioners. A
-    // questioner's row at clarify=N can be the CLARIFY-ONLY row that emitted
-    // `<workflow-clarify>` (no `<workflow-output>`, therefore no entries
-    // in `node_run_outputs`); that row is the one that CAUSED the
-    // cross-clarify session, not a row that consumed the answers. Without
-    // the output check the cascade silently skips re-minting the
-    // questioner, downstream review reads a port-missing upstream, and the
-    // task fails with `review-source-port-missing`. See live task
-    // 01KS86DPCSERV7S41GQA5Y81RN + the patch doc.
-    const clarifyMatch = topLevel.filter((r) => (r.clarifyIteration ?? 0) >= newClarifyIteration)
-    if (clarifyMatch.length > 0) {
-      let anyHasDataOutput = false
-      for (const r of clarifyMatch) {
-        const outs = await db
-          .select({ portName: nodeRunOutputs.portName })
-          .from(nodeRunOutputs)
-          .where(eq(nodeRunOutputs.nodeRunId, r.id))
-        if (outs.some((o) => !o.portName.startsWith('__'))) {
-          anyHasDataOutput = true
-          break
-        }
-      }
-      if (anyHasDataOutput) continue
-    }
-    // Template row: the latest top-level row. We inherit its iteration /
-    // shardKey / parentNodeRunId / reviewIteration / preSnapshot — the only
-    // field we bump is clarifyIteration (RFC-064 unified counter). Using
-    // started_at desc + id desc as the picker matches "most recent first";
-    // status is irrelevant (we just need template values to inherit).
-    // started_at can be NULL on freshly-minted pending rows that never
-    // started; we coerce NULL → 0 so they sort to the bottom of the
-    // descending list while still being valid candidates.
-    const template = topLevel.slice().sort((a, b) => {
-      const aTs = a.startedAt ?? 0
-      const bTs = b.startedAt ?? 0
-      if (aTs !== bTs) return bTs - aTs
-      return b.id.localeCompare(a.id)
-    })[0]!
-    // retry_index must beat every existing row at this (node, iteration) so
-    // isFresherNodeRun picks the new pending over any prior done — even
-    // when an RFC-042 follow-up inflated retry_index on a prior attempt.
-    const newRetryIndex = Math.max(...topLevel.map((r) => r.retryIndex)) + 1
-    const newId = ulid()
-    await db.insert(nodeRuns).values({
-      id: newId,
-      taskId,
-      nodeId,
-      status: 'pending',
-      retryIndex: newRetryIndex,
-      iteration: template.iteration,
-      parentNodeRunId: null,
-      shardKey: template.shardKey ?? null,
-      reviewIteration: template.reviewIteration,
-      clarifyIteration: newClarifyIteration,
-      preSnapshot: template.preSnapshot,
-    })
-    minted.push(nodeId)
-  }
-  return minted
-}
-
-/**
- * Resolve the workflow definition snapshot for `taskId` from the tasks table.
- *
- * RFC-074 PR-B: DEAD CODE — its only caller was the now-removed cascade.
- * Exported so lint does not flag the unused private symbol; deleted in PR-C.
- */
-export async function loadDefinitionForTask(
-  db: DbClient,
-  taskId: string,
-): Promise<WorkflowDefinition> {
-  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0]
-  if (row === undefined) {
-    throw new NotFoundError('task-not-found', `task ${taskId} not found`)
-  }
-  const definition = parseDefinitionFromSnapshot(row.workflowSnapshot)
-  if (definition === null) {
-    throw new NotFoundError(
-      'workflow-snapshot-malformed',
-      `task ${taskId} workflow snapshot is unparseable`,
-    )
-  }
-  return definition
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,26 +882,13 @@ export async function triggerQuestionerContinueRerun(
  * time, controlled by the session's persisted directive — the rerun's
  * dispatch path is identical.
  *
- * clarifyIteration MUST bump (mirroring `triggerDesignerRerun` §2 at line
- * ~826): the scheduler's `isQuestionerCrossClarifyRerun` gate
- * (scheduler.ts) only routes through the `cross-questioner` consumerKind
- * branch when the current run's `clarifyIteration > 0`. Inheriting the
- * prior counter unchanged makes the fast-path / reject mint land at
- * clarify=0 for the first round, the scheduler falls back to
- * `consumerKind='self'` (which finds zero kind='self' rows for this asking
- * node), the resulting `clarifyContext = undefined`, and the questioner
- * reruns BLIND — having no record of having asked anything — so it just
- * re-emits the same `<workflow-clarify>` envelope and the cycle repeats.
- * Reject path is symptomatically masked by `hasPersistentStop` short-
- * circuiting the cross-clarify node to done before a new session is
- * created, but the prompt-level STOP CLARIFYING trailer was never reaching
- * the questioner either. Bumping clarifyIteration here fixes both paths.
- *
- * Live evidence: task 01KSESDVXQVRQX1FXG6N432C52 — session
- * 01KSETFZVRV5AE9TY53940RP8F submit (4/4 questioner-scope, continue) ⇒
- * questioner run 01KSETHZPGANSGRR24W7834BEY minted at clarify=0, scheduler
- * fell through to self-clarify, agent re-emitted the same envelope,
- * cross_clarify session 01KSETKNNT3TMPKCCJ6M980BSS reopened.
+ * RFC-074 PR-C: no clarifyIteration bump. The scheduler's
+ * `isQuestionerCrossClarifyRerun` gate is now `clarifyMode === 'cross'` (PR-B
+ * regression fix) and the cross-questioner prompt context ages by the RFC-070
+ * `consumedByQuestionerRunId IS NULL` stamp — neither reads cci. Freshness is
+ * pure id-order, so this freshly-minted row is the latest insert and wins
+ * `isFresherNodeRun` automatically. The old max-participant+1 bump (the
+ * symptom-masking patch for task 01KSESDVXQVRQX1FXG6N432C52) is gone.
  */
 async function mintQuestionerRerun(args: {
   db: DbClient
@@ -1165,34 +905,6 @@ async function mintQuestionerRerun(args: {
     )
   }
 
-  // Compute newClarifyIteration as max(participant clarify, session iteration)
-  // + 1 across the questioner's loopIter — identical algorithm to
-  // triggerDesignerRerun so the questioner lands above every peer in the
-  // cross-clarify chain (designer, sibling questioners, prior cross-clarify
-  // sessions). lastRun.iteration is the loopIter for nodes inside a
-  // wrapper-loop (and 0 for top-level nodes), matching how
-  // createCrossClarifySession derives it.
-  const loopIter = lastRun.iteration
-  const peerRunsAtIter = await args.db
-    .select({ c: nodeRuns.clarifyIteration })
-    .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, args.taskId), eq(nodeRuns.iteration, loopIter)))
-  const sessionRowsAtIter = await args.db
-    .select({ iter: crossClarifySessions.iteration })
-    .from(crossClarifySessions)
-    .where(
-      and(
-        eq(crossClarifySessions.taskId, args.taskId),
-        eq(crossClarifySessions.loopIter, loopIter),
-      ),
-    )
-  const maxParticipantClarify = Math.max(
-    0,
-    ...peerRunsAtIter.map((r) => r.c ?? 0),
-    ...sessionRowsAtIter.map((r) => r.iter ?? 0),
-  )
-  const newClarifyIteration = maxParticipantClarify + 1
-
   const newId = ulid()
   await args.db.insert(nodeRuns).values({
     id: newId,
@@ -1204,7 +916,6 @@ async function mintQuestionerRerun(args: {
     parentNodeRunId: lastRun.parentNodeRunId ?? null,
     shardKey: lastRun.shardKey ?? null,
     reviewIteration: lastRun.reviewIteration,
-    clarifyIteration: newClarifyIteration,
     preSnapshot: lastRun.preSnapshot,
   })
   return { questionerNodeRunId: newId }
@@ -1302,11 +1013,12 @@ export interface BuildExternalFeedbackArgs {
   taskId: string
   designerNodeId: string
   loopIter: number
-  /** When the designer about to rerun has clarifyIteration N (RFC-064 unified
-   *  counter — covers cross-clarify rounds), pull the most recently consumed
-   *  batch (designer_run_triggered_at non-NULL) so the rendered block matches
-   *  the iteration the agent is about to run. */
-  designerClarifyIteration: number
+  /** RFC-074 PR-C: the designer's clarify generation, derived by the scheduler
+   *  from prior-done id-order (replaces the retired clarifyIteration counter).
+   *  0 = first designer run → no consumed cross-clarify batch to surface. Used
+   *  only for the early-exit guard and the rendered "round" display; aging
+   *  itself is the RFC-070 `consumedByConsumerRunId IS NULL` stamp below. */
+  designerGeneration: number
   definition: WorkflowDefinition
 }
 
@@ -1337,7 +1049,7 @@ export interface ExternalFeedbackPromptContext {
 export async function buildExternalFeedbackContext(
   args: BuildExternalFeedbackArgs,
 ): Promise<ExternalFeedbackPromptContext | undefined> {
-  if (args.designerClarifyIteration <= 0) return undefined
+  if (args.designerGeneration <= 0) return undefined
 
   const siblingNodeIds = findCrossClarifyNodesPointingToDesigner(
     args.definition,
@@ -1409,7 +1121,7 @@ export async function buildExternalFeedbackContext(
     .join(', ')
   return {
     block,
-    iteration: String(args.designerClarifyIteration),
+    iteration: String(args.designerGeneration),
     sourcesCsv: csv,
   }
 }

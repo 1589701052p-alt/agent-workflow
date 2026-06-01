@@ -128,7 +128,6 @@ async function seedStopAnsweredSession(db: DbClient, taskId: string): Promise<vo
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   const { clarifyNodeRunId } = await createClarifySession({
     db,
@@ -238,7 +237,6 @@ describe("buildClarifyPromptContext: 'stop' directive is scoped to clarify-rerun
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,

@@ -122,7 +122,6 @@ describe('POST /api/tasks/:id/diagnose — RFC-052 shape', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: Date.now(),
     })
@@ -166,7 +165,6 @@ describe('POST /api/tasks/:id/diagnose — RFC-052 shape', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: Date.now(),
     })
@@ -265,7 +263,6 @@ describe('POST /api/tasks/:id/diagnose — RFC-057 stuck-rule merge', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_review',
       startedAt: Date.now(),
     })

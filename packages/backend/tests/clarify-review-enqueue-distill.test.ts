@@ -71,7 +71,6 @@ function seedFixture(db: DbClient): {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_human',
     })
     .run()
@@ -84,7 +83,6 @@ function seedFixture(db: DbClient): {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_human',
     })
     .run()

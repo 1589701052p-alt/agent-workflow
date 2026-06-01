@@ -1126,13 +1126,13 @@ export async function retryNode(
   // re-runs them. We do this by inserting a fresh failed row at retry_index
   // max+1, so the scheduler treats it as the "latest" and starts attempt+1.
   //
-  // Carry forward (iteration, clarifyIteration, reviewIteration, shardKey,
-  // parentNodeRunId, preSnapshot) from the prior run so the retried attempt
-  // resumes in the same loop / clarify / review / shard frame. Skipping this
-  // step previously reset clarifyIteration to 0 on retry, which made
-  // buildClarifyPromptContext drop every answered round and the agent's
-  // multi-round clarify history vanished from the next prompt. For the
-  // explicitly retried target the source-of-truth is `runRow` (the row the
+  // Carry forward (iteration, reviewIteration, shardKey, parentNodeRunId,
+  // preSnapshot) from the prior run so the retried attempt resumes in the same
+  // loop / review / shard frame. RFC-074 PR-C: the clarify generation is no
+  // longer carried on the row — it is derived from prior-done id-order at
+  // dispatch time, and the answered Q&A surfaces via the RFC-070 consumed-by
+  // stamp regardless of which row this retry is. For the explicitly retried
+  // target the source-of-truth is `runRow` (the row the
   // user picked); for cascaded downstream nodes we inherit from each node's
   // own latest row.
   // RFC-052 / RFC-053 PR-C: per-kind cascade behavior comes from
@@ -1170,11 +1170,6 @@ export async function retryNode(
       status: 'failed',
       retryIndex: nextRetry,
       iteration: inherit?.iteration ?? 0,
-      // RFC-064: the inherited clarifyIteration alone now covers both self
-      // + cross signals (no more separate crossClarifyIteration mirror to
-      // worry about — patch-2026-05-25 §2.3's intent is structurally
-      // preserved by the unified counter).
-      clarifyIteration: inherit?.clarifyIteration ?? 0,
       reviewIteration: inherit?.reviewIteration ?? 0,
       shardKey: inherit?.shardKey ?? null,
       parentNodeRunId: inherit?.parentNodeRunId ?? null,
@@ -1393,9 +1388,6 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     shardKey: r.shardKey,
     retryIndex: r.retryIndex,
     reviewIteration: r.reviewIteration,
-    // RFC-023 + RFC-064: unified clarifyIteration covers BOTH self-clarify
-    // and cross-clarify rounds (single counter post-RFC-064).
-    clarifyIteration: r.clarifyIteration,
     status: r.status,
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,

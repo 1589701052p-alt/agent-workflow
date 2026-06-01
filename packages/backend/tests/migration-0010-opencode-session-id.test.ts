@@ -68,7 +68,6 @@ describe('migration 0010 (RFC-026 node_runs.opencode_session_id)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         opencodeSessionId: 'opc_abc123',
       })
@@ -82,7 +81,6 @@ describe('migration 0010 (RFC-026 node_runs.opencode_session_id)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'pending',
         // opencodeSessionId intentionally omitted — should land as NULL
       })

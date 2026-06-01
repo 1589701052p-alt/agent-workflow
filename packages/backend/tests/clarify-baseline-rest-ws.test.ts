@@ -152,7 +152,6 @@ describe('RFC-058 baseline T6 — list summaries shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     await createClarifySession({
       db,
@@ -219,7 +218,6 @@ describe('RFC-058 baseline T6 — list summaries shape', () => {
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: 0,
       },
       {
         id: 'nr_q1',
@@ -274,7 +272,6 @@ describe('RFC-058 baseline T6 — detail wire shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -333,7 +330,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
@@ -485,7 +481,6 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,

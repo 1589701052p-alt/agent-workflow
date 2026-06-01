@@ -130,7 +130,6 @@ async function seedQRun(db: DbClient, taskId: string, nodeId: string): Promise<s
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   return id
 }
@@ -144,7 +143,6 @@ async function seedDesignerRun(db: DbClient, taskId: string): Promise<string> {
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     preSnapshot: 'snap-c4',
   })
   return id
@@ -256,7 +254,6 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
     await db.insert(clarifySessions).values({
       id: `cs_${Math.random().toString(36).slice(2, 6)}`,

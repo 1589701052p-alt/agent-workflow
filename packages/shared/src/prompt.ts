@@ -59,7 +59,7 @@ export interface ReviewPromptContext {
  * Builtin tokens populated from this context:
  *   {{__clarify_questions__}}  ← questionsBlock (markdown listing of what the agent asked)
  *   {{__clarify_answers__}}    ← answersBlock   (markdown listing of user answers + synthesis)
- *   {{__clarify_iteration__}}  ← iteration      (string form of source.clarifyIteration)
+ *   {{__clarify_iteration__}}  ← iteration      (string form of the clarify generation)
  *   {{__clarify_remaining__}}  ← remaining      (string; "max - current" when inside a
  *                                                wrapper-loop with a cap, "" otherwise)
  *

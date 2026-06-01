@@ -21,7 +21,6 @@ function makeRun(id: string, nodeId: string): NodeRun {
     shardKey: null,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'done',
     startedAt: null,
     finishedAt: null,

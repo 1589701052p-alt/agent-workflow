@@ -61,7 +61,6 @@ function seedTaskWithNodeRun(db: DbClient): { taskId: string; nodeRunId: string 
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'running',
     })
     .run()
@@ -311,7 +310,6 @@ describe('startLiveSubagentCapture', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
       })
       .run()

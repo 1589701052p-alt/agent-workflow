@@ -464,10 +464,6 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
 
     const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
     expect(rev2).toBeDefined()
-    const designerTops = await topLevel(c.db, task.id, 'designer')
-    const designerCci = Math.max(
-      ...designerTops.filter((r) => r.status === 'done').map((r) => r.clarifyIteration ?? 0),
-    )
 
     // approve v2 (whose content already reflects the latest designer run)
     await submitReviewDecision({
@@ -484,11 +480,9 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     expect({
       status: await taskStatus(c.db, task.id),
       spuriousReview: spurious?.id ?? null,
-      designerCci,
     }).toEqual({
       status: 'done',
       spuriousReview: null,
-      designerCci,
     })
   })
 
@@ -656,9 +650,11 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     // task must not be 'done' with a stale B approval.
     const status = await taskStatus(c.db, task.id)
     const bTops = await topLevel(c.db, task.id, 'revB')
-    const bApprovedAgainstV1 = bTops.some(
-      (r) => r.status === 'done' && (r.clarifyIteration ?? 0) === (revB!.clarifyIteration ?? 0),
-    )
+    // RFC-074 PR-C: "B's stale approval survived" ⟺ revB's own row is still the
+    // freshest top-level revB row AND done. If B was pulled back, a newer
+    // awaiting_review row (larger id) sits on top, so this is false.
+    const bFreshest = bTops.slice().sort((a, b) => (a.id < b.id ? 1 : -1))[0]
+    const bApprovedAgainstV1 = bFreshest?.id === revB!.id && bFreshest?.status === 'done'
     expect({ taskDone: status === 'done', bStillApproved: bApprovedAgainstV1 }).toEqual({
       taskDone: false,
       bStillApproved: false,

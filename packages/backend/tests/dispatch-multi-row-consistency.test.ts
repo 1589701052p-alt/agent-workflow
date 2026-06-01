@@ -19,7 +19,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { eq, and } from 'drizzle-orm'
-import { ulid } from 'ulid'
+// RFC-074 PR-C: freshness is pure ULID id-order. These tests seed multiple
+// node_runs synchronously and rely on creation order, so we use a MONOTONIC
+// factory — plain ulid() is not monotonic within a millisecond and would make
+// "scheduler picks the later row" non-deterministic.
+import { monotonicFactory } from 'ulid'
+const ulid = monotonicFactory()
 import type { DbClient } from '../src/db/client'
 import { createInMemoryDb } from '../src/db/client'
 import {
@@ -122,7 +127,7 @@ async function pickLatestRow(
   taskId: string,
   nodeId: string,
   iteration = 0,
-): Promise<{ id: string; status: string; retryIndex: number; clarifyIteration: number }> {
+): Promise<{ id: string; status: string; retryIndex: number }> {
   const rows = await db
     .select()
     .from(nodeRuns)
@@ -149,7 +154,6 @@ async function seedAgentDone(
     nodeId: 'doc',
     iteration: 0,
     retryIndex: opts.retryIndex ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     status: 'done',
     startedAt: Date.now() - 200,
     finishedAt: Date.now() - 100,
@@ -179,7 +183,6 @@ async function seedReviewRow(
     nodeId: 'rev_1',
     iteration: 0,
     retryIndex: opts.retryIndex ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     reviewIteration: opts.reviewIteration ?? 0,
     status: opts.status,
     errorMessage: opts.errorMessage ?? null,
@@ -328,13 +331,11 @@ describe('RFC-053 PR-A T1b — multi-row dispatch consistency', () => {
     const staleId = await seedReviewRow(h.db, h.taskId, {
       status: 'done',
       retryIndex: 1,
-      clarifyIteration: 0,
       finishedAt: Date.now() - 100,
     })
     const clarifyRerunId = await seedReviewRow(h.db, h.taskId, {
       status: 'pending',
       retryIndex: 0,
-      clarifyIteration: 1,
     })
 
     const latest = await pickLatestRow(h.db, h.taskId, 'rev_1')
@@ -445,7 +446,6 @@ describe('RFC-053 PR-A T1b — multi-row dispatch consistency', () => {
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'done',
       startedAt: Date.now() - 200,
       finishedAt: Date.now() - 100,
@@ -459,7 +459,6 @@ describe('RFC-053 PR-A T1b — multi-row dispatch consistency', () => {
       iteration: 1,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'pending',
       startedAt: Date.now(),
     })
@@ -483,7 +482,6 @@ describe('RFC-053 PR-A T1b — multi-row dispatch consistency', () => {
       iteration: 0,
       retryIndex: 9,
       reviewIteration: 0,
-      clarifyIteration: 0,
       parentNodeRunId: top,
       shardKey: 'shard-1',
       status: 'pending',

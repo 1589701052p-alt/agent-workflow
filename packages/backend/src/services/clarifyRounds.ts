@@ -328,19 +328,16 @@ export interface BuildPromptContextArgs {
 export async function buildPromptContext(
   args: BuildPromptContextArgs,
 ): Promise<ClarifyPromptContext | undefined> {
-  // RFC-074: the cross-questioner path ages rounds by the RFC-070 consumed-by
-  // stamp (`consumedByQuestionerRunId IS NULL`, applied in
-  // selectAnsweredRoundsForConsumer) — NOT by the cci counter. It must therefore
-  // skip the cci-scoping below. The cci scoping silently dropped the questioner's
-  // Q&A once PR-B removed the cascade that used to bump the *downstream*
-  // questioner's clarifyIteration (the questioner then re-runs at cci=0, the
-  // `iteration < targetIteration` / `<= 0` guards exclude every round, and the
-  // questioner re-asks forever). self + cross-designer KEEP the cci scoping:
-  // their consumers are still cci-bumped (self-clarify rerun / triggerDesignerRerun).
-  const cciScoped = args.consumerKind !== 'cross-questioner'
-  if (cciScoped && args.targetIteration <= 0) return undefined
-
-  const allRows = await selectAnsweredRoundsForConsumer({
+  // RFC-074 PR-C: all three consumer kinds age rounds purely by the RFC-070
+  // consumed-by stamp (`consumed_by_*_run_id IS NULL`, applied in
+  // selectAnsweredRoundsForConsumer) — there is no longer a cci-counter cutoff.
+  // The retired `iteration < targetIteration` / `targetIteration <= 0` scoping
+  // was the cross-scale comparison (round index vs the dropped clarifyIteration)
+  // that silently dropped a questioner's Q&A once the downstream-cascade cci
+  // bump went away (PR-B regression). Every answered-but-unconsumed round is, by
+  // construction, a genuinely-prior round the rerun should see; once a rerun
+  // finishes done-with-output the mark helper stamps the rows so they age out.
+  const priorRounds = await selectAnsweredRoundsForConsumer({
     db: args.db,
     taskId: args.taskId,
     consumerKind: args.consumerKind,
@@ -348,16 +345,6 @@ export async function buildPromptContext(
     ...(args.loopIter !== undefined ? { loopIter: args.loopIter } : {}),
     ...(args.shardKey !== undefined ? { shardKey: args.shardKey } : {}),
   })
-
-  // Restrict to rounds whose iteration is strictly less than the consumer's
-  // about-to-run iteration. Matches the RFC-023 + RFC-056 semantics
-  // (iterationIndex < targetIteration); guards against the in-flight
-  // round (iteration === targetIteration) leaking before it's answered.
-  // cross-questioner is exempt (see above): its SELECT already returned only
-  // unconsumed answered rounds, every one of which is genuinely prior.
-  const priorRounds = cciScoped
-    ? allRows.filter((r) => r.iteration < args.targetIteration)
-    : allRows
   if (priorRounds.length === 0) return undefined
 
   const inlineMode = args.sessionMode === 'inline'

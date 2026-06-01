@@ -75,8 +75,8 @@ export function previewOf(bodyMd: string, max = 200): string {
  * caller must also know which attempts share the same opencodeSessionId.
  *
  * Returns true iff `run.retryIndex > 0` AND the run shares
- * `opencodeSessionId` with the retry_index=0 sibling for the same
- * (nodeId, iteration, shardKey, reviewIteration, clarifyIteration).
+ * `opencodeSessionId` with the retry_index=0 sibling that anchors its
+ * generation (see `findFirstAttemptSibling`).
  */
 export function isFollowupInherit(run: NodeRun, attempt0: NodeRun | undefined): boolean {
   if (run.retryIndex === 0) return false
@@ -88,23 +88,27 @@ export function isFollowupInherit(run: NodeRun, attempt0: NodeRun | undefined): 
 }
 
 /**
- * Pick the retry_index=0 sibling for the active run, scoped to the same
- * (nodeId, iteration, shardKey, reviewIteration, clarifyIteration). The
- * picker needs all five keys to disambiguate fan-out and loop-iteration
- * neighbors; using only nodeId would surface the wrong attempt 0 when the
- * node ran across multiple iterations / shards.
+ * Pick the retry_index=0 sibling that ANCHORS the active run's clarify
+ * generation, scoped to the same (nodeId, iteration, shardKey,
+ * reviewIteration). RFC-074 PR-C: the retired clarifyIteration counter used to
+ * be the fifth key; the generation is now id-ordered — the anchor is the
+ * retry=0 row with the LARGEST id not exceeding the active run's id (mirrors
+ * backend memoryInject.loadInjectedSnapshotFromFirstAttempt). Using only nodeId
+ * would surface the wrong attempt 0 across iterations / shards.
  */
 export function findFirstAttemptSibling(
   run: NodeRun,
   allRuns: readonly NodeRun[],
 ): NodeRun | undefined {
-  return allRuns.find(
-    (r) =>
-      r.nodeId === run.nodeId &&
-      r.iteration === run.iteration &&
-      r.shardKey === run.shardKey &&
-      r.reviewIteration === run.reviewIteration &&
-      r.clarifyIteration === run.clarifyIteration &&
-      r.retryIndex === 0,
-  )
+  let anchor: NodeRun | undefined
+  for (const r of allRuns) {
+    if (r.nodeId !== run.nodeId) continue
+    if (r.iteration !== run.iteration) continue
+    if (r.shardKey !== run.shardKey) continue
+    if (r.reviewIteration !== run.reviewIteration) continue
+    if (r.retryIndex !== 0) continue
+    if (r.id > run.id) continue
+    if (anchor === undefined || r.id > anchor.id) anchor = r
+  }
+  return anchor
 }

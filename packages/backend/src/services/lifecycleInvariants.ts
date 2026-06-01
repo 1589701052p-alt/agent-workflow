@@ -31,7 +31,7 @@
 // All seven invariants are read-only against the source tables; only
 // `lifecycle_alerts` is written.
 
-import { and, eq, gt, gte, inArray, isNull, isNotNull, or } from 'drizzle-orm'
+import { and, eq, gte, inArray, isNull, isNotNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type {
@@ -431,14 +431,18 @@ async function checkT3(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInv
 }
 
 async function checkU1(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInvariantFinding[]> {
-  // U1: per (task, nodeId, reviewIteration, clarifyIteration, shardKey)
-  //     at most 1 row in {awaiting_review, awaiting_human}.
+  // U1: per (task, nodeId, reviewIteration, shardKey) at most 1 row in
+  //     {awaiting_review, awaiting_human}.
+  // RFC-074 PR-C: the dedup key no longer carries the retired clarifyIteration
+  // dimension. With speculative cci-bumped pre-mints gone (PR-B), a node has at
+  // most one active row per (reviewIteration, shard) slot; two active rows there
+  // is a genuine duplicate regardless of generation, so dropping the cci
+  // dimension tightens the invariant to exactly the no-speculative-mint world.
   const rows = await db
     .select({
       id: nodeRuns.id,
       nodeId: nodeRuns.nodeId,
       reviewIteration: nodeRuns.reviewIteration,
-      clarifyIteration: nodeRuns.clarifyIteration,
       shardKey: nodeRuns.shardKey,
       status: nodeRuns.status,
     })
@@ -452,7 +456,7 @@ async function checkU1(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInv
   if (rows.length < 2) return []
   const groups = new Map<string, typeof rows>()
   for (const r of rows) {
-    const key = `${r.nodeId}|${r.reviewIteration}|${r.clarifyIteration}|${r.shardKey ?? ''}`
+    const key = `${r.nodeId}|${r.reviewIteration}|${r.shardKey ?? ''}`
     const existing = groups.get(key) ?? []
     existing.push(r)
     groups.set(key, existing)
@@ -481,10 +485,12 @@ async function checkCR1(
   now: number,
 ): Promise<LifecycleInvariantFinding[]> {
   // CR-1 (RFC-056 §10 + RFC-064): cross-clarify round answered+continue +
-  // parent task failed + no consuming designer node_run (i.e. no done
-  // designer run with clarifyIteration >= round.iteration) ⟹ upgrade to
-  // 'abandoned'. RFC-064 unified the counter, so the consumption check
-  // now compares on `clarifyIteration` only.
+  // parent task failed + the cross-clarify round was never consumed by a
+  // done-with-output designer run ⟹ upgrade to 'abandoned'. RFC-074 PR-C / D8:
+  // "was this round consumed?" is answered directly by the RFC-070
+  // `consumed_by_consumer_run_id` stamp (set by markRoundsConsumed when the
+  // designer finishes done-with-output) — no more cross-scale clarifyIteration
+  // comparison against the round's local iteration counter.
   //
   // Unlike R1/R2/C1/T*/U1, this rule is "auto-upgrade": the violation IS the
   // signal — we flip the row to abandoned in this pass so the next scan
@@ -516,6 +522,10 @@ async function checkCR1(
         eq(clarifyRounds.status, 'answered'),
         eq(clarifyRounds.directive, 'continue'),
         isNotNull(clarifyRounds.targetConsumerNodeId),
+        // RFC-074 PR-C / D8: only un-consumed rounds are abandonment candidates.
+        // The consumed-by stamp is set when a done-with-output designer run bakes
+        // this round in — its presence means the feedback WAS consumed.
+        isNull(clarifyRounds.consumedByConsumerRunId),
       ),
     )
   if (stuck.length === 0) return []
@@ -523,23 +533,6 @@ async function checkCR1(
   const out: LifecycleInvariantFinding[] = []
   for (const s of stuck) {
     if (s.targetDesignerNodeId === null) continue
-    // Is there a designer node_run with clarifyIteration >= round.iteration
-    // that reached 'done'? If yes, the feedback was consumed → not abandoned.
-    const consumed = (
-      await db
-        .select({ id: nodeRuns.id })
-        .from(nodeRuns)
-        .where(
-          and(
-            eq(nodeRuns.taskId, ctx.taskId),
-            eq(nodeRuns.nodeId, s.targetDesignerNodeId),
-            gt(nodeRuns.clarifyIteration, s.iteration),
-            eq(nodeRuns.status, 'done'),
-          ),
-        )
-        .limit(1)
-    )[0]
-    if (consumed !== undefined) continue
 
     // Upgrade in place.
     await db

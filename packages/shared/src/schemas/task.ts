@@ -508,19 +508,6 @@ export const NodeRunSchema = z.object({
    * counts purely technical retries like process crashes).
    */
   reviewIteration: z.number().int().nonnegative().default(0),
-  /**
-   * RFC-023 + RFC-064: bumped each time the agent is re-spawned because of a
-   * clarify round — covers BOTH self-clarify (RFC-023, asking_node ==
-   * target_consumer) and cross-clarify (RFC-056, asking_node !=
-   * target_consumer) flows after RFC-064 unified the two counters. The
-   * `kind` column on `clarify_rounds` is the only "self vs cross"
-   * discriminator the runtime needs; nodes that participate in a new round
-   * as either asking_node or target_consumer_node see this counter bump
-   * (see services/clarify.ts §3 mint algorithm). Orthogonal to retryIndex
-   * (technical retries) and reviewIteration (post-output review rounds).
-   * For a wrapper-fanout shard child node_run, the value is per-shard.
-   */
-  clarifyIteration: z.number().int().nonnegative().default(0),
   status: NodeRunStatusSchema,
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),

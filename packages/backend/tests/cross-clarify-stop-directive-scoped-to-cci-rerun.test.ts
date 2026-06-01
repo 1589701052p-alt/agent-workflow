@@ -115,7 +115,6 @@ async function seedStopAnsweredCrossRound(db: DbClient, taskId: string): Promise
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   await db.insert(nodeRuns).values({
     id: 'nr_cc',

@@ -212,7 +212,9 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
         }),
     )
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const designerRun = runs.find((r) => r.nodeId === 'd' && r.clarifyIteration === 0)
+    const designerRun = runs
+      .filter((r) => r.nodeId === 'd')
+      .sort((a, b) => (a.id < b.id ? -1 : 1))[0]
     expect(designerRun?.opencodeSessionId).toBe('opc_first_round')
   })
 
@@ -287,7 +289,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
     // Questions, retains User Answers (Current Round), ends with inline
     // reminder. Pull it off the rerun row.
     const allRuns = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const rerun = allRuns.find((r) => r.nodeId === 'd' && r.clarifyIteration === 1)
+    const rerun = allRuns.filter((r) => r.nodeId === 'd').sort((a, b) => (a.id > b.id ? -1 : 1))[0]
     expect(rerun).toBeDefined()
     expect(rerun?.promptText ?? '').toContain('User Answers (Current Round)')
     expect(rerun?.promptText ?? '').not.toContain('Prior Rounds (Questions)')
@@ -363,7 +365,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
 
     // Rerun's prompt carries the legacy multi-round dump section names.
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const rerun = runs.find((r) => r.nodeId === 'd' && r.clarifyIteration === 1)
+    const rerun = runs.filter((r) => r.nodeId === 'd').sort((a, b) => (a.id > b.id ? -1 : 1))[0]
     expect(rerun?.promptText ?? '').toContain('Prior Rounds (Answers)')
     expect(rerun?.promptText ?? '').not.toContain('User Answers (Current Round)')
   })
@@ -426,7 +428,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
     }
     // Fallback warning event on the rerun row.
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const rerun = runs.find((r) => r.nodeId === 'd' && r.clarifyIteration === 1)!
+    const rerun = runs.filter((r) => r.nodeId === 'd').sort((a, b) => (a.id > b.id ? -1 : 1))[0]!
     const events = await h.db
       .select()
       .from(nodeRunEvents)

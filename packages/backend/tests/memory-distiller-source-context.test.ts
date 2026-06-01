@@ -89,7 +89,6 @@ function seedSourceAgentNodeRun(
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_human',
       promptText: opts.promptText ?? 'Please make the change',
       startedAt: opts.startedAt ?? Date.now(),
@@ -113,7 +112,6 @@ function seedClarifySession(
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_human',
     })
     .run()
@@ -244,7 +242,6 @@ describe('loadSourceEvents — clarify transcript', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'awaiting_human',
       })
       .run()
@@ -342,7 +339,6 @@ describe('loadSourceEvents — review body', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
       })
       .run()

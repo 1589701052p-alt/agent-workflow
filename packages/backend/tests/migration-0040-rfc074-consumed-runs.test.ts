@@ -63,7 +63,6 @@ describe('RFC-074 migration 0040 — consumed_upstream_runs_json + superseded', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       consumedUpstreamRunsJson: consumed,
     })
     const [row] = await db.select().from(nodeRuns).where(eq(nodeRuns.id, '01RUNWITHPROV'))
@@ -80,7 +79,6 @@ describe('RFC-074 migration 0040 — consumed_upstream_runs_json + superseded', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const [row] = await db.select().from(nodeRuns).where(eq(nodeRuns.id, '01LEGACYRUN'))
     expect(row?.consumedUpstreamRunsJson).toBeNull()
@@ -97,7 +95,6 @@ describe('RFC-074 migration 0040 — consumed_upstream_runs_json + superseded', 
       status: 'awaiting_review',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     await db.insert(docVersions).values({
       id: '01DOCV1',

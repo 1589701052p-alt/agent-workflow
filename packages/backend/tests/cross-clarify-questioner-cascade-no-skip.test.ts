@@ -226,7 +226,6 @@ async function seedRun(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     startedAt: now,
     finishedAt: now,
     ...fields,
@@ -275,7 +274,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       retryIndex: 3,
       // RFC-064: under the unified counter, the questioner's prior round
       // sits at clarifyIteration=1 (was crossClarifyIteration=1 pre-unify).
-      clarifyIteration: 1,
       preSnapshot: 'snap-questioner-v1',
       // Intentionally no node_run_outputs row — this is the "emitted only
       // <workflow-clarify>" state the patch addresses.
@@ -346,10 +344,8 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'designer')))
     const designerFresh = designerRows.find((r) => r.status === 'pending')
     expect(designerFresh, 'designer must have a fresh pending row after rerun').toBeDefined()
-    expect(
-      designerFresh?.clarifyIteration,
-      'Fix B — designer rerun cci must be max(designer.cci, questioner.cci) + 1 = 2',
-    ).toBe(2)
+    // RFC-074 PR-C: the designer rerun is identified by being a fresh pending
+    // insert (latest id), not by a clarifyIteration bump (counter retired).
 
     // RFC-074 (T-B8): the eager cascade is gone, so the questioner is NOT
     // pre-minted a fresh pending row. It keeps its clarify-only done row at
@@ -368,7 +364,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     // Prior questioner_v1 row is left untouched.
     const qPriorRow = qRows.find((r) => r.id === questionerV1)
     expect(qPriorRow?.status).toBe('done')
-    expect(qPriorRow?.clarifyIteration).toBe(1)
   })
 
   // -----------------------------------------------------------------------
@@ -387,7 +382,6 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     const agentRunId = await seedRun(db, taskId, 'agent_x', {
       id: 'agent_x_v1',
       retryIndex: 0,
-      clarifyIteration: 0,
       preSnapshot: 'snap-x-v1',
     })
 
@@ -420,13 +414,9 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
           eq(nodeRuns.status, 'pending'),
         ),
       )
+    // RFC-074 PR-C: exactly one fresh pending rerun row is minted. Freshness is
+    // pure id-order, so the rerun (latest insert) wins without a cci bump.
     expect(rerunRows.length).toBe(1)
-    expect(
-      rerunRows[0]?.clarifyIteration,
-      'Fix C — clarify.ts:406 rerun mint must inherit clarifyIteration from source row',
-    ).toBe(1)
-    // Sanity: clarifyIteration bumps as before.
-    expect(rerunRows[0]?.clarifyIteration).toBe(1)
   })
 
   // -----------------------------------------------------------------------
@@ -490,69 +480,10 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
   })
 
   // -----------------------------------------------------------------------
-  // §2.3 — source-text guards for every insert site enumerated in the patch.
-  // -----------------------------------------------------------------------
-
-  describe('§2.3 source-text guards — every node_runs insert preserves clarifyIteration', () => {
-    test('crossClarify.ts:799 idempotency uses output existence, not bare cci comparison', () => {
-      const src = readFileSync(CROSS_CLARIFY_SOURCE, 'utf8')
-      // The new guard either consults `nodeRunOutputs` directly, or uses a
-      // helper named with `hasDataOutput` / `dataOutputs` / similar. We
-      // match either shape to keep the lock semantic (the patch document
-      // says "at least one row at the target iteration has produced a
-      // non-clarify output port") rather than syntactic.
-      const cascadeWindow = src.match(/async function cascadeDownstreamFromDesigner[\s\S]*?\n\}\n/)
-      expect(cascadeWindow, 'cascadeDownstreamFromDesigner must exist').not.toBeNull()
-      const body = cascadeWindow?.[0] ?? ''
-      expect(
-        /nodeRunOutputs|node_run_outputs|hasDataOutput|dataOutputs/.test(body),
-        'cascade idempotency must consult node_run_outputs (not just compare cci numbers)',
-      ).toBe(true)
-    })
-
-    test('task.ts:690 retry-from-interrupt placeholder inserts clarifyIteration', () => {
-      const src = readFileSync(TASK_SOURCE, 'utf8')
-      // The retry-from-interrupt mint is the only insert(nodeRuns) in
-      // task.ts; the post-patch values block must contain
-      const insertWindow = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/)
-      expect(insertWindow, 'task.ts must contain an insert(nodeRuns) block').not.toBeNull()
-      expect(insertWindow?.[0].includes('clarifyIteration'), insertWindow?.[0]).toBe(true)
-    })
-
-    test('clarify.ts:169 + :406 clarify-related inserts include clarifyIteration', () => {
-      const src = readFileSync(CLARIFY_SOURCE, 'utf8')
-      const insertMatches = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/g)
-      expect(insertMatches, 'clarify.ts must contain insert(nodeRuns) blocks').not.toBeNull()
-      for (const block of insertMatches ?? []) {
-        expect(block.includes('clarifyIteration'), block).toBe(true)
-      }
-    })
-
-    test('review.ts:451 + :1335 review-related inserts include clarifyIteration', () => {
-      const src = readFileSync(REVIEW_SOURCE, 'utf8')
-      const insertMatches = src.match(/\.insert\(nodeRuns\)\s*\.values\(\{[\s\S]*?\}\)/g)
-      expect(insertMatches, 'review.ts must contain insert(nodeRuns) blocks').not.toBeNull()
-      for (const block of insertMatches ?? []) {
-        expect(block.includes('clarifyIteration'), block).toBe(true)
-      }
-    })
-
-    test('crossClarify.ts newCci computation is max-aware (designer + questioner + session)', () => {
-      const src = readFileSync(CROSS_CLARIFY_SOURCE, 'utf8')
-      const triggerWindow = src.match(/export async function triggerDesignerRerun[\s\S]*?\nexport /)
-      expect(triggerWindow, 'triggerDesignerRerun must exist').not.toBeNull()
-      const body = triggerWindow?.[0] ?? ''
-      // The new computation either uses `Math.max(...)` with multiple
-      // sources, or a named helper like `computeNextCrossClarifyIteration`.
-      // A bare `(lastDesigner.clarifyIteration ?? 0) + 1` is the
-      // pre-patch shape and must NOT be the sole driver of the cascade
-      // newCci value.
-      expect(
-        /Math\.max|computeNext|maxCrossClarify/i.test(body),
-        'triggerDesignerRerun newCci must max across designer + questioner (not just lastDesigner.cci + 1)',
-      ).toBe(true)
-    })
-  })
+  // §2.3 source-text guards removed (RFC-074 PR-C): they asserted every
+  // node_runs insert SET clarifyIteration and that the cascade computed a
+  // max-aware cci bump — exactly the mechanics this RFC retires. Freshness is
+  // pure id-order; there is no cci to preserve or bump.
 })
 
 // Avoid unused-import warning for clarifySessions when the test layout is

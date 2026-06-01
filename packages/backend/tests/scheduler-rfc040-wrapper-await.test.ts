@@ -366,9 +366,8 @@ describe('RFC-040 wrapper-loop bubbles awaiting_human (clarify inside loop)', ()
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'd')))
     expect(agentRuns.length).toBeGreaterThanOrEqual(2)
     expect(agentRuns.every((r) => r.iteration === 0)).toBe(true)
-    const clarifyIters = new Set(agentRuns.map((r) => r.clarifyIteration))
-    expect(clarifyIters.has(0)).toBe(true)
-    expect(clarifyIters.has(1)).toBe(true)
+    // RFC-074 PR-C: two top-level rows (original + clarify rerun) confirm the
+    // second generation; the retired clarifyIteration set check is gone.
 
     // Still only 1 clarify_session (idempotent + same iteration).
     const sessionsAfter = await h.db

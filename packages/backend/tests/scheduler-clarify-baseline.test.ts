@@ -128,7 +128,6 @@ describe('RFC-058 baseline T5 — self-clarify dispatch path', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -233,7 +232,7 @@ describe('RFC-058 baseline T5 — cross-clarify designer dispatch path', () => {
       taskId,
       designerNodeId: 'designer',
       loopIter: 0,
-      designerClarifyIteration: 1,
+      designerGeneration: 1,
       definition: ccDef,
     })
     expect(ctx?.block).toContain('### From')

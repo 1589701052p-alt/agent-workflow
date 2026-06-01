@@ -70,13 +70,14 @@ async function findResurrectionCandidate(
     grouped.set(r.nodeId, arr)
   }
   for (const [nodeId, rows] of grouped) {
-    // Group by (iteration, reviewIteration|clarifyIteration). Pick latest by
-    // retryIndex within group. If that latest is terminal-non-done AND there's
-    // no done sibling in the same group, it's a resurrection candidate.
+    // Group by iteration scope. Pick latest by id (creation order) within group.
+    // If that latest is terminal-non-done AND there's no done sibling in the
+    // same group, it's a resurrection candidate.
+    // RFC-074 PR-C: the clarify branch no longer keys on the retired
+    // clarifyIteration — clarify rows for a (node, iteration) are scoped by
+    // iteration alone; review still scopes by (iteration, reviewIteration).
     const iterKey = (r: Row): string =>
-      kind === 'review'
-        ? `${r.iteration}|${r.reviewIteration}`
-        : `${r.iteration}|${r.clarifyIteration}`
+      kind === 'review' ? `${r.iteration}|${r.reviewIteration}` : `${r.iteration}`
     const byIter = new Map<string, Row[]>()
     for (const r of rows) {
       const k = iterKey(r)
@@ -87,8 +88,8 @@ async function findResurrectionCandidate(
     for (const [, group] of byIter) {
       const hasDone = group.some((r) => r.status === 'done')
       if (hasDone) continue
-      // Latest by retryIndex
-      const latest = group.reduce((acc, r) => (r.retryIndex > acc.retryIndex ? r : acc), group[0]!)
+      // Latest by id (creation order — the most recently minted attempt).
+      const latest = group.reduce((acc, r) => (r.id > acc.id ? r : acc), group[0]!)
       if (isTerminalNonDone(latest.status)) {
         return {
           nodeRunId: latest.id,

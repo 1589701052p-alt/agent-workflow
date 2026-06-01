@@ -476,7 +476,6 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
             iteration: nodeRuns.iteration,
             shardKey: nodeRuns.shardKey,
             reviewIteration: nodeRuns.reviewIteration,
-            clarifyIteration: nodeRuns.clarifyIteration,
           })
           .from(nodeRuns)
           .where(eq(nodeRuns.id, opts.nodeRunId))
@@ -489,7 +488,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
           iteration: currentRunRow.iteration,
           shardKey: currentRunRow.shardKey,
           reviewIteration: currentRunRow.reviewIteration,
-          clarifyIteration: currentRunRow.clarifyIteration,
+          runId: opts.nodeRunId,
         })
       }
     } catch (err) {

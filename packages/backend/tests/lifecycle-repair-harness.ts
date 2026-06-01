@@ -132,7 +132,6 @@ export async function insertNodeRun(
     iteration: opts.iteration ?? 0,
     retryIndex: opts.retryIndex ?? 0,
     reviewIteration: opts.reviewIteration ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     shardKey: opts.shardKey ?? null,
     status: opts.status,
     startedAt: opts.startedAt ?? Date.now() - 1000,

@@ -80,7 +80,6 @@ async function seedRunningTaskWithS3(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: 'interrupted',
     startedAt: Date.now() - 1000,
     finishedAt: Date.now(),

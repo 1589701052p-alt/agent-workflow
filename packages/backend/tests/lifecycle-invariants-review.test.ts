@@ -96,7 +96,6 @@ async function insertReviewRun(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: opts.status,
     startedAt: Date.now() - 100,
     finishedAt: opts.finishedAt ?? null,

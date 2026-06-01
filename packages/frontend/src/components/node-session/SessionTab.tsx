@@ -19,6 +19,7 @@ import { ConversationFlow } from './ConversationFlow'
 import { InjectedMemoriesCard } from './InjectedMemoriesCard'
 import { RuntimeInventorySection } from '@/components/inventory/RuntimeInventorySection'
 import { Select, type SelectOption } from '@/components/Select'
+import { clarifyRoundForRun } from '@/lib/node-history'
 
 interface Props {
   taskId: string
@@ -143,7 +144,7 @@ function AttemptPicker({
               n: g.attempts.length,
               defaultValue: 'inline · {{n}} rounds',
             })
-          : iterLabel(latest, t)
+          : iterLabel(latest, t, clarifyRoundForRun(latest, attempts))
         return { value: latest.id, label }
       }),
     [groups, t],
@@ -258,14 +259,11 @@ export function groupStartTime(group: AttemptGroup): number {
   return min
 }
 
-function iterLabel(a: NodeRun, t: TFunction): string {
-  // RFC-064: the unified `clarifyIteration` covers both self-clarify
-  // (RFC-023) and cross-clarify (RFC-056) reruns — mint helpers
-  // (mintQuestionerRerun / triggerDesignerRerun / cascadeDownstreamFromDesigner)
-  // bump this single counter on either flow. The previously-separate
-  // `crossClarifyIteration` branch has been folded in (design.md §10.5
-  // option D1), and the cross-clarify-specific i18n key is no longer used.
-  if (a.clarifyIteration > 0) return t('nodeDrawer.iterClarify', { n: a.clarifyIteration })
+function iterLabel(a: NodeRun, t: TFunction, clarifyRound = 0): string {
+  // RFC-074 PR-C: the clarify round is derived from id-order (clarifyRoundForRun)
+  // — the retired clarifyIteration counter is gone. The label covers both self-
+  // and cross-clarify reruns.
+  if (clarifyRound > 0) return t('nodeDrawer.iterClarify', { n: clarifyRound })
   if (a.reviewIteration > 0) return t('nodeDrawer.iterReview', { n: a.reviewIteration })
   if (a.iteration > 0) return t('nodeDrawer.iterLoop', { n: a.iteration })
   if (a.retryIndex > 0) return t('nodeDrawer.iterRetry', { n: a.retryIndex })

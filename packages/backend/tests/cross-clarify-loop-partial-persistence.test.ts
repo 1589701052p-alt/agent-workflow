@@ -137,17 +137,11 @@ async function seedQRun(
     status: 'done',
     retryIndex: 0,
     iteration: loopIter,
-    clarifyIteration: 0,
   })
   return id
 }
 
-async function seedDesignerRun(
-  db: DbClient,
-  taskId: string,
-  loopIter = 0,
-  clarifyIteration = 0,
-): Promise<string> {
+async function seedDesignerRun(db: DbClient, taskId: string, loopIter = 0): Promise<string> {
   const id = `nr_d_${loopIter}_${Math.random().toString(36).slice(2, 6)}`
   await db.insert(nodeRuns).values({
     id,
@@ -156,7 +150,6 @@ async function seedDesignerRun(
     status: 'done',
     retryIndex: 0,
     iteration: loopIter,
-    clarifyIteration,
     preSnapshot: 'snap-c5',
   })
   return id
@@ -173,7 +166,7 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
   test('iter 0 reject → hasPersistentStop true; persists into iter 1 query', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    await seedDesignerRun(db, taskId, 0, 0)
+    await seedDesignerRun(db, taskId, 0)
     const qIter0 = await seedQRun(db, taskId, 'questioner', 0)
     const a = await createCrossClarifySession({
       db,
@@ -198,7 +191,7 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
   test('iter 1 evaluateDesignerRerunReadiness does NOT see iter 0 continue submissions as iter-1 feedback', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    await seedDesignerRun(db, taskId, 0, 0)
+    await seedDesignerRun(db, taskId, 0)
     const qIter0 = await seedQRun(db, taskId, 'questioner', 0)
     const iter0Session = await createCrossClarifySession({
       db,
@@ -220,7 +213,7 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
 
     // Now the wrapper-loop steps to iter 1 — no iter-1 cross sessions yet.
     // Readiness scoped to loopIter=1 must NOT consider the iter 0 session.
-    await seedDesignerRun(db, taskId, 1, 0)
+    await seedDesignerRun(db, taskId, 1)
     const readiness = await evaluateDesignerRerunReadiness({
       db,
       taskId,
@@ -237,7 +230,7 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
   test('iter 1 dispatchCrossClarifyNode for cross1 short-circuits to done (no new awaiting in iter 1)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    await seedDesignerRun(db, taskId, 0, 0)
+    await seedDesignerRun(db, taskId, 0)
     const qIter0 = await seedQRun(db, taskId, 'questioner', 0)
     const a = await createCrossClarifySession({
       db,
@@ -291,7 +284,7 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
   test('iter 0 directive=stop session row remains queryable after iter transition (persistence = retention, not forward-propagation)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    await seedDesignerRun(db, taskId, 0, 0)
+    await seedDesignerRun(db, taskId, 0)
     const qIter0 = await seedQRun(db, taskId, 'questioner', 0)
     const a = await createCrossClarifySession({
       db,

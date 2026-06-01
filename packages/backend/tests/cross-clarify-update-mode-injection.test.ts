@@ -48,6 +48,11 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+// RFC-074 PR-C: freshness is pure ULID id-order. Seeded rows must use real,
+// monotonic ULIDs (not `nr_<node>_<rand>` strings, which sort AFTER ULIDs and
+// would make a seeded prior-done look "newer" than the production-minted rerun).
+import { monotonicFactory } from 'ulid'
+const seedUlid = monotonicFactory()
 import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import {
@@ -167,7 +172,7 @@ async function seedRun(
   nodeId: string,
   fields: Partial<typeof nodeRuns.$inferInsert>,
 ): Promise<string> {
-  const id = `nr_${nodeId}_${Math.random().toString(36).slice(2, 10)}`
+  const id = seedUlid()
   await db.insert(nodeRuns).values({
     id,
     taskId,
@@ -175,7 +180,6 @@ async function seedRun(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     startedAt: Date.now(),
     ...fields,
   })
@@ -203,24 +207,32 @@ async function assembleDesignerCrossClarifyContext(args: {
     await db.select().from(nodeRuns).where(eq(nodeRuns.id, designerNodeRunId)).limit(1)
   )[0]
   if (currentRunRow === undefined) return {}
-  const currentCrossClarifyIteration = currentRunRow.clarifyIteration ?? 0
-  // Gate mirrors scheduler.ts:1287-1291 (post-patch — NO retry_index gate).
-  const isCrossClarifyTriggeredRerun = currentCrossClarifyIteration > 0
-  let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
-  if (isCrossClarifyTriggeredRerun) {
-    const priorRows = await db
+  // RFC-074 PR-C: mirror scheduler.ts — the clarify generation is the count of
+  // prior top-level done rows (id < current), and priorDoneDesigner is the
+  // freshest of them. No clarifyIteration counter.
+  const priorDoneGenerations = (
+    await db
       .select()
       .from(nodeRuns)
       .where(
         and(
           eq(nodeRuns.taskId, taskId),
           eq(nodeRuns.nodeId, designerNodeId),
+          eq(nodeRuns.iteration, currentRunRow.iteration),
           eq(nodeRuns.status, 'done'),
         ),
       )
-    for (const r of priorRows) {
-      if (r.clarifyIteration >= currentCrossClarifyIteration) continue
-      if (r.parentNodeRunId !== null) continue
+  ).filter(
+    (r) =>
+      (r.shardKey ?? null) === (currentRunRow.shardKey ?? null) &&
+      r.parentNodeRunId === null &&
+      r.id < currentRunRow.id,
+  )
+  const designerGeneration = priorDoneGenerations.length
+  const isCrossClarifyTriggeredRerun = designerGeneration > 0
+  let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
+  if (isCrossClarifyTriggeredRerun) {
+    for (const r of priorDoneGenerations) {
       if (isFresherNodeRun(r, priorDoneDesigner)) priorDoneDesigner = r
     }
   }
@@ -229,7 +241,7 @@ async function assembleDesignerCrossClarifyContext(args: {
     taskId,
     designerNodeId,
     loopIter,
-    designerClarifyIteration: currentCrossClarifyIteration,
+    designerGeneration,
     definition,
   })
   if (ctx === undefined) return {}
@@ -276,7 +288,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     const priorDesignerId = await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 9,
-      clarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -287,7 +298,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     const qRun = await seedRun(db, taskId, 'questioner', {
       status: 'done',
       retryIndex: 2,
-      clarifyIteration: 0,
     })
 
     const sess = await createCrossClarifySession({
@@ -321,7 +331,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, newDesignerNodeRunId!)).limit(1)
     )[0]
     expect(newRow?.retryIndex).toBeGreaterThan(0)
-    expect(newRow?.clarifyIteration).toBe(1)
 
     const ctx = await assembleDesignerCrossClarifyContext({
       db,
@@ -351,7 +360,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     const priorDesignerId = await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 9,
-      clarifyIteration: 6,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -441,7 +449,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     const priorDesignerId = await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 0,
-      clarifyIteration: 0,
       preSnapshot: 'snap-d-pre',
     })
     await db.insert(nodeRunOutputs).values({
@@ -501,7 +508,6 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     await seedRun(db, taskId, 'designer', {
       status: 'done',
       retryIndex: 3,
-      clarifyIteration: 2,
       preSnapshot: 'snap-d-pre',
     })
     // Intentionally no node_run_outputs row for the prior designer run.
@@ -565,31 +571,31 @@ describe('RFC-056 patch 2026-05-23 — scheduler source guard against `retryInde
   // it back the runtime symptom is silent — the rendered prompt simply
   // drops the §6 sections. We grep the source so silent re-introduction
   // becomes a hard CI fail.
-  test('isCrossClarifyTriggeredRerun gate has no retry_index check (RFC-064: gate keys on clarifyIteration)', () => {
+  test('isCrossClarifyTriggeredRerun gate has no retry_index check (RFC-074: keys on derived generation)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // RFC-064: the gate now keys on the unified clarifyIteration (the cross
-    // signal was previously on a separate column). Patch-2026-05-23's "no
-    // retry_index sub-gate" intent stays — adding it back would silently
-    // drop the §6 sections under in-attempt RFC-042 retries.
-    const m = src.match(/const isCrossClarifyTriggeredRerun =[^;]+;?\s*\n\s*let priorDoneDesigner/)
+    // RFC-074 PR-C: the gate keys on the derived `clarifyGeneration` (count of
+    // prior-done generations by id-order), NOT the retired clarifyIteration
+    // counter. Patch-2026-05-23's "no retry_index sub-gate" intent stays —
+    // adding it back would drop the §6 sections under in-attempt RFC-042 retries.
+    const m = src.match(/const isCrossClarifyTriggeredRerun =[^;\n]+/)
     expect(m, 'must find the isCrossClarifyTriggeredRerun assignment').not.toBeNull()
     const gateText = m![0]
     expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
     expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
     expect(gateText).toContain('hasExternalFeedbackChannel')
-    expect(gateText).toContain('currentClarifyIteration')
+    expect(gateText).toContain('clarifyGeneration')
   })
 
-  test('isQuestionerCrossClarifyRerun gate has no retry_index check (RFC-064: gate keys on clarifyIteration)', () => {
+  test('isQuestionerCrossClarifyRerun gate keys on clarifyMode, not retry_index or a counter (RFC-074)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // RFC-056 patch-2026-05-27 + RFC-064: hoisted declaration; the cross
-    // signal is now on `currentClarifyIteration` under the unified counter.
-    const m = src.match(/const isQuestionerCrossClarifyRerun =[\s\S]*?>\s*0\b/)
+    // RFC-074 PR-C: the questioner gate is `clarifyMode === 'cross'` — the cci
+    // proxy was removed (PR-B regression fix); aging is the RFC-070 stamp.
+    const m = src.match(/const isQuestionerCrossClarifyRerun =[^;\n]+/)
     expect(m, 'must find the isQuestionerCrossClarifyRerun assignment').not.toBeNull()
     const gateText = m![0]
     expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
     expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
     expect(gateText).toContain("clarifyMode === 'cross'")
-    expect(gateText).toContain('currentClarifyIteration')
+    expect(gateText).not.toMatch(/clarifyIteration|clarifyGeneration/)
   })
 })

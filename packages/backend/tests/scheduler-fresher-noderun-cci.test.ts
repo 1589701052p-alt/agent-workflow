@@ -43,7 +43,6 @@ function mkRow(opts: {
     tokTotal: null,
     preSnapshot: null,
     reviewIteration: 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     opencodeSessionId: null,
     inventorySnapshotJson: null,
     wrapperProgressJson: null,
@@ -65,13 +64,11 @@ describe('RFC-064 — isFresherNodeRun ranks by unified clarifyIteration', () =>
     // Post-RFC-064: clarify=1 > clarify=0 wins → pending row picked.
     const done = mkRow({
       id: '01KS7GPRZ11RWZ6NTXN2VVAAKR',
-      clarifyIteration: 0,
       retryIndex: 1,
       status: 'done',
     })
     const pending = mkRow({
       id: '01KSEX6H6A8YPK2S9QA3PDSHY0',
-      clarifyIteration: 1,
       retryIndex: 0,
       status: 'pending',
     })

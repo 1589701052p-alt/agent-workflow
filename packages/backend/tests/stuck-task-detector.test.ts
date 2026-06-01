@@ -95,7 +95,6 @@ async function insertRun(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: opts.status,
     startedAt: T0 - MIN_MS,
     finishedAt: opts.finishedAt ?? null,

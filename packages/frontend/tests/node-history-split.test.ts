@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import type { NodeRun } from '@agent-workflow/shared'
-import { formatIterationLabel, nodeRunHistory } from '../src/lib/node-history'
+import { clarifyRoundForRun, formatIterationLabel, nodeRunHistory } from '../src/lib/node-history'
 
 function makeRun(partial: Partial<NodeRun> & { id: string }): NodeRun {
   return {
@@ -31,7 +31,6 @@ function makeRun(partial: Partial<NodeRun> & { id: string }): NodeRun {
     shardKey: partial.shardKey ?? null,
     retryIndex: partial.retryIndex ?? 0,
     reviewIteration: partial.reviewIteration ?? 0,
-    clarifyIteration: partial.clarifyIteration ?? 0,
     status: partial.status ?? 'done',
     startedAt: partial.startedAt ?? null,
     finishedAt: partial.finishedAt ?? null,
@@ -75,66 +74,98 @@ describe('nodeRunHistory', () => {
     // The previous split returned `iterations=[]` here and relied on a
     // separate retry box — that box no longer exists, so the helper must
     // return every retry interleaved with current.
-    const current = makeRun({ id: 'cur', retryIndex: 2 })
-    const r0 = makeRun({ id: 'r0', retryIndex: 0 })
-    const r1 = makeRun({ id: 'r1', retryIndex: 1 })
-    expect(nodeRunHistory(current, [current, r1, r0]).map((r) => r.id)).toEqual(['r0', 'r1', 'cur'])
+    // RFC-074 PR-C: sorted by id (creation order); causal ids r0<r1<cur.
+    const current = makeRun({ id: '03cur', retryIndex: 2 })
+    const r0 = makeRun({ id: '01r0', retryIndex: 0 })
+    const r1 = makeRun({ id: '02r1', retryIndex: 1 })
+    expect(nodeRunHistory(current, [current, r1, r0]).map((r) => r.id)).toEqual([
+      '01r0',
+      '02r1',
+      '03cur',
+    ])
   })
 
   test('clarify-loop case: agent_p69bj1 4-row timeline preserved end-to-end', () => {
-    const c0 = makeRun({ id: 'c0', clarifyIteration: 0, startedAt: 100 })
-    const c1 = makeRun({ id: 'c1', clarifyIteration: 1, startedAt: 200 })
-    const c2 = makeRun({ id: 'c2', clarifyIteration: 2, startedAt: 300 })
-    const cur = makeRun({ id: 'cur', clarifyIteration: 3, startedAt: 400, status: 'running' })
+    // RFC-074 PR-C: clarify generations are id-ordered (each rerun minted later
+    // carries a larger ULID). Causal ids c0<c1<c2<cur reproduce the timeline.
+    const c0 = makeRun({ id: '01c0', retryIndex: 0, startedAt: 100 })
+    const c1 = makeRun({ id: '01c1', retryIndex: 0, startedAt: 200 })
+    const c2 = makeRun({ id: '01c2', retryIndex: 0, startedAt: 300 })
+    const cur = makeRun({ id: '01cur', retryIndex: 0, startedAt: 400, status: 'running' })
     expect(nodeRunHistory(cur, [c0, c1, c2, cur]).map((r) => r.id)).toEqual([
-      'c0',
-      'c1',
-      'c2',
-      'cur',
+      '01c0',
+      '01c1',
+      '01c2',
+      '01cur',
     ])
   })
 
-  test('sort order is (iteration, review, clarify, crossClarify, retryIndex, startedAt)', () => {
-    const a = makeRun({ id: 'a', iteration: 0, reviewIteration: 0, clarifyIteration: 2 })
-    const b = makeRun({ id: 'b', iteration: 0, reviewIteration: 1, clarifyIteration: 0 })
-    const c = makeRun({ id: 'c', iteration: 1, reviewIteration: 0, clarifyIteration: 0 })
-    const cur = makeRun({ id: 'cur', iteration: 2 })
-    expect(nodeRunHistory(cur, [c, b, a, cur]).map((r) => r.id)).toEqual(['a', 'b', 'c', 'cur'])
+  test('sort order is (iteration, reviewIteration, id)', () => {
+    const a = makeRun({ id: '01a', iteration: 0, reviewIteration: 0 })
+    const b = makeRun({ id: '01b', iteration: 0, reviewIteration: 1 })
+    const c = makeRun({ id: '01c', iteration: 1, reviewIteration: 0 })
+    const cur = makeRun({ id: '01cur', iteration: 2 })
+    expect(nodeRunHistory(cur, [c, b, a, cur]).map((r) => r.id)).toEqual([
+      '01a',
+      '01b',
+      '01c',
+      '01cur',
+    ])
   })
 
-  // RFC-056 cross-clarify questioner re-runs bump `crossClarifyIteration`
-  // only (loop/review/clarify/retry stay at 0). If the sort key forgets
-  // cci, an existing done row at cci=0 sits next to the fresh cci=1 row
-  // with arbitrary order from `startedAt`, and the user can't tell which
-  // chip in the timeline is "this round" vs "last round".
-  test('cross-clarify rerun: cci tie-breaks after clarifyIteration, before retryIndex', () => {
-    const oldDone = makeRun({
-      id: 'old',
-      clarifyIteration: 0,
-      retryIndex: 0,
-      startedAt: 100,
-    })
-    const newPending = makeRun({
-      id: 'new',
-      clarifyIteration: 0,
-      retryIndex: 0,
-      status: 'pending',
-      startedAt: 200,
-    })
+  // RFC-074 PR-C: a clarify-driven rerun is minted later than the done row it
+  // supersedes, so its id is larger and it sorts AFTER. Causal ids reproduce
+  // the "old round then this round" timeline without the retired cci key.
+  test('clarify rerun: later-minted row (larger id) sorts after the prior done row', () => {
+    const oldDone = makeRun({ id: '01old', retryIndex: 0, startedAt: 100 })
+    const newPending = makeRun({ id: '02new', retryIndex: 0, status: 'pending', startedAt: 200 })
     expect(nodeRunHistory(newPending, [newPending, oldDone]).map((r) => r.id)).toEqual([
-      'old',
-      'new',
+      '01old',
+      '02new',
     ])
   })
 
-  test('mixed: cross-iteration siblings + same-tuple retries interleave correctly', () => {
-    const cur = makeRun({ id: 'cur', clarifyIteration: 2, retryIndex: 1 })
-    const sameTupleRetry = makeRun({ id: 'rt', clarifyIteration: 2, retryIndex: 0 })
-    const earlierIter = makeRun({ id: 'pi', clarifyIteration: 1, retryIndex: 0 })
-    const earlierIterRetry = makeRun({ id: 'pi-rt', clarifyIteration: 1, retryIndex: 1 })
+  test('mixed: cross-iteration siblings + same-tuple retries interleave by id', () => {
+    // Causal ids reflect creation order: gen1, gen1-retry, gen2, gen2-retry(cur).
+    const earlierIter = makeRun({ id: '01pi', retryIndex: 0 })
+    const earlierIterRetry = makeRun({ id: '02pi-rt', retryIndex: 1 })
+    const sameTupleRetry = makeRun({ id: '03rt', retryIndex: 0 })
+    const cur = makeRun({ id: '04cur', retryIndex: 1 })
     expect(
       nodeRunHistory(cur, [cur, sameTupleRetry, earlierIter, earlierIterRetry]).map((r) => r.id),
-    ).toEqual(['pi', 'pi-rt', 'rt', 'cur'])
+    ).toEqual(['01pi', '02pi-rt', '03rt', '04cur'])
+  })
+})
+
+describe('clarifyRoundForRun (RFC-074 PR-C — id-order generation derivation)', () => {
+  test('first generation (only retry=0 row) → round 0', () => {
+    const r0 = makeRun({ id: '01a', retryIndex: 0 })
+    expect(clarifyRoundForRun(r0, [r0])).toBe(0)
+  })
+
+  test('each later retry=0 top-level row is the next round', () => {
+    const g0 = makeRun({ id: '01g0', retryIndex: 0 })
+    const g1 = makeRun({ id: '02g1', retryIndex: 0 })
+    const g2 = makeRun({ id: '03g2', retryIndex: 0 })
+    const runs = [g0, g1, g2]
+    expect(clarifyRoundForRun(g0, runs)).toBe(0)
+    expect(clarifyRoundForRun(g1, runs)).toBe(1)
+    expect(clarifyRoundForRun(g2, runs)).toBe(2)
+  })
+
+  test('a process retry (retry>0) inherits the round of its retry=0 anchor', () => {
+    const g0 = makeRun({ id: '01g0', retryIndex: 0 })
+    const g1 = makeRun({ id: '02g1', retryIndex: 0 })
+    const g1retry = makeRun({ id: '03g1r', retryIndex: 1 }) // belongs to gen 1
+    const runs = [g0, g1, g1retry]
+    expect(clarifyRoundForRun(g1retry, runs)).toBe(1)
+  })
+
+  test('round is scoped per (iteration, reviewIteration)', () => {
+    const i0 = makeRun({ id: '01i0', iteration: 0, retryIndex: 0 })
+    const i1 = makeRun({ id: '02i1', iteration: 1, retryIndex: 0 })
+    // i1 is the first generation within its own iteration → round 0.
+    expect(clarifyRoundForRun(i1, [i0, i1])).toBe(0)
   })
 })
 
@@ -144,23 +175,21 @@ describe('formatIterationLabel', () => {
   })
 
   test('only clarify non-zero → single chunk, no retry suffix', () => {
-    expect(formatIterationLabel(makeRun({ id: 'x', clarifyIteration: 2 }), { t })).toBe(
-      'nodeDrawer.iterClarify=2',
-    )
+    // RFC-074 PR-C: the clarify round is the derived 3rd arg, not a row field.
+    expect(formatIterationLabel(makeRun({ id: 'x' }), { t }, 2)).toBe('nodeDrawer.iterClarify=2')
   })
 
   test('loop + review + clarify joined with " · " in canonical order', () => {
-    const run = makeRun({ id: 'x', iteration: 3, reviewIteration: 1, clarifyIteration: 2 })
-    expect(formatIterationLabel(run, { t })).toBe(
+    const run = makeRun({ id: 'x', iteration: 3, reviewIteration: 1 })
+    expect(formatIterationLabel(run, { t }, 2)).toBe(
       'nodeDrawer.iterLoop=3 · nodeDrawer.iterReview=1 · nodeDrawer.iterClarify=2',
     )
   })
 
   test('retryIndex > 0 appends a retry chunk — covers the unified list', () => {
-    // Pure retry of clarify=1: this is what the dropped "retry list" used
-    // to show, now rendered inline as the iteration label.
-    const run = makeRun({ id: 'x', clarifyIteration: 1, retryIndex: 2 })
-    expect(formatIterationLabel(run, { t })).toBe(
+    // Pure retry of clarify round 1: rendered inline as the iteration label.
+    const run = makeRun({ id: 'x', retryIndex: 2 })
+    expect(formatIterationLabel(run, { t }, 1)).toBe(
       'nodeDrawer.iterClarify=1 · nodeDrawer.iterRetry=2',
     )
   })

@@ -81,7 +81,6 @@ async function insertRun(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: opts.reviewIteration ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     shardKey: opts.shardKey ?? null,
     status: opts.status,
     startedAt: Date.now() - 100,

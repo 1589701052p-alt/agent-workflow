@@ -147,7 +147,6 @@ async function seedAgentDone(
     nodeId: 'doc',
     iteration: 0,
     retryIndex: opts.retryIndex ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     status: 'done',
     startedAt: Date.now() - 200,
     finishedAt: Date.now() - 100,
@@ -173,7 +172,6 @@ async function seedReviewRow(
     iteration: 0,
     retryIndex: 0,
     reviewIteration,
-    clarifyIteration: 0,
     status,
     startedAt: Date.now() - 50,
   })
@@ -655,7 +653,6 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
         nodeId: 'doc',
         status: 'awaiting_human',
         retryIndex: 0,
-        clarifyIteration: 0,
         iteration: 0,
         startedAt: Date.now() - 100,
         opencodeSessionId: 'opencode-session-1',
@@ -731,7 +728,7 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, h.taskId), eq(nodeRuns.nodeId, 'doc')))
-      const fresh = agentRows.find((r) => r.clarifyIteration === 1)
+      const fresh = agentRows.find((r) => r.status === 'pending')
       expect(fresh).toBeDefined()
       expect(fresh!.retryIndex).toBe(0)
       expect(fresh!.status).toBe('pending')

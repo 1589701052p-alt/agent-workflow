@@ -60,7 +60,6 @@ function seedTaskWithReviewRun(db: DbClient): { taskId: string; nodeRunId: strin
       iteration: 0,
       retryIndex: 0,
       reviewIteration: 0,
-      clarifyIteration: 0,
       status: 'done',
     })
     .run()

@@ -21,14 +21,14 @@ export type Rfc026EventDecoded =
       level: 'info'
       code: 'clarify-session-resumed'
       sessionIdPrefix: string
-      clarifyIteration?: number
+      clarifyGeneration?: number
       raw: string
     }
   | {
       level: 'warning'
       code: 'inline-clarify-fallback-to-isolated'
       reason: 'missing-session-id' | 'session-not-found' | 'unsupported-opencode-version'
-      clarifyIteration?: number
+      clarifyGeneration?: number
       raw: string
     }
 
@@ -61,8 +61,8 @@ export function parseRfc026Event(payload: string): Rfc026EventDecoded | null {
     return null
   }
   const code = typeof parsed.code === 'string' ? parsed.code : ''
-  const clarifyIteration =
-    typeof parsed.clarifyIteration === 'number' ? parsed.clarifyIteration : undefined
+  const clarifyGeneration =
+    typeof parsed.clarifyGeneration === 'number' ? parsed.clarifyGeneration : undefined
 
   if (payload.startsWith(TAG_INFO)) {
     if (code !== 'clarify-session-resumed') return null
@@ -71,7 +71,7 @@ export function parseRfc026Event(payload: string): Rfc026EventDecoded | null {
       level: 'info',
       code: 'clarify-session-resumed',
       sessionIdPrefix,
-      ...(clarifyIteration !== undefined ? { clarifyIteration } : {}),
+      ...(clarifyGeneration !== undefined ? { clarifyGeneration } : {}),
       raw: payload,
     }
   }
@@ -89,7 +89,7 @@ export function parseRfc026Event(payload: string): Rfc026EventDecoded | null {
     level: 'warning',
     code: 'inline-clarify-fallback-to-isolated',
     reason: reasonRaw,
-    ...(clarifyIteration !== undefined ? { clarifyIteration } : {}),
+    ...(clarifyGeneration !== undefined ? { clarifyGeneration } : {}),
     raw: payload,
   }
 }

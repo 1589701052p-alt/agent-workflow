@@ -52,7 +52,6 @@ export async function getSessionTree(
       promptText: nodeRuns.promptText,
       startedAt: nodeRuns.startedAt,
       opencodeSessionId: nodeRuns.opencodeSessionId,
-      clarifyIteration: nodeRuns.clarifyIteration,
       retryIndex: nodeRuns.retryIndex,
     })
     .from(nodeRuns)
@@ -133,7 +132,6 @@ interface InlineSiblingRow {
   id: string
   promptText: string | null
   startedAt: number | null
-  clarifyIteration: number
   retryIndex: number
 }
 
@@ -151,7 +149,6 @@ async function loadInlineSiblings(
     promptText: string | null
     startedAt: number | null
     opencodeSessionId: string | null
-    clarifyIteration: number
     retryIndex: number
   },
 ): Promise<InlineSiblingRow[]> {
@@ -161,7 +158,6 @@ async function loadInlineSiblings(
         id: run.id,
         promptText: run.promptText,
         startedAt: run.startedAt,
-        clarifyIteration: run.clarifyIteration,
         retryIndex: run.retryIndex,
       },
     ]
@@ -171,7 +167,6 @@ async function loadInlineSiblings(
       id: nodeRuns.id,
       promptText: nodeRuns.promptText,
       startedAt: nodeRuns.startedAt,
-      clarifyIteration: nodeRuns.clarifyIteration,
       retryIndex: nodeRuns.retryIndex,
     })
     .from(nodeRuns)
@@ -182,21 +177,15 @@ async function loadInlineSiblings(
         id: run.id,
         promptText: run.promptText,
         startedAt: run.startedAt,
-        clarifyIteration: run.clarifyIteration,
         retryIndex: run.retryIndex,
       },
     ]
   }
-  // Same chronological ordering the AttemptPicker uses
-  // (sortNodeRunsForPromptHistory): (clarifyIteration, retryIndex,
-  // startedAt). Ensures the first sibling is round 0 and its
-  // promptText is the original ask, with later rounds appended.
-  rows.sort(
-    (a, b) =>
-      a.clarifyIteration - b.clarifyIteration ||
-      a.retryIndex - b.retryIndex ||
-      (a.startedAt ?? 0) - (b.startedAt ?? 0),
-  )
+  // RFC-074 PR-C: chronological ordering is pure ULID id-order (creation
+  // order) — the first sibling is round 0 (smallest id, the original ask) and
+  // later clarify rounds / retries (minted later, larger id) append in order.
+  // This replaces the retired (clarifyIteration, retryIndex, startedAt) sort.
+  rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   return rows
 }
 

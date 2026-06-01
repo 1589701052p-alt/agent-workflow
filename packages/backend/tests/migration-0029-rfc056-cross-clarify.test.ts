@@ -125,12 +125,14 @@ describe('RFC-056 → RFC-064 — node_runs.cross_clarify_iteration column lifec
     expect(col).toBeUndefined()
   })
 
-  test('clarify_iteration / review_iteration / retry_index all remain', async () => {
+  test('review_iteration / retry_index remain; both clarify counters are gone (RFC-074 PR-C)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const cols = (await db.all(sql`PRAGMA table_info(node_runs)`)) as ColumnInfo[]
     const names = new Set(cols.map((c) => c.name))
     expect(names.has('cross_clarify_iteration')).toBe(false)
-    expect(names.has('clarify_iteration')).toBe(true)
+    // RFC-074 PR-C migration 0041 dropped clarify_iteration too — freshness is
+    // pure ULID id-order, the generation is derived from prior-done id-order.
+    expect(names.has('clarify_iteration')).toBe(false)
     expect(names.has('review_iteration')).toBe(true)
     expect(names.has('retry_index')).toBe(true)
   })

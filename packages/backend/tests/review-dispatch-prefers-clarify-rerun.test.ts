@@ -108,14 +108,13 @@ describe('dispatchReviewNode upstream selection — clarify rerun must beat stal
     // Stale row: process retry that ran BEFORE the clarify session. retryIndex
     // is higher than the clarify-rerun's, but clarifyIteration is 0. No
     // docpath port was emitted on this attempt.
-    const staleRunId = ulid()
+    const staleRunId = '01A_STALE' // RFC-074 PR-C: causal ids (clarify rerun minted later wins by id)
     await db.insert(nodeRuns).values({
       id: staleRunId,
       taskId,
       nodeId: 'doc',
       iteration: 0,
       retryIndex: 1,
-      clarifyIteration: 0,
       status: 'done',
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
@@ -126,14 +125,13 @@ describe('dispatchReviewNode upstream selection — clarify rerun must beat stal
     // Fresh row: clarify-driven rerun minted at retryIndex=0,
     // clarifyIteration=1 (see submitClarifyAnswers + isFresherNodeRun in
     // packages/backend/src/services/scheduler.ts). Emitted docpath.
-    const clarifyRunId = ulid()
+    const clarifyRunId = '01B_CLARIFY'
     await db.insert(nodeRuns).values({
       id: clarifyRunId,
       taskId,
       nodeId: 'doc',
       iteration: 0,
       retryIndex: 0,
-      clarifyIteration: 1,
       status: 'done',
       startedAt: Date.now(),
       finishedAt: Date.now(),

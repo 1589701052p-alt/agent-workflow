@@ -113,7 +113,6 @@ async function seed(
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     status: opts.runStatus ?? 'done',
     promptText: 'go',
     startedAt: 1000,

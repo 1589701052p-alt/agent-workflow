@@ -304,42 +304,6 @@ export function pickFreshestReviewRun(
   return { reuse, latestDone }
 }
 
-/**
- * RFC-074 PR-B: DEAD CODE — no longer called. `dispatchReviewNode`'s
- * cci-alignment short-circuit was replaced by provenance freshness (the
- * scheduler's completed-set gating + the consumed-source guard inside
- * dispatch). Kept only because PR-A baseline + RFC-056/064 tests still lock its
- * truth table; deleted together with cci retirement in PR-C (grep guard C11).
- * Do NOT add new callers.
- *
- * RFC-056 patch-2026-05-26 + RFC-064: a review's prior `done` approval
- * covers the upstream state at THAT row's `clarifyIteration` (unified
- * counter). When the upstream source agent has subsequently re-run via
- * clarify cascade (self or cross) and now sits at a higher
- * clarifyIteration, the prior approval is stale and the cascade-minted
- * pending review row MUST run — even though RFC-052 declared "any done
- * row in this iteration is decisive".
- *
- * Returns true iff `latestDone` exists AND its clarifyIteration is at
- * least as fresh as the upstream source row's (i.e. the approval still
- * covers the upstream output the review would now be looking at). Returns
- * false when latestDone is undefined (no prior approval) OR when upstream
- * has advanced past the approval — in that case dispatchReviewNode
- * declines the short-circuit and re-parks the cascade pending row as
- * awaiting_review so the user can re-approve on the refreshed upstream.
- *
- * The clarifyIteration=0 baseline (workflows that never see clarify)
- * reduces to `latestDone !== undefined`, i.e. RFC-052's original
- * short-circuit.
- */
-export function isReviewClarifyAlignedWithUpstream(
-  latestDone: typeof nodeRuns.$inferSelect | undefined,
-  sourceRun: typeof nodeRuns.$inferSelect,
-): boolean {
-  if (latestDone === undefined) return false
-  return (latestDone.clarifyIteration ?? 0) >= (sourceRun.clarifyIteration ?? 0)
-}
-
 // ---------------------------------------------------------------------------
 // Scheduler entry point.
 // ---------------------------------------------------------------------------
@@ -533,10 +497,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
           )
         await tx
           .update(nodeRuns)
-          .set({
-            consumedUpstreamRunsJson: consumedJson,
-            clarifyIteration: sourceRun.clarifyIteration ?? 0,
-          })
+          .set({ consumedUpstreamRunsJson: consumedJson })
           .where(eq(nodeRuns.id, reuse.id))
       })
     }
@@ -578,8 +539,6 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
       retryIndex: 0,
       iteration,
       reviewIteration,
-      // cci still mirrors the source for isFresherNodeRun ordering (PR-C drops it).
-      clarifyIteration: sourceRun.clarifyIteration ?? 0,
       consumedUpstreamRunsJson: consumedJson,
       startedAt: Date.now(),
     })
@@ -1472,17 +1431,12 @@ export async function submitReviewDecision(
       iteration: latest.iteration,
       parentNodeRunId: null,
       preSnapshot: latest.preSnapshot,
-      // Must inherit clarifyIteration so isFresherNodeRun ranks this fresh
-      // pending row above any prior clarify-rerun done row at the same node.
-      // Without this the scheduler's latestPerNode picks the prior done row,
-      // skips agent execution, and dispatchReviewNode reads its stale output
-      // into a brand-new doc_version — the "version refreshed without rerun"
-      // bug from task 01KS1N8WVZWE8FTR4K9WSETRNW (贪吃蛇). Locked by
-      // review-iterate-inherits-clarify-iteration.test.ts.
-      // RFC-064: under the unified clarifyIteration the previously-separate
-      // crossClarifyIteration mirror (patch-2026-05-25 §2.3) is gone — the
-      // single inherit below covers both self + cross cascade signals.
-      clarifyIteration: latest.clarifyIteration,
+      // RFC-074 PR-C: no clarifyIteration inherit. This fresh insert is the
+      // latest id, so isFresherNodeRun (pure id-order) ranks it above the prior
+      // clarify-rerun done row automatically — the scheduler runs the agent
+      // before dispatchReviewNode reads its output, so the "version refreshed
+      // without rerun" bug (task 01KS1N8WVZWE8FTR4K9WSETRNW 贪吃蛇) stays fixed.
+      // Locked by review-iterate-inherits-clarify-iteration.test.ts.
     })
   }
 

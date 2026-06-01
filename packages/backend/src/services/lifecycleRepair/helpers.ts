@@ -14,7 +14,6 @@ const NODE_RUN_COLS = {
   status: nodeRuns.status,
   retryIndex: nodeRuns.retryIndex,
   reviewIteration: nodeRuns.reviewIteration,
-  clarifyIteration: nodeRuns.clarifyIteration,
   shardKey: nodeRuns.shardKey,
   iteration: nodeRuns.iteration,
 }

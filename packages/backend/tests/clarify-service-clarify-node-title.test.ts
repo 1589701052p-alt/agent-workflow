@@ -79,7 +79,6 @@ async function seedSessionForSnapshot(
     status: 'awaiting_human',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   const sessionId = `cs_${taskId}`
   await db.insert(clarifySessions).values({

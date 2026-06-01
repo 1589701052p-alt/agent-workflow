@@ -55,7 +55,6 @@ function seed(
       nodeId: 'clarify-1',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       status: 'awaiting_human',
       startedAt: now,
     })

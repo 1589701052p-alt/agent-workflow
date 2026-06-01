@@ -83,7 +83,6 @@ async function seed(
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     reviewIteration: 2, // simulate prior reviewIteration > 0
   })
 
@@ -97,7 +96,6 @@ async function seed(
     status: 'awaiting_review',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
     reviewIteration: 2,
   })
   await db.insert(docVersions).values({
@@ -177,7 +175,6 @@ describe('clarify activity does not perturb in-flight reviews', () => {
     expect(dvAfter?.decision).toBe('pending')
 
     const rerun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunNodeRunId)))[0]
-    expect(rerun?.clarifyIteration).toBe(1) // bumped
     expect(rerun?.reviewIteration).toBe(2) // passthrough
   })
 })

@@ -42,11 +42,7 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import {
-  dispatchReviewNode,
-  isReviewClarifyAlignedWithUpstream,
-  pickFreshestReviewRun,
-} from '../src/services/review'
+import { dispatchReviewNode, pickFreshestReviewRun } from '../src/services/review'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -75,7 +71,6 @@ function row(
     shardKey: null,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
     startedAt: null,
     finishedAt: null,
     pid: null,
@@ -123,9 +118,10 @@ describe('RFC-056 patch-2026-05-26 — pickFreshestReviewRun', () => {
     expect(latestDone).toBeUndefined()
   })
 
-  test('reuse = freshest by isFresherNodeRun (clarifyIteration → retryIndex → ulid)', () => {
-    const oldDone = row({ id: '01-old', status: 'done', clarifyIteration: 0, retryIndex: 0 })
-    const newPending = row({ id: '02-new', status: 'pending', clarifyIteration: 0, retryIndex: 1 })
+  test('reuse = freshest by isFresherNodeRun (pure ULID id-order)', () => {
+    // Causal ids: the pending rerun was minted after the old done row.
+    const oldDone = row({ id: '01-old', status: 'done', retryIndex: 0 })
+    const newPending = row({ id: '02-new', status: 'pending', retryIndex: 1 })
     const { reuse } = pickFreshestReviewRun([oldDone, newPending])
     expect(reuse?.id).toBe('02-new')
   })
@@ -148,42 +144,11 @@ describe('RFC-056 patch-2026-05-26 — pickFreshestReviewRun', () => {
   })
 })
 
-describe('RFC-056 patch-2026-05-26 — isReviewClarifyAlignedWithUpstream', () => {
-  const upstream = (cci: number) => row({ id: 'src', status: 'done', clarifyIteration: cci })
-  const done = (cci: number) => row({ id: 'done', status: 'done', clarifyIteration: cci })
-
-  test('returns false when no latestDone (no prior approval)', () => {
-    expect(isReviewClarifyAlignedWithUpstream(undefined, upstream(0))).toBe(false)
-    expect(isReviewClarifyAlignedWithUpstream(undefined, upstream(5))).toBe(false)
-  })
-
-  test('cci=0 / cci=0 → aligned (RFC-052 baseline, no cross-clarify ever)', () => {
-    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(0))).toBe(true)
-  })
-
-  test('upstream cci=1, done cci=0 → NOT aligned (cascade pending must dispatch)', () => {
-    // This is the live-task 01KS86DPCSERV7S41GQA5Y81RN failure mode.
-    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(1))).toBe(false)
-  })
-
-  test('upstream cci=4, done cci=0 → NOT aligned (multi-round cascade)', () => {
-    expect(isReviewClarifyAlignedWithUpstream(done(0), upstream(4))).toBe(false)
-  })
-
-  test('upstream cci=1, done cci=1 → aligned (review already covered the cascade)', () => {
-    expect(isReviewClarifyAlignedWithUpstream(done(1), upstream(1))).toBe(true)
-  })
-
-  test('upstream cci=1, done cci=2 → aligned (done covers more than upstream needs)', () => {
-    expect(isReviewClarifyAlignedWithUpstream(done(2), upstream(1))).toBe(true)
-  })
-
-  test('null / undefined clarifyIteration coerce to 0 on both sides', () => {
-    const upstreamNullCci = row({ id: 'src', status: 'done' }) // clarifyIteration = 0 by default
-    const doneNullCci = row({ id: 'done', status: 'done' })
-    expect(isReviewClarifyAlignedWithUpstream(doneNullCci, upstreamNullCci)).toBe(true)
-  })
-})
+// RFC-074 PR-C: the `isReviewClarifyAlignedWithUpstream` cci short-circuit was
+// deleted (PR-B). The "prior approval still covers the upstream → skip / fire
+// re-review" decision is now provenance-based (`coversSource` on the consumed
+// run id), exercised by the dispatchReviewNode integration tests below
+// (especially "stale provenance → US-2 re-review").
 
 // ---------------------------------------------------------------------------
 // dispatchReviewNode integration — alignment true short-circuits, false
@@ -283,7 +248,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -300,7 +264,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -331,8 +294,9 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
   // fresh awaiting_review (RFC-005 US-2). This rewrite asserts that behavior.
   test('stale provenance: review consumed an older source → US-2 re-review (fresh awaiting_review)', async () => {
     const { taskId, task, definition, reviewNode } = await seed()
-    // Old designer done — the version the prior review approved.
-    const oldDesignerId = ulid()
+    // Old designer done — the version the prior review approved. RFC-074 PR-C:
+    // freshness is pure id-order, so ids are CAUSAL (new minted after old).
+    const oldDesignerId = '01A_OLD_DESIGNER'
     await db.insert(nodeRuns).values({
       id: oldDesignerId,
       taskId,
@@ -340,7 +304,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 5000,
       finishedAt: Date.now() - 4000,
     })
@@ -350,7 +313,7 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       content: '# original body',
     })
     // Fresher designer done (e.g. a later rerun) — this is the current source.
-    const newDesignerId = ulid()
+    const newDesignerId = '01B_NEW_DESIGNER'
     await db.insert(nodeRuns).values({
       id: newDesignerId,
       taskId,
@@ -358,7 +321,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 4,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -375,7 +337,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       consumedUpstreamRunsJson: JSON.stringify({ designer: oldDesignerId }),
       startedAt: Date.now() - 5000,
       finishedAt: Date.now() - 4000,
@@ -420,7 +381,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -436,7 +396,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
     })
@@ -448,7 +407,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'pending',
       retryIndex: 1,
       iteration: 0,
-      clarifyIteration: 0,
     })
 
     const result = await dispatchReviewNode({
@@ -475,7 +433,6 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now(),
       finishedAt: Date.now(),
     })
@@ -513,19 +470,21 @@ describe('RFC-056 patch-2026-05-26 — dispatchReviewNode cci-aware short-circui
 describe('RFC-056 patch-2026-05-26 — source-text guards', () => {
   const src = readFileSync(REVIEW_SOURCE_PATH, 'utf8')
 
-  test('review.ts exports pickFreshestReviewRun + isReviewClarifyAlignedWithUpstream', () => {
+  test('review.ts exports pickFreshestReviewRun; the cci helper is gone (RFC-074 PR-C)', () => {
     expect(src).toContain('export function pickFreshestReviewRun(')
-    expect(src).toContain('export function isReviewClarifyAlignedWithUpstream(')
+    // PR-C deleted the cci-alignment short-circuit entirely.
+    expect(src.includes('isReviewClarifyAlignedWithUpstream')).toBe(false)
   })
 
-  test('RFC-074: dispatchReviewNode uses provenance (coversSource), not the cci-aware helper', () => {
-    // RFC-074 (T-B9) replaced the cci-alignment short-circuit with provenance:
-    // dispatch no longer CALLS isReviewClarifyAlignedWithUpstream (the function
-    // lingers as dead code until PR-C). The decision now flows through
-    // coversSource + the recorded consumed_upstream_runs_json.
-    expect(src.includes('isReviewClarifyAlignedWithUpstream(latestDone, sourceRun)')).toBe(false)
+  test('RFC-074: dispatchReviewNode uses provenance (coversSource), not a cci-aware helper', () => {
+    // The re-review decision flows through coversSource + the recorded
+    // consumed_upstream_runs_json — never a clarifyIteration comparison.
     expect(src).toContain('coversSource')
     expect(src).toContain('consumedUpstreamRunsJson')
+    // No LIVE clarifyIteration usage (prose comments referencing the retired
+    // counter are fine; property access / object-key assignment are not).
+    expect(/\.clarifyIteration\b/.test(src)).toBe(false)
+    expect(/\bclarifyIteration\s*:/.test(src)).toBe(false)
     // The pre-patch literal must NOT survive either.
     expect(src.includes('let alreadyDone =')).toBe(false)
     expect(src.includes('alreadyDone = true')).toBe(false)

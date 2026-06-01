@@ -71,7 +71,6 @@ describe('migration 0026 (RFC-049 node_runs.port_validation_failures_json)', () 
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'failed',
         portValidationFailuresJson: payload,
       })
@@ -85,7 +84,6 @@ describe('migration 0026 (RFC-049 node_runs.port_validation_failures_json)', () 
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         // portValidationFailuresJson intentionally omitted — legacy row
       })
@@ -108,7 +106,6 @@ describe('migration 0026 (RFC-049 node_runs.port_validation_failures_json)', () 
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'failed',
         portValidationFailuresJson: '[]',
       })
@@ -137,7 +134,6 @@ describe('migration 0026 (RFC-049 node_runs.port_validation_failures_json)', () 
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'failed',
         portValidationFailuresJson: payload,
       })

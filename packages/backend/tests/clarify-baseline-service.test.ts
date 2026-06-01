@@ -127,7 +127,6 @@ describe('RFC-058 baseline T2 — createClarifySession / row shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { session, clarifyNodeRunId } = await createClarifySession({
       db,
@@ -158,7 +157,6 @@ describe('RFC-058 baseline T2 — createClarifySession / row shape', () => {
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
       shardKey: 'shard-A',
       parentNodeRunId: 'parent-multi',
     })
@@ -183,7 +181,6 @@ describe('RFC-058 baseline T2 — createClarifySession / row shape', () => {
     const cnr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, clarifyNodeRunId)))[0]
     expect(cnr?.shardKey).toBe('shard-A')
     expect(cnr?.parentNodeRunId).toBe('parent-multi')
-    expect(cnr?.clarifyIteration).toBe(1)
   })
 })
 
@@ -198,7 +195,6 @@ describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -221,7 +217,6 @@ describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', 
     expect(r.session.directive).toBe('continue')
     expect(r.rerunNodeRunId).toBeTruthy()
     const next = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, r.rerunNodeRunId)))[0]
-    expect(next?.clarifyIteration).toBe(1)
     expect(next?.retryIndex).toBe(0)
     expect(next?.nodeId).toBe('designer')
   })
@@ -236,7 +231,6 @@ describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -269,7 +263,6 @@ describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { session, clarifyNodeRunId } = await createClarifySession({
       db,
@@ -307,7 +300,6 @@ describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', 
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -388,7 +380,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId: cnr0 } = await createClarifySession({
       db,
@@ -415,7 +406,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
       status: 'done',
       retryIndex: 0,
       iteration: 1,
-      clarifyIteration: 1,
     })
     const { clarifyNodeRunId: cnr1 } = await createClarifySession({
       db,
@@ -470,7 +460,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
         status: 'done',
         retryIndex: 0,
         iteration: 0,
-        clarifyIteration: 0,
       },
       {
         id: 'nr_i_r1',
@@ -479,7 +468,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
         status: 'done',
         retryIndex: 0,
         iteration: 1,
-        clarifyIteration: 1,
       },
     ])
     const { clarifyNodeRunId: cnr0 } = await createClarifySession({
@@ -544,7 +532,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
       shardKey: 'shard-A',
       parentNodeRunId: 'parent-A',
     })
@@ -595,7 +582,6 @@ describe('RFC-058 baseline T2 — buildClarifyPromptContext multi-round + inline
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { clarifyNodeRunId: cnrDir } = await createClarifySession({
       db,
@@ -656,7 +642,6 @@ describe('RFC-058 baseline T2 — cleanupSessionsForTask (task delete path)', ()
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     const { session } = await createClarifySession({
       db,
@@ -690,7 +675,6 @@ describe('RFC-058 baseline T2 — nodeRunOutputs interaction (aging context)', (
       status: 'done',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 0,
     })
     await db.insert(nodeRunOutputs).values({
       nodeRunId: 'nr_with_outputs',

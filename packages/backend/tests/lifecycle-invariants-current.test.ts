@@ -261,7 +261,6 @@ async function insertNodeRun(
     iteration: opts.iteration ?? 0,
     retryIndex: opts.retryIndex ?? 0,
     reviewIteration: opts.reviewIteration ?? 0,
-    clarifyIteration: opts.clarifyIteration ?? 0,
     parentNodeRunId: opts.parentNodeRunId ?? null,
     status: opts.status,
     startedAt: Date.now() - 100,

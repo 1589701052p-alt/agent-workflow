@@ -2,22 +2,24 @@
 // NodeDetailDrawer Stats tab.
 //
 // Background: a single workflow node id may produce many node_runs that
-// differ on any of five orthogonal counters — loop `iteration`, RFC-005
-// `reviewIteration`, RFC-023 `clarifyIteration`, RFC-056 `crossClarifyIteration`,
-// or process `retryIndex`. We used to render iterations and retries in
-// two separate boxes, but retries always also showed up in the iteration
-// list, so the boxes were redundant in the mixed case and just confusing.
-// One unified, always-visible timeline — with the active row highlighted —
-// fits both pure-retry and mixed cases.
+// differ on any of several orthogonal counters — loop `iteration`, RFC-005
+// `reviewIteration`, process `retryIndex` — plus the clarify "generation".
+// RFC-074 PR-C retired the `clarifyIteration` column; the clarify round is now
+// DERIVED from ULID id-order (design §6.5): each clarify-driven rerun is minted
+// at retryIndex=0, so the count of prior retry=0 top-level rows at the same
+// (iteration, reviewIteration) is the round index — what the counter used to
+// hold. We render one unified, always-visible timeline with the active row
+// highlighted.
 
 import type { NodeRun } from '@agent-workflow/shared'
 
 /**
  * All sibling node_runs of the same workflow node, sorted by
- * (iteration, reviewIteration, clarifyIteration, crossClarifyIteration,
- * retryIndex, startedAt). *Includes* the current run so the active row
- * can be highlighted in place. Excludes multi-process shard children
- * (they belong to a separate "shards" section above).
+ * (iteration, reviewIteration, id). RFC-074 PR-C: ULID id is the canonical
+ * creation order, replacing the retired (clarifyIteration, retryIndex,
+ * startedAt) tail. *Includes* the current run so the active row can be
+ * highlighted in place. Excludes multi-process shard children (they belong to a
+ * separate "shards" section above).
  */
 export function nodeRunHistory(current: NodeRun, runs: readonly NodeRun[]): NodeRun[] {
   return runs
@@ -25,18 +27,29 @@ export function nodeRunHistory(current: NodeRun, runs: readonly NodeRun[]): Node
     .sort((a, b) => {
       if (a.iteration !== b.iteration) return a.iteration - b.iteration
       if (a.reviewIteration !== b.reviewIteration) return a.reviewIteration - b.reviewIteration
-      // RFC-064: unified clarifyIteration covers both self-clarify (RFC-023)
-      // and cross-clarify (RFC-056) rounds; the per-kind label split has been
-      // collapsed (option D1 from design.md §10.5). Mint helpers
-      // (mintQuestionerRerun / triggerDesignerRerun / cascadeDownstream...)
-      // now bump the single field, so the all-zero branch in
-      // formatIterationLabel correctly excludes any minted rerun row.
-      if (a.clarifyIteration !== b.clarifyIteration) return a.clarifyIteration - b.clarifyIteration
-      if (a.retryIndex !== b.retryIndex) return a.retryIndex - b.retryIndex
-      const at = a.startedAt ?? Number.POSITIVE_INFINITY
-      const bt = b.startedAt ?? Number.POSITIVE_INFINITY
-      return at - bt
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     })
+}
+
+/**
+ * RFC-074 PR-C: derive a run's clarify round (the value the retired
+ * `clarifyIteration` counter held) from id-order. Each clarify-driven rerun is
+ * a fresh retry=0 top-level insert, so the round = (number of retry=0 top-level
+ * rows for the same node at the same (iteration, reviewIteration) whose id is
+ * ≤ this run's id) − 1. A process retry (retryIndex>0) inherits the round of
+ * the retry=0 row that anchors its generation. 0 = first generation.
+ */
+export function clarifyRoundForRun(run: NodeRun, runs: readonly NodeRun[]): number {
+  const anchors = runs.filter(
+    (r) =>
+      r.nodeId === run.nodeId &&
+      r.parentNodeRunId === null &&
+      r.iteration === run.iteration &&
+      r.reviewIteration === run.reviewIteration &&
+      r.retryIndex === 0 &&
+      r.id <= run.id,
+  )
+  return Math.max(0, anchors.length - 1)
 }
 
 interface IterationLabelOpts {
@@ -49,18 +62,20 @@ interface IterationLabelOpts {
  * All-zero tuple → `initial` — the very first attempt, no iteration counter
  * ever bumped.
  *
- * RFC-064: under the unified clarifyIteration, the previously-separate
- * `crossClarifyIteration` chip is gone — the renderer no longer
- * distinguishes self vs cross clarify rounds at the label level (design.md
- * §10.5 option D1). The label `iterClarify` covers both flows.
+ * RFC-074 PR-C: the clarify round is no longer read off the row; the caller
+ * passes the derived `clarifyRound` (see `clarifyRoundForRun`). The label
+ * `iterClarify` covers both self- and cross-clarify flows.
  */
-export function formatIterationLabel(run: NodeRun, opts: IterationLabelOpts): string {
+export function formatIterationLabel(
+  run: NodeRun,
+  opts: IterationLabelOpts,
+  clarifyRound = 0,
+): string {
   const parts: string[] = []
   if (run.iteration > 0) parts.push(opts.t('nodeDrawer.iterLoop', { n: run.iteration }))
   if (run.reviewIteration > 0)
     parts.push(opts.t('nodeDrawer.iterReview', { n: run.reviewIteration }))
-  if (run.clarifyIteration > 0)
-    parts.push(opts.t('nodeDrawer.iterClarify', { n: run.clarifyIteration }))
+  if (clarifyRound > 0) parts.push(opts.t('nodeDrawer.iterClarify', { n: clarifyRound }))
   if (parts.length === 0) parts.push(opts.t('nodeDrawer.iterInitial'))
   if (run.retryIndex > 0) parts.push(opts.t('nodeDrawer.iterRetry', { n: run.retryIndex }))
   return parts.join(' · ')

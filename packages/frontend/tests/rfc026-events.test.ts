@@ -11,13 +11,13 @@ import { parseRfc026Event, isRfc026EventPayload } from '../src/lib/rfc026-events
 describe('parseRfc026Event', () => {
   it('parses the success info payload', () => {
     const payload =
-      '[rfc026/inline-session-resumed] {"rfc":"rfc026","code":"clarify-session-resumed","sessionIdPrefix":"opc_abcd","clarifyIteration":1}'
+      '[rfc026/inline-session-resumed] {"rfc":"rfc026","code":"clarify-session-resumed","sessionIdPrefix":"opc_abcd","clarifyGeneration":1}'
     const got = parseRfc026Event(payload)
     expect(got).toEqual({
       level: 'info',
       code: 'clarify-session-resumed',
       sessionIdPrefix: 'opc_abcd',
-      clarifyIteration: 1,
+      clarifyGeneration: 1,
       raw: payload,
     })
   })
@@ -28,7 +28,7 @@ describe('parseRfc026Event', () => {
       'session-not-found',
       'unsupported-opencode-version',
     ] as const) {
-      const payload = `[rfc026/inline-fallback] {"rfc":"rfc026","code":"inline-clarify-fallback-to-isolated","reason":"${reason}","clarifyIteration":2}`
+      const payload = `[rfc026/inline-fallback] {"rfc":"rfc026","code":"inline-clarify-fallback-to-isolated","reason":"${reason}","clarifyGeneration":2}`
       const got = parseRfc026Event(payload)
       expect(got).not.toBeNull()
       expect(got!.level).toBe('warning')
@@ -36,7 +36,7 @@ describe('parseRfc026Event', () => {
       // narrow the union for the field access
       if (got!.level === 'warning') {
         expect(got!.reason).toBe(reason)
-        expect(got!.clarifyIteration).toBe(2)
+        expect(got!.clarifyGeneration).toBe(2)
       }
     }
   })

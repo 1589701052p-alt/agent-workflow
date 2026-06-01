@@ -393,7 +393,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
@@ -474,7 +473,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'done',
       retryIndex: 6,
       iteration: 0,
-      clarifyIteration: 0,
       startedAt: Date.now() - 1000,
       finishedAt: Date.now() - 500,
     })
@@ -518,7 +516,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
@@ -628,7 +625,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
 
     // Step 3: simulate the daemon restart sweep — the rerun row never got a
@@ -659,7 +655,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
     const fresh = dRuns[0]!
     expect(fresh.id).not.toBe(rerunId)
     expect(fresh.status).toBe('done')
-    expect(fresh.clarifyIteration).toBe(1) // the bug: this was 0
     expect(fresh.promptText ?? '').toContain('Clarify Q&A')
     expect(fresh.promptText ?? '').toContain('Postgres')
   })
@@ -749,7 +744,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 1,
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
     const ROUND2_BODY = JSON.stringify({
@@ -812,7 +806,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'interrupted',
       retryIndex: 0,
       iteration: 0,
-      clarifyIteration: 2,
       finishedAt: Date.now(),
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
@@ -834,7 +827,6 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       .sort((a, b) => b.retryIndex - a.retryIndex)
     const fresh = dRuns[0]!
     expect(fresh.id).not.toBe(ci2Id)
-    expect(fresh.clarifyIteration).toBe(2)
     expect(fresh.status).toBe('done')
     const prompt = fresh.promptText ?? ''
     expect(prompt).toContain('Round 1')

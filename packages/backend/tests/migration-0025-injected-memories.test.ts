@@ -76,7 +76,6 @@ describe('migration 0025 (RFC-046 node_runs.injected_memories_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         injectedMemoriesJson: payload,
       })
@@ -90,7 +89,6 @@ describe('migration 0025 (RFC-046 node_runs.injected_memories_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         // injectedMemoriesJson intentionally omitted — legacy row
       })
@@ -113,7 +111,6 @@ describe('migration 0025 (RFC-046 node_runs.injected_memories_json)', () => {
         iteration: 0,
         retryIndex: 0,
         reviewIteration: 0,
-        clarifyIteration: 0,
         status: 'done',
         injectedMemoriesJson: '[]',
       })

@@ -24,7 +24,7 @@ import {
   isPromptCapableKind,
   sortNodeRunsForPromptHistory,
 } from '@/lib/node-prompt'
-import { formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
+import { clarifyRoundForRun, formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
 import { classifyCanceled, displayNoderunStatusKey, supersededDecision } from '@/lib/noderun-status'
 import { parseRfc026Event } from '@/lib/rfc026-events'
 import { parseRfc031Event } from '@/lib/rfc031-events'
@@ -413,7 +413,7 @@ function StatsTab({
           <dt>opencode session</dt>
           <dd data-testid="rfc026-session-id">
             <code>{run.opencodeSessionId.slice(0, 16)}</code>
-            {run.clarifyIteration > 0 && (
+            {clarifyRoundForRun(run, history) > 0 && (
               <span
                 className="chip chip--tight"
                 data-testid="rfc026-session-chip"
@@ -480,7 +480,7 @@ function StatsTab({
                       disabled={isActive}
                       onClick={() => onPickRetry?.(r.id)}
                     >
-                      <code>{formatIterationLabel(r, { t })}</code>{' '}
+                      <code>{formatIterationLabel(r, { t }, clarifyRoundForRun(r, history))}</code>{' '}
                       <span className={`status-chip status-chip--${noderunTone(r.status)}`}>
                         {t(displayNoderunStatusKey(r))}
                       </span>
@@ -563,7 +563,7 @@ function EventsTab({ taskId, nodeRunId }: { taskId: string; nodeRunId: string })
               rfc026.level === 'info'
                 ? t('clarify.eventStream.sessionResumed', {
                     prefix: rfc026.sessionIdPrefix,
-                    n: rfc026.clarifyIteration ?? '?',
+                    n: rfc026.clarifyGeneration ?? '?',
                   })
                 : t('clarify.eventStream.fallbackToIsolated', { reason: rfc026.reason })
             return (

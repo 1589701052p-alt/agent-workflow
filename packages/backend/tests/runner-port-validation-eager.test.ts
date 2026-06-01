@@ -107,7 +107,6 @@ async function insertNodeRun(db: DbClient, taskId: string): Promise<string> {
     iteration: 0,
     retryIndex: 0,
     reviewIteration: 0,
-    clarifyIteration: 0,
   })
   return id
 }

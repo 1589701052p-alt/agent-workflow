@@ -77,7 +77,6 @@ async function seedTask(db: DbClient): Promise<{ taskId: string; sourceRunId: st
     status: 'done',
     retryIndex: 0,
     iteration: 0,
-    clarifyIteration: 0,
   })
   return { taskId, sourceRunId }
 }
