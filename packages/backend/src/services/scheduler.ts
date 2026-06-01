@@ -69,7 +69,7 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
-import { isNodeRunFresh } from '@/services/freshness'
+import { computeReadyNodes, isNodeRunFresh } from '@/services/freshness'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
 import { runCommitPush } from '@/services/commitPushRunner'
@@ -595,11 +595,15 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     if (opts.signal?.aborted === true) {
       return { kind: 'canceled', detail: { summary: 'task canceled', message: 'signal aborted' } }
     }
-    const ready: WorkflowNode[] = []
-    for (const n of remaining.values()) {
-      const ups = upstreamsOf.get(n.id) ?? []
-      if (ups.every((u) => completed.has(u))) ready.push(n)
-    }
+    // RFC-074 follow-up — transitive dispatch gate. A node dispatches only once
+    // its WHOLE structural ancestor chain is `completed`, not just its direct
+    // upstreams. The old one-hop gate (`ups.every((u) => completed.has(u))`) let
+    // a grandchild race ahead of a re-review while a grandparent was mid-rerun:
+    // an intermediate review's stale `done` row was still one-hop-fresh (not yet
+    // demoted), so the grandchild consumed a now-invalid approved_doc (incident
+    // 01KT1HDYV6RA8EJGY5BSE20MH9). See computeReadyNodes /
+    // areTransitiveUpstreamsCompleted in freshness.ts.
+    const ready = computeReadyNodes(remaining.values(), upstreamsOf, completed)
     if (ready.length === 0) {
       // No ready nodes AND remaining is non-empty. Before declaring the
       // scope stalled, re-scan in case a clarify answer (or any other

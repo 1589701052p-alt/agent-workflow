@@ -63,3 +63,62 @@ export function isNodeRunFresh(
   }
   return true
 }
+
+/**
+ * RFC-074 follow-up — transitive dispatch gate. Incident replay: task
+ * 01KT1HDYV6RA8EJGY5BSE20MH9 (same graph shape as 01KS86DPCSERV7S41GQA5Y81RN —
+ * in → designer → rev1 → questioner → rev2 → out + cross-clarify cycle).
+ *
+ * A node is dispatch-ready iff EVERY *transitive* structural upstream is
+ * `completed` (the scheduler's live "latest run is done ∧ one-hop-fresh" set),
+ * not merely its DIRECT upstreams. runScope historically gated on direct
+ * upstreams only (`ups.every((u) => completed.has(u))`). When a cross-clarify
+ * answer re-ran the GRANDPARENT designer out-of-band, the intermediate review
+ * node still showed its stale `done` row — one-hop-fresh, not yet demoted — so
+ * `completed.has(review)` was true and the grandchild questioner dispatched in
+ * the SAME batch, 198ms after the designer rerun finished, consuming an
+ * approved_doc that no longer matched the revised design. It thus raced ahead of
+ * the re-review the rerun should have forced (rev1 was only demoted to
+ * awaiting_review AFTER the questioner had already run). Walking the whole
+ * ancestor chain closes that window: the grandchild waits until its entire
+ * chain has re-settled (i.e. the review is re-approved).
+ *
+ * Pure graph predicate — no db / scheduler / nodeRuns dependency, preserving
+ * this module's purity contract. `seen` memoizes already-confirmed subtrees and
+ * makes the walk cycle-safe (defensive: buildScopeUpstreams already drops the
+ * channel / back edges — __clarify__, __clarify_response__, __external_feedback__,
+ * to_designer, to_questioner — so the structural DAG is acyclic).
+ */
+export function areTransitiveUpstreamsCompleted(
+  nodeId: string,
+  upstreamsOf: Map<string, string[]>,
+  completed: ReadonlySet<string>,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const u of upstreamsOf.get(nodeId) ?? []) {
+    if (!completed.has(u)) return false
+    if (seen.has(u)) continue // subtree already confirmed (memo + cycle guard)
+    seen.add(u)
+    if (!areTransitiveUpstreamsCompleted(u, upstreamsOf, completed, seen)) return false
+  }
+  return true
+}
+
+/**
+ * Pure extraction of runScope's per-batch ready computation, so the transitive
+ * gate above is unit-testable at the actual dispatch-decision altitude (rather
+ * than only as graph-walk trivia). A remaining node becomes ready only once its
+ * whole structural ancestor chain is `completed`. Generic over the node shape —
+ * the scheduler passes `WorkflowNode`s; tests pass `{ id }` stubs.
+ */
+export function computeReadyNodes<N extends { id: string }>(
+  remaining: Iterable<N>,
+  upstreamsOf: Map<string, string[]>,
+  completed: ReadonlySet<string>,
+): N[] {
+  const ready: N[] = []
+  for (const n of remaining) {
+    if (areTransitiveUpstreamsCompleted(n.id, upstreamsOf, completed)) ready.push(n)
+  }
+  return ready
+}
