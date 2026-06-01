@@ -75,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('MemoryAllList — Approved/Archived filter + in-app confirm dialog', () => {
@@ -127,7 +128,11 @@ describe('MemoryAllList — Approved/Archived filter + in-app confirm dialog', (
           headers: { 'content-type': 'application/json' },
         }),
     )
-    const confirmSpy = vi.spyOn(window, 'confirm')
+    // vitest 4 + happy-dom 20 no longer define window.confirm, so vi.spyOn
+    // can't wrap it. Install our own fn to assert the component never calls it
+    // (the shared Dialog path replaces window.confirm — also grep-locked below).
+    const confirmSpy = vi.fn()
+    vi.stubGlobal('confirm', confirmSpy)
     wrap(true)
     const btn = await screen.findByTestId('memory-all-mem_1-archive')
     fireEvent.click(btn)
@@ -184,7 +189,11 @@ describe('MemoryAllList — Approved/Archived filter + in-app confirm dialog', (
         headers: { 'content-type': 'application/json' },
       })
     })
-    const confirmSpy = vi.spyOn(window, 'confirm')
+    // vitest 4 + happy-dom 20 no longer define window.confirm, so vi.spyOn
+    // can't wrap it. Install our own fn to assert the component never calls it
+    // (the shared Dialog path replaces window.confirm — also grep-locked below).
+    const confirmSpy = vi.fn()
+    vi.stubGlobal('confirm', confirmSpy)
     wrap(true)
     const btn = await screen.findByTestId('memory-all-mem_1-delete')
     fireEvent.click(btn)

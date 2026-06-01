@@ -10,55 +10,49 @@ import { setBaseUrl, setToken } from '../src/stores/auth'
 import { useTasksSync } from '../src/hooks/useTasksSync'
 import { useWorkflowSync } from '../src/hooks/useWorkflowSync'
 
-const realWs = globalThis.WebSocket
+let opened: MockWebSocket[] = []
 
-interface FakeWs {
+// vitest 4 + happy-dom 20: a `vi.fn((url) => objectLiteral)` used as a
+// constructor is no longer honored — `new WebSocket()` discarded the returned
+// object, so the tracked `opened` array stayed empty and every assertion read
+// `undefined`. A real class whose constructor records `this` is the
+// version-robust shape (mirrors the already-passing use-clarify-ws.test.tsx).
+class MockWebSocket {
   url: string
-  listeners: Record<string, Array<(e: MessageEvent | Event) => void>>
-  send(): void
-  close(): void
+  listeners: Record<string, Array<(e: MessageEvent | Event) => void>> = {
+    open: [],
+    message: [],
+    close: [],
+    error: [],
+  }
+  constructor(url: string) {
+    this.url = url
+    opened.push(this)
+    // Auto-fire open on next microtask (mirrors the real handshake).
+    Promise.resolve().then(() => {
+      for (const l of this.listeners.open ?? []) l(new Event('open'))
+    })
+  }
+  addEventListener(event: string, fn: (e: MessageEvent | Event) => void): void {
+    ;(this.listeners[event] ??= []).push(fn)
+  }
+  send(): void {}
+  close(): void {
+    for (const l of this.listeners.close ?? []) l(new Event('close'))
+  }
 }
 
-function fakeWebSocketCtor(url: string): FakeWs {
-  const ws: FakeWs = {
-    url,
-    listeners: { open: [], message: [], close: [], error: [] },
-    send() {},
-    close() {
-      for (const l of ws.listeners.close ?? []) l(new Event('close'))
-    },
-  }
-  // Auto-fire open on next microtask.
-  Promise.resolve().then(() => {
-    for (const l of ws.listeners.open ?? []) l(new Event('open'))
-  })
-  ;(
-    ws as unknown as {
-      addEventListener: (e: string, fn: (m: MessageEvent | Event) => void) => void
-    }
-  ).addEventListener = (event: string, fn: (m: MessageEvent | Event) => void) => {
-    const list = ws.listeners[event] ?? []
-    list.push(fn)
-    ws.listeners[event] = list
-  }
-  return ws
-}
-
-let opened: FakeWs[]
 beforeEach(() => {
   opened = []
-  // @ts-expect-error replace with a fake that just tracks instances
-  globalThis.WebSocket = vi.fn((url: string) => {
-    const ws = fakeWebSocketCtor(url)
-    opened.push(ws)
-    return ws
-  })
+  // vi.stubGlobal installs the mock on the env global the module-under-test
+  // resolves bare `WebSocket` against; vi.unstubAllGlobals restores it.
+  vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket)
   setBaseUrl('http://daemon.test')
   setToken('tok')
 })
 
 afterEach(() => {
-  globalThis.WebSocket = realWs
+  vi.unstubAllGlobals()
   window.localStorage.clear()
 })
 
