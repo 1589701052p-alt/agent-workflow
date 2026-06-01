@@ -198,9 +198,9 @@ function plantR1Violation(taskId: string): {
   const now = Date.now()
   const sql = `
     INSERT INTO node_runs (id, task_id, node_id, parent_node_run_id, iteration,
-      shard_key, retry_index, review_iteration, clarify_iteration, status,
+      shard_key, retry_index, review_iteration, status,
       started_at, finished_at)
-    VALUES ('${nodeRunId}', '${taskId}', 'rev_stuck', NULL, 0, NULL, 0, 0, 0,
+    VALUES ('${nodeRunId}', '${taskId}', 'rev_stuck', NULL, 0, NULL, 0, 0,
       'awaiting_review', ${now - 1000}, NULL);
     INSERT INTO doc_versions (id, task_id, review_node_id, review_node_run_id,
       source_node_id, source_port_name, version_index, review_iteration,

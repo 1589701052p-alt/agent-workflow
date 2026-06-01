@@ -834,7 +834,8 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
     expect(round1).toContain('--session')
     expect(round1).toContain('opc_e2e_e2e-rfc026-designer')
 
-    // 6. Assertion B: the persisted node_runs row for round 0 (clarifyIteration=0)
+    // 6. Assertion B: the persisted node_runs row for round 0 (RFC-074 PR-C:
+    //    the earliest 'designer' run by ULID id — clarify generation 0)
     //    carries the same opencodeSessionId the stub emitted.
     const runsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
@@ -842,14 +843,14 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
     expectOk(runsRes, 'GET task node-runs')
     const runsBody = (await runsRes.json()) as {
       runs: Array<{
+        id: string
         nodeId: string
-        clarifyIteration: number
         opencodeSessionId: string | null
       }>
     }
-    const round0Run = runsBody.runs.find(
-      (r) => r.nodeId === 'designer' && r.clarifyIteration === 0,
-    )
+    const round0Run = runsBody.runs
+      .filter((r) => r.nodeId === 'designer')
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0]
     expect(round0Run?.opencodeSessionId).toBe('opc_e2e_e2e-rfc026-designer')
   })
 })

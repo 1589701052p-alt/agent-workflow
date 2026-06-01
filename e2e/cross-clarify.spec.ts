@@ -343,28 +343,27 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     expect(designerRound2, 'designer round 2 prompt was logged').not.toBeNull()
     expect(designerRound2![1]).toContain('## External Feedback')
 
-    // 7. Designer's elevated node_run carries clarifyIteration > 0 — under
-    //    the RFC-064 unified counter, cross-clarify rounds bump the same
-    //    column as self-clarify rounds. The §C8 "orthogonal counters"
-    //    invariant from RFC-056 has been replaced by the §3.2 max+1 mint
-    //    algorithm: the cross-clarify submit lifts the designer's
-    //    clarifyIteration above every prior participant's, and we assert
-    //    on the post-rerun row by its strictly-positive counter.
+    // 7. Designer reran after the cross-clarify submit. RFC-074 PR-C: the
+    //    retired clarifyIteration counter is gone — the rerun is identified by
+    //    id-order, i.e. a SECOND done top-level designer node_run minted after
+    //    the original (the cross-clarify submit triggers triggerDesignerRerun).
     const runsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
     })
     expectOk(runsRes, 'GET task node-runs')
     const runs = (await runsRes.json()) as {
       runs: Array<{
+        id: string
         nodeId: string
-        clarifyIteration: number
+        parentNodeRunId: string | null
         status: string
       }>
     }
-    const elevatedDesigner = runs.runs.find(
-      (r) => r.nodeId === 'designer' && r.clarifyIteration > 0 && r.status === 'done',
-    )
-    expect(elevatedDesigner, 'designer reran with clarifyIteration > 0').toBeDefined()
+    const doneDesigners = runs.runs
+      .filter((r) => r.nodeId === 'designer' && r.parentNodeRunId === null && r.status === 'done')
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    expect(doneDesigners.length, 'designer reran (>= 2 done rows)').toBeGreaterThanOrEqual(2)
+    const elevatedDesigner = doneDesigners[doneDesigners.length - 1]
     expect(elevatedDesigner?.status).toBe('done')
   })
 })
