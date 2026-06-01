@@ -532,4 +532,105 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     expect(designerRow?.promptText ?? '').toContain('## External Feedback')
     expect(designerRow?.promptText ?? '').toContain("### From 'questioner' (round 0)")
   })
+
+  // RFC-074 PR-C regression lock — bad case from production task
+  // 01KSHB1YHMZWFX85SHQ4KM2HKX. A cross-clarify QUESTIONER that sits DOWNSTREAM
+  // of the designer must still receive its prior Q&A context when it re-runs
+  // after a designer-scoped cross-clarify answer — otherwise it re-asks the
+  // same question and loops cross-clarify forever.
+  //
+  // Pre-PR-B the downstream cascade minted the questioner's rerun with a bumped
+  // clarifyIteration, which the scheduler's `isQuestionerCrossClarifyRerun =
+  // cci > 0` gate keyed on. PR-B (T-B8) deleted the cascade; the questioner now
+  // re-runs via lazy freshness demote at the inherited cci=0, so the gate
+  // misfires and the Q&A is dropped. RED until PR-C replaces the cci gate with
+  // a session-state check (there IS an answered cross-clarify round for this
+  // questioner). Asserts the BEHAVIOR (the rerun prompt carries the Q&A), so it
+  // is agnostic to how the gate is re-implemented.
+  test('RFC-074: downstream questioner rerun after designer-scope answer still carries its Q&A', async () => {
+    await seedAgent(h.db, 'designer', ['design'])
+    await seedAgent(h.db, 'questioner', ['design'])
+    const { taskId } = await seedWorkflowAndTask(h, defaultDef(), { req: 'go' })
+
+    // Prior settled generation: input + designer done; questioner done having
+    // CONSUMED this designer run (so a designer rerun makes it provenance-stale
+    // and gets it re-dispatched downstream).
+    const inRunId = ulid()
+    await h.db
+      .insert(nodeRuns)
+      .values({ id: inRunId, taskId, nodeId: 'in1', status: 'done', retryIndex: 0, iteration: 0 })
+    const priorDesigner = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: priorDesigner,
+      taskId,
+      nodeId: 'designer',
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+    })
+    const qRunId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: qRunId,
+      taskId,
+      nodeId: 'questioner',
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      consumedUpstreamRunsJson: JSON.stringify({ designer: priorDesigner }),
+    })
+
+    // The questioner asked a cross-clarify question (target = designer); answered.
+    const { session } = await createCrossClarifySession({
+      db: h.db,
+      taskId,
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: qRunId,
+      targetDesignerNodeId: 'designer',
+      loopIter: 0,
+      questions: [
+        {
+          id: 'q1',
+          title: 'CCQ_TITLE_MARKER_为何',
+          kind: 'single',
+          recommended: false,
+          options: [
+            { label: 'OPT_ALPHA', description: '', recommended: false, recommendationReason: '' },
+            { label: 'OPT_BETA', description: '', recommended: false, recommendationReason: '' },
+          ],
+        },
+      ],
+    })
+    const ret = await submitCrossClarifyAnswers({
+      db: h.db,
+      crossClarifyNodeRunId: session.crossClarifyNodeRunId,
+      answers: [
+        {
+          questionId: 'q1',
+          selectedOptionIndices: [0],
+          selectedOptionLabels: ['OPT_ALPHA'],
+          customText: '',
+        },
+      ],
+      directive: 'continue',
+    })
+    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+
+    // Designer reruns (cci bumped) → questioner goes provenance-stale → it is
+    // re-dispatched at the inherited cci=0 (no cascade bump) → prompt is built.
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'plan v2' }) }, () =>
+      runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', MOCK_OPENCODE] }),
+    )
+
+    const allRuns = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const questionerRuns = allRuns
+      .filter((r) => r.nodeId === 'questioner' && r.parentNodeRunId === null)
+      .sort((a, b) => (a.id < b.id ? 1 : -1))
+    const rerun = questionerRuns[0]!
+    expect(rerun.id, 'a fresh questioner rerun must have happened').not.toBe(qRunId)
+    // The rerun prompt MUST carry the prior cross-clarify Q&A so the questioner
+    // does not re-ask. RED today: cci=0 → isQuestionerCrossClarifyRerun gate
+    // drops it. GREEN once PR-C makes the gate session-state-based.
+    expect(rerun.promptText ?? '').toContain('CCQ_TITLE_MARKER_为何')
+  })
 })

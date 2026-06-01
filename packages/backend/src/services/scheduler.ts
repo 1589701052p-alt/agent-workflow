@@ -1767,13 +1767,20 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // local iteration counter is eliminated structurally.
         //
         // RFC-056 §5.4 §6.4: when the about-to-run node is a cross-clarify
-        // questioner AND this rerun was triggered by a cross-clarify resolve
-        // (clarifyIteration > 0 under the unified counter), pull the
-        // questioner's own Q&A from kind='cross' rows via the cross-questioner
-        // consumer branch. Otherwise (self path) read kind='self'. Both
-        // branches share the `applyLatestDirective: isClarifyRerun` gate
-        // RFC-064 §5.5 unified.
-        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross' && currentClarifyIteration > 0
+        // questioner, pull the questioner's own Q&A from kind='cross' rows via
+        // the cross-questioner consumer branch. Otherwise (self path) read
+        // kind='self'. Both branches share the `applyLatestDirective:
+        // isClarifyRerun` gate RFC-064 §5.5 unified.
+        //
+        // RFC-074: dropped the `&& currentClarifyIteration > 0` sub-condition.
+        // It used to detect "post-cross-clarify-resolve rerun" via the cci
+        // bump, but PR-B removed the cascade that bumped a DOWNSTREAM
+        // questioner's cci — so a downstream questioner re-runs at cci=0 and the
+        // gate misfired, dropping its Q&A and looping it. buildPromptContext
+        // now self-gates for cross-questioner via the RFC-070 consumed-by stamp
+        // (returns undefined when there is no unconsumed answered round), so the
+        // cci proxy is no longer needed.
+        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross'
         const clarifyContext = hasClarifyChannel
           ? isQuestionerCrossClarifyRerun
             ? await buildPromptContext({

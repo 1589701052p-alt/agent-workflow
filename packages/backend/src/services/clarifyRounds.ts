@@ -328,7 +328,17 @@ export interface BuildPromptContextArgs {
 export async function buildPromptContext(
   args: BuildPromptContextArgs,
 ): Promise<ClarifyPromptContext | undefined> {
-  if (args.targetIteration <= 0) return undefined
+  // RFC-074: the cross-questioner path ages rounds by the RFC-070 consumed-by
+  // stamp (`consumedByQuestionerRunId IS NULL`, applied in
+  // selectAnsweredRoundsForConsumer) — NOT by the cci counter. It must therefore
+  // skip the cci-scoping below. The cci scoping silently dropped the questioner's
+  // Q&A once PR-B removed the cascade that used to bump the *downstream*
+  // questioner's clarifyIteration (the questioner then re-runs at cci=0, the
+  // `iteration < targetIteration` / `<= 0` guards exclude every round, and the
+  // questioner re-asks forever). self + cross-designer KEEP the cci scoping:
+  // their consumers are still cci-bumped (self-clarify rerun / triggerDesignerRerun).
+  const cciScoped = args.consumerKind !== 'cross-questioner'
+  if (cciScoped && args.targetIteration <= 0) return undefined
 
   const allRows = await selectAnsweredRoundsForConsumer({
     db: args.db,
@@ -343,7 +353,11 @@ export async function buildPromptContext(
   // about-to-run iteration. Matches the RFC-023 + RFC-056 semantics
   // (iterationIndex < targetIteration); guards against the in-flight
   // round (iteration === targetIteration) leaking before it's answered.
-  const priorRounds = allRows.filter((r) => r.iteration < args.targetIteration)
+  // cross-questioner is exempt (see above): its SELECT already returned only
+  // unconsumed answered rounds, every one of which is genuinely prior.
+  const priorRounds = cciScoped
+    ? allRows.filter((r) => r.iteration < args.targetIteration)
+    : allRows
   if (priorRounds.length === 0) return undefined
 
   const inlineMode = args.sessionMode === 'inline'
