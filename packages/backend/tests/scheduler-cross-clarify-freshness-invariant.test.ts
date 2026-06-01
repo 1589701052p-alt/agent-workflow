@@ -341,3 +341,189 @@ describe('RFC-056 Layer B — applyClarifyFreshnessInvariant', () => {
     expect(afterSecond.length, 'second pass must NOT add a new row').toBe(2)
   })
 })
+
+// RFC-074 PR-A baseline — freshness observable locks (A7-A12).
+//
+// WHY THIS BLOCK EXISTS (regression intent):
+//   The describe above + `cross-clarify-downstream-cascade.test.ts` (Layer A)
+//   already lock the core demote/cascade/idempotency behavior. These cases add
+//   the freshness behaviors PR-B will lean on but that were NOT yet pinned:
+//   loop-iteration scoping of the mint (PR-B T-B6b), diamond fan-in max-cci
+//   selection (the S12 topology), and Layer-A∘Layer-B composition (no
+//   double-mint when a cascade row already exists). They assert the CURRENT
+//   cci-based behavior; PR-B's provenance rewrite must keep the observable
+//   results (demoted set, minted iteration, no double-mint) identical.
+describe('RFC-074 PR-A baseline — freshness observable (A7-A12)', () => {
+  // A7 — loop-iteration scoping. A node with done rows in TWO loop iterations
+  // must demote only within the scope's iteration: the mint's retryIndex is
+  // computed from this-iteration rows and the new pending carries this
+  // iteration; the other iteration's row is untouched. Locks the
+  // `r.iteration === ctx.iteration` filter (scheduler.ts ~964) that PR-B's
+  // freshestDone iteration scoping (T-B6b) replaces.
+  test('A7: demote is scoped to ctx.iteration — other-iteration rows untouched', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const designer = await seedRun(db, taskId, 'designer', { iteration: 1, clarifyIteration: 1 })
+    const reviewIter1 = await seedRun(db, taskId, 'review', { iteration: 1, clarifyIteration: 0 })
+    // An older loop iteration's done row — must NOT be considered or mutated.
+    await seedRun(db, taskId, 'review', { iteration: 0, clarifyIteration: 0 })
+    await applyClarifyFreshnessInvariant({
+      db,
+      taskId,
+      iteration: 1,
+      scopeNodes: [makeAgentNode('designer'), makeAgentNode('review')],
+      upstreamsOf: new Map([
+        ['designer', []],
+        ['review', ['designer']],
+      ]),
+      priorRuns: [
+        designer,
+        reviewIter1,
+        ...(await db
+          .select()
+          .from(nodeRuns)
+          .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'review')))),
+      ],
+      latestPerNode: new Map([
+        ['designer', designer],
+        ['review', reviewIter1],
+      ]),
+      completed: new Set(['designer', 'review']),
+      remaining: new Map(),
+      log,
+    })
+    const iter1Rows = await db
+      .select()
+      .from(nodeRuns)
+      .where(
+        and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'review'), eq(nodeRuns.iteration, 1)),
+      )
+    const freshPending = iter1Rows.find((r) => r.status === 'pending' && r.clarifyIteration === 1)
+    expect(freshPending, 'fresh pending minted at iteration=1, cci=1').toBeDefined()
+    // The iteration=0 row is still exactly one row, untouched.
+    const iter0Rows = await db
+      .select()
+      .from(nodeRuns)
+      .where(
+        and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'review'), eq(nodeRuns.iteration, 0)),
+      )
+    expect(iter0Rows.length, 'other-iteration row untouched').toBe(1)
+  })
+
+  // A8a — diamond fan-in: a node demotes when the MAX cci across its multiple
+  // upstreams exceeds its own (one bumped upstream is enough). This is the S12
+  // topology where the silent rerun bites.
+  test('A8a: diamond fan-in — max upstream cci wins → demote', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const a = await seedRun(db, taskId, 'A', { clarifyIteration: 2 })
+    const b = await seedRun(db, taskId, 'B', { clarifyIteration: 0 })
+    const merge = await seedRun(db, taskId, 'merge', { clarifyIteration: 1 })
+    const completed = new Set(['A', 'B', 'merge'])
+    await applyClarifyFreshnessInvariant({
+      db,
+      taskId,
+      iteration: 0,
+      scopeNodes: [makeAgentNode('A'), makeAgentNode('B'), makeAgentNode('merge')],
+      upstreamsOf: new Map([
+        ['A', []],
+        ['B', []],
+        ['merge', ['A', 'B']],
+      ]),
+      priorRuns: [a, b, merge],
+      latestPerNode: new Map([
+        ['A', a],
+        ['B', b],
+        ['merge', merge],
+      ]),
+      completed,
+      remaining: new Map(),
+      log,
+    })
+    expect(completed.has('merge')).toBe(false)
+    const mergeRows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'merge')))
+    expect(mergeRows.find((r) => r.status === 'pending' && r.clarifyIteration === 2)).toBeDefined()
+  })
+
+  // A8b — diamond fan-in: when no upstream exceeds the node's cci, it stays
+  // completed and nothing is minted (idempotent across equal generations).
+  test('A8b: diamond fan-in — all upstreams <= node cci → no demote', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const a = await seedRun(db, taskId, 'A', { clarifyIteration: 1 })
+    const b = await seedRun(db, taskId, 'B', { clarifyIteration: 1 })
+    const merge = await seedRun(db, taskId, 'merge', { clarifyIteration: 1 })
+    const completed = new Set(['A', 'B', 'merge'])
+    await applyClarifyFreshnessInvariant({
+      db,
+      taskId,
+      iteration: 0,
+      scopeNodes: [makeAgentNode('A'), makeAgentNode('B'), makeAgentNode('merge')],
+      upstreamsOf: new Map([
+        ['A', []],
+        ['B', []],
+        ['merge', ['A', 'B']],
+      ]),
+      priorRuns: [a, b, merge],
+      latestPerNode: new Map([
+        ['A', a],
+        ['B', b],
+        ['merge', merge],
+      ]),
+      completed,
+      remaining: new Map(),
+      log,
+    })
+    expect(completed.has('merge')).toBe(true)
+    const mergeRows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'merge')))
+    expect(mergeRows.length).toBe(1)
+  })
+
+  // A9 — Layer A ∘ Layer B composition. When the cross-clarify cascade
+  // (Layer A) already minted a fresh pending row for a downstream node, that
+  // node's latest row is pending → it is in `remaining`, NOT `completed`. The
+  // freshness invariant only walks `completed`, so it must NOT mint a second
+  // pending row. Locks the no-double-mint guarantee between the two layers.
+  test('A9: Layer-A pending already minted → Layer B does not double-mint', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const designer = await seedRun(db, taskId, 'designer', { clarifyIteration: 1 })
+    await seedRun(db, taskId, 'review', { clarifyIteration: 0 }) // old done
+    const cascadePending = await seedRun(db, taskId, 'review', {
+      clarifyIteration: 1,
+      retryIndex: 1,
+      status: 'pending',
+    }) // Layer A cascade output
+    const completed = new Set(['designer']) // review is NOT completed (latest is pending)
+    const remaining = new Map([['review', makeAgentNode('review')]])
+    await applyClarifyFreshnessInvariant({
+      db,
+      taskId,
+      iteration: 0,
+      scopeNodes: [makeAgentNode('designer'), makeAgentNode('review')],
+      upstreamsOf: new Map([
+        ['designer', []],
+        ['review', ['designer']],
+      ]),
+      priorRuns: [designer, cascadePending],
+      latestPerNode: new Map([
+        ['designer', designer],
+        ['review', cascadePending],
+      ]),
+      completed,
+      remaining,
+      log,
+    })
+    const reviewRows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'review')))
+    expect(reviewRows.length, 'no second pending minted by Layer B').toBe(2)
+  })
+})

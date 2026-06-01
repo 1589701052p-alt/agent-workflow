@@ -3307,7 +3307,12 @@ async function resolveSkills(
  * retry_index). This lets inner-scope nodes see top-level node outputs
  * (iteration=0) and same-iteration upstream outputs from earlier ready batches.
  */
-async function resolveUpstreamInputs(
+// RFC-074 PR-A: exported (was module-private) so the picker baseline test
+// `resolve-upstream-inputs-picker-baseline.test.ts` can lock its CURRENT
+// cci-blind `(iteration desc, retryIndex desc)` row selection before PR-B
+// unifies it with the freshness picker (design §5.1 / decision D10). Adding
+// `export` is behavior-preserving — no logic changes in PR-A.
+export async function resolveUpstreamInputs(
   db: DbClient,
   taskId: string,
   edges: WorkflowEdge[],

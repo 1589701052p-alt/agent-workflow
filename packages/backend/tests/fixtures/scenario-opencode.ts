@@ -1,0 +1,124 @@
+// Plan-driven mock opencode for COMBINATION SCENARIO tests (agent × review ×
+// clarify). Unlike the env-driven mock-opencode.ts (one static behavior per
+// process) this stub varies behavior per (agent, invocation-index) by reading
+// a JSON plan + per-agent on-disk counters. That lets one task drive a
+// multi-phase flow like designer: [output-v1, clarify, output-after-answer,
+// clarify, output-v2] across many runTask/resume cycles.
+//
+// Invoked by the runner as:
+//   bun run scenario-opencode.ts run "<prompt>" --agent NAME --format json ...
+// and as `... --version` at daemon/runtime probe time.
+//
+// Env contract:
+//   SCENARIO_PLAN_FILE   path to JSON: { "<agentName>": Step[] }
+//       Step =
+//         | { "output": { "<port>": "<content>" } }      // emit <workflow-output>
+//         | { "clarify": <bodyObject> }                  // emit <workflow-clarify>
+//         | { "skipEnvelope": true }                     // emit text, no envelope
+//         | { "crash": true }                            // exit 1, no envelope
+//       When an agent is invoked MORE times than its plan has steps, the LAST
+//       step repeats (so "always output v2 from now on" = just leave v2 last).
+//   SCENARIO_STATE_DIR   dir for per-agent counter files (created by test).
+//   SCENARIO_DEFAULT_OUTPUT  optional JSON {port:content}; used when an agent
+//       has no plan entry at all (e.g. a plain downstream agent we don't script).
+
+import process from 'node:process'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+function fail(msg: string, code = 2): never {
+  process.stderr.write(`scenario-opencode: ${msg}\n`)
+  process.exit(code)
+}
+
+const argv = process.argv.slice(2)
+
+if (argv[0] === '--version' || argv.includes('--version')) {
+  process.stdout.write('scenario-opencode 1.14.99\n')
+  process.exit(0)
+}
+if (argv[0] !== 'run') fail(`expected 'run', got '${argv[0]}'`)
+
+const env = process.env
+if (!env.OPENCODE_CONFIG_DIR) fail('OPENCODE_CONFIG_DIR not set')
+if (!env.OPENCODE_CONFIG_CONTENT) fail('OPENCODE_CONFIG_CONTENT not set')
+
+const agentFlagIdx = argv.indexOf('--agent')
+const agentName = agentFlagIdx >= 0 ? (argv[agentFlagIdx + 1] ?? '') : ''
+if (!agentName) fail('missing --agent <name>')
+
+interface OutputStep {
+  output: Record<string, string>
+}
+interface ClarifyStep {
+  clarify: unknown
+}
+interface SkipStep {
+  skipEnvelope: true
+}
+interface CrashStep {
+  crash: true
+}
+type Step = OutputStep | ClarifyStep | SkipStep | CrashStep
+
+const planFile = env.SCENARIO_PLAN_FILE
+const stateDir = env.SCENARIO_STATE_DIR
+if (!planFile || !stateDir) fail('SCENARIO_PLAN_FILE and SCENARIO_STATE_DIR required')
+if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true })
+
+let plan: Record<string, Step[]> = {}
+try {
+  plan = JSON.parse(readFileSync(planFile, 'utf-8')) as Record<string, Step[]>
+} catch (e) {
+  fail(`SCENARIO_PLAN_FILE parse: ${(e as Error).message}`)
+}
+
+// Per-(agent) invocation counter — increments each spawn so we can step the plan.
+const counterFile = join(stateDir, `count-${agentName}`)
+let n = 0
+if (existsSync(counterFile)) n = Number(readFileSync(counterFile, 'utf-8').trim()) || 0
+const callIndex = n // 0-based for this invocation
+writeFileSync(counterFile, String(n + 1))
+
+// Trace each invocation so the test can assert how many times each agent ran.
+const traceFile = join(stateDir, 'trace.jsonl')
+appendFileSync(traceFile, JSON.stringify({ agent: agentName, callIndex }) + '\n')
+
+const steps = plan[agentName]
+let step: Step
+if (steps && steps.length > 0) {
+  step = steps[Math.min(callIndex, steps.length - 1)]!
+} else if (env.SCENARIO_DEFAULT_OUTPUT) {
+  step = { output: JSON.parse(env.SCENARIO_DEFAULT_OUTPUT) as Record<string, string> }
+} else {
+  step = { output: { out: `default-${agentName}-${callIndex}` } }
+}
+
+function emitText(text: string): void {
+  process.stdout.write(
+    JSON.stringify({ type: 'text', timestamp: Date.now(), part: { type: 'text', text } }) + '\n',
+  )
+}
+
+if ('crash' in step && step.crash) {
+  emitText('(scenario: agent crashed)')
+  process.exit(1)
+}
+if ('skipEnvelope' in step && step.skipEnvelope) {
+  emitText('(scenario: agent produced text without an envelope)')
+  process.exit(0)
+}
+if ('clarify' in step) {
+  emitText(`<workflow-clarify>${JSON.stringify(step.clarify)}</workflow-clarify>`)
+  process.exit(0)
+}
+if ('output' in step) {
+  let env2 = '<workflow-output>\n'
+  for (const [port, content] of Object.entries(step.output)) {
+    env2 += `  <port name="${port}">${content}</port>\n`
+  }
+  env2 += '</workflow-output>'
+  emitText(env2)
+  process.exit(0)
+}
+fail(`unrecognized plan step for ${agentName}@${callIndex}: ${JSON.stringify(step)}`)

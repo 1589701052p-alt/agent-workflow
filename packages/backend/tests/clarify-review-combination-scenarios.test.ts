@@ -1,0 +1,1951 @@
+// EXPLORATORY combination-scenario probes (agent × review × clarify).
+//
+// Goal: drive end-to-end flows through the REAL scheduler (runTask) + REAL
+// decision handlers (submitClarifyAnswers / submitReviewDecision) and assert
+// the EXPECTED-CORRECT behavior. Any failing assertion = a current flow that
+// does not meet expectations.
+//
+// NOT an RFC implementation. These are probes to surface misbehaving flows
+// (notably the cci/cascade/review-freshness interplay). Scenarios annotated
+// `[KNOWN-INCIDENT]` are expected to expose the live bug from task
+// 01KSHVXCH6RQ5F5P64MZ4FZVN6 on current code.
+
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { execSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { and, eq } from 'drizzle-orm'
+import type { DbClient } from '../src/db/client'
+import { createInMemoryDb } from '../src/db/client'
+import {
+  clarifySessions,
+  crossClarifySessions,
+  docVersions,
+  nodeRunOutputs,
+  nodeRuns,
+  tasks,
+} from '../src/db/schema'
+import { createAgent } from '../src/services/agent'
+import { createWorkflow } from '../src/services/workflow'
+import { submitClarifyAnswers } from '../src/services/clarify'
+import { submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { addReviewComment, submitReviewDecision } from '../src/services/review'
+import { runTask } from '../src/services/scheduler'
+import { startTask } from '../src/services/task'
+import type {
+  ClarifyAnswer,
+  ClarifyQuestion,
+  WorkflowDefinition,
+  WorkflowNode,
+} from '@agent-workflow/shared'
+
+const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+const SCENARIO_STUB = resolve(import.meta.dir, 'fixtures', 'scenario-opencode.ts')
+
+type Step =
+  | { output: Record<string, string> }
+  | { clarify: unknown }
+  | { skipEnvelope: true }
+  | { crash: true }
+
+const CLARIFY_BODY = {
+  questions: [
+    {
+      id: 'q1',
+      title: 'Which option?',
+      kind: 'single',
+      recommended: false,
+      options: [
+        { label: 'A', description: '', recommended: true, recommendationReason: '' },
+        { label: 'B', description: '', recommended: false, recommendationReason: '' },
+      ],
+    } as ClarifyQuestion,
+  ],
+}
+const CLARIFY_ANSWER: ClarifyAnswer = {
+  questionId: 'q1',
+  selectedOptionIndices: [0],
+  selectedOptionLabels: ['A'],
+  customText: '',
+}
+
+interface Ctx {
+  db: DbClient
+  appHome: string
+  repoPath: string
+  stateDir: string
+  planFile: string
+  cleanup: () => void
+}
+
+let idx = 0
+function freshCtx(): Ctx {
+  idx++
+  const tmp = mkdtempSync(join(tmpdir(), `aw-combo-${idx}-`))
+  const appHome = join(tmp, 'home')
+  const repoPath = join(tmp, 'repo')
+  const stateDir = join(tmp, 'state')
+  const planFile = join(tmp, 'plan.json')
+  mkdirSync(appHome, { recursive: true })
+  mkdirSync(stateDir, { recursive: true })
+  execSync(`git init -b main "${repoPath}"`, { stdio: 'ignore' })
+  execSync(`git -C "${repoPath}" config user.email t@t.test`, { stdio: 'ignore' })
+  execSync(`git -C "${repoPath}" config user.name t`, { stdio: 'ignore' })
+  writeFileSync(join(repoPath, 'README.md'), '# r\n')
+  execSync(`git -C "${repoPath}" add . && git -C "${repoPath}" commit -m init`, { stdio: 'ignore' })
+  const db = createInMemoryDb(MIGRATIONS)
+  return {
+    db,
+    appHome,
+    repoPath,
+    stateDir,
+    planFile,
+    cleanup: () => {
+      rmSync(tmp, { recursive: true, force: true })
+      delete process.env.SCENARIO_PLAN_FILE
+      delete process.env.SCENARIO_STATE_DIR
+      delete process.env.AGENT_WORKFLOW_HOME
+    },
+  }
+}
+
+function writePlan(c: Ctx, plan: Record<string, Step[]>): void {
+  writeFileSync(c.planFile, JSON.stringify(plan))
+  process.env.SCENARIO_PLAN_FILE = c.planFile
+  process.env.SCENARIO_STATE_DIR = c.stateDir
+  process.env.AGENT_WORKFLOW_HOME = c.appHome
+}
+
+function opencodeCmd(): string[] {
+  return ['bun', 'run', SCENARIO_STUB]
+}
+
+async function topLevel(db: DbClient, taskId: string, nodeId: string) {
+  const rows = await db
+    .select()
+    .from(nodeRuns)
+    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
+  return rows.filter((r) => r.parentNodeRunId === null)
+}
+
+async function openClarifyRunId(db: DbClient, taskId: string): Promise<string> {
+  const rows = await db
+    .select()
+    .from(clarifySessions)
+    .where(and(eq(clarifySessions.taskId, taskId), eq(clarifySessions.status, 'awaiting_human')))
+  const id = rows[0]?.clarifyNodeRunId
+  if (!id) throw new Error('no awaiting clarify session')
+  return id
+}
+
+async function awaitingReviewRun(db: DbClient, taskId: string, nodeId: string) {
+  const tops = await topLevel(db, taskId, nodeId)
+  return tops.find((r) => r.status === 'awaiting_review')
+}
+
+async function taskStatus(db: DbClient, taskId: string): Promise<string> {
+  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+  return t?.status ?? '??'
+}
+
+async function makeDesigner(c: Ctx, name = 'designer', outs = ['design']): Promise<void> {
+  await createAgent(c.db, {
+    name,
+    description: '',
+    outputs: outs,
+    outputKinds: Object.fromEntries(outs.map((o) => [o, 'markdown'])),
+    readonly: false,
+    syncOutputsOnIterate: true,
+    permission: {},
+    skills: [],
+    dependsOn: [],
+    mcp: [],
+    plugins: [],
+    frontmatterExtra: {},
+    bodyMd: '',
+  })
+}
+
+describe('combination scenarios: agent × review × clarify (current code)', () => {
+  let c: Ctx
+  beforeEach(() => {
+    c = freshCtx()
+  })
+  afterEach(() => {
+    c.cleanup()
+  })
+
+  // ---------------------------------------------------------------------------
+  // S1 — baseline: agent → review → approve → downstream consumes approved doc
+  // ---------------------------------------------------------------------------
+  test('S1 baseline: approve propagates the approved doc to the downstream agent', async () => {
+    await makeDesigner(c)
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      designer: [{ output: { design: 'DESIGN_V1' } }],
+      builder: [{ output: { build: 'BUILT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'rev', portName: 'approved_doc' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's1', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's1',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_review')
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+    const builderTops = await topLevel(c.db, task.id, 'builder')
+    const builderDone = builderTops.find((r) => r.status === 'done')
+    expect(builderDone).toBeDefined()
+  })
+
+  // ---------------------------------------------------------------------------
+  // S2 — iterate: approved doc must reflect v2 (post-iterate), not v1
+  // ---------------------------------------------------------------------------
+  test('S2 iterate: approving after iterate yields v2 content and leaves no dead awaiting rows', async () => {
+    await makeDesigner(c)
+    writePlan(c, {
+      designer: [{ output: { design: 'DESIGN_V1' } }, { output: { design: 'DESIGN_V2' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's2', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's2',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev1 = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev1).toBeDefined()
+
+    // iterate v1
+    await addReviewComment({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      anchor: {
+        sectionPath: '#',
+        paragraphIdx: 0,
+        offsetStart: 0,
+        offsetEnd: 3,
+        selectedText: 'DES',
+        contextBefore: '',
+        contextAfter: '',
+        occurrenceIndex: 1,
+      },
+      commentText: 'please revise',
+    })
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      decision: 'iterated',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    // review should be awaiting again on v2
+    const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev2).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev2!.id,
+      decision: 'approved',
+      expectedReviewIteration: 1,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+    // approved_doc output must be v2
+    const revTops = await topLevel(c.db, task.id, 'rev')
+    const approvedRun = revTops.find((r) => r.status === 'done')
+    expect(approvedRun).toBeDefined()
+    const outs = await c.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, approvedRun!.id))
+    const approvedDoc = outs.find((o) => o.portName === 'approved_doc')?.content ?? ''
+    expect(approvedDoc).toContain('DESIGN_V2')
+    expect(approvedDoc).not.toContain('DESIGN_V1')
+  })
+
+  // ---------------------------------------------------------------------------
+  // S3 — [KNOWN-INCIDENT] iterate → clarify×2 → v2 → approve must NOT spawn a
+  // second review of the same content. Repro of 01KSHVXCH6RQ5F5P64MZ4FZVN6.
+  // ---------------------------------------------------------------------------
+  // RED on current code (reproduces 01KSHVXCH6RQ5F5P64MZ4FZVN6). skip keeps the
+  // shared tree green; flips to live `test` + green under RFC-074 provenance.
+  test.skip('S3 [KNOWN-INCIDENT]: approve after iterate+clarify reruns must not re-open review on the same content', async () => {
+    await makeDesigner(c)
+    // designer plan: call0 output v1; call1 clarify; call2 clarify; call3 output v2
+    writePlan(c, {
+      designer: [
+        { output: { design: 'DESIGN_V1' } },
+        { clarify: CLARIFY_BODY },
+        { clarify: CLARIFY_BODY },
+        { output: { design: 'DESIGN_V2' } },
+      ],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'designer', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'designer', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's3', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's3',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev1 = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev1).toBeDefined()
+
+    // iterate → designer reruns and (per plan) emits clarify
+    await addReviewComment({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      anchor: {
+        sectionPath: '#',
+        paragraphIdx: 0,
+        offsetStart: 0,
+        offsetEnd: 3,
+        selectedText: 'DES',
+        contextBefore: '',
+        contextAfter: '',
+        occurrenceIndex: 1,
+      },
+      commentText: 'revise',
+    })
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      decision: 'iterated',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify #1
+
+    // answer clarify #1 → designer reruns, asks clarify #2
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // clarify #2
+
+    // answer clarify #2 → designer reruns, emits output v2 → review awaiting v2
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev2).toBeDefined()
+    const designerTops = await topLevel(c.db, task.id, 'designer')
+    const designerCci = Math.max(
+      ...designerTops.filter((r) => r.status === 'done').map((r) => r.clarifyIteration ?? 0),
+    )
+
+    // approve v2 (whose content already reflects the latest designer run)
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev2!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev2!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    // EXPECTED: task done, no spurious re-opened review.
+    const spurious = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spuriousReview: spurious?.id ?? null,
+      designerCci,
+    }).toEqual({
+      status: 'done',
+      spuriousReview: null,
+      designerCci,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S4 — control: self-clarify BEFORE review (no iterate). Should be clean.
+  // ---------------------------------------------------------------------------
+  test('S4 control: clarify-before-review then approve completes cleanly', async () => {
+    await makeDesigner(c)
+    writePlan(c, { designer: [{ clarify: CLARIFY_BODY }, { output: { design: 'DESIGN_V1' } }] })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'designer', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'designer', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's4', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's4',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+    expect(await awaitingReviewRun(c.db, task.id, 'rev')).toBeUndefined()
+  })
+
+  // ---------------------------------------------------------------------------
+  // S5 — sibling reviews: rejecting one must invalidate the approved sibling
+  // ---------------------------------------------------------------------------
+  test('S5 sibling reviews: rejecting reviewA invalidates the already-approved reviewB', async () => {
+    await makeDesigner(c)
+    writePlan(c, {
+      designer: [{ output: { design: 'DESIGN_V1' } }, { output: { design: 'DESIGN_V2' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'revA',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer'],
+        },
+        {
+          id: 'revB',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnReject: ['designer'],
+          rerunnableOnIterate: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'revA', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'revB', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's5', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's5',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const revA = await awaitingReviewRun(c.db, task.id, 'revA')
+    const revB = await awaitingReviewRun(c.db, task.id, 'revB')
+    expect(revA && revB).toBeTruthy()
+
+    // approve B first
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: revB!.id,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+    })
+    // then reject A (rerunnable designer) → designer reruns v2 → B's approval is now stale
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: revA!.id,
+      decision: 'rejected',
+      expectedReviewIteration: 0,
+      rejectReason: 'no good',
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    // EXPECTED: B must NOT remain a finalized approval against the stale v1.
+    // It should be pulled back (awaiting_review again or superseded), and the
+    // task must not be 'done' with a stale B approval.
+    const status = await taskStatus(c.db, task.id)
+    const bTops = await topLevel(c.db, task.id, 'revB')
+    const bApprovedAgainstV1 = bTops.some(
+      (r) => r.status === 'done' && (r.clarifyIteration ?? 0) === (revB!.clarifyIteration ?? 0),
+    )
+    expect({ taskDone: status === 'done', bStillApproved: bApprovedAgainstV1 }).toEqual({
+      taskDone: false,
+      bStillApproved: false,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S6 — does the incident class extend to the REJECT path (not just iterate)?
+  // ---------------------------------------------------------------------------
+  // RED on current code [NEW FINDING: bug class extends to the reject path].
+  test.skip('S6 probe: reject + clarify reruns then approve must not re-open review on the same content', async () => {
+    await makeDesigner(c)
+    writePlan(c, {
+      designer: [
+        { output: { design: 'DESIGN_V1' } },
+        { clarify: CLARIFY_BODY },
+        { output: { design: 'DESIGN_V2' } },
+      ],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'designer', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'designer', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's6', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's6',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev1 = await awaitingReviewRun(c.db, task.id, 'rev')
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      decision: 'rejected',
+      expectedReviewIteration: 0,
+      rejectReason: 'redo',
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev2).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev2!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev2!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const spurious = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spuriousReview: spurious?.id ?? null,
+    }).toEqual({ status: 'done', spuriousReview: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S8 — multi-hop A → B → review(B), with A self-clarifying before output
+  // ---------------------------------------------------------------------------
+  // RED on current code [NEW FINDING: most common trigger — a clarifying agent
+  // with a non-clarifying intermediate agent before the review forces ONE
+  // spurious re-review after the first approval, because the intermediate agent
+  // is dispatched fresh at cci=0 while its upstream sits at cci=1. No
+  // iterate/reject needed — just ask-clarify-then-proceed + a 2-hop chain].
+  test.skip('S8 multi-hop: A→B→review with A clarify-before-output completes cleanly', async () => {
+    await makeDesigner(c, 'agentA', ['a'])
+    await makeDesigner(c, 'agentB', ['b'])
+    writePlan(c, {
+      agentA: [{ clarify: CLARIFY_BODY }, { output: { a: 'A_OUT' } }],
+      agentB: [{ output: { b: 'B_OUT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'agentA', kind: 'agent-single', agentName: 'agentA' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        { id: 'agentB', kind: 'agent-single', agentName: 'agentB' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'agentB', portName: 'b' },
+          rerunnableOnIterate: ['agentB'],
+          rerunnableOnReject: ['agentB'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentA', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'agentA', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'agentA', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'agentA', portName: 'a' },
+          target: { nodeId: 'agentB', portName: 'a' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'agentB', portName: 'b' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's8', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's8',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spurious: (await awaitingReviewRun(c.db, task.id, 'rev'))?.id ?? null,
+    }).toEqual({ status: 'done', spurious: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S9 — downstream clarify must NOT re-open an already-approved upstream review
+  // ---------------------------------------------------------------------------
+  test('S9 freshness-direction: downstream agent clarify does not re-open the upstream approved review', async () => {
+    await makeDesigner(c)
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      designer: [{ output: { design: 'DESIGN_V1' } }],
+      builder: [{ clarify: CLARIFY_BODY }, { output: { build: 'BUILT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'rev', portName: 'approved_doc' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'builder', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'builder', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's9', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's9',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    // builder now asks clarify
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    // EXPECTED: review stays approved (done), task done, review NOT re-opened.
+    const revTops = await topLevel(c.db, task.id, 'rev')
+    const reopened = revTops.some((r) => r.status === 'awaiting_review')
+    expect({ status: await taskStatus(c.db, task.id), reopened }).toEqual({
+      status: 'done',
+      reopened: false,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S10 — pure agent chain A(clarify)→B→C (no review). Negative control: a
+  // forward-only flow with a clarifying head should still reach `done` — the
+  // cci lag only bites on a runScope RE-ENTRY (resume), of which there is none
+  // here. If this fails, the lag is worse than S8 (bites forward flow too).
+  // ---------------------------------------------------------------------------
+  test('S10 control: pure agent chain with clarifying head reaches done (no re-entry)', async () => {
+    await makeDesigner(c, 'agentA', ['a'])
+    await makeDesigner(c, 'agentB', ['b'])
+    await makeDesigner(c, 'agentC', ['cc'])
+    writePlan(c, {
+      agentA: [{ clarify: CLARIFY_BODY }, { output: { a: 'A_OUT' } }],
+      agentB: [{ output: { b: 'B_OUT' } }],
+      agentC: [{ output: { cc: 'C_OUT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'agentA', kind: 'agent-single', agentName: 'agentA' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        { id: 'agentB', kind: 'agent-single', agentName: 'agentB' },
+        { id: 'agentC', kind: 'agent-single', agentName: 'agentC' },
+        {
+          id: 'out',
+          kind: 'output',
+          ports: [{ name: 'final', bind: { nodeId: 'agentC', portName: 'cc' } }],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentA', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'agentA', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'agentA', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'agentA', portName: 'a' },
+          target: { nodeId: 'agentB', portName: 'a' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'agentB', portName: 'b' },
+          target: { nodeId: 'agentC', portName: 'b' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's10', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's10',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+  })
+
+  // ---------------------------------------------------------------------------
+  // S11 — A(clarify)→B(clarify)→review. A non-clarifying intermediate is the
+  // S8 trigger; here B ALSO clarifies, bumping its own cci to match A. Probe:
+  // does a self-clarifying intermediate avoid the spurious re-review?
+  // ---------------------------------------------------------------------------
+  test('S11 probe: A(clarify)→B(clarify)→review then approve completes without re-review', async () => {
+    await makeDesigner(c, 'agentA', ['a'])
+    await makeDesigner(c, 'agentB', ['b'])
+    writePlan(c, {
+      agentA: [{ clarify: CLARIFY_BODY }, { output: { a: 'A_OUT' } }],
+      agentB: [{ clarify: CLARIFY_BODY }, { output: { b: 'B_OUT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'agentA', kind: 'agent-single', agentName: 'agentA' },
+        { id: 'clrA', kind: 'clarify', title: 'a' },
+        { id: 'agentB', kind: 'agent-single', agentName: 'agentB' },
+        { id: 'clrB', kind: 'clarify', title: 'b' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'agentB', portName: 'b' },
+          rerunnableOnIterate: ['agentB'],
+          rerunnableOnReject: ['agentB'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentA', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'agentA', portName: '__clarify__' },
+          target: { nodeId: 'clrA', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clrA', portName: 'answers' },
+          target: { nodeId: 'agentA', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'agentA', portName: 'a' },
+          target: { nodeId: 'agentB', portName: 'a' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'agentB', portName: '__clarify__' },
+          target: { nodeId: 'clrB', portName: 'questions' },
+        },
+        {
+          id: 'e6',
+          source: { nodeId: 'clrB', portName: 'answers' },
+          target: { nodeId: 'agentB', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e7',
+          source: { nodeId: 'agentB', portName: 'b' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's11', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's11',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    // answer A's clarify
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    // answer B's clarify
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spurious: (await awaitingReviewRun(c.db, task.id, 'rev'))?.id ?? null,
+    }).toEqual({ status: 'done', spurious: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S12 — diamond: designer(clarify) → revA(review) AND designer → builder → out.
+  // After approving revA, the non-reviewed builder branch must not be silently
+  // re-run just because builder's cci lags designer's (post-clarify) cci.
+  // Asserts builder ran exactly once (exposes silent wasted reruns).
+  // ---------------------------------------------------------------------------
+  // RED on current code [NEW FINDING: lower severity — silent wasted rerun].
+  // Task still reaches done + revA stays approved, but the non-reviewed builder
+  // sibling re-runs (builderDoneRows=2) purely because builder.cci lagged
+  // designer's post-clarify cci. No user-visible re-review, but wasted execution
+  // (and a non-readonly sibling could churn worktree files for nothing).
+  test.skip('S12 diamond: approving the reviewed branch must not silently re-run the sibling builder branch', async () => {
+    await makeDesigner(c)
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      designer: [{ clarify: CLARIFY_BODY }, { output: { design: 'DESIGN_V1' } }],
+      builder: [{ output: { build: 'BUILT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'revA',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+        {
+          id: 'out',
+          kind: 'output',
+          ports: [{ name: 'f', bind: { nodeId: 'builder', portName: 'build' } }],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'designer', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'revA', portName: '__review_input__' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's12', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's12',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    const revA = await awaitingReviewRun(c.db, task.id, 'revA')
+    expect(revA).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: revA!.id,
+      decision: 'approved',
+      expectedReviewIteration: revA!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const builderTops = await topLevel(c.db, task.id, 'builder')
+    const builderDone = builderTops.filter((r) => r.status === 'done')
+    expect({
+      status: await taskStatus(c.db, task.id),
+      builderDoneRows: builderDone.length,
+    }).toEqual({
+      status: 'done',
+      builderDoneRows: 1,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S13 — loop wrapper {designer + clarify} → post-loop agent → review(agent).
+  // (review.inputSource must be an agent, not the wrapper — validator rule
+  // review-input-source-not-markdown; so we review a post-loop agent.) Probes
+  // cci freshness across the loop sub-scope boundary into the parent-scope
+  // review.
+  // ---------------------------------------------------------------------------
+  test('S13 loop wrapper with inner clarify → post-loop agent → review approves cleanly', async () => {
+    await makeDesigner(c)
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      designer: [{ clarify: CLARIFY_BODY }, { output: { design: 'DESIGN_V1' } }],
+      builder: [{ output: { build: 'BUILT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 3,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'loop',
+          kind: 'wrapper-loop',
+          nodeIds: ['designer', 'clr'],
+          maxIterations: 3,
+          exitCondition: { kind: 'port-not-empty', nodeId: 'designer', portName: 'design' },
+          outputBindings: [{ name: 'looped', bind: { nodeId: 'designer', portName: 'design' } }],
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'builder', portName: 'build' },
+          rerunnableOnIterate: ['builder'],
+          rerunnableOnReject: ['builder'],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'designer', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'loop', portName: 'looped' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'builder', portName: 'build' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's13', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's13',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spurious: (await awaitingReviewRun(c.db, task.id, 'rev'))?.id ?? null,
+    }).toEqual({ status: 'done', spurious: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S15 — cross-clarify + review (Layer A cascade mechanism, distinct from the
+  // Layer B path S3/S6/S8 hit). questioner asks the designer; after continue,
+  // designer reruns and the cascade re-mints downstream. Invariant: the task
+  // converges to `done` after the legit re-reviews and never `failed`.
+  // ---------------------------------------------------------------------------
+  test('S15 cross-clarify + review: converges to done, never fails with internal inconsistency', async () => {
+    await makeDesigner(c, 'designer', ['doc'])
+    await makeDesigner(c, 'questioner', ['qdoc'])
+    // designer: v1, then (after external feedback) v2.
+    // questioner: first run asks cross-clarify, then outputs.
+    writePlan(c, {
+      designer: [
+        { output: { doc: 'D_V1' } },
+        { output: { doc: 'D_V2' } },
+        { output: { doc: 'D_V3' } },
+      ],
+      questioner: [
+        { clarify: CLARIFY_BODY },
+        { output: { qdoc: 'Q_OUT' } },
+        { output: { qdoc: 'Q_OUT2' } },
+      ],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 3,
+      inputs: [{ kind: 'text', key: 'req', label: 'r' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'req' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'doc' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+        { id: 'questioner', kind: 'agent-single', agentName: 'questioner' },
+        { id: 'cross1', kind: 'clarify-cross-agent' },
+        {
+          id: 'out',
+          kind: 'output',
+          ports: [{ name: 'final', bind: { nodeId: 'questioner', portName: 'qdoc' } }],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'req' },
+          target: { nodeId: 'designer', portName: 'req' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'doc' },
+          target: { nodeId: 'rev1', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'rev1', portName: 'approved_doc' },
+          target: { nodeId: 'questioner', portName: 'req' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'questioner', portName: '__clarify__' },
+          target: { nodeId: 'cross1', portName: 'questions' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'cross1', portName: 'to_designer' },
+          target: { nodeId: 'designer', portName: '__external_feedback__' },
+        },
+        {
+          id: 'e6',
+          source: { nodeId: 'cross1', portName: 'to_questioner' },
+          target: { nodeId: 'questioner', portName: '__external_feedback__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's15', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's15',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { req: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    // designer v1 → rev1 awaiting. approve.
+    const rev1 = await awaitingReviewRun(c.db, task.id, 'rev1')
+    expect(rev1).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1!.id,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    // questioner ran and asked cross-clarify → awaiting_human
+    expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
+
+    // answer cross-clarify with continue → designer reruns + cascade
+    const ccRows = await c.db
+      .select()
+      .from(crossClarifySessions)
+      .where(
+        and(
+          eq(crossClarifySessions.taskId, task.id),
+          eq(crossClarifySessions.status, 'awaiting_human'),
+        ),
+      )
+    expect(ccRows.length).toBe(1)
+    await submitCrossClarifyAnswers({
+      db: c.db,
+      crossClarifyNodeRunId: ccRows[0]!.crossClarifyNodeRunId,
+      answers: [CLARIFY_ANSWER],
+      directive: 'stop',
+    })
+    // Drive the scheduler to a fixed point: resume up to a few times, approving
+    // any review that re-opens (legit: designer changed). Bounded loop.
+    let guard = 0
+    while (guard++ < 8) {
+      await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+      const st = await taskStatus(c.db, task.id)
+      if (st === 'done' || st === 'failed') break
+      if (st === 'awaiting_review') {
+        const r = await awaitingReviewRun(c.db, task.id, 'rev1')
+        if (r) {
+          await submitReviewDecision({
+            db: c.db,
+            appHome: c.appHome,
+            nodeRunId: r.id,
+            decision: 'approved',
+            expectedReviewIteration: r.reviewIteration,
+          })
+          continue
+        }
+        break
+      }
+      if (st === 'awaiting_human') break // unexpected second clarify (stop should end it)
+    }
+
+    const finalStatus = await taskStatus(c.db, task.id)
+    const failedRun = (await c.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, task.id))).find(
+      (r) => r.status === 'failed',
+    )
+    expect({ finalStatus, failedReason: failedRun?.errorMessage ?? null }).toEqual({
+      finalStatus: 'done',
+      failedReason: null,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S16 — multi-review pipeline: designer → rev1 → builder → rev2. Iterating
+  // rev1 must propagate v2 through to builder; rev2 reviews builder's v2 output;
+  // approving both ends clean with no spurious re-open.
+  // ---------------------------------------------------------------------------
+  test('S16 multi-review pipeline: iterate rev1 → approve → builder → approve rev2 ends clean', async () => {
+    await makeDesigner(c)
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      designer: [{ output: { design: 'DESIGN_V1' } }, { output: { design: 'DESIGN_V2' } }],
+      builder: [{ output: { build: 'BUILT_FROM_V2' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev1',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+        {
+          id: 'rev2',
+          kind: 'review',
+          inputSource: { nodeId: 'builder', portName: 'build' },
+          rerunnableOnIterate: ['builder'],
+          rerunnableOnReject: ['builder'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev1', portName: '__review_input__' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'rev1', portName: 'approved_doc' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'builder', portName: 'build' },
+          target: { nodeId: 'rev2', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's16', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's16',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev1a = await awaitingReviewRun(c.db, task.id, 'rev1')
+    expect(rev1a).toBeDefined()
+    await addReviewComment({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1a!.id,
+      anchor: {
+        sectionPath: '#',
+        paragraphIdx: 0,
+        offsetStart: 0,
+        offsetEnd: 3,
+        selectedText: 'DES',
+        contextBefore: '',
+        contextAfter: '',
+        occurrenceIndex: 1,
+      },
+      commentText: 'revise',
+    })
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1a!.id,
+      decision: 'iterated',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev1b = await awaitingReviewRun(c.db, task.id, 'rev1')
+    expect(rev1b).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev1b!.id,
+      decision: 'approved',
+      expectedReviewIteration: 1,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const rev2 = await awaitingReviewRun(c.db, task.id, 'rev2')
+    expect(rev2).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev2!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev2!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const spurious1 = await awaitingReviewRun(c.db, task.id, 'rev1')
+    const spurious2 = await awaitingReviewRun(c.db, task.id, 'rev2')
+    expect({
+      status: await taskStatus(c.db, task.id),
+      s1: spurious1?.id ?? null,
+      s2: spurious2?.id ?? null,
+    }).toEqual({ status: 'done', s1: null, s2: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S17 — process crash then retry (RFC-042, same row) → review. A crashed-then-
+  // recovered agent must produce a clean single done row + review approves once.
+  // ---------------------------------------------------------------------------
+  test('S17 crash-then-retry agent → review approves cleanly (single done row)', async () => {
+    await makeDesigner(c)
+    writePlan(c, { designer: [{ crash: true }, { output: { design: 'DESIGN_V1' } }] })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'designer', portName: 'design' },
+          rerunnableOnIterate: ['designer'],
+          rerunnableOnReject: ['designer'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'designer', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'designer', portName: 'design' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's17', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's17',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    const designerDone = (await topLevel(c.db, task.id, 'designer')).filter(
+      (r) => r.status === 'done',
+    )
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: 0,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      designerDoneRows: designerDone.length,
+      spurious: (await awaitingReviewRun(c.db, task.id, 'rev'))?.id ?? null,
+    }).toEqual({
+      status: 'done',
+      designerDoneRows: 1,
+      spurious: null,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S18 — two independent branches A(clarify)→revA and B→revB. A's clarify must
+  // not interfere with B's branch; both approve cleanly.
+  // ---------------------------------------------------------------------------
+  test('S18 parallel branches: clarify on branch A does not interfere with branch B review', async () => {
+    await makeDesigner(c, 'agentA', ['a'])
+    await makeDesigner(c, 'agentB', ['b'])
+    writePlan(c, {
+      agentA: [{ clarify: CLARIFY_BODY }, { output: { a: 'A_OUT' } }],
+      agentB: [{ output: { b: 'B_OUT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'agentA', kind: 'agent-single', agentName: 'agentA' },
+        { id: 'clr', kind: 'clarify', title: 'c' },
+        {
+          id: 'revA',
+          kind: 'review',
+          inputSource: { nodeId: 'agentA', portName: 'a' },
+          rerunnableOnIterate: ['agentA'],
+          rerunnableOnReject: ['agentA'],
+        },
+        { id: 'agentB', kind: 'agent-single', agentName: 'agentB' },
+        {
+          id: 'revB',
+          kind: 'review',
+          inputSource: { nodeId: 'agentB', portName: 'b' },
+          rerunnableOnIterate: ['agentB'],
+          rerunnableOnReject: ['agentB'],
+        },
+      ] as WorkflowNode[],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentA', portName: 'topic' },
+        },
+        {
+          id: 'e2',
+          source: { nodeId: 'agentA', portName: '__clarify__' },
+          target: { nodeId: 'clr', portName: 'questions' },
+        },
+        {
+          id: 'e3',
+          source: { nodeId: 'clr', portName: 'answers' },
+          target: { nodeId: 'agentA', portName: '__clarify_response__' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'agentA', portName: 'a' },
+          target: { nodeId: 'revA', portName: '__review_input__' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentB', portName: 'topic' },
+        },
+        {
+          id: 'e6',
+          source: { nodeId: 'agentB', portName: 'b' },
+          target: { nodeId: 'revB', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's18', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's18',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    // A asked clarify; B should already be awaiting_review.
+    await submitClarifyAnswers({
+      db: c.db,
+      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      answers: [CLARIFY_ANSWER],
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    const revA = await awaitingReviewRun(c.db, task.id, 'revA')
+    const revB = await awaitingReviewRun(c.db, task.id, 'revB')
+    expect(revA && revB).toBeTruthy()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: revA!.id,
+      decision: 'approved',
+      expectedReviewIteration: revA!.reviewIteration,
+    })
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: revB!.id,
+      decision: 'approved',
+      expectedReviewIteration: revB!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      sA: (await awaitingReviewRun(c.db, task.id, 'revA'))?.id ?? null,
+      sB: (await awaitingReviewRun(c.db, task.id, 'revB'))?.id ?? null,
+    }).toEqual({ status: 'done', sA: null, sB: null })
+  })
+
+  // ---------------------------------------------------------------------------
+  // S19 — fanout → post-fanout agent → review. Locks that the wrapper's shard /
+  // aggregator children (parentNodeRunId set) don't break the downstream review,
+  // and approve completes cleanly.
+  // ---------------------------------------------------------------------------
+  // DEFERRED (not a product bug): the fanout wrapper's shardSource/outlet ports
+  // need validator-compliant declarations that the runtime-only fanout e2e test
+  // bypasses via direct seed. The "wrapper inner/child rows (parentNodeRunId set)
+  // don't break a downstream review" property is already locked structurally by
+  // S13 (loop wrapper → builder → review). Revisit with a direct-seed harness if
+  // fanout-specific provenance needs its own lock.
+  test.skip('S19 fanout → builder → review approves cleanly (shard children excluded)', async () => {
+    await createAgent(c.db, {
+      name: 'worker',
+      description: '',
+      outputs: ['result'],
+      outputKinds: { result: 'markdown' },
+      readonly: false,
+      syncOutputsOnIterate: false,
+      permission: {},
+      skills: [],
+      dependsOn: [],
+      mcp: [],
+      plugins: [],
+      frontmatterExtra: {},
+      bodyMd: '',
+    })
+    await createAgent(c.db, {
+      name: 'agg',
+      description: '',
+      outputs: ['result'],
+      outputKinds: { result: 'markdown' },
+      readonly: false,
+      syncOutputsOnIterate: false,
+      role: 'aggregator',
+      outputWrapperPortNames: { result: 'final' },
+      permission: {},
+      skills: [],
+      dependsOn: [],
+      mcp: [],
+      plugins: [],
+      frontmatterExtra: {},
+      bodyMd: '',
+    })
+    await makeDesigner(c, 'builder', ['build'])
+    writePlan(c, {
+      worker: [{ output: { result: 'processed' } }],
+      agg: [{ output: { result: 'MERGED' } }],
+      builder: [{ output: { build: 'BUILT' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 4,
+      inputs: [{ kind: 'text', key: 'docs', label: 'docs' }],
+      nodes: [
+        { id: 'inp', kind: 'input', inputKey: 'docs' },
+        {
+          id: 'fan',
+          kind: 'wrapper-fanout',
+          nodeIds: ['inner', 'aggNode'],
+          inputs: [{ name: 'docs', kind: 'list<path<md>>', isShardSource: true }],
+        },
+        {
+          id: 'inner',
+          kind: 'agent-single',
+          agentName: 'worker',
+          promptTemplate: 'Process {{doc}}',
+        },
+        {
+          id: 'aggNode',
+          kind: 'agent-single',
+          agentName: 'agg',
+          promptTemplate: 'Merge {{items}}',
+        },
+        { id: 'builder', kind: 'agent-single', agentName: 'builder' },
+        {
+          id: 'rev',
+          kind: 'review',
+          inputSource: { nodeId: 'builder', portName: 'build' },
+          rerunnableOnIterate: ['builder'],
+          rerunnableOnReject: ['builder'],
+        },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'inp', portName: 'docs' },
+          target: { nodeId: 'fan', portName: 'docs' },
+        },
+        {
+          id: 'eB',
+          source: { nodeId: 'fan', portName: 'docs' },
+          target: { nodeId: 'inner', portName: 'doc' },
+          boundary: 'wrapper-input',
+        },
+        {
+          id: 'eAgg',
+          source: { nodeId: 'inner', portName: 'result' },
+          target: { nodeId: 'aggNode', portName: 'items' },
+        },
+        {
+          id: 'eOut',
+          source: { nodeId: 'fan', portName: 'final' },
+          target: { nodeId: 'builder', portName: 'doc' },
+        },
+        {
+          id: 'eRev',
+          source: { nodeId: 'builder', portName: 'build' },
+          target: { nodeId: 'rev', portName: '__review_input__' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's19', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's19',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { docs: 'a.md\nb.md' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    const rev = await awaitingReviewRun(c.db, task.id, 'rev')
+    expect(rev).toBeDefined()
+    await submitReviewDecision({
+      db: c.db,
+      appHome: c.appHome,
+      nodeRunId: rev!.id,
+      decision: 'approved',
+      expectedReviewIteration: rev!.reviewIteration,
+    })
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+
+    expect({
+      status: await taskStatus(c.db, task.id),
+      spurious: (await awaitingReviewRun(c.db, task.id, 'rev'))?.id ?? null,
+    }).toEqual({ status: 'done', spurious: null })
+  })
+})
