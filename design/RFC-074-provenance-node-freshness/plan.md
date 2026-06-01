@@ -19,6 +19,24 @@
 > （仅 daemon/ws/cli/mcp 环境前置失败，pristine main 同样红）；前端 2230 全绿。**测试基线等价口径**：所有
 > 旧的「靠 ulid() 调用序」或「手 seed 非因果 id」的 freshness 测试改因果 id / monotonicFactory（生产侧 rerun
 > 总在更晚 ms 由用户动作触发→id 单调，仅同步测试 seeding 需此处置）。
+>
+> **Post-merge 正确性审查 + 补强（2026-06-01，CI 全绿 tip `f5f6f11`）**：PR-A/B/C 落地后全量复审
+> （多-agent + 逐行 hand-verify + 实跑），核心 freshness 正确、零调度 bug。修 1 个真实展示层回归 +
+> 补齐验收清单缺测：**F2**（commit `9693b82`）designer cross-clarify rerun 在 `retry=max+1` mint（**故意**：
+> 保 scheduler `isClarifyRerun=clarifyGeneration>0&&retryIndex===0` 自-clarify inline 门为假，cross-clarify
+> 走 retry-无关的 `isCrossClarifyTriggeredRerun`），但三个代际消费者（`memoryInject.loadInjectedSnapshotFromFirstAttempt`
+> / 前端 `clarifyRoundForRun` / `findFirstAttemptSibling`）按 `retryIndex===0` 过滤代际锚 → 漏 designer 代、
+> 「第 N 轮」少计 + 注入快照取错代（纯展示，违 AC PR-C「§6.5 UI 与迁移前一致」）。修：三者统一改 **retry-无关的
+> prior-`done` 边界口径**（镜像 `priorDoneGenerationsForRun`——代际起于首行或前一 top-level 行 `done` 之后；
+> retry 只跟在 `failed` 后＝同代，`scheduler.ts:498` `decideEnvelopeFollowup` 实证），订正 5 个「retry 跟 done」
+> 不真实 fixture；**F3**（`9693b82`）§4.3/D9 多跳 staged-demote 集成测试 `S-RFC074`（in→A→B→C 全-agent、
+> 逐 batch demote[B]→demote[C]，断言 consumed 指向 fresh 上游——RFC #1 风险此前无专测）；**F4/F5**（`9693b82`）
+> memoryInject 多代际 + 前端「第 N 轮」designer/US-2 parity 单测（T-C4a）；**F7/F8**（`ee06769`）§8/D3 wrapper-
+> provenance-atomic 锁（`freshness.test.ts` B5 + 源码锁）+ migration-0041 含行数据拷贝逐列 round-trip + 索引/FK
+> 存活锁；**F9**（`2ecca40`）lifecycleRepair T2 id-代际选择 C 组锁（T-C4b）+ harness `id` 槽。门禁：typecheck（3
+> 包）+ lint + format 绿；前端 2233（vitest 4.1.8）；RFC-074 后端生态 120 pass/1 skip/0 fail；CI 全绿。**deferred
+> （非阻塞）**：demote safety-cap（终止性结构性保证、过紧 cap 反伤深链）/ S3·sessionView 多代际锁（低值）/ 过时
+> cci-first 注释（纯文案）。**至此 RFC-074 真正完工**（原 PR-C 标 Done 偏早，本次补强后名副其实）。
 
 ## 1. PR 拆分（3 PR 强序，决策 D7）
 
