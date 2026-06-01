@@ -71,6 +71,18 @@ import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
+import { runCommitPush } from '@/services/commitPushRunner'
+import {
+  buildCommitAgent,
+  buildCommitMessagePrompt,
+  buildRepairPrompt,
+  commitPushNodeId,
+  COMMIT_MESSAGE_PORT,
+} from '@/services/commitPush'
+import {
+  DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES,
+  DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES,
+} from '@agent-workflow/shared'
 import {
   decodeWrapperProgress,
   encodeWrapperProgress,
@@ -117,6 +129,13 @@ export interface RunTaskOptions {
    * Omitted → runner falls back to its compile-time defaults.
    */
   subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
+  /**
+   * RFC-075: model for the built-in commit agent (commit message + push
+   * repair). Omitted → opencode's installed default. Repair budget + diff
+   * truncation use the DEFAULT_COMMIT_PUSH_* constants (Settings wiring is a
+   * follow-up; the runtime reads sensible defaults today).
+   */
+  commitPushModel?: string
 }
 
 type NodeStatus =
@@ -654,6 +673,21 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
       const r = results[i]!
       if (r.kind === 'ok') {
         completed.add(node.id)
+        // RFC-075: after a top-level node finishes (writer agent or a wrapper
+        // treated as a unit), auto-commit&push its changes when the task opted
+        // in. Gated on `autoCommitPush` so every existing (opt-out) task takes
+        // a byte-identical zero-change path. Defensive: a commit failure must
+        // NEVER break task execution.
+        if (state.task.autoCommitPush && state.topLevelIds.has(node.id)) {
+          try {
+            await maybeRunCommitPush(state, node, iteration, log)
+          } catch (err) {
+            log.warn('auto commit&push trigger failed (ignored)', {
+              nodeId: node.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
         continue
       }
       if (r.kind === 'awaiting_review') {
@@ -706,6 +740,162 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     return { kind: 'failed', detail: firstFailureDetail }
   }
   return { kind: 'ok' }
+}
+
+/**
+ * RFC-075: auto commit&push after a top-level node completed. Diff-driven —
+ * for each repo whose worktree has changes since the last commit, the
+ * framework stages + commits (LLM message) + pushes via `runCommitPush`, with
+ * the commit message + push repair driven by an opencode session (the built-in
+ * commit agent) captured under the synthesized commit node_run. Read-only
+ * nodes and no-op writers leave a clean worktree and are skipped for free.
+ *
+ * Only ever invoked when `state.task.autoCommitPush === true` (the caller
+ * gates it), so this is a pure addition for opt-in tasks. Each repo's commit
+ * runs sequentially in the scope's result loop, so commits never interleave.
+ */
+async function maybeRunCommitPush(
+  state: SchedulerState,
+  node: WorkflowNode,
+  iteration: number,
+  log: Logger,
+): Promise<void> {
+  const { db, task } = state
+  // The triggering node's latest done run at this iteration → parent of the
+  // commit row, so the detail page can group it under the agent.
+  const parentRows = await db
+    .select({ id: nodeRuns.id })
+    .from(nodeRuns)
+    .where(
+      and(
+        eq(nodeRuns.taskId, task.id),
+        eq(nodeRuns.nodeId, node.id),
+        eq(nodeRuns.iteration, iteration),
+        eq(nodeRuns.status, 'done'),
+      ),
+    )
+    .orderBy(desc(nodeRuns.startedAt))
+    .limit(1)
+  const parentNodeRunId = parentRows[0]?.id ?? null
+  const agentLabel: string =
+    node.kind === 'agent-single' && typeof node.agentName === 'string' ? node.agentName : node.id
+  const branch = task.branch
+  const model = state.opts.commitPushModel
+
+  for (const repo of state.repos) {
+    const status = await runGit(repo.worktreePath, ['status', '--porcelain'])
+    if (status.stdout.trim() === '') continue // nothing changed in this repo
+    const repoSlug = repo.worktreeDirName
+    const nodeId = commitPushNodeId(node.id, repoSlug || undefined)
+    const baseRef = repo.baseBranch || task.baseBranch
+    const repoName = repoSlug || repo.repoPath.split('/').pop() || 'repo'
+
+    // Drive a commit-agent opencode session under the commit node_run id so the
+    // detail-page "view session" button shows the message/repair conversation.
+    const genViaOpencode = async (
+      prompt: string,
+      ctx: { nodeRunId: string },
+    ): Promise<{ message: string | null; sessionId: string | null }> => {
+      // Each opencode session (message gen, each repair) runs on its OWN child
+      // node_run so runNode's lifecycle state machine (pending→running→done)
+      // owns it cleanly — reusing the commit container row would collide with
+      // its mark-running transition. The child's parent is the container, so
+      // the detail page groups the captured session(s) under the commit row.
+      const sessionRunId = ulid()
+      try {
+        await db.insert(nodeRuns).values({
+          id: sessionRunId,
+          taskId: task.id,
+          nodeId,
+          parentNodeRunId: ctx.nodeRunId,
+          status: 'pending',
+          retryIndex: 0,
+          iteration,
+          shardKey: null,
+          startedAt: Date.now(),
+        })
+        const result = await runNode({
+          taskId: task.id,
+          nodeRunId: sessionRunId,
+          nodeId,
+          agent: buildCommitAgent(model ?? null),
+          inputs: {},
+          worktreePath: repo.worktreePath,
+          promptTemplate: prompt,
+          templateMeta: {
+            repoPath: repo.repoPath,
+            baseBranch: baseRef,
+            taskId: task.id,
+            nodeId,
+            iteration,
+            repos: state.repos,
+          },
+          skills: [],
+          dependents: [],
+          mcps: [],
+          plugins: [],
+          appHome: state.opts.appHome,
+          db,
+          log: log.child('commit'),
+          gitUserName: task.gitUserName,
+          gitUserEmail: task.gitUserEmail,
+          ...(state.opts.opencodeCmd ? { opencodeCmd: state.opts.opencodeCmd } : {}),
+          ...(state.opts.signal ? { signal: state.opts.signal } : {}),
+        })
+        const msg = result.outputs[COMMIT_MESSAGE_PORT]
+        return {
+          message: msg !== undefined && msg.trim() !== '' ? msg : null,
+          sessionId: result.sessionId ?? null,
+        }
+      } catch (err) {
+        log.warn('commit-agent opencode run failed; will fall back', {
+          nodeId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return { message: null, sessionId: null }
+      }
+    }
+
+    await runCommitPush(
+      {
+        taskId: task.id,
+        agentNodeId: node.id,
+        agentName: agentLabel,
+        parentNodeRunId,
+        worktreePath: repo.worktreePath,
+        repoBranch: branch,
+        baseRef,
+        ...(repoSlug ? { repoSlug } : {}),
+        gitUserName: task.gitUserName,
+        gitUserEmail: task.gitUserEmail,
+        maxRepairRetries: DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES,
+        diffMaxBytes: DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES,
+        generateMessage: (mctx) =>
+          genViaOpencode(
+            buildCommitMessagePrompt({
+              repoName,
+              branch,
+              baseRef,
+              stat: mctx.stat,
+              diffTruncated: mctx.diffTruncated,
+            }),
+            mctx,
+          ),
+        generateRepair: (rctx) =>
+          genViaOpencode(
+            buildRepairPrompt({
+              branch,
+              pushStderr: rctx.pushStderr,
+              currentMessage: rctx.currentMessage,
+              stat: rctx.stat,
+              priorAttempts: rctx.priorAttempts,
+            }),
+            rctx,
+          ),
+      },
+      { db, log: log.child('commit') },
+    )
+  }
 }
 
 /**

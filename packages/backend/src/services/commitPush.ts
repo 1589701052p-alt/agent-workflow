@@ -9,12 +9,47 @@
 
 import type { DetectedEnvelopeKind } from '@/services/envelope'
 import { extractLastEnvelope, parseEnvelope } from '@/services/envelope'
-import type { NodeRunStatus } from '@agent-workflow/shared'
+import type { Agent, NodeRunStatus } from '@agent-workflow/shared'
 
 /** Synthetic node_id prefix marking a framework commit&push node_run. */
 export const COMMIT_PUSH_NODE_PREFIX = '__commit_push__'
 /** The single output port the built-in commit agent declares. */
 export const COMMIT_MESSAGE_PORT = 'commit_message'
+/** Name of the framework-internal commit agent (never a user-editable row). */
+export const COMMIT_AGENT_NAME = 'commit'
+
+/**
+ * RFC-075 T12: the framework's built-in "commit" agent. Not persisted to the
+ * `agents` table — constructed on the fly and handed to `runNode` so it spawns
+ * an opencode session (captured under the commit node_run) that summarizes the
+ * staged diff / repairs a rejected push. Read-only (it only emits text; the
+ * framework runs git), no skills / deps / mcp / plugins. `model` falls back to
+ * opencode's installed default when unset.
+ */
+export function buildCommitAgent(model?: string | null): Agent {
+  const now = Date.now()
+  return {
+    id: '__commit_agent__',
+    name: COMMIT_AGENT_NAME,
+    description: 'Framework built-in: write commit messages and repair rejected pushes (RFC-075).',
+    outputs: [COMMIT_MESSAGE_PORT],
+    readonly: true,
+    syncOutputsOnIterate: true,
+    permission: {},
+    skills: [],
+    dependsOn: [],
+    mcp: [],
+    plugins: [],
+    frontmatterExtra: {},
+    bodyMd:
+      'You write git commit messages and repair rejected pushes. Always reply with exactly one ' +
+      `<workflow-output> envelope containing a single <port name="${COMMIT_MESSAGE_PORT}"> element.`,
+    schemaVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+    ...(model != null && model !== '' ? { model } : {}),
+  }
+}
 
 /**
  * Synthetic node_id for a commit&push run triggered by `agentNodeId`. In
