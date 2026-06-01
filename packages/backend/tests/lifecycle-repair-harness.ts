@@ -122,9 +122,13 @@ export async function insertNodeRun(
     startedAt?: number
     finishedAt?: number | null
     errorMessage?: string | null
+    // RFC-074 PR-C: explicit id lets multi-generation tests pin id-order
+    // deterministically (freshness/generation selection is pure ULID id-order;
+    // two plain ulid() calls in the same ms could otherwise invert and flake).
+    id?: string
   },
 ): Promise<string> {
-  const id = ulid()
+  const id = opts.id ?? ulid()
   await db.insert(nodeRuns).values({
     id,
     taskId,
