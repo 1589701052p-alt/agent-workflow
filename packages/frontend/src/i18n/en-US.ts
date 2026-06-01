@@ -1093,7 +1093,7 @@ export const enUS: Resources = {
     },
     autoCommitPush: {
       label: 'Auto commit & push on completion',
-      hint: "After each writer agent emits its final output, the framework commits all changes and pushes to the remote (clarify rounds don't trigger it)",
+      hint: 'After each writer agent emits its final output, the framework commits all changes and pushes to the remote',
     },
     pathFetch: {
       label: 'Refresh remote refs before launch',
