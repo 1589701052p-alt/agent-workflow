@@ -21,6 +21,8 @@ import { ConfirmButton } from '@/components/ConfirmButton'
 import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
+import { Dialog } from '@/components/Dialog'
+import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
@@ -533,9 +535,19 @@ function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
   }
 }
 
+// RFC-075: synthetic commit&push node id prefix. Container rows carry
+// `commitPush` metadata; the message/repair session children share the nodeId
+// but have `commitPush == null` (hidden from the table — reachable via the
+// container row's "view session" dialog).
+const COMMIT_PUSH_PREFIX = '__commit_push__'
+
 function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSnapshot: unknown }) {
   const { t } = useTranslation()
   if (runs.length === 0) return <div className="muted">{t('tasks.noNodeRuns')}</div>
+  // Hide commit-session CHILD rows (kept reachable via the container's dialog).
+  const visible = runs.filter(
+    (r) => !(r.nodeId.startsWith(COMMIT_PUSH_PREFIX) && r.commitPush == null),
+  )
   return (
     <table className="data-table">
       <thead>
@@ -550,7 +562,11 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
         </tr>
       </thead>
       <tbody>
-        {runs.map((r) => {
+        {visible.map((r) => {
+          // RFC-075: framework commit&push row — distinct rendering + session dialog.
+          if (r.commitPush != null) {
+            return <CommitRunRow key={r.id} run={r} allRuns={runs} />
+          }
           const name = resolveNodeNameFromSnapshot(workflowSnapshot, r.nodeId) ?? r.nodeId
           return (
             <tr key={r.id}>
@@ -616,6 +632,91 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
         })}
       </tbody>
     </table>
+  )
+}
+
+/** RFC-075: i18n key for a commit&push outcome label. */
+function commitOutcomeKey(outcome: string): string {
+  switch (outcome) {
+    case 'pushed':
+      return 'tasks.commitOutcomePushed'
+    case 'commit-local-auth':
+      return 'tasks.commitOutcomeLocalAuth'
+    case 'commit-local-failed':
+      return 'tasks.commitOutcomeLocalFailed'
+    default:
+      return 'tasks.commitOutcomeSkippedEmpty'
+  }
+}
+
+/**
+ * RFC-075: a framework commit&push row. Renders the outcome chip + change
+ * stats and a "view session" button that opens the message/repair conversation
+ * (captured on the child node_runs) in a Dialog, reusing SessionTab.
+ */
+function CommitRunRow({ run, allRuns }: { run: NodeRun; allRuns: NodeRun[] }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const cp = run.commitPush!
+  // Session children: same nodeId, parent = this container row.
+  const sessionRuns = allRuns.filter((r) => r.parentNodeRunId === run.id)
+  const latestChild = sessionRuns[sessionRuns.length - 1]
+  return (
+    <tr data-testid="commit-push-row">
+      <td>
+        <span>{t('tasks.commitPushNode')}</span>{' '}
+        <code className="data-table__muted">{cp.repoBranch}</code>
+      </td>
+      <td>
+        <span
+          className={`status-chip status-chip--${noderunTone(run.status)}`}
+          data-testid="commit-push-outcome"
+        >
+          {t(commitOutcomeKey(cp.pushOutcome))}
+        </span>{' '}
+        {sessionRuns.length > 0 && latestChild !== undefined && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => setOpen(true)}
+            data-testid="commit-push-session-btn"
+          >
+            {t('tasks.commitViewSession')}
+          </button>
+        )}
+        {latestChild !== undefined && (
+          <Dialog
+            open={open}
+            onClose={() => setOpen(false)}
+            title={t('tasks.commitSessionTitle')}
+            size="lg"
+          >
+            <SessionTab
+              taskId={run.taskId}
+              runs={sessionRuns}
+              nodeId={run.nodeId}
+              selectedRunId={latestChild.id}
+              workflowNodeKind="agent-single"
+            />
+          </Dialog>
+        )}
+      </td>
+      <td className="data-table__muted">{t('common.emDash')}</td>
+      <td className="data-table__muted">{cp.repairAttempts}</td>
+      <td className="data-table__muted">
+        {run.startedAt === null ? t('common.emDash') : new Date(run.startedAt).toLocaleTimeString()}
+      </td>
+      <td className="data-table__muted">
+        {cp.filesChanged > 0
+          ? t('tasks.commitFiles', {
+              files: cp.filesChanged,
+              ins: cp.insertions,
+              del: cp.deletions,
+            })
+          : t('common.emDash')}
+      </td>
+      <td className="data-table__muted">{cp.pushError ?? t('common.emDash')}</td>
+    </tr>
   )
 }
 

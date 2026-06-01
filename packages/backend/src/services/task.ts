@@ -15,7 +15,8 @@ import type {
   TaskRepo,
   TaskSummary,
 } from '@agent-workflow/shared'
-import { NODE_KIND_BEHAVIORS } from '@agent-workflow/shared'
+import { CommitPushMetaSchema, NODE_KIND_BEHAVIORS } from '@agent-workflow/shared'
+import type { CommitPushMeta } from '@agent-workflow/shared'
 import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm'
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
@@ -88,6 +89,12 @@ export interface StartTaskDeps {
    * `pollMs = 0` keeps RFC-027 behavior (post-run BFS only).
    */
   subagentLiveCapture?: { pollMs: number; consecutiveFailureLimit: number }
+  /**
+   * RFC-075: auto commit&push runtime config (resolved from settings by the
+   * route). Threaded into `RunTaskOptions`. Omitted fields fall back to
+   * opencode-default model + DEFAULT_COMMIT_PUSH_* constants.
+   */
+  commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -796,6 +803,14 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
+    // RFC-075: thread commit&push runtime config through to the scheduler.
+    ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
+    ...(deps.commitPush?.maxRepairRetries !== undefined
+      ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
+      : {}),
+    ...(deps.commitPush?.diffMaxBytes !== undefined
+      ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
+      : {}),
     log,
     signal: controller.signal,
   })
@@ -1002,6 +1017,14 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
       : {}),
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
+      : {}),
+    // RFC-075: thread commit&push runtime config through to the scheduler.
+    ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
+    ...(deps.commitPush?.maxRepairRetries !== undefined
+      ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
+      : {}),
+    ...(deps.commitPush?.diffMaxBytes !== undefined
+      ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
       : {}),
     log,
     signal: controller.signal,
@@ -1329,6 +1352,22 @@ export async function listTasks(
 }
 
 /**
+ * RFC-075: defensively parse `node_runs.commit_push_json` into CommitPushMeta.
+ * Returns null for regular rows (NULL column) and for any corrupt payload —
+ * the column is framework-written, so corruption shouldn't happen, but a bad
+ * row must not 5xx the whole task-detail response.
+ */
+function parseCommitPushJson(raw: string | null): CommitPushMeta | null {
+  if (raw === null || raw === '') return null
+  try {
+    const parsed = CommitPushMetaSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Returns all node_runs rows for a task plus their captured port outputs.
  * Ordering: started_at ascending so the frontend can render them as a
  * timeline. node_runs that haven't started yet (`pending`) tail the list
@@ -1384,6 +1423,10 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     // injectedMemories — corrupted payloads degrade to null rather than
     // throw the whole task detail response.
     portValidationFailures: parsePortValidationFailuresJson(r.portValidationFailuresJson),
+    // RFC-075: commit&push metadata on framework-synthesized commit rows
+    // (NULL on every regular node_run). Defensive parse: corrupt payloads
+    // degrade to null rather than 5xx the whole task-detail response.
+    commitPush: parseCommitPushJson(r.commitPushJson),
   }))
 
   let outputs: NodeRunOutput[] = []

@@ -96,6 +96,23 @@ function resolveSubagentLiveCapture(
   }
 }
 
+/** RFC-075: read the auto commit&push runtime config from settings. */
+function resolveCommitPushConfig(
+  configPath: string,
+): { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } | undefined {
+  try {
+    const cfg = loadConfig(configPath)
+    const out: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } = {}
+    if (cfg.commitPushModel !== undefined) out.model = cfg.commitPushModel
+    if (cfg.commitPushMaxRepairRetries !== undefined)
+      out.maxRepairRetries = cfg.commitPushMaxRepairRetries
+    if (cfg.commitPushDiffMaxBytes !== undefined) out.diffMaxBytes = cfg.commitPushDiffMaxBytes
+    return Object.keys(out).length > 0 ? out : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {
     const actor = actorOf(c)
@@ -198,11 +215,13 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       }
     }
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
+    const commitPush = resolveCommitPushConfig(deps.configPath)
     const task = await startTask(parsed.data, {
       db: deps.db,
       actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+      ...(commitPush !== undefined ? { commitPush } : {}),
     })
     return c.json(task, 201)
   })

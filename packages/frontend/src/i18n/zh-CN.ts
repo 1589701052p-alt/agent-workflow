@@ -772,6 +772,14 @@ export interface Resources {
     metaWorkingBranch: string
     metaWorkingBranchNone: string
     metaAutoCommitPushOn: string
+    commitPushNode: string
+    commitViewSession: string
+    commitSessionTitle: string
+    commitOutcomePushed: string
+    commitOutcomeLocalAuth: string
+    commitOutcomeLocalFailed: string
+    commitOutcomeSkippedEmpty: string
+    commitFiles: string
     metaStarted: string
     metaFinished: string
     metaError: string
@@ -2789,6 +2797,14 @@ export const zhCN: Resources = {
     metaWorkingBranch: '工作分支',
     metaWorkingBranchNone: '—（隔离分支）',
     metaAutoCommitPushOn: '自动提交并推送：开',
+    commitPushNode: '提交并推送',
+    commitViewSession: '查看会话',
+    commitSessionTitle: '提交并推送会话',
+    commitOutcomePushed: '已推送',
+    commitOutcomeLocalAuth: '仅本地提交（推送受限）',
+    commitOutcomeLocalFailed: '仅本地提交（推送失败）',
+    commitOutcomeSkippedEmpty: '无改动',
+    commitFiles: '{{files}} 个文件，+{{ins}}/-{{del}}',
     metaStarted: '开始',
     metaFinished: '完成',
     metaError: '错误',

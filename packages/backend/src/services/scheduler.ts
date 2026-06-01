@@ -136,6 +136,10 @@ export interface RunTaskOptions {
    * follow-up; the runtime reads sensible defaults today).
    */
   commitPushModel?: string
+  /** RFC-075: repair-retry budget; falls back to DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES. */
+  commitPushMaxRepairRetries?: number
+  /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
+  commitPushDiffMaxBytes?: number
 }
 
 type NodeStatus =
@@ -868,8 +872,9 @@ async function maybeRunCommitPush(
         ...(repoSlug ? { repoSlug } : {}),
         gitUserName: task.gitUserName,
         gitUserEmail: task.gitUserEmail,
-        maxRepairRetries: DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES,
-        diffMaxBytes: DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES,
+        maxRepairRetries:
+          state.opts.commitPushMaxRepairRetries ?? DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES,
+        diffMaxBytes: state.opts.commitPushDiffMaxBytes ?? DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES,
         generateMessage: (mctx) =>
           genViaOpencode(
             buildCommitMessagePrompt({
