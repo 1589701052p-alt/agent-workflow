@@ -22,6 +22,7 @@
 | **T-A2** | 扩 `scheduler-cross-clarify-freshness-invariant.test.ts` + cross-clarify cascade 套件：A7-A12 锁 Layer A/B 可观察结果（上游 rerun→下游重跑 / **多跳纯-agent 链 mid-loop 逐层传播** / 幂等）——这组是 §4.3 critical 的等价基线 | backend/tests |
 | **T-A3** | 扩 review iterate/reject/approve 套件：A13-A17 + 再评合同 | backend/tests |
 | **T-A4** | 新建 `provenance-incident-replay.test.ts`：A18-A20 事故 task `01KSHVXCH6RQ5F5P64MZ4FZVN6` 快照回放 | backend/tests |
+| **T-A4b** | **已落地（探索期产出，未 commit）**：`clarify-review-combination-scenarios.test.ts`（17 场景）+ `fixtures/scenario-opencode.ts`（plan 驱动 stub）。当前 12 PASS（回归锁）+ 5 skip（4 RED bug：S8/S3/S6/S12 + S19 fanout defer）。PR-A 纳入：保留 12 个 PASS 作为回归锁随套件跑绿；4 个 RED 维持 skip（PR-B un-skip）。typecheck/test/format 已全绿 | backend/tests |
 | **T-A5** | push 后查 GH Actions CI 全绿（[feedback_post_commit_ci_check]）+ 用户验收 | — |
 
 ### PR-B：provenance + bug fix
@@ -42,6 +43,7 @@
 | **T-B11** | 前端 review supersede banner +「旧版批注已失效」提示 + 自动切 v(n+1) | frontend/src/components |
 | **T-B12** | i18n（zh+en） | frontend/src/i18n |
 | **T-B13** | B 组 ≥ 18 case（§11.2）：isNodeRunFresh 单元 / consumed 记录 / completed+**每-batch fixed-point 重算** / 多跳纯-agent 链 mid-loop 逐层 demote（B8-B10，§4.3）/ 事故修复 / review refresh / crash recovery / null=fresh / **B17 clarify-only-no-output 上游** / **B18 review resume 幂等（删短路后）** | backend/tests |
+| **T-B13b** | **un-skip 组合场景的 4 个 RED 作为 fix-verification**（`clarify-review-combination-scenarios.test.ts`）：S8（`A(问)→B→检视`，头号触发器）/ S3（iterate+clarify 原始事故）/ S6（reject+clarify）/ S12（diamond 静默重跑）去掉 `test.skip` → 必须转绿；12 个 PASS 回归锁保持绿（AC-12） | backend/tests |
 | **T-B14** | 前端 review banner 渲染测试 | frontend/tests |
 | **T-B15** | 3-trio gate + Playwright e2e + GH Actions CI 全绿 | — |
 
