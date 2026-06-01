@@ -47,6 +47,10 @@
 | **T-B14** | 前端 review banner 渲染测试 | frontend/tests |
 | **T-B15** | 3-trio gate + Playwright e2e + GH Actions CI 全绿 | — |
 
+> **实施记录（2026-06-01）**：PR-B 后端落地完成。两处偏离本表的低风险决策（皆为减小 churn + 遵 D7"bug fix 独立于 cci 退役"）：
+> 1. **T-B7/T-B9 + cascade 函数只删调用、函数留死代码到 PR-C**：`applyClarifyFreshnessInvariant` / `isReviewClarifyAlignedWithUpstream` / `cascadeDownstreamFromDesigner` / `loadDefinitionForTask` 的*调用*已删（即行为变更），但函数本体导出保留（避免 lint 未用报错 + 保住 PR-A baseline 与他人 RFC-056 测试），随 PR-C 的 grep-guard（C11）一起物理删。
+> 2. **T-B11/T-B12/T-B14（前端 supersede banner + i18n + banner 渲染测试）延后到小后续 PR**：review 刷新后自动切 v(n+1) 已由既有 `useTaskSync` query invalidation 工作；banner 仅是 §7 awaiting-refresh 边界场景"旧批注已失效"的 UX 解释，不影响正确性。后端 supersede 数据（`decision='superseded'` + `decisionReason='upstream-refreshed'`）已就绪，banner 随时可在其上构建。
+
 ### PR-C：cci 退役
 
 | ID | 说明 | 文件 |
