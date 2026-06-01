@@ -1553,6 +1553,15 @@ export const enUS: Resources = {
     opencodePathHint: 'Defaults to `which opencode` from PATH.',
     defaultModel: 'Default model',
     defaultModelHint: 'Used by agents without an explicit `model`.',
+    commitPushModel: 'Commit & push model',
+    commitPushModelHint:
+      'Model that writes commit messages / repairs rejected pushes for RFC-075 auto commit&push. Blank = opencode default (a cheap model is recommended).',
+    commitPushMaxRepairRetries: 'Push repair retry limit',
+    commitPushMaxRepairRetriesHint:
+      'Max repair-and-repush cycles when a push is rejected by a server policy (default 3; auth failures never retry).',
+    commitPushDiffMaxBytes: 'Commit-message diff byte cap',
+    commitPushDiffMaxBytesHint:
+      'Truncation cap for the diff fed to the commit-message session (default 16384; 0 = --stat only).',
     defaultVariant: 'Default variant',
     defaultTemperature: 'Default temperature',
     defaultSteps: 'Default steps',

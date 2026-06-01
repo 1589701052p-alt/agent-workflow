@@ -1470,6 +1470,12 @@ export interface Resources {
     opencodePathHint: string
     defaultModel: string
     defaultModelHint: string
+    commitPushModel: string
+    commitPushModelHint: string
+    commitPushMaxRepairRetries: string
+    commitPushMaxRepairRetriesHint: string
+    commitPushDiffMaxBytes: string
+    commitPushDiffMaxBytesHint: string
     defaultVariant: string
     defaultTemperature: string
     defaultSteps: string
@@ -3486,6 +3492,15 @@ export const zhCN: Resources = {
     opencodePathHint: '缺省走 PATH 上的 `which opencode`。',
     defaultModel: '默认 model',
     defaultModelHint: '没声明 model 的 agent 使用。',
+    commitPushModel: '提交&推送模型',
+    commitPushModelHint:
+      'RFC-075 自动提交时生成 commit message / 修复被拒推送的模型；留空用 opencode 默认（建议填便宜模型）。',
+    commitPushMaxRepairRetries: '推送修复重试上限',
+    commitPushMaxRepairRetriesHint:
+      '推送被规范拒收时起修复会话改 message 重推的最大次数（默认 3；鉴权失败不重试）。',
+    commitPushDiffMaxBytes: 'commit message diff 字节上限',
+    commitPushDiffMaxBytesHint:
+      '喂给生成 commit message 的 diff 截断阈值（默认 16384；0 表示只用 --stat）。',
     defaultVariant: '默认 variant',
     defaultTemperature: '默认 temperature',
     defaultSteps: '默认 steps',

@@ -156,6 +156,10 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
       'maxConcurrentNodes',
       'multiProcessSubprocessConcurrency',
       'logLevel',
+      // RFC-075: auto commit&push runtime config.
+      'commitPushModel',
+      'commitPushMaxRepairRetries',
+      'commitPushDiffMaxBytes',
     ],
     {
       onSaved: () => {
@@ -254,6 +258,42 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
             <option value="error">error</option>
           </select>
         </Field>
+        {/* RFC-075: auto commit&push runtime knobs (the per-task toggles live
+            on the launch form). The model label namespaces these clearly so no
+            separate subheading / bespoke CSS is needed. */}
+        <Field
+          label={t('settingsForm.commitPushModel')}
+          hint={t('settingsForm.commitPushModelHint')}
+        >
+          <ModelSelect
+            value={state.commitPushModel}
+            onChange={(v) => setState({ ...state, commitPushModel: v })}
+          />
+        </Field>
+        <div className="form-grid form-grid--cols-2">
+          <Field
+            label={t('settingsForm.commitPushMaxRepairRetries')}
+            hint={t('settingsForm.commitPushMaxRepairRetriesHint')}
+          >
+            <NumberInput
+              value={state.commitPushMaxRepairRetries}
+              onChange={(v) => setState({ ...state, commitPushMaxRepairRetries: v })}
+              min={0}
+              max={10}
+            />
+          </Field>
+          <Field
+            label={t('settingsForm.commitPushDiffMaxBytes')}
+            hint={t('settingsForm.commitPushDiffMaxBytesHint')}
+          >
+            <NumberInput
+              value={state.commitPushDiffMaxBytes}
+              onChange={(v) => setState({ ...state, commitPushDiffMaxBytes: v })}
+              min={0}
+              max={262144}
+            />
+          </Field>
+        </div>
       </SectionForm>
     </>
   )
