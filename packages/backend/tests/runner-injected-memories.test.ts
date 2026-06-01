@@ -232,11 +232,15 @@ describe('RFC-046 — runner persists injected_memories_json', () => {
         approvedAt: null,
       },
     ])
-    // Pre-seed attempt 0 row that already 'done', with snapshot persisted.
+    // Pre-seed attempt 0: it ran inject (snapshot persisted) then FAILED an
+    // envelope check — the only state that triggers an envelope-followup
+    // (scheduler decideEnvelopeFollowup requires prev.status === 'failed').
+    // RFC-074 PR-C: the generation anchor walks by id and treats a `failed`
+    // predecessor as same-generation, so the followup resolves to THIS attempt.
     await insertNodeRun(h.db, h.taskId, {
       nodeId: 'agent-x',
       retryIndex: 0,
-      status: 'done',
+      status: 'failed',
       injectedMemoriesJson: attempt0Json,
       opencodeSessionId: 'sess_resume',
     })
@@ -279,10 +283,12 @@ describe('RFC-046 — runner persists injected_memories_json', () => {
   })
 
   test('R4: envelope-followup retry inherits NULL when attempt 0 has NULL', async () => {
+    // Attempt 0 failed envelope validation (the followup trigger) with a NULL
+    // snapshot — RFC-074 PR-C anchor walks to this `failed` predecessor.
     await insertNodeRun(h.db, h.taskId, {
       nodeId: 'agent-y',
       retryIndex: 0,
-      status: 'done',
+      status: 'failed',
       injectedMemoriesJson: null,
       opencodeSessionId: 'sess_resume_null',
     })

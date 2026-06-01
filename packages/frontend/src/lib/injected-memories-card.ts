@@ -75,8 +75,11 @@ export function previewOf(bodyMd: string, max = 200): string {
  * caller must also know which attempts share the same opencodeSessionId.
  *
  * Returns true iff `run.retryIndex > 0` AND the run shares
- * `opencodeSessionId` with the retry_index=0 sibling that anchors its
- * generation (see `findFirstAttemptSibling`).
+ * `opencodeSessionId` with the generation-anchor sibling (see
+ * `findFirstAttemptSibling`). A run that IS its generation's first attempt
+ * (anchor === run) is never an inherit, which also covers a cross-clarify
+ * designer rerun (minted at retry=max+1, so it does not early-return on
+ * retryIndex===0 but anchors to itself).
  */
 export function isFollowupInherit(run: NodeRun, attempt0: NodeRun | undefined): boolean {
   if (run.retryIndex === 0) return false
@@ -88,27 +91,37 @@ export function isFollowupInherit(run: NodeRun, attempt0: NodeRun | undefined): 
 }
 
 /**
- * Pick the retry_index=0 sibling that ANCHORS the active run's clarify
- * generation, scoped to the same (nodeId, iteration, shardKey,
- * reviewIteration). RFC-074 PR-C: the retired clarifyIteration counter used to
- * be the fifth key; the generation is now id-ordered — the anchor is the
- * retry=0 row with the LARGEST id not exceeding the active run's id (mirrors
- * backend memoryInject.loadInjectedSnapshotFromFirstAttempt). Using only nodeId
- * would surface the wrong attempt 0 across iterations / shards.
+ * Pick the sibling that ANCHORS the active run's clarify generation (its first
+ * attempt — the one that ran inject), scoped to the same (nodeId, iteration,
+ * shardKey, reviewIteration). RFC-074 PR-C: mirrors the backend
+ * `memoryInject.loadInjectedSnapshotFromFirstAttempt` / scheduler
+ * `priorDoneGenerationsForRun` — the generation starts at the first in-scope
+ * row OR at any row whose nearest prior in-scope row (by id) is `done`. This is
+ * retry-AGNOSTIC: a process / envelope-followup retry follows a `failed`
+ * attempt (same generation), while a clarify-driven rerun follows the prior
+ * generation's `done` row. The earlier `retry_index === 0` anchor under-counted
+ * cross-clarify DESIGNER reruns, which mint at retry=max+1 (not 0).
  */
 export function findFirstAttemptSibling(
   run: NodeRun,
   allRuns: readonly NodeRun[],
 ): NodeRun | undefined {
+  const scoped = allRuns
+    .filter(
+      (r) =>
+        r.nodeId === run.nodeId &&
+        r.parentNodeRunId === null &&
+        r.iteration === run.iteration &&
+        r.shardKey === run.shardKey &&
+        r.reviewIteration === run.reviewIteration &&
+        r.id <= run.id,
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   let anchor: NodeRun | undefined
-  for (const r of allRuns) {
-    if (r.nodeId !== run.nodeId) continue
-    if (r.iteration !== run.iteration) continue
-    if (r.shardKey !== run.shardKey) continue
-    if (r.reviewIteration !== run.reviewIteration) continue
-    if (r.retryIndex !== 0) continue
-    if (r.id > run.id) continue
-    if (anchor === undefined || r.id > anchor.id) anchor = r
+  let prevStatus: string | undefined
+  for (const r of scoped) {
+    if (prevStatus === undefined || prevStatus === 'done') anchor = r
+    prevStatus = r.status
   }
   return anchor
 }

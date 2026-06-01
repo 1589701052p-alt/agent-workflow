@@ -242,8 +242,13 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
     iteration?: number
     shardKey?: string | null
     reviewIteration?: number
+    // RFC-074 PR-C: explicit id lets multi-generation tests pin id-order
+    // deterministically (the anchor walk is id-ordered); status lets a test
+    // model a failed attempt (a followup retry's predecessor).
+    id?: string
+    status?: 'done' | 'failed' | 'pending' | 'running' | 'interrupted'
   }): string {
-    const id = ulid()
+    const id = opts.id ?? ulid()
     db.insert(nodeRuns)
       .values({
         id,
@@ -253,11 +258,28 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
         shardKey: opts.shardKey ?? null,
         retryIndex: opts.retryIndex,
         reviewIteration: opts.reviewIteration ?? 0,
-        status: 'done',
+        status: opts.status ?? 'done',
         injectedMemoriesJson: opts.json,
       })
       .run()
     return id
+  }
+
+  // Minimal valid InjectedMemorySnapshot[] JSON carrying a single id marker.
+  function snapJson(marker: string): string {
+    return JSON.stringify([
+      {
+        id: marker,
+        version: 1,
+        scopeType: 'agent',
+        scopeId: 'a',
+        title: marker,
+        bodyMd: 'b',
+        tags: [],
+        sourceKind: 'manual',
+        approvedAt: null,
+      },
+    ])
   }
 
   test('B6: returns parsed snapshot from retry_index=0 sibling', async () => {
@@ -362,6 +384,94 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
       runId: runIdB,
     })
     expect(snapB?.[0]?.id).toBe('mB')
+  })
+
+  // RFC-074 PR-C regression (T-C4a / design §6.4.1): the anchor must select the
+  // generation START, not "the latest retry=0 row". A cross-clarify DESIGNER
+  // rerun is minted at retryIndex = max+1 (triggerDesignerRerun) — NOT 0 — so
+  // the retired retry=0 anchor resolved a designer rerun's followup to the PRIOR
+  // generation's snapshot. The boundary walk (generation starts after a `done`
+  // row) fixes it. This case is RED under the old anchor, GREEN under the new.
+  test('B-RFC074a: designer rerun (retry=max+1) followup anchors to its own generation, not the prior', async () => {
+    const { taskId } = seedTask(db)
+    // gen 0: first design, done at retry=0.
+    seedNodeRun({
+      taskId,
+      nodeId: 'designer',
+      id: '01g0',
+      retryIndex: 0,
+      status: 'done',
+      json: snapJson('g0'),
+    })
+    // gen 1: cross-clarify designer rerun minted at retry=max+1; its first
+    // attempt ran inject (snapshot g1) then FAILED an envelope check.
+    seedNodeRun({
+      taskId,
+      nodeId: 'designer',
+      id: '02g1',
+      retryIndex: 6,
+      status: 'failed',
+      json: snapJson('g1'),
+    })
+    // gen 1 envelope-followup retry — the row whose snapshot we resolve; it
+    // copies from its generation's first attempt.
+    const followupId = seedNodeRun({
+      taskId,
+      nodeId: 'designer',
+      id: '03g1f',
+      retryIndex: 7,
+      status: 'pending',
+      json: null,
+    })
+    const snap = await loadInjectedSnapshotFromFirstAttempt(db, {
+      taskId,
+      nodeId: 'designer',
+      iteration: 0,
+      shardKey: null,
+      reviewIteration: 0,
+      runId: followupId,
+    })
+    expect(snap?.[0]?.id).toBe('g1') // NOT 'g0' (the pre-fix regression)
+  })
+
+  // Self-clarify two-generation guard: generations must not bleed. (This shape
+  // already worked under the old retry=0 anchor since self-clarify reruns mint
+  // at retry=0 — kept as a non-regression lock alongside the designer case.)
+  test('B-RFC074b: self-clarify generations do not bleed across the id boundary', async () => {
+    const { taskId } = seedTask(db)
+    seedNodeRun({
+      taskId,
+      nodeId: 'agent-1',
+      id: '01a',
+      retryIndex: 0,
+      status: 'done',
+      json: snapJson('gA'),
+    })
+    seedNodeRun({
+      taskId,
+      nodeId: 'agent-1',
+      id: '02b',
+      retryIndex: 0,
+      status: 'failed',
+      json: snapJson('gB'),
+    })
+    const followupId = seedNodeRun({
+      taskId,
+      nodeId: 'agent-1',
+      id: '03bf',
+      retryIndex: 1,
+      status: 'pending',
+      json: null,
+    })
+    const snap = await loadInjectedSnapshotFromFirstAttempt(db, {
+      taskId,
+      nodeId: 'agent-1',
+      iteration: 0,
+      shardKey: null,
+      reviewIteration: 0,
+      runId: followupId,
+    })
+    expect(snap?.[0]?.id).toBe('gB')
   })
 })
 

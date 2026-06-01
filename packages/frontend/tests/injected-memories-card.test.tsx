@@ -118,9 +118,13 @@ describe('<InjectedMemoriesCard>', () => {
   })
 
   test('F6: retry_index>0 with shared opencodeSessionId surfaces the inherited chip', () => {
+    // RFC-074 PR-C: attempt 0 FAILED an envelope check (the only state that
+    // spawns the envelope-followup a1) — so the generation anchor walk keeps a1
+    // in attempt-0's generation and the "inherited from attempt 0" chip shows.
     const a0 = run({
       id: 'r0',
       retryIndex: 0,
+      status: 'failed',
       opencodeSessionId: 'sess_abc',
       injectedMemories: [snap()],
     })
@@ -135,7 +139,15 @@ describe('<InjectedMemoriesCard>', () => {
   })
 
   test('F7: retry_index>0 with different opencodeSessionId does NOT show inherited chip', () => {
-    const a0 = run({ id: 'r0', retryIndex: 0, opencodeSessionId: 's0', injectedMemories: [snap()] })
+    // a0 failed (real followup predecessor) so a1 genuinely anchors to a0 and
+    // the chip is suppressed by the SESSION mismatch, not a self-anchor.
+    const a0 = run({
+      id: 'r0',
+      retryIndex: 0,
+      status: 'failed',
+      opencodeSessionId: 's0',
+      injectedMemories: [snap()],
+    })
     const a1 = run({ id: 'r1', retryIndex: 1, opencodeSessionId: 's1', injectedMemories: [snap()] })
     render(<InjectedMemoriesCard run={a1} attempts={[a0, a1]} workflowNodeKind="agent-single" />)
     expect(screen.queryByText(/Inherited from attempt 0/)).toBeNull()

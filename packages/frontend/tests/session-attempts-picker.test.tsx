@@ -110,8 +110,11 @@ afterEach(() => {
 
 describe('Session attempts dropdown picker', () => {
   test('renders a combobox (not a radiogroup) and the picked label is on the trigger', () => {
-    const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100 })
-    const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200 })
+    // RFC-074 PR-C: a process retry follows a FAILED attempt (the only state
+    // that spawns one), so r0/r1 are failed and r2 is the live retry — round
+    // stays 0 and the label reads retry#N, not a spurious clarify#N.
+    const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100, status: 'failed' })
+    const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200, status: 'failed' })
     const r2 = run({ id: 'r2', retryIndex: 2, startedAt: 300 })
     renderDrawer({
       nodeRunId: r2.id,
@@ -167,11 +170,12 @@ describe('Session attempts dropdown picker', () => {
   })
 
   test('iter label distinguishes initial / retry / loop / clarify rows (id-order derivation, RFC-074 PR-C)', () => {
-    // RFC-074 PR-C: the clarify round is DERIVED from id-order (clarifyRoundForRun)
-    // — each clarify-driven rerun is a fresh retry=0 top-level insert with a
-    // larger ULID. Causal ids place generation 1 (01d) and generation 2 (01e)
-    // among the iter-0/retry-0 rows; the labels read clarify#1 / clarify#2.
-    const initial = run({ id: '01a', retryIndex: 0, iteration: 0 })
+    // RFC-074 PR-C: the clarify round is DERIVED from prior-`done` id-order
+    // (clarifyRoundForRun), retry-agnostic. `initial` (01a) FAILED and `retry`
+    // (01b) is its successful process retry — so 01b stays round 0 (label
+    // retry#1), while the later clarify reruns 01d/01e (each following a `done`
+    // row) read clarify#1 / clarify#2.
+    const initial = run({ id: '01a', retryIndex: 0, iteration: 0, status: 'failed' })
     const retry = run({ id: '01b', retryIndex: 1, iteration: 0, startedAt: 200 })
     const loop = run({ id: '01c', retryIndex: 0, iteration: 2, startedAt: 300 })
     const clarify = run({ id: '01d', retryIndex: 0, iteration: 0, startedAt: 400 })
@@ -296,8 +300,10 @@ describe('Session attempts dropdown picker', () => {
   })
 
   test('groups with no startedAt sink to the bottom', () => {
-    const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100 })
-    const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200 })
+    // RFC-074 PR-C: r0/r1 are failed attempts in a retry chain (so the live
+    // retry rows keep round 0 → retry#N labels, not spurious clarify#N).
+    const r0 = run({ id: 'r0', retryIndex: 0, startedAt: 100, status: 'failed' })
+    const r1 = run({ id: 'r1', retryIndex: 1, startedAt: 200, status: 'failed' })
     // Not-yet-started attempt — should land last regardless of retryIndex.
     const pending = run({
       id: 'rp',

@@ -143,29 +143,59 @@ describe('clarifyRoundForRun (RFC-074 PR-C — id-order generation derivation)',
     expect(clarifyRoundForRun(r0, [r0])).toBe(0)
   })
 
-  test('each later retry=0 top-level row is the next round', () => {
-    const g0 = makeRun({ id: '01g0', retryIndex: 0 })
-    const g1 = makeRun({ id: '02g1', retryIndex: 0 })
-    const g2 = makeRun({ id: '03g2', retryIndex: 0 })
+  test('each later done generation row is the next round', () => {
+    const g0 = makeRun({ id: '01g0', status: 'done' })
+    const g1 = makeRun({ id: '02g1', status: 'done' })
+    const g2 = makeRun({ id: '03g2', status: 'done' })
     const runs = [g0, g1, g2]
     expect(clarifyRoundForRun(g0, runs)).toBe(0)
     expect(clarifyRoundForRun(g1, runs)).toBe(1)
     expect(clarifyRoundForRun(g2, runs)).toBe(2)
   })
 
-  test('a process retry (retry>0) inherits the round of its retry=0 anchor', () => {
-    const g0 = makeRun({ id: '01g0', retryIndex: 0 })
-    const g1 = makeRun({ id: '02g1', retryIndex: 0 })
-    const g1retry = makeRun({ id: '03g1r', retryIndex: 1 }) // belongs to gen 1
-    const runs = [g0, g1, g1retry]
-    expect(clarifyRoundForRun(g1retry, runs)).toBe(1)
+  test('a process retry (its predecessor failed) stays in its generation', () => {
+    // RFC-074 PR-C (corrected): a process / envelope-followup retry fires only
+    // AFTER a `failed` attempt (scheduler decideEnvelopeFollowup requires
+    // prev.status === 'failed'), so it follows a non-`done` row and belongs to
+    // the SAME generation. The round counts prior COMPLETED (done) generations,
+    // retry-agnostic — NOT retry=0 rows.
+    const g0 = makeRun({ id: '01g0', retryIndex: 0, status: 'done' }) // gen 0, done
+    const g1fail = makeRun({ id: '02g1', retryIndex: 0, status: 'failed' }) // gen 1, attempt 1 crashed
+    const g1retry = makeRun({ id: '03g1r', retryIndex: 1, status: 'done' }) // gen 1, retry succeeded
+    const runs = [g0, g1fail, g1retry]
+    expect(clarifyRoundForRun(g1fail, runs)).toBe(1) // one prior done generation (g0)
+    expect(clarifyRoundForRun(g1retry, runs)).toBe(1) // same gen 1 — g1fail (failed) not counted
+  })
+
+  test('cross-clarify designer rerun (retryIndex = max+1) is a NEW round — RFC-074 regression fix', () => {
+    // Regression repro: triggerDesignerRerun mints the cross-clarify rerun at
+    // retryIndex = max+1 (NOT 0) to keep the scheduler isClarifyRerun gate
+    // false. The retired `retryIndex === 0` anchor therefore collapsed every
+    // designer generation to round 0 (under-count). The prior-done id-order
+    // derivation counts it correctly (pre-migration cci=1). This assertion is
+    // RED under the old retry=0 filter and GREEN under the corrected helper.
+    const d0 = makeRun({ id: '01d0', retryIndex: 0, status: 'done' }) // first design, done
+    const dRerun = makeRun({ id: '02d1', retryIndex: 5, status: 'done' }) // cross-clarify rerun @ retry max+1
+    expect(clarifyRoundForRun(dRerun, [d0, dRerun])).toBe(1)
   })
 
   test('round is scoped per (iteration, reviewIteration)', () => {
-    const i0 = makeRun({ id: '01i0', iteration: 0, retryIndex: 0 })
-    const i1 = makeRun({ id: '02i1', iteration: 1, retryIndex: 0 })
+    const i0 = makeRun({ id: '01i0', iteration: 0, status: 'done' })
+    const i1 = makeRun({ id: '02i1', iteration: 1, status: 'done' })
     // i1 is the first generation within its own iteration → round 0.
     expect(clarifyRoundForRun(i1, [i0, i1])).toBe(0)
+  })
+
+  test('US-2 re-review: a second done top-level row counts as a round (unchanged by the fix)', () => {
+    // A review node's RFC-005 US-2 re-review mints a second done top-level row
+    // at the SAME reviewIteration. Both the old retry=0 filter and the new
+    // prior-done derivation count it as round 1 for review nodes — documenting
+    // that this fix does NOT change review-node round display (the separate
+    // "review nodes should not show a clarify chip at all" concern is tracked
+    // independently and is out of scope for the designer regression).
+    const r0 = makeRun({ id: '01r0', retryIndex: 0, status: 'done' })
+    const r1 = makeRun({ id: '02r1', retryIndex: 0, status: 'done' })
+    expect(clarifyRoundForRun(r1, [r0, r1])).toBe(1)
   })
 })
 

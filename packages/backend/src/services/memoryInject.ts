@@ -378,13 +378,23 @@ export async function injectMemoryForRun(deps: {
  * original list.
  *
  * RFC-074 PR-C: the retired `clarifyIteration` counter used to identify the
- * generation. We now anchor by id-order: the generation of the current run
- * (id = `ctx.runId`) is the most recent retry_index=0 row whose id is ≤ the
- * current run's id, scoped to (task, node, iteration, shard, reviewIteration).
- * Every clarify rerun is minted at retry_index=0 (a fresh generation), so these
- * retry=0 rows partition the attempts into generations; the one with the
- * largest id ≤ runId starts the current generation and carries its inject
- * snapshot.
+ * generation. We now anchor by id-order, mirroring the scheduler's canonical
+ * `priorDoneGenerationsForRun`: a generation STARTS at the first top-level row
+ * OR at any row whose nearest prior top-level row (by id) is `done`. A process /
+ * envelope-followup retry only fires when the prior attempt is `failed`
+ * (scheduler.ts decideEnvelopeFollowup: `prev.status !== 'failed' → no
+ * followup`), so it follows a non-`done` row and belongs to the SAME
+ * generation; a clarify-driven rerun follows the prior generation's `done` row
+ * and STARTS a new one. The anchor for `ctx.runId` is the latest generation
+ * start with id ≤ runId — the first attempt of the current generation, which
+ * ran inject and persisted the snapshot.
+ *
+ * Note: this is deliberately retry-agnostic. The earlier `retry_index === 0`
+ * anchor assumed every clarify rerun mints at retry=0; that is FALSE for a
+ * cross-clarify DESIGNER rerun, which `triggerDesignerRerun` mints at
+ * retry_index = max+1 (to keep the scheduler's self-clarify `isClarifyRerun`
+ * gate false). Under the old anchor a designer rerun's followup resolved to the
+ * PRIOR generation's snapshot; the boundary walk fixes that.
  *
  * Returns null when:
  *   - no anchor row exists (race);
@@ -403,7 +413,11 @@ export async function loadInjectedSnapshotFromFirstAttempt(
   },
 ): Promise<InjectedMemorySnapshot[] | null> {
   const candidates = await db
-    .select({ id: nodeRuns.id, json: nodeRuns.injectedMemoriesJson })
+    .select({
+      id: nodeRuns.id,
+      status: nodeRuns.status,
+      json: nodeRuns.injectedMemoriesJson,
+    })
     .from(nodeRuns)
     .where(
       and(
@@ -412,15 +426,19 @@ export async function loadInjectedSnapshotFromFirstAttempt(
         eq(nodeRuns.iteration, ctx.iteration),
         ctx.shardKey === null ? isNull(nodeRuns.shardKey) : eq(nodeRuns.shardKey, ctx.shardKey),
         eq(nodeRuns.reviewIteration, ctx.reviewIteration),
-        eq(nodeRuns.retryIndex, 0),
+        isNull(nodeRuns.parentNodeRunId),
       ),
     )
-  // The generation anchor is the retry=0 row with the largest id not exceeding
-  // the current run's id (the start of the current generation).
+  // Walk the in-scope top-level rows up to runId in id-order; the anchor is the
+  // LATEST generation start (first row, or a row whose predecessor was `done`).
+  const upToRun = candidates
+    .filter((r) => r.id <= ctx.runId)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   let anchor: { id: string; json: string | null } | undefined
-  for (const r of candidates) {
-    if (r.id > ctx.runId) continue
-    if (anchor === undefined || r.id > anchor.id) anchor = r
+  let prevStatus: string | undefined
+  for (const r of upToRun) {
+    if (prevStatus === undefined || prevStatus === 'done') anchor = r
+    prevStatus = r.status
   }
   if (anchor?.json == null) return null
   return parseInjectedSnapshotJson(anchor.json)

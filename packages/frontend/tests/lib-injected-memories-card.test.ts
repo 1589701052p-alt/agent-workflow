@@ -124,13 +124,27 @@ describe('previewOf', () => {
 
 describe('findFirstAttemptSibling', () => {
   const runs = [
-    run({ id: 'r0', nodeId: 'n', retryIndex: 0, iteration: 0 }),
+    // RFC-074 PR-C: r0 is attempt-0 that FAILED (the only state under which its
+    // retry r1 exists) — the generation anchor walks by id and treats a `failed`
+    // predecessor as same-generation, so r1 anchors back to r0.
+    run({ id: 'r0', nodeId: 'n', retryIndex: 0, iteration: 0, status: 'failed' }),
     run({ id: 'r1', nodeId: 'n', retryIndex: 1, iteration: 0 }),
     run({ id: 'r0-iter1', nodeId: 'n', retryIndex: 0, iteration: 1 }),
     run({ id: 'shard-a', nodeId: 'n', retryIndex: 0, shardKey: 'a' }),
   ]
-  test('finds the same-key sibling at retry_index=0', () => {
+  test('a retry anchors back to its generation start (failed attempt-0)', () => {
     expect(findFirstAttemptSibling(runs[1]!, runs)?.id).toBe('r0')
+  })
+  test('cross-clarify designer rerun (retry=max+1) anchors to itself, not the prior gen', () => {
+    // Regression: the retired retry=0 anchor returned the prior generation's
+    // retry=0 row for a designer rerun; the boundary walk anchors a generation
+    // start (predecessor `done`) to itself. The designer rerun is the start of
+    // its own generation, so it must anchor to itself (→ isFollowupInherit false).
+    const gen = [
+      run({ id: 'd0', nodeId: 'd', retryIndex: 0, iteration: 0, status: 'done' }),
+      run({ id: 'd1-rerun', nodeId: 'd', retryIndex: 5, iteration: 0, status: 'done' }),
+    ]
+    expect(findFirstAttemptSibling(gen[1]!, gen)?.id).toBe('d1-rerun')
   })
   test('discriminates by iteration', () => {
     expect(

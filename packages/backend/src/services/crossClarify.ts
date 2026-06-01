@@ -781,6 +781,17 @@ export async function triggerDesignerRerun(
   // max+1 bump so the attempts switcher / lineage stays monotonic, but it is no
   // longer load-bearing for freshness (the entire cci-bump-over-all-participants
   // machinery — the source of patch-2026-05-23/25 — is gone).
+  //
+  // ⚠️ Deliberately retry_index ≥ 1, NOT 0: the scheduler's self-clarify inline
+  // gate `isClarifyRerun = clarifyGeneration>0 && retryIndex===0` (scheduler.ts)
+  // must stay FALSE for a cross-clarify designer rerun (it uses the separate
+  // retry-agnostic `isCrossClarifyTriggeredRerun` update-mode path instead). So
+  // a designer rerun is INTENTIONALLY indistinguishable-by-retryIndex from a
+  // process retry. Every "clarify generation" consumer is therefore retry-
+  // AGNOSTIC and keys on prior-`done` id-order (priorDoneGenerationsForRun /
+  // memoryInject anchor / frontend clarifyRoundForRun) — do NOT re-introduce a
+  // retry===0 assumption keyed on this mint or those will mis-count designer
+  // reruns. See design §6.4.1 / §6.5.
   const topLevelDesignerRows = designerRows.filter(
     (r) => r.parentNodeRunId === null && r.iteration === lastDesigner.iteration,
   )

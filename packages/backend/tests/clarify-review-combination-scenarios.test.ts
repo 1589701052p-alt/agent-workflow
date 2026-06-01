@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { and, eq } from 'drizzle-orm'
+import { ulid } from 'ulid'
 import type { DbClient } from '../src/db/client'
 import { createInMemoryDb } from '../src/db/client'
 import {
@@ -1023,6 +1024,109 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     })
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('done')
+  })
+
+  // ---------------------------------------------------------------------------
+  // S-RFC074 §4.3 / D9 — the RFC's self-declared #1 risk. After deleting the
+  // Layer A pre-mint cascade, a fresher upstream must propagate ONE HOP PER
+  // BATCH down a pure-agent chain via the per-batch recomputeFreshnessAndDemote:
+  // batch1 demotes B (re-runs reading the fresh A), batch2 demotes C (re-runs
+  // reading the fresh B). A regression that demoted only the immediate
+  // downstream non-transitively, or that broke the per-batch recompute, would
+  // pass every other scenario yet silently let C run on a STALE B. We lock that
+  // the freshly re-run B consumed the NEW A and the freshly re-run C the NEW B.
+  // ---------------------------------------------------------------------------
+  test('S-RFC074: in→A→B→C all-agent staged demote propagates one hop per batch', async () => {
+    await makeDesigner(c, 'agentA', ['a'])
+    await makeDesigner(c, 'agentB', ['b'])
+    await makeDesigner(c, 'agentC', ['cc'])
+    writePlan(c, {
+      agentA: [{ output: { a: 'A_V1' } }, { output: { a: 'A_V2' } }],
+      agentB: [{ output: { b: 'B_V1' } }, { output: { b: 'B_V2' } }],
+      agentC: [{ output: { cc: 'C_V1' } }, { output: { cc: 'C_V2' } }],
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 2,
+      inputs: [{ kind: 'text', key: 'topic', label: 't' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'topic' },
+        { id: 'agentA', kind: 'agent-single', agentName: 'agentA' },
+        { id: 'agentB', kind: 'agent-single', agentName: 'agentB' },
+        { id: 'agentC', kind: 'agent-single', agentName: 'agentC' },
+      ] as unknown as WorkflowDefinition['nodes'],
+      edges: [
+        {
+          id: 'e1',
+          source: { nodeId: 'in1', portName: 'topic' },
+          target: { nodeId: 'agentA', portName: 'topic' },
+        },
+        {
+          id: 'e4',
+          source: { nodeId: 'agentA', portName: 'a' },
+          target: { nodeId: 'agentB', portName: 'a' },
+        },
+        {
+          id: 'e5',
+          source: { nodeId: 'agentB', portName: 'b' },
+          target: { nodeId: 'agentC', portName: 'b' },
+        },
+      ],
+    }
+    const wf = await createWorkflow(c.db, { name: 's-rfc074', description: '', definition: def })
+    const task = await startTask(
+      {
+        workflowId: wf.id,
+        name: 's-rfc074',
+        repoPath: c.repoPath,
+        baseBranch: 'main',
+        inputs: { topic: 'x' },
+      },
+      { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
+    )
+    // The pure-agent chain runs straight to done (v1), each node consuming its
+    // upstream's v1 run.
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+    const consumedOf = (r: { consumedUpstreamRunsJson: string | null }) =>
+      JSON.parse(r.consumedUpstreamRunsJson ?? '{}') as Record<string, string>
+    const doneB1 = (await topLevel(c.db, task.id, 'agentB')).filter((r) => r.status === 'done')
+    const doneC1 = (await topLevel(c.db, task.id, 'agentC')).filter((r) => r.status === 'done')
+    expect(doneB1.length).toBe(1)
+    expect(doneC1.length).toBe(1)
+    const oldA = (await topLevel(c.db, task.id, 'agentA')).find((r) => r.status === 'done')!.id
+    expect(consumedOf(doneB1[0]!).agentA).toBe(oldA) // B consumed the v1 A
+
+    // Trigger a fresh A generation: mint a pending A rerun (the shape
+    // submitClarifyAnswers mints) so the next runScope re-runs A → A_V2. With
+    // Layer A gone, NOTHING pre-mints B/C — the per-batch demote must.
+    await c.db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId: task.id,
+      nodeId: 'agentA',
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+    })
+    await c.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, task.id))
+
+    await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
+    expect(await taskStatus(c.db, task.id)).toBe('done')
+
+    const doneA2 = (await topLevel(c.db, task.id, 'agentA')).filter((r) => r.status === 'done')
+    const doneB2 = (await topLevel(c.db, task.id, 'agentB')).filter((r) => r.status === 'done')
+    const doneC2 = (await topLevel(c.db, task.id, 'agentC')).filter((r) => r.status === 'done')
+    const newest = (rows: typeof doneA2) => rows.reduce((m, r) => (r.id > m.id ? r : m))
+    const newA = newest(doneA2)
+    const newB = newest(doneB2)
+    const newC = newest(doneC2)
+    expect(newA.id).not.toBe(oldA) // A re-ran (A_V2)
+    // B and C each demoted + re-ran EXACTLY once — staged, not double-run.
+    expect(doneB2.length).toBe(2)
+    expect(doneC2.length).toBe(2)
+    // The crux of §4.3: the fresh downstream rows consumed the fresh upstream
+    // rows (B reads the NEW A, C reads the NEW B). A non-transitive demote would
+    // leave newC consuming the OLD B here.
+    expect(consumedOf(newB).agentA).toBe(newA.id)
+    expect(consumedOf(newC).agentB).toBe(newB.id)
   })
 
   // ---------------------------------------------------------------------------

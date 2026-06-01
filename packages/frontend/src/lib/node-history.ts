@@ -5,10 +5,12 @@
 // differ on any of several orthogonal counters — loop `iteration`, RFC-005
 // `reviewIteration`, process `retryIndex` — plus the clarify "generation".
 // RFC-074 PR-C retired the `clarifyIteration` column; the clarify round is now
-// DERIVED from ULID id-order (design §6.5): each clarify-driven rerun is minted
-// at retryIndex=0, so the count of prior retry=0 top-level rows at the same
-// (iteration, reviewIteration) is the round index — what the counter used to
-// hold. We render one unified, always-visible timeline with the active row
+// DERIVED from ULID id-order (design §6.5), mirroring the scheduler's canonical
+// `priorDoneGenerationsForRun`: the round is the count of prior COMPLETED
+// generations — top-level `done` rows of the same node at the same (iteration,
+// reviewIteration) minted before this run. This is retry-AGNOSTIC (see
+// clarifyRoundForRun for why retryIndex===0 under-counted cross-clarify designer
+// reruns). We render one unified, always-visible timeline with the active row
 // highlighted.
 
 import type { NodeRun } from '@agent-workflow/shared'
@@ -33,23 +35,31 @@ export function nodeRunHistory(current: NodeRun, runs: readonly NodeRun[]): Node
 
 /**
  * RFC-074 PR-C: derive a run's clarify round (the value the retired
- * `clarifyIteration` counter held) from id-order. Each clarify-driven rerun is
- * a fresh retry=0 top-level insert, so the round = (number of retry=0 top-level
- * rows for the same node at the same (iteration, reviewIteration) whose id is
- * ≤ this run's id) − 1. A process retry (retryIndex>0) inherits the round of
- * the retry=0 row that anchors its generation. 0 = first generation.
+ * `clarifyIteration` counter held) from id-order. The round = the number of
+ * prior COMPLETED generations: top-level `done` rows for the same node at the
+ * same (iteration, reviewIteration) whose id is < this run's id. This mirrors
+ * the backend's canonical `priorDoneGenerationsForRun` so the chip, the
+ * scheduler's `clarifyGeneration`, and `memoryInject`'s anchor all agree.
+ *
+ * It is deliberately retry-AGNOSTIC. A clarify-driven rerun follows the prior
+ * generation's `done` row (counted); a process / envelope-followup retry only
+ * fires after a `failed` attempt (not counted — same generation). The earlier
+ * `retryIndex === 0` filter under-counted cross-clarify DESIGNER reruns, which
+ * `triggerDesignerRerun` mints at retryIndex = max+1 (not 0) to keep the
+ * scheduler's self-clarify `isClarifyRerun` gate false — so a designer rerun is
+ * structurally indistinguishable from a process retry by retryIndex alone.
+ * 0 = first generation.
  */
 export function clarifyRoundForRun(run: NodeRun, runs: readonly NodeRun[]): number {
-  const anchors = runs.filter(
+  return runs.filter(
     (r) =>
       r.nodeId === run.nodeId &&
       r.parentNodeRunId === null &&
       r.iteration === run.iteration &&
       r.reviewIteration === run.reviewIteration &&
-      r.retryIndex === 0 &&
-      r.id <= run.id,
-  )
-  return Math.max(0, anchors.length - 1)
+      r.status === 'done' &&
+      r.id < run.id,
+  ).length
 }
 
 interface IterationLabelOpts {

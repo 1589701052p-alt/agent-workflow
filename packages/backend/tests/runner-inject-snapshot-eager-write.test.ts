@@ -252,10 +252,14 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
         approvedAt: null,
       },
     ])
+    // Attempt 0 ran inject (snapshot persisted) then FAILED an envelope check —
+    // the only state that triggers an envelope-followup. RFC-074 PR-C: the
+    // generation anchor walks by id and treats this `failed` predecessor as
+    // same-generation, so the followup copies THIS attempt's snapshot.
     await insertNodeRun(h.db, h.taskId, {
       nodeId: 'agent-x',
       retryIndex: 0,
-      status: 'done',
+      status: 'failed',
       injectedMemoriesJson: attempt0Json,
       opencodeSessionId: 'sess_resume',
     })
