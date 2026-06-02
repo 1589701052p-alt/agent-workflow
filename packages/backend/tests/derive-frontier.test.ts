@@ -254,7 +254,8 @@ describe('RFC-076 PR-B — deriveFrontier', () => {
   })
 
   test('wrapper-loop parked with fresh inner pending at i≥1 → ready (N2/HIGH-1)', () => {
-    const { definition, scopeNodes, scopeIds } = def([{ id: 'lw', kind: 'wrapper-loop' }])
+    // This test builds defWithInner inline (the wrapper needs a nodeIds inner set),
+    // so the generic def() helper isn't used here.
     // The wrapper's own row at iteration 0; mark progress iteration 2.
     const wrapperRow = row('lw', 'awaiting_human', {
       iteration: 0,
