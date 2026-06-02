@@ -405,6 +405,20 @@ export async function submitCrossClarifyAnswers(
   const questionScopesJson = validatedScopes === undefined ? null : JSON.stringify(validatedScopes)
 
   const answersJson = JSON.stringify(sealedAnswers)
+  // RFC-076 T0-extend note: unlike submitClarifyAnswers, this session → answered
+  // flip CANNOT be deferred past the rerun mints below — the multi-source
+  // readiness check (extractDesignerScopedSubset + peer aggregation, see the
+  // `continue` branch) requires THIS session to read as resolved so a peer's
+  // submit sees it. The asking questioner's park keys off this same status
+  // (deriveFrontier.askingRunIds), so a concurrent runScope tick landing between
+  // this flip and the questioner rerun mint could briefly judge the questioner
+  // complete. That window is (a) only reachable when an INDEPENDENT parallel
+  // branch is still in flight at answer time (a downstream questioner parks its
+  // own subtree, so its direct downstream can't race), and (b) self-correcting:
+  // the questioner rerun re-mints as a fresher run, so any downstream that ran on
+  // the questioner's clarify-emit output goes stale and re-dispatches (RFC-074
+  // provenance). Net effect under the race is a wasted re-run, never a wrong
+  // final state — so we keep peer-aggregation correctness and accept it.
   await args.db
     .update(crossClarifySessions)
     .set({

@@ -363,45 +363,30 @@ export async function submitClarifyAnswers(
 
   const answeredAt = now()
   const answersJson = JSON.stringify(sealedAnswers)
-  await db
-    .update(clarifySessions)
-    .set({
-      answersJson,
-      status: 'answered',
-      answeredAt,
-      answeredBy,
-      directive,
-    })
-    .where(eq(clarifySessions.id, sessionRow.id))
 
-  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds so
-  // the unified service (services/clarifyRounds.ts) sees the latest Q&A
-  // history. Idempotent: row exists from createClarifySession's dual-write.
-  await db
-    .update(clarifyRounds)
-    .set({
-      answersJson,
-      status: 'answered',
-      answeredAt,
-      answeredBy,
-      directive,
-    })
-    .where(eq(clarifyRounds.id, sessionRow.id))
-
-  // RFC-076 PR-0 (T0) — torn-read write-ordering. The clarify→done flip and
-  // the source-agent rerun mint are two separate writes; with the flip FIRST
-  // (the old order) a reader landing between them — after `done`, before the
-  // rerun insert, across the rollbackToSnapshot git-subprocess yield below —
-  // sees "clarify done, rerun absent". A frontier derived from node_runs at
-  // that instant judges the agent's prior done row still freshest ⇒ scope
-  // allSettled ⇒ FALSE COMPLETION, dropping the rerun. (db.transaction does NOT
-  // help: bun:sqlite's transaction is synchronous, so an async body COMMITs at
-  // its first real `await` — verified — leaving post-await writes outside the
-  // tx.) Fix = mint the rerun BEFORE flipping clarify→done. The rerun row's
-  // fields come entirely from `sourceRunRow` (incl. its ORIGINAL preSnapshot —
-  // independent of the rollback), so the reorder is data-safe. The only
-  // intermediate state a reader can now observe is "clarify still awaiting +
-  // rerun present" — a safe, non-completing frontier.
+  // RFC-076 PR-0 (T0) + T0-extend — torn-read write-ordering. Resuming a clarify
+  // is several writes for ONE logical event: (1) mint the source-agent rerun,
+  // (2) flip clarify_session + clarify_rounds → answered, (3) flip the clarify
+  // node_run → done. A reader — a concurrent runScope tick; under the RFC-076
+  // race loop the user can answer branch A's clarify while sibling branch B is
+  // still in flight, so the next tick re-reads node_runs mid-sequence — must
+  // never see a state that lets the frontier FALSELY COMPLETE the asking agent
+  // and run its downstream on a clarify-only / empty output.
+  //
+  // The asking agent's OWN run is `done` (the runner marks it so when it emits
+  // <workflow-clarify>). Two independent facts keep it parked: the OPEN session
+  // (deriveFrontier's askingRunIds, sourced from clarify_session.status =
+  // awaiting_human) and — once minted — the pending rerun (which makes its prior
+  // `done` row no longer the latest). The invariant is therefore: NEVER (session
+  // answered ∧ rerun absent). So mint the rerun FIRST, flip the session SECOND,
+  // flip the clarify node LAST; every intermediate state keeps the agent
+  // protected by one or the other (the old order flipped the session — and, pre
+  // PR-0, the clarify node — before the rerun, opening the gap across the
+  // rollbackToSnapshot git-subprocess yield below). db.transaction does NOT help:
+  // bun:sqlite's transaction is synchronous, so an async body COMMITs at its
+  // first real `await` — verified. The rerun's fields come entirely from
+  // `sourceRunRow` (incl. its ORIGINAL preSnapshot, independent of the rollback),
+  // so the reorder is data-safe.
 
   const taskRow = (await db.select().from(tasks).where(eq(tasks.id, sessionRow.taskId)).limit(1))[0]
   if (taskRow === undefined) {
@@ -453,7 +438,7 @@ export async function submitClarifyAnswers(
     }
   }
 
-  // Mint the source-agent rerun — BEFORE the clarify→done flip (T0 ordering).
+  // (1) Mint the source-agent rerun FIRST (T0 / T0-extend ordering).
   const rerunNodeRunId = ulid()
   await db.insert(nodeRuns).values({
     id: rerunNodeRunId,
@@ -475,7 +460,35 @@ export async function submitClarifyAnswers(
     preSnapshot: sourceRunRow.preSnapshot,
   })
 
-  // Close the clarify node_run LAST. RFC-053: resume-clarify enforces
+  // (2) Flip the session → answered SECOND — only now that the rerun exists, so
+  // no concurrent frontier read observes "session answered ∧ rerun absent" and
+  // false-completes the asking agent (T0-extend).
+  await db
+    .update(clarifySessions)
+    .set({
+      answersJson,
+      status: 'answered',
+      answeredAt,
+      answeredBy,
+      directive,
+    })
+    .where(eq(clarifySessions.id, sessionRow.id))
+
+  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds so
+  // the unified service (services/clarifyRounds.ts) sees the latest Q&A
+  // history. Idempotent: row exists from createClarifySession's dual-write.
+  await db
+    .update(clarifyRounds)
+    .set({
+      answersJson,
+      status: 'answered',
+      answeredAt,
+      answeredBy,
+      directive,
+    })
+    .where(eq(clarifyRounds.id, sessionRow.id))
+
+  // (3) Close the clarify node_run LAST. RFC-053: resume-clarify enforces
   // awaiting_human → done. By the time clarify is `done`, the rerun row above
   // already exists (T0 invariant), so no reader observes done-without-rerun.
   await transitionNodeRunStatus({

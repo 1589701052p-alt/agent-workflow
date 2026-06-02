@@ -171,7 +171,7 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
     expect(agentRows.find((r) => r.id === agentRunId)?.status).toBe('done')
   })
 
-  test('source-ordering guard: rerun insert precedes the resume-clarify (done) transition', () => {
+  test('source-ordering guard: rerun insert precedes BOTH the session flip and the resume-clarify (done) transition', () => {
     const src = readFileSync(
       resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
       'utf8',
@@ -180,9 +180,21 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
     const rerunInsertIdx = src.indexOf('id: rerunNodeRunId,')
     // The clarify→done flip: transitionNodeRunStatus with the resume-clarify event.
     const flipIdx = src.indexOf("kind: 'resume-clarify'")
+    // RFC-076 T0-extend: the clarify_session → answered flip. submitClarifyAnswers
+    // is the only place a `status: 'answered'` literal appears before the
+    // sealedSession return, and after the reorder its first occurrence is the
+    // clarifySessions update — which must come AFTER the rerun mint.
+    const sessionFlipIdx = src.indexOf("status: 'answered'")
     expect(rerunInsertIdx).toBeGreaterThan(0)
     expect(flipIdx).toBeGreaterThan(0)
+    expect(sessionFlipIdx).toBeGreaterThan(0)
     // T0 invariant: the rerun must be minted BEFORE clarify is flipped to done.
     expect(rerunInsertIdx).toBeLessThan(flipIdx)
+    // T0-extend invariant: the rerun must be minted BEFORE the session is flipped
+    // to `answered` — else a concurrent runScope tick (race loop) observes
+    // "session answered ∧ rerun absent" and false-completes the asking agent,
+    // running its downstream on a clarify-only output (combination-scenarios S12
+    // is the end-to-end lock; this is the load-bearing torn-window source guard).
+    expect(rerunInsertIdx).toBeLessThan(sessionFlipIdx)
   })
 })
