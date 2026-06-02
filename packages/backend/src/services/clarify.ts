@@ -388,16 +388,21 @@ export async function submitClarifyAnswers(
     })
     .where(eq(clarifyRounds.id, sessionRow.id))
 
-  // Close the clarify node_run. RFC-053: resume-clarify enforces
-  // awaiting_human → done.
-  await transitionNodeRunStatus({
-    db,
-    nodeRunId: clarifyNodeRunId,
-    event: { kind: 'resume-clarify' },
-    extra: { finishedAt: answeredAt },
-  })
+  // RFC-076 PR-0 (T0) — torn-read write-ordering. The clarify→done flip and
+  // the source-agent rerun mint are two separate writes; with the flip FIRST
+  // (the old order) a reader landing between them — after `done`, before the
+  // rerun insert, across the rollbackToSnapshot git-subprocess yield below —
+  // sees "clarify done, rerun absent". A frontier derived from node_runs at
+  // that instant judges the agent's prior done row still freshest ⇒ scope
+  // allSettled ⇒ FALSE COMPLETION, dropping the rerun. (db.transaction does NOT
+  // help: bun:sqlite's transaction is synchronous, so an async body COMMITs at
+  // its first real `await` — verified — leaving post-await writes outside the
+  // tx.) Fix = mint the rerun BEFORE flipping clarify→done. The rerun row's
+  // fields come entirely from `sourceRunRow` (incl. its ORIGINAL preSnapshot —
+  // independent of the rollback), so the reorder is data-safe. The only
+  // intermediate state a reader can now observe is "clarify still awaiting +
+  // rerun present" — a safe, non-completing frontier.
 
-  // Mint the source-agent rerun.
   const taskRow = (await db.select().from(tasks).where(eq(tasks.id, sessionRow.taskId)).limit(1))[0]
   if (taskRow === undefined) {
     throw new NotFoundError('task-not-found', `task ${sessionRow.taskId} not found`)
@@ -448,6 +453,7 @@ export async function submitClarifyAnswers(
     }
   }
 
+  // Mint the source-agent rerun — BEFORE the clarify→done flip (T0 ordering).
   const rerunNodeRunId = ulid()
   await db.insert(nodeRuns).values({
     id: rerunNodeRunId,
@@ -467,6 +473,16 @@ export async function submitClarifyAnswers(
     // automatically; the clarify generation is derived from prior-done id-order
     // at dispatch time.
     preSnapshot: sourceRunRow.preSnapshot,
+  })
+
+  // Close the clarify node_run LAST. RFC-053: resume-clarify enforces
+  // awaiting_human → done. By the time clarify is `done`, the rerun row above
+  // already exists (T0 invariant), so no reader observes done-without-rerun.
+  await transitionNodeRunStatus({
+    db,
+    nodeRunId: clarifyNodeRunId,
+    event: { kind: 'resume-clarify' },
+    extra: { finishedAt: answeredAt },
   })
 
   const sealedSession: ClarifySession = {
