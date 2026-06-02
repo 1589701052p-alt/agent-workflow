@@ -893,8 +893,6 @@ export interface Resources {
     colIteration: string
     colRetry: string
     colDuration: string
-    reviewWaitDuration: string
-    reviewAwaiting: string
     secondsAgo: string
     minutesAgo: string
     hoursAgo: string
@@ -2922,8 +2920,6 @@ export const zhCN: Resources = {
     colIteration: '轮次',
     colRetry: '重试',
     colDuration: '耗时',
-    reviewWaitDuration: '{{d}}s（人工）',
-    reviewAwaiting: '等待人工',
     secondsAgo: '{{n}} 秒前',
     minutesAgo: '{{n}} 分钟前',
     hoursAgo: '{{n}} 小时前',

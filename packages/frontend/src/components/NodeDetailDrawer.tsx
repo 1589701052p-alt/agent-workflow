@@ -380,17 +380,12 @@ function StatsTab({
   agentName: string | null
 }) {
   const { t } = useTranslation()
-  // RFC-078: review rows surface the current round's content-anchored start +
-  // a human-review wait, not the pinned slot-open started_at / (finished−
-  // started) compute span. See lib/reviewRunDisplay.
-  const { isReview, displayStartedAt: displayStarted, reviewWaitMs } = reviewRunDisplay(run)
-  const duration = isReview
-    ? reviewWaitMs != null
-      ? t('tasks.reviewWaitDuration', { d: Math.round(reviewWaitMs / 10) / 100 })
-      : t('tasks.reviewAwaiting')
-    : run.startedAt !== null && run.finishedAt !== null
-      ? `${((run.finishedAt - run.startedAt) / 1000).toFixed(2)}s`
-      : t('common.emDash')
+  // RFC-078: review rows surface the current round's content-anchored start,
+  // not the pinned slot-open started_at. durationMs unifies the review wait and
+  // the compute span so the "duration" reads identically — no 人工/非人工
+  // marker. See lib/reviewRunDisplay.
+  const { displayStartedAt: displayStarted, durationMs } = reviewRunDisplay(run)
+  const duration = durationMs === null ? t('common.emDash') : `${(durationMs / 1000).toFixed(2)}s`
   // RFC-011 文案：被新尝试取代的旧 attempt 不再以 raw 'canceled' 字串呈现，
   // 也不显示机器前缀错误信息——通过 noderun-status helper 决定 chip 文案与
   // 是否用 supersededHint / rollbackHint 替换 errorMessage。

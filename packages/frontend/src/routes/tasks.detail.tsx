@@ -569,10 +569,12 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
             return <CommitRunRow key={r.id} run={r} allRuns={runs} />
           }
           const name = resolveNodeNameFromSnapshot(workflowSnapshot, r.nodeId) ?? r.nodeId
-          // RFC-078: review rows show the CURRENT round's content-anchored time
-          // and a human-review wait, not the pinned slot-first-open started_at /
-          // (finished−started) compute span. See lib/reviewRunDisplay.
-          const { isReview, displayStartedAt, reviewWaitMs } = reviewRunDisplay(r)
+          // RFC-078: review rows show the CURRENT round's content-anchored start,
+          // not the pinned slot-first-open started_at. The duration column renders
+          // reviewRunDisplay's unified durationMs — a review's human-review wait and
+          // a compute span format identically, with no 人工/非人工 marker. See
+          // lib/reviewRunDisplay.
+          const { displayStartedAt, durationMs } = reviewRunDisplay(r)
           return (
             <tr key={r.id}>
               <td>
@@ -623,13 +625,7 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
                   : new Date(displayStartedAt).toLocaleTimeString()}
               </td>
               <td className="data-table__muted">
-                {isReview
-                  ? reviewWaitMs != null
-                    ? t('tasks.reviewWaitDuration', { d: Math.round(reviewWaitMs / 100) / 10 })
-                    : t('tasks.reviewAwaiting')
-                  : r.startedAt === null || r.finishedAt === null
-                    ? t('common.emDash')
-                    : `${Math.round((r.finishedAt - r.startedAt) / 100) / 10}s`}
+                {durationMs === null ? t('common.emDash') : `${Math.round(durationMs / 100) / 10}s`}
               </td>
               <td className="data-table__muted">
                 {classifyCanceled(r) === 'manual'
