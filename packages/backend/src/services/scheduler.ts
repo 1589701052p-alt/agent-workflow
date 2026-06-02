@@ -50,7 +50,16 @@ import {
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRunOutputs, nodeRuns, skills, taskRepos, tasks } from '@/db/schema'
+import {
+  clarifySessions,
+  crossClarifySessions,
+  nodeRunEvents,
+  nodeRunOutputs,
+  nodeRuns,
+  skills,
+  taskRepos,
+  tasks,
+} from '@/db/schema'
 import { getAgent } from '@/services/agent'
 import { resolveDependsClosure } from '@/services/agentDeps'
 import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
@@ -70,11 +79,7 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
-import {
-  areTransitiveUpstreamsCompleted,
-  computeReadyNodes,
-  isNodeRunFresh,
-} from '@/services/freshness'
+import { areTransitiveUpstreamsCompleted, isNodeRunFresh } from '@/services/freshness'
 import { isDispatchable } from '@/services/dispatchFrontier'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
@@ -533,217 +538,221 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
   const { db, taskId, definition, opts } = state
   const { scopeIds, iteration, log } = args
 
-  // Scope nodes include output sinks: they each get a virtual node_run that
-  // mirrors their upstream port content, so lifecycle invariant T3 (task.done
-  // ⟹ every output node has a done node_run) is satisfied and the detail page
-  // can read output values from node_run_outputs uniformly.
-  const scopeNodes = definition.nodes.filter((n) => scopeIds.has(n.id))
-  // Upstream map restricted to in-scope sources.
-  const upstreamsOf = buildScopeUpstreams(scopeNodes, definition.edges)
-  const remaining = new Map(scopeNodes.map((n) => [n.id, n]))
-  const completed = new Set<string>()
-
-  // P-3-08 resume: nodes whose latest run at THIS iteration is `done` are
-  // pre-completed. Inner scopes additionally narrow by iteration so re-runs
-  // start fresh per iteration.
+  // RFC-076 PR-B — completion-driven dispatch frontier (replaces the
+  // snapshot-batch + Promise.all-barrier + rescan/recompute reconcile model).
   //
-  // RFC-023: the "latest" comparator must put clarifyIteration first.
-  // submitClarifyAnswers mints clarify reruns at retryIndex=0 (process-retry
-  // budget intact) with clarifyIteration+1 — putting retryIndex first lets
-  // a stale (retryIndex=N, clarifyIteration=0) done row from a prior single-
-  // node-retry storm beat the fresh rerun. See isFresherNodeRun.
-  const priorRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-  const latestPerNode = new Map<string, (typeof priorRuns)[number]>()
-  for (const r of priorRuns) {
-    if (r.iteration !== iteration) continue
-    if (!scopeIds.has(r.nodeId)) continue
-    if (r.parentNodeRunId !== null) continue // skip fan-out child rows
-    if (isFresherNodeRun(r, latestPerNode.get(r.nodeId))) {
-      latestPerNode.set(r.nodeId, r)
-    }
-  }
-  // RFC-074: freshestDonePerNode — each in-scope node's freshest DONE top-level
-  // row at THIS iteration (design §3.2). A node is provenance-fresh iff every
-  // upstream run it consumed is still that upstream's freshest done here;
-  // cross-loop-boundary inputs (lower iteration, absent from this map) are
-  // treated as still-fresh by isNodeRunFresh.
-  const freshestDonePerNode = buildFreshestDonePerNode(priorRuns, scopeIds, iteration)
-  // A node is `completed` iff its latest row is done AND provenance-fresh.
-  // Stale-done nodes stay in `remaining` and get re-dispatched (recording fresh
-  // consumed) once their upstreams are ready — NO speculative mint, which is
-  // why dead pending rows structurally disappear (§4.2). This replaces both the
-  // old unconditional done→completed AND the two cascade layers (Layer A
-  // cascadeDownstreamFromDesigner + Layer B applyClarifyFreshnessInvariant);
-  // mid-batch downstream propagation is handled by recomputeFreshnessAndDemote
-  // after each batch (§4.3 / D9).
-  for (const [nodeId, r] of latestPerNode) {
-    if (r.status === 'done' && isNodeRunFresh(r, freshestDonePerNode)) {
-      completed.add(nodeId)
-      remaining.delete(nodeId)
-    }
-  }
+  // Each tick re-reads node_runs and re-derives the dispatchable frontier from
+  // scratch (`deriveFrontier`); there is no mutable completed/remaining snapshot
+  // to keep in sync, so the old `rescanScopeForNewPendingRows` (mid-execution
+  // clarify answers) and `recomputeFreshnessAndDemote` (RFC-074 multi-hop
+  // demotion) are subsumed — both effects fall out of re-deriving from the DB.
+  //
+  // Newly-ready nodes start IMMEDIATELY and we await the FIRST in-flight
+  // completion (`Promise.race`), so a finished node's downstream dispatches the
+  // instant its last upstream settles — no waiting on the slowest sibling in a
+  // batch. Writers still serialize via `writeSem` inside runOneNode; readonly
+  // nodes run truly in parallel.
+  //
+  // `scopeNodes` includes output sinks: each gets a virtual node_run mirroring
+  // its upstream port content, so invariant T3 (task.done ⟹ every output node
+  // has a done node_run) holds and the detail page reads outputs uniformly.
+  const scopeNodes = definition.nodes.filter((n) => scopeIds.has(n.id))
+  const upstreamsOf = buildScopeUpstreams(scopeNodes, definition.edges)
+  const scopeNodeById = new Map(scopeNodes.map((n) => [n.id, n]))
 
-  // Cross-batch aggregation: collect awaiting / failure signals across every
-  // batch instead of short-circuiting on the first failure. Background: a
-  // wrapper-loop sibling failing fast used to swallow a parallel branch's
-  // `awaiting_human` (RFC-023 bug 13). The new contract — "let each batch
-  // finish, then decide based on priority canceled > awaiting_human >
-  // awaiting_review > failed > ok" — matches the user's mental model that an
-  // un-answered clarify cannot be silently lost just because another branch
-  // exhausted its retry budget.
-  let anyAwaitingReview = false
-  let anyAwaitingHuman = false
-  let awaitingReviewDetail: { summary: string; message: string; nodeId?: string } | undefined
-  let awaitingHumanDetail: { summary: string; message: string; nodeId?: string } | undefined
+  // In-flight node promises keyed by nodeId; `dispatchedThisInvocation` recovers
+  // the per-invocation dedup the old `remaining.delete(n.id)` provided (N3): a
+  // pure status read can't distinguish "failed row already (re-)dispatched this
+  // call" from "failed row awaiting a fresh resume", so we remember what we
+  // started. `parkedDetail` captures awaiting/failed summaries as they happen so
+  // the terminal block can bubble the right message (a node parked in a PRIOR
+  // invocation has no entry → falls back to '' / the generic detail, matching
+  // the old `?? ''` wrapper bubbling).
+  const inFlight = new Map<string, Promise<{ nodeId: string; result: OneNodeResult }>>()
+  const dispatchedThisInvocation = new Set<string>()
+  const parkedDetail = new Map<string, { summary: string; message: string }>()
   let firstFailureDetail: { summary: string; message: string; nodeId?: string } | undefined
 
-  while (remaining.size > 0) {
+  while (true) {
     if (opts.signal?.aborted === true) {
+      // Cancel is a hard short-circuit: the abort already fired, so every live
+      // child receives SIGTERM through the shared signal. Return immediately
+      // without draining in-flight promises.
       return { kind: 'canceled', detail: { summary: 'task canceled', message: 'signal aborted' } }
     }
-    // RFC-074 follow-up — transitive dispatch gate. A node dispatches only once
-    // its WHOLE structural ancestor chain is `completed`, not just its direct
-    // upstreams. The old one-hop gate (`ups.every((u) => completed.has(u))`) let
-    // a grandchild race ahead of a re-review while a grandparent was mid-rerun:
-    // an intermediate review's stale `done` row was still one-hop-fresh (not yet
-    // demoted), so the grandchild consumed a now-invalid approved_doc (incident
-    // 01KT1HDYV6RA8EJGY5BSE20MH9). See computeReadyNodes /
-    // areTransitiveUpstreamsCompleted in freshness.ts.
-    const ready = computeReadyNodes(remaining.values(), upstreamsOf, completed)
-    if (ready.length === 0) {
-      // No ready nodes AND remaining is non-empty. Before declaring the
-      // scope stalled, re-scan in case a clarify answer (or any other
-      // out-of-band mutation) minted a fresh pending row for a node we
-      // previously considered `done`. If rescan added at least one node
-      // back to remaining, try again on the next loop iteration.
-      const added = await rescanScopeForNewPendingRows(state, args, {
-        scopeNodes,
-        latestPerNode,
-        completed,
-        remaining,
-      })
-      // RFC-074 §4.3: also demote any completed node whose consumed upstream
-      // advanced — re-dispatching it can unblock the apparent stall.
-      const demoted = await recomputeFreshnessAndDemote(state, args, {
-        scopeNodes,
-        latestPerNode,
-        completed,
-        remaining,
-      })
-      if (added > 0 || demoted > 0) continue
-      // If a prior batch parked a node in awaiting_human / awaiting_review,
-      // the downstream is blocked WAITING for a human, not stalled. Bubble
-      // the awaiting signal up so runTask can transition the task chip
-      // cleanly. Without this branch the post-RFC-023-bug-13 refactor (which
-      // moved the awaiting return out of the per-batch for-loop into the
-      // end-of-scope priority block) breaks the agent-single happy-path
-      // e2e: designer asks clarify, review_design has no completed upstream,
-      // ready becomes empty, we'd otherwise fail the task with "scheduler
-      // stalled" before the user ever sees the question.
-      if (anyAwaitingHuman) {
-        return { kind: 'awaiting_human', detail: awaitingHumanDetail }
+
+    const rows = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const openClarify = await loadOpenClarify(db, taskId)
+    const f = deriveFrontier(
+      rows,
+      definition,
+      scopeNodes,
+      scopeIds,
+      iteration,
+      upstreamsOf,
+      new Set(inFlight.keys()),
+      dispatchedThisInvocation,
+      openClarify.clarifyNodeIds,
+      openClarify.askingRunIds,
+    )
+
+    for (const nodeId of f.ready) {
+      const node = scopeNodeById.get(nodeId)
+      if (node === undefined) continue
+      dispatchedThisInvocation.add(nodeId)
+      inFlight.set(
+        nodeId,
+        runOneNode(state, { node, iteration, log }).then((result) => ({ nodeId, result })),
+      )
+    }
+
+    if (inFlight.size === 0) {
+      // Quiescent — nothing running and nothing newly ready. Decide the scope
+      // outcome by the SAME priority the batch model used (canceled is handled
+      // above): awaiting_human > awaiting_review > failed > done > stalled. The
+      // distinction between "done" and "stalled" is `allSettled` — every
+      // in-scope node completed vs. a node blocked with no path forward.
+      if (f.awaitingHuman.length > 0) {
+        return { kind: 'awaiting_human', detail: detailFor(f.awaitingHuman[0]!, parkedDetail) }
       }
-      if (anyAwaitingReview) {
-        return { kind: 'awaiting_review', detail: awaitingReviewDetail }
+      if (f.awaitingReview.length > 0) {
+        return { kind: 'awaiting_review', detail: detailFor(f.awaitingReview[0]!, parkedDetail) }
       }
-      // Genuine stall: no awaiting, no completable progress. Surface any
-      // earlier per-node failure as the cause if one exists; otherwise
-      // fall back to the generic stalled message.
       if (firstFailureDetail !== undefined) {
         return { kind: 'failed', detail: firstFailureDetail }
+      }
+      if (f.allSettled) {
+        return { kind: 'ok' }
       }
       return {
         kind: 'failed',
         detail: { summary: 'scheduler stalled', message: 'no ready nodes in scope' },
       }
     }
-    for (const n of ready) remaining.delete(n.id)
 
-    const results = await Promise.all(
-      ready.map((node) => runOneNode(state, { node, iteration, log })),
-    )
-    for (let i = 0; i < ready.length; i++) {
-      const node = ready[i]!
-      const r = results[i]!
-      if (r.kind === 'ok') {
-        completed.add(node.id)
-        // RFC-075: after a top-level node finishes (writer agent or a wrapper
-        // treated as a unit), auto-commit&push its changes when the task opted
-        // in. Gated on `autoCommitPush` so every existing (opt-out) task takes
-        // a byte-identical zero-change path. Defensive: a commit failure must
-        // NEVER break task execution.
-        if (state.task.autoCommitPush && state.topLevelIds.has(node.id)) {
-          try {
-            await maybeRunCommitPush(state, node, iteration, log)
-          } catch (err) {
-            log.warn('auto commit&push trigger failed (ignored)', {
-              nodeId: node.id,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-        continue
-      }
-      if (r.kind === 'awaiting_review') {
-        anyAwaitingReview = true
-        awaitingReviewDetail = { summary: r.summary, message: r.message, nodeId: node.id }
-        continue
-      }
-      if (r.kind === 'awaiting_human') {
-        anyAwaitingHuman = true
-        awaitingHumanDetail = { summary: r.summary, message: r.message, nodeId: node.id }
-        continue
-      }
-      if (r.kind === 'canceled') {
-        // canceled is the only hard short-circuit — the signal was tripped
-        // explicitly by the user, so no point processing the remaining batch.
-        return {
-          kind: 'canceled',
-          detail: { summary: r.summary, message: r.message, nodeId: node.id },
-        }
-      }
-      // failed: record the first one for the eventual return value but
-      // do NOT short-circuit; sibling branches may still need
-      // awaiting_human / awaiting_review bubbled up to the user.
-      if (firstFailureDetail === undefined) {
-        firstFailureDetail = { summary: r.summary, message: r.message, nodeId: node.id }
+    const { nodeId, result } = await Promise.race(inFlight.values())
+    inFlight.delete(nodeId)
+
+    if (result.kind === 'canceled') {
+      // Hard short-circuit (user-tripped signal): no point draining the rest.
+      return {
+        kind: 'canceled',
+        detail: { summary: result.summary, message: result.message, nodeId },
       }
     }
-    // RFC-023 bug 13: after every batch, re-scan node_runs from the DB. If a
-    // user answered a clarify session mid-execution, `submitClarifyAnswers`
-    // already minted a fresh `pending` row for the asking agent with a
-    // higher `clarifyIteration`. Pull that node back into `remaining` so the
-    // next loop iteration dispatches it — otherwise the orphaned row would
-    // sit pending forever (scope's initial `latestPerNode` snapshot was
-    // already stale).
-    await rescanScopeForNewPendingRows(state, args, {
-      scopeNodes,
-      latestPerNode,
-      completed,
-      remaining,
-    })
-    // RFC-074 §4.3 (D9): the load-bearing piece. After a batch's nodes finish,
-    // demote any completed node whose consumed upstream now has a fresher done
-    // row, so multi-hop downstream propagation advances one hop per batch
-    // (replacing Layer A's eager cascade with lazy, provenance-driven re-runs).
-    await recomputeFreshnessAndDemote(state, args, {
-      scopeNodes,
-      latestPerNode,
-      completed,
-      remaining,
-    })
+    if (result.kind === 'awaiting_review' || result.kind === 'awaiting_human') {
+      // Park: record the detail and re-derive next tick. Other branches may
+      // still be in flight; only when the scope goes quiescent does the
+      // terminal block bubble this up (priority canceled > awaiting_human >
+      // awaiting_review > failed). An un-answered clarify cannot be silently
+      // lost just because a sibling failed.
+      parkedDetail.set(nodeId, { summary: result.summary, message: result.message })
+      continue
+    }
+    if (result.kind === 'failed') {
+      // Record the first failure but do NOT short-circuit — sibling branches
+      // may still surface awaiting_human / awaiting_review. The failed row is
+      // in `dispatchedThisInvocation`, so deriveFrontier will NOT re-dispatch
+      // it this call (it lands in the `failed` bucket); a fresh invocation
+      // (resume/retry) re-mints it via isDispatchable (N1).
+      if (firstFailureDetail === undefined) {
+        firstFailureDetail = { summary: result.summary, message: result.message, nodeId }
+      }
+      continue
+    }
+    // ok — RFC-075 auto commit&push after a top-level node completes (opt-in;
+    // a commit failure must NEVER break task execution).
+    if (state.task.autoCommitPush && state.topLevelIds.has(nodeId)) {
+      const node = scopeNodeById.get(nodeId)
+      if (node !== undefined) {
+        try {
+          await maybeRunCommitPush(state, node, iteration, log)
+        } catch (err) {
+          log.warn('auto commit&push trigger failed (ignored)', {
+            nodeId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+    }
   }
+}
 
-  if (anyAwaitingHuman) {
-    return { kind: 'awaiting_human', detail: awaitingHumanDetail }
+/**
+ * RFC-076 PR-B — terminal detail for a parked / failed node when the scope goes
+ * quiescent. A node parked THIS invocation has its summary/message captured in
+ * `parked`; a node parked in a PRIOR invocation (e.g. a resume that never had to
+ * re-run it) has no entry and falls back to '' — matching the old wrapper
+ * bubbling (`subRes.detail?.summary ?? ''`) and the fact that the top-level
+ * runTask ignores awaiting detail entirely (it only sets the task status chip).
+ */
+function detailFor(
+  nodeId: string,
+  parked: Map<string, { summary: string; message: string }>,
+): { summary: string; message: string; nodeId: string } {
+  const d = parked.get(nodeId)
+  return { summary: d?.summary ?? '', message: d?.message ?? '', nodeId }
+}
+
+/**
+ * RFC-076 PR-B — the open-clarify evidence `deriveFrontier` needs to honor a
+ * clarify park while re-deriving the frontier purely from node_runs. Two sets,
+ * both from UNANSWERED (`awaiting_human`) self / cross-clarify sessions:
+ *
+ *   - `clarifyNodeIds` (N6): clarify / cross-clarify NODE ids with an open
+ *     session. Positive evidence that prevents settling a clarify leaf without a
+ *     row during the "agent emitted <workflow-clarify>, createClarifySession
+ *     mid-write" window (the session row can land before the clarify node_run).
+ *
+ *   - `askingRunIds`: the node_run ids of the ASKING agent / questioner runs
+ *     (`source_agent_node_run_id` / `source_questioner_node_run_id`). When an
+ *     agent emits <workflow-clarify>, the runner marks the agent's OWN run
+ *     `done` and runOneNode returns `awaiting_human`; the old batch model used
+ *     that return value to keep the agent OUT of `completed` (so downstream
+ *     stayed blocked until the answer minted a rerun). A DB-derived frontier
+ *     sees only the `done` row, so without this set it would complete the asking
+ *     agent and run its downstream against an empty/clarify-only output (S12:
+ *     the diamond's sibling builder ran twice). An asking run id parks its node
+ *     in awaitingHuman until submitClarifyAnswers mints the rerun.
+ *
+ * A task parked awaiting a clarify never advances its loop iteration, so no
+ * iteration filter is needed (a stale awaiting session from a prior iteration
+ * cannot coexist with active scheduling of a later one).
+ */
+async function loadOpenClarify(
+  db: DbClient,
+  taskId: string,
+): Promise<{ clarifyNodeIds: Set<string>; askingRunIds: Set<string> }> {
+  const clarifyNodeIds = new Set<string>()
+  const askingRunIds = new Set<string>()
+  const self = await db
+    .select({
+      nodeId: clarifySessions.clarifyNodeId,
+      askingRunId: clarifySessions.sourceAgentNodeRunId,
+    })
+    .from(clarifySessions)
+    .where(and(eq(clarifySessions.taskId, taskId), eq(clarifySessions.status, 'awaiting_human')))
+  for (const r of self) {
+    clarifyNodeIds.add(r.nodeId)
+    if (r.askingRunId !== null && r.askingRunId !== '') askingRunIds.add(r.askingRunId)
   }
-  if (anyAwaitingReview) {
-    return { kind: 'awaiting_review', detail: awaitingReviewDetail }
+  const cross = await db
+    .select({
+      nodeId: crossClarifySessions.crossClarifyNodeId,
+      askingRunId: crossClarifySessions.sourceQuestionerNodeRunId,
+    })
+    .from(crossClarifySessions)
+    .where(
+      and(
+        eq(crossClarifySessions.taskId, taskId),
+        eq(crossClarifySessions.status, 'awaiting_human'),
+      ),
+    )
+  for (const r of cross) {
+    clarifyNodeIds.add(r.nodeId)
+    if (r.askingRunId !== null && r.askingRunId !== '') askingRunIds.add(r.askingRunId)
   }
-  if (firstFailureDetail !== undefined) {
-    return { kind: 'failed', detail: firstFailureDetail }
-  }
-  return { kind: 'ok' }
+  return { clarifyNodeIds, askingRunIds }
 }
 
 /**
@@ -978,6 +987,12 @@ function isLiveStatus(status: string): boolean {
  * @param dispatchedThisInvocation nodes already dispatched this runScope call
  *   (N3 — recovers the old remaining.delete per-invocation dedup; pure status
  *   read can't tell "already-dispatched parked wrapper" from "fresh resume").
+ * @param openClarifyNodeIds       clarify / cross-clarify NODE ids with an open
+ *   session (N6 — see loadOpenClarify).
+ * @param askingRunIds             node_run ids of asking agent / questioner runs
+ *   with an open clarify session. Their `done` row is a clarify park, NOT a
+ *   completion: excluded from `completed` and bucketed awaitingHuman until the
+ *   answer mints a rerun (S12). See loadOpenClarify.
  */
 export function deriveFrontier(
   rows: ReadonlyArray<typeof nodeRuns.$inferSelect>,
@@ -989,6 +1004,7 @@ export function deriveFrontier(
   inFlight: ReadonlySet<string>,
   dispatchedThisInvocation: ReadonlySet<string>,
   openClarifyNodeIds: ReadonlySet<string>,
+  askingRunIds: ReadonlySet<string> = new Set(),
 ): Frontier {
   const latestPerNode = new Map<string, typeof nodeRuns.$inferSelect>()
   for (const r of rows) {
@@ -999,9 +1015,14 @@ export function deriveFrontier(
   }
   const freshestDone = buildFreshestDonePerNode(rows, scopeIds, iteration)
 
-  // Pass 1 — done∧fresh (old seed口径) + exhausted (loop-max true terminal, HIGH-2).
+  // Pass 1 — done∧fresh (old seed口径) + exhausted (loop-max true terminal,
+  // HIGH-2). An asking agent's `done` run with an OPEN clarify session is NOT a
+  // completion (it is mid-conversation, parked awaiting the answer) — excluded
+  // here, bucketed awaitingHuman below (S12: matches the old batch model keeping
+  // the asking agent out of `completed` via runOneNode's awaiting_human return).
   const completed = new Set<string>()
   for (const [nodeId, r] of latestPerNode) {
+    if (askingRunIds.has(r.id)) continue
     if (r.status === 'done' && isNodeRunFresh(r, freshestDone)) completed.add(nodeId)
     else if (r.status === 'exhausted') completed.add(nodeId)
   }
@@ -1026,6 +1047,14 @@ export function deriveFrontier(
     if (completed.has(n.id)) continue
     remainingCount += 1
     const latest = latestPerNode.get(n.id)
+    // Asking agent parked on an open clarify: its `done` row is mid-conversation,
+    // not a completion and not (re-)dispatchable — submitClarifyAnswers mints the
+    // rerun. Park it in awaitingHuman so the scope bubbles awaiting_human (and so
+    // a `done`-status latest doesn't fall through to no bucket → false stall).
+    if (latest !== undefined && askingRunIds.has(latest.id)) {
+      awaitingHuman.push(n.id)
+      continue
+    }
     const dispatchable =
       areTransitiveUpstreamsCompleted(n.id, upstreamsOf, completed) &&
       !inFlight.has(n.id) &&
@@ -1048,112 +1077,6 @@ export function deriveFrontier(
     failed,
     allSettled: remainingCount === 0,
   }
-}
-
-/**
- * RFC-074 §4.3 (decision D9) — per-batch fixed-point freshness recompute. This
- * is the load-bearing replacement for Layer A's pre-mint RESPONSIBILITY
- * (mid-loop multi-hop downstream propagation), not just Layer B's entry
- * invariant. After each batch — and in the ready-empty stall guard — re-read
- * node_runs, rebuild latest + freshestDone, and for every node currently in
- * `completed` recompute `isNodeRunFresh` against the run it consumed. A node
- * that went stale (an upstream produced a fresher done row in this batch) is
- * demoted out of `completed` back into `remaining` — with NO mint; it
- * re-dispatches naturally on a later batch and records fresh consumed then.
- *
- * Each call advances downstream propagation one hop (A done → demote B; next
- * batch runs B → demote C; …); the surrounding `while (remaining.size > 0)`
- * batch loop is the outer fixed-point. Returns the number of nodes demoted.
- */
-async function recomputeFreshnessAndDemote(
-  state: SchedulerState,
-  args: ScopeArgs,
-  ctx: {
-    scopeNodes: WorkflowNode[]
-    latestPerNode: Map<string, typeof nodeRuns.$inferSelect>
-    completed: Set<string>
-    remaining: Map<string, WorkflowNode>
-  },
-): Promise<number> {
-  const { db, taskId } = state
-  const { iteration, scopeIds, log } = args
-  const fresh = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-  const newLatest = new Map<string, (typeof fresh)[number]>()
-  for (const r of fresh) {
-    if (r.iteration !== iteration) continue
-    if (!scopeIds.has(r.nodeId)) continue
-    if (r.parentNodeRunId !== null) continue
-    if (isFresherNodeRun(r, newLatest.get(r.nodeId))) newLatest.set(r.nodeId, r)
-  }
-  const freshestDone = buildFreshestDonePerNode(fresh, scopeIds, iteration)
-  const demoted: string[] = []
-  for (const nodeId of Array.from(ctx.completed)) {
-    const r = newLatest.get(nodeId)
-    if (r === undefined || r.status !== 'done') continue
-    if (!isNodeRunFresh(r, freshestDone)) {
-      ctx.completed.delete(nodeId)
-      const node = ctx.scopeNodes.find((n) => n.id === nodeId)
-      if (node !== undefined) ctx.remaining.set(nodeId, node)
-      ctx.latestPerNode.set(nodeId, r)
-      demoted.push(nodeId)
-    }
-  }
-  if (demoted.length > 0) {
-    log.info('rfc074 freshness demote (upstream advanced)', { taskId, iteration, nodes: demoted })
-  }
-  return demoted.length
-}
-
-/**
- * RFC-023 bug 13: rescan node_runs for the current task + iteration looking
- * for fresh rows whose (retryIndex, clarifyIteration) tuple beats whatever
- * `latestPerNode` cached at scope entry (or after the prior batch). When a
- * beating row is `pending`, the corresponding node is added back into
- * `remaining` (and pulled out of `completed` if it was there) so the
- * scheduler picks it up on the next batch — covering the "user answered a
- * clarify while the scope's `Promise.all` was still blocked on a sibling
- * branch" race. Returns the number of nodes added back to remaining so the
- * caller can decide whether to break a stall.
- */
-async function rescanScopeForNewPendingRows(
-  state: SchedulerState,
-  args: ScopeArgs,
-  ctx: {
-    scopeNodes: WorkflowNode[]
-    latestPerNode: Map<string, typeof nodeRuns.$inferSelect>
-    completed: Set<string>
-    remaining: Map<string, WorkflowNode>
-  },
-): Promise<number> {
-  const { db, taskId } = state
-  const { iteration, scopeIds } = args
-  const fresh = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-  let added = 0
-  const newLatest = new Map<string, (typeof fresh)[number]>()
-  for (const r of fresh) {
-    if (r.iteration !== iteration) continue
-    if (!scopeIds.has(r.nodeId)) continue
-    if (r.parentNodeRunId !== null) continue
-    if (isFresherNodeRun(r, newLatest.get(r.nodeId))) {
-      newLatest.set(r.nodeId, r)
-    }
-  }
-  for (const [nodeId, row] of newLatest) {
-    const cached = ctx.latestPerNode.get(nodeId)
-    if (!isFresherNodeRun(row, cached)) continue
-    ctx.latestPerNode.set(nodeId, row)
-    if (row.status === 'pending') {
-      ctx.completed.delete(nodeId)
-      if (!ctx.remaining.has(nodeId)) {
-        const node = ctx.scopeNodes.find((n) => n.id === nodeId)
-        if (node !== undefined) {
-          ctx.remaining.set(nodeId, node)
-          added += 1
-        }
-      }
-    }
-  }
-  return added
 }
 
 // -----------------------------------------------------------------------------

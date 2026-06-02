@@ -90,16 +90,36 @@ describe('RFC-076 PR-A — isDispatchable (trim-B status gate)', () => {
     )
   })
 
-  // C2 — leaf parked nodes never re-dispatch (the round-1 busy-loop fix).
-  test('leaf awaiting_human (clarify) → NOT dispatchable (C2)', () => {
+  // C2 — a FRESH leaf parked node never re-dispatches (the round-1 busy-loop
+  // fix); the `run` helper defaults consumed=null ⇒ always fresh.
+  test('FRESH leaf awaiting_human (clarify) → NOT dispatchable (C2)', () => {
     expect(
       isDispatchable(run({ status: 'awaiting_human' }), 'clarify', NO_FRESH, [], emptyDef),
     ).toBe(false)
   })
-  test('leaf awaiting_review (review) → NOT dispatchable (C2)', () => {
+  test('FRESH leaf awaiting_review (review) → NOT dispatchable (C2)', () => {
     expect(
       isDispatchable(run({ status: 'awaiting_review' }), 'review', NO_FRESH, [], emptyDef),
     ).toBe(false)
+  })
+
+  // RFC-076 S8/S11 fix — a STALE parked leaf (consumed an upstream run that has
+  // since advanced) MUST re-dispatch, symmetric with stale `done`. Otherwise
+  // approving a review built on an obsolete upstream re-reviews on next entry.
+  // `dispatchedThisInvocation` (N3, in deriveFrontier) bounds the re-run to once.
+  test('STALE leaf awaiting_review → dispatchable (re-park against fresh upstream, S8/S11)', () => {
+    const staleParked = run({
+      status: 'awaiting_review',
+      consumedUpstreamRunsJson: JSON.stringify({ up: '01OLD' }),
+    })
+    expect(isDispatchable(staleParked, 'review', STALE_FRESHEST, [], emptyDef)).toBe(true)
+  })
+  test('STALE leaf awaiting_human → dispatchable (symmetry with stale done)', () => {
+    const staleParked = run({
+      status: 'awaiting_human',
+      consumedUpstreamRunsJson: JSON.stringify({ up: '01OLD' }),
+    })
+    expect(isDispatchable(staleParked, 'clarify', STALE_FRESHEST, [], emptyDef)).toBe(true)
   })
 
   // N2 — wrapper awaiting_* is a resume anchor, dispatchable iff inner has fresh work.

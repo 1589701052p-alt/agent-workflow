@@ -179,12 +179,30 @@ describe('source guard — runScope wires the transitive gate', () => {
     'utf8',
   )
 
-  test('runScope calls computeReadyNodes and no longer hand-rolls the one-hop gate', () => {
-    expect(SCHEDULER_SRC).toContain('computeReadyNodes(remaining.values()')
-    // The old hand-rolled ready loop ended in `ready.push(n)` — a code-only
-    // token (the prose comment above the call deliberately quotes the one-hop
-    // EXPRESSION but never `ready.push`). Its absence locks out a re-inlined
-    // one-hop gate without tripping on documentation.
+  // RFC-076 PR-B moved dispatch off the batch model: runScope no longer calls
+  // `computeReadyNodes` directly nor hand-rolls a ready loop. It re-derives the
+  // frontier each tick via `deriveFrontier`, which is where the transitive gate
+  // (`areTransitiveUpstreamsCompleted`) now lives — so the incident-01KT1HDYV6
+  // grandchild-races-stale-review fix is preserved structurally. These guards
+  // lock that wiring; the pure-semantics blocks above lock the gate's logic.
+  test('the transitive gate predicate is still the dispatch readiness check', () => {
+    // areTransitiveUpstreamsCompleted — the fix-A transitive closure — must
+    // remain the gate. A re-inlined one-hop `ups.every((u) => completed.has(u))`
+    // dispatch loop (the OLD bug shape, ending in `ready.push(n)`) must NOT
+    // reappear (the prose comments quote the one-hop EXPRESSION but never the
+    // code-only token `ready.push`).
+    expect(SCHEDULER_SRC).toContain('areTransitiveUpstreamsCompleted(')
     expect(SCHEDULER_SRC).not.toContain('ready.push(n)')
+  })
+
+  test('runScope is completion-driven (deriveFrontier + Promise.race, no batch barrier)', () => {
+    // deriveFrontier is the dispatch brain; Promise.race makes a finished node's
+    // downstream dispatch the instant its last upstream settles. The old batch
+    // barrier (`Promise.all(ready.map((node) => runOneNode...))`) is gone, as is
+    // the direct computeReadyNodes call — both replaced by per-tick re-derivation.
+    expect(SCHEDULER_SRC).toContain('deriveFrontier(')
+    expect(SCHEDULER_SRC).toContain('Promise.race(')
+    expect(SCHEDULER_SRC).not.toContain('ready.map((node) => runOneNode')
+    expect(SCHEDULER_SRC).not.toContain('computeReadyNodes(remaining.values()')
   })
 })

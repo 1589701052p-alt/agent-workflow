@@ -149,6 +149,39 @@ describe('RFC-076 PR-B — deriveFrontier', () => {
     expect(f.allSettled).toBe(false)
   })
 
+  test('asking-run park (S12): a done agent run in askingRunIds is NOT completed, parks awaitingHuman', () => {
+    // designer → builder. designer emitted <workflow-clarify>: the runner marked
+    // designer's OWN run `done`, but it is mid-conversation (open clarify
+    // session). It must NOT complete (else builder runs prematurely on a
+    // clarify-only / empty output — the S12 diamond double-run). askingRunIds
+    // carries the designer run id from the open session.
+    const { definition, scopeNodes, scopeIds } = def([
+      { id: 'in', kind: 'input' },
+      { id: 'designer', kind: 'agent-single' },
+      { id: 'builder', kind: 'agent-single' },
+    ])
+    const designer = row('designer', 'done')
+    const rows = [row('in', 'done'), designer, row('builder', 'pending')]
+    const askingRunIds = new Set([designer.id])
+    const f = deriveFrontier(
+      rows,
+      definition,
+      scopeNodes,
+      scopeIds,
+      0,
+      ups({ designer: ['in'], builder: ['designer'] }),
+      NONE,
+      NONE,
+      NONE,
+      askingRunIds,
+    )
+    expect(f.completed.has('designer')).toBe(false)
+    expect(f.awaitingHuman).toEqual(['designer'])
+    // builder is held: its upstream designer is not completed.
+    expect(f.ready).not.toContain('builder')
+    expect(f.allSettled).toBe(false)
+  })
+
   test('N1 — failed agent with upstream done → READY (resume re-mint), not in failed bucket', () => {
     const { definition, scopeNodes, scopeIds } = def([
       { id: 'in', kind: 'input' },

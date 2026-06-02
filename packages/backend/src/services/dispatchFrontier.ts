@@ -11,9 +11,11 @@
 //     failed row and lets the scheduler mint retry_index=max+1; reapOrphanRuns
 //     flips running→interrupted). Excluding them — as full-B did — would turn
 //     every resume into "scheduler stalled". `exhausted` (loop-max, a true
-//     terminal, round-3 HIGH-2) and leaf `awaiting_*` (round-1 C2) are NOT
-//     dispatchable; a WRAPPER's `awaiting_*` IS (round-2 N2 resume anchor), but
-//     only when its inner scope has fresh post-answer work.
+//     terminal, round-3 HIGH-2) is NOT dispatchable. A FRESH leaf `awaiting_*`
+//     stays parked (round-1 C2 busy-loop fix); a STALE one (upstream advanced)
+//     re-dispatches like a stale `done` (S8/S11/S12 — re-park the review against
+//     the fresh upstream). A WRAPPER's `awaiting_*` IS dispatchable (round-2 N2
+//     resume anchor), but only when its inner scope has fresh post-answer work.
 //
 //   - wrapperHasFreshInnerWork(wrapperRow, rows, definition) — round-3 HIGH-1.
 //     A wrapper-loop parks its OWN top-level row at `parentIteration`, but its
@@ -116,9 +118,9 @@ export function wrapperHasFreshInnerWork(
  *                                  scheduler mints retry_index=max+1, bounded by
  *                                  runOneNode's attempt ≤ retryIndex+maxRetries)
  *   wrapper awaiting_*   → wrapperHasFreshInnerWork (N2 resume anchor + HIGH-1)
- *   else                 → false  (done∧fresh / leaf awaiting_* [C2] /
- *                                  exhausted [loop-max true terminal, HIGH-2] /
- *                                  canceled / running)
+ *   leaf awaiting_*      → !fresh (stale parked re-runs; fresh parked stays — C2)
+ *   else                 → false  (done∧fresh / exhausted [loop-max true
+ *                                  terminal, HIGH-2] / canceled / running)
  *
  * In-pass busy-loop protection does NOT come from this gate — it comes from the
  * scheduler's per-invocation `dispatchedThisInvocation` set (N3) + runOneNode
@@ -137,7 +139,19 @@ export function isDispatchable(
   if (row.status === 'failed' || row.status === 'interrupted') return true
   if (row.status === 'awaiting_human' || row.status === 'awaiting_review') {
     if (WRAPPER_KINDS.has(kind)) return wrapperHasFreshInnerWork(row, rows, definition)
-    return false // leaf parked — never re-dispatch (C2)
+    // Leaf parked (review / clarify). C2 keeps a FRESH parked leaf parked — it
+    // is genuinely waiting on a human, and re-dispatching it every tick would
+    // busy-loop. But a parked leaf whose consumed upstream has since advanced is
+    // STALE: the artifact under review changed out from under the pending human
+    // decision. It must re-dispatch (re-park a fresh review against the new
+    // upstream), exactly like a stale `done` row — symmetric with the line
+    // above. Approving a stale parked review would otherwise leave it consuming
+    // an obsolete upstream run, surfacing as a spurious re-review on the next
+    // scope entry (the RFC-074 demote-the-stale-parked-review path the old batch
+    // model performed via recomputeFreshnessAndDemote; combination-scenarios
+    // S8/S11/S12 lock this). `dispatchedThisInvocation` (N3) still bounds it to
+    // one re-dispatch per invocation, so no busy-loop.
+    return !isNodeRunFresh(row, freshestDonePerUpstream)
   }
   // exhausted (loop-max true terminal) / canceled / running → not dispatchable
   return false
