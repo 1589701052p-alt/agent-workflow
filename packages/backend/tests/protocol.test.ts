@@ -37,7 +37,7 @@ describe('buildProtocolBlock', () => {
       const block = buildProtocolBlock(['summary', 'report'], false, { report: 'markdown_file' })
       expect(block).toContain('  - summary\n')
       expect(block).toContain(
-        '  - report (markdown_file — write the file first, then emit only its worktree-relative path)',
+        '  - report (path — write the file first, then emit only its worktree-relative path)',
       )
     })
 
@@ -48,7 +48,9 @@ describe('buildProtocolBlock', () => {
       })
       // Names every markdown_file port so the agent knows which ones need a
       // real file behind them; sibling string ports are NOT named here.
-      expect(block).toContain('For ports declared `markdown_file` above (`report`, `plan`)')
+      expect(block).toContain(
+        'For path-kind ports above (`report` (extension .md/.markdown), `plan` (extension .md/.markdown))',
+      )
       expect(block).toContain('USE A FILE-WRITING TOOL')
       expect(block).toContain('Write / Edit')
       expect(block).toContain('task worktree')
@@ -56,7 +58,7 @@ describe('buildProtocolBlock', () => {
         'place ONLY that worktree-relative path inside the matching `<port>` tag',
       )
       expect(block).toContain(
-        'a path that does not point to an existing file causes the run to fail',
+        'a path that does not point to an existing file with the declared extension causes the run to fail',
       )
     })
 
@@ -66,7 +68,7 @@ describe('buildProtocolBlock', () => {
       expect(block).toContain('<port name="summary">...</port>')
       // report is markdown_file — placeholder becomes a worktree-relative path hint.
       expect(block).toContain(
-        '<port name="report"><worktree-relative path to the .md file you just wrote></port>',
+        '<port name="report"><worktree-relative path to the file you just wrote></port>',
       )
     })
 
@@ -77,7 +79,7 @@ describe('buildProtocolBlock', () => {
         findings: 'markdown',
       })
       for (const block of [noKindsBlock, allStringBlock]) {
-        expect(block).not.toContain('For ports declared `markdown_file` above')
+        expect(block).not.toContain('For path-kind ports above')
         expect(block).not.toContain('write the file first')
         expect(block).not.toContain('USE A FILE-WRITING TOOL')
       }
@@ -95,10 +97,10 @@ describe('buildProtocolBlock', () => {
     test('bi-modal trailing block (hasClarifyChannel=true) still surfaces the markdown_file guidance', () => {
       const block = buildProtocolBlock(['design'], true, { design: 'markdown_file' })
       expect(block).toContain('This node has a clarify channel')
-      expect(block).toContain('For ports declared `markdown_file` above (`design`)')
+      expect(block).toContain('For path-kind ports above (`design` (extension .md/.markdown))')
       expect(block).toContain('USE A FILE-WRITING TOOL')
       expect(block).toContain(
-        '<port name="design"><worktree-relative path to the .md file you just wrote></port>',
+        '<port name="design"><worktree-relative path to the file you just wrote></port>',
       )
     })
   })
@@ -229,10 +231,10 @@ describe('renderUserPrompt — template substitution', () => {
       agentOutputKinds: { report: 'markdown_file' },
     })
     // End-to-end: the runner-equivalent call surfaces the file-first rule.
-    expect(out).toContain('For ports declared `markdown_file` above (`report`)')
+    expect(out).toContain('For path-kind ports above (`report` (extension .md/.markdown))')
     expect(out).toContain('USE A FILE-WRITING TOOL')
     expect(out).toContain(
-      '<port name="report"><worktree-relative path to the .md file you just wrote></port>',
+      '<port name="report"><worktree-relative path to the file you just wrote></port>',
     )
     // Final `</workflow-output>` is still the very last token of the prompt.
     expect(out.endsWith('</workflow-output>')).toBe(true)

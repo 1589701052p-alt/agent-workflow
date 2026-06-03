@@ -13,6 +13,7 @@
 // validation pass alongside renderUserPrompt.
 
 import { tryParseKind, type ParsedKind } from './kindParser'
+import { tryHandlerForParsedKind } from './outputKinds'
 
 const TEMPLATE_REF_RE = /\{\{(\w+)\}\}/g
 
@@ -54,8 +55,12 @@ export function findPromptSignalRefs(
     if (rawKind === undefined) continue
     const parsed = typeof rawKind === 'string' ? tryParseKind(rawKind) : rawKind
     if (parsed === null) continue
-    if (parsed.kind === 'base' && parsed.name === 'signal') {
-      out.push({ port, kindRepr: 'signal' })
+    // RFC-080: ask the kind handler whether it carries data, instead of
+    // hardcoding the single 'signal' base name. Any future no-data control
+    // kind is then auto-forbidden as a `{{port}}` template reference.
+    const handler = tryHandlerForParsedKind(parsed)
+    if (handler !== null && !handler.carriesData(parsed)) {
+      out.push({ port, kindRepr: handler.displayName })
     }
   }
   return out

@@ -11,6 +11,16 @@
 // PR-D：切换 runtime 调用方为 parseKind + getHandlerForParsedKind；同步
 // 删除 markdownFile.ts、把现有 HANDLERS Record 替换为本注册表。
 //
+// RFC-080（PR-A）现状更新：agent-output 的运行时调用方——shared/prompt.ts
+// `buildProtocolBlock`、backend `envelope.ts resolvePortContentDetailed`、
+// `runner.ts` repair——**已切到本注册表**（经 `groupPortsByParsedKind` /
+// `getHandlerForParsedKind` / `composePerParsedKindRepairBlocks`）。
+// outputKinds/index.ts 的旧 `HANDLERS` Record 仅余自身单测调用、无 agent-output
+// 运行时调用方；markdownFile.ts 暂未删除（留作 follow-up）。本文件还托管 RFC-080
+// 的具名 hook（DEFAULT_OUTPUT_KIND / formatPortValidationErrCode / 分组 helper）+
+// handler 能力方法（baseNames / carriesData / bulletSuffix / examplePlaceholder /
+// isReviewableBody）+ base 名加载期交叉校验（drift guard 层 1/3a）。
+//
 // 设计要点：
 //   - 每个 handler 通过 `matches(parsed)` 自报负责的 ParsedKind 子集。
 //     PathHandler 接 `parsed.kind === 'path'`（任意 ext，含 path<*>）；
@@ -20,7 +30,7 @@
 //   - subReasons 跨 handler 唯一性继续锁住（与 RFC-049 同款 invariant）；
 //     模块加载期 throw 让 PR 永远不能合入冲突命名。
 
-import { stringifyKind, type ParsedKind } from '../kindParser'
+import { tryParseKind, stringifyKind, REGISTERED_BASE_KINDS, type ParsedKind } from '../kindParser'
 import type { ValidateIO, ValidateResult } from './types'
 
 export interface ParametricValidateCtx {
@@ -48,6 +58,45 @@ export interface ParametricOutputKindHandler {
   readonly subReasons: ReadonlySet<string>
   /** Returns true if this handler should serve the given ParsedKind. */
   matches(parsed: ParsedKind): boolean
+  /**
+   * RFC-080 drift guard: the base kind NAMES this handler serves (e.g. the
+   * string handler → `['string']`; the path / list handlers serve a SHAPE,
+   * not a base name → `[]`). The registry cross-checks the union of all
+   * handlers' `baseNames` against `REGISTERED_BASE_KINDS` at module load
+   * (`assertBaseNameCoverage`) so a new base kind can never be added to the
+   * grammar allowlist without a handler claiming it, and vice versa.
+   */
+  readonly baseNames: readonly string[]
+  /**
+   * RFC-080: does this kind carry data that can be referenced as a `{{port}}`
+   * template token? `signal` → false (control-flow only). Drives
+   * `signalPromptGuard` + canvas signal-port styling, so any future no-data
+   * control kind is auto-forbidden in prompt templates without editing those
+   * call sites.
+   */
+  carriesData(parsed: ParsedKind): boolean
+  /**
+   * RFC-080: the per-port annotation appended to this kind's bullet in the
+   * `<workflow-output>` protocol block (e.g. path → "write the file first…").
+   * `null` = no suffix. Replaces prompt.ts's hardcoded `=== 'markdown_file'`
+   * literal branch so a new kind self-annotates.
+   */
+  bulletSuffix(parsed: ParsedKind): string | null
+  /**
+   * RFC-080: the inner text of this kind's `<port>…</port>` example in the
+   * Format block (default `'...'`; signal → `''`; path → a path hint). Lets
+   * the example self-adapt to new kinds.
+   */
+  examplePlaceholder(parsed: ParsedKind): string
+  /**
+   * RFC-080 placeholder (call-site consolidation lands in RFC-081): is this
+   * kind a single markdown-bodied document eligible for the review / multi-doc
+   * machinery? Replaces the hand-rolled "markdownish" set scattered across
+   * validator / reviewMultiDoc / review / schemas. A `list` is NOT a single
+   * body → false at the list level; multi-doc detection (a list whose ITEM is
+   * reviewable) is a structural check the callers do against `parsed.item`.
+   */
+  isReviewableBody(parsed: ParsedKind): boolean
   /** First-turn prompt guidance. Receives the ports declared with this
    *  handler + their full ParsedKind context so a list handler can decide
    *  guidance based on item kind. Return null to skip. */
@@ -105,6 +154,123 @@ export function tryHandlerForParsedKind(parsed: ParsedKind): ParametricOutputKin
 }
 
 // -----------------------------------------------------------------------------
+// RFC-080 — named hooks + parametric grouping helpers.
+//
+// These are the registry-owned single sources of truth that replace magic
+// literals scattered across prompt / envelope / runner. PR-A migrates the
+// agent-output runtime callers onto them; the legacy `HANDLERS` Record helpers
+// (`groupPortsByKind` / `composePerKindRepairBlocks` / `getOutputKindHandler`)
+// in outputKinds/index.ts stay for non-migrated / test callers.
+// -----------------------------------------------------------------------------
+
+/** The implicit kind of an output port with no declared `outputKinds` entry. */
+export const DEFAULT_OUTPUT_KIND = 'string'
+
+/** ParsedKind form of {@link DEFAULT_OUTPUT_KIND}. */
+export function defaultParsedKind(): ParsedKind {
+  return { kind: 'base', name: DEFAULT_OUTPUT_KIND }
+}
+
+/**
+ * The canonical `port-validation-<namespace>-<subReason>` errCode shape. The
+ * namespace is the handler's `displayName` (path / list / signal / string /
+ * markdown) so it never carries `<>` and a new kind cannot diverge the format.
+ */
+export function formatPortValidationErrCode(displayName: string, subReason: string): string {
+  return `port-validation-${displayName}-${subReason}`
+}
+
+/** Parse a port's declared kind string, defaulting absent → base 'string'. */
+export function parsePortKind(kind: string | undefined): ParsedKind {
+  if (kind === undefined || kind === '') return defaultParsedKind()
+  return tryParseKind(kind) ?? defaultParsedKind()
+}
+
+export type ParsedKindGroup = {
+  handler: ParametricOutputKindHandler
+  /** Ports served by this handler, in first-occurrence order. */
+  ports: string[]
+  /** Each port's ParsedKind (so list/path handlers can read item/ext). */
+  portKinds: Map<string, ParsedKind>
+}
+
+/**
+ * Parametric sibling of outputKinds/index.ts `groupPortsByKind`: parse every
+ * declared port's kind into a ParsedKind, bucket by the matching parametric
+ * handler (key = displayName, first-occurrence order), default absent kinds to
+ * base 'string'. Unlike the legacy helper this never throws on path<ext> /
+ * list<T> / signal — they route through `getHandlerForParsedKind`.
+ */
+export function groupPortsByParsedKind(
+  declaredOutputs: readonly string[],
+  agentOutputKinds?: Record<string, string>,
+): ParsedKindGroup[] {
+  const byDisplay = new Map<string, ParsedKindGroup>()
+  const order: string[] = []
+  for (const port of declaredOutputs) {
+    const parsed = parsePortKind(agentOutputKinds?.[port])
+    const handler = getHandlerForParsedKind(parsed)
+    let group = byDisplay.get(handler.displayName)
+    if (group === undefined) {
+      group = { handler, ports: [], portKinds: new Map() }
+      byDisplay.set(handler.displayName, group)
+      order.push(handler.displayName)
+    }
+    group.ports.push(port)
+    group.portKinds.set(port, parsed)
+  }
+  return order.map((d) => byDisplay.get(d)!)
+}
+
+/**
+ * Parametric sibling of outputKinds/index.ts `composePerKindRepairBlocks`:
+ * accepts failures carrying a kind STRING (as persisted by the runner), parses
+ * each, buckets by the matching parametric handler, and calls its
+ * `buildRepairBlock`. Failures whose kind doesn't parse are dropped (defensive;
+ * the schema admits only registered kinds on ingress).
+ */
+export function composePerParsedKindRepairBlocks(
+  failures: readonly { port: string; kind: string; subReason: string; detail?: string }[],
+  agentOutputKinds?: Record<string, string>,
+): string[] {
+  if (failures.length === 0) return []
+  const byDisplay = new Map<
+    string,
+    { handler: ParametricOutputKindHandler; items: ParametricKindFailure[] }
+  >()
+  const order: string[] = []
+  for (const f of failures) {
+    const parsed = tryParseKind(f.kind)
+    if (parsed === null) continue
+    const handler = getHandlerForParsedKind(parsed)
+    let bucket = byDisplay.get(handler.displayName)
+    if (bucket === undefined) {
+      bucket = { handler, items: [] }
+      byDisplay.set(handler.displayName, bucket)
+      order.push(handler.displayName)
+    }
+    const item: ParametricKindFailure = { port: f.port, kind: parsed, subReason: f.subReason }
+    if (f.detail !== undefined) item.detail = f.detail
+    bucket.items.push(item)
+  }
+  const out: string[] = []
+  for (const d of order) {
+    const bucket = byDisplay.get(d)!
+    // The repair block's "ports" arg = all ports of this kind declared on the
+    // agent, mirroring the legacy helper's contract.
+    const ports = Object.entries(agentOutputKinds ?? {})
+      .filter(([, k]) => {
+        const p = tryParseKind(k)
+        return p !== null && getHandlerForParsedKind(p).displayName === d
+      })
+      .map(([port]) => port)
+    const segment = bucket.handler.buildRepairBlock({ failures: bucket.items, ports })
+    if (segment !== null) out.push(segment)
+  }
+  return out
+}
+
+// -----------------------------------------------------------------------------
 // Module-load-time invariant: subReason short-codes are unique within this
 // registry. RFC-049 sibling check on the legacy HANDLERS Record continues
 // to run independently in outputKinds/index.ts.
@@ -120,6 +286,50 @@ export function tryHandlerForParsedKind(parsed: ParsedKind): ParametricOutputKin
         )
       }
       claimedBy.set(sub, h.displayName)
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// RFC-080 drift guard layer 3a — base-name coverage cross-check.
+//
+// The union of every handler's `baseNames` MUST equal `REGISTERED_BASE_KINDS`
+// (kindParser.ts), and each base name must be served by exactly one handler.
+// This closes the kindParser.ts allowlist drift WITHOUT kindParser importing
+// the registry (the dependency is one-directional; see kindParser.ts note).
+// Adding a base kind to one side without the other → boot/CI throw.
+// -----------------------------------------------------------------------------
+{
+  const claimedBy = new Map<string, string>()
+  for (const h of PARAMETRIC_HANDLERS) {
+    for (const name of h.baseNames) {
+      // Sanity: a declared base name must actually route to its handler.
+      if (getHandlerForParsedKind({ kind: 'base', name }).displayName !== h.displayName) {
+        throw new Error(
+          `RFC-080 baseNames: '${name}' declared by ${h.displayName} but resolves to a different handler`,
+        )
+      }
+      const prev = claimedBy.get(name)
+      if (prev !== undefined) {
+        throw new Error(
+          `RFC-080 baseNames: base kind '${name}' claimed by both ${prev} and ${h.displayName}`,
+        )
+      }
+      claimedBy.set(name, h.displayName)
+    }
+  }
+  for (const name of REGISTERED_BASE_KINDS) {
+    if (!claimedBy.has(name)) {
+      throw new Error(
+        `RFC-080 baseNames: REGISTERED_BASE_KINDS has '${name}' but no parametric handler declares it`,
+      )
+    }
+  }
+  for (const name of claimedBy.keys()) {
+    if (!REGISTERED_BASE_KINDS.has(name)) {
+      throw new Error(
+        `RFC-080 baseNames: handler declares base '${name}' missing from REGISTERED_BASE_KINDS`,
+      )
     }
   }
 }

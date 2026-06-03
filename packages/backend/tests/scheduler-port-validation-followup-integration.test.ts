@@ -161,7 +161,8 @@ describe('RFC-049 scheduler port-validation follow-up integration', () => {
 
     // Attempt 0: failed with port-validation prefix + structured failures column.
     expect(attempt0!.status).toBe('failed')
-    expect(attempt0!.errorMessage).toContain('port-validation-markdown_file-missing-file')
+    // RFC-080 (D2): markdown_file folds to path<md> → namespace is `path`.
+    expect(attempt0!.errorMessage).toContain('port-validation-path-missing-file')
     expect(attempt0!.portValidationFailuresJson).not.toBeNull()
     const parsed = JSON.parse(attempt0!.portValidationFailuresJson!) as Array<{
       port: string

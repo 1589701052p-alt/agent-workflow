@@ -43,9 +43,16 @@ describe('RFC-049 envelope.ts source-level prefix swap guard', () => {
     }
   })
 
-  test('the new kind-namespaced template literal is wired in', () => {
-    // Verifies the prefix construction site uses the kind-namespaced form.
-    expect(ENVELOPE_SRC).toContain('`port-validation-${kind}-${result.subReason}`')
+  test('the errCode is built via the shared formatPortValidationErrCode helper', () => {
+    // RFC-080 (D2): the inline `port-validation-${kind}-...` template literal
+    // was replaced by `formatPortValidationErrCode(handler.displayName, ...)`,
+    // so the namespace is the parametric handler's displayName (e.g. `path`,
+    // never `<>`). The errCode format now lives with the registry, not inline.
+    expect(ENVELOPE_SRC).toContain(
+      'formatPortValidationErrCode(handler.displayName, result.subReason)',
+    )
+    // The old inline template literal must be gone.
+    expect(ENVELOPE_SRC).not.toContain('`port-validation-${kind}-${result.subReason}`')
   })
 
   test('non-namespaced `port-validation-<sub>` bare-sub forms are NOT present', () => {

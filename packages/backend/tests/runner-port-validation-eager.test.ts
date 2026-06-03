@@ -10,7 +10,7 @@
 //   3. Translate the failure into a PortValidationError, captured into the
 //      `portValidationFailures` list.
 //   4. Mark status=failed, errorMessage to the namespaced
-//      `port-validation-markdown_file-missing-file: ...` form.
+//      `port-validation-path-missing-file: ...` form.
 //   5. Persist the structured failures payload to
 //      `node_runs.port_validation_failures_json` (JSON array).
 //
@@ -159,7 +159,7 @@ describe('RFC-049 runner eager port-validation', () => {
         }),
     )
     expect(result.status).toBe('failed')
-    expect(result.errorMessage).toContain('port-validation-markdown_file-missing-file')
+    expect(result.errorMessage).toContain('port-validation-path-missing-file')
     expect(result.errorMessage).toContain("'report.md'")
 
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]!
@@ -258,7 +258,7 @@ describe('RFC-049 runner eager port-validation', () => {
         }),
     )
     expect(result.status).toBe('failed')
-    expect(result.errorMessage).toContain('port-validation-markdown_file-wrong-extension')
+    expect(result.errorMessage).toContain('port-validation-path-wrong-extension')
 
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]!
     const parsed = JSON.parse(row.portValidationFailuresJson!) as Array<{ subReason: string }>
@@ -290,7 +290,7 @@ describe('RFC-049 runner eager port-validation', () => {
         }),
     )
     expect(result.status).toBe('failed')
-    expect(result.errorMessage).toContain('port-validation-markdown_file-empty-file')
+    expect(result.errorMessage).toContain('port-validation-path-empty-file')
 
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]!
     const parsed = JSON.parse(row.portValidationFailuresJson!) as Array<{ subReason: string }>

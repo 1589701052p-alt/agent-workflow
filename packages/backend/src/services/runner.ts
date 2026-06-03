@@ -28,7 +28,7 @@ import type {
   ReviewPromptContext,
 } from '@agent-workflow/shared'
 import {
-  composePerKindRepairBlocks,
+  composePerParsedKindRepairBlocks,
   parseClarifyEnvelopeBody,
   renderEnvelopeFollowupPrompt,
   SignalPortInPromptError,
@@ -575,10 +575,14 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     opts.envelopeFollowupReason === 'port-validation' &&
     opts.envelopeFollowupPortValidations &&
     opts.envelopeFollowupPortValidations.length > 0
-      ? composePerKindRepairBlocks(
+      ? // RFC-080: route per-kind repair through the parametric registry —
+        // path<ext> / list<T> / signal failures now render their repair block
+        // instead of being dropped by the legacy 3-key Record. No more
+        // `as 'string' | 'markdown' | 'markdown_file'` narrowing cast.
+        composePerParsedKindRepairBlocks(
           opts.envelopeFollowupPortValidations.map((f) => ({
             port: f.port,
-            kind: f.kind as 'string' | 'markdown' | 'markdown_file',
+            kind: f.kind,
             subReason: f.subReason,
             ...(f.detail !== undefined ? { detail: f.detail } : {}),
           })),

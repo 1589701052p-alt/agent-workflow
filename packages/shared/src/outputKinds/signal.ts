@@ -28,6 +28,14 @@ const handler: ParametricOutputKindHandler = {
 
   matches: (p: ParsedKind) => p.kind === 'base' && p.name === 'signal',
 
+  baseNames: ['signal'],
+  // RFC-080: signal ports carry NO data — auto-forbidden in `{{port}}` prompt
+  // templates (signalPromptGuard) and styled as control-flow on the canvas.
+  carriesData: () => false,
+  bulletSuffix: () => '(signal — control-flow only, carries no data; leave the tag empty)',
+  examplePlaceholder: () => '',
+  isReviewableBody: () => false,
+
   buildPromptGuidance({ ports }) {
     if (ports.length === 0) return null
     const list = ports.map((p) => `\`${p}\``).join(', ')

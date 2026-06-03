@@ -154,7 +154,17 @@ export function isValidKindString(text: string): boolean {
  * `REGISTERED_BASE_KINDS.has(name)`. The only public hook is
  * `isRegisteredKindString`.
  */
-const REGISTERED_BASE_KINDS: ReadonlySet<string> = new Set<string>(['string', 'markdown', 'signal'])
+// RFC-080: exported so the parametric handler registry can CROSS-CHECK it at
+// module load against the union of each handler's declared `baseNames` (drift
+// guard layer 3a). The red line stays: `kindParser.ts` MUST NOT import the
+// registry (that recreates the RFC-079 `index→list→registry→list` init cycle
+// that crashes `build:binary`). The dependency is one-directional — the
+// registry imports THIS set, never the reverse.
+export const REGISTERED_BASE_KINDS: ReadonlySet<string> = new Set<string>([
+  'string',
+  'markdown',
+  'signal',
+])
 
 /**
  * Stricter sibling of `isValidKindString`: parses successfully AND every

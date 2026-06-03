@@ -38,6 +38,16 @@ const handler: ParametricOutputKindHandler = {
 
   matches: (p: ParsedKind) => p.kind === 'list',
 
+  // RFC-080: list serves a SHAPE, not a base name.
+  baseNames: [],
+  carriesData: () => true,
+  bulletSuffix: () => null,
+  examplePlaceholder: () => '...',
+  // A list is not itself a single reviewable body. Multi-doc review keys on
+  // "a list whose ITEM is reviewable" — a structural check callers do against
+  // `parsed.item` (RFC-081); the list level is always false here.
+  isReviewableBody: () => false,
+
   buildPromptGuidance({ ports, portKinds }) {
     if (ports.length === 0) return null
     const lines: string[] = []

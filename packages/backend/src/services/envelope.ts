@@ -22,7 +22,13 @@
 
 import { readFileSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { getOutputKindHandler, type AgentOutputKind, type ValidateIO } from '@agent-workflow/shared'
+import {
+  getHandlerForParsedKind,
+  formatPortValidationErrCode,
+  parseKind,
+  type AgentOutputKind,
+  type ValidateIO,
+} from '@agent-workflow/shared'
 import { ValidationError } from '@/util/errors'
 
 /**
@@ -316,10 +322,16 @@ export function resolvePortContentDetailed(opts: ResolvePortContentOptions): {
   // subReason, detail }`; failures translate into a
   // `port-validation-<kind>-<sub>` errCode at the wire (kind namespace so a
   // future kind's subReasons can't collide with markdown_file's codes).
-  const handler = getOutputKindHandler(kind)
+  // RFC-080: dispatch through the parametric registry (parseKind → matches),
+  // so path<ext> / list<T> / signal validate correctly. `markdown_file` folds
+  // to path<md> at parse time → identical containment / ext / existence /
+  // non-empty checks as the legacy markdownFile handler. The errCode namespace
+  // is the handler's displayName (D2: `port-validation-path-*`, never `<>`).
+  const parsed = parseKind(kind)
+  const handler = getHandlerForParsedKind(parsed)
   const result = handler.validate(
     rawContent,
-    { port: opts.port ?? '', kind, worktreePath },
+    { port: opts.port ?? '', kind: parsed, worktreePath },
     NODE_VALIDATE_IO,
   )
   if (result.ok) {
@@ -327,16 +339,13 @@ export function resolvePortContentDetailed(opts: ResolvePortContentOptions): {
     if (result.sourcePath !== undefined) out.sourcePath = result.sourcePath
     return out
   }
-  throw new PortValidationError(
-    `port-validation-${kind}-${result.subReason}`,
-    `port-validation-${kind}-${result.subReason}: ${result.detail}`,
-    {
-      port: opts.port ?? '',
-      kind,
-      subReason: result.subReason,
-      ...(result.detail !== undefined ? { detail: result.detail } : {}),
-    },
-  )
+  const errCode = formatPortValidationErrCode(handler.displayName, result.subReason)
+  throw new PortValidationError(errCode, `${errCode}: ${result.detail}`, {
+    port: opts.port ?? '',
+    kind,
+    subReason: result.subReason,
+    ...(result.detail !== undefined ? { detail: result.detail } : {}),
+  })
 }
 
 /**

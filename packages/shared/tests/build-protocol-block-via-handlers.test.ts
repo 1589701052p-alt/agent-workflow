@@ -23,9 +23,14 @@ describe('RFC-049 buildProtocolBlock — handler dispatch', () => {
     expect(block).not.toContain('two-step protocol')
   })
 
-  test('declares a markdown_file port → markdown_file handler contributes guidance', () => {
+  test('declares a markdown_file port → path<md> handler contributes file-first guidance', () => {
+    // RFC-080: buildProtocolBlock now dispatches via the parametric registry.
+    // 'markdown_file' folds to path<md> at parse time, so the PATH handler's
+    // two-step guidance is emitted (text differs from the legacy markdownFile
+    // handler but is semantically equivalent — D1).
     const block = buildProtocolBlock(['report'], false, { report: 'markdown_file' })
-    expect(block).toContain('For ports declared `markdown_file` above (`report`)')
+    expect(block).toContain('For path-kind ports above')
+    expect(block).toContain('`report` (extension .md/.markdown)')
     expect(block).toContain('USE A FILE-WRITING TOOL')
     expect(block).toContain('two-step protocol')
   })
@@ -51,9 +56,13 @@ describe('RFC-049 shared/prompt.ts source-level migration anchors', () => {
     expect(PROMPT_SRC).not.toContain('write the file first, then place ONLY')
   })
 
-  test('shared/prompt.ts now imports from the handler registry', () => {
+  test('shared/prompt.ts now imports from the parametric handler registry', () => {
+    // RFC-080: migrated from the legacy `groupPortsByKind` (3-key Record) to
+    // the parametric `groupPortsByParsedKind` (parseKind → matches dispatch).
     expect(PROMPT_SRC).toContain("from './outputKinds'")
-    expect(PROMPT_SRC).toContain('groupPortsByKind')
+    expect(PROMPT_SRC).toContain('groupPortsByParsedKind')
     expect(PROMPT_SRC).toContain('buildPromptGuidance')
+    // The legacy 3-key grouping helper must no longer be referenced here.
+    expect(PROMPT_SRC).not.toContain('groupPortsByKind(')
   })
 })

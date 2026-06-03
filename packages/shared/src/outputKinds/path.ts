@@ -60,6 +60,16 @@ const handler: ParametricOutputKindHandler = {
 
   matches: (p: ParsedKind) => p.kind === 'path',
 
+  // RFC-080: path serves a SHAPE, not a base name.
+  baseNames: [],
+  carriesData: () => true,
+  bulletSuffix: () => '(path — write the file first, then emit only its worktree-relative path)',
+  examplePlaceholder: () => '<worktree-relative path to the file you just wrote>',
+  // RFC-080: a path<md> / path<markdown> port is a single reviewable markdown
+  // document body (the legacy markdown_file behaviour); other exts are not.
+  isReviewableBody: (parsed: ParsedKind) =>
+    parsed.kind === 'path' && (parsed.ext === 'md' || parsed.ext === 'markdown'),
+
   buildPromptGuidance({ ports, portKinds }) {
     if (ports.length === 0) return null
     const list = ports

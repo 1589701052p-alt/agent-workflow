@@ -4,7 +4,7 @@
 
 import type { AgentOutputKindsMap } from './schemas/agent'
 import { CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT } from './clarify'
-import { groupPortsByKind } from './outputKinds'
+import { groupPortsByParsedKind, parsePortKind, getHandlerForParsedKind } from './outputKinds'
 
 /**
  * Review-driven re-run context (RFC-005 + RFC-014).
@@ -543,28 +543,36 @@ export function buildProtocolBlock(
   hasClarifyChannel?: boolean,
   agentOutputKinds?: AgentOutputKindsMap,
 ): string {
-  const isMdFile = (port: string): boolean => agentOutputKinds?.[port] === 'markdown_file'
+  // RFC-080: per-port bullet / example annotation is owned by each kind's
+  // handler (parsed-kind dispatch) — no more literal `=== 'markdown_file'`
+  // branch. string/markdown → null suffix + '...' example (byte-identical to
+  // the legacy plain bullet); path → the file-first suffix + path example;
+  // signal → empty example.
+  const handlerFor = (port: string) => {
+    const parsed = parsePortKind(agentOutputKinds?.[port])
+    return { parsed, handler: getHandlerForParsedKind(parsed) }
+  }
 
-  const renderBullet = (port: string): string =>
-    isMdFile(port)
-      ? `  - ${port} (markdown_file — write the file first, then emit only its worktree-relative path)\n`
-      : `  - ${port}\n`
+  const renderBullet = (port: string): string => {
+    const { parsed, handler } = handlerFor(port)
+    const suffix = handler.bulletSuffix(parsed)
+    return suffix !== null ? `  - ${port} ${suffix}\n` : `  - ${port}\n`
+  }
 
-  const renderExample = (port: string): string =>
-    isMdFile(port)
-      ? `  <port name="${port}"><worktree-relative path to the .md file you just wrote></port>\n`
-      : `  <port name="${port}">...</port>\n`
+  const renderExample = (port: string): string => {
+    const { parsed, handler } = handlerFor(port)
+    return `  <port name="${port}">${handler.examplePlaceholder(parsed)}</port>\n`
+  }
 
-  // RFC-049: per-kind prompt guidance is now owned by each kind's handler.
-  // Iterate the registered handlers for the kinds declared on this agent and
-  // concatenate their non-null guidance segments. Handlers see ONLY ports
-  // declared as their kind — string / markdown handlers add nothing today;
-  // markdown_file handler emits the two-step protocol reminder.
+  // RFC-049/080: per-kind prompt guidance is owned by each kind's handler.
+  // Bucket the agent's declared ports by their parsed kind and concatenate
+  // each handler's non-null guidance — string / markdown add nothing;
+  // path / list emit their two-step / per-item reminders.
   const renderPerKindGuidance = (): string => {
-    const groups = groupPortsByKind(agentOutputs, agentOutputKinds)
+    const groups = groupPortsByParsedKind(agentOutputs, agentOutputKinds)
     let out = ''
-    for (const { handler, ports } of groups) {
-      const segment = handler.buildPromptGuidance({ ports })
+    for (const { handler, ports, portKinds } of groups) {
+      const segment = handler.buildPromptGuidance({ ports, portKinds })
       if (segment !== null) out += segment
     }
     return out

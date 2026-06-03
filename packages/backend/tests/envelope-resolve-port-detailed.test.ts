@@ -119,3 +119,72 @@ describe('resolvePortContentDetailed sourcePath', () => {
     expect(result.sourcePath).toBeUndefined()
   })
 })
+
+// RFC-080: resolvePortContentDetailed now dispatches through the parametric
+// registry. Before the migration, any of these kinds threw
+// `outputKind handler not registered`; now path<ext> / list<T> / signal all
+// validate correctly and the errCode namespace is the handler displayName.
+describe('RFC-080 — parametric kinds resolve via the registry', () => {
+  let worktree: string
+
+  beforeEach(() => {
+    worktree = mkdtempSync(join(tmpdir(), 'aw-rpcd80-wt-'))
+  })
+  afterEach(() => {
+    rmSync(worktree, { recursive: true, force: true })
+  })
+
+  test('kind=path<json> + .json file → body read, sourcePath = relative path', () => {
+    writeFileSync(join(worktree, 'data.json'), '{"k":1}')
+    const result = resolvePortContentDetailed({
+      rawContent: 'data.json',
+      kind: 'path<json>',
+      worktreePath: worktree,
+    })
+    expect(result.body).toBe('{"k":1}')
+    expect(result.sourcePath).toBe('data.json')
+  })
+
+  test('kind=path<json> + wrong extension → PortValidationError with `path` namespace (D2)', () => {
+    writeFileSync(join(worktree, 'data.txt'), 'nope')
+    expect(() =>
+      resolvePortContentDetailed({
+        rawContent: 'data.txt',
+        kind: 'path<json>',
+        worktreePath: worktree,
+      }),
+    ).toThrow('port-validation-path-wrong-extension')
+  })
+
+  test('kind=list<path<md>> + two .md paths → validates each item, body = joined paths', () => {
+    writeFileSync(join(worktree, 'a.md'), '# A')
+    writeFileSync(join(worktree, 'b.md'), '# B')
+    const result = resolvePortContentDetailed({
+      rawContent: 'a.md\nb.md',
+      kind: 'list<path<md>>',
+      worktreePath: worktree,
+    })
+    expect(result.body).toBe('a.md\nb.md')
+  })
+
+  test('kind=list<path<md>> + one item points to a missing file → list errCode namespace', () => {
+    writeFileSync(join(worktree, 'a.md'), '# A')
+    expect(() =>
+      resolvePortContentDetailed({
+        rawContent: 'a.md\nmissing.md',
+        kind: 'list<path<md>>',
+        worktreePath: worktree,
+      }),
+    ).toThrow('port-validation-list-list-item-validate-failed')
+  })
+
+  test('kind=signal + any content → normalized to empty body, never throws', () => {
+    const result = resolvePortContentDetailed({
+      rawContent: 'the agent wrote something here',
+      kind: 'signal',
+      worktreePath: worktree,
+    })
+    expect(result.body).toBe('')
+    expect(result.sourcePath).toBeUndefined()
+  })
+})
