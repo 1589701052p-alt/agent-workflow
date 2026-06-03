@@ -1,7 +1,7 @@
 // RFC-060 PR-A — parametric 'markdown' base kind handler. Passthrough.
 // Sibling to outputKinds/markdown.ts under the new parametric registry.
 
-import type { ParsedKind } from '../kindParser'
+import { isReviewableBodyKind, type ParsedKind } from '../kindParser'
 import type { ParametricOutputKindHandler } from './registry'
 
 const handler: ParametricOutputKindHandler = {
@@ -12,8 +12,9 @@ const handler: ParametricOutputKindHandler = {
   carriesData: () => true,
   bulletSuffix: () => null,
   examplePlaceholder: () => '...',
-  // RFC-080: a base 'markdown' port is a single reviewable document body.
-  isReviewableBody: () => true,
+  // RFC-080/081: a base 'markdown' port is a single reviewable document body.
+  // Delegates to the kindParser predicate (single source of truth).
+  isReviewableBody: (p: ParsedKind) => isReviewableBodyKind(p),
   buildPromptGuidance: () => null,
   validate: (rawContent) => ({ ok: true, body: rawContent }),
   buildRepairBlock: () => null,

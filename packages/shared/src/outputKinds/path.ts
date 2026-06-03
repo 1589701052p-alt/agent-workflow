@@ -22,7 +22,7 @@
 // not yet called by runtime. PR-D removes markdownFile.ts and routes
 // envelope.ts / review.ts through this handler.
 
-import type { ParsedKind } from '../kindParser'
+import { isReviewableBodyKind, type ParsedKind } from '../kindParser'
 import type { ParametricOutputKindHandler } from './registry'
 
 const SUB_REASON_DESCRIPTIONS: Record<string, string> = {
@@ -65,10 +65,10 @@ const handler: ParametricOutputKindHandler = {
   carriesData: () => true,
   bulletSuffix: () => '(path — write the file first, then emit only its worktree-relative path)',
   examplePlaceholder: () => '<worktree-relative path to the file you just wrote>',
-  // RFC-080: a path<md> / path<markdown> port is a single reviewable markdown
-  // document body (the legacy markdown_file behaviour); other exts are not.
-  isReviewableBody: (parsed: ParsedKind) =>
-    parsed.kind === 'path' && (parsed.ext === 'md' || parsed.ext === 'markdown'),
+  // RFC-080/081: a path<md> / path<markdown> port is a single reviewable
+  // markdown document body (the legacy markdown_file behaviour); other exts
+  // are not. Delegates to the kindParser predicate (single source of truth).
+  isReviewableBody: (parsed: ParsedKind) => isReviewableBodyKind(parsed),
 
   buildPromptGuidance({ ports, portKinds }) {
     if (ports.length === 0) return null

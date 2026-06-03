@@ -31,6 +31,7 @@ import {
   CLARIFY_SOURCE_PORT_NAME,
   countFanoutAggregators,
   isMultiDocReviewInput,
+  isReviewableBodyKind,
   tryParseKind,
 } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
@@ -774,9 +775,8 @@ export function validateWorkflowDef(
         const agent = agentByName.get(agentName)
         const kind = agent?.outputKinds?.[srcPort]
         const parsed: ParsedKind | null = kind !== undefined ? tryParseKind(kind) : null
-        const isMarkdownish =
-          (parsed?.kind === 'base' && parsed.name === 'markdown') ||
-          (parsed?.kind === 'path' && (parsed.ext === 'md' || parsed.ext === 'markdown'))
+        // RFC-081: delegate the "markdownish" decision to the single predicate.
+        const isMarkdownish = parsed !== null && isReviewableBodyKind(parsed)
         if (parsed?.kind === 'list') {
           // RFC-079: a list<markdownish> input (list<path<md>> / list<markdown>)
           // puts the review in MULTI-DOCUMENT mode — each item is archived as

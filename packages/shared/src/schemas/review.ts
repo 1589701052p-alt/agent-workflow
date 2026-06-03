@@ -10,7 +10,7 @@
 // will consume.
 
 import { z } from 'zod'
-import { isRegisteredKindString } from '../kindParser'
+import { isRegisteredKindString, isReviewableBodyKindString } from '../kindParser'
 import { PortRefSchema } from './workflow'
 
 // -----------------------------------------------------------------------------
@@ -415,9 +415,13 @@ export function isMultiMarkdownUpstream(
   if (!input.syncOutputsOnIterate) {
     return { trigger: false, markdownPorts: [] }
   }
+  // RFC-081: a markdown-bodied port is any kind isReviewableBodyKind admits
+  // (base markdown / path<md> / path<markdown> / the markdown_file alias) —
+  // delegated to the single kindParser predicate instead of the stale literal
+  // pair, so a path<md> sibling now correctly participates in the cascade.
   const markdownPorts: string[] = []
   for (const o of input.outputs) {
-    if (o.kind === 'markdown' || o.kind === 'markdown_file') {
+    if (o.kind !== undefined && isReviewableBodyKindString(o.kind)) {
       markdownPorts.push(o.name)
     }
   }

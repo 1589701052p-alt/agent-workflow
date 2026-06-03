@@ -7,18 +7,14 @@
 // oracles for that behavior — no Bun / Node / DB imports, so they test in
 // either runtime and back the source-level regression locks (RFC-079 C2/C3).
 
-import { tryParseKind, type ParsedKind } from './kindParser'
+import { tryParseKind, isReviewableBodyKind } from './kindParser'
 
 // -----------------------------------------------------------------------------
 // Mode detection: which review inputs trigger multi-document mode.
+//
+// RFC-081: the "markdownish item" decision is delegated to the single
+// `isReviewableBodyKind` predicate (kindParser) rather than re-implemented here.
 // -----------------------------------------------------------------------------
-
-/** A list item kind is "markdownish" if it renders as a markdown document. */
-function isMarkdownishItem(p: ParsedKind): boolean {
-  if (p.kind === 'base') return p.name === 'markdown'
-  if (p.kind === 'path') return p.ext === 'md' || p.ext === 'markdown'
-  return false
-}
 
 /**
  * True when a review node's input port kind string should drive multi-document
@@ -30,7 +26,7 @@ function isMarkdownishItem(p: ParsedKind): boolean {
 export function isMultiDocReviewInput(kind: string): boolean {
   const parsed = tryParseKind(kind)
   if (parsed === null || parsed.kind !== 'list') return false
-  return isMarkdownishItem(parsed.item)
+  return isReviewableBodyKind(parsed.item)
 }
 
 /**
@@ -41,7 +37,7 @@ export function isMultiDocReviewInput(kind: string): boolean {
 export function isNonMarkdownListReviewInput(kind: string): boolean {
   const parsed = tryParseKind(kind)
   if (parsed === null || parsed.kind !== 'list') return false
-  return !isMarkdownishItem(parsed.item)
+  return !isReviewableBodyKind(parsed.item)
 }
 
 // -----------------------------------------------------------------------------

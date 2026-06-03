@@ -209,6 +209,31 @@ export function kindsEqual(a: ParsedKind, b: ParsedKind): boolean {
   }
 }
 
+/**
+ * RFC-081: is this kind a single markdown-bodied document — eligible for the
+ * review / multi-document machinery? base `markdown` OR `path<md>` /
+ * `path<markdown>` (the legacy `markdown_file`, which folds to `path<md>`).
+ *
+ * This is the SINGLE source of truth for the "markdownish" decision that was
+ * previously hand-rolled in reviewMultiDoc.ts / workflow.validator.ts /
+ * schemas/review.ts / review.ts. It lives in kindParser (which imports nothing)
+ * so cycle-blocked modules — notably `schemas/review.ts`, which sits UNDER the
+ * handler registry in the import graph — can use it without pulling the
+ * registry and recreating the RFC-079 init cycle. Each parametric handler's
+ * `isReviewableBody` delegates here too, so the predicate has one definition.
+ */
+export function isReviewableBodyKind(p: ParsedKind): boolean {
+  if (p.kind === 'base') return p.name === 'markdown'
+  if (p.kind === 'path') return p.ext === 'md' || p.ext === 'markdown'
+  return false
+}
+
+/** String form of {@link isReviewableBodyKind}; false on unparseable input. */
+export function isReviewableBodyKindString(kind: string): boolean {
+  const parsed = tryParseKind(kind)
+  return parsed !== null && isReviewableBodyKind(parsed)
+}
+
 // -----------------------------------------------------------------------------
 // internal helpers
 // -----------------------------------------------------------------------------

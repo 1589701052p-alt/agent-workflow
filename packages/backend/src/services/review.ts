@@ -1889,7 +1889,10 @@ async function iterateSiblingCascadeApplies(args: {
     const raw = fmExtra.outputKinds
     if (raw !== null && raw !== undefined && typeof raw === 'object') {
       for (const [port, kind] of Object.entries(raw as Record<string, unknown>)) {
-        if (kind === 'markdown' || kind === 'markdown_file' || kind === 'string') {
+        // RFC-081: surface every declared (string) kind; isMultiMarkdownUpstream
+        // now decides which are markdown-bodied via isReviewableBodyKind, so a
+        // path<md> sibling is no longer silently dropped here.
+        if (typeof kind === 'string') {
           outputKinds[port] = kind
         }
       }
@@ -2173,7 +2176,10 @@ export async function buildSiblingOutputsBlock(
     const raw = fmExtra.outputKinds
     if (raw !== null && raw !== undefined && typeof raw === 'object') {
       for (const [port, kind] of Object.entries(raw as Record<string, unknown>)) {
-        if (kind === 'markdown' || kind === 'markdown_file' || kind === 'string') {
+        // RFC-081: surface every declared (string) kind; isMultiMarkdownUpstream
+        // now decides which are markdown-bodied via isReviewableBodyKind, so a
+        // path<md> sibling is no longer silently dropped here.
+        if (typeof kind === 'string') {
           outputKinds[port] = kind
         }
       }
