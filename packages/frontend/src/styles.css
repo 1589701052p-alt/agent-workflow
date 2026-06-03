@@ -3137,6 +3137,39 @@ code {
   flex: 0 0 auto;
 }
 
+/* ---- RFC-080 kind selector (shared by OutputsEditor + canvas fanout) ---- */
+
+.kind-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.kind-select__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.kind-select__row .form-input {
+  width: auto;
+  flex: 0 1 auto;
+  min-width: 90px;
+}
+
+.kind-select__error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.kind-select__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* ---- JSON field ---- */
 
 .json-field__error {

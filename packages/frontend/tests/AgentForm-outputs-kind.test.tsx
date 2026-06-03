@@ -39,21 +39,25 @@ afterEach(() => {
 })
 
 describe('AgentForm outputs kind round-trip', () => {
-  test('selecting markdown_file on an existing port surfaces outputKinds upward', () => {
+  test('selecting a kind on an existing port surfaces outputKinds upward', () => {
     const onChange = vi.fn<(next: CreateAgent) => void>()
     const initial: CreateAgent = { ...emptyAgent(), name: 'demo', outputs: ['report'] }
     mount(initial, onChange)
 
-    // Other selects (model picker, etc.) live on the same form, so target the
-    // per-port aria-label that OutputsEditor renders.
-    const select = screen.getByLabelText(
-      /Output kind for report|report 的输出类型/,
-    ) as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'markdown_file' } })
+    // RFC-080 PR-B: the per-port kind editor is now the public KindSelect
+    // (button[role=combobox] + portaled listbox). Other comboboxes (model /
+    // role picker) live on the same form, so target the per-port aria-label.
+    const trigger = screen.getByRole('combobox', { name: /Output kind for report/ })
+    fireEvent.click(trigger)
+    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('markdown'),
+    )
+    if (opt === undefined) throw new Error('markdown option not found')
+    fireEvent.mouseDown(opt)
 
     expect(onChange).toHaveBeenCalledTimes(1)
     const next = onChange.mock.calls[0]?.[0] as CreateAgent
     expect(next.outputs).toEqual(['report'])
-    expect(next.outputKinds).toEqual({ report: 'markdown_file' })
+    expect(next.outputKinds).toEqual({ report: 'markdown' })
   })
 })

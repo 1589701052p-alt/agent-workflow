@@ -1,11 +1,12 @@
-// OutputsEditor: per-port name + AgentOutputKind select. Locks in RFC-005
-// design.md §line 120 — frontend lets users pick kind=markdown_file from the
-// UI instead of having to PUT /api/agents with a curl payload. Tests also
-// pin the source-level wiring so AgentForm doesn't regress to a plain
-// ChipsInput for the outputs field.
+// OutputsEditor: per-port name + KindSelect. RFC-005 design.md §line 120 let
+// users pick a kind from the UI; RFC-080 PR-B swapped the 3-option <select> for
+// the shared KindSelect so the full grammar (path<ext> / list<…> / signal) is
+// selectable. These tests drive the public Select popover + lock the upward
+// (outputs, outputKinds) propagation.
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { AgentOutputKindsMap } from '@agent-workflow/shared'
@@ -28,17 +29,60 @@ function mount(
   )
 }
 
+// Stateful harness for multi-step interactions: feeds onChange back into the
+// controlled value so the next step renders against the updated kind, while
+// still forwarding every change to a spy for assertions.
+function mountStateful(
+  initialOutputs: string[],
+  initialKinds: AgentOutputKindsMap | undefined,
+  spy: OnChange,
+) {
+  function Harness() {
+    const [outputs, setOutputs] = useState(initialOutputs)
+    const [kinds, setKinds] = useState(initialKinds)
+    return (
+      <OutputsEditor
+        outputs={outputs}
+        outputKinds={kinds}
+        onChange={(o, k) => {
+          spy(o, k)
+          setOutputs(o)
+          setKinds(k)
+        }}
+        placeholder="add a port name then Enter"
+      />
+    )
+  }
+  return render(<Harness />)
+}
+
+// Drives the public Select popover: click the button[role=combobox] trigger,
+// then mousedown the matching portaled <li role="option">.
+function clickKindOption(triggerLabel: RegExp, optionLabel: string) {
+  const trigger = screen.getByRole('combobox', { name: triggerLabel }) as HTMLButtonElement
+  fireEvent.click(trigger)
+  const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+    (li.textContent ?? '').includes(optionLabel),
+  )
+  if (opt === undefined) throw new Error(`option '${optionLabel}' not found`)
+  fireEvent.mouseDown(opt)
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
 })
 
 describe('OutputsEditor', () => {
-  test('renders one row per declared port with the current kind selected', () => {
+  test('renders one row per declared port with the current kind shown', () => {
     mount(['summary', 'report'], { report: 'markdown_file' }, vi.fn())
-    const selects = screen.getAllByRole('combobox') as HTMLSelectElement[]
-    expect(selects).toHaveLength(2)
-    expect(selects[0]?.value).toBe('string') // summary defaults to string
-    expect(selects[1]?.value).toBe('markdown_file')
+    const triggers = screen.getAllByRole('combobox')
+    expect(triggers).toHaveLength(2)
+    // summary defaults to base string; report is markdown_file → path<md>.
+    expect(triggers[0]?.textContent).toContain('string')
+    expect(triggers[1]?.textContent).toContain('file path')
+    // the path ext input shows 'md'.
+    const ext = screen.getByTestId('output-kind-report-ext') as HTMLInputElement
+    expect(ext.value).toBe('md')
   })
 
   test('adding a new port leaves outputKinds untouched (defaults to string)', () => {
@@ -50,20 +94,29 @@ describe('OutputsEditor', () => {
     expect(onChange).toHaveBeenCalledWith(['summary', 'extra_port'], { summary: 'markdown' })
   })
 
-  test('changing a port kind from string to markdown_file writes outputKinds entry', () => {
+  test('selecting markdown on a port writes the outputKinds entry', () => {
     const onChange = vi.fn<OnChange>()
     mount(['report'], undefined, onChange)
-    const select = screen.getByRole('combobox') as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'markdown_file' } })
-    expect(onChange).toHaveBeenCalledWith(['report'], { report: 'markdown_file' })
+    clickKindOption(/Output kind for report/, 'markdown')
+    expect(onChange).toHaveBeenCalledWith(['report'], { report: 'markdown' })
   })
 
   test('flipping the only port back to string drops the key and returns undefined', () => {
     const onChange = vi.fn<OnChange>()
-    mount(['report'], { report: 'markdown_file' }, onChange)
-    const select = screen.getByRole('combobox') as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'string' } })
+    mount(['report'], { report: 'markdown' }, onChange)
+    clickKindOption(/Output kind for report/, 'string')
     expect(onChange).toHaveBeenCalledWith(['report'], undefined)
+  })
+
+  test('file path + ext md + list toggle yields list<path<md>> (RFC-080 grammar)', () => {
+    const spy = vi.fn<OnChange>()
+    mountStateful(['docs'], undefined, spy)
+    clickKindOption(/Output kind for docs/, 'file path')
+    expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'path<*>' })
+    fireEvent.change(screen.getByTestId('output-kind-docs-ext'), { target: { value: 'md' } })
+    expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'path<md>' })
+    fireEvent.click(screen.getByLabelText('list'))
+    expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'list<path<md>>' })
   })
 
   test('removing a port with a kind drops both array entry and kinds key', () => {
@@ -86,21 +139,28 @@ describe('OutputsEditor', () => {
     fireEvent.change(input, { target: { value: 'BadName' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onChange).not.toHaveBeenCalled()
-    // i18n validate message (en or zh) — the error region is the second match,
-    // and its presence is enough to lock the rejection path.
-    expect(screen.getByRole('textbox')).toBeTruthy()
   })
 })
 
-describe('AgentForm wiring (source-level sanity)', () => {
-  // Defends against a regression that would silently drop the kind UI: if the
-  // outputs field block reverted to a bare <ChipsInput value={value.outputs}…>,
-  // users would lose the per-port kind selector even though all the i18n keys
-  // and component code below are still present.
+describe('AgentForm wiring + KindSelect source-level guards', () => {
+  const outputsEditorSrc = readFileSync(
+    join(__dirname, '..', 'src', 'components', 'OutputsEditor.tsx'),
+    'utf8',
+  )
+  const agentFormSrc = readFileSync(
+    join(__dirname, '..', 'src', 'components', 'AgentForm.tsx'),
+    'utf8',
+  )
+
   test('AgentForm.tsx imports OutputsEditor and no longer uses ChipsInput for outputs', () => {
-    const src = readFileSync(join(__dirname, '..', 'src', 'components', 'AgentForm.tsx'), 'utf8')
-    expect(src).toContain('import { OutputsEditor }')
-    expect(src).toContain('<OutputsEditor')
-    expect(src).not.toMatch(/<ChipsInput[^>]*value=\{value\.outputs/)
+    expect(agentFormSrc).toContain('import { OutputsEditor }')
+    expect(agentFormSrc).toContain('<OutputsEditor')
+    expect(agentFormSrc).not.toMatch(/<ChipsInput[^>]*value=\{value\.outputs/)
+  })
+
+  test('OutputsEditor delegates the kind editor to KindSelect (no bespoke <select>)', () => {
+    expect(outputsEditorSrc).toContain("import { KindSelect } from './KindSelect'")
+    expect(outputsEditorSrc).toContain('<KindSelect')
+    expect(outputsEditorSrc).not.toContain('<select')
   })
 })

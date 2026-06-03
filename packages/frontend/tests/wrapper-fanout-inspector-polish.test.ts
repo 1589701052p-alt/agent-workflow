@@ -52,9 +52,11 @@ describe('RFC-060 F.T1 — wrapper-fanout inspector reuses public form primitive
     expect(block).toMatch(/<Field[\s\S]*?label=\{t\('inspector\.fanoutDerivedOutputs'\)\}/)
   })
 
-  test('inputs[] row uses <TextInput> for name + kind (not raw <input>)', () => {
-    const textInputCount = (block.match(/<TextInput/g) ?? []).length
-    expect(textInputCount).toBeGreaterThanOrEqual(2)
+  test('inputs[] row uses <TextInput> for name + <KindSelect> for kind (not raw <input>)', () => {
+    // RFC-080 PR-B: the kind editor is the shared KindSelect (replaces the raw
+    // kind <TextInput>); the name field stays a <TextInput>.
+    expect(block).toContain('<TextInput')
+    expect(block).toContain('<KindSelect')
     // Naked <input is allowed only on the shardSource <Switch> implementation
     // itself; the wrapper-fanout branch should NOT introduce any.
     expect(block).not.toMatch(/<input\s[^>]*className="form-input"/)

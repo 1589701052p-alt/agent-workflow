@@ -1213,6 +1213,20 @@ export interface Resources {
     noPorts: string
     assembledTitle: string
   }
+  kindSelect: {
+    baseLabel: string
+    base_string: string
+    base_markdown: string
+    base_signal: string
+    base_path: string
+    listToggle: string
+    extPlaceholder: string
+    extError: string
+    advancedToggle: string
+    guidedToggle: string
+    parseError: string
+    signalHint: string
+  }
   agentForm: {
     fieldName: string
     fieldNameHint: string
@@ -3243,6 +3257,20 @@ export const zhCN: Resources = {
     mockTitle: '模拟端口值',
     noPorts: '没有入边端口。增加一条入边后此处会列出。',
     assembledTitle: '拼好的 prompt',
+  },
+  kindSelect: {
+    baseLabel: '输出类型',
+    base_string: '字符串',
+    base_markdown: 'Markdown 正文',
+    base_signal: 'signal（控制流）',
+    base_path: '文件路径',
+    listToggle: 'list 列表',
+    extPlaceholder: '扩展名（* / md / json）',
+    extError: '扩展名只能是 * 或小写字母/数字',
+    advancedToggle: '高级',
+    guidedToggle: '引导',
+    parseError: '不是合法的 kind（如 list<path<md>>）',
+    signalHint: '仅控制流——不携带数据',
   },
   agentForm: {
     fieldName: '名称',

@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next'
 import { ChipsInput } from '@/components/ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
 import { ModelSelect } from '@/components/ModelSelect'
+import { KindSelect } from '@/components/KindSelect'
 import { computePorts } from './WorkflowCanvas'
 import { REVIEW_INPUT_HANDLE_ID, syncEdgeFromFormField } from './connectionSync'
 import { patchInputDef, renameInputKey } from './syncInputDefs'
@@ -693,10 +694,10 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                         onChange={(v) => patchInput(idx, { name: v })}
                         placeholder={t('inspector.fanoutInputNamePlaceholder')}
                       />
-                      <TextInput
+                      <KindSelect
                         value={p.kind}
                         onChange={(v) => patchInput(idx, { kind: v })}
-                        placeholder="list<path<md>>"
+                        testidPrefix={`fanout-input-kind-${idx}`}
                       />
                       <Switch
                         checked={p.isShardSource === true}

@@ -145,3 +145,7 @@ export * from './types'
 // HANDLERS Record above; PR-D switches runtime callers over and removes
 // the legacy entries.
 export * from './registry'
+
+// RFC-080 PR-B — frontend-facing kind UI descriptor table (cycle-safe: imports
+// only kindParser). Drives KindSelect / i18n labels / download / canvas styling.
+export * from './uiCatalog'
