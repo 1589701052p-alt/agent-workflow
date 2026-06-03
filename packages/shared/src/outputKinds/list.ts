@@ -23,27 +23,13 @@
 
 import type { ParsedKind } from '../kindParser'
 import { stringifyKind } from '../kindParser'
+import { splitListItems } from '../listWire'
 import { getHandlerForParsedKind, type ParametricOutputKindHandler } from './registry'
 import type { ValidateResult } from './types'
 
 const SUB_REASON_DESCRIPTIONS: Record<string, string> = {
   'list-empty-item': 'list contains a blank line where an item was expected',
   'list-item-validate-failed': 'one or more list items failed item-kind validation',
-}
-
-// RFC-079: exported so the backend review dispatch (services/review.ts) can
-// split a list<path<md>> port's wire content into per-item paths using the
-// exact same normalization the validator/runtime use — keeping the
-// multi-document review's item set byte-identical to the downstream
-// wrapper-fanout's shard set.
-export function splitListItems(rawContent: string): string[] {
-  // Items are non-empty trimmed lines; preserve declaration order. Blank
-  // lines between items are tolerated (dropped) — agents wrapping their
-  // output in extra newlines won't trip the empty-item check.
-  return rawContent
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
 }
 
 const handler: ParametricOutputKindHandler = {

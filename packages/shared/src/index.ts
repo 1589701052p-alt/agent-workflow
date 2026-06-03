@@ -47,6 +47,7 @@ export * from './wrapperFanout'
 export * from './worktree-files'
 // RFC-079 — review multi-document mode pure helpers.
 export * from './reviewMultiDoc'
-// RFC-079 — surface the list wire-form splitter so backend review dispatch
-// shares the exact item normalization the validator/runtime use.
-export { splitListItems } from './outputKinds/list'
+// RFC-079 — list wire-form splitter. Re-exported from its dependency-free
+// module (NOT outputKinds/list) so the barrel never pulls the parametric
+// handler registry into a module-init cycle (see listWire.ts header).
+export * from './listWire'
