@@ -1156,7 +1156,7 @@ export const enUS: Resources = {
     fieldReviewInputSourceNodeHint: 'Upstream node id whose markdown output this review covers.',
     fieldReviewInputSourcePort: 'Source port',
     fieldReviewInputSourcePortHint:
-      'Port name on the source node (agent.outputKinds must declare it markdown).',
+      'Port name on the source node; its declared kind must be markdown-family (markdown / markdown_file / path<md>). A list<path<md>> / list<markdown> port enters multi-document review.',
     fieldReviewRerunReject: 'Reject re-runs',
     fieldReviewRerunRejectHint:
       'Comma-separated node ids. Default = source node + all its reachable upstreams.',

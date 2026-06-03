@@ -3132,7 +3132,7 @@ export const zhCN: Resources = {
     fieldReviewInputSourceNodeHint: '产出待评 markdown 的上游节点 id。',
     fieldReviewInputSourcePort: '上游端口',
     fieldReviewInputSourcePortHint:
-      '该节点产出的 markdown 端口名（agent.outputKinds 必须声明为 markdown）。',
+      '上游端口名；该端口在 agent 上声明的 kind 需属 markdown 家族（markdown / markdown_file / path<md>）。声明为 list<path<md>> / list<markdown> 时进入多文档评审。',
     fieldReviewRerunReject: 'reject 时重跑节点',
     fieldReviewRerunRejectHint: '逗号分隔的节点 id；默认 = 上游节点 + 其所有可达上游。',
     fieldReviewRerunIterate: 'iterate 时重跑节点',
