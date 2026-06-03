@@ -34,4 +34,36 @@ describe('agentToDraft', () => {
 
     expect(draft.outputKinds).toEqual({ report: 'markdown_file', note: 'markdown' })
   })
+
+  // RFC-080 PR-C: the parametric kinds now selectable via KindSelect must
+  // survive the detail→edit→save round-trip exactly like the legacy kinds.
+  // This is the persistence round-trip lock (the KindSelect write path is
+  // covered by OutputsEditor.test.tsx; the kind grammar by kind-select.test.tsx).
+  test('preserves parametric kinds (path<json> / list<path<md>> / signal)', () => {
+    const agent: Agent = {
+      id: 'a2',
+      name: 'splitter',
+      description: 'd',
+      outputs: ['data', 'docs', 'done'],
+      outputKinds: { data: 'path<json>', docs: 'list<path<md>>', done: 'signal' },
+      readonly: false,
+      syncOutputsOnIterate: true,
+      permission: {},
+      skills: [],
+      dependsOn: [],
+      mcp: [],
+      plugins: [],
+      frontmatterExtra: {},
+      bodyMd: '',
+      schemaVersion: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+
+    expect(agentToDraft(agent).outputKinds).toEqual({
+      data: 'path<json>',
+      docs: 'list<path<md>>',
+      done: 'signal',
+    })
+  })
 })
