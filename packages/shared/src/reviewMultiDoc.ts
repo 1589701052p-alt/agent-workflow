@@ -40,6 +40,23 @@ export function isNonMarkdownListReviewInput(kind: string): boolean {
   return !isReviewableBodyKind(parsed.item)
 }
 
+/**
+ * RFC-081: a multi-document review's items are INLINE markdown bodies
+ * (`list<markdown>`) rather than worktree file PATHS (`list<path<md>>`). Inline
+ * items are framed by MARKDOWN_DOC_BOUNDARY in the port wire content and
+ * archived with `item_path = NULL` (the body lives at the doc_version's
+ * bodyPath); path items are newline-separated and carry an `item_path`.
+ */
+export function isInlineMarkdownListReviewInput(kind: string): boolean {
+  const parsed = tryParseKind(kind)
+  return (
+    parsed !== null &&
+    parsed.kind === 'list' &&
+    parsed.item.kind === 'base' &&
+    parsed.item.name === 'markdown'
+  )
+}
+
 // -----------------------------------------------------------------------------
 // Title extraction for the left-hand document list.
 // -----------------------------------------------------------------------------

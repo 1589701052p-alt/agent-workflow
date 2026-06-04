@@ -23,7 +23,7 @@
 
 import type { ParsedKind } from '../kindParser'
 import { stringifyKind } from '../kindParser'
-import { splitListItems } from '../listWire'
+import { splitListItems, MARKDOWN_DOC_BOUNDARY } from '../listWire'
 import { getHandlerForParsedKind, type ParametricOutputKindHandler } from './registry'
 import type { ValidateResult } from './types'
 
@@ -50,21 +50,41 @@ const handler: ParametricOutputKindHandler = {
 
   buildPromptGuidance({ ports, portKinds }) {
     if (ports.length === 0) return null
-    const lines: string[] = []
+    // RFC-081: list<markdown> items are multi-line inline bodies framed by a
+    // boundary line; every OTHER list is one-item-per-line.
+    const inlineMd: string[] = []
+    const lineItem: string[] = []
     for (const port of ports) {
       const k = portKinds.get(port)
-      const itemKind = k !== undefined && k.kind === 'list' ? stringifyKind(k.item) : 'unknown'
-      lines.push(`  - \`${port}\` (list<${itemKind}>)`)
+      const isInlineMd = k?.kind === 'list' && k.item.kind === 'base' && k.item.name === 'markdown'
+      if (isInlineMd) inlineMd.push(port)
+      else lineItem.push(port)
     }
-    return (
-      '\n' +
-      'For list-kind ports above, emit each item on its own line inside the `<port>` tag:\n' +
-      lines.join('\n') +
-      '\n' +
-      "  Empty lines are dropped. Each item must satisfy its inner kind's contract (e.g. " +
-      'list<path<md>> requires every line to be a worktree-relative .md/.markdown path ' +
-      'pointing to a non-empty file).\n'
-    )
+    let out = '\n'
+    if (lineItem.length > 0) {
+      const lines = lineItem.map((port) => {
+        const k = portKinds.get(port)
+        const itemKind = k !== undefined && k.kind === 'list' ? stringifyKind(k.item) : 'unknown'
+        return `  - \`${port}\` (list<${itemKind}>)`
+      })
+      out +=
+        'For these list ports, emit each item on its own line inside the `<port>` tag:\n' +
+        lines.join('\n') +
+        '\n' +
+        "  Empty lines are dropped. Each item must satisfy its inner kind's contract (e.g. " +
+        'list<path<md>> requires every line to be a worktree-relative .md/.markdown path ' +
+        'pointing to a non-empty file).\n'
+    }
+    if (inlineMd.length > 0) {
+      const names = inlineMd.map((p) => `\`${p}\``).join(', ')
+      out +=
+        `For list<markdown> ports (${names}) you emit MULTIPLE markdown documents inline in one ` +
+        '`<port>` tag. Separate consecutive documents with a line containing EXACTLY:\n' +
+        `  ${MARKDOWN_DOC_BOUNDARY}\n` +
+        '  Put the full markdown body of each document between the boundaries (multi-line is ' +
+        'fine). Do NOT include the boundary line inside a document. Empty documents are dropped.\n'
+    }
+    return out
   },
 
   validate(rawContent, ctx, io) {

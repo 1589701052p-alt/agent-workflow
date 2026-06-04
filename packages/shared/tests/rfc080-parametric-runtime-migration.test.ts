@@ -39,8 +39,8 @@ describe('RFC-080 — parametric kinds reach buildProtocolBlock without throwing
     expect(block).toContain('<port name="done"></port>')
     // path — file-first two-step guidance
     expect(block).toContain('For path-kind ports above')
-    // list — per-item guidance
-    expect(block).toContain('For list-kind ports above')
+    // list — per-item guidance (RFC-081 reworded the line-item list guidance)
+    expect(block).toContain('For these list ports')
   })
 
   test('legacy string/markdown ports stay byte-identical (plain bullet + ... example)', () => {

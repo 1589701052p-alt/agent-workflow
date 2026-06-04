@@ -45,7 +45,10 @@ import {
   allDocumentsDecided,
   extractDocTitle,
   isMultiDocReviewInput,
+  isInlineMarkdownListReviewInput,
   splitListItems,
+  splitMarkdownDocs,
+  joinMarkdownDocs,
 } from '@agent-workflow/shared'
 import type { ReviewDocumentSummary } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
@@ -423,12 +426,20 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
   let resolvedBody = ''
   let resolvedSourcePath: string | undefined
   let itemPaths: string[] = []
+  let inlineBodies: string[] = []
+  // RFC-081: list<markdown> items are inline document bodies framed by
+  // MARKDOWN_DOC_BOUNDARY; list<path<md>> items are newline-separated worktree
+  // paths (read from disk at archive time).
+  const itemsInline = isMultiDoc && isInlineMarkdownListReviewInput(upstreamKind ?? '')
   if (isMultiDoc) {
-    // The port content is newline-separated worktree-relative .md paths. Split
-    // with the SAME shared splitter the validator / downstream wrapper-fanout
-    // use so the reviewed item set matches the shard set byte-for-byte. Each
-    // item's body is read from the worktree at archive time (below).
-    itemPaths = splitListItems(portRow.content)
+    if (itemsInline) {
+      inlineBodies = splitMarkdownDocs(portRow.content)
+    } else {
+      // Split with the SAME shared splitter the validator / downstream
+      // wrapper-fanout use so the reviewed item set matches the shard set
+      // byte-for-byte. Each item's body is read from the worktree below.
+      itemPaths = splitListItems(portRow.content)
+    }
   } else {
     try {
       const resolved = resolvePortContentDetailed({
@@ -593,15 +604,24 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
         .sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0))
     } else {
       docs = []
-      for (let i = 0; i < itemPaths.length; i++) {
-        const itemPath = itemPaths[i]!
+      const itemCount = itemsInline ? inlineBodies.length : itemPaths.length
+      for (let i = 0; i < itemCount; i++) {
         let body: string
-        try {
-          body = readFileSync(join(task.worktreePath, itemPath), 'utf8')
-        } catch {
-          // A missing / unreadable file must not wedge the whole round — the
-          // reviewer can still reject it. Surface a visible placeholder body.
-          body = `> ⚠️ RFC-079: file not found in worktree: \`${itemPath}\``
+        let itemPath: string | undefined
+        if (itemsInline) {
+          // RFC-081: list<markdown> — the body IS the inline content; no
+          // worktree path, archived with item_path / source_file_path NULL.
+          body = inlineBodies[i]!
+          itemPath = undefined
+        } else {
+          itemPath = itemPaths[i]!
+          try {
+            body = readFileSync(join(task.worktreePath, itemPath), 'utf8')
+          } catch {
+            // A missing / unreadable file must not wedge the whole round — the
+            // reviewer can still reject it. Surface a visible placeholder body.
+            body = `> ⚠️ RFC-079: file not found in worktree: \`${itemPath}\``
+          }
         }
         const dv = await createDocVersion({
           db,
@@ -613,9 +633,8 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
           sourcePortName,
           reviewIteration,
           body,
-          sourceFilePath: itemPath,
+          ...(itemPath !== undefined ? { sourceFilePath: itemPath, itemPath } : {}),
           itemIndex: i,
-          itemPath,
           selection: 'unselected',
         })
         docs.push(dv)
@@ -1334,21 +1353,41 @@ export interface SubmitReviewDecisionResult {
  */
 async function approveMultiDocReview(args: {
   db: DbClient
+  appHome: string
   nodeRunId: string
   run: typeof nodeRuns.$inferSelect
   dvs: DocVersion[]
   author?: string
 }): Promise<SubmitReviewDecisionResult> {
-  const { db, nodeRunId, run, dvs } = args
+  const { db, appHome, nodeRunId, run, dvs } = args
   const decidedAt = Date.now()
   const decidedBy = args.author ?? 'local'
-  const acceptedPaths = acceptedSubsetPaths(dvs)
-  const acceptedContent = acceptedPaths.join('\n')
   const acceptedItemIndices = dvs
     .filter((d) => d.selection === 'accepted')
     .map((d) => d.itemIndex)
     .filter((i): i is number => i !== null && i !== undefined)
     .sort((a, b) => a - b)
+  // RFC-081: a list<markdown> round archives items inline (item_path NULL) — the
+  // accepted subset is the accepted bodies (in item order) joined by
+  // MARKDOWN_DOC_BOUNDARY, emitted as list<markdown>. A list<path<md>> round
+  // joins accepted worktree paths by newline, emitted as list<path<md>>. Empty
+  // subset → empty content → downstream wrapper-fanout sees an empty list and
+  // completes immediately. Detect inline from the archived rows.
+  const itemsInline = dvs.length > 0 && dvs.every((d) => (d.itemPath ?? null) === null)
+  let acceptedContent: string
+  let acceptedKind: string
+  if (itemsInline) {
+    const acceptedBodies = dvs
+      .filter((d) => d.selection === 'accepted')
+      .slice()
+      .sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0))
+      .map((d) => readDocVersionBody(appHome, d))
+    acceptedContent = joinMarkdownDocs(acceptedBodies)
+    acceptedKind = 'list<markdown>'
+  } else {
+    acceptedContent = acceptedSubsetPaths(dvs).join('\n')
+    acceptedKind = 'list<path<md>>'
+  }
   const rep = dvs[0]!
   const meta = JSON.stringify({
     decision: 'approved',
@@ -1358,19 +1397,15 @@ async function approveMultiDocReview(args: {
     sourceNodeId: rep.sourceNodeId,
     sourcePortName: rep.sourcePortName,
     itemCount: dvs.length,
-    acceptedCount: acceptedPaths.length,
+    acceptedCount: acceptedItemIndices.length,
     acceptedItemIndices,
   })
-  // The curated subset is a list<path<md>> (paths into the live worktree); a
-  // downstream wrapper-fanout shards it by path. Empty subset → empty content,
-  // and the fanout sees an empty list and completes immediately.
-  const ACCEPTED_KIND = 'list<path<md>>'
   await db
     .insert(nodeRunOutputs)
-    .values({ nodeRunId, portName: 'accepted', content: acceptedContent, kind: ACCEPTED_KIND })
+    .values({ nodeRunId, portName: 'accepted', content: acceptedContent, kind: acceptedKind })
     .onConflictDoUpdate({
       target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
-      set: { content: acceptedContent, kind: ACCEPTED_KIND },
+      set: { content: acceptedContent, kind: acceptedKind },
     })
   await db
     .insert(nodeRunOutputs)
@@ -1502,6 +1537,7 @@ export async function submitReviewDecision(
       // items, in item order) on the `accepted` port instead of approved_doc.
       return approveMultiDocReview({
         db: args.db,
+        appHome: args.appHome,
         nodeRunId: args.nodeRunId,
         run,
         dvs,
