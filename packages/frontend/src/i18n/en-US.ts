@@ -124,7 +124,7 @@ export const enUS: Resources = {
     lineRefRange: 'Lines {{start}}–{{end}}',
     approveButton: 'Approve',
     rejectButton: 'Reject',
-    iterateButton: 'Iterate',
+    iterateButton: 'Revise per comments',
     detailHint: 'Current version · iteration {{iteration}} · decision: {{decision}}',
     rejectPrompt:
       'Enter a rejection reason (the following nodes will roll back & re-run: {{willRerun}}):',

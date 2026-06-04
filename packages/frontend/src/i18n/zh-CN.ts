@@ -2163,7 +2163,7 @@ export const zhCN: Resources = {
     lineRefRange: '第 {{start}}–{{end}} 行',
     approveButton: '通过',
     rejectButton: '退回',
-    iterateButton: '迭代',
+    iterateButton: '根据评审意见修改',
     detailHint: '当前版本 · 已迭代 {{iteration}} 轮 · 决策：{{decision}}',
     rejectPrompt: '请输入退回原因（提交后将回滚并重跑：{{willRerun}}）：',
     rejectReasonRequired: '退回必须填写原因。',
