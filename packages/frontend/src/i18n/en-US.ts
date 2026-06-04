@@ -1289,6 +1289,9 @@ export const enUS: Resources = {
     base_markdown: 'markdown',
     base_signal: 'signal (control-flow)',
     base_path: 'file path',
+    extLabel: 'file extension',
+    ext_any: 'any file',
+    ext_md: 'Markdown (.md)',
     listToggle: 'list',
     extPlaceholder: 'ext (* / md / json)',
     extError: 'extension must be * or lowercase letters/digits',
@@ -1305,7 +1308,7 @@ export const enUS: Resources = {
     fieldDescriptionPlaceholder: 'One-line summary shown in lists',
     fieldOutputs: 'Outputs',
     fieldOutputsHint:
-      'Port names declared in <port> envelopes. Pick a kind per port: markdown_file means the port carries a worktree-relative .md path and the framework reads the file body.',
+      'Port names declared in <port> envelopes. Pick a kind per port. Choosing "file path" with the Markdown (.md) extension makes the port carry a worktree-relative .md path that the framework reads as the file body.',
     fieldOutputsPlaceholder: 'add a port name then Enter',
     outputsValidate: 'lowercase + underscore only',
     outputKindLabel: 'Output kind for {{port}}',

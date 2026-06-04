@@ -6,7 +6,7 @@
 
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
-import { OUTPUT_KIND_UI } from '@agent-workflow/shared'
+import { OUTPUT_KIND_UI, PATH_EXT_UI } from '@agent-workflow/shared'
 import { decompose, recompose, KindSelect } from '../src/components/KindSelect'
 import { enUS } from '../src/i18n/en-US'
 import { zhCN } from '../src/i18n/zh-CN'
@@ -24,9 +24,13 @@ describe('KindSelect decompose / recompose (grammar round-trip)', () => {
     expect(decompose('')).toMatchObject({ mode: 'guided', leafId: 'string', listWrap: false })
   })
 
-  test('path<*> / path<md> / path<json>', () => {
+  test('path<*> / path<md> are guided; non-builtin ext (path<json>) → advanced', () => {
     expect(decompose('path<*>')).toMatchObject({ mode: 'guided', leafId: 'path', ext: '*' })
     expect(decompose('path<md>')).toMatchObject({ mode: 'guided', leafId: 'path', ext: 'md' })
+    // Only the built-in PATH_EXT_UI exts (* / md) drive the guided ext dropdown.
+    // path<json> still round-trips, but via the advanced raw-text field until
+    // 'json' is promoted into the catalog; recompose builds it verbatim.
+    expect(decompose('path<json>').mode).toBe('advanced')
     expect(recompose(false, 'path', 'json')).toBe('path<json>')
     expect(recompose(false, 'path', '')).toBe('path<*>')
   })
@@ -72,6 +76,17 @@ describe('RFC-080 drift guard 3b — OUTPUT_KIND_UI labels resolve in both local
       expect(typeof resolve(zhCN, d.labelKey)).toBe('string')
     })
   }
+  // The path ext sub-dropdown (PATH_EXT_UI) + its aria-label must also resolve.
+  for (const e of PATH_EXT_UI) {
+    test(`path ext '${e.ext}': ${e.labelKey} present in en-US + zh-CN`, () => {
+      expect(typeof resolve(enUS, e.labelKey)).toBe('string')
+      expect(typeof resolve(zhCN, e.labelKey)).toBe('string')
+    })
+  }
+  test('kindSelect.extLabel present in en-US + zh-CN', () => {
+    expect(typeof resolve(enUS, 'kindSelect.extLabel')).toBe('string')
+    expect(typeof resolve(zhCN, 'kindSelect.extLabel')).toBe('string')
+  })
 })
 
 describe('KindSelect render smoke', () => {
@@ -90,7 +105,7 @@ describe('KindSelect render smoke', () => {
     expect(onChange).toHaveBeenCalledWith('markdown')
   })
 
-  test('a list<path<md>> value renders a list toggle that is on + a path ext input', () => {
+  test('a list<path<md>> value renders a list toggle that is on + a path ext dropdown on Markdown', () => {
     render(
       <KindSelect
         value="list<path<md>>"
@@ -101,8 +116,24 @@ describe('KindSelect render smoke', () => {
     )
     // list toggle (Switch) is checked.
     expect(screen.getByLabelText('list')).toBeTruthy()
-    // path ext input present with 'md'.
-    const ext = screen.getByTestId('k-ext') as HTMLInputElement
-    expect(ext.value).toBe('md')
+    // path ext is now a Select (its trigger shows the Markdown (.md) label),
+    // a second combobox distinct from the base-kind one.
+    const extTrigger = screen.getByRole('combobox', { name: 'file extension' })
+    expect((extTrigger.textContent ?? '').toLowerCase()).toContain('markdown')
+  })
+
+  test('picking md from the path ext dropdown emits path<md> (the review-ready kind)', () => {
+    const onChange = vi.fn<(k: string) => void>()
+    // Selecting the generic "file path" lands on path<*>; the ext dropdown is
+    // how the user reaches the markdown-file kind that review nodes accept.
+    render(<KindSelect value="path<*>" onChange={onChange} ariaLabel="Output kind" />)
+    const extTrigger = screen.getByRole('combobox', { name: 'file extension' })
+    fireEvent.click(extTrigger)
+    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').toLowerCase().includes('markdown'),
+    )
+    expect(opt).toBeDefined()
+    fireEvent.mouseDown(opt!)
+    expect(onChange).toHaveBeenCalledWith('path<md>')
   })
 })

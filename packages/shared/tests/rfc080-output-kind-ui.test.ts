@@ -11,6 +11,9 @@ import {
   getHandlerForParsedKind,
   parseKind,
   REGISTERED_BASE_KINDS,
+  PATH_EXT_UI,
+  listSelectablePathExts,
+  isSelectablePathExt,
   type OutputKindUiDescriptor,
 } from '@agent-workflow/shared'
 
@@ -49,6 +52,21 @@ describe('RFC-080 OUTPUT_KIND_UI catalog', () => {
 
   test('only the path entry is downloadable', () => {
     expect(OUTPUT_KIND_UI.filter((d) => d.downloadable).map((d) => d.id)).toEqual(['path'])
+  })
+
+  test('PATH_EXT_UI ships the built-in path extensions (* + md), each valid path<ext>', () => {
+    expect(listSelectablePathExts().map((e) => e.ext)).toEqual(['*', 'md'])
+    // Every listed ext composes a parseable path<ext> kind.
+    for (const e of PATH_EXT_UI) {
+      expect(parseKind(`path<${e.ext}>`)).toEqual({ kind: 'path', ext: e.ext })
+    }
+  })
+
+  test('isSelectablePathExt matches the catalog (md builtin, json/xml not yet)', () => {
+    expect(isSelectablePathExt('*')).toBe(true)
+    expect(isSelectablePathExt('md')).toBe(true)
+    expect(isSelectablePathExt('json')).toBe(false)
+    expect(isSelectablePathExt('xml')).toBe(false)
   })
 
   test('drift guard layer 2: a descriptor missing a dimension fails to typecheck', () => {

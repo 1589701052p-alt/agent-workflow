@@ -3160,6 +3160,14 @@ code {
   min-width: 90px;
 }
 
+/* The path ext dropdown stays compact (it holds short tokens like
+   "Markdown (.md)"), matching the footprint of the text input it replaced
+   rather than stretching to the full-width default of `.select`. */
+.kind-select__ext {
+  flex: 0 0 auto;
+  width: 160px;
+}
+
 .kind-select__error {
   color: var(--danger);
   font-size: 12px;

@@ -82,6 +82,41 @@ export function outputKindUiById(id: string): OutputKindUiDescriptor | undefined
 }
 
 // -----------------------------------------------------------------------------
+// PATH_EXT_UI — the built-in `path<ext>` extensions the KindSelect renders as a
+// SECOND dropdown (the ext sub-control) once the user picks the `path` leaf,
+// instead of a free-text box. Single source of truth for the file formats a
+// path port can declare from the guided control; adding one (e.g. `json`) is a
+// one-line edit here + its two i18n labels.
+//
+// `*` (any extension) and `md` (the markdown file — the legacy markdown_file ≡
+// path<md> that review nodes accept) ship today. An ext NOT in this list stays
+// expressible via the KindSelect advanced raw-text field, so no grammar power
+// is lost — it just isn't a one-click choice until promoted into this table.
+// -----------------------------------------------------------------------------
+
+export interface PathExtUiDescriptor {
+  /** The token stored inside `path<ext>`; '*' means any extension. */
+  readonly ext: string
+  /** i18n key; the frontend provides cn/en (asserted present by a frontend test). */
+  readonly labelKey: string
+}
+
+export const PATH_EXT_UI = [
+  { ext: '*', labelKey: 'kindSelect.ext_any' },
+  { ext: 'md', labelKey: 'kindSelect.ext_md' },
+] as const satisfies readonly PathExtUiDescriptor[]
+
+/** The selectable `path<ext>` extensions the KindSelect ext dropdown enumerates. */
+export function listSelectablePathExts(): readonly PathExtUiDescriptor[] {
+  return PATH_EXT_UI
+}
+
+/** True iff `ext` is one of the built-in, one-click-selectable path extensions. */
+export function isSelectablePathExt(ext: string): boolean {
+  return PATH_EXT_UI.some((d) => d.ext === ext)
+}
+
+// -----------------------------------------------------------------------------
 // drift guard layer 3a (UI side): every base kind in REGISTERED_BASE_KINDS must
 // have exactly one 'base' descriptor, and every 'base' descriptor id must be a
 // registered base kind. (The 'param-path' entry is the only non-base shape.)
@@ -103,5 +138,15 @@ export function outputKindUiById(id: string): OutputKindUiDescriptor | undefined
     if (!seen.has(name)) {
       throw new Error(`RFC-080 OUTPUT_KIND_UI: registered base kind '${name}' has no UI descriptor`)
     }
+  }
+}
+
+// PATH_EXT_UI invariant: no duplicate ext token (a dup would make the ext
+// dropdown render two rows that round-trip to the same `path<ext>`).
+{
+  const seen = new Set<string>()
+  for (const d of PATH_EXT_UI) {
+    if (seen.has(d.ext)) throw new Error(`PATH_EXT_UI: duplicate ext token '${d.ext}'`)
+    seen.add(d.ext)
   }
 }

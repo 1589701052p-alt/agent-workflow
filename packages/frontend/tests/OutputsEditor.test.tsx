@@ -75,14 +75,17 @@ afterEach(() => {
 describe('OutputsEditor', () => {
   test('renders one row per declared port with the current kind shown', () => {
     mount(['summary', 'report'], { report: 'markdown_file' }, vi.fn())
-    const triggers = screen.getAllByRole('combobox')
-    expect(triggers).toHaveLength(2)
     // summary defaults to base string; report is markdown_file → path<md>.
-    expect(triggers[0]?.textContent).toContain('string')
-    expect(triggers[1]?.textContent).toContain('file path')
-    // the path ext input shows 'md'.
-    const ext = screen.getByTestId('output-kind-report-ext') as HTMLInputElement
-    expect(ext.value).toBe('md')
+    expect(screen.getByRole('combobox', { name: /Output kind for summary/ }).textContent).toContain(
+      'string',
+    )
+    expect(screen.getByRole('combobox', { name: /Output kind for report/ }).textContent).toContain(
+      'file path',
+    )
+    // the path ext is now a second combobox (RFC-080 follow-up): it shows the
+    // Markdown (.md) label rather than a raw 'md' text input.
+    const ext = screen.getByRole('combobox', { name: /file extension/ })
+    expect((ext.textContent ?? '').toLowerCase()).toContain('markdown')
   })
 
   test('adding a new port leaves outputKinds untouched (defaults to string)', () => {
@@ -113,7 +116,8 @@ describe('OutputsEditor', () => {
     mountStateful(['docs'], undefined, spy)
     clickKindOption(/Output kind for docs/, 'file path')
     expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'path<*>' })
-    fireEvent.change(screen.getByTestId('output-kind-docs-ext'), { target: { value: 'md' } })
+    // ext is now a Select: pick the Markdown (.md) option from its popover.
+    clickKindOption(/file extension/, 'Markdown')
     expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'path<md>' })
     fireEvent.click(screen.getByLabelText('list'))
     expect(spy).toHaveBeenLastCalledWith(['docs'], { docs: 'list<path<md>>' })

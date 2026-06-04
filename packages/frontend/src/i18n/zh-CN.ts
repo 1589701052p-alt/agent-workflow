@@ -1219,6 +1219,9 @@ export interface Resources {
     base_markdown: string
     base_signal: string
     base_path: string
+    extLabel: string
+    ext_any: string
+    ext_md: string
     listToggle: string
     extPlaceholder: string
     extError: string
@@ -3264,6 +3267,9 @@ export const zhCN: Resources = {
     base_markdown: 'Markdown 正文',
     base_signal: 'signal（控制流）',
     base_path: '文件路径',
+    extLabel: '文件扩展名',
+    ext_any: '任意文件',
+    ext_md: 'Markdown（.md）',
     listToggle: 'list 列表',
     extPlaceholder: '扩展名（* / md / json）',
     extError: '扩展名只能是 * 或小写字母/数字',
@@ -3280,7 +3286,7 @@ export const zhCN: Resources = {
     fieldDescriptionPlaceholder: '一行简介，会显示在列表中',
     fieldOutputs: '输出端口',
     fieldOutputsHint:
-      '在 <port> envelope 中声明的端口名。可为每个端口选择类型：markdown_file 表示端口内容是 worktree 内的 .md 相对路径，框架会自动读取文件内容。',
+      '在 <port> envelope 中声明的端口名。可为每个端口选择类型；选「文件路径」并把扩展名设为 Markdown（.md）时，端口内容是 worktree 内的 .md 相对路径，框架会自动读取文件内容。',
     fieldOutputsPlaceholder: '输入端口名后按 Enter',
     outputsValidate: '只允许小写字母 + 下划线',
     outputKindLabel: '{{port}} 的输出类型',

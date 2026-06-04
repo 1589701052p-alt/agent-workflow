@@ -17,6 +17,8 @@ import {
   stringifyKind,
   isRegisteredKindString,
   listSelectableKinds,
+  listSelectablePathExts,
+  isSelectablePathExt,
   type ParsedKind,
 } from '@agent-workflow/shared'
 import { Select } from './Select'
@@ -37,6 +39,7 @@ type Decomposed = Guided | { mode: 'advanced' }
 
 const SELECTABLE = listSelectableKinds()
 const SELECTABLE_IDS = new Set(SELECTABLE.map((d) => d.id))
+const PATH_EXTS = listSelectablePathExts()
 
 /** Break a canonical kind string into the guided controls, or 'advanced'. */
 export function decompose(value: string): Decomposed {
@@ -54,6 +57,10 @@ export function decompose(value: string): Decomposed {
     return { mode: 'guided', listWrap, leafId: leaf.name, ext: '*' }
   }
   if (leaf.kind === 'path') {
+    // Only the built-in PATH_EXT_UI extensions are guided; an ad-hoc ext
+    // (e.g. path<xml>) round-trips through the advanced raw-text field until
+    // it's promoted into the catalog. Mirrors the unknown-base-kind fallback.
+    if (!isSelectablePathExt(leaf.ext)) return { mode: 'advanced' }
     return { mode: 'guided', listWrap, leafId: 'path', ext: leaf.ext }
   }
   // Nested list<list<…>> or any other shape → advanced.
@@ -68,8 +75,6 @@ export function recompose(listWrap: boolean, leafId: string, ext: string): strin
   const full: ParsedKind = listWrap ? { kind: 'list', item: leaf } : leaf
   return stringifyKind(full)
 }
-
-const EXT_RE = /^\*$|^[a-z][a-z0-9]*$/
 
 export function KindSelect({
   value,
@@ -122,7 +127,6 @@ export function KindSelect({
 
   const g = decomposed as Guided
   const isPath = g.leafId === 'path'
-  const extValid = !isPath || EXT_RE.test(g.ext)
 
   return (
     <div className="kind-select" aria-label={ariaLabel}>
@@ -135,13 +139,15 @@ export function KindSelect({
           disabled={disabled}
         />
         {isPath && (
-          <TextInput
-            value={g.ext}
-            onChange={(ext) => onChange(recompose(g.listWrap, g.leafId, ext))}
-            placeholder={t('kindSelect.extPlaceholder')}
-            disabled={disabled}
-            data-testid={tid('ext')}
-          />
+          <span className="kind-select__ext">
+            <Select<string>
+              value={g.ext}
+              onChange={(ext) => onChange(recompose(g.listWrap, g.leafId, ext))}
+              options={PATH_EXTS.map((e) => ({ value: e.ext, label: t(e.labelKey) }))}
+              ariaLabel={t('kindSelect.extLabel')}
+              disabled={disabled}
+            />
+          </span>
         )}
         <Switch
           checked={g.listWrap}
@@ -160,7 +166,6 @@ export function KindSelect({
           {t('kindSelect.advancedToggle')}
         </button>
       </div>
-      {isPath && !extValid && <div className="kind-select__error">{t('kindSelect.extError')}</div>}
       {g.leafId === 'signal' && (
         <div className="kind-select__hint">{t('kindSelect.signalHint')}</div>
       )}
