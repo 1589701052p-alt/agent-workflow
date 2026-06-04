@@ -32,6 +32,7 @@ import {
   countFanoutAggregators,
   isMultiDocReviewInput,
   isReviewableBodyKind,
+  reviewApprovedPortName,
   tryParseKind,
 } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
@@ -297,19 +298,18 @@ export function validateWorkflowDef(
         // list<path<md>>). Both carry `approval_meta`. inputSource validity is
         // checked separately below; here we only choose the port name so
         // downstream edge validation accepts the right outlet.
-        let reviewMultiDoc = false
+        let inputKind: string | undefined
         const inputSource = (node as Record<string, unknown>).inputSource
         if (inputSource !== null && typeof inputSource === 'object') {
           const rec = inputSource as Record<string, unknown>
           const src = typeof rec.nodeId === 'string' ? nodeById.get(rec.nodeId) : undefined
           if (src?.kind === 'agent-single' && typeof rec.portName === 'string') {
-            const k = agentByName.get(readString(src, 'agentName') ?? '')?.outputKinds?.[
+            inputKind = agentByName.get(readString(src, 'agentName') ?? '')?.outputKinds?.[
               rec.portName
             ]
-            reviewMultiDoc = k !== undefined && isMultiDocReviewInput(k)
           }
         }
-        outs.add(reviewMultiDoc ? 'accepted' : 'approved_doc')
+        outs.add(reviewApprovedPortName(inputKind))
         outs.add('approval_meta')
         break
       }

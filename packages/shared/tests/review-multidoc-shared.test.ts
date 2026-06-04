@@ -17,6 +17,7 @@ import {
   isMultiDocMember,
   isMultiDocReviewInput,
   isNonMarkdownListReviewInput,
+  reviewApprovedPortName,
   type SelectableDoc,
 } from '../src/reviewMultiDoc'
 
@@ -55,6 +56,22 @@ describe('isNonMarkdownListReviewInput (validator reject path)', () => {
     expect(isNonMarkdownListReviewInput('list<path<md>>')).toBe(false)
     expect(isNonMarkdownListReviewInput('markdown')).toBe(false)
     expect(isNonMarkdownListReviewInput('garbage<')).toBe(false)
+  })
+})
+
+describe('reviewApprovedPortName (validator/canvas/runtime shared outlet)', () => {
+  test('multi-doc inputSource → accepted', () => {
+    expect(reviewApprovedPortName('list<path<md>>')).toBe('accepted')
+    expect(reviewApprovedPortName('list<markdown>')).toBe('accepted')
+  })
+  test('single-doc inputSource → approved_doc', () => {
+    expect(reviewApprovedPortName('path<md>')).toBe('approved_doc')
+    expect(reviewApprovedPortName('markdown')).toBe('approved_doc')
+  })
+  test('unresolvable / non-markdown inputSource → approved_doc fallback', () => {
+    expect(reviewApprovedPortName(undefined)).toBe('approved_doc')
+    expect(reviewApprovedPortName('list<string>')).toBe('approved_doc')
+    expect(reviewApprovedPortName('garbage<')).toBe('approved_doc')
   })
 })
 

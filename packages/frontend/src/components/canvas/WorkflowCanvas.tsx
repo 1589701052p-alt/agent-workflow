@@ -33,7 +33,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
-import { deriveWrapperFanoutOutputs } from '@agent-workflow/shared'
+import { deriveWrapperFanoutOutputs, reviewApprovedPortName } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
 import { AgentNode } from './nodes/AgentNode'
 import { applyPaste, buildSlice, getClipboard, setClipboard } from './canvasClipboard'
@@ -1289,8 +1289,32 @@ export function computePorts(
       break
     }
     case 'review': {
-      // RFC-005: review nodes publish two ports downstream after approve.
-      outputs.push('approved_doc')
+      // RFC-005 / RFC-079/081: review nodes publish two ports downstream after
+      // approve. The curated/approved outlet is `accepted` for multi-document
+      // review (inputSource is a list<markdownish> port) and `approved_doc` for
+      // single-document review. The canvas MUST derive this the same way the
+      // validator does (`reviewApprovedPortName`) — hard-coding `approved_doc`
+      // here drew a phantom outlet on multi-doc review nodes, so a downstream
+      // edge wired to the real `accepted` port looked correct on the canvas yet
+      // tripped `edge-source-port-missing` at validate time.
+      const inputSource = rec.inputSource
+      let inputKind: string | undefined
+      if (inputSource !== null && typeof inputSource === 'object') {
+        const srcRec = inputSource as Record<string, unknown>
+        const srcNode =
+          typeof srcRec.nodeId === 'string'
+            ? definition.nodes.find((n) => n.id === srcRec.nodeId)
+            : undefined
+        const srcRecNode = srcNode as Record<string, unknown> | undefined
+        if (
+          srcRecNode?.kind === 'agent-single' &&
+          typeof srcRecNode.agentName === 'string' &&
+          typeof srcRec.portName === 'string'
+        ) {
+          inputKind = agentByName.get(srcRecNode.agentName)?.outputKinds?.[srcRec.portName]
+        }
+      }
+      outputs.push(reviewApprovedPortName(inputKind))
       outputs.push('approval_meta')
       break
     }

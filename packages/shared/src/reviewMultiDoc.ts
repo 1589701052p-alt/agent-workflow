@@ -57,6 +57,27 @@ export function isInlineMarkdownListReviewInput(kind: string): boolean {
   )
 }
 
+/**
+ * RFC-079/081: the downstream output port name a review node publishes for the
+ * curated/approved document(s). Multi-document review (inputSource is a
+ * `list<markdownish>` port) publishes `accepted` (the curated subset, kind
+ * `list<path<md>>`); single-document review publishes `approved_doc` (the source
+ * doc passes through). Both review nodes additionally publish `approval_meta`.
+ *
+ * `inputKind` is the upstream port's output kind string (the source agent's
+ * `outputKinds[portName]`), or `undefined` when it can't be resolved — no
+ * inputSource, a non-agent source, or the port absent from the agent's
+ * `outputKinds`. Unresolvable → single-document `approved_doc`.
+ *
+ * Centralizing this stops the validator (`workflow.validator.ts`), the canvas
+ * port inventory (`WorkflowCanvas.computePorts`), and the runtime from drifting
+ * on the port name — the exact drift that produced stale `approved_doc` edges
+ * against a multi-doc review node.
+ */
+export function reviewApprovedPortName(inputKind: string | undefined): 'accepted' | 'approved_doc' {
+  return inputKind !== undefined && isMultiDocReviewInput(inputKind) ? 'accepted' : 'approved_doc'
+}
+
 // -----------------------------------------------------------------------------
 // Title extraction for the left-hand document list.
 // -----------------------------------------------------------------------------

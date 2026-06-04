@@ -180,6 +180,48 @@ describe('computePorts', () => {
     expect(ports.outputs).toContain('docpath')
     expect(ports.outputs).toContain('code')
   })
+
+  // RFC-079/081 regression: the canvas review outlet must be DERIVED from the
+  // inputSource kind, not hard-coded `approved_doc`. Locks the bug where a
+  // multi-doc review node (inputSource = list<path<md>> port) rendered a
+  // phantom `approved_doc` outlet on the canvas while the validator (and
+  // runtime) used `accepted` — so an edge wired to the real `accepted` port
+  // looked correct yet tripped `edge-source-port-missing` at validate time.
+  const REVIEW_DEF = (inputSource: { nodeId: string; portName: string }): WorkflowDefinition => ({
+    ...DEF,
+    nodes: [
+      { id: 'doc', kind: 'agent-single', agentName: 'doc', position: { x: 0, y: 0 } },
+      { id: 'tester', kind: 'agent-single', agentName: 'tester', position: { x: 0, y: 0 } },
+      { id: 'rev', kind: 'review', inputSource, position: { x: 0, y: 0 } },
+    ],
+    edges: [],
+  })
+  const reviewByName = new Map<string, Agent>([
+    ['doc', { ...CODER, name: 'doc', outputs: ['docpath'], outputKinds: { docpath: 'path<md>' } }],
+    [
+      'tester',
+      { ...CODER, name: 'tester', outputs: ['cases'], outputKinds: { cases: 'list<path<md>>' } },
+    ],
+  ])
+
+  test('review node: single-doc inputSource (path<md>) → approved_doc outlet', () => {
+    const def = REVIEW_DEF({ nodeId: 'doc', portName: 'docpath' })
+    const ports = computePorts(def.nodes[2]!, reviewByName, def)
+    expect(ports.outputs).toEqual(['approved_doc', 'approval_meta'])
+  })
+
+  test('review node: multi-doc inputSource (list<path<md>>) → accepted outlet (NOT approved_doc)', () => {
+    const def = REVIEW_DEF({ nodeId: 'tester', portName: 'cases' })
+    const ports = computePorts(def.nodes[2]!, reviewByName, def)
+    expect(ports.outputs).toEqual(['accepted', 'approval_meta'])
+    expect(ports.outputs).not.toContain('approved_doc')
+  })
+
+  test('review node: unresolvable inputSource falls back to approved_doc', () => {
+    const def = REVIEW_DEF({ nodeId: 'ghost', portName: 'nope' })
+    const ports = computePorts(def.nodes[2]!, reviewByName, def)
+    expect(ports.outputs).toEqual(['approved_doc', 'approval_meta'])
+  })
 })
 
 describe('toFlowNodes', () => {
