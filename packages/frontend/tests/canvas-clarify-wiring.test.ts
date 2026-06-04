@@ -77,7 +77,12 @@ describe('RFC-023 bugfix source-level wiring guard', () => {
     // refactor that split the two loops into multi-line conditionals
     // pushed the function past 5000 chars; bump to 5500 to keep the
     // fallback edge-pass inside the slice.
-    const body = src.slice(fnIdx, fnIdx + 5500)
+    //
+    // 2026-06-04: the review case now DERIVES its outlet via
+    // reviewApprovedPortName (inputSource kind → accepted/approved_doc) instead
+    // of hard-coding `approved_doc`; that ~25-line block pushed the backfill
+    // loop to ~offset 6300. Bump 5500 → 7000 to keep it inside the slice.
+    const body = src.slice(fnIdx, fnIdx + 7000)
     expect(body).toMatch(
       /for \(const e of definition\.edges\)[\s\S]*?e\.source\.nodeId === node\.id[\s\S]*?outputs\.push\(e\.source\.portName\)/,
     )
