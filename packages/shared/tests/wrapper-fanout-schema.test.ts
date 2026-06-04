@@ -25,10 +25,9 @@ describe('NODE_KIND enum', () => {
     expect(NODE_KIND).toContain('wrapper-fanout')
   })
 
-  test('still includes existing kinds (no removals)', () => {
+  test('still includes the long-standing kinds (agent-single + IO + wrappers + review/clarify)', () => {
     for (const kind of [
       'agent-single',
-      'agent-multi',
       'input',
       'output',
       'wrapper-git',
@@ -39,6 +38,12 @@ describe('NODE_KIND enum', () => {
     ]) {
       expect(NODE_KIND).toContain(kind)
     }
+    // RFC-060 PR-E intentionally removed the legacy 'agent-multi' fan-out kind
+    // (superseded by 'wrapper-fanout'; see the NODE_KIND comment in
+    // schemas/workflow.ts). Lock that it stays gone so a future change can't
+    // silently reintroduce it — and so this guard stops asserting a kind that
+    // no longer exists (the stale `agent-multi` entry made this test red).
+    expect(NODE_KIND).not.toContain('agent-multi')
   })
 })
 
@@ -48,7 +53,9 @@ describe('isProcessNodeKind', () => {
   })
 
   test('existing process kinds remain process kinds', () => {
-    for (const kind of ['agent-single', 'agent-multi', 'wrapper-git', 'wrapper-loop'] as const) {
+    // 'agent-multi' dropped: RFC-060 PR-E removed it from NodeKind, so it's no
+    // longer a (typed) process kind to assert here.
+    for (const kind of ['agent-single', 'wrapper-git', 'wrapper-loop'] as const) {
       expect(isProcessNodeKind(kind)).toBe(true)
     }
   })
