@@ -2210,7 +2210,7 @@ export const zhCN: Resources = {
       pending: '待定',
       accepted: '已采纳',
       notAccepted: '已排除',
-      approveProgress: '通过（{{decided}}/{{total}}）',
+      approveProgress: '通过({{decided}}/{{total}})',
       approveBlocked: '还有 {{count}} 篇未裁决',
       noComments: '（暂无评审意见）',
       badge: '多文档',
