@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto'
 import type Parser from 'web-tree-sitter'
 import type { LangId, SymbolKind, SymbolNode } from '@agent-workflow/shared'
 import { parseSource } from './parser'
-import { getLangExtraction, type ExtractionConfig } from './queries'
+import { getLangExtraction, DEGRADED_LANGS, type ExtractionConfig } from './queries'
 
 type TsNode = Parser.SyntaxNode
 
@@ -140,6 +140,11 @@ function buildSymbols(
     if (r.rawKind === 'function') {
       const parent = nearestDefAncestor(r.node)
       if (parent !== null && CLASS_LIKE.has(parent.rawKind)) return 'method'
+      // Rust impl methods: captured as functions, qualified by a receiver type.
+      if (cfg.receiverPrefix !== undefined) {
+        const recv = cfg.receiverPrefix(r.node)
+        if (recv !== null && recv !== '') return 'method'
+      }
     }
     return r.rawKind
   }
@@ -167,6 +172,7 @@ function buildSymbols(
     built.push({ raw: r, kind, name, qn, id })
   }
 
+  const degraded = DEGRADED_LANGS.has(opts.lang)
   const out: SymbolNode[] = []
   for (const b of built) {
     const node = b.raw.node
@@ -207,7 +213,8 @@ function buildSymbols(
       filePath: opts.filePath,
       range: { startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1 },
       parentId,
-      confidence: 'extracted',
+      confidence: degraded ? 'inferred' : 'extracted',
+      degraded: degraded ? true : undefined,
     })
   }
   return out

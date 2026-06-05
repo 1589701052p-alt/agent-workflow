@@ -237,14 +237,16 @@ describe('baseline — added / removed whole file + guards', () => {
     expect(file.changes).toEqual([])
   })
 
-  test('grammar present but no PR-A extraction (java) → unsupported', async () => {
+  test('unmapped-but-known-extension file (ruby) → unsupported', async () => {
+    // tree-sitter-wasms ships a ruby grammar, but RFC-083 does not map `.rb`,
+    // so resolveLang returns null → unsupported (lang 'unknown').
     const file = await analyzeFile({
-      filePath: 'A.java',
-      oldText: 'class A {}',
-      newText: 'class A { int x; }',
+      filePath: 'a.rb',
+      oldText: 'class A; end',
+      newText: 'class A; def m; end; end',
     })
     expect(file.status).toBe('unsupported')
-    expect(file.lang).toBe('java')
+    expect(file.lang).toBe('unknown')
   })
 
   test('binary content → skipped-binary', async () => {
