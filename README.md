@@ -214,15 +214,15 @@ network, appearance, memory, connection, rendering, and authentication tabs.
 
 ## Requirements
 
-| Tool         | Supported version                       | Why                                    |
-| ------------ | --------------------------------------- | -------------------------------------- |
-| **opencode** | ≥ 1.14.0 and < 1.16.0 (1.15.5 verified) | Spawned as the agent subprocess        |
-| **git**      | 2.5+                                    | `git worktree`, snapshots, stash, diff |
-| **OS**       | macOS or Linux                          | Windows is not supported in v1         |
+| Tool         | Supported version                          | Why                                    |
+| ------------ | ------------------------------------------ | -------------------------------------- |
+| **opencode** | ≥ 1.14.0 and < 1.17.0 (verified to 1.15.5) | Spawned as the agent subprocess        |
+| **git**      | 2.5+                                       | `git worktree`, snapshots, stash, diff |
+| **OS**       | macOS or Linux                             | Windows is not supported in v1         |
 
 The daemon enforces a supported **range**: it refuses to start if opencode is
-below `1.14.0` _or_ at/above the unverified `1.16.0` ceiling (every `1.14.x` and
-`1.15.x` is accepted). `opencode` must be on `PATH`, or set `opencodePath` in
+below `1.14.0` _or_ at/above the `1.17.0` ceiling (every `1.14.x`, `1.15.x`, and
+`1.16.x` is accepted). `opencode` must be on `PATH`, or set `opencodePath` in
 `config.json`. The same range is reported by `agent-workflow doctor` and the
 **Settings → Runtime** tab.
 

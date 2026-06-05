@@ -140,14 +140,14 @@ describe('GET /api/runtime/opencode', () => {
     // a minor — re-verify" gate. The probe must surface this as
     // compatible=false + a reason that points the user at the manual smoke
     // test before flipping the cap forward.
-    writeBinary(h.binaryPath, { versionStdout: 'stub-opencode 1.16.0' })
+    writeBinary(h.binaryPath, { versionStdout: 'stub-opencode 1.17.0' })
     const res = await req(h.app, '/api/runtime/opencode')
     const json = (await res.json()) as Record<string, unknown>
-    expect(json.version).toBe('1.16.0')
+    expect(json.version).toBe('1.17.0')
     expect(json.compatible).toBe(false)
     expect(typeof json.incompatibleReason).toBe('string')
     const reason = json.incompatibleReason as string
-    expect(reason).toContain('1.16.0')
+    expect(reason).toContain('1.17.0')
     expect(reason).toContain(MAX_OPENCODE_VERSION_EXCLUSIVE)
   })
 

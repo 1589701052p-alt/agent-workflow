@@ -90,7 +90,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
       `agent-workflow: opencode ${probe.version} is incompatible.\n` +
         `  required range: ${MIN_OPENCODE_VERSION} <= version < ${MAX_OPENCODE_VERSION_EXCLUSIVE}\n` +
         `  reason: ${probe.incompatibleReason ?? 'unknown'}\n` +
-        `  to recover: \`npm install -g opencode-ai@1.15.5\` (or any 1.14.x / 1.15.x) or set 'opencodePath' in ${Paths.config}.`,
+        `  to recover: \`npm install -g opencode-ai@1.15.5\` (or any 1.14.x / 1.15.x / 1.16.x) or set 'opencodePath' in ${Paths.config}.`,
     )
     lock.release()
     process.exit(1)

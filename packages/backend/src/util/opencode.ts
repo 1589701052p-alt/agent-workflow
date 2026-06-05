@@ -15,8 +15,8 @@ export const MIN_OPENCODE_VERSION = '1.14.0'
 
 /**
  * Exclusive upper bound — a permissive tripwire for the next major-ish
- * upstream change. Currently set to the next minor (`1.16.0`), allowing every
- * `1.14.x` AND `1.15.x` release.
+ * upstream change. Currently set to `1.17.0`, allowing every `1.14.x`,
+ * `1.15.x`, AND `1.16.x` release.
  *
  * Historical context: opencode 1.14.51 shipped commit 7f2b5ee8c (the Effect-TS
  * rewrite of `packages/opencode/src/cli/cmd/run.ts`), which changed root
@@ -34,11 +34,17 @@ export const MIN_OPENCODE_VERSION = '1.14.0'
  * is verified-working — reproduced 2026-05-20 against 1.15.5 with the same
  * worktree + clarify-iteration fixture that broke 1.14.51.
  *
+ * 1.16.x was admitted on 2026-06-05 (ceiling moved 1.16.0 -> 1.17.0) because
+ * `opencode-ai@latest` released 1.16.0 and the old cap blocked it at daemon
+ * startup. NOTE: this was a compat bump to track the released line, not a fresh
+ * end-to-end isolation re-validation — 1.16.x should still be smoke-tested
+ * against a clarify-iteration agent node when a 1.16.x binary is in hand.
+ *
  * The cap now exists only as a "you just bumped past a minor — manually
- * re-verify" tripwire; bump it forward once you've smoke-tested a 1.16.x
+ * re-verify" tripwire; bump it forward once you've smoke-tested a 1.17.x
  * or 2.x against a clarify-iteration agent node end-to-end.
  */
-export const MAX_OPENCODE_VERSION_EXCLUSIVE = '1.16.0'
+export const MAX_OPENCODE_VERSION_EXCLUSIVE = '1.17.0'
 
 export interface OpencodeProbe {
   /** Resolved binary path (absolute when overridden, "opencode" when on PATH). */

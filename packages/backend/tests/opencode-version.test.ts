@@ -100,7 +100,15 @@ describe('version cap', () => {
     expect(compareSemver('1.15.5', MAX_OPENCODE_VERSION_EXCLUSIVE)).toBeLessThan(0)
   })
 
-  test('1.16.0 is at/above the cap (the next-minor tripwire)', () => {
-    expect(compareSemver('1.16.0', MAX_OPENCODE_VERSION_EXCLUSIVE)).toBeGreaterThanOrEqual(0)
+  test('1.16.0 is inside the supported window (cap moved 1.16.0 -> 1.17.0 on 2026-06-05)', () => {
+    // Why: opencode-ai@latest released 1.16.0 and the old 1.16.0 ceiling
+    // blocked it at daemon startup. The cap was bumped to 1.17.0 to track the
+    // released line. See util/opencode.ts MAX_OPENCODE_VERSION_EXCLUSIVE.
+    expect(compareSemver('1.16.0', MIN_OPENCODE_VERSION)).toBeGreaterThanOrEqual(0)
+    expect(compareSemver('1.16.0', MAX_OPENCODE_VERSION_EXCLUSIVE)).toBeLessThan(0)
+  })
+
+  test('1.17.0 is at/above the cap (the next-minor tripwire)', () => {
+    expect(compareSemver('1.17.0', MAX_OPENCODE_VERSION_EXCLUSIVE)).toBeGreaterThanOrEqual(0)
   })
 })
