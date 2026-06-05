@@ -620,6 +620,22 @@ export async function gitChangedFiles(worktreePath: string, fromCommit: string):
 }
 
 /**
+ * RFC-083 — read a file's blob content at a given ref (`git show <ref>:<path>`).
+ * Returns null when the path does not exist at that ref (e.g. a file the agent
+ * added — no "before" side). Used by the structural-diff service to fetch the
+ * old version of each changed file. Read-only.
+ */
+export async function readBlobAtRef(
+  cwd: string,
+  ref: string,
+  relPath: string,
+): Promise<string | null> {
+  const r = await runGit(cwd, ['-c', 'core.quotepath=false', 'show', `${ref}:${relPath}`])
+  if (r.exitCode !== 0) return null
+  return r.stdout
+}
+
+/**
  * Capped variant of `gitDiffSnapshot` for the HTTP response in
  * `GET /api/tasks/:id/diff`. v1 caps at 1 MiB to keep the network round-trip
  * predictable; multi-process sharding uses the uncapped form.

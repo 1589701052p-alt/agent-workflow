@@ -42,6 +42,8 @@ import {
   retryNode,
   startTask,
 } from '@/services/task'
+import { getTaskStructuralDiff } from '@/services/structuralDiff/service'
+import { structuralScopeSchema } from '@agent-workflow/shared'
 import {
   applyUploadsToWorktree,
   DEFAULT_UPLOAD_LIMITS,
@@ -274,6 +276,13 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/tasks/:id/diff', async (c) => {
     return c.json(await getTaskDiff(deps.db, c.req.param('id')))
+  })
+
+  // RFC-083 — structural (semantic) diff overlay for the textual diff above.
+  // `?scope=task|node|wrapper` (v1 implements 'task'; others 422).
+  app.get('/api/tasks/:id/structural-diff', async (c) => {
+    const scope = structuralScopeSchema.catch('task').parse(c.req.query('scope'))
+    return c.json(await getTaskStructuralDiff(deps.db, c.req.param('id'), scope))
   })
 
   // RFC-053 P-6: list currently-open lifecycle_alerts (invariant + stuck)
