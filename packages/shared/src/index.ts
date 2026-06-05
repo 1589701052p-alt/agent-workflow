@@ -24,6 +24,7 @@ export * from './schemas/taskFeedback'
 export * from './schemas/user'
 export * from './schemas/workflow'
 export * from './schemas/sessionView'
+export * from './schemas/structuralDiff'
 export * from './schemas/ws'
 export * from './sessionView'
 export * from './inventory'
@@ -51,3 +52,8 @@ export * from './reviewMultiDoc'
 // module (NOT outputKinds/list) so the barrel never pulls the parametric
 // handler registry into a module-init cycle (see listWire.ts header).
 export * from './listWire'
+// RFC-083 — structural-diff symbol-graph set-diff + summary aggregation.
+// Dependency-free leaf (type-only import from the schema), re-exported here so
+// the barrel never drags a registry-coupled module into a module-init cycle
+// (same discipline as listWire; see structuralDiffGraph.ts header).
+export * from './structuralDiffGraph'
