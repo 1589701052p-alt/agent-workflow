@@ -2981,7 +2981,7 @@ export const zhCN: Resources = {
     structCardDependencies: '依赖',
     structDepsHeader: '依赖变更',
     structImpactHeader: '影响面（谁调用了被改方法）',
-    structImpactInferred: '文件内 · 启发式',
+    structImpactInferred: '启发式（跨文件，名称匹配）',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',

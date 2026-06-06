@@ -155,6 +155,36 @@ describe('computeFromWorktree — real git repo', () => {
     expect(idx).toContain('added A.n')
   })
 
+  test('cross-file impact: a method changed in one file, called from another', async () => {
+    const dir = await makeRepo()
+    writeFileSync(
+      join(dir, 'svc.py'),
+      'class Svc:\n    def charge(self, amt):\n        return amt\n',
+    )
+    writeFileSync(
+      join(dir, 'caller.py'),
+      'from svc import Svc\nclass Order:\n    def pay(self):\n        return Svc().charge(10)\n',
+    )
+    await runGit(dir, ['add', '.'])
+    await runGit(dir, ['commit', '-q', '-m', 'init'])
+    // modify charge's body (uncommitted)
+    writeFileSync(
+      join(dir, 'svc.py'),
+      'class Svc:\n    def charge(self, amt):\n        return amt * 2\n',
+    )
+
+    const diff = await computeFromWorktree({
+      taskId: 't',
+      scope: 'task',
+      worktreePath: dir,
+      fromRef: 'HEAD',
+    })
+    const chargeImpact = diff.impact.find((i) => i.changedSymbolId.includes('charge'))
+    expect(chargeImpact).toBeDefined()
+    // the caller lives in a DIFFERENT file (caller.py), found via cross-file scan
+    expect(chargeImpact?.callers.some((c) => c.filePath === 'caller.py')).toBe(true)
+  })
+
   test('clean worktree → empty diff', async () => {
     const dir = await makeRepo()
     writeFileSync(join(dir, 'a.py'), 'def f():\n    return 1\n')

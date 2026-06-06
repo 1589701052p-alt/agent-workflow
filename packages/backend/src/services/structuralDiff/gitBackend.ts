@@ -1,13 +1,26 @@
 // RFC-083 PR-C — git-backed blob readers for a worktree. Enumerates changed
 // files between `fromRef` and the live worktree (tracked + untracked), reads the
 // old side via `git show <fromRef>:<path>` and the new side from the worktree on
-// disk, and hands them to assembleStructuralDiff.
+// disk, and hands them to assembleStructuralDiff. After assembly it augments the
+// impact with CROSS-FILE callers (worktree-wide `git grep` + re-parse).
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { gitChangedFiles, gitChangedFilesBetween, readBlobAtRef } from '@/util/git'
+import { gitChangedFiles, gitChangedFilesBetween, gitGrepFiles, readBlobAtRef } from '@/util/git'
 import { assembleStructuralDiff } from './assemble'
-import type { StructuralDiff, StructuralScope } from '@agent-workflow/shared'
+import { resolveLang } from './lang/grammars'
+import { hasExtraction } from './lang/queries'
+import { extractSymbols } from './lang/extract'
+import { collectImpactTargets, findCallers } from './impact'
+import { MAX_ANALYZE_BYTES } from './baseline'
+import type { ImpactItem, StructuralDiff, StructuralScope } from '@agent-workflow/shared'
+
+type BlobReader = (path: string) => Promise<string | null>
+
+/** Cap the candidate caller files we re-parse for cross-file impact (bounds the
+ *  cost on large repos; `git grep` already narrows to files that mention a
+ *  changed method's name). */
+const MAX_CROSS_FILE_CANDIDATES = 60
 
 /** Compute the baseline structural diff between `fromRef` and the current
  *  worktree state. `toRef` is the sentinel 'WORKTREE'. */
@@ -28,7 +41,7 @@ export async function computeFromWorktree(opts: {
       return null // deleted in worktree, or unreadable
     }
   }
-  return assembleStructuralDiff({
+  const diff = await assembleStructuralDiff({
     taskId: opts.taskId,
     scope: opts.scope,
     nodeRunId: opts.nodeRunId,
@@ -38,6 +51,7 @@ export async function computeFromWorktree(opts: {
     readOld,
     readNew,
   })
+  return augmentCrossFileImpact(diff, opts.worktreePath, readNew)
 }
 
 /** Compute the structural diff between two refs (per-node snapshot pair). Both
@@ -55,7 +69,7 @@ export async function computeBetweenRefs(opts: {
     readBlobAtRef(opts.worktreePath, opts.fromRef, p)
   const readNew = (p: string): Promise<string | null> =>
     readBlobAtRef(opts.worktreePath, opts.toRef, p)
-  return assembleStructuralDiff({
+  const diff = await assembleStructuralDiff({
     taskId: opts.taskId,
     scope: opts.scope,
     nodeRunId: opts.nodeRunId,
@@ -65,4 +79,75 @@ export async function computeBetweenRefs(opts: {
     readOld,
     readNew,
   })
+  // Cross-file callers come from `git grep` against the worktree (the toRef
+  // snapshot is a subset of the worktree's tracked content), so the candidate
+  // bodies are read via readNew (`git show toRef:path`) for consistency.
+  return augmentCrossFileImpact(diff, opts.worktreePath, readNew)
+}
+
+/**
+ * Extend `diff.impact` with cross-file callers: for each changed method, find
+ * other files in the worktree whose code calls it. `git grep` narrows to files
+ * mentioning the name; each is re-parsed and its symbols' bodies checked. Merges
+ * into the within-file impact already on the diff. Best-effort: any failure for
+ * a candidate file is skipped, never throwing.
+ */
+async function augmentCrossFileImpact(
+  diff: StructuralDiff,
+  worktreePath: string,
+  readNew: BlobReader,
+): Promise<StructuralDiff> {
+  // Cross-file names are noisier than within-file (no scope), so require ≥3 chars.
+  const targets = collectImpactTargets(diff.files, 3)
+  if (targets.length === 0) return diff
+
+  const ownerFiles = new Set(targets.map((t) => t.ownerFile))
+  const patterns = [...new Set(targets.map((t) => `${t.name}(`))]
+  const grepped = await gitGrepFiles(worktreePath, patterns)
+  const candidates = grepped
+    .filter((p) => !ownerFiles.has(p))
+    .filter((p) => {
+      const r = resolveLang(p)
+      return r !== null && hasExtraction(r.lang)
+    })
+    .slice(0, MAX_CROSS_FILE_CANDIDATES)
+  if (candidates.length === 0) return diff
+
+  // Merge by changedSymbolId so cross-file callers add to within-file ones.
+  const impactById = new Map<string, ImpactItem>(
+    diff.impact.map((i) => [i.changedSymbolId, { ...i, callers: [...i.callers] }]),
+  )
+
+  for (const path of candidates) {
+    const resolution = resolveLang(path)
+    if (resolution === null) continue
+    const text = await readNew(path)
+    if (text === null || text.length > MAX_ANALYZE_BYTES) continue
+    let symbols
+    try {
+      symbols = (
+        await extractSymbols({
+          lang: resolution.lang,
+          grammarFile: resolution.grammarFile,
+          filePath: path,
+          source: text,
+        })
+      ).symbols
+    } catch {
+      continue
+    }
+    const lines = text.split('\n')
+    for (const target of targets) {
+      const callers = findCallers(target.name, symbols, lines, path) // different file → no self-exclude
+      if (callers.length === 0) continue
+      let item = impactById.get(target.changedSymbolId)
+      if (item === undefined) {
+        item = { changedSymbolId: target.changedSymbolId, callers: [], confidence: 'inferred' }
+        impactById.set(target.changedSymbolId, item)
+      }
+      item.callers.push(...callers)
+    }
+  }
+
+  return { ...diff, impact: [...impactById.values()] }
 }

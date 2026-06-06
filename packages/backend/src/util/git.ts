@@ -620,6 +620,25 @@ export async function gitChangedFiles(worktreePath: string, fromCommit: string):
 }
 
 /**
+ * RFC-083 — worktree files containing any of the given fixed-string patterns
+ * (`git grep -l --untracked -F -e p1 -e p2 ...`). Used by cross-file impact to
+ * find candidate caller files for a changed method. Empty on no match / error
+ * (grep exits 1 with no matches, which is not an error here).
+ */
+export async function gitGrepFiles(worktreePath: string, patterns: string[]): Promise<string[]> {
+  if (patterns.length === 0) return []
+  const args = ['-c', 'core.quotepath=false', 'grep', '-l', '--untracked', '-F']
+  for (const p of patterns) args.push('-e', p)
+  const r = await runGit(worktreePath, args)
+  // exit 0 = matches, 1 = no matches (fine), >1 = real error → treat as empty.
+  if (r.exitCode !== 0) return []
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+/**
  * RFC-083 — names of files that differ between two refs (`git diff --name-only
  * <fromRef> <toRef>`). Used by the per-node structural diff to bound the
  * changed-file set between two snapshots. Throws on git failure (e.g. a pruned
