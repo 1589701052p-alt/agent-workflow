@@ -9599,6 +9599,7 @@ mark.comment-anchor[data-active='true'] {
 }
 /* a card = one class / file */
 .sg-card {
+  width: 240px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);

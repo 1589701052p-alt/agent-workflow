@@ -102,16 +102,14 @@ function cardHeight(memberCount: number): number {
   return HEADER_H + memberCount * ROW_H + PAD_V
 }
 
-/** Hierarchical top→down layout via dagre. Mutates each card's x/y/w/h. */
-function layoutWithDagre(cards: GraphCard[], edges: GraphCardEdge[]): void {
+/** Hierarchical top→down layout via dagre. Mutates each card's x/y using the
+ *  card's CURRENT w/h. Call once with estimated sizes (initial render), then
+ *  again with xyflow's MEASURED sizes so edges land on the real card edges. */
+export function layoutGraph(cards: GraphCard[], edges: GraphCardEdge[]): void {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: 'TB', nodesep: 36, ranksep: 56, marginx: 16, marginy: 16 })
   g.setDefaultEdgeLabel(() => ({}))
-  for (const c of cards) {
-    c.w = CARD_W
-    c.h = cardHeight(c.members.length)
-    g.setNode(c.id, { width: c.w, height: c.h })
-  }
+  for (const c of cards) g.setNode(c.id, { width: c.w, height: c.h })
   for (const e of edges) g.setEdge(e.source, e.target)
   dagre.layout(g)
   for (const c of cards) {
@@ -219,6 +217,11 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
 
   const list = [...cards.values()]
   const edges = [...edgeMap.values()]
-  layoutWithDagre(list, edges)
+  // estimated sizes for the FIRST layout; the view re-layouts with measured ones.
+  for (const c of list) {
+    c.w = CARD_W
+    c.h = cardHeight(c.members.length)
+  }
+  layoutGraph(list, edges)
   return { cards: list, edges }
 }

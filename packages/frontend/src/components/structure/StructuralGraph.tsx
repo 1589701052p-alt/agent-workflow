@@ -1,8 +1,8 @@
-// RFC-083 PR-F — read-only class-collaboration diagram (xyflow). Each node is a
-// CARD (class / file) rendered by CardNode: a header (kind + name, change badge)
-// over a list of member rows — changed members colored + badged, caller members
-// muted. Edges run caller-card → changed-card. Fully non-interactive. All model
-// logic is in lib/structureGraph (unit-tested); this is the xyflow adapter.
+// RFC-083 PR-F/PR-G — read-only class-collaboration diagram (xyflow), laid out
+// top→down by dagre. Cards have variable size (member rows), so we use the
+// controlled-node pattern: render → let xyflow MEASURE each card → re-run dagre
+// with the real sizes → fitView. Without this, edges connect to estimated node
+// boxes and visibly float off the cards.
 
 import {
   ReactFlow,
@@ -12,14 +12,24 @@ import {
   Handle,
   Position,
   MarkerType,
+  useNodesState,
+  useEdgesState,
+  useNodesInitialized,
+  useReactFlow,
   type Node,
   type Edge,
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { StructuralDiff } from '@agent-workflow/shared'
-import { buildStructureGraph, type GraphCard } from '@/lib/structureGraph'
+import {
+  buildStructureGraph,
+  layoutGraph,
+  type GraphCard,
+  type StructureGraph,
+} from '@/lib/structureGraph'
 import { badgeSymbol } from '@/lib/structureView'
 
 function CardNode({ data }: NodeProps) {
@@ -27,7 +37,7 @@ function CardNode({ data }: NodeProps) {
   const ctClass = card.changeType !== undefined ? ` sg-card--ct-${card.changeType}` : ''
   const changedClass = card.isChanged ? ' sg-card--changed' : ' sg-card--caller'
   return (
-    <div className={`sg-card${changedClass}${ctClass}`} style={{ width: card.w }}>
+    <div className={`sg-card${changedClass}${ctClass}`}>
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="sg-card__header">
         <span className="sg-card__kind">{card.kind}</span>
@@ -66,29 +76,87 @@ function CardNode({ data }: NodeProps) {
 
 const NODE_TYPES = { card: CardNode }
 
+function GraphFlow({ graph }: { graph: StructureGraph }) {
+  const initialNodes = useMemo<Node[]>(
+    () =>
+      graph.cards.map((c) => ({
+        id: c.id,
+        type: 'card',
+        position: { x: c.x, y: c.y },
+        data: { card: c },
+        draggable: false,
+        connectable: false,
+      })),
+    [graph],
+  )
+  const initialEdges = useMemo<Edge[]>(
+    () =>
+      graph.edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        className: `sg-edge--${e.kind}`,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      })),
+    [graph],
+  )
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
+  const [edges, , onEdgesChange] = useEdgesState(initialEdges)
+  const initialized = useNodesInitialized()
+  const { fitView } = useReactFlow()
+  const laidOut = useRef(false)
+
+  // new data → reset to estimated layout and re-measure
+  useEffect(() => {
+    laidOut.current = false
+    setNodes(initialNodes)
+  }, [initialNodes, setNodes])
+
+  // once xyflow has measured every card, re-run dagre with the REAL sizes so the
+  // hierarchy spacing is correct and edges land on the actual card edges.
+  useEffect(() => {
+    if (!initialized || laidOut.current) return
+    laidOut.current = true
+    setNodes((nds) => {
+      for (const c of graph.cards) {
+        const measured = nds.find((n) => n.id === c.id)?.measured
+        if (measured?.width) c.w = measured.width
+        if (measured?.height) c.h = measured.height
+      }
+      layoutGraph(graph.cards, graph.edges)
+      const pos = new Map(graph.cards.map((c) => [c.id, { x: c.x, y: c.y }]))
+      return nds.map((n) => ({ ...n, position: pos.get(n.id) ?? n.position }))
+    })
+    requestAnimationFrame(() => fitView({ minZoom: 0.4, maxZoom: 1, padding: 0.12 }))
+  }, [initialized, graph, setNodes, fitView])
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      nodeTypes={NODE_TYPES}
+      nodesDraggable={false}
+      nodesConnectable={false}
+      elementsSelectable={false}
+      fitView
+      fitViewOptions={{ maxZoom: 1, minZoom: 0.4 }}
+      minZoom={0.15}
+      proOptions={{ hideAttribution: true }}
+    >
+      <Background />
+      <Controls showInteractive={false} />
+    </ReactFlow>
+  )
+}
+
 export function StructuralGraph({ data }: { data: StructuralDiff }) {
   const { t } = useTranslation()
-  const graph = buildStructureGraph(data)
+  const graph = useMemo(() => buildStructureGraph(data), [data])
   if (graph.cards.length === 0) {
     return <div className="muted structure-graph__empty">{t('tasks.structGraphEmpty')}</div>
   }
-  const nodes: Node[] = graph.cards.map((c) => ({
-    id: c.id,
-    type: 'card',
-    position: { x: c.x, y: c.y },
-    data: { card: c },
-    draggable: false,
-    connectable: false,
-    width: c.w,
-    height: c.h,
-  }))
-  const edges: Edge[] = graph.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    className: `sg-edge--${e.kind}`,
-    markerEnd: { type: MarkerType.ArrowClosed },
-  }))
   return (
     <div className="structure-graph-wrap">
       <div className="structure-graph__legend">
@@ -125,21 +193,7 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
       </div>
       <div className="structure-graph" data-testid="structure-graph">
         <ReactFlowProvider>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={NODE_TYPES}
-            nodesDraggable={false}
-            nodesConnectable={false}
-            elementsSelectable={false}
-            fitView
-            fitViewOptions={{ maxZoom: 1, minZoom: 0.4 }}
-            minZoom={0.15}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background />
-            <Controls showInteractive={false} />
-          </ReactFlow>
+          <GraphFlow graph={graph} />
         </ReactFlowProvider>
       </div>
     </div>
