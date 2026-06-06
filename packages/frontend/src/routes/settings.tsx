@@ -247,16 +247,17 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
           </Field>
         </div>
         <Field label={t('settingsForm.logLevel')}>
-          <select
-            className="form-input"
-            value={state.logLevel}
-            onChange={(e) => setState({ ...state, logLevel: e.target.value as Config['logLevel'] })}
-          >
-            <option value="debug">debug</option>
-            <option value="info">info</option>
-            <option value="warn">warn</option>
-            <option value="error">error</option>
-          </select>
+          <Select<NonNullable<Config['logLevel']>>
+            value={state.logLevel ?? config.logLevel}
+            ariaLabel={t('settingsForm.logLevel')}
+            onChange={(v) => setState({ ...state, logLevel: v })}
+            options={[
+              { value: 'debug', label: 'debug' },
+              { value: 'info', label: 'info' },
+              { value: 'warn', label: 'warn' },
+              { value: 'error', label: 'error' },
+            ]}
+          />
         </Field>
         {/* RFC-075: auto commit&push runtime knobs (the per-task toggles live
             on the launch form). The model label namespaces these clearly so no
@@ -521,26 +522,28 @@ export function AppearanceTab({ config }: TabProps) {
       success={save.isSuccess && save.error === null ? 'saved' : null}
     >
       <Field label={t('settings.themeLabel')} hint={t('settings.themeHint')}>
-        <select
-          className="form-input"
+        <Select<NonNullable<Config['theme']>>
           value={state.theme ?? 'system'}
-          onChange={(e) => setState({ ...state, theme: e.target.value as Config['theme'] })}
-        >
-          <option value="system">{t('settings.themeSystem')}</option>
-          <option value="light">{t('settings.themeLight')}</option>
-          <option value="dark">{t('settings.themeDark')}</option>
-        </select>
+          ariaLabel={t('settings.themeLabel')}
+          onChange={(v) => setState({ ...state, theme: v })}
+          options={[
+            { value: 'system', label: t('settings.themeSystem') },
+            { value: 'light', label: t('settings.themeLight') },
+            { value: 'dark', label: t('settings.themeDark') },
+          ]}
+        />
       </Field>
       <Field label={t('settings.languageLabel')} hint={t('settings.languageHint')}>
-        <select
-          className="form-input"
-          data-testid="settings-language-select"
+        <Select<SupportedLanguage>
           value={state.language ?? 'zh-CN'}
-          onChange={(e) => setState({ ...state, language: e.target.value as SupportedLanguage })}
-        >
-          <option value="zh-CN">{t('settings.languageZhCN')}</option>
-          <option value="en-US">{t('settings.languageEnUS')}</option>
-        </select>
+          ariaLabel={t('settings.languageLabel')}
+          data-testid="settings-language-select"
+          onChange={(v) => setState({ ...state, language: v })}
+          options={[
+            { value: 'zh-CN', label: t('settings.languageZhCN') },
+            { value: 'en-US', label: t('settings.languageEnUS') },
+          ]}
+        />
       </Field>
     </SectionForm>
   )
@@ -573,23 +576,17 @@ export function MemoryTab({ config }: TabProps) {
         label={t('settings.memoryDistillLangLabel')}
         hint={t('settings.memoryDistillLangHint')}
       >
-        <select
-          className="form-input"
+        <Select<'' | NonNullable<Config['memoryDistillLang']>>
           data-testid="settings-memory-distill-lang-select"
+          ariaLabel={t('settings.memoryDistillLangLabel')}
           value={state.memoryDistillLang ?? ''}
-          onChange={(e) => {
-            const v = e.target.value
-            setState({
-              ...state,
-              memoryDistillLang:
-                v === '' ? undefined : (v as NonNullable<Config['memoryDistillLang']>),
-            })
-          }}
-        >
-          <option value="">{t('settings.memoryDistillLangDefault')}</option>
-          <option value="en-US">{t('settings.memoryDistillLangEnUS')}</option>
-          <option value="zh-CN">{t('settings.memoryDistillLangZhCN')}</option>
-        </select>
+          onChange={(v) => setState({ ...state, memoryDistillLang: v === '' ? undefined : v })}
+          options={[
+            { value: '', label: t('settings.memoryDistillLangDefault') },
+            { value: 'en-US', label: t('settings.memoryDistillLangEnUS') },
+            { value: 'zh-CN', label: t('settings.memoryDistillLangZhCN') },
+          ]}
+        />
       </Field>
     </SectionForm>
   )

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { Config } from '@agent-workflow/shared'
 import { AppearanceTab } from '../src/routes/settings'
 import i18n from '../src/i18n'
@@ -77,22 +77,37 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   clearToken()
   vi.restoreAllMocks()
 })
+
+// The language picker is now the shared <Select> (RFC-036): a role=combobox
+// trigger (carrying the testid) + a portaled role=listbox. Open it and click
+// the option whose rendered label matches the given i18n key.
+function pickLanguage(langLabelKey: string) {
+  act(() => {
+    fireEvent.click(screen.getByTestId('settings-language-select'))
+  })
+  const listbox = screen.getByRole('listbox')
+  act(() => {
+    fireEvent.mouseDown(within(listbox).getByText(i18n.t(langLabelKey)))
+  })
+}
 
 describe('AppearanceTab language select', () => {
   test('renders both theme and language selects + reflects current language', () => {
     mockPutOnce({})
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<AppearanceTab config={mkConfig({ language: 'en-US' })} />, { wrapper: wrap(qc) })
-    const langSel = screen.getByTestId('settings-language-select') as HTMLSelectElement
-    expect(langSel.value).toBe('en-US')
-    // theme select still present (sanity)
-    const themes = screen
-      .getAllByRole('combobox')
-      .filter((el) => el !== langSel) as HTMLSelectElement[]
+    const langSel = screen.getByTestId('settings-language-select')
+    // Trigger shows the current language's label (was <select>.value).
+    expect(langSel.textContent).toContain(i18n.t('settings.languageEnUS'))
+    // theme select still present (sanity) — both are role=combobox triggers.
+    const themes = screen.getAllByRole('combobox').filter((el) => el !== langSel)
     expect(themes.length).toBeGreaterThan(0)
   })
 
@@ -100,22 +115,17 @@ describe('AppearanceTab language select', () => {
     mockPutOnce({})
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<AppearanceTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const langSel = screen.getByTestId('settings-language-select') as HTMLSelectElement
-    expect(langSel.value).toBe('zh-CN')
-    act(() => {
-      fireEvent.change(langSel, { target: { value: 'en-US' } })
-    })
-    expect(langSel.value).toBe('en-US')
+    const langSel = screen.getByTestId('settings-language-select')
+    expect(langSel.textContent).toContain(i18n.t('settings.languageZhCN'))
+    pickLanguage('settings.languageEnUS')
+    expect(langSel.textContent).toContain(i18n.t('settings.languageEnUS'))
   })
 
   test('successful save fires PUT with language=en-US and flips i18n', async () => {
     const calls = mockPutOnce({})
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<AppearanceTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const langSel = screen.getByTestId('settings-language-select') as HTMLSelectElement
-    act(() => {
-      fireEvent.change(langSel, { target: { value: 'en-US' } })
-    })
+    pickLanguage('settings.languageEnUS')
     const saveBtn = screen
       .getAllByRole('button')
       .find((b) => b.textContent && /保存|Save/.test(b.textContent))
@@ -136,10 +146,7 @@ describe('AppearanceTab language select', () => {
     mockPutOnce({ fails: true })
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<AppearanceTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const langSel = screen.getByTestId('settings-language-select') as HTMLSelectElement
-    act(() => {
-      fireEvent.change(langSel, { target: { value: 'en-US' } })
-    })
+    pickLanguage('settings.languageEnUS')
     const saveBtn = screen
       .getAllByRole('button')
       .find((b) => b.textContent && /保存|Save/.test(b.textContent))

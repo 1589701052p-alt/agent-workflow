@@ -8,7 +8,7 @@
 // Accessibility: role=combobox + aria-controls/expanded + role=listbox /
 // option + arrow-key + Home/End + Enter/Space + Esc.
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export interface SelectOption<V extends string> {
@@ -16,6 +16,14 @@ export interface SelectOption<V extends string> {
   label: string
   description?: string
   disabled?: boolean
+  /**
+   * Optional group label. Consecutive options sharing the same non-empty
+   * `group` render under a single non-interactive header — the unified
+   * replacement for the native `<optgroup>` (used by ModelSelect's
+   * provider grouping). Options must already be ordered so same-group
+   * entries are adjacent; the header shows whenever `group` changes.
+   */
+  group?: string
 }
 
 interface Props<V extends string> {
@@ -29,6 +37,9 @@ interface Props<V extends string> {
   className?: string
   /** name attribute on the hidden input so the value lands in `form` submits. */
   name?: string
+  /** Forwarded to the trigger button so callers migrated from a native
+   *  `<select data-testid>` keep the same test anchor. */
+  'data-testid'?: string
   /** Render a custom row body. Default = `option.label`. */
   renderOption?: (opt: SelectOption<V>) => React.ReactNode
   /**
@@ -159,6 +170,7 @@ export function Select<V extends string>(props: Props<V>) {
         aria-controls={popoverId}
         aria-labelledby={props.ariaLabel ? undefined : labelId}
         aria-label={props.ariaLabel}
+        data-testid={props['data-testid']}
         disabled={props.disabled}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onTriggerKey}
@@ -196,35 +208,47 @@ export function Select<V extends string>(props: Props<V>) {
             {props.options.map((opt, i) => {
               const active = i === activeIndex
               const selected = opt.value === props.value
+              // Render a group header whenever the (non-empty) group changes
+              // from the previous option. Index `i` stays the props.options
+              // index so keyboard nav / aria-activedescendant remain aligned.
+              const prevGroup = i > 0 ? props.options[i - 1]?.group : undefined
+              const showHeader =
+                opt.group !== undefined && opt.group !== '' && opt.group !== prevGroup
               return (
-                <li
-                  id={`${popoverId}-opt-${i}`}
-                  key={opt.value}
-                  role="option"
-                  aria-selected={selected}
-                  aria-disabled={opt.disabled || undefined}
-                  className={`select__option ${active ? 'select__option--active' : ''} ${
-                    selected ? 'select__option--selected' : ''
-                  }`.trim()}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  onMouseDown={(e) => {
-                    // mousedown not click — keeps focus from leaving before we close
-                    e.preventDefault()
-                    if (opt.disabled) return
-                    props.onChange(opt.value)
-                    setOpen(false)
-                    triggerRef.current?.focus()
-                  }}
-                >
-                  <span className="select__option-label">
-                    {props.renderOption ? props.renderOption(opt) : opt.label}
-                  </span>
-                  {selected && (
-                    <span className="select__option-check" aria-hidden>
-                      ✓
-                    </span>
+                <Fragment key={opt.value}>
+                  {showHeader && (
+                    <li className="select__group" role="presentation" aria-hidden>
+                      {opt.group}
+                    </li>
                   )}
-                </li>
+                  <li
+                    id={`${popoverId}-opt-${i}`}
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={opt.disabled || undefined}
+                    className={`select__option ${active ? 'select__option--active' : ''} ${
+                      selected ? 'select__option--selected' : ''
+                    }`.trim()}
+                    onMouseEnter={() => setActiveIndex(i)}
+                    onMouseDown={(e) => {
+                      // mousedown not click — keeps focus from leaving before we close
+                      e.preventDefault()
+                      if (opt.disabled) return
+                      props.onChange(opt.value)
+                      setOpen(false)
+                      triggerRef.current?.focus()
+                    }}
+                  >
+                    <span className="select__option-label">
+                      {props.renderOption ? props.renderOption(opt) : opt.label}
+                    </span>
+                    {selected && (
+                      <span className="select__option-check" aria-hidden>
+                        ✓
+                      </span>
+                    )}
+                  </li>
+                </Fragment>
               )
             })}
           </ul>,

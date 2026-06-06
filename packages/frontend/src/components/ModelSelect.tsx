@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import type { OpencodeModel, RuntimeModelsResponse } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { TextInput } from '@/components/Form'
+import { Select, type SelectOption } from '@/components/Select'
 
 export const RUNTIME_MODELS_QUERY_KEY = ['runtime', 'models'] as const
 
@@ -71,41 +72,41 @@ export function ModelSelect({ value, onChange }: Props) {
 
   const selectValue = value === undefined || value === '' ? '' : isCustom ? CUSTOM_OPTION : value
 
+  // Provider grouping moves from native <optgroup> to the shared Select's
+  // `group` field (RFC-036 extension). The leading empty row and the trailing
+  // custom sentinel stay ungrouped so they render without a header.
+  const modelOptions: ReadonlyArray<SelectOption<string>> = [
+    {
+      value: '',
+      label: list.isLoading ? t('settingsForm.modelLoading') : t('settingsForm.modelEmpty'),
+    },
+    ...grouped.flatMap(([provider, models]) =>
+      models.map((m) => ({ value: m.id, label: m.name ?? m.modelID, group: provider })),
+    ),
+    { value: CUSTOM_OPTION, label: t('settingsForm.modelCustom') },
+  ]
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <select
-          className="form-input"
-          value={selectValue}
-          disabled={list.isLoading}
-          onChange={(e) => {
-            const v = e.target.value
-            if (v === '') {
-              onChange(undefined)
-              return
-            }
-            if (v === CUSTOM_OPTION) {
-              onChange(customText === '' ? undefined : customText)
-              return
-            }
-            onChange(v)
-          }}
-          style={{ flex: 1 }}
-        >
-          <option value="">
-            {list.isLoading ? t('settingsForm.modelLoading') : t('settingsForm.modelEmpty')}
-          </option>
-          {grouped.map(([provider, models]) => (
-            <optgroup key={provider} label={provider}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name ?? m.modelID}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-          <option value={CUSTOM_OPTION}>{t('settingsForm.modelCustom')}</option>
-        </select>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Select<string>
+            value={selectValue}
+            disabled={list.isLoading}
+            options={modelOptions}
+            onChange={(v) => {
+              if (v === '') {
+                onChange(undefined)
+                return
+              }
+              if (v === CUSTOM_OPTION) {
+                onChange(customText === '' ? undefined : customText)
+                return
+              }
+              onChange(v)
+            }}
+          />
+        </div>
         <button
           type="button"
           className="btn"

@@ -5,7 +5,7 @@
 // NodeInspector.tsx (input branch) AND syncInputDefs.ts.
 
 import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { NodeInspector } from '../src/components/canvas/NodeInspector'
@@ -41,7 +41,10 @@ function last(onChange: ReturnType<typeof vi.fn>): WorkflowDefinition {
 }
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
 })
 
 describe('input NodeInspector (RFC-004)', () => {
@@ -53,11 +56,17 @@ describe('input NodeInspector (RFC-004)', () => {
     render(<Host initial={def} onChangeSpy={vi.fn()} />)
     // inputKey TextInput by displayed value
     expect(screen.getByDisplayValue('req')).toBeTruthy()
-    // kind <select> — text default option present + 5 kinds (RFC-020 adds 'upload')
-    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
-    const kinds = Array.from(kindSelect.options).map((o) => o.value)
+    // kind dropdown (shared Select) — trigger reflects 'text'; opening lists
+    // the 5 kinds (RFC-020 adds 'upload'). Read the label span only (the
+    // selected row also carries a "✓" check span).
+    const kindTrigger = screen.getByRole('combobox')
+    expect(kindTrigger.textContent).toMatch(/text/)
+    fireEvent.click(kindTrigger)
+    const kindList = document.getElementById(kindTrigger.getAttribute('aria-controls')!)!
+    const kinds = Array.from(kindList.querySelectorAll('[role="option"]')).map(
+      (o) => o.querySelector('.select__option-label')?.textContent ?? '',
+    )
     expect(kinds).toEqual(['text', 'files', 'enum', 'git', 'upload'])
-    expect(kindSelect.value).toBe('text')
     // label TextInput shows 'Need it'
     expect(screen.getByDisplayValue('Need it')).toBeTruthy()
     // required Switch shows checked
@@ -116,8 +125,10 @@ describe('input NodeInspector (RFC-004)', () => {
     })
     const spy = vi.fn()
     render(<Host initial={def} onChangeSpy={spy} />)
-    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
-    fireEvent.change(kindSelect, { target: { value: 'files' } })
+    const kindTrigger = screen.getByRole('combobox')
+    fireEvent.click(kindTrigger)
+    const kindList = document.getElementById(kindTrigger.getAttribute('aria-controls')!)!
+    fireEvent.mouseDown(within(kindList).getByText('files'))
     const next = last(spy)
     expect(next.inputs[0]?.kind).toBe('files')
     expect((next.nodes[0] as Record<string, unknown>).inputKey).toBe('req')

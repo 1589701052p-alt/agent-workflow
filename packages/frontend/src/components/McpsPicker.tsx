@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import type { Mcp } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { ChipsInput } from './ChipsInput'
+import { Select } from './Select'
 
 export const MCPS_QUERY_KEY = ['mcps'] as const
 
@@ -34,35 +35,34 @@ export function McpsPicker({ value, onChange, placeholder }: Props) {
 
   const failed = list.error !== null && list.error !== undefined
 
+  // One-shot "add to list" dropdown: value stays "" so the trigger always
+  // shows the picker label; picking a row appends it to the chips.
+  const pickerLabel = list.isLoading
+    ? t('agentForm.mcpsPickerLoading')
+    : available.length === 0
+      ? t('agentForm.mcpsPickerEmpty')
+      : t('agentForm.mcpsPickerLabel')
+
   return (
     <div>
       {!failed && (
-        <select
-          className="form-input"
-          value=""
-          disabled={list.isLoading || available.length === 0}
-          onChange={(e) => {
-            const name = e.target.value
-            if (!name) return
-            if (!value.includes(name)) onChange([...value, name])
-            e.target.value = ''
-          }}
-          style={{ marginBottom: 6 }}
-          data-testid="mcps-picker-select"
-        >
-          <option value="">
-            {list.isLoading
-              ? t('agentForm.mcpsPickerLoading')
-              : available.length === 0
-                ? t('agentForm.mcpsPickerEmpty')
-                : t('agentForm.mcpsPickerLabel')}
-          </option>
-          {available.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.description ? `${m.name} — ${m.description}` : m.name}
-            </option>
-          ))}
-        </select>
+        <div style={{ marginBottom: 6 }}>
+          <Select<string>
+            value=""
+            placeholder={pickerLabel}
+            ariaLabel={pickerLabel}
+            disabled={list.isLoading || available.length === 0}
+            data-testid="mcps-picker-select"
+            options={available.map((m) => ({
+              value: m.name,
+              label: m.description ? `${m.name} — ${m.description}` : m.name,
+            }))}
+            onChange={(name) => {
+              if (name === '' || value.includes(name)) return
+              onChange([...value, name])
+            }}
+          />
+        </div>
       )}
       <ChipsInput value={value} onChange={onChange} placeholder={placeholder} />
       {failed && (

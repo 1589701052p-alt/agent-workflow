@@ -5,7 +5,7 @@
 //   3. selecting an option calls onChange with the picked name appended
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Agent } from '@agent-workflow/shared'
 import { AgentDependsPicker } from '../src/components/AgentDependsPicker'
@@ -54,42 +54,56 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   vi.restoreAllMocks()
 })
+
+// The picker dropdown is the shared <Select> (RFC-036): role=combobox trigger
+// + portaled role=listbox. Open it once the list query settles.
+async function openPicker() {
+  const trigger = (await waitFor(() => screen.getByRole('combobox'))) as HTMLButtonElement
+  await waitFor(() => expect(trigger.disabled).toBe(false))
+  fireEvent.click(trigger)
+  return screen.getByRole('listbox')
+}
+
+function optionLabels(list: HTMLElement): string[] {
+  return within(list)
+    .getAllByRole('option')
+    .map((o) => o.textContent ?? '')
+}
 
 describe('AgentDependsPicker', () => {
   test('lists every agent not yet selected', async () => {
     mockAgents([fakeAgent('alpha'), fakeAgent('beta'), fakeAgent('gamma')])
     wrap(<AgentDependsPicker value={[]} onChange={() => {}} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBeGreaterThan(1))
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'alpha', 'beta', 'gamma'])
+    const list = await openPicker()
+    expect(optionLabels(list)).toEqual(['alpha', 'beta', 'gamma'])
   })
 
   test('selfName is filtered out of the dropdown (self-ref save-time rejection)', async () => {
     mockAgents([fakeAgent('orchestrator'), fakeAgent('auditor'), fakeAgent('runner')])
     wrap(<AgentDependsPicker value={[]} onChange={() => {}} selfName="orchestrator" />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBe(3))
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'auditor', 'runner'])
+    const list = await openPicker()
+    expect(optionLabels(list)).toEqual(['auditor', 'runner'])
   })
 
   test('already-selected names are filtered out (no duplicates offered)', async () => {
     mockAgents([fakeAgent('a'), fakeAgent('b'), fakeAgent('c')])
     wrap(<AgentDependsPicker value={['b']} onChange={() => {}} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBe(3))
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'a', 'c'])
+    const list = await openPicker()
+    expect(optionLabels(list)).toEqual(['a', 'c'])
   })
 
   test('selecting an option appends it via onChange', async () => {
     mockAgents([fakeAgent('a'), fakeAgent('b')])
     const onChange = vi.fn()
     wrap(<AgentDependsPicker value={['existing']} onChange={onChange} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBeGreaterThan(1))
-    fireEvent.change(select, { target: { value: 'b' } })
+    const list = await openPicker()
+    fireEvent.mouseDown(within(list).getByText('b'))
     expect(onChange).toHaveBeenCalledWith(['existing', 'b'])
   })
 

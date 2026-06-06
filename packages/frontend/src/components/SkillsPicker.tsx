@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import type { Skill } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { ChipsInput } from './ChipsInput'
+import { Select } from './Select'
 
 export const SKILLS_QUERY_KEY = ['skills'] as const
 
@@ -34,36 +35,34 @@ export function SkillsPicker({ value, onChange, placeholder }: Props) {
 
   const failed = list.error !== null && list.error !== undefined
 
+  // The dropdown is a one-shot "add to list" action: value stays "" so the
+  // trigger always shows the picker label; picking a row appends it and the
+  // controlled value="" pins the trigger back to the label on re-render.
+  const pickerLabel = list.isLoading
+    ? t('agentForm.skillsPickerLoading')
+    : available.length === 0
+      ? t('agentForm.skillsPickerEmpty')
+      : t('agentForm.skillsPickerLabel')
+
   return (
     <div>
       {!failed && (
-        <select
-          className="form-input"
-          value=""
-          disabled={list.isLoading || available.length === 0}
-          onChange={(e) => {
-            const name = e.target.value
-            if (!name) return
-            if (!value.includes(name)) onChange([...value, name])
-            // Reset the visible selection so the user can keep picking; the
-            // controlled value="" pins it back on the next render anyway.
-            e.target.value = ''
-          }}
-          style={{ marginBottom: 6 }}
-        >
-          <option value="">
-            {list.isLoading
-              ? t('agentForm.skillsPickerLoading')
-              : available.length === 0
-                ? t('agentForm.skillsPickerEmpty')
-                : t('agentForm.skillsPickerLabel')}
-          </option>
-          {available.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.description ? `${s.name} — ${s.description}` : s.name}
-            </option>
-          ))}
-        </select>
+        <div style={{ marginBottom: 6 }}>
+          <Select<string>
+            value=""
+            placeholder={pickerLabel}
+            ariaLabel={pickerLabel}
+            disabled={list.isLoading || available.length === 0}
+            options={available.map((s) => ({
+              value: s.name,
+              label: s.description ? `${s.name} — ${s.description}` : s.name,
+            }))}
+            onChange={(name) => {
+              if (name === '' || value.includes(name)) return
+              onChange([...value, name])
+            }}
+          />
+        </div>
       )}
       <ChipsInput value={value} onChange={onChange} placeholder={placeholder} />
       {failed && (

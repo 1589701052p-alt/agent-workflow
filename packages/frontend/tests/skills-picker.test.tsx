@@ -1,7 +1,7 @@
 // RFC-002 tests for SkillsPicker.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Skill } from '@agent-workflow/shared'
 import { SkillsPicker } from '../src/components/SkillsPicker'
@@ -42,46 +42,63 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   vi.restoreAllMocks()
 })
+
+// The picker dropdown is the shared <Select> (RFC-036): role=combobox trigger
+// + portaled role=listbox. `openPicker` waits for the list query to settle so
+// the trigger is enabled, then opens it and returns the listbox.
+async function openPicker() {
+  const trigger = (await waitFor(() => screen.getByRole('combobox'))) as HTMLButtonElement
+  await waitFor(() => expect(trigger.disabled).toBe(false))
+  fireEvent.click(trigger)
+  return screen.getByRole('listbox')
+}
+
+function optionLabels(list: HTMLElement): string[] {
+  return within(list)
+    .getAllByRole('option')
+    .map((o) => o.textContent ?? '')
+}
 
 describe('SkillsPicker', () => {
   test('renders dropdown with skills not yet in value', async () => {
     mockSkills([fakeSkill('a'), fakeSkill('b'), fakeSkill('c')])
     wrap(<SkillsPicker value={[]} onChange={() => {}} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBeGreaterThan(1))
-    const optionValues = Array.from(select.options).map((o) => o.value)
-    expect(optionValues).toEqual(['', 'a', 'b', 'c'])
+    const list = await openPicker()
+    // Placeholder no longer lives in the option list (it's the trigger text).
+    expect(optionLabels(list)).toEqual(['a', 'b', 'c'])
   })
 
   test('selecting an option calls onChange with the skill appended', async () => {
     mockSkills([fakeSkill('a'), fakeSkill('b')])
     const onChange = vi.fn()
     wrap(<SkillsPicker value={['existing']} onChange={onChange} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBeGreaterThan(1))
-    fireEvent.change(select, { target: { value: 'b' } })
+    const list = await openPicker()
+    // Select rows commit on mousedown (keeps focus before closing).
+    fireEvent.mouseDown(within(list).getByText('b'))
     expect(onChange).toHaveBeenCalledWith(['existing', 'b'])
   })
 
   test('already-selected skills are filtered out of the dropdown', async () => {
     mockSkills([fakeSkill('a'), fakeSkill('b'), fakeSkill('c')])
     wrap(<SkillsPicker value={['b']} onChange={() => {}} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
-    await waitFor(() => expect(select.options.length).toBe(3))
-    const optionValues = Array.from(select.options).map((o) => o.value)
-    expect(optionValues).toEqual(['', 'a', 'c'])
+    const list = await openPicker()
+    expect(optionLabels(list)).toEqual(['a', 'c'])
   })
 
   test('empty skill list disables the dropdown', async () => {
     mockSkills([])
     wrap(<SkillsPicker value={[]} onChange={() => {}} />)
-    const select = (await waitFor(() => screen.getByRole('combobox'))) as HTMLSelectElement
+    const trigger = (await waitFor(() => screen.getByRole('combobox'))) as HTMLButtonElement
     // wait until loading resolves
-    await waitFor(() => expect(select.disabled).toBe(true))
-    expect(select.options).toHaveLength(1) // only placeholder
+    await waitFor(() => expect(trigger.disabled).toBe(true))
+    // Disabled trigger never opens, so there is no listbox.
+    expect(screen.queryByRole('listbox')).toBeNull()
   })
 
   test('load failure hides dropdown and shows muted error', async () => {

@@ -12,7 +12,8 @@ const SRC = readFileSync(
 
 describe('NodeInspector upload-kind support (RFC-020)', () => {
   test('inputKind dropdown includes "upload"', () => {
-    expect(SRC).toContain('<option value="upload">upload</option>')
+    // RFC-036 migration: native <option> → shared <Select> option object.
+    expect(SRC).toContain("{ value: 'upload', label: 'upload' }")
   })
 
   test('UploadInputFields component is mounted when kind === upload', () => {

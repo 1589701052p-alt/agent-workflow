@@ -29,6 +29,7 @@ import { ChipsInput } from '@/components/ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
 import { ModelSelect } from '@/components/ModelSelect'
 import { KindSelect } from '@/components/KindSelect'
+import { Select } from '@/components/Select'
 import { computePorts } from './WorkflowCanvas'
 import { REVIEW_INPUT_HANDLE_ID, syncEdgeFromFormField } from './connectionSync'
 import { patchInputDef, renameInputKey } from './syncInputDefs'
@@ -198,23 +199,18 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             />
           </Field>
           <Field label={t('inspector.fieldInputKind')} hint={t('inspector.fieldInputKindHint')}>
-            <select
-              className="form-input"
+            <Select<WorkflowInput['kind']>
               value={inputKind}
-              onChange={(e) =>
-                onCommitDef(
-                  patchInputDef(definition, key, {
-                    kind: e.target.value as WorkflowInput['kind'],
-                  }),
-                )
-              }
-            >
-              <option value="text">text</option>
-              <option value="files">files</option>
-              <option value="enum">enum</option>
-              <option value="git">git</option>
-              <option value="upload">upload</option>
-            </select>
+              ariaLabel={t('inspector.fieldInputKind')}
+              onChange={(v) => onCommitDef(patchInputDef(definition, key, { kind: v }))}
+              options={[
+                { value: 'text', label: 'text' },
+                { value: 'files', label: 'files' },
+                { value: 'enum', label: 'enum' },
+                { value: 'git', label: 'git' },
+                { value: 'upload', label: 'upload' },
+              ]}
+            />
           </Field>
           {inputKind === 'upload' && (
             <UploadInputFields
@@ -408,16 +404,17 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             label={t('inspector.fieldExitConditionKind')}
             hint={t('inspector.fieldExitConditionKindHint')}
           >
-            <select
-              className="form-input"
+            <Select<string>
               value={exitKind}
-              onChange={(e) => updateExit({ kind: e.target.value })}
-            >
-              <option value="port-empty">port-empty</option>
-              <option value="port-not-empty">port-not-empty</option>
-              <option value="port-equals">port-equals</option>
-              <option value="port-count-lt">port-count-lt</option>
-            </select>
+              ariaLabel={t('inspector.fieldExitConditionKind')}
+              onChange={(v) => updateExit({ kind: v })}
+              options={[
+                { value: 'port-empty', label: 'port-empty' },
+                { value: 'port-not-empty', label: 'port-not-empty' },
+                { value: 'port-equals', label: 'port-equals' },
+                { value: 'port-count-lt', label: 'port-count-lt' },
+              ]}
+            />
           </Field>
           <Field
             label={t('inspector.fieldExitConditionTarget')}
@@ -436,22 +433,23 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               return (
                 <div className="form-grid form-grid--two">
                   <div>
-                    <select
-                      className={`form-input ${nodeIdInvalid ? 'form-input--invalid' : ''}`}
+                    <Select<string>
+                      className={nodeIdInvalid ? 'form-input--invalid' : undefined}
                       value={exitNodeId}
-                      onChange={(e) => updateExit({ nodeId: e.target.value })}
+                      ariaLabel={t('inspector.loopExitNodeIdSelect')}
+                      onChange={(v) => updateExit({ nodeId: v })}
                       data-testid="loop-exit-node-select"
-                    >
-                      <option value="">{t('inspector.loopExitNodeIdSelect')}</option>
-                      {candidates.map((c) => (
-                        <option key={c.nodeId} value={c.nodeId}>
-                          {c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId}
-                        </option>
-                      ))}
-                      {nodeIdInvalid ? (
-                        <option value={exitNodeId}>{exitNodeId} (missing)</option>
-                      ) : null}
-                    </select>
+                      options={[
+                        { value: '', label: t('inspector.loopExitNodeIdSelect') },
+                        ...candidates.map((c) => ({
+                          value: c.nodeId,
+                          label: c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId,
+                        })),
+                        ...(nodeIdInvalid
+                          ? [{ value: exitNodeId, label: `${exitNodeId} (missing)` }]
+                          : []),
+                      ]}
+                    />
                     {nodeIdInvalid ? (
                       <div className="form-input__error">
                         {t('inspector.loopExitInvalidNodeId', { nodeId: exitNodeId })}
@@ -459,23 +457,21 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                     ) : null}
                   </div>
                   <div>
-                    <select
-                      className={`form-input ${portInvalid ? 'form-input--invalid' : ''}`}
+                    <Select<string>
+                      className={portInvalid ? 'form-input--invalid' : undefined}
                       value={exitPortName}
-                      onChange={(e) => updateExit({ portName: e.target.value })}
+                      ariaLabel={t('inspector.loopExitPortNameSelect')}
+                      onChange={(v) => updateExit({ portName: v })}
                       disabled={exitNodeId.length === 0}
                       data-testid="loop-exit-port-select"
-                    >
-                      <option value="">{t('inspector.loopExitPortNameSelect')}</option>
-                      {portCandidates.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                      {portInvalid ? (
-                        <option value={exitPortName}>{exitPortName} (missing)</option>
-                      ) : null}
-                    </select>
+                      options={[
+                        { value: '', label: t('inspector.loopExitPortNameSelect') },
+                        ...portCandidates.map((p) => ({ value: p, label: p })),
+                        ...(portInvalid
+                          ? [{ value: exitPortName, label: `${exitPortName} (missing)` }]
+                          : []),
+                      ]}
+                    />
                     {portInvalid ? (
                       <div className="form-input__error">
                         {t('inspector.loopExitInvalidPortName', { portName: exitPortName })}
@@ -537,45 +533,44 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                       }}
                       placeholder={t('inspector.outputNamePlaceholder')}
                     />
-                    <select
-                      className={`form-input form-input--mono ${bindNodeInvalid ? 'form-input--invalid' : ''}`}
+                    <Select<string>
+                      className={`form-input--mono${bindNodeInvalid ? ' form-input--invalid' : ''}`}
                       value={b.bind.nodeId}
-                      onChange={(e) => {
+                      ariaLabel={t('inspector.loopExitNodeIdSelect')}
+                      onChange={(v) => {
                         const copy = [...bindings]
-                        copy[i] = { ...b, bind: { ...b.bind, nodeId: e.target.value } }
+                        copy[i] = { ...b, bind: { ...b.bind, nodeId: v } }
                         setBindings(copy)
                       }}
-                    >
-                      <option value="">{t('inspector.loopExitNodeIdSelect')}</option>
-                      {candidates.map((c) => (
-                        <option key={c.nodeId} value={c.nodeId}>
-                          {c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId}
-                        </option>
-                      ))}
-                      {bindNodeInvalid ? (
-                        <option value={b.bind.nodeId}>{b.bind.nodeId} (missing)</option>
-                      ) : null}
-                    </select>
-                    <select
-                      className={`form-input form-input--mono ${bindPortInvalid ? 'form-input--invalid' : ''}`}
+                      options={[
+                        { value: '', label: t('inspector.loopExitNodeIdSelect') },
+                        ...candidates.map((c) => ({
+                          value: c.nodeId,
+                          label: c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId,
+                        })),
+                        ...(bindNodeInvalid
+                          ? [{ value: b.bind.nodeId, label: `${b.bind.nodeId} (missing)` }]
+                          : []),
+                      ]}
+                    />
+                    <Select<string>
+                      className={`form-input--mono${bindPortInvalid ? ' form-input--invalid' : ''}`}
                       value={b.bind.portName}
-                      onChange={(e) => {
+                      ariaLabel={t('inspector.loopExitPortNameSelect')}
+                      onChange={(v) => {
                         const copy = [...bindings]
-                        copy[i] = { ...b, bind: { ...b.bind, portName: e.target.value } }
+                        copy[i] = { ...b, bind: { ...b.bind, portName: v } }
                         setBindings(copy)
                       }}
                       disabled={b.bind.nodeId.length === 0}
-                    >
-                      <option value="">{t('inspector.loopExitPortNameSelect')}</option>
-                      {bindPortCandidates.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                      {bindPortInvalid ? (
-                        <option value={b.bind.portName}>{b.bind.portName} (missing)</option>
-                      ) : null}
-                    </select>
+                      options={[
+                        { value: '', label: t('inspector.loopExitPortNameSelect') },
+                        ...bindPortCandidates.map((p) => ({ value: p, label: p })),
+                        ...(bindPortInvalid
+                          ? [{ value: b.bind.portName, label: `${b.bind.portName} (missing)` }]
+                          : []),
+                      ]}
+                    />
                     <button
                       type="button"
                       className="btn btn--sm"
@@ -845,23 +840,20 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             hint={t('inspector.fieldReviewInputSourceNodeHint')}
             required
           >
-            <select
-              className="form-input"
+            <Select<string>
               value={inputSource.nodeId ?? ''}
-              onChange={(e) =>
+              ariaLabel={t('inspector.fieldReviewInputSourceNode')}
+              onChange={(v) =>
                 patchReviewInputSource({
-                  nodeId: e.target.value,
+                  nodeId: v,
                   portName: inputSource.portName ?? '',
                 })
               }
-            >
-              <option value="">—</option>
-              {upstreamCandidates.map((id) => (
-                <option key={id} value={id}>
-                  {id}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: '—' },
+                ...upstreamCandidates.map((id) => ({ value: id, label: id })),
+              ]}
+            />
           </Field>
           <Field
             label={t('inspector.fieldReviewInputSourcePort')}
@@ -1238,18 +1230,16 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               strategy inspector sections are deleted; agent-single is now the
               only agent node kind. Fan-out work goes through wrapper-fanout. */}
           <Field label={t('inspector.fieldAgent')} required>
-            <select
-              className="form-input"
+            <Select<string>
               value={agentName}
-              onChange={(e) => update({ agentName: e.target.value })}
-            >
-              <option value="">{t('inspector.pickAgent')}</option>
-              {agents.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+              placeholder={t('inspector.pickAgent')}
+              ariaLabel={t('inspector.fieldAgent')}
+              onChange={(v) => update({ agentName: v })}
+              options={[
+                { value: '', label: t('inspector.pickAgent') },
+                ...agents.map((a) => ({ value: a.name, label: a.name })),
+              ]}
+            />
           </Field>
 
           <Field

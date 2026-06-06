@@ -3,7 +3,7 @@
 // WorkflowDefinition with the right node updated.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Agent, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -96,9 +96,24 @@ function lastPatchedNode(onChange: ReturnType<typeof vi.fn>): WorkflowNode {
 }
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   vi.restoreAllMocks()
 })
+
+// The inspector's pickers are the shared <Select> (RFC-036): role=combobox
+// triggers + portaled role=listbox. Find a trigger by the text it displays,
+// open it, and click an option by its label.
+function comboboxShowing(text: RegExp): HTMLElement | undefined {
+  return screen.getAllByRole('combobox').find((c) => text.test(c.textContent ?? ''))
+}
+function pickFromCombobox(trigger: HTMLElement, optionLabel: string | RegExp) {
+  fireEvent.click(trigger)
+  const listbox = screen.getByRole('listbox')
+  fireEvent.mouseDown(within(listbox).getByText(optionLabel))
+}
 
 describe('NodeInspector', () => {
   test('renders nothing when no node is selected', () => {
@@ -244,7 +259,7 @@ describe('NodeInspector', () => {
       exitCondition: { kind: 'port-empty', nodeId: 'a', portName: 'p' },
       outputBindings: [],
     })
-    fireEvent.change(screen.getByDisplayValue('port-empty'), { target: { value: 'port-equals' } })
+    pickFromCombobox(comboboxShowing(/port-empty/)!, 'port-equals')
     const after = lastPatchedNode(onChange) as unknown as {
       exitCondition: { kind: string; nodeId: string; portName: string }
     }
@@ -278,8 +293,8 @@ describe('NodeInspector', () => {
     })
     // First combobox is the agent picker; the model-override dropdown
     // also renders, so we explicitly grab index 0.
-    const select = (screen.getAllByRole('combobox') as HTMLSelectElement[])[0]!
-    fireEvent.change(select, { target: { value: 'coder' } })
+    const trigger = screen.getAllByRole('combobox')[0]!
+    pickFromCombobox(trigger, 'coder')
     const after = lastPatchedNode(onChange) as unknown as { agentName: string }
     expect(after.agentName).toBe('coder')
   })
@@ -304,9 +319,9 @@ describe('NodeInspector', () => {
       agentName: 'coder',
       promptTemplate: '',
     })
-    const modelOption = await screen.findByRole('option', { name: /sonnet/i })
-    const modelSelect = modelOption.closest('select') as HTMLSelectElement
-    expect(modelSelect.value).toBe('anthropic/sonnet')
+    // No override → ModelSelect value falls back to the agent's own model, so
+    // once the list loads the model combobox trigger displays "sonnet".
+    await waitFor(() => expect(comboboxShowing(/sonnet/i)).toBeTruthy())
   })
 
   // Locks in the swap from a free-text model field to a ModelSelect dropdown
@@ -329,9 +344,10 @@ describe('NodeInspector', () => {
       agentName: 'coder',
       promptTemplate: '',
     })
-    const modelOption = await screen.findByRole('option', { name: /sonnet/i })
-    const modelSelect = modelOption.closest('select') as HTMLSelectElement
-    fireEvent.change(modelSelect, { target: { value: 'anthropic/sonnet' } })
+    // Wait for the models to load so the override dropdown becomes a Select
+    // (an unknown value would otherwise fall back to the custom text input).
+    await waitFor(() => expect(comboboxShowing(/sonnet/i)).toBeTruthy())
+    pickFromCombobox(comboboxShowing(/sonnet/i)!, 'sonnet')
     const after = lastPatchedNode(onChange) as unknown as {
       overrides: { model?: string }
     }

@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { Config } from '@agent-workflow/shared'
 import { MemoryTab } from '../src/routes/settings'
 import i18n from '../src/i18n'
@@ -69,39 +69,62 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   clearToken()
   vi.restoreAllMocks()
 })
+
+// The distill-language picker is now the shared <Select> (RFC-036): a
+// role=combobox trigger (carrying the testid) + a portaled role=listbox. Open
+// it and click the option whose rendered label matches the given i18n key.
+function pickLang(labelKey: string) {
+  act(() => {
+    fireEvent.click(screen.getByTestId('settings-memory-distill-lang-select'))
+  })
+  const listbox = screen.getByRole('listbox')
+  act(() => {
+    fireEvent.mouseDown(within(listbox).getByText(i18n.t(labelKey)))
+  })
+}
 
 describe('RFC-050 MemoryTab — distill output language select', () => {
   test('renders three options and reflects current config value', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<MemoryTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, { wrapper: wrap(qc) })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select') as HTMLSelectElement
-    expect(sel.value).toBe('zh-CN')
-    const opts = Array.from(sel.options).map((o) => o.value)
-    expect(opts).toEqual(['', 'en-US', 'zh-CN'])
+    const sel = screen.getByTestId('settings-memory-distill-lang-select')
+    // Trigger reflects the current value's label (was <select>.value).
+    expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangZhCN'))
+    // Open and verify the three options (Default / English / 简体中文).
+    act(() => {
+      fireEvent.click(sel)
+    })
+    const listbox = screen.getByRole('listbox')
+    expect(within(listbox).getAllByRole('option')).toHaveLength(3)
+    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangDefault'))).toBeTruthy()
+    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangEnUS'))).toBeTruthy()
+    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangZhCN'))).toBeTruthy()
   })
 
   test('unset config (undefined) defaults the select to empty (Default)', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<MemoryTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select') as HTMLSelectElement
-    expect(sel.value).toBe('')
+    const sel = screen.getByTestId('settings-memory-distill-lang-select')
+    expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangDefault'))
   })
 
   test('picking zh-CN and saving fires PUT /api/config with the new value', async () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<MemoryTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select') as HTMLSelectElement
-    act(() => {
-      fireEvent.change(sel, { target: { value: 'zh-CN' } })
-    })
-    expect(sel.value).toBe('zh-CN')
+    pickLang('settings.memoryDistillLangZhCN')
+    expect(
+      screen.getByTestId('settings-memory-distill-lang-select').textContent,
+    ).toContain(i18n.t('settings.memoryDistillLangZhCN'))
     const saveBtn = screen
       .getAllByRole('button')
       .find((b) => b.textContent && /保存|Save/.test(b.textContent))
@@ -120,11 +143,7 @@ describe('RFC-050 MemoryTab — distill output language select', () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<MemoryTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, { wrapper: wrap(qc) })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select') as HTMLSelectElement
-    act(() => {
-      fireEvent.change(sel, { target: { value: '' } })
-    })
-    expect(sel.value).toBe('')
+    pickLang('settings.memoryDistillLangDefault')
     const saveBtn = screen
       .getAllByRole('button')
       .find((b) => b.textContent && /保存|Save/.test(b.textContent))

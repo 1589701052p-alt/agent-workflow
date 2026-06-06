@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import type { Plugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { ChipsInput } from './ChipsInput'
+import { Select } from './Select'
 
 export const PLUGINS_QUERY_KEY = ['plugins'] as const
 
@@ -36,36 +37,36 @@ export function PluginsPicker({ value, onChange, placeholder }: Props) {
 
   const failed = list.error !== null && list.error !== undefined
 
+  // One-shot "add to list" dropdown: value stays "" so the trigger always
+  // shows the picker label; picking a row appends it to the chips.
+  const pickerLabel = list.isLoading
+    ? t('agentForm.pluginsPickerLoading')
+    : available.length === 0
+      ? t('agentForm.pluginsPickerEmpty')
+      : t('agentForm.pluginsPickerLabel')
+
   return (
     <div>
       {!failed && (
-        <select
-          className="form-input"
-          value=""
-          disabled={list.isLoading || available.length === 0}
-          onChange={(e) => {
-            const name = e.target.value
-            if (!name) return
-            if (!value.includes(name)) onChange([...value, name])
-            e.target.value = ''
-          }}
-          style={{ marginBottom: 6 }}
-          data-testid="plugins-picker-select"
-        >
-          <option value="">
-            {list.isLoading
-              ? t('agentForm.pluginsPickerLoading')
-              : available.length === 0
-                ? t('agentForm.pluginsPickerEmpty')
-                : t('agentForm.pluginsPickerLabel')}
-          </option>
-          {available.map((p) => (
-            <option key={p.name} value={p.name}>
-              {p.description ? `${p.name} — ${p.description}` : p.name}
-              {p.resolvedVersion !== null ? ` (${p.resolvedVersion})` : ''}
-            </option>
-          ))}
-        </select>
+        <div style={{ marginBottom: 6 }}>
+          <Select<string>
+            value=""
+            placeholder={pickerLabel}
+            ariaLabel={pickerLabel}
+            disabled={list.isLoading || available.length === 0}
+            data-testid="plugins-picker-select"
+            options={available.map((p) => ({
+              value: p.name,
+              label:
+                (p.description ? `${p.name} — ${p.description}` : p.name) +
+                (p.resolvedVersion !== null ? ` (${p.resolvedVersion})` : ''),
+            }))}
+            onChange={(name) => {
+              if (name === '' || value.includes(name)) return
+              onChange([...value, name])
+            }}
+          />
+        </div>
       )}
       <ChipsInput value={value} onChange={onChange} placeholder={placeholder} />
       {failed && (

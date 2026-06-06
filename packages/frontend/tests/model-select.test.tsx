@@ -4,7 +4,7 @@
 // - One render test verifies the failed-list fallback + custom-value branch.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { OpencodeModel, RuntimeModelsResponse } from '@agent-workflow/shared'
 import { groupByProvider, isCustomValue, ModelSelect } from '../src/components/ModelSelect'
@@ -23,7 +23,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
   vi.restoreAllMocks()
 })
 
@@ -96,11 +99,47 @@ describe('ModelSelect render', () => {
     )
     const onChange = vi.fn()
     wrap(<ModelSelect value="future/new-model" onChange={onChange} />)
-    // Wait for list to load.
-    await waitFor(() => screen.getByText(/sonnet/i))
+    // Wait for the list query to resolve. The model options now live in the
+    // shared Select's portaled listbox (only mounted when open), so we can't
+    // assert on an inline <option>; the Refresh button re-enabling is the
+    // observable "models loaded" signal instead.
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: /refresh/i }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    )
     // Custom input should appear pre-filled with the unknown value.
     const customInput = screen.getByDisplayValue('future/new-model')
     fireEvent.change(customInput, { target: { value: 'future/v2' } })
     expect(onChange).toHaveBeenLastCalledWith('future/v2')
+  })
+
+  test('grouped dropdown renders provider headers and selecting a model emits its id', async () => {
+    const payload: RuntimeModelsResponse = {
+      binary: 'opencode',
+      cached: false,
+      models: [
+        { id: 'anthropic/sonnet', provider: 'anthropic', modelID: 'sonnet' },
+        { id: 'openai/gpt', provider: 'openai', modelID: 'gpt' },
+      ],
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const onChange = vi.fn()
+    wrap(<ModelSelect value={undefined} onChange={onChange} />)
+    const trigger = (await waitFor(() => screen.getByRole('combobox'))) as HTMLButtonElement
+    await waitFor(() => expect(trigger.disabled).toBe(false))
+    fireEvent.click(trigger)
+    const list = screen.getByRole('listbox')
+    // Provider names render as non-interactive group headers (was <optgroup>).
+    expect(within(list).getByText('anthropic')).toBeTruthy()
+    expect(within(list).getByText('openai')).toBeTruthy()
+    // Picking a model row emits its canonical "provider/modelID".
+    fireEvent.mouseDown(within(list).getByText('sonnet'))
+    expect(onChange).toHaveBeenCalledWith('anthropic/sonnet')
   })
 })

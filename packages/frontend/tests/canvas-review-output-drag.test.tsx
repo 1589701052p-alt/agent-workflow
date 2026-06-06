@@ -13,7 +13,7 @@
 //
 // Reference: design/RFC-007-canvas-review-output-drag/design.md §8.2.
 
-import { render, fireEvent, screen } from '@testing-library/react'
+import { render, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -29,7 +29,10 @@ import {
 import i18n from '../src/i18n'
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  // Unmount via testing-library first — the Select listbox is portaled to
+  // document.body, so wiping innerHTML before cleanup() races React's
+  // removeChild and crashes happy-dom.
+  cleanup()
 })
 
 function makeReviewDef(inputSource = { nodeId: '', portName: '' }): WorkflowDefinition {
@@ -128,10 +131,12 @@ describe('Review NodeInspector — RFC-007 form ↔ edge sync', () => {
       },
     ]
     render(<Host initialDef={def} selectedNodeId="r" onChangeSpy={spy} />)
-    // The first <select> in the form is the upstream nodeId picker.
-    const selects = document.querySelectorAll('select')
-    const upstream = selects[0]! as HTMLSelectElement
-    fireEvent.change(upstream, { target: { value: '' } })
+    // The upstream nodeId picker is the shared <Select>; clearing = picking
+    // the leading "—" (empty) option from its portaled listbox.
+    const upstream = screen.getByRole('combobox')
+    fireEvent.click(upstream)
+    const list = document.getElementById(upstream.getAttribute('aria-controls')!)!
+    fireEvent.mouseDown(within(list).getByText('—'))
     expect(spy).toHaveBeenCalled()
     const last = spy.mock.calls[spy.mock.calls.length - 1]![0] as WorkflowDefinition
     expect(last.edges).toHaveLength(0)
