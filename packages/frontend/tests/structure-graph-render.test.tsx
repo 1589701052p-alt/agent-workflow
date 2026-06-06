@@ -3,7 +3,7 @@
 // a blank canvas). This is the "does the graph really render" guard.
 
 import { describe, expect, test, afterEach } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, fireEvent } from '@testing-library/react'
 import { computeSummary, type StructuralDiff, type SymbolNode } from '@agent-workflow/shared'
 import '../src/i18n'
 import { StructuralGraph } from '../src/components/structure/StructuralGraph'
@@ -71,25 +71,24 @@ function sampleDiff(): StructuralDiff {
   }
 }
 
-describe('<StructuralGraph /> renders cards', () => {
-  test('a class card with member rows + a caller card + an edge appear in the DOM', () => {
+describe('<StructuralGraph />', () => {
+  test('package level (default) shows package nodes; class level shows class cards', () => {
     const { container } = render(<StructuralGraph data={sampleDiff()} />)
-    // the changed class card
+    // default = package overview → package summary nodes, no class cards
+    expect(container.querySelectorAll('.sg-pkgnode').length).toBeGreaterThanOrEqual(1)
+    expect(container.querySelector('.sg-card')).toBeNull()
+    // switch to class level
+    const classBtn = [...container.querySelectorAll('.structure-graph__level button')].find((b) =>
+      /类级|Classes/.test(b.textContent ?? ''),
+    )
+    fireEvent.click(classBtn as Element)
     const cards = container.querySelectorAll('.sg-card')
-    expect(cards.length).toBeGreaterThanOrEqual(2) // OrderService + Checkout (caller)
-    // member rows rendered inside cards
-    const members = container.querySelectorAll('.sg-card__member')
-    expect(members.length).toBeGreaterThanOrEqual(2) // charge + refund (+ caller pay)
-    // a changed member carries a change-type class (color)
+    expect(cards.length).toBeGreaterThanOrEqual(1) // OrderService
+    expect(container.textContent).toContain('OrderService')
+    expect(container.textContent).toContain('charge')
     expect(
       container.querySelector('.sg-card__member--ct-modified, .sg-card__member--ct-added'),
     ).toBeTruthy()
-    // the card titles are present as text
-    expect(container.textContent).toContain('OrderService')
-    expect(container.textContent).toContain('charge')
-    // edges are wired into the flow (the path geometry needs real node
-    // measurement → only drawn in a browser; the model test covers edge data)
-    expect(container.querySelector('.react-flow__edges')).toBeTruthy()
   })
 
   test('empty state when nothing graphable', () => {

@@ -1,8 +1,9 @@
-// RFC-083 PR-F/PR-G — read-only class-collaboration diagram (xyflow), laid out
-// top→down by dagre. Cards have variable size (member rows), so we use the
-// controlled-node pattern: render → let xyflow MEASURE each card → re-run dagre
-// with the real sizes → fitView. Without this, edges connect to estimated node
-// boxes and visibly float off the cards.
+// RFC-083 PR-F/PR-G — read-only structural diagram (xyflow). Two levels (the
+// user toggles): PACKAGE overview (one box per package + aggregated edges — the
+// readable architecture view, default) and CLASS detail (class cards grouped in
+// package boxes). Edge kinds (inherits / references / calls) are filterable;
+// 'calls' is off by default since it's the noisiest. Class cards have variable
+// size, so the class flow measures them then re-runs dagre (else edges float).
 
 import {
   ReactFlow,
@@ -21,16 +22,27 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { StructuralDiff } from '@agent-workflow/shared'
 import {
   buildStructureGraph,
+  aggregatePackageGraph,
   layoutGraph,
+  type EdgeKind,
   type GraphCard,
+  type PkgGraphNode,
   type StructureGraph,
+  type PackageGraph,
 } from '@/lib/structureGraph'
 import { badgeSymbol } from '@/lib/structureView'
+
+const EDGE_KEYS: EdgeKind[] = ['inherits', 'references', 'calls']
+const EDGE_LABEL: Record<EdgeKind, string> = {
+  inherits: 'tasks.structGraphEdgeInherits',
+  references: 'tasks.structGraphEdgeReferences',
+  calls: 'tasks.structGraphEdgeCalls',
+}
 
 function CardNode({ data }: NodeProps) {
   const card = data.card as GraphCard
@@ -82,12 +94,72 @@ function PkgNode({ data }: NodeProps) {
   )
 }
 
-const NODE_TYPES = { card: CardNode, pkg: PkgNode }
+function PkgSummaryNode({ data }: NodeProps) {
+  const { t } = useTranslation()
+  const n = data.node as PkgGraphNode
+  return (
+    <div className="sg-pkgnode">
+      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <span className="sg-pkgnode__name" title={n.id}>
+        {n.label}
+      </span>
+      <span className="sg-pkgnode__count">
+        {t('tasks.structGraphPkgClasses', { n: n.classCount })}
+      </span>
+      <Handle type="source" position={Position.Bottom} isConnectable={false} />
+    </div>
+  )
+}
 
-function GraphFlow({ graph }: { graph: StructureGraph }) {
+const CLASS_NODE_TYPES = { card: CardNode, pkg: PkgNode }
+const PKG_NODE_TYPES = { pkgnode: PkgSummaryNode }
+
+function edgeFor(e: { id: string; source: string; target: string; kind: EdgeKind }): Edge {
+  return {
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    className: `sg-edge--${e.kind}`,
+    markerEnd: { type: MarkerType.ArrowClosed },
+  }
+}
+
+/** PACKAGE overview — fixed-size nodes, so no measure/re-layout dance needed. */
+function PackageFlow({ graph }: { graph: PackageGraph }) {
+  const nodes: Node[] = graph.nodes.map((n) => ({
+    id: n.id,
+    type: 'pkgnode',
+    position: { x: n.x, y: n.y },
+    data: { node: n },
+    draggable: false,
+    connectable: false,
+    width: n.w,
+    height: n.h,
+  }))
+  const edges = graph.edges.map(edgeFor)
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={PKG_NODE_TYPES}
+      nodesDraggable={false}
+      nodesConnectable={false}
+      elementsSelectable={false}
+      fitView
+      fitViewOptions={{ maxZoom: 1.2, minZoom: 0.3 }}
+      minZoom={0.15}
+      proOptions={{ hideAttribution: true }}
+    >
+      <Background />
+      <Controls showInteractive={false} />
+    </ReactFlow>
+  )
+}
+
+/** CLASS detail — cards have variable size, so measure then re-layout. */
+function ClassFlow({ graph }: { graph: StructureGraph }) {
   const initialNodes = useMemo<Node[]>(
     () => [
-      // package containers first / lowest z so the cards sit on top of them
       ...graph.packages.map((p) => ({
         id: p.id,
         type: 'pkg',
@@ -111,31 +183,18 @@ function GraphFlow({ graph }: { graph: StructureGraph }) {
     ],
     [graph],
   )
-  const initialEdges = useMemo<Edge[]>(
-    () =>
-      graph.edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        className: `sg-edge--${e.kind}`,
-        markerEnd: { type: MarkerType.ArrowClosed },
-      })),
-    [graph],
-  )
+  const initialEdges = useMemo<Edge[]>(() => graph.edges.map(edgeFor), [graph])
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, , onEdgesChange] = useEdgesState(initialEdges)
   const initialized = useNodesInitialized()
   const { fitView } = useReactFlow()
   const laidOut = useRef(false)
 
-  // new data → reset to estimated layout and re-measure
   useEffect(() => {
     laidOut.current = false
     setNodes(initialNodes)
   }, [initialNodes, setNodes])
 
-  // once xyflow has measured every card, re-run dagre with the REAL sizes so the
-  // hierarchy spacing is correct and edges land on the actual card edges.
   useEffect(() => {
     if (!initialized || laidOut.current) return
     laidOut.current = true
@@ -167,7 +226,7 @@ function GraphFlow({ graph }: { graph: StructureGraph }) {
       edges={edges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
-      nodeTypes={NODE_TYPES}
+      nodeTypes={CLASS_NODE_TYPES}
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
@@ -184,47 +243,79 @@ function GraphFlow({ graph }: { graph: StructureGraph }) {
 
 export function StructuralGraph({ data }: { data: StructuralDiff }) {
   const { t } = useTranslation()
-  const graph = useMemo(() => buildStructureGraph(data), [data])
-  if (graph.cards.length === 0) {
+  const [level, setLevel] = useState<'package' | 'class'>('package')
+  const [edgeKinds, setEdgeKinds] = useState<Set<EdgeKind>>(
+    () => new Set<EdgeKind>(['inherits', 'references']),
+  )
+  const classGraph = useMemo(() => buildStructureGraph(data, edgeKinds), [data, edgeKinds])
+  const pkgGraph = useMemo(() => aggregatePackageGraph(classGraph), [classGraph])
+  if (classGraph.cards.length === 0) {
     return <div className="muted structure-graph__empty">{t('tasks.structGraphEmpty')}</div>
   }
+  const toggleKind = (k: EdgeKind): void =>
+    setEdgeKinds((s) => {
+      const n = new Set(s)
+      if (n.has(k)) n.delete(k)
+      else n.add(k)
+      return n
+    })
   return (
     <div className="structure-graph-wrap">
-      <div className="structure-graph__legend">
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__swatch structure-graph__swatch--ct-added" />
-          {t('tasks.structGraphLegendAdded')}
-        </span>
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__swatch structure-graph__swatch--ct-modified" />
-          {t('tasks.structGraphLegendModified')}
-        </span>
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__swatch structure-graph__swatch--ct-removed" />
-          {t('tasks.structGraphLegendRemoved')}
-        </span>
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__swatch structure-graph__swatch--caller" />
-          {t('tasks.structGraphLegendCaller')}
-        </span>
+      <div className="structure-graph__controls">
+        <div
+          className="segmented structure-graph__level"
+          role="radiogroup"
+          aria-label={t('tasks.structGraphLevelLabel')}
+        >
+          {(['package', 'class'] as const).map((lv) => (
+            <button
+              key={lv}
+              type="button"
+              role="radio"
+              aria-checked={level === lv}
+              className={`segmented__option ${level === lv ? 'segmented__option--active' : ''}`}
+              onClick={() => setLevel(lv)}
+            >
+              {lv === 'package'
+                ? t('tasks.structGraphLevelPackage')
+                : t('tasks.structGraphLevelClass')}
+            </button>
+          ))}
+        </div>
         <span className="structure-graph__legend-sep" aria-hidden="true" />
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__edge-key structure-graph__edge-key--inherits" />
-          {t('tasks.structGraphEdgeInherits')}
-        </span>
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__edge-key structure-graph__edge-key--references" />
-          {t('tasks.structGraphEdgeReferences')}
-        </span>
-        <span className="structure-graph__legend-item">
-          <span className="structure-graph__edge-key structure-graph__edge-key--calls" />
-          {t('tasks.structGraphEdgeCalls')}
-        </span>
+        {EDGE_KEYS.map((k) => (
+          <label key={k} className="structure-graph__edge-toggle">
+            <input type="checkbox" checked={edgeKinds.has(k)} onChange={() => toggleKind(k)} />
+            <span className={`structure-graph__edge-key structure-graph__edge-key--${k}`} />
+            {t(EDGE_LABEL[k])}
+          </label>
+        ))}
+        {level === 'class' && (
+          <>
+            <span className="structure-graph__legend-sep" aria-hidden="true" />
+            <span className="structure-graph__legend-item">
+              <span className="structure-graph__swatch structure-graph__swatch--ct-added" />
+              {t('tasks.structGraphLegendAdded')}
+            </span>
+            <span className="structure-graph__legend-item">
+              <span className="structure-graph__swatch structure-graph__swatch--ct-modified" />
+              {t('tasks.structGraphLegendModified')}
+            </span>
+            <span className="structure-graph__legend-item">
+              <span className="structure-graph__swatch structure-graph__swatch--ct-removed" />
+              {t('tasks.structGraphLegendRemoved')}
+            </span>
+          </>
+        )}
         <span className="structure-graph__legend-hint">{t('tasks.structGraphLegendHint')}</span>
       </div>
       <div className="structure-graph" data-testid="structure-graph">
-        <ReactFlowProvider>
-          <GraphFlow graph={graph} />
+        <ReactFlowProvider key={level}>
+          {level === 'package' ? (
+            <PackageFlow graph={pkgGraph} />
+          ) : (
+            <ClassFlow graph={classGraph} />
+          )}
         </ReactFlowProvider>
       </div>
     </div>

@@ -76,6 +76,20 @@ export interface StructureGraph {
   edges: GraphCardEdge[]
   packages: GraphPackage[]
 }
+/** A node in the PACKAGE-level overview: one box per package. */
+export interface PkgGraphNode {
+  id: string
+  label: string
+  classCount: number
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export interface PackageGraph {
+  nodes: PkgGraphNode[]
+  edges: GraphCardEdge[]
+}
 
 const CARD_W = 240
 const HEADER_H = 34
@@ -171,7 +185,59 @@ export function layoutGraph(
   }
 }
 
-export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
+export const ALL_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set(['inherits', 'references', 'calls'])
+
+const PKG_NODE_W = 200
+const PKG_NODE_H = 52
+
+/** Collapse the class graph to a PACKAGE-level overview: one node per package
+ *  (with its changed-class count) + aggregated inter-package edges (strongest
+ *  kind per pair). Far fewer nodes/edges → readable architecture. */
+export function aggregatePackageGraph(graph: StructureGraph): PackageGraph {
+  const cardPkg = new Map(graph.cards.map((c) => [c.id, c.pkg]))
+  const classCount = new Map<string, number>()
+  for (const c of graph.cards) {
+    classCount.set(c.pkg, (classCount.get(c.pkg) ?? 0) + (c.isChanged ? 1 : 0))
+  }
+  const edgeMap = new Map<string, GraphCardEdge>()
+  for (const e of graph.edges) {
+    const a = cardPkg.get(e.source)
+    const b = cardPkg.get(e.target)
+    if (a === undefined || b === undefined || a === b) continue
+    const id = `${a}=>${b}`
+    const ex = edgeMap.get(id)
+    if (ex === undefined || EDGE_RANK[e.kind] > EDGE_RANK[ex.kind]) {
+      edgeMap.set(id, { id, source: a, target: b, kind: e.kind })
+    }
+  }
+  const nodes: PkgGraphNode[] = [...classCount].map(([id, n]) => ({
+    id,
+    label: packageLabel(id),
+    classCount: n,
+    x: 0,
+    y: 0,
+    w: PKG_NODE_W,
+    h: PKG_NODE_H,
+  }))
+  const edges = [...edgeMap.values()]
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: 'TB', nodesep: 44, ranksep: 64, marginx: 16, marginy: 16 })
+  g.setDefaultEdgeLabel(() => ({}))
+  for (const n of nodes) g.setNode(n.id, { width: n.w, height: n.h })
+  for (const e of edges) g.setEdge(e.source, e.target)
+  dagre.layout(g)
+  for (const n of nodes) {
+    const d = g.node(n.id)
+    n.x = d.x - n.w / 2
+    n.y = d.y - n.h / 2
+  }
+  return { nodes, edges }
+}
+
+export function buildStructureGraph(
+  diff: StructuralDiff,
+  edgeKinds: ReadonlySet<EdgeKind> = ALL_EDGE_KINDS,
+): StructureGraph {
   const cards = new Map<string, GraphCard>()
   const ensureCard = (key: string, title: string, file: string, kind: CardKind): GraphCard => {
     let c = cards.get(key)
@@ -237,46 +303,48 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
     }
   }
   // class-level relationships (the architecture); guard for older API responses
-  for (const e of diff.classEdges ?? []) addEdge(e.from, e.to, e.kind)
-  // method-level call edges + caller cards (from impact)
-  for (const item of diff.impact) {
-    const targetCardId = changedSymbolCard.get(item.changedSymbolId)
-    if (targetCardId === undefined) continue
-    for (const caller of item.callers) {
-      let callerKey: string
-      let callerTitle: string
-      let callerFile: string
-      let callerKind: CardKind
-      let callerLabel: string | null
-      if (caller.symbolId !== undefined) {
-        const file = fileFromId(caller.symbolId)
-        const qn = qnFromId(caller.symbolId)
-        const c = memberContainer(file, qn)
-        callerKey = c.key
-        callerTitle = c.title
-        callerFile = file
-        callerKind = c.kind
-        callerLabel = leafOf(qn)
-      } else {
-        callerKey = `${caller.filePath}::<file>`
-        callerTitle = fileBase(caller.filePath)
-        callerFile = caller.filePath
-        callerKind = 'file'
-        callerLabel = null
+  for (const e of diff.classEdges ?? []) if (edgeKinds.has(e.kind)) addEdge(e.from, e.to, e.kind)
+  // method-level call edges + caller cards (from impact) — only when 'calls' is on,
+  // so filtering it out also drops the otherwise-orphaned caller cards.
+  if (edgeKinds.has('calls'))
+    for (const item of diff.impact) {
+      const targetCardId = changedSymbolCard.get(item.changedSymbolId)
+      if (targetCardId === undefined) continue
+      for (const caller of item.callers) {
+        let callerKey: string
+        let callerTitle: string
+        let callerFile: string
+        let callerKind: CardKind
+        let callerLabel: string | null
+        if (caller.symbolId !== undefined) {
+          const file = fileFromId(caller.symbolId)
+          const qn = qnFromId(caller.symbolId)
+          const c = memberContainer(file, qn)
+          callerKey = c.key
+          callerTitle = c.title
+          callerFile = file
+          callerKind = c.kind
+          callerLabel = leafOf(qn)
+        } else {
+          callerKey = `${caller.filePath}::<file>`
+          callerTitle = fileBase(caller.filePath)
+          callerFile = caller.filePath
+          callerKind = 'file'
+          callerLabel = null
+        }
+        if (callerKey === targetCardId) continue
+        const callerCard = ensureCard(callerKey, callerTitle, callerFile, callerKind)
+        if (callerLabel !== null && !callerCard.members.some((m) => m.label === callerLabel)) {
+          callerCard.members.push({
+            id: `${callerKey}::${callerLabel}`,
+            label: callerLabel,
+            kind: 'method',
+            role: 'caller',
+          })
+        }
+        addEdge(callerKey, targetCardId, 'calls')
       }
-      if (callerKey === targetCardId) continue
-      const callerCard = ensureCard(callerKey, callerTitle, callerFile, callerKind)
-      if (callerLabel !== null && !callerCard.members.some((m) => m.label === callerLabel)) {
-        callerCard.members.push({
-          id: `${callerKey}::${callerLabel}`,
-          label: callerLabel,
-          kind: 'method',
-          role: 'caller',
-        })
-      }
-      addEdge(callerKey, targetCardId, 'calls')
     }
-  }
 
   const list = [...cards.values()]
   const edges = [...edgeMap.values()]
