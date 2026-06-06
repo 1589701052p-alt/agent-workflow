@@ -42,6 +42,7 @@ const GO = `
 
 const TYPESCRIPT = `
 (class_declaration name: (_) @name) @def.class
+(class !name) @def.class
 (interface_declaration name: (_) @name) @def.interface
 (enum_declaration name: (_) @name) @def.enum
 (method_definition name: (property_identifier) @name) @def.method
@@ -53,6 +54,7 @@ const TYPESCRIPT = `
 
 const JAVASCRIPT = `
 (class_declaration name: (identifier) @name) @def.class
+(class !name) @def.class
 (method_definition name: (property_identifier) @name) @def.method
 (function_declaration name: (identifier) @name) @def.function
 (field_definition property: (property_identifier) @name) @def.field
@@ -64,6 +66,7 @@ const JAVASCRIPT = `
 
 const JAVA = `
 (class_declaration name: (identifier) @name) @def.class
+(object_creation_expression type: (_) @name (class_body)) @def.class
 (interface_declaration name: (identifier) @name) @def.interface
 (enum_declaration name: (identifier) @name) @def.enum
 (method_declaration name: (identifier) @name) @def.method

@@ -90,6 +90,12 @@ export const symbolNodeSchema = z.object({
   confidence: confidenceSchema.default('extracted'),
   /** True when produced by a best-effort grammar (C++/Scala baseline). */
   degraded: z.boolean().optional(),
+  /** RFC-086 — true for an anonymous type with no name of its own: a Java
+   *  anonymous class (`new TimerTask(){…}`), a JS/TS anonymous `class`
+   *  expression. `name` then holds its base/super type (e.g. `TimerTask`), or ''
+   *  when even that can't be resolved (UI shows `«anonymous»`). `kind` stays
+   *  'class' so it groups + lays out like any other container. */
+  anonymous: z.boolean().optional(),
 })
 export type SymbolNode = z.infer<typeof symbolNodeSchema>
 
@@ -281,6 +287,28 @@ export const classEdgeSchema = z.object({
 })
 export type ClassEdge = z.infer<typeof classEdgeSchema>
 
+// RFC-085 — method call chain. The forward call graph is computed LAZILY (one
+// level per request, see GET /call-targets), not precomputed on the diff. A
+// CallTarget is one direct callee (method or constructor) of a method.
+export const callResolutionSchema = z.enum(['resolved', 'external', 'unresolved'])
+export type CallResolution = z.infer<typeof callResolutionSchema>
+
+export const callTargetSchema = z.object({
+  /** stable ref of the callee `${filePath}#${qualifiedName}` — feeds the next
+   *  expand. Present for 'resolved'; absent for 'external'/'unresolved'. */
+  ref: z.string().optional(),
+  /** display: the resolved signature, or the source-literal call (`factory.get().x`). */
+  label: z.string(),
+  kind: z.enum(['method', 'constructor']),
+  /** source-order index within the caller body — drives child order + sequence. */
+  order: z.number().int().nonnegative(),
+  resolution: callResolutionSchema,
+  /** for resolved/external: the callee's owner class card id (`${file}::${ClassQn}`),
+   *  used as the sequence-diagram lifeline. */
+  ownerClass: z.string().optional(),
+})
+export type CallTarget = z.infer<typeof callTargetSchema>
+
 export const structuralDiffSchema = z.object({
   scope: structuralScopeSchema,
   taskId: z.string(),
@@ -300,6 +328,11 @@ export const structuralDiffSchema = z.object({
    *  (constructs / holds a field of / statically uses). from/to are
    *  `${filePath}::${qualifiedName}` (= the graph's card ids). */
   classEdges: z.array(classEdgeSchema).default([]),
+  /** RFC-085 — true when there is at least one CHANGED method that can serve as
+   *  a call-chain root (enables the "调用链" entry). The chain itself is fetched
+   *  lazily per method via GET /call-targets, not embedded here. Optional so older
+   *  responses + non-task scopes parse; the UI treats undefined as false. */
+  callChainAvailable: z.boolean().optional(),
   summary: structuralDiffSummarySchema,
 })
 export type StructuralDiff = z.infer<typeof structuralDiffSchema>

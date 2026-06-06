@@ -110,6 +110,9 @@ export interface GraphCard {
   /** package = the file's directory; cards in the same package are grouped. */
   pkg: string
   kind: CardKind
+  /** RFC-086 — an anonymous type (Java anon class / JS-TS anon class expr); the
+   *  title already reads `«anonymous» <base>`, this flags it for badge styling. */
+  anonymous?: boolean
   changeType?: ChangeType
   isChanged: boolean
   members: GraphMember[]
@@ -195,16 +198,37 @@ function leafOf(qualifiedName: string): string {
   const idx = qualifiedName.lastIndexOf('.')
   return idx >= 0 ? qualifiedName.slice(idx + 1) : qualifiedName
 }
+/** Drop the last dotted segment (`A.b.c` → `A.b`); '' when there is none. */
+function stripLeaf(qualifiedName: string): string {
+  const idx = qualifiedName.lastIndexOf('.')
+  return idx > 0 ? qualifiedName.slice(0, idx) : ''
+}
+
+/** RFC-086 — resolve a member's owning CARD from its qualifiedName using the
+ *  diff's actual symbol KINDS (`qnKind`), not a blind "everything before the
+ *  last dot is a class" string split. A prefix that is itself a known member
+ *  (method/function/constructor/field …) can't be a class container — so we walk
+ *  UP past it. This stops a method-local definition (an anonymous class's
+ *  `run()`, a nested function/closure) from minting a phantom "class" card named
+ *  after the enclosing callable (e.g. `GameFrame.setupGameTimer`). A real inner
+ *  class (`Outer.Inner`) is a CONTAINER kind, so it is NOT skipped. Falls back to
+ *  the file card when no class container remains. Language-agnostic. */
 function memberContainer(
   filePath: string,
   qualifiedName: string,
+  qnKind: ReadonlyMap<string, SymbolKind>,
 ): { key: string; title: string; kind: CardKind } {
-  const idx = qualifiedName.lastIndexOf('.')
-  if (idx > 0) {
-    const container = qualifiedName.slice(0, idx)
-    return { key: `${filePath}::${container}`, title: container, kind: 'class' }
+  let container = stripLeaf(qualifiedName)
+  while (container !== '') {
+    const k = qnKind.get(`${filePath}::${container}`)
+    if (k !== undefined && MEMBER_KINDS.has(k)) container = stripLeaf(container)
+    else break
   }
-  return { key: `${filePath}::<file>`, title: fileBase(filePath), kind: 'file' }
+  if (container === '')
+    return { key: `${filePath}::<file>`, title: fileBase(filePath), kind: 'file' }
+  const k = qnKind.get(`${filePath}::${container}`)
+  const kind: CardKind = k !== undefined && CONTAINER_KINDS.has(k) ? k : 'class'
+  return { key: `${filePath}::${container}`, title: container, kind }
 }
 
 function cardHeight(memberCount: number): number {
@@ -341,6 +365,12 @@ export function relatedMembers(
   return ids
 }
 
+/** RFC-086 — card title for an anonymous type: its base type in guillemets
+ *  (`«anonymous» TimerTask`), or bare `«anonymous»` when the base is unknown. */
+export function anonymousCardTitle(baseName: string): string {
+  return baseName.length > 0 ? `«anonymous» ${baseName}` : '«anonymous»'
+}
+
 export function buildStructureGraph(
   diff: StructuralDiff,
   edgeKinds: ReadonlySet<EdgeKind> = ALL_EDGE_KINDS,
@@ -367,6 +397,16 @@ export function buildStructureGraph(
     return c
   }
 
+  // RFC-086 — map every changed symbol's qualifiedName → kind (per file), so
+  // memberContainer can tell a real class container from a method-local scope.
+  const qnKind = new Map<string, SymbolKind>()
+  for (const f of diff.files) {
+    for (const ch of f.changes) {
+      const sym = ch.after ?? ch.before
+      if (sym !== undefined) qnKind.set(`${sym.filePath}::${sym.qualifiedName}`, sym.kind)
+    }
+  }
+
   // 1) changed symbols → cards + changed member rows.
   const changedSymbolCard = new Map<string, string>()
   for (const f of diff.files) {
@@ -374,17 +414,24 @@ export function buildStructureGraph(
       const sym = ch.after ?? ch.before
       if (sym === undefined) continue
       if (CONTAINER_KINDS.has(sym.kind)) {
+        const title = sym.anonymous === true ? anonymousCardTitle(sym.name) : sym.qualifiedName
         const card = ensureCard(
           `${sym.filePath}::${sym.qualifiedName}`,
-          sym.qualifiedName,
+          title,
           sym.filePath,
           sym.kind,
         )
+        // a container's own symbol is authoritative over a member row that may
+        // have created the card first — override title/kind (esp. the «anonymous»
+        // label, whose qualifiedName is the meaningless `$anon<line>` synthetic).
+        card.title = title
+        card.kind = sym.kind
+        if (sym.anonymous === true) card.anonymous = true
         card.changeType = ch.changeType
         card.isChanged = true
         changedSymbolCard.set(sym.id, card.id)
       } else if (MEMBER_KINDS.has(sym.kind)) {
-        const c = memberContainer(sym.filePath, sym.qualifiedName)
+        const c = memberContainer(sym.filePath, sym.qualifiedName, qnKind)
         const card = ensureCard(c.key, c.title, sym.filePath, c.kind)
         card.isChanged = true
         card.members.push({
@@ -455,7 +502,7 @@ export function buildStructureGraph(
       if (caller.symbolId !== undefined) {
         const file = fileFromId(caller.symbolId)
         const qn = qnFromId(caller.symbolId)
-        const c = memberContainer(file, qn)
+        const c = memberContainer(file, qn, qnKind)
         callerKey = c.key
         callerTitle = c.title
         callerFile = file

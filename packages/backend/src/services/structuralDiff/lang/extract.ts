@@ -46,6 +46,35 @@ function stripQuotes(s: string): string {
   return s.replace(/^['"`]|['"`]$/g, '').trim()
 }
 
+/** RFC-086 — anonymous type nodes that have no name of their own: a Java
+ *  anonymous class (`new T(){…}` = object_creation_expression carrying a
+ *  class_body) and a JS/TS anonymous `class` expression. (A named class
+ *  expression has a `name` field; a class *declaration* is a different node.) */
+function isAnonymousTypeNode(node: TsNode): boolean {
+  if (node.type === 'object_creation_expression') return true
+  if (node.type === 'class') return node.childForFieldName('name') === null
+  return false
+}
+
+/** Base/super type LEAF of an anonymous type: `java.util.TimerTask<X>` →
+ *  `TimerTask`. Java: the `@name` capture is the created type. JS/TS anon class
+ *  expression: the `extends` clause value. '' when there is none (UI then shows
+ *  `«anonymous»`). */
+function anonBaseLeaf(node: TsNode, nameNode: TsNode | null): string {
+  let text = nameNode !== null ? nameNode.text : ''
+  if (nameNode === null) {
+    const heritage = node.children.find((c) => c.type === 'class_heritage')
+    const ext = heritage?.children.find((c) => c.type === 'extends_clause')
+    text = ext?.childForFieldName('value')?.text ?? ''
+  }
+  text = text.trim()
+  const lt = text.indexOf('<')
+  if (lt >= 0) text = text.slice(0, lt) // strip generics
+  const dot = text.lastIndexOf('.')
+  if (dot >= 0) text = text.slice(dot + 1) // strip package/qualifier
+  return text.trim()
+}
+
 interface RawDef {
   node: TsNode
   nameNode: TsNode | null
@@ -136,7 +165,12 @@ function buildSymbols(
       const recv = cfg.receiverPrefix(r.node)
       if (recv !== null && recv !== '') prefix = `${recv}.`
     }
-    const qn = prefix + leafName(r)
+    // Anonymous types have no name of their own → a stable per-line synthetic
+    // leaf (`$anon<line>`), so the qualifiedName (and thus the card key) stays
+    // unique even with several anonymous classes in one method. The DISPLAY name
+    // (base type) is computed separately in pass 3.
+    const leaf = isAnonymousTypeNode(r.node) ? `$anon${r.node.startPosition.row + 1}` : leafName(r)
+    const qn = prefix + leaf
     qnameCache.set(r, qn)
     return qn
   }
@@ -167,8 +201,11 @@ function buildSymbols(
   // class-like name → id, for receiver-based parent linking (Go methods).
   const classLikeIdByName = new Map<string, string>()
   for (const r of raws) {
-    const name = leafName(r)
-    if (name === '') continue
+    const isAnon = isAnonymousTypeNode(r.node)
+    const name = isAnon ? anonBaseLeaf(r.node, r.nameNode) : leafName(r)
+    // keep anonymous nodes even with an unresolved base type (name === '');
+    // every other def with no name is noise and skipped.
+    if (name === '' && !isAnon) continue
     const kind = finalKind(r)
     const qn = qualifiedName(r)
     const id = `${opts.filePath}#${qn}:${kind}:${r.node.startPosition.row + 1}`
@@ -220,6 +257,7 @@ function buildSymbols(
       parentId,
       confidence: degraded ? 'inferred' : 'extracted',
       degraded: degraded ? true : undefined,
+      anonymous: isAnonymousTypeNode(node) ? true : undefined,
     })
   }
   return out

@@ -58,8 +58,11 @@ function CardNode({ data }: NodeProps) {
   const hlMembers = useContext(HighlightedMembers)
   const ctClass = card.changeType !== undefined ? ` sg-card--ct-${card.changeType}` : ''
   const changedClass = card.isChanged ? ' sg-card--changed' : ' sg-card--caller'
+  // RFC-086 — anonymous types (title already reads `«anonymous» <base>`) get a
+  // muted/italic treatment so they read as synthetic, not a declared class.
+  const anonClass = card.anonymous === true ? ' sg-card--anonymous' : ''
   return (
-    <div className={`sg-card${changedClass}${ctClass}`}>
+    <div className={`sg-card${changedClass}${ctClass}${anonClass}`}>
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="sg-card__header">
         <span className="sg-card__kind">{card.kind}</span>

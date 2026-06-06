@@ -480,3 +480,122 @@ describe('relatedMembers (highlight ONLY the methods an active edge involves)', 
     expect(relatedMembers(edges, new Set()).size).toBe(0)
   })
 })
+
+// Locks the RFC-086 fix: a method-local definition (an anonymous class's method,
+// a nested function/closure) must NOT mint a phantom "class" card named after the
+// enclosing callable. Source incident: task 01KTDNGTHM975PF4WTG1Q3PV3Q — the
+// anonymous `new TimerTask(){ run(){} }` inside GameFrame.setupGameTimer() drew a
+// bogus card titled "GameFrame.setupGameTimer" (a method shown as a class).
+describe('buildStructureGraph — RFC-086 method-local definitions', () => {
+  type Change = StructuralDiff['files'][number]['changes'][number]
+  const change = (file: string, qn: string, kind: SymbolNode['kind']): Change => ({
+    changeType: 'added',
+    kind,
+    after: sym(file, qn, kind),
+  })
+  const file = (
+    filePath: string,
+    lang: StructuralDiff['files'][number]['lang'],
+    changes: Change[],
+  ): StructuralDiff['files'][number] => ({
+    filePath,
+    lang,
+    status: 'ok',
+    edges: [],
+    impact: [],
+    changes,
+  })
+
+  test('Java anonymous-class method does NOT create a class named after its method', () => {
+    const g = buildStructureGraph(
+      diffWith([
+        file('GameFrame.java', 'java', [
+          change('GameFrame.java', 'GameFrame', 'class'),
+          change('GameFrame.java', 'GameFrame.setupGameTimer', 'method'),
+          change('GameFrame.java', 'GameFrame.setupGameTimer.run', 'method'),
+        ]),
+      ]),
+    )
+    expect(g.cards.find((c) => c.title === 'GameFrame.setupGameTimer')).toBeUndefined()
+    const gf = g.cards.find((c) => c.title === 'GameFrame')
+    expect(gf?.members.map((m) => m.label).sort()).toEqual(['run', 'setupGameTimer'])
+  })
+
+  test('JS nested function folds into the file card, no phantom "outer" class', () => {
+    const g = buildStructureGraph(
+      diffWith([
+        file('app.js', 'javascript', [
+          change('app.js', 'outer', 'function'),
+          change('app.js', 'outer.inner', 'function'),
+        ]),
+      ]),
+    )
+    expect(g.cards.find((c) => c.title === 'outer')).toBeUndefined()
+    const fileCard = g.cards.find((c) => c.kind === 'file')
+    expect(fileCard?.members.map((m) => m.label).sort()).toEqual(['inner', 'outer'])
+  })
+
+  test('a real inner class is NOT mistaken for a method-local scope', () => {
+    const g = buildStructureGraph(
+      diffWith([
+        file('Outer.java', 'java', [
+          change('Outer.java', 'Outer', 'class'),
+          change('Outer.java', 'Outer.Inner', 'class'),
+          change('Outer.java', 'Outer.Inner.method', 'method'),
+        ]),
+      ]),
+    )
+    const inner = g.cards.find((c) => c.title === 'Outer.Inner')
+    expect(inner?.kind).toBe('class')
+    expect(inner?.members.map((m) => m.label)).toEqual(['method'])
+  })
+
+  test('anonymous class renders as «anonymous» <baseType> with its method + creation edge', () => {
+    const anon: SymbolNode = {
+      id: 'GameFrame.java#GameFrame.setupGameTimer.$anon3:class:3',
+      kind: 'class',
+      name: 'TimerTask',
+      qualifiedName: 'GameFrame.setupGameTimer.$anon3',
+      lang: 'java',
+      filePath: 'GameFrame.java',
+      confidence: 'extracted',
+      anonymous: true,
+    }
+    const setupId = 'GameFrame.java#GameFrame.setupGameTimer:method:1'
+    const g = buildStructureGraph(
+      diffWith(
+        [
+          file('GameFrame.java', 'java', [
+            change('GameFrame.java', 'GameFrame', 'class'),
+            change('GameFrame.java', 'GameFrame.setupGameTimer', 'method'),
+            { changeType: 'added', kind: 'class', after: anon },
+            change('GameFrame.java', 'GameFrame.setupGameTimer.$anon3.run', 'method'),
+          ]),
+        ],
+        {
+          classEdges: [
+            {
+              from: 'GameFrame.java::GameFrame',
+              to: 'GameFrame.java::GameFrame.setupGameTimer.$anon3',
+              kind: 'references',
+              fromMembers: [setupId],
+            },
+          ],
+        },
+      ),
+    )
+    const card = g.cards.find((c) => c.anonymous === true)
+    expect(card?.title).toBe('«anonymous» TimerTask')
+    expect(card?.members.map((m) => m.label)).toEqual(['run'])
+    // the meaningless synthetic qualifiedName is never shown as a title
+    expect(g.cards.some((c) => c.title === 'GameFrame.setupGameTimer.$anon3')).toBe(false)
+    // creation edge enclosing class → anonymous class survives
+    expect(
+      g.edges.some(
+        (e) =>
+          e.source === 'GameFrame.java::GameFrame' &&
+          e.target === 'GameFrame.java::GameFrame.setupGameTimer.$anon3',
+      ),
+    ).toBe(true)
+  })
+})

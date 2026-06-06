@@ -9524,6 +9524,85 @@ mark.comment-anchor[data-active='true'] {
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+/* RFC-085 — call-chain entry icon on a changed-method row */
+.structure__callchain-entry {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+.structure__callchain-entry:hover {
+  color: var(--accent);
+}
+/* RFC-085 — call-chain view */
+.callchain {
+  flex: 1;
+  min-height: 240px;
+  overflow: auto;
+  padding: 8px 6px;
+}
+.callchain__root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  padding: 4px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.callchain__root-glyph {
+  color: var(--accent);
+}
+.callchain__list {
+  list-style: none;
+  margin: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+.callchain__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.callchain__row--unresolved {
+  opacity: 0.5;
+}
+.callchain__toggle {
+  flex: none;
+  width: 16px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+.callchain__bullet {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.callchain__tag {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--muted);
+}
+.callchain__tag--unresolved {
+  color: color-mix(in srgb, #c0392b 60%, var(--text));
+}
+.callchain__empty {
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .structure__dep-eco {
   color: var(--muted, #6b7280);
 }
@@ -9771,6 +9850,14 @@ mark.comment-anchor[data-active='true'] {
 }
 .sg-card--caller .sg-card__header {
   background: var(--panel);
+}
+/* RFC-086 — anonymous types read as synthetic: muted, italic, dashed border. */
+.sg-card--anonymous {
+  border-style: dashed;
+}
+.sg-card--anonymous .sg-card__title {
+  font-style: italic;
+  color: var(--muted);
 }
 .sg-card__member--ct-added {
   color: var(--success);

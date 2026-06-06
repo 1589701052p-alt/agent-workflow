@@ -12,7 +12,12 @@ import { resolveLang } from './lang/grammars'
 import { hasExtraction } from './lang/queries'
 import { extractSymbols } from './lang/extract'
 import { collectImpactTargets, findCallers } from './impact'
-import { collectClassNodes, collectClassMembers, computeClassEdges } from './classGraph'
+import {
+  collectClassNodes,
+  collectClassMembers,
+  computeClassEdges,
+  computeAnonCreationEdges,
+} from './classGraph'
 import { MAX_ANALYZE_BYTES } from './baseline'
 import type { ImpactItem, StructuralDiff, StructuralScope } from '@agent-workflow/shared'
 
@@ -164,13 +169,24 @@ async function augmentClassEdges(
   diff: StructuralDiff,
   readNew: BlobReader,
 ): Promise<StructuralDiff> {
+  // RFC-086 — anon "created by" edges come from the parentId chain (no file read);
+  // emit them even when there are too few class nodes for the name-match pass.
+  const anonEdges = computeAnonCreationEdges(diff.files)
   const nodes = collectClassNodes(diff.files)
-  if (nodes.length < 2) return diff
+  if (nodes.length < 2) {
+    return anonEdges.length > 0 ? { ...diff, classEdges: anonEdges } : diff
+  }
   const fileText = new Map<string, string>()
   for (const file of new Set(nodes.map((n) => n.file))) {
     const text = await readNew(file)
     if (text !== null && text.length <= MAX_ANALYZE_BYTES) fileText.set(file, text)
   }
   const membersByClass = collectClassMembers(diff.files)
-  return { ...diff, classEdges: computeClassEdges(nodes, fileText, membersByClass) }
+  const nameEdges = computeClassEdges(nodes, fileText, membersByClass)
+  const seen = new Set(nameEdges.map((e) => `${e.from}|${e.to}|${e.kind}`))
+  const merged = [
+    ...nameEdges,
+    ...anonEdges.filter((e) => !seen.has(`${e.from}|${e.to}|${e.kind}`)),
+  ]
+  return { ...diff, classEdges: merged }
 }

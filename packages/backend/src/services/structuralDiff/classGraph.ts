@@ -7,7 +7,7 @@
 // from the declaration's heritage clause; everything else is a reference. The
 // PURE core takes file text injected (no I/O); the caller reads the worktree.
 
-import type { FileStructuralDiff, ClassEdge, SymbolKind } from '@agent-workflow/shared'
+import type { FileStructuralDiff, ClassEdge, SymbolKind, SymbolNode } from '@agent-workflow/shared'
 
 const CONTAINER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
   'class',
@@ -150,6 +150,47 @@ export function collectClassNodes(files: ReadonlyArray<FileStructuralDiff>): Cla
     }
   }
   return out
+}
+
+/** RFC-086 — explicit "enclosing member CREATES this anonymous type" edges. An
+ *  anonymous class (Java `new TimerTask(){…}`, JS/TS anon `class` expr) has a
+ *  synthetic qualifiedName that never appears as text elsewhere, so the name-match
+ *  heuristic in computeClassEdges can't (and shouldn't — it would over-match the
+ *  base type) find it. Instead we read the structural parentId chain: walk up from
+ *  the anon node to the nearest real container (its owning class) and record the
+ *  first member on the way (the method/field that instantiated it) as the edge's
+ *  fromMember. PURE. */
+export function computeAnonCreationEdges(files: ReadonlyArray<FileStructuralDiff>): ClassEdge[] {
+  const byId = new Map<string, SymbolNode>()
+  for (const f of files) {
+    for (const ch of f.changes) {
+      const s = ch.after ?? ch.before
+      if (s !== undefined) byId.set(s.id, s)
+    }
+  }
+  const edges: ClassEdge[] = []
+  const seen = new Set<string>()
+  for (const s of byId.values()) {
+    if (s.anonymous !== true) continue
+    const to = `${s.filePath}::${s.qualifiedName}`
+    // walk parentId up to the nearest container; first member on the way = creator
+    let creator: string | undefined
+    let cur = s.parentId !== undefined ? byId.get(s.parentId) : undefined
+    while (cur !== undefined && !CONTAINER_KINDS.has(cur.kind)) {
+      if (creator === undefined && MEMBER_KINDS.has(cur.kind)) creator = cur.id
+      cur = cur.parentId !== undefined ? byId.get(cur.parentId) : undefined
+    }
+    if (cur === undefined) continue // no enclosing changed class to anchor 'from'
+    const from = `${cur.filePath}::${cur.qualifiedName}`
+    if (from === to) continue
+    const key = `${from}|${to}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const edge: ClassEdge = { from, to, kind: 'references' }
+    if (creator !== undefined) edge.fromMembers = [creator]
+    edges.push(edge)
+  }
+  return edges
 }
 
 /** True when `name` appears in C's heritage clause (extends/implements / Python
