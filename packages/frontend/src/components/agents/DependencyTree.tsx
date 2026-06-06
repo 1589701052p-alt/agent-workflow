@@ -17,8 +17,9 @@ interface DependencyTreeProps {
 }
 
 export function DependencyTree({ tree, onNodeClick }: DependencyTreeProps) {
+  const { t } = useTranslation()
   return (
-    <div className="dep-tree" role="tree" aria-label="Dependency tree">
+    <div className="dep-tree" role="tree" aria-label={t('dependencyTree.ariaTreeLabel')}>
       <Row node={tree} prefix="" isRoot={true} isLast={true} onNodeClick={onNodeClick} />
     </div>
   )
@@ -85,7 +86,9 @@ function NodeLabel({
   const { t } = useTranslation()
   const clickable = !missing && !node.duplicateRef && onNodeClick !== undefined
   const label = (
-    <span className="dep-tree__name">{missing ? `<missing> ${node.name}` : node.name}</span>
+    <span className="dep-tree__name">
+      {missing ? t('dependencyTree.missingPrefix', { name: node.name }) : node.name}
+    </span>
   )
   return (
     <span className="dep-tree__label">
@@ -94,7 +97,7 @@ function NodeLabel({
           type="button"
           className="dep-tree__link"
           onClick={() => onNodeClick(node.name)}
-          aria-label={`Open agent ${node.name}`}
+          aria-label={t('dependencyTree.openAgentAria', { name: node.name })}
         >
           {label}
         </button>

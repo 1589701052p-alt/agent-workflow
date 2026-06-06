@@ -241,19 +241,19 @@ function ReviewDetailPage() {
     // review.ts:1315 + workflow-validator.test.ts "rerunnableOnReject
     // empty does NOT emit `review-rerunnable-empty-on-reject`"). Showing
     // "(none)" here told users nothing would re-run, which was a lie.
-    const willRerun = detail.data.rerunnableOnReject.join(', ') || '(direct upstream)'
+    const willRerun = detail.data.rerunnableOnReject.join(', ') || t('reviews.rerunDirectUpstream')
     setDecisionDialog({ kind: 'reject', willRerun, reason: '', reasonError: false })
-  }, [detail.data])
+  }, [detail.data, t])
 
   const onIterate = useCallback(() => {
     if (detail.data === undefined) return
-    const willRerun = detail.data.rerunnableOnIterate.join(', ') || '(direct upstream)'
+    const willRerun = detail.data.rerunnableOnIterate.join(', ') || t('reviews.rerunDirectUpstream')
     setDecisionDialog({
       kind: 'iterate',
       willRerun,
       noComments: detail.data.comments.length === 0,
     })
-  }, [detail.data])
+  }, [detail.data, t])
 
   const confirmDecisionDialog = useCallback(async () => {
     if (decisionDialog === null || detail.data === undefined) return
@@ -437,7 +437,11 @@ function ReviewDetailPage() {
             {t('reviews.downloadMarkdown')}
           </button>
           {!readonly && (
-            <div className="review-detail__decision-actions" role="group" aria-label="decisions">
+            <div
+              className="review-detail__decision-actions"
+              role="group"
+              aria-label={t('reviews.decisionActionsAria')}
+            >
               <button
                 type="button"
                 className="btn btn--sm btn--primary"
@@ -472,7 +476,7 @@ function ReviewDetailPage() {
           <span>
             {t('reviews.historicalBanner', {
               version: headerVersionIndex ?? '?',
-              decision: headerDecision ?? 'pending',
+              decision: headerDecision ?? t('reviews.decision.pending'),
             })}
           </span>
           <Link
@@ -550,7 +554,7 @@ function ReviewDetailPage() {
               granularity={diffGranularity}
               leftLabel={t('reviews.diffLeftLabel', {
                 version: priorVersion?.versionIndex ?? '?',
-                decision: priorVersion?.decision ?? 'pending',
+                decision: priorVersion?.decision ?? t('reviews.decision.pending'),
               })}
               rightLabel={t('reviews.diffRightLabel', {
                 version: data.currentVersion.versionIndex,

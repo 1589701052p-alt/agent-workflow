@@ -182,7 +182,7 @@ function AttemptPicker({
           <span className="session-attempts__shard">{latest.shardKey}</span>
         )}
         {!inline && isFanoutParent(latest) && (
-          <span className="session-attempts__parent">parent</span>
+          <span className="session-attempts__parent">{t('nodeDrawer.sessionParentBadge')}</span>
         )}
         {latest.startedAt !== null && (
           <span className="session-attempts__time">

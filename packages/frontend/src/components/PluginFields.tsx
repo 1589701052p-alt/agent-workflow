@@ -33,7 +33,7 @@ export function PluginFields({ value, onChange, nameLocked, errors }: PluginFiel
           required
           pattern={PLUGIN_NAME_RE.source}
         />
-        {errors.name !== undefined && <span className="form-field__error">{errors.name}</span>}
+        {errors.name !== undefined && <span className="form-field__error">{t(errors.name)}</span>}
       </Field>
 
       <Field label={t('plugins.fieldSpec')} required hint={t('plugins.fieldSpecHint')}>
@@ -43,7 +43,7 @@ export function PluginFields({ value, onChange, nameLocked, errors }: PluginFiel
           placeholder="@scope/pkg@1.2.3   ./local/plugin.ts   github:org/repo"
           required
         />
-        {errors.spec !== undefined && <span className="form-field__error">{errors.spec}</span>}
+        {errors.spec !== undefined && <span className="form-field__error">{t(errors.spec)}</span>}
       </Field>
 
       <Field label={t('plugins.fieldDescription')}>
@@ -59,7 +59,7 @@ export function PluginFields({ value, onChange, nameLocked, errors }: PluginFiel
           monospace
         />
         {errors.options !== undefined && (
-          <span className="form-field__error">{errors.options}</span>
+          <span className="form-field__error">{t(errors.options)}</span>
         )}
       </Field>
 

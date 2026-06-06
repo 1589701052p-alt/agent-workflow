@@ -6,6 +6,7 @@
 // useDeferredValue so heavy renders don't gate keystrokes.
 
 import { useDeferredValue } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Prose } from './prose/Prose'
 import { TextArea } from './Form'
 
@@ -17,11 +18,12 @@ interface MarkdownEditorProps {
 }
 
 export function MarkdownEditor({ value, onChange, rows = 18, placeholder }: MarkdownEditorProps) {
+  const { t } = useTranslation()
   const deferred = useDeferredValue(value)
   return (
     <div className="md-editor">
       <div className="md-editor__pane md-editor__pane--edit">
-        <div className="md-editor__label">Edit</div>
+        <div className="md-editor__label">{t('agentForm.markdownEditLabel')}</div>
         <TextArea
           value={value}
           onChange={onChange}
@@ -31,9 +33,11 @@ export function MarkdownEditor({ value, onChange, rows = 18, placeholder }: Mark
         />
       </div>
       <div className="md-editor__pane md-editor__pane--preview">
-        <div className="md-editor__label">Preview</div>
+        <div className="md-editor__label">{t('agentForm.markdownPreviewLabel')}</div>
         {deferred.trim() === '' ? (
-          <div className="md-editor__preview md-preview__empty">Nothing to preview yet.</div>
+          <div className="md-editor__preview md-preview__empty">
+            {t('agentForm.markdownPreviewEmpty')}
+          </div>
         ) : (
           <Prose body={deferred} className="md-editor__preview" />
         )}

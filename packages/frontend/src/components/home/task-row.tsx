@@ -74,6 +74,8 @@ function describeStatus(
       return t('home.taskRow.statusCanceled')
     case 'interrupted':
       return t('home.taskRow.statusInterrupted')
+    case 'pending':
+      return t('home.taskRow.statusPending')
     default:
       return status
   }

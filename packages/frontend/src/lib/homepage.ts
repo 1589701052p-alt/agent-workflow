@@ -10,6 +10,8 @@
 
 import type { ClarifyRoundSummary, ReviewSummary } from '@agent-workflow/shared'
 
+import i18n from '@/i18n'
+
 export type GreetingKey = 'morning' | 'afternoon' | 'evening'
 
 export interface InboxPreviewItem {
@@ -79,8 +81,8 @@ export function mergeInboxItems(
         : c.askingNodeId
     const shardOrIter =
       c.askingShardKey !== null && c.askingShardKey !== ''
-        ? `shard ${c.askingShardKey}`
-        : `iter ${c.iteration}`
+        ? i18n.t('nav.inbox.shardLabel', { shard: c.askingShardKey })
+        : i18n.t('nav.inbox.iterLabel', { iter: c.iteration })
     out.push({
       kind: 'clarify',
       rowKey: c.id,

@@ -76,7 +76,8 @@ export function ImportZipPanel() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}) as Record<string, unknown>)
         const code = typeof body.code === 'string' ? body.code : `http-${res.status}`
-        const message = typeof body.message === 'string' ? body.message : 'failed to parse zip'
+        const message =
+          typeof body.message === 'string' ? body.message : t('skills.zipParseFailedFallback')
         setPhase({ kind: 'parse-error', code, message })
         return
       }
@@ -103,7 +104,9 @@ export function ImportZipPanel() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}) as Record<string, unknown>)
         const message =
-          typeof body.message === 'string' ? body.message : `commit failed (${res.status})`
+          typeof body.message === 'string'
+            ? body.message
+            : t('skills.zipCommitFailedFallback', { status: res.status })
         setCommitError(message)
         return
       }
@@ -187,7 +190,8 @@ export function ImportZipPanel() {
           <ul>
             {phase.parse.errors.map((err, i) => (
               <li key={i}>
-                <code>{err.path === '' ? '(zip)' : err.path}</code> — {err.code}: {err.message}
+                <code>{err.path === '' ? t('skills.zipErrorWholeArchiveLabel') : err.path}</code> —{' '}
+                {err.code}: {err.message}
               </li>
             ))}
           </ul>

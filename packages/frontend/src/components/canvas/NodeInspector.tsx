@@ -446,7 +446,12 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                           label: c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId,
                         })),
                         ...(nodeIdInvalid
-                          ? [{ value: exitNodeId, label: `${exitNodeId} (missing)` }]
+                          ? [
+                              {
+                                value: exitNodeId,
+                                label: t('inspector.missingOption', { value: exitNodeId }),
+                              },
+                            ]
                           : []),
                       ]}
                     />
@@ -468,7 +473,12 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                         { value: '', label: t('inspector.loopExitPortNameSelect') },
                         ...portCandidates.map((p) => ({ value: p, label: p })),
                         ...(portInvalid
-                          ? [{ value: exitPortName, label: `${exitPortName} (missing)` }]
+                          ? [
+                              {
+                                value: exitPortName,
+                                label: t('inspector.missingOption', { value: exitPortName }),
+                              },
+                            ]
                           : []),
                       ]}
                     />
@@ -549,7 +559,12 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                           label: c.title.length > 0 ? `${c.title} (${c.nodeId})` : c.nodeId,
                         })),
                         ...(bindNodeInvalid
-                          ? [{ value: b.bind.nodeId, label: `${b.bind.nodeId} (missing)` }]
+                          ? [
+                              {
+                                value: b.bind.nodeId,
+                                label: t('inspector.missingOption', { value: b.bind.nodeId }),
+                              },
+                            ]
                           : []),
                       ]}
                     />
@@ -567,7 +582,12 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                         { value: '', label: t('inspector.loopExitPortNameSelect') },
                         ...bindPortCandidates.map((p) => ({ value: p, label: p })),
                         ...(bindPortInvalid
-                          ? [{ value: b.bind.portName, label: `${b.bind.portName} (missing)` }]
+                          ? [
+                              {
+                                value: b.bind.portName,
+                                label: t('inspector.missingOption', { value: b.bind.portName }),
+                              },
+                            ]
                           : []),
                       ]}
                     />

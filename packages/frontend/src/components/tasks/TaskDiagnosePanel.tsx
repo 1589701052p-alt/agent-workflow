@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 
 import { api } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
+import { describeApiError } from '@/i18n'
 import { RepairChoiceDialog } from '@/components/tasks/RepairChoiceDialog'
 import type { LifecycleAlertRule, LifecycleAlertSeverity } from '@/types/lifecycle'
 
@@ -98,9 +99,7 @@ export function TaskDiagnosePanel(props: TaskDiagnosePanelProps): ReactElement {
       >
         {m.isPending && <div className="muted">{t('tasks.diagnose.loading')}</div>}
         {m.error !== null && m.error !== undefined && (
-          <div className="error-box">
-            {m.error instanceof Error ? m.error.message : String(m.error)}
-          </div>
+          <div className="error-box">{describeApiError(m.error)}</div>
         )}
         {m.data !== undefined && (
           <DiagnoseTable

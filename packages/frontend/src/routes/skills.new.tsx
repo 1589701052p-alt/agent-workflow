@@ -8,8 +8,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Skill } from '@agent-workflow/shared'
 import { SKILL_NAME_RE } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
 import { Field, TextArea, TextInput } from '@/components/Form'
+import { describeApiError } from '@/i18n'
 import { ImportZipPanel } from '@/components/skills/ImportZipPanel'
 import { Route as RootRoute } from './__root'
 
@@ -192,22 +193,18 @@ function SkillCreatePage() {
                   : t('skills.createButton')}
             </button>
             {tab !== 'folder' && create.error !== null && create.error !== undefined && (
-              <span className="form-actions__error">{describeError(create.error)}</span>
+              <span className="form-actions__error">{describeApiError(create.error)}</span>
             )}
             {tab === 'folder' &&
               registerFolder.error !== null &&
               registerFolder.error !== undefined && (
-                <span className="form-actions__error">{describeError(registerFolder.error)}</span>
+                <span className="form-actions__error">
+                  {describeApiError(registerFolder.error)}
+                </span>
               )}
           </div>
         </>
       )}
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

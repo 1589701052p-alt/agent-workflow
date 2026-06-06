@@ -33,7 +33,7 @@ export function OutputsEditor({ outputs, outputKinds, onChange, placeholder }: O
     const token = raw.trim()
     if (token === '') return
     if (outputs.includes(token)) {
-      setError(`duplicate: ${token}`)
+      setError(t('common.duplicateError', { token }))
       return
     }
     if (!PORT_NAME_RE.test(token)) {
@@ -94,7 +94,7 @@ export function OutputsEditor({ outputs, outputKinds, onChange, placeholder }: O
                   type="button"
                   className="chip__remove outputs-editor__remove"
                   onClick={() => removeAt(idx)}
-                  aria-label={`Remove ${name}`}
+                  aria-label={t('common.removeAria', { label: name })}
                 >
                   ×
                 </button>

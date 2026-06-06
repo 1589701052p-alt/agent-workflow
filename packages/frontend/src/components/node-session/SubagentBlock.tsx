@@ -34,7 +34,9 @@ export function SubagentBlock({ call }: Props) {
         </button>
         <RoleBadge variant="subagent" icon="🪆" label={t('session.subagent')} />
         <code className="session-block__tool-name">{subtitle}</code>
-        <span className={`status-chip status-chip--${toneFor(call.status)}`}>{call.status}</span>
+        <span className={`status-chip status-chip--${toneFor(call.status)}`}>
+          {t(statusKeyFor(call.status))}
+        </span>
         {captureMissing && (
           <span className="session-capture-warning">{t('session.captureMissing')}</span>
         )}
@@ -64,5 +66,18 @@ function toneFor(status: string): string {
       return 'red'
     default:
       return 'gray'
+  }
+}
+
+function statusKeyFor(status: string): string {
+  switch (status) {
+    case 'completed':
+      return 'session.statusCompleted'
+    case 'running':
+      return 'session.statusRunning'
+    case 'error':
+      return 'session.statusError'
+    default:
+      return 'session.statusPending'
   }
 }

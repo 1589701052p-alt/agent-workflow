@@ -6,6 +6,7 @@
 // parent only gets called with parsed values once the input parses cleanly.
 
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { TextArea } from './Form'
 
 interface JsonFieldProps {
@@ -16,6 +17,7 @@ interface JsonFieldProps {
 }
 
 export function JsonField({ value, onChange, rows = 6, placeholder }: JsonFieldProps) {
+  const { t } = useTranslation()
   const [draft, setDraft] = useState(() => stringify(value))
   const [error, setError] = useState<string | null>(null)
   const [externalSync, setExternalSync] = useState(() => stringify(value))
@@ -42,13 +44,13 @@ export function JsonField({ value, onChange, rows = 6, placeholder }: JsonFieldP
     try {
       const parsed = JSON.parse(next)
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        setError('must be a JSON object')
+        setError(t('common.jsonMustBeObject'))
         return
       }
       setError(null)
       onChange(parsed as Record<string, unknown>)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'invalid JSON')
+      setError(e instanceof Error ? e.message : t('common.invalidJson'))
     }
   }
 

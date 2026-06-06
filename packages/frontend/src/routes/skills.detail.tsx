@@ -88,7 +88,7 @@ function SkillDetailPage() {
           <h1>{name}</h1>
           <p className="page__hint">
             <span className={`chip chip--tight chip--${meta.data.sourceKind}`}>
-              {meta.data.sourceKind}
+              {t(meta.data.sourceKind === 'managed' ? 'skills.tabManaged' : 'skills.tabExternal')}
             </span>{' '}
             <code>{meta.data.managedPath ?? meta.data.externalPath ?? ''}</code>
           </p>

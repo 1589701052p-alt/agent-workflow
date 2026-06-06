@@ -82,7 +82,7 @@ function McpsPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th aria-label="expand" />
+              <th aria-label={t('common.ariaExpandColumn')} />
               <th>{t('mcps.colName')}</th>
               <th>{t('mcps.colType')}</th>
               <th>{t('mcps.colDescription')}</th>
@@ -90,7 +90,7 @@ function McpsPage() {
               <th>{t('mcps.colStatus')}</th>
               <th>{t('mcps.colLatency')}</th>
               <th>{t('mcps.colToolCount')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>

@@ -10,6 +10,8 @@ import type {
   MemoryDistillSourceEventEntry,
 } from '@agent-workflow/shared'
 
+import i18n from '@/i18n'
+
 export type SourceKind = MemoryDistillSourceEventEntry['kind']
 
 export interface GroupedSourceEvents {
@@ -50,7 +52,7 @@ export function selectAttempts(
  * "process never produced an exit" from "process exited cleanly".
  */
 export function formatExitCode(code: number | null | undefined): string {
-  if (code === null || code === undefined) return '—'
+  if (code === null || code === undefined) return i18n.t('common.emDash')
   return String(code)
 }
 
@@ -65,7 +67,7 @@ export function truncateStderr(input: string | null | undefined, maxChars = 4000
   const trimmed = input.trim()
   if (trimmed.length === 0) return null
   if (trimmed.length <= maxChars) return trimmed
-  return `${trimmed.slice(0, maxChars)}\n…(clipped at ${maxChars} chars for display)`
+  return `${trimmed.slice(0, maxChars)}${i18n.t('memory.distillJobDetail.stderrClipped', { n: maxChars })}`
 }
 
 /**

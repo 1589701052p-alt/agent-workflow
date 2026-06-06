@@ -118,7 +118,9 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
           typeof c.askingNodeTitle === 'string' && c.askingNodeTitle.length > 0
             ? c.askingNodeTitle
             : c.askingNodeId
-        const shardOrIter = c.askingShardKey ? `shard ${c.askingShardKey}` : `iter ${c.iteration}`
+        const shardOrIter = c.askingShardKey
+          ? t('nav.inbox.shardLabel', { shard: c.askingShardKey })
+          : t('nav.inbox.iterLabel', { iter: c.iteration })
         rows.push({
           kind: 'clarify',
           // React key uses the round id (always unique). The nav target
@@ -130,7 +132,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
           taskId: c.taskId,
           taskName: c.taskName,
           title: clarifyTitle,
-          subtitle: `← ${agentLabel} · ${shardOrIter}`,
+          subtitle: t('nav.inbox.clarifySubtitle', { agent: agentLabel, detail: shardOrIter }),
           createdAt: c.createdAt,
         })
       }

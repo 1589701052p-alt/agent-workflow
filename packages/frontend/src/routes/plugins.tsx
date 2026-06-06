@@ -98,7 +98,7 @@ function PluginsPage() {
               <th>{t('plugins.colSource')}</th>
               <th>{t('plugins.colVersion')}</th>
               <th>{t('plugins.colEnabled')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>
@@ -119,7 +119,9 @@ function PluginsPage() {
                     <code className="muted">{p.spec}</code>
                   </td>
                   <td className="data-table__nowrap">
-                    <span className="chip chip--tight">{p.sourceKind}</span>
+                    <span className="chip chip--tight">
+                      {t(`plugins.sourceKind.${p.sourceKind}`)}
+                    </span>
                   </td>
                   <td className="data-table__nowrap">
                     {p.resolvedVersion ?? t('common.emDash')}

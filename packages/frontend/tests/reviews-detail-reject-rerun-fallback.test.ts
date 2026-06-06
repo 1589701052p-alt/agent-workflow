@@ -24,10 +24,12 @@ function src(): string {
 }
 
 describe('reviews.detail.tsx — reject willRerun fallback', () => {
-  test('onReject falls back to "(direct upstream)" when rerunnableOnReject is empty', () => {
+  // The "(direct upstream)" literal moved into the i18n bundle as
+  // `reviews.rerunDirectUpstream`; the fallback is now `|| t('reviews.rerunDirectUpstream')`.
+  test('onReject falls back to t(reviews.rerunDirectUpstream) when rerunnableOnReject is empty', () => {
     const s = src()
     expect(s).toMatch(
-      /detail\.data\.rerunnableOnReject\.join\(\s*',\s*'\s*\)\s*\|\|\s*'\(direct upstream\)'/,
+      /detail\.data\.rerunnableOnReject\.join\(\s*',\s*'\s*\)\s*\|\|\s*t\('reviews\.rerunDirectUpstream'\)/,
     )
   })
 
@@ -36,10 +38,10 @@ describe('reviews.detail.tsx — reject willRerun fallback', () => {
     expect(s).not.toMatch(/rerunnableOnReject\.join\(\s*',\s*'\s*\)\s*\|\|\s*'\(none\)'/)
   })
 
-  test('onIterate keeps its "(direct upstream)" fallback (symmetry guard)', () => {
+  test('onIterate keeps its t(reviews.rerunDirectUpstream) fallback (symmetry guard)', () => {
     const s = src()
     expect(s).toMatch(
-      /detail\.data\.rerunnableOnIterate\.join\(\s*',\s*'\s*\)\s*\|\|\s*'\(direct upstream\)'/,
+      /detail\.data\.rerunnableOnIterate\.join\(\s*',\s*'\s*\)\s*\|\|\s*t\('reviews\.rerunDirectUpstream'\)/,
     )
   })
 })

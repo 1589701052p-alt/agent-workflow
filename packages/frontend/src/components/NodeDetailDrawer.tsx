@@ -222,7 +222,7 @@ function SubProcessList({ shards, onPick }: { shards: NodeRun[]; onPick?: (id: s
                 onClick={() => onPick?.(c.id)}
               >
                 <span className={`status-chip status-chip--${noderunTone(c.status)}`}>
-                  {c.status}
+                  {t(displayNoderunStatusKey(c))}
                 </span>
                 <code className="subprocess-list__shard">
                   {c.shardKey ?? t('nodeDrawer.shardNoKey')}
@@ -413,7 +413,7 @@ function StatsTab({
       <dd>{run.retryIndex}</dd>
       {run.opencodeSessionId !== null && run.opencodeSessionId.length > 0 && (
         <>
-          <dt>opencode session</dt>
+          <dt>{t('nodeDrawer.statSession')}</dt>
           <dd data-testid="rfc026-session-id">
             <code>{run.opencodeSessionId.slice(0, 16)}</code>
             {clarifyRoundForRun(run, history) > 0 && (
@@ -587,7 +587,8 @@ function EventsTab({ taskId, nodeRunId }: { taskId: string; nodeRunId: string })
           const rfc031 =
             e.kind === 'text' && typeof e.payload === 'string' ? parseRfc031Event(e.payload) : null
           if (rfc031 !== null) {
-            const label = rfc031.pluginName.length > 0 ? rfc031.pluginName : '(unknown plugin)'
+            const label =
+              rfc031.pluginName.length > 0 ? rfc031.pluginName : t('nodeDrawer.unknownPlugin')
             return (
               <li
                 key={e.id}

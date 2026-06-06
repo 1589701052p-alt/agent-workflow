@@ -81,7 +81,7 @@ function SkillsPage() {
               <th>{t('skills.colSource')}</th>
               <th>{t('skills.colDescription')}</th>
               <th>{t('skills.colPath')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>
@@ -111,7 +111,9 @@ function SkillsPage() {
                   </div>
                 </td>
                 <td>
-                  <span className={`chip chip--tight chip--${s.sourceKind}`}>{s.sourceKind}</span>
+                  <span className={`chip chip--tight chip--${s.sourceKind}`}>
+                    {t(s.sourceKind === 'managed' ? 'skills.tabManaged' : 'skills.tabExternal')}
+                  </span>
                 </td>
                 <td
                   className="data-table__muted data-table__truncate"

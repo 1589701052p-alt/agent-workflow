@@ -18,6 +18,7 @@ import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DocVersion, ReviewSummary } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { describeApiError } from '@/i18n'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/LoadingState'
 import { Route as RootRoute } from './__root'
@@ -101,7 +102,7 @@ export function ReviewsListPage() {
       </div>
       {list.isLoading && <LoadingState data-testid="reviews-loading" />}
       {list.error !== null && list.error !== undefined && (
-        <div className="error-box">{(list.error as Error).message}</div>
+        <div className="error-box">{describeApiError(list.error)}</div>
       )}
       {list.data !== undefined && list.data.length === 0 && (
         <EmptyState title={t('reviews.emptyList')} data-testid="reviews-empty" />
@@ -186,7 +187,9 @@ export function ReviewsListPage() {
                                     : 'gray'
                           }`}
                         >
-                          {r.awaitingReview ? t('reviews.statusAwaiting') : r.decision}
+                          {r.awaitingReview
+                            ? t('reviews.statusAwaiting')
+                            : t(`reviews.decision.${r.decision}`)}
                         </span>
                       </td>
                       <td>v{r.currentVersionIndex}</td>
@@ -280,7 +283,7 @@ export function HistoryRows({
             <li key={v.id} className="reviews-version-list__item">
               <span className="reviews-version-list__label">v{v.versionIndex}</span>
               <span className={`status-chip status-chip--${decisionChipColor(v.decision)}`}>
-                {v.decision}
+                {t(`reviews.decision.${v.decision}`)}
               </span>
               {isCurrent && (
                 <span className="reviews-version-list__current-pill">

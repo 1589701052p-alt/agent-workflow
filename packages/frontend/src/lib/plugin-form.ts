@@ -50,16 +50,16 @@ export interface BuiltErrors {
 export function buildCreatePayload(form: PluginFormState): BuiltCreate | BuiltErrors {
   const errors: Record<string, string> = {}
   if (!PLUGIN_NAME_RE.test(form.name)) {
-    errors.name = 'name must match [a-z0-9][a-z0-9_-]* and be 1–64 chars'
+    errors.name = 'plugins.errors.nameInvalid'
   }
   if (form.spec.trim() === '') {
-    errors.spec = 'spec is required'
+    errors.spec = 'plugins.errors.specRequired'
   } else if (form.spec.length > 512) {
-    errors.spec = 'spec is too long (max 512 chars)'
+    errors.spec = 'plugins.errors.specTooLong'
   }
   const options = parseOptions(form.optionsJson)
   if (options === null) {
-    errors.options = 'options must be a JSON object (e.g. {} or {"key":"value"})'
+    errors.options = 'plugins.errorOptionsJson'
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors }
   // Final schema validation as a defensive layer — catches edge cases the
@@ -94,10 +94,10 @@ export function buildUpdatePayload(
   existing: Plugin,
 ): BuiltCreate extends never ? never : { ok: true; payload: UpdatePlugin } | BuiltErrors {
   const errors: Record<string, string> = {}
-  if (form.spec.trim() === '') errors.spec = 'spec is required'
+  if (form.spec.trim() === '') errors.spec = 'plugins.errors.specRequired'
   const options = parseOptions(form.optionsJson)
   if (options === null) {
-    errors.options = 'options must be a JSON object'
+    errors.options = 'plugins.errorOptionsJson'
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors }
   const patch: UpdatePlugin = {}

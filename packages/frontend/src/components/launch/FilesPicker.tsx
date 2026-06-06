@@ -6,6 +6,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoFilesResponse, WorkflowInput } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { TextInput } from '@/components/Form'
@@ -23,6 +24,7 @@ interface Props {
  * split as needed.
  */
 export function FilesPicker({ def, repoPath, value, onChange }: Props) {
+  const { t } = useTranslation()
   const [filter, setFilter] = useState('')
   const all = useQuery<RepoFilesResponse>({
     queryKey: ['repos', 'files', repoPath],
@@ -66,9 +68,9 @@ export function FilesPicker({ def, repoPath, value, onChange }: Props) {
   }, [all.data, filter])
 
   if (repoPath === '') {
-    return <div className="muted">Pick a repo first to load file paths.</div>
+    return <div className="muted">{t('launch.filesPicker.pickRepoFirst')}</div>
   }
-  if (all.isLoading) return <div className="muted">Loading files…</div>
+  if (all.isLoading) return <div className="muted">{t('launch.filesPicker.loading')}</div>
   if (all.error !== null && all.error !== undefined) {
     return <div className="error-box">{describeError(all.error)}</div>
   }
@@ -76,11 +78,18 @@ export function FilesPicker({ def, repoPath, value, onChange }: Props) {
   return (
     <div className="files-picker">
       <div className="files-picker__filter">
-        <TextInput value={filter} onChange={setFilter} placeholder="Filter paths…" />
+        <TextInput
+          value={filter}
+          onChange={setFilter}
+          placeholder={t('launch.filesPicker.filterPlaceholder')}
+        />
         <span className="muted">
-          {selected.size} selected{min !== undefined ? ` / min ${min}` : ''}
-          {max !== undefined ? ` / max ${max}` : ''}
-          {allowedKinds !== undefined ? ` · kind: ${allowedKinds}` : ''}
+          {t('launch.filesPicker.selectedCount', { n: selected.size })}
+          {min !== undefined ? t('launch.filesPicker.minSuffix', { min }) : ''}
+          {max !== undefined ? t('launch.filesPicker.maxSuffix', { max }) : ''}
+          {allowedKinds !== undefined
+            ? t('launch.filesPicker.kindSuffix', { kinds: allowedKinds })
+            : ''}
         </span>
       </div>
       <ul className="files-picker__list">
@@ -94,7 +103,7 @@ export function FilesPicker({ def, repoPath, value, onChange }: Props) {
         ))}
       </ul>
       {visible.length > 500 && (
-        <div className="muted">…and {visible.length - 500} more. Tighten the filter.</div>
+        <div className="muted">{t('launch.filesPicker.moreHint', { n: visible.length - 500 })}</div>
       )}
     </div>
   )

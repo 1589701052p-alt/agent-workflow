@@ -105,7 +105,7 @@ function WorkflowsPage() {
               <th>{t('workflows.colName')}</th>
               <th>{t('workflows.colVersion')}</th>
               <th>{t('workflows.colId')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>

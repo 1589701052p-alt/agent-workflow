@@ -8,6 +8,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import type {
   RecentRepo,
   RepoRefsResponse,
@@ -365,6 +366,7 @@ function LaunchPage() {
             ) : (
               <DynamicInput
                 def={def}
+                t={t}
                 repoPath={primarySource.kind === 'path' ? primarySource.repoPath : ''}
                 value={inputs[def.key] ?? ''}
                 onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
@@ -393,11 +395,13 @@ function LaunchPage() {
 
 function DynamicInput({
   def,
+  t,
   repoPath,
   value,
   onChange,
 }: {
   def: WorkflowInput
+  t: TFunction
   repoPath: string
   value: string
   onChange: (next: string) => void
@@ -426,7 +430,13 @@ function DynamicInput({
   if (def.kind === 'git') {
     return <GitPicker def={def} repoPath={repoPath} value={value} onChange={onChange} />
   }
-  return <TextInput value={value} onChange={onChange} placeholder={`raw ${def.kind} value`} />
+  return (
+    <TextInput
+      value={value}
+      onChange={onChange}
+      placeholder={t('launch.rawInputPlaceholder', { kind: def.kind })}
+    />
+  )
 }
 
 /**

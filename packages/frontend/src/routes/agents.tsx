@@ -58,7 +58,7 @@ function AgentsPage() {
               <th>{t('agents.colDescription')}</th>
               <th>{t('agents.colOutputs')}</th>
               <th>{t('agents.colReadonly')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>

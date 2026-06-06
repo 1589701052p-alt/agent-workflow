@@ -9,6 +9,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoRefsResponse, WorkflowInput } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { Field, TextInput } from '@/components/Form'
@@ -40,6 +41,7 @@ interface PrValue {
 type GitValue = BranchValue | CommitRangeValue | PrValue
 
 export function GitPicker({ def, repoPath, value, onChange }: Props) {
+  const { t } = useTranslation()
   const gitKind = ((def as Record<string, unknown>).gitKind as GitKind | undefined) ?? 'branch'
   const refs = useQuery<RepoRefsResponse>({
     queryKey: ['repos', 'refs', repoPath],
@@ -65,14 +67,14 @@ export function GitPicker({ def, repoPath, value, onChange }: Props) {
   if (gitKind === 'branch') {
     const current = parsed?.kind === 'branch' ? parsed.ref : ''
     return (
-      <Field label="Branch" required>
+      <Field label={t('launch.gitPicker.branchLabel')} required>
         <Select<string>
           value={current}
-          ariaLabel="Branch"
-          placeholder="— pick a branch —"
+          ariaLabel={t('launch.gitPicker.branchLabel')}
+          placeholder={t('launch.pickBranchPlaceholder')}
           onChange={(ref) => emit({ kind: 'branch', ref })}
           options={[
-            { value: '', label: '— pick a branch —' },
+            { value: '', label: t('launch.pickBranchPlaceholder') },
             ...(refs.data?.branches ?? []).map((b) => ({ value: b, label: b })),
           ]}
         />
@@ -84,14 +86,14 @@ export function GitPicker({ def, repoPath, value, onChange }: Props) {
       parsed?.kind === 'commit-range' ? parsed : { kind: 'commit-range', from: '', to: '' }
     return (
       <div className="form-grid form-grid--cols-2">
-        <Field label="From (sha / ref)" required>
+        <Field label={t('launch.gitPicker.fromLabel')} required>
           <TextInput
             value={current.from}
             onChange={(v) => emit({ ...current, from: v })}
             placeholder="origin/main"
           />
         </Field>
-        <Field label="To (sha / ref)" required>
+        <Field label={t('launch.gitPicker.toLabel')} required>
           <TextInput
             value={current.to}
             onChange={(v) => emit({ ...current, to: v })}
@@ -104,7 +106,7 @@ export function GitPicker({ def, repoPath, value, onChange }: Props) {
   // pr
   const current: PrValue = parsed?.kind === 'pr' ? parsed : { kind: 'pr', number: '' }
   return (
-    <Field label="Pull request #" required>
+    <Field label={t('launch.gitPicker.prLabel')} required>
       <TextInput
         value={current.number}
         onChange={(v) => emit({ kind: 'pr', number: v })}

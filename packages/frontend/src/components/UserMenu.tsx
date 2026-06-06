@@ -112,7 +112,7 @@ export function UserMenu() {
             <span className="user-menu__role">
               {isDaemon
                 ? t('userMenu.daemonRole', { defaultValue: 'daemon admin' })
-                : data.user.role}
+                : t(`account.roles.${data.user.role}`)}
             </span>
           </div>
           {!isDaemon && (

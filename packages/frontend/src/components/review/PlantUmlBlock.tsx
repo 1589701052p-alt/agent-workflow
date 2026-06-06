@@ -29,6 +29,8 @@
 import DOMPurify from 'dompurify'
 import pako from 'pako'
 
+import i18n from '@/i18n'
+
 export const PlantUmlBlock = {
   /**
    * Synchronously mount the loading state, then kick off the fetch.
@@ -188,7 +190,9 @@ async function fetchAndSwap(
     return
   }
   const msg =
-    plantumlSyntaxError !== null ? plantumlSyntaxError : (lastErr?.message ?? 'unknown error')
+    plantumlSyntaxError !== null
+      ? plantumlSyntaxError
+      : (lastErr?.message ?? i18n.t('reviews.plantumlUnknownError'))
   mount.appendChild(buildErrorWithSource(source, msg))
 }
 
@@ -210,15 +214,16 @@ export function extractPlantUmlSyntaxError(body: string): string | null {
   const lineMatch = body.match(/From string \(line (\d+)\)/i)
   const reason = extractReasonFromErrorSvg(body)
   if (lineMatch !== null) {
-    const head = `PlantUML syntax error at line ${lineMatch[1]}`
-    return reason !== null ? `${head} — ${reason}` : `${head} (see source below)`
+    return reason !== null
+      ? i18n.t('reviews.plantumlSyntaxErrorLineAndReason', { line: lineMatch[1], reason })
+      : `${i18n.t('reviews.plantumlSyntaxErrorAtLine', { line: lineMatch[1] })}${i18n.t('reviews.plantumlSeeSourceSuffix')}`
   }
   if (reason !== null) {
-    return `PlantUML syntax error — ${reason}`
+    return i18n.t('reviews.plantumlSyntaxErrorReasonOnly', { reason })
   }
   // Some PlantUML versions write "Syntax Error?" without a line number.
   if (/Syntax Error/i.test(body)) {
-    return 'PlantUML syntax error (see source below)'
+    return i18n.t('reviews.plantumlSyntaxErrorGeneric')
   }
   return null
 }
@@ -277,8 +282,7 @@ function buildUnconfigured(source: string): HTMLElement {
   // plantuml-block.test.ts regex (/not configured/) still matches; the
   // banner styling in prose.css is what makes it read as a system notice
   // rather than markdown body text.
-  hint.textContent =
-    'PlantUML renderer not configured — set an endpoint in Settings → Rendering. Showing diagram source below.'
+  hint.textContent = i18n.t('reviews.plantumlUnconfigured')
   const pre = document.createElement('pre')
   pre.className = 'review-diagram__source'
   pre.textContent = source
@@ -290,7 +294,7 @@ function buildUnconfigured(source: string): HTMLElement {
 function buildLoading(): HTMLElement {
   const wrap = document.createElement('div')
   wrap.className = 'review-diagram__loading'
-  wrap.textContent = 'rendering…'
+  wrap.textContent = i18n.t('reviews.plantumlRendering')
   return wrap
 }
 
@@ -299,7 +303,7 @@ function buildErrorWithSource(source: string, msg: string): HTMLElement {
   wrap.className = 'review-diagram__error-wrap'
   const err = document.createElement('div')
   err.className = 'review-diagram__error'
-  err.textContent = `plantuml render failed: ${msg}`
+  err.textContent = i18n.t('reviews.plantumlRenderFailed', { msg })
   const pre = document.createElement('pre')
   pre.className = 'review-diagram__source'
   pre.textContent = source

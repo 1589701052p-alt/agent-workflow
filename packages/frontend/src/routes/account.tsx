@@ -19,12 +19,12 @@ export const Route = createRoute({
 function AccountPage() {
   const { t } = useTranslation()
   const { data, isLoading } = useActor()
-  if (isLoading) return <div className="page account-page">Loading…</div>
+  if (isLoading) return <div className="page account-page">{t('common.loading')}</div>
   if (!data) {
     return (
       <div className="page account-page">
         <h1>{t('account.title', { defaultValue: 'My account' })}</h1>
-        <p>Please sign in.</p>
+        <p>{t('account.pleaseSignIn')}</p>
       </div>
     )
   }
@@ -118,7 +118,8 @@ function PasswordSection() {
     onError: (e: unknown) =>
       setMsg({
         kind: 'err',
-        text: e instanceof ApiError ? e.message : ((e as Error).message ?? 'failed'),
+        text:
+          e instanceof ApiError ? e.message : ((e as Error).message ?? t('common.unknownError')),
       }),
   })
   return (

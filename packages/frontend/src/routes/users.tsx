@@ -66,7 +66,8 @@ function UsersPage() {
     onMutate: () => setRoleError(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
     onError: (e: unknown, vars) => {
-      const msg = e instanceof ApiError ? e.message : ((e as Error).message ?? 'failed')
+      const msg =
+        e instanceof ApiError ? e.message : ((e as Error).message ?? t('common.unknownError'))
       setRoleError({ id: vars.id, msg })
     },
   })
@@ -93,7 +94,7 @@ function UsersPage() {
           {t('users.new', { defaultValue: 'New user' })}
         </button>
       </header>
-      {isLoading && <div>Loading…</div>}
+      {isLoading && <div>{t('common.loading')}</div>}
       {error && <div className="auth-form__error">{(error as Error).message}</div>}
       <table className="data-table">
         <thead>

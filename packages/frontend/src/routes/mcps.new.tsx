@@ -7,8 +7,9 @@ import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Mcp } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
 import { McpFields } from '@/components/McpFields'
+import { describeApiError } from '@/i18n'
 import { buildCreatePayload, EMPTY_LOCAL_FORM, type McpFormState } from '@/lib/mcp-form'
 import { Route as RootRoute } from './__root'
 
@@ -30,6 +31,8 @@ function McpCreatePage() {
       const built = buildCreatePayload(form)
       if (!built.ok) {
         setErrors(built.errors)
+        // Internal validation sentinel: surfaced as inline field errors via
+        // setErrors, never shown in the form-actions error banner.
         throw new Error('form-invalid')
       }
       setErrors({})
@@ -60,16 +63,12 @@ function McpCreatePage() {
         >
           {create.isPending ? t('common.creating') : t('mcps.createButton')}
         </button>
-        {create.error !== null && create.error !== undefined && (
-          <span className="form-actions__error">{describeError(create.error)}</span>
-        )}
+        {create.error !== null &&
+          create.error !== undefined &&
+          !(create.error instanceof Error && create.error.message === 'form-invalid') && (
+            <span className="form-actions__error">{describeApiError(create.error)}</span>
+          )}
       </div>
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

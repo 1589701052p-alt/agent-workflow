@@ -47,6 +47,11 @@ export interface Resources {
       pendingMemoryGroup: string
       pendingMemoryEmpty: string
       memoryItemSubtitle: string
+      clarifyShardOrIter: string
+      clarifySubtitle: string
+      badgeAria: string
+      shardLabel: string
+      iterLabel: string
     }
     // RFC-041 PR4: top-level Memory route.
     memory: string
@@ -91,6 +96,7 @@ export interface Resources {
       statusFailed: string
       statusCanceled: string
       statusInterrupted: string
+      statusPending: string
       relativeJustNow: string
       relativeMinAgo: string
       relativeHourAgo: string
@@ -136,11 +142,15 @@ export interface Resources {
     toolNamingHint: string
     cwdHint: string
     oauthCliHint: string
+    oauthModeAuto: string
+    oauthModeDisabled: string
     // RFC-030 — probe columns + expand block.
     colStatus: string
     colLatency: string
     colToolCount: string
     probe: {
+      latencyMs: string
+      latencySec: string
       btnRun: string
       btnRunning: string
       viewFull: string
@@ -230,6 +240,16 @@ export interface Resources {
     upgradeButton: string
     upgrading: string
     errorOptionsJson: string
+    errors: {
+      nameInvalid: string
+      specRequired: string
+      specTooLong: string
+    }
+    sourceKind: {
+      npm: string
+      file: string
+      git: string
+    }
   }
   reviews: {
     title: string
@@ -317,6 +337,23 @@ export interface Resources {
       noComments: string
       badge: string
     }
+    decision: {
+      approved: string
+      rejected: string
+      iterated: string
+      pending: string
+    }
+    rerunDirectUpstream: string
+    decisionActionsAria: string
+    plantumlUnknownError: string
+    plantumlSyntaxErrorAtLine: string
+    plantumlSyntaxErrorLineAndReason: string
+    plantumlSyntaxErrorReasonOnly: string
+    plantumlSyntaxErrorGeneric: string
+    plantumlSeeSourceSuffix: string
+    plantumlUnconfigured: string
+    plantumlRendering: string
+    plantumlRenderFailed: string
   }
   auth: {
     title: string
@@ -426,6 +463,11 @@ export interface Resources {
       settingsRead: { label: string; desc: string }
       settingsWrite: { label: string; desc: string }
       tasksReadAll: { label: string; desc: string }
+    }
+    pleaseSignIn: string
+    roles: {
+      admin: string
+      user: string
     }
   }
   // RFC-036 — /users admin page.
@@ -555,6 +597,8 @@ export interface Resources {
     renderingTestSuccess: string
     renderingTestFailure: string
     renderingTestEmptyEndpoint: string
+    renderingTestUnknownError: string
+    renderingTestTimeout: string
     // RFC-036 — Authentication tab (OIDC providers admin).
     auth: {
       providersTitle: string
@@ -605,6 +649,10 @@ export interface Resources {
       enabledHint: string
       testOk: string
       testFail: string
+      testSaveFirst: string
+      testDetailIssuer: string
+      testDetailToken: string
+      testDetailJwks: string
     }
   }
   onboarding: {
@@ -645,6 +693,17 @@ export interface Resources {
     empty: string
     optionalPlaceholder: string
     confirmPrompt: string
+    close: string
+    selectAnOption: string
+    ariaActions: string
+    ariaExpandColumn: string
+    removeAria: string
+    duplicateError: string
+    invalidJson: string
+    jsonMustBeObject: string
+    emptyResource: string
+    startedAt: string
+    finishedAt: string
   }
   agents: {
     title: string
@@ -746,6 +805,19 @@ export interface Resources {
     zipRenameConflict: string
     zipConflictManaged: string
     zipConflictExternal: string
+    fileDiscardConfirm: string
+    fileErrPathRequired: string
+    fileErrRelativeOnly: string
+    fileTreeHeader: string
+    fileTreeEmpty: string
+    fileNewPathPlaceholder: string
+    fileAddButton: string
+    fileEditorEmpty: string
+    fileLoadingNamed: string
+    fileDeleteButton: string
+    zipParseFailedFallback: string
+    zipCommitFailedFallback: string
+    zipErrorWholeArchiveLabel: string
   }
   workflows: {
     title: string
@@ -959,6 +1031,7 @@ export interface Resources {
     worktreeFilesDownload: string
     worktreeFilesDownloading: string
     worktreeFilesDownloadError: string
+    worktreeFilesTreeAria: string
     noWorkflowSnapshot: string
     noBaseCommit: string
     loadingDiff: string
@@ -1038,6 +1111,9 @@ export interface Resources {
     menuWrapLoop: string
     menuDecompose: string
     boxSelectHint: string
+    menuSelectedCount: string
+    nodeTitleUnsetAgent: string
+    nodeTitleUnsetKey: string
   }
   launch: {
     title: string
@@ -1068,6 +1144,8 @@ export interface Resources {
       targetDirHint: string
       acceptHint: string
       maxSizeHint: string
+      minHint: string
+      maxHint: string
     }
     repoSource: {
       bar: string
@@ -1126,6 +1204,23 @@ export interface Resources {
     autoCommitPush: {
       label: string
       hint: string
+    }
+    rawInputPlaceholder: string
+    filesPicker: {
+      pickRepoFirst: string
+      loading: string
+      filterPlaceholder: string
+      selectedCount: string
+      minSuffix: string
+      maxSuffix: string
+      kindSuffix: string
+      moreHint: string
+    }
+    gitPicker: {
+      branchLabel: string
+      fromLabel: string
+      toLabel: string
+      prLabel: string
     }
   }
   inspector: {
@@ -1270,6 +1365,7 @@ export interface Resources {
     clarifySessionModeIsolated: string
     clarifySessionModeInline: string
     clarifySessionModeHint: string
+    missingOption: string
   }
   promptPreview: {
     mockTitle: string
@@ -1412,6 +1508,9 @@ export interface Resources {
         frontmatterExtra: string
       }
     }
+    markdownEditLabel: string
+    markdownPreviewLabel: string
+    markdownPreviewEmpty: string
   }
   // RFC-022: shared visual for the agent dependsOn closure (DependencyTree
   // component + buildDependencyTree helper). Used by AgentForm edit preview
@@ -1428,6 +1527,9 @@ export interface Resources {
     writes: string
     seeAbove: string
     cycleHeading: string
+    ariaTreeLabel: string
+    missingPrefix: string
+    openAgentAria: string
   }
   dependencyTreePreview: {
     emptyHint: string
@@ -1531,6 +1633,9 @@ export interface Resources {
         'in-flight': string
       }
     }
+    statSession: string
+    unknownPlugin: string
+    sessionParentBadge: string
   }
   noderunStatus: {
     pending: string
@@ -1810,6 +1915,7 @@ export interface Resources {
     statusError: string
     loadError: string
     empty: string
+    toolInput: string
   }
   // RFC-041 PR4: platform memory UI surface.
   memory: {
@@ -1903,6 +2009,12 @@ export interface Resources {
       repo: string
       global: string
     }
+    scopeRow: {
+      agentCount: string
+      workflowPrefix: string
+      repoPrefix: string
+      global: string
+    }
     status: {
       candidate: string
       approved: string
@@ -1975,6 +2087,8 @@ export interface Resources {
       sessionLoadError: string
       sourceDeleted: string
       stderrLabel: string
+      exitCodeLabel: string
+      stderrClipped: string
     }
   }
   // RFC-041 PR4: per-task feedback ("dear future me") area.
@@ -2144,6 +2258,11 @@ export const zhCN: Resources = {
       pendingMemoryGroup: '待审批记忆 ({{count}})',
       pendingMemoryEmpty: '暂无候选记忆',
       memoryItemSubtitle: '{{scope}} · {{kind}}',
+      clarifyShardOrIter: '分片 {{shard}} / 第 {{iter}} 轮',
+      clarifySubtitle: '← {{agent}} · {{detail}}',
+      badgeAria: '{{n}} 项待处理',
+      shardLabel: '分片 {{shard}}',
+      iterLabel: '第 {{iter}} 轮',
     },
     memory: '记忆',
     memoryHint: '从过往反问、评审与反馈中沉淀的长期上下文',
@@ -2187,6 +2306,7 @@ export const zhCN: Resources = {
       statusFailed: '失败',
       statusCanceled: '已取消',
       statusInterrupted: '已中断',
+      statusPending: '排队中',
       relativeJustNow: '刚刚',
       relativeMinAgo: '{{n}} 分钟前',
       relativeHourAgo: '{{n}} 小时前',
@@ -2278,6 +2398,24 @@ export const zhCN: Resources = {
       noComments: '（暂无评审意见）',
       badge: '多文档',
     },
+    decision: {
+      approved: '通过',
+      rejected: '退回',
+      iterated: '迭代',
+      pending: '待定',
+    },
+    rerunDirectUpstream: '（直接上游）',
+    decisionActionsAria: '决策',
+    plantumlUnknownError: '未知错误',
+    plantumlSyntaxErrorAtLine: 'PlantUML 语法错误，位于第 {{line}} 行',
+    plantumlSyntaxErrorLineAndReason: 'PlantUML 语法错误，位于第 {{line}} 行 — {{reason}}',
+    plantumlSyntaxErrorReasonOnly: 'PlantUML 语法错误 — {{reason}}',
+    plantumlSyntaxErrorGeneric: 'PlantUML 语法错误（见下方源码）',
+    plantumlSeeSourceSuffix: ' （见下方源码）',
+    plantumlUnconfigured:
+      'PlantUML 渲染器未配置 —— 请在 设置 → 渲染 中设置 endpoint。下方显示图源。',
+    plantumlRendering: '渲染中…',
+    plantumlRenderFailed: 'PlantUML 渲染失败：{{msg}}',
   },
   auth: {
     title: '登录',
@@ -2397,6 +2535,11 @@ export const zhCN: Resources = {
         label: '查看所有任务',
         desc: '不止 owner 或 collaborator —— 整库可见。仅管理员。',
       },
+    },
+    pleaseSignIn: '请先登录。',
+    roles: {
+      admin: '管理员',
+      user: '用户',
     },
   },
   users: {
@@ -2531,6 +2674,8 @@ export const zhCN: Resources = {
     renderingTestSuccess: '已返回 svg，端点可用。',
     renderingTestFailure: '渲染失败：',
     renderingTestEmptyEndpoint: '请先填写端点 URL。',
+    renderingTestUnknownError: '未知',
+    renderingTestTimeout: '超时',
     auth: {
       providersTitle: 'OIDC 身份提供商',
       providersHint:
@@ -2583,6 +2728,10 @@ export const zhCN: Resources = {
       enabledHint: '开启后会出现在登录页；关闭则隐藏。',
       testOk: '连接成功',
       testFail: '连接失败',
+      testSaveFirst: '请先保存，再运行测试',
+      testDetailIssuer: 'issuer：',
+      testDetailToken: 'token：',
+      testDetailJwks: 'jwks：',
     },
   },
   onboarding: {
@@ -2627,6 +2776,17 @@ export const zhCN: Resources = {
     empty: '（空）',
     optionalPlaceholder: '（可选）',
     confirmPrompt: '确认？',
+    close: '关闭',
+    selectAnOption: '请选择',
+    ariaActions: '操作',
+    ariaExpandColumn: '展开',
+    removeAria: '移除 {{label}}',
+    duplicateError: '重复：{{token}}',
+    invalidJson: 'JSON 无效',
+    jsonMustBeObject: '必须是 JSON 对象',
+    emptyResource: '暂无{{title}}。',
+    startedAt: '开始时间',
+    finishedAt: '完成时间',
   },
   agents: {
     title: '代理',
@@ -2728,6 +2888,19 @@ export const zhCN: Resources = {
     zipRenameConflict: '名称已被占用',
     zipConflictManaged: '已存在 managed 技能',
     zipConflictExternal: 'external 技能 — 不支持 ZIP 覆盖',
+    fileDiscardConfirm: '放弃未保存的修改？',
+    fileErrPathRequired: '路径必填',
+    fileErrRelativeOnly: '仅允许相对路径；不能包含 ".."',
+    fileTreeHeader: '文件',
+    fileTreeEmpty: '暂无文件。',
+    fileNewPathPlaceholder: 'path/to/new-file.md',
+    fileAddButton: '+ 新增',
+    fileEditorEmpty: '请在左侧选择文件，或新增一个。',
+    fileLoadingNamed: '正在加载 {{name}}…',
+    fileDeleteButton: '删除文件',
+    zipParseFailedFallback: '解析 zip 失败',
+    zipCommitFailedFallback: '提交失败（{{status}}）',
+    zipErrorWholeArchiveLabel: '(zip)',
   },
   mcps: {
     title: 'MCP 服务器',
@@ -2773,11 +2946,15 @@ export const zhCN: Resources = {
       'stdio 子进程会在该 task 的 worktree 目录下启动（opencode 端没有 cwd 字段，所以这里也不提供）。',
     oauthCliHint:
       'remote MCP 走 OAuth 时，建议先在主机上执行 `opencode mcp auth <name>` 完成一次浏览器登录，token 会落到 ~/.opencode/auth/，之后所有 opencode 子进程都能复用。',
+    oauthModeAuto: '自动',
+    oauthModeDisabled: '禁用',
     // RFC-030 — probe columns + expand block.
     colStatus: '状态',
     colLatency: '延时',
     colToolCount: '工具',
     probe: {
+      latencyMs: '{{ms}} ms',
+      latencySec: '{{s}} s',
       btnRun: '重新探测',
       btnRunning: '探测中…',
       viewFull: '查看完整接口',
@@ -2869,6 +3046,16 @@ export const zhCN: Resources = {
     upgradeButton: '升级',
     upgrading: '升级中…',
     errorOptionsJson: 'Options 必须是合法的 JSON 对象。',
+    errors: {
+      nameInvalid: 'name 必须匹配 [a-z0-9][a-z0-9_-]* 且长度 1–64',
+      specRequired: 'spec 必填',
+      specTooLong: 'spec 过长（最多 512 字符）',
+    },
+    sourceKind: {
+      npm: 'npm',
+      file: '文件',
+      git: 'Git',
+    },
   },
   workflows: {
     title: '工作流',
@@ -3079,6 +3266,7 @@ export const zhCN: Resources = {
     worktreeFilesDownload: '下载',
     worktreeFilesDownloading: '下载中…',
     worktreeFilesDownloadError: '下载失败。',
+    worktreeFilesTreeAria: 'worktree 文件',
     noWorkflowSnapshot: '没有工作流快照。',
     noBaseCommit: '未记录 base commit；diff 不可用。',
     loadingDiff: '加载 diff 中…',
@@ -3157,6 +3345,9 @@ export const zhCN: Resources = {
     menuWrapLoop: '用 loop wrapper 包装',
     menuDecompose: '解组 wrapper',
     boxSelectHint: '按住 Shift 框选',
+    menuSelectedCount: '已选 {{n}} 个',
+    nodeTitleUnsetAgent: '(未设置代理)',
+    nodeTitleUnsetKey: '(未设置 key)',
   },
   launch: {
     title: '启动：{{name}}',
@@ -3187,6 +3378,8 @@ export const zhCN: Resources = {
       targetDirHint: '提交时会写入 worktree 的相对目录：{{dir}}',
       acceptHint: '接受类型：{{accept}}',
       maxSizeHint: '单文件上限：{{bytes}} 字节',
+      minHint: ' / 最少 {{n}}',
+      maxHint: ' / 最多 {{n}}',
     },
     repoSource: {
       bar: '仓库来源',
@@ -3237,6 +3430,23 @@ export const zhCN: Resources = {
       switchLabel: '启动前先 `git fetch --all --prune --tags`',
       switchHint:
         '仅刷新远端跟踪 ref；不会 `pull` / `merge` / `checkout`，工作目录与当前分支保持原样。',
+    },
+    rawInputPlaceholder: '原始 {{kind}} 值',
+    filesPicker: {
+      pickRepoFirst: '请先选择仓库以加载文件路径。',
+      loading: '正在加载文件…',
+      filterPlaceholder: '筛选路径…',
+      selectedCount: '已选 {{n}} 个',
+      minSuffix: ' / 最少 {{min}}',
+      maxSuffix: ' / 最多 {{max}}',
+      kindSuffix: ' · 类型：{{kinds}}',
+      moreHint: '…还有 {{n}} 项，请收窄筛选条件。',
+    },
+    gitPicker: {
+      branchLabel: '分支',
+      fromLabel: '起始 (sha / ref)',
+      toLabel: '结束 (sha / ref)',
+      prLabel: 'Pull request #',
     },
   },
   inspector: {
@@ -3382,6 +3592,7 @@ export const zhCN: Resources = {
     clarifySessionModeInline: '同 session 内反问',
     clarifySessionModeHint:
       '选「同 session」时 agent 在每轮反问之间保留完整对话历史（省 token + 响应更快）；session 失效时自动回退到独立模式。',
+    missingOption: '{{value}}(缺失)',
   },
   promptPreview: {
     mockTitle: '模拟端口值',
@@ -3531,6 +3742,9 @@ export const zhCN: Resources = {
         frontmatterExtra: '→ frontmatterExtra',
       },
     },
+    markdownEditLabel: '编辑',
+    markdownPreviewLabel: '预览',
+    markdownPreviewEmpty: '暂无可预览内容。',
   },
   dependencyTree: {
     skills: '技能：{{names}}',
@@ -3540,6 +3754,9 @@ export const zhCN: Resources = {
     writes: '可写',
     seeAbove: '↑ 见上',
     cycleHeading: '依赖闭包检测到环：',
+    ariaTreeLabel: '依赖树',
+    missingPrefix: '<缺失> {{name}}',
+    openAgentAria: '打开代理 {{name}}',
   },
   dependencyTreePreview: {
     emptyHint: '暂未声明依赖代理；上方添加后会在此实时显示闭包。',
@@ -3645,6 +3862,9 @@ export const zhCN: Resources = {
         'in-flight': '正在运行，清单生成中…',
       },
     },
+    statSession: 'opencode 会话',
+    unknownPlugin: '(未知插件)',
+    sessionParentBadge: '父级',
   },
   noderunStatus: {
     pending: '待运行',
@@ -3962,6 +4182,7 @@ export const zhCN: Resources = {
     statusError: '出错',
     loadError: '加载会话失败。',
     empty: '本轮 session 暂无事件。',
+    toolInput: '输入',
   },
   memory: {
     title: '平台长期记忆',
@@ -4054,6 +4275,12 @@ export const zhCN: Resources = {
       repo: '仓库',
       global: '全局',
     },
+    scopeRow: {
+      agentCount: '代理 · {{n}}',
+      workflowPrefix: '工作流 · ',
+      repoPrefix: '仓库 · ',
+      global: '全局',
+    },
     status: {
       candidate: '候选',
       approved: '已批准',
@@ -4123,6 +4350,8 @@ export const zhCN: Resources = {
       sessionLoadError: '加载对话失败',
       sourceDeleted: '源已删除',
       stderrLabel: '子进程 stderr（截断）',
+      exitCodeLabel: '退出码',
+      stderrClipped: '\n…(显示时截断至 {{n}} 字符)',
     },
   },
   taskFeedback: {

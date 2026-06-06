@@ -4,8 +4,17 @@
 // → unconfigured fallback / error display). Uses vitest's vi.stubGlobal
 // to swap `fetch` for each scenario.
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import i18n from '@/i18n'
 import { PlantUmlBlock, extractPlantUmlSyntaxError } from '@/components/review/PlantUmlBlock'
+
+// The unconfigured-hint / render-failed copy moved into the i18n bundle
+// (reviews.plantuml*). This file's assertions check the English wording, so
+// pin the locale to en-US before any render. vitest isolates modules per file,
+// so this does not leak into other suites.
+beforeAll(async () => {
+  await i18n.changeLanguage('en-US')
+})
 
 function makeMount(): HTMLDivElement {
   const el = document.createElement('div')

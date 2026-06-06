@@ -12,6 +12,7 @@
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import type { McpProbe, McpToolInfo } from '@agent-workflow/shared'
 import { McpProbeStatusChip, type McpProbeUiStatus } from '@/components/McpProbeStatusChip'
 import { useMcpProbe, useProbeMcpMutation } from '@/lib/mcp-probe-query'
@@ -49,7 +50,7 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
             : t('mcps.probe.lastProbed', {
                 at: formatTimestamp(probe.updatedAt),
               })}
-          {probe !== null && ` · ${formatLatency(probe.latencyMs)}`}
+          {probe !== null && ` · ${formatLatency(probe.latencyMs, t)}`}
         </span>
         <button
           type="button"
@@ -285,9 +286,9 @@ function CapabilitiesSection(props: { capabilities: McpProbe['capabilities'] }) 
   )
 }
 
-function formatLatency(ms: number): string {
-  if (ms < 1000) return `${ms} ms`
-  return `${(ms / 1000).toFixed(2)} s`
+function formatLatency(ms: number, t: TFunction): string {
+  if (ms < 1000) return t('mcps.probe.latencyMs', { ms })
+  return t('mcps.probe.latencySec', { s: (ms / 1000).toFixed(2) })
 }
 
 function formatTimestamp(ms: number): string {

@@ -17,19 +17,25 @@ export function ScopeAndDedupSnapshot({ scope, snapshot }: Props) {
     <div className="distill-job-detail__scope" data-testid="distill-scope-and-dedup">
       <div className="distill-job-detail__scope-row">
         {scope.agentIds.length > 0 && (
-          <span className="distill-job-detail__scope-chip">agents · {scope.agentIds.length}</span>
+          <span className="distill-job-detail__scope-chip">
+            {t('memory.scopeRow.agentCount', { n: scope.agentIds.length })}
+          </span>
         )}
         {scope.workflowId !== null && (
           <span className="distill-job-detail__scope-chip">
-            workflow · <code>{scope.workflowId}</code>
+            {t('memory.scopeRow.workflowPrefix')}
+            <code>{scope.workflowId}</code>
           </span>
         )}
         {scope.repoId !== null && (
           <span className="distill-job-detail__scope-chip">
-            repo · <code>{scope.repoId}</code>
+            {t('memory.scopeRow.repoPrefix')}
+            <code>{scope.repoId}</code>
           </span>
         )}
-        {scope.includeGlobal && <span className="distill-job-detail__scope-chip">global</span>}
+        {scope.includeGlobal && (
+          <span className="distill-job-detail__scope-chip">{t('memory.scopeRow.global')}</span>
+        )}
       </div>
       <h3 className="distill-job-detail__section-subhead">
         {t('memory.distillJobDetail.dedupSnapshotLabel')}

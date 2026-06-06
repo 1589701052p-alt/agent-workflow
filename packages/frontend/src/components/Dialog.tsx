@@ -13,6 +13,7 @@
 
 import { useEffect, useId, useRef, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 
 export type DialogSize = 'sm' | 'md' | 'lg'
 
@@ -46,6 +47,7 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export function Dialog(props: DialogProps): ReactElement | null {
+  const { t } = useTranslation()
   const size: DialogSize = props.size ?? 'md'
   const closeOnOverlay = props.closeOnOverlayClick ?? true
   const closeOnEsc = props.closeOnEsc ?? true
@@ -89,7 +91,7 @@ export function Dialog(props: DialogProps): ReactElement | null {
   useEffect(() => {
     if (!props.open) return
     restoreRef.current = document.activeElement as HTMLElement | null
-    const t = window.setTimeout(() => {
+    const focusTimer = window.setTimeout(() => {
       const target =
         props.initialFocusRef?.current ??
         panelRef.current?.querySelector<HTMLElement>(FOCUSABLE) ??
@@ -97,7 +99,7 @@ export function Dialog(props: DialogProps): ReactElement | null {
       target?.focus?.()
     }, 0)
     return () => {
-      window.clearTimeout(t)
+      window.clearTimeout(focusTimer)
       const restoreTarget = props.triggerRef?.current ?? restoreRef.current
       restoreTarget?.focus?.()
     }
@@ -177,7 +179,7 @@ export function Dialog(props: DialogProps): ReactElement | null {
             type="button"
             className="dialog__close"
             onClick={props.onClose}
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             ×
           </button>

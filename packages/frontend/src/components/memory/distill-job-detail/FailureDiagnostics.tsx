@@ -23,7 +23,7 @@ export function FailureDiagnostics({ job }: Props) {
       <dl className="distill-job-detail__diagnostics-list">
         <dt>{t('memory.distillJobs.colAttempts')}</dt>
         <dd>{job.attempts}</dd>
-        <dt>Exit code</dt>
+        <dt>{t('memory.distillJobDetail.exitCodeLabel')}</dt>
         <dd>
           <code>{formatExitCode(job.exitCode ?? null)}</code>
         </dd>

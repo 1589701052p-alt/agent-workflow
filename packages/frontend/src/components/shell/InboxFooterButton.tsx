@@ -53,7 +53,7 @@ export function InboxFooterButton({ open, onToggle }: InboxFooterButtonProps) {
         <span
           className="sidebar__badge inbox-footer-button__badge"
           data-testid="inbox-footer-badge"
-          aria-label={`${total} pending items`}
+          aria-label={t('nav.inbox.badgeAria', { n: total })}
         >
           {badgeText}
         </span>

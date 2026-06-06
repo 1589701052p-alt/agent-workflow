@@ -91,7 +91,7 @@ function TasksPage() {
               <th>{t('tasks.colStarted')}</th>
               <th>{t('tasks.colRepo')}</th>
               <th>{t('tasks.colError')}</th>
-              <th aria-label="actions" />
+              <th aria-label={t('common.ariaActions')} />
             </tr>
           </thead>
           <tbody>

@@ -3,6 +3,7 @@
 // the last chip. No drag-reorder for M1; that's a P-1-17 stretch.
 
 import { useState, type KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface ChipsInputProps {
   value: string[]
@@ -26,6 +27,7 @@ export function ChipsInput({
   disabled,
   testidPrefix,
 }: ChipsInputProps) {
+  const { t } = useTranslation()
   const [pending, setPending] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -33,7 +35,7 @@ export function ChipsInput({
     const token = raw.trim()
     if (token === '') return
     if (value.includes(token)) {
-      setError(`duplicate: ${token}`)
+      setError(t('common.duplicateError', { token }))
       return
     }
     if (validate) {
@@ -71,7 +73,7 @@ export function ChipsInput({
               type="button"
               className="chip__remove"
               onClick={() => remove(i)}
-              aria-label={`Remove ${token}`}
+              aria-label={t('common.removeAria', { label: token })}
               disabled={disabled}
               data-testid={
                 testidPrefix !== undefined ? `${testidPrefix}-remove-${token}` : undefined

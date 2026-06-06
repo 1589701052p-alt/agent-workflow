@@ -6,8 +6,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { FileNode } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
+import { describeApiError } from '@/i18n'
 import { ConfirmButton } from './ConfirmButton'
 import { TextArea, TextInput } from './Form'
 
@@ -17,6 +19,7 @@ interface Props {
 }
 
 export function SkillFileTree({ skillName, readonly = false }: Props) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const treeKey = ['skill-files', skillName]
   const [selected, setSelected] = useState<string | null>(null)
@@ -84,7 +87,7 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
   })
 
   function handleSelect(path: string) {
-    if (dirty && !confirm('Discard unsaved changes?')) return
+    if (dirty && !confirm(t('skills.fileDiscardConfirm'))) return
     setSelected(path)
     setDraft('')
     setDirty(false)
@@ -93,11 +96,11 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
   function handleAdd() {
     const p = newPath.trim()
     if (p === '') {
-      setNewError('path required')
+      setNewError(t('skills.fileErrPathRequired'))
       return
     }
     if (p.startsWith('/') || p.includes('..')) {
-      setNewError('relative paths only; no ".."')
+      setNewError(t('skills.fileErrRelativeOnly'))
       return
     }
     setNewError(null)
@@ -117,13 +120,13 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
   return (
     <div className="file-tree">
       <div className="file-tree__sidebar">
-        <div className="file-tree__header">Files</div>
-        {tree.isLoading && <div className="muted">Loading…</div>}
+        <div className="file-tree__header">{t('skills.fileTreeHeader')}</div>
+        {tree.isLoading && <div className="muted">{t('common.loading')}</div>}
         {tree.error !== null && tree.error !== undefined && (
-          <div className="error-box">{describeError(tree.error)}</div>
+          <div className="error-box">{describeApiError(tree.error)}</div>
         )}
         {tree.data !== undefined && tree.data.length === 0 && (
-          <div className="muted">No files yet.</div>
+          <div className="muted">{t('skills.fileTreeEmpty')}</div>
         )}
         <ul className="file-tree__list">
           {(tree.data ?? []).map((f) => (
@@ -148,7 +151,7 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
                 setNewPath(v)
                 setNewError(null)
               }}
-              placeholder="path/to/new-file.md"
+              placeholder={t('skills.fileNewPathPlaceholder')}
             />
             <button
               type="button"
@@ -156,7 +159,7 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
               onClick={handleAdd}
               disabled={save.isPending}
             >
-              + Add
+              {t('skills.fileAddButton')}
             </button>
             {newError !== null && <div className="file-tree__err">{newError}</div>}
           </div>
@@ -165,9 +168,9 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
 
       <div className="file-tree__editor">
         {selected === null ? (
-          <div className="muted">Select a file on the left, or add a new one.</div>
+          <div className="muted">{t('skills.fileEditorEmpty')}</div>
         ) : file.isLoading ? (
-          <div className="muted">Loading {selected}…</div>
+          <div className="muted">{t('skills.fileLoadingNamed', { name: selected })}</div>
         ) : (
           <>
             <div className="file-tree__path-bar">
@@ -179,11 +182,11 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
                   disabled={!dirty || save.isPending || readonly}
                   onClick={() => save.mutate({ path: selected, content: draft })}
                 >
-                  {save.isPending ? 'Saving…' : 'Save'}
+                  {save.isPending ? t('common.saving') : t('common.save')}
                 </button>
                 {!readonly && (
                   <ConfirmButton
-                    label="Delete file"
+                    label={t('skills.fileDeleteButton')}
                     onConfirm={() => del.mutateAsync(selected)}
                     danger
                     disabled={del.isPending}
@@ -201,17 +204,11 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
               monospace
             />
             {save.error !== null && save.error !== undefined && (
-              <div className="error-box">{describeError(save.error)}</div>
+              <div className="error-box">{describeApiError(save.error)}</div>
             )}
           </>
         )}
       </div>
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

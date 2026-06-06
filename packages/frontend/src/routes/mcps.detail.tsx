@@ -7,8 +7,9 @@ import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Mcp } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { describeApiError } from '@/i18n'
 import { McpFields } from '@/components/McpFields'
 import { McpInventoryPanel } from '@/components/mcps/McpInventoryPanel'
 import { buildCreatePayload, EMPTY_LOCAL_FORM, mcpToForm, type McpFormState } from '@/lib/mcp-form'
@@ -70,7 +71,7 @@ function McpDetailPage() {
 
   if (query.isLoading) return <div className="page muted">{t('common.loading')}</div>
   if (query.error !== null && query.error !== undefined)
-    return <div className="page error-box">{describeError(query.error)}</div>
+    return <div className="page error-box">{describeApiError(query.error)}</div>
 
   return (
     <div className="page">
@@ -102,10 +103,10 @@ function McpDetailPage() {
       (del.error !== null && del.error !== undefined) ? (
         <div className="form-actions">
           {save.error !== null && save.error !== undefined && (
-            <span className="form-actions__error">{describeError(save.error)}</span>
+            <span className="form-actions__error">{describeApiError(save.error)}</span>
           )}
           {del.error !== null && del.error !== undefined && (
-            <span className="form-actions__error">{describeError(del.error)}</span>
+            <span className="form-actions__error">{describeApiError(del.error)}</span>
           )}
         </div>
       ) : null}
@@ -119,10 +120,4 @@ function McpDetailPage() {
       <McpFields value={form} onChange={setForm} nameLocked errors={errors} />
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

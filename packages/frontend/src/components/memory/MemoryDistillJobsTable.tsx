@@ -80,7 +80,7 @@ export function MemoryDistillJobsTable() {
                   {t(`memory.distillJobs.status.${job.status}`)}
                 </span>
               </td>
-              <td>{job.sourceKind}</td>
+              <td>{t(`memory.sourceKind.${job.sourceKind}`)}</td>
               <td>{job.attempts}</td>
               <td className="muted">{new Date(job.createdAt).toLocaleString()}</td>
               <td className="memory-distill-status__error">{job.lastError ?? ''}</td>

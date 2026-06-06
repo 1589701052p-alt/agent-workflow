@@ -1,5 +1,8 @@
 // Shared placeholder list rendering. Real DataTable arrives in P-1-17.
 
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
+
 import { ApiError } from '@/api/client'
 
 export interface ResourceListItem {
@@ -17,16 +20,17 @@ export interface ResourceListProps {
 }
 
 export function ResourceList({ title, placeholder, items, isLoading, error }: ResourceListProps) {
+  const { t } = useTranslation()
   return (
     <div className="page">
       <header className="page__header">
         <h1>{title}</h1>
         <p className="page__hint">{placeholder}</p>
       </header>
-      {isLoading && <div className="muted">Loading…</div>}
-      {error !== null && error !== undefined && <ErrorBox error={error} />}
+      {isLoading && <div className="muted">{t('common.loading')}</div>}
+      {error !== null && error !== undefined && <ErrorBox error={error} t={t} />}
       {!isLoading && error === null && items.length === 0 && (
-        <div className="muted">No {title.toLowerCase()} yet.</div>
+        <div className="muted">{t('common.emptyResource', { title: title.toLowerCase() })}</div>
       )}
       {items.length > 0 && (
         <ul className="resource-list">
@@ -44,8 +48,8 @@ export function ResourceList({ title, placeholder, items, isLoading, error }: Re
   )
 }
 
-function ErrorBox({ error }: { error: unknown }) {
-  let label = 'Unknown error'
+function ErrorBox({ error, t }: { error: unknown; t: TFunction }) {
+  let label = t('common.unknownError')
   if (error instanceof ApiError) label = `${error.code}: ${error.message}`
   else if (error instanceof Error) label = error.message
   return <div className="error-box">⚠ {label}</div>

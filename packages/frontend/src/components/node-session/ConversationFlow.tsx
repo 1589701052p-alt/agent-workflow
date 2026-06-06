@@ -86,7 +86,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
           {message.input !== undefined && message.input !== null ? (
             <details className="session-block__details">
               <summary>
-                <span className="session-block__details-tag">input</span>
+                <span className="session-block__details-tag">{t('session.toolInput')}</span>
               </summary>
               <pre className="session-block__body">{stringify(message.input)}</pre>
             </details>

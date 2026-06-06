@@ -10,6 +10,7 @@
 
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 
 export interface SelectOption<V extends string> {
   value: V
@@ -51,6 +52,7 @@ interface Props<V extends string> {
 }
 
 export function Select<V extends string>(props: Props<V>) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState<number>(() =>
     Math.max(
@@ -194,7 +196,7 @@ export function Select<V extends string>(props: Props<V>) {
             ref={listRef}
             tabIndex={-1}
             role="listbox"
-            aria-label={props.ariaLabel ?? 'Select an option'}
+            aria-label={props.ariaLabel ?? t('common.selectAnOption')}
             aria-activedescendant={`${popoverId}-opt-${activeIndex}`}
             className="select__listbox select__listbox--portal"
             onKeyDown={onListKey}

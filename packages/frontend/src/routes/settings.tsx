@@ -620,12 +620,17 @@ function RenderingTab({ config }: TabProps) {
         return
       }
       if (mount.querySelector('.review-diagram__error') !== null) {
-        const errText = mount.querySelector('.review-diagram__error')?.textContent ?? 'unknown'
+        const errText =
+          mount.querySelector('.review-diagram__error')?.textContent ??
+          t('settings.renderingTestUnknownError')
         setTestState({ kind: 'failure', msg: t('settings.renderingTestFailure') + errText })
         return
       }
     }
-    setTestState({ kind: 'failure', msg: t('settings.renderingTestFailure') + 'timeout' })
+    setTestState({
+      kind: 'failure',
+      msg: t('settings.renderingTestFailure') + t('settings.renderingTestTimeout'),
+    })
   }
 
   return (
@@ -899,7 +904,7 @@ function OidcProviderDialog(props: {
       // Mode='create' — ask the daemon to probe the URL by saving a temp,
       // but the simpler path is just letting the user save first. Until
       // then test is unavailable for new providers.
-      throw new Error('save first, then run test')
+      throw new Error(t('settings.auth.testSaveFirst'))
     },
     onSuccess: (r) => setTestResult(r),
     onError: (e: unknown) =>
@@ -1162,11 +1167,13 @@ function OidcProviderDialog(props: {
                   ✓ {t('settings.auth.testOk', { defaultValue: 'Connection successful' })}
                 </strong>
                 <span className="oidc-form__test-detail">
-                  issuer: <code>{testResult.issuer}</code>
+                  {t('settings.auth.testDetailIssuer')} <code>{testResult.issuer}</code>
                   <br />
-                  token: <code>{new URL(testResult.tokenEndpoint).host}</code>
+                  {t('settings.auth.testDetailToken')}{' '}
+                  <code>{new URL(testResult.tokenEndpoint).host}</code>
                   <br />
-                  jwks: <code>{new URL(testResult.jwksUri).host}</code>
+                  {t('settings.auth.testDetailJwks')}{' '}
+                  <code>{new URL(testResult.jwksUri).host}</code>
                 </span>
               </>
             ) : (

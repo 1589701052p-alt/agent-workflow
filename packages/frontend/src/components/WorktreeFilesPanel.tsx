@@ -136,7 +136,11 @@ export function WorktreeFilesPanel({ taskId }: { taskId: string }): ReactElement
             {t('tasks.worktreeFilesRefresh')}
           </button>
         </div>
-        <div className="worktree-files-panel__tree-body" role="tree" aria-label="worktree files">
+        <div
+          className="worktree-files-panel__tree-body"
+          role="tree"
+          aria-label={t('tasks.worktreeFilesTreeAria')}
+        >
           <DirChildren
             taskId={taskId}
             dirPath=""

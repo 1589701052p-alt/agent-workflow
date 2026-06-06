@@ -11,9 +11,10 @@ import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, Config, CreateAgent } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api } from '@/api/client'
 import { AgentForm, emptyAgent } from '@/components/AgentForm'
 import { AgentImportDialog } from '@/components/AgentImportDialog'
+import { describeApiError } from '@/i18n'
 import { mergeAgentImport } from '@/lib/agent-import-merge'
 import { Route as RootRoute } from './__root'
 
@@ -102,15 +103,9 @@ function AgentCreatePage() {
           {create.isPending ? t('common.creating') : t('agents.createButton')}
         </button>
         {create.error !== null && create.error !== undefined && (
-          <span className="form-actions__error">{describeError(create.error)}</span>
+          <span className="form-actions__error">{describeApiError(create.error)}</span>
         )}
       </div>
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

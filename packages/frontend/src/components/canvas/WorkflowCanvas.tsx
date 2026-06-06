@@ -32,6 +32,7 @@ import {
   useState,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import i18n from '@/i18n'
 import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
 import { deriveWrapperFanoutOutputs, reviewApprovedPortName } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
@@ -1174,7 +1175,7 @@ function CanvasInner({
           menu?.nodeId !== undefined && menu?.nodeId !== null ? (
             <code>{menu.nodeId}</code>
           ) : (
-            <span>{selection.nodes.length} selected</span>
+            <span>{t('editor.menuSelectedCount', { n: selection.nodes.length })}</span>
           )
         }
       />
@@ -1448,10 +1449,10 @@ export function nodeTitle(n: WorkflowNode): string {
     return rec.title
   }
   if (n.kind === 'agent-single') {
-    return typeof rec.agentName === 'string' ? rec.agentName : '(unset agent)'
+    return typeof rec.agentName === 'string' ? rec.agentName : i18n.t('editor.nodeTitleUnsetAgent')
   }
   if (n.kind === 'input') {
-    return typeof rec.inputKey === 'string' ? rec.inputKey : '(unset key)'
+    return typeof rec.inputKey === 'string' ? rec.inputKey : i18n.t('editor.nodeTitleUnsetKey')
   }
   return n.id
 }

@@ -66,8 +66,8 @@ export function UploadPicker({ def, files, onChange }: Props) {
         </button>
         <span className="muted upload-picker__hint">
           {t('launch.upload.selectedCount', { count: files.length })}
-          {minCount !== undefined ? ` / min ${minCount}` : ''}
-          {maxCount !== undefined ? ` / max ${maxCount}` : ''}
+          {minCount !== undefined ? t('launch.upload.minHint', { n: minCount }) : ''}
+          {maxCount !== undefined ? t('launch.upload.maxHint', { n: maxCount }) : ''}
         </span>
       </div>
       <div className="muted upload-picker__targetdir">

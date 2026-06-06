@@ -124,7 +124,7 @@ export function McpFields({ value, onChange, nameLocked, errors }: McpFieldsProp
                   checked={value.oauthMode === 'auto'}
                   onChange={() => set('oauthMode', 'auto')}
                 />
-                auto
+                {t('mcps.oauthModeAuto')}
               </label>
               <label className="chip">
                 <input
@@ -132,7 +132,7 @@ export function McpFields({ value, onChange, nameLocked, errors }: McpFieldsProp
                   checked={value.oauthMode === 'disabled'}
                   onChange={() => set('oauthMode', 'disabled')}
                 />
-                false
+                {t('mcps.oauthModeDisabled')}
               </label>
             </div>
           </Field>
