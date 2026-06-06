@@ -680,4 +680,92 @@ describe('buildStructureGraph — RFC-086 method-local definitions', () => {
     expect(card?.members.map((m) => m.label)).toEqual(['go'])
     expect(g.cards.some((c) => c.title.includes('$anon'))).toBe(false)
   })
+
+  // RE-AUDIT REGRESSION: a method-local NAMED class (Java `void m(){ class Helper{} }`)
+  // was titled with the method in the path (`G.m.Helper`); design §6 wants its own
+  // leaf name re-anchored under the real class.
+  test('method-local named class card is titled by its leaf (Helper), not method-qualified', () => {
+    const g = buildStructureGraph(
+      diffWith([
+        file('G.java', 'java', [
+          change('G.java', 'G', 'class'),
+          change('G.java', 'G.m', 'method'),
+          change('G.java', 'G.m.Helper', 'class'),
+          change('G.java', 'G.m.Helper.run', 'method'),
+        ]),
+      ]),
+    )
+    const helper = g.cards.find((c) => c.members.some((m) => m.label === 'run'))
+    expect(helper?.title).toBe('Helper')
+    expect(helper?.kind).toBe('class')
+    expect(g.cards.some((c) => c.title.includes('.m.') || c.title === 'G.m.Helper')).toBe(false)
+  })
+
+  // RE-AUDIT REGRESSION: a method-NESTED method as an impact caller (Rust impl
+  // `S::m` containing `fn inner`, qn S.m.inner kind method) minted a phantom 'S.m'
+  // class. A nested-in-anonymous method caller (Owner.method.$anonN.run) likewise
+  // minted a card named after the enclosing method. Both must fold, not phantom.
+  for (const [label, callerId] of [
+    ['method-nested method caller', 'lib.rs#S.m.inner:method:5'],
+    ['anon-nested method caller', 'app.java#Foo.bar.$anon3_4.run:method:9'],
+  ] as const) {
+    test(`${label} folds to file card, no method-named phantom class`, () => {
+      const fp = callerId.split('#')[0] ?? ''
+      const target = sym('svc.ts', 'Svc.charge', 'method')
+      const g = buildStructureGraph(
+        diffWith(
+          [
+            file('svc.ts', 'typescript', [
+              { changeType: 'modified', kind: 'method', after: target },
+            ]),
+          ],
+          {
+            impact: [
+              {
+                changedSymbolId: target.id,
+                confidence: 'extracted',
+                callers: [
+                  { symbolId: callerId, filePath: fp, range: { startLine: 5, endLine: 6 } },
+                ],
+              },
+            ],
+          },
+        ),
+      )
+      // no phantom card titled after a method / anon scope
+      expect(g.cards.some((c) => c.title === 'S.m' || c.title === 'Foo.bar')).toBe(false)
+      expect(g.cards.some((c) => c.title.includes('$anon'))).toBe(false)
+      // the caller folded to its file card
+      expect(g.cards.find((c) => c.id === `${fp}::<file>`)).toBeDefined()
+    })
+  }
+
+  // GUARD: a normal caller in an UNCHANGED class still gets its class card (the
+  // impact-caller fold must NOT regress single-segment class containers).
+  test('a normal caller in an unchanged class still gets its class card', () => {
+    const target = sym('svc.ts', 'Svc.charge', 'method')
+    const g = buildStructureGraph(
+      diffWith(
+        [file('svc.ts', 'typescript', [{ changeType: 'modified', kind: 'method', after: target }])],
+        {
+          impact: [
+            {
+              changedSymbolId: target.id,
+              confidence: 'extracted',
+              callers: [
+                {
+                  symbolId: 'pay.ts#Billing.run:method:7',
+                  filePath: 'pay.ts',
+                  range: { startLine: 7, endLine: 9 },
+                },
+              ],
+            },
+          ],
+        },
+      ),
+    )
+    const billing = g.cards.find((c) => c.title === 'Billing')
+    expect(billing?.kind).toBe('class')
+    expect(billing?.members.some((m) => m.label === 'run')).toBe(true)
+  })
 })

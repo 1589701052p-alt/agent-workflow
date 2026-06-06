@@ -90,6 +90,14 @@ if (idx > 0) {
 - **B3（已修）**：`$anon<line>` 对**同一行两个匿名类**会撞 id/qn（第二个丢失）。修：合成段加列 → `$anon<line>_<col>`。
 - **回归锁**：前端 +4（内层体改无 `$anon` 假类 / 具名函数调用方折叠 / `anonymousCardTitle` / 无基类型 `«anonymous»` 渲染）、后端 +6（同行双匿名 / Python·Rust·TS 嵌套函数 / 字段初始化匿名 / 匿名套匿名）。
 
+### 审计修复（第二轮，2026-06-06）—— 方法内**具名**定义
+
+第二次对抗式复审（针对 fix 自身）又发现 3 个同根残留，已修 + 补回归锁：
+
+- **方法内具名类**（Java `void m(){ class Helper{} }` → `G.m.Helper`）：卡片标题带上了方法段（`G.m.Helper`），违反 design §6「用它自己的名字成卡」。修：新增 `displayTitle`——容器 qn 若经过**已知成员前缀**（外层方法），标题剥到该方法之后的叶子（→ `Helper`）；真实内部类 `Outer.Inner`（路径无成员）保持不变。
+- **方法内嵌方法做 impact 调用方**（Rust impl `S::m` 内 `fn inner` → qn `S.m.inner` kind method）造出 `S.m` 假类；**匿名类内方法做调用方**（`Owner.method.$anonN.run`）造出以方法命名的假卡。根因：调用方 qn 的祖先永不在 diff，前端无法判定中段 kind。修：impact 调用方路径（`preferFileForUnknownNested`）把「未知且多段」的容器折叠到 file 卡，杜绝以方法命名的假类；**单段未知容器（普通类，如 `Billing`）仍出类卡**（无回归，已加 guard 测试）。
+- **回归锁**：前端 +4（具名类标题=叶子 / 方法内嵌方法调用方折叠 / 匿名内方法调用方折叠 / 普通未变类调用方仍出类卡）。design §6 现与 as-built 一致。
+
 ### 后续（已记录、非本轮）
 
 - **D4** 深度模式 SCIP 解析 lambda 目标接口升格（CI 不可验，同 RFC-083 SCIP 边界）。

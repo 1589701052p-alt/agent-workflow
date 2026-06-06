@@ -222,6 +222,26 @@ function leafOfQn(qualifiedName: string): string {
  *  changed symbol we must walk past it rather than mint a card titled with it. */
 const SYNTHETIC_ANON = /^\$anon[\d_]+$/
 
+/** RFC-086 — display title for a container card. A method-local NAMED class has a
+ *  qualifiedName that passes through its enclosing method (e.g. `G.m.Helper`);
+ *  design §6 wants it shown by its own leaf name (`Helper`), not method-qualified.
+ *  Strip the qn up to and including the DEEPEST prefix that is a known MEMBER (the
+ *  enclosing callable), leaving the local type's own (possibly dotted) name. A real
+ *  inner class (`Outer.Inner` — no member in its path) is returned unchanged. */
+function displayTitle(
+  filePath: string,
+  containerQn: string,
+  qnKind: ReadonlyMap<string, SymbolKind>,
+): string {
+  const segs = containerQn.split('.')
+  let cut = 0
+  for (let i = 1; i < segs.length; i += 1) {
+    const k = qnKind.get(`${filePath}::${segs.slice(0, i).join('.')}`)
+    if (k !== undefined && MEMBER_KINDS.has(k)) cut = i
+  }
+  return cut > 0 ? segs.slice(cut).join('.') : containerQn
+}
+
 /** RFC-086 — resolve a member's owning CARD from its qualifiedName using the
  *  diff's actual symbol KINDS (`qnKind`), not a blind "everything before the
  *  last dot is a class" string split. We walk UP past any prefix that can't be a
@@ -234,16 +254,20 @@ const SYNTHETIC_ANON = /^\$anon[\d_]+$/
  *     is header-only), which is the COMMON edit-inner-body case; treating it as a
  *     class brought the phantom card back. (When the anon IS a changed symbol,
  *     k==='class' and we keep it — that is the real «anonymous» card.)
- *  A real inner class (`Outer.Inner`, a CONTAINER kind) is NOT skipped. When the
- *  remaining container's kind is unknown, a *function* member's container is by
- *  construction a non-class scope (a class-nested function is extracted as
- *  'method'), so it folds to the FILE card instead of a phantom class — this also
- *  hardens the impact-caller path, whose caller qns are never in the diff. */
+ *  A real inner class (`Outer.Inner`, a CONTAINER kind) is NOT skipped; its card
+ *  title is re-leafed by displayTitle when method-local. When the remaining
+ *  container's kind is unknown, a *function* member's container is a non-class
+ *  scope → file card. `preferFileForUnknownNested` (the impact-caller path, whose
+ *  caller qns are NEVER in the diff so ancestor kinds are unknowable) folds an
+ *  UNKNOWN multi-segment container to the file card too, since `S.m` / `G.m.Helper`
+ *  can't be told apart from a real inner class there and must not mint a phantom
+ *  method-named class. */
 function memberContainer(
   filePath: string,
   qualifiedName: string,
   qnKind: ReadonlyMap<string, SymbolKind>,
   ownKind?: SymbolKind,
+  preferFileForUnknownNested = false,
 ): { key: string; title: string; kind: CardKind } {
   const fileCard = {
     key: `${filePath}::<file>`,
@@ -266,13 +290,22 @@ function memberContainer(
   if (container === '') return fileCard
   const k = qnKind.get(`${filePath}::${container}`)
   if (k !== undefined && CONTAINER_KINDS.has(k)) {
-    return { key: `${filePath}::${container}`, title: container, kind: k }
+    return {
+      key: `${filePath}::${container}`,
+      title: displayTitle(filePath, container, qnKind),
+      kind: k,
+    }
   }
   // container kind unknown (its own declaration didn't change): a method/field's
   // owner is a class (keep the RFC-083 "unchanged class still gets a card"
   // behavior); a function's owner is a non-class scope → fold to the file card.
   if (ownKind === 'function') return fileCard
-  return { key: `${filePath}::${container}`, title: container, kind: 'class' }
+  if (preferFileForUnknownNested && container.includes('.')) return fileCard
+  return {
+    key: `${filePath}::${container}`,
+    title: displayTitle(filePath, container, qnKind),
+    kind: 'class',
+  }
 }
 
 function cardHeight(memberCount: number): number {
@@ -458,7 +491,10 @@ export function buildStructureGraph(
       const sym = ch.after ?? ch.before
       if (sym === undefined) continue
       if (CONTAINER_KINDS.has(sym.kind)) {
-        const title = sym.anonymous === true ? anonymousCardTitle(sym.name) : sym.qualifiedName
+        const title =
+          sym.anonymous === true
+            ? anonymousCardTitle(sym.name)
+            : displayTitle(sym.filePath, sym.qualifiedName, qnKind)
         const card = ensureCard(
           `${sym.filePath}::${sym.qualifiedName}`,
           title,
@@ -549,7 +585,7 @@ export function buildStructureGraph(
       if (caller.symbolId !== undefined) {
         const file = fileFromId(caller.symbolId)
         const qn = qnFromId(caller.symbolId)
-        const c = memberContainer(file, qn, qnKind, kindFromId(caller.symbolId))
+        const c = memberContainer(file, qn, qnKind, kindFromId(caller.symbolId), true)
         callerKey = c.key
         callerTitle = c.title
         callerFile = file
