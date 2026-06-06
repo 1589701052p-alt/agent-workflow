@@ -45,6 +45,8 @@ export interface GraphCard {
   id: string
   title: string
   file: string
+  /** package = the file's directory; cards in the same package are grouped. */
+  pkg: string
   kind: CardKind
   changeType?: ChangeType
   isChanged: boolean
@@ -60,9 +62,19 @@ export interface GraphCardEdge {
   target: string
   kind: EdgeKind
 }
+/** A package container (a directory); its box wraps the cards inside it. */
+export interface GraphPackage {
+  id: string
+  label: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
 export interface StructureGraph {
   cards: GraphCard[]
   edges: GraphCardEdge[]
+  packages: GraphPackage[]
 }
 
 const CARD_W = 240
@@ -73,6 +85,24 @@ const EDGE_RANK: Record<EdgeKind, number> = { inherits: 3, references: 2, calls:
 
 export function fileBase(p: string): string {
   return p.split('/').pop() ?? p
+}
+/** package id = the file's directory ('(root)' for top-level files). */
+export function packageOf(file: string): string {
+  const i = file.lastIndexOf('/')
+  return i > 0 ? file.slice(0, i) : '(root)'
+}
+/** A readable package label: strip the build/source root and show the dotted
+ *  package (Java/Kotlin/…), e.g. `…/src/main/java/com/wbq/snake/ai` → `com.wbq.snake.ai`. */
+export function packageLabel(pkg: string): string {
+  if (pkg === '(root)') return pkg
+  for (const m of ['src/main/java/', 'src/main/kotlin/', 'src/main/scala/', 'src/main/', 'src/']) {
+    const i = pkg.indexOf(m)
+    if (i >= 0) {
+      const rest = pkg.slice(i + m.length).replace(/\//g, '.')
+      return rest.length > 0 ? rest : '(root)'
+    }
+  }
+  return pkg.split('/').slice(-2).join('/') // fallback: last 2 path segments
 }
 function qnFromId(id: string): string {
   const afterHash = id.split('#')[1]
@@ -102,14 +132,26 @@ function cardHeight(memberCount: number): number {
   return HEADER_H + memberCount * ROW_H + PAD_V
 }
 
-/** Hierarchical top→down layout via dagre. Mutates each card's x/y using the
- *  card's CURRENT w/h. Call once with estimated sizes (initial render), then
- *  again with xyflow's MEASURED sizes so edges land on the real card edges. */
-export function layoutGraph(cards: GraphCard[], edges: GraphCardEdge[]): void {
-  const g = new dagre.graphlib.Graph()
+const PKG_HEADER_H = 22 // room for the package label inside its box
+
+/** Hierarchical top→down layout via dagre COMPOUND: classes are grouped into
+ *  their package cluster, clusters laid out relative to each other. Mutates each
+ *  card's x/y (using its CURRENT w/h) and each package's x/y/w/h (the box that
+ *  wraps its cards). Call once with estimated sizes, then again with xyflow's
+ *  MEASURED sizes so edges land on real card edges. */
+export function layoutGraph(
+  cards: GraphCard[],
+  edges: GraphCardEdge[],
+  packages: GraphPackage[],
+): void {
+  const g = new dagre.graphlib.Graph({ compound: true })
   g.setGraph({ rankdir: 'TB', nodesep: 36, ranksep: 56, marginx: 16, marginy: 16 })
   g.setDefaultEdgeLabel(() => ({}))
-  for (const c of cards) g.setNode(c.id, { width: c.w, height: c.h })
+  for (const p of packages) g.setNode(p.id, {}) // cluster node
+  for (const c of cards) {
+    g.setNode(c.id, { width: c.w, height: c.h })
+    g.setParent(c.id, c.pkg)
+  }
   for (const e of edges) g.setEdge(e.source, e.target)
   dagre.layout(g)
   for (const c of cards) {
@@ -118,6 +160,15 @@ export function layoutGraph(cards: GraphCard[], edges: GraphCardEdge[]): void {
     c.x = n.x - c.w / 2
     c.y = n.y - c.h / 2
   }
+  for (const p of packages) {
+    const n = g.node(p.id)
+    if (n === undefined) continue
+    // cluster bbox (center + size) → top-left; reserve a strip for the label.
+    p.x = n.x - n.width / 2
+    p.y = n.y - n.height / 2 - PKG_HEADER_H
+    p.w = n.width
+    p.h = n.height + PKG_HEADER_H
+  }
 }
 
 export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
@@ -125,7 +176,19 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
   const ensureCard = (key: string, title: string, file: string, kind: CardKind): GraphCard => {
     let c = cards.get(key)
     if (c === undefined) {
-      c = { id: key, title, file, kind, isChanged: false, members: [], x: 0, y: 0, w: 0, h: 0 }
+      c = {
+        id: key,
+        title,
+        file,
+        pkg: packageOf(file),
+        kind,
+        isChanged: false,
+        members: [],
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+      }
       cards.set(key, c)
     }
     return c
@@ -217,11 +280,20 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
 
   const list = [...cards.values()]
   const edges = [...edgeMap.values()]
+  // one package per distinct directory the cards live in.
+  const packages: GraphPackage[] = [...new Set(list.map((c) => c.pkg))].map((id) => ({
+    id,
+    label: packageLabel(id),
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+  }))
   // estimated sizes for the FIRST layout; the view re-layouts with measured ones.
   for (const c of list) {
     c.w = CARD_W
     c.h = cardHeight(c.members.length)
   }
-  layoutGraph(list, edges)
-  return { cards: list, edges }
+  layoutGraph(list, edges, packages)
+  return { cards: list, edges, packages }
 }

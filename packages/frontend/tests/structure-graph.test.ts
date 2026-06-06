@@ -10,7 +10,7 @@ import {
   type SymbolNode,
   type ClassEdge,
 } from '@agent-workflow/shared'
-import { buildStructureGraph, fileBase } from '../src/lib/structureGraph'
+import { buildStructureGraph, fileBase, packageOf, packageLabel } from '../src/lib/structureGraph'
 
 function sym(filePath: string, qn: string, kind: SymbolNode['kind']): SymbolNode {
   return {
@@ -183,4 +183,27 @@ describe('buildStructureGraph — hierarchy layout (dagre)', () => {
 
 test('fileBase strips the directory', () => {
   expect(fileBase('src/a/b.ts')).toBe('b.ts')
+})
+
+describe('package grouping', () => {
+  test('cards group into a package per directory', () => {
+    const g = buildStructureGraph(
+      diffWith([
+        cls('src/a/Foo.ts', 'Foo'),
+        cls('src/a/Bar.ts', 'Bar'),
+        cls('src/b/Baz.ts', 'Baz'),
+      ]),
+    )
+    expect(g.packages.map((p) => p.id).sort()).toEqual(['src/a', 'src/b'])
+    expect(g.cards.find((c) => c.title === 'Foo')?.pkg).toBe('src/a')
+    expect(g.cards.find((c) => c.title === 'Baz')?.pkg).toBe('src/b')
+  })
+
+  test('packageOf / packageLabel', () => {
+    expect(packageOf('src/a/b/C.ts')).toBe('src/a/b')
+    expect(packageOf('Top.ts')).toBe('(root)')
+    // strip the java source root → dotted package
+    expect(packageLabel('app/src/main/java/com/wbq/snake/ai')).toBe('com.wbq.snake.ai')
+    expect(packageLabel('src/lib/util')).toBe('lib.util')
+  })
 })

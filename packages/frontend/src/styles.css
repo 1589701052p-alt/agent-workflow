@@ -9598,6 +9598,27 @@ mark.comment-anchor[data-active='true'] {
   font-size: 12px;
 }
 /* a card = one class / file */
+/* package container (a directory) wrapping its class cards */
+.sg-pkg {
+  width: 100%;
+  height: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.sg-pkg__label {
+  position: absolute;
+  top: 3px;
+  left: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sg-card {
   width: 240px;
   border: 1px solid var(--border);

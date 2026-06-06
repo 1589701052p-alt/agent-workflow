@@ -74,19 +74,41 @@ function CardNode({ data }: NodeProps) {
   )
 }
 
-const NODE_TYPES = { card: CardNode }
+function PkgNode({ data }: NodeProps) {
+  return (
+    <div className="sg-pkg">
+      <span className="sg-pkg__label">{String(data.label)}</span>
+    </div>
+  )
+}
+
+const NODE_TYPES = { card: CardNode, pkg: PkgNode }
 
 function GraphFlow({ graph }: { graph: StructureGraph }) {
   const initialNodes = useMemo<Node[]>(
-    () =>
-      graph.cards.map((c) => ({
+    () => [
+      // package containers first / lowest z so the cards sit on top of them
+      ...graph.packages.map((p) => ({
+        id: p.id,
+        type: 'pkg',
+        position: { x: p.x, y: p.y },
+        data: { label: p.label },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        zIndex: 0,
+        style: { width: p.w, height: p.h },
+      })),
+      ...graph.cards.map((c) => ({
         id: c.id,
         type: 'card',
         position: { x: c.x, y: c.y },
         data: { card: c },
         draggable: false,
         connectable: false,
+        zIndex: 1,
       })),
+    ],
     [graph],
   )
   const initialEdges = useMemo<Edge[]>(
@@ -123,9 +145,18 @@ function GraphFlow({ graph }: { graph: StructureGraph }) {
         if (measured?.width) c.w = measured.width
         if (measured?.height) c.h = measured.height
       }
-      layoutGraph(graph.cards, graph.edges)
-      const pos = new Map(graph.cards.map((c) => [c.id, { x: c.x, y: c.y }]))
-      return nds.map((n) => ({ ...n, position: pos.get(n.id) ?? n.position }))
+      layoutGraph(graph.cards, graph.edges, graph.packages)
+      const cardPos = new Map(graph.cards.map((c) => [c.id, { x: c.x, y: c.y }]))
+      const pkg = new Map(graph.packages.map((p) => [p.id, p]))
+      return nds.map((n) => {
+        if (n.type === 'pkg') {
+          const p = pkg.get(n.id)
+          return p === undefined
+            ? n
+            : { ...n, position: { x: p.x, y: p.y }, style: { ...n.style, width: p.w, height: p.h } }
+        }
+        return { ...n, position: cardPos.get(n.id) ?? n.position }
+      })
     })
     requestAnimationFrame(() => fitView({ minZoom: 0.4, maxZoom: 1, padding: 0.12 }))
   }, [initialized, graph, setNodes, fitView])
