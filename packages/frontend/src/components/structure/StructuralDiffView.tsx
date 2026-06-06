@@ -23,6 +23,7 @@ import {
   badgeSymbol,
   type SummaryRow,
 } from '@/lib/structureView'
+import { StructuralGraph } from './StructuralGraph'
 
 // degradedReasons that mean "deep was requested but fell back to baseline".
 const DEEP_FALLBACK_REASONS = new Set<string>([
@@ -49,6 +50,7 @@ export function StructuralDiffView({
   onJumpToHunk?: (anchor: HunkAnchor) => void
 }) {
   const { t } = useTranslation()
+  const [view, setView] = useState<'tree' | 'graph'>('tree')
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
@@ -80,7 +82,33 @@ export function StructuralDiffView({
         <DependencyChangesPanel changes={data.dependencyChanges} />
       )}
       {data.impact.length > 0 && <ImpactPanel impact={data.impact} />}
-      {files.length > 0 && <StructuralTree files={files} onJumpToHunk={onJumpToHunk} />}
+      {files.length > 0 && (
+        <div className="structure__detail">
+          <div
+            className="segmented structure__view-toggle"
+            role="radiogroup"
+            aria-label={t('tasks.structViewLabel')}
+          >
+            {(['tree', 'graph'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={view === v}
+                className={`segmented__option ${view === v ? 'segmented__option--active' : ''}`}
+                onClick={() => setView(v)}
+              >
+                {v === 'tree' ? t('tasks.structViewTree') : t('tasks.structViewGraph')}
+              </button>
+            ))}
+          </div>
+          {view === 'tree' ? (
+            <StructuralTree files={files} onJumpToHunk={onJumpToHunk} />
+          ) : (
+            <StructuralGraph data={data} />
+          )}
+        </div>
+      )}
     </div>
   )
 }

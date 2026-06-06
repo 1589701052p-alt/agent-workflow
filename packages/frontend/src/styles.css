@@ -9543,6 +9543,34 @@ mark.comment-anchor[data-active='true'] {
 .structure__badge--renamed {
   color: var(--accent);
 }
+.structure__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.structure__view-toggle {
+  align-self: flex-start;
+}
+/* RFC-083 PR-F — read-only blast-radius graph */
+.structure-graph {
+  height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.structure-graph__node--changed .react-flow__node-default,
+.structure-graph__node.structure-graph__node--changed {
+  background: var(--diff-add-bg, #16331f);
+  border-color: var(--diff-add-fg, #3fb950);
+  color: var(--text);
+}
+.structure-graph__node--caller.structure-graph__node {
+  background: var(--surface-2, #1c2128);
+  border-color: var(--border);
+  color: var(--text-muted, #8b949e);
+}
 .structure__tree {
   display: flex;
   flex-direction: row;

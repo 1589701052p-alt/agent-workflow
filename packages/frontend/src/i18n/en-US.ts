@@ -961,6 +961,9 @@ export const enUS: Resources = {
     structEngineDeep: 'Deep',
     structDegradedDeepFallback:
       'Deep analysis unavailable (no indexer / project did not build / timed out); fell back to the baseline heuristic.',
+    structViewLabel: 'View',
+    structViewTree: 'Tree',
+    structViewGraph: 'Graph',
     structViaImportManifest: 'imported in code',
     structRenamedFrom: 'was {{from}}',
     structSigChanged: 'signature changed',

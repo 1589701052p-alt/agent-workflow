@@ -194,6 +194,17 @@ describe('<StructuralDiffView />', () => {
     expect(tag?.textContent).toBeTruthy() // precise label rendered (vs heuristic)
   })
 
+  test('view toggle switches from the tree to the read-only graph (PR-F)', () => {
+    const { container } = render(<StructuralDiffView data={sampleDiff()} />)
+    expect(container.querySelector('.structure__tree')).toBeTruthy() // tree by default
+    expect(container.querySelector('[data-testid="structure-graph"]')).toBeNull()
+    const toggle = container.querySelector('.structure__view-toggle')
+    const graphBtn = toggle?.querySelectorAll('button')[1] // [tree, graph]
+    fireEvent.click(graphBtn as Element)
+    expect(container.querySelector('[data-testid="structure-graph"]')).toBeTruthy()
+    expect(container.querySelector('.structure__tree')).toBeNull() // tree swapped out
+  })
+
   test('empty diff renders an empty state', () => {
     const empty: StructuralDiff = {
       ...sampleDiff(),

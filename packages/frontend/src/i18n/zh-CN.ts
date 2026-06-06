@@ -908,6 +908,9 @@ export interface Resources {
     structEngineBaseline: string
     structEngineDeep: string
     structDegradedDeepFallback: string
+    structViewLabel: string
+    structViewTree: string
+    structViewGraph: string
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
@@ -2993,6 +2996,9 @@ export const zhCN: Resources = {
     structEngineDeep: '深度',
     structDegradedDeepFallback:
       '深度分析不可用（未装索引器 / 项目编译不过 / 超时），已回退基线启发式。',
+    structViewLabel: '视图',
+    structViewTree: '树',
+    structViewGraph: '关系图',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',
