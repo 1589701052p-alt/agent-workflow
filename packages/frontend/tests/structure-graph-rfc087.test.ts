@@ -62,3 +62,81 @@ describe('RFC-087 buildStructureGraph prefers sym.visibility', () => {
     expect(member?.visibility).toBe('private')
   })
 })
+
+describe('RFC-087 private-gate end-to-end (bbebb8f fix now works for Rust via structural visibility)', () => {
+  // The audit found the "private not used from outside" gate (commit bbebb8f)
+  // silently failed for Rust/C++/JS because the heuristic mis-read their private
+  // members as public. With backend `visibility`, a structurally-private downstream
+  // member must be DROPPED from a references edge's memberLinks.
+  function member(
+    file: string,
+    qn: string,
+    line: number,
+    visibility?: SymbolNode['visibility'],
+  ): SymbolNode {
+    const leaf = qn.slice(qn.lastIndexOf('.') + 1)
+    return {
+      id: `${file}#${qn}:method:${line}`,
+      kind: 'method',
+      name: leaf,
+      qualifiedName: qn,
+      signature: `fn ${leaf}(&self)`,
+      lang: 'rust',
+      filePath: file,
+      range: { startLine: line, endLine: line },
+      confidence: 'extracted',
+      visibility,
+    }
+  }
+  function container(file: string, name: string): SymbolNode {
+    return {
+      id: `${file}#${name}:struct:1`,
+      kind: 'struct',
+      name,
+      qualifiedName: name,
+      lang: 'rust',
+      filePath: file,
+      range: { startLine: 1, endLine: 9 },
+      confidence: 'extracted',
+    }
+  }
+
+  test('a structurally-private downstream member is excluded from the references edge memberLinks', () => {
+    const pub = member('a.rs', 'D.pub_m', 5, 'public')
+    const priv = member('a.rs', 'D.priv_m', 6, 'private')
+    const diff = {
+      scope: 'task',
+      taskId: 't',
+      fromRef: 'a',
+      toRef: 'b',
+      engine: 'baseline',
+      status: 'ok',
+      files: [
+        {
+          filePath: 'a.rs',
+          lang: 'rust',
+          status: 'ok',
+          edges: [],
+          impact: [],
+          changes: [
+            { changeType: 'modified', kind: 'struct', after: container('a.rs', 'C') },
+            { changeType: 'modified', kind: 'struct', after: container('a.rs', 'D') },
+            { changeType: 'added', kind: 'method', after: pub },
+            { changeType: 'added', kind: 'method', after: priv },
+          ],
+        },
+      ],
+      dependencyChanges: [],
+      impact: [],
+      classEdges: [
+        { from: 'a.rs::C', to: 'a.rs::D', kind: 'references', toMembers: [pub.id, priv.id] },
+      ],
+    } as unknown as StructuralDiff
+
+    const graph = buildStructureGraph(diff)
+    const edge = graph.edges.find((e) => e.source === 'a.rs::C' && e.target === 'a.rs::D')
+    const targets = (edge?.memberLinks ?? []).map((l) => l.target)
+    expect(targets).toContain(pub.id) // public stays
+    expect(targets).not.toContain(priv.id) // private dropped (the gate works)
+  })
+})

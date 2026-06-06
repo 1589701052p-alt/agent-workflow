@@ -28,15 +28,20 @@
 
 ### W1 — Schema：新增可选承载字段（后向兼容，无迁移）
 
+> **As-built 说明**：实现期把承载方式收敛到「只动 `SymbolNode` 两个可选字段 + 其余全部 compute-time」，比初稿（maskRanges/callSites 也进 schema）耦合更小、风险更低。最终只改：
+
 `packages/shared/src/schemas/structuralDiff.ts`：
 
-- `symbolNodeSchema` 加 `visibility: z.enum(['public','protected','package','private']).optional()`。
-- `fileStructuralDiffSchema` 加 `maskRanges: z.array(z.object({ start: int, end: int })).default([])`——该文件 NEW 内容里所有 comment + string 字面量的**字节区间**（用于 classGraph 掩码）。
-  - 备选：用行区间。选字节区间因 `extract` 已有 `node.startIndex/endIndex`，classGraph 现按行切片，可由字节区间投影到行；二者皆可，design 取字节区间 + 在 classGraph 内转行掩码。
-- 继承/内嵌边：复用既有 `symbolEdgeSchema`（`kind: 'inherits' | 'implements'`，已存在）。extract 产出 file 级 `edges`（`fileStructuralDiffSchema.edges` 已存在但当前未填充类间继承），assemble 时把跨文件/changed-class 的 inherits/implements 归并进顶层 `classEdges`（结构化优先，`isInheritance` 兜底补充）。
-- 调用点：file 级新增可选 `callSites: z.array(z.object({ callerByteStart, callerByteEnd, calleeName })).default([])`，或更轻量地复用 impact。为最小耦合，design 采用：extract 产出 `callSites`（callee 简单名 + 调用所在字节位置），classGraph `usedMembersAndCallers` 优先消费 `callSites`，无则回退现 `.name(` 正则（兜底覆盖未结构化语言路径）。
+- `symbolNodeSchema` 加 `visibility: z.enum(['public','protected','package','private']).optional()`（W3）。
+- `symbolNodeSchema` 加 `heritage: z.array(z.string()).optional()`（W6，Go/Rust 的父/超 trait/内嵌叶名；其余 6 语言走 `isInheritance` 正则兜底，不填）。
 
-所有新增字段 optional/default → 旧磁盘 JSON `safeParse` 不报错（`store.ts:46`）。zod 单测覆盖「缺字段解析成功」。
+**不进 schema 的（compute-time，as-built 与初稿差异）**：
+
+- **掩码（W2）**：不持久化 `maskRanges`。`classGraph` 是计算期产物（不入磁盘 JSON），故掩码在 `gitBackend.augmentClassEdges` 里**就地重解析**每个 changed-class 文件、调 `maskCommentsAndStrings` 得到掩码文本再喂 `computeClassEdges`（`stripCommentsAndStrings` 留作掩码文本上的无害兜底 + 直测路径）。
+- **继承/内嵌边（W6）**：不新增 `edges`/`symbolEdge` 流。改为把父/内嵌叶名挂在 `SymbolNode.heritage`，随既有管线流到 `collectClassNodes`→`ClassNode.heritage`，`computeClassEdges` 用它判 `inherits`（正则兜底）。
+- **调用点（W7）**：不新增 `callSites`。改为把 `usedMembersAndCallers` 的成员访问正则从 `\.(name)` 扩成 `(?:\.|->|::)(name)`，一行覆盖 C++ `->`、Rust/C++ `::`、Go/JS/TS/Python/Java `.`。
+
+两个新字段均 optional → 旧磁盘 JSON `safeParse` 不报错（`store.ts:46`）。zod 单测覆盖「缺字段解析成功」。
 
 ### W2 — AST 注释/字符串掩码（替换 `stripCommentsAndStrings`）
 
@@ -44,16 +49,16 @@ extract 阶段对每文件用一条 per-language blanking query 收集 comment +
 
 每语言已验证的 blanking query（节点名取自真实探测）：
 
-| lang | comment 节点 | string 节点 | blanking query |
-|---|---|---|---|
-| python | `comment` | `string`（含三引号/f/r/b/拼接子串）| `(comment) @b (string) @b` |
-| go | `comment` | `interpreted_string_literal` `raw_string_literal` `rune_literal` | `[(comment)(interpreted_string_literal)(raw_string_literal)(rune_literal)] @b` |
-| rust | `line_comment` `block_comment` | `string_literal` `raw_string_literal` `char_literal` | 五者 `@b` |
-| cpp | `comment` | `string_literal` `char_literal` `raw_string_literal` `system_lib_string` | 四者 `@b` |
-| javascript | `comment` | `string` `template_string` `regex` | 四者 `@b` |
-| typescript | `comment` | `string` `template_string` `regex` | 同 JS |
-| java | `line_comment` `block_comment`（探测复用 Java grammar 确认）| `string_literal` `character_literal` | 实现期探测确认 |
-| scala | `comment` | `string`（含三引号；插值串 `string_transform_expression` 内含 `string`）| `(comment) @b (string) @b` |
+| lang       | comment 节点                                                 | string 节点                                                              | blanking query                                                                 |
+| ---------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| python     | `comment`                                                    | `string`（含三引号/f/r/b/拼接子串）                                      | `(comment) @b (string) @b`                                                     |
+| go         | `comment`                                                    | `interpreted_string_literal` `raw_string_literal` `rune_literal`         | `[(comment)(interpreted_string_literal)(raw_string_literal)(rune_literal)] @b` |
+| rust       | `line_comment` `block_comment`                               | `string_literal` `raw_string_literal` `char_literal`                     | 五者 `@b`                                                                      |
+| cpp        | `comment`                                                    | `string_literal` `char_literal` `raw_string_literal` `system_lib_string` | 四者 `@b`                                                                      |
+| javascript | `comment`                                                    | `string` `template_string` `regex`                                       | 四者 `@b`                                                                      |
+| typescript | `comment`                                                    | `string` `template_string` `regex`                                       | 同 JS                                                                          |
+| java       | `line_comment` `block_comment`（探测复用 Java grammar 确认） | `string_literal` `character_literal`                                     | 实现期探测确认                                                                 |
+| scala      | `comment`                                                    | `string`（含三引号；插值串 `string_transform_expression` 内含 `string`） | `(comment) @b (string) @b`                                                     |
 
 要点（探测证实）：多行字符串/块注释都是**单节点**，range 覆盖全部行——这正是手写词法器（换行结束串）做错的地方。
 兜底/降级：
