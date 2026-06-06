@@ -1,60 +1,63 @@
 # RFC-085 — 任务分解
 
-> 状态:Draft。**未经用户批准不进入实现**。编号 `RFC-085-Tn`。
+> 状态:Draft（需求四轮澄清定稿）。**未经用户批准不进入实现**。编号 `RFC-085-Tn`。
 
 ## 依赖前提
 
-- RFC-083 已 Done(符号集 / `collectClassMembers` / 深度 SCIP / `stripCommentsAndStrings` / 结构视图四视图)——本 RFC 全部建立其上。
-- 不依赖 RFC-084(conformance-auditor),与之并行无冲突(各自只读 RFC-083 产物)。
+- RFC-083 Done(符号集 / `collectClassMembers` / 深度 SCIP / `stripCommentsAndStrings` / 8 语言 tree-sitter / 结构页四视图)。本 RFC 全建其上。
+- 与 RFC-084(conformance-auditor）并行无冲突。
 
-## 阶段 1 —— 直接被调(MVP:点方法看它调了谁)
+## 阶段 1 —— 调用树 MVP（点改动方法 → 它直接调了谁）
 
-- **RFC-085-T1 — shared schema**:加 `callSiteSchema` + `StructuralDiff.callSites`(default `[]`)。测试:schema parse + 默认空 + 向后兼容(旧 JSON 不含字段仍 valid)。
-- **RFC-085-T2 — 后端有序调用提取**(依赖 T1):`structuralDiff/callGraph.ts`(PURE `extractCallSites(method, tree, typeTable)` + 启发式目标解析)+ `gitBackend.augmentCallSites` 接入 computeFromWorktree/BetweenRefs;复用 RFC-083 parse 树(透传,避免二次 parse)+ `MAX_ANALYZE_BYTES` + 注释/字符串 strip。测试:§6 后端 PURE 用例 + 真实 git 仓 assemble 断言。
-- **RFC-085-T3 — 前端直接被调视图**(依赖 T1;可与 T2 并行用 mock 数据):`lib/callChain.ts` 雏形(只取直接被调)+ `<CallChainView>` 缩进列表 + 结构树/关系图方法行的"看调用链"入口(`onJumpToCallChain`)。测试:纯函数 + 点击触发 + 渲染 smoke。
+- **RFC-085-T1 — shared schema + 可用标记**：`callTargetSchema`（§1.1）；`StructuralDiff.callChainAvailable: boolean`（default false，向后兼容）。测试：schema parse + 旧响应向后兼容。
+- **RFC-085-T2 — 后端懒展开服务**（依赖 T1）：`structuralDiff/callGraph/`——`extractCalls`（PURE，有序收集方法+`new`，复用 RFC-083 parse/strip）+ 目标解析阶梯（this/self、field-type、`new T`、external、unresolved）+ 轻量 `类名→文件` 浅扫索引（缓存）+ 按需读/parse worktree 文件穿透未改动。测试：§6 后端 PURE 全套 + 真实 git 仓多语言 fixture（含一个动态语言验 unresolved）。
+- **RFC-085-T3 — 端点**（依赖 T2）：`GET /api/tasks/:id/call-targets?scope=&methodRef=`（node/wrapper scope 复用 RFC-083 解析）+ contract registry + `callChainAvailable` 接入 service。测试：200 形状 + scope 校验 + 无根空态。
+- **RFC-085-T4 — 前端调用树视图**（依赖 T1，可与 T2/T3 并行用 mock）：`lib/callChain.ts`（根 + 直接被调，默认 1 层）+ `<CallChainView>`（第 5 标签）+ 树/关系图改动方法行的**小入口图标** → `onOpenCallChain(ref)`。测试：纯函数 + 入口触发 + 渲染 smoke + 空态。
 
-→ **PR-A**(T1+T2+T3):MVP「点方法 → 它直接调用的方法(可解析的精确连、不可解析的灰显)」。
+→ **PR-A**（T1-T4）：点改动方法 → 第 5 标签以它为根、列出直接被调（resolved 精确 / external / unresolved 灰显），默认 1 层。
 
-## 阶段 2 —— 递归调用链
+## 阶段 2 —— 递归懒展开
 
-- **RFC-085-T4 — `buildCallChain` 递归 + 展开/环/截断**(依赖 T3):递归展开、`maxDepth`/`maxNodes`、环检测、`unresolved`/`external` 作叶子;视图加逐层 `▸` 展开。测试:递归、环检测、截断、叶子化(§6)。
+- **RFC-085-T5 — `▸` 懒展开 + 环/截断**（依赖 T4）：点 `▸` 对节点 `ref` 调端点取下一层（含穿透未改动文件）、填 children 缓存；环检测、深度/节点上限、`external`/`unresolved` 叶子化。测试:懒展开、环检测、截断、叶子化。
 
-→ **PR-B**(T4):多层调用链可展开。
+→ **PR-B**（T5）：多层调用链可逐级展开，穿透未改动代码。
 
 ## 阶段 3 —— 时序图
 
-- **RFC-085-T5 — 时序图数据预言**(依赖 T4,PURE):调用链 → 有序消息流(lifeline 去重 + 消息顺序 + depth/激活)。测试:PURE 顺序/去重断言。
-- **RFC-085-T6 — 时序图渲染**(依赖 T5):按 design §3.3 选 mermaid(方案 A)或自绘 SVG(方案 B)——**实现前用 ExitPlanMode/询问定渲染方案**;`<SequenceDiagram>`。测试:渲染 smoke(lifeline 数 + 消息数)+ 视觉对齐自查(与 /agents 等核心页 side-by-side)。若引 mermaid:`build:binary` smoke 确认前端依赖不破单二进制构建。
+- **RFC-085-T6 — 时序图数据预言**（依赖 T5，PURE）：调用链 → 有序消息流（lifeline 按 `ownerClass` 去重、消息按 order、depth/激活）。测试：PURE 顺序/去重断言。
+- **RFC-085-T7 — 时序图渲染**（依赖 T6）：design §3.3 选 mermaid（方案 A）或自绘 SVG（方案 B）——**实现前用 ExitPlanMode/询问定方案**；`<SequenceDiagram>` + 调用链树↔时序图切换。测试：渲染 smoke（lifeline 数 + 消息数）+ 视觉对齐自查；若引 mermaid → `build:binary` smoke 验前端依赖不破单二进制。
 
-→ **PR-C**(T5+T6):时序图视图。
+→ **PR-C**（T6+T7）：时序图视图。
 
 ## PR 拆分建议
 
 | PR | 含 | 交付 |
 | --- | --- | --- |
-| PR-A | T1+T2+T3 | 点方法看直接被调(精确+未解析) |
-| PR-B | T4 | 递归调用链展开 |
-| PR-C | T5+T6 | 时序图 |
+| PR-A | T1-T4 | 点改动方法看直接被调（精确 + 未解析灰显），默认 1 层 |
+| PR-B | T5 | `▸` 递归懒展开，穿透未改动 |
+| PR-C | T6+T7 | 时序图 |
 
-每个 PR commit 前缀 `feat(scope): RFC-085 ...`;均需全绿门槛(typecheck/test/format,动 shared/后端加 build:binary)。
+每 PR commit 前缀 `feat(scope): RFC-085 ...`；全绿门槛（typecheck/test/format，动 shared/后端加 build:binary）。
 
 ## 验收清单
 
-- [ ] T1 schema:`callSites` 可选、默认空、旧响应向后兼容。
-- [ ] T2:`this.foo`/`foo`/`field.foo`(类型在 diff)→ `resolved`;类型在 diff 外 → `external`;链式/无法定位 → `unresolved`;`order` = 源码顺序;注释/字符串调用被排除。
-- [ ] T2:真实 git 仓(Java + TS)fixture 端到端断言一条已知调用链。
-- [ ] T3:点结构树/关系图方法行 → 弹出直接被调列表;`unresolved` 灰显;旧 diff 入口禁用 + 空态。
-- [ ] T4:递归 ≥3 层;环检测不死循环;`maxDepth`/`maxNodes` 截断标注。
-- [ ] T5:调用链 → 有序消息流,lifeline 去重、消息按序。
-- [ ] T6:时序图渲染 smoke;渲染方案经用户确认;若引依赖,单二进制 smoke 通过。
-- [ ] 深度 SCIP 不可用自动回退启发式,视图不崩、标"基线精度"。
-- [ ] 全程门槛全绿;CI 三项 + e2e 绿。
+- [ ] T1：`callTargetSchema` + `callChainAvailable`，旧响应向后兼容。
+- [ ] T2：`this/self.foo`/`foo`→当前类；`field.foo`（静态类型）→`T.foo`(`resolved`)；`new T`→构造；类在表外→`external`；动态语言 `recv.foo`/链式/接口→`unresolved`；`order`=源码序；注释/字符串调用被排除；穿透到未改动文件可解析。
+- [ ] T2：8 语言抽调用；真实 git 仓 Java+TS 链较全、Python 多 unresolved 断点——均不崩、断点标注。
+- [ ] T3：`call-targets` 端点形状/scope/空态；node/wrapper scope 复用 RFC-083。
+- [ ] T4：点改动方法行入口图标 → 第 5 标签以它为根；默认 1 层；resolved/external/unresolved 三态样式；无根空态；不覆盖原有点行（跳 hunk/高亮）。
+- [ ] T5：`▸` 懒展开下一层（含未改动）；环检测不死循环；深度/节点上限标"已截断"。
+- [ ] T6：链 → 有序消息流，lifeline 去重、消息按序。
+- [ ] T7：时序图渲染 smoke；方案经用户确认；引依赖则单二进制 smoke 过。
+- [ ] 深度 SCIP 不可用自动回退启发式，视图不崩、标"基线精度"。
+- [ ] 全程门槛全绿；CI 三项 + e2e 绿。
 
 ## 风险 & 缓解
 
 | 风险 | 缓解 |
 | --- | --- |
-| 调用图覆盖低(当前 Java SCIP 回退,impact 稀) | 阶段 1 用 tree-sitter 启发式自给自足,不只靠 SCIP;精度边界显式标注 |
-| 接收者类型解析弱(动态/链式) | 分 `resolved`/`external`/`unresolved` 三档,宁缺毋滥,绝不臆造 |
-| 时序图渲染复杂/引依赖 | 数据与渲染解耦(T5 出数据、T6 出渲染);mermaid vs 自绘待拍板;依赖过单二进制 smoke |
-| 二次 parse 性能 | 复用 RFC-083 既有 parse 树,不重复 parse |
+| 动态语言（Py/JS）链多断点 | 接受：尽力而为 + 断点灰显（用户已定）；深度 SCIP 装了则精确 |
+| 懒展开多次 parse 慢 | 默认 1 层 + 结果缓存 + 类名→文件浅扫（不全量 parse）+ 深度/节点上限 |
+| 跨文件类型解析弱 | 三档 resolved/external/unresolved，宁缺毋滥、不臆造 |
+| 时序图渲染/依赖 | 数据与渲染解耦（T6 数据、T7 渲染）；mermaid vs 自绘待拍板 + 单二进制 smoke |
+| 穿透全仓打开任意文件 | 复用 `MAX_ANALYZE_BYTES` + 失败标"不可展开"，不阻塞整条链 |

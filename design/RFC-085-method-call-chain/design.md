@@ -1,139 +1,131 @@
 # RFC-085 — 技术设计
 
+> 已据用户四轮澄清定稿:全仓穿透 + 按需懒加载 + 入口=改动方法 + 1 层默认 + 方法&构造 + 尽力而为断点 + 全 8 语言 + 先树后时序图。
+
 ## 0. 与 RFC-083 的关系
 
-复用、不重造:
+复用、不重造:符号集 `SymbolNode`、成员范围 `collectClassMembers`、深度 SCIP(`structuralDiff/deep/*`)、注释/字符串剥离 `stripCommentsAndStrings`、8 语言 tree-sitter 提取(`lang/extract.ts`)。本 RFC 新增的核心 = **按需正向调用解析(懒)** + **调用链遍历** + **时序图**。
 
-- **符号集** `SymbolNode`(含 `id` / `qualifiedName` / `range` / `signature` / `parentId`)—— 调用链的节点就是这些方法符号。
-- **成员范围** `collectClassMembers`(`MemberRange`,含 name/kind/range)—— 把"某行的调用"归属到某个方法。
-- **深度模式 SCIP**(`structuralDiff/deep/*`)—— 有 SCIP 时用它的精确 occurrence/relationship 做调用解析。
-- **`impact`**(callee → callers,反向)—— 可**反转**成 caller → callees 作为补充信号。
+## 1. 核心架构:懒加载,而非预算产物
 
-本 RFC **新增**的核心是:**有序、正向的调用提取**(`callSites`)+ **调用链组装/遍历**+ **时序图视图**。
+调用链穿透全仓,但**绝不预先全仓建图**。模型是一个**"展开一层"服务**:
 
-## 1. 数据模型(shared schema)
-
-新增一个**可选**产物,挂在 `StructuralDiff` 上(向后兼容,旧响应 = 空):
-
-```ts
-// packages/shared/src/schemas/structuralDiff.ts
-export const callSiteSchema = z.object({
-  /** 调用所在方法(主调)symbol id —— 复用 SymbolNode.id */
-  from: z.string(),
-  /** 被调方法 symbol id;解析不到具体方法时省略(unresolved) */
-  to: z.string().optional(),
-  /** 被调方在源码里的字面接收者+方法名,如 `context.getSnake`(用于 unresolved 展示 + 调试) */
-  callee: z.string(),
-  /** 主调方法体内的出现序号(从 0 起),驱动时序图自上而下顺序 */
-  order: z.number().int().nonneg(),
-  /** 解析置信度:'resolved'(定位到本 diff 内的具体方法)| 'external'(解析到已知类但方法不在 diff)| 'unresolved' */
-  resolution: z.enum(['resolved', 'external', 'unresolved']),
-})
-export type CallSite = z.infer<typeof callSiteSchema>
-// StructuralDiff 增: callSites: z.array(callSiteSchema).default([])
+```
+expandMethod(methodRef) -> CallTarget[]   // methodRef 的直接被调(方法+构造),按源码顺序
 ```
 
-> 注:`order` 是**主调方法体内**的相对序号,不是全局序;时序图按"展开路径上每层各自的 order"排。
+- 前端从根(改动方法)开始,点 `▸` 才请求该节点的 `expandMethod`,结果缓存。
+- 一次 expand 只 parse:该方法所在文件 + 为解析其调用目标而触达的少量文件。
 
-## 2. 后端:有序正向调用提取(新)
+### 1.1 数据契约(shared schema,新增)
 
-新模块 `structuralDiff/callGraph.ts`(PURE 优先,文本/AST 注入):
+```ts
+export const callTargetSchema = z.object({
+  /** 被调方法的稳定引用:`${filePath}#${qualifiedName}` —— 可作为下一次 expand 的入参 */
+  ref: z.string().optional(),                 // resolved 时有；unresolved 省略
+  /** 展示名:解析到的方法签名，或源码字面 `factory.get().x` */
+  label: z.string(),
+  kind: z.enum(['method', 'constructor']),
+  /** 主调方法体内出现序号(0 起)——驱动树的子节点顺序 + 时序图消息顺序 */
+  order: z.number().int().nonneg(),
+  resolution: z.enum(['resolved', 'external', 'unresolved']),
+  /** resolved/external 时:被调所属类的卡片 id（复用 RFC-083 `${file}::${ClassQn}`），给时序图当 lifeline */
+  ownerClass: z.string().optional(),
+})
+```
 
-### 2.1 抽取调用点
+> `callTargets` **不挂在 `StructuralDiff` 上**(那是预算产物的思路);改由**新端点按需返回**(见 §4)。`StructuralDiff` 只多一个布尔 `callChainAvailable`(是否有可作根的改动方法)。
 
-对每个**变更方法**(已有 `MemberRange` + 其 body 文本/AST):
+## 2. 后端:懒展开服务(新)
 
-1. 用 tree-sitter **遍历方法体 AST**,按 DFS/源序收集 `call_expression`(各语言 grammar 的调用节点),记下:
-   - `order`(遍历计数);
-   - 接收者表达式文本(`context` / `this` / `factory.create(x)` …)+ 方法名(`getSnake`)。
-2. **基线无 tree-sitter 重解析成本**:RFC-083 已为该文件 parse 过一次,复用同一棵树(把 parse 结果在 assemble 阶段透传,避免二次 parse)。
+新模块 `structuralDiff/callGraph/`:
 
-### 2.2 目标解析(receiver type → class → method)
+### 2.1 抽调用点(单方法,有序)
+
+`extractCalls(methodNode, tree)`(PURE):tree-sitter 遍历方法体 AST,按源序收集 `call_expression` 与 `new_expression`(各语言 grammar 节点),产出 `{ receiverText, name, kind, order }[]`。复用 RFC-083 已 parse 的树(根=改动方法时直接复用;穿透到未改动文件时按需 parse 该文件)。注释/字符串里的"调用"由 `stripCommentsAndStrings` 先剥除。
+
+### 2.2 目标解析(receiver type → class → file → method)
 
 按置信度阶梯,**能解析才连**:
 
-- **SCIP(深度模式,最准)**:用 occurrence 的 symbol 直接拿到被调方法的 SCIP symbol,映射回 `SymbolNode.id`。
-- **启发式(基线 / 回退)**:
-  1. `this.foo()` / `foo()` → 当前类的 `foo`;
-  2. `recv.foo()` 且 `recv` 是本类的**字段/参数/局部变量**,其声明类型 `T` 是本 diff 里的类 → `T.foo`(用 RFC-083 的 `collectClassMembers` + 类型→类名表);
-  3. 解析到类 `T` 但 `T.foo` 不在 diff → `resolution='external'`(连到类、不连到具体方法行);
-  4. 链式 `a.b().c()` / 泛型 / lambda / 无法定位接收者类型 → `resolution='unresolved'`(只留 `callee` 字面)。
+- **深度模式 SCIP(最准,任意语言)**:occurrence symbol → 被调方法 SCIP symbol → 映射回 `ref`。
+- **基线启发式(回退,精度按语言分档)**:
+  1. `this.foo()`/`self.foo()`/`foo()` → 当前类的 `foo`(静态/动态语言皆可);
+  2. `new T(...)` → 类 `T` 的构造函数(`T` 经 §2.3 索引定位文件);
+  3. `recv.foo()` 且 `recv` 是本方法可见的**字段/参数/局部变量**,其**声明类型** `T`(静态类型语言可得)→ `T.foo`;
+  4. 解析到类 `T` 但 `T.foo` 找不到 → `external`(连类不连方法);
+  5. **动态类型(Python/JS)`recv` 无声明类型** / 链式 / 泛型 / lambda / 接口多实现 → `unresolved`(只留 `label`)。
 
-解析失败**不抛错、不臆造**:产出 `unresolved` 记录,前端灰显。
+**绝不臆造**:解析不到 → `unresolved`,前端灰显、不可下钻。
 
-### 2.3 装配
+### 2.3 轻量"类名→文件"索引(跨文件解析的支点)
 
-`gitBackend.augmentCallSites(diff, parseTrees)`:对每个变更方法跑 2.1+2.2,产出 `callSites[]`,挂到 `diff`。链路位置:在 `augmentClassEdges` 之后(同样只读 worktree)。复用 RFC-083 的 `MAX_ANALYZE_BYTES` 上限 + 降级标注。
+为把 `T` 定位到其文件,需要一个 `类名 → 文件` 表。**不全量 parse**:一次**浅扫**(正则/轻量 query 抓 `class/interface/struct/...` 声明行)建表,**按 worktree 缓存**(随 task 缓存,失效随 worktree 变化)。目标文件只在**真的要展开到它**时才完整 parse(懒)。
 
-## 3. 前端:调用链组装 + 视图
+### 2.4 入口与穿透
+
+- **根** = 改动方法(其 `ref` 来自 RFC-083 已有符号集);
+- 展开到**未改动**方法:`ref` 的 `filePath` 指向 worktree 任意文件 → 按需读 + parse → §2.1/§2.2。
+- 复用 RFC-083 `MAX_ANALYZE_BYTES` + 降级标注;超大/解析失败的文件 → 该层标"不可展开"。
+
+## 3. 前端:调用链树 + 时序图
 
 ### 3.1 调用链模型(纯函数,可测)
 
-`lib/callChain.ts`:
+`lib/callChain.ts`:`CallChainNode = { ref?, label, kind, resolution, ownerClass?, children?: CallChainNode[], loaded, truncated?, cycle? }`。
 
-```ts
-buildCallChain(callSites, rootSymbolId, opts: {maxDepth, maxNodes}): CallChainNode
-// CallChainNode = { symbolId, label(签名), children: CallChainNode[], truncated?, resolution }
-```
+- 入口:根方法 → 调 expand 取直接被调(默认仅此 1 层);
+- `▸` 展开:对该节点 `ref` 调 expand,填 `children`(按 `order`),缓存;
+- **环检测**(展开路径含 `ref` → 标 `cycle`、不再下钻)、**深度上限**、**节点上限**(命中标 `truncated`);
+- `external`/`unresolved` 为叶子(无 `▸`)。
 
-- 以 `from === current` 过滤、按 `order` 升序取直接被调;
-- 递归展开,**环检测**(路径集合,A→B→A 标 `cycle` 不再下钻)、**深度上限** `maxDepth`、**节点上限** `maxNodes`(命中标 `truncated`);
-- `unresolved`/`external` 作为叶子(不再下钻)。
+### 3.2 阶段 1-2:调用树视图(第 5 标签)
 
-### 3.2 阶段 1-2:缩进树视图
-
-复用 RFC-083 的卡片/行样式,渲染调用链树:每行 = 方法签名 + 解析徽标;`▸` 展开下一层;`unresolved` 灰显。从结构树/关系图的方法行加"看调用链"入口(`onJumpToCallChain(symbolId)`)。
+`StructuralDiffView` 加第 5 视图「调用链」(空根时空态)。树/关系图的**改动方法行**加小入口图标 → `onOpenCallChain(ref)` → 切第 5 标签、设根。行样式复用 RFC-083 卡片/成员风格 + 解析徽标(`✓`/`⚠ 未解析` 灰显)+ 变更徽标(根是改动方法)。
 
 ### 3.3 阶段 3:时序图
 
-数据 → 时序图:DFS 调用链,生成 `(caller lifeline, callee lifeline, message=方法名, depth)` 的**有序消息流**。
+调用链 → 有序消息流:DFS,产出 `{ from: ownerClass, to: ownerClass, message: name, depth, order }[]`,lifeline 去重(按 `ownerClass`)。渲染二选一(**PR-C 拍板**):
+- **A mermaid `sequenceDiagram`**:消息流转 mermaid 文本渲染;激活/嵌套/自循环开箱即用;代价=新增前端依赖(进 bundle、不进后端二进制,过 build:binary smoke 验)。
+- **B 自绘 SVG 泳道**:lifeline 竖线 + 有序水平消息 + 激活矩形;无依赖、风格统一;代价=嵌套布局自写。
 
-渲染二选一(design 取舍,待拍板):
-
-- **方案 A:mermaid `sequenceDiagram`**。把消息流转成 mermaid 文本,用 `mermaid` 渲染。优点:激活条/嵌套/自循环开箱即用、标准。代价:新增 `mermaid` 依赖(体积/单二进制影响需评估——mermaid 是前端 bundle,不进后端二进制,风险可控)。
-- **方案 B:自绘 SVG 泳道**。lifeline 竖线 + 有序水平消息箭头 + 激活矩形。优点:无依赖、风格与现有图统一、可与 xyflow 视觉对齐。代价:嵌套/激活布局要自己写。
-
-倾向:**先 A 快速出可用时序图**(数据模型是真资产,渲染器可替换),若依赖/体积不可接受再切 B。
+倾向先 A 快出(数据是真资产、渲染器可换)。
 
 ## 4. 接口契约
 
-- 后端:`StructuralDiff.callSites`(新,default `[]`);computeFromWorktree / computeBetweenRefs 链路追加 `augmentCallSites`。
-- 前端:`StructuralDiffView` 加第 5 个视图入口或独立面板"调用链";`buildCallChain` 纯函数 + `<CallChainView>` / `<SequenceDiagram>` 组件。
-- 兼容:旧 diff(无 `callSites`)→ 入口禁用 + 空态文案;不影响 RFC-083 既有四视图。
+- **新端点** `GET /api/tasks/:id/call-targets?scope=&methodRef=<file#qn>`（+ node/wrapper scope 复用 RFC-083 解析）→ `CallTarget[]`(§1.1)。挂 `mountTaskRoutes`、contract registry 登记。
+- `StructuralDiff` 加 `callChainAvailable: boolean`(有无可作根的改动方法)。
+- 前端:`<CallChainView>`(懒展开树)+ 阶段 3 `<SequenceDiagram>`;`buildCallChain`/`expandNode` 走端点。
+- 兼容:无该端点的旧后端 → 入口禁用 + 空态。
 
 ## 5. 失败模式 & 边界
 
 | 情形 | 行为 |
 | --- | --- |
-| 接收者类型无法定位 | `unresolved`,灰显,不下钻 |
-| 被调类在 diff 外 | `external`,连到类不连方法行 |
+| 动态语言无类型 / 接口多实现 / 链式 / 反射 | `unresolved` 灰显,不下钻 |
+| 解析到类、方法不在该文件 | `external`,连类不连方法 |
 | 递归环 | 环检测,标 `cycle`,停 |
-| 超大链 | `maxDepth`/`maxNodes` 截断,标"已截断" |
-| 深度 SCIP 不可用 | 回退启发式,横幅标"基线精度" |
-| 非变更方法做主调 | v1 只从**变更方法**起链(无 row 的方法不在卡片上);可后续放宽 |
-| 文件超 `MAX_ANALYZE_BYTES` | 跳过该文件调用提取 + 标注 |
+| 超大链 | 深度/节点上限,标"已截断" |
+| 深度 SCIP 不可用 | 回退启发式,标"基线精度" |
+| 目标文件超 `MAX_ANALYZE_BYTES`/解析失败 | 该节点标"不可展开" |
+| 根必须是改动方法 | 未改动方法无入口图标(v1) |
 
 ## 6. 测试策略(test-with-every-change)
 
 **必写**(纯函数优先):
 
-- `callGraph`(后端,PURE):
-  - `this.foo()` / `foo()` → 当前类方法;
-  - `field.foo()` 且 field 类型在 diff → 解析到 `T.foo`(`resolved`);
-  - 类型在 diff 外 → `external`;链式/无法定位 → `unresolved`;
-  - `order` 反映源码顺序(先 `a()` 后 `b()` → order 0,1);
-  - 注释/字符串里的"调用"被 RFC-083 的 strip 排除(复用 `stripCommentsAndStrings`)。
-- `buildCallChain`(前端,PURE):直接被调按 order;递归展开;**环检测**;`maxDepth`/`maxNodes` 截断;`unresolved` 作叶子。
-- 时序图数据预言(PURE):调用链 → 有序消息流(lifeline 去重、消息顺序、depth)。
-- 集成:`StructuralDiffView` 点方法行触发 `onJumpToCallChain`;`<SequenceDiagram>` 渲染 smoke(至少 lifeline 数 + 消息数断言)。
-- 回归锚:真实 git 仓 fixture(Java + TS)端到端断言一条已知调用链。
+- `extractCalls`(PURE,8 语言代表样本):有序收集方法调用 + `new`;注释/字符串剥除;`order` = 源码序。
+- 目标解析(PURE):`this/self.foo`→当前类;`field.foo`(静态类型)→`T.foo`(`resolved`);类在表外→`external`;动态语言 `recv.foo`/链式→`unresolved`;`new T()`→构造。
+- `类名→文件`浅扫索引(PURE):多文件建表正确。
+- `buildCallChain`/`expandNode`(前端 PURE):直接被调按 order;懒展开填 children;**环检测**;深度/节点截断;`external`/`unresolved` 叶子化。
+- 时序图数据预言(PURE):链 → 有序消息流(lifeline 去重、消息顺序、depth)。
+- 集成:真实 git 仓 fixture(Java + TS + 一个动态语言如 Python 验"多 unresolved")端到端断言一条链 + 一个断点;`<CallChainView>` 懒展开渲染 smoke;阶段 3 `<SequenceDiagram>` 渲染 smoke。
+- 端点契约:`call-targets` 200 形状 + scope 校验 + 无根空态。
 
-**门槛**:`typecheck && test && format:check`;动到 shared/后端 → `build:binary` smoke。
+**门槛**:`typecheck && test && format:check`;动 shared/后端 → `build:binary` smoke(阶段 3 若引 mermaid 必验)。
 
-## 7. 分阶段(降低风险 + 增量交付)
+## 7. 分阶段
 
-1. **阶段 1** = §2 调用提取 + §3.1/§3.2 直接被调缩进视图(先有"点方法看它调了谁")。
-2. **阶段 2** = `buildCallChain` 递归 + 展开/环/截断。
-3. **阶段 3** = 时序图(顺序消息流 + 渲染器)。
-
-每阶段单独 PR、单独验收(见 plan.md)。
+1. **阶段 1**(PR-A)= §1 schema + §2 懒展开服务(extractCalls + 启发式解析 + 类名→文件索引)+ §4 端点 + §3.2 调用树视图(默认 1 层 + 入口图标)。
+2. **阶段 2**(PR-B)= `▸` 递归懒展开 + 环检测 + 深度/节点截断。
+3. **阶段 3**(PR-C)= 时序图(有序消息流 + 渲染器,渲染方案 ExitPlanMode/询问定)。
