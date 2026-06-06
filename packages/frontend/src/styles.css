@@ -9566,17 +9566,18 @@ mark.comment-anchor[data-active='true'] {
 .structure__view-toggle {
   align-self: flex-start;
 }
-/* impact, when shown as a view, scrolls within a bounded area (it can be long) */
+/* impact, when shown as a view, fills the remaining height + scrolls (long) */
 .structure__impact-view {
-  max-height: 480px;
+  flex: 1;
+  min-height: 240px;
   overflow: auto;
 }
 /* RFC-083 PR-F — read-only class-collaboration diagram */
 .structure-graph {
-  height: 480px;
-  /* fixed-height: never let a collapsed flex parent (the impact panel can eat
-     all the column height) shrink it to ~0 and hide the whole graph */
-  flex: none;
+  /* fill the remaining pane height; min-height is the FLOOR that stops a
+     collapsed flex parent from crushing it to ~0 (the old 2px-invisible bug) */
+  flex: 1;
+  min-height: 360px;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -9693,9 +9694,10 @@ mark.comment-anchor[data-active='true'] {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* size to content (legend + fixed-height graph), don't collapse in a 0-height
-     flex parent — pairs with `.structure-graph { flex: none }` */
-  flex: none;
+  /* fill the detail area so the graph (flex:1 inside) can grow to the page
+     height; the graph's own min-height is the anti-collapse floor */
+  flex: 1;
+  min-height: 0;
 }
 .structure-graph__legend {
   display: flex;

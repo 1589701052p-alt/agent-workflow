@@ -19,11 +19,12 @@ const graphCss = css.slice(
 )
 
 describe('structure-graph container height', () => {
-  // regression: the graph is inside a flex column the (tall) impact panel can
-  // collapse to 0 — a shrinkable flex child got crushed to ~2px and vanished.
-  test('has a fixed height and is non-shrinkable (flex: none)', () => {
-    expect(graphCss).toMatch(/height:\s*\d{3}px/)
-    expect(graphCss).toMatch(/flex:\s*none/)
+  // regression: the graph is inside a flex column that could collapse to 0 — a
+  // shrinkable child got crushed to ~2px and vanished. It now FILLS (flex:1) but
+  // a min-height FLOOR guarantees it can never collapse below a visible size.
+  test('fills (flex:1) with a min-height floor that stops collapse', () => {
+    expect(graphCss).toMatch(/flex:\s*1/)
+    expect(graphCss).toMatch(/min-height:\s*\d{3}px/)
   })
 })
 
