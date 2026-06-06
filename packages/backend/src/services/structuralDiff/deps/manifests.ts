@@ -84,15 +84,20 @@ function parseNpm(content: string): DepMap {
 // extraction without a full TOML dependency.
 function parseCargo(content: string): DepMap {
   const out: DepMap = new Map()
-  const depTable = /^\[(?:dev-|build-)?dependencies(?:\.[\w-]+)?\]/
   let inDeps = false
   for (const raw of content.split('\n')) {
     const line = raw.trim()
     if (line.startsWith('[')) {
-      inDeps = depTable.test(line)
-      // `[dependencies.foo]` table → the dep is `foo`
+      // `[dependencies.foo]` table → the dep is `foo`; its body lines are foo's
+      // OWN fields (version/features/...), NOT new deps — so leave the deps
+      // context after capturing the name (else `version = "1"` reads as a dep).
       const sub = line.match(/^\[(?:dev-|build-)?dependencies\.([\w-]+)\]/)
-      if (sub?.[1] !== undefined) out.set(sub[1], null)
+      if (sub?.[1] !== undefined) {
+        out.set(sub[1], null)
+        inDeps = false
+      } else {
+        inDeps = /^\[(?:dev-|build-)?dependencies\]\s*$/.test(line)
+      }
       continue
     }
     if (!inDeps || line === '' || line.startsWith('#')) continue
@@ -131,30 +136,69 @@ function parseGoMod(content: string): DepMap {
 }
 
 function parsePython(content: string): DepMap {
+  // pyproject.toml (PEP 621 array / poetry table) vs requirements.txt — distinct
+  // shapes, so parsing arbitrary `key = value` as a dep (the old bug: `version`,
+  // `requires-python` etc. became phantom deps) is avoided.
+  const isToml = /^\s*\[(tool\.poetry|project|build-system)/m.test(content)
+  return isToml ? parsePyproject(content) : parseRequirementsTxt(content)
+}
+
+/** A PEP 508 requirement spec → [name, version|null]. Skips python/non-deps. */
+function pep508(spec: string): [string, string | null] | null {
+  const m = spec.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/)
+  if (m?.[1] === undefined) return null
+  const name = m[1]
+  if (name.toLowerCase() === 'python') return null
+  const rest = (m[2] ?? '').trim()
+  const ver = rest.match(/(?:==|>=|~=|!=|<=|<|>|\^|~)\s*([^\s,;]+)/)
+  return [name, ver?.[1] ?? null]
+}
+
+function parseRequirementsTxt(content: string): DepMap {
   const out: DepMap = new Map()
-  // requirements.txt lines OR pyproject [project].dependencies / poetry table.
-  // Lightweight: scan for `name (==|>=|~=|<=|>|<) ver` and quoted PEP 508 specs.
-  const specRe =
-    /^["']?([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*(?:==|>=|~=|!=|<=|<|>)?\s*([0-9][\w.*-]*)?/
-  let inDeps = false
   for (const raw of content.split('\n')) {
     const line = raw.trim()
-    if (line === '' || line.startsWith('#')) continue
-    if (/^\[(tool\.poetry\.dependencies|project)\]/.test(line)) {
-      inDeps = true
+    // Skip blanks, comments, pip options (-e/-r/--hash), and VCS/URL installs.
+    if (line === '' || line.startsWith('#') || line.startsWith('-')) continue
+    if (line.includes('://') || line.startsWith('git+') || line.includes('@ ')) continue
+    const parsed = pep508(line.split(/[;#]/)[0] ?? line)
+    if (parsed !== null) out.set(parsed[0], parsed[1])
+  }
+  return out
+}
+
+function parsePyproject(content: string): DepMap {
+  const out: DepMap = new Map()
+  let inPoetryDeps = false
+  let inDepArray = false
+  for (const raw of content.split('\n')) {
+    const line = raw.trim()
+    if (line.startsWith('[')) {
+      inPoetryDeps = /^\[tool\.poetry\.dependencies\]/.test(line)
+      inDepArray = false
       continue
     }
-    if (line.startsWith('[')) inDeps = false
-    if (line.startsWith('dependencies') && line.includes('[')) inDeps = true
-    if (line === ']') inDeps = false
-    const stripped = line.replace(/^["']|["'],?$/g, '')
-    const m = stripped.match(specRe)
-    if (m?.[1] !== undefined && /[A-Za-z]/.test(m[1]) && m[1].toLowerCase() !== 'python') {
-      // Only accept obvious dependency lines: requirements.txt always, pyproject
-      // only inside a deps context.
-      if (inDeps || /[=<>~!]/.test(line) || !line.includes('=')) {
-        out.set(m[1], m[2] ?? null)
+    if (/^dependencies\s*=\s*\[/.test(line)) inDepArray = true
+    if (inDepArray) {
+      // PEP 621: dependencies = ["requests>=2.28", "flask"] (may span lines).
+      for (const q of line.match(/"([^"]+)"|'([^']+)'/g) ?? []) {
+        const parsed = pep508(q.replace(/^["']|["']$/g, ''))
+        if (parsed !== null) out.set(parsed[0], parsed[1])
       }
+      if (line.includes(']')) inDepArray = false
+      continue
+    }
+    if (inPoetryDeps) {
+      // poetry: name = "^1.2"  OR  name = { version = "^1.2", ... }
+      const m = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)\s*=\s*(.+)$/)
+      if (m?.[1] === undefined || m[1].toLowerCase() === 'python') continue
+      const rhs = m[2] ?? ''
+      const verStr = rhs.match(/^["']([^"']*)["']/)?.[1]
+      const verInline = rhs.match(/version\s*=\s*["']([^"']*)["']/)?.[1]
+      const ver = verStr ?? verInline
+      // Strip the leading constraint operator (^/~/>=...) so versions read like
+      // the requirements.txt parser (`^2.28` → `2.28`).
+      out.set(m[1], ver !== undefined ? ver.replace(/^[\^~>=<!=\s]+/, '') : null)
     }
   }
   return out

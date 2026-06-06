@@ -60,15 +60,22 @@ export async function analyzeFile(opts: {
   }
 
   try {
-    const oldSymbols =
-      oldText !== null ? await extractSymbols({ lang, grammarFile, filePath, source: oldText }) : []
-    const newSymbols =
-      newText !== null ? await extractSymbols({ lang, grammarFile, filePath, source: newText }) : []
-    const changes = graphDiff(oldSymbols, newSymbols).map((c) => ({
+    const oldRes =
+      oldText !== null
+        ? await extractSymbols({ lang, grammarFile, filePath, source: oldText })
+        : { symbols: [], hadError: false }
+    const newRes =
+      newText !== null
+        ? await extractSymbols({ lang, grammarFile, filePath, source: newText })
+        : { symbols: [], hadError: false }
+    const changes = graphDiff(oldRes.symbols, newRes.symbols).map((c) => ({
       ...c,
       hunkAnchor: anchorFor(c, filePath),
     }))
-    const status = DEGRADED_LANGS.has(lang) ? 'degraded' : 'ok'
+    // best-effort language → degraded; otherwise a recovered parse error also
+    // downgrades to degraded so the UI flags "analysis may be incomplete".
+    const status: FileStructuralDiff['status'] =
+      DEGRADED_LANGS.has(lang) || oldRes.hadError || newRes.hadError ? 'degraded' : 'ok'
     return { filePath, lang, status, changes, edges: [] }
   } catch {
     return { filePath, lang, status: 'parse-error', changes: [], edges: [] }

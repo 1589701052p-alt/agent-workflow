@@ -94,6 +94,57 @@ describe('parseManifest — per ecosystem', () => {
   })
 })
 
+// Regression guards for parser bugs found by the RFC-083 completeness audit:
+// phantom deps from cargo sub-tables / pyproject metadata, dropped poetry caret
+// versions, and garbage from requirements options / VCS installs.
+describe('parseManifest — audit regressions', () => {
+  test('cargo [dependencies.foo] sub-table: only `foo`, no phantom version/features', () => {
+    const m = parseManifest(
+      'cargo',
+      '[dependencies.serde]\nversion = "1.0"\nfeatures = ["derive"]\n\n[dependencies]\ntokio = "1"\n',
+    )
+    expect(m.has('serde')).toBe(true)
+    expect(m.has('tokio')).toBe(true)
+    expect(m.has('version')).toBe(false)
+    expect(m.has('features')).toBe(false)
+  })
+
+  test('pyproject PEP 621: array deps only, not [project] metadata keys', () => {
+    const m = parseManifest(
+      'pip',
+      '[project]\nname = "mypkg"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = ["requests>=2.28", "flask"]\n',
+    )
+    expect(m.get('requests')).toBe('2.28')
+    expect(m.has('flask')).toBe(true)
+    expect(m.has('name')).toBe(false)
+    expect(m.has('version')).toBe(false)
+    expect(m.has('requires-python')).toBe(false)
+  })
+
+  test('poetry table: caret/tilde versions kept, python excluded', () => {
+    const m = parseManifest(
+      'pip',
+      '[tool.poetry.dependencies]\npython = "^3.10"\nrequests = "^2.28"\nserde = { version = "~1.2", optional = true }\n',
+    )
+    expect(m.get('requests')).toBe('2.28')
+    expect(m.get('serde')).toBe('1.2')
+    expect(m.has('python')).toBe(false)
+  })
+
+  test('requirements.txt: skip -e / VCS / option lines', () => {
+    const m = parseManifest(
+      'pip',
+      '-e .\n-r base.txt\ngit+https://github.com/x/y.git#egg=z\nflask==2.0\nnumpy\n',
+    )
+    expect(m.get('flask')).toBe('2.0')
+    expect(m.has('numpy')).toBe(true)
+    expect(m.has('-e')).toBe(false)
+    expect(m.has('z')).toBe(false)
+    expect(m.has('git')).toBe(false)
+    expect(m.size).toBe(2)
+  })
+})
+
 describe('dependencyChangesForManifest — set-diff', () => {
   test('added / removed / updated', () => {
     const changes = dependencyChangesForManifest({

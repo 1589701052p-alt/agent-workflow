@@ -62,13 +62,18 @@ export async function extractSymbols(opts: {
   grammarFile: string
   filePath: string
   source: string
-}): Promise<SymbolNode[]> {
+}): Promise<{ symbols: SymbolNode[]; hadError: boolean }> {
   const cfg = getLangExtraction(opts.lang)
-  if (cfg === undefined) return []
+  if (cfg === undefined) return { symbols: [], hadError: false }
   const { tree, language } = await parseSource(opts.grammarFile, opts.source)
   const query = language.query(cfg.query)
   try {
-    return buildSymbols(query.matches(tree.rootNode), opts, cfg)
+    // tree-sitter recovers from syntax errors instead of throwing, so a grammar
+    // that can't parse a construct (e.g. a newer syntax the pinned grammar
+    // predates) silently yields a partial tree. Surface that as `hadError` so
+    // the file is marked degraded rather than a misleading "ok".
+    const hadError = tree.rootNode.hasError
+    return { symbols: buildSymbols(query.matches(tree.rootNode), opts, cfg), hadError }
   } finally {
     query.delete()
     tree.delete()

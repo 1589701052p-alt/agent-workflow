@@ -249,6 +249,17 @@ describe('baseline — added / removed whole file + guards', () => {
     expect(file.lang).toBe('unknown')
   })
 
+  test('syntax error (recovered by tree-sitter) → status degraded, not silent ok', async () => {
+    // tree-sitter recovers instead of throwing; a broken construct must still
+    // downgrade the file to 'degraded' so the UI flags incompleteness.
+    const file = await analyzeFile({
+      filePath: 'b.py',
+      oldText: 'def f():\n    return 1\n',
+      newText: 'def f():\n    return 1\nclass @@@ broken(:\n',
+    })
+    expect(file.status).toBe('degraded')
+  })
+
   test('binary content → skipped-binary', async () => {
     const bin = 'abc' + String.fromCharCode(0) + 'def'
     const file = await analyzeFile({ filePath: 'a.py', oldText: null, newText: bin })
