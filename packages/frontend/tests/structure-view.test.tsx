@@ -149,7 +149,7 @@ describe('<StructuralDiffView />', () => {
     expect(jumped).toEqual({ filePath: 'mod.py', startLine: 3, endLine: 4 })
   })
 
-  test('renders the impact panel (within-file callers) when impact is present', () => {
+  test('impact panel (within-file callers) shows under the 影响面 view toggle', () => {
     const data = sampleDiff()
     data.impact = [
       {
@@ -164,7 +164,11 @@ describe('<StructuralDiffView />', () => {
         confidence: 'inferred',
       },
     ]
-    render(<StructuralDiffView data={data} />)
+    const { container } = render(<StructuralDiffView data={data} />)
+    // impact is folded into the view toggle (not an always-on panel) → 3rd option
+    expect(screen.queryByText('Animal.speak')).toBeNull()
+    const impactBtn = container.querySelectorAll('.structure__view-toggle button')[2]
+    fireEvent.click(impactBtn as Element)
     expect(screen.getByText('Animal.speak')).toBeTruthy() // impact target (full qn)
     expect(screen.getByText(/Animal\.greet/)).toBeTruthy() // caller
   })
@@ -190,6 +194,8 @@ describe('<StructuralDiffView />', () => {
       },
     ]
     const { container } = render(<StructuralDiffView data={data} />)
+    const impactBtn = container.querySelectorAll('.structure__view-toggle button')[2]
+    fireEvent.click(impactBtn as Element)
     const tag = container.querySelector('.structure__impact .structure__tag')
     expect(tag?.textContent).toBeTruthy() // precise label rendered (vs heuristic)
   })

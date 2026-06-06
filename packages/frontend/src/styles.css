@@ -9566,6 +9566,11 @@ mark.comment-anchor[data-active='true'] {
 .structure__view-toggle {
   align-self: flex-start;
 }
+/* impact, when shown as a view, scrolls within a bounded area (it can be long) */
+.structure__impact-view {
+  max-height: 480px;
+  overflow: auto;
+}
 /* RFC-083 PR-F — read-only class-collaboration diagram */
 .structure-graph {
   height: 480px;

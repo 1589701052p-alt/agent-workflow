@@ -33,6 +33,14 @@ const DEEP_FALLBACK_REASONS = new Set<string>([
   'scip-parse-error',
 ])
 
+// The detail views, toggled by the segmented control. 'impact' (the caller list)
+// is folded in here instead of an always-on panel so it stops eating page space.
+const VIEWS = [
+  { key: 'tree', labelKey: 'tasks.structViewTree' },
+  { key: 'graph', labelKey: 'tasks.structViewGraph' },
+  { key: 'impact', labelKey: 'tasks.structViewImpact' },
+] as const
+
 const CARD_LABEL_KEY: Record<SummaryRow['key'], string> = {
   classes: 'tasks.structCardClasses',
   methods: 'tasks.structCardMethods',
@@ -50,7 +58,7 @@ export function StructuralDiffView({
   onJumpToHunk?: (anchor: HunkAnchor) => void
 }) {
   const { t } = useTranslation()
-  const [view, setView] = useState<'tree' | 'graph'>('tree')
+  const [view, setView] = useState<'tree' | 'graph' | 'impact'>('tree')
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
@@ -65,6 +73,8 @@ export function StructuralDiffView({
   const degraded = data.files.some((f) => f.status === 'degraded')
   const deepFellBack =
     data.engine === 'baseline' && DEEP_FALLBACK_REASONS.has(data.degradedReason ?? '')
+  // 'impact' view disappears when there's no impact → don't strand the toggle there.
+  const activeView = view === 'impact' && data.impact.length === 0 ? 'tree' : view
   return (
     <div className="structure">
       {deepFellBack && (
@@ -81,7 +91,6 @@ export function StructuralDiffView({
       {data.dependencyChanges.length > 0 && (
         <DependencyChangesPanel changes={data.dependencyChanges} />
       )}
-      {data.impact.length > 0 && <ImpactPanel impact={data.impact} />}
       {files.length > 0 && (
         <div className="structure__detail">
           <div
@@ -89,23 +98,27 @@ export function StructuralDiffView({
             role="radiogroup"
             aria-label={t('tasks.structViewLabel')}
           >
-            {(['tree', 'graph'] as const).map((v) => (
+            {VIEWS.filter((v) => v.key !== 'impact' || data.impact.length > 0).map((v) => (
               <button
-                key={v}
+                key={v.key}
                 type="button"
                 role="radio"
-                aria-checked={view === v}
-                className={`segmented__option ${view === v ? 'segmented__option--active' : ''}`}
-                onClick={() => setView(v)}
+                aria-checked={activeView === v.key}
+                className={`segmented__option ${activeView === v.key ? 'segmented__option--active' : ''}`}
+                onClick={() => setView(v.key)}
               >
-                {v === 'tree' ? t('tasks.structViewTree') : t('tasks.structViewGraph')}
+                {t(v.labelKey)}
               </button>
             ))}
           </div>
-          {view === 'tree' ? (
+          {activeView === 'tree' ? (
             <StructuralTree files={files} onJumpToHunk={onJumpToHunk} />
-          ) : (
+          ) : activeView === 'graph' ? (
             <StructuralGraph data={data} />
+          ) : (
+            <div className="structure__impact-view">
+              <ImpactPanel impact={data.impact} />
+            </div>
           )}
         </div>
       )}
