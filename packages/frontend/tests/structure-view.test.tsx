@@ -111,7 +111,7 @@ describe('structureView helpers', () => {
 })
 
 describe('<StructuralDiffView />', () => {
-  test('renders tree, badges, dependency, and degraded banner', () => {
+  test('renders tree, badges, and degraded banner', () => {
     render(<StructuralDiffView data={sampleDiff()} />)
     // left file list shows both changed files
     expect(screen.getByText('mod.py')).toBeTruthy()
@@ -120,10 +120,17 @@ describe('<StructuralDiffView />', () => {
     expect(screen.getByText('Animal')).toBeTruthy()
     expect(screen.getByText('speak')).toBeTruthy()
     expect(screen.getByText('walk')).toBeTruthy()
-    // dependency panel
-    expect(screen.getByText('tokio')).toBeTruthy()
     // degraded banner present (a cpp file is best-effort)
     expect(screen.getByRole('status')).toBeTruthy()
+  })
+
+  test('dependency changes show under the 依赖 view toggle (not always-on)', () => {
+    const { container } = render(<StructuralDiffView data={sampleDiff()} />)
+    expect(screen.queryByText('tokio')).toBeNull() // folded into the toggle, not shown by default
+    const buttons = container.querySelectorAll('.structure__view-toggle button')
+    const depsBtn = [...buttons].find((b) => /依赖|Deps/.test(b.textContent ?? ''))
+    fireEvent.click(depsBtn as Element)
+    expect(screen.getByText('tokio')).toBeTruthy()
   })
 
   test('selecting another file swaps the body', () => {

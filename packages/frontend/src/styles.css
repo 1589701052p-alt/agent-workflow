@@ -9389,7 +9389,7 @@ mark.comment-anchor[data-active='true'] {
 .structure-pane {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   height: 100%;
   min-height: 0;
 }
@@ -9406,7 +9406,7 @@ mark.comment-anchor[data-active='true'] {
 .structure {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   height: 100%;
   min-height: 0;
 }
@@ -9429,7 +9429,7 @@ mark.comment-anchor[data-active='true'] {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 3px 8px;
   font-size: var(--font-xs);
 }
 .structure__card-count {

@@ -965,6 +965,7 @@ export const enUS: Resources = {
     structViewTree: 'Tree',
     structViewGraph: 'Graph',
     structViewImpact: 'Impact',
+    structViewDeps: 'Deps',
     structBodyDeltaTitle: 'method body line changes (+added / −removed)',
     structGraphEmpty:
       'No graphable structural changes (only deps/fields changed) — see the summary cards & Tree view.',

@@ -912,6 +912,7 @@ export interface Resources {
     structViewTree: string
     structViewGraph: string
     structViewImpact: string
+    structViewDeps: string
     structBodyDeltaTitle: string
     structGraphEmpty: string
     structGraphLegendAdded: string
@@ -3011,6 +3012,7 @@ export const zhCN: Resources = {
     structViewTree: '树',
     structViewGraph: '关系图',
     structViewImpact: '影响面',
+    structViewDeps: '依赖',
     structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
     structGraphEmpty: '无可视化的结构改动（仅依赖/字段等变更）—— 见上方摘要卡片与"树"视图。',
     structGraphLegendAdded: '+ 新增',
