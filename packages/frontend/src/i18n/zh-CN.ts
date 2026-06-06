@@ -885,6 +885,10 @@ export interface Resources {
     tabWorktreeFiles: string
     tabWorktreeDiff: string
     tabWorktreeStructure: string
+    structScopeLabel: string
+    structScopeTask: string
+    structPruned: string
+    structReadonlyNode: string
     structEmpty: string
     structDegradedBanner: string
     structDegradedChip: string
@@ -2957,6 +2961,10 @@ export const zhCN: Resources = {
     tabWorktreeFiles: '工作目录',
     tabWorktreeDiff: '工作目录 diff',
     tabWorktreeStructure: '结构',
+    structScopeLabel: '范围',
+    structScopeTask: '整任务',
+    structPruned: '该节点的快照已被回收（worktree GC 后），结构 diff 不可用。',
+    structReadonlyNode: '该节点为只读 / 无写入，无结构变化。',
     structEmpty: '本次改动无可识别的结构变化。',
     structDegradedBanner: '部分文件为 best-effort 分析（C++/Scala），结构可能不完整。',
     structDegradedChip: '不完整',

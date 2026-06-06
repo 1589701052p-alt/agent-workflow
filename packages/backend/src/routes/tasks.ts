@@ -279,10 +279,11 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   // RFC-083 — structural (semantic) diff overlay for the textual diff above.
-  // `?scope=task|node|wrapper` (v1 implements 'task'; others 422).
+  // `?scope=task|node` (+ `nodeRunId` for node scope); 'wrapper' → 422.
   app.get('/api/tasks/:id/structural-diff', async (c) => {
     const scope = structuralScopeSchema.catch('task').parse(c.req.query('scope'))
-    return c.json(await getTaskStructuralDiff(deps.db, c.req.param('id'), scope))
+    const nodeRunId = c.req.query('nodeRunId')
+    return c.json(await getTaskStructuralDiff(deps.db, c.req.param('id'), scope, nodeRunId))
   })
 
   // RFC-053 P-6: list currently-open lifecycle_alerts (invariant + stuck)

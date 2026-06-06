@@ -5,7 +5,7 @@
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { gitChangedFiles, readBlobAtRef } from '@/util/git'
+import { gitChangedFiles, gitChangedFilesBetween, readBlobAtRef } from '@/util/git'
 import { assembleStructuralDiff } from './assemble'
 import type { StructuralDiff, StructuralScope } from '@agent-workflow/shared'
 
@@ -34,6 +34,33 @@ export async function computeFromWorktree(opts: {
     nodeRunId: opts.nodeRunId,
     fromRef: opts.fromRef,
     toRef: 'WORKTREE',
+    changedFiles,
+    readOld,
+    readNew,
+  })
+}
+
+/** Compute the structural diff between two refs (per-node snapshot pair). Both
+ *  sides read via `git show <ref>:<path>`. */
+export async function computeBetweenRefs(opts: {
+  taskId: string
+  scope: StructuralScope
+  nodeRunId?: string
+  worktreePath: string
+  fromRef: string
+  toRef: string
+}): Promise<StructuralDiff> {
+  const changedFiles = await gitChangedFilesBetween(opts.worktreePath, opts.fromRef, opts.toRef)
+  const readOld = (p: string): Promise<string | null> =>
+    readBlobAtRef(opts.worktreePath, opts.fromRef, p)
+  const readNew = (p: string): Promise<string | null> =>
+    readBlobAtRef(opts.worktreePath, opts.toRef, p)
+  return assembleStructuralDiff({
+    taskId: opts.taskId,
+    scope: opts.scope,
+    nodeRunId: opts.nodeRunId,
+    fromRef: opts.fromRef,
+    toRef: opts.toRef,
     changedFiles,
     readOld,
     readNew,

@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assembleStructuralDiff } from '../src/services/structuralDiff/assemble'
-import { computeFromWorktree } from '../src/services/structuralDiff/gitBackend'
+import { computeFromWorktree, computeBetweenRefs } from '../src/services/structuralDiff/gitBackend'
 import { runGit } from '../src/util/git'
 
 describe('assembleStructuralDiff — in-memory', () => {
@@ -42,12 +42,31 @@ describe('assembleStructuralDiff — in-memory', () => {
     expect(kinds).toContain('modified A.foo')
     expect(kinds).toContain('added A.bar')
     expect(diff.files.some((f) => f.filePath === 'README.md')).toBe(false)
-    // dependency change
-    expect(diff.dependencyChanges.find((d) => d.packageName === 'zod')?.changeType).toBe('added')
+    // dependency change — added but not imported in the (import-less) code file
+    const zod = diff.dependencyChanges.find((d) => d.packageName === 'zod')
+    expect(zod?.changeType).toBe('added')
+    expect(zod?.viaImport).toBe(false)
     // summary aggregates both
     expect(diff.summary.methods.added).toBe(1)
     expect(diff.summary.methods.modified).toBe(1)
     expect(diff.summary.dependencies.added).toBe(1)
+  })
+
+  test('viaImport: a new source import of an added package flips viaImport', async () => {
+    const diff = await assembleStructuralDiff({
+      taskId: 't',
+      scope: 'task',
+      fromRef: 'a',
+      toRef: 'WORKTREE',
+      changedFiles: ['src/m.rs', 'Cargo.toml'],
+      readOld: async () => null,
+      readNew: async (p) =>
+        p === 'src/m.rs' ? 'use tokio::time;\nfn f() {}\n' : '[dependencies]\ntokio = "1"\n',
+    })
+    const tokio = diff.dependencyChanges.find((d) => d.packageName === 'tokio')
+    expect(tokio?.changeType).toBe('added')
+    expect(tokio?.viaManifest).toBe(true)
+    expect(tokio?.viaImport).toBe(true) // `use tokio::time;` references it
   })
 })
 
@@ -104,6 +123,36 @@ describe('computeFromWorktree — real git repo', () => {
     ).toBe(true)
     expect(diff.dependencyChanges.find((d) => d.packageName === 'serde')?.changeType).toBe('added')
     expect(diff.summary.dependencies.added).toBe(1)
+  })
+
+  test('computeBetweenRefs: structural diff between two commits (node-scope pairing)', async () => {
+    const dir = await makeRepo()
+    writeFileSync(join(dir, 'mod.py'), 'class A:\n    def m(self):\n        return 1\n')
+    await runGit(dir, ['add', '.'])
+    await runGit(dir, ['commit', '-q', '-m', 'v1'])
+    const from = (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim()
+    writeFileSync(
+      join(dir, 'mod.py'),
+      'class A:\n    def m(self):\n        return 2\n    def n(self):\n        return 3\n',
+    )
+    await runGit(dir, ['add', '.'])
+    await runGit(dir, ['commit', '-q', '-m', 'v2'])
+    const to = (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim()
+
+    const diff = await computeBetweenRefs({
+      taskId: 't',
+      scope: 'node',
+      worktreePath: dir,
+      fromRef: from,
+      toRef: to,
+    })
+    expect(diff.fromRef).toBe(from)
+    expect(diff.toRef).toBe(to)
+    const idx = diff.files
+      .find((f) => f.filePath === 'mod.py')
+      ?.changes.map((c) => `${c.changeType} ${(c.after ?? c.before)?.qualifiedName}`)
+    expect(idx).toContain('modified A.m')
+    expect(idx).toContain('added A.n')
   })
 
   test('clean worktree → empty diff', async () => {

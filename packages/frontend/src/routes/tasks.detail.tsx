@@ -28,6 +28,7 @@ import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
 import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
+import { Select } from '@/components/Select'
 import { WorktreeFilesPanel } from '@/components/WorktreeFilesPanel'
 import { classifyCanceled, displayNoderunStatusKey } from '@/lib/noderun-status'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
@@ -51,6 +52,8 @@ function TaskDetailPage() {
   // RFC-021: page-level tab state. Default is the workflow-status canvas
   // since that's the most actionable view for a running task.
   const [tab, setTab] = useState<TaskDetailTab>('workflow-status')
+  // RFC-083: structural-diff scope — 'task' or `node:${nodeRunId}`.
+  const [structScope, setStructScope] = useState<string>('task')
   // Same shape as the editor route: the drawer ✕ must drive xyflow's
   // selection clear, otherwise the underlying node stays highlighted and
   // a re-click on it is swallowed by xyflow's `handleNodeClick`. See
@@ -89,9 +92,13 @@ function TaskDetailPage() {
   // RFC-083 — structural (semantic) diff for the task scope. Same gating as the
   // textual diff (needs a base commit); refetches while the task is live.
   const structuralDiff = useQuery<StructuralDiff>({
-    queryKey: ['tasks', id, 'structural-diff'],
-    queryFn: ({ signal }) =>
-      api.get(`/api/tasks/${encodeURIComponent(id)}/structural-diff`, undefined, signal),
+    queryKey: ['tasks', id, 'structural-diff', structScope],
+    queryFn: ({ signal }) => {
+      const qs = structScope.startsWith('node:')
+        ? `?scope=node&nodeRunId=${encodeURIComponent(structScope.slice('node:'.length))}`
+        : '?scope=task'
+      return api.get(`/api/tasks/${encodeURIComponent(id)}/structural-diff${qs}`, undefined, signal)
+    },
     enabled: task.data !== undefined && task.data.baseCommit !== null,
     refetchInterval: (q) =>
       isTerminal(task.data?.status) && q.state.data !== undefined ? false : 6000,
@@ -421,13 +428,32 @@ function TaskDetailPage() {
         <div className="task-detail__pane" hidden={tab !== 'worktree-structure'}>
           {tk.baseCommit === null ? (
             <div className="muted">{t('tasks.noBaseCommit')}</div>
-          ) : structuralDiff.isLoading ? (
-            <div className="muted">{t('tasks.loadingDiff')}</div>
-          ) : structuralDiff.error !== null && structuralDiff.error !== undefined ? (
-            <div className="error-box">{describeError(structuralDiff.error)}</div>
-          ) : structuralDiff.data !== undefined ? (
-            <StructuralDiffView data={structuralDiff.data} />
-          ) : null}
+          ) : (
+            <div className="structure-pane">
+              <div className="structure-pane__scope">
+                <span className="structure-pane__scope-label">{t('tasks.structScopeLabel')}</span>
+                <Select
+                  ariaLabel={t('tasks.structScopeLabel')}
+                  value={structScope}
+                  onChange={setStructScope}
+                  options={[
+                    { value: 'task', label: t('tasks.structScopeTask') },
+                    ...(nodeRuns.data?.runs ?? []).map((r) => ({
+                      value: `node:${r.id}`,
+                      label: `${r.nodeId} · ${r.status}`,
+                    })),
+                  ]}
+                />
+              </div>
+              {structuralDiff.isLoading ? (
+                <div className="muted">{t('tasks.loadingDiff')}</div>
+              ) : structuralDiff.error !== null && structuralDiff.error !== undefined ? (
+                <div className="error-box">{describeError(structuralDiff.error)}</div>
+              ) : structuralDiff.data !== undefined ? (
+                <StructuralDiffView data={structuralDiff.data} />
+              ) : null}
+            </div>
+          )}
         </div>
 
         {/* RFC-041 PR4: per-task feedback. Originally lived in a fixed

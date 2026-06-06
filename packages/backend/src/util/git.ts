@@ -620,6 +620,39 @@ export async function gitChangedFiles(worktreePath: string, fromCommit: string):
 }
 
 /**
+ * RFC-083 — names of files that differ between two refs (`git diff --name-only
+ * <fromRef> <toRef>`). Used by the per-node structural diff to bound the
+ * changed-file set between two snapshots. Throws on git failure (e.g. a pruned
+ * snapshot object) so the caller can surface a typed 'pruned' status.
+ */
+export async function gitChangedFilesBetween(
+  worktreePath: string,
+  fromRef: string,
+  toRef: string,
+): Promise<string[]> {
+  const r = await runGit(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'diff',
+    '--name-only',
+    fromRef,
+    toRef,
+    '--',
+  ])
+  if (r.exitCode !== 0) {
+    throw new DomainError(
+      'structural-diff-refs-failed',
+      `git diff --name-only ${fromRef} ${toRef} failed: ${r.stderr.trim()}`,
+      500,
+    )
+  }
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+/**
  * RFC-083 — read a file's blob content at a given ref (`git show <ref>:<path>`).
  * Returns null when the path does not exist at that ref (e.g. a file the agent
  * added — no "before" side). Used by the structural-diff service to fetch the

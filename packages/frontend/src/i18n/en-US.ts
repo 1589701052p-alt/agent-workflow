@@ -935,6 +935,11 @@ export const enUS: Resources = {
     tabWorktreeFiles: 'Worktree files',
     tabWorktreeDiff: 'Worktree diff',
     tabWorktreeStructure: 'Structure',
+    structScopeLabel: 'Scope',
+    structScopeTask: 'Whole task',
+    structPruned:
+      "This node's snapshot was reclaimed (after worktree GC); structural diff unavailable.",
+    structReadonlyNode: 'This node is readonly / made no writes — no structural changes.',
     structEmpty: 'No recognizable structural changes in this diff.',
     structDegradedBanner:
       'Some files use best-effort analysis (C++/Scala); structure may be incomplete.',

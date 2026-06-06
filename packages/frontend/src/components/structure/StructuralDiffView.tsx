@@ -35,6 +35,12 @@ export function StructuralDiffView({ data }: { data: StructuralDiff }) {
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
+    if (data.degradedReason === 'snapshot-pruned') {
+      return <EmptyState title={t('tasks.structPruned')} />
+    }
+    if (data.degradedReason === 'readonly-node-no-snapshot') {
+      return <EmptyState title={t('tasks.structReadonlyNode')} />
+    }
     return <EmptyState title={t('tasks.structEmpty')} />
   }
   const degraded = data.files.some((f) => f.status === 'degraded')

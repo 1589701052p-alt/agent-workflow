@@ -10,6 +10,7 @@ import {
   computeSummary,
   type StructuralDiff,
   type FileStructuralDiff,
+  type DependencyChange,
   type StructuralScope,
   type Engine,
   type AnalysisStatus,
@@ -54,7 +55,7 @@ export async function assembleStructuralDiff(opts: {
     }
   }
 
-  const dependencyChanges = aggregateDependencyChanges(manifestInputs)
+  const dependencyChanges = applyViaImport(files, aggregateDependencyChanges(manifestInputs))
   const summary = computeSummary(files, dependencyChanges)
 
   return {
@@ -71,6 +72,36 @@ export async function assembleStructuralDiff(opts: {
     impact: [],
     summary,
   }
+}
+
+/**
+ * RFC-083 — correlate added/updated manifest deps with new source imports
+ * (US-4: "a new import resolving to a newly-added package is the highest-
+ * confidence 'this change adds a dependency on X'"). Heuristic substring match
+ * (the import-path→package mapping is fuzzy across ecosystems); a hint, not an
+ * authority. For `group:artifact` deps (maven/gradle/sbt) the artifact segment
+ * is also tried.
+ */
+function applyViaImport(files: FileStructuralDiff[], deps: DependencyChange[]): DependencyChange[] {
+  const addedImports: string[] = []
+  for (const f of files) {
+    for (const c of f.changes) {
+      if (c.kind !== 'import' || c.changeType !== 'added') continue
+      const token = (c.after?.qualifiedName ?? c.after?.name ?? '').toLowerCase()
+      if (token !== '') addedImports.push(token)
+    }
+  }
+  if (addedImports.length === 0) return deps
+  return deps.map((d) => {
+    if (d.changeType === 'removed') return d
+    const candidates = [d.packageName.toLowerCase()]
+    if (d.packageName.includes(':')) {
+      const artifact = d.packageName.split(':').pop()
+      if (artifact !== undefined) candidates.push(artifact.toLowerCase())
+    }
+    const hit = candidates.some((c) => c.length >= 3 && addedImports.some((imp) => imp.includes(c)))
+    return hit ? { ...d, viaImport: true } : d
+  })
 }
 
 /** Merge several per-repo StructuralDiffs (multi-repo task) into one, prefixing

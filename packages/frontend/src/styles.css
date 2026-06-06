@@ -9381,6 +9381,23 @@ mark.comment-anchor[data-active='true'] {
 }
 
 /* RFC-083 — structural (semantic) diff view. */
+.structure-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+.structure-pane__scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.structure-pane__scope-label {
+  font-size: var(--font-xs);
+  color: var(--muted, #6b7280);
+}
 .structure {
   display: flex;
   flex-direction: column;
@@ -9584,4 +9601,3 @@ mark.comment-anchor[data-active='true'] {
   font-size: var(--font-xs);
   padding: 8px;
 }
-
