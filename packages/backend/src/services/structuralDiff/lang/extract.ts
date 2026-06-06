@@ -75,6 +75,113 @@ function anonBaseLeaf(node: TsNode, nameNode: TsNode | null): string {
   return text.trim()
 }
 
+// RFC-087 — structural member visibility for langs whose signature text carries
+// no usable access info (Rust `pub`, C++ `public:`/`private:` sections) or whose
+// access is a name prefix (JS/TS `#private`). Returns undefined for langs handled
+// by the frontend's signature/convention heuristic (Java keyword + package
+// default / TS accessibility_modifier / Python `_`·`__` / Go caps / Scala kw).
+type Visibility = 'public' | 'protected' | 'package' | 'private'
+
+function computeVisibility(node: TsNode, lang: LangId, name: string): Visibility | undefined {
+  if (name.startsWith('#')) return 'private' // JS/TS hard-private (#field / #method)
+  if (lang === 'rust') return rustVisibility(node)
+  if (lang === 'cpp') return cppVisibility(node)
+  return undefined
+}
+
+/** Rust: a `visibility_modifier` child = `pub`; `pub(crate|super|self|in …)` carries
+ *  a named child → module-scoped (not public API), mapped to 'package'. No modifier
+ *  → private. A trait method signature is public by the trait contract. */
+function rustVisibility(node: TsNode): Visibility {
+  if (node.type === 'function_signature_item') return 'public'
+  const vis = node.children.find((c) => c.type === 'visibility_modifier')
+  if (vis === undefined) return 'private'
+  return vis.namedChildren.length > 0 ? 'package' : 'public'
+}
+
+/** C++: per-member access comes from the `access_specifier` section label that
+ *  precedes it inside the `field_declaration_list` (default: class→private,
+ *  struct→public). Out-of-line defs (parent not a field_declaration_list) →
+ *  undefined (frontend defaults public). */
+function cppVisibility(node: TsNode): Visibility | undefined {
+  const list = node.parent
+  if (list === null || list.type !== 'field_declaration_list') return undefined
+  let cur: Visibility = list.parent?.type === 'struct_specifier' ? 'public' : 'private'
+  for (const sib of list.namedChildren) {
+    if (sib.id === node.id) break
+    if (sib.type === 'access_specifier') {
+      const t = sib.text.trim()
+      if (t === 'public' || t === 'protected' || t === 'private') cur = t
+    }
+  }
+  return cur
+}
+
+// RFC-087 — structural heritage (parent/super-trait/embedded type leaf names) for
+// the two langs whose inheritance isn't in the declaration header the classGraph
+// regex scans: Go (struct/interface embedding) and Rust (`impl Trait for S` +
+// supertrait bounds). The other 6 langs keep the regex heuristic (it covers them).
+function goHeritage(node: TsNode): string[] {
+  const out: string[] = []
+  const push = (t: TsNode | null): void => {
+    const leaf = t === null ? null : t.type === 'qualified_type' ? t.childForFieldName('name') : t
+    const txt = (leaf?.text ?? '').trim()
+    if (txt !== '') out.push(txt)
+  }
+  for (const st of node.descendantsOfType('struct_type')) {
+    for (const fd of st.descendantsOfType('field_declaration')) {
+      if (fd.childForFieldName('name') === null) push(fd.childForFieldName('type')) // embedded
+    }
+  }
+  for (const it of node.descendantsOfType('interface_type')) {
+    for (const ce of it.descendantsOfType('constraint_elem')) {
+      push(
+        ce.namedChildren.find((c) => c.type === 'type_identifier' || c.type === 'qualified_type') ??
+          null,
+      )
+    }
+  }
+  return out
+}
+
+/** Rust impl/trait edges are top-level items separate from the type's own decl, so
+ *  build a file-wide `typeLeaf → [parent leaves]` map once from the root. */
+function rustHeritageMap(root: TsNode): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  const leaf = (n: TsNode | null): string => {
+    if (n === null) return ''
+    const t = n.type === 'generic_type' ? (n.childForFieldName('type') ?? n) : n
+    return t.text.trim()
+  }
+  const add = (k: string, v: string): void => {
+    if (k === '' || v === '') return
+    const arr = map.get(k) ?? []
+    arr.push(v)
+    map.set(k, arr)
+  }
+  for (const impl of root.descendantsOfType('impl_item')) {
+    const tr = impl.childForFieldName('trait')
+    if (tr === null) continue // inherent impl `impl S {}` is not inheritance
+    add(leaf(impl.childForFieldName('type')), leaf(tr))
+  }
+  for (const tr of root.descendantsOfType('trait_item')) {
+    const bounds = tr.childForFieldName('bounds')
+    if (bounds === null) continue
+    const name = tr.childForFieldName('name')?.text?.trim() ?? ''
+    for (const ti of bounds.descendantsOfType('type_identifier')) add(name, ti.text.trim())
+  }
+  return map
+}
+
+const MEMBERISH: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
+  'method',
+  'function',
+  'constructor',
+  'field',
+  'property',
+  'constant',
+])
+
 interface RawDef {
   node: TsNode
   nameNode: TsNode | null
@@ -102,7 +209,10 @@ export async function extractSymbols(opts: {
     // predates) silently yields a partial tree. Surface that as `hadError` so
     // the file is marked degraded rather than a misleading "ok".
     const hadError = tree.rootNode.hasError
-    return { symbols: buildSymbols(query.matches(tree.rootNode), opts, cfg), hadError }
+    return {
+      symbols: buildSymbols(query.matches(tree.rootNode), opts, cfg, tree.rootNode),
+      hadError,
+    }
   } finally {
     query.delete()
     tree.delete()
@@ -113,6 +223,7 @@ function buildSymbols(
   matches: Parser.QueryMatch[],
   opts: { lang: LangId; filePath: string; source: string },
   cfg: ExtractionConfig,
+  rootNode: TsNode,
 ): SymbolNode[] {
   // ---- Pass 1: collect raw defs, indexed by tree-node id for nesting lookup.
   const raws: RawDef[] = []
@@ -176,9 +287,21 @@ function buildSymbols(
   }
 
   const finalKind = (r: RawDef): SymbolKind => {
+    const parent = nearestDefAncestor(r.node)
+    const inClass = parent !== null && CLASS_LIKE.has(parent.rawKind)
+    // RFC-087 — constructor reclassification (Java already emits @def.constructor).
+    // No dedicated constructor node in TS/JS/Python/Scala — detect by name; the
+    // member must sit in a class-like scope so a free fn named `constructor` isn't
+    // misclassified.
+    if (inClass) {
+      const nm = r.nameNode?.text ?? ''
+      if ((opts.lang === 'typescript' || opts.lang === 'javascript') && nm === 'constructor')
+        return 'constructor'
+      if (opts.lang === 'python' && nm === '__init__') return 'constructor'
+      if (opts.lang === 'scala' && nm === 'this') return 'constructor'
+    }
     if (r.rawKind === 'function') {
-      const parent = nearestDefAncestor(r.node)
-      if (parent !== null && CLASS_LIKE.has(parent.rawKind)) return 'method'
+      if (inClass) return 'method'
       // Rust impl methods: captured as functions, qualified by a receiver type.
       if (cfg.receiverPrefix !== undefined) {
         const recv = cfg.receiverPrefix(r.node)
@@ -215,6 +338,9 @@ function buildSymbols(
   }
 
   const degraded = DEGRADED_LANGS.has(opts.lang)
+  // RFC-087 — Rust heritage needs a file-wide impl/trait scan; build it lazily once.
+  let rustMap: Map<string, string[]> | null = null
+  const getRustMap = (): Map<string, string[]> => (rustMap ??= rustHeritageMap(rootNode))
   const out: SymbolNode[] = []
   for (const b of built) {
     const node = b.raw.node
@@ -244,6 +370,21 @@ function buildSymbols(
       if (recv !== null && recv !== '') parentId = classLikeIdByName.get(recv)
     }
 
+    // RFC-087 — structural visibility (members) + heritage (Go/Rust containers).
+    const visibility = MEMBERISH.has(b.kind)
+      ? computeVisibility(node, opts.lang, b.name)
+      : undefined
+    let heritage: string[] | undefined
+    if (isContainer) {
+      const h =
+        opts.lang === 'go'
+          ? goHeritage(node)
+          : opts.lang === 'rust'
+            ? (getRustMap().get(b.name) ?? [])
+            : []
+      if (h.length > 0) heritage = h
+    }
+
     out.push({
       id: b.id,
       kind: b.kind,
@@ -258,6 +399,8 @@ function buildSymbols(
       confidence: degraded ? 'inferred' : 'extracted',
       degraded: degraded ? true : undefined,
       anonymous: isAnonymousTypeNode(node) ? true : undefined,
+      visibility,
+      heritage,
     })
   }
   return out

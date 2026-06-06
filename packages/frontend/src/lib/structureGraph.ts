@@ -56,6 +56,7 @@ export function memberVisibility(
   name: string,
   lang: string,
 ): Visibility {
+  if (name.startsWith('#')) return 'private' // JS/TS hard-private (#field / #method)
   const sig = signature ?? ''
   if (/\bprivate\b/.test(sig)) return 'private'
   if (/\bprotected\b/.test(sig)) return 'protected'
@@ -66,7 +67,7 @@ export function memberVisibility(
     return 'public'
   }
   if (lang === 'go') return /^[A-Z]/.test(name) ? 'public' : 'private'
-  return lang === 'java' || lang === 'kotlin' ? 'package' : 'public'
+  return lang === 'java' ? 'package' : 'public'
 }
 
 /** Row text: the signature minus the visibility keyword (it becomes the group),
@@ -441,7 +442,10 @@ export function buildStructureGraph(
           changeType: ch.changeType,
           role: 'changed',
           signature: sym.signature,
-          visibility: memberVisibility(sym.signature, sym.name, f.lang),
+          // RFC-087 — prefer the backend's structurally-derived visibility (Rust
+          // `pub`, C++ access sections, JS/TS `#`); fall back to the signature/
+          // convention heuristic for langs where it isn't computed server-side.
+          visibility: sym.visibility ?? memberVisibility(sym.signature, sym.name, f.lang),
         })
         changedSymbolCard.set(sym.id, card.id)
       }

@@ -11,6 +11,7 @@ import { assembleStructuralDiff } from './assemble'
 import { resolveLang } from './lang/grammars'
 import { hasExtraction } from './lang/queries'
 import { extractSymbols } from './lang/extract'
+import { maskCommentsAndStrings } from './lang/mask'
 import { collectImpactTargets, findCallers } from './impact'
 import {
   collectClassNodes,
@@ -176,10 +177,19 @@ async function augmentClassEdges(
   if (nodes.length < 2) {
     return anonEdges.length > 0 ? { ...diff, classEdges: anonEdges } : diff
   }
+  // RFC-087 — mask comments + string literals via the AST (per-language), so a
+  // class/method name mentioned only in a comment/string isn't matched as a real
+  // reference. Replaces the C-family hand lexer for the production path; the
+  // regex stripper inside computeClassEdges then no-ops on the masked text.
   const fileText = new Map<string, string>()
   for (const file of new Set(nodes.map((n) => n.file))) {
     const text = await readNew(file)
-    if (text !== null && text.length <= MAX_ANALYZE_BYTES) fileText.set(file, text)
+    if (text === null || text.length > MAX_ANALYZE_BYTES) continue
+    const r = resolveLang(file)
+    fileText.set(
+      file,
+      r !== null ? await maskCommentsAndStrings(r.lang, r.grammarFile, text) : text,
+    )
   }
   const membersByClass = collectClassMembers(diff.files)
   const nameEdges = computeClassEdges(nodes, fileText, membersByClass)

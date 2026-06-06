@@ -73,6 +73,9 @@ export interface ClassNode {
   name: string // leaf class name (for reference matching)
   file: string
   range: { startLine: number; endLine: number }
+  /** RFC-087 — structural parent/super-trait/embedded leaf names (Go/Rust), where
+   *  the heritage isn't in the declaration header `isInheritance` scans. */
+  heritage?: readonly string[]
 }
 
 function escapeRegExp(s: string): string {
@@ -146,7 +149,13 @@ export function collectClassNodes(files: ReadonlyArray<FileStructuralDiff>): Cla
       const key = `${sym.filePath}::${sym.qualifiedName}`
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ key, name: leafName(sym.qualifiedName), file: sym.filePath, range: sym.range })
+      out.push({
+        key,
+        name: leafName(sym.qualifiedName),
+        file: sym.filePath,
+        range: sym.range,
+        heritage: sym.heritage,
+      })
     }
   }
   return out
@@ -267,9 +276,13 @@ export function computeClassEdges(
     const members = membersByClass.get(c.key)
     for (const d of nodes) {
       if (d.key === c.key || d.name === c.name) continue // skip self + same-name (ambiguous)
+      // RFC-087 — structural heritage (Go/Rust) wins; else the regex heritage scan
+      // (Java/TS/Python/C++/Scala). An inherits pair need not also appear in the
+      // body text, so check heritage before the name-in-body gate below.
+      const inherits = c.heritage?.includes(d.name) === true || isInheritance(declText, d.name)
       const re = new RegExp(`\\b${escapeRegExp(d.name)}\\b`)
-      if (!re.test(bodyText)) continue
-      const kind = isInheritance(declText, d.name) ? 'inherits' : 'references'
+      if (!inherits && !re.test(bodyText)) continue
+      const kind = inherits ? 'inherits' : 'references'
       // upstream: EVERY changed member of C where D appears.
       // downstream: D's constructor + D's members C invokes by name (`.foo`).
       let fromMembers: string[] | undefined
@@ -333,7 +346,9 @@ function usedMembersAndCallers(
   }
   const names = [...byName.keys()].filter((n) => n.length > 0)
   if (names.length > 0) {
-    const re = new RegExp(`\\.(${names.map(escapeRegExp).join('|')})\\b`, 'g')
+    // RFC-087 — match every member-access operator: `.` (java/ts/js/python/go/rust),
+    // C++ `->` (pointer), and `::` (Rust assoc / C++ scope) — not just the dot.
+    const re = new RegExp(`(?:\\.|->|::)(${names.map(escapeRegExp).join('|')})\\b`, 'g')
     for (let i = 0; i < body.length; i += 1) {
       const line = body[i] ?? ''
       re.lastIndex = 0

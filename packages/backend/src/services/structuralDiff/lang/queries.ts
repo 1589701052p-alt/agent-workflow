@@ -46,8 +46,10 @@ const TYPESCRIPT = `
 (interface_declaration name: (_) @name) @def.interface
 (enum_declaration name: (_) @name) @def.enum
 (method_definition name: (property_identifier) @name) @def.method
+(method_definition name: (private_property_identifier) @name) @def.method
 (function_declaration name: (identifier) @name) @def.function
 (public_field_definition name: (property_identifier) @name) @def.field
+(public_field_definition name: (private_property_identifier) @name) @def.field
 (variable_declarator name: (identifier) @name value: (arrow_function)) @def.function
 (import_statement source: (string) @name) @def.import
 `
@@ -56,8 +58,10 @@ const JAVASCRIPT = `
 (class_declaration name: (identifier) @name) @def.class
 (class !name) @def.class
 (method_definition name: (property_identifier) @name) @def.method
+(method_definition name: (private_property_identifier) @name) @def.method
 (function_declaration name: (identifier) @name) @def.function
 (field_definition property: (property_identifier) @name) @def.field
+(field_definition property: (private_property_identifier) @name) @def.field
 (variable_declarator name: (identifier) @name value: (arrow_function)) @def.function
 (import_statement source: (string) @name) @def.import
 `
@@ -80,18 +84,24 @@ const RUST = `
 (enum_item name: (type_identifier) @name) @def.enum
 (trait_item name: (type_identifier) @name) @def.trait
 (function_item name: (identifier) @name) @def.function
+(function_signature_item name: (identifier) @name) @def.method
 (field_declaration name: (field_identifier) @name) @def.field
 (use_declaration) @def.import
 `
 
 // C++ is preprocessor-blind and out-of-line / templated members are lossy in
 // any lightweight tool — captures classes/structs/enums/fields/free functions
-// + #include, marked degraded. Member methods are largely missed by design.
+// + #include, marked degraded. RFC-087 adds in-class member methods (inline
+// defs + prototypes, via the `field_identifier` declarator that only appears for
+// class members); constructors/destructors (identifier declarator) stay out of
+// scope for this degraded grammar.
 const CPP = `
 (class_specifier name: (type_identifier) @name) @def.class
 (struct_specifier name: (type_identifier) @name) @def.struct
 (enum_specifier name: (type_identifier) @name) @def.enum
 (field_declaration declarator: (field_identifier) @name) @def.field
+(field_declaration declarator: (function_declarator declarator: (field_identifier) @name)) @def.method
+(function_definition declarator: (function_declarator declarator: (field_identifier) @name)) @def.method
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @def.function
 (preproc_include) @def.import
 `

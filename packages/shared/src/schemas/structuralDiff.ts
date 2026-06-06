@@ -96,6 +96,20 @@ export const symbolNodeSchema = z.object({
    *  when even that can't be resolved (UI shows `«anonymous»`). `kind` stays
    *  'class' so it groups + lays out like any other container. */
   anonymous: z.boolean().optional(),
+  /** RFC-087 — member access level computed STRUCTURALLY from the language's
+   *  grammar at extraction time (Rust `pub`, C++ `public:`/`private:` section,
+   *  TS `accessibility_modifier`, JS/TS `#private`, Java/TS keyword, Python
+   *  `_`/`__`, Go capitalisation, Scala `private`). The frontend prefers this
+   *  over its signature-regex heuristic. Optional — absent for older artifacts
+   *  and for langs/constructs where it isn't derivable (then the heuristic runs). */
+  visibility: z.enum(['public', 'protected', 'package', 'private']).optional(),
+  /** RFC-087 — leaf names of this container's parents/super-traits/embedded
+   *  types, extracted structurally where the heritage isn't in the declaration
+   *  header the regex heuristic scans (Go struct/interface embedding, Rust
+   *  `impl Trait for S` + supertrait bounds). classGraph treats a changed class
+   *  whose name is in here as an `inherits` edge. Empty/undefined → the
+   *  `isInheritance` regex fallback decides (covers Java/TS/Python/C++/Scala). */
+  heritage: z.array(z.string()).optional(),
 })
 export type SymbolNode = z.infer<typeof symbolNodeSchema>
 
