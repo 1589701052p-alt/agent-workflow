@@ -911,6 +911,7 @@ export interface Resources {
     structViewLabel: string
     structViewTree: string
     structViewGraph: string
+    structBodyDeltaTitle: string
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
@@ -2999,6 +3000,7 @@ export const zhCN: Resources = {
     structViewLabel: '视图',
     structViewTree: '树',
     structViewGraph: '关系图',
+    structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',

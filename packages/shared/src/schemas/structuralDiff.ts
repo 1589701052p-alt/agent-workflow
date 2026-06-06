@@ -116,6 +116,14 @@ export const symbolChangeSchema = z.object({
   signatureChanged: z.boolean().optional(),
   /** Symbol body text differs (bodyHash mismatch). */
   bodyChanged: z.boolean().optional(),
+  /** RFC-083 logic detail (#6): how much of a modified callable's body changed,
+   *  as line-level added/removed counts (heuristic line multiset diff). */
+  bodyDelta: z
+    .object({
+      added: z.number().int().nonnegative(),
+      removed: z.number().int().nonnegative(),
+    })
+    .optional(),
   /** For renamed/moved: the prior qualifiedName. */
   renamedFrom: z.string().optional(),
   /** Where to jump in the textual diff for this symbol. */

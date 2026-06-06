@@ -300,6 +300,16 @@ function FileChanges({
                   {ch.signatureChanged === true && (
                     <span className="structure__tag">{t('tasks.structSigChanged')}</span>
                   )}
+                  {ch.bodyDelta !== undefined && (
+                    <span className="structure__body-delta" title={t('tasks.structBodyDeltaTitle')}>
+                      {ch.bodyDelta.added > 0 && (
+                        <span className="structure__body-delta-add">+{ch.bodyDelta.added}</span>
+                      )}
+                      {ch.bodyDelta.removed > 0 && (
+                        <span className="structure__body-delta-del">−{ch.bodyDelta.removed}</span>
+                      )}
+                    </span>
+                  )}
                 </>
               )
               return (

@@ -9550,6 +9550,19 @@ mark.comment-anchor[data-active='true'] {
   flex: 1;
   min-height: 0;
 }
+/* RFC-083 #6 — per-method body line delta (+added / −removed) */
+.structure__body-delta {
+  display: inline-flex;
+  gap: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.structure__body-delta-add {
+  color: var(--diff-add-fg, #3fb950);
+}
+.structure__body-delta-del {
+  color: var(--diff-del-fg, #f85149);
+}
 .structure__view-toggle {
   align-self: flex-start;
 }

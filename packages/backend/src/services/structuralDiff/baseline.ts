@@ -11,6 +11,7 @@ import { resolveLang } from './lang/grammars'
 import { extractSymbols } from './lang/extract'
 import { hasExtraction, DEGRADED_LANGS } from './lang/queries'
 import { computeWithinFileImpact } from './impact'
+import { bodyDeltaFor } from './bodyDelta'
 
 /** Files larger than this are skipped (consistent with diff sharding caps). */
 export const MAX_ANALYZE_BYTES = 1_500_000
@@ -72,6 +73,7 @@ export async function analyzeFile(opts: {
     const changes = graphDiff(oldRes.symbols, newRes.symbols).map((c) => ({
       ...c,
       hunkAnchor: anchorFor(c, filePath),
+      bodyDelta: bodyDeltaFor(c, oldText, newText),
     }))
     // best-effort language → degraded; otherwise a recovered parse error also
     // downgrades to degraded so the UI flags "analysis may be incomplete".

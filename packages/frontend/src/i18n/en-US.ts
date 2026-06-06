@@ -964,6 +964,7 @@ export const enUS: Resources = {
     structViewLabel: 'View',
     structViewTree: 'Tree',
     structViewGraph: 'Graph',
+    structBodyDeltaTitle: 'method body line changes (+added / −removed)',
     structViaImportManifest: 'imported in code',
     structRenamedFrom: 'was {{from}}',
     structSigChanged: 'signature changed',
