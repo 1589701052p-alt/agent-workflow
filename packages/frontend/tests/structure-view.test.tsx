@@ -169,6 +169,31 @@ describe('<StructuralDiffView />', () => {
     expect(screen.getByText(/Animal\.greet/)).toBeTruthy() // caller
   })
 
+  test('deep-fallback banner shows when deep was requested but fell back', () => {
+    const data = sampleDiff()
+    data.engine = 'baseline'
+    data.degradedReason = 'indexer-missing'
+    data.files = data.files.filter((f) => f.status !== 'degraded') // drop the cpp degraded banner
+    const { container } = render(<StructuralDiffView data={data} />)
+    expect(container.querySelectorAll('.structure__banner')).toHaveLength(1)
+  })
+
+  test('impact panel renders a precise tag for extracted confidence', () => {
+    const data = sampleDiff()
+    data.impact = [
+      {
+        changedSymbolId: 'a.ts#A.m:method:1',
+        callers: [
+          { symbolId: 'b.ts#B.n:method:2', filePath: 'b.ts', range: { startLine: 2, endLine: 3 } },
+        ],
+        confidence: 'extracted',
+      },
+    ]
+    const { container } = render(<StructuralDiffView data={data} />)
+    const tag = container.querySelector('.structure__impact .structure__tag')
+    expect(tag?.textContent).toBeTruthy() // precise label rendered (vs heuristic)
+  })
+
   test('empty diff renders an empty state', () => {
     const empty: StructuralDiff = {
       ...sampleDiff(),

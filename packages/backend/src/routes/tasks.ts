@@ -280,10 +280,19 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   // RFC-083 — structural (semantic) diff overlay for the textual diff above.
   // `?scope=task|node` (+ `nodeRunId` for node scope); 'wrapper' → 422.
+  // `?mode=deep` tries an external SCIP indexer for precise cross-file impact,
+  // auto-falling back to the heuristic baseline when none is available.
   app.get('/api/tasks/:id/structural-diff', async (c) => {
     const scope = structuralScopeSchema.catch('task').parse(c.req.query('scope'))
     const nodeRunId = c.req.query('nodeRunId')
-    return c.json(await getTaskStructuralDiff(deps.db, c.req.param('id'), scope, nodeRunId))
+    const mode = c.req.query('mode') === 'deep' ? 'deep' : 'baseline'
+    return c.json(
+      await getTaskStructuralDiff(deps.db, c.req.param('id'), scope, nodeRunId, {
+        mode,
+        // v1: indexers resolved from PATH; settings-path overrides are a follow-up.
+        deepCfg: mode === 'deep' ? { timeoutMs: 120_000 } : undefined,
+      }),
+    )
   })
 
   // RFC-053 P-6: list currently-open lifecycle_alerts (invariant + stuck)

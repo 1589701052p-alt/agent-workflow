@@ -54,6 +54,9 @@ function TaskDetailPage() {
   const [tab, setTab] = useState<TaskDetailTab>('workflow-status')
   // RFC-083: structural-diff scope — 'task' or `node:${nodeRunId}`.
   const [structScope, setStructScope] = useState<string>('task')
+  // RFC-083: engine — 'baseline' (always available) or 'deep' (external SCIP
+  // indexer; auto-falls back to baseline when unavailable).
+  const [engineMode, setEngineMode] = useState<'baseline' | 'deep'>('baseline')
   // RFC-083: text↔structure cross-nav — file to focus when jumping to the diff.
   const [diffFocusFile, setDiffFocusFile] = useState<string | null>(null)
   // Same shape as the editor route: the drawer ✕ must drive xyflow's
@@ -94,12 +97,21 @@ function TaskDetailPage() {
   // RFC-083 — structural (semantic) diff for the task scope. Same gating as the
   // textual diff (needs a base commit); refetches while the task is live.
   const structuralDiff = useQuery<StructuralDiff>({
-    queryKey: ['tasks', id, 'structural-diff', structScope],
+    queryKey: ['tasks', id, 'structural-diff', structScope, engineMode],
     queryFn: ({ signal }) => {
-      const qs = structScope.startsWith('node:')
-        ? `?scope=node&nodeRunId=${encodeURIComponent(structScope.slice('node:'.length))}`
-        : '?scope=task'
-      return api.get(`/api/tasks/${encodeURIComponent(id)}/structural-diff${qs}`, undefined, signal)
+      const params = new URLSearchParams()
+      if (structScope.startsWith('node:')) {
+        params.set('scope', 'node')
+        params.set('nodeRunId', structScope.slice('node:'.length))
+      } else {
+        params.set('scope', 'task')
+      }
+      if (engineMode === 'deep') params.set('mode', 'deep')
+      return api.get(
+        `/api/tasks/${encodeURIComponent(id)}/structural-diff?${params.toString()}`,
+        undefined,
+        signal,
+      )
     },
     // Only when the Structure tab is open: the analysis is expensive (git grep +
     // tree-sitter parse), and the scope <Select> must not mount into the DOM on
@@ -457,6 +469,27 @@ function TaskDetailPage() {
                     })),
                   ]}
                 />
+                <span className="structure-pane__scope-label">{t('tasks.structEngineLabel')}</span>
+                <div
+                  className="segmented"
+                  role="radiogroup"
+                  aria-label={t('tasks.structEngineLabel')}
+                >
+                  {(['baseline', 'deep'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      role="radio"
+                      aria-checked={engineMode === m}
+                      className={`segmented__option ${engineMode === m ? 'segmented__option--active' : ''}`}
+                      onClick={() => setEngineMode(m)}
+                    >
+                      {m === 'baseline'
+                        ? t('tasks.structEngineBaseline')
+                        : t('tasks.structEngineDeep')}
+                    </button>
+                  ))}
+                </div>
               </div>
               {structuralDiff.isLoading ? (
                 <div className="muted">{t('tasks.loadingDiff')}</div>

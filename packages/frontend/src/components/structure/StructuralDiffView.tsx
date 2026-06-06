@@ -24,6 +24,14 @@ import {
   type SummaryRow,
 } from '@/lib/structureView'
 
+// degradedReasons that mean "deep was requested but fell back to baseline".
+const DEEP_FALLBACK_REASONS = new Set<string>([
+  'indexer-missing',
+  'build-failed',
+  'timeout',
+  'scip-parse-error',
+])
+
 const CARD_LABEL_KEY: Record<SummaryRow['key'], string> = {
   classes: 'tasks.structCardClasses',
   methods: 'tasks.structCardMethods',
@@ -53,8 +61,15 @@ export function StructuralDiffView({
     return <EmptyState title={t('tasks.structEmpty')} />
   }
   const degraded = data.files.some((f) => f.status === 'degraded')
+  const deepFellBack =
+    data.engine === 'baseline' && DEEP_FALLBACK_REASONS.has(data.degradedReason ?? '')
   return (
     <div className="structure">
+      {deepFellBack && (
+        <div className="structure__banner" role="status">
+          {t('tasks.structDegradedDeepFallback')}
+        </div>
+      )}
       {degraded && (
         <div className="structure__banner" role="status">
           {t('tasks.structDegradedBanner')}
@@ -80,11 +95,15 @@ function symbolName(id: string | undefined): string {
 
 function ImpactPanel({ impact }: { impact: ImpactItem[] }) {
   const { t } = useTranslation()
+  // Precise (deep/SCIP) when any item is 'extracted'; else heuristic (baseline).
+  const precise = impact.some((i) => i.confidence === 'extracted')
   return (
     <div className="structure__impact">
       <div className="structure__impact-header">
         {t('tasks.structImpactHeader')}
-        <span className="structure__tag">{t('tasks.structImpactInferred')}</span>
+        <span className="structure__tag">
+          {precise ? t('tasks.structImpactExtracted') : t('tasks.structImpactInferred')}
+        </span>
       </div>
       <ul className="structure__impact-list">
         {impact.map((it, i) => (

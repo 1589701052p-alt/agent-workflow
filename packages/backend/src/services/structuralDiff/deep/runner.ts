@@ -1,0 +1,79 @@
+// RFC-083 PR-E — run a SCIP indexer with a timeout (I/O only). The spawn is
+// injectable so tests drive the four outcomes (ok / non-zero / timeout / garbage
+// output) with a stub binary — no real indexer in CI. The indexer runs with cwd
+// = the worktree but writes SCIP to a scratch dir OUTSIDE it, so the agent's git
+// diff is never dirtied.
+
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { IndexerSpec } from './indexers'
+
+export type DeepDegradedReason = 'indexer-missing' | 'build-failed' | 'timeout' | 'scip-parse-error'
+
+export interface IndexerRunResult {
+  ok: boolean
+  scipBytes?: Uint8Array
+  reason?: DeepDegradedReason
+}
+
+/** A spawn shaped like the subset of Bun.spawn we use — so tests can inject. */
+export type SpawnFn = (opts: {
+  cmd: string[]
+  cwd?: string
+  stdout?: 'ignore' | 'pipe'
+  stderr?: 'ignore' | 'pipe'
+  stdin?: 'ignore'
+}) => { exited: Promise<number>; kill: (signal?: number) => void }
+
+export async function runIndexer(opts: {
+  spec: IndexerSpec
+  bin: string
+  worktreePath: string
+  timeoutMs: number
+  spawn?: SpawnFn
+}): Promise<IndexerRunResult> {
+  const spawn = opts.spawn ?? (Bun.spawn as unknown as SpawnFn)
+  const scratch = await mkdtemp(join(tmpdir(), 'aw-scip-'))
+  const outPath = join(scratch, 'index.scip')
+  try {
+    const proc = spawn({
+      cmd: [opts.bin, ...opts.spec.buildArgs(outPath)],
+      cwd: opts.worktreePath,
+      stdout: 'ignore',
+      stderr: 'ignore',
+      stdin: 'ignore',
+    })
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        proc.kill()
+      } catch {
+        /* already exited */
+      }
+    }, opts.timeoutMs)
+    const code = await proc.exited
+    clearTimeout(timer)
+
+    if (timedOut) return { ok: false, reason: 'timeout' }
+    if (code !== 0) return { ok: false, reason: 'build-failed' }
+
+    let bytes: Uint8Array
+    try {
+      bytes = await readFile(outPath)
+    } catch {
+      return { ok: false, reason: 'build-failed' } // indexer produced no output
+    }
+    if (bytes.length === 0) return { ok: false, reason: 'build-failed' }
+    return { ok: true, scipBytes: bytes }
+  } catch {
+    return { ok: false, reason: 'build-failed' }
+  } finally {
+    try {
+      await rm(scratch, { recursive: true, force: true })
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+}

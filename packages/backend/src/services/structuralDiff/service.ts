@@ -20,12 +20,45 @@ import { computeFromWorktree, computeBetweenRefs } from './gitBackend'
 import { mergeStructuralDiffs } from './assemble'
 import { resolveNodeScope } from './refSelect'
 import { readStoredDiff, writeStoredDiff, isTerminalTaskStatus } from './store'
+import {
+  computeDeepStructuralDiff,
+  DeepUnavailableError,
+  type ResolvedDeepConfig,
+} from './deep/service'
+
+/** Deep-mode request: try the external SCIP indexer, fall back to baseline. */
+export interface DeepOpts {
+  mode: 'baseline' | 'deep'
+  deepCfg?: ResolvedDeepConfig
+}
+
+/** Compute the baseline, then (if deep requested) try to upgrade its impact to
+ *  precise SCIP-resolved callers — falling back to baseline on ANY failure. */
+async function withDeep(
+  deepOpts: DeepOpts | undefined,
+  worktreePath: string,
+  computeBaseline: () => Promise<StructuralDiff>,
+): Promise<StructuralDiff> {
+  const baseline = await computeBaseline()
+  if (deepOpts?.mode !== 'deep') return baseline
+  try {
+    return await computeDeepStructuralDiff({
+      baseline,
+      worktreePath,
+      deps: { deepCfg: deepOpts.deepCfg },
+    })
+  } catch (err) {
+    const reason = err instanceof DeepUnavailableError ? err.reason : 'build-failed'
+    return { ...baseline, engine: 'baseline', degradedReason: reason }
+  }
+}
 
 export async function getTaskStructuralDiff(
   db: DbClient,
   taskId: string,
   scope: StructuralScope = 'task',
   nodeRunId?: string,
+  deepOpts?: DeepOpts,
 ): Promise<StructuralDiff> {
   if (scope === 'wrapper') {
     throw new ValidationError(
@@ -40,7 +73,7 @@ export async function getTaskStructuralDiff(
   }
 
   if (scope === 'node') {
-    return getNodeStructuralDiff(db, task, nodeRunId)
+    return getNodeStructuralDiff(db, task, nodeRunId, deepOpts)
   }
 
   if (task.repoCount === 1) {
@@ -61,14 +94,13 @@ export async function getTaskStructuralDiff(
         410,
       )
     }
-    const diff = await computeFromWorktree({
-      taskId,
-      scope,
-      worktreePath: task.worktreePath,
-      fromRef: task.baseCommit,
-    })
-    // Persist for terminal tasks so the view survives a later worktree GC.
-    if (isTerminalTaskStatus(task.status)) void writeStoredDiff(diff)
+    const baseCommit = task.baseCommit
+    const diff = await withDeep(deepOpts, task.worktreePath, () =>
+      computeFromWorktree({ taskId, scope, worktreePath: task.worktreePath, fromRef: baseCommit }),
+    )
+    // Persist the BASELINE for terminal tasks so the view survives a later
+    // worktree GC. Never persist a deep request's result (deep is on-demand).
+    if (deepOpts?.mode !== 'deep' && isTerminalTaskStatus(task.status)) void writeStoredDiff(diff)
     return diff
   }
 
@@ -124,6 +156,7 @@ async function getNodeStructuralDiff(
   db: DbClient,
   task: ResolvedTask,
   nodeRunId: string | undefined,
+  deepOpts?: DeepOpts,
 ): Promise<StructuralDiff> {
   if (nodeRunId === undefined || nodeRunId === '') {
     throw new ValidationError(
@@ -167,24 +200,27 @@ async function getNodeStructuralDiff(
       410,
     )
   }
+  const worktreePath = task.worktreePath
+  const resolution = res
   try {
-    if (res.kind === 'between') {
-      return await computeBetweenRefs({
-        taskId: task.id,
-        scope: 'node',
-        nodeRunId,
-        worktreePath: task.worktreePath,
-        fromRef: res.fromRef,
-        toRef: res.toRef,
-      })
-    }
-    return await computeFromWorktree({
-      taskId: task.id,
-      scope: 'node',
-      nodeRunId,
-      worktreePath: task.worktreePath,
-      fromRef: res.fromRef,
-    })
+    return await withDeep(deepOpts, worktreePath, () =>
+      resolution.kind === 'between'
+        ? computeBetweenRefs({
+            taskId: task.id,
+            scope: 'node',
+            nodeRunId,
+            worktreePath,
+            fromRef: resolution.fromRef,
+            toRef: resolution.toRef,
+          })
+        : computeFromWorktree({
+            taskId: task.id,
+            scope: 'node',
+            nodeRunId,
+            worktreePath,
+            fromRef: resolution.fromRef,
+          }),
+    )
   } catch {
     // Snapshot objects pruned by a post-GC `git gc` — surface gracefully.
     return emptyNodeDiff(task.id, nodeRunId, 'snapshot-pruned', 'pruned')

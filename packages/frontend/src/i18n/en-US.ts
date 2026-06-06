@@ -955,6 +955,12 @@ export const enUS: Resources = {
     structDepsHeader: 'Dependency changes',
     structImpactHeader: 'Impact (callers of changed methods)',
     structImpactInferred: 'heuristic (cross-file, name-based)',
+    structImpactExtracted: 'precise (SCIP type-resolved)',
+    structEngineLabel: 'Engine',
+    structEngineBaseline: 'Baseline',
+    structEngineDeep: 'Deep',
+    structDegradedDeepFallback:
+      'Deep analysis unavailable (no indexer / project did not build / timed out); fell back to the baseline heuristic.',
     structViaImportManifest: 'imported in code',
     structRenamedFrom: 'was {{from}}',
     structSigChanged: 'signature changed',

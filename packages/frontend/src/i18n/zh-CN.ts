@@ -903,6 +903,11 @@ export interface Resources {
     structDepsHeader: string
     structImpactHeader: string
     structImpactInferred: string
+    structImpactExtracted: string
+    structEngineLabel: string
+    structEngineBaseline: string
+    structEngineDeep: string
+    structDegradedDeepFallback: string
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
@@ -2982,6 +2987,12 @@ export const zhCN: Resources = {
     structDepsHeader: '依赖变更',
     structImpactHeader: '影响面（谁调用了被改方法）',
     structImpactInferred: '启发式（跨文件，名称匹配）',
+    structImpactExtracted: '精确（SCIP 类型解析）',
+    structEngineLabel: '引擎',
+    structEngineBaseline: '基线',
+    structEngineDeep: '深度',
+    structDegradedDeepFallback:
+      '深度分析不可用（未装索引器 / 项目编译不过 / 超时），已回退基线启发式。',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',
