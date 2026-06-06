@@ -3005,7 +3005,7 @@ export const zhCN: Resources = {
     structViewTree: '树',
     structViewGraph: '关系图',
     structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
-    structGraphEmpty: '无调用方 —— 关系图只展示"被其它代码调用"的改动；其余改动请看"树"视图。',
+    structGraphEmpty: '无可视化的结构改动（仅依赖/字段等变更）—— 见上方摘要卡片与"树"视图。',
     structGraphLegendChanged: '改动的方法',
     structGraphLegendCaller: '调用方（受影响）',
     structGraphLegendHint: '箭头：调用方 → 被改方法',

@@ -1,7 +1,8 @@
-// RFC-083 PR-F — pure blast-radius graph model. The graph is BANDED: one band
-// per changed method that has callers (method on the right, its callers stacked
-// to its left, edges caller → method). Changed methods with no callers are
-// omitted (no cross-symbol impact). Locks that semantic + the layout.
+// RFC-083 PR-F — pure blast-radius graph model. BANDED: one band per changed
+// method that has callers (method right, callers stacked left, edges caller →
+// method). Changed units with NO callers still appear (standalone grid) so the
+// graph is never blank when there are real changes — only non-graphable kinds
+// (fields/imports) yield an empty graph. Locks that semantic + the layout.
 
 import { describe, expect, test } from 'vitest'
 import { computeSummary, type StructuralDiff, type SymbolNode } from '@agent-workflow/shared'
@@ -57,10 +58,23 @@ describe('labelFromSymbolId', () => {
 })
 
 describe('buildStructureGraph', () => {
-  test('changed symbols with NO callers are omitted (no blast radius to show)', () => {
+  test('changed methods with NO callers still appear (standalone, no edges)', () => {
     const g = buildStructureGraph(diffWith([fileWith(svc)], []))
+    expect(g.nodes).toHaveLength(1) // the changed method is shown
+    expect(g.nodes[0]?.kind).toBe('changed')
+    expect(g.nodes[0]?.label).toBe('Svc.charge')
+    expect(g.edges).toEqual([]) // no callers → no edges
+  })
+
+  test('non-graphable kinds (field/import) produce no nodes → empty graph', () => {
+    const field: SymbolNode = {
+      ...svc,
+      id: 'm.py#C.x:field:1',
+      kind: 'field',
+      qualifiedName: 'C.x',
+    }
+    const g = buildStructureGraph(diffWith([fileWith(field)], []))
     expect(g.nodes).toEqual([])
-    expect(g.edges).toEqual([])
   })
 
   test('a band: changed method (right) + its callers (left), edges caller → method', () => {

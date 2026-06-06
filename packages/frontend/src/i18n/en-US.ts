@@ -966,7 +966,7 @@ export const enUS: Resources = {
     structViewGraph: 'Graph',
     structBodyDeltaTitle: 'method body line changes (+added / −removed)',
     structGraphEmpty:
-      'No callers — the graph only shows changes that other code calls; see the Tree view for the rest.',
+      'No graphable structural changes (only deps/fields changed) — see the summary cards & Tree view.',
     structGraphLegendChanged: 'changed method',
     structGraphLegendCaller: 'caller (affected)',
     structGraphLegendHint: 'arrow: caller → changed method',
