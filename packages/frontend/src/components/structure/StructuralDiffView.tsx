@@ -19,6 +19,7 @@ import {
   summaryRows,
   groupFileChanges,
   displayableFiles,
+  fileTreeRows,
   badgeClass,
   badgeSymbol,
   type SummaryRow,
@@ -257,24 +258,38 @@ function StructuralTree({
     <div className="structure__tree">
       <aside className="structure__files">
         <nav role="tablist" aria-orientation="vertical" className="structure__tablist">
-          {files.map((f, i) => (
-            <button
-              type="button"
-              key={f.filePath}
-              role="tab"
-              aria-selected={i === idx}
-              title={f.filePath}
-              className={`structure__file-tab ${i === idx ? 'structure__file-tab--active' : ''}`}
-              onClick={() => setSel(i)}
-            >
-              <span className="structure__file-name">{f.filePath}</span>
-              {f.status === 'degraded' && (
-                <span className="structure__chip" title={t('tasks.structDegradedBanner')}>
-                  {t('tasks.structDegradedChip')}
-                </span>
-              )}
-            </button>
-          ))}
+          {fileTreeRows(files).map((row, ri) => {
+            const indent = { paddingLeft: `${8 + row.depth * 14}px` }
+            if (row.fileIndex === undefined) {
+              return (
+                <div key={`d${ri}`} className="structure__tree-dir" style={indent}>
+                  {row.name}
+                </div>
+              )
+            }
+            const f = files[row.fileIndex]
+            if (f === undefined) return null
+            const i = row.fileIndex
+            return (
+              <button
+                type="button"
+                key={`f${i}`}
+                role="tab"
+                aria-selected={i === idx}
+                title={f.filePath}
+                className={`structure__file-tab ${i === idx ? 'structure__file-tab--active' : ''}`}
+                style={indent}
+                onClick={() => setSel(i)}
+              >
+                <span className="structure__file-name">{row.name}</span>
+                {f.status === 'degraded' && (
+                  <span className="structure__chip" title={t('tasks.structDegradedBanner')}>
+                    {t('tasks.structDegradedChip')}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </nav>
       </aside>
       <section className="structure__body">

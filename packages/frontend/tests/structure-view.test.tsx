@@ -15,7 +15,7 @@ import type {
 } from '@agent-workflow/shared'
 import '../src/i18n'
 import { StructuralDiffView } from '../src/components/structure/StructuralDiffView'
-import { summaryRows, groupFileChanges, badgeSymbol } from '../src/lib/structureView'
+import { summaryRows, groupFileChanges, badgeSymbol, fileTreeRows } from '../src/lib/structureView'
 
 afterEach(() => cleanup())
 
@@ -107,6 +107,22 @@ describe('structureView helpers', () => {
     expect(badgeSymbol('removed')).toBe('−')
     expect(badgeSymbol('modified')).toBe('~')
     expect(badgeSymbol('renamed')).toBe('→')
+  })
+
+  test('fileTreeRows groups by directory + compacts single-child chains', () => {
+    const rows = fileTreeRows([
+      { filePath: 'src/main/java/com/x/A.ts' },
+      { filePath: 'src/main/java/com/x/B.ts' },
+      { filePath: 'Top.ts' },
+    ])
+    // the deep single-child chain collapses to one directory row
+    expect(rows.find((r) => r.fileIndex === undefined)?.name).toBe('src/main/java/com/x')
+    // files render as basenames, indented under their directory
+    const a = rows.find((r) => r.name === 'A.ts')
+    expect(a?.fileIndex).toBe(0)
+    expect(a?.depth).toBeGreaterThan(0)
+    // a top-level file stays at depth 0
+    expect(rows.find((r) => r.name === 'Top.ts')?.depth).toBe(0)
   })
 })
 
