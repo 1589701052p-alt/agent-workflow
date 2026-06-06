@@ -41,14 +41,49 @@ describe('computeClassEdges', () => {
       [
         'a.ts::A',
         [
-          { id: 'a.ts#A.foo:method:1', startLine: 2, endLine: 4 },
-          { id: 'a.ts#A.bar:method:1', startLine: 5, endLine: 5 },
+          { id: 'a.ts#A.foo:method:1', kind: 'method' as const, startLine: 2, endLine: 4 },
+          { id: 'a.ts#A.bar:method:1', kind: 'method' as const, startLine: 5, endLine: 5 },
         ],
       ],
     ])
     const edges = computeClassEdges(nodes, fileText, members)
     expect(edges).toEqual([
       { from: 'a.ts::A', to: 'b.ts::B', kind: 'references', fromMember: 'a.ts#A.foo:method:1' },
+    ])
+  })
+
+  test('a references edge also points downstream to the referenced class constructor (toMember)', () => {
+    const nodes = [node('a.ts::A', 'A', 'a.ts', 1, 4), node('b.ts::B', 'B', 'b.ts', 1, 4)]
+    const fileText = new Map([
+      ['a.ts', 'class A {\n  make() {\n    return new B()\n  }\n}'],
+      ['b.ts', 'class B {\n  constructor() {}\n  k() {}\n}'],
+    ])
+    const members = new Map([
+      [
+        'a.ts::A',
+        [{ id: 'a.ts#A.make:method:1', kind: 'method' as const, startLine: 2, endLine: 4 }],
+      ],
+      [
+        'b.ts::B',
+        [
+          {
+            id: 'b.ts#B.ctor:constructor:1',
+            kind: 'constructor' as const,
+            startLine: 2,
+            endLine: 2,
+          },
+        ],
+      ],
+    ])
+    const edges = computeClassEdges(nodes, fileText, members)
+    expect(edges).toEqual([
+      {
+        from: 'a.ts::A',
+        to: 'b.ts::B',
+        kind: 'references',
+        fromMember: 'a.ts#A.make:method:1',
+        toMember: 'b.ts#B.ctor:constructor:1',
+      },
     ])
   })
 

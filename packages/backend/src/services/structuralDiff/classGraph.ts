@@ -30,6 +30,7 @@ const MEMBER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
  *  reference to the exact member it appears in. */
 export interface MemberRange {
   id: string
+  kind: SymbolKind
   startLine: number
   endLine: number
 }
@@ -52,7 +53,12 @@ export function collectClassMembers(
       const key = containerKey(sym.filePath, sym.qualifiedName)
       if (key === '') continue
       const arr = out.get(key) ?? []
-      arr.push({ id: sym.id, startLine: sym.range.startLine, endLine: sym.range.endLine })
+      arr.push({
+        id: sym.id,
+        kind: sym.kind,
+        startLine: sym.range.startLine,
+        endLine: sym.range.endLine,
+      })
       out.set(key, arr)
     }
   }
@@ -117,7 +123,13 @@ export function computeClassEdges(
   if (nodes.length < 2) return []
   const edges: ClassEdge[] = []
   const seen = new Set<string>()
-  const add = (from: string, to: string, kind: ClassEdge['kind'], fromMember?: string): void => {
+  const add = (
+    from: string,
+    to: string,
+    kind: ClassEdge['kind'],
+    fromMember?: string,
+    toMember?: string,
+  ): void => {
     if (from === to) return
     const refKey = `${from}|${to}|references`
     const inhKey = `${from}|${to}|inherits`
@@ -134,7 +146,10 @@ export function computeClassEdges(
     const k = `${from}|${to}|${kind}`
     if (seen.has(k)) return
     seen.add(k)
-    edges.push(fromMember === undefined ? { from, to, kind } : { from, to, kind, fromMember })
+    const edge: ClassEdge = { from, to, kind }
+    if (fromMember !== undefined) edge.fromMember = fromMember
+    if (toMember !== undefined) edge.toMember = toMember
+    edges.push(edge)
   }
 
   for (const c of nodes) {
@@ -150,12 +165,17 @@ export function computeClassEdges(
       if (!re.test(bodyText)) continue
       const kind = isInheritance(declText, d.name) ? 'inherits' : 'references'
       // attribute a reference to the CHANGED member whose range contains it
+      // (upstream), and to the referenced class's constructor (downstream).
       let fromMember: string | undefined
-      if (kind === 'references' && members !== undefined) {
-        const ln = firstMatchLine(body, re, c.range.startLine)
-        if (ln >= 0) fromMember = members.find((m) => ln >= m.startLine && ln <= m.endLine)?.id
+      let toMember: string | undefined
+      if (kind === 'references') {
+        if (members !== undefined) {
+          const ln = firstMatchLine(body, re, c.range.startLine)
+          if (ln >= 0) fromMember = members.find((m) => ln >= m.startLine && ln <= m.endLine)?.id
+        }
+        toMember = membersByClass.get(d.key)?.find((m) => m.kind === 'constructor')?.id
       }
-      add(c.key, d.key, kind, fromMember)
+      add(c.key, d.key, kind, fromMember, toMember)
     }
   }
   return edges

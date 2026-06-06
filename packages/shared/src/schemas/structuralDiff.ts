@@ -274,6 +274,10 @@ export const classEdgeSchema = z.object({
    *  method this edge involves, not the whole class. Undefined when the reference
    *  isn't inside a changed member (or for 'inherits', a class-level relation). */
   fromMember: z.string().optional(),
+  /** For 'references': the symbol id of `to`'s CONSTRUCTOR (the referenced
+   *  class's entry point) when it has a changed one — the downstream end to
+   *  highlight alongside `fromMember`. Undefined if `to` has no changed ctor. */
+  toMember: z.string().optional(),
 })
 export type ClassEdge = z.infer<typeof classEdgeSchema>
 
