@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   collectClassNodes,
+  collectClassMembers,
   computeClassEdges,
   type ClassNode,
 } from '../src/services/structuralDiff/classGraph'
@@ -27,6 +28,59 @@ describe('computeClassEdges', () => {
     ])
     const edges = computeClassEdges(nodes, fileText)
     expect(edges).toEqual([{ from: 'a.ts::A', to: 'b.ts::B', kind: 'references' }])
+  })
+
+  test('a references edge is attributed to the member where the reference sits (fromMember)', () => {
+    const nodes = [node('a.ts::A', 'A', 'a.ts', 1, 6), node('b.ts::B', 'B', 'b.ts', 1, 3)]
+    const fileText = new Map([
+      // A.foo (lines 2-4) constructs B on line 3; A.bar (line 5) does not
+      ['a.ts', 'class A {\n  foo() {\n    return new B()\n  }\n  bar() {}\n}'],
+      ['b.ts', 'class B {\n  k() {}\n}'],
+    ])
+    const members = new Map([
+      [
+        'a.ts::A',
+        [
+          { id: 'a.ts#A.foo:method:1', startLine: 2, endLine: 4 },
+          { id: 'a.ts#A.bar:method:1', startLine: 5, endLine: 5 },
+        ],
+      ],
+    ])
+    const edges = computeClassEdges(nodes, fileText, members)
+    expect(edges).toEqual([
+      { from: 'a.ts::A', to: 'b.ts::B', kind: 'references', fromMember: 'a.ts#A.foo:method:1' },
+    ])
+  })
+
+  test('collectClassMembers groups changed members under their enclosing class key', () => {
+    const sym = (qn: string, a: number, b: number): SymbolNode => ({
+      id: `a.ts#${qn}:method:1`,
+      kind: 'method',
+      name: qn.split('.').pop() ?? qn,
+      qualifiedName: qn,
+      lang: 'typescript',
+      filePath: 'a.ts',
+      confidence: 'extracted',
+      range: { startLine: a, endLine: b },
+    })
+    const files: FileStructuralDiff[] = [
+      {
+        filePath: 'a.ts',
+        lang: 'typescript',
+        status: 'ok',
+        edges: [],
+        impact: [],
+        changes: [
+          { changeType: 'added', kind: 'method', after: sym('A.foo', 2, 4) },
+          { changeType: 'modified', kind: 'method', after: sym('A.bar', 5, 6) },
+        ],
+      },
+    ]
+    const members = collectClassMembers(files)
+    expect(members.get('a.ts::A')?.map((m) => m.id)).toEqual([
+      'a.ts#A.foo:method:1',
+      'a.ts#A.bar:method:1',
+    ])
   })
 
   test('A extends B → inheritance edge, and it wins over a reference for the pair', () => {

@@ -10,7 +10,14 @@ import {
   type SymbolNode,
   type ClassEdge,
 } from '@agent-workflow/shared'
-import { buildStructureGraph, fileBase, packageOf, packageLabel } from '../src/lib/structureGraph'
+import {
+  buildStructureGraph,
+  fileBase,
+  packageOf,
+  packageLabel,
+  relatedMembers,
+  type GraphCardEdge,
+} from '../src/lib/structureGraph'
 
 function sym(filePath: string, qn: string, kind: SymbolNode['kind']): SymbolNode {
   return {
@@ -210,5 +217,43 @@ describe('package grouping', () => {
     // strip the java source root → dotted package
     expect(packageLabel('app/src/main/java/com/wbq/snake/ai')).toBe('com.wbq.snake.ai')
     expect(packageLabel('src/lib/util')).toBe('lib.util')
+  })
+})
+
+describe('relatedMembers (highlight ONLY the methods an active edge involves)', () => {
+  const edges: GraphCardEdge[] = [
+    {
+      id: 'A=>B',
+      source: 'A',
+      target: 'B',
+      kind: 'calls',
+      memberLinks: [{ source: 'A::pay', target: 'B::charge' }],
+    },
+    // a 'references' edge attributed to the referencing member (source only)
+    {
+      id: 'C=>D',
+      source: 'C',
+      target: 'D',
+      kind: 'references',
+      memberLinks: [{ source: 'C::ctor' }],
+    },
+    // a class-level edge with NO member info (e.g. inheritance) → highlights nothing
+    { id: 'E=>F', source: 'E', target: 'F', kind: 'inherits' },
+  ]
+
+  test('calls edge → exactly the caller + callee methods', () => {
+    expect([...relatedMembers(edges, new Set(['A=>B']))].sort()).toEqual(['A::pay', 'B::charge'])
+  })
+
+  test('references edge → exactly the referencing member (not the whole class)', () => {
+    expect([...relatedMembers(edges, new Set(['C=>D']))]).toEqual(['C::ctor'])
+  })
+
+  test('edge with no member info → nothing (never a whole class)', () => {
+    expect(relatedMembers(edges, new Set(['E=>F'])).size).toBe(0)
+  })
+
+  test('no active edge → nothing', () => {
+    expect(relatedMembers(edges, new Set()).size).toBe(0)
   })
 })

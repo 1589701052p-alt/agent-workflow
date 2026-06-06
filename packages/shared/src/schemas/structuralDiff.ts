@@ -269,6 +269,11 @@ export const classEdgeSchema = z.object({
   /** `${filePath}::${qualifiedName}` of the referenced class. */
   to: z.string(),
   kind: classEdgeKindSchema,
+  /** For 'references': the symbol id of the CHANGED member (method/field) of
+   *  `from` where the reference appears — so the graph can highlight the exact
+   *  method this edge involves, not the whole class. Undefined when the reference
+   *  isn't inside a changed member (or for 'inherits', a class-level relation). */
+  fromMember: z.string().optional(),
 })
 export type ClassEdge = z.infer<typeof classEdgeSchema>
 

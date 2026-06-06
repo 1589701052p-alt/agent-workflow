@@ -209,11 +209,12 @@ describe('computeFromWorktree — real git repo', () => {
       to: 'base.ts::Base',
       kind: 'inherits',
     })
-    expect(diff.classEdges).toContainEqual({
-      from: 'a.ts::A',
-      to: 'dep.ts::Dep',
-      kind: 'references',
-    })
+    // the reference (`new Dep()`) is attributed to the member of A it sits in,
+    // so the graph can highlight that exact method/field (not the whole class)
+    const ref = diff.classEdges.find((e) => e.from === 'a.ts::A' && e.to === 'dep.ts::Dep')
+    expect(ref?.kind).toBe('references')
+    expect(ref?.fromMember).toBeDefined()
+    expect(ref?.fromMember).toContain('a.ts#A')
   })
 
   test('clean worktree → empty diff', async () => {

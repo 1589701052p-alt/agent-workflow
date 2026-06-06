@@ -29,6 +29,7 @@ import {
   buildStructureGraph,
   aggregatePackageGraph,
   layoutGraph,
+  relatedMembers,
   type EdgeKind,
   type GraphCard,
   type GraphCardEdge,
@@ -163,19 +164,12 @@ function useEdgeHighlight(baseEdges: Edge[], rawEdges: ReadonlyArray<GraphCardEd
       }),
     [baseEdges, hl],
   )
-  // member rows linked by the active edges (caller ↔ callee), to highlight too.
-  const highlightedMembers = useMemo<ReadonlySet<string>>(() => {
-    const ids = new Set<string>()
-    if (hl.size === 0) return ids
-    for (const e of rawEdges) {
-      if (!hl.has(e.id)) continue
-      for (const link of e.memberLinks ?? []) {
-        if (link.source !== undefined) ids.add(link.source)
-        if (link.target !== undefined) ids.add(link.target)
-      }
-    }
-    return ids
-  }, [rawEdges, hl])
+  // member rows related to the active edges (precise caller↔callee for 'calls',
+  // else the changed methods of both connected classes), to highlight too.
+  const highlightedMembers = useMemo<ReadonlySet<string>>(
+    () => relatedMembers(rawEdges, hl),
+    [rawEdges, hl],
+  )
   return { edges, highlightedMembers, onEdgeClick, onNodeClick, onPaneClick }
 }
 

@@ -17,6 +17,47 @@ const CONTAINER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
   'enum',
   'object',
 ])
+const MEMBER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
+  'method',
+  'function',
+  'constructor',
+  'field',
+  'property',
+  'constant',
+])
+
+/** Changed member (method/field/…) with its id + line range, for attributing a
+ *  reference to the exact member it appears in. */
+export interface MemberRange {
+  id: string
+  startLine: number
+  endLine: number
+}
+
+function containerKey(filePath: string, qualifiedName: string): string {
+  const i = qualifiedName.lastIndexOf('.')
+  return i > 0 ? `${filePath}::${qualifiedName.slice(0, i)}` : ''
+}
+
+/** Changed members grouped by their enclosing class key (`${file}::${ClassQn}`),
+ *  so computeClassEdges can map a reference's line → the member it sits in. */
+export function collectClassMembers(
+  files: ReadonlyArray<FileStructuralDiff>,
+): Map<string, MemberRange[]> {
+  const out = new Map<string, MemberRange[]>()
+  for (const f of files) {
+    for (const ch of f.changes) {
+      const sym = ch.after ?? ch.before
+      if (sym === undefined || !MEMBER_KINDS.has(sym.kind) || sym.range === undefined) continue
+      const key = containerKey(sym.filePath, sym.qualifiedName)
+      if (key === '') continue
+      const arr = out.get(key) ?? []
+      arr.push({ id: sym.id, startLine: sym.range.startLine, endLine: sym.range.endLine })
+      out.set(key, arr)
+    }
+  }
+  return out
+}
 
 export interface ClassNode {
   key: string // `${filePath}::${qualifiedName}` — matches the graph card id
@@ -65,15 +106,18 @@ function isInheritance(declText: string, name: string): boolean {
 }
 
 /** Inherit/reference edges among the class nodes. `fileText` maps filePath → its
- *  NEW content. PURE. Inheritance wins over a plain reference for the same pair. */
+ *  NEW content; `membersByClass` (from collectClassMembers) lets a 'references'
+ *  edge record the exact member it appears in (`fromMember`). PURE. Inheritance
+ *  wins over a plain reference for the same pair. */
 export function computeClassEdges(
   nodes: readonly ClassNode[],
   fileText: ReadonlyMap<string, string>,
+  membersByClass: ReadonlyMap<string, ReadonlyArray<MemberRange>> = new Map(),
 ): ClassEdge[] {
   if (nodes.length < 2) return []
   const edges: ClassEdge[] = []
   const seen = new Set<string>()
-  const add = (from: string, to: string, kind: ClassEdge['kind']): void => {
+  const add = (from: string, to: string, kind: ClassEdge['kind'], fromMember?: string): void => {
     if (from === to) return
     const refKey = `${from}|${to}|references`
     const inhKey = `${from}|${to}|inherits`
@@ -90,7 +134,7 @@ export function computeClassEdges(
     const k = `${from}|${to}|${kind}`
     if (seen.has(k)) return
     seen.add(k)
-    edges.push({ from, to, kind })
+    edges.push(fromMember === undefined ? { from, to, kind } : { from, to, kind, fromMember })
   }
 
   for (const c of nodes) {
@@ -99,12 +143,28 @@ export function computeClassEdges(
     const body = text.split('\n').slice(c.range.startLine - 1, c.range.endLine)
     const bodyText = body.join('\n')
     const declText = body.slice(0, 3).join(' ') // heritage clauses live near the top
+    const members = membersByClass.get(c.key)
     for (const d of nodes) {
       if (d.key === c.key || d.name === c.name) continue // skip self + same-name (ambiguous)
       const re = new RegExp(`\\b${escapeRegExp(d.name)}\\b`)
       if (!re.test(bodyText)) continue
-      add(c.key, d.key, isInheritance(declText, d.name) ? 'inherits' : 'references')
+      const kind = isInheritance(declText, d.name) ? 'inherits' : 'references'
+      // attribute a reference to the CHANGED member whose range contains it
+      let fromMember: string | undefined
+      if (kind === 'references' && members !== undefined) {
+        const ln = firstMatchLine(body, re, c.range.startLine)
+        if (ln >= 0) fromMember = members.find((m) => ln >= m.startLine && ln <= m.endLine)?.id
+      }
+      add(c.key, d.key, kind, fromMember)
     }
   }
   return edges
+}
+
+/** Absolute (1-based) line of the first body line matching `re`, or -1. */
+function firstMatchLine(body: string[], re: RegExp, startLine: number): number {
+  for (let i = 0; i < body.length; i += 1) {
+    if (re.test(body[i] ?? '')) return startLine + i
+  }
+  return -1
 }

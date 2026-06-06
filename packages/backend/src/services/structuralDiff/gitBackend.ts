@@ -12,7 +12,7 @@ import { resolveLang } from './lang/grammars'
 import { hasExtraction } from './lang/queries'
 import { extractSymbols } from './lang/extract'
 import { collectImpactTargets, findCallers } from './impact'
-import { collectClassNodes, computeClassEdges } from './classGraph'
+import { collectClassNodes, collectClassMembers, computeClassEdges } from './classGraph'
 import { MAX_ANALYZE_BYTES } from './baseline'
 import type { ImpactItem, StructuralDiff, StructuralScope } from '@agent-workflow/shared'
 
@@ -171,5 +171,6 @@ async function augmentClassEdges(
     const text = await readNew(file)
     if (text !== null && text.length <= MAX_ANALYZE_BYTES) fileText.set(file, text)
   }
-  return { ...diff, classEdges: computeClassEdges(nodes, fileText) }
+  const membersByClass = collectClassMembers(diff.files)
+  return { ...diff, classEdges: computeClassEdges(nodes, fileText, membersByClass) }
 }

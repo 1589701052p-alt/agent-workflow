@@ -237,6 +237,27 @@ export function aggregatePackageGraph(graph: StructureGraph): PackageGraph {
   return { nodes, edges }
 }
 
+/** Member rows to highlight for the active (highlighted) edges — ONLY the exact
+ *  methods that edge involves (memberLinks): caller↔callee for 'calls', the
+ *  referencing member for 'references'. Class-level edges with no specific member
+ *  (e.g. inheritance) highlight nothing. We never highlight a whole class's
+ *  members — only what the edge actually links. */
+export function relatedMembers(
+  edges: ReadonlyArray<GraphCardEdge>,
+  highlightedEdgeIds: ReadonlySet<string>,
+): Set<string> {
+  const ids = new Set<string>()
+  if (highlightedEdgeIds.size === 0) return ids
+  for (const e of edges) {
+    if (!highlightedEdgeIds.has(e.id)) continue
+    for (const l of e.memberLinks ?? []) {
+      if (l.source !== undefined) ids.add(l.source)
+      if (l.target !== undefined) ids.add(l.target)
+    }
+  }
+  return ids
+}
+
 export function buildStructureGraph(
   diff: StructuralDiff,
   edgeKinds: ReadonlySet<EdgeKind> = ALL_EDGE_KINDS,
@@ -307,7 +328,17 @@ export function buildStructureGraph(
     }
   }
   // class-level relationships (the architecture); guard for older API responses
-  for (const e of diff.classEdges ?? []) if (edgeKinds.has(e.kind)) addEdge(e.from, e.to, e.kind)
+  for (const e of diff.classEdges ?? []) {
+    if (!edgeKinds.has(e.kind)) continue
+    addEdge(e.from, e.to, e.kind)
+    // a 'references' edge knows the member where the reference sits → highlight it
+    if (e.fromMember !== undefined) {
+      const edgeId = `${e.from}=>${e.to}`
+      const arr = callLinks.get(edgeId) ?? []
+      arr.push({ source: e.fromMember })
+      callLinks.set(edgeId, arr)
+    }
+  }
   // method-level call edges + caller cards (from impact) — only when 'calls' is on,
   // so filtering it out also drops the otherwise-orphaned caller cards.
   if (edgeKinds.has('calls'))
