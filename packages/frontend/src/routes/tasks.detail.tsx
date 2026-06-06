@@ -54,6 +54,8 @@ function TaskDetailPage() {
   const [tab, setTab] = useState<TaskDetailTab>('workflow-status')
   // RFC-083: structural-diff scope — 'task' or `node:${nodeRunId}`.
   const [structScope, setStructScope] = useState<string>('task')
+  // RFC-083: text↔structure cross-nav — file to focus when jumping to the diff.
+  const [diffFocusFile, setDiffFocusFile] = useState<string | null>(null)
   // Same shape as the editor route: the drawer ✕ must drive xyflow's
   // selection clear, otherwise the underlying node stays highlighted and
   // a re-click on it is swallowed by xyflow's `handleNodeClick`. See
@@ -420,7 +422,11 @@ function TaskDetailPage() {
           ) : diff.error !== null && diff.error !== undefined ? (
             <div className="error-box">{describeError(diff.error)}</div>
           ) : diff.data !== undefined ? (
-            <WorktreeDiffPanel diff={diff.data.diff} truncated={diff.data.truncated} />
+            <WorktreeDiffPanel
+              diff={diff.data.diff}
+              truncated={diff.data.truncated}
+              focusFilePath={diffFocusFile}
+            />
           ) : null}
         </div>
 
@@ -450,7 +456,13 @@ function TaskDetailPage() {
               ) : structuralDiff.error !== null && structuralDiff.error !== undefined ? (
                 <div className="error-box">{describeError(structuralDiff.error)}</div>
               ) : structuralDiff.data !== undefined ? (
-                <StructuralDiffView data={structuralDiff.data} />
+                <StructuralDiffView
+                  data={structuralDiff.data}
+                  onJumpToHunk={(anchor) => {
+                    setDiffFocusFile(anchor.filePath)
+                    setTab('worktree-diff')
+                  }}
+                />
               ) : null}
             </div>
           )}

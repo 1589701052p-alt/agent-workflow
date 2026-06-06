@@ -956,6 +956,7 @@ export const enUS: Resources = {
     structViaImportManifest: 'imported in code',
     structRenamedFrom: 'was {{from}}',
     structSigChanged: 'signature changed',
+    structJumpToDiff: 'Jump to textual diff',
     tabFeedback: 'Feedback',
     worktreeFilesEmpty: 'Select a file from the left to preview.',
     worktreeFilesNoWorktree: 'This task has no worktree.',

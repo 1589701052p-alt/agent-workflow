@@ -11,6 +11,7 @@ import type {
   DependencyChange,
   StructuralDiffSummary,
   SymbolChange,
+  HunkAnchor,
 } from '@agent-workflow/shared'
 import { EmptyState } from '@/components/EmptyState'
 import {
@@ -30,7 +31,14 @@ const CARD_LABEL_KEY: Record<SummaryRow['key'], string> = {
   dependencies: 'tasks.structCardDependencies',
 }
 
-export function StructuralDiffView({ data }: { data: StructuralDiff }) {
+export function StructuralDiffView({
+  data,
+  onJumpToHunk,
+}: {
+  data: StructuralDiff
+  /** Jump to the textual diff for a symbol (text↔structure cross-nav). */
+  onJumpToHunk?: (anchor: HunkAnchor) => void
+}) {
   const { t } = useTranslation()
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
@@ -55,7 +63,7 @@ export function StructuralDiffView({ data }: { data: StructuralDiff }) {
       {data.dependencyChanges.length > 0 && (
         <DependencyChangesPanel changes={data.dependencyChanges} />
       )}
-      {files.length > 0 && <StructuralTree files={files} />}
+      {files.length > 0 && <StructuralTree files={files} onJumpToHunk={onJumpToHunk} />}
     </div>
   )
 }
@@ -128,7 +136,13 @@ function DependencyChangesPanel({ changes }: { changes: DependencyChange[] }) {
   )
 }
 
-function StructuralTree({ files }: { files: FileStructuralDiff[] }) {
+function StructuralTree({
+  files,
+  onJumpToHunk,
+}: {
+  files: FileStructuralDiff[]
+  onJumpToHunk?: (anchor: HunkAnchor) => void
+}) {
   const { t } = useTranslation()
   const [sel, setSel] = useState(0)
   const idx = Math.min(sel, files.length - 1)
@@ -158,13 +172,19 @@ function StructuralTree({ files }: { files: FileStructuralDiff[] }) {
         </nav>
       </aside>
       <section className="structure__body">
-        {selected !== undefined && <FileChanges file={selected} />}
+        {selected !== undefined && <FileChanges file={selected} onJumpToHunk={onJumpToHunk} />}
       </section>
     </div>
   )
 }
 
-function FileChanges({ file }: { file: FileStructuralDiff }) {
+function FileChanges({
+  file,
+  onJumpToHunk,
+}: {
+  file: FileStructuralDiff
+  onJumpToHunk?: (anchor: HunkAnchor) => void
+}) {
   const { t } = useTranslation()
   if (file.status === 'parse-error') {
     return <div className="structure__muted muted">{t('tasks.structParseError')}</div>
@@ -181,8 +201,9 @@ function FileChanges({ file }: { file: FileStructuralDiff }) {
           <ul className="structure__symbols">
             {g.changes.map((ch, i) => {
               const node = ch.after ?? ch.before
-              return (
-                <li key={`${node?.qualifiedName ?? '?'}-${i}`} className="structure__symbol">
+              const jumpable = onJumpToHunk !== undefined && ch.hunkAnchor !== undefined
+              const body = (
+                <>
                   <span className={badgeClass(ch.changeType)} aria-label={ch.changeType}>
                     {badgeSymbol(ch.changeType)}
                   </span>
@@ -198,6 +219,22 @@ function FileChanges({ file }: { file: FileStructuralDiff }) {
                     )}
                   {ch.signatureChanged === true && (
                     <span className="structure__tag">{t('tasks.structSigChanged')}</span>
+                  )}
+                </>
+              )
+              return (
+                <li key={`${node?.qualifiedName ?? '?'}-${i}`} className="structure__symbol">
+                  {jumpable ? (
+                    <button
+                      type="button"
+                      className="structure__symbol-jump"
+                      title={t('tasks.structJumpToDiff')}
+                      onClick={() => onJumpToHunk(ch.hunkAnchor as HunkAnchor)}
+                    >
+                      {body}
+                    </button>
+                  ) : (
+                    body
                   )}
                 </li>
               )

@@ -904,6 +904,7 @@ export interface Resources {
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
+    structJumpToDiff: string
     tabFeedback: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
@@ -2980,6 +2981,7 @@ export const zhCN: Resources = {
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',
+    structJumpToDiff: '跳转到文本 diff',
     tabFeedback: '留言',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',

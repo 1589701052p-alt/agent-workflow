@@ -14,12 +14,28 @@ import { DiffFileBody, splitByFile, type FileBlock } from './DiffViewer'
 interface Props {
   diff: string
   truncated?: boolean
+  /** RFC-083: when set/changed, select the file block whose header contains
+   *  this path (text↔structure cross-nav from the structural diff view). */
+  focusFilePath?: string | null
 }
 
-export function WorktreeDiffPanel({ diff, truncated }: Props) {
+export function WorktreeDiffPanel({ diff, truncated, focusFilePath }: Props) {
   const { t } = useTranslation()
   const blocks = useMemo(() => splitByFile(diff), [diff])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+
+  // Jump-to-file: when an external focus request arrives, select the block whose
+  // header references that path. Header is `diff --git a/<p> b/<p>` so a
+  // substring match is reliable. Re-runs on focus changes (incl. re-clicks via
+  // the request token the caller may bump).
+  useEffect(() => {
+    if (focusFilePath === null || focusFilePath === undefined || focusFilePath === '') return
+    const hitIdx = blocks.findIndex((b) => b.header.includes(focusFilePath))
+    if (hitIdx >= 0) {
+      const b = blocks[hitIdx]
+      if (b !== undefined) setSelectedKey(keyOf(b, hitIdx))
+    }
+  }, [focusFilePath, blocks])
 
   // Self-heal: when the diff string changes (resume / refetch) the
   // previously selected file may no longer exist. Fall back to the

@@ -9592,6 +9592,23 @@ mark.comment-anchor[data-active='true'] {
 .structure__symbol-kind {
   color: var(--muted, #6b7280);
 }
+.structure__symbol-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.structure__symbol-jump:hover .structure__symbol-name {
+  text-decoration: underline;
+  color: var(--accent);
+}
 .structure__symbol-from,
 .structure__tag {
   font-size: 11px;

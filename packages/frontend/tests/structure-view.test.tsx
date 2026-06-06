@@ -130,6 +130,23 @@ describe('<StructuralDiffView />', () => {
     expect(screen.getByText('Widget')).toBeTruthy()
   })
 
+  test('clicking a symbol with a hunkAnchor invokes onJumpToHunk (text↔structure)', () => {
+    const data = sampleDiff()
+    const change = data.files[0]?.changes[0]
+    if (change !== undefined) change.hunkAnchor = { filePath: 'mod.py', startLine: 3, endLine: 4 }
+    let jumped: { filePath: string; startLine: number; endLine: number } | null = null
+    render(
+      <StructuralDiffView
+        data={data}
+        onJumpToHunk={(a) => {
+          jumped = a
+        }}
+      />,
+    )
+    fireEvent.click(screen.getByText('speak'))
+    expect(jumped).toEqual({ filePath: 'mod.py', startLine: 3, endLine: 4 })
+  })
+
   test('empty diff renders an empty state', () => {
     const empty: StructuralDiff = {
       ...sampleDiff(),
