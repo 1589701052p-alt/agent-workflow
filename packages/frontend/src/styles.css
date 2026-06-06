@@ -9803,6 +9803,9 @@ mark.comment-anchor[data-active='true'] {
   flex-direction: column;
   gap: 2px;
   min-height: 0;
+  /* same fix as worktree-diff: scroll instead of letting the flex-shrink
+     cascade crush rows to a sliver when a task has many files */
+  overflow-y: auto;
 }
 .structure__file-tab {
   text-align: left;
@@ -9818,6 +9821,7 @@ mark.comment-anchor[data-active='true'] {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  flex-shrink: 0;
 }
 .structure__file-tab:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);

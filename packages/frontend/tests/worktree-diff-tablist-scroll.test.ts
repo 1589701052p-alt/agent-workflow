@@ -17,11 +17,17 @@ const block = (selector: string): string => {
   return start >= 0 ? css.slice(start, css.indexOf('}', start)) : ''
 }
 
-describe('worktree-diff file list does not crush rows', () => {
-  test('the tab list scrolls (overflow-y) instead of shrinking rows', () => {
-    expect(block('.worktree-diff__tablist')).toMatch(/overflow-y:\s*auto/)
+// Both feature-specific file lists share the SAME flex-column tablist pattern,
+// so both need the SAME guard (worktree-diff is where it first surfaced; the
+// structure tree has the identical nesting).
+describe.each([
+  ['.worktree-diff__tablist', '.worktree-diff__file-tab'],
+  ['.structure__tablist', '.structure__file-tab'],
+])('%s does not crush its rows', (listSel, itemSel) => {
+  test(`${listSel} scrolls (overflow-y) instead of shrinking rows`, () => {
+    expect(block(listSel)).toMatch(/overflow-y:\s*auto/)
   })
-  test('each file tab refuses to flex-shrink', () => {
-    expect(block('.worktree-diff__file-tab')).toMatch(/flex-shrink:\s*0/)
+  test(`${itemSel} refuses to flex-shrink`, () => {
+    expect(block(itemSel)).toMatch(/flex-shrink:\s*0/)
   })
 })
