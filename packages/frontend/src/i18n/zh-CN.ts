@@ -919,6 +919,9 @@ export interface Resources {
     structGraphLegendRemoved: string
     structGraphLegendCaller: string
     structGraphLegendHint: string
+    structGraphEdgeInherits: string
+    structGraphEdgeReferences: string
+    structGraphEdgeCalls: string
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
@@ -3014,7 +3017,10 @@ export const zhCN: Resources = {
     structGraphLegendModified: '~ 改动',
     structGraphLegendRemoved: '− 删除',
     structGraphLegendCaller: '调用方（受影响）',
-    structGraphLegendHint: '箭头：调用方 → 被改方法',
+    structGraphLegendHint: '箭头：A → A 依赖/使用的类',
+    structGraphEdgeInherits: '继承/实现',
+    structGraphEdgeReferences: '构造/引用',
+    structGraphEdgeCalls: '调用',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',

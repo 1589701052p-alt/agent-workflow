@@ -80,6 +80,7 @@ function sampleDiff(): StructuralDiff {
     files,
     dependencyChanges: deps,
     impact: [],
+    classEdges: [],
     summary: computeSummary(files, deps),
   }
 }

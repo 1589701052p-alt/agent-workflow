@@ -44,6 +44,7 @@ function baselineDiff(): StructuralDiff {
     files,
     dependencyChanges: [],
     impact: [],
+    classEdges: [],
     summary: computeSummary(files, []),
   }
 }

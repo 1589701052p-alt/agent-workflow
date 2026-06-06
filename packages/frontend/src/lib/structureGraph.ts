@@ -1,15 +1,14 @@
-// RFC-083 PR-F — pure model for the structural-diff graph, redesigned as a
-// CLASS-COLLABORATION DIAGRAM (not scattered one-box-per-symbol). The unit is a
-// CARD = a class / file (container). Each card lists:
-//   - its CHANGED members (methods/fields), colored + badged by change type;
-//   - its CALLER members (methods that call changed code elsewhere), neutral.
-// Edges run card → card when a method in one card calls a changed member in
-// another (call direction). So at a glance you read: which classes changed, what
-// changed inside each, and how the classes depend on each other. Containment
-// comes from `qualifiedName` (`OrderService.charge` → class `OrderService`); no
-// backend change needed. Manual layout (no dagre/elk dep); logic here so the
-// xyflow component stays a thin adapter.
+// RFC-083 PR-F/PR-G — pure model for the structural-diff graph as a CLASS
+// COLLABORATION DIAGRAM with a HIERARCHICAL (dagre) layout. A node is a CARD (a
+// class / file) listing its changed members + the members that call changed code
+// elsewhere. EDGES are the real relationships among changed classes:
+//   - 'inherits'   : extends / implements           (from backend classEdges)
+//   - 'references' : constructs / holds / uses       (from backend classEdges)
+//   - 'calls'      : a method calls a changed method (from impact)
+// dagre ranks the cards top→down by these edges so the architecture/hierarchy
+// reads at a glance. All logic here so the xyflow component stays a thin adapter.
 
+import dagre from '@dagrejs/dagre'
 import type { StructuralDiff, SymbolKind, ChangeType } from '@agent-workflow/shared'
 
 const CONTAINER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
@@ -32,11 +31,12 @@ const MEMBER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
 ])
 
 export type MemberRole = 'changed' | 'caller'
+export type EdgeKind = 'inherits' | 'references' | 'calls'
+
 export interface GraphMember {
   id: string
   label: string
   kind: SymbolKind
-  /** set for role 'changed' */
   changeType?: ChangeType
   role: MemberRole
 }
@@ -46,9 +46,7 @@ export interface GraphCard {
   title: string
   file: string
   kind: CardKind
-  /** set when the container symbol itself was added/modified/removed/renamed */
   changeType?: ChangeType
-  /** true when the card holds changed members or itself changed (vs caller-only) */
   isChanged: boolean
   members: GraphMember[]
   x: number
@@ -60,13 +58,19 @@ export interface GraphCardEdge {
   id: string
   source: string
   target: string
+  kind: EdgeKind
 }
 export interface StructureGraph {
   cards: GraphCard[]
   edges: GraphCardEdge[]
 }
 
-// ---- id / name parsing (`${filePath}#${qualifiedName}:${kind}:${line}`) ----
+const CARD_W = 240
+const HEADER_H = 34
+const ROW_H = 22
+const PAD_V = 12
+const EDGE_RANK: Record<EdgeKind, number> = { inherits: 3, references: 2, calls: 1 }
+
 export function fileBase(p: string): string {
   return p.split('/').pop() ?? p
 }
@@ -82,8 +86,6 @@ function leafOf(qualifiedName: string): string {
   const idx = qualifiedName.lastIndexOf('.')
   return idx >= 0 ? qualifiedName.slice(idx + 1) : qualifiedName
 }
-
-/** The card a member belongs to: its enclosing class, or the file if top-level. */
 function memberContainer(
   filePath: string,
   qualifiedName: string,
@@ -96,34 +98,27 @@ function memberContainer(
   return { key: `${filePath}::<file>`, title: fileBase(filePath), kind: 'file' }
 }
 
-// ---- layout ----
-const CARD_W = 240
-const GAP_X = 56
-const GAP_Y = 28
-const HEADER_H = 34
-const ROW_H = 22
-const PAD_V = 12
+function cardHeight(memberCount: number): number {
+  return HEADER_H + memberCount * ROW_H + PAD_V
+}
 
-function layoutCards(cards: GraphCard[]): void {
+/** Hierarchical top→down layout via dagre. Mutates each card's x/y/w/h. */
+function layoutWithDagre(cards: GraphCard[], edges: GraphCardEdge[]): void {
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: 'TB', nodesep: 36, ranksep: 56, marginx: 16, marginy: 16 })
+  g.setDefaultEdgeLabel(() => ({}))
   for (const c of cards) {
     c.w = CARD_W
-    c.h = HEADER_H + c.members.length * ROW_H + PAD_V
+    c.h = cardHeight(c.members.length)
+    g.setNode(c.id, { width: c.w, height: c.h })
   }
-  // Balanced MASONRY across an adaptive number of columns, biased WIDE so a big
-  // canvas is actually used (not 1–2 tall columns). Cards come in changed-first
-  // (see the sort in buildStructureGraph), so changed cards fill the top rows.
-  const n = cards.length
-  // bias WIDE (canvas is wide-short) so fitView fills the width instead of
-  // centering a narrow column with big empty margins; cap at 6 / the card count.
-  const cols = Math.max(1, Math.min(6, n, Math.ceil(Math.sqrt(n * 2.6))))
-  const colY = new Array<number>(cols).fill(0)
+  for (const e of edges) g.setEdge(e.source, e.target)
+  dagre.layout(g)
   for (const c of cards) {
-    // place in the currently shortest column
-    let col = 0
-    for (let i = 1; i < cols; i += 1) if ((colY[i] ?? 0) < (colY[col] ?? 0)) col = i
-    c.x = col * (CARD_W + GAP_X)
-    c.y = colY[col] ?? 0
-    colY[col] = (colY[col] ?? 0) + c.h + GAP_Y
+    const n = g.node(c.id)
+    // dagre gives the node CENTER; xyflow positions are top-left.
+    c.x = n.x - c.w / 2
+    c.y = n.y - c.h / 2
   }
 }
 
@@ -139,7 +134,7 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
   }
 
   // 1) changed symbols → cards + changed member rows.
-  const changedSymbolCard = new Map<string, string>() // changed symbol id → card id
+  const changedSymbolCard = new Map<string, string>()
   for (const f of diff.files) {
     for (const ch of f.changes) {
       const sym = ch.after ?? ch.before
@@ -170,9 +165,19 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
     }
   }
 
-  // 2) impact → caller cards (+ caller member rows) + card→card edges.
-  const edgeKeys = new Set<string>()
-  const edges: GraphCardEdge[] = []
+  // 2) edges. Prefer inherits > references > calls for a given pair.
+  const edgeMap = new Map<string, GraphCardEdge>()
+  const addEdge = (source: string, target: string, kind: EdgeKind): void => {
+    if (source === target || !cards.has(source) || !cards.has(target)) return
+    const id = `${source}=>${target}`
+    const existing = edgeMap.get(id)
+    if (existing === undefined || EDGE_RANK[kind] > EDGE_RANK[existing.kind]) {
+      edgeMap.set(id, { id, source, target, kind })
+    }
+  }
+  // class-level relationships (the architecture); guard for older API responses
+  for (const e of diff.classEdges ?? []) addEdge(e.from, e.to, e.kind)
+  // method-level call edges + caller cards (from impact)
   for (const item of diff.impact) {
     const targetCardId = changedSymbolCard.get(item.changedSymbolId)
     if (targetCardId === undefined) continue
@@ -198,8 +203,7 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
         callerKind = 'file'
         callerLabel = null
       }
-      if (callerKey === targetCardId) continue // call within the same card — skip
-
+      if (callerKey === targetCardId) continue
       const callerCard = ensureCard(callerKey, callerTitle, callerFile, callerKind)
       if (callerLabel !== null && !callerCard.members.some((m) => m.label === callerLabel)) {
         callerCard.members.push({
@@ -209,17 +213,12 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
           role: 'caller',
         })
       }
-      const ek = `${callerKey}->${targetCardId}`
-      if (!edgeKeys.has(ek)) {
-        edgeKeys.add(ek)
-        edges.push({ id: ek, source: callerKey, target: targetCardId })
-      }
+      addEdge(callerKey, targetCardId, 'calls')
     }
   }
 
   const list = [...cards.values()]
-  // changed cards first (more important), then by title — stable + readable.
-  list.sort((a, b) => Number(b.isChanged) - Number(a.isChanged) || a.title.localeCompare(b.title))
-  layoutCards(list)
+  const edges = [...edgeMap.values()]
+  layoutWithDagre(list, edges)
   return { cards: list, edges }
 }

@@ -12,6 +12,7 @@ import { resolveLang } from './lang/grammars'
 import { hasExtraction } from './lang/queries'
 import { extractSymbols } from './lang/extract'
 import { collectImpactTargets, findCallers } from './impact'
+import { collectClassNodes, computeClassEdges } from './classGraph'
 import { MAX_ANALYZE_BYTES } from './baseline'
 import type { ImpactItem, StructuralDiff, StructuralScope } from '@agent-workflow/shared'
 
@@ -51,7 +52,8 @@ export async function computeFromWorktree(opts: {
     readOld,
     readNew,
   })
-  return augmentCrossFileImpact(diff, opts.worktreePath, readNew)
+  const withImpact = await augmentCrossFileImpact(diff, opts.worktreePath, readNew)
+  return augmentClassEdges(withImpact, readNew)
 }
 
 /** Compute the structural diff between two refs (per-node snapshot pair). Both
@@ -82,7 +84,8 @@ export async function computeBetweenRefs(opts: {
   // Cross-file callers come from `git grep` against the worktree (the toRef
   // snapshot is a subset of the worktree's tracked content), so the candidate
   // bodies are read via readNew (`git show toRef:path`) for consistency.
-  return augmentCrossFileImpact(diff, opts.worktreePath, readNew)
+  const withImpact = await augmentCrossFileImpact(diff, opts.worktreePath, readNew)
+  return augmentClassEdges(withImpact, readNew)
 }
 
 /**
@@ -150,4 +153,23 @@ async function augmentCrossFileImpact(
   }
 
   return { ...diff, impact: [...impactById.values()] }
+}
+
+/**
+ * Compute class-level inherit/reference edges (RFC-083 PR-G) by reading each
+ * changed class's NEW file content and matching other changed class names.
+ * Best-effort: an unreadable file is skipped.
+ */
+async function augmentClassEdges(
+  diff: StructuralDiff,
+  readNew: BlobReader,
+): Promise<StructuralDiff> {
+  const nodes = collectClassNodes(diff.files)
+  if (nodes.length < 2) return diff
+  const fileText = new Map<string, string>()
+  for (const file of new Set(nodes.map((n) => n.file))) {
+    const text = await readNew(file)
+    if (text !== null && text.length <= MAX_ANALYZE_BYTES) fileText.set(file, text)
+  }
+  return { ...diff, classEdges: computeClassEdges(nodes, fileText) }
 }

@@ -70,6 +70,7 @@ export async function assembleStructuralDiff(opts: {
     files,
     dependencyChanges,
     impact: files.flatMap((f) => f.impact),
+    classEdges: [], // filled by the git backend (needs file content)
     summary,
   }
 }
@@ -108,7 +109,7 @@ function applyViaImport(files: FileStructuralDiff[], deps: DependencyChange[]): 
  *  file paths with the repo label so the UI can tell them apart. Recomputes the
  *  summary over the merged set. */
 export function mergeStructuralDiffs(
-  base: Omit<StructuralDiff, 'files' | 'dependencyChanges' | 'summary' | 'impact'>,
+  base: Omit<StructuralDiff, 'files' | 'dependencyChanges' | 'summary' | 'impact' | 'classEdges'>,
   parts: Array<{ label: string; diff: StructuralDiff }>,
 ): StructuralDiff {
   const files: FileStructuralDiff[] = []
@@ -127,6 +128,7 @@ export function mergeStructuralDiffs(
     files,
     dependencyChanges,
     impact: files.flatMap((f) => f.impact),
+    classEdges: [], // multi-repo class edges would need label-prefixed keys — deferred
     summary: computeSummary(files, dependencyChanges),
   }
 }

@@ -9690,6 +9690,20 @@ mark.comment-anchor[data-active='true'] {
 .structure-graph .react-flow__arrowhead {
   fill: var(--muted);
 }
+/* edge kinds: inherits (accent, bold) / references (solid) / calls (dashed) */
+.structure-graph .react-flow__edge.sg-edge--inherits .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.structure-graph .react-flow__edge.sg-edge--references .react-flow__edge-path {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.structure-graph .react-flow__edge.sg-edge--calls .react-flow__edge-path {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
 .structure-graph-wrap {
   display: flex;
   flex-direction: column;
@@ -9732,6 +9746,26 @@ mark.comment-anchor[data-active='true'] {
 }
 .structure-graph__swatch--caller {
   background: var(--panel);
+}
+.structure-graph__legend-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
+.structure-graph__edge-key {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--muted);
+}
+.structure-graph__edge-key--inherits {
+  border-top-color: var(--accent);
+}
+.structure-graph__edge-key--references {
+  border-top-color: var(--muted);
+}
+.structure-graph__edge-key--calls {
+  border-top-style: dashed;
 }
 .structure-graph__legend-hint {
   margin-left: auto;

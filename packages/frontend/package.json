@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@agent-workflow/shared": "workspace:*",
+    "@dagrejs/dagre": "^3.0.0",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@shikijs/transformers": "^4.0.2",

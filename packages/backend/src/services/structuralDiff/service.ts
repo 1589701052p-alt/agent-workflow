@@ -251,6 +251,7 @@ function emptyNodeDiff(
     files: [],
     dependencyChanges: [],
     impact: [],
+    classEdges: [],
     summary: computeSummary([], []),
   }
 }

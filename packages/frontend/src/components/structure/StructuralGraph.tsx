@@ -28,7 +28,7 @@ function CardNode({ data }: NodeProps) {
   const changedClass = card.isChanged ? ' sg-card--changed' : ' sg-card--caller'
   return (
     <div className={`sg-card${changedClass}${ctClass}`} style={{ width: card.w }}>
-      <Handle type="target" position={Position.Left} isConnectable={false} />
+      <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="sg-card__header">
         <span className="sg-card__kind">{card.kind}</span>
         <span className="sg-card__title" title={`${card.title} · ${card.file}`}>
@@ -59,7 +59,7 @@ function CardNode({ data }: NodeProps) {
           ))}
         </ul>
       )}
-      <Handle type="source" position={Position.Right} isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </div>
   )
 }
@@ -86,6 +86,7 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
     id: e.id,
     source: e.source,
     target: e.target,
+    className: `sg-edge--${e.kind}`,
     markerEnd: { type: MarkerType.ArrowClosed },
   }))
   return (
@@ -106,6 +107,19 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
         <span className="structure-graph__legend-item">
           <span className="structure-graph__swatch structure-graph__swatch--caller" />
           {t('tasks.structGraphLegendCaller')}
+        </span>
+        <span className="structure-graph__legend-sep" aria-hidden="true" />
+        <span className="structure-graph__legend-item">
+          <span className="structure-graph__edge-key structure-graph__edge-key--inherits" />
+          {t('tasks.structGraphEdgeInherits')}
+        </span>
+        <span className="structure-graph__legend-item">
+          <span className="structure-graph__edge-key structure-graph__edge-key--references" />
+          {t('tasks.structGraphEdgeReferences')}
+        </span>
+        <span className="structure-graph__legend-item">
+          <span className="structure-graph__edge-key structure-graph__edge-key--calls" />
+          {t('tasks.structGraphEdgeCalls')}
         </span>
         <span className="structure-graph__legend-hint">{t('tasks.structGraphLegendHint')}</span>
       </div>

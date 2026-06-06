@@ -33,6 +33,7 @@ function sample(taskId: string): StructuralDiff {
     files: [],
     dependencyChanges: [],
     impact: [],
+    classEdges: [],
     summary: computeSummary([], []),
   }
 }

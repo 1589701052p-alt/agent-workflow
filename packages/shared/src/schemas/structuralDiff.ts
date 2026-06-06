@@ -260,6 +260,18 @@ export const structuralDiffSummarySchema = z.object({
 })
 export type StructuralDiffSummary = z.infer<typeof structuralDiffSummarySchema>
 
+export const classEdgeKindSchema = z.enum(['inherits', 'references'])
+export type ClassEdgeKind = z.infer<typeof classEdgeKindSchema>
+
+export const classEdgeSchema = z.object({
+  /** `${filePath}::${qualifiedName}` of the referencing class. */
+  from: z.string(),
+  /** `${filePath}::${qualifiedName}` of the referenced class. */
+  to: z.string(),
+  kind: classEdgeKindSchema,
+})
+export type ClassEdge = z.infer<typeof classEdgeSchema>
+
 export const structuralDiffSchema = z.object({
   scope: structuralScopeSchema,
   taskId: z.string(),
@@ -274,6 +286,11 @@ export const structuralDiffSchema = z.object({
   dependencyChanges: z.array(dependencyChangeSchema).default([]),
   /** Non-empty only under deep mode. */
   impact: z.array(impactItemSchema).default([]),
+  /** RFC-083 PR-G — class-level relationships among CHANGED classes, for the
+   *  graph's hierarchy: 'inherits' (extends/implements) + 'references'
+   *  (constructs / holds a field of / statically uses). from/to are
+   *  `${filePath}::${qualifiedName}` (= the graph's card ids). */
+  classEdges: z.array(classEdgeSchema).default([]),
   summary: structuralDiffSummarySchema,
 })
 export type StructuralDiff = z.infer<typeof structuralDiffSchema>

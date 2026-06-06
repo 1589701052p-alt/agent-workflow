@@ -66,6 +66,7 @@ function sampleDiff(): StructuralDiff {
         ],
       },
     ],
+    classEdges: [],
     summary: computeSummary(files, []),
   }
 }

@@ -185,6 +185,37 @@ describe('computeFromWorktree — real git repo', () => {
     expect(chargeImpact?.callers.some((c) => c.filePath === 'caller.py')).toBe(true)
   })
 
+  test('classEdges: inheritance + construction among new classes (PR-G)', async () => {
+    const dir = await makeRepo()
+    writeFileSync(join(dir, 'README.md'), '# repo\n')
+    await runGit(dir, ['add', '.'])
+    await runGit(dir, ['commit', '-q', '-m', 'init'])
+    // ALL three classes are new (changed) so each gets a graph node
+    writeFileSync(join(dir, 'base.ts'), 'export class Base {\n  hi() {}\n}\n')
+    writeFileSync(
+      join(dir, 'a.ts'),
+      'import { Base } from "./base"\nclass A extends Base {\n  d = new Dep()\n  run() {\n    return this.d\n  }\n}\n',
+    )
+    writeFileSync(join(dir, 'dep.ts'), 'class Dep {\n  work() {}\n}\n')
+
+    const diff = await computeFromWorktree({
+      taskId: 't',
+      scope: 'task',
+      worktreePath: dir,
+      fromRef: 'HEAD',
+    })
+    expect(diff.classEdges).toContainEqual({
+      from: 'a.ts::A',
+      to: 'base.ts::Base',
+      kind: 'inherits',
+    })
+    expect(diff.classEdges).toContainEqual({
+      from: 'a.ts::A',
+      to: 'dep.ts::Dep',
+      kind: 'references',
+    })
+  })
+
   test('clean worktree → empty diff', async () => {
     const dir = await makeRepo()
     writeFileSync(join(dir, 'a.py'), 'def f():\n    return 1\n')
