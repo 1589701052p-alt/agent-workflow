@@ -4154,18 +4154,25 @@ code {
   box-shadow: none;
 }
 
-/* xyflow's default Controls / MiniMap are hard-coded to white-on-light, so
- * in dark mode the bottom-left zoom strip jumps out like a brick. Re-bind
- * them to our theme tokens — works in both modes because --panel /
- * --border / --text resolve correctly per data-theme. */
-.workflow-canvas .react-flow__controls {
+/* xyflow's bottom-corner widgets — Controls (bottom-left), MiniMap and the
+ * attribution watermark (bottom-right) — default to white-on-light
+ * (--xy-*-default tokens), so in dark mode they jump out like white bricks.
+ * Re-bind them to our theme tokens for EVERY react-flow canvas, not just one
+ * wrapper: the workflow editor / task-detail DAG (.workflow-canvas) AND the
+ * structural-diff graph (.structure-graph) and any future canvas all share
+ * these corners. Scoping the fix to a single wrapper is exactly what let the
+ * dark-mode regression come back when .structure-graph was added (RFC-083)
+ * without inheriting it — so these selectors are intentionally global.
+ * Works in both modes because --panel / --border / --text / --muted resolve
+ * per data-theme. */
+.react-flow__controls {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   overflow: hidden;
 }
-.workflow-canvas .react-flow__controls-button {
+.react-flow__controls-button {
   background: var(--panel);
   border: none;
   border-bottom: 1px solid var(--border);
@@ -4174,28 +4181,37 @@ code {
   width: 26px;
   height: 26px;
 }
-.workflow-canvas .react-flow__controls-button:last-child {
+.react-flow__controls-button:last-child {
   border-bottom: none;
 }
-.workflow-canvas .react-flow__controls-button:hover {
+.react-flow__controls-button:hover {
   background: var(--bg);
 }
-.workflow-canvas .react-flow__controls-button svg {
+.react-flow__controls-button svg {
   fill: var(--text);
   max-width: 14px;
   max-height: 14px;
 }
 
-.workflow-canvas .react-flow__minimap {
+.react-flow__minimap {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
-.workflow-canvas .react-flow__minimap-mask {
+.react-flow__minimap-mask {
   fill: rgba(0, 0, 0, 0.25);
 }
-:root[data-theme='dark'] .workflow-canvas .react-flow__minimap-mask {
+:root[data-theme='dark'] .react-flow__minimap-mask {
   fill: rgba(0, 0, 0, 0.5);
+}
+/* Bottom-right "React Flow" watermark — default background is translucent
+ * white (--xy-attribution-background-color-default), a pale smudge over the
+ * dark canvas. Theme it so it sits quietly in both modes. */
+.react-flow__attribution {
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+}
+.react-flow__attribution a {
+  color: var(--muted);
 }
 
 /* ---- Context menu ---- */
