@@ -107,6 +107,11 @@ export function extractCalls(body: TsNode, language: Parser.Language, lang: Lang
         else if (c.name === 'name') name = c.node.text
       }
       if (callNode === undefined || name === '') continue
+      // Scala `new Bar()` is an `instance_expression` wrapping a `call_expression`,
+      // so the same site matches BOTH `@call.new` (outer) and `@call.bare` (inner)
+      // on distinct nodes — dedup-by-id misses it. Drop the inner bare so the site
+      // is counted once (as the constructor), not also as a phantom external method.
+      if (callTag === 'call.bare' && callNode.parent?.type === 'instance_expression') continue
       if (seen.has(callNode.id)) continue
       seen.add(callNode.id)
       const leafName = leaf(name)

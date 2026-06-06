@@ -4,8 +4,59 @@
 // unit coverage independent of the React tree.
 
 import type { CallTarget } from '@agent-workflow/shared'
+import type { SeqCallNode } from './sequence'
 
 export type { CallTarget }
+
+/** Bounds for the eager sequence-diagram walk (the tree view stays lazy). */
+export const SEQ_MAX_NODES = 80
+export const SEQ_MAX_DEPTH = 8
+
+/** Eagerly (but bounded) walk a method's forward chain into a SeqCallNode tree.
+ *  `fetcher(ref)` returns one method's direct callees. Recurses only into resolved
+ *  callees; sets `truncated` when a resolved subtree is dropped for the node cap,
+ *  a cycle (ref already an ancestor) OR the depth cap — so the diagram can flag
+ *  that it's incomplete. PURE given `fetcher` (injectable → unit-testable). */
+export async function walkChainTree(
+  rootRef: string,
+  fetcher: (ref: string) => Promise<CallTarget[]>,
+  opts: { maxNodes: number; maxDepth: number } = {
+    maxNodes: SEQ_MAX_NODES,
+    maxDepth: SEQ_MAX_DEPTH,
+  },
+): Promise<{ tree: SeqCallNode[]; truncated: boolean }> {
+  let count = 0
+  let truncated = false
+  const visit = async (
+    ref: string,
+    ancestors: ReadonlySet<string>,
+    depth: number,
+  ): Promise<SeqCallNode[]> => {
+    const targets = (await fetcher(ref)).slice().sort((a, b) => a.order - b.order)
+    const out: SeqCallNode[] = []
+    for (const tg of targets) {
+      if (count >= opts.maxNodes) {
+        truncated = true
+        break
+      }
+      count += 1
+      let children: SeqCallNode[] = []
+      if (tg.resolution === 'resolved' && tg.ref !== undefined) {
+        if (ancestors.has(tg.ref) || depth >= opts.maxDepth) truncated = true
+        else children = await visit(tg.ref, new Set([...ancestors, tg.ref]), depth + 1)
+      }
+      out.push({
+        ownerClass: tg.ownerClass ?? null,
+        method: tg.label,
+        resolution: tg.resolution,
+        children,
+      })
+    }
+    return out
+  }
+  const tree = await visit(rootRef, new Set([rootRef]), 0)
+  return { tree, truncated }
+}
 
 /** Max chain depth (root = 0); deeper expands are blocked + marked truncated so a
  *  pathological recursion can't open an unbounded tree. */
@@ -30,9 +81,20 @@ export function expandState(
   return 'expandable'
 }
 
-/** The readable method name from a call ref (`file#Qualified.name`). */
+/** The readable method name from a call ref (`file#Qualified.name`). Splits on the
+ *  FIRST '#' only — a qualifiedName can itself contain '#' (JS/TS hard `#private`
+ *  members, e.g. `Svc.#secret`), so `split('#')[1]` would corrupt it. */
 export function refLabel(ref: string): string {
-  const qn = ref.includes('#') ? (ref.split('#')[1] ?? ref) : ref
+  const i = ref.indexOf('#')
+  const qn = i >= 0 ? ref.slice(i + 1) : ref
   const leaf = qn.split('.').pop() ?? qn
   return `${leaf}()`
+}
+
+/** The backend methodRef (`file#qualifiedName`) for a member, decoded from its
+ *  encoded symbol id (`file#qualifiedName:kind:row`). Strips ONLY the trailing
+ *  `:kind:row` from the end — never splits on '#', because a `#private`
+ *  qualifiedName contains a literal '#' (RFC-087) that `id.split('#')[1]` breaks. */
+export function refFromMemberId(id: string): string {
+  return id.replace(/:[^:]+:[^:]+$/, '')
 }

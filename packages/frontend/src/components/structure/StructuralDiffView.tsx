@@ -70,6 +70,10 @@ export function StructuralDiffView({
     setCallRoot(root)
     setView('callchain')
   }
+  // Only offer the ⎇ entry when the call chain is actually available (single-repo
+  // tasks with a changed callable); multi-repo leaves callChainAvailable unset, so
+  // the entry stays hidden instead of rendering a button that no-ops.
+  const callChainEntry = data.callChainAvailable === true ? openCallChain : undefined
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
@@ -133,10 +137,10 @@ export function StructuralDiffView({
             <StructuralTree
               files={files}
               onJumpToHunk={onJumpToHunk}
-              onOpenCallChain={openCallChain}
+              onOpenCallChain={callChainEntry}
             />
           ) : activeView === 'graph' ? (
-            <StructuralGraph data={data} onOpenCallChain={openCallChain} />
+            <StructuralGraph data={data} onOpenCallChain={callChainEntry} />
           ) : activeView === 'impact' ? (
             <div className="structure__impact-view">
               <ImpactPanel impact={data.impact} />

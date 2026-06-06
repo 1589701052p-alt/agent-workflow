@@ -50,6 +50,7 @@ const CallChainEntry = createContext<((root: { ref: string; label: string }) => 
 )
 const GRAPH_CALLABLE = new Set<string>(['method', 'function', 'constructor'])
 import { badgeSymbol } from '@/lib/structureView'
+import { refFromMemberId } from '@/lib/callChain'
 
 const EDGE_KEYS: EdgeKind[] = ['inherits', 'references', 'calls']
 const EDGE_LABEL: Record<EdgeKind, string> = {
@@ -117,8 +118,9 @@ function CardNode({ data }: NodeProps) {
                             aria-label={t('tasks.structCallChainEntry')}
                             onClick={(e) => {
                               e.stopPropagation() // don't trigger node-click edge highlight
-                              const qn = (m.id.split('#')[1] ?? '').split(':')[0]
-                              openCallChain({ ref: `${card.file}#${qn}`, label: `${m.label}()` })
+                              // refFromMemberId strips `:kind:row` without splitting on
+                              // '#' — a `#private` qn (RFC-087) contains a literal '#'.
+                              openCallChain({ ref: refFromMemberId(m.id), label: `${m.label}()` })
                             }}
                           >
                             ⎇

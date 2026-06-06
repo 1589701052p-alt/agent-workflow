@@ -8,7 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { CallTarget } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { expandState, type ExpandState } from '@/lib/callChain'
+import { expandState, walkChainTree, type ExpandState } from '@/lib/callChain'
 import { buildSequence, type SeqCallNode } from '@/lib/sequence'
 import { SequenceDiagram } from './SequenceDiagram'
 import { LoadingState } from '@/components/LoadingState'
@@ -76,56 +76,22 @@ function rootClassOf(ref: string): string {
   return `${file}::${dot > 0 ? qn.slice(0, dot) : qn}`
 }
 
-const SEQ_MAX_NODES = 80
-const SEQ_MAX_DEPTH = 8
-
-/** Eagerly (but bounded) walk the chain into a SeqCallNode tree for the diagram. */
-async function fetchChainTree(
+/** Eagerly (but bounded) walk the chain for the diagram, via the pure
+ *  `walkChainTree` (cycle/depth/node truncation lives there + is unit-tested). */
+function fetchChainTree(
   taskId: string,
   rootRef: string,
   signal: AbortSignal | undefined,
 ): Promise<{ tree: SeqCallNode[]; truncated: boolean }> {
-  let count = 0
-  let truncated = false
-  const visit = async (
-    ref: string,
-    ancestors: ReadonlySet<string>,
-    depth: number,
-  ): Promise<SeqCallNode[]> => {
+  const fetcher = async (ref: string): Promise<CallTarget[]> => {
     const res = await api.get<{ targets: CallTarget[] }>(
       `/api/tasks/${encodeURIComponent(taskId)}/call-targets?methodRef=${encodeURIComponent(ref)}`,
       undefined,
       signal,
     )
-    const out: SeqCallNode[] = []
-    for (const tg of (res.targets ?? []).slice().sort((a, b) => a.order - b.order)) {
-      if (count >= SEQ_MAX_NODES) {
-        truncated = true
-        break
-      }
-      count += 1
-      let children: SeqCallNode[] = []
-      if (tg.resolution === 'resolved' && tg.ref !== undefined) {
-        if (ancestors.has(tg.ref) || depth >= SEQ_MAX_DEPTH) {
-          // a resolved subtree we DID NOT expand (cycle / depth cap) → the diagram
-          // is incomplete; surface the marker (the tree view tags these per-node,
-          // the sequence view can't, so it flags the whole diagram).
-          truncated = true
-        } else {
-          children = await visit(tg.ref, new Set([...ancestors, tg.ref]), depth + 1)
-        }
-      }
-      out.push({
-        ownerClass: tg.ownerClass ?? null,
-        method: tg.label,
-        resolution: tg.resolution,
-        children,
-      })
-    }
-    return out
+    return res.targets ?? []
   }
-  const tree = await visit(rootRef, new Set([rootRef]), 0)
-  return { tree, truncated }
+  return walkChainTree(rootRef, fetcher)
 }
 
 function SequencePane({ taskId, root }: { taskId: string; root: CallChainRoot }) {

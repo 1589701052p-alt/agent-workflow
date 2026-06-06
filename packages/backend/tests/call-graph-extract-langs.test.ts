@@ -69,9 +69,12 @@ describe('extractCalls — every language captures method + bare + construction'
     expect(s).toContain('_.bar:method')
   })
 
-  test('scala — new Bar() is a constructor, not a method (#7)', async () => {
+  test('scala — new Bar() is a constructor, not a method (#7), emitted ONCE (no phantom dup)', async () => {
     const s = sig(await calls('a.scala', 'class A { def run() = { x.foo(); new Bar() } }\n'))
     expect(s).toContain('x.foo:method')
     expect(s.some((x) => x.endsWith('Bar:constructor'))).toBe(true)
+    // the instance_expression + nested call_expression must NOT both emit a Bar
+    expect(s.filter((x) => x.split(':')[0]?.endsWith('Bar')).length).toBe(1)
+    expect(s.some((x) => x.endsWith('Bar:method'))).toBe(false)
   })
 })

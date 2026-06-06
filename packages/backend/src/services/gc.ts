@@ -13,6 +13,7 @@ import type { Config } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { tasks } from '@/db/schema'
 import { removeWorktree, runGit } from '@/util/git'
+import { invalidateCallGraphIndex } from '@/services/structuralDiff/callGraph/expandService'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('gc')
@@ -70,6 +71,7 @@ export async function runWorktreeGc(
     }
     try {
       await removeWorktree({ repoPath: t.repoPath, worktreePath: t.worktreePath, force: true })
+      invalidateCallGraphIndex(t.worktreePath) // RFC-085 — free the cached class→file index
       result.removed.push(t.id)
     } catch (err) {
       log.warn('removeWorktree failed', {
