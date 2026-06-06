@@ -16,13 +16,14 @@
 import { createRequire } from 'node:module'
 import { dirname, extname, join } from 'node:path'
 import type { LangId } from '@agent-workflow/shared'
+import { GRAMMAR_FILES, IS_EMBEDDED } from '@/embed.generated'
 
 const require = createRequire(import.meta.url)
 
 let _grammarsDir: string | null = null
 let _runtimeWasm: string | null = null
 
-/** Directory holding the per-language `tree-sitter-<lang>.wasm` files. */
+/** Directory holding the per-language `tree-sitter-<lang>.wasm` files (dev). */
 export function grammarsDir(): string {
   if (_grammarsDir === null) {
     _grammarsDir = join(dirname(require.resolve('tree-sitter-wasms/package.json')), 'out')
@@ -30,8 +31,13 @@ export function grammarsDir(): string {
   return _grammarsDir
 }
 
-/** The web-tree-sitter runtime `.wasm` (loaded by `Parser.init`). */
+/** The web-tree-sitter runtime `.wasm` (loaded by `Parser.init`). In the
+ *  compiled binary it comes from the embed table; in dev from node_modules. */
 export function runtimeWasmPath(): string {
+  if (IS_EMBEDDED) {
+    const embedded = GRAMMAR_FILES['tree-sitter.wasm']
+    if (embedded !== undefined) return embedded
+  }
   if (_runtimeWasm === null) {
     _runtimeWasm = join(
       dirname(require.resolve('web-tree-sitter/package.json')),
@@ -41,8 +47,13 @@ export function runtimeWasmPath(): string {
   return _runtimeWasm
 }
 
-/** Absolute path to a grammar wasm file by its bare filename. */
+/** Absolute path to a grammar wasm file by its bare filename. Embedded
+ *  `/$bunfs/...` path in the binary; node_modules path in dev. */
 export function grammarFilePath(grammarFile: string): string {
+  if (IS_EMBEDDED) {
+    const embedded = GRAMMAR_FILES[grammarFile]
+    if (embedded !== undefined) return embedded
+  }
   return join(grammarsDir(), grammarFile)
 }
 

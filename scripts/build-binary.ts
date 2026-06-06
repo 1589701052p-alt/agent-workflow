@@ -22,8 +22,10 @@
 
 import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
-import { join, posix, relative, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 
+const require = createRequire(import.meta.url)
 const repoRoot = resolve(import.meta.dirname, '..')
 const frontendDist = join(repoRoot, 'packages', 'frontend', 'dist')
 const migrationsDir = join(repoRoot, 'packages', 'backend', 'db', 'migrations')
@@ -61,6 +63,15 @@ export const MIGRATION_FILES: Record<string, string> = {}
  * empty (the runner reads the source tree directly).
  */
 export const PLUGIN_FILES: Record<string, string> = {}
+
+/**
+ * RFC-083: tree-sitter grammar + runtime wasm table for the structural-diff
+ * engine. Keyed by basename (e.g. \`tree-sitter-python.wasm\`,
+ * \`tree-sitter.wasm\`) → embedded \`/$bunfs/...\` path. In dev this stays empty
+ * and \`services/structuralDiff/lang/grammars.ts\` resolves the wasms from
+ * node_modules instead.
+ */
+export const GRAMMAR_FILES: Record<string, string> = {}
 `
 
 function platformSuffix(): string {
@@ -192,12 +203,54 @@ function writeGenerated(): {
   lines.push('}')
   lines.push('')
 
+  // RFC-083: embed the tree-sitter runtime + per-language grammar wasms so the
+  // structural-diff engine works inside the compiled binary (no node_modules at
+  // runtime). Keyed by basename — grammars.ts looks them up via GRAMMAR_FILES.
+  const grammarEntries: Array<[string, string]> = []
+  for (const abs of grammarWasmPaths()) {
+    const base = basename(abs)
+    const id = safeIdent('gram', base)
+    lines.push(`import ${id} from '${relImport(abs)}' with { type: 'file' }`)
+    grammarEntries.push([base, id])
+  }
+  lines.push('')
+  lines.push('export const GRAMMAR_FILES: Record<string, string> = {')
+  for (const [rel, id] of grammarEntries) lines.push(`  ${JSON.stringify(rel)}: ${id},`)
+  lines.push('}')
+  lines.push('')
+
   writeFileSync(generatedPath, lines.join('\n'))
   return {
     frontendCount: frontEntries.length,
     migrationCount: migEntries.length,
     pluginCount: pluginEntries.length,
+    grammarCount: grammarEntries.length,
   }
+}
+
+/** Absolute paths of the wasm assets the structural-diff engine needs: the
+ *  web-tree-sitter runtime + the 8 RFC-083 grammars (+ tsx dialect). */
+function grammarWasmPaths(): string[] {
+  // Resolve from the backend package — tree-sitter-wasms / web-tree-sitter live
+  // in packages/backend/node_modules, not the repo root.
+  const backendRequire = createRequire(join(backendSrc, 'main.ts'))
+  const wasmsOut = join(dirname(backendRequire.resolve('tree-sitter-wasms/package.json')), 'out')
+  const runtime = join(
+    dirname(backendRequire.resolve('web-tree-sitter/package.json')),
+    'tree-sitter.wasm',
+  )
+  const grammars = [
+    'python',
+    'go',
+    'typescript',
+    'tsx',
+    'javascript',
+    'java',
+    'rust',
+    'cpp',
+    'scala',
+  ].map((n) => join(wasmsOut, `tree-sitter-${n}.wasm`))
+  return [runtime, ...grammars].filter((p) => existsSync(p))
 }
 
 async function main(): Promise<void> {
@@ -211,7 +264,7 @@ async function main(): Promise<void> {
   //    the binary.
   const counts = writeGenerated()
   process.stdout.write(
-    `\nwrote ${generatedPath}: ${counts.frontendCount} frontend files + ${counts.migrationCount} migration files + ${counts.pluginCount} opencode-plugin files\n`,
+    `\nwrote ${generatedPath}: ${counts.frontendCount} frontend files + ${counts.migrationCount} migration files + ${counts.pluginCount} opencode-plugin files + ${counts.grammarCount} grammar wasms\n`,
   )
 
   // 3. bun build --compile.

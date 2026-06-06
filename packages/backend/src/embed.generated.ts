@@ -24,3 +24,12 @@ export const MIGRATION_FILES: Record<string, string> = {}
  * empty (the runner reads the source tree directly).
  */
 export const PLUGIN_FILES: Record<string, string> = {}
+
+/**
+ * RFC-083: tree-sitter grammar + runtime wasm table for the structural-diff
+ * engine. Keyed by basename (e.g. `tree-sitter-python.wasm`,
+ * `tree-sitter.wasm`) → embedded `/$bunfs/...` path. In dev this stays empty
+ * and `services/structuralDiff/lang/grammars.ts` resolves the wasms from
+ * node_modules instead.
+ */
+export const GRAMMAR_FILES: Record<string, string> = {}
