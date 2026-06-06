@@ -9606,6 +9606,14 @@ mark.comment-anchor[data-active='true'] {
   border-radius: 10px;
   background: color-mix(in srgb, var(--text) 3%, transparent);
 }
+/* the package box is a visual grouping only — it must NOT capture pointer events,
+   else (sitting above the edges layer) it covers every edge inside the box and
+   they become unclickable. xyflow sets `pointer-events: all` INLINE on every node
+   (the flow has an onNodeClick handler), so !important is required to override it.
+   Clicks then fall through to the edges / cards beneath. */
+.structure-graph .react-flow__node-pkg {
+  pointer-events: none !important;
+}
 .sg-pkg__label {
   position: absolute;
   top: 3px;

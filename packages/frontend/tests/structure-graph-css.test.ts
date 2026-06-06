@@ -31,6 +31,17 @@ describe('structure-graph handle hit area', () => {
   })
 })
 
+describe('structure-graph package box click-through', () => {
+  // regression: the package container node sits ABOVE the edges layer; without
+  // pointer-events:none it covers every edge inside the box → those edges can't
+  // be clicked. The box is purely visual, so clicks must fall through.
+  test('package container does not capture pointer events', () => {
+    const i = css.indexOf('.structure-graph .react-flow__node-pkg {')
+    const rule = css.slice(i, css.indexOf('}', i))
+    expect(rule).toMatch(/pointer-events:\s*none/)
+  })
+})
+
 describe('structure-graph container height', () => {
   // regression: the graph is inside a flex column that could collapse to 0 — a
   // shrinkable child got crushed to ~2px and vanished. It now FILLS (flex:1) but
