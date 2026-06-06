@@ -57,6 +57,14 @@ export async function assembleStructuralDiff(opts: {
 
   const dependencyChanges = applyViaImport(files, aggregateDependencyChanges(manifestInputs))
   const summary = computeSummary(files, dependencyChanges)
+  // RFC-085 — a chain root must be a CHANGED callable still present (`after`).
+  const callChainAvailable = files.some((f) =>
+    f.changes.some(
+      (ch) =>
+        ch.after !== undefined &&
+        (ch.kind === 'method' || ch.kind === 'function' || ch.kind === 'constructor'),
+    ),
+  )
 
   return {
     scope: opts.scope,
@@ -71,6 +79,7 @@ export async function assembleStructuralDiff(opts: {
     dependencyChanges,
     impact: files.flatMap((f) => f.impact),
     classEdges: [], // filled by the git backend (needs file content)
+    callChainAvailable,
     summary,
   }
 }

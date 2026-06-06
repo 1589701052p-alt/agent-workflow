@@ -250,6 +250,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },
   { method: 'GET', path: '/api/tasks/:id/diff' },
   { method: 'GET', path: '/api/tasks/:id/structural-diff' },
+  { method: 'GET', path: '/api/tasks/:id/call-targets' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/events' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/inventory' },

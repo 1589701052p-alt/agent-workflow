@@ -25,6 +25,7 @@ import {
   type SummaryRow,
 } from '@/lib/structureView'
 import { StructuralGraph } from './StructuralGraph'
+import { CallChainView, type CallChainRoot } from './CallChainView'
 
 // degradedReasons that mean "deep was requested but fell back to baseline".
 const DEEP_FALLBACK_REASONS = new Set<string>([
@@ -42,7 +43,9 @@ const VIEWS = [
   { key: 'graph', labelKey: 'tasks.structViewGraph' },
   { key: 'impact', labelKey: 'tasks.structViewImpact' },
   { key: 'deps', labelKey: 'tasks.structViewDeps' },
+  { key: 'callchain', labelKey: 'tasks.structViewCallChain' },
 ] as const
+type ViewKey = (typeof VIEWS)[number]['key']
 
 const CARD_LABEL_KEY: Record<SummaryRow['key'], string> = {
   classes: 'tasks.structCardClasses',
@@ -61,7 +64,12 @@ export function StructuralDiffView({
   onJumpToHunk?: (anchor: HunkAnchor) => void
 }) {
   const { t } = useTranslation()
-  const [view, setView] = useState<'tree' | 'graph' | 'impact' | 'deps'>('tree')
+  const [view, setView] = useState<ViewKey>('tree')
+  const [callRoot, setCallRoot] = useState<CallChainRoot | null>(null)
+  const openCallChain = (root: CallChainRoot): void => {
+    setCallRoot(root)
+    setView('callchain')
+  }
   const files = displayableFiles(data.files)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
@@ -78,12 +86,12 @@ export function StructuralDiffView({
     data.engine === 'baseline' && DEEP_FALLBACK_REASONS.has(data.degradedReason ?? '')
   // A view is offered only when it has something to show; if the current view
   // empties out (data refetch), fall back to the first available one.
-  const viewAvailable = (k: (typeof VIEWS)[number]['key']): boolean =>
-    k === 'tree' || k === 'graph'
-      ? files.length > 0
-      : k === 'impact'
-        ? data.impact.length > 0
-        : data.dependencyChanges.length > 0
+  const viewAvailable = (k: ViewKey): boolean => {
+    if (k === 'tree' || k === 'graph') return files.length > 0
+    if (k === 'impact') return data.impact.length > 0
+    if (k === 'deps') return data.dependencyChanges.length > 0
+    return data.callChainAvailable === true // callchain
+  }
   const availableViews = VIEWS.filter((v) => viewAvailable(v.key))
   const activeView = availableViews.some((v) => v.key === view)
     ? view
@@ -122,16 +130,24 @@ export function StructuralDiffView({
             ))}
           </div>
           {activeView === 'tree' ? (
-            <StructuralTree files={files} onJumpToHunk={onJumpToHunk} />
+            <StructuralTree
+              files={files}
+              onJumpToHunk={onJumpToHunk}
+              onOpenCallChain={openCallChain}
+            />
           ) : activeView === 'graph' ? (
             <StructuralGraph data={data} />
           ) : activeView === 'impact' ? (
             <div className="structure__impact-view">
               <ImpactPanel impact={data.impact} />
             </div>
-          ) : (
+          ) : activeView === 'deps' ? (
             <div className="structure__impact-view">
               <DependencyChangesPanel changes={data.dependencyChanges} />
+            </div>
+          ) : (
+            <div className="structure__impact-view">
+              <CallChainView taskId={data.taskId} root={callRoot} />
             </div>
           )}
         </div>
@@ -246,9 +262,11 @@ function DependencyChangesPanel({ changes }: { changes: DependencyChange[] }) {
 function StructuralTree({
   files,
   onJumpToHunk,
+  onOpenCallChain,
 }: {
   files: FileStructuralDiff[]
   onJumpToHunk?: (anchor: HunkAnchor) => void
+  onOpenCallChain?: (root: CallChainRoot) => void
 }) {
   const { t } = useTranslation()
   const [sel, setSel] = useState(0)
@@ -293,18 +311,28 @@ function StructuralTree({
         </nav>
       </aside>
       <section className="structure__body">
-        {selected !== undefined && <FileChanges file={selected} onJumpToHunk={onJumpToHunk} />}
+        {selected !== undefined && (
+          <FileChanges
+            file={selected}
+            onJumpToHunk={onJumpToHunk}
+            onOpenCallChain={onOpenCallChain}
+          />
+        )}
       </section>
     </div>
   )
 }
 
+const CALLABLE_KINDS = new Set(['method', 'function', 'constructor'])
+
 function FileChanges({
   file,
   onJumpToHunk,
+  onOpenCallChain,
 }: {
   file: FileStructuralDiff
   onJumpToHunk?: (anchor: HunkAnchor) => void
+  onOpenCallChain?: (root: CallChainRoot) => void
 }) {
   const { t } = useTranslation()
   if (file.status === 'parse-error') {
@@ -323,6 +351,16 @@ function FileChanges({
             {g.changes.map((ch, i) => {
               const node = ch.after ?? ch.before
               const jumpable = onJumpToHunk !== undefined && ch.hunkAnchor !== undefined
+              // a call-chain root must be a callable that still exists (`after`)
+              const callRoot =
+                onOpenCallChain !== undefined &&
+                ch.after !== undefined &&
+                CALLABLE_KINDS.has(ch.after.kind)
+                  ? {
+                      ref: `${ch.after.filePath}#${ch.after.qualifiedName}`,
+                      label: `${ch.after.name}()`,
+                    }
+                  : null
               const body = (
                 <>
                   <span className={badgeClass(ch.changeType)} aria-label={ch.changeType}>
@@ -366,6 +404,17 @@ function FileChanges({
                     </button>
                   ) : (
                     body
+                  )}
+                  {callRoot !== null && (
+                    <button
+                      type="button"
+                      className="structure__callchain-entry"
+                      title={t('tasks.structCallChainEntry')}
+                      aria-label={t('tasks.structCallChainEntry')}
+                      onClick={() => onOpenCallChain?.(callRoot)}
+                    >
+                      ⎇
+                    </button>
                   )}
                 </li>
               )

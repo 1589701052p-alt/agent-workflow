@@ -913,6 +913,16 @@ export interface Resources {
     structViewGraph: string
     structViewImpact: string
     structViewDeps: string
+    structViewCallChain: string
+    structCallChainEntry: string
+    structCallPick: string
+    structCallNoCalls: string
+    structCallExternal: string
+    structCallUnresolved: string
+    structCallCycle: string
+    structCallTruncated: string
+    structCallExpand: string
+    structCallCollapse: string
     structBodyDeltaTitle: string
     structGraphEmpty: string
     structGraphLegendAdded: string
@@ -3018,6 +3028,16 @@ export const zhCN: Resources = {
     structViewGraph: '关系图',
     structViewImpact: '影响面',
     structViewDeps: '依赖',
+    structViewCallChain: '调用链',
+    structCallChainEntry: '看调用链',
+    structCallPick: '点某个方法行的「⎇ 看调用链」查看它的后续调用链',
+    structCallNoCalls: '未发现调用',
+    structCallExternal: '外部',
+    structCallUnresolved: '未解析',
+    structCallCycle: '环',
+    structCallTruncated: '已截断',
+    structCallExpand: '展开',
+    structCallCollapse: '收起',
     structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
     structGraphEmpty: '无可视化的结构改动（仅依赖/字段等变更）—— 见上方摘要卡片与"树"视图。',
     structGraphLegendAdded: '+ 新增',

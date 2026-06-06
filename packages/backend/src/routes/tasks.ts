@@ -43,6 +43,7 @@ import {
   startTask,
 } from '@/services/task'
 import { getTaskStructuralDiff } from '@/services/structuralDiff/service'
+import { getCallTargets } from '@/services/structuralDiff/callGraph/expandService'
 import type { ResolvedDeepConfig } from '@/services/structuralDiff/deep/service'
 import { structuralScopeSchema } from '@agent-workflow/shared'
 import {
@@ -307,6 +308,17 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         deepCfg: mode === 'deep' ? resolveStructuralDeepConfig(deps.configPath) : undefined,
       }),
     )
+  })
+
+  // RFC-085 — lazy call-chain expansion: direct callees of one method (method+
+  // constructor calls), source-ordered, best-effort resolved/external/unresolved.
+  app.get('/api/tasks/:id/call-targets', async (c) => {
+    const methodRef = c.req.query('methodRef')
+    if (methodRef === undefined || methodRef === '') {
+      return c.json({ error: 'methodRef query param required' }, 422)
+    }
+    const targets = await getCallTargets(deps.db, c.req.param('id'), methodRef)
+    return c.json({ targets })
   })
 
   // RFC-053 P-6: list currently-open lifecycle_alerts (invariant + stuck)
