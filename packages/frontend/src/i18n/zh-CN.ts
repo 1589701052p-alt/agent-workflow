@@ -884,6 +884,22 @@ export interface Resources {
     tabOutputs: string
     tabWorktreeFiles: string
     tabWorktreeDiff: string
+    tabWorktreeStructure: string
+    structEmpty: string
+    structDegradedBanner: string
+    structDegradedChip: string
+    structParseError: string
+    structFileNoSymbolChanges: string
+    structCardFiles: string
+    structCardClasses: string
+    structCardMethods: string
+    structCardFields: string
+    structCardImports: string
+    structCardDependencies: string
+    structDepsHeader: string
+    structViaImportManifest: string
+    structRenamedFrom: string
+    structSigChanged: string
     tabFeedback: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
@@ -2940,6 +2956,22 @@ export const zhCN: Resources = {
     tabOutputs: '输出',
     tabWorktreeFiles: '工作目录',
     tabWorktreeDiff: '工作目录 diff',
+    tabWorktreeStructure: '结构',
+    structEmpty: '本次改动无可识别的结构变化。',
+    structDegradedBanner: '部分文件为 best-effort 分析（C++/Scala），结构可能不完整。',
+    structDegradedChip: '不完整',
+    structParseError: '该文件解析失败，已跳过结构分析。',
+    structFileNoSymbolChanges: '该文件无符号级变化。',
+    structCardFiles: '文件',
+    structCardClasses: '类',
+    structCardMethods: '方法',
+    structCardFields: '成员',
+    structCardImports: '导入',
+    structCardDependencies: '依赖',
+    structDepsHeader: '依赖变更',
+    structViaImportManifest: '源码已引用',
+    structRenamedFrom: '原 {{from}}',
+    structSigChanged: '签名变化',
     tabFeedback: '留言',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',

@@ -37,8 +37,9 @@ function makeRun(over: Partial<NodeRun>): NodeRun {
 }
 
 describe('TAB_ORDER', () => {
-  test('is the canonical 7-tab order from the RFC (RFC-065 inserted worktree-files)', () => {
+  test('is the canonical 8-tab order from the RFC (RFC-083 inserted worktree-structure)', () => {
     // RFC-065 added `worktree-files` between `outputs` and `worktree-diff`.
+    // RFC-083 added `worktree-structure` immediately after `worktree-diff`.
     // `feedback` remains last as the RFC-041 reflective tab.
     expect(TAB_ORDER).toEqual([
       'workflow-status',
@@ -47,25 +48,28 @@ describe('TAB_ORDER', () => {
       'outputs',
       'worktree-files',
       'worktree-diff',
+      'worktree-structure',
       'feedback',
     ])
   })
 
   test('is readonly (frozen at the type level — defense against accidental sort)', () => {
-    expect(TAB_ORDER).toHaveLength(7)
+    expect(TAB_ORDER).toHaveLength(8)
   })
 
-  test('worktree-files sits immediately after outputs and before worktree-diff', () => {
+  test('worktree-structure sits immediately after worktree-diff', () => {
     const outIdx = TAB_ORDER.indexOf('outputs')
     const filesIdx = TAB_ORDER.indexOf('worktree-files')
     const diffIdx = TAB_ORDER.indexOf('worktree-diff')
+    const structIdx = TAB_ORDER.indexOf('worktree-structure')
     expect(filesIdx).toBe(outIdx + 1)
     expect(diffIdx).toBe(filesIdx + 1)
+    expect(structIdx).toBe(diffIdx + 1)
   })
 })
 
 describe('availableTabs', () => {
-  test('returns all 7 tabs when the workflow declares outputs', () => {
+  test('returns all 8 tabs when the workflow declares outputs', () => {
     expect(availableTabs({ hasOutputs: true })).toEqual([
       'workflow-status',
       'node-runs',
@@ -73,6 +77,7 @@ describe('availableTabs', () => {
       'outputs',
       'worktree-files',
       'worktree-diff',
+      'worktree-structure',
       'feedback',
     ])
   })
@@ -85,6 +90,7 @@ describe('availableTabs', () => {
       'details',
       'worktree-files',
       'worktree-diff',
+      'worktree-structure',
       'feedback',
     ])
     expect(tabs.includes('outputs' as never)).toBe(false)

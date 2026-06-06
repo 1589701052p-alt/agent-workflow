@@ -30,7 +30,15 @@ describe('TaskDetailPage tab structure', () => {
   })
 
   test('renders six panes keyed by `hidden={tab !== ...}` (one per TaskDetailTab)', () => {
-    const tabs = ['workflow-status', 'node-runs', 'details', 'outputs', 'worktree-diff', 'feedback']
+    const tabs = [
+      'workflow-status',
+      'node-runs',
+      'details',
+      'outputs',
+      'worktree-diff',
+      'worktree-structure',
+      'feedback',
+    ]
     for (const k of tabs) {
       expect(SRC).toMatch(new RegExp(`hidden=\\{tab !== '${k}'\\}`))
     }
@@ -64,6 +72,7 @@ describe('TaskDetailPage tab structure', () => {
       'tabOutputs',
       'tabWorktreeFiles',
       'tabWorktreeDiff',
+      'tabWorktreeStructure',
       'tabFeedback',
     ]) {
       expect(SRC).toMatch(new RegExp(`'tasks\\.${key}'`))
@@ -75,7 +84,7 @@ describe('TaskDetailPage tab structure', () => {
     // should appear exactly once and contain every `.task-detail__pane`.
     // RFC-065 added the worktree-files pane between outputs and worktree-diff.
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(7)
+    expect(paneCount).toBe(8)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })

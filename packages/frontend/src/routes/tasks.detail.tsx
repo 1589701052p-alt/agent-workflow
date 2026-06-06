@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import type {
   Agent,
   NodeRun,
+  StructuralDiff,
   Task,
   TaskDiff,
   TaskNodeRuns,
@@ -26,6 +27,7 @@ import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
+import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
 import { WorktreeFilesPanel } from '@/components/WorktreeFilesPanel'
 import { classifyCanceled, displayNoderunStatusKey } from '@/lib/noderun-status'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
@@ -78,6 +80,18 @@ function TaskDetailPage() {
     queryKey: ['tasks', id, 'diff'],
     queryFn: ({ signal }) =>
       api.get(`/api/tasks/${encodeURIComponent(id)}/diff`, undefined, signal),
+    enabled: task.data !== undefined && task.data.baseCommit !== null,
+    refetchInterval: (q) =>
+      isTerminal(task.data?.status) && q.state.data !== undefined ? false : 6000,
+    retry: false,
+  })
+
+  // RFC-083 — structural (semantic) diff for the task scope. Same gating as the
+  // textual diff (needs a base commit); refetches while the task is live.
+  const structuralDiff = useQuery<StructuralDiff>({
+    queryKey: ['tasks', id, 'structural-diff'],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${encodeURIComponent(id)}/structural-diff`, undefined, signal),
     enabled: task.data !== undefined && task.data.baseCommit !== null,
     refetchInterval: (q) =>
       isTerminal(task.data?.status) && q.state.data !== undefined ? false : 6000,
@@ -403,6 +417,19 @@ function TaskDetailPage() {
           ) : null}
         </div>
 
+        {/* RFC-083 — structural (semantic) diff overlay for the textual diff. */}
+        <div className="task-detail__pane" hidden={tab !== 'worktree-structure'}>
+          {tk.baseCommit === null ? (
+            <div className="muted">{t('tasks.noBaseCommit')}</div>
+          ) : structuralDiff.isLoading ? (
+            <div className="muted">{t('tasks.loadingDiff')}</div>
+          ) : structuralDiff.error !== null && structuralDiff.error !== undefined ? (
+            <div className="error-box">{describeError(structuralDiff.error)}</div>
+          ) : structuralDiff.data !== undefined ? (
+            <StructuralDiffView data={structuralDiff.data} />
+          ) : null}
+        </div>
+
         {/* RFC-041 PR4: per-task feedback. Originally lived in a fixed
             footer panel below the panes, but a long feedback thread
             squeezed `.task-detail__panes` (flex:1; min-height:0) down to
@@ -430,6 +457,8 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabWorktreeFiles')
     case 'worktree-diff':
       return t('tasks.tabWorktreeDiff')
+    case 'worktree-structure':
+      return t('tasks.tabWorktreeStructure')
     case 'feedback':
       return t('tasks.tabFeedback')
   }

@@ -12,6 +12,7 @@ export type TaskDetailTab =
   | 'outputs'
   | 'worktree-files'
   | 'worktree-diff'
+  | 'worktree-structure'
   | 'feedback'
 
 /** Canonical left-to-right tab order shown in the page tab bar. The
@@ -27,6 +28,8 @@ export const TAB_ORDER: readonly TaskDetailTab[] = [
   'outputs',
   'worktree-files',
   'worktree-diff',
+  // RFC-083: structural-diff overlay, immediately after the textual diff.
+  'worktree-structure',
   'feedback',
 ] as const
 
