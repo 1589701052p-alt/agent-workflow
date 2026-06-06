@@ -74,13 +74,8 @@ export function preciseImpactFromBaseline(
   const changed: Array<{ changedSymbolId: string; scipSymbol: string }> = []
   for (const f of files) {
     for (const ch of f.changes) {
-      if (
-        ch.changeType !== 'modified' &&
-        ch.changeType !== 'removed' &&
-        ch.changeType !== 'renamed'
-      ) {
-        continue
-      }
+      // Every changed callable (incl. 'added') — so deep mode also surfaces
+      // call relationships among new classes, not just edits.
       const node = ch.after ?? ch.before
       if (node === undefined || !CALLABLE.has(node.kind) || node.range === undefined) continue
       const scipSymbol = resolveChangedScipSymbol(graph, f.filePath, node.range)

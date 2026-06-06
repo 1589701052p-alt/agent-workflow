@@ -45,6 +45,29 @@ describe('computeWithinFileImpact', () => {
     expect(callerIds).not.toContain(helper.id) // not itself
   })
 
+  test('an ADDED method also gets its callers (so new-class call edges appear)', () => {
+    // regression: 'added' used to be excluded from impact, so calls AMONG new
+    // code were invisible in the graph. Now a new method called elsewhere yields
+    // an impact item.
+    const newText = `class A:
+    def fresh(self):
+        return 1
+    def user(self):
+        return self.fresh()
+`
+    const fresh = sym({ qn: 'A.fresh', startLine: 2, endLine: 3 })
+    const user = sym({ qn: 'A.user', startLine: 4, endLine: 5 })
+    const impact = computeWithinFileImpact(
+      [{ changeType: 'added', kind: 'method', after: fresh }],
+      [fresh, user],
+      newText,
+      'f.py',
+    )
+    expect(impact).toHaveLength(1)
+    expect(impact[0]?.changedSymbolId).toBe(fresh.id)
+    expect(impact[0]?.callers.map((c) => c.symbolId)).toContain(user.id)
+  })
+
   test('no callers → no impact item', () => {
     const newText = `def lonely():\n    return 1\n`
     const lonely = sym({ qn: 'lonely', startLine: 1, endLine: 2 })

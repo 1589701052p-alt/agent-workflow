@@ -54,7 +54,17 @@ export function findCallers(
 }
 
 function isImpactRelevant(ch: SymbolChange): boolean {
-  return ch.changeType === 'modified' || ch.changeType === 'removed' || ch.changeType === 'renamed'
+  // Every changed callable — INCLUDING 'added' — gets its callers found, so the
+  // graph shows call relationships among new classes too (A(new) → B(new)), not
+  // just the blast radius of edits. 'added' was previously excluded, which left
+  // new-class call edges invisible.
+  return (
+    ch.changeType === 'added' ||
+    ch.changeType === 'modified' ||
+    ch.changeType === 'removed' ||
+    ch.changeType === 'renamed' ||
+    ch.changeType === 'moved'
+  )
 }
 
 export interface ImpactTarget {
@@ -64,8 +74,9 @@ export interface ImpactTarget {
   ownerFile: string
 }
 
-/** The changed callable symbols worth computing impact for (modified / removed /
- *  renamed methods/functions, names ≥ minLen). Dedups by id. */
+/** The changed callable symbols worth computing impact for (ALL change types,
+ *  incl. added — so callers/uses of new methods are found too; names ≥ minLen).
+ *  Dedups by id. */
 export function collectImpactTargets(
   files: ReadonlyArray<{ filePath: string; changes: readonly SymbolChange[] }>,
   minNameLen = 2,
