@@ -965,6 +965,11 @@ export const enUS: Resources = {
     structViewTree: 'Tree',
     structViewGraph: 'Graph',
     structBodyDeltaTitle: 'method body line changes (+added / −removed)',
+    structGraphEmpty:
+      'No callers — the graph only shows changes that other code calls; see the Tree view for the rest.',
+    structGraphLegendChanged: 'changed method',
+    structGraphLegendCaller: 'caller (affected)',
+    structGraphLegendHint: 'arrow: caller → changed method',
     structViaImportManifest: 'imported in code',
     structRenamedFrom: 'was {{from}}',
     structSigChanged: 'signature changed',

@@ -912,6 +912,10 @@ export interface Resources {
     structViewTree: string
     structViewGraph: string
     structBodyDeltaTitle: string
+    structGraphEmpty: string
+    structGraphLegendChanged: string
+    structGraphLegendCaller: string
+    structGraphLegendHint: string
     structViaImportManifest: string
     structRenamedFrom: string
     structSigChanged: string
@@ -3001,6 +3005,10 @@ export const zhCN: Resources = {
     structViewTree: '树',
     structViewGraph: '关系图',
     structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
+    structGraphEmpty: '无调用方 —— 关系图只展示"被其它代码调用"的改动；其余改动请看"树"视图。',
+    structGraphLegendChanged: '改动的方法',
+    structGraphLegendCaller: '调用方（受影响）',
+    structGraphLegendHint: '箭头：调用方 → 被改方法',
     structViaImportManifest: '源码已引用',
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',

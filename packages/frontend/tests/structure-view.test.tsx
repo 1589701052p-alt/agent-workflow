@@ -195,7 +195,22 @@ describe('<StructuralDiffView />', () => {
   })
 
   test('view toggle switches from the tree to the read-only graph (PR-F)', () => {
-    const { container } = render(<StructuralDiffView data={sampleDiff()} />)
+    const data = sampleDiff()
+    // give it a caller so the graph has a band to draw (else it's the empty state)
+    data.impact = [
+      {
+        changedSymbolId: data.files[0]!.changes[0]!.after!.id,
+        confidence: 'inferred',
+        callers: [
+          {
+            symbolId: 'mod.py#Animal.greet:method:8',
+            filePath: 'mod.py',
+            range: { startLine: 8, endLine: 9 },
+          },
+        ],
+      },
+    ]
+    const { container } = render(<StructuralDiffView data={data} />)
     expect(container.querySelector('.structure__tree')).toBeTruthy() // tree by default
     expect(container.querySelector('[data-testid="structure-graph"]')).toBeNull()
     const toggle = container.querySelector('.structure__view-toggle')

@@ -9572,17 +9572,80 @@ mark.comment-anchor[data-active='true'] {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  background: var(--bg);
 }
-.structure-graph__node--changed .react-flow__node-default,
-.structure-graph__node.structure-graph__node--changed {
-  background: var(--diff-add-bg, #16331f);
-  border-color: var(--diff-add-fg, #3fb950);
+/* Size + wrap the xyflow default node so long qualifiedNames stay inside the
+   box (theme-aware colors; --accent/--panel/--text exist in both light+dark). */
+.structure-graph .react-flow__node {
+  width: auto;
+  max-width: 180px;
+  min-width: 56px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+}
+.structure-graph .react-flow__node.structure-graph__node--changed {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  border-color: var(--accent);
   color: var(--text);
+  font-weight: 600;
 }
-.structure-graph__node--caller.structure-graph__node {
-  background: var(--surface-2, #1c2128);
+.structure-graph .react-flow__node.structure-graph__node--caller {
+  background: var(--panel);
   border-color: var(--border);
-  color: var(--text-muted, #8b949e);
+  color: var(--muted);
+}
+.structure-graph .react-flow__edge-path {
+  stroke: var(--muted);
+}
+.structure-graph .react-flow__arrowhead {
+  fill: var(--muted);
+}
+.structure-graph-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.structure-graph__legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.structure-graph__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.structure-graph__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.structure-graph__swatch--changed {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  border-color: var(--accent);
+}
+.structure-graph__swatch--caller {
+  background: var(--panel);
+}
+.structure-graph__legend-hint {
+  margin-left: auto;
+}
+.structure-graph__empty {
+  padding: 24px;
+  text-align: center;
 }
 .structure__tree {
   display: flex;
