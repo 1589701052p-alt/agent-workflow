@@ -71,6 +71,7 @@
 
 import process from 'node:process'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 function fail(msg: string, code = 2): never {
   process.stderr.write(`mock-opencode: ${msg}\n`)
@@ -229,6 +230,24 @@ if (
   writeFileSync(counterFile, String(n))
   if (failUntil > 0 && n <= failUntil) forceFail = true
   if (skipEnvelopeUntil > 0 && n <= skipEnvelopeUntil) forceSkipEnvelope = true
+}
+
+// Scheduler boundary audit: simulate an agent that DIRTIES the worktree on a
+// FAILED attempt (a "partial write"). When MOCK_OPENCODE_WRITE_FILE is set,
+// the mock writes MOCK_OPENCODE_WRITE_FILE_CONTENT (default 'stray') to that
+// cwd-relative path, but ONLY on invocations that are about to fail
+// (forceFail). The runner spawns opencode with cwd = the task worktree, so
+// process.cwd() is the worktree. Lets pre-snapshot/rollback tests assert that
+// a failed attempt's partial write is (or is not) cleared before the retry.
+if (env.MOCK_OPENCODE_WRITE_FILE && forceFail) {
+  try {
+    writeFileSync(
+      join(process.cwd(), env.MOCK_OPENCODE_WRITE_FILE),
+      env.MOCK_OPENCODE_WRITE_FILE_CONTENT ?? 'stray',
+    )
+  } catch (e) {
+    fail(`MOCK_OPENCODE_WRITE_FILE write failed: ${(e as Error).message}`)
+  }
 }
 
 // RFC-026: optionally pre-emit a session.created event so the runner captures

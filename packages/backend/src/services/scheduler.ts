@@ -350,12 +350,26 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     repos,
   }
 
-  // 8. Drive the top-level scope.
-  const result = await runScope(state, {
-    scopeIds: topLevelIds,
-    iteration: 0,
-    log,
-  })
+  // 8. Drive the top-level scope. Any thrown error must land the task in
+  // `failed` rather than wedge it on `running`: runTask is fire-and-forget from
+  // the HTTP/resume path, so an unhandled rejection (e.g. an illegal node_run
+  // transition, or a DB error inside a sink/wrapper branch that — unlike the
+  // agent path — has no local try/catch) would otherwise leave the task stuck
+  // `running` and unresumable (resumeTask refuses `running`). See
+  // scheduler-boundary-wrapper-resume-interrupted.test.ts.
+  let result: ScopeResult
+  try {
+    result = await runScope(state, {
+      scopeIds: topLevelIds,
+      iteration: 0,
+      log,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log.error('runTask: scope threw — failing task', { taskId, error: message })
+    await failTask(db, taskId, 'scheduler error', message)
+    return
+  }
 
   if (result.kind === 'failed' && result.detail) {
     await failTask(db, taskId, result.detail.summary, result.detail.message, result.detail.nodeId)
@@ -560,6 +574,26 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
   const upstreamsOf = buildScopeUpstreams(scopeNodes, definition.edges)
   const scopeNodeById = new Map(scopeNodes.map((n) => [n.id, n]))
 
+  // Defensive cycle check for the dispatch graph. runTask topologically validates
+  // the TOP scope at launch, but inner wrapper scopes (loop / git / fanout) were
+  // never checked: a same-iteration data cycle between two inner nodes makes
+  // areTransitiveUpstreamsCompleted false for both forever, so the scope goes
+  // quiescent and fails with an opaque "scheduler stalled". Surface a clear cycle
+  // error instead (channel/back edges are already dropped by buildScopeUpstreams,
+  // so a cycle here is a genuine same-iteration data cycle). See
+  // scheduler-boundary-intra-loop-cycle-stall.test.ts.
+  const cycleNode = findScopeCycle(scopeNodes, upstreamsOf)
+  if (cycleNode !== null) {
+    return {
+      kind: 'failed',
+      detail: {
+        summary: `cycle detected inside scope at node '${cycleNode}'`,
+        message: 'scope-cycle',
+        nodeId: cycleNode,
+      },
+    }
+  }
+
   // In-flight node promises keyed by nodeId; `dispatchedThisInvocation` recovers
   // the per-invocation dedup the old `remaining.delete(n.id)` provided (N3): a
   // pure status read can't distinguish "failed row already (re-)dispatched this
@@ -620,6 +654,20 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
       }
       if (firstFailureDetail !== undefined) {
         return { kind: 'failed', detail: firstFailureDetail }
+      }
+      // A terminal 'exhausted' loop in this scope is a failure even on a resume
+      // invocation where it wasn't (re-)dispatched this call (so firstFailureDetail
+      // is unset) — never let it fall through to allSettled→ok.
+      if (f.exhausted.length > 0) {
+        const exId = f.exhausted[0]!
+        return {
+          kind: 'failed',
+          detail: {
+            summary: `wrapper-loop ${exId} exhausted (max iterations reached)`,
+            message: 'wrapper-loop-exhausted',
+            nodeId: exId,
+          },
+        }
       }
       if (f.allSettled) {
         return { kind: 'ok' }
@@ -966,6 +1014,8 @@ export interface Frontier {
   awaitingHuman: string[]
   /** latest failed, NOT going to ready (a dispatchable failed row = pending resume, not terminal). */
   failed: string[]
+  /** latest 'exhausted' (loop-max) — a terminal FAILURE, surfaced when the scope is quiescent. */
+  exhausted: string[]
   /** every in-scope node is completed ⇒ scope may return done. */
   allSettled: boolean
 }
@@ -1026,10 +1076,17 @@ export function deriveFrontier(
   // here, bucketed awaitingHuman below (S12: matches the old batch model keeping
   // the asking agent out of `completed` via runOneNode's awaiting_human return).
   const completed = new Set<string>()
+  const exhausted: string[] = []
   for (const [nodeId, r] of latestPerNode) {
     if (askingRunIds.has(r.id)) continue
     if (r.status === 'done' && isNodeRunFresh(r, freshestDone)) completed.add(nodeId)
-    else if (r.status === 'exhausted') completed.add(nodeId)
+    // 'exhausted' (loop hit maxIterations without exit) is a TERMINAL FAILURE,
+    // not a completion. Marking it completed made a resume invocation see an
+    // exhausted top-level loop as done → the task silently flipped failed→done
+    // and downstream consumed empty output. Bucket it as a failure so the scope
+    // fails consistently on the first run AND any resume. See
+    // scheduler-boundary-loop-exhausted-resume.test.ts.
+    else if (r.status === 'exhausted') exhausted.push(nodeId)
   }
   // Pass 2 — settles-without-row (C1/N6). clarify nodes have no structural
   // upstream (channel edges dropped) so are leaves; cross-clarify depends on its
@@ -1080,6 +1137,7 @@ export function deriveFrontier(
     awaitingReview,
     awaitingHuman,
     failed,
+    exhausted,
     allSettled: remainingCount === 0,
   }
 }
@@ -1459,7 +1517,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // mismatch between session memory and disk.
         if (!followupDecision.followup) {
           const snap = await readSnapshotForLatestRun(db, taskId, node.id, iteration)
-          if (!agent.readonly && snap !== '') {
+          // Always roll a writer back before a fresh-session retry — even when
+          // the pre-snapshot is '' (the worktree was CLEAN when snapshotted, the
+          // common case, or the snapshot failed). rollbackToSnapshot still does
+          // `reset --hard` + `clean -fd` for snap === '', which clears the failed
+          // attempt's partial writes; gating on snap !== '' left them behind. See
+          // scheduler-boundary-presnapshot-rollback-skip.test.ts.
+          if (!agent.readonly) {
             try {
               await rollbackToSnapshot(task.worktreePath, snap)
             } catch (err) {
@@ -2168,7 +2232,14 @@ async function runLoopWrapperNode(
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
+        // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
+        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
+        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // allowTerminal bypasses that guard while allowedFrom still restricts the
+        // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
+        allowTerminal: true,
         reason: 'wrapper-resume',
       })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
@@ -2343,7 +2414,14 @@ async function runFanoutWrapperNode(
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
+        // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
+        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
+        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // allowTerminal bypasses that guard while allowedFrom still restricts the
+        // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
+        allowTerminal: true,
         reason: 'wrapper-fanout-resume',
       })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
@@ -2422,10 +2500,18 @@ async function runFanoutWrapperNode(
   // 9. Build shards with per-item shardKey (resolveKeyOf — path-family uses
   // the path itself, others default to 0-based index).
   const keyOf = resolveKeyOf(itemKind)
-  const shards = items.map((value, idx) => ({
-    shardKey: keyOf(value, idx, itemKind),
-    value,
-  }))
+  // Disambiguate colliding shardKeys (e.g. duplicate path items, whose
+  // path-family key IS the path string) by suffixing the index, so every item
+  // gets a UNIQUE shard identity. Without this, two equal items mint two
+  // children with the same shardKey and the aggregator's find-by-shardKey drops
+  // one. See scheduler-boundary-fanout-shardkey-collision.test.ts.
+  const seenShardKeys = new Set<string>()
+  const shards = items.map((value, idx) => {
+    let shardKey = keyOf(value, idx, itemKind)
+    if (seenShardKeys.has(shardKey)) shardKey = `${shardKey}#${idx}`
+    seenShardKeys.add(shardKey)
+    return { shardKey, value }
+  })
 
   // 10. Dispatch each inner node (skip aggregator — handled last).
   for (const innerId of innerIds) {
@@ -2510,6 +2596,19 @@ async function runFanoutWrapperNode(
           }),
         ),
       )
+      // Cancel takes precedence over failure: when the task was aborted, shards
+      // come back 'canceled' (SIGTERM) — the wrapper row must reflect 'canceled',
+      // not 'failed' (a canceled task should leave no 'failed' run). See
+      // scheduler-boundary-canceled-fanout-status.test.ts.
+      if (shardResults.some((r) => r.kind === 'canceled') || opts.signal?.aborted === true) {
+        await markWrapperTerminal(db, wrapperRunId, 'canceled')
+        broadcastNodeStatus(taskId, wrapperRunId, node.id, 'canceled')
+        return {
+          kind: 'canceled',
+          summary: `wrapper-fanout ${node.id} canceled`,
+          message: 'canceled',
+        }
+      }
       const failedShards = shardResults.filter((r) => r.kind === 'failed')
       if (failedShards.length > 0) {
         const msg = failedShards.map((f) => `${f.shardKey}:${f.message}`).join(' | ')
@@ -2541,6 +2640,15 @@ async function runFanoutWrapperNode(
         broadcastInputs: innerUpstream,
         log: log.child(`fanout:${node.id}:${innerId}:shared`),
       })
+      if (r.kind === 'canceled' || opts.signal?.aborted === true) {
+        await markWrapperTerminal(db, wrapperRunId, 'canceled')
+        broadcastNodeStatus(taskId, wrapperRunId, node.id, 'canceled')
+        return {
+          kind: 'canceled',
+          summary: `wrapper-fanout ${node.id} canceled`,
+          message: 'canceled',
+        }
+      }
       if (r.kind === 'failed') {
         await markWrapperTerminal(db, wrapperRunId, 'failed', `inner-shared-failed:${r.message}`)
         broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
@@ -2636,7 +2744,7 @@ interface DispatchShardArgs {
 }
 
 interface DispatchShardResult {
-  kind: 'ok' | 'failed'
+  kind: 'ok' | 'failed' | 'canceled'
   shardKey: string
   outputs: Record<string, string>
   message: string
@@ -2671,18 +2779,63 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   const { db, task, taskId, opts } = state
 
   const shardKey = shard?.shardKey ?? '__shared__'
-  const shardRunId = ulid()
-  await db.insert(nodeRuns).values({
-    id: shardRunId,
-    taskId,
-    nodeId: innerNode.id,
-    status: 'pending',
-    retryIndex: 0,
-    iteration,
-    parentNodeRunId: wrapperRunId,
-    shardKey: shard === null ? null : shardKey,
-    startedAt: Date.now(),
-  })
+  const rowShardKey = shard === null ? null : shardKey
+
+  // Idempotent (re)dispatch: a reaped prior run can leave a child row for this
+  // (wrapper run, shardKey). Reuse it instead of minting a duplicate — the
+  // aggregator's find-by-shardKey would otherwise pick the older empty one. A
+  // 'done' child is reused as-is (its outputs are still valid); a
+  // non-terminal/failed child is re-run in place. Only a missing child mints a
+  // fresh row. See scheduler-boundary-fanout-resume-duplicate-shards.test.ts.
+  const priorChildren = await db
+    .select()
+    .from(nodeRuns)
+    .where(
+      and(
+        eq(nodeRuns.taskId, taskId),
+        eq(nodeRuns.nodeId, innerNode.id),
+        eq(nodeRuns.parentNodeRunId, wrapperRunId),
+      ),
+    )
+  const priorChild = priorChildren.find((r) => (r.shardKey ?? null) === rowShardKey)
+  let shardRunId: string
+  if (priorChild !== undefined && priorChild.status === 'done') {
+    const outRows = await db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, priorChild.id))
+    const outputs: Record<string, string> = {}
+    for (const o of outRows) outputs[o.portName] = o.content
+    broadcastNodeStatus(taskId, priorChild.id, innerNode.id, 'done')
+    return { kind: 'ok', shardKey, outputs, message: '' }
+  }
+  if (priorChild !== undefined) {
+    // Re-run the existing non-terminal/failed child in place. allowTerminal: a
+    // reaped child is 'interrupted' (terminal); reset to pending so runNode's
+    // mark-running (pending → running) applies cleanly.
+    shardRunId = priorChild.id
+    await setNodeRunStatus({
+      db,
+      nodeRunId: shardRunId,
+      to: 'pending',
+      allowedFrom: ['pending', 'running', 'interrupted', 'failed', 'canceled'],
+      allowTerminal: true,
+      reason: 'fanout-shard-resume',
+    })
+  } else {
+    shardRunId = ulid()
+    await db.insert(nodeRuns).values({
+      id: shardRunId,
+      taskId,
+      nodeId: innerNode.id,
+      status: 'pending',
+      retryIndex: 0,
+      iteration,
+      parentNodeRunId: wrapperRunId,
+      shardKey: rowShardKey,
+      startedAt: Date.now(),
+    })
+  }
   broadcastNodeStatus(taskId, shardRunId, innerNode.id, 'pending')
 
   // Build inner inputs: broadcast first, then inject shard value for any
@@ -2755,6 +2908,13 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   const nodeTimeoutMs = pickNumber(innerNode, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const nodeOverrides = pickOverrides(innerNode)
 
+  // Concurrency: fan-out shards previously bypassed every cap. Acquire the
+  // global node slot + the fan-out subprocess slot (the previously-dead
+  // subprocessSem), plus the write slot for non-readonly shards so writers
+  // serialize on the shared worktree. See scheduler-boundary-fanout-concurrency.test.ts.
+  const releaseGlobal = await state.globalSem.acquire()
+  const releaseSub = await state.subprocessSem.acquire()
+  const releaseWrite = innerAgent.readonly ? null : await state.writeSem.acquire()
   try {
     const result = await runNode({
       taskId,
@@ -2795,6 +2955,9 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
         : {}),
     })
     broadcastNodeStatus(taskId, shardRunId, innerNode.id, result.status)
+    if (result.status === 'canceled') {
+      return { kind: 'canceled', shardKey, outputs: {}, message: result.errorMessage ?? 'canceled' }
+    }
     if (result.status !== 'done') {
       return {
         kind: 'failed',
@@ -2808,6 +2971,10 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
     const msg = err instanceof Error ? err.message : String(err)
     broadcastNodeStatus(taskId, shardRunId, innerNode.id, 'failed')
     return { kind: 'failed', shardKey, outputs: {}, message: msg }
+  } finally {
+    releaseWrite?.()
+    releaseSub()
+    releaseGlobal()
   }
 }
 
@@ -2925,6 +3092,12 @@ async function dispatchFanoutAggregator(
   const nodeTimeoutMs = pickNumber(aggNode, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
   const nodeOverrides = pickOverrides(aggNode)
 
+  // Concurrency: the aggregator is a real opencode subprocess too — count it
+  // against the global node + fan-out subprocess caps (and the write slot when
+  // it is non-readonly), like the shards above.
+  const releaseGlobal = await state.globalSem.acquire()
+  const releaseSub = await state.subprocessSem.acquire()
+  const releaseWrite = aggAgent.readonly ? null : await state.writeSem.acquire()
   try {
     const result = await runNode({
       taskId,
@@ -2979,6 +3152,10 @@ async function dispatchFanoutAggregator(
     const msg = err instanceof Error ? err.message : String(err)
     broadcastNodeStatus(taskId, aggRunId, aggNode.id, 'failed')
     return { kind: 'failed', summary: 'aggregator threw', message: msg, outputs: {} }
+  } finally {
+    releaseWrite?.()
+    releaseSub()
+    releaseGlobal()
   }
 }
 
@@ -3037,7 +3214,14 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
+        // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
+        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
+        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // allowTerminal bypasses that guard while allowedFrom still restricts the
+        // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
+        allowTerminal: true,
         reason: 'wrapper-resume',
       })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
@@ -3450,6 +3634,40 @@ async function readPortAtIteration(
     .from(nodeRunOutputs)
     .where(and(eq(nodeRunOutputs.nodeRunId, chosen.id), eq(nodeRunOutputs.portName, portName)))
   return out[0]?.content ?? ''
+}
+
+/**
+ * Detect a cycle in a scope's structural upstream graph (the same `upstreamsOf`
+ * the dispatch frontier walks). Returns a node id that lies on a cycle, or null
+ * when the scope is acyclic. DFS with white/grey/black coloring; a grey re-visit
+ * is a back-edge. `upstreamsOf` values are always in-scope (buildScopeUpstreams
+ * drops out-of-scope sources), so the walk stays within the scope.
+ */
+function findScopeCycle(
+  scopeNodes: WorkflowNode[],
+  upstreamsOf: Map<string, string[]>,
+): string | null {
+  const color = new Map<string, 0 | 1 | 2>() // 0=unvisited 1=visiting 2=done
+  const visit = (id: string): string | null => {
+    color.set(id, 1)
+    for (const up of upstreamsOf.get(id) ?? []) {
+      const c = color.get(up) ?? 0
+      if (c === 1) return up // back-edge → cycle
+      if (c === 0) {
+        const found = visit(up)
+        if (found !== null) return found
+      }
+    }
+    color.set(id, 2)
+    return null
+  }
+  for (const n of scopeNodes) {
+    if ((color.get(n.id) ?? 0) === 0) {
+      const found = visit(n.id)
+      if (found !== null) return found
+    }
+  }
+  return null
 }
 
 /**

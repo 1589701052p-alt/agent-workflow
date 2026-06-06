@@ -596,6 +596,24 @@ export function validateWorkflowDef(
           }
         }
       }
+      // exitCondition must reference a real node. At runtime readPortAtIteration
+      // returns '' for a dangling reference, which silently satisfies a
+      // port-empty/-count condition and exits the loop early (no error surfaced).
+      // (Port-level existence isn't checked here: output ports are only known
+      // when the agent is in the validation context, so a port check would
+      // false-positive when validating a def standalone — node existence is the
+      // reliable signal.) See scheduler-boundary-loop-exit-condition-validation.test.ts.
+      const exitCond = (node as Record<string, unknown>).exitCondition
+      if (exitCond !== null && typeof exitCond === 'object') {
+        const exitNodeId = (exitCond as Record<string, unknown>).nodeId
+        if (typeof exitNodeId === 'string' && !nodeById.has(exitNodeId)) {
+          issues.push({
+            code: 'wrapper-loop-exit-node-missing',
+            message: `wrapper-loop '${node.id}' exitCondition references unknown node '${exitNodeId}'`,
+            pointer: node.id,
+          })
+        }
+      }
     }
   }
 

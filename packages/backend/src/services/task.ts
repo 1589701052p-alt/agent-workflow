@@ -978,12 +978,17 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
   }
 
   // Collect the latest non-done run per nodeId — those are the ones that
-  // need rollback + a fresh attempt.
+  // need rollback + a fresh attempt. Freshness is ULID id-order, matching the
+  // scheduler's authority (isFresherNodeRun). retryIndex ordering was wrong: a
+  // clarify-driven rerun is minted with retryIndex 0 but a newer id, so an older
+  // failed retry with a higher retryIndex would shadow it and resume would roll
+  // the worktree back to the wrong row's pre_snapshot. See
+  // scheduler-boundary-resume-retryindex-vs-id.test.ts.
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, id))
   const latestPerNode = new Map<string, (typeof runs)[number]>()
   for (const r of runs) {
     const prev = latestPerNode.get(r.nodeId)
-    if (prev === undefined || r.retryIndex > prev.retryIndex) latestPerNode.set(r.nodeId, r)
+    if (prev === undefined || r.id > prev.id) latestPerNode.set(r.nodeId, r)
   }
   const toRollback = [...latestPerNode.values()].filter(
     (r) => r.status === 'failed' || r.status === 'interrupted',
