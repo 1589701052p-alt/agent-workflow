@@ -37,4 +37,19 @@ describe('SequenceDiagram', () => {
     render(<SequenceDiagram model={{ participants: [], messages: [] }} />)
     expect(screen.queryByTestId('sequence-diagram')).toBeNull()
   })
+
+  // Regression: message labels used to be centered between caller/callee lifelines
+  // (textAnchor="middle" at (x1+x2)/2), so on long arrows the method name floated
+  // far from either lifeline. They must now be left-aligned at the arrow's left end.
+  test('message labels are left-aligned at the arrow start, not centered', () => {
+    // A → B (lifeline centers PAD+COL_W/2=99 and PAD+COL_W+COL_W/2=249).
+    const model = buildSequence('f::A', [
+      { ownerClass: 'f::B', method: 'charge()', resolution: 'resolved', children: [] },
+    ])
+    render(<SequenceDiagram model={model} />)
+    const label = screen.getByText(/charge\(\)/)
+    expect(label.getAttribute('text-anchor')).toBe('start')
+    // x sits just right of the LEFT lifeline (99 + SEQ_LABEL_GAP), not the midpoint 174
+    expect(Number(label.getAttribute('x'))).toBe(99 + 8)
+  })
 })

@@ -60,3 +60,67 @@ export function buildSequence(rootClass: string, children: readonly SeqCallNode[
   walk(rootClass, children, 0)
   return { participants, messages }
 }
+
+// --- Sequence diagram layout (pure; rendered by SequenceDiagram.tsx) -----------
+// Constants live here so the SVG size can be computed — and unit-tested — without
+// a DOM. The width MUST include message-label text that extends past the
+// participant columns; in particular self-call labels are drawn to the RIGHT of
+// their lifeline, so on the last participant they used to overflow the svg's
+// width and get clipped by overflow:hidden (rightmost-column truncation bug).
+
+export const SEQ_COL_W = 150
+export const SEQ_ROW_H = 34
+export const SEQ_HEAD_H = 40
+export const SEQ_PAD = 24
+/** x of a self-call label = lifeline x + this (matches the `h 22` loop + gap). */
+export const SEQ_SELF_LABEL_OFFSET = 26
+/** gap from an inter-participant arrow's left endpoint to its left-aligned label. */
+export const SEQ_LABEL_GAP = 8
+/** approx glyph advance of the 11px ui-monospace msg label. Slightly generous so
+ *  we never under-size (clip); over-sizing only adds harmless right padding. */
+export const SEQ_CHAR_W = 6.7
+/** approx glyph advance of the 12px head label. */
+export const SEQ_HEAD_CHAR_W = 7.3
+
+/** Indented label string exactly as drawn (depth → leading spaces). */
+export function seqMessageLabel(m: Pick<SeqMessage, 'depth' | 'label'>): string {
+  return `${' '.repeat(m.depth * 2)}${m.label}`
+}
+
+export interface SeqLayout {
+  width: number
+  height: number
+}
+
+/** Lifeline center x for a participant. */
+function seqCenterX(model: SequenceModel, p: string): number {
+  const i = Math.max(0, model.participants.indexOf(p))
+  return SEQ_PAD + i * SEQ_COL_W + SEQ_COL_W / 2
+}
+
+/** Pure SVG size for the diagram. `width` accounts for label text that extends
+ *  past the participant columns (centered message labels and, crucially,
+ *  self-call labels drawn to the right of the last lifeline). */
+export function seqDiagramLayout(model: SequenceModel): SeqLayout {
+  // Rightmost content x (absolute). Columns occupy [PAD, PAD + n*COL_W]; a final
+  // PAD is added below so the base equals the old PAD*2 + n*COL_W width.
+  let maxRight = SEQ_PAD + model.participants.length * SEQ_COL_W
+  for (const p of model.participants) {
+    // head label is textAnchor=middle, so it spreads half its width each side.
+    const right = seqCenterX(model, p) + (classDisplay(p).length * SEQ_HEAD_CHAR_W) / 2
+    if (right > maxRight) maxRight = right
+  }
+  for (const m of model.messages) {
+    const textW = seqMessageLabel(m).length * SEQ_CHAR_W
+    const x1 = seqCenterX(model, m.from)
+    const x2 = seqCenterX(model, m.to)
+    const right =
+      x1 === x2
+        ? x1 + SEQ_SELF_LABEL_OFFSET + textW // self-call: label starts right of lifeline
+        : Math.min(x1, x2) + SEQ_LABEL_GAP + textW // label left-aligned at the arrow's left end
+    if (right > maxRight) maxRight = right
+  }
+  const width = Math.ceil(maxRight + SEQ_PAD)
+  const height = SEQ_HEAD_H + SEQ_PAD + model.messages.length * SEQ_ROW_H + SEQ_PAD
+  return { width, height }
+}

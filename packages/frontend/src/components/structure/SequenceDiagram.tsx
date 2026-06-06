@@ -6,12 +6,18 @@
 // dashed/dotted + muted.
 
 import { useTranslation } from 'react-i18next'
-import { classDisplay, UNRESOLVED_LIFELINE, type SequenceModel } from '@/lib/sequence'
-
-const COL_W = 150
-const ROW_H = 34
-const HEAD_H = 40
-const PAD = 24
+import {
+  classDisplay,
+  seqDiagramLayout,
+  seqMessageLabel,
+  SEQ_COL_W as COL_W,
+  SEQ_HEAD_H as HEAD_H,
+  SEQ_LABEL_GAP,
+  SEQ_PAD as PAD,
+  SEQ_ROW_H as ROW_H,
+  UNRESOLVED_LIFELINE,
+  type SequenceModel,
+} from '@/lib/sequence'
 
 export function SequenceDiagram({ model }: { model: SequenceModel }) {
   const { t } = useTranslation()
@@ -22,9 +28,8 @@ export function SequenceDiagram({ model }: { model: SequenceModel }) {
     const i = Math.max(0, model.participants.indexOf(p))
     return PAD + i * COL_W + COL_W / 2
   }
-  const width = PAD * 2 + model.participants.length * COL_W
+  const { width, height } = seqDiagramLayout(model)
   const chartTop = HEAD_H + PAD
-  const height = chartTop + model.messages.length * ROW_H + PAD
 
   return (
     <div className="seqdiag" data-testid="sequence-diagram">
@@ -62,7 +67,7 @@ export function SequenceDiagram({ model }: { model: SequenceModel }) {
           const x2 = cx(m.to)
           const self = x1 === x2
           const cls = `seqdiag__msg seqdiag__msg--${m.resolution}`
-          const label = `${' '.repeat(m.depth * 2)}${m.label}`
+          const label = seqMessageLabel(m)
           if (self) {
             // self-call: a small loop to the right of the lifeline
             return (
@@ -80,9 +85,18 @@ export function SequenceDiagram({ model }: { model: SequenceModel }) {
             )
           }
           const dir = x2 > x1 ? 1 : -1
+          // Left-align the label at the arrow's left endpoint (reading rightward)
+          // instead of centering it — otherwise on long arrows (root calling a
+          // far-right participant) the method name floats in the middle, far from
+          // either lifeline. Anchoring at min(x1,x2) also keeps it inside the svg.
           return (
             <g key={idx} className={cls}>
-              <text x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" className="seqdiag__msg-label">
+              <text
+                x={Math.min(x1, x2) + SEQ_LABEL_GAP}
+                y={y - 6}
+                textAnchor="start"
+                className="seqdiag__msg-label"
+              >
                 {label}
               </text>
               <line
