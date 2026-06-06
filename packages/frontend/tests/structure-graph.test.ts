@@ -66,6 +66,28 @@ describe('buildStructureGraph', () => {
     expect(g.edges).toEqual([]) // no callers → no edges
   })
 
+  test('changed nodes carry their changeType (added / modified / removed)', () => {
+    const added = node('a.ts#A.n:method:1', 'A.n')
+    const removed = node('a.ts#A.o:method:2', 'A.o')
+    const files: StructuralDiff['files'] = [
+      {
+        filePath: 'a.ts',
+        lang: 'typescript',
+        status: 'ok',
+        edges: [],
+        impact: [],
+        changes: [
+          { changeType: 'added', kind: 'method', after: added },
+          { changeType: 'removed', kind: 'method', before: removed },
+        ],
+      },
+    ]
+    const g = buildStructureGraph(diffWith(files, []))
+    const byLabel = new Map(g.nodes.map((n) => [n.label, n.changeType]))
+    expect(byLabel.get('A.n')).toBe('added')
+    expect(byLabel.get('A.o')).toBe('removed')
+  })
+
   test('non-graphable kinds (field/import) produce no nodes → empty graph', () => {
     const field: SymbolNode = {
       ...svc,

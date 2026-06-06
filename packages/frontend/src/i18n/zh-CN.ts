@@ -913,7 +913,9 @@ export interface Resources {
     structViewGraph: string
     structBodyDeltaTitle: string
     structGraphEmpty: string
-    structGraphLegendChanged: string
+    structGraphLegendAdded: string
+    structGraphLegendModified: string
+    structGraphLegendRemoved: string
     structGraphLegendCaller: string
     structGraphLegendHint: string
     structViaImportManifest: string
@@ -3006,7 +3008,9 @@ export const zhCN: Resources = {
     structViewGraph: '关系图',
     structBodyDeltaTitle: '方法体行变更（+新增 / −删除）',
     structGraphEmpty: '无可视化的结构改动（仅依赖/字段等变更）—— 见上方摘要卡片与"树"视图。',
-    structGraphLegendChanged: '改动的方法',
+    structGraphLegendAdded: '+ 新增',
+    structGraphLegendModified: '~ 改动',
+    structGraphLegendRemoved: '− 删除',
     structGraphLegendCaller: '调用方（受影响）',
     structGraphLegendHint: '箭头：调用方 → 被改方法',
     structViaImportManifest: '源码已引用',

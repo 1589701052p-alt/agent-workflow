@@ -8,12 +8,15 @@
 // Read a band top-to-bottom: "<changed method> ← <caller>, <caller>, …".
 // Manual layout (no dagre/elk dep); logic here so the xyflow component stays thin.
 
-import type { StructuralDiff, SymbolKind } from '@agent-workflow/shared'
+import type { StructuralDiff, SymbolKind, ChangeType } from '@agent-workflow/shared'
 
 export interface GraphNode {
   id: string
   label: string
   kind: 'changed' | 'caller'
+  /** add/modify/delete/rename — set for `kind: 'changed'` so the view can color
+   *  + badge it like the tree. Callers are existing code → undefined. */
+  changeType?: ChangeType
   x: number
   y: number
 }
@@ -57,12 +60,18 @@ export function labelFromSymbolId(id: string): string {
 }
 
 export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
-  // every changed symbol: id → {label, kind}.
-  const changed = new Map<string, { label: string; kind: SymbolKind }>()
+  // every changed symbol: id → {label, kind, changeType}.
+  const changed = new Map<string, { label: string; kind: SymbolKind; changeType: ChangeType }>()
   for (const f of diff.files) {
     for (const ch of f.changes) {
       const sym = ch.after ?? ch.before
-      if (sym !== undefined) changed.set(sym.id, { label: sym.qualifiedName, kind: sym.kind })
+      if (sym !== undefined) {
+        changed.set(sym.id, {
+          label: sym.qualifiedName,
+          kind: sym.kind,
+          changeType: ch.changeType,
+        })
+      }
     }
   }
 
@@ -75,14 +84,14 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
   for (const item of diff.impact) {
     if (item.callers.length === 0) continue
     banded.add(item.changedSymbolId)
-    const targetLabel =
-      changed.get(item.changedSymbolId)?.label ?? labelFromSymbolId(item.changedSymbolId)
+    const target = changed.get(item.changedSymbolId)
     const bandHeight = item.callers.length * ROW_H
     const targetY = y + Math.max(0, (bandHeight - NODE_H) / 2)
     nodes.push({
       id: item.changedSymbolId,
-      label: targetLabel,
+      label: target?.label ?? labelFromSymbolId(item.changedSymbolId),
       kind: 'changed',
+      changeType: target?.changeType ?? 'modified',
       x: COL_CHANGED_X,
       y: targetY,
     })
@@ -110,7 +119,14 @@ export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
   standalone.forEach(([id, v], idx) => {
     const col = idx % GRID_COLS
     const row = Math.floor(idx / GRID_COLS)
-    nodes.push({ id, label: v.label, kind: 'changed', x: col * GRID_W, y: gridY0 + row * ROW_H })
+    nodes.push({
+      id,
+      label: v.label,
+      kind: 'changed',
+      changeType: v.changeType,
+      x: col * GRID_W,
+      y: gridY0 + row * ROW_H,
+    })
   })
 
   return { nodes, edges }

@@ -967,7 +967,9 @@ export const enUS: Resources = {
     structBodyDeltaTitle: 'method body line changes (+added / −removed)',
     structGraphEmpty:
       'No graphable structural changes (only deps/fields changed) — see the summary cards & Tree view.',
-    structGraphLegendChanged: 'changed method',
+    structGraphLegendAdded: '+ added',
+    structGraphLegendModified: '~ modified',
+    structGraphLegendRemoved: '− removed',
     structGraphLegendCaller: 'caller (affected)',
     structGraphLegendHint: 'arrow: caller → changed method',
     structViaImportManifest: 'imported in code',

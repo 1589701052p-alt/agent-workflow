@@ -9591,15 +9591,33 @@ mark.comment-anchor[data-active='true'] {
   box-shadow: none;
 }
 .structure-graph .react-flow__node.structure-graph__node--changed {
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
-  border-color: var(--accent);
   color: var(--text);
   font-weight: 600;
+}
+/* change-type colors — match the tree badges (added=success, modified=#d99100,
+   removed=danger, renamed/moved=accent) */
+.structure-graph .react-flow__node.structure-graph__node--ct-added {
+  background: color-mix(in srgb, var(--success) 18%, var(--panel));
+  border-color: var(--success);
+}
+.structure-graph .react-flow__node.structure-graph__node--ct-modified {
+  background: color-mix(in srgb, #d99100 18%, var(--panel));
+  border-color: #d99100;
+}
+.structure-graph .react-flow__node.structure-graph__node--ct-removed {
+  background: color-mix(in srgb, var(--danger) 18%, var(--panel));
+  border-color: var(--danger);
+}
+.structure-graph .react-flow__node.structure-graph__node--ct-renamed,
+.structure-graph .react-flow__node.structure-graph__node--ct-moved {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-color: var(--accent);
 }
 .structure-graph .react-flow__node.structure-graph__node--caller {
   background: var(--panel);
   border-color: var(--border);
   color: var(--muted);
+  font-weight: 400;
 }
 .structure-graph .react-flow__edge-path {
   stroke: var(--muted);
@@ -9633,9 +9651,17 @@ mark.comment-anchor[data-active='true'] {
   border-radius: 3px;
   border: 1px solid var(--border);
 }
-.structure-graph__swatch--changed {
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
-  border-color: var(--accent);
+.structure-graph__swatch--ct-added {
+  background: color-mix(in srgb, var(--success) 18%, var(--panel));
+  border-color: var(--success);
+}
+.structure-graph__swatch--ct-modified {
+  background: color-mix(in srgb, #d99100 18%, var(--panel));
+  border-color: #d99100;
+}
+.structure-graph__swatch--ct-removed {
+  background: color-mix(in srgb, var(--danger) 18%, var(--panel));
+  border-color: var(--danger);
 }
 .structure-graph__swatch--caller {
   background: var(--panel);

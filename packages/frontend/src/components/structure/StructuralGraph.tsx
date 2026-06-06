@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css'
 import { useTranslation } from 'react-i18next'
 import type { StructuralDiff } from '@agent-workflow/shared'
 import { buildStructureGraph } from '@/lib/structureGraph'
+import { badgeSymbol } from '@/lib/structureView'
 
 export function StructuralGraph({ data }: { data: StructuralDiff }) {
   const { t } = useTranslation()
@@ -26,16 +27,22 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
     // The graph only shows changes that something else calls; none here.
     return <div className="muted structure-graph__empty">{t('tasks.structGraphEmpty')}</div>
   }
-  const nodes: Node[] = graph.nodes.map((n) => ({
-    id: n.id,
-    position: { x: n.x, y: n.y },
-    data: { label: n.label },
-    className: `structure-graph__node structure-graph__node--${n.kind}`,
-    draggable: false,
-    connectable: false,
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
-  }))
+  const nodes: Node[] = graph.nodes.map((n) => {
+    // Changed nodes carry a +/~/−/→ glyph + a change-type color class so add /
+    // modify / delete / rename read at a glance (like the tree badges).
+    const ctClass = n.changeType !== undefined ? ` structure-graph__node--ct-${n.changeType}` : ''
+    const label = n.changeType !== undefined ? `${badgeSymbol(n.changeType)} ${n.label}` : n.label
+    return {
+      id: n.id,
+      position: { x: n.x, y: n.y },
+      data: { label },
+      className: `structure-graph__node structure-graph__node--${n.kind}${ctClass}`,
+      draggable: false,
+      connectable: false,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+    }
+  })
   const edges: Edge[] = graph.edges.map((e) => ({
     id: e.id,
     source: e.source,
@@ -46,8 +53,16 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
     <div className="structure-graph-wrap">
       <div className="structure-graph__legend">
         <span className="structure-graph__legend-item">
-          <span className="structure-graph__swatch structure-graph__swatch--changed" />
-          {t('tasks.structGraphLegendChanged')}
+          <span className="structure-graph__swatch structure-graph__swatch--ct-added" />
+          {t('tasks.structGraphLegendAdded')}
+        </span>
+        <span className="structure-graph__legend-item">
+          <span className="structure-graph__swatch structure-graph__swatch--ct-modified" />
+          {t('tasks.structGraphLegendModified')}
+        </span>
+        <span className="structure-graph__legend-item">
+          <span className="structure-graph__swatch structure-graph__swatch--ct-removed" />
+          {t('tasks.structGraphLegendRemoved')}
         </span>
         <span className="structure-graph__legend-item">
           <span className="structure-graph__swatch structure-graph__swatch--caller" />
