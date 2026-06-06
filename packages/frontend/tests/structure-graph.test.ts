@@ -1,21 +1,20 @@
-// RFC-083 PR-F — pure blast-radius graph model. BANDED: one band per changed
-// method that has callers (method right, callers stacked left, edges caller →
-// method). Changed units with NO callers still appear (standalone grid) so the
-// graph is never blank when there are real changes — only non-graphable kinds
-// (fields/imports) yield an empty graph. Locks that semantic + the layout.
+// RFC-083 PR-F — class-collaboration graph model. A CARD = a class/file; it
+// lists its changed members (badged by change type) + caller members (methods
+// that call changed code elsewhere); edges run caller-card → changed-card. Locks
+// the containment grouping, change-type carry-through, and the impact edges.
 
 import { describe, expect, test } from 'vitest'
 import { computeSummary, type StructuralDiff, type SymbolNode } from '@agent-workflow/shared'
-import { buildStructureGraph, labelFromSymbolId } from '../src/lib/structureGraph'
+import { buildStructureGraph, fileBase } from '../src/lib/structureGraph'
 
-function node(id: string, qn: string): SymbolNode {
+function sym(filePath: string, qn: string, kind: SymbolNode['kind']): SymbolNode {
   return {
-    id,
-    kind: 'method',
-    name: qn.split('.').pop() ?? qn,
+    id: `${filePath}#${qn}:${kind}:1`,
+    kind,
+    name: qn.includes('.') ? (qn.split('.').pop() ?? qn) : qn,
     qualifiedName: qn,
     lang: 'typescript',
-    filePath: id.split('#')[0] ?? 'f',
+    filePath,
     confidence: 'extracted',
   }
 }
@@ -38,146 +37,158 @@ function diffWith(
   }
 }
 
-const svc = node('svc.ts#Svc.charge:method:2', 'Svc.charge')
-const fileWith = (...syms: SymbolNode[]): StructuralDiff['files'][number] => ({
-  filePath: syms[0]?.filePath ?? 'f',
+const file = (
+  filePath: string,
+  changes: StructuralDiff['files'][number]['changes'],
+): StructuralDiff['files'][number] => ({
+  filePath,
   lang: 'typescript',
   status: 'ok',
   edges: [],
   impact: [],
-  changes: syms.map((s) => ({ changeType: 'modified', kind: 'method', after: s })),
+  changes,
 })
 
-describe('labelFromSymbolId', () => {
-  test('extracts the qualifiedName segment', () => {
-    expect(labelFromSymbolId('svc.ts#Svc.charge:method:2')).toBe('Svc.charge')
-  })
-  test('falls back to the raw id when unparseable', () => {
-    expect(labelFromSymbolId('weird')).toBe('weird')
-  })
-})
-
-describe('buildStructureGraph', () => {
-  test('changed methods with NO callers still appear (standalone, no edges)', () => {
-    const g = buildStructureGraph(diffWith([fileWith(svc)], []))
-    expect(g.nodes).toHaveLength(1) // the changed method is shown
-    expect(g.nodes[0]?.kind).toBe('changed')
-    expect(g.nodes[0]?.label).toBe('Svc.charge')
-    expect(g.edges).toEqual([]) // no callers → no edges
-  })
-
-  test('changed nodes carry their changeType (added / modified / removed)', () => {
-    const added = node('a.ts#A.n:method:1', 'A.n')
-    const removed = node('a.ts#A.o:method:2', 'A.o')
-    const files: StructuralDiff['files'] = [
-      {
-        filePath: 'a.ts',
-        lang: 'typescript',
-        status: 'ok',
-        edges: [],
-        impact: [],
-        changes: [
-          { changeType: 'added', kind: 'method', after: added },
-          { changeType: 'removed', kind: 'method', before: removed },
-        ],
-      },
-    ]
-    const g = buildStructureGraph(diffWith(files, []))
-    const byLabel = new Map(g.nodes.map((n) => [n.label, n.changeType]))
-    expect(byLabel.get('A.n')).toBe('added')
-    expect(byLabel.get('A.o')).toBe('removed')
-  })
-
-  test('non-graphable kinds (field/import) produce no nodes → empty graph', () => {
-    const field: SymbolNode = {
-      ...svc,
-      id: 'm.py#C.x:field:1',
-      kind: 'field',
-      qualifiedName: 'C.x',
-    }
-    const g = buildStructureGraph(diffWith([fileWith(field)], []))
-    expect(g.nodes).toEqual([])
-  })
-
-  test('a band: changed method (right) + its callers (left), edges caller → method', () => {
+describe('buildStructureGraph — cards', () => {
+  test('a changed method becomes a member row inside its CLASS card', () => {
     const g = buildStructureGraph(
       diffWith(
-        [fileWith(svc)],
+        [
+          file('svc.ts', [
+            {
+              changeType: 'modified',
+              kind: 'method',
+              after: sym('svc.ts', 'OrderService.charge', 'method'),
+            },
+            {
+              changeType: 'added',
+              kind: 'method',
+              after: sym('svc.ts', 'OrderService.refund', 'method'),
+            },
+          ]),
+        ],
+        [],
+      ),
+    )
+    expect(g.cards).toHaveLength(1)
+    const card = g.cards[0]!
+    expect(card.title).toBe('OrderService') // grouped under the class
+    expect(card.isChanged).toBe(true)
+    expect(card.members.map((m) => `${m.changeType} ${m.label}`).sort()).toEqual([
+      'added refund',
+      'modified charge',
+    ])
+  })
+
+  test('a changed class sets the card changeType; top-level fn → a FILE card', () => {
+    const g = buildStructureGraph(
+      diffWith(
+        [
+          file('a.ts', [
+            { changeType: 'added', kind: 'class', after: sym('a.ts', 'Widget', 'class') },
+          ]),
+          file('util.ts', [
+            {
+              changeType: 'modified',
+              kind: 'function',
+              after: sym('util.ts', 'helper', 'function'),
+            },
+          ]),
+        ],
+        [],
+      ),
+    )
+    const widget = g.cards.find((c) => c.title === 'Widget')
+    expect(widget?.kind).toBe('class')
+    expect(widget?.changeType).toBe('added')
+    const util = g.cards.find((c) => c.title === 'util.ts')
+    expect(util?.kind).toBe('file') // top-level fn grouped under its file
+    expect(util?.members[0]?.label).toBe('helper')
+  })
+
+  test('impact adds a caller card + a caller→changed edge', () => {
+    const g = buildStructureGraph(
+      diffWith(
+        [
+          file('svc.ts', [
+            {
+              changeType: 'modified',
+              kind: 'method',
+              after: sym('svc.ts', 'Svc.charge', 'method'),
+            },
+          ]),
+        ],
         [
           {
-            changedSymbolId: 'svc.ts#Svc.charge:method:2',
+            changedSymbolId: 'svc.ts#Svc.charge:method:1',
             confidence: 'extracted',
             callers: [
               {
-                symbolId: 'order.ts#Order.pay:method:5',
-                filePath: 'order.ts',
-                range: { startLine: 5, endLine: 6 },
+                symbolId: 'ctrl.ts#Checkout.pay:method:3',
+                filePath: 'ctrl.ts',
+                range: { startLine: 3, endLine: 4 },
               },
+            ],
+          },
+        ],
+      ),
+    )
+    const checkout = g.cards.find((c) => c.title === 'Checkout')
+    expect(checkout).toBeDefined()
+    expect(checkout?.isChanged).toBe(false) // caller-only
+    expect(checkout?.members[0]).toMatchObject({ label: 'pay', role: 'caller' })
+    expect(g.edges).toHaveLength(1)
+    expect(g.edges[0]).toMatchObject({ source: 'ctrl.ts::Checkout', target: 'svc.ts::Svc' })
+  })
+
+  test('caller-only cards sit left of changed cards (blast-radius flow)', () => {
+    const g = buildStructureGraph(
+      diffWith(
+        [
+          file('svc.ts', [
+            {
+              changeType: 'modified',
+              kind: 'method',
+              after: sym('svc.ts', 'Svc.charge', 'method'),
+            },
+          ]),
+        ],
+        [
+          {
+            changedSymbolId: 'svc.ts#Svc.charge:method:1',
+            confidence: 'extracted',
+            callers: [
               {
-                symbolId: 'cart.ts#Cart.total:method:9',
-                filePath: 'cart.ts',
-                range: { startLine: 9, endLine: 10 },
+                symbolId: 'ctrl.ts#Checkout.pay:method:3',
+                filePath: 'ctrl.ts',
+                range: { startLine: 3, endLine: 4 },
               },
             ],
           },
         ],
       ),
     )
-    const target = g.nodes.find((n) => n.kind === 'changed')
-    const callers = g.nodes.filter((n) => n.kind === 'caller')
-    expect(target?.label).toBe('Svc.charge')
-    expect(callers.map((c) => c.label).sort()).toEqual(['Cart.total', 'Order.pay'])
-    // callers sit left of the changed method
-    for (const c of callers) expect(c.x).toBeLessThan(target!.x)
-    // every edge points caller → the changed method
-    expect(g.edges).toHaveLength(2)
-    for (const e of g.edges) expect(e.target).toBe('svc.ts#Svc.charge:method:2')
+    const caller = g.cards.find((c) => !c.isChanged)!
+    const changed = g.cards.find((c) => c.isChanged)!
+    expect(caller.x).toBeLessThan(changed.x)
   })
 
-  test('deep callers with no symbolId get a synthetic file:line node', () => {
+  test('only field/import changes → no cards (nothing graphable)', () => {
     const g = buildStructureGraph(
       diffWith(
-        [fileWith(svc)],
         [
-          {
-            changedSymbolId: 'svc.ts#Svc.charge:method:2',
-            confidence: 'extracted',
-            callers: [{ filePath: 'order.ts', range: { startLine: 7, endLine: 7 } }],
-          },
+          file('m.py', [
+            { changeType: 'added', kind: 'import', after: sym('m.py', 'os', 'import') },
+          ]),
         ],
+        [],
       ),
     )
-    const caller = g.nodes.find((n) => n.kind === 'caller')
-    expect(caller?.label).toBe('order.ts') // falls back to the file path
-    expect(g.edges[0]?.source).toContain('order.ts:7')
+    expect(g.cards).toEqual([])
   })
 
-  test('multiple targets → stacked bands (later band sits lower)', () => {
-    const a = node('a.ts#A.f:method:1', 'A.f')
-    const b = node('b.ts#B.g:method:1', 'B.g')
-    const g = buildStructureGraph(
-      diffWith(
-        [fileWith(a), fileWith(b)],
-        [
-          {
-            changedSymbolId: 'a.ts#A.f:method:1',
-            confidence: 'extracted',
-            callers: [
-              { symbolId: 'x#X.m:method:1', filePath: 'x.ts', range: { startLine: 1, endLine: 2 } },
-            ],
-          },
-          {
-            changedSymbolId: 'b.ts#B.g:method:1',
-            confidence: 'extracted',
-            callers: [
-              { symbolId: 'y#Y.m:method:1', filePath: 'y.ts', range: { startLine: 1, endLine: 2 } },
-            ],
-          },
-        ],
-      ),
-    )
-    const targets = g.nodes.filter((n) => n.kind === 'changed')
-    expect(targets).toHaveLength(2)
-    expect(targets[0]!.y).toBeLessThan(targets[1]!.y) // second band below the first
+  test('fileBase strips the directory', () => {
+    expect(fileBase('src/a/b.ts')).toBe('b.ts')
+    expect(fileBase('b.ts')).toBe('b.ts')
   })
 })

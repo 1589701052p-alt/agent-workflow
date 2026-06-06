@@ -1,133 +1,230 @@
-// RFC-083 PR-F — pure model for the read-only blast-radius graph.
-//
-// The graph shows every changed code unit (class/method/function/…). Where a
-// changed method HAS callers it's drawn as a BAND — the method on the right with
-// its callers stacked to its left, arrows caller → method ("who is affected").
-// Changed units with no detected callers are still shown, as a standalone grid
-// below the bands (so the graph is never blank just because nothing calls them).
-// Read a band top-to-bottom: "<changed method> ← <caller>, <caller>, …".
-// Manual layout (no dagre/elk dep); logic here so the xyflow component stays thin.
+// RFC-083 PR-F — pure model for the structural-diff graph, redesigned as a
+// CLASS-COLLABORATION DIAGRAM (not scattered one-box-per-symbol). The unit is a
+// CARD = a class / file (container). Each card lists:
+//   - its CHANGED members (methods/fields), colored + badged by change type;
+//   - its CALLER members (methods that call changed code elsewhere), neutral.
+// Edges run card → card when a method in one card calls a changed member in
+// another (call direction). So at a glance you read: which classes changed, what
+// changed inside each, and how the classes depend on each other. Containment
+// comes from `qualifiedName` (`OrderService.charge` → class `OrderService`); no
+// backend change needed. Manual layout (no dagre/elk dep); logic here so the
+// xyflow component stays a thin adapter.
 
 import type { StructuralDiff, SymbolKind, ChangeType } from '@agent-workflow/shared'
 
-export interface GraphNode {
-  id: string
-  label: string
-  kind: 'changed' | 'caller'
-  /** add/modify/delete/rename — set for `kind: 'changed'` so the view can color
-   *  + badge it like the tree. Callers are existing code → undefined. */
-  changeType?: ChangeType
-  x: number
-  y: number
-}
-export interface GraphEdge {
-  id: string
-  source: string
-  target: string
-}
-export interface StructureGraph {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-}
-
-// Kinds worth a node — the structural units. Fields/imports/constants are noise.
-const GRAPH_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
+const CONTAINER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
   'class',
   'interface',
   'trait',
   'struct',
   'enum',
   'object',
-  'function',
+  'namespace',
+  'module',
+])
+const MEMBER_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
   'method',
+  'function',
   'constructor',
+  'field',
+  'property',
+  'constant',
 ])
 
-const COL_CALLER_X = 0
-const COL_CHANGED_X = 320
-const ROW_H = 60 // vertical pitch between stacked callers / grid rows
-const NODE_H = 40 // approx node height (for centering the target in its band)
-const BAND_GAP = 28 // blank space between bands
-const GRID_COLS = 3
-const GRID_W = 210
-const Y0 = 8
+export type MemberRole = 'changed' | 'caller'
+export interface GraphMember {
+  id: string
+  label: string
+  kind: SymbolKind
+  /** set for role 'changed' */
+  changeType?: ChangeType
+  role: MemberRole
+}
+export type CardKind = SymbolKind | 'file'
+export interface GraphCard {
+  id: string
+  title: string
+  file: string
+  kind: CardKind
+  /** set when the container symbol itself was added/modified/removed/renamed */
+  changeType?: ChangeType
+  /** true when the card holds changed members or itself changed (vs caller-only) */
+  isChanged: boolean
+  members: GraphMember[]
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export interface GraphCardEdge {
+  id: string
+  source: string
+  target: string
+}
+export interface StructureGraph {
+  cards: GraphCard[]
+  edges: GraphCardEdge[]
+}
 
-/** `${filePath}#${qualifiedName}:${kind}:${line}` → qualifiedName (fallback id). */
-export function labelFromSymbolId(id: string): string {
+// ---- id / name parsing (`${filePath}#${qualifiedName}:${kind}:${line}`) ----
+export function fileBase(p: string): string {
+  return p.split('/').pop() ?? p
+}
+function qnFromId(id: string): string {
   const afterHash = id.split('#')[1]
   if (afterHash === undefined) return id
   return afterHash.split(':')[0] ?? id
 }
+function fileFromId(id: string): string {
+  return id.split('#')[0] ?? id
+}
+function leafOf(qualifiedName: string): string {
+  const idx = qualifiedName.lastIndexOf('.')
+  return idx >= 0 ? qualifiedName.slice(idx + 1) : qualifiedName
+}
+
+/** The card a member belongs to: its enclosing class, or the file if top-level. */
+function memberContainer(
+  filePath: string,
+  qualifiedName: string,
+): { key: string; title: string; kind: CardKind } {
+  const idx = qualifiedName.lastIndexOf('.')
+  if (idx > 0) {
+    const container = qualifiedName.slice(0, idx)
+    return { key: `${filePath}::${container}`, title: container, kind: 'class' }
+  }
+  return { key: `${filePath}::<file>`, title: fileBase(filePath), kind: 'file' }
+}
+
+// ---- layout ----
+const CARD_W = 240
+const GAP_X = 56
+const GAP_Y = 28
+const HEADER_H = 34
+const ROW_H = 22
+const PAD_V = 12
+
+function layoutCards(cards: GraphCard[]): void {
+  for (const c of cards) {
+    c.w = CARD_W
+    c.h = HEADER_H + c.members.length * ROW_H + PAD_V
+  }
+  // Two zones: caller-only cards (left), changed cards (right, up to 2 columns).
+  const callers = cards.filter((c) => !c.isChanged)
+  const changed = cards.filter((c) => c.isChanged)
+  // left column
+  let leftY = 0
+  for (const c of callers) {
+    c.x = 0
+    c.y = leftY
+    leftY += c.h + GAP_Y
+  }
+  // right zone: masonry into N columns (1 col if no callers → keep it compact)
+  const rightX0 = callers.length > 0 ? CARD_W + GAP_X : 0
+  const cols = Math.min(2, Math.max(1, changed.length))
+  const colY = new Array<number>(cols).fill(0)
+  for (const c of changed) {
+    let col = 0
+    for (let i = 1; i < cols; i += 1) if ((colY[i] ?? 0) < (colY[col] ?? 0)) col = i
+    c.x = rightX0 + col * (CARD_W + GAP_X)
+    c.y = colY[col] ?? 0
+    colY[col] = (colY[col] ?? 0) + c.h + GAP_Y
+  }
+}
 
 export function buildStructureGraph(diff: StructuralDiff): StructureGraph {
-  // every changed symbol: id → {label, kind, changeType}.
-  const changed = new Map<string, { label: string; kind: SymbolKind; changeType: ChangeType }>()
+  const cards = new Map<string, GraphCard>()
+  const ensureCard = (key: string, title: string, file: string, kind: CardKind): GraphCard => {
+    let c = cards.get(key)
+    if (c === undefined) {
+      c = { id: key, title, file, kind, isChanged: false, members: [], x: 0, y: 0, w: 0, h: 0 }
+      cards.set(key, c)
+    }
+    return c
+  }
+
+  // 1) changed symbols → cards + changed member rows.
+  const changedSymbolCard = new Map<string, string>() // changed symbol id → card id
   for (const f of diff.files) {
     for (const ch of f.changes) {
       const sym = ch.after ?? ch.before
-      if (sym !== undefined) {
-        changed.set(sym.id, {
-          label: sym.qualifiedName,
+      if (sym === undefined) continue
+      if (CONTAINER_KINDS.has(sym.kind)) {
+        const card = ensureCard(
+          `${sym.filePath}::${sym.qualifiedName}`,
+          sym.qualifiedName,
+          sym.filePath,
+          sym.kind,
+        )
+        card.changeType = ch.changeType
+        card.isChanged = true
+        changedSymbolCard.set(sym.id, card.id)
+      } else if (MEMBER_KINDS.has(sym.kind)) {
+        const c = memberContainer(sym.filePath, sym.qualifiedName)
+        const card = ensureCard(c.key, c.title, sym.filePath, c.kind)
+        card.isChanged = true
+        card.members.push({
+          id: sym.id,
+          label: sym.name,
           kind: sym.kind,
           changeType: ch.changeType,
+          role: 'changed',
         })
+        changedSymbolCard.set(sym.id, card.id)
       }
     }
   }
 
-  const nodes: GraphNode[] = []
-  const edges: GraphEdge[] = []
-  const banded = new Set<string>()
-  let y = Y0
-
-  // 1) bands — changed methods that have callers.
+  // 2) impact → caller cards (+ caller member rows) + card→card edges.
+  const edgeKeys = new Set<string>()
+  const edges: GraphCardEdge[] = []
   for (const item of diff.impact) {
-    if (item.callers.length === 0) continue
-    banded.add(item.changedSymbolId)
-    const target = changed.get(item.changedSymbolId)
-    const bandHeight = item.callers.length * ROW_H
-    const targetY = y + Math.max(0, (bandHeight - NODE_H) / 2)
-    nodes.push({
-      id: item.changedSymbolId,
-      label: target?.label ?? labelFromSymbolId(item.changedSymbolId),
-      kind: 'changed',
-      changeType: target?.changeType ?? 'modified',
-      x: COL_CHANGED_X,
-      y: targetY,
-    })
-    item.callers.forEach((c, i) => {
-      const baseId = c.symbolId ?? `${c.filePath}:${c.range.startLine}`
-      const callerNodeId = `${item.changedSymbolId}::${baseId}`
-      const callerLabel = c.symbolId !== undefined ? labelFromSymbolId(c.symbolId) : c.filePath
-      nodes.push({
-        id: callerNodeId,
-        label: callerLabel,
-        kind: 'caller',
-        x: COL_CALLER_X,
-        y: y + i * ROW_H,
-      })
-      edges.push({ id: callerNodeId, source: callerNodeId, target: item.changedSymbolId })
-    })
-    y += bandHeight + BAND_GAP
+    const targetCardId = changedSymbolCard.get(item.changedSymbolId)
+    if (targetCardId === undefined) continue
+    for (const caller of item.callers) {
+      let callerKey: string
+      let callerTitle: string
+      let callerFile: string
+      let callerKind: CardKind
+      let callerLabel: string | null
+      if (caller.symbolId !== undefined) {
+        const file = fileFromId(caller.symbolId)
+        const qn = qnFromId(caller.symbolId)
+        const c = memberContainer(file, qn)
+        callerKey = c.key
+        callerTitle = c.title
+        callerFile = file
+        callerKind = c.kind
+        callerLabel = leafOf(qn)
+      } else {
+        callerKey = `${caller.filePath}::<file>`
+        callerTitle = fileBase(caller.filePath)
+        callerFile = caller.filePath
+        callerKind = 'file'
+        callerLabel = null
+      }
+      if (callerKey === targetCardId) continue // call within the same card — skip
+
+      const callerCard = ensureCard(callerKey, callerTitle, callerFile, callerKind)
+      if (callerLabel !== null && !callerCard.members.some((m) => m.label === callerLabel)) {
+        callerCard.members.push({
+          id: `${callerKey}::${callerLabel}`,
+          label: callerLabel,
+          kind: 'method',
+          role: 'caller',
+        })
+      }
+      const ek = `${callerKey}->${targetCardId}`
+      if (!edgeKeys.has(ek)) {
+        edgeKeys.add(ek)
+        edges.push({ id: ek, source: callerKey, target: targetCardId })
+      }
+    }
   }
 
-  // 2) standalone — changed units with no callers, in a grid below the bands.
-  const standalone = [...changed.entries()].filter(
-    ([id, v]) => !banded.has(id) && GRAPH_KINDS.has(v.kind),
-  )
-  const gridY0 = nodes.length > 0 ? y + BAND_GAP : Y0
-  standalone.forEach(([id, v], idx) => {
-    const col = idx % GRID_COLS
-    const row = Math.floor(idx / GRID_COLS)
-    nodes.push({
-      id,
-      label: v.label,
-      kind: 'changed',
-      changeType: v.changeType,
-      x: col * GRID_W,
-      y: gridY0 + row * ROW_H,
-    })
-  })
-
-  return { nodes, edges }
+  const list = [...cards.values()]
+  // changed cards first (more important), then by title — stable + readable.
+  list.sort((a, b) => Number(b.isChanged) - Number(a.isChanged) || a.title.localeCompare(b.title))
+  layoutCards(list)
+  return { cards: list, edges }
 }

@@ -1,48 +1,86 @@
-// RFC-083 PR-F — read-only blast-radius graph (xyflow). Renders the banded model
-// from buildStructureGraph: one band per changed method that has callers, the
-// method on the right with its callers stacked to its left, arrows pointing
-// caller → method (call direction). A legend explains the two node colors. Fully
-// non-interactive — it's a visualization, not an editor. Graph logic lives in
-// lib/structureGraph (unit-tested); this is a thin adapter.
+// RFC-083 PR-F — read-only class-collaboration diagram (xyflow). Each node is a
+// CARD (class / file) rendered by CardNode: a header (kind + name, change badge)
+// over a list of member rows — changed members colored + badged, caller members
+// muted. Edges run caller-card → changed-card. Fully non-interactive. All model
+// logic is in lib/structureGraph (unit-tested); this is the xyflow adapter.
 
 import {
   ReactFlow,
   ReactFlowProvider,
   Background,
-  MarkerType,
+  Handle,
   Position,
+  MarkerType,
   type Node,
   type Edge,
+  type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useTranslation } from 'react-i18next'
 import type { StructuralDiff } from '@agent-workflow/shared'
-import { buildStructureGraph } from '@/lib/structureGraph'
+import { buildStructureGraph, type GraphCard } from '@/lib/structureGraph'
 import { badgeSymbol } from '@/lib/structureView'
+
+function CardNode({ data }: NodeProps) {
+  const card = data.card as GraphCard
+  const ctClass = card.changeType !== undefined ? ` sg-card--ct-${card.changeType}` : ''
+  const changedClass = card.isChanged ? ' sg-card--changed' : ' sg-card--caller'
+  return (
+    <div className={`sg-card${changedClass}${ctClass}`} style={{ width: card.w }}>
+      <Handle type="target" position={Position.Left} isConnectable={false} />
+      <div className="sg-card__header">
+        <span className="sg-card__kind">{card.kind}</span>
+        <span className="sg-card__title" title={`${card.title} · ${card.file}`}>
+          {card.title}
+        </span>
+        {card.changeType !== undefined && (
+          <span className="sg-card__badge">{badgeSymbol(card.changeType)}</span>
+        )}
+      </div>
+      {card.members.length > 0 && (
+        <ul className="sg-card__members">
+          {card.members.map((m) => (
+            <li
+              key={m.id}
+              className={
+                m.role === 'changed'
+                  ? `sg-card__member sg-card__member--ct-${m.changeType}`
+                  : 'sg-card__member sg-card__member--caller'
+              }
+            >
+              <span className="sg-card__member-badge">
+                {m.role === 'changed' && m.changeType !== undefined
+                  ? badgeSymbol(m.changeType)
+                  : '·'}
+              </span>
+              <span className="sg-card__member-name">{m.label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Handle type="source" position={Position.Right} isConnectable={false} />
+    </div>
+  )
+}
+
+const NODE_TYPES = { card: CardNode }
 
 export function StructuralGraph({ data }: { data: StructuralDiff }) {
   const { t } = useTranslation()
   const graph = buildStructureGraph(data)
-  if (graph.nodes.length === 0) {
-    // The graph only shows changes that something else calls; none here.
+  if (graph.cards.length === 0) {
     return <div className="muted structure-graph__empty">{t('tasks.structGraphEmpty')}</div>
   }
-  const nodes: Node[] = graph.nodes.map((n) => {
-    // Changed nodes carry a +/~/−/→ glyph + a change-type color class so add /
-    // modify / delete / rename read at a glance (like the tree badges).
-    const ctClass = n.changeType !== undefined ? ` structure-graph__node--ct-${n.changeType}` : ''
-    const label = n.changeType !== undefined ? `${badgeSymbol(n.changeType)} ${n.label}` : n.label
-    return {
-      id: n.id,
-      position: { x: n.x, y: n.y },
-      data: { label },
-      className: `structure-graph__node structure-graph__node--${n.kind}${ctClass}`,
-      draggable: false,
-      connectable: false,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    }
-  })
+  const nodes: Node[] = graph.cards.map((c) => ({
+    id: c.id,
+    type: 'card',
+    position: { x: c.x, y: c.y },
+    data: { card: c },
+    draggable: false,
+    connectable: false,
+    width: c.w,
+    height: c.h,
+  }))
   const edges: Edge[] = graph.edges.map((e) => ({
     id: e.id,
     source: e.source,
@@ -75,11 +113,12 @@ export function StructuralGraph({ data }: { data: StructuralDiff }) {
           <ReactFlow
             nodes={nodes}
             edges={edges}
+            nodeTypes={NODE_TYPES}
             nodesDraggable={false}
             nodesConnectable={false}
             elementsSelectable={false}
             fitView
-            minZoom={0.2}
+            minZoom={0.15}
             proOptions={{ hideAttribution: true }}
           >
             <Background />
