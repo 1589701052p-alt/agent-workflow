@@ -9603,6 +9603,66 @@ mark.comment-anchor[data-active='true'] {
   padding: 4px 8px;
   font-size: 12px;
 }
+/* RFC-085 — call-chain top bar (root + tree/sequence toggle) */
+.callchain__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.callchain__mode {
+  flex: none;
+}
+.callchain__sequence {
+  overflow: auto;
+}
+/* RFC-085 — sequence diagram (custom SVG) */
+.seqdiag {
+  overflow: auto;
+  padding: 4px;
+}
+.seqdiag__head {
+  fill: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  stroke: var(--border);
+}
+.seqdiag__head-label {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.seqdiag__lifeline {
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+.seqdiag__life--unresolved .seqdiag__head {
+  fill: color-mix(in srgb, var(--text) 6%, transparent);
+  opacity: 0.6;
+}
+.seqdiag__line {
+  stroke: var(--text);
+  stroke-width: 1.4;
+}
+.seqdiag__arrowhead {
+  fill: var(--text);
+}
+.seqdiag__msg-label {
+  font-size: 11px;
+  fill: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+}
+.seqdiag__msg--external .seqdiag__line {
+  stroke-dasharray: 4 2;
+  opacity: 0.7;
+}
+.seqdiag__msg--unresolved {
+  opacity: 0.5;
+}
+.seqdiag__msg--unresolved .seqdiag__line {
+  stroke-dasharray: 2 2;
+}
 .structure__dep-eco {
   color: var(--muted, #6b7280);
 }

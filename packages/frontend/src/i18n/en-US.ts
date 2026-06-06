@@ -976,6 +976,10 @@ export const enUS: Resources = {
     structCallTruncated: 'truncated',
     structCallExpand: 'expand',
     structCallCollapse: 'collapse',
+    structCallMode: 'View',
+    structCallModeTree: 'Call tree',
+    structCallModeSequence: 'Sequence',
+    structSeqTitle: 'Call-chain sequence diagram',
     structBodyDeltaTitle: 'method body line changes (+added / −removed)',
     structGraphEmpty:
       'No graphable structural changes (only deps/fields changed) — see the summary cards & Tree view.',

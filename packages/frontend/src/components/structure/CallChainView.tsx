@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next'
 import type { CallTarget } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { expandState, type ExpandState } from '@/lib/callChain'
+import { buildSequence, type SeqCallNode } from '@/lib/sequence'
+import { SequenceDiagram } from './SequenceDiagram'
 import { LoadingState } from '@/components/LoadingState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { EmptyState } from '@/components/EmptyState'
@@ -20,20 +22,125 @@ export interface CallChainRoot {
   label: string
 }
 
+type ChainMode = 'tree' | 'sequence'
+
 export function CallChainView({ taskId, root }: { taskId: string; root: CallChainRoot | null }) {
   const { t } = useTranslation()
+  const [mode, setMode] = useState<ChainMode>('tree')
   if (root === null) {
     return <EmptyState title={t('tasks.structCallPick')} />
   }
   return (
     <div className="callchain" data-testid="call-chain">
-      <div className="callchain__root">
-        <span className="callchain__root-glyph" aria-hidden="true">
-          ⎇
-        </span>
-        <span className="callchain__root-label">{root.label}</span>
+      <div className="callchain__top">
+        <div className="callchain__root">
+          <span className="callchain__root-glyph" aria-hidden="true">
+            ⎇
+          </span>
+          <span className="callchain__root-label">{root.label}</span>
+        </div>
+        <div
+          className="segmented callchain__mode"
+          role="radiogroup"
+          aria-label={t('tasks.structCallMode')}
+        >
+          {(['tree', 'sequence'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={mode === m}
+              className={`segmented__option ${mode === m ? 'segmented__option--active' : ''}`}
+              onClick={() => setMode(m)}
+            >
+              {t(m === 'tree' ? 'tasks.structCallModeTree' : 'tasks.structCallModeSequence')}
+            </button>
+          ))}
+        </div>
       </div>
-      <CallLevel taskId={taskId} parentRef={root.ref} ancestors={new Set([root.ref])} depth={1} />
+      {mode === 'tree' ? (
+        <CallLevel taskId={taskId} parentRef={root.ref} ancestors={new Set([root.ref])} depth={1} />
+      ) : (
+        <SequencePane taskId={taskId} root={root} />
+      )}
+    </div>
+  )
+}
+
+/** Owner-class lifeline id for a method ref (`file#A.b` → `file::A`). */
+function rootClassOf(ref: string): string {
+  const hash = ref.indexOf('#')
+  const file = hash < 0 ? ref : ref.slice(0, hash)
+  const qn = hash < 0 ? ref : ref.slice(hash + 1)
+  const dot = qn.lastIndexOf('.')
+  return `${file}::${dot > 0 ? qn.slice(0, dot) : qn}`
+}
+
+const SEQ_MAX_NODES = 80
+const SEQ_MAX_DEPTH = 8
+
+/** Eagerly (but bounded) walk the chain into a SeqCallNode tree for the diagram. */
+async function fetchChainTree(
+  taskId: string,
+  rootRef: string,
+  signal: AbortSignal | undefined,
+): Promise<{ tree: SeqCallNode[]; truncated: boolean }> {
+  let count = 0
+  let truncated = false
+  const visit = async (
+    ref: string,
+    ancestors: ReadonlySet<string>,
+    depth: number,
+  ): Promise<SeqCallNode[]> => {
+    const res = await api.get<{ targets: CallTarget[] }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/call-targets?methodRef=${encodeURIComponent(ref)}`,
+      undefined,
+      signal,
+    )
+    const out: SeqCallNode[] = []
+    for (const tg of (res.targets ?? []).slice().sort((a, b) => a.order - b.order)) {
+      if (count >= SEQ_MAX_NODES) {
+        truncated = true
+        break
+      }
+      count += 1
+      let children: SeqCallNode[] = []
+      if (
+        tg.resolution === 'resolved' &&
+        tg.ref !== undefined &&
+        !ancestors.has(tg.ref) &&
+        depth < SEQ_MAX_DEPTH
+      ) {
+        children = await visit(tg.ref, new Set([...ancestors, tg.ref]), depth + 1)
+      }
+      out.push({
+        ownerClass: tg.ownerClass ?? null,
+        method: tg.label,
+        resolution: tg.resolution,
+        children,
+      })
+    }
+    return out
+  }
+  const tree = await visit(rootRef, new Set([rootRef]), 0)
+  return { tree, truncated }
+}
+
+function SequencePane({ taskId, root }: { taskId: string; root: CallChainRoot }) {
+  const { t } = useTranslation()
+  const q = useQuery({
+    queryKey: ['chainTree', taskId, root.ref],
+    queryFn: ({ signal }) => fetchChainTree(taskId, root.ref, signal),
+  })
+  if (q.isLoading) return <LoadingState />
+  if (q.isError) return <ErrorBanner error={q.error} />
+  const model = buildSequence(rootClassOf(root.ref), q.data?.tree ?? [])
+  return (
+    <div className="callchain__sequence">
+      {q.data?.truncated === true && (
+        <div className="callchain__empty muted">{t('tasks.structCallTruncated')}</div>
+      )}
+      <SequenceDiagram model={model} />
     </div>
   )
 }
