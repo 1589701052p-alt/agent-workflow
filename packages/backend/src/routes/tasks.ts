@@ -43,6 +43,7 @@ import {
   startTask,
 } from '@/services/task'
 import { getTaskStructuralDiff } from '@/services/structuralDiff/service'
+import type { ResolvedDeepConfig } from '@/services/structuralDiff/deep/service'
 import { structuralScopeSchema } from '@agent-workflow/shared'
 import {
   applyUploadsToWorktree,
@@ -78,6 +79,20 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
     // config unreadable — fall back to default PATH lookup
   }
   return undefined
+}
+
+/** RFC-083: resolve deep-mode indexer path overrides + timeout from settings.
+ *  Unreadable config → PATH lookup + default timeout. */
+function resolveStructuralDeepConfig(configPath: string): ResolvedDeepConfig {
+  try {
+    const cfg = loadConfig(configPath)
+    return {
+      overrides: cfg.structuralDeepIndexers,
+      timeoutMs: cfg.structuralDeepTimeoutMs ?? 120_000,
+    }
+  } catch {
+    return { timeoutMs: 120_000 }
+  }
 }
 
 /**
@@ -289,8 +304,7 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     return c.json(
       await getTaskStructuralDiff(deps.db, c.req.param('id'), scope, nodeRunId, {
         mode,
-        // v1: indexers resolved from PATH; settings-path overrides are a follow-up.
-        deepCfg: mode === 'deep' ? { timeoutMs: 120_000 } : undefined,
+        deepCfg: mode === 'deep' ? resolveStructuralDeepConfig(deps.configPath) : undefined,
       }),
     )
   })

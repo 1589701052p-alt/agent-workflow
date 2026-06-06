@@ -16,6 +16,7 @@ import { nodeRuns } from '@/db/schema'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { computeSummary, type StructuralDiff, type StructuralScope } from '@agent-workflow/shared'
 import { getTask } from '@/services/task'
+import { WrapperProgressSchema } from '@/services/wrapperProgress'
 import { computeFromWorktree, computeBetweenRefs } from './gitBackend'
 import { mergeStructuralDiffs } from './assemble'
 import { resolveNodeScope } from './refSelect'
@@ -60,13 +61,6 @@ export async function getTaskStructuralDiff(
   nodeRunId?: string,
   deepOpts?: DeepOpts,
 ): Promise<StructuralDiff> {
-  if (scope === 'wrapper') {
-    throw new ValidationError(
-      'structural-scope-unsupported',
-      `structural-diff scope 'wrapper' is not yet supported`,
-    )
-  }
-
   const task = await getTask(db, taskId)
   if (task === null) {
     throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
@@ -74,6 +68,9 @@ export async function getTaskStructuralDiff(
 
   if (scope === 'node') {
     return getNodeStructuralDiff(db, task, nodeRunId, deepOpts)
+  }
+  if (scope === 'wrapper') {
+    return getWrapperStructuralDiff(db, task, nodeRunId, deepOpts)
   }
 
   if (task.repoCount === 1) {
@@ -177,10 +174,18 @@ async function getNodeStructuralDiff(
       id: nodeRuns.id,
       preSnapshot: nodeRuns.preSnapshot,
       startedAt: nodeRuns.startedAt,
+      wrapperProgressJson: nodeRuns.wrapperProgressJson,
     })
     .from(nodeRuns)
     .where(eq(nodeRuns.taskId, task.id))
     .orderBy(asc(nodeRuns.startedAt), asc(nodeRuns.id))
+
+  // A git-wrapper node selected in the per-node picker → use its recorded
+  // baseline (the wrapper's diff is baseline → worktree, not a snapshot pair).
+  const target = rows.find((r) => r.id === nodeRunId)
+  if (target !== undefined && parseWrapperGitBaseline(target.wrapperProgressJson) !== null) {
+    return getWrapperStructuralDiff(db, task, nodeRunId, deepOpts)
+  }
 
   const res = resolveNodeScope(rows, nodeRunId)
   if (res.kind === 'not-found') {
@@ -232,9 +237,10 @@ function emptyNodeDiff(
   nodeRunId: string,
   degradedReason: string,
   status: StructuralDiff['status'] = 'ok',
+  scope: StructuralScope = 'node',
 ): StructuralDiff {
   return {
-    scope: 'node',
+    scope,
     taskId,
     nodeRunId,
     fromRef: '',
@@ -246,5 +252,82 @@ function emptyNodeDiff(
     dependencyChanges: [],
     impact: [],
     summary: computeSummary([], []),
+  }
+}
+
+/** wrapper-git baseline commit (the HEAD captured before the inner scope), or
+ *  null when the node isn't a git wrapper / has no recorded baseline. */
+export function parseWrapperGitBaseline(json: string | null): string | null {
+  if (json === null || json === '') return null
+  try {
+    const parsed = WrapperProgressSchema.safeParse(JSON.parse(json))
+    if (!parsed.success || parsed.data.kind !== 'git') return null
+    const baseline = parsed.data.baseline
+    return baseline !== undefined && baseline !== '' ? baseline : null
+  } catch {
+    return null
+  }
+}
+
+/** Per-wrapper structural diff: what did a git-wrapper's inner scope change?
+ *  fromRef = the wrapper's recorded baseline commit; toRef = the worktree. */
+async function getWrapperStructuralDiff(
+  db: DbClient,
+  task: ResolvedTask,
+  nodeRunId: string | undefined,
+  deepOpts?: DeepOpts,
+): Promise<StructuralDiff> {
+  if (nodeRunId === undefined || nodeRunId === '') {
+    throw new ValidationError(
+      'structural-node-run-required',
+      `structural-diff scope 'wrapper' requires a 'nodeRunId' query param`,
+    )
+  }
+  if (task.repoCount !== 1) {
+    throw new ValidationError(
+      'structural-wrapper-scope-multi-repo-unsupported',
+      `per-wrapper structural diff is single-repo only in v1`,
+    )
+  }
+  const row = (
+    await db
+      .select({ wrapperProgressJson: nodeRuns.wrapperProgressJson })
+      .from(nodeRuns)
+      .where(eq(nodeRuns.id, nodeRunId))
+      .limit(1)
+  )[0]
+  if (row === undefined) {
+    throw new NotFoundError(
+      'node-run-not-found',
+      `node run '${nodeRunId}' not found in task '${task.id}'`,
+    )
+  }
+  const baseline = parseWrapperGitBaseline(row.wrapperProgressJson)
+  if (baseline === null) {
+    throw new ValidationError(
+      'structural-wrapper-not-git',
+      `node run '${nodeRunId}' is not a git-wrapper with a recorded baseline commit`,
+    )
+  }
+  if (!existsSync(task.worktreePath)) {
+    throw new DomainError(
+      'task-worktree-missing',
+      `worktree '${task.worktreePath}' does not exist; cannot compute structural diff`,
+      410,
+    )
+  }
+  const worktreePath = task.worktreePath
+  try {
+    return await withDeep(deepOpts, worktreePath, () =>
+      computeFromWorktree({
+        taskId: task.id,
+        scope: 'wrapper',
+        nodeRunId,
+        worktreePath,
+        fromRef: baseline,
+      }),
+    )
+  } catch {
+    return emptyNodeDiff(task.id, nodeRunId, 'snapshot-pruned', 'pruned', 'wrapper')
   }
 }

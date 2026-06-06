@@ -75,6 +75,13 @@ export function parseScip(bytes: Uint8Array): ScipGraph {
   return { documents, bySymbol: buildSymbolIndex(documents) }
 }
 
+/** Merge several SCIP graphs (one per language indexer) into one, rebuilding the
+ *  symbol index over the combined documents. */
+export function mergeScipGraphs(graphs: ScipGraph[]): ScipGraph {
+  const documents = graphs.flatMap((g) => g.documents)
+  return { documents, bySymbol: buildSymbolIndex(documents) }
+}
+
 export function buildSymbolIndex(documents: ScipDocument[]): ScipGraph['bySymbol'] {
   const m = new Map<string, Array<{ doc: string; occ: ScipOccurrence }>>()
   for (const d of documents) {

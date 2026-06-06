@@ -87,6 +87,73 @@ describe('computeDeepStructuralDiff', () => {
     expect(out.impact[0]?.callers.map((c) => c.filePath)).toEqual(['order.ts'])
   })
 
+  test('multi-language diff: runs both indexers, merges graphs, impact spans both', async () => {
+    const tsNode: SymbolNode = { ...chargeNode, id: 'svc.ts#A.foo:method:2', filePath: 'svc.ts' }
+    const pyNode: SymbolNode = {
+      ...chargeNode,
+      id: 'mod.py#B.bar:method:2',
+      filePath: 'mod.py',
+      lang: 'python',
+    }
+    const files = [
+      {
+        filePath: 'svc.ts',
+        lang: 'typescript' as const,
+        status: 'ok' as const,
+        edges: [],
+        impact: [],
+        changes: [{ changeType: 'modified' as const, kind: 'method' as const, after: tsNode }],
+      },
+      {
+        filePath: 'mod.py',
+        lang: 'python' as const,
+        status: 'ok' as const,
+        edges: [],
+        impact: [],
+        changes: [{ changeType: 'modified' as const, kind: 'method' as const, after: pyNode }],
+      },
+    ]
+    const baseline: StructuralDiff = {
+      ...baselineDiff(),
+      files,
+      summary: computeSummary(files, []),
+    }
+    const tsBytes = encodeScipFixture([
+      {
+        relativePath: 'svc.ts',
+        occurrences: [{ symbol: 'TS#foo', range: [1, 0, 5], isDefinition: true }],
+      },
+      {
+        relativePath: 'caller.ts',
+        occurrences: [{ symbol: 'TS#foo', range: [3, 0, 5], isDefinition: false }],
+      },
+    ])
+    const pyBytes = encodeScipFixture([
+      {
+        relativePath: 'mod.py',
+        occurrences: [{ symbol: 'PY#bar', range: [1, 0, 5], isDefinition: true }],
+      },
+      {
+        relativePath: 'helper.py',
+        occurrences: [{ symbol: 'PY#bar', range: [3, 0, 5], isDefinition: false }],
+      },
+    ])
+    const out = await computeDeepStructuralDiff({
+      baseline,
+      worktreePath: '/wt',
+      deps: {
+        probeIndexer: available,
+        runIndexer: async ({ spec }) => ({
+          ok: true,
+          scipBytes: spec.id === 'scip-typescript' ? tsBytes : pyBytes,
+        }),
+      },
+    })
+    expect(out.engine).toBe('deep')
+    const callerFiles = out.impact.flatMap((i) => i.callers.map((c) => c.filePath)).sort()
+    expect(callerFiles).toEqual(['caller.ts', 'helper.py']) // merged across both indexers
+  })
+
   test('no indexer available → indexer-missing', async () => {
     await expectReason(
       computeDeepStructuralDiff({

@@ -9,7 +9,7 @@
 // merging is a follow-up.
 
 import type { StructuralDiff } from '@agent-workflow/shared'
-import { parseScip, ScipParseError } from './scip'
+import { parseScip, mergeScipGraphs, ScipParseError, type ScipGraph } from './scip'
 import { preciseImpactFromBaseline } from './deepImpact'
 import {
   INDEXER_SPECS,
@@ -63,43 +63,44 @@ export async function computeDeepStructuralDiff(args: {
     throw new DeepUnavailableError('indexer-missing', 'no indexer covers the changed languages')
   }
 
-  // First available indexer for the changed languages wins.
-  let chosen: { spec: IndexerSpec; bin: string } | null = null
+  // Run EVERY available indexer the changed languages need (a diff can span
+  // multiple languages) and merge their SCIP graphs. Usable if at least one
+  // available indexer produced a parseable index.
+  const graphs: ScipGraph[] = []
+  let anyAvailable = false
+  let lastReason: DeepDegradedReason = 'indexer-missing'
   for (const id of needed) {
     const spec = INDEXER_SPECS[id]
     const p = await probe(spec, cfg?.overrides)
-    if (p.available) {
-      chosen = { spec, bin: p.bin }
-      break
+    if (!p.available) continue
+    anyAvailable = true
+    const result = await run({
+      spec,
+      bin: p.bin,
+      worktreePath,
+      timeoutMs: cfg?.timeoutMs ?? spec.timeoutMs,
+    })
+    if (!result.ok || result.scipBytes === undefined) {
+      lastReason = result.reason ?? 'build-failed'
+      continue
+    }
+    try {
+      graphs.push(parseScip(result.scipBytes))
+    } catch (e) {
+      lastReason = e instanceof ScipParseError ? 'scip-parse-error' : 'build-failed'
     }
   }
-  if (chosen === null) {
+  if (!anyAvailable) {
     throw new DeepUnavailableError(
       'indexer-missing',
       'no SCIP indexer installed for these languages',
     )
   }
-
-  const result = await run({
-    spec: chosen.spec,
-    bin: chosen.bin,
-    worktreePath,
-    timeoutMs: cfg?.timeoutMs ?? chosen.spec.timeoutMs,
-  })
-  if (!result.ok || result.scipBytes === undefined) {
-    throw new DeepUnavailableError(result.reason ?? 'build-failed', 'indexer run failed')
+  if (graphs.length === 0) {
+    // Indexer(s) present but none produced a usable index (build/parse failed).
+    throw new DeepUnavailableError(lastReason, 'all available indexers failed')
   }
 
-  let graph
-  try {
-    graph = parseScip(result.scipBytes)
-  } catch (e) {
-    throw new DeepUnavailableError(
-      'scip-parse-error',
-      e instanceof ScipParseError ? e.message : String(e),
-    )
-  }
-
-  const impact = preciseImpactFromBaseline(graph, baseline.files)
+  const impact = preciseImpactFromBaseline(mergeScipGraphs(graphs), baseline.files)
   return { ...baseline, engine: 'deep', impact, degradedReason: undefined }
 }

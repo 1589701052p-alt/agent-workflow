@@ -202,6 +202,21 @@ export const ConfigSchema = z.object({
    */
   commitPushDiffMaxBytes: z.number().int().min(0).max(262144).optional(),
 
+  // --- RFC-083 structural deep-mode (optional external SCIP indexers) ---
+  // Absolute-path overrides per indexer binary; unset = looked up on PATH.
+  structuralDeepIndexers: z
+    .object({
+      scipTypescript: z.string().min(1).optional(),
+      scipPython: z.string().min(1).optional(),
+      scipGo: z.string().min(1).optional(),
+      scipClang: z.string().min(1).optional(),
+      scipJava: z.string().min(1).optional(),
+      rustAnalyzer: z.string().min(1).optional(),
+    })
+    .optional(),
+  /** Per-indexer run timeout for deep mode (ms). Default 120000. */
+  structuralDeepTimeoutMs: z.number().int().positive().optional(),
+
   // --- Large outputs ---
   largeOutputThresholdBytes: z.number().int().positive(),
 
