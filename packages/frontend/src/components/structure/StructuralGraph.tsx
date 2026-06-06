@@ -22,7 +22,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { StructuralDiff } from '@agent-workflow/shared'
 import {
@@ -31,10 +31,14 @@ import {
   layoutGraph,
   type EdgeKind,
   type GraphCard,
+  type GraphCardEdge,
   type PkgGraphNode,
   type StructureGraph,
   type PackageGraph,
 } from '@/lib/structureGraph'
+
+// Member rows highlighted because an active edge links them (caller ↔ callee).
+const HighlightedMembers = createContext<ReadonlySet<string>>(new Set())
 import { badgeSymbol } from '@/lib/structureView'
 
 const EDGE_KEYS: EdgeKind[] = ['inherits', 'references', 'calls']
@@ -46,6 +50,7 @@ const EDGE_LABEL: Record<EdgeKind, string> = {
 
 function CardNode({ data }: NodeProps) {
   const card = data.card as GraphCard
+  const hlMembers = useContext(HighlightedMembers)
   const ctClass = card.changeType !== undefined ? ` sg-card--ct-${card.changeType}` : ''
   const changedClass = card.isChanged ? ' sg-card--changed' : ' sg-card--caller'
   return (
@@ -62,23 +67,22 @@ function CardNode({ data }: NodeProps) {
       </div>
       {card.members.length > 0 && (
         <ul className="sg-card__members">
-          {card.members.map((m) => (
-            <li
-              key={m.id}
-              className={
-                m.role === 'changed'
-                  ? `sg-card__member sg-card__member--ct-${m.changeType}`
-                  : 'sg-card__member sg-card__member--caller'
-              }
-            >
-              <span className="sg-card__member-badge">
-                {m.role === 'changed' && m.changeType !== undefined
-                  ? badgeSymbol(m.changeType)
-                  : '·'}
-              </span>
-              <span className="sg-card__member-name">{m.label}</span>
-            </li>
-          ))}
+          {card.members.map((m) => {
+            const base =
+              m.role === 'changed'
+                ? `sg-card__member sg-card__member--ct-${m.changeType}`
+                : 'sg-card__member sg-card__member--caller'
+            return (
+              <li key={m.id} className={hlMembers.has(m.id) ? `${base} sg-card__member--hl` : base}>
+                <span className="sg-card__member-badge">
+                  {m.role === 'changed' && m.changeType !== undefined
+                    ? badgeSymbol(m.changeType)
+                    : '·'}
+                </span>
+                <span className="sg-card__member-name">{m.label}</span>
+              </li>
+            )
+          })}
         </ul>
       )}
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
@@ -128,10 +132,7 @@ function edgeFor(e: { id: string; source: string; target: string; kind: EdgeKind
  *  a node's TOP half (input) → its incoming edges, BOTTOM half (output) → its
  *  outgoing edges; click the empty pane → clear. Highlighted edges pop, the rest
  *  dim. `rawEdges` is the source/target lookup; `baseEdges` the xyflow edges. */
-function useEdgeHighlight(
-  baseEdges: Edge[],
-  rawEdges: ReadonlyArray<{ id: string; source: string; target: string }>,
-) {
+function useEdgeHighlight(baseEdges: Edge[], rawEdges: ReadonlyArray<GraphCardEdge>) {
   const [hl, setHl] = useState<ReadonlySet<string>>(() => new Set())
   const onPaneClick = useCallback(() => setHl(new Set()), [])
   const onEdgeClick = useCallback((_: unknown, edge: { id: string }) => {
@@ -162,7 +163,20 @@ function useEdgeHighlight(
       }),
     [baseEdges, hl],
   )
-  return { edges, onEdgeClick, onNodeClick, onPaneClick }
+  // member rows linked by the active edges (caller ↔ callee), to highlight too.
+  const highlightedMembers = useMemo<ReadonlySet<string>>(() => {
+    const ids = new Set<string>()
+    if (hl.size === 0) return ids
+    for (const e of rawEdges) {
+      if (!hl.has(e.id)) continue
+      for (const link of e.memberLinks ?? []) {
+        if (link.source !== undefined) ids.add(link.source)
+        if (link.target !== undefined) ids.add(link.target)
+      }
+    }
+    return ids
+  }, [rawEdges, hl])
+  return { edges, highlightedMembers, onEdgeClick, onNodeClick, onPaneClick }
 }
 
 /** PACKAGE overview — fixed-size nodes, so no measure/re-layout dance needed. */
@@ -231,7 +245,10 @@ function ClassFlow({ graph }: { graph: StructureGraph }) {
   const initialEdges = useMemo<Edge[]>(() => graph.edges.map(edgeFor), [graph])
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [baseEdges, , onEdgesChange] = useEdgesState(initialEdges)
-  const { edges, onEdgeClick, onNodeClick, onPaneClick } = useEdgeHighlight(baseEdges, graph.edges)
+  const { edges, highlightedMembers, onEdgeClick, onNodeClick, onPaneClick } = useEdgeHighlight(
+    baseEdges,
+    graph.edges,
+  )
   const initialized = useNodesInitialized()
   const { fitView } = useReactFlow()
   const laidOut = useRef(false)
@@ -267,26 +284,28 @@ function ClassFlow({ graph }: { graph: StructureGraph }) {
   }, [initialized, graph, setNodes, fitView])
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onEdgeClick={onEdgeClick}
-      onNodeClick={onNodeClick}
-      onPaneClick={onPaneClick}
-      nodeTypes={CLASS_NODE_TYPES}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      elementsSelectable={false}
-      fitView
-      fitViewOptions={{ maxZoom: 1, minZoom: 0.4 }}
-      minZoom={0.15}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <HighlightedMembers.Provider value={highlightedMembers}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onEdgeClick={onEdgeClick}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
+        nodeTypes={CLASS_NODE_TYPES}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        fitView
+        fitViewOptions={{ maxZoom: 1, minZoom: 0.4 }}
+        minZoom={0.15}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </HighlightedMembers.Provider>
   )
 }
 

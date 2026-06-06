@@ -165,6 +165,11 @@ describe('buildStructureGraph — edges', () => {
       target: 'svc.ts::Svc',
       kind: 'calls',
     })
+    // the calls edge records the linked member rows (caller pay → callee charge),
+    // so highlighting the edge can also highlight those methods
+    expect(g.edges[0]?.memberLinks).toEqual([
+      { source: 'ctrl.ts::Checkout::pay', target: 'svc.ts#Svc.charge:method:1' },
+    ])
   })
 })
 

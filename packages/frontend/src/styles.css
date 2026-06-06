@@ -9692,6 +9692,12 @@ mark.comment-anchor[data-active='true'] {
   white-space: nowrap;
   overflow: hidden;
 }
+/* member row linked by an active edge (caller ↔ callee) */
+.sg-card__member--hl {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 600;
+}
 .sg-card__member-badge {
   width: 10px;
   flex: none;

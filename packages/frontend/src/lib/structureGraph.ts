@@ -61,6 +61,9 @@ export interface GraphCardEdge {
   source: string
   target: string
   kind: EdgeKind
+  /** for 'calls' edges: the specific member rows involved (caller → callee), so
+   *  highlighting the edge can also highlight the related methods. */
+  memberLinks?: Array<{ source?: string; target?: string }>
 }
 /** A package container (a directory); its box wraps the cards inside it. */
 export interface GraphPackage {
@@ -294,6 +297,7 @@ export function buildStructureGraph(
 
   // 2) edges. Prefer inherits > references > calls for a given pair.
   const edgeMap = new Map<string, GraphCardEdge>()
+  const callLinks = new Map<string, Array<{ source?: string; target?: string }>>()
   const addEdge = (source: string, target: string, kind: EdgeKind): void => {
     if (source === target || !cards.has(source) || !cards.has(target)) return
     const id = `${source}=>${target}`
@@ -343,11 +347,23 @@ export function buildStructureGraph(
           })
         }
         addEdge(callerKey, targetCardId, 'calls')
+        // record which member rows this call links (caller method → changed method)
+        const edgeId = `${callerKey}=>${targetCardId}`
+        const arr = callLinks.get(edgeId) ?? []
+        arr.push({
+          source: callerLabel !== null ? `${callerKey}::${callerLabel}` : undefined,
+          target: item.changedSymbolId,
+        })
+        callLinks.set(edgeId, arr)
       }
     }
 
   const list = [...cards.values()]
   const edges = [...edgeMap.values()]
+  for (const e of edges) {
+    const links = callLinks.get(e.id)
+    if (links !== undefined) e.memberLinks = links
+  }
   // one package per distinct directory the cards live in.
   const packages: GraphPackage[] = [...new Set(list.map((c) => c.pkg))].map((id) => ({
     id,
