@@ -101,7 +101,11 @@ function TaskDetailPage() {
         : '?scope=task'
       return api.get(`/api/tasks/${encodeURIComponent(id)}/structural-diff${qs}`, undefined, signal)
     },
-    enabled: task.data !== undefined && task.data.baseCommit !== null,
+    // Only when the Structure tab is open: the analysis is expensive (git grep +
+    // tree-sitter parse), and the scope <Select> must not mount into the DOM on
+    // other tabs (else a page-wide `[role=combobox]` locator grabs it).
+    enabled:
+      tab === 'worktree-structure' && task.data !== undefined && task.data.baseCommit !== null,
     refetchInterval: (q) =>
       isTerminal(task.data?.status) && q.state.data !== undefined ? false : 6000,
     retry: false,
@@ -430,9 +434,12 @@ function TaskDetailPage() {
           ) : null}
         </div>
 
-        {/* RFC-083 — structural (semantic) diff overlay for the textual diff. */}
+        {/* RFC-083 — structural (semantic) diff overlay for the textual diff.
+            Content (incl. the scope <Select>) renders only when this tab is
+            active: keeps the expensive analysis lazy and keeps a page-wide
+            `[role=combobox]` locator from grabbing the hidden scope picker. */}
         <div className="task-detail__pane" hidden={tab !== 'worktree-structure'}>
-          {tk.baseCommit === null ? (
+          {tab !== 'worktree-structure' ? null : tk.baseCommit === null ? (
             <div className="muted">{t('tasks.noBaseCommit')}</div>
           ) : (
             <div className="structure-pane">
