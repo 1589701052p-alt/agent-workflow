@@ -449,11 +449,19 @@ export function buildStructureGraph(
       }
       if (callerKey === targetCardId) continue
       const edgeId = `${callerKey}=>${targetCardId}`
+      // the CALLING method's row id = its own symbol id (matches the changed-method
+      // row when the caller is in the diff), so it lines up whether or not we
+      // materialise a synthetic caller row.
+      const callerMemberId = caller.symbolId
       if (callsOn) {
         const callerCard = ensureCard(callerKey, callerTitle, callerFile, callerKind)
-        if (callerLabel !== null && !callerCard.members.some((m) => m.label === callerLabel)) {
+        if (
+          callerMemberId !== undefined &&
+          callerLabel !== null &&
+          !callerCard.members.some((m) => m.id === callerMemberId)
+        ) {
           callerCard.members.push({
-            id: `${callerKey}::${callerLabel}`,
+            id: callerMemberId,
             label: callerLabel,
             kind: 'method',
             role: 'caller',
@@ -461,14 +469,12 @@ export function buildStructureGraph(
         }
         addEdge(callerKey, targetCardId, 'calls')
       }
-      // attach the callee (downstream) — to the calls edge we just made, OR to an
-      // already-existing edge (e.g. a 'references' edge) between the same pair.
+      // attach the call's endpoints — to the calls edge we just made, OR to an
+      // already-existing 'references' edge between the same pair. Surface BOTH the
+      // calling method (upstream start point) and the callee (downstream).
       if (callsOn || edgeMap.has(edgeId)) {
         const arr = callLinks.get(edgeId) ?? []
-        arr.push({
-          source: callsOn && callerLabel !== null ? `${callerKey}::${callerLabel}` : undefined,
-          target: item.changedSymbolId,
-        })
+        arr.push({ source: callerMemberId, target: item.changedSymbolId })
         callLinks.set(edgeId, arr)
       }
     }

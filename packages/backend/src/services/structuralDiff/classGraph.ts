@@ -172,15 +172,24 @@ export function computeClassEdges(
       let fromMembers: string[] | undefined
       let toMembers: string[] | undefined
       if (kind === 'references') {
+        const ids = new Set<string>()
         if (members !== undefined) {
-          const ids = new Set<string>()
+          // C members where D's NAME appears (holds a field/param of type D)
           for (const ln of matchLines(body, re, c.range.startLine)) {
             const m = members.find((mm) => ln >= mm.startLine && ln <= mm.endLine)
             if (m !== undefined) ids.add(m.id)
           }
-          if (ids.size > 0) fromMembers = [...ids]
         }
-        toMembers = usedMembers(membersByClass.get(d.key), bodyText)
+        const uc = usedMembersAndCallers(
+          membersByClass.get(d.key),
+          members,
+          body,
+          c.range.startLine,
+        )
+        // upstream = type-reference sites + the methods that CALL into D
+        for (const id of uc.callers) ids.add(id)
+        if (ids.size > 0) fromMembers = [...ids]
+        if (uc.used.length > 0) toMembers = uc.used
       }
       add(c.key, d.key, kind, fromMembers, toMembers)
     }
@@ -197,16 +206,21 @@ function matchLines(body: string[], re: RegExp, startLine: number): number[] {
   return out
 }
 
-/** The referenced class's members that the referencing body USES: its
- *  constructor (entry) + any member invoked by name as `.foo(`/`.foo` in the
- *  body. Heuristic (a name can coincide), mirroring the class-name reference
- *  scan. Returns undefined when nothing is found. */
-function usedMembers(
+/** What the referencing class C USES of referenced class D, AND the C member
+ *  doing the using:
+ *   - `used`    : D's constructor (entry) + D members invoked by name (`.foo`).
+ *   - `callers` : C members whose body contains such a call (the call's UPSTREAM
+ *                 start point). Heuristic (a name can coincide), mirroring the
+ *                 class-name reference scan. */
+function usedMembersAndCallers(
   dMembers: ReadonlyArray<MemberRange> | undefined,
-  bodyText: string,
-): string[] | undefined {
-  if (dMembers === undefined || dMembers.length === 0) return undefined
+  cMembers: ReadonlyArray<MemberRange> | undefined,
+  body: string[],
+  cStartLine: number,
+): { used: string[]; callers: string[] } {
+  if (dMembers === undefined || dMembers.length === 0) return { used: [], callers: [] }
   const used = new Set<string>()
+  const callers = new Set<string>()
   const byName = new Map<string, string[]>()
   for (const m of dMembers) {
     if (m.kind === 'constructor') used.add(m.id) // entry point, always relevant
@@ -217,9 +231,21 @@ function usedMembers(
   const names = [...byName.keys()].filter((n) => n.length > 0)
   if (names.length > 0) {
     const re = new RegExp(`\\.(${names.map(escapeRegExp).join('|')})\\b`, 'g')
-    for (const match of bodyText.matchAll(re)) {
-      for (const id of byName.get(match[1] ?? '') ?? []) used.add(id)
+    for (let i = 0; i < body.length; i += 1) {
+      const line = body[i] ?? ''
+      re.lastIndex = 0
+      let hit = false
+      let match: RegExpExecArray | null
+      while ((match = re.exec(line)) !== null) {
+        for (const id of byName.get(match[1] ?? '') ?? []) used.add(id)
+        hit = true
+      }
+      if (hit) {
+        const ln = cStartLine + i
+        const caller = cMembers?.find((mm) => ln >= mm.startLine && ln <= mm.endLine)?.id
+        if (caller !== undefined) callers.add(caller)
+      }
     }
   }
-  return used.size > 0 ? [...used] : undefined
+  return { used: [...used], callers: [...callers] }
 }

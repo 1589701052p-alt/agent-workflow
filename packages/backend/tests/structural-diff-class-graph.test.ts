@@ -192,6 +192,9 @@ describe('computeClassEdges', () => {
       (e) => e.from === 'a.ts::A' && e.to === 'b.ts::B',
     )
     expect(ref?.toMembers?.sort()).toEqual(['b.ts#B.bar:method:1', 'b.ts#B.foo:method:1']) // baz NOT used
+    // the CALLING method (run, where this.b.foo()/bar() sit) is added upstream as
+    // the call's start point — alongside the field `b` where B's type appears
+    expect(ref?.fromMembers?.sort()).toEqual(['a.ts#A.b:field:1', 'a.ts#A.run:method:1'])
   })
 
   test('collectClassMembers groups changed members under their enclosing class key', () => {

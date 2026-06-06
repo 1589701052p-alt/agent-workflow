@@ -259,11 +259,13 @@ describe('buildStructureGraph — edges', () => {
           ],
         },
       ),
-      new Set(['references']), // calls OFF — yet the callee still shows downstream
+      new Set(['references']), // calls OFF — yet the call's endpoints still show
     )
     const e = g.edges.find((x) => x.source === 'a.ts::A' && x.target === 'b.ts::B')
     expect(e?.kind).toBe('references')
+    // downstream callee + UPSTREAM calling method (the call's start point)
     expect(e?.memberLinks?.some((l) => l.target === 'b.ts#B.foo:method:1')).toBe(true)
+    expect(e?.memberLinks?.some((l) => l.source === 'a.ts#A.m:method:3')).toBe(true)
   })
 
   test('inherits wins over a calls edge for the same pair', () => {
@@ -320,11 +322,16 @@ describe('buildStructureGraph — edges', () => {
       target: 'svc.ts::Svc',
       kind: 'calls',
     })
-    // the calls edge records the linked member rows (caller pay → callee charge),
-    // so highlighting the edge can also highlight those methods
+    // the calls edge records the linked member rows (caller pay → callee charge)
+    // by their real symbol ids, so highlighting lights up the actual rows
     expect(g.edges[0]?.memberLinks).toEqual([
-      { source: 'ctrl.ts::Checkout::pay', target: 'svc.ts#Svc.charge:method:1' },
+      { source: 'ctrl.ts#Checkout.pay:method:3', target: 'svc.ts#Svc.charge:method:1' },
     ])
+    // the caller card's method row uses the caller's symbol id (so the calling
+    // method — the call's start point — is the one that highlights)
+    expect(g.cards.find((c) => c.title === 'Checkout')?.members[0]?.id).toBe(
+      'ctrl.ts#Checkout.pay:method:3',
+    )
   })
 })
 
