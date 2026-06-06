@@ -214,7 +214,9 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   // renders as the shared <Select> — a role=combobox trigger + portaled
   // listbox — so open it and pick 'main' rather than selectOption() on a
   // native <select> (which no longer exists).
-  const branchSelect = page.locator('[data-testid^="repo-source-base-branch"]')
+  // Scope to role=combobox so we wait for the <Select> that swaps in once refs
+  // resolve — NOT the TextInput that carries the same testid before then.
+  const branchSelect = page.locator('[data-testid^="repo-source-base-branch"][role="combobox"]')
   await expect(branchSelect).toBeVisible({ timeout: 10_000 })
   await branchSelect.click()
   // Select rows commit on mousedown (then the listbox unmounts), so dispatch
