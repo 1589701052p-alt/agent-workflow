@@ -494,6 +494,40 @@ describe('task HTTP routes', () => {
     expect(((await res.json()) as { code: string }).code).toBe('task-worktree-missing')
   })
 
+  test('GET /:id/diff when worktree dir EXISTS but is not a git repo -> 410', async () => {
+    // Regression: a worktree dir can outlive its source repo (moved/deleted),
+    // so `existsSync` passes but `git diff` fails. Before the fix this leaked a
+    // 500 with git's entire `--no-index` usage block as the message. It must
+    // now be the same clean 410 the fully-missing-dir case returns.
+    const notARepo = mkdtempSync(join(tmpdir(), 'aw-notrepo-'))
+    try {
+      const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+      const id = ulid()
+      await h.db.insert(tasks).values({
+        name: 'fixture-task',
+        id,
+        workflowId: wfId,
+        workflowSnapshot: '{}',
+        repoPath: h.repoPath,
+        worktreePath: notARepo,
+        baseBranch: 'main',
+        branch: `agent-workflow/${id}`,
+        baseCommit: 'deadbeef'.repeat(5),
+        status: 'failed',
+        inputs: '{}',
+        startedAt: Date.now(),
+      })
+      const res = await req(h.app, `/api/tasks/${id}/diff`)
+      expect(res.status).toBe(410)
+      const body = (await res.json()) as { code: string; message: string }
+      expect(body.code).toBe('task-worktree-missing')
+      // The message stays a single actionable line — no git usage-block spew.
+      expect(body.message).not.toContain('usage: git diff')
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true })
+    }
+  })
+
   test('GET /:id/node-runs/:nodeRunId/events paginates with ?since', async () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const taskId = ulid()

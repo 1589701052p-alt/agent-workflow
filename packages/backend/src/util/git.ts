@@ -73,6 +73,49 @@ export async function requireGitRepo(repoPath: string): Promise<void> {
   }
 }
 
+/**
+ * True only when `path` is the working tree of a git repository — i.e. a
+ * directory `git diff` / `git ls-files` can actually run in.
+ *
+ * Why this exists separate from `existsSync`: a task worktree lives under
+ * `~/.agent-workflow/worktrees/...` and its `.git` is a *file* pointing at the
+ * source repo's `.git/worktrees/<id>`. If the source repo is later moved or
+ * deleted (or the `.git` file is removed), the worktree directory survives on
+ * disk — `existsSync` still returns true — but git can no longer resolve it.
+ * `git diff <commit>` then either prints `fatal: not a git repository: <gitdir>`
+ * or falls back to its `--no-index` mode and dumps a hundreds-of-lines usage
+ * block. Callers that gate on a usable worktree must probe this, not just the
+ * directory's existence.
+ *
+ * `git rev-parse --is-inside-work-tree` prints `true` (exit 0) inside a work
+ * tree and fails (exit 128) otherwise. We also reject the `false`/exit-0 case
+ * (cwd is a bare repo / inside `.git`) since every caller wants a real work
+ * tree.
+ */
+export async function isGitWorkTree(path: string): Promise<boolean> {
+  if (!existsSync(path)) return false
+  const r = await runGit(path, ['rev-parse', '--is-inside-work-tree'])
+  return r.exitCode === 0 && r.stdout.trim() === 'true'
+}
+
+/**
+ * Collapse a `git diff` failure into one actionable line. When the worktree
+ * dir exists but isn't a git repo (source repo moved/deleted, `.git` removed),
+ * git falls back to its `--no-index` path and writes a hundreds-of-lines usage
+ * block to stderr (led by `warning: Not a git repository...`), or prints
+ * `fatal: not a git repository: <gitdir>`. Surfacing that whole blob as the
+ * error message is useless noise — and it's exactly what reached the task
+ * detail "工作目录 diff" tab. Replace it with a concise sentence; any other
+ * failure (bad revision, etc.) keeps its real stderr for debugging.
+ */
+function diffFailureMessage(worktreePath: string, stderr: string): string {
+  const trimmed = stderr.trim()
+  if (/not a git repository/i.test(trimmed)) {
+    return `git diff failed: '${worktreePath}' is not a git repository (worktree removed or its source repo is gone)`
+  }
+  return `git diff failed: ${trimmed}`
+}
+
 // -----------------------------------------------------------------------------
 // Read-only queries used by /api/repos/* (P-1-10)
 // -----------------------------------------------------------------------------
@@ -505,7 +548,11 @@ export async function gitDiffSnapshot(worktreePath: string, fromCommit: string):
     '--',
   ])
   if (tracked.exitCode !== 0) {
-    throw new DomainError('worktree-diff-failed', `git diff failed: ${tracked.stderr.trim()}`, 500)
+    throw new DomainError(
+      'worktree-diff-failed',
+      diffFailureMessage(worktreePath, tracked.stderr),
+      500,
+    )
   }
   // `core.quotepath=false` is critical: without it, ls-files C-style escapes
   // any non-ASCII path (e.g. `docs/中文.md` -> `"docs/\344\270\255\346\226\207.md"`)
@@ -589,7 +636,7 @@ export async function gitChangedFiles(worktreePath: string, fromCommit: string):
   if (tracked.exitCode !== 0) {
     throw new DomainError(
       'worktree-diff-failed',
-      `git diff --name-only failed: ${tracked.stderr.trim()}`,
+      diffFailureMessage(worktreePath, tracked.stderr),
       500,
     )
   }

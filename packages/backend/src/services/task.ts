@@ -38,7 +38,13 @@ import { listSkills } from '@/services/skill'
 import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
 import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
-import { createWorktree, gitDiffSnapshot, rollbackToSnapshot, worktreeDiff } from '@/util/git'
+import {
+  createWorktree,
+  gitDiffSnapshot,
+  isGitWorkTree,
+  rollbackToSnapshot,
+  worktreeDiff,
+} from '@/util/git'
 import { redactGitUrl } from '@agent-workflow/shared'
 import { ConflictError, DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import { readArchivedEvents } from '@/services/eventsArchive'
@@ -1653,10 +1659,16 @@ export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDif
         409,
       )
     }
-    if (!existsSync(task.worktreePath)) {
+    // `existsSync` is not enough: a worktree dir can outlive its source repo
+    // (moved/deleted), leaving a directory git can't resolve. Probing it here
+    // turns what was a cryptic 500 (`git diff` dumping its `--no-index` usage
+    // block) into the same clean 410 the missing-dir case already returns.
+    if (!(await isGitWorkTree(task.worktreePath))) {
       throw new DomainError(
         'task-worktree-missing',
-        `worktree '${task.worktreePath}' does not exist; cannot compute diff`,
+        existsSync(task.worktreePath)
+          ? `worktree '${task.worktreePath}' is no longer a valid git repository (its source repo was moved or deleted); cannot compute diff`
+          : `worktree '${task.worktreePath}' does not exist; cannot compute diff`,
         410,
       )
     }
@@ -1676,9 +1688,15 @@ export async function getTaskDiff(db: DbClient, taskId: string): Promise<TaskDif
       410,
     )
   }
-  const usable = task.repos.filter(
+  const candidates = task.repos.filter(
     (r) => r.baseCommit !== null && r.baseCommit !== '' && existsSync(r.worktreePath),
   )
+  // A worktree dir can survive after its source repo is gone, so `existsSync`
+  // alone isn't enough — `gitDiffSnapshot` would 500 below. Drop those here so
+  // one broken repo never shorts the whole task diff (same skip-bad-shard
+  // policy as the missing-base / missing-worktree filters above).
+  const valid = await Promise.all(candidates.map((r) => isGitWorkTree(r.worktreePath)))
+  const usable = candidates.filter((_, i) => valid[i])
   if (usable.length === 0) {
     throw new DomainError(
       'task-no-base-commit',
