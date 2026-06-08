@@ -14,6 +14,7 @@ import { asc, eq } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
+import { isGitWorkTree } from '@/util/git'
 import { computeSummary, type StructuralDiff, type StructuralScope } from '@agent-workflow/shared'
 import { getTask } from '@/services/task'
 import { WrapperProgressSchema } from '@/services/wrapperProgress'
@@ -81,13 +82,17 @@ export async function getTaskStructuralDiff(
         409,
       )
     }
-    if (!existsSync(task.worktreePath)) {
-      // Worktree GC'd — serve the eager-persisted artifact if we have one.
+    if (!(await isGitWorkTree(task.worktreePath))) {
+      // Worktree GC'd OR no longer a git repo (source repo moved/deleted) —
+      // serve the eager-persisted artifact if we have one, else a clean 410
+      // (RFC-089 P1: `existsSync` alone let a broken worktree reach `git diff`
+      // and 500; `isGitWorkTree` collapses it to the same 410 as the textual
+      // diff tab).
       const stored = await readStoredDiff(taskId, 'task')
       if (stored !== null) return stored
       throw new DomainError(
         'task-worktree-missing',
-        `worktree '${task.worktreePath}' does not exist; cannot compute structural diff`,
+        `worktree '${task.worktreePath}' is unavailable (missing or no longer a git repository); cannot compute structural diff`,
         410,
       )
     }
@@ -111,9 +116,13 @@ export async function getTaskStructuralDiff(
       410,
     )
   }
-  const usable = task.repos.filter(
+  const candidates = task.repos.filter(
     (r) => r.baseCommit !== null && r.baseCommit !== '' && existsSync(r.worktreePath),
   )
+  // RFC-089 P1: a repo worktree dir can outlive its source repo, so existsSync
+  // isn't enough — drop non-git ones as bad shards (mirrors getTaskDiff).
+  const valid = await Promise.all(candidates.map((r) => isGitWorkTree(r.worktreePath)))
+  const usable = candidates.filter((_, i) => valid[i])
   if (usable.length === 0) {
     throw new DomainError(
       'task-no-base-commit',
@@ -198,10 +207,10 @@ async function getNodeStructuralDiff(
     // Readonly / non-write node correctly contributes nothing.
     return emptyNodeDiff(task.id, nodeRunId, 'readonly-node-no-snapshot')
   }
-  if (!existsSync(task.worktreePath)) {
+  if (!(await isGitWorkTree(task.worktreePath))) {
     throw new DomainError(
       'task-worktree-missing',
-      `worktree '${task.worktreePath}' does not exist; cannot compute structural diff`,
+      `worktree '${task.worktreePath}' is unavailable (missing or no longer a git repository); cannot compute structural diff`,
       410,
     )
   }
@@ -310,10 +319,10 @@ async function getWrapperStructuralDiff(
       `node run '${nodeRunId}' is not a git-wrapper with a recorded baseline commit`,
     )
   }
-  if (!existsSync(task.worktreePath)) {
+  if (!(await isGitWorkTree(task.worktreePath))) {
     throw new DomainError(
       'task-worktree-missing',
-      `worktree '${task.worktreePath}' does not exist; cannot compute structural diff`,
+      `worktree '${task.worktreePath}' is unavailable (missing or no longer a git repository); cannot compute structural diff`,
       410,
     )
   }

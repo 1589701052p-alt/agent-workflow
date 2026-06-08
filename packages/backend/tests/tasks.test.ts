@@ -528,6 +528,39 @@ describe('task HTTP routes', () => {
     }
   })
 
+  test('GET /:id/structural-diff when worktree dir EXISTS but is not a git repo -> 410', async () => {
+    // RFC-089 P1: the structural service shared the same `existsSync`-only guard
+    // as the textual diff, so a worktree dir that outlived its source repo
+    // reached `gitChangedFiles` and 500'd. `isGitWorkTree` must collapse it to
+    // the same clean 410 (no persisted artifact exists for this fixture task).
+    const notARepo = mkdtempSync(join(tmpdir(), 'aw-notrepo-struct-'))
+    try {
+      const wfId = await seedWorkflow(h.db, EMPTY_DEF)
+      const id = ulid()
+      await h.db.insert(tasks).values({
+        name: 'fixture-task',
+        id,
+        workflowId: wfId,
+        workflowSnapshot: '{}',
+        repoPath: h.repoPath,
+        worktreePath: notARepo,
+        baseBranch: 'main',
+        branch: `agent-workflow/${id}`,
+        baseCommit: 'deadbeef'.repeat(5),
+        status: 'failed',
+        inputs: '{}',
+        startedAt: Date.now(),
+      })
+      const res = await req(h.app, `/api/tasks/${id}/structural-diff`)
+      expect(res.status).toBe(410)
+      const body = (await res.json()) as { code: string; message: string }
+      expect(body.code).toBe('task-worktree-missing')
+      expect(body.message).not.toContain('usage: git diff')
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true })
+    }
+  })
+
   test('GET /:id/node-runs/:nodeRunId/events paginates with ?since', async () => {
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const taskId = ulid()

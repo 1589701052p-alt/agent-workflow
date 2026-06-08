@@ -4,14 +4,20 @@
 每个 PR 必须 `bun run typecheck && bun run test && bun run format:check` 全绿 +
 推后查 CI（[feedback_post_commit_ci_check]）。单仓回归测试是每个 PR 的硬门槛。
 
-## PR-A（P1）— isGitWorkTree 一致性 + 文件树按仓可读
-- **RFC-089-T1**：`structuralDiff/service.ts` task/node/wrapper 三处 +
-  多仓 `usable` filter 的 `existsSync` → `isGitWorkTree`（保 readStoredDiff 兜底在前）。
-- **RFC-089-T2**：前端结构文件树 depth-0「仓」节点可读标签（复用既有 row 渲染）。
-- 验收：单仓目录在但非仓库 → 410；多仓文件树按仓分组可见；单仓不变。
-- 测试：后端路由 410 用例；前端多仓分组渲染断言。
+## PR-A（P1）— isGitWorkTree 一致性（后端）
+- **RFC-089-T1**：`structuralDiff/service.ts` task(单仓)/node/wrapper 三处 +
+  多仓 `usable` filter 的 `existsSync` → `isGitWorkTree`（多仓**父目录容器**保留
+  `existsSync`——它本身不是 git worktree；readStoredDiff 兜底仍在前）。
+- 验收：单仓 / node / wrapper 目录在但非仓库 → 干净 410（非 500）；多仓某仓损坏
+  当坏分片跳过；单仓正常路径不变。
+- 测试：`tasks.test.ts` 结构路由「目录在但非仓库 → 410」（镜像文本 diff 用例）。
+- 注：原 T2「文件树按仓可读」**并入 PR-B**——它需要 merge 产出 `repoLabels` +
+  前端标注，与 PR-B 的前端图 repo 感知一处落地、避免两次碰 `structureView`。
 
-## PR-B（P2）— 类关系图多仓
+## PR-B（P2）— 类关系图多仓 + 文件树按仓可读
+- **RFC-089-T2**（从 PR-A 移入）：`mergeStructuralDiffs` 产出 `repoLabels: string[]`
+  （schema 加可选字段，单仓 omit）；前端结构文件树据此把 depth-0「仓」节点标注为
+  仓（复用既有 row 渲染，不新增 chrome）。
 - **RFC-089-T3**：`assemble.ts` 抽 `prefixFilePath`/`prefixCardId`/`prefixSymbolId`
   纯函数；`files[].filePath` 改走 `prefixFilePath`（等价重构，单仓不变）。
 - **RFC-089-T4**：`mergeStructuralDiffs` 前缀合并 `classEdges`（from/to/members），
