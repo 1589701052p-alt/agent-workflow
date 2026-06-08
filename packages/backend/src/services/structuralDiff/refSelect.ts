@@ -35,3 +35,33 @@ export function resolveNodeScope(runs: NodeRunRef[], nodeRunId: string): NodeSco
   }
   return { kind: 'to-worktree', fromRef: target.preSnapshot }
 }
+
+/**
+ * RFC-089 P3 — project the multi-repo per-node snapshot maps
+ * (`pre_snapshot_repos_json` = `{<worktreeDirName>: <stashSha>}`) onto a SINGLE
+ * repo, yielding the same `NodeRunRef` shape `resolveNodeScope` already consumes.
+ * So multi-repo node scope is just "run the same resolution once per repo".
+ *
+ * A run with no entry for `repoDir` (the node didn't write that repo) gets a
+ * null `preSnapshot` → `resolveNodeScope` treats it as a non-write, exactly like
+ * the single-repo readonly case. Malformed JSON → that run contributes null
+ * (warn-and-continue parity with the resume rollback path in task.ts).
+ */
+export function perRepoNodeRuns(
+  rows: Array<{ id: string; startedAt: number | null; preSnapshotReposJson: string | null }>,
+  repoDir: string,
+): NodeRunRef[] {
+  return rows.map((r) => {
+    let sha: string | null = null
+    if (r.preSnapshotReposJson !== null) {
+      try {
+        const map = JSON.parse(r.preSnapshotReposJson) as Record<string, string>
+        const v = map[repoDir]
+        sha = typeof v === 'string' && v !== '' ? v : null
+      } catch {
+        sha = null
+      }
+    }
+    return { id: r.id, preSnapshot: sha, startedAt: r.startedAt }
+  })
+}

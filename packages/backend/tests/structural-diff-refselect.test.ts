@@ -3,7 +3,11 @@
 // for the last writer); readonly nodes (no snapshot) contribute nothing.
 
 import { describe, expect, test } from 'bun:test'
-import { resolveNodeScope, type NodeRunRef } from '../src/services/structuralDiff/refSelect'
+import {
+  resolveNodeScope,
+  perRepoNodeRuns,
+  type NodeRunRef,
+} from '../src/services/structuralDiff/refSelect'
 
 const runs: NodeRunRef[] = [
   { id: 'a', preSnapshot: 'snapA', startedAt: 1 },
@@ -42,5 +46,51 @@ describe('resolveNodeScope', () => {
     // 'a' at t=1, then a readonly 'r' at t=2, then 'b' at t=3 → a pairs with b.
     const out = resolveNodeScope(runs, 'a')
     expect(out).toMatchObject({ kind: 'between', toRef: 'snapB' })
+  })
+})
+
+// RFC-089 P3 — multi-repo node scope projects each run's per-repo snapshot map
+// (`pre_snapshot_repos_json`) onto a single repo, then reuses resolveNodeScope.
+describe('perRepoNodeRuns', () => {
+  const mrows = [
+    {
+      id: 'a',
+      startedAt: 1,
+      preSnapshotReposJson: JSON.stringify({ 'repo-x': 'xA', 'repo-y': 'yA' }),
+    },
+    { id: 'b', startedAt: 2, preSnapshotReposJson: JSON.stringify({ 'repo-x': 'xB' }) }, // wrote repo-x only
+    { id: 'c', startedAt: 3, preSnapshotReposJson: null }, // no map at all
+    { id: 'd', startedAt: 4, preSnapshotReposJson: '{not json' }, // malformed → null
+  ]
+
+  test('projects the per-repo sha; missing/null/malformed → null preSnapshot', () => {
+    expect(perRepoNodeRuns(mrows, 'repo-x')).toEqual([
+      { id: 'a', preSnapshot: 'xA', startedAt: 1 },
+      { id: 'b', preSnapshot: 'xB', startedAt: 2 },
+      { id: 'c', preSnapshot: null, startedAt: 3 },
+      { id: 'd', preSnapshot: null, startedAt: 4 },
+    ])
+    expect(perRepoNodeRuns(mrows, 'repo-y').map((r) => r.preSnapshot)).toEqual([
+      'yA',
+      null,
+      null,
+      null,
+    ])
+  })
+
+  test('composes with resolveNodeScope per repo (different from/to per repo)', () => {
+    // repo-x: a and b both wrote it → a pairs with b.
+    expect(resolveNodeScope(perRepoNodeRuns(mrows, 'repo-x'), 'a')).toEqual({
+      kind: 'between',
+      fromRef: 'xA',
+      toRef: 'xB',
+    })
+    // repo-y: only a wrote it → a is the last writer → diff against worktree.
+    expect(resolveNodeScope(perRepoNodeRuns(mrows, 'repo-y'), 'a')).toEqual({
+      kind: 'to-worktree',
+      fromRef: 'yA',
+    })
+    // a node that wrote neither repo (here: 'c') → readonly for each repo.
+    expect(resolveNodeScope(perRepoNodeRuns(mrows, 'repo-x'), 'c')).toEqual({ kind: 'readonly' })
   })
 })

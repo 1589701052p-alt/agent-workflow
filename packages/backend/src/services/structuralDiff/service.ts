@@ -20,7 +20,7 @@ import { getTask } from '@/services/task'
 import { WrapperProgressSchema } from '@/services/wrapperProgress'
 import { computeFromWorktree, computeBetweenRefs } from './gitBackend'
 import { mergeStructuralDiffs } from './assemble'
-import { resolveNodeScope } from './refSelect'
+import { resolveNodeScope, perRepoNodeRuns } from './refSelect'
 import { readStoredDiff, writeStoredDiff, isTerminalTaskStatus } from './store'
 import {
   computeDeepStructuralDiff,
@@ -170,18 +170,11 @@ async function getNodeStructuralDiff(
       `structural-diff scope 'node' requires a 'nodeRunId' query param`,
     )
   }
-  if (task.repoCount !== 1) {
-    // Multi-repo per-node snapshots live in pre_snapshot_repos_json — deferred.
-    throw new ValidationError(
-      'structural-node-scope-multi-repo-unsupported',
-      `per-node structural diff is single-repo only in v1`,
-    )
-  }
-
   const rows = await db
     .select({
       id: nodeRuns.id,
       preSnapshot: nodeRuns.preSnapshot,
+      preSnapshotReposJson: nodeRuns.preSnapshotReposJson,
       startedAt: nodeRuns.startedAt,
       wrapperProgressJson: nodeRuns.wrapperProgressJson,
     })
@@ -189,6 +182,75 @@ async function getNodeStructuralDiff(
     .where(eq(nodeRuns.taskId, task.id))
     .orderBy(asc(nodeRuns.startedAt), asc(nodeRuns.id))
 
+  // RFC-089 P3 — multi-repo node scope: resolve + compute per repo (reusing the
+  // single-repo resolveNodeScope over each repo's column via perRepoNodeRuns),
+  // then merge. Multi-repo tasks have NO wrapper-git nodes (RFC-066 forbids
+  // them), so there's no wrapper delegation in this branch.
+  if (task.repoCount > 1) {
+    if (!rows.some((r) => r.id === nodeRunId)) {
+      throw new NotFoundError(
+        'node-run-not-found',
+        `node run '${nodeRunId}' not found in task '${task.id}'`,
+      )
+    }
+    const parts: Array<{ label: string; diff: StructuralDiff }> = []
+    let hadSnapshot = false
+    let hadError = false
+    for (const repo of task.repos) {
+      const res = resolveNodeScope(perRepoNodeRuns(rows, repo.worktreeDirName), nodeRunId)
+      if (res.kind !== 'between' && res.kind !== 'to-worktree') continue // node didn't write this repo
+      hadSnapshot = true
+      if (!(await isGitWorkTree(repo.worktreePath))) {
+        hadError = true
+        continue
+      }
+      const label = repo.worktreeDirName || basename(repo.repoPath)
+      try {
+        const diff = await withDeep(deepOpts, repo.worktreePath, () =>
+          res.kind === 'between'
+            ? computeBetweenRefs({
+                taskId: task.id,
+                scope: 'node',
+                nodeRunId,
+                worktreePath: repo.worktreePath,
+                fromRef: res.fromRef,
+                toRef: res.toRef,
+              })
+            : computeFromWorktree({
+                taskId: task.id,
+                scope: 'node',
+                nodeRunId,
+                worktreePath: repo.worktreePath,
+                fromRef: res.fromRef,
+              }),
+        )
+        parts.push({ label, diff })
+      } catch {
+        hadError = true
+      }
+    }
+    if (parts.length === 0) {
+      // A snapshot existed somewhere but nothing computed → pruned; otherwise the
+      // node simply wrote no repo → readonly. Mirrors the single-repo codes.
+      return hadSnapshot
+        ? emptyNodeDiff(task.id, nodeRunId, 'snapshot-pruned', 'pruned')
+        : emptyNodeDiff(task.id, nodeRunId, 'readonly-node-no-snapshot')
+    }
+    return mergeStructuralDiffs(
+      {
+        scope: 'node',
+        taskId: task.id,
+        nodeRunId,
+        fromRef: 'multi',
+        toRef: 'WORKTREE',
+        engine: 'baseline',
+        status: hadError ? 'partial' : 'ok',
+      },
+      parts,
+    )
+  }
+
+  // Single-repo (repoCount === 1) — unchanged.
   // A git-wrapper node selected in the per-node picker → use its recorded
   // baseline (the wrapper's diff is baseline → worktree, not a snapshot pair).
   const target = rows.find((r) => r.id === nodeRunId)
