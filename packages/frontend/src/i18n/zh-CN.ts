@@ -336,6 +336,9 @@ export interface Resources {
       approveBlocked: string
       noComments: string
       badge: string
+      acceptHint: string
+      notAcceptHint: string
+      shortcutHint: string
     }
     decision: {
       approved: string
@@ -2418,6 +2421,9 @@ export const zhCN: Resources = {
       approveBlocked: '还有 {{count}} 篇未裁决',
       noComments: '（暂无评审意见）',
       badge: '多文档',
+      acceptHint: '采纳（快捷键 Q）',
+      notAcceptHint: '不采纳（快捷键 W）',
+      shortcutHint: '↑/↓ 切换文件 · Q 采纳 · W 不采纳',
     },
     decision: {
       approved: '通过',

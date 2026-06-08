@@ -184,6 +184,9 @@ export const enUS: Resources = {
       approveBlocked: '{{count}} document(s) still undecided',
       noComments: '(no review comments yet)',
       badge: 'Multi-doc',
+      acceptHint: 'Accept (shortcut: Q)',
+      notAcceptHint: 'Exclude (shortcut: W)',
+      shortcutHint: '↑/↓ switch file · Q accept · W exclude',
     },
     decision: {
       approved: 'approved',

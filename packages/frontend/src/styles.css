@@ -6087,6 +6087,12 @@ mark.comment-anchor[data-active='true'] {
   gap: 8px;
   flex: 0 0 auto;
 }
+/* RFC-090: keyboard-shortcut hint, pushed to the right of the per-doc actions. */
+.review-multidoc__shortcut-hint {
+  margin-left: auto;
+  align-self: center;
+  font-size: 12px;
+}
 .reviews-row__multidoc {
   margin-top: 4px;
 }

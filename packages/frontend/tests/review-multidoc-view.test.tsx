@@ -131,4 +131,61 @@ describe('MultiDocReviewView', () => {
       })
     })
   })
+
+  // RFC-090: keyboard navigation for the review queue.
+  test('ArrowDown / ArrowUp move the active document and clamp at the ends', async () => {
+    wrap(<MultiDocReviewView nodeRunId="run" />)
+    await screen.findByText('Case A')
+    const current = (title: string): string | null =>
+      screen.getByText(title).closest('button')?.getAttribute('aria-current') ?? null
+    expect(current('Case A')).toBe('true') // first doc active by default
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    await waitFor(() => expect(current('Case B')).toBe('true'))
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    await waitFor(() => expect(current('Case C')).toBe('true'))
+    // Clamp: ArrowDown on the last document stays put (no wraparound).
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(current('Case C')).toBe('true')
+    // ArrowUp walks back.
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    await waitFor(() => expect(current('Case B')).toBe('true'))
+  })
+
+  test('Q sets the active document to accepted', async () => {
+    wrap(<MultiDocReviewView nodeRunId="run" />)
+    await screen.findByText('Case A')
+    fireEvent.keyDown(window, { key: 'q' })
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/api/reviews/run/documents/d0/selection', {
+        selection: 'accepted',
+      })
+    })
+  })
+
+  test('W sets the active document to not_accepted', async () => {
+    wrap(<MultiDocReviewView nodeRunId="run" />)
+    await screen.findByText('Case A')
+    fireEvent.keyDown(window, { key: 'w' })
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/api/reviews/run/documents/d0/selection', {
+        selection: 'not_accepted',
+      })
+    })
+  })
+
+  // The popover / inline-edit comment textareas (and the reject-reason textarea)
+  // are all form controls; focus inside any of them must mute Q/W so a typed
+  // 'q'/'w' edits the comment instead of flipping the doc's selection.
+  test('Q/W do not fire while focus is in a form control', async () => {
+    wrap(<MultiDocReviewView nodeRunId="run" />)
+    await screen.findByText('Case A')
+    const ta = document.createElement('textarea')
+    document.body.appendChild(ta)
+    ta.focus()
+    expect(document.activeElement).toBe(ta)
+    fireEvent.keyDown(window, { key: 'q' })
+    fireEvent.keyDown(window, { key: 'w' })
+    expect(api.patch).not.toHaveBeenCalled()
+    document.body.removeChild(ta)
+  })
 })

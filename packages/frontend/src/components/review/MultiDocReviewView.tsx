@@ -12,7 +12,7 @@
 // round-level approve/iterate/reject decision.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   Config,
@@ -28,6 +28,7 @@ import { LoadingState } from '@/components/LoadingState'
 import { ReviewDocPane } from '@/components/review/ReviewDocPane'
 import { StatusChip, type StatusChipKind } from '@/components/StatusChip'
 import { useTaskSync } from '@/hooks/useTaskSync'
+import { multiDocHotkeyAction, nextDocIndex } from '@/lib/review/multiDocHotkeys'
 
 type Selection = 'unselected' | 'accepted' | 'not_accepted'
 
@@ -62,6 +63,8 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
   const documents = useMemo(() => detail.data?.documents ?? [], [detail.data])
   const firstDocId = detail.data?.currentVersion.id ?? ''
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+  const [paneCapturing, setPaneCapturing] = useState(false)
+  const listRef = useRef<HTMLUListElement>(null)
   const activeDocId = selectedDocId ?? firstDocId
   const isFirst = activeDocId === firstDocId
 
@@ -135,6 +138,56 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
     await submitDecision.mutateAsync({ decision, reviewIteration })
   }, [dialog, submitDecision, reviewIteration])
 
+  // RFC-090: keyboard nav for the multi-doc review queue — ↑/↓ switch document,
+  // Q/W accept/reject the current one. Suppressed while the reviewer is filling
+  // in a comment (paneCapturing, reported by ReviewDocPane when its popover is
+  // open or a comment is inline-edited), while a decision dialog is open, or
+  // while focus is in any form control. Modifier chords are ignored (see
+  // multiDocHotkeyAction) so Cmd+W / Shift+Arrow etc. pass through untouched.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (paneCapturing) return
+      if (dialog !== null) return
+      if (
+        document.activeElement !== null &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)
+      ) {
+        return
+      }
+      const action = multiDocHotkeyAction(e)
+      if (action === null) return
+      const idx = documents.findIndex((d) => d.docVersionId === activeDocId)
+      if (action === 'prev' || action === 'next') {
+        if (documents.length === 0) return
+        e.preventDefault()
+        const target = documents[nextDocIndex(idx, documents.length, action)]
+        if (target !== undefined) setSelectedDocId(target.docVersionId)
+        return
+      }
+      // accept / not_accept — only when the round is awaiting review and the
+      // active document is known (mirrors the per-doc buttons' visibility).
+      const cur = idx >= 0 ? documents[idx] : undefined
+      if (!awaiting || cur === undefined || selectionMut.isPending) return
+      e.preventDefault()
+      selectionMut.mutate({
+        docVersionId: activeDocId,
+        selection: action === 'accept' ? 'accepted' : 'not_accepted',
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paneCapturing, dialog, documents, activeDocId, awaiting, selectionMut])
+
+  // RFC-090: keep the keyboard-selected document visible in the navigator.
+  // block:'nearest' is a no-op when the item is already on screen, so mouse
+  // clicks and the initial mount don't jank-scroll the list.
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-doc-id="${activeDocId}"]`)
+    if (el !== null && el !== undefined && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' })
+    }
+  }, [activeDocId])
+
   if (detail.isLoading) return <LoadingState label={t('common.loading')} />
   if (detail.isError || detail.data === undefined) return <ErrorBanner error={detail.error} />
 
@@ -198,7 +251,7 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
           <div className="review-multidoc__list-head">
             {t('reviews.multiDoc.documents', { count: documents.length })}
           </div>
-          <ul role="list">
+          <ul role="list" ref={listRef}>
             {documents.map((d) => {
               const chip = selectionChip(d.selection)
               const active = d.docVersionId === activeDocId
@@ -206,6 +259,7 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
                 <li key={d.docVersionId}>
                   <button
                     type="button"
+                    data-doc-id={d.docVersionId}
                     className={
                       'review-multidoc__doc' + (active ? ' review-multidoc__doc--active' : '')
                     }
@@ -239,6 +293,7 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
               <button
                 type="button"
                 data-testid="multidoc-accept"
+                title={t('reviews.multiDoc.acceptHint')}
                 className={
                   'btn btn--sm' + (current.selection === 'accepted' ? ' btn--primary' : '')
                 }
@@ -252,6 +307,7 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
               <button
                 type="button"
                 data-testid="multidoc-not-accept"
+                title={t('reviews.multiDoc.notAcceptHint')}
                 className={
                   'btn btn--sm' + (current.selection === 'not_accepted' ? ' btn--danger' : '')
                 }
@@ -262,6 +318,9 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
               >
                 {t('reviews.multiDoc.notAccept')}
               </button>
+              <span className="muted review-multidoc__shortcut-hint">
+                {t('reviews.multiDoc.shortcutHint')}
+              </span>
             </div>
           )}
           {activeBody === undefined ? (
@@ -278,6 +337,7 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
               plantumlEndpoint={config.data?.plantumlEndpoint}
               plantumlAuthHeader={config.data?.plantumlAuthHeader}
               onInvalidate={invalidate}
+              onShortcutCaptureChange={setPaneCapturing}
             />
           )}
         </div>
