@@ -26,8 +26,25 @@ import {
   type SummaryRow,
   type SigToken,
 } from '@/lib/structureView'
+import {
+  classifyBreaking,
+  explainChange,
+  orderAndFilterChanges,
+  walkthroughItems,
+  severityCounts,
+  type Severity,
+  type SortBy,
+  type WalkthroughItem,
+} from '@/lib/structureSemantics'
 import { StructuralGraph } from './StructuralGraph'
 import { CallChainView, type CallChainRoot } from './CallChainView'
+
+const ALL_SEVERITIES: readonly Severity[] = ['breaking', 'risky', 'safe']
+const SEVERITY_LABEL: Record<Severity, string> = {
+  breaking: 'tasks.structSevBreaking',
+  risky: 'tasks.structSevRisky',
+  safe: 'tasks.structSevSafe',
+}
 
 // degradedReasons that mean "deep was requested but fell back to baseline".
 const DEEP_FALLBACK_REASONS = new Set<string>([
@@ -67,6 +84,10 @@ export function StructuralDiffView({
 }) {
   const { t } = useTranslation()
   const [view, setView] = useState<ViewKey>('tree')
+  // RFC-088 — tree ordering + severity filtering. Default: risk-first sort, all
+  // severities shown.
+  const [sortBy, setSortBy] = useState<SortBy>('severity')
+  const [sevFilter, setSevFilter] = useState<ReadonlySet<Severity>>(() => new Set(ALL_SEVERITIES))
   const [callRoot, setCallRoot] = useState<CallChainRoot | null>(null)
   const openCallChain = (root: CallChainRoot): void => {
     setCallRoot(root)
@@ -77,6 +98,10 @@ export function StructuralDiffView({
   // the entry stays hidden instead of rendering a button that no-ops.
   const callChainEntry = data.callChainAvailable === true ? openCallChain : undefined
   const files = displayableFiles(data.files)
+  // RFC-088 — risk classification across all files: drives the breaking summary
+  // card and the walkthrough.
+  const counts = severityCounts(files)
+  const walkthrough = walkthroughItems(files, 8)
   const hasContent = files.length > 0 || data.dependencyChanges.length > 0
   if (!hasContent) {
     if (data.degradedReason === 'snapshot-pruned') {
@@ -114,7 +139,23 @@ export function StructuralDiffView({
           {t('tasks.structDegradedBanner')}
         </div>
       )}
-      <StructuralSummaryCards summary={data.summary} />
+      <StructuralSummaryCards
+        summary={data.summary}
+        breaking={counts.breaking}
+        onFocusBreaking={() => {
+          setView('tree')
+          setSortBy('severity')
+          setSevFilter(new Set<Severity>(['breaking']))
+        }}
+      />
+      {walkthrough.length > 0 && (
+        <WalkthroughCard
+          items={walkthrough}
+          more={counts.breaking + counts.risky - walkthrough.length}
+          onJumpToHunk={onJumpToHunk}
+          onOpenCallChain={callChainEntry}
+        />
+      )}
       {availableViews.length > 0 && (
         <div className="structure__detail">
           <div
@@ -136,11 +177,21 @@ export function StructuralDiffView({
             ))}
           </div>
           {activeView === 'tree' ? (
-            <StructuralTree
-              files={files}
-              onJumpToHunk={onJumpToHunk}
-              onOpenCallChain={callChainEntry}
-            />
+            <>
+              <StructureTreeToolbar
+                sortBy={sortBy}
+                setSortBy={setSortBy}
+                sevFilter={sevFilter}
+                setSevFilter={setSevFilter}
+              />
+              <StructuralTree
+                files={files}
+                sortBy={sortBy}
+                sevFilter={sevFilter}
+                onJumpToHunk={onJumpToHunk}
+                onOpenCallChain={callChainEntry}
+              />
+            </>
           ) : activeView === 'graph' ? (
             <StructuralGraph data={data} onOpenCallChain={callChainEntry} />
           ) : activeView === 'impact' ? (
@@ -197,7 +248,148 @@ function ImpactPanel({ impact }: { impact: ImpactItem[] }) {
   )
 }
 
-function StructuralSummaryCards({ summary }: { summary: StructuralDiffSummary }) {
+/** RFC-088 — tree controls: sort (risk / name) + per-severity show toggles. */
+function StructureTreeToolbar({
+  sortBy,
+  setSortBy,
+  sevFilter,
+  setSevFilter,
+}: {
+  sortBy: SortBy
+  setSortBy: (s: SortBy) => void
+  sevFilter: ReadonlySet<Severity>
+  setSevFilter: (s: ReadonlySet<Severity>) => void
+}) {
+  const { t } = useTranslation()
+  const toggleSev = (s: Severity): void => {
+    const next = new Set(sevFilter)
+    if (next.has(s)) next.delete(s)
+    else next.add(s)
+    // never let the filter empty out to "show nothing" — re-show all instead
+    setSevFilter(next.size === 0 ? new Set(ALL_SEVERITIES) : next)
+  }
+  return (
+    <div className="structure__toolbar">
+      <span className="structure__toolbar-label">{t('tasks.structSortLabel')}</span>
+      <div
+        className="segmented structure__sort"
+        role="radiogroup"
+        aria-label={t('tasks.structSortLabel')}
+      >
+        {(['severity', 'name'] as const).map((s) => (
+          <button
+            key={s}
+            type="button"
+            role="radio"
+            aria-checked={sortBy === s}
+            className={`segmented__option ${sortBy === s ? 'segmented__option--active' : ''}`}
+            onClick={() => setSortBy(s)}
+          >
+            {t(s === 'severity' ? 'tasks.structSortSeverity' : 'tasks.structSortName')}
+          </button>
+        ))}
+      </div>
+      <span className="structure__toolbar-label">{t('tasks.structFilterLabel')}</span>
+      {ALL_SEVERITIES.map((s) => (
+        <label key={s} className="structure__sev-toggle">
+          <input type="checkbox" checked={sevFilter.has(s)} onChange={() => toggleSev(s)} />
+          <span className={`structure__severity structure__severity--${s}`}>
+            {t(SEVERITY_LABEL[s])}
+          </span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+/** RFC-088 — "look here first" strip: top-N changes by risk, each linking to the
+ *  textual diff (hunk) or the call chain. Host gates rendering on items.length. */
+function WalkthroughCard({
+  items,
+  more,
+  onJumpToHunk,
+  onOpenCallChain,
+}: {
+  items: WalkthroughItem[]
+  more: number
+  onJumpToHunk?: (anchor: HunkAnchor) => void
+  onOpenCallChain?: (root: CallChainRoot) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="structure__walkthrough" data-testid="structure-walkthrough">
+      <div className="structure__walkthrough-header">{t('tasks.structWalkthroughTitle')}</div>
+      <ul className="structure__walkthrough-list">
+        {items.map((it, i) => {
+          const node = it.change.after ?? it.change.before
+          const explain = explainChange(it.change)
+          const anchor = it.change.hunkAnchor
+          const after = it.change.after
+          const onClick =
+            onJumpToHunk !== undefined && anchor !== undefined
+              ? () => onJumpToHunk(anchor)
+              : onOpenCallChain !== undefined &&
+                  after !== undefined &&
+                  CALLABLE_KINDS.has(after.kind)
+                ? () =>
+                    onOpenCallChain({
+                      ref: `${after.filePath}#${after.qualifiedName}`,
+                      label: `${after.name}()`,
+                    })
+                : undefined
+          const inner = (
+            <>
+              <span className={`structure__severity structure__severity--${it.severity}`}>
+                {t(SEVERITY_LABEL[it.severity])}
+              </span>
+              <span className="structure__walkthrough-name">
+                {node?.name ?? node?.qualifiedName}
+              </span>
+              <span className="structure__walkthrough-explain">{t(explain.key, explain.vars)}</span>
+            </>
+          )
+          return (
+            <li
+              key={`${it.filePath}-${node?.qualifiedName ?? '?'}-${i}`}
+              className="structure__walkthrough-item"
+            >
+              {onClick !== undefined ? (
+                <button
+                  type="button"
+                  className="structure__walkthrough-jump"
+                  onClick={onClick}
+                  title={it.filePath}
+                >
+                  {inner}
+                </button>
+              ) : (
+                <span className="structure__walkthrough-static" title={it.filePath}>
+                  {inner}
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {more > 0 && (
+        <div className="structure__walkthrough-more">
+          {t('tasks.structWalkthroughMore', { n: more })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StructuralSummaryCards({
+  summary,
+  breaking,
+  onFocusBreaking,
+}: {
+  summary: StructuralDiffSummary
+  /** RFC-088 — count of breaking-classified changes; renders a clickable card. */
+  breaking: number
+  onFocusBreaking: () => void
+}) {
   const { t } = useTranslation()
   const rows = summaryRows(summary)
   return (
@@ -206,6 +398,17 @@ function StructuralSummaryCards({ summary }: { summary: StructuralDiffSummary })
         <span className="structure__card-count">{summary.files}</span>
         <span className="structure__card-label">{t('tasks.structCardFiles')}</span>
       </div>
+      {breaking > 0 && (
+        <button
+          type="button"
+          className="structure__card structure__card--breaking"
+          onClick={onFocusBreaking}
+          title={t('tasks.structSevBreaking')}
+        >
+          <span className="structure__card-count">{breaking}</span>
+          <span className="structure__card-label">{t('tasks.structCardBreaking')}</span>
+        </button>
+      )}
       {rows.map((r) => (
         <div key={r.key} className="structure__card">
           <span className="structure__card-label">{t(CARD_LABEL_KEY[r.key])}</span>
@@ -267,10 +470,14 @@ function DependencyChangesPanel({ changes }: { changes: DependencyChange[] }) {
 
 function StructuralTree({
   files,
+  sortBy,
+  sevFilter,
   onJumpToHunk,
   onOpenCallChain,
 }: {
   files: FileStructuralDiff[]
+  sortBy: SortBy
+  sevFilter: ReadonlySet<Severity>
   onJumpToHunk?: (anchor: HunkAnchor) => void
   onOpenCallChain?: (root: CallChainRoot) => void
 }) {
@@ -320,6 +527,8 @@ function StructuralTree({
         {selected !== undefined && (
           <FileChanges
             file={selected}
+            sortBy={sortBy}
+            sevFilter={sevFilter}
             onJumpToHunk={onJumpToHunk}
             onOpenCallChain={onOpenCallChain}
           />
@@ -371,10 +580,14 @@ const CALLABLE_KINDS = new Set(['method', 'function', 'constructor'])
 
 function FileChanges({
   file,
+  sortBy,
+  sevFilter,
   onJumpToHunk,
   onOpenCallChain,
 }: {
   file: FileStructuralDiff
+  sortBy: SortBy
+  sevFilter: ReadonlySet<Severity>
   onJumpToHunk?: (anchor: HunkAnchor) => void
   onOpenCallChain?: (root: CallChainRoot) => void
 }) {
@@ -386,9 +599,20 @@ function FileChanges({
   if (groups.length === 0) {
     return <div className="structure__muted muted">{t('tasks.structFileNoSymbolChanges')}</div>
   }
+  // RFC-088 — per-group order + severity filter; groups that empty out under the
+  // filter are dropped, and if everything is filtered away say so.
+  const shownGroups = groups
+    .map((g) => ({
+      container: g.container,
+      changes: orderAndFilterChanges(g.changes, sortBy, { severities: sevFilter }),
+    }))
+    .filter((g) => g.changes.length > 0)
+  if (shownGroups.length === 0) {
+    return <div className="structure__muted muted">{t('tasks.structFileNoSymbolChanges')}</div>
+  }
   return (
     <div className="structure__changes">
-      {groups.map((g) => (
+      {shownGroups.map((g) => (
         <div key={g.container || '__top__'} className="structure__group">
           {g.container !== '' && <div className="structure__group-header">{g.container}</div>}
           <ul className="structure__symbols">
@@ -412,6 +636,9 @@ function FileChanges({
                 ch.signatureChanged === true && ch.changeType === 'modified'
                   ? diffSignatureTokens(ch.before?.signature, ch.after?.signature)
                   : null
+              // RFC-088 — risk chip + one-line plain-language explanation.
+              const verdict = classifyBreaking(ch)
+              const explain = explainChange(ch)
               const body = (
                 <>
                   <span className={badgeClass(ch.changeType)} aria-label={ch.changeType}>
@@ -421,6 +648,15 @@ function FileChanges({
                   <span className="structure__symbol-name">
                     {node?.name ?? node?.qualifiedName}
                   </span>
+                  {verdict.severity !== 'safe' && (
+                    <span
+                      className={`structure__severity structure__severity--${verdict.severity}`}
+                      title={verdict.uncertain ? t('tasks.structSevUnknownVis') : undefined}
+                    >
+                      {t(SEVERITY_LABEL[verdict.severity])}
+                      {verdict.uncertain ? ' ?' : ''}
+                    </span>
+                  )}
                   {(ch.changeType === 'renamed' || ch.changeType === 'moved') &&
                     ch.renamedFrom !== undefined && (
                       <span className="structure__symbol-from">
@@ -468,6 +704,7 @@ function FileChanges({
                     </button>
                   )}
                   {sigDiff !== null && <SignatureDiff diff={sigDiff} />}
+                  <div className="structure__explain">{t(explain.key, explain.vars)}</div>
                 </li>
               )
             })}

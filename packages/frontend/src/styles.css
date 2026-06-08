@@ -10336,3 +10336,122 @@ mark.comment-anchor[data-active='true'] {
   color: var(--success);
   border-radius: 3px;
 }
+
+/* RFC-088 — severity chip (breaking / risky), plain-language explanation line,
+ * tree sort/filter toolbar, breaking summary card, and walkthrough strip. */
+.structure__severity {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.structure__severity--breaking {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+.structure__severity--risky {
+  background: color-mix(in srgb, #d99100 18%, transparent);
+  color: #d99100;
+}
+.structure__severity--safe {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+}
+.structure__explain {
+  margin: 1px 0 4px 26px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.structure__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px 0;
+}
+.structure__toolbar-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.structure__sev-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.structure__card--breaking {
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.structure__card--breaking .structure__card-count {
+  color: var(--danger);
+}
+.structure__card--breaking:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.structure__walkthrough {
+  margin: 0 0 12px 0;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+}
+.structure__walkthrough-header {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.structure__walkthrough-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.structure__walkthrough-jump,
+.structure__walkthrough-static {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font: inherit;
+  color: var(--text);
+}
+.structure__walkthrough-jump {
+  cursor: pointer;
+}
+.structure__walkthrough-jump:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.structure__walkthrough-name {
+  font-weight: 600;
+  font-size: 12px;
+  flex: none;
+}
+.structure__walkthrough-explain {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.structure__walkthrough-more {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}

@@ -1020,6 +1020,24 @@ export interface Resources {
     structRenamedFrom: string
     structSigChanged: string
     structJumpToDiff: string
+    structExplainAdded: string
+    structExplainRemovedPublic: string
+    structExplainRemovedPrivate: string
+    structExplainRenamed: string
+    structExplainMoved: string
+    structExplainSig: string
+    structExplainBody: string
+    structSevBreaking: string
+    structSevRisky: string
+    structSevSafe: string
+    structSevUnknownVis: string
+    structSortLabel: string
+    structSortName: string
+    structSortSeverity: string
+    structFilterLabel: string
+    structCardBreaking: string
+    structWalkthroughTitle: string
+    structWalkthroughMore: string
     tabFeedback: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
@@ -3258,6 +3276,24 @@ export const zhCN: Resources = {
     structRenamedFrom: '原 {{from}}',
     structSigChanged: '签名变化',
     structJumpToDiff: '跳转到文本 diff',
+    structExplainAdded: '新增 {{kind}} {{name}}',
+    structExplainRemovedPublic: '删除了对外可见的 {{kind}} {{name}} —— 可能破坏调用方',
+    structExplainRemovedPrivate: '删除了私有 {{kind}} {{name}}',
+    structExplainRenamed: '{{kind}} {{name}} 由 {{from}} 重命名 —— 旧名调用会失效',
+    structExplainMoved: '{{kind}} {{name}} 被移动',
+    structExplainSig: '{{name}} 的签名变了 —— 请检查所有调用点',
+    structExplainBody: '{{name}} 仅函数体改动',
+    structSevBreaking: '破坏性',
+    structSevRisky: '需留意',
+    structSevSafe: '安全',
+    structSevUnknownVis: '可见性未知 —— 已按保守口径分级',
+    structSortLabel: '排序',
+    structSortName: '名称',
+    structSortSeverity: '风险',
+    structFilterLabel: '显示',
+    structCardBreaking: '破坏性',
+    structWalkthroughTitle: '重点改动(按风险)',
+    structWalkthroughMore: '还有 {{n}} 处',
     tabFeedback: '留言',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',

@@ -12,6 +12,7 @@ import type {
   StructuralDiff,
   SymbolNode,
   DependencyChange,
+  HunkAnchor,
 } from '@agent-workflow/shared'
 import '../src/i18n'
 import { StructuralDiffView } from '../src/components/structure/StructuralDiffView'
@@ -303,5 +304,104 @@ describe('<StructuralDiffView />', () => {
     }
     const { container } = render(<StructuralDiffView data={empty} />)
     expect(container.querySelector('.structure__tree')).toBeNull()
+  })
+})
+
+// RFC-088 — semantics overlay: severity chips + plain-language explanation,
+// risk-first sort + severity filter + clickable breaking card, and the
+// walkthrough strip. Assertions use class/glyph anchors (locale-agnostic).
+describe('<StructuralDiffView /> RFC-088 semantics overlay', () => {
+  const pub = (qn: string): SymbolNode => ({
+    ...sym(qn, 'method'),
+    filePath: 'svc.ts',
+    visibility: 'public',
+  })
+
+  function semDiff(): StructuralDiff {
+    const files: FileStructuralDiff[] = [
+      {
+        filePath: 'svc.ts',
+        lang: 'typescript',
+        status: 'ok',
+        edges: [],
+        impact: [],
+        changes: [
+          {
+            changeType: 'removed',
+            kind: 'method',
+            before: pub('Svc.gone'),
+            hunkAnchor: { filePath: 'svc.ts', startLine: 1, endLine: 2 },
+          },
+          { changeType: 'added', kind: 'method', after: pub('Svc.fresh') },
+        ],
+      },
+    ]
+    return {
+      scope: 'task',
+      taskId: 't',
+      fromRef: 'a',
+      toRef: 'WORKTREE',
+      engine: 'baseline',
+      status: 'ok',
+      files,
+      dependencyChanges: [],
+      impact: [],
+      classEdges: [],
+      summary: computeSummary(files, []),
+    }
+  }
+
+  test('tree rows carry a severity chip + a plain-language explanation', () => {
+    const { container } = render(<StructuralDiffView data={semDiff()} />)
+    // removed public method → breaking chip; every row gets an explanation line
+    expect(
+      container.querySelector('.structure__changes .structure__severity--breaking'),
+    ).toBeTruthy()
+    expect(container.querySelector('.structure__explain')).toBeTruthy()
+  })
+
+  test('default risk-first sort puts the breaking change at the top of the tree', () => {
+    const { container } = render(<StructuralDiffView data={semDiff()} />)
+    const firstRow = container.querySelector('.structure__changes .structure__symbol')
+    expect(firstRow?.textContent ?? '').toContain('gone') // breaking before safe 'fresh'
+  })
+
+  test('walkthrough strip lists breaking first and jumps to the hunk on click', () => {
+    let jumped: HunkAnchor | null = null
+    const { container } = render(
+      <StructuralDiffView
+        data={semDiff()}
+        onJumpToHunk={(a) => {
+          jumped = a
+        }}
+      />,
+    )
+    const card = container.querySelector('[data-testid="structure-walkthrough"]')
+    expect(card).toBeTruthy()
+    expect(card!.querySelector('.structure__severity')?.className).toContain(
+      'structure__severity--breaking',
+    )
+    fireEvent.click(card!.querySelector('.structure__walkthrough-jump') as Element)
+    expect(jumped).toEqual({ filePath: 'svc.ts', startLine: 1, endLine: 2 })
+  })
+
+  test('clicking the breaking summary card filters the tree to breaking only', () => {
+    const { container } = render(<StructuralDiffView data={semDiff()} />)
+    expect(container.querySelector('.structure__changes')?.textContent ?? '').toContain('fresh')
+    const card = container.querySelector('.structure__card--breaking') as Element
+    expect(card).toBeTruthy()
+    fireEvent.click(card)
+    const tree = container.querySelector('.structure__changes')
+    expect(tree?.textContent ?? '').toContain('gone') // breaking stays
+    expect(tree?.textContent ?? '').not.toContain('fresh') // safe filtered out
+  })
+
+  test('no walkthrough / breaking card when every change is safe', () => {
+    const d = semDiff()
+    d.files[0]!.changes = [{ changeType: 'added', kind: 'method', after: pub('Svc.fresh') }]
+    d.summary = computeSummary(d.files, [])
+    const { container } = render(<StructuralDiffView data={d} />)
+    expect(container.querySelector('[data-testid="structure-walkthrough"]')).toBeNull()
+    expect(container.querySelector('.structure__card--breaking')).toBeNull()
   })
 })
