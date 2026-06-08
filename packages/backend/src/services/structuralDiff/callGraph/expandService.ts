@@ -6,12 +6,12 @@
 // per worktree path. Best-effort by design.
 
 import { readFile as fsReadFile, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import type { DbClient } from '@/db/client'
 import type { CallTarget } from '@agent-workflow/shared'
 import { getTask } from '@/services/task'
 import { DomainError, NotFoundError } from '@/util/errors'
+import { isGitWorkTree } from '@/util/git'
 import { resolveLang } from '../lang/grammars'
 import { scanClassDecls, buildClassIndex } from './classIndex'
 import { expandMethod, type ExpandCtx } from './service'
@@ -102,6 +102,44 @@ export async function worktreeExpandCtx(root: string): Promise<ExpandCtx> {
   }
 }
 
+/**
+ * RFC-089 P4 — split a (possibly repo-label-prefixed) call-chain ref into its
+ * repo dir + the in-repo ref. In a multi-repo task the graph's refs are
+ * `${worktreeDirName}/${filePath}#${qn}` (mergeStructuralDiffs prefixes them);
+ * call expansion must run in THAT repo's worktree against the UN-prefixed ref.
+ * Longest matching `${dir}/` prefix wins; no match → `{ dir: null, innerRef }`.
+ * Pure (exported for tests).
+ */
+export function splitRepoRef(
+  repoDirs: readonly string[],
+  ref: string,
+): { dir: string | null; innerRef: string } {
+  let best: string | null = null
+  for (const dir of repoDirs) {
+    if (dir !== '' && ref.startsWith(`${dir}/`) && (best === null || dir.length > best.length)) {
+      best = dir
+    }
+  }
+  return best === null
+    ? { dir: null, innerRef: ref }
+    : { dir: best, innerRef: ref.slice(best.length + 1) }
+}
+
+/** Re-apply a repo label to one id segment (before `#` for refs / `::` for
+ *  ownerClass) so the next lazy expand resolves back to the same repo. */
+function prefixSeg(label: string, id: string, delim: string): string {
+  const i = id.indexOf(delim)
+  return i < 0 ? `${label}/${id}` : `${label}/${id.slice(0, i)}${id.slice(i)}`
+}
+
+function reprefixTarget(label: string, t: CallTarget): CallTarget {
+  return {
+    ...t,
+    ref: t.ref !== undefined ? prefixSeg(label, t.ref, '#') : undefined,
+    ownerClass: t.ownerClass !== undefined ? prefixSeg(label, t.ownerClass, '::') : undefined,
+  }
+}
+
 /** Resolve the task's worktree + expand one method's direct callees. */
 export async function getCallTargets(
   db: DbClient,
@@ -110,13 +148,39 @@ export async function getCallTargets(
 ): Promise<CallTarget[]> {
   const task = await getTask(db, taskId)
   if (task === null) throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
-  if (!existsSync(task.worktreePath)) {
+
+  // Single-repo: expand against the task worktree with the ref as-is. Multi-repo
+  // (RFC-089 P4): the ref is `${worktreeDirName}/…`, so pick that repo's worktree
+  // and strip the prefix before expanding, then re-prefix the results so the
+  // chain keeps resolving within the same repo on the next click.
+  let worktreePath = task.worktreePath
+  let innerRef = methodRef
+  let label: string | null = null
+  if (task.repoCount > 1) {
+    const split = splitRepoRef(
+      task.repos.map((r) => r.worktreeDirName),
+      methodRef,
+    )
+    if (split.dir === null) {
+      throw new NotFoundError(
+        'call-target-repo-unresolved',
+        `call-chain ref '${methodRef}' does not match any repo in task '${taskId}'`,
+      )
+    }
+    const repo = task.repos.find((r) => r.worktreeDirName === split.dir)!
+    worktreePath = repo.worktreePath
+    innerRef = split.innerRef
+    label = split.dir
+  }
+
+  if (!(await isGitWorkTree(worktreePath))) {
     throw new DomainError(
       'task-worktree-missing',
-      `worktree '${task.worktreePath}' does not exist; cannot expand call chain`,
+      `worktree '${worktreePath}' is unavailable (missing or no longer a git repository); cannot expand call chain`,
       410,
     )
   }
-  const ctx = await worktreeExpandCtx(task.worktreePath)
-  return expandMethod(methodRef, ctx)
+  const ctx = await worktreeExpandCtx(worktreePath)
+  const targets = await expandMethod(innerRef, ctx)
+  return label === null ? targets : targets.map((t) => reprefixTarget(label, t))
 }

@@ -231,6 +231,9 @@ export function mergeStructuralDiffs(
     dependencyChanges,
     impact: files.flatMap((f) => f.impact),
     classEdges,
+    // RFC-089 P4 — the ⎇ call-chain entry lights up if ANY repo has a chain root.
+    // Safe to expose for multi-repo now that getCallTargets resolves per repo.
+    callChainAvailable: parts.some((p) => p.diff.callChainAvailable === true),
     summary: computeSummary(files, dependencyChanges),
   }
 }

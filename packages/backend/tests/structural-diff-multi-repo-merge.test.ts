@@ -148,4 +148,21 @@ describe('mergeStructuralDiffs — RFC-089 P2 prefixing', () => {
   test('same-path same-name classes across repos do NOT collide', () => {
     expect(new Set(merged.classEdges.map((e) => e.from)).size).toBe(2)
   })
+
+  test('callChainAvailable is OR-reduced across repos (RFC-089 P4)', () => {
+    const withChain: StructuralDiff = { ...repoDiff(), callChainAvailable: true }
+    const without = repoDiff() // callChainAvailable undefined
+    expect(
+      mergeStructuralDiffs(BASE, [
+        { label: 'a', diff: without },
+        { label: 'b', diff: withChain },
+      ]).callChainAvailable,
+    ).toBe(true)
+    expect(
+      mergeStructuralDiffs(BASE, [
+        { label: 'a', diff: without },
+        { label: 'b', diff: without },
+      ]).callChainAvailable,
+    ).toBe(false)
+  })
 })
