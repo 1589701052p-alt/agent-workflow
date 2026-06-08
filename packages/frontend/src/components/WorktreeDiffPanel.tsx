@@ -15,7 +15,7 @@
 // group → identical rendering and identical (bare-header) viewed keys, so
 // previously-persisted progress keeps matching.
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DiffFileBody, splitByRepo, type FileBlock } from './DiffViewer'
 import { loadViewed, saveViewed, toggleViewed, viewedProgress } from '@/lib/diffViewed'
@@ -67,12 +67,77 @@ export function WorktreeDiffPanel({ diff, truncated, focusFilePath, storageKey }
   // RFC-021 (Q5) — which files the reviewer has checked off, persisted per task.
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() => loadViewed(storageKey))
   useEffect(() => setViewed(loadViewed(storageKey)), [storageKey])
-  const markViewed = (viewedKey: string): void =>
-    setViewed((prev) => {
-      const next = toggleViewed(prev, viewedKey)
-      saveViewed(storageKey, next)
-      return next
-    })
+  const markViewed = useCallback(
+    (viewedKey: string): void =>
+      setViewed((prev) => {
+        const next = toggleViewed(prev, viewedKey)
+        saveViewed(storageKey, next)
+        return next
+      }),
+    [storageKey],
+  )
+
+  // Keyboard file switching. The left list is already a vertical
+  // `role="tablist"`, whose ARIA contract is Up/Down to move between tabs — the
+  // current widget claimed the role but never honored the keys. Each tab keeps a
+  // ref so selecting one can pull focus onto it: that keeps the focus ring,
+  // scroll-into-view, and the roving tab stop in sync with the shown file, and
+  // lets repeated Arrow presses continue from the new position even on browsers
+  // that don't focus a <button> on click (Safari / Firefox on macOS).
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>())
+  const selectFile = useCallback((key: string) => {
+    setSelectedKey(key)
+    tabRefs.current.get(key)?.focus()
+  }, [])
+
+  // Up/Down (+ Home/End) move between files; Space toggles the current file's
+  // "viewed" mark. Scoped to the list via onKeyDown — NOT a global window
+  // listener — so it never hijacks these keys while the diff body on the right is
+  // being scrolled.
+  const onTablistKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (items.length === 0) return
+      const currentKey = selectedKey ?? items[0]?.selKey
+      const idx = items.findIndex((it) => it.selKey === currentKey)
+      const go = (i: number): void => {
+        const next = items[Math.max(0, Math.min(items.length - 1, i))]
+        if (next !== undefined) selectFile(next.selKey)
+      }
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault()
+          go(idx + 1)
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          go(idx - 1)
+          break
+        case 'Home':
+          e.preventDefault()
+          go(0)
+          break
+        case 'End':
+          e.preventDefault()
+          go(items.length - 1)
+          break
+        case ' ':
+        case 'Spacebar': {
+          // Space toggles the current file's "viewed" mark — a keyboard shortcut
+          // for the per-file checkbox. Skip when the Space came from the checkbox
+          // itself: it toggles natively, and handling it here too would
+          // double-toggle to a no-op. preventDefault otherwise stops the page
+          // from scrolling (Space's default) and the tab from re-activating.
+          if ((e.target as HTMLElement).tagName === 'INPUT') break
+          e.preventDefault()
+          const cur = items[idx]
+          if (cur !== undefined) markViewed(cur.viewedKey)
+          break
+        }
+      }
+    },
+    [items, selectedKey, selectFile, markViewed],
+  )
 
   // Jump-to-file: when an external focus request arrives, select the block whose
   // header references that path. Header is `diff --git a/<p> b/<p>` so a
@@ -119,7 +184,12 @@ export function WorktreeDiffPanel({ diff, truncated, focusFilePath, storageKey }
         <div className="worktree-diff__progress" data-testid="diff-viewed-progress">
           {t('tasks.diffViewedProgress', { n: progress.viewed, total: progress.total })}
         </div>
-        <nav role="tablist" aria-orientation="vertical" className="worktree-diff__tablist">
+        <nav
+          role="tablist"
+          aria-orientation="vertical"
+          className="worktree-diff__tablist"
+          onKeyDown={onTablistKeyDown}
+        >
           {items.map((it, idx) => {
             // Emit a repo heading at each repo boundary (multi-repo only).
             const showRepo = it.repo !== null && (idx === 0 || items[idx - 1]?.repo !== it.repo)
@@ -150,10 +220,17 @@ export function WorktreeDiffPanel({ diff, truncated, focusFilePath, storageKey }
                   <button
                     type="button"
                     role="tab"
+                    ref={(el) => {
+                      if (el !== null) tabRefs.current.set(it.selKey, el)
+                      else tabRefs.current.delete(it.selKey)
+                    }}
+                    // Roving tab stop: only the active file tab is in the Tab
+                    // order; Up/Down then move among the rest (ARIA tablist).
+                    tabIndex={isActive ? 0 : -1}
                     aria-selected={isActive}
                     title={it.block.header}
                     className={`worktree-diff__file-tab ${isActive ? 'worktree-diff__file-tab--active' : ''}`}
-                    onClick={() => setSelectedKey(it.selKey)}
+                    onClick={() => selectFile(it.selKey)}
                   >
                     {it.block.header}
                   </button>

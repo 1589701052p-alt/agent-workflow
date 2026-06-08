@@ -7,6 +7,9 @@
 
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterAll, describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import i18n from '@/i18n'
 import { WorktreeDiffPanel } from '../src/components/WorktreeDiffPanel'
 
@@ -230,5 +233,141 @@ index 3333..4444 100644
     expect((checks[0] as HTMLInputElement).checked).toBe(true)
     expect((checks[1] as HTMLInputElement).checked).toBe(false)
     expect(screen.getByTestId('diff-viewed-progress').textContent).toMatch(/1\/2/)
+  })
+})
+
+// Keyboard file switching. The file column is a vertical `role="tablist"`, whose
+// ARIA contract is Up/Down to move between tabs (Home/End to the ends). These
+// lock that behavior plus the two decisions that keep it tame: a roving tab stop
+// (only the active tab is Tab-reachable) and a list-SCOPED handler (onKeyDown on
+// the tablist, never a global window listener) so Arrow keys can never hijack
+// scrolling the diff body on the right. Selection assertions read `aria-selected`
+// so they stay locale-agnostic (tab labels are file paths, not translated).
+describe('WorktreeDiffPanel — keyboard file switching', () => {
+  const selectedTabLabel = (): string | null =>
+    screen.getAllByRole('tab').find((t) => t.getAttribute('aria-selected') === 'true')
+      ?.textContent ?? null
+
+  test('ArrowDown / ArrowUp move to the next / previous file', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    expect(selectedTabLabel()).toBe('src/a.ts')
+
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedTabLabel()).toBe('src/b.ts')
+    // The right pane swaps to the newly selected file.
+    expect(screen.getByText('+new line from b')).toBeTruthy()
+    expect(screen.queryByText('+new line from a')).toBeNull()
+
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedTabLabel()).toBe('src/c.ts')
+
+    fireEvent.keyDown(tablist, { key: 'ArrowUp' })
+    expect(selectedTabLabel()).toBe('src/b.ts')
+    expect(screen.getByText('+new line from b')).toBeTruthy()
+  })
+
+  test('Home / End jump to the first / last file', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    fireEvent.keyDown(tablist, { key: 'End' })
+    expect(selectedTabLabel()).toBe('src/c.ts')
+    expect(screen.getByText('+new line from c')).toBeTruthy()
+    fireEvent.keyDown(tablist, { key: 'Home' })
+    expect(selectedTabLabel()).toBe('src/a.ts')
+  })
+
+  test('selection clamps at both ends — no wraparound', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    // already on the first file → ArrowUp keeps it there
+    fireEvent.keyDown(tablist, { key: 'ArrowUp' })
+    expect(selectedTabLabel()).toBe('src/a.ts')
+    // jump to the last file → ArrowDown past the end keeps it there
+    fireEvent.keyDown(tablist, { key: 'End' })
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedTabLabel()).toBe('src/c.ts')
+  })
+
+  test('roving tab stop: only the active file tab is Tab-reachable', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    const tabIndexes = (): number[] => screen.getAllByRole('tab').map((t) => t.tabIndex)
+    expect(tabIndexes()).toEqual([0, -1, -1])
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(tabIndexes()).toEqual([-1, 0, -1])
+  })
+
+  test('keyboard selection pulls focus onto the shown file tab', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    // Focus follows selection so repeated presses continue from here + the row
+    // scrolls into view.
+    expect(document.activeElement).toBe(screen.getAllByRole('tab')[1])
+  })
+
+  test('modifier + Arrow is ignored so browser / OS shortcuts pass through', () => {
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} />)
+    const tablist = screen.getByRole('tablist')
+    fireEvent.keyDown(tablist, { key: 'ArrowDown', metaKey: true })
+    expect(selectedTabLabel()).toBe('src/a.ts') // unchanged
+  })
+
+  // Space toggles the current file's "viewed" mark — the keyboard shortcut for
+  // the per-file checkbox, so a reviewer can ↓ / Space down the list hands-on-keys.
+  const checkboxes = (): HTMLInputElement[] => screen.getAllByRole('checkbox') as HTMLInputElement[]
+  const progress = (): string => screen.getByTestId('diff-viewed-progress').textContent ?? ''
+
+  test('Space marks the current file viewed, and Space again clears it', () => {
+    localStorage.clear()
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} storageKey="kbV1" />)
+    const tablist = screen.getByRole('tablist')
+    expect(progress()).toMatch(/0\/3/)
+
+    fireEvent.keyDown(tablist, { key: ' ' })
+    expect(checkboxes()[0]!.checked).toBe(true)
+    expect(progress()).toMatch(/1\/3/)
+    expect(selectedTabLabel()).toBe('src/a.ts') // Space marks, it does not navigate
+
+    fireEvent.keyDown(tablist, { key: ' ' })
+    expect(checkboxes()[0]!.checked).toBe(false)
+    expect(progress()).toMatch(/0\/3/)
+  })
+
+  test('Space marks the file you navigated to, not the first', () => {
+    localStorage.clear()
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} storageKey="kbV2" />)
+    const tablist = screen.getByRole('tablist')
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' }) // select 2nd file
+    fireEvent.keyDown(tablist, { key: ' ' }) // mark it viewed
+    const checks = checkboxes()
+    expect(checks[0]!.checked).toBe(false)
+    expect(checks[1]!.checked).toBe(true)
+    expect(checks[2]!.checked).toBe(false)
+    expect(progress()).toMatch(/1\/3/)
+  })
+
+  test('Space originating from the viewed checkbox is left to the checkbox (no double-toggle)', () => {
+    localStorage.clear()
+    render(<WorktreeDiffPanel diff={THREE_FILE_DIFF} storageKey="kbV3" />)
+    // The list handler must NOT act on a Space whose target is the checkbox — the
+    // checkbox toggles natively, and a second toggle here would cancel it out.
+    // happy-dom doesn't run the checkbox's native Space toggle, so firing a Space
+    // keydown on the checkbox exercises the bubbled list handler in isolation:
+    // "viewed" must stay untouched.
+    fireEvent.keyDown(checkboxes()[0]!, { key: ' ' })
+    expect(progress()).toMatch(/0\/3/)
+    expect(checkboxes()[0]!.checked).toBe(false)
+  })
+
+  // Source-level backstop (repo test policy): the file-switch handler must hang
+  // off the tablist, never a window 'keydown' listener — a global listener would
+  // steal Arrow keys everywhere and break scrolling the diff body on the right.
+  test('Arrow handler is list-scoped, not a global window listener', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(path.resolve(here, '../src/components/WorktreeDiffPanel.tsx'), 'utf8')
+    expect(src).toMatch(/onKeyDown=\{onTablistKeyDown\}/)
+    expect(src).not.toMatch(/addEventListener\(\s*['"]keydown['"]/)
   })
 })

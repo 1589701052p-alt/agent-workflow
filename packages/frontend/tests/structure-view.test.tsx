@@ -23,6 +23,9 @@ import {
   fileTreeRows,
   diffSignatureTokens,
 } from '../src/lib/structureView'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 
 afterEach(() => cleanup())
 
@@ -403,5 +406,145 @@ describe('<StructuralDiffView /> RFC-088 semantics overlay', () => {
     const { container } = render(<StructuralDiffView data={d} />)
     expect(container.querySelector('[data-testid="structure-walkthrough"]')).toBeNull()
     expect(container.querySelector('.structure__card--breaking')).toBeNull()
+  })
+})
+
+// Keyboard file switching in the structural tree's left file list (mirrors the
+// WorktreeDiffPanel behavior). The list is a vertical `role="tablist"`; Up/Down
+// (+ Home/End) step between FILE rows in their VISUAL order, skipping directory
+// header rows, and follow the rendered tree — NOT the `files` array order, which
+// fileTreeRows reorders by directory. The handler is list-SCOPED (onKeyDown on
+// the tablist), never a global window listener, so Arrow keys can't hijack
+// scrolling. Selection assertions read aria-selected → locale-agnostic.
+describe('<StructuralDiffView /> keyboard file switching', () => {
+  const selectedFileName = (): string | null =>
+    screen
+      .getAllByRole('tab')
+      .find((tb) => tb.getAttribute('aria-selected') === 'true')
+      ?.querySelector('.structure__file-name')?.textContent ?? null
+
+  test('ArrowDown / ArrowUp move between files and swap the body', () => {
+    render(<StructuralDiffView data={sampleDiff()} />)
+    const tablist = screen.getByRole('tablist')
+    // first file (mod.py) selected by default
+    expect(selectedFileName()).toBe('mod.py')
+    expect(screen.getByText('speak')).toBeTruthy()
+
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedFileName()).toBe('w.cpp')
+    expect(screen.getByText('Widget')).toBeTruthy() // body swapped to w.cpp
+    expect(screen.queryByText('speak')).toBeNull()
+
+    fireEvent.keyDown(tablist, { key: 'ArrowUp' })
+    expect(selectedFileName()).toBe('mod.py')
+    expect(screen.getByText('speak')).toBeTruthy()
+  })
+
+  test('roving tab stop + focus follow the selected file', () => {
+    render(<StructuralDiffView data={sampleDiff()} />)
+    const tablist = screen.getByRole('tablist')
+    const tabs = (): HTMLElement[] => screen.getAllByRole('tab')
+    expect(tabs().map((tb) => tb.tabIndex)).toEqual([0, -1])
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(tabs().map((tb) => tb.tabIndex)).toEqual([-1, 0])
+    expect(document.activeElement).toBe(tabs()[1])
+  })
+
+  test('modifier + Arrow is ignored so browser / OS shortcuts pass through', () => {
+    render(<StructuralDiffView data={sampleDiff()} />)
+    const tablist = screen.getByRole('tablist')
+    fireEvent.keyDown(tablist, { key: 'ArrowDown', metaKey: true })
+    expect(selectedFileName()).toBe('mod.py') // unchanged
+  })
+
+  // The critical case: directory grouping reorders files relative to the `files`
+  // array, so Up/Down must follow the TREE (visual) order and skip directory rows.
+  function treeFile(filePath: string, className: string): FileStructuralDiff {
+    return {
+      filePath,
+      lang: 'typescript',
+      status: 'ok',
+      edges: [],
+      impact: [],
+      changes: [
+        {
+          changeType: 'added',
+          kind: 'class',
+          after: {
+            id: `${filePath}#${className}:class`,
+            kind: 'class',
+            name: className,
+            qualifiedName: className,
+            lang: 'typescript',
+            filePath,
+            confidence: 'extracted',
+          },
+        },
+      ],
+    }
+  }
+  function treeDiff(): StructuralDiff {
+    // array order: B(0), A(1), C(2); tree order: src/a/A, src/a/C, src/b/B.
+    const files = [
+      treeFile('src/b/B.ts', 'Bbb'),
+      treeFile('src/a/A.ts', 'Aaa'),
+      treeFile('src/a/C.ts', 'Ccc'),
+    ]
+    return {
+      scope: 'task',
+      taskId: 't',
+      fromRef: 'a',
+      toRef: 'WORKTREE',
+      engine: 'baseline',
+      status: 'ok',
+      files,
+      dependencyChanges: [],
+      impact: [],
+      classEdges: [],
+      summary: computeSummary(files, []),
+    }
+  }
+
+  test('navigation follows visual tree order (not the files array) and skips dir rows', () => {
+    const { container } = render(<StructuralDiffView data={treeDiff()} />)
+    const tablist = screen.getByRole('tablist')
+    // tabs render in tree order (dirs grouped + alpha-sorted), not array order
+    expect(
+      screen
+        .getAllByRole('tab')
+        .map((tb) => tb.querySelector('.structure__file-name')?.textContent),
+    ).toEqual(['A.ts', 'C.ts', 'B.ts'])
+    const bodyText = (): string => container.querySelector('.structure__body')?.textContent ?? ''
+
+    // Home → first VISUAL file (A.ts), even though files[0] is B.ts
+    fireEvent.keyDown(tablist, { key: 'Home' })
+    expect(selectedFileName()).toBe('A.ts')
+    expect(bodyText()).toContain('Aaa') // body actually swapped, not just the highlight
+
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedFileName()).toBe('C.ts') // src/a/C.ts — next visual row
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedFileName()).toBe('B.ts') // src/b/B.ts — last visual row
+    // clamp at the bottom (no wraparound)
+    fireEvent.keyDown(tablist, { key: 'ArrowDown' })
+    expect(selectedFileName()).toBe('B.ts')
+
+    fireEvent.keyDown(tablist, { key: 'End' })
+    expect(selectedFileName()).toBe('B.ts')
+    fireEvent.keyDown(tablist, { key: 'Home' })
+    expect(selectedFileName()).toBe('A.ts')
+  })
+
+  // Source-level backstop (repo test policy): the file-switch handler must hang
+  // off the tablist, never a window 'keydown' listener — a global listener would
+  // steal Arrow keys everywhere and break scrolling.
+  test('Arrow handler is list-scoped, not a global window listener', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(
+      path.resolve(here, '../src/components/structure/StructuralDiffView.tsx'),
+      'utf8',
+    )
+    expect(src).toMatch(/onKeyDown=\{onTablistKeyDown\}/)
+    expect(src).not.toMatch(/addEventListener\(\s*['"]keydown['"]/)
   })
 })

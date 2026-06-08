@@ -3,7 +3,7 @@
 // with +/~/− badges. Pure aggregation/grouping lives in lib/structureView.ts;
 // this file is JSX wiring reusing existing public primitives + diff CSS colors.
 
-import { useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   StructuralDiff,
@@ -485,11 +485,64 @@ function StructuralTree({
   const [sel, setSel] = useState(0)
   const idx = Math.min(sel, files.length - 1)
   const selected = files[idx]
+
+  // Keyboard file switching, mirroring WorktreeDiffPanel. The list is a vertical
+  // `role="tablist"`; Up/Down (+ Home/End) step between FILE rows in their
+  // VISUAL (top-to-bottom) order — directory headers are skipped, and the order
+  // follows the rendered tree, NOT the `files` array (fileTreeRows groups + sorts
+  // by directory, so the two can differ). Selecting pulls focus onto the tab so
+  // the focus ring, scroll-into-view, and the roving tab stop track the shown
+  // file and repeated presses continue from there.
+  const rows = useMemo(() => fileTreeRows(files), [files])
+  const fileOrder = useMemo(
+    () => rows.flatMap((r) => (r.fileIndex === undefined ? [] : [r.fileIndex])),
+    [rows],
+  )
+  const tabRefs = useRef(new Map<number, HTMLButtonElement>())
+  const selectFile = useCallback((fileIndex: number) => {
+    setSel(fileIndex)
+    tabRefs.current.get(fileIndex)?.focus()
+  }, [])
+  const onTablistKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (fileOrder.length === 0) return
+      const pos = fileOrder.indexOf(idx)
+      const go = (p: number): void => {
+        const next = fileOrder[Math.max(0, Math.min(fileOrder.length - 1, p))]
+        if (next !== undefined) selectFile(next)
+      }
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault()
+          go(pos + 1)
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          go(pos - 1)
+          break
+        case 'Home':
+          e.preventDefault()
+          go(0)
+          break
+        case 'End':
+          e.preventDefault()
+          go(fileOrder.length - 1)
+          break
+      }
+    },
+    [fileOrder, idx, selectFile],
+  )
   return (
     <div className="structure__tree">
       <aside className="structure__files">
-        <nav role="tablist" aria-orientation="vertical" className="structure__tablist">
-          {fileTreeRows(files).map((row, ri) => {
+        <nav
+          role="tablist"
+          aria-orientation="vertical"
+          className="structure__tablist"
+          onKeyDown={onTablistKeyDown}
+        >
+          {rows.map((row, ri) => {
             const indent = { paddingLeft: `${8 + row.depth * 14}px` }
             if (row.fileIndex === undefined) {
               return (
@@ -506,11 +559,18 @@ function StructuralTree({
                 type="button"
                 key={`f${i}`}
                 role="tab"
+                ref={(el) => {
+                  if (el !== null) tabRefs.current.set(i, el)
+                  else tabRefs.current.delete(i)
+                }}
+                // Roving tab stop: only the active file tab is Tab-reachable;
+                // Up/Down then move among the rest (ARIA tablist).
+                tabIndex={i === idx ? 0 : -1}
                 aria-selected={i === idx}
                 title={f.filePath}
                 className={`structure__file-tab ${i === idx ? 'structure__file-tab--active' : ''}`}
                 style={indent}
-                onClick={() => setSel(i)}
+                onClick={() => selectFile(i)}
               >
                 <span className="structure__file-name">{row.name}</span>
                 {f.status === 'degraded' && (
