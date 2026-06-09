@@ -44,13 +44,43 @@ export function openDb(opts: OpenDbOptions): DbClient {
 }
 
 /**
+ * Per-process cache of a fully-migrated in-memory SQLite image, keyed by the
+ * resolved migrations folder. The migrations are replayed exactly ONCE per
+ * folder per process; every subsequent createInMemoryDb() call hydrates a
+ * fresh, independent database from the serialized image instead of re-running
+ * all migrations (~18ms → ~0.1ms per call; the backend suite calls this ~260×).
+ *
+ * Safe because the migrated schema is deterministic and Bun's
+ * Database.deserialize() copies the image — each test gets a private DB, so
+ * writes never bleed across tests (locked by createindb-snapshot-parity.test.ts).
+ */
+const migratedSnapshotCache = new Map<string, Uint8Array>()
+
+function migratedSnapshot(migrationsFolder: string): Uint8Array {
+  const key = resolve(migrationsFolder)
+  let snapshot = migratedSnapshotCache.get(key)
+  if (!snapshot) {
+    const template = new Database(':memory:')
+    template.exec('PRAGMA foreign_keys = ON;')
+    migrate(drizzle(template, { schema }), { migrationsFolder: key })
+    snapshot = template.serialize()
+    template.close()
+    migratedSnapshotCache.set(key, snapshot)
+  }
+  return snapshot
+}
+
+/**
  * Open an in-memory database with all migrations applied.
  * Used by bun:test integration tests; no fs side-effects.
+ *
+ * The returned DB is a hydrated copy of a once-migrated template (see
+ * migratedSnapshot). PRAGMA foreign_keys is a per-connection setting that is
+ * NOT part of the serialized image, so it is re-applied here to preserve the
+ * original (always-FK-on) contract.
  */
 export function createInMemoryDb(migrationsFolder: string): DbClient {
-  const sqlite = new Database(':memory:')
+  const sqlite = Database.deserialize(migratedSnapshot(migrationsFolder))
   sqlite.exec('PRAGMA foreign_keys = ON;')
-  const db = drizzle(sqlite, { schema })
-  migrate(db, { migrationsFolder: resolve(migrationsFolder) })
-  return db
+  return drizzle(sqlite, { schema })
 }

@@ -1,11 +1,117 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const mainPath = resolve(import.meta.dir, '..', 'src', 'main.ts')
 
-describe('daemon start (M1 P-1-01..P-1-04)', () => {
+// Tests 1-3 are read-only / idempotent contract checks against an IDENTICAL
+// fresh daemon, so they share ONE spawn (beforeAll) instead of paying the
+// ~400ms spawn-to-ready cost three times. The config-PUT test runs LAST because
+// it is the only one that MUTATES config — the two read-only tests above must
+// observe pristine DEFAULT_CONFIG first. Lifecycle tests (restart / lock) keep
+// their own per-test daemons below.
+describe('daemon start — read-only contract on a shared daemon (M1 P-1-01..P-1-04)', () => {
+  let tmp: string
+  let child: ReturnType<typeof spawnDaemon>
+  let url: string
+  let token: string
+
+  beforeAll(async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'aw-daemon-'))
+    const env = { ...(process.env as Record<string, string>), AGENT_WORKFLOW_HOME: tmp }
+    child = spawnDaemon(env)
+    ;({ url, token } = await waitForReady(child.stdout, 10_000))
+  })
+
+  afterAll(async () => {
+    child.kill('SIGTERM')
+    await child.exited
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test('serves /health with full schema after successful startup', async () => {
+    // /health is public and returns the full schema per design.md §4.2.2.
+    const res = await fetch(`${url}health`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.ok).toBe(true)
+    expect(typeof body.opencodeVersion).toBe('string')
+    expect(body.opencodeVersion).toMatch(/^\d+\.\d+\.\d+/)
+    expect(typeof body.dbVersion).toBe('number')
+    expect(typeof body.uptime).toBe('number')
+    expect(body.runningTasks).toBe(0)
+    // Token sanity-check just to use the variable (auth covered below).
+    expect(token).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  test('/api/* unauthorized returns 401; route-not-found also uses standard schema', async () => {
+    const unauthRes = await fetch(`${url}api/whoami`)
+    expect(unauthRes.status).toBe(401)
+    const unauth = (await unauthRes.json()) as Record<string, unknown>
+    expect(unauth.code).toBe('unauthorized')
+
+    const okRes = await fetch(`${url}api/whoami`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(okRes.status).toBe(200)
+
+    const nfRes = await fetch(`${url}api/no-such-route?token=${token}`)
+    expect(nfRes.status).toBe(404)
+    const nf = (await nfRes.json()) as Record<string, unknown>
+    expect(nf.code).toBe('route-not-found')
+  })
+
+  // LAST: mutates config (PUT). Keep after the read-only tests above.
+  test('GET /api/config returns full DEFAULT_CONFIG; PUT merges patch', async () => {
+    const auth = { Authorization: `Bearer ${token}` }
+
+    // Initial GET.
+    const getRes = await fetch(`${url}api/config`, { headers: auth })
+    expect(getRes.status).toBe(200)
+    const cfg = (await getRes.json()) as Record<string, unknown>
+    expect(cfg.$schema_version).toBe(1)
+    expect(cfg.maxConcurrentNodes).toBe(4)
+    expect(cfg.bindHost).toBe('127.0.0.1')
+    expect(cfg.theme).toBe('system')
+    expect(cfg.language).toBe('zh-CN')
+
+    // PUT a patch — change theme + maxConcurrentNodes.
+    const putRes = await fetch(`${url}api/config`, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ theme: 'dark', maxConcurrentNodes: 8 }),
+    })
+    expect(putRes.status).toBe(200)
+    const updated = (await putRes.json()) as Record<string, unknown>
+    expect(updated.theme).toBe('dark')
+    expect(updated.maxConcurrentNodes).toBe(8)
+    expect(updated.bindHost).toBe('127.0.0.1') // preserved
+
+    // GET again confirms persistence.
+    const reread = (await (await fetch(`${url}api/config`, { headers: auth })).json()) as Record<
+      string,
+      unknown
+    >
+    expect(reread.theme).toBe('dark')
+    expect(reread.maxConcurrentNodes).toBe(8)
+
+    // Invalid patch — wrong type.
+    const badRes = await fetch(`${url}api/config`, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ maxConcurrentNodes: -1 }),
+    })
+    expect(badRes.status).toBe(422)
+    const badBody = (await badRes.json()) as Record<string, unknown>
+    expect(badBody.ok).toBe(false)
+    expect(badBody.code).toBe('config-invalid')
+  })
+})
+
+// Lifecycle tests need independent daemon processes (restart / second-instance
+// lock), so they keep a fresh home + their own spawns per test.
+describe('daemon start — lifecycle (per-test daemon)', () => {
   let tmp: string
   let env: Record<string, string>
 
@@ -16,106 +122,6 @@ describe('daemon start (M1 P-1-01..P-1-04)', () => {
 
   afterEach(() => {
     rmSync(tmp, { recursive: true, force: true })
-  })
-
-  test('serves /health with full schema after successful startup', async () => {
-    const child = spawnDaemon(env)
-    try {
-      const { url, token } = await waitForReady(child.stdout, 10_000)
-
-      // /health is public and returns the full schema per design.md §4.2.2.
-      const res = await fetch(`${url}health`)
-      expect(res.status).toBe(200)
-      const body = (await res.json()) as Record<string, unknown>
-      expect(body.ok).toBe(true)
-      expect(typeof body.opencodeVersion).toBe('string')
-      expect(body.opencodeVersion).toMatch(/^\d+\.\d+\.\d+/)
-      expect(typeof body.dbVersion).toBe('number')
-      expect(typeof body.uptime).toBe('number')
-      expect(body.runningTasks).toBe(0)
-      // Token sanity-check just to use the variable (auth covered below).
-      expect(token).toMatch(/^[0-9a-f]{64}$/)
-    } finally {
-      child.kill('SIGTERM')
-      await child.exited
-    }
-  })
-
-  test('GET /api/config returns full DEFAULT_CONFIG; PUT merges patch', async () => {
-    const child = spawnDaemon(env)
-    try {
-      const { url, token } = await waitForReady(child.stdout, 10_000)
-      const auth = { Authorization: `Bearer ${token}` }
-
-      // Initial GET.
-      const getRes = await fetch(`${url}api/config`, { headers: auth })
-      expect(getRes.status).toBe(200)
-      const cfg = (await getRes.json()) as Record<string, unknown>
-      expect(cfg.$schema_version).toBe(1)
-      expect(cfg.maxConcurrentNodes).toBe(4)
-      expect(cfg.bindHost).toBe('127.0.0.1')
-      expect(cfg.theme).toBe('system')
-      expect(cfg.language).toBe('zh-CN')
-
-      // PUT a patch — change theme + maxConcurrentNodes.
-      const putRes = await fetch(`${url}api/config`, {
-        method: 'PUT',
-        headers: { ...auth, 'content-type': 'application/json' },
-        body: JSON.stringify({ theme: 'dark', maxConcurrentNodes: 8 }),
-      })
-      expect(putRes.status).toBe(200)
-      const updated = (await putRes.json()) as Record<string, unknown>
-      expect(updated.theme).toBe('dark')
-      expect(updated.maxConcurrentNodes).toBe(8)
-      expect(updated.bindHost).toBe('127.0.0.1') // preserved
-
-      // GET again confirms persistence.
-      const reread = (await (await fetch(`${url}api/config`, { headers: auth })).json()) as Record<
-        string,
-        unknown
-      >
-      expect(reread.theme).toBe('dark')
-      expect(reread.maxConcurrentNodes).toBe(8)
-
-      // Invalid patch — wrong type.
-      const badRes = await fetch(`${url}api/config`, {
-        method: 'PUT',
-        headers: { ...auth, 'content-type': 'application/json' },
-        body: JSON.stringify({ maxConcurrentNodes: -1 }),
-      })
-      expect(badRes.status).toBe(422)
-      const badBody = (await badRes.json()) as Record<string, unknown>
-      expect(badBody.ok).toBe(false)
-      expect(badBody.code).toBe('config-invalid')
-    } finally {
-      child.kill('SIGTERM')
-      await child.exited
-    }
-  })
-
-  test('/api/* unauthorized returns 401; route-not-found also uses standard schema', async () => {
-    const child = spawnDaemon(env)
-    try {
-      const { url, token } = await waitForReady(child.stdout, 10_000)
-
-      const unauthRes = await fetch(`${url}api/whoami`)
-      expect(unauthRes.status).toBe(401)
-      const unauth = (await unauthRes.json()) as Record<string, unknown>
-      expect(unauth.code).toBe('unauthorized')
-
-      const okRes = await fetch(`${url}api/whoami`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      expect(okRes.status).toBe(200)
-
-      const nfRes = await fetch(`${url}api/no-such-route?token=${token}`)
-      expect(nfRes.status).toBe(404)
-      const nf = (await nfRes.json()) as Record<string, unknown>
-      expect(nf.code).toBe('route-not-found')
-    } finally {
-      child.kill('SIGTERM')
-      await child.exited
-    }
   })
 
   test('token + config persist across daemon restarts', async () => {

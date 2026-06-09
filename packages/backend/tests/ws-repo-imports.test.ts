@@ -56,6 +56,18 @@ async function buildHarness(): Promise<Harness> {
   }
 }
 
+/** Resolve as soon as `pred()` holds (polling), capped at `capMs`. */
+async function waitUntil(pred: () => boolean, capMs = 1000): Promise<void> {
+  const start = Date.now()
+  while (!pred()) {
+    if (Date.now() - start > capMs) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+const hasType = (msgs: Array<{ type: string }>, type: string): boolean =>
+  msgs.some((m) => m.type === type)
+
 describe('/ws/repo-imports/{batchId} (RFC-033)', () => {
   let h: Harness
   beforeEach(async () => {
@@ -75,7 +87,7 @@ describe('/ws/repo-imports/{batchId} (RFC-033)', () => {
     })
     sock.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
     // Wait for hello frame.
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'hello'))
 
     repoImportsBroadcaster.broadcast(REPO_IMPORT_CHANNEL(batchId), {
       type: 'row.update',
@@ -99,7 +111,7 @@ describe('/ws/repo-imports/{batchId} (RFC-033)', () => {
       batchId,
       completedAt: '2026-05-17T00:00:03.000Z',
     })
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'row.update') && hasType(received, 'batch.completed'))
     sock.close()
 
     const types = received.map((m) => m.type)
@@ -117,13 +129,17 @@ describe('/ws/repo-imports/{batchId} (RFC-033)', () => {
     const sock = new WebSocket(`${h.url}/ws/repo-imports/${myBatch}?token=${TOKEN}`)
     await new Promise<void>((res) => sock.addEventListener('open', () => res()))
     sock.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'hello'))
 
     repoImportsBroadcaster.broadcast(REPO_IMPORT_CHANNEL(otherBatch), {
       type: 'batch.completed',
       batchId: otherBatch,
       completedAt: '2026-05-17T00:00:01.000Z',
     })
+    // Negative assertion: we must give an *erroneous* cross-batch delivery a
+    // bounded window to (wrongly) arrive before concluding it didn't. Unlike the
+    // positive waits above, this one cannot be predicate-driven — keep a short
+    // fixed settle.
     await new Promise((r) => setTimeout(r, 50))
     sock.close()
 

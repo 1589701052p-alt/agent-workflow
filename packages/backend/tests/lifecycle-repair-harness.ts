@@ -280,9 +280,12 @@ export async function readTaskStatus(db: DbClient, taskId: string): Promise<stri
 }
 
 export async function settleResumes(): Promise<void> {
-  abortAllActiveTasks()
-  // Give the void runTask promise a tick to settle so its `.finally` removes
-  // itself from the activeTasks map. 50ms is generous for an
-  // ENOENT-on-spawn fail (the only mode tests should hit).
-  await Bun.sleep(50)
+  const aborted = abortAllActiveTasks()
+  // Only pay the settle when a resume was actually in flight. Most repair tests
+  // (preflight-stale, preview-steps, …) never trigger a background runTask, so
+  // there is nothing to settle and the sleep would be ~78×50ms of dead wait
+  // across the suite. When a task WAS aborted, give the void runTask promise a
+  // tick so its `.finally` removes itself from the activeTasks map — 50ms is
+  // generous for an ENOENT-on-spawn fail (the only mode tests should hit).
+  if (aborted.length > 0) await Bun.sleep(50)
 }

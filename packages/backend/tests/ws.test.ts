@@ -96,6 +96,23 @@ async function collectMessages(
   })
 }
 
+/**
+ * Resolve as soon as `pred()` is true, polling every few ms, with `capMs` as an
+ * upper bound. Replaces fixed `setTimeout(50)` settle waits: WS frames arrive in
+ * <5ms locally, so the wait collapses to near-zero while the cap still guards
+ * against a genuinely-missing message (which then fails the assertion below it).
+ */
+async function waitUntil(pred: () => boolean, capMs = 1000): Promise<void> {
+  const start = Date.now()
+  while (!pred()) {
+    if (Date.now() - start > capMs) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+const hasType = (msgs: unknown[], type: string): boolean =>
+  msgs.some((m) => (m as { type?: string }).type === type)
+
 describe('WebSocket channels', () => {
   let h: Harness
   beforeEach(async () => {
@@ -116,14 +133,10 @@ describe('WebSocket channels', () => {
   })
 
   test('/ws/tasks: hello + receives task.created and task.status', async () => {
-    const msgs = await collectMessages(`${h.url}/ws/tasks?token=${TOKEN}`, 3, 1500)
-    // The hello arrives before any broadcast. Trigger a broadcast right after
-    // connecting. We allow some races by reading what we get within the
-    // window and matching on shape.
-    // Wait a tick to ensure the listener registered.
-    // (collectMessages already kicked off the connection by the time it
-    // returned the first message; for this test we don't have one yet — so
-    // we re-issue: this code path is simplified below.)
+    // This test only asserts the hello frame (no broadcast is triggered), so we
+    // ask for exactly 1 message — collectMessages early-resolves on the hello
+    // instead of idling out the full window.
+    const msgs = await collectMessages(`${h.url}/ws/tasks?token=${TOKEN}`, 1, 1500)
     expect(msgs.length).toBeGreaterThanOrEqual(1)
     const first = msgs[0] as { type: string; channel?: string }
     expect(first.type).toBe('hello')
@@ -139,14 +152,14 @@ describe('WebSocket channels', () => {
     })
     ws.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
     // Hello frame is queued before the first broadcast — wait for it.
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'hello'))
 
     await createWorkflow(h.db, {
       name: 'wf-1',
       description: '',
       definition: { $schema_version: 1, inputs: [], nodes: [], edges: [] },
     })
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'workflow.created'))
     ws.close()
 
     const types = received.map((m) => (m as { type: string }).type)
@@ -167,11 +180,13 @@ describe('WebSocket channels', () => {
       ws.addEventListener('open', () => res())
     })
     ws.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'hello'))
 
     await updateWorkflow(h.db, wf.id, { name: 'wf renamed' })
     await deleteWorkflow(h.db, wf.id)
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(
+      () => hasType(received, 'workflow.updated') && hasType(received, 'workflow.deleted'),
+    )
     ws.close()
 
     const types = received.map((m) => m.type)
@@ -210,7 +225,7 @@ describe('WebSocket channels', () => {
       ws.addEventListener('open', () => res())
     })
     ws.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'hello'))
 
     // Trigger emitTaskStatus by flipping the row + invoking the helper.
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0]
@@ -249,7 +264,7 @@ describe('WebSocket channels', () => {
       repos: [],
     })
 
-    await new Promise((r) => setTimeout(r, 50))
+    await waitUntil(() => hasType(received, 'task.status') && hasType(received, 'task.done'))
     ws.close()
 
     const types = received.map((m) => m.type)
@@ -306,7 +321,9 @@ describe('WebSocket channels', () => {
       ws.addEventListener('open', () => res())
     })
     ws.addEventListener('message', (e) => received.push(JSON.parse(String(e.data))))
-    await new Promise((r) => setTimeout(r, 100))
+    // Exactly 2 events have id > firstId; the server replays them on connect.
+    // Wait until both have arrived (no third can come, so the count stays exact).
+    await waitUntil(() => received.filter((m) => m.type === 'node.event').length >= 2)
     ws.close()
 
     const events = received.filter((m) => m.type === 'node.event')

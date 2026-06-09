@@ -259,44 +259,12 @@ describe('WorktreeFilesPanel', () => {
     expect(truncated?.textContent).toMatch(/5000/)
   })
 
-  test('expand state survives across folder collapse/re-expand round-trip', async () => {
-    // Same scenario as the cache test but verifies the file becomes
-    // visible again after re-expand without needing a re-fetch from the
-    // server (cache hit assertion already done above; this assertion is
-    // about DOM state visibility).
-    installFetch(
-      new Map<string, () => unknown>([
-        // specific patterns first so the URL-includes match wins over the
-        // generic `worktree-tree` root pattern.
-        [
-          'worktree-tree?path=src',
-          () => ({
-            path: 'src',
-            truncated: false,
-            entries: [{ name: 'hello.ts', kind: 'file', size: 12 }],
-          }),
-        ],
-        [
-          'worktree-tree',
-          () => ({
-            path: '',
-            truncated: false,
-            entries: [{ name: 'src', kind: 'directory', size: null }],
-          }),
-        ],
-      ]),
-    )
-    wrap()
-    const dir = await screen.findByTestId('worktree-tree-dir-src')
-    fireEvent.click(dir)
-    await screen.findByTestId('worktree-tree-file-src/hello.ts')
-    fireEvent.click(dir)
-    await waitFor(() => {
-      expect(screen.queryByTestId('worktree-tree-file-src/hello.ts')).toBeNull()
-    })
-    fireEvent.click(dir)
-    await screen.findByTestId('worktree-tree-file-src/hello.ts')
-  })
+  // NOTE: a former test "expand state survives across folder collapse/re-expand
+  // round-trip" was removed as a strict subset of "expand directory triggers
+  // subdir fetch; collapse + re-expand uses cache" above — that test already
+  // asserts every visibility transition (expand shows file / collapse hides it /
+  // re-expand re-shows it) on the identical mock, plus the cache-hit fetch counts
+  // this one lacked. No coverage lost.
 
   test('refresh button re-fetches expanded tree levels even with staleTime: Infinity', async () => {
     // Regression: on 2026-05-26 a user opened the worktree-files tab at task

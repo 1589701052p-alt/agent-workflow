@@ -248,46 +248,31 @@ describe('RFC-062 GET /inventory in-flight fallback', () => {
     if (body.captured) expect(body.agents[0]?.name).toBe('from-db')
   })
 
-  test('AC-5a: status=done + DB NULL + runRoot file still on disk → reason=file-missing', async () => {
-    // Models the case where runner step 12 cleanup failed but step 11 DB
-    // write also didn't happen — DB NULL is authoritative for terminal rows.
-    const { db, app } = buildApp()
-    const { taskId, nodeRunId } = await seed(db, { runStatus: 'done', inventoryJson: null })
-    const runRoot = runRootFor(taskId, nodeRunId)
-    mkdirSync(runRoot, { recursive: true })
-    writeFileSync(join(runRoot, 'inventory.json'), JSON.stringify(makeCapturedSnapshot()), 'utf-8')
-    const res = await req(app, `/api/tasks/${taskId}/node-runs/${nodeRunId}/inventory`)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as InventorySnapshot
-    expect(body.captured).toBe(false)
-    if (!body.captured) expect(body.reason).toBe('file-missing')
-  })
-
-  test('AC-5b: status=canceled + DB NULL + runRoot file on disk → file-missing', async () => {
-    const { db, app } = buildApp()
-    const { taskId, nodeRunId } = await seed(db, { runStatus: 'canceled', inventoryJson: null })
-    const runRoot = runRootFor(taskId, nodeRunId)
-    mkdirSync(runRoot, { recursive: true })
-    writeFileSync(join(runRoot, 'inventory.json'), JSON.stringify(makeCapturedSnapshot()), 'utf-8')
-    const res = await req(app, `/api/tasks/${taskId}/node-runs/${nodeRunId}/inventory`)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as InventorySnapshot
-    expect(body.captured).toBe(false)
-    if (!body.captured) expect(body.reason).toBe('file-missing')
-  })
-
-  test('AC-5c: status=failed + DB NULL + runRoot file on disk → file-missing', async () => {
-    const { db, app } = buildApp()
-    const { taskId, nodeRunId } = await seed(db, { runStatus: 'failed', inventoryJson: null })
-    const runRoot = runRootFor(taskId, nodeRunId)
-    mkdirSync(runRoot, { recursive: true })
-    writeFileSync(join(runRoot, 'inventory.json'), JSON.stringify(makeCapturedSnapshot()), 'utf-8')
-    const res = await req(app, `/api/tasks/${taskId}/node-runs/${nodeRunId}/inventory`)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as InventorySnapshot
-    expect(body.captured).toBe(false)
-    if (!body.captured) expect(body.reason).toBe('file-missing')
-  })
+  // AC-5 terminal states (done/canceled/failed): DB NULL is authoritative even
+  // when a stale runRoot file is still on disk. The service has no per-status
+  // branching — its only discriminant is the binary `if (status === 'running')`
+  // guard, so all three terminal values drive the identical fallback. Table-driven
+  // over the three so each real terminal value stays exercised without 3× the
+  // byte-identical body. (AC-5a models the underlying race: runner step 12 cleanup
+  // failed but step 11 DB write also didn't happen — DB NULL wins for terminal rows.)
+  for (const runStatus of ['done', 'canceled', 'failed'] as const) {
+    test(`AC-5(${runStatus}): status=${runStatus} + DB NULL + runRoot file on disk → file-missing`, async () => {
+      const { db, app } = buildApp()
+      const { taskId, nodeRunId } = await seed(db, { runStatus, inventoryJson: null })
+      const runRoot = runRootFor(taskId, nodeRunId)
+      mkdirSync(runRoot, { recursive: true })
+      writeFileSync(
+        join(runRoot, 'inventory.json'),
+        JSON.stringify(makeCapturedSnapshot()),
+        'utf-8',
+      )
+      const res = await req(app, `/api/tasks/${taskId}/node-runs/${nodeRunId}/inventory`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as InventorySnapshot
+      expect(body.captured).toBe(false)
+      if (!body.captured) expect(body.reason).toBe('file-missing')
+    })
+  }
 
   test('AC-7: non-agent kinds still return 410 (in-flight branch never reached)', async () => {
     const { db, app } = buildApp()
