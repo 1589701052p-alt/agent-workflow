@@ -55,6 +55,12 @@ jobs:
         # --coverage-reporter accepts multiple values: keep the human-readable
         # text summary in the log and also emit lcov for codecov upload.
         run: bun test --coverage --coverage-reporter=text --coverage-reporter=lcov
+        env:
+          # Real-git-clone (file:// + recursive submodules) and external MCP-spawn
+          # integration suites are gated behind RUN_GIT_NETWORK so local `bun test`
+          # stays deterministic. CI has the environment to run them — enable here so
+          # coverage is unchanged (these files run unconditionally before this gate).
+          RUN_GIT_NETWORK: '1'
 
       - name: Test (frontend, vitest)
         run: bun run --filter @agent-workflow/frontend test

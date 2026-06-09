@@ -11,6 +11,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorktree } from '../src/util/git'
 
+// RUN_GIT_NETWORK gate (P0 test-tier fortification): builds a real submodule
+// fixture via `git submodule add file://` + bare clone, then drives
+// createWorktree's `submodule update --init --recursive`. The file:// clone /
+// recursion flakes (timeout) on machines without unrestricted file-protocol
+// git, masking real regressions. Gated so local `bun test` is deterministic;
+// CI exports RUN_GIT_NETWORK=1 to preserve coverage. See git-repo-cache-submodule.
+const RUN_GIT_NETWORK = process.env.RUN_GIT_NETWORK === '1'
+
 async function gitCmd(cwd: string, ...args: string[]): Promise<void> {
   const proc = Bun.spawn({
     cmd: ['git', ...args],
@@ -26,7 +34,7 @@ async function gitCmd(cwd: string, ...args: string[]): Promise<void> {
   }
 }
 
-describe('createWorktree RFC-034 submodule init', () => {
+describe.skipIf(!RUN_GIT_NETWORK)('createWorktree RFC-034 submodule init', () => {
   let root: string
   let parentRepo: string
   let childBare: string
@@ -121,5 +129,12 @@ describe('createWorktree RFC-034 submodule init', () => {
     expect(wt.hasSubmodules).toBe(false)
     expect(wt.submoduleInitOk).toBe(true)
     expect(wt.submoduleInitError).toBeNull()
+  })
+})
+
+// Always-on gate self-test (runs even in the default skipped mode).
+describe('RUN_GIT_NETWORK gate sanity', () => {
+  test('suite is skipped iff RUN_GIT_NETWORK!=1', () => {
+    expect(!RUN_GIT_NETWORK).toBe(process.env.RUN_GIT_NETWORK !== '1')
   })
 })
