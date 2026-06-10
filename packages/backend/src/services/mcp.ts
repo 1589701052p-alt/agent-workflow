@@ -14,6 +14,7 @@ import { McpLocalConfigSchema, McpRemoteConfigSchema, McpSchema } from '@agent-w
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import { agents, mcps } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 
@@ -123,18 +124,22 @@ export async function renameMcp(db: DbClient, oldName: string, input: RenameMcp)
   // we never end up with a renamed mcp row plus stale agent references (the
   // missing-reference would surface as a validator error on next save).
   const dependents = await findAgentsReferencingMcp(db, oldName)
-  await db.transaction(async (tx) => {
-    await tx
-      .update(mcps)
+  // RFC-093: synchronous transaction (dbTxSync) — the previous async form
+  // COMMITted at its first await; a mid-cascade failure left a renamed row
+  // with stale agent references (audit S-10).
+  dbTxSync(db, (tx) => {
+    tx.update(mcps)
       .set({ name: input.newName, updatedAt: Date.now() })
       .where(eq(mcps.name, oldName))
+      .run()
 
     for (const dep of dependents) {
-      const row = await tx
+      const row = tx
         .select({ mcp: agents.mcp })
         .from(agents)
         .where(eq(agents.id, dep.id))
         .limit(1)
+        .all()
       const current = row[0]
       if (current === undefined) continue
       let arr: string[]
@@ -145,10 +150,10 @@ export async function renameMcp(db: DbClient, oldName: string, input: RenameMcp)
         arr = []
       }
       const next = arr.map((n) => (n === oldName ? input.newName : n))
-      await tx
-        .update(agents)
+      tx.update(agents)
         .set({ mcp: JSON.stringify(next), updatedAt: Date.now() })
         .where(eq(agents.id, dep.id))
+        .run()
     }
   })
 

@@ -25,6 +25,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm'
+import { dbTxSync } from '@/db/txSync'
 import { ulid } from 'ulid'
 import type {
   AgentOutputKind,
@@ -502,8 +503,11 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
       // upstream produced a fresher run. Refresh in place: retire the pending
       // doc_version(s), drop their now-meaningless anchored comments, re-stamp
       // the row's provenance. createDocVersion below makes v(n+1) on new body.
-      await db.transaction(async (tx) => {
-        const stale = await tx
+      // RFC-093: synchronous transaction (dbTxSync) — the previous
+      // `db.transaction(async …)` COMMITted at its first await and left this
+      // three-step retire sequence non-atomic (audit S-10).
+      dbTxSync(db, (tx) => {
+        const stale = tx
           .select({ id: docVersions.id })
           .from(docVersions)
           .where(
@@ -513,11 +517,11 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
               eq(docVersions.decision, 'pending'),
             ),
           )
+          .all()
         for (const s of stale) {
-          await tx.delete(reviewComments).where(eq(reviewComments.docVersionId, s.id))
+          tx.delete(reviewComments).where(eq(reviewComments.docVersionId, s.id)).run()
         }
-        await tx
-          .update(docVersions)
+        tx.update(docVersions)
           .set({
             decision: 'superseded',
             decisionReason: 'upstream-refreshed',
@@ -531,10 +535,11 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
               eq(docVersions.decision, 'pending'),
             ),
           )
-        await tx
-          .update(nodeRuns)
+          .run()
+        tx.update(nodeRuns)
           .set({ consumedUpstreamRunsJson: consumedJson })
           .where(eq(nodeRuns.id, reuse.id))
+          .run()
       })
     }
   } else if (latestDone !== undefined && coversSource(latestDone)) {

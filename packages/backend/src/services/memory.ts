@@ -5,9 +5,11 @@
 //     PR2 / PR3 respectively).
 //   - `promoteCandidate` implements the immutable + supersede chain described
 //     in design/RFC-041-platform-long-term-memory/design.md §7.3. The whole
-//     promote → mark-superseded → broadcast sequence is wrapped in a single
-//     drizzle transaction so we never end up with a half-promoted candidate
-//     or an orphan supersede link.
+//     promote → mark-superseded → broadcast sequence runs inside a SYNCHRONOUS
+//     transaction (dbTxSync, RFC-093) so we never end up with a half-promoted
+//     candidate or an orphan supersede link. (The previous
+//     `db.transaction(async …)` form COMMITted at its first await and provided
+//     no such guarantee — audit S-10.)
 //
 // Authorization is enforced by `requirePermission` at the route layer; this
 // module does not re-check permissions but does require the caller to pass
@@ -30,6 +32,7 @@ import type {
 } from '@agent-workflow/shared'
 import { MemorySchema } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import { memories, memoryDistillJobs } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { MEMORY_CHANNEL, memoryBroadcaster } from '@/ws/broadcaster'
@@ -282,12 +285,10 @@ export async function promoteCandidate(
   body: MemoryCandidatePromote,
   adminUserId: string,
 ): Promise<Memory> {
-  return db.transaction(async (tx) => {
-    const rows = (await tx
-      .select()
-      .from(memories)
-      .where(eq(memories.id, id))
-      .limit(1)) as MemoryRow[]
+  // RFC-093: synchronous transaction (dbTxSync) — the previous async form
+  // COMMITted at its first await and provided no atomicity (audit S-10).
+  return dbTxSync(db, (tx) => {
+    const rows = tx.select().from(memories).where(eq(memories.id, id)).limit(1).all() as MemoryRow[]
     if (rows.length === 0) throw new NotFoundError('memory-not-found', `memory ${id} not found`)
     const cand = rows[0]!
     if (cand.status !== 'candidate') {
@@ -298,13 +299,14 @@ export async function promoteCandidate(
     }
 
     if (body.action === 'reject') {
-      await tx.update(memories).set({ status: 'rejected' }).where(eq(memories.id, id))
+      tx.update(memories).set({ status: 'rejected' }).where(eq(memories.id, id)).run()
       publish({ type: 'memory.candidate.promoted', memoryId: id, newStatus: 'rejected' })
-      const final = (await tx
+      const final = tx
         .select()
         .from(memories)
         .where(eq(memories.id, id))
-        .limit(1)) as MemoryRow[]
+        .limit(1)
+        .all() as MemoryRow[]
       return rowToMemory(final[0]!)
     }
 
@@ -312,10 +314,11 @@ export async function promoteCandidate(
     const overrideTags = body.tagsOverride
     let nextVersion = 1
     if (supersedeIds.length > 0) {
-      const targets = (await tx
+      const targets = tx
         .select()
         .from(memories)
-        .where(inArray(memories.id, supersedeIds))) as MemoryRow[]
+        .where(inArray(memories.id, supersedeIds))
+        .all() as MemoryRow[]
       if (targets.length !== supersedeIds.length) {
         const missing = supersedeIds.filter((sid) => !targets.some((t) => t.id === sid))
         throw new NotFoundError(
@@ -346,8 +349,7 @@ export async function promoteCandidate(
 
     const tagsForRow = overrideTags !== undefined ? JSON.stringify(overrideTags) : cand.tags
     const approvedAt = Date.now()
-    await tx
-      .update(memories)
+    tx.update(memories)
       .set({
         status: 'approved',
         approvedByUserId: adminUserId,
@@ -357,12 +359,13 @@ export async function promoteCandidate(
         tags: tagsForRow,
       })
       .where(eq(memories.id, id))
+      .run()
 
     if (supersedeIds.length > 0) {
-      await tx
-        .update(memories)
+      tx.update(memories)
         .set({ status: 'superseded', supersededById: id })
         .where(inArray(memories.id, supersedeIds))
+        .run()
     }
 
     publish({
@@ -375,11 +378,12 @@ export async function promoteCandidate(
       publish({ type: 'memory.superseded', oldId: sid, newId: id })
     }
 
-    const final = (await tx
+    const final = tx
       .select()
       .from(memories)
       .where(eq(memories.id, id))
-      .limit(1)) as MemoryRow[]
+      .limit(1)
+      .all() as MemoryRow[]
     return rowToMemory(final[0]!)
   })
 }
@@ -412,12 +416,10 @@ export async function patchMemory(
   input: MemoryPatchRequest,
   editorUserId?: string,
 ): Promise<PatchMemoryResult> {
-  return db.transaction(async (tx) => {
-    const rows = (await tx
-      .select()
-      .from(memories)
-      .where(eq(memories.id, id))
-      .limit(1)) as MemoryRow[]
+  // RFC-093: synchronous transaction (dbTxSync) — the previous async form
+  // COMMITted at its first await and provided no atomicity (audit S-10).
+  return dbTxSync(db, (tx) => {
+    const rows = tx.select().from(memories).where(eq(memories.id, id)).limit(1).all() as MemoryRow[]
     if (rows.length === 0) {
       throw new NotFoundError('memory-not-found', `memory ${id} not found`)
     }
@@ -485,8 +487,7 @@ export async function patchMemory(
     }
 
     const nextVersion = row.version + 1
-    await tx
-      .update(memories)
+    tx.update(memories)
       .set({
         scopeType: synth.scopeType,
         scopeId: synth.scopeId,
@@ -496,6 +497,7 @@ export async function patchMemory(
         version: nextVersion,
       })
       .where(eq(memories.id, id))
+      .run()
 
     publish({
       type: 'memory.updated',
@@ -511,11 +513,12 @@ export async function patchMemory(
       `[memory-edited] id=${id} editedBy=${editorUserId ?? 'unknown'} fieldsChanged=${changed.join(',')} version=${nextVersion}`,
     )
 
-    const after = (await tx
+    const after = tx
       .select()
       .from(memories)
       .where(eq(memories.id, id))
-      .limit(1)) as MemoryRow[]
+      .limit(1)
+      .all() as MemoryRow[]
     return { memory: rowToMemory(after[0]!), changedFields: changed }
   })
 }

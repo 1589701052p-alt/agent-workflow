@@ -34,6 +34,7 @@ type CreatePluginInput = z.input<typeof CreatePluginSchema>
 import { eq, like } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import { agents, plugins } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { cleanupPluginDir, installPlugin } from './pluginInstaller'
@@ -234,18 +235,22 @@ export async function renamePlugin(db: DbClient, id: string, input: RenamePlugin
   // Rename + cascade update of agents.plugins arrays inside a single
   // transaction so we never end up with a renamed row plus stale agent refs.
   const dependents = await findAgentsReferencingPlugin(db, existing.name)
-  await db.transaction(async (tx) => {
-    await tx
-      .update(plugins)
+  // RFC-093: synchronous transaction (dbTxSync) — the previous async form
+  // COMMITted at its first await; a mid-cascade failure left a renamed row
+  // with stale agent references (audit S-10).
+  dbTxSync(db, (tx) => {
+    tx.update(plugins)
       .set({ name: input.newName, updatedAt: Date.now() })
       .where(eq(plugins.id, existing.id))
+      .run()
 
     for (const dep of dependents) {
-      const row = await tx
+      const row = tx
         .select({ plugins: agents.plugins })
         .from(agents)
         .where(eq(agents.id, dep.id))
         .limit(1)
+        .all()
       const current = row[0]
       if (current === undefined) continue
       let arr: string[]
@@ -256,10 +261,10 @@ export async function renamePlugin(db: DbClient, id: string, input: RenamePlugin
         arr = []
       }
       const next = arr.map((n) => (n === existing.name ? input.newName : n))
-      await tx
-        .update(agents)
+      tx.update(agents)
         .set({ plugins: JSON.stringify(next), updatedAt: Date.now() })
         .where(eq(agents.id, dep.id))
+        .run()
     }
   })
 

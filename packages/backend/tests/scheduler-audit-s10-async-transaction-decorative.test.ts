@@ -15,17 +15,12 @@
 // its first real await — verified"；lifecycleRepair/options-R2.ts:4-7 记载
 // RFC-052 approve 半提交事故正是此类。
 //
-// 【守卫层】当前缺陷行为：src 下仍存在五处装饰性 async 事务（review.ts:505、
-// memory.ts:285/415、plugin.ts:237、mcp.ts:126）——API 形态像安全的，RFC-052
-// 之后 review.ts:505 又新写了一处，复发已被证实。守卫断言清单恰好等于这五处：
-// 任何人再写出第六处（或在新文件里写出第一处）本测试即红，强迫其面对本文件
-// 行为证明层的事实。
-//
-// 正确语义：需要原子性的多写序列必须走同步事务（WP-7 的 dbTxSync 助手，包装
-// bun:sqlite 原生同步 transaction——本文件第三个用例演示了该原语确实回滚）。
-// 修复落点：WP-7（dbTxSync 助手 + 改写五处 + 修正 memory.ts:9 错误注释）。
-// 修复时本文件的守卫用例应翻红：把 EXPECTED_ASYNC_TX_SITES 清空（或随逐处改写
-// 递减），最终断言 src 内 `.transaction(async` 零命中；行为证明层永久保留。
+// 【守卫层】RFC-093（WP-7）已落地：调研基线的五处装饰性 async 事务（review.ts、
+// memory.ts ×2、plugin.ts、mcp.ts）已全部改写为 src/db/txSync.ts 的 dbTxSync
+// （类型层拒绝 async 回调 + 运行时 Promise 守卫即回滚），守卫从此零容忍——
+// src 内任何非注释行出现 `.transaction(async` 本测试即红，强迫作者面对本文件
+// 行为证明层的事实并改用 dbTxSync。原语自身的行为锁定（提交/回滚/运行时守卫/
+// review 三步序列红绿对照）见 rfc093-db-tx-sync.test.ts。
 
 import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
@@ -135,16 +130,15 @@ function countNonCommentMatches(content: string, re: RegExp): number {
   return n
 }
 
-/** 调研基线（HEAD f9db99f 附近）的五处装饰性 async 事务。 */
-const EXPECTED_ASYNC_TX_SITES: Record<string, number> = {
-  'services/mcp.ts': 1,
-  'services/memory.ts': 2,
-  'services/plugin.ts': 1,
-  'services/review.ts': 1,
-}
+/**
+ * RFC-093 已落地（WP-7）：调研基线的五处装饰性 async 事务（mcp.ts / memory.ts ×2 /
+ * plugin.ts / review.ts）已全部改写为 `dbTxSync`（src/db/txSync.ts）的同步执行面。
+ * 守卫从此零容忍：src 内任何非注释行出现 `.transaction(async` 即红。
+ */
+const EXPECTED_ASYNC_TX_SITES: Record<string, number> = {}
 
 describe('S-10 guard: `.transaction(async` inventory in packages/backend/src', () => {
-  test('exactly the five known decorative sites — a sixth occurrence turns this red', () => {
+  test('ZERO decorative async transactions — any occurrence turns this red (use dbTxSync)', () => {
     const actual: Record<string, number> = {}
     for (const file of walkTsFiles(BACKEND_SRC)) {
       const count = countNonCommentMatches(
@@ -155,9 +149,9 @@ describe('S-10 guard: `.transaction(async` inventory in packages/backend/src', (
         actual[relative(BACKEND_SRC, file).split(sep).join('/')] = count
       }
     }
-    // 新增命中（任何文件计数上升 / 新文件出现）→ 此断言红。处置：不要写
-    // async 事务体——用 WP-7 的同步事务助手；如 WP-7 已落地并改写既有处，
-    // 同步递减/清空本清单（届时目标是空对象）。
+    // 任何命中 → 此断言红。处置：不要写 async 事务体——它在 bun:sqlite 下
+    // 没有任何原子性（见本文件行为证明层）；用 src/db/txSync.ts 的 dbTxSync
+    // + 同步执行面（.all()/.run()/.get()）。
     expect(actual).toEqual(EXPECTED_ASYNC_TX_SITES)
   })
 })
