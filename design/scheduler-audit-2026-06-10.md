@@ -399,6 +399,8 @@ _报告完。所有行号以调研时 HEAD（f9db99f 附近）为准；落地各
 
 9. **（2026-06-10 测试网落地时新发现）validator 对 fanout boundary 边误报 `edge-source-port-missing`**：workflow.validator.ts:255-322 的端口收集 switch 没有 `wrapper-fanout` case，wrapper 输出端口集为空集，导致连向 fanout wrapper 边界入口的合法边被判 error——疑似会卡死带 boundary 边 fanout 工作流的 createTask 校验门。既有 workflow-validator-wrapper-fanout.test.ts 全用 toContain 断言，不会暴露此误报。已在 `scheduler-audit-s05-fanout-inner-chain.test.ts` 以 characterization 锁定现状，归 WP-6a 一并处置。
 
+10. **（2026-06-10 RFC-092 对抗检视时新发现）S-2 家族扩展：三处 out-of-band 回滚点同样单轨读 `preSnapshot`，多仓恒 no-op**——clarify 答复重跑前回滚（clarify.ts:425-439）、review iterate/reject 回滚（review.ts:1704-1715）、cross-clarify 回滚（crossClarify.ts:782）。多仓任务在这些路径上的 rerun 起点是上一次运行残留的脏工作区。RFC-092 落地共享 `rollbackNodeRunWorktrees` 后修复为机械接线，归 WP-5 一并走（RFC-092 proposal 非目标有记录）。另：同一检视确认 wrapper 内 clarify 的 mid-run 答复在 RFC-092 后仍会停泊 awaiting*human 需手动 resume（wrapper awaiting*\* 行不走 pending-bypass），该限制归 WP-6c 与 S-3 一并扩展。
+
 ---
 
 ## ⑦ 调研过程备注（可信度声明）
