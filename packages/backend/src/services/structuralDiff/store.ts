@@ -12,6 +12,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { appHome } from '@/util/paths'
+import { TERMINAL_TASK_STATUSES as LIFECYCLE_TERMINAL_TASK_STATUSES } from '@/services/lifecycle'
 import {
   structuralDiffSchema,
   type StructuralDiff,
@@ -50,12 +51,8 @@ export async function readStoredDiff(
   }
 }
 
-const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
-  'done',
-  'failed',
-  'canceled',
-  'interrupted',
-])
+// RFC-097: single source of truth in services/lifecycle.ts.
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(LIFECYCLE_TERMINAL_TASK_STATUSES)
 
 /** Whether a task status is terminal (worth persisting its structural diff,
  *  since a terminal task's worktree may be GC'd). */

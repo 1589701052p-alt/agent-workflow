@@ -10,12 +10,9 @@
 //     run at the current iter and force-flip it back to awaiting_review
 //     (allowTerminal). The task stays awaiting_review.
 
-import { eq } from 'drizzle-orm'
+import { setNodeRunStatus, setTaskStatus } from '@/services/lifecycle'
 
-import { tasks } from '@/db/schema'
-import { setNodeRunStatus } from '@/services/lifecycle'
-
-import { isTerminalNonDone, loadAllNodeRunsForTask } from './helpers'
+import { isTerminalNonDone, loadAllNodeRunsForTask, schedulerLivenessGate } from './helpers'
 import { isFresherNodeRun } from '@/services/freshness'
 import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
 
@@ -89,6 +86,9 @@ const T1_DEMOTE_TASK: RepairOptionDef = {
   risk: 'low',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'awaiting_review') {
       return {
         available: false,
@@ -108,16 +108,21 @@ const T1_DEMOTE_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['awaiting_review'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-T1',
         errorMessage: `RFC-057 repair T1.demote-task via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'T1.demote-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },

@@ -38,8 +38,11 @@ import {
   submitReviewDecision,
   updateReviewCommentText,
 } from '@/services/review'
-import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { createLogger } from '@/util/log'
 import { Paths } from '@/util/paths'
+
+const log = createLogger('reviews')
 
 /**
  * RFC-036 — guard for review decision endpoint. The actor must be the
@@ -177,14 +180,23 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         appHome: appHomeFor(deps),
         ...(opencodeCmd ? { opencodeCmd } : {}),
       }
-      // RFC-092 (audit S-26/S-27): a `task-not-resumable` ConflictError here is
-      // EXPECTED when the task is still running (parallel branch in flight) —
-      // the live dispatch loop picks the freshly minted pending rerun row up
-      // via deriveFrontier's pending-anchor release. Other errors are NOT
-      // persisted anywhere by this catch (the old comment claiming "errors
-      // land in task.errorMessage via failTask" was wrong); classification /
-      // retry-with-backoff is queued behind audit WP-4 (S-27).
-      void resumeTask(deps.db, result.taskId, resumeDeps).catch(() => {})
+      // RFC-097 (audit S-27): classified swallow — `task-not-resumable` is
+      // EXPECTED when the task is still running or actively driven (the live
+      // dispatch loop picks the freshly minted pending rerun row up via
+      // deriveFrontier's pending-anchor release, RFC-092); anything else is
+      // surfaced at warn so failures stop vanishing.
+      void resumeTask(deps.db, result.taskId, resumeDeps).catch((err) => {
+        if (err instanceof ConflictError && err.code === 'task-not-resumable') {
+          log.info('review resume deferred — live dispatch loop picks up the pending rerun', {
+            taskId: result.taskId,
+          })
+          return
+        }
+        log.warn('review resume threw', {
+          taskId: result.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
     }
     return c.json({ ok: true, ...result })
   })

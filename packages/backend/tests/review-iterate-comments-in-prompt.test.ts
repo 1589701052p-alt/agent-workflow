@@ -34,6 +34,7 @@ import { createWorkflow } from '../src/services/workflow'
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -232,6 +233,8 @@ describe('RFC-005 review iterate — comments reach the upstream re-run prompt',
 
     // Re-enter the scheduler synchronously (mirrors what resumeTask kicks
     // off async-style in production).
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
+    await reenterScheduler(h.db, h.taskId)
     await runTask({
       taskId: h.taskId,
       db: h.db,

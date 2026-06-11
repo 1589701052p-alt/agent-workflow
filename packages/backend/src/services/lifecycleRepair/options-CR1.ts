@@ -16,10 +16,9 @@
 //     auto-upgraded to abandoned; scheduler's freshness invariant
 //     (RFC-056 §5.4) will pick up downstream cascade if appropriate.
 
-import { eq } from 'drizzle-orm'
+import { setTaskStatus } from '@/services/lifecycle'
 
-import { tasks } from '@/db/schema'
-
+import { schedulerLivenessGate } from './helpers'
 import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const CR1_ACKNOWLEDGE: RepairOptionDef = {
@@ -58,6 +57,9 @@ const CR1_RETRY_DESIGNER_RERUN: RepairOptionDef = {
   risk: 'medium',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'failed') {
       return {
         available: false,
@@ -77,16 +79,23 @@ const CR1_RETRY_DESIGNER_RERUN: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write — `failed` is terminal, so this is one of the four
+    // allowTerminal holders (design §1). A lost race surfaces as
+    // repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['failed'],
+      allowTerminal: true,
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-CR1',
         errorMessage: `RFC-057 repair CR-1.retry-designer-rerun via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'CR-1.retry-designer-rerun',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },

@@ -15,6 +15,7 @@ import type { DbClient } from '@/db/client'
 import { tasks } from '@/db/schema'
 import { abortAllActiveTasks } from '@/services/task'
 import { createLogger } from '@/util/log'
+import { trySetTaskStatus } from '@/services/lifecycle'
 
 const log = createLogger('shutdown')
 
@@ -35,14 +36,19 @@ export async function gracefulShutdown(db: DbClient, budgetMs: number = 30_000):
     count: survivors.length,
   })
   for (const t of survivors) {
-    await db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS from running; a task that settled inside the budget window
+    // keeps its real terminal status.
+    await trySetTaskStatus({
+      db,
+      taskId: t.id,
+      to: 'interrupted',
+      allowedFrom: ['running'],
+      extra: {
         finishedAt: Date.now(),
         errorSummary: 'daemon-shutdown',
         errorMessage: 'task did not exit within graceful shutdown budget',
-      })
-      .where(eq(tasks.id, t.id))
+      },
+      reason: 'graceful-shutdown',
+    })
   }
 }

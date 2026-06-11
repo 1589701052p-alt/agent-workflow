@@ -34,6 +34,7 @@ import { agents, docVersions, nodeRuns, tasks, workflows } from '../src/db/schem
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -394,6 +395,9 @@ describe('RFC-092 S-1 端到端 — mid-run review iterate 由活调度循环自
       decision: 'approved',
       expectedReviewIteration: 1,
     })
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first
+    // (test stand-in for resumeTask).
+    await reenterScheduler(h.db, taskId)
     await runTask({
       taskId,
       db: h.db,

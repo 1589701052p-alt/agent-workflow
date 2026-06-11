@@ -262,6 +262,19 @@ export async function applyRepairOption(args: ApplyRepairOptionArgs): Promise<Re
       outcomeMessage: message,
       appliedAt: now(),
     })
+    // RFC-097: a task-status CAS loss inside apply means the task moved under
+    // the operator's feet between preflight and the write — same situation as
+    // a stale preflight. Re-map to the existing 409 contract (operator
+    // re-diagnoses) instead of leaking the raw transition error code.
+    if (
+      err instanceof ConflictError &&
+      (err.code === 'illegal-task-transition' || err.code === 'concurrent-task-transition')
+    ) {
+      throw new ConflictError(
+        'repair-preflight-stale',
+        `apply for '${optionId}' lost the task-status race (${message}); re-diagnose to refresh`,
+      )
+    }
     throw err
   }
 

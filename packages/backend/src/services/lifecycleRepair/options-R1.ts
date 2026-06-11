@@ -17,8 +17,8 @@
 
 import { eq } from 'drizzle-orm'
 
-import { docVersions, nodeRunOutputs, nodeRuns, tasks } from '@/db/schema'
-import { setNodeRunStatus } from '@/services/lifecycle'
+import { docVersions, nodeRunOutputs, nodeRuns } from '@/db/schema'
+import { setNodeRunStatus, setTaskStatus } from '@/services/lifecycle'
 
 import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
 
@@ -291,15 +291,21 @@ const R1_MARK_FAILED: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'failed',
+    // RFC-097: CAS write — preflight excluded terminal states, so allowedFrom
+    // is the full non-terminal set. A lost race surfaces as
+    // repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'failed',
+      allowedFrom: ['pending', 'running', 'awaiting_review', 'awaiting_human'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-R1',
         errorMessage: `RFC-057 repair R1.mark-task-failed via alert ${rc.alert.id}`,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'R1.mark-task-failed',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'failed' } },

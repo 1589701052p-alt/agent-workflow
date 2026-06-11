@@ -33,6 +33,7 @@ import {
 import { submitClarifyAnswers } from '../src/services/clarify'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -259,6 +260,8 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
     // Round 1: agent runs again. Inline mode → spawn argv contains
     // `--session opc_R0`. Mock returns a normal <workflow-output> so the
     // task can finish.
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
+    await reenterScheduler(h.db, taskId)
     await withEnv(
       {
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'done' }),
@@ -344,6 +347,8 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       ],
     })
 
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
+    await reenterScheduler(h.db, taskId)
     await withEnv(
       {
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'done' }),
@@ -407,6 +412,8 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       ],
     })
 
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
+    await reenterScheduler(h.db, taskId)
     await withEnv(
       {
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'done' }),

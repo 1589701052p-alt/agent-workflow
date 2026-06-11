@@ -5,8 +5,27 @@ import { eq } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
+import { isTaskActive } from '@/services/task'
 
-import type { RepairNodeRunRow } from './types'
+import type { PreflightResult, RepairNodeRunRow } from './types'
+
+/** RFC-097 (audit S-23): repair options that flip task status and/or
+ * resumeAfterApply must refuse while an in-process scheduler loop owns the
+ * task — a repair write would race the live driver (second scheduler kicked
+ * under the first, or the live loop's own CAS clobbered). Returns the canned
+ * unavailable PreflightResult, or null when no scheduler is attached.
+ * Note for tests: harness-built tasks never sit in task.ts's activeTasks map,
+ * so this gate only fires when a real runTask is attached (see
+ * rfc097-repair-liveness.test.ts). */
+export function schedulerLivenessGate(rc: { task: { id: string } }): PreflightResult | null {
+  if (!isTaskActive(rc.task.id)) return null
+  return {
+    available: false,
+    unavailableReasonKey: 'diagnose.repair.common.schedulerActive',
+    previewSteps: [],
+    ctx: {},
+  }
+}
 
 const NODE_RUN_COLS = {
   id: nodeRuns.id,

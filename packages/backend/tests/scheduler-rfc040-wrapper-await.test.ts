@@ -44,6 +44,7 @@ import { runTask } from '../src/services/scheduler'
 import { submitClarifyAnswers } from '../src/services/clarify'
 import { decodeWrapperProgress } from '../src/services/wrapperProgress'
 import { runGit } from '../src/util/git'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -328,6 +329,8 @@ describe('RFC-040 wrapper-loop bubbles awaiting_human (clarify inside loop)', ()
 
     // Second pass simulates resumeTask: scheduler re-enters and finds the
     // wrapper parked. This time the agent emits a real output (no clarify).
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
+    await reenterScheduler(h.db, taskId)
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'use postgres' }) }, () =>
       runTask({
         taskId,
@@ -536,6 +539,9 @@ describe('RFC-040 wrapper-git bubbles awaiting_human (clarify inside git wrapper
       answeredBy: 'local',
     })
 
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first
+    // (test stand-in for resumeTask).
+    await reenterScheduler(h.db, taskId)
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'use postgres' }) }, () =>
       runTask({
         taskId,

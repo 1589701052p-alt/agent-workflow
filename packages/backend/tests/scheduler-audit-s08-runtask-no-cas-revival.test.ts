@@ -1,21 +1,23 @@
-// CURRENT-BEHAVIOR LOCK — design/scheduler-audit-2026-06-10.md S-8 (WP-4)
+// REGRESSION GUARD — RFC-097 (audit S-8 / WP-4): runTask 入口状态 CAS。
 //
-// 当前缺陷行为：runTask 入口没有任何状态 CAS / 防重入检查——
-// services/scheduler.ts:261-262 的 "3. Mark running" 是一条无条件
-// `db.update(tasks).set({ status: 'running' })`。后果（本文件逐条锁定）：
+// 历史缺陷（本文件前身以 CURRENT-BEHAVIOR LOCK 形态锁定过）：runTask 入口
+// 没有任何状态 CAS / 防重入检查——"Mark running" 是一条无条件
+// `db.update(tasks).set({ status: 'running' })`，导致：
 //   1. 已 canceled 的任务被直接复活并跑到 done（终态不设防）；
-//   2. 已 done 的任务被重新进入、重新铸 node_runs 跑一遍（无终态守卫）；
+//   2. 已 done 的任务被重新进入、重新铸 node_runs 跑一遍；
 //   3. status='running'（语义上已有另一个调度器实例持有）的任务被静默接管
 //      ——这正是 S-8 "并发 resume/retry 起两个调度器双写同一 worktree" 的入口面。
 //
-// 正确语义：runTask 仅应接受 pending（或显式列入转移表的可恢复态）；
-// 非法 from-状态应拒绝执行（no-op / 409），running 应视为已有实例持有而拒绝
-// 二次进入（结合 activeTasks 注册表）。
+// RFC-097 修复（services/scheduler.ts runTask "3. Mark running"）：
+//   `trySetTaskStatus({ to: 'running', allowedFrom: ['pending'] })`，
+//   CAS 失败（终态 / 已 running / 任意非 pending）→ log + return，
+//   不铸任何 node_runs、不覆写 finishedAt / errorSummary。
 //
-// 修复落点：WP-4（shared nextTaskStatus 转移表 + transitionTaskStatus CAS +
-// resumeTask/retryNode/runTask 入口 activeTasks 拒绝）。
-// 修复时本文件应翻红：把各断言翻转为「状态保持原值 / 不铸任何 node_runs /
-// runTask 拒绝执行」（见每条断言旁的 FLIP 注释）。
+// 本文件即原 FLIP 指引的落地：断言全部翻转为「状态保持原值 / 零新铸
+// node_runs / runTask 拒绝执行」。任何 refactor 把 runTask 入口的 CAS 拿掉
+// （或放宽 allowedFrom），这里会立刻翻红。
+// 末尾的 positive control（pending 任务正常跑到 done）证明零行断言不是
+// 因 harness 失效而空洞为绿。
 //
 // 工作流刻意取最小形态 input → output（零 agent 节点，opencode 不会真被
 // spawn），因此本测试只行使 runTask 的入口路径 + frontier 终结路径，确定性 100%。
@@ -96,7 +98,7 @@ function minimalDef(): WorkflowDefinition {
 
 async function seedTaskWithStatus(
   h: Harness,
-  status: 'canceled' | 'done' | 'running',
+  status: 'pending' | 'canceled' | 'done' | 'running',
   extra: Partial<typeof tasks.$inferInsert> = {},
 ): Promise<string> {
   const workflowId = ulid()
@@ -133,14 +135,14 @@ async function invokeRunTask(h: Harness, taskId: string): Promise<void> {
   })
 }
 
-describe('S-8 lock: runTask entry has no status CAS / no re-entry guard (scheduler.ts:261-262)', () => {
+describe('RFC-097 guard: runTask entry CAS (allowedFrom={pending}) — no revival, no takeover', () => {
   let h: Harness
   beforeEach(async () => {
     h = await buildHarness()
   })
   afterEach(() => h.cleanup())
 
-  test('canceled task is silently revived and driven to done', async () => {
+  test('canceled task stays canceled — runTask refuses, zero node_runs minted', async () => {
     const staleFinishedAt = Date.now() - 60_000
     const taskId = await seedTaskWithStatus(h, 'canceled', {
       finishedAt: staleFinishedAt,
@@ -150,57 +152,63 @@ describe('S-8 lock: runTask entry has no status CAS / no re-entry guard (schedul
     await invokeRunTask(h, taskId)
 
     const row = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    // FLIP (WP-4): 修复后应为 'canceled'（runTask 拒绝非 pending/可恢复态）。
-    expect(row?.status).toBe('done')
-    // 终结写确实重新发生过：finishedAt 被覆写为新值。
-    // FLIP (WP-4): 修复后应保持 staleFinishedAt 原值。
-    expect(row?.finishedAt ?? 0).toBeGreaterThan(staleFinishedAt)
-    // 盲写的另一面：done 写点（scheduler.ts:403）只 set status+finishedAt，
-    // 复活后的"done"任务仍背着取消时代的 errorSummary——状态与错误字段失配。
+    // 终态设防：runTask 入口 CAS from={pending} 失败 → log + return。
+    expect(row?.status).toBe('canceled')
+    // 终结写没有重新发生：finishedAt / errorSummary 保持取消时代原值。
+    expect(row?.finishedAt).toBe(staleFinishedAt)
     expect(row?.errorSummary).toBe('canceled')
 
+    // 被拒绝的调用不得铸任何 node_runs（含 input/output 虚拟行）。
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    // 最小 in→out 工作流恰好铸 2 行虚拟 node_runs（input + output 各 1，均 done）。
-    // FLIP (WP-4): 修复后应为 0（被拒绝的调用不得铸任何 node_runs）。
-    expect(runs.length).toBe(2)
-    expect(runs.map((r) => r.nodeId).sort()).toEqual(['in', 'out'])
-    expect(runs.every((r) => r.status === 'done')).toBe(true)
+    expect(runs.length).toBe(0)
   })
 
-  test('done (terminal) task is re-entered and fully re-run — fresh node_runs minted', async () => {
-    const staleFinishedAt = 1_000 // 远古时间戳，证明终结写发生过一次新的
+  test('done (terminal) task is not re-entered — finishedAt untouched, zero node_runs minted', async () => {
+    const staleFinishedAt = 1_000 // 远古时间戳：任何覆写都会暴露
     const taskId = await seedTaskWithStatus(h, 'done', { finishedAt: staleFinishedAt })
 
     await invokeRunTask(h, taskId)
 
     const row = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(row?.status).toBe('done')
-    // FLIP (WP-4): 修复后 finishedAt 应保持 staleFinishedAt（任务根本不该重跑）。
-    expect(row?.finishedAt ?? 0).toBeGreaterThan(staleFinishedAt)
+    expect(row?.finishedAt).toBe(staleFinishedAt)
 
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    // seed 时该任务没有任何历史 node_runs，这 2 行全是本次重入新铸的
-    // （in + out 各 1）。FLIP (WP-4): 修复后应为 0——done 任务不得被重新调度。
-    expect(runs.length).toBe(2)
-    expect(runs.map((r) => r.nodeId).sort()).toEqual(['in', 'out'])
+    expect(runs.length).toBe(0)
   })
 
-  test('running task (semantically owned by another scheduler) is taken over without any re-entry check', async () => {
+  test('running task (owned by another scheduler) — second runTask is a no-op', async () => {
+    // 直接 insert status='running' 的任务行：模拟另一个调度器实例已持有。
+    // runTask 入口 CAS from={pending} 看到 'running' 即失败返回，不接管。
     const taskId = await seedTaskWithStatus(h, 'running')
 
-    // 第二个 runTask 调用照单全收——这就是 S-8 双调度器双写 worktree 的入口面。
     await invokeRunTask(h, taskId)
 
     const row = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    // FLIP (WP-4): 修复后 status 应保持 'running' 且本次调用不产生任何行
-    //（入口以 activeTasks/CAS 识别"已有实例持有"并拒绝）。
+    // 状态仍归第一实例所有；本次调用零副作用（不翻状态、不终结）。
+    expect(row?.status).toBe('running')
+    expect(row?.finishedAt).toBeNull()
+
+    // 第二实例不再独立铸整套行——"同一节点铸两份行"的入口面已封死。
+    const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    expect(runs.length).toBe(0)
+  })
+
+  test('positive control: pending task is claimed and driven to done (2 virtual node_runs)', async () => {
+    // 证明上面三条的"零行 / 状态不变"不是 harness 失效的空洞绿：
+    // 同一 harness 下合法的 pending 任务必须照常被认领并跑完。
+    const taskId = await seedTaskWithStatus(h, 'pending')
+
+    await invokeRunTask(h, taskId)
+
+    const row = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(row?.status).toBe('done')
+    expect(row?.finishedAt ?? 0).toBeGreaterThan(0)
 
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    // 第二实例独立铸了整套行（in + out 各 1）——若真有另一实例在跑，
-    // 这就是"同一节点铸两份行"的爆炸半径起点。
-    // FLIP (WP-4): 修复后应为 0。
+    // 最小 in→out 工作流恰好铸 2 行虚拟 node_runs（input + output 各 1，均 done）。
     expect(runs.length).toBe(2)
     expect(runs.map((r) => r.nodeId).sort()).toEqual(['in', 'out'])
+    expect(runs.every((r) => r.status === 'done')).toBe(true)
   })
 })

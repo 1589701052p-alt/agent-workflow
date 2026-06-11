@@ -10,10 +10,9 @@
 //     non-running status, so we go via interrupted.)
 //   - S4.cancel-task  — give up; task → canceled. Worktree preserved.
 
-import { eq } from 'drizzle-orm'
+import { setTaskStatus } from '@/services/lifecycle'
 
-import { tasks } from '@/db/schema'
-
+import { schedulerLivenessGate } from './helpers'
 import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const S4_KICK_TASK: RepairOptionDef = {
@@ -24,6 +23,9 @@ const S4_KICK_TASK: RepairOptionDef = {
   risk: 'low',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'pending') {
       return {
         available: false,
@@ -43,16 +45,22 @@ const S4_KICK_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write — pending→interrupted is the manual-kick escape
+    // transition (design §2 row 22). A lost race surfaces as
+    // repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['pending'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S4',
         errorMessage: `RFC-057 repair S4.kick-task via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S4.kick-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },
@@ -69,6 +77,9 @@ const S4_CANCEL_TASK: RepairOptionDef = {
   risk: 'high',
   destructive: true,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'pending') {
       return {
         available: false,
@@ -88,15 +99,20 @@ const S4_CANCEL_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'canceled',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'canceled',
+      allowedFrom: ['pending'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S4',
         errorMessage: `RFC-057 repair S4.cancel-task via alert ${rc.alert.id}`,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S4.cancel-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'canceled' } },

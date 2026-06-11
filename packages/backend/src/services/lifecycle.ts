@@ -177,3 +177,112 @@ export async function setNodeRunStatus(args: {
   }
   return { from, to: args.to }
 }
+
+// -----------------------------------------------------------------------------
+// RFC-097 — tasks.status CAS (audit S-8 / S-14 / WP-4): the RFC-053 triple
+// (transition table + CAS helper + direct-write ratchet) replicated to the
+// tasks table. Every `tasks.status` write goes through setTaskStatus /
+// trySetTaskStatus below; the s14 source-text guard keeps direct
+// `update(tasks).set({ status: … })` out of every other module.
+// -----------------------------------------------------------------------------
+
+import type { TaskStatus } from '@agent-workflow/shared'
+import { tasks } from '@/db/schema'
+
+export const TERMINAL_TASK_STATUSES = ['done', 'failed', 'canceled', 'interrupted'] as const
+
+export function isTerminalTaskStatus(s: string): boolean {
+  return (TERMINAL_TASK_STATUSES as readonly string[]).includes(s)
+}
+
+/** Whitelisted companion columns (mirrors NodeRunStatusUpdateExtra; explicit
+ *  null is allowed — resume clears the error quadruple, repair T3 clears
+ *  finishedAt). `status` itself cannot be smuggled through here. */
+export type TaskStatusUpdateExtra = Partial<
+  Pick<typeof tasks.$inferInsert, 'finishedAt' | 'errorSummary' | 'errorMessage' | 'failedNodeId'>
+>
+
+export class ConcurrentTaskTransition extends ConflictError {
+  constructor(taskId: string, expectedFrom: readonly string[], reason: string) {
+    super(
+      'concurrent-task-transition',
+      `task ${taskId} status changed concurrently (expected one of [${expectedFrom.join(',')}]) — ${reason}`,
+    )
+  }
+}
+
+/**
+ * CAS-strict task status write. `allowedFrom` is the explicit legal-source
+ * set for this transition (RFC-097 design §1 matrix); terminal sources are
+ * refused unless the caller holds the `allowTerminal` escape hatch (exactly
+ * four holders: resumeTask, retryNode, repair CR-1, repair T3).
+ *
+ * Throws ConflictError('illegal-task-transition') when the current status is
+ * outside `allowedFrom`, ConcurrentTaskTransition when the CAS lost a race.
+ */
+export async function setTaskStatus(args: {
+  db: DbClient
+  taskId: string
+  to: TaskStatus
+  allowedFrom: readonly TaskStatus[]
+  allowTerminal?: boolean
+  extra?: TaskStatusUpdateExtra
+  reason: string
+}): Promise<{ from: TaskStatus; to: TaskStatus }> {
+  const rows = await args.db
+    .select({ status: tasks.status })
+    .from(tasks)
+    .where(eq(tasks.id, args.taskId))
+    .limit(1)
+  if (rows.length === 0) {
+    throw new NotFoundError('task-not-found', `task ${args.taskId} not found`)
+  }
+  const from = rows[0]!.status as TaskStatus
+  if (isTerminalTaskStatus(from) && args.allowTerminal !== true) {
+    throw new ConflictError(
+      'illegal-task-transition',
+      `task ${args.taskId} is terminal ('${from}'); refuse to overwrite (${args.reason})`,
+    )
+  }
+  if (!args.allowedFrom.includes(from)) {
+    throw new ConflictError(
+      'illegal-task-transition',
+      `task ${args.taskId} status='${from}' not in allowedFrom=[${args.allowedFrom.join(',')}] (${args.reason})`,
+    )
+  }
+  // rfc097-allow-direct-task-status-write -- single allowlisted writer
+  const updated = await args.db
+    .update(tasks)
+    .set({ status: args.to, ...(args.extra ?? {}) })
+    .where(and(eq(tasks.id, args.taskId), eq(tasks.status, from)))
+    .returning({ id: tasks.id })
+  if (updated.length === 0) {
+    throw new ConcurrentTaskTransition(args.taskId, args.allowedFrom, args.reason)
+  }
+  return { from, to: args.to }
+}
+
+/**
+ * Non-throwing variant for callers whose CAS-loss handling is "respect the
+ * winner and move on" (scheduler terminal writes, orphan/shutdown reapers,
+ * cancel fallback). Returns whether this writer won. Status-gate misses
+ * (from outside allowedFrom / terminal without escape hatch) also return
+ * false — the caller semantics are identical to a lost race.
+ */
+export async function trySetTaskStatus(args: {
+  db: DbClient
+  taskId: string
+  to: TaskStatus
+  allowedFrom: readonly TaskStatus[]
+  allowTerminal?: boolean
+  extra?: TaskStatusUpdateExtra
+  reason: string
+}): Promise<boolean> {
+  try {
+    await setTaskStatus(args)
+    return true
+  } catch (err) {
+    if (err instanceof ConflictError || err instanceof NotFoundError) return false
+    throw err
+  }
+}

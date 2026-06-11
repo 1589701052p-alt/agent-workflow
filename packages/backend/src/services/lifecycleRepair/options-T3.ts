@@ -8,10 +8,9 @@
 //     scheduler picks up the missing output node and completes it.
 //   - T3.mark-task-failed   — accept reality; task → failed.
 
-import { eq } from 'drizzle-orm'
+import { setTaskStatus } from '@/services/lifecycle'
 
-import { tasks } from '@/db/schema'
-
+import { schedulerLivenessGate } from './helpers'
 import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const T3_DEMOTE_TASK: RepairOptionDef = {
@@ -22,6 +21,9 @@ const T3_DEMOTE_TASK: RepairOptionDef = {
   risk: 'medium',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'done') {
       return {
         available: false,
@@ -41,16 +43,24 @@ const T3_DEMOTE_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write — `done` is terminal, so T3 is one of the four
+    // allowTerminal holders (design §1; the repo's only terminal→terminal
+    // rewrites). Explicit finishedAt:null rides the extra whitelist. A lost
+    // race surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['done'],
+      allowTerminal: true,
+      extra: {
         finishedAt: null,
         errorSummary: 'manual-repair-T3',
         errorMessage: `RFC-057 repair T3.demote-task via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'T3.demote-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },
@@ -67,6 +77,9 @@ const T3_MARK_FAILED: RepairOptionDef = {
   risk: 'high',
   destructive: true,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'done') {
       return {
         available: false,
@@ -85,15 +98,22 @@ const T3_MARK_FAILED: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'failed',
+    // RFC-097: CAS write — done→failed, allowTerminal holder (see demote-task
+    // above). A lost race surfaces as repair-preflight-stale via the engine's
+    // apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'failed',
+      allowedFrom: ['done'],
+      allowTerminal: true,
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-T3',
         errorMessage: `RFC-057 repair T3.mark-task-failed via alert ${rc.alert.id}`,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'T3.mark-task-failed',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'failed' } },

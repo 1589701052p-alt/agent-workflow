@@ -77,7 +77,7 @@ import {
   type ClarifyInlineFallbackReason,
 } from '@/services/clarifyFallback'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
-import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
+import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import {
   areTransitiveUpstreamsCompleted,
@@ -269,8 +269,21 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     return
   }
 
-  // 3. Mark running.
-  await db.update(tasks).set({ status: 'running' }).where(eq(tasks.id, taskId))
+  // 3. Mark running — CAS from 'pending' ONLY (RFC-097, audit S-8/S-14).
+  // The unconditional write here used to revive canceled/done tasks and let a
+  // second runTask take over a live one. CAS loss → another driver owns the
+  // task (or it is terminal): log and step away without minting anything.
+  const claimed = await trySetTaskStatus({
+    db,
+    taskId,
+    to: 'running',
+    allowedFrom: ['pending'],
+    reason: 'runTask-start',
+  })
+  if (!claimed) {
+    log.warn('runTask: task not claimable (not pending) — refusing to drive it', { taskId })
+    return
+  }
   await emitStatus(db, taskId)
 
   // 4. Validate node kinds.
@@ -393,9 +406,28 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
   if (result.kind === 'awaiting_review') {
     // RFC-005: task pauses with status=awaiting_review until a decision lands
     // via REST. Decision handler will call resumeTask which re-enters here.
-    await db.update(tasks).set({ status: 'awaiting_review' }).where(eq(tasks.id, taskId))
-    await emitStatus(db, taskId)
-    log.info('task awaiting human review', { taskId })
+    // RFC-097: cancel wins — an abort that landed after runScope's last
+    // signal check must not be overwritten by a park/terminal write.
+    if (opts.signal?.aborted === true) {
+      await cancelTaskRow(db, taskId)
+      return
+    }
+    if (
+      await trySetTaskStatus({
+        db,
+        taskId,
+        to: 'awaiting_review',
+        allowedFrom: ['running'],
+        reason: 'scope-awaiting-review',
+      })
+    ) {
+      await emitStatus(db, taskId)
+      log.info('task awaiting human review', { taskId })
+    } else {
+      log.warn('awaiting_review write lost to a concurrent transition — respecting winner', {
+        taskId,
+      })
+    }
     return
   }
   if (result.kind === 'awaiting_human') {
@@ -404,16 +436,51 @@ export async function runTask(opts: RunTaskOptions): Promise<void> {
     // awaiting_human; the source agent has no rerun row yet — that's
     // created when the user POSTs answers. Per design §7.3 awaiting_human
     // outranks awaiting_review on the task chip when both can fire at once.
-    await db.update(tasks).set({ status: 'awaiting_human' }).where(eq(tasks.id, taskId))
-    await emitStatus(db, taskId)
-    log.info('task awaiting human clarification', { taskId })
+    if (opts.signal?.aborted === true) {
+      await cancelTaskRow(db, taskId)
+      return
+    }
+    if (
+      await trySetTaskStatus({
+        db,
+        taskId,
+        to: 'awaiting_human',
+        allowedFrom: ['running'],
+        reason: 'scope-awaiting-human',
+      })
+    ) {
+      await emitStatus(db, taskId)
+      log.info('task awaiting human clarification', { taskId })
+    } else {
+      log.warn('awaiting_human write lost to a concurrent transition — respecting winner', {
+        taskId,
+      })
+    }
     return
   }
 
-  // 9. Done.
-  await db.update(tasks).set({ status: 'done', finishedAt: Date.now() }).where(eq(tasks.id, taskId))
-  await emitStatus(db, taskId)
-  log.info('task done', { taskId })
+  // 9. Done. RFC-097: cancel wins — final aborted check before the terminal
+  // CAS; a cancelTask fallback racing us resolves by whoever's CAS lands
+  // (from-sets are disjoint winners: done from=running vs canceled CAS).
+  if (opts.signal?.aborted === true) {
+    await cancelTaskRow(db, taskId)
+    return
+  }
+  if (
+    await trySetTaskStatus({
+      db,
+      taskId,
+      to: 'done',
+      allowedFrom: ['running'],
+      extra: { finishedAt: Date.now() },
+      reason: 'task-done',
+    })
+  ) {
+    await emitStatus(db, taskId)
+    log.info('task done', { taskId })
+  } else {
+    log.warn('done write lost to a concurrent transition — respecting winner', { taskId })
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -3503,26 +3570,55 @@ async function failTask(
   errorMessage: string,
   failedNodeId?: string,
 ): Promise<void> {
-  const set: Record<string, unknown> = {
-    status: 'failed',
-    finishedAt: Date.now(),
-    errorSummary,
-    errorMessage,
+  // RFC-097: callers sit either before mark-running (snapshot-invalid /
+  // unsupported-kind → from=pending) or inside the running scope. A canceled
+  // winner is respected (cancel outranks fail).
+  const won = await trySetTaskStatus({
+    db,
+    taskId,
+    to: 'failed',
+    allowedFrom: ['pending', 'running'],
+    extra: {
+      finishedAt: Date.now(),
+      errorSummary,
+      errorMessage,
+      ...(failedNodeId !== undefined ? { failedNodeId } : {}),
+    },
+    reason: `failTask: ${errorSummary}`,
+  })
+  if (!won) {
+    createLogger('scheduler').warn(
+      'failTask write lost to a concurrent transition — respecting winner',
+      { taskId, errorSummary },
+    )
+    return
   }
-  if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
-  await db.update(tasks).set(set).where(eq(tasks.id, taskId))
   await emitStatus(db, taskId)
 }
 
 async function cancelTaskRow(db: DbClient, taskId: string, failedNodeId?: string): Promise<void> {
-  const set: Record<string, unknown> = {
-    status: 'canceled',
-    finishedAt: Date.now(),
-    errorSummary: 'canceled by user',
-    errorMessage: 'aborted by signal',
+  // RFC-097: idempotent — cancelTask's fallback (or a failTask that raced
+  // first) may already have landed a terminal status; respect the winner.
+  const won = await trySetTaskStatus({
+    db,
+    taskId,
+    to: 'canceled',
+    allowedFrom: ['running'],
+    extra: {
+      finishedAt: Date.now(),
+      errorSummary: 'canceled by user',
+      errorMessage: 'aborted by signal',
+      ...(failedNodeId !== undefined ? { failedNodeId } : {}),
+    },
+    reason: 'cancelTaskRow',
+  })
+  if (!won) {
+    createLogger('scheduler').warn(
+      'cancelTaskRow lost to a concurrent transition — respecting winner',
+      { taskId },
+    )
+    return
   }
-  if (failedNodeId !== undefined) set.failedNodeId = failedNodeId
-  await db.update(tasks).set(set).where(eq(tasks.id, taskId))
   await emitStatus(db, taskId)
 }
 

@@ -9,8 +9,10 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import { clarifySessions, nodeRuns, tasks } from '@/db/schema'
+import { clarifySessions, nodeRuns } from '@/db/schema'
+import { setTaskStatus } from '@/services/lifecycle'
 
+import { schedulerLivenessGate } from './helpers'
 import type { ApplyResult, PreflightResult, RepairOptionDef } from './types'
 
 const S2_DEMOTE_TASK: RepairOptionDef = {
@@ -21,6 +23,9 @@ const S2_DEMOTE_TASK: RepairOptionDef = {
   risk: 'medium',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'awaiting_human') {
       return {
         available: false,
@@ -40,16 +45,21 @@ const S2_DEMOTE_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['awaiting_human'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S2',
         errorMessage: `RFC-057 repair S2.demote-task via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S2.demote-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },

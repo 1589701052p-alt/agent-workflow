@@ -10,10 +10,10 @@
 // they'll keep running detached until they exit naturally (their parent is
 // init now). v1 doesn't promise to clean these up.
 
-import { eq, inArray } from 'drizzle-orm'
+import { inArray } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { nodeRuns, tasks } from '@/db/schema'
-import { transitionNodeRunStatus } from '@/services/lifecycle'
+import { transitionNodeRunStatus, trySetTaskStatus } from '@/services/lifecycle'
 import { createLogger } from '@/util/log'
 
 const log = createLogger('orphans')
@@ -25,7 +25,16 @@ export interface ReapResult {
 
 export async function reapOrphanRuns(db: DbClient): Promise<ReapResult> {
   const now = Date.now()
-  const runningTasks = await db.select().from(tasks).where(eq(tasks.status, 'running'))
+  // RFC-097: 'pending' tasks are reaped too — boot runs before the HTTP server
+  // listens, so any pending task here is an orphan (startTask inserts and
+  // kicks in-process; a resume/retry that crashed mid-rollback leaves the
+  // CAS-claimed task pending with nobody attached — the gap5 task-side
+  // asymmetry this closes, mirroring the node_runs branch below which always
+  // reaped pending rows).
+  const runningTasks = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.status, ['running', 'pending'] as const))
   const runningRuns = await db
     .select()
     .from(nodeRuns)
@@ -36,15 +45,22 @@ export async function reapOrphanRuns(db: DbClient): Promise<ReapResult> {
   }
 
   for (const t of runningTasks) {
-    await db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS from the observed status; a loss means something else
+    // already settled the row — skip and log, same net as the node_runs
+    // branch below.
+    const won = await trySetTaskStatus({
+      db,
+      taskId: t.id,
+      to: 'interrupted',
+      allowedFrom: [t.status as 'running' | 'pending'],
+      extra: {
         finishedAt: now,
         errorSummary: 'daemon-restart',
         errorMessage: 'daemon restarted while this task was running; please resume',
-      })
-      .where(eq(tasks.id, t.id))
+      },
+      reason: 'reapOrphanRuns',
+    })
+    if (!won) log.warn('orphan task reap lost a race — skipping', { taskId: t.id })
   }
   let runsReaped = 0
   for (const r of runningRuns) {

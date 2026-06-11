@@ -33,6 +33,10 @@ import { submitCrossClarifyAnswers } from '../src/services/crossClarify'
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
+// RFC-097: runTask's entry CAS only claims pending tasks. Every scheduler
+// re-entry below (the post-decision / post-answer `await runTask(...)` calls)
+// is preceded by reenterScheduler — the test stand-in for resumeTask.
+import { reenterScheduler } from './reenter-scheduler'
 import type {
   ClarifyAnswer,
   ClarifyQuestion,
@@ -241,6 +245,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect(await taskStatus(c.db, task.id)).toBe('done')
@@ -322,6 +327,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'iterated',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     // review should be awaiting again on v2
@@ -334,6 +340,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 1,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect(await taskStatus(c.db, task.id)).toBe('done')
@@ -443,6 +450,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'iterated',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify #1
 
@@ -452,6 +460,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // clarify #2
 
@@ -461,6 +470,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -474,6 +484,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev2!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     // EXPECTED: task done, no spurious re-opened review.
@@ -548,6 +559,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -559,6 +571,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect(await taskStatus(c.db, task.id)).toBe('done')
@@ -644,6 +657,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       expectedReviewIteration: 0,
       rejectReason: 'no good',
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     // EXPECTED: B must NOT remain a finalized approval against the stale v1.
@@ -733,6 +747,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       expectedReviewIteration: 0,
       rejectReason: 'redo',
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify
     await submitClarifyAnswers({
@@ -740,6 +755,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev2 = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -751,6 +767,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev2!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const spurious = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -836,6 +853,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -847,6 +865,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({
@@ -928,6 +947,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     // builder now asks clarify
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
@@ -936,6 +956,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     // EXPECTED: review stays approved (done), task done, review NOT re-opened.
@@ -1022,6 +1043,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('done')
   })
@@ -1213,6 +1235,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     // answer B's clarify
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
@@ -1221,6 +1244,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -1232,6 +1256,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({
@@ -1323,6 +1348,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     const revA = await awaitingReviewRun(c.db, task.id, 'revA')
     expect(revA).toBeDefined()
@@ -1333,6 +1359,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: revA!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const builderTops = await topLevel(c.db, task.id, 'builder')
@@ -1429,6 +1456,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev = await awaitingReviewRun(c.db, task.id, 'rev')
@@ -1440,6 +1468,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({
@@ -1546,6 +1575,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     // questioner ran and asked cross-clarify → awaiting_human
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
@@ -1571,6 +1601,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     // any review that re-opens (legit: designer changed). Bounded loop.
     let guard = 0
     while (guard++ < 8) {
+      await reenterScheduler(c.db, task.id)
       await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
       const st = await taskStatus(c.db, task.id)
       if (st === 'done' || st === 'failed') break
@@ -1694,6 +1725,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'iterated',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev1b = await awaitingReviewRun(c.db, task.id, 'rev1')
@@ -1705,6 +1737,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 1,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const rev2 = await awaitingReviewRun(c.db, task.id, 'rev2')
@@ -1716,6 +1749,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev2!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const spurious1 = await awaitingReviewRun(c.db, task.id, 'rev1')
@@ -1784,6 +1818,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: 0,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({
@@ -1881,6 +1916,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     const revA = await awaitingReviewRun(c.db, task.id, 'revA')
@@ -1900,6 +1936,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: revB!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({
@@ -2040,6 +2077,7 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       decision: 'approved',
       expectedReviewIteration: rev!.reviewIteration,
     })
+    await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
 
     expect({

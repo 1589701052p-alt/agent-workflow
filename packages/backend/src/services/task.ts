@@ -38,6 +38,7 @@ import { listSkills } from '@/services/skill'
 import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
 import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
+import { setTaskStatus, trySetTaskStatus } from '@/services/lifecycle'
 import { pickFreshestRun } from '@/services/freshness'
 import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
 import { createWorktree, gitDiffSnapshot, isGitWorkTree, worktreeDiff } from '@/util/git'
@@ -73,6 +74,13 @@ const log = createLogger('task')
  * for M1.
  */
 const activeTasks = new Map<string, AbortController>()
+
+/** RFC-097 (audit S-8/S-23): is an in-process scheduler loop attached to this
+ *  task right now? Used by resume/retry entry rejection and lifecycleRepair's
+ *  scheduler-liveness preflight. */
+export function isTaskActive(taskId: string): boolean {
+  return activeTasks.has(taskId)
+}
 
 /**
  * P-4-06: abort every in-flight task. Used by daemon shutdown. The runner
@@ -830,7 +838,8 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       })
     })
     .finally(() => {
-      activeTasks.delete(taskId)
+      // RFC-097: identity-compare before delete.
+      if (activeTasks.get(taskId) === controller) activeTasks.delete(taskId)
     })
 
   if (deps.awaitScheduler === true) {
@@ -900,15 +909,21 @@ export async function cancelTask(db: DbClient, id: string): Promise<Task> {
   }
 
   // Fallback: scheduler didn't notice or no controller — flip the row.
-  await db
-    .update(tasks)
-    .set({
-      status: 'canceled',
+  // RFC-097: CAS from {pending, running}; a loss means the scheduler (or a
+  // racing failTask) landed a terminal status first — return the winner
+  // instead of overwriting it.
+  await trySetTaskStatus({
+    db,
+    taskId: id,
+    to: 'canceled',
+    allowedFrom: ['pending', 'running'],
+    extra: {
       finishedAt: Date.now(),
       errorSummary: 'canceled by user',
       errorMessage: 'no active scheduler at cancel time',
-    })
-    .where(eq(tasks.id, id))
+    },
+    reason: 'cancelTask-fallback',
+  })
   const final = (await getTask(db, id)) as Task
   emitTaskStatus(final)
   return final
@@ -928,6 +943,15 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
   if (task === null) {
     throw new NotFoundError('task-not-found', `task '${id}' not found`)
   }
+  // RFC-097 (audit S-8): an in-process scheduler loop already owns this task —
+  // a second driver would double-write the worktree. Same 409 code as the
+  // status gate below (the resume contract exposes one code).
+  if (isTaskActive(id)) {
+    throw new ConflictError(
+      'task-not-resumable',
+      `task '${id}' is actively running (scheduler attached); cannot resume`,
+    )
+  }
   if (
     task.status !== 'failed' &&
     task.status !== 'interrupted' &&
@@ -938,6 +962,31 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
       'task-not-resumable',
       `task '${id}' is ${task.status}; only failed/interrupted/awaiting_review/awaiting_human tasks can resume`,
     )
+  }
+
+  // RFC-097 (audit S-8): the pending CAS IS the ownership lock — it moves
+  // BEFORE the git rollback so a concurrent resume/retry loses here with zero
+  // side effects (the old order let both racers roll the worktree back and
+  // kick two schedulers). Losing the race surfaces as the same 409 the status
+  // gate above produces.
+  try {
+    await setTaskStatus({
+      db,
+      taskId: id,
+      to: 'pending',
+      allowedFrom: ['failed', 'interrupted', 'awaiting_review', 'awaiting_human'],
+      allowTerminal: true,
+      extra: { finishedAt: null, errorSummary: null, errorMessage: null, failedNodeId: null },
+      reason: 'resumeTask',
+    })
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      throw new ConflictError(
+        'task-not-resumable',
+        `task '${id}' changed state concurrently; only failed/interrupted/awaiting_review/awaiting_human tasks can resume`,
+      )
+    }
+    throw err
   }
 
   // Collect the latest non-done run per nodeId — those are the ones that
@@ -961,19 +1010,12 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
     await rollbackNodeRunForResume(task, r, log)
     // The scheduler creates a new node_run with retry_index = max+1 on its
     // own when it sees no pending run for the node, so we just leave the
-    // failed row as historical and clear errors on the task.
+    // failed row as historical. The task row already flipped pending above
+    // (RFC-097 ownership lock); a rollback failure keeps it pending — same
+    // warn-and-continue net as before, runTask kicks regardless. A daemon
+    // crash mid-rollback leaves a pending orphan that boot reaping flips to
+    // interrupted (reapOrphanRuns, RFC-097 crash-window compensation).
   }
-
-  await db
-    .update(tasks)
-    .set({
-      status: 'pending',
-      finishedAt: null,
-      errorSummary: null,
-      errorMessage: null,
-      failedNodeId: null,
-    })
-    .where(eq(tasks.id, id))
 
   const next = (await getTask(db, id)) as Task
   emitTaskStatus(next)
@@ -981,6 +1023,10 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
   // Kick the scheduler — same plumbing as startTask but without re-creating
   // the worktree.
   const controller = new AbortController()
+  if (activeTasks.has(id)) {
+    // Should be unreachable (entry check + ownership CAS) — defensive only.
+    log.error('resumeTask: controller already registered for task', { taskId: id })
+  }
   activeTasks.set(id, controller)
   void runTask({
     taskId: id,
@@ -1011,7 +1057,9 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
       })
     })
     .finally(() => {
-      activeTasks.delete(id)
+      // RFC-097: identity-compare before delete — never evict a successor's
+      // controller.
+      if (activeTasks.get(id) === controller) activeTasks.delete(id)
     })
   return next
 }
@@ -1037,11 +1085,50 @@ export async function retryNode(
   if (task === null) {
     throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
   }
+  // RFC-097 (audit S-8): refuse while an in-process scheduler owns the task.
+  if (isTaskActive(taskId)) {
+    throw new ConflictError(
+      'task-still-running',
+      `task '${taskId}' has an active scheduler attached; cancel it first before retrying a node`,
+    )
+  }
   if (task.status === 'pending' || task.status === 'running') {
     throw new ConflictError(
       'task-still-running',
       `task '${taskId}' is ${task.status}; cancel it first before retrying a node`,
     )
+  }
+  // RFC-097: ownership lock — CAS the task to pending BEFORE the rollback and
+  // placeholder minting so a concurrent retry/resume loses with zero side
+  // effects (the old order let the loser pollute node_runs and the worktree).
+  // from = the complement of {pending, running}; canceled→pending is the
+  // RFC-095 revival path; done→pending is an explicit re-run of a finished
+  // node. All four terminal sources are deliberate — allowTerminal.
+  try {
+    await setTaskStatus({
+      db,
+      taskId,
+      to: 'pending',
+      allowedFrom: [
+        'done',
+        'failed',
+        'canceled',
+        'interrupted',
+        'awaiting_review',
+        'awaiting_human',
+      ],
+      allowTerminal: true,
+      extra: { finishedAt: null, errorSummary: null, errorMessage: null, failedNodeId: null },
+      reason: 'retryNode',
+    })
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      throw new ConflictError(
+        'task-still-running',
+        `task '${taskId}' changed state concurrently; cancel/settle it before retrying a node`,
+      )
+    }
+    throw err
   }
   const runRow = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1))[0]
   if (runRow === undefined || runRow.taskId !== taskId) {
@@ -1165,16 +1252,7 @@ export async function retryNode(
     })
   }
 
-  await db
-    .update(tasks)
-    .set({
-      status: 'pending',
-      finishedAt: null,
-      errorSummary: null,
-      errorMessage: null,
-      failedNodeId: null,
-    })
-    .where(eq(tasks.id, taskId))
+  // Task row already flipped pending above (RFC-097 ownership lock).
   const next = (await getTask(db, taskId)) as Task
   emitTaskStatus(next)
 
@@ -1201,7 +1279,7 @@ export async function retryNode(
       })
     })
     .finally(() => {
-      activeTasks.delete(taskId)
+      if (activeTasks.get(taskId) === controller) activeTasks.delete(taskId)
     })
   return next
 }

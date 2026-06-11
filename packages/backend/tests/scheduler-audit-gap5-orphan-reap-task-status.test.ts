@@ -1,31 +1,26 @@
-// CURRENT-BEHAVIOR LOCK — design/scheduler-audit-2026-06-10.md §⑥ 缺口5 (orphans 收割不看任务状态)
+// design/scheduler-audit-2026-06-10.md §⑥ 缺口5 (orphans 收割与任务状态) — 半锁半修。
 //
-// 当前缺陷行为（已对照 src/services/orphans.ts:26-70 核实）：
-//   `reapOrphanRuns` 的 node_runs 查询是全库 `status IN ('running','pending')`，
-//   不 join / 不过滤所属任务的状态（orphans.ts:29-32）。因此 daemon 重启时：
-//     1. 合法暂停中任务（task=awaiting_human / awaiting_review）名下的 `pending`
-//        锚点行会被翻成 `interrupted`——这些行不是孤儿，它们是"用户答完 clarify /
-//        review 后调度器要复用的幂等派发锚点"（runOneNode 的 pendingExisting 复用，
-//        scheduler.ts:1438-1449）。
-//     2. 尚未开跑任务（task=pending）名下的行同样被收割；且 task 本身保持
-//        pending（任务级收割只扫 task.status='running'，orphans.ts:28），重启后
-//        无人 re-kick——报告注明只有 stuckTaskDetector S4 的 5 分钟告警兜底。
-//   注意 packages/shared/src/node-kind-behavior.ts:72-75 自述 leave-alone 仅靠
-//   "查询只选 running/pending" 隐式保证——该保证只按【行状态】成立，按【任务状态】
-//   完全不成立，本文件锁定的正是后者。
+// RFC-097 之后本缺口拆成两半，本文件相应一半锁缺陷、一半锁新语义：
 //
-// 正确语义应是：boot 收割只处理"上一个 daemon 进程真正在跑"的任务（task=running，
-// 或至少排除 awaiting_* / pending 这类用户可见的合法停泊态）名下的行；暂停中任务的
-// pending 锚点行必须原样保留，否则 clarify/review 答复后的恢复路径会找不到锚点行。
+//   1.【仍是 CURRENT-BEHAVIOR LOCK】`reapOrphanRuns` 的 node_runs 查询是全库
+//      `status IN ('running','pending')`，不 join / 不过滤所属任务的状态
+//      （orphans.ts）。合法暂停中任务（task=awaiting_human / awaiting_review）
+//      名下的 `pending` 锚点行仍会被翻成 `interrupted`——这些行不是孤儿，它们是
+//      "用户答完 clarify / review 后调度器要复用的幂等派发锚点"（runOneNode 的
+//      pendingExisting 复用）。packages/shared/src/node-kind-behavior.ts:72-75
+//      自述 leave-alone 仅靠"查询只选 running/pending"隐式保证——该保证只按
+//      【行状态】成立，按【任务状态】不成立。该半边与 S-1 的修法强耦合，留待
+//      WP-1/WP-2；修复时按断言旁 FLIP 注释翻转（pending 锚点行保持 'pending'、
+//      ReapResult.runs 归零）。
 //
-// 修复归属：报告 ⑥-5 未划入既有 WP，但与 S-1 的修法强耦合（S-1 建议让 deriveFrontier
-// 对 pending-latest 放行、依赖 pending 行做幂等锚点；若按该方案修 S-1，必须同步修本
-// 缺口，否则 boot 收割会把锚点行翻 interrupted 使 S-1 修复失效）。预计随 WP-1/WP-2 处置。
-//
-// 修复时本文件应翻红，按各断言旁注释翻转期望值：
-//   - awaiting_human 任务的 pending 行应保持 'pending'（现锁 'interrupted'）
-//   - pending 任务的 pending 行应保持 'pending'（现锁 'interrupted'）
-//   - ReapResult.runs 相应归零
+//   2.【RFC-097 已修，锁新语义】task=pending 的任务侧不对称已关闭
+//      （design/RFC-097-task-status-cas/design.md §3 崩溃窗口补偿）：boot 收割
+//      现在把 pending 任务一并翻 interrupted（errorSummary='daemon-restart'）。
+//      论证：boot 收割在 HTTP listen 之前运行（src/cli/start.ts 步骤 5b），彼刻
+//      一切 pending 任务必为孤儿——startTask 是 insert 后同进程立即 kick，而
+//      resume/retry 的 pending CAS 前移后「回滚中途崩溃」恰好留下这种无人认领的
+//      pending 残留。收割后 resumeTask 可从 interrupted 恢复（完整恢复闭环见
+//      rfc097-pending-orphan-reap.test.ts）。
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
@@ -105,7 +100,7 @@ async function runStatus(db: DbClient, id: string): Promise<string | undefined> 
   return (await db.select().from(nodeRuns).where(eq(nodeRuns.id, id)))[0]?.status
 }
 
-describe('gap5 — reapOrphanRuns ignores task status (current-behavior lock)', () => {
+describe('gap5 — reapOrphanRuns vs task status（锚点行缺陷锁 + RFC-097 pending 任务收割新语义）', () => {
   let h: Harness
   beforeEach(() => {
     h = buildHarness()
@@ -123,7 +118,8 @@ describe('gap5 — reapOrphanRuns ignores task status (current-behavior lock)', 
 
     const r = await reapOrphanRuns(h.db)
 
-    // Task-level reap only scans task.status='running' → 0 tasks flipped.
+    // Task-level reap scans task.status ∈ {'running','pending'} (RFC-097) →
+    // awaiting_human is outside the set, 0 tasks flipped.
     expect(r.tasks).toBe(0)
     // DEFECT LOCK: the pending anchor row of a legally-paused task is counted
     // as an orphan and flipped. After fix: expect(r.runs).toBe(0).
@@ -144,23 +140,25 @@ describe('gap5 — reapOrphanRuns ignores task status (current-behavior lock)', 
     expect(await runStatus(h.db, clarifyRunId)).toBe('awaiting_human')
   })
 
-  test('pending task (not yet started / resume window): its pending row is reaped and nobody re-kicks the task', async () => {
+  test('pending task (crashed resume residue): RFC-097 reaps the task itself to interrupted(daemon-restart) so resume can recover', async () => {
     const taskId = await seedTask(h.db, 'pending')
     const runId = await seedRun(h.db, taskId, 'a', 'pending')
 
     const r = await reapOrphanRuns(h.db)
 
-    expect(r.tasks).toBe(0)
-    // DEFECT LOCK: row of a not-yet-running task flipped to interrupted.
-    // After fix: expect(r.runs).toBe(0) and the row stays 'pending'.
+    // RFC-097 (design §3): a pending task at boot time is by construction an
+    // orphan (boot reap runs before HTTP listen; startTask kicks in-process)
+    // — the old "stays pending forever, S4 alerts only" asymmetry is closed.
+    expect(r.tasks).toBe(1)
     expect(r.runs).toBe(1)
     expect(await runStatus(h.db, runId)).toBe('interrupted')
 
-    // The task stays 'pending' forever after the boot pass — task-side reap
-    // only flips running tasks, and no boot path re-kicks pending tasks
-    // (stuckTaskDetector S4 alerts only; explicit non-goal to auto-resume).
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('pending')
+    expect(t?.status).toBe('interrupted')
+    expect(t?.errorSummary).toBe('daemon-restart')
+    // interrupted ∈ resumeTask's recoverable set — the user-visible escape
+    // hatch the pending wedge never had. Full recovery loop is exercised in
+    // rfc097-pending-orphan-reap.test.ts (no duplication here).
   })
 
   // Contrast row of the (task-status × reap-outcome) matrix — running task +

@@ -29,6 +29,7 @@ import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { agents, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -161,9 +162,12 @@ describe('scheduler: an exhausted top-level wrapper-loop must NOT flip failed->d
     )[0]!
     expect(loopRowAfterRun1.status).toBe('exhausted')
 
-    // Run #2 — simulate a resume by re-entering runTask against the SAME db/task
-    // WITHOUT resetting anything. runTask sets status='running' at entry; the
-    // run must NOT end in 'done'.
+    // Run #2 — simulate a resume by re-entering runTask against the SAME db/task.
+    // RFC-097: runTask's entry CAS only claims pending tasks, so reset to
+    // pending first (the resumeTask equivalent) — otherwise run #2 silently
+    // no-ops and the headline assertion below would be hollow-green. The run
+    // must NOT end in 'done'.
+    await reenterScheduler(h.db, taskId)
     await withEnv(env, () => runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd }))
 
     const afterRun2 = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!

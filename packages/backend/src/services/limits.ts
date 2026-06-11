@@ -43,11 +43,14 @@ export async function enforceLimits(
       // Already terminal between read and cancel; ignore.
     }
     // cancelTask sets a generic 'canceled by user' summary; overwrite with the
-    // limit-specific reason so the UI surfaces it.
+    // limit-specific reason so the UI surfaces it. RFC-097 (audit S-14): only
+    // on rows where the cancel actually landed — a task that reached
+    // done/failed between the scan and the cancel keeps its real terminal
+    // message instead of being painted over with limit copy.
     await db
       .update(tasks)
       .set({ errorSummary: reason.summary, errorMessage: reason.message })
-      .where(eq(tasks.id, t.id))
+      .where(and(eq(tasks.id, t.id), eq(tasks.status, 'canceled')))
     canceled.push(t.id)
     log.warn('limit exceeded', { taskId: t.id, summary: reason.summary })
   }

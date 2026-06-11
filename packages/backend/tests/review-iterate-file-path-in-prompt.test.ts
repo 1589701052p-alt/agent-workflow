@@ -32,6 +32,7 @@ import { createWorkflow } from '../src/services/workflow'
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -277,6 +278,9 @@ describe('RFC-005 followup — markdown_file source path lands in iterate prompt
       decision: 'iterated',
       expectedReviewIteration: 0,
     })
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first
+    // (test stand-in for resumeTask).
+    await reenterScheduler(h.db, h.taskId)
     await runTask({
       taskId: h.taskId,
       db: h.db,

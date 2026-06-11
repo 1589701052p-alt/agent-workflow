@@ -20,6 +20,7 @@ import { agents, clarifySessions, tasks, workflows } from '../src/db/schema'
 import { submitClarifyAnswers } from '../src/services/clarify'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
+import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -181,6 +182,9 @@ describe('RFC-026 regression — isolated mode never resumes', () => {
           },
         ],
       })
+      // RFC-097: runTask's entry CAS only claims pending tasks — reset first
+      // (test stand-in for resumeTask).
+      await reenterScheduler(h.db, taskId)
       await withEnv(
         {
           MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'ok' }),

@@ -17,12 +17,9 @@
 //     nor clarify rows look obvious.
 //   - S3.mark-task-failed      — give up; task → failed. Worktree kept.
 
-import { eq } from 'drizzle-orm'
+import { setNodeRunStatus, setTaskStatus } from '@/services/lifecycle'
 
-import { tasks } from '@/db/schema'
-import { setNodeRunStatus } from '@/services/lifecycle'
-
-import { isTerminalNonDone, loadAllNodeRunsForTask } from './helpers'
+import { isTerminalNonDone, loadAllNodeRunsForTask, schedulerLivenessGate } from './helpers'
 import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
 
 // ---------------------------------------------------------------------------
@@ -116,6 +113,9 @@ const S3_RESURRECT_REVIEW: RepairOptionDef = {
   risk: 'low',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'running') {
       return {
         available: false,
@@ -158,16 +158,21 @@ const S3_RESURRECT_REVIEW: RepairOptionDef = {
       extra: { finishedAt: null, errorMessage: null },
       reason: 'S3.resurrect-review-run',
     })
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['running'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S3',
         errorMessage: `RFC-057 repair S3.resurrect-review-run via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S3.resurrect-review-run',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: {
@@ -191,6 +196,9 @@ const S3_RESURRECT_CLARIFY: RepairOptionDef = {
   risk: 'low',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'running') {
       return {
         available: false,
@@ -233,16 +241,21 @@ const S3_RESURRECT_CLARIFY: RepairOptionDef = {
       extra: { finishedAt: null, errorMessage: null },
       reason: 'S3.resurrect-clarify-run',
     })
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['running'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S3',
         errorMessage: `RFC-057 repair S3.resurrect-clarify-run via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S3.resurrect-clarify-run',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: {
@@ -266,6 +279,9 @@ const S3_DEMOTE_TASK: RepairOptionDef = {
   risk: 'medium',
   destructive: false,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'running') {
       return {
         available: false,
@@ -285,16 +301,21 @@ const S3_DEMOTE_TASK: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'interrupted',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'interrupted',
+      allowedFrom: ['running'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S3',
         errorMessage: `RFC-057 repair S3.demote-task via alert ${rc.alert.id}`,
         failedNodeId: null,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S3.demote-task',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'interrupted' } },
@@ -315,6 +336,9 @@ const S3_MARK_FAILED: RepairOptionDef = {
   risk: 'high',
   destructive: true,
   async preflight(rc): Promise<PreflightResult> {
+    // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
+    const gate = schedulerLivenessGate(rc)
+    if (gate !== null) return gate
     if (rc.task.status !== 'running') {
       return {
         available: false,
@@ -334,15 +358,20 @@ const S3_MARK_FAILED: RepairOptionDef = {
   },
   async apply(rc): Promise<ApplyResult> {
     const before = { task: { status: rc.task.status } }
-    await rc.db
-      .update(tasks)
-      .set({
-        status: 'failed',
+    // RFC-097: CAS write mirroring the preflight status gate. A lost race
+    // surfaces as repair-preflight-stale via the engine's apply catch.
+    await setTaskStatus({
+      db: rc.db,
+      taskId: rc.task.id,
+      to: 'failed',
+      allowedFrom: ['running'],
+      extra: {
         finishedAt: rc.now(),
         errorSummary: 'manual-repair-S3',
         errorMessage: `RFC-057 repair S3.mark-task-failed via alert ${rc.alert.id}`,
-      })
-      .where(eq(tasks.id, rc.task.id))
+      },
+      reason: 'S3.mark-task-failed',
+    })
     return {
       beforeSnapshot: before,
       afterSnapshot: { task: { status: 'failed' } },

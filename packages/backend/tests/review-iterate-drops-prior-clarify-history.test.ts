@@ -47,6 +47,7 @@ import { createClarifySession, submitClarifyAnswers } from '../src/services/clar
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
+import { reenterScheduler } from './reenter-scheduler'
 import type { ClarifyAnswer, ClarifyQuestion } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -357,6 +358,9 @@ describe('review-iterate rerun drops prior clarify Q&A from the prompt', () => {
     expect(supersededRow?.errorMessage ?? '').toContain('superseded-by-review-iterated')
     // Its clarifyIteration must still read 1 — the cutoff is read off this row.
 
+    // RFC-097: runTask's entry CAS only claims pending tasks — reset first
+    // (test stand-in for resumeTask).
+    await reenterScheduler(h.db, h.taskId)
     await runTask({
       taskId: h.taskId,
       db: h.db,
