@@ -413,3 +413,4 @@ _报告完。所有行号以调研时 HEAD（f9db99f 附近）为准；落地各
 - 多个核实 agent 用临时脚本做了端到端复现（S-1 菱形拓扑 mid-run 答题、S-3 approve-in-loop 双 resume 卡死、S-10 bun:sqlite async 事务 COMMIT 外实证），这些复现脚本**未落库为回归测试**——按本仓 Test-with-every-change 规约，修复前须先把它们固化为 RED 测试（见 ⑥ 第 8 条）。
 - **2026-06-10 更新：测试网已落地**——⑥ 第 8 条已解决。22 个 `scheduler-audit-*` 测试文件 / 78 条用例（全绿的现状锁定 + oracle + 源码守卫三形态，每条带翻转指引），覆盖 S-1~S-22 全部可测项与缺口 1/3/4/5；S-3/S-10 等复现已固化。落地过程中顺带核实了附录 C 的部分条目（#5 readPortAtIteration i≥1 恒空串成立并已锁进 gap4 文件；S-13 fork#6 lifecycleRepair/helpers.ts:42 成立已锁）。各 WP 动刀时先跑对应 `scheduler-audit-s<NN>` 文件，按文件头注释翻转断言。
 - 行号基线：HEAD f9db99f（2026-06-10）。
+- **2026-06-12 收官**：改进路线全部工作包完成——WP-1(RFC-092)/WP-7(RFC-093)/WP-6a(RFC-094)/WP-2(RFC-095)/WP-3(RFC-096)/WP-4(RFC-097)/WP-5+6b+6c+6d+8+9+10(RFC-098 四批 d867ebb/0d53870/46ff73b/f010f6e)。正文 28 个确认问题中除明确 deferred 项（S-18 部分容忍 errors port、⑥-1 limits 墙钟、缺口 3 gc 多仓、缺口 5 节点侧锚点行、clarify 收敛单表、fanout 跨代 UI 漏显）外全部根治；每项均有翻转后的语义锁定测试。后续接手以 STATE.md 与各 RFC 目录为准。
