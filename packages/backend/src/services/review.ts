@@ -64,7 +64,7 @@ import {
   workflows,
 } from '@/db/schema'
 import { resolvePortContentDetailed } from '@/services/envelope'
-import { isFresherNodeRun, pickFreshestRun } from '@/services/freshness'
+import { pickFreshestRun } from '@/services/freshness'
 import { parseConsumedJson } from '@/services/freshness'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'

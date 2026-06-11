@@ -1,7 +1,7 @@
 // RFC-057 — common DB query helpers shared between option modules.
 // Living in a sibling file (not the engine entry) avoids cycles.
 
-import { and, desc, eq } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
