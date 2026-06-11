@@ -66,7 +66,7 @@ interrupted / done→failed，全仓唯一终态→终态改写）。
 ## 3. 任务级互斥（S-8）
 
 - **task.ts 导出 `isTaskActive(taskId): boolean`**（activeTasks.has）。
-- **resumeTask 新序列**：① `isTaskActive` → 409 `task-already-active`；② 状态门 fast-path
+- **resumeTask 新序列**：① `isTaskActive` → 409（code 复用 `task-not-resumable`，见下）；② 状态门 fast-path
   （现行 :931-941 保留）；③ `setTaskStatus(pending, from=可恢复集, allowTerminal)` —— CAS 即
   所有权锁，输者 409 `task-not-resumable`；④ 赢者执行 git 回滚（失败不回退状态——任务停在
   pending，与现行回滚失败 warn-continue 一致，runTask 照常 kick）；⑤ 注册 controller +
@@ -101,7 +101,7 @@ interrupted / done→failed，全仓唯一终态→终态改写）。
 
 ## 5. S-27：reviews.ts 分类吞
 
-`.catch(() => {})` → clarify.ts:270-281 同款：`task-not-resumable`（含新 `task-already-active`）
+`.catch(() => {})` → clarify.ts:270-281 同款：`task-not-resumable`（含 active 形态）
 → log.info（预期：活调度循环经 RFC-092 pending 锚点自取）；其余 → log.warn。
 
 ## 6. 失败模式
