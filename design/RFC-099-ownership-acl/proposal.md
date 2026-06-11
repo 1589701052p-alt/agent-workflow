@@ -83,13 +83,13 @@ owner+collaborator 可见性（taskCollab.ts:25 `canViewTask`）、节点级 rev
 | D15 | 保存校验         | 只校验**新增**引用（工作流加 agent、agent 加 skills/mcp/plugins/dependsOn）    |
 | D16 | 成员列表可见性   | 资源可见者皆可见成员列表（只读），owner+admin 可改                             |
 | D17 | 角色快照优先级   | 成员身份优先：owner > user > admin                                             |
-| D18 | 新建资源默认档位 | private（仅 owner），owner 可随时切 public（落档时定，用户批准 RFC 时可改）    |
+| D18 | 新建资源默认档位 | **public（全员可用）**，owner 可随时收紧为 private（用户批准 RFC 时修订）     |
 | D19 | 单用户模式       | 沿用 RFC-036 multiUserEnabled gating：daemon/单用户下 `__system__`=admin，行为零变化 |
 
 ## 用户故事
 
-1. 用户 A 创建「合规审计代理」，默认 private；把同组 B 加进用户列表。B 能在自己的工作流里
-   挂这个代理；C 在代理列表里根本看不到它。
+1. 用户 A 创建「合规审计代理」并收紧为 private；把同组 B 加进用户列表。B 能在自己的工作流
+   里挂这个代理；C 在代理列表里根本看不到它。
 2. A 用含该代理的工作流启动任务，把 B、C 选为任务用户。C 虽看不到代理本身，但能看到任务、
    能回答任务里的评审和反问（D3 隐式可用 + D5 继承）。
 3. 反问弹出 5 个问题：B 答了 1–3 题（草稿自动保存，逐题记下 B），C 补答 4–5 题并点提交。

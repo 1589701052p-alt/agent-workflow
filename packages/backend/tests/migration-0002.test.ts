@@ -25,7 +25,7 @@ import { drizzle } from 'drizzle-orm/bun-sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { ulid } from 'ulid'
 import * as schema from '../src/db/schema'
-import { nodeRuns, tasks, workflows } from '../src/db/schema'
+import { nodeRuns, tasks } from '../src/db/schema'
 
 const ROOT_MIGRATIONS = resolve(import.meta.dirname, '..', 'db', 'migrations')
 const JOURNAL_RAW = JSON.parse(readFileSync(join(ROOT_MIGRATIONS, 'meta', '_journal.json'), 'utf8'))
@@ -82,22 +82,25 @@ describe('RFC-005 0002 migration — data integrity + new schema', () => {
   })
 
   test('stage A: applies 0000 + 0001 only; v1 schema is reachable', () => {
-    const { db, sqlite } = openWithMigrations(dbPath, v1MigrationsDir)
+    const { sqlite } = openWithMigrations(dbPath, v1MigrationsDir)
 
     // Seed a workflow + task + node_run, the way the daemon would after v1.
     const workflowId = ulid()
-    db.insert(workflows)
-      .values({
-        id: workflowId,
-        name: 'design-flow',
-        description: '',
-        definition: JSON.stringify({ $schema_version: 1, inputs: [], nodes: [], edges: [] }),
-        version: 1,
-        schemaVersion: 1,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-      .run()
+    // RFC-099 update: switched from drizzle's typed insert to raw SQL for the
+    // same reason tasks/node_runs below already did (RFC-024 comment) — adding
+    // `visibility` (RFC-099, default 'public') to schema.ts makes drizzle emit
+    // `INSERT (..., visibility)` against a v1 DB that doesn't have the column.
+    sqlite
+      .prepare(
+        `INSERT INTO workflows (id, name, description, definition, version, schema_version, created_at, updated_at)
+         VALUES (?, 'design-flow', '', ?, 1, 1, ?, ?)`,
+      )
+      .run(
+        workflowId,
+        JSON.stringify({ $schema_version: 1, inputs: [], nodes: [], edges: [] }),
+        Date.now(),
+        Date.now(),
+      )
 
     const taskId = ulid()
     // RFC-024 update: switched from drizzle's typed insert to raw SQL for the

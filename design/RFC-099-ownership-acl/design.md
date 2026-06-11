@@ -12,13 +12,16 @@
 
 ```sql
 ALTER TABLE {t} ADD COLUMN owner_user_id TEXT;            -- FK users.id（应用层约束）
-ALTER TABLE {t} ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private';  -- 'private'|'public'
-UPDATE {t} SET visibility = 'public',
-  owner_user_id = COALESCE(
+ALTER TABLE {t} ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';  -- 'private'|'public'（D18 修订：默认 public）
+UPDATE {t} SET owner_user_id = COALESCE(
     (SELECT id FROM users WHERE role='admin' AND id != '__system__'
        ORDER BY created_at ASC LIMIT 1),
     '__system__');
 ```
+
+> 批次修正：0045 只做**加列 + 建表 + backfill**；collaborator 角色收编与
+> `DROP TABLE node_assignments` 挪到 **migration 0046（B3/T7）**，与引用这些代码的
+> taskCollab/routes 删改同批落地，保证 B1 独立编译绿。
 
 **通用授权表**（一张表服务五类资源，避免 5 张孪生表）：
 
@@ -37,8 +40,8 @@ CREATE INDEX idx_resource_grants_user ON resource_grants(user_id);
 **其余**：
 
 - `skill_sources` 加 `created_by TEXT`（同款 backfill）；扫描导入的 external 技能行
-  `owner_user_id = source.created_by`、`visibility` 继承 source 既有技能策略——存量 public、
-  新源导入 private（reconciler 写入点：services/skill-source.ts）。
+  `owner_user_id = source.created_by`、visibility=public（D18 默认；reconciler 写入点：
+  services/skill-source.ts）。
 - `review_comments` 加 `author_role TEXT`；`doc_versions` 加 `decided_by_role TEXT`；
   `clarify_rounds` 加 `submitted_by_role TEXT`、`answer_attributions_json TEXT`、
   `draft_answers_json TEXT`。全部 nullable，历史行 NULL = 渲染成「本地用户（历史）」。
@@ -86,7 +89,7 @@ resolveTaskRole(actor, task, isMember)   // D17: ownerUserId===me → 'owner'; i
 | ------------------------------------- | -------------------------------------------------------------------- |
 | GET /api/{res}（5 类列表）            | 接 `visibleIdsFilter`；响应加 `ownerUserId/visibility`               |
 | GET /api/{res}/:id                    | `canViewResource` 失败 → 404                                          |
-| POST /api/{res}                       | 创建者写入 `owner_user_id=actor`，默认 private（D18）                |
+| POST /api/{res}                       | 创建者写入 `owner_user_id=actor`，默认 public（D18 修订）            |
 | PUT/PATCH/DELETE /api/{res}/:id       | `requireOwner`                                                        |
 | GET /api/skills（RFC-017 reconciler） | 扫描导入行带 owner（§1）                                              |
 | workflows YAML import                 | 导入者即 owner；export 要求可见                                       |

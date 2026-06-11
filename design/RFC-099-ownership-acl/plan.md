@@ -7,14 +7,15 @@
 
 ## B1 — 模型与 ACL 核心（schema + shared + service）
 
-- **T1** migration `0045_rfc099_ownership_acl.sql`：五表加列 + backfill（最早 admin /
-  `__system__` 兜底 + 存量 public）、`resource_grants` 建表、`skill_sources.created_by`、
-  归属四列（author_role / decided_by_role / submitted_by_role / answer_attributions_json +
-  draft_answers_json）、collaborator 角色收编、`DROP TABLE node_assignments`；drizzle
-  schema.ts 同步（enum 收紧 + 删 nodeAssignments 导出）。fixture 迁移断言（有/无 admin 两库）。
+- **T1** migration `0045_rfc099_ownership_acl.sql`：五表加列（visibility 默认 public，D18
+  修订）+ owner backfill（最早 admin / `__system__` 兜底）、`resource_grants` 建表、
+  `skill_sources.created_by`、归属四列（author_role / decided_by_role / submitted_by_role /
+  answer_attributions_json + draft_answers_json）；drizzle schema.ts 同步加列。
+  **collaborator 角色收编 + `DROP TABLE node_assignments` 挪到 migration 0046（B3/T7）**，
+  与引用代码删改同批，保证 B1 独立编译。fixture 迁移断言（有/无 admin 两库）。
 - **T2** shared：permission.ts baseline 扩容（5 资源 write + 4 memory 管理点）+ 快照测试
-  更新；`TaskActorRole` / Acl schema / attribution schema / `clarify.draft.updated` ws 变体 /
-  StartTaskSchema 删 assignments（显式 422）。
+  更新；`TaskActorRole` / Acl schema / attribution schema / `clarify.draft.updated` ws 变体。
+  **StartTaskSchema 删 assignments 挪到 B3/T7**（routes/tasks.ts 引用同批删）。
 - **T3** `services/resourceAcl.ts`：canViewResource / requireOwner / visibleIdsFilter /
   resolveTaskRole + 全矩阵单测。
 

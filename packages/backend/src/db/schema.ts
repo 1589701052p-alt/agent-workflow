@@ -52,6 +52,15 @@ export const agents = sqliteTable('agents', {
   plugins: text('plugins').notNull().default('[]'),
   frontmatterExtra: text('frontmatter_extra').notNull().default('{}'), // JSON for advanced fields
   bodyMd: text('body_md').notNull().default(''), // system prompt; may be empty
+  // RFC-099: resource-level ACL. owner_user_id = single owner (users.id or the
+  // '__system__' sentinel — app-layer FK so daemon-only DBs stay valid).
+  // visibility 'public' = every active user can view/use; 'private' = owner +
+  // resource_grants rows only. Admins bypass both. Same pair on skills / mcps /
+  // plugins / workflows below.
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -74,6 +83,9 @@ export const skillSources = sqliteTable('skill_sources', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   lastScannedAt: integer('last_scanned_at'), // unix ms; null = never scanned
   lastScanError: text('last_scan_error'), // short error code OR summary of skipped reports
+  // RFC-099: who registered this source. Skills imported from it inherit this
+  // user as their owner (D11).
+  createdBy: text('created_by'),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -106,6 +118,11 @@ export const mcps = sqliteTable('mcps', {
   config: text('config').notNull().default('{}'),
   /** Per-server toggle (matches opencode `mcp.<name>.enabled`). */
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  // RFC-099 ACL (see agents table comment).
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -140,6 +157,11 @@ export const plugins = sqliteTable('plugins', {
   /** npm: package.json.version; git: commit short sha; file: mtime hash. Nullable on partial install. */
   resolvedVersion: text('resolved_version'),
   installedAt: integer('installed_at').notNull(),
+  // RFC-099 ACL (see agents table comment).
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -214,6 +236,12 @@ export const skills = sqliteTable(
     // RFC-017: source-folder-derived rows tag the originating skill_sources row.
     // ON DELETE SET NULL is defensive; service layer deletes child skills first.
     sourceId: text('source_id').references(() => skillSources.id, { onDelete: 'set null' }),
+    // RFC-099 ACL (see agents table comment). External skills inherit their
+    // source's created_by as owner at import time.
+    ownerUserId: text('owner_user_id'),
+    visibility: text('visibility', { enum: ['private', 'public'] })
+      .notNull()
+      .default('public'),
     schemaVersion: integer('schema_version').notNull().default(1),
     createdAt: integer('created_at')
       .notNull()
@@ -236,6 +264,11 @@ export const workflows = sqliteTable('workflows', {
   description: text('description').notNull().default(''),
   definition: text('definition').notNull(), // JSON: { $schema_version, nodes, edges, inputs, outputs }
   version: integer('version').notNull().default(1), // bumps on each PUT
+  // RFC-099 ACL (see agents table comment).
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -244,6 +277,32 @@ export const workflows = sqliteTable('workflows', {
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
 })
+
+// -----------------------------------------------------------------------------
+// RFC-099 resource_grants — one generic per-user grant table for all five
+// ACL'd resource types (agent / skill / mcp / plugin / workflow) instead of
+// five twin tables. A row = "this user can view + use this resource". Owner
+// and admins are NOT materialised here — canViewResource short-circuits them.
+// added_by/added_at are audit-only.
+// -----------------------------------------------------------------------------
+export const resourceGrants = sqliteTable(
+  'resource_grants',
+  {
+    resourceType: text('resource_type', {
+      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow'],
+    }).notNull(),
+    resourceId: text('resource_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    addedBy: text('added_by').notNull(),
+    addedAt: integer('added_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.resourceType, t.resourceId, t.userId] }),
+    userIdx: index('idx_resource_grants_user').on(t.userId),
+  }),
+)
 
 // -----------------------------------------------------------------------------
 // recent_repos — cache of recently used repo paths for the launcher dropdown.
@@ -675,6 +734,9 @@ export const docVersions = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
     decidedAt: integer('decided_at'),
     decidedBy: text('decided_by'), // v1 always 'local'; reserved
+    // RFC-099: task-relationship role snapshot of the decider (D7/D17).
+    // NULL = historic / system rows. Not read by buildReviewPromptContext.
+    decidedByRole: text('decided_by_role'),
   },
   (t) => ({
     reviewIdx: index('idx_doc_versions_review_run').on(t.reviewNodeRunId, t.versionIndex),
@@ -710,6 +772,11 @@ export const reviewComments = sqliteTable(
     occurrenceIndex: integer('occurrence_index').notNull(),
     commentText: text('comment_text').notNull(),
     author: text('author').notNull().default('local'),
+    // RFC-099: task-relationship role snapshot at comment time
+    // ('owner'|'user'|'admin', member identity first — D17). NULL = historic
+    // row, rendered as "local user (history)". NEVER read by
+    // renderCommentsForPrompt (prompt isolation, D7).
+    authorRole: text('author_role'),
     createdAt: integer('created_at')
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -964,6 +1031,17 @@ export const clarifyRounds = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
     answeredAt: integer('answered_at'),
     answeredBy: text('answered_by'),
+    // RFC-099 (D7/D8/D14): collaborative-answer attribution. All three are
+    // UI/audit-only — buildPromptContext / buildClarifyPromptBlock must never
+    // read them (locked by rfc099 prompt-isolation tests).
+    //   submitted_by_role — task-relationship role snapshot of answeredBy.
+    //   answer_attributions_json — Record<questionId, {userId, role, updatedAt}>;
+    //     live-updated on every draft save, frozen at submit.
+    //   draft_answers_json — Record<questionId, string> server-side draft;
+    //     per-question last-write-wins; cleared at submit.
+    submittedByRole: text('submitted_by_role'),
+    answerAttributionsJson: text('answer_attributions_json'),
+    draftAnswersJson: text('draft_answers_json'),
     // RFC-059: same payload as crossClarifySessions.questionScopesJson; written
     // by the submit handler dual-write. Always NULL for kind='self' rows;
     // may be NULL for kind='cross' rows when client did not send the map.
