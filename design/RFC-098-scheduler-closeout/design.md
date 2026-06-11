@@ -135,3 +135,72 @@ errorSummary='snapshot-lost')` + HTTP 抛错；scheduler 重试路径 → 节点
 每批的翻转/保绿/新增清单**以 survey.md 对应分域 §测试面为操作手册**（已逐文件列明 FLIP 行号
 与保绿约束），此处不重复。全程纪律：先翻/补 oracle 再动刀；每批跑 lint + typecheck + 全量 +
 format + build:binary；推送后 CI 绿再进下一批。
+
+## 对抗检视修订（双检视员 2026-06-12，落地前必修——以下条款覆盖正文同主题表述）
+
+**B1/B2（检视员一，7 攻击面 → 5 修订）**
+
+1. **注册表删除点唯一化**（攻击面 1 成立——HTTP gc-if-idle 会在 scheduler 缓存实例存活期间
+   删条目→重建新实例→互斥失效，S-9 复活）：`gcTaskWriteSem` 只允许 runTask finally 调用
+   （保留 if-idle 判据：HTTP 正持锁则跳过，条目存活到下次 getOrCreate 复用）；HTTP 路径一律
+   不 gc。残留上限 = 每个"停泊期被回滚过且不再 resume"的任务一个 Semaphore（可接受，记录）。
+   oracle：mid-run 两次 HTTP 回滚断言 getTaskWriteSem 同实例（Object.is）。
+2. **commit&push synthetic 细则**（攻击面 2）：synthetic promise 用**非节点键**
+   （`commitpush:{nodeId}:{iter}`）入 inFlight——节点键会进 deriveFrontier 在飞集把下游冻住
+   （按分支复活要修的冻结）；**canceled 两个 return 点必须先 drain 全部 synthetic**（其内部
+   signal 已传入，会快速 canceled 返回）再 return——否则弃置的 commit 会话与 finally gc
+   再次 split-brain；maybeRunCommitPush 逐 repo 循环头加 `signal.aborted` 早退。
+3. **多仓回滚两阶段 all-or-nothing**（攻击面 4 成立——逐仓循环第 2 仓 snapshot-missing 时
+   第 1 仓已被改写，违反"工作区不被破坏"承诺）：rollbackNodeRunWorktrees 多仓分支改
+   phase1 全仓 `cat-file -e` 预检（'' 仓跳过），任一缺失 → failures 返回且**零仓被动**；
+   phase2 全过才执行回滚。rollbackToSnapshot 头部检查保留为直接调用方兜底。
+4. **detached 测试面缓解**（攻击面 5）：stubborn fixture 内置 60s 绝对自毁；相关用例
+   afterEach 对记录 pid best-effort killTree(SIGKILL)；'child-unkillable' 收尾补
+   `child.unref()`；**不做**仅生产 detached 开关（测试网失真）。
+5. **S5 涟漪显式清单**（攻击面 6 成立——survey 漏第五、六处）：四处类型涟漪 + 前端 i18n
+   双语（en/zh 的 rule 标签表 + repair 文案族 + zh 类型块）+ 新建 `options-S5.ts`（id 前缀
+   'S5.'，过运行时对账）；补 describeRule 未知-rule fallback 用例。
+   **测试翻红补列**：resume-task-idempotent **R8**（fake sha `sha-fake-failed` 在 fail-closed
+   后翻红）——拆为「真 stash sha 正常 resume」+「快照丢失 → snapshot-lost」两用例（后者兼作
+   WP-9 oracle）。
+
+**B3/B4（检视员二，8 攻击面 → 6 修订）**
+
+6. **S-7 consumed 写入时机改裁**（攻击面 1b 成立——resume 覆盖写会把 parked 期间外部源
+   rerun 的事实永久掩盖，语义随调度时序漂移）：loop/git wrapper **只在 fresh-mint 写
+   consumed，resume 不覆盖**（终态自然判 stale → 下轮全量重跑，多一轮但收敛正确）。
+   正文 B3「每次进入覆盖写（对齐 fanout）」作废。同 invocation 内 wrapper done→stale 落
+   blocked('stale-done-in-invocation-dedup') 的有界退化（resume 可解）写入失败模式表。
+7. **S-20 reuseDisabled 持久化**（攻击面 1c 成立——内存 flag 在 crash-resume 后丢失，比较
+   基线已被覆盖，路径族 shard 跨代回放旧结果）：`reuseDisabled` 落 wrapperProgressJson
+   （markWrapperTerminal 时清除）。
+8. **S-3 evidence 契约补全**（攻击面 3）：wrapperRevivalEvidence 内部**必须按 innerIter
+   构 buildFreshestDonePerNode(rows, innerDescendants, innerIter)** 判 review done∧fresh
+   （误用外层 freshestDone 必错——写进函数 doc 契约）；嵌套窗口（loop-in-git 深层证据落在
+   内层计数 j）**depth-1 限定**，loop-in-git 的深层 approve resume 列为已知限制（与既有
+   pending 证据同病，记录不修）。
+9. **S-4 preDirty 条款**（攻击面 2）：上限 4096 条或序列化 256KB，**超限降级为空集**
+   （=今日累计语义，多报而非丢报；「纯路径集」降级方向作废——会把真改动扣掉）；hash-equal
+   扣除裁决为正确（与 git 状态语义一致），钉「pre-dirty 改又改回 → 不出现在 git_diff」用例；
+   'deleted' 哨兵按状态比较；跨代 interplay（stale 重跑第二代把第一代残留当 preDirty）与
+   「wrapper 重跑无回滚」开放点同源，记录。
+10. **工厂 running 直铸裁清**（攻击面 6）：RFC-053 状态机只管 update 不管 insert——收编 =
+    搬调用点不改语义（不做两步 insert+transition）；工厂加断言
+    `status==='running' ⟹ parentNodeRunId 非 null`（frontier 不可见性约束）违反即 throw +
+    钉点测试。survey「不建议直铸」表述作废。
+11. **RerunCause 映射修正**（攻击面 7 成立——两个失真会翻"保绿网"）：gate-2 的 cause 集合 =
+    `{'clarify-answer', 'cross-clarify-questioner-rerun'}`（questioner 重跑刻意 retryIndex:0
+    依赖同一门）；**gate-3 不 switch(cause)**——isCrossClarifyTriggeredRerun 是
+    retry-agnostic 的 lineage 信号（in-attempt retry 共享 draft），保留 clarifyGeneration>0
+    判定；枚举补 latestExisting ∈ {failed, awaiting\_\*} 重铸的归并判则（归 'revival' 或新值，
+    实现时定并测试钉死）；**T-d 改裁**：只拆 gate 依赖、保留 designer max+1 铸法（attempts
+    链单调职责）→ cross-clarify-designer-retry-index 测试**不翻转**（survey FLIP 预告作废）、
+    cross-clarify-service:655 亦不翻。
+    **测试面修正**：cross-clarify-stop-directive-scoped-to-cci-rerun + questioner-context 在
+    上述映射修正下保绿（survey 原映射下是地雷）；lifecycle-wrapper-nested 与
+    clarify-review-combination-scenarios 的 wrapper-loop 场景在 S-7 落地后必跑核对；新增正向
+    oracle「resume N 次 input done 行恒 1 行、wrapper 不因 input 判 stale」钉死 input 行
+    语义结论；S-3 重构保留 wrapperHasFreshInnerWork 同名布尔壳（dispatch-frontier-fanout-fresh
+    直接 import）。
+    **UI 已知项**（攻击面 4 附带）：fanout 跨代复用后 NodeDetailDrawer 按 parent 分组会漏显
+    被复用的旧代子行（漏显非双计）——升格为验收说明，前端修复另立。
