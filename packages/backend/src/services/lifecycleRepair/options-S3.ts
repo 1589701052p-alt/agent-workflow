@@ -60,7 +60,8 @@ async function findResurrectionCandidate(
   const allRuns = await loadAllNodeRunsForTask(rc.db, rc.task.id)
   // For each target nodeId, find the most-recent terminal-non-done row at the
   // current (review|clarify)Iteration that has no `done` sibling in the same
-  // iteration. Most-recent = highest retryIndex.
+  // iteration. Most-recent = highest ULID id (RFC-096: the old comment said
+  // "highest retryIndex" but the code below has always compared by id).
   type Row = (typeof allRuns)[number]
   const grouped = new Map<string, Row[]>()
   for (const r of allRuns) {

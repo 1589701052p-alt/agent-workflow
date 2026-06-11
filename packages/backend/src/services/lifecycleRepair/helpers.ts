@@ -30,17 +30,9 @@ export async function loadNodeRun(
   return rows[0] ?? null
 }
 
-export async function loadNodeRunsForNode(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-): Promise<RepairNodeRunRow[]> {
-  return db
-    .select(NODE_RUN_COLS)
-    .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-    .orderBy(desc(nodeRuns.retryIndex))
-}
+// RFC-096: `loadNodeRunsForNode` was deleted — a dead export (zero call sites
+// since its RFC-057 introduction) whose `desc(retryIndex)` ordering was one of
+// the audit S-13 freshest-row forks.
 
 export async function loadAllNodeRunsForTask(
   db: DbClient,

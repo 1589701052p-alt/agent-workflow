@@ -79,7 +79,13 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
-import { areTransitiveUpstreamsCompleted, isNodeRunFresh } from '@/services/freshness'
+import {
+  areTransitiveUpstreamsCompleted,
+  buildFreshestDonePerNode,
+  isFresherNodeRun,
+  isNodeRunFresh,
+  pickFreshestRun,
+} from '@/services/freshness'
 import {
   decideScopeOutcome,
   isDispatchable,
@@ -425,40 +431,11 @@ interface ScopeArgs {
   log: Logger
 }
 
-/**
- * Order two node_run rows by "freshness". The freshest row drives the node's
- * state in the scheduler (latestPerNode + rescan).
- *
- * RFC-074 PR-C: pure ULID-id ordering. The newest-inserted row always wins.
- *
- * Why pure id is correct (and why the old `(clarifyIteration, retryIndex, id)`
- * triple is gone):
- *   - node_run ids are ULIDs, monotonically increasing in creation order. Every
- *     rerun that should "win" — a clarify-driven rerun, a cross-clarify rerun,
- *     a single-node process retry — is by construction minted AFTER the rows it
- *     supersedes, so it always has the largest id. The causal insert order the
- *     scheduler already enforces makes id-order and the old counter-order pick
- *     the SAME row (proposal §4.2; de-risked end-to-end before this PR).
- *   - The old `clarifyIteration`-first layer existed only to force a clarify
- *     rerun to beat a higher-`retryIndex` done row from an earlier retry storm.
- *     Because the clarify rerun is minted later, its id is already larger — no
- *     separate counter needed. RFC-064's "missed-mirror" patch class (one
- *     codepath bumps a counter, another forgets) disappears with the counter.
- *   - `(retryIndex, id)` was considered and rejected: a retry storm on a stale
- *     row could inflate retryIndex above a later low-retry clarify rerun and
- *     wrongly shadow it. Pure id has no such failure mode.
- *
- * The PR-A baseline suite (`isfresher-noderun-baseline.test.ts`) locks that
- * this ordering is byte-equivalent to the retired triple on causally-minted
- * rows; the C-group adds the id-equivalence cross-check.
- */
-export function isFresherNodeRun(
-  candidate: typeof nodeRuns.$inferSelect,
-  incumbent: typeof nodeRuns.$inferSelect | undefined,
-): boolean {
-  if (incumbent === undefined) return true
-  return candidate.id > incumbent.id
-}
+// RFC-096: `isFresherNodeRun` moved to freshness.ts (the row-ordering
+// authority lives with the freshness primitives now; audit S-13 / WP-3).
+// Re-exported here so the six existing test files importing it from the
+// scheduler keep working unchanged.
+export { isFresherNodeRun } from '@/services/freshness'
 
 // -----------------------------------------------------------------------------
 // RFC-042 — same-session envelope follow-up decision.
@@ -812,8 +789,10 @@ async function maybeRunCommitPush(
   const { db, task } = state
   // The triggering node's latest done run at this iteration → parent of the
   // commit row, so the detail page can group it under the agent.
+  // RFC-096: freshest-by-id pick (was desc(startedAt) — a S-13 ordering fork;
+  // attribution semantics unchanged, the rows are done-only).
   const parentRows = await db
-    .select({ id: nodeRuns.id })
+    .select({ id: nodeRuns.id, parentNodeRunId: nodeRuns.parentNodeRunId, status: nodeRuns.status })
     .from(nodeRuns)
     .where(
       and(
@@ -823,9 +802,7 @@ async function maybeRunCommitPush(
         eq(nodeRuns.status, 'done'),
       ),
     )
-    .orderBy(desc(nodeRuns.startedAt))
-    .limit(1)
-  const parentNodeRunId = parentRows[0]?.id ?? null
+  const parentNodeRunId = pickFreshestRun(parentRows, { topLevelOnly: true })?.id ?? null
   const agentLabel: string =
     node.kind === 'agent-single' && typeof node.agentName === 'string' ? node.agentName : node.id
   const branch = task.branch
@@ -953,29 +930,8 @@ async function maybeRunCommitPush(
   }
 }
 
-/**
- * RFC-074 §3.2 / §4.2: each in-scope node's freshest DONE top-level row at the
- * given scope iteration, keyed by nodeId. This is the map `isNodeRunFresh`
- * consults — a consumed upstream run is "still fresh" iff it equals the id of
- * that upstream's entry here. Upstreams with no done row at this iteration
- * (e.g. settled cross-loop-boundary inputs) are simply absent, so
- * `isNodeRunFresh` treats them as not-stale (defensive).
- */
-function buildFreshestDonePerNode(
-  rows: ReadonlyArray<typeof nodeRuns.$inferSelect>,
-  scopeIds: Set<string>,
-  iteration: number,
-): Map<string, typeof nodeRuns.$inferSelect> {
-  const m = new Map<string, typeof nodeRuns.$inferSelect>()
-  for (const r of rows) {
-    if (r.iteration !== iteration) continue
-    if (!scopeIds.has(r.nodeId)) continue
-    if (r.parentNodeRunId !== null) continue
-    if (r.status !== 'done') continue
-    if (isFresherNodeRun(r, m.get(r.nodeId))) m.set(r.nodeId, r)
-  }
-  return m
-}
+// RFC-096: `buildFreshestDonePerNode` moved to freshness.ts alongside the
+// comparator (audit S-13 / WP-3).
 
 // -----------------------------------------------------------------------------
 // RFC-076 PR-B — deriveFrontier (the dispatch brain; PURE, and LIVE: runScope
@@ -988,9 +944,8 @@ function buildFreshestDonePerNode(
 // reconcile. Composes fix A's areTransitiveUpstreamsCompleted + PR-A's
 // isDispatchable / wrapperHasFreshInnerWork, plus RFC-092's pending-anchor
 // row-id release (mid-run clarify answer / review decision pickup, audit S-1).
-// Lives here (not freshness.ts / dispatchFrontier.ts) to reuse the scheduler's
-// row-ordering primitives (isFresherNodeRun / buildFreshestDonePerNode)
-// without an import cycle. Pure-function locks: derive-frontier.test.ts.
+// The row-ordering primitives (isFresherNodeRun / buildFreshestDonePerNode)
+// live in freshness.ts since RFC-096. Pure-function locks: derive-frontier.test.ts.
 
 export interface Frontier {
   /** done∧fresh ∪ exhausted(loop-max terminal, HIGH-2) ∪ settles-without-row leaves. */
@@ -1892,11 +1847,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         if (isCrossClarifyTriggeredRerun) {
           // RFC-074 PR-C: the working draft for this clarify-driven rerun is
           // the freshest prior generation's done row (id < current) — exactly
-          // the set already computed above. Pick by id (isFresherNodeRun) for
-          // the same reason readPortAtIteration does (RFC-040 shadowing bug).
-          for (const r of priorDoneGenerations) {
-            if (isFresherNodeRun(r, priorDoneDesigner)) priorDoneDesigner = r
-          }
+          // the set already computed above. RFC-096: shared picker (the rows
+          // are already done-only + top-level; the filters are belt-and-braces).
+          priorDoneDesigner = pickFreshestRun(priorDoneGenerations, {
+            topLevelOnly: true,
+            statusIn: ['done'],
+          })
         }
 
         // RFC-070: aging is row-state ("`consumed_by_..._run_id IS NULL`")
@@ -3790,21 +3746,18 @@ async function readPortAtIteration(
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  // Pick the freshest top-level run. RFC-040 surfaced a bug here: a wrapper-
-  // loop iteration that produced output via a clarify-driven rerun (the
-  // agent asked, the user answered, the framework minted a rerun row with
-  // clarifyIteration=1) would be silently shadowed by the original
-  // (clarifyIteration=0, retryIndex=0) row when this helper sorted only by
-  // retryIndex. The dispatcher's `isFresherNodeRun` comparator (see :287)
-  // already uses (clarifyIteration desc, retryIndex desc, id desc) for the
-  // same reason; replicate that ordering here so exit_condition / output
-  // binding evaluation sees the post-rerun output, not the original empty
-  // ask. See design/RFC-040-wrapper-await-bubble/design.md §4.5.
-  const candidates = rows.filter((r) => r.parentNodeRunId === null)
-  let chosen: (typeof candidates)[number] | undefined
-  for (const r of candidates) {
-    if (isFresherNodeRun(r, chosen)) chosen = r
-  }
+  // Pick the freshest DONE top-level run (shared picker, pure id order).
+  // RFC-096 (audit 附录 C #5): the done-only filter aligns this read with
+  // buildFreshestDonePerNode / the RFC-074 freshness口径 — without it, a
+  // freshly minted non-done row (e.g. a concurrent designer-rerun pending
+  // row) was picked as freshest, had no outputs, and the port read returned
+  // '': a loop `port-empty` exit condition false-fired and the wrapper
+  // persisted '' outputs. Non-done rows never have outputs (the runner only
+  // persists ports on done), so skipping them can only surface the newest
+  // REAL content. (The RFC-040 shadowing fix — pure id over retryIndex — is
+  // inherited from isFresherNodeRun; the old comment describing the retired
+  // (clarifyIteration, retryIndex, id) triple was stale and is gone.)
+  const chosen = pickFreshestRun(rows, { topLevelOnly: true, statusIn: ['done'] })
   if (chosen === undefined) return ''
   const out = await db
     .select()

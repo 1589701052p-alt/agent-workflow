@@ -38,6 +38,7 @@ import { listSkills } from '@/services/skill'
 import { validateWorkflowDef } from '@/services/workflow.validator'
 import { upsertRecentRepo } from '@/services/repo'
 import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
+import { pickFreshestRun } from '@/services/freshness'
 import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
 import { createWorktree, gitDiffSnapshot, isGitWorkTree, worktreeDiff } from '@/util/git'
 import { redactGitUrl } from '@agent-workflow/shared'
@@ -1127,14 +1128,24 @@ export async function retryNode(
     }
   }
   for (const nodeId of targets) {
+    // RFC-096 (audit S-13 / 附录 C #2): the inheritance source is the freshest
+    // TOP-LEVEL row by pure id — the old `desc(retryIndex)` pick had no
+    // iteration / parent filter, so a placeholder could inherit a fan-out
+    // child's parentNodeRunId (invisible to the frontier → cascade silently
+    // dead) or a stale iteration. nextRetry stays the ALL-rows max+1
+    // (conservative: legacy pathological rows minted by the old pickers may
+    // carry inflated retryIndex on child/inherited rows — never collide).
+    // prev === undefined (e.g. a fanout-inner node with only child rows) keeps
+    // the `?? 0` fallback below: the placeholder lands as a fresh top-level
+    // row that is inert for the top-level scope (inner nodes re-run via the
+    // wrapper's own resume path).
     const existing = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-      .orderBy(desc(nodeRuns.retryIndex))
-      .limit(1)
-    const prev = existing[0]
-    const nextRetry = prev === undefined ? 0 : prev.retryIndex + 1
+    const prev = pickFreshestRun(existing, { topLevelOnly: true })
+    const maxRetry = existing.reduce((mx, r) => (r.retryIndex > mx ? r.retryIndex : mx), -1)
+    const nextRetry = maxRetry + 1
     const inherit = nodeId === runRow.nodeId ? runRow : prev
     const newId = ulid()
     await db.insert(nodeRuns).values({

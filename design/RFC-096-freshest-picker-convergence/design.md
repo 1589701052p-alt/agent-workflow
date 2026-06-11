@@ -57,7 +57,9 @@ export function pickFreshestRun<
 - NULL startedAt 沉底 → 自家/review 铸的 rerun 行（不写 startedAt）永远选不中——id 序天然
   覆盖；
 - mark-running 重写 startedAt 的排序漂移消失；
-- 子行不再可选（top-level 过滤）。
+- 子行**保持可选**（实现修正：fanout 内 designer 的 rerun 必须继承 shardKey/parentNodeRunId，
+  既有测试 cross-clarify-service『preserves shard_key + parent_node_run_id passthrough』锁定
+  该特性——初版设计的 top-level 过滤会误杀它；只改排序键不改可选集）。
 - status 不滤：与 review.ts applyReviewDecision 同型——supersede/rollback 目标就是「该节点
   最新一行（无论状态）」；rollback 用 lastDesigner.preSnapshot、继承 iteration 等字段的语义
   保持，只是行选对了。

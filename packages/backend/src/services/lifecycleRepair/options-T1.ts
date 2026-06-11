@@ -16,6 +16,7 @@ import { tasks } from '@/db/schema'
 import { setNodeRunStatus } from '@/services/lifecycle'
 
 import { isTerminalNonDone, loadAllNodeRunsForTask } from './helpers'
+import { isFresherNodeRun } from '@/services/freshness'
 import type { ApplyResult, PreflightResult, RepairContext, RepairOptionDef } from './types'
 
 interface ReviewRunCandidate {
@@ -60,7 +61,11 @@ async function findLatestTerminalReviewRun(rc: RepairContext): Promise<ReviewRun
     }
     for (const [reviewIter, group] of groups) {
       if (group.some((r) => r.status === 'done')) continue
-      const latest = group.reduce((acc, r) => (r.retryIndex > acc.retryIndex ? r : acc), group[0]!)
+      // RFC-096 (audit S-13): pure id order — a stale high-retryIndex terminal
+      // row must not shadow a later low-retry rerun (same class of bug
+      // resumeTask fixed once already; the old in-memory retryIndex reduce
+      // bypassed the SQL-text guards).
+      const latest = group.reduce((acc, r) => (isFresherNodeRun(r, acc) ? r : acc), group[0]!)
       if (isTerminalNonDone(latest.status)) {
         if (best === null || reviewIter > best.reviewIteration) {
           best = {

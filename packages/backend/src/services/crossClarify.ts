@@ -82,6 +82,7 @@ import type { DbClient } from '@/db/client'
 import { clarifyRounds, crossClarifySessions, nodeRuns, tasks } from '@/db/schema'
 import { sealAnswersServerSide } from '@/services/clarify'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
+import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { rollbackToSnapshot } from '@/util/git'
 import { createLogger } from '@/util/log'
@@ -756,13 +757,23 @@ export async function triggerDesignerRerun(
 ): Promise<TriggerDesignerRerunResult> {
   const now = (args.now ?? Date.now)()
 
-  // Latest designer node_run (any status) — the cascade source.
+  // Latest designer node_run (any status, ANY parent) — the cascade source.
+  // RFC-096 (audit S-13 / 附录 C #7): pick by pure ULID id via the shared
+  // picker. The old `desc(startedAt)` had two pathologies — freshly minted
+  // rerun rows never write startedAt (NULL sorts LAST under DESC, so they
+  // could never be selected and a second trigger re-picked the stale row) and
+  // mark-running REWRITES startedAt (a resumed old-iteration row jumped to the
+  // front, anchoring rollback/inheritance/retry-bump on the wrong iteration —
+  // the minted pending row was then invisible to the current frontier and
+  // cross-clarify stalled). Child rows stay SELECTABLE on purpose: a designer
+  // inside a wrapper-fanout lives on shard child rows, and its rerun must
+  // inherit shardKey + parentNodeRunId (locked by cross-clarify-service
+  // 'preserves shard_key + parent_node_run_id passthrough').
   const designerRows = await args.db
     .select()
     .from(nodeRuns)
     .where(and(eq(nodeRuns.taskId, args.taskId), eq(nodeRuns.nodeId, args.designerNodeId)))
-    .orderBy(desc(nodeRuns.startedAt))
-  const lastDesigner = designerRows[0]
+  const lastDesigner = pickFreshestRun(designerRows, { topLevelOnly: false })
   if (lastDesigner === undefined) {
     throw new NotFoundError(
       'cross-clarify-designer-run-not-found',

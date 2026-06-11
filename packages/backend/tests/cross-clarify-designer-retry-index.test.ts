@@ -122,13 +122,19 @@ async function seedTask(db: DbClient): Promise<string> {
   return taskId
 }
 
+// RFC-096: seeded ids are MONOTONIC in seeding order (was Math.random — the
+// production picker is pure ULID id-order since RFC-096, so a random id made
+// `lastDesigner` selection nondeterministic; seeding order now IS causal
+// order, matching how production mints rows).
+let seedSeq = 0
 async function seedRun(
   db: DbClient,
   taskId: string,
   nodeId: string,
   fields: Partial<typeof nodeRuns.$inferInsert>,
 ): Promise<string> {
-  const id = `nr_${nodeId}_${Math.random().toString(36).slice(2, 10)}`
+  seedSeq += 1
+  const id = `nr_${String(seedSeq).padStart(4, '0')}_${nodeId}`
   await db.insert(nodeRuns).values({
     id,
     taskId,
@@ -249,9 +255,9 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
     // Designer ran twice at iteration=0 (retry 0, 5) then once at
     // iteration=1 (retry 0). A cross-clarify resolve at iteration=1 must
     // bump retry_index off iteration=1's max only — not iteration=0's.
-    // startedAt is explicitly set in ascending order so `lastDesigner`
-    // (picked via ORDER BY started_at DESC) resolves to the iteration=1
-    // row deterministically.
+    // RFC-096: `lastDesigner` is picked by pure ULID id order — the
+    // iteration=1 row is seeded LAST so it has the largest id and wins
+    // deterministically (startedAt fields kept for row realism only).
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRun(db, taskId, 'designer', { iteration: 0, retryIndex: 0, startedAt: 100 })

@@ -64,7 +64,7 @@ import {
   workflows,
 } from '@/db/schema'
 import { resolvePortContentDetailed } from '@/services/envelope'
-import { isFresherNodeRun } from '@/services/scheduler'
+import { isFresherNodeRun, pickFreshestRun } from '@/services/freshness'
 import { parseConsumedJson } from '@/services/freshness'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
@@ -314,14 +314,12 @@ export interface ReviewRunsPicked {
 export function pickFreshestReviewRun(
   reviewRuns: ReadonlyArray<typeof nodeRuns.$inferSelect>,
 ): ReviewRunsPicked {
-  let reuse: typeof nodeRuns.$inferSelect | undefined
-  let latestDone: typeof nodeRuns.$inferSelect | undefined
-  for (const r of reviewRuns) {
-    if (r.parentNodeRunId !== null) continue
-    if (isFresherNodeRun(r, reuse)) reuse = r
-    if (r.status === 'done' && isFresherNodeRun(r, latestDone)) latestDone = r
+  // RFC-096: thin wrapper over the shared picker (freshness.ts) — kept as an
+  // exported named function because tests anchor on it.
+  return {
+    reuse: pickFreshestRun(reviewRuns, { topLevelOnly: true }),
+    latestDone: pickFreshestRun(reviewRuns, { topLevelOnly: true, statusIn: ['done'] }),
   }
-  return { reuse, latestDone }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,13 +389,12 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
         eq(nodeRuns.iteration, iteration),
       ),
     )
-  let sourceRun: (typeof sourceRuns)[number] | undefined
-  for (const r of sourceRuns) {
-    // Skip fan-out child rows — multi-process review fanout per-shard is
-    // RFC-005 T14; for now we read the aggregator-side row.
-    if (r.parentNodeRunId !== null) continue
-    if (isFresherNodeRun(r, sourceRun)) sourceRun = r
-  }
+  // RFC-096: shared picker, top-level only (fan-out child rows skipped —
+  // multi-process review per-shard is RFC-005 T14). Deliberately NO statusIn
+  // filter: the freshest row must be checked for done-ness below — filtering
+  // would silently fall back to an OLDER done row instead of failing loudly
+  // with review-upstream-not-done.
+  const sourceRun = pickFreshestRun(sourceRuns, { topLevelOnly: true })
   if (sourceRun === undefined || sourceRun.status !== 'done') {
     return {
       kind: 'failed',
@@ -1698,11 +1695,9 @@ export async function submitReviewDecision(
     // immediately reads the stale upstream output to mint v(n+1) — i.e. iterate
     // looks like "version refreshed, no agent run". Locked by
     // review-iterate-inherits-clarify-iteration.test.ts.
-    let latest: (typeof upRuns)[number] | undefined
-    for (const r of upRuns) {
-      if (r.parentNodeRunId !== null) continue
-      if (isFresherNodeRun(r, latest)) latest = r
-    }
+    // RFC-096: shared picker; intentionally no status filter — supersede must
+    // be able to cancel live rows AND the typical done row alike.
+    const latest = pickFreshestRun(upRuns, { topLevelOnly: true })
     if (latest === undefined) continue
     // Worktree rollback per the review-node config. Track whether rollback
     // *actually completed* so the supersede marker can distinguish "files

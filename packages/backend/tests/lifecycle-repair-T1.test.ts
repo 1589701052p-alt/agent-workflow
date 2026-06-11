@@ -149,6 +149,64 @@ describe('RFC-057 — T1.resurrect-review-run', () => {
     )
   })
 
+  test('RFC-096: stale high-retryIndex terminal row does not shadow a later low-retry rerun (pure id-order pick)', async () => {
+    // Red before RFC-096: findLatestTerminalReviewRun reduced the same-
+    // reviewIteration group by HIGHEST retryIndex, so a retry storm on a stale
+    // row (retryIndex=9, minted FIRST) shadowed a later clarify-rerun-style
+    // row (retryIndex=1, larger id) — the exact bug class resumeTask fixed
+    // once already; the in-memory reduce bypassed the SQL-text guards. The
+    // candidate must now be the id-freshest row of the group.
+    h = await buildHarness({ taskStatus: 'awaiting_review' })
+    const staleHighRetry = await insertNodeRun(h.db, h.taskId, {
+      id: 'nr_rfc096_t1_0001_stale',
+      nodeId: 'rev_1',
+      status: 'interrupted',
+      retryIndex: 9,
+      reviewIteration: 1,
+      startedAt: 9_999_999_999_999, // realism: startedAt order must be inert too
+      finishedAt: Date.now(),
+    })
+    const freshLowRetry = await insertNodeRun(h.db, h.taskId, {
+      id: 'nr_rfc096_t1_0002_fresh', // minted later → larger id
+      nodeId: 'rev_1',
+      status: 'failed',
+      retryIndex: 1,
+      reviewIteration: 1,
+      startedAt: 1_000,
+      finishedAt: Date.now(),
+    })
+    const alertId = await insertAlert(h.db, h.taskId, {
+      rule: 'T1',
+      detail: { rule: 'T1' },
+    })
+    // Preflight preview names the id-freshest run, not the retry-storm row.
+    const list = await listRepairOptionsForAlert({
+      db: h.db,
+      taskId: h.taskId,
+      alertId,
+      actorUserId: null,
+      appHome: h.tmpDir,
+      deps: h.deps,
+    })
+    const opt = list.options.find((o) => o.id === 'T1.resurrect-review-run')
+    expect(opt?.available).toBe(true)
+    expect(opt?.previewSteps.some((s) => s.includes(freshLowRetry))).toBe(true)
+    expect(opt?.previewSteps.some((s) => s.includes(staleHighRetry))).toBe(false)
+    // Apply resurrects the fresh row; the stale storm row is left untouched.
+    const res = await applyRepairOption({
+      db: h.db,
+      taskId: h.taskId,
+      alertId,
+      optionId: 'T1.resurrect-review-run',
+      actorUserId: 'u-1',
+      appHome: h.tmpDir,
+      deps: h.deps,
+    })
+    expect(res.outcome).toBe('success')
+    expect(await readNodeRunStatus(h.db, freshLowRetry)).toBe('awaiting_review')
+    expect(await readNodeRunStatus(h.db, staleHighRetry)).toBe('interrupted')
+  })
+
   test('skip when a sibling at same reviewIteration already done', async () => {
     h = await buildHarness({ taskStatus: 'awaiting_review' })
     // retry=0 done + retry=1 interrupted at same reviewIteration: the rule says

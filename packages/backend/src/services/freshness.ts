@@ -128,3 +128,85 @@ export function computeReadyNodes<N extends { id: string }>(
   }
   return ready
 }
+
+/**
+ * Order two node_run rows by "freshness". The freshest row drives the node's
+ * state in the scheduler (latestPerNode) and every shared picker below.
+ *
+ * RFC-074 PR-C: pure ULID-id ordering. The newest-inserted row always wins.
+ * RFC-096 (audit S-13 / WP-3): moved here from scheduler.ts — the ordering
+ * authority lives with the freshness primitives; the generic is widened to
+ * `{ id: string }` (only the id is compared) so projected row shapes (e.g.
+ * lifecycleRepair's RepairNodeRunRow) can use it too.
+ *
+ * Why pure id is correct (and why the old `(clarifyIteration, retryIndex, id)`
+ * triple is gone):
+ *   - node_run ids are ULIDs, monotonically increasing in creation order. Every
+ *     rerun that should "win" — a clarify-driven rerun, a cross-clarify rerun,
+ *     a single-node process retry — is by construction minted AFTER the rows it
+ *     supersedes, so it always has the largest id.
+ *   - `(retryIndex, id)` was considered and rejected: a retry storm on a stale
+ *     row could inflate retryIndex above a later low-retry clarify rerun and
+ *     wrongly shadow it. Pure id has no such failure mode.
+ *
+ * The PR-A baseline suite (`isfresher-noderun-baseline.test.ts`) locks that
+ * this ordering is byte-equivalent to the retired triple on causally-minted
+ * rows; the C-group adds the id-equivalence cross-check.
+ */
+export function isFresherNodeRun<R extends { id: string }>(
+  candidate: R,
+  incumbent: R | undefined,
+): boolean {
+  if (incumbent === undefined) return true
+  return candidate.id > incumbent.id
+}
+
+/**
+ * RFC-074 §3.2 / §4.2: each in-scope node's freshest DONE top-level row at the
+ * given scope iteration, keyed by nodeId. This is the map `isNodeRunFresh`
+ * consults — a consumed upstream run is "still fresh" iff it equals the id of
+ * that upstream's entry here. (RFC-096: moved here from scheduler.ts.)
+ */
+export function buildFreshestDonePerNode(
+  rows: ReadonlyArray<NodeRunRow>,
+  scopeIds: Set<string>,
+  iteration: number,
+): Map<string, NodeRunRow> {
+  const m = new Map<string, NodeRunRow>()
+  for (const r of rows) {
+    if (r.iteration !== iteration) continue
+    if (!scopeIds.has(r.nodeId)) continue
+    if (r.parentNodeRunId !== null) continue
+    if (r.status !== 'done') continue
+    if (isFresherNodeRun(r, m.get(r.nodeId))) m.set(r.nodeId, r)
+  }
+  return m
+}
+
+/**
+ * RFC-096 (audit S-13 / WP-3) — the ONE sanctioned way to pick "the freshest
+ * run" out of a row set. Ordering is always pure ULID id (isFresherNodeRun);
+ * the only knobs are explicit filter predicates. nodeId / iteration filtering
+ * belongs in the caller's SQL WHERE — this picker deliberately does not group.
+ *
+ * History this replaces: `desc(retryIndex)` picks (a retry storm on a stale
+ * row shadows a later low-retry rerun — the bug resumeTask fixed once already)
+ * and `desc(startedAt)` picks (NULL startedAt sorts LAST under DESC, so
+ * freshly-minted rerun rows — which never write startedAt — could never be
+ * selected; mark-running rewrites startedAt and made the order drift).
+ */
+export function pickFreshestRun<
+  R extends { id: string; parentNodeRunId: string | null; status: string },
+>(
+  rows: readonly R[],
+  opts: { topLevelOnly?: boolean; statusIn?: readonly string[] } = {},
+): R | undefined {
+  const topLevelOnly = opts.topLevelOnly ?? true
+  let best: R | undefined
+  for (const r of rows) {
+    if (topLevelOnly && r.parentNodeRunId !== null) continue
+    if (opts.statusIn !== undefined && !opts.statusIn.includes(r.status)) continue
+    if (isFresherNodeRun(r, best)) best = r
+  }
+  return best
+}
