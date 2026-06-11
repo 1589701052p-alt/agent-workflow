@@ -2,6 +2,7 @@
 // Mirrors design/proposal.md §3.2 and design/design.md §3 (skills table).
 
 import { z } from 'zod'
+import { ResourceVisibilitySchema } from './resourceAcl'
 
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/
 
@@ -19,6 +20,10 @@ export const SkillSchema = z.object({
   id: z.string(),
   name: SkillNameSchema,
   description: z.string(),
+  /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+  ownerUserId: z.string().nullable().optional(),
+  /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+  visibility: ResourceVisibilitySchema.optional(),
   sourceKind: SkillSourceKindSchema,
   managedPath: z.string().optional(),
   externalPath: z.string().optional(),
@@ -108,6 +113,8 @@ export const SkillSourceSchema = z.object({
   enabled: z.boolean(),
   lastScannedAt: z.number().int().nullable(),
   lastScanError: z.string().nullable(),
+  /** RFC-099 (D11) — who registered this source; its imported skills inherit this owner. */
+  createdBy: z.string().nullable().optional(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 })

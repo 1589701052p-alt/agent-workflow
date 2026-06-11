@@ -68,15 +68,30 @@ const USER_RESOURCE_READS: ReadonlyArray<Permission> = [
   'runtime:read',
 ]
 
+// RFC-099: resource writes are no longer admin-only at the route gate — any
+// user may create the five ACL'd resource types (creator becomes owner) and
+// modify the ones they own. The per-row owner/grant check lives in
+// services/resourceAcl.ts; these points are only the coarse method gate.
+// repos:write stays admin-only (repos are out of the ACL model).
+const USER_RESOURCE_WRITES: ReadonlyArray<Permission> = [
+  'agents:write',
+  'skills:write',
+  'mcps:write',
+  'plugins:write',
+  'workflows:write',
+]
+
 const USER_BASELINE: ReadonlyArray<Permission> = [
   ...USER_RESOURCE_READS,
+  ...USER_RESOURCE_WRITES,
   'users:search',
   'tasks:launch',
   'tasks:read:own',
   'tasks:cancel:own',
   'account:self',
   // RFC-041: anyone logged in can read approved memories and write task
-  // feedback on tasks they can see. approve/archive/delete stay admin-only.
+  // feedback on tasks they can see. approve/archive/delete stay admin-only
+  // until RFC-099 B3 moves them to per-row canManageMemory gating.
   'memory:read',
   'memory:write_feedback',
 ]

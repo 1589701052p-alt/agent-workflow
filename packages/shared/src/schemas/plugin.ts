@@ -14,6 +14,7 @@
 // inject time when options are non-empty.
 
 import { z } from 'zod'
+import { ResourceVisibilitySchema } from './resourceAcl'
 
 /** Permitted characters in plugin name (URL-safe; matches `/api/plugins/:name`). */
 export const PLUGIN_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/
@@ -51,6 +52,10 @@ export const PluginSchema = z.object({
   spec: PluginSpecSchema,
   options: PluginOptionsSchema,
   description: z.string(),
+  /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+  ownerUserId: z.string().nullable().optional(),
+  /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+  visibility: ResourceVisibilitySchema.optional(),
   enabled: z.boolean(),
   sourceKind: PluginSourceKindSchema,
   /**

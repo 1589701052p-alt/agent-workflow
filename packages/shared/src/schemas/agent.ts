@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { McpNameSchema } from './mcp'
 import { PluginNameSchema } from './plugin'
+import { ResourceVisibilitySchema } from './resourceAcl'
 import { AgentOutputKindSchema } from './review'
 
 /**
@@ -70,6 +71,10 @@ export const AgentSchema = z.object({
   id: z.string(),
   name: AgentNameSchema,
   description: z.string(),
+  /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+  ownerUserId: z.string().nullable().optional(),
+  /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+  visibility: ResourceVisibilitySchema.optional(),
   outputs: z.array(z.string()),
   outputKinds: AgentOutputKindsMapSchema.optional(),
   /**

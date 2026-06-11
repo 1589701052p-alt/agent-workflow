@@ -184,6 +184,7 @@ export async function commitSkillZipBuffer(
   opts: SkillZipFsOptions,
   buffer: Uint8Array,
   decisions: SkillZipDecisionMap,
+  aclOpts?: { ownerUserId?: string },
 ): Promise<CommitSkillZipResponse> {
   const { candidates } = await parseSkillZipBuffer(db, buffer)
   const decisionFor = new Map(Object.entries(decisions))
@@ -263,7 +264,12 @@ export async function commitSkillZipBuffer(
     try {
       const result = writeCandidate(opts, candidate, targetName, existing)
       if (existing === null) {
-        const created = await insertManagedRow(db, targetName, candidate.description)
+        const created = await insertManagedRow(
+          db,
+          targetName,
+          candidate.description,
+          aclOpts?.ownerUserId,
+        )
         outcome.created.push(created)
       } else {
         const updated = await updateManagedRow(db, existing.id, candidate.description)
@@ -348,7 +354,12 @@ function writeCandidate(
   }
 }
 
-async function insertManagedRow(db: DbClient, name: string, description: string): Promise<Skill> {
+async function insertManagedRow(
+  db: DbClient,
+  name: string,
+  description: string,
+  ownerUserId?: string,
+): Promise<Skill> {
   const id = ulid()
   const now = Date.now()
   await db.insert(skills).values({
@@ -358,6 +369,9 @@ async function insertManagedRow(db: DbClient, name: string, description: string)
     sourceKind: 'managed',
     managedPath: `skills/${name}/files`,
     externalPath: null,
+    // RFC-099: the zip importer becomes owner; default 'public' (D18).
+    ownerUserId: ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })

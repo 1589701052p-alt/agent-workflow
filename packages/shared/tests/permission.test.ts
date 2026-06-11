@@ -25,7 +25,7 @@ describe('PERMISSIONS catalog', () => {
     expect(ROLE_PERMISSIONS.admin.length).toBe(PERMISSIONS.length)
   })
 
-  test('user role contains exactly the documented baseline (14 entries)', () => {
+  test('user role contains exactly the documented baseline (19 entries)', () => {
     const expected: Permission[] = [
       'agents:read',
       'skills:read',
@@ -34,6 +34,13 @@ describe('PERMISSIONS catalog', () => {
       'workflows:read',
       'repos:read',
       'runtime:read',
+      // RFC-099 — resource writes are route-gate-open for all users; the
+      // per-row owner/grant check lives in services/resourceAcl.ts.
+      'agents:write',
+      'skills:write',
+      'mcps:write',
+      'plugins:write',
+      'workflows:write',
       'users:search',
       'tasks:launch',
       'tasks:read:own',
@@ -48,11 +55,8 @@ describe('PERMISSIONS catalog', () => {
 
   test('user role does NOT include any admin-only point (snapshot guard)', () => {
     const adminOnly: Permission[] = [
-      'agents:write',
-      'skills:write',
-      'mcps:write',
-      'plugins:write',
-      'workflows:write',
+      // RFC-099: repos stay OUT of the ownership ACL model — repos:write
+      // remains admin-only while the five resource writes moved to baseline.
       'repos:write',
       'users:read',
       'users:write',
@@ -63,7 +67,8 @@ describe('PERMISSIONS catalog', () => {
       'backup:run',
       'tasks:read:all',
       'tasks:cancel:all',
-      // RFC-041 write surface on platform memory
+      // RFC-041 write surface on platform memory (B3 moves these to per-row
+      // canManageMemory gating; until then they stay admin-only).
       'memory:approve',
       'memory:archive',
       'memory:delete',
@@ -81,7 +86,9 @@ describe('PERMISSIONS catalog', () => {
     expect(hasPermission('admin', 'oidc:configure')).toBe(true)
     expect(hasPermission('admin', 'users:read')).toBe(true)
     expect(hasPermission('user', 'agents:read')).toBe(true)
-    expect(hasPermission('user', 'agents:write')).toBe(false)
+    // RFC-099: route-gate write open to users (row-level ACL is the real gate)
+    expect(hasPermission('user', 'agents:write')).toBe(true)
+    expect(hasPermission('user', 'repos:write')).toBe(false)
     expect(hasPermission('user', 'settings:read')).toBe(false)
     expect(hasPermission('user', 'users:read')).toBe(false)
     expect(hasPermission('user', 'users:search')).toBe(true)

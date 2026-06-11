@@ -84,6 +84,7 @@ export async function createManagedSkill(
   db: DbClient,
   opts: SkillFsOptions,
   input: CreateManagedSkill,
+  aclOpts?: { ownerUserId?: string },
 ): Promise<Skill> {
   if ((await getSkill(db, input.name)) !== null) {
     throw new ConflictError('skill-name-in-use', `skill '${input.name}' already exists`)
@@ -108,6 +109,9 @@ export async function createManagedSkill(
     sourceKind: 'managed',
     managedPath: `skills/${input.name}/files`,
     externalPath: null,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: aclOpts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -120,6 +124,7 @@ export async function createManagedSkill(
 export async function importExternalSkill(
   db: DbClient,
   input: ImportExternalSkill,
+  aclOpts?: { ownerUserId?: string },
 ): Promise<Skill> {
   if (!existsSync(input.externalPath)) {
     throw new ValidationError(
@@ -146,6 +151,9 @@ export async function importExternalSkill(
     sourceKind: 'external',
     managedPath: null,
     externalPath: input.externalPath,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: aclOpts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -392,6 +400,9 @@ function rowToSkill(row: SkillRow): Skill {
     id: row.id,
     name: row.name,
     description: row.description,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     sourceKind: row.sourceKind as 'managed' | 'external',
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,

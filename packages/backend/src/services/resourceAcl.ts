@@ -19,18 +19,33 @@
 // role recorded on review comments / decisions / clarify submissions. Member
 // identity wins over the global admin role.
 
-import type { AclResourceType, ResourceVisibility, TaskActorRole } from '@agent-workflow/shared'
-import { and, eq } from 'drizzle-orm'
+import type {
+  AclResourceType,
+  ResourceAcl,
+  ResourceVisibility,
+  TaskActorRole,
+  UpdateResourceAclBody,
+  UserPublic,
+} from '@agent-workflow/shared'
+import { and, eq, inArray } from 'drizzle-orm'
 import type { Actor } from '@/auth/actor'
+import { SYSTEM_USER_ID } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
-import { agents, mcps, plugins, resourceGrants, skills, workflows } from '@/db/schema'
-import { ForbiddenError, NotFoundError } from '@/util/errors'
+import { dbTxSync } from '@/db/txSync'
+import { agents, mcps, plugins, resourceGrants, skills, users, workflows } from '@/db/schema'
+import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 
-/** Minimal row shape every ACL check accepts; full resource rows superset it. */
+/**
+ * Minimal row shape every ACL check accepts; full resource rows AND mapped
+ * DTOs superset it. The two ACL fields are optional so shared DTOs (which
+ * declare them optional for fixture back-compat) plug in directly; absent
+ * visibility means 'public' (the D2 legacy semantics) and absent owner means
+ * "no owner yet" (admin-managed).
+ */
 export interface AclRow {
   id: string
-  ownerUserId: string | null
-  visibility: ResourceVisibility
+  ownerUserId?: string | null
+  visibility?: ResourceVisibility
 }
 
 /** Drizzle table per ACL resource type — used by routes to share generic helpers. */
@@ -62,8 +77,8 @@ export async function listGrantedResourceIds(
 /** Pure visibility predicate against a pre-fetched grant set. */
 export function isVisibleRow(actor: Actor, row: AclRow, grantedIds: ReadonlySet<string>): boolean {
   if (isAdminActor(actor)) return true
-  if (row.visibility === 'public') return true
-  if (row.ownerUserId !== null && row.ownerUserId === actor.user.id) return true
+  if ((row.visibility ?? 'public') === 'public') return true
+  if (row.ownerUserId != null && row.ownerUserId === actor.user.id) return true
   return grantedIds.has(row.id)
 }
 
@@ -92,8 +107,8 @@ export async function canViewResource(
   row: AclRow,
 ): Promise<boolean> {
   if (isAdminActor(actor)) return true
-  if (row.visibility === 'public') return true
-  if (row.ownerUserId !== null && row.ownerUserId === actor.user.id) return true
+  if ((row.visibility ?? 'public') === 'public') return true
+  if (row.ownerUserId != null && row.ownerUserId === actor.user.id) return true
   const rows = await db
     .select({ resourceId: resourceGrants.resourceId })
     .from(resourceGrants)
@@ -124,7 +139,7 @@ export async function requireResourceView(
 
 export function isResourceOwner(actor: Actor, row: AclRow): boolean {
   if (isAdminActor(actor)) return true
-  return row.ownerUserId !== null && row.ownerUserId === actor.user.id
+  return row.ownerUserId != null && row.ownerUserId === actor.user.id
 }
 
 /**
@@ -159,4 +174,146 @@ export function resolveTaskRole(
   if (isMember) return 'user'
   if (isAdminActor(actor)) return 'admin'
   return null
+}
+
+// ---------------------------------------------------------------------------
+// ACL management endpoints (GET/PUT /api/{res}/:key/acl)
+// ---------------------------------------------------------------------------
+
+type UserRow = typeof users.$inferSelect
+
+function toUserPublic(row: UserRow): UserPublic {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.displayName,
+    role: row.role,
+    status: row.status,
+  }
+}
+
+/**
+ * Build the GET /acl response. Caller has already passed requireResourceView;
+ * member list is read-only-visible to every viewer (D16).
+ */
+export async function getResourceAcl(
+  db: DbClient,
+  actor: Actor,
+  type: AclResourceType,
+  row: AclRow,
+): Promise<ResourceAcl> {
+  const grantRows = await db
+    .select()
+    .from(resourceGrants)
+    .where(and(eq(resourceGrants.resourceType, type), eq(resourceGrants.resourceId, row.id)))
+  const grantIds = grantRows.map((g) => g.userId)
+  const wantedIds = [...new Set([...(row.ownerUserId ? [row.ownerUserId] : []), ...grantIds])]
+  const userRows =
+    wantedIds.length === 0 ? [] : await db.select().from(users).where(inArray(users.id, wantedIds))
+  const byId = new Map(userRows.map((u) => [u.id, u]))
+  const ownerRow =
+    row.ownerUserId != null && row.ownerUserId !== SYSTEM_USER_ID
+      ? (byId.get(row.ownerUserId) ?? null)
+      : null
+  const grantUsers = grantIds
+    .map((id) => byId.get(id))
+    .filter((u): u is UserRow => u !== undefined)
+    .map(toUserPublic)
+  return {
+    resourceType: type,
+    resourceId: row.id,
+    ownerUserId: row.ownerUserId ?? null,
+    owner: ownerRow ? toUserPublic(ownerRow) : null,
+    visibility: row.visibility ?? 'public',
+    users: grantUsers,
+    canManage: isResourceOwner(actor, row),
+  }
+}
+
+/**
+ * PUT /acl — owner/admin only. `userIds` is full-replace. On owner transfer
+ * the previous owner is auto-appended to the grant list so they don't lock
+ * themselves out of their own (now someone else's) resource. The new owner is
+ * never materialised as a grant row (canViewResource short-circuits owners).
+ */
+export async function updateResourceAcl(
+  db: DbClient,
+  actor: Actor,
+  type: AclResourceType,
+  row: AclRow,
+  body: UpdateResourceAclBody,
+): Promise<ResourceAcl> {
+  await requireResourceOwner(db, actor, type, row)
+
+  // Validate every referenced user is a real, active, non-system account.
+  const referenced = new Set<string>(body.userIds ?? [])
+  if (body.ownerUserId !== undefined) referenced.add(body.ownerUserId)
+  if (referenced.size > 0) {
+    const rows = await db
+      .select({ id: users.id, status: users.status })
+      .from(users)
+      .where(inArray(users.id, [...referenced]))
+    const active = new Set(rows.filter((r) => r.status === 'active').map((r) => r.id))
+    const bad = [...referenced].filter((id) => id === SYSTEM_USER_ID || !active.has(id))
+    if (bad.length > 0) {
+      throw new ValidationError('acl-user-invalid', 'referenced user(s) not active', {
+        userIds: bad,
+      })
+    }
+  }
+
+  const prevOwner = row.ownerUserId ?? null
+  const nextOwner = body.ownerUserId !== undefined ? body.ownerUserId : prevOwner
+  const nextVisibility: ResourceVisibility =
+    body.visibility !== undefined ? body.visibility : (row.visibility ?? 'public')
+
+  let nextGrantIds: string[]
+  if (body.userIds !== undefined) {
+    nextGrantIds = [...new Set(body.userIds)]
+  } else {
+    const current = await db
+      .select({ userId: resourceGrants.userId })
+      .from(resourceGrants)
+      .where(and(eq(resourceGrants.resourceType, type), eq(resourceGrants.resourceId, row.id)))
+    nextGrantIds = current.map((g) => g.userId)
+  }
+  // Owner transfer keeps the previous human owner visible (server-side rule).
+  if (
+    nextOwner !== prevOwner &&
+    prevOwner !== null &&
+    prevOwner !== SYSTEM_USER_ID &&
+    !nextGrantIds.includes(prevOwner)
+  ) {
+    nextGrantIds.push(prevOwner)
+  }
+  // The owner is never a grant row.
+  nextGrantIds = nextGrantIds.filter((id) => id !== nextOwner)
+
+  const table = ACL_TABLES[type]
+  const now = Date.now()
+  dbTxSync(db, (tx) => {
+    tx.update(table)
+      .set({ ownerUserId: nextOwner, visibility: nextVisibility, updatedAt: now })
+      .where(eq(table.id, row.id))
+      .run()
+    tx.delete(resourceGrants)
+      .where(and(eq(resourceGrants.resourceType, type), eq(resourceGrants.resourceId, row.id)))
+      .run()
+    if (nextGrantIds.length > 0) {
+      tx.insert(resourceGrants)
+        .values(
+          nextGrantIds.map((userId) => ({
+            resourceType: type,
+            resourceId: row.id,
+            userId,
+            addedBy: actor.user.id,
+            addedAt: now,
+          })),
+        )
+        .run()
+    }
+  })
+
+  const updatedRow: AclRow = { id: row.id, ownerUserId: nextOwner, visibility: nextVisibility }
+  return getResourceAcl(db, actor, type, updatedRow)
 }

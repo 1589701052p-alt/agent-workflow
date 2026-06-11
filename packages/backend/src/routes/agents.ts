@@ -13,6 +13,7 @@ import {
 } from '@agent-workflow/shared'
 import { z } from 'zod'
 import type { Hono } from 'hono'
+import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
 import {
   createAgent,
@@ -23,21 +24,30 @@ import {
   updateAgent,
 } from '@/services/agent'
 import { resolveDependsClosure, validateDependsOn } from '@/services/agentDeps'
+import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
+import { assertNewRefsUsable, diffNewNames } from '@/services/resourceRefs'
+import { mountAclEndpoints } from './resourceAcl'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Agent } from '@agent-workflow/shared'
 
 export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
+  // RFC-099: load-or-404 that treats "missing" and "not visible" identically
+  // (same code + message) so existence never leaks to non-granted users.
+  async function loadVisibleAgent(actor: Actor, name: string) {
+    const agent = await getAgent(deps.db, name)
+    if (agent === null || !(await canViewResource(deps.db, actor, 'agent', agent))) {
+      throw new NotFoundError('agent-not-found', `agent '${name}' not found`)
+    }
+    return agent
+  }
+
   app.get('/api/agents', async (c) => {
     const list = await listAgents(deps.db)
-    return c.json(list)
+    return c.json(await filterVisibleRows(deps.db, actorOf(c), 'agent', list))
   })
 
   app.get('/api/agents/:name', async (c) => {
-    const name = c.req.param('name')
-    const agent = await getAgent(deps.db, name)
-    if (agent === null) {
-      throw new NotFoundError('agent-not-found', `agent '${name}' not found`)
-    }
+    const agent = await loadVisibleAgent(actorOf(c), c.req.param('name'))
     return c.json(agent)
   })
 
@@ -49,7 +59,16 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const created = await createAgent(deps.db, parsed.data)
+    const actor = actorOf(c)
+    // RFC-099 (D15): on create, every reference is new — reject names that
+    // resolve to resources the editor cannot view.
+    await assertNewRefsUsable(deps.db, actor, [
+      { type: 'skill', names: parsed.data.skills },
+      { type: 'mcp', names: parsed.data.mcp },
+      { type: 'plugin', names: parsed.data.plugins ?? [] },
+      { type: 'agent', names: parsed.data.dependsOn },
+    ])
+    const created = await createAgent(deps.db, parsed.data, { ownerUserId: actor.user.id })
     return c.json(created, 201)
   })
 
@@ -62,12 +81,53 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleAgent(actor, name)
+    await requireResourceOwner(deps.db, actor, 'agent', existing)
+    // RFC-099 (D15): only NEWLY-added references are usability-checked.
+    await assertNewRefsUsable(deps.db, actor, [
+      ...(parsed.data.skills !== undefined
+        ? [
+            {
+              type: 'skill' as const,
+              names: diffNewNames(new Set(existing.skills), new Set(parsed.data.skills)),
+            },
+          ]
+        : []),
+      ...(parsed.data.mcp !== undefined
+        ? [
+            {
+              type: 'mcp' as const,
+              names: diffNewNames(new Set(existing.mcp), new Set(parsed.data.mcp)),
+            },
+          ]
+        : []),
+      ...(parsed.data.plugins !== undefined
+        ? [
+            {
+              type: 'plugin' as const,
+              names: diffNewNames(new Set(existing.plugins), new Set(parsed.data.plugins)),
+            },
+          ]
+        : []),
+      ...(parsed.data.dependsOn !== undefined
+        ? [
+            {
+              type: 'agent' as const,
+              names: diffNewNames(new Set(existing.dependsOn), new Set(parsed.data.dependsOn)),
+            },
+          ]
+        : []),
+    ])
     const updated = await updateAgent(deps.db, name, parsed.data)
     return c.json(updated)
   })
 
   app.delete('/api/agents/:name', async (c) => {
     const name = c.req.param('name')
+    const actor = actorOf(c)
+    const existing = await loadVisibleAgent(actor, name)
+    await requireResourceOwner(deps.db, actor, 'agent', existing)
     await deleteAgent(deps.db, name)
     return c.body(null, 204)
   })
@@ -81,6 +141,9 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleAgent(actor, name)
+    await requireResourceOwner(deps.db, actor, 'agent', existing)
     const renamed = await renameAgent(deps.db, name, parsed.data)
     return c.json(renamed)
   })
@@ -91,10 +154,8 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
   // render `<missing> name` rather than silently shrinking the tree.
   app.get('/api/agents/:name/closure', async (c) => {
     const name = c.req.param('name')
-    const root = await getAgent(deps.db, name)
-    if (root === null) {
-      throw new NotFoundError('agent-not-found', `agent '${name}' not found`)
-    }
+    const actor = actorOf(c)
+    const root = await loadVisibleAgent(actor, name)
     const closure = await resolveDependsClosure(deps.db, root, { allowMissing: true })
     // `allowMissing: true` never produces ok:false (cycles only arise when a
     // name appears on the active path — which agent.ts save guard prevents),
@@ -106,10 +167,26 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
         cyclePath: closure.cyclePath,
       })
     }
-    return c.json({
-      ok: true,
-      agents: toAgentClosureSummaries(closure.agents, root),
+    // RFC-099: closure members the viewer cannot see keep their NAME (it
+    // already appears in a visible agent's dependsOn) but mask everything
+    // else, mirroring the "无权限占位" reference-site rule.
+    const summaries = toAgentClosureSummaries(closure.agents, root)
+    const memberRows = new Map(closure.agents.map((a) => [a.name, a]))
+    const visible = await filterVisibleRows(deps.db, actor, 'agent', closure.agents)
+    const visibleNames = new Set(visible.map((a) => a.name))
+    const masked = summaries.map((s) => {
+      if (s.missing || visibleNames.has(s.name) || !memberRows.has(s.name)) return s
+      return {
+        ...s,
+        description: '',
+        skills: [],
+        skillCount: 0,
+        dependsOn: [],
+        mcp: [],
+        plugins: [],
+      }
     })
+    return c.json({ ok: true, agents: masked })
   })
 
   // RFC-022: preview endpoint used by AgentForm while editing. Returns
@@ -176,6 +253,14 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
       ok: true,
       agents: toAgentClosureSummaries(closure.agents, syntheticRoot),
     })
+  })
+
+  // RFC-099 — GET/PUT /api/agents/:name/acl
+  mountAclEndpoints(app, deps, {
+    type: 'agent',
+    base: '/api/agents',
+    param: 'name',
+    load: (db, name) => getAgent(db, name),
   })
 }
 

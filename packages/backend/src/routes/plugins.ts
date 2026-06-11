@@ -37,20 +37,27 @@ import {
   PluginInstallTimeoutError,
 } from '@/services/pluginInstaller'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { actorOf, type Actor } from '@/auth/actor'
+import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
+import { mountAclEndpoints } from './resourceAcl'
 
 export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
+  // RFC-099: missing and not-visible produce the identical 404 (D1).
+  async function loadVisiblePlugin(actor: Actor, idOrName: string) {
+    const plugin = await getPlugin(deps.db, idOrName)
+    if (plugin === null || !(await canViewResource(deps.db, actor, 'plugin', plugin))) {
+      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
+    }
+    return plugin
+  }
+
   app.get('/api/plugins', async (c) => {
     const list = await listPlugins(deps.db)
-    return c.json(list)
+    return c.json(await filterVisibleRows(deps.db, actorOf(c), 'plugin', list))
   })
 
   app.get('/api/plugins/:id', async (c) => {
-    const idOrName = c.req.param('id')
-    const plugin = await getPlugin(deps.db, idOrName)
-    if (plugin === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
-    return c.json(plugin)
+    return c.json(await loadVisiblePlugin(actorOf(c), c.req.param('id')))
   })
 
   app.post('/api/plugins', async (c) => {
@@ -62,7 +69,14 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
       })
     }
     try {
-      const created = await createPlugin(deps.db, parsed.data)
+      const created = await createPlugin(
+        deps.db,
+        parsed.data,
+        {},
+        {
+          ownerUserId: actorOf(c).user.id,
+        },
+      )
       return c.json(created, 201)
     } catch (err) {
       throw wrapInstallErrors(err)
@@ -78,10 +92,9 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const existing = await getPlugin(deps.db, idOrName)
-    if (existing === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
+    const actor = actorOf(c)
+    const existing = await loadVisiblePlugin(actor, idOrName)
+    await requireResourceOwner(deps.db, actor, 'plugin', existing)
     try {
       const updated = await updatePlugin(deps.db, existing.id, parsed.data)
       return c.json(updated)
@@ -92,10 +105,9 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
 
   app.delete('/api/plugins/:id', async (c) => {
     const idOrName = c.req.param('id')
-    const existing = await getPlugin(deps.db, idOrName)
-    if (existing === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
+    const actor = actorOf(c)
+    const existing = await loadVisiblePlugin(actor, idOrName)
+    await requireResourceOwner(deps.db, actor, 'plugin', existing)
     await deletePlugin(deps.db, existing.id)
     return c.body(null, 204)
   })
@@ -109,10 +121,9 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const existing = await getPlugin(deps.db, idOrName)
-    if (existing === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
+    const actor = actorOf(c)
+    const existing = await loadVisiblePlugin(actor, idOrName)
+    await requireResourceOwner(deps.db, actor, 'plugin', existing)
     const renamed = await renamePlugin(deps.db, existing.id, parsed.data)
     return c.json(renamed)
   })
@@ -122,10 +133,9 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
   // differs from `current`.
   app.post('/api/plugins/:id/check-update', async (c) => {
     const idOrName = c.req.param('id')
-    const existing = await getPlugin(deps.db, idOrName)
-    if (existing === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
+    const actor = actorOf(c)
+    const existing = await loadVisiblePlugin(actor, idOrName)
+    await requireResourceOwner(deps.db, actor, 'plugin', existing)
     try {
       const { available, latest } = await checkForUpdate(
         existing.id,
@@ -142,10 +152,9 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
   // installedAt + cachedPath; never bumps the spec or options.
   app.post('/api/plugins/:id/upgrade', async (c) => {
     const idOrName = c.req.param('id')
-    const existing = await getPlugin(deps.db, idOrName)
-    if (existing === null) {
-      throw new NotFoundError('plugin-not-found', `plugin '${idOrName}' not found`)
-    }
+    const actor = actorOf(c)
+    const existing = await loadVisiblePlugin(actor, idOrName)
+    await requireResourceOwner(deps.db, actor, 'plugin', existing)
     try {
       const updated = await reinstallPlugin(deps.db, existing.id)
       return c.json(updated)
@@ -153,6 +162,14 @@ export function mountPluginRoutes(app: Hono, deps: AppDeps): void {
       throw wrapInstallErrors(err)
     }
   })
+  // RFC-099 — GET/PUT /api/plugins/:id/acl
+  mountAclEndpoints(app, deps, {
+    type: 'plugin',
+    base: '/api/plugins',
+    param: 'id',
+    load: (db, idOrName) => getPlugin(db, idOrName),
+  })
+
   // void unused imports — kept so wrapInstallErrors stays self-contained.
   void installPlugin
   void deps

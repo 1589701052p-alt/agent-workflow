@@ -80,57 +80,62 @@ describe('regular-user session token — admin-only endpoints all return 403', (
     expect(body.details?.requiredPermission).toBe('settings:write')
   })
 
-  test('POST /api/agents → 403 (agents:write)', async () => {
+  // RFC-099: resource writes are no longer admin-only at the route gate —
+  // any user may create the five ACL'd resource types (creator becomes
+  // owner). The 403s these cases used to pin moved to per-row ownership
+  // checks (rfc099-resource-routes.test.ts). The route gate now admits the
+  // user, so an empty body gets a 422 validation error, NOT a 403.
+  test('POST /api/agents → 422 for user (route gate open, body invalid)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/agents', {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(422)
   })
 
-  test('PUT /api/agents/:name → 403', async () => {
+  test('PUT /api/agents/:name → 404 for user (gate open, agent missing)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/agents/something', {
       method: 'PUT',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
-  test('DELETE /api/agents/:name → 403', async () => {
+  test('DELETE /api/agents/:name → 404 for user (gate open, agent missing)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/agents/something', { method: 'DELETE' })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
-  test('POST /api/skills → 403', async () => {
+  test('POST /api/skills → 422 for user (route gate open, body invalid)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/skills', {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(422)
   })
 
-  test('POST /api/mcps → 403', async () => {
+  test('POST /api/mcps → 422 for user (route gate open, body invalid)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/mcps', {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(422)
   })
 
-  test('POST /api/plugins → 403', async () => {
+  test('POST /api/plugins → 422 for user (route gate open, body invalid)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/plugins', {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(422)
   })
 
-  test('POST /api/workflows → 403', async () => {
+  test('POST /api/workflows → 422 for user (route gate open, body invalid)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/workflows', {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(422)
   })
 
   test('POST /api/repos → 403', async () => {
@@ -193,7 +198,9 @@ describe('regular-user session token — endpoints that are intentionally open',
 })
 
 describe('PAT-bearing actor cannot escape role limits', () => {
-  test('PAT carrying agents:write but issued for a regular user is still 403', async () => {
+  // RFC-099 note: this used to probe agents:write, but that scope moved into
+  // the user baseline. users:read is the new canonical admin-only scope.
+  test('PAT carrying users:read but issued for a regular user is still 403', async () => {
     const { db, app } = await buildHarness()
     const { createPat } = await import('../src/auth/patStore')
     const { findByUsername } = await import('../src/services/users')
@@ -202,12 +209,9 @@ describe('PAT-bearing actor cannot escape role limits', () => {
       db,
       userId: bob!.id,
       name: 'overreach',
-      scopes: ['agents:write'],
+      scopes: ['users:read'],
     })
-    const res = await reqAs(app, token, '/api/agents', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    })
+    const res = await reqAs(app, token, '/api/users')
     expect(res.status).toBe(403)
   })
 })

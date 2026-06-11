@@ -9,7 +9,14 @@
 
 import { CreateWorkflowSchema, UpdateWorkflowSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
+import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
+import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
+import {
+  assertNewRefsUsable,
+  diffNewNames,
+  extractWorkflowAgentNames,
+} from '@/services/resourceRefs'
 import {
   createWorkflow,
   deleteWorkflow,
@@ -20,17 +27,24 @@ import {
 } from '@/services/workflow'
 import { exportWorkflowYaml, importWorkflowYaml } from '@/services/workflow.yaml'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { mountAclEndpoints } from './resourceAcl'
 
 export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
-  app.get('/api/workflows', async (c) => c.json(await listWorkflows(deps.db)))
-
-  app.get('/api/workflows/:id', async (c) => {
-    const id = c.req.param('id')
+  // RFC-099: missing and not-visible produce the identical 404 (D1).
+  async function loadVisibleWorkflow(actor: Actor, id: string) {
     const wf = await getWorkflow(deps.db, id)
-    if (wf === null) {
+    if (wf === null || !(await canViewResource(deps.db, actor, 'workflow', wf))) {
       throw new NotFoundError('workflow-not-found', `workflow '${id}' not found`)
     }
-    return c.json(wf)
+    return wf
+  }
+
+  app.get('/api/workflows', async (c) =>
+    c.json(await filterVisibleRows(deps.db, actorOf(c), 'workflow', await listWorkflows(deps.db))),
+  )
+
+  app.get('/api/workflows/:id', async (c) => {
+    return c.json(await loadVisibleWorkflow(actorOf(c), c.req.param('id')))
   })
 
   app.post('/api/workflows', async (c) => {
@@ -40,7 +54,12 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const created = await createWorkflow(deps.db, parsed.data)
+    const actor = actorOf(c)
+    // RFC-099 (D15): on create every agent reference is new.
+    await assertNewRefsUsable(deps.db, actor, [
+      { type: 'agent', names: [...extractWorkflowAgentNames(parsed.data.definition)] },
+    ])
+    const created = await createWorkflow(deps.db, parsed.data, { ownerUserId: actor.user.id })
     return c.json(created, 201)
   })
 
@@ -52,20 +71,36 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleWorkflow(actor, id)
+    await requireResourceOwner(deps.db, actor, 'workflow', existing)
+    // RFC-099 (D15): only NEWLY-added agent references are checked.
+    if (parsed.data.definition !== undefined) {
+      const newNames = diffNewNames(
+        extractWorkflowAgentNames(existing.definition),
+        extractWorkflowAgentNames(parsed.data.definition),
+      )
+      await assertNewRefsUsable(deps.db, actor, [{ type: 'agent', names: newNames }])
+    }
     return c.json(await updateWorkflow(deps.db, id, parsed.data))
   })
 
   app.delete('/api/workflows/:id', async (c) => {
+    const actor = actorOf(c)
+    const existing = await loadVisibleWorkflow(actor, c.req.param('id'))
+    await requireResourceOwner(deps.db, actor, 'workflow', existing)
     await deleteWorkflow(deps.db, c.req.param('id'))
     return c.body(null, 204)
   })
 
-  app.post('/api/workflows/:id/validate', async (c) =>
-    c.json(await validateWorkflow(deps.db, c.req.param('id'))),
-  )
+  app.post('/api/workflows/:id/validate', async (c) => {
+    await loadVisibleWorkflow(actorOf(c), c.req.param('id'))
+    return c.json(await validateWorkflow(deps.db, c.req.param('id')))
+  })
 
   // P-4-08: YAML export / import.
   app.get('/api/workflows/:id/export', async (c) => {
+    await loadVisibleWorkflow(actorOf(c), c.req.param('id'))
     const yaml = await exportWorkflowYaml(deps.db, c.req.param('id'))
     return c.body(yaml, 200, {
       'content-type': 'application/yaml; charset=utf-8',
@@ -83,8 +118,16 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
       onConflictRaw === 'overwrite' || onConflictRaw === 'new' || onConflictRaw === 'fail'
         ? onConflictRaw
         : 'fail'
-    const wf = await importWorkflowYaml(deps.db, body, { onConflict })
+    const wf = await importWorkflowYaml(deps.db, body, { onConflict, actor: actorOf(c) })
     return c.json(wf, 201)
+  })
+
+  // RFC-099 — GET/PUT /api/workflows/:id/acl
+  mountAclEndpoints(app, deps, {
+    type: 'workflow',
+    base: '/api/workflows',
+    param: 'id',
+    load: (db, id) => getWorkflow(db, id),
   })
 }
 

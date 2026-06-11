@@ -26,7 +26,9 @@ import {
   WriteSkillFileSchema,
 } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
+import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
+import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
 import { Paths } from '@/util/paths'
 import {
   createManagedSkill,
@@ -45,11 +47,23 @@ import {
 } from '@/services/skill'
 import { commitSkillZipBuffer, parseSkillZipBuffer, ZIP_LIMITS } from '@/services/skill-zip'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { mountAclEndpoints } from './resourceAcl'
 
 export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
   const fsOpts: SkillFsOptions = { appHome: Paths.root }
 
-  app.get('/api/skills', async (c) => c.json(await listSkills(deps.db)))
+  // RFC-099: missing and not-visible produce the identical 404 (D1).
+  async function loadVisibleSkill(actor: Actor, name: string) {
+    const skill = await getSkill(deps.db, name)
+    if (skill === null || !(await canViewResource(deps.db, actor, 'skill', skill))) {
+      throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
+    }
+    return skill
+  }
+
+  app.get('/api/skills', async (c) =>
+    c.json(await filterVisibleRows(deps.db, actorOf(c), 'skill', await listSkills(deps.db))),
+  )
 
   app.post('/api/skills', async (c) => {
     const parsed = CreateManagedSkillSchema.safeParse(await safeJson(c.req.raw))
@@ -58,7 +72,9 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const created = await createManagedSkill(deps.db, fsOpts, parsed.data)
+    const created = await createManagedSkill(deps.db, fsOpts, parsed.data, {
+      ownerUserId: actorOf(c).user.id,
+    })
     return c.json(created, 201)
   })
 
@@ -69,7 +85,9 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const created = await importExternalSkill(deps.db, parsed.data)
+    const created = await importExternalSkill(deps.db, parsed.data, {
+      ownerUserId: actorOf(c).user.id,
+    })
     return c.json(created, 201)
   })
 
@@ -114,16 +132,14 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: decisionsParsed.error.issues,
       })
     }
-    const result = await commitSkillZipBuffer(deps.db, fsOpts, buffer, decisionsParsed.data)
+    const result = await commitSkillZipBuffer(deps.db, fsOpts, buffer, decisionsParsed.data, {
+      ownerUserId: actorOf(c).user.id,
+    })
     return c.json(result)
   })
 
   app.get('/api/skills/:name', async (c) => {
-    const skill = await getSkill(deps.db, c.req.param('name'))
-    if (skill === null) {
-      throw new NotFoundError('skill-not-found', `skill '${c.req.param('name')}' not found`)
-    }
-    return c.json(skill)
+    return c.json(await loadVisibleSkill(actorOf(c), c.req.param('name')))
   })
 
   app.put('/api/skills/:name', async (c) => {
@@ -133,18 +149,25 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
     return c.json(await updateSkill(deps.db, c.req.param('name'), parsed.data))
   })
 
   app.delete('/api/skills/:name', async (c) => {
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
     await deleteSkill(deps.db, fsOpts, c.req.param('name'))
     return c.body(null, 204)
   })
 
   // SKILL.md content (parsed view).
-  app.get('/api/skills/:name/content', async (c) =>
-    c.json(await readSkillContent(deps.db, fsOpts, c.req.param('name'))),
-  )
+  app.get('/api/skills/:name/content', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
+    return c.json(await readSkillContent(deps.db, fsOpts, c.req.param('name')))
+  })
 
   app.put('/api/skills/:name/content', async (c) => {
     const parsed = UpdateSkillContentSchema.safeParse(await safeJson(c.req.raw))
@@ -153,15 +176,20 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
     return c.json(await writeSkillContent(deps.db, fsOpts, c.req.param('name'), parsed.data))
   })
 
   // File tree + single-file CRUD.
-  app.get('/api/skills/:name/files', async (c) =>
-    c.json(await listSkillFiles(deps.db, fsOpts, c.req.param('name'))),
-  )
+  app.get('/api/skills/:name/files', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
+    return c.json(await listSkillFiles(deps.db, fsOpts, c.req.param('name')))
+  })
 
   app.get('/api/skills/:name/file', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
     const path = requirePath(c.req.query('path'))
     const content = await readSkillFile(deps.db, fsOpts, c.req.param('name'), path)
     return c.json({ path, content })
@@ -175,14 +203,28 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
     await writeSkillFile(deps.db, fsOpts, c.req.param('name'), path, parsed.data.content)
     return c.json({ ok: true, path })
   })
 
   app.delete('/api/skills/:name/file', async (c) => {
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
     const path = requirePath(c.req.query('path'))
     await deleteSkillFile(deps.db, fsOpts, c.req.param('name'), path)
     return c.body(null, 204)
+  })
+
+  // RFC-099 — GET/PUT /api/skills/:name/acl
+  mountAclEndpoints(app, deps, {
+    type: 'skill',
+    base: '/api/skills',
+    param: 'name',
+    load: (db, name) => getSkill(db, name),
   })
 }
 

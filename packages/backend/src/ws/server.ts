@@ -29,7 +29,8 @@ import { and, eq, gt, asc } from 'drizzle-orm'
 import type { Actor } from '@/auth/actor'
 import { resolveActor } from '@/auth/session'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRuns, tasks } from '@/db/schema'
+import { nodeRunEvents, nodeRuns, tasks, workflows } from '@/db/schema'
+import { canViewResource } from '@/services/resourceAcl'
 import { canViewTask } from '@/services/taskCollab'
 import { createLogger } from '@/util/log'
 import {
@@ -259,6 +260,37 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
     return visible
   }
 
+  /**
+   * RFC-099 — workflow-row visibility, cached per connection under a `wf:`
+   * key prefix so task ids and workflow ids never collide in the shared
+   * cache map. Entries for a workflow are invalidated when a
+   * 'workflow.acl.updated' frame passes through (see the workflows channel
+   * handler) and on 'workflow.deleted'.
+   */
+  async function cachedIsWorkflowVisible(
+    ws: ServerWebSocket<ConnectionData>,
+    workflowId: string,
+  ): Promise<boolean> {
+    const key = `wf:${workflowId}`
+    const cached = ws.data.visibilityCache.get(key)
+    if (cached !== undefined) return cached
+    const rows = await deps.db
+      .select({
+        id: workflows.id,
+        ownerUserId: workflows.ownerUserId,
+        visibility: workflows.visibility,
+      })
+      .from(workflows)
+      .where(eq(workflows.id, workflowId))
+      .limit(1)
+    const visible =
+      rows.length === 0
+        ? false
+        : await canViewResource(deps.db, ws.data.actor, 'workflow', rows[0]!)
+    ws.data.visibilityCache.set(key, visible)
+    return visible
+  }
+
   async function handleOpen(ws: ServerWebSocket<ConnectionData>): Promise<void> {
     const ch = ws.data.channel
     log.debug('open', { channel: ch })
@@ -313,9 +345,41 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         return
       }
       case 'workflows': {
+        // RFC-099 — per-frame ACL filter, mirroring the tasks-list pattern
+        // above. Every WorkflowsWsMessage carries exactly one workflowId.
+        //   - 'workflow.acl.updated' frames FIRST invalidate this
+        //     connection's cached visibility for that workflow (the ACL just
+        //     changed), then go through the same visible-check before send.
+        //   - 'workflow.deleted': the row is already gone, so fall back to
+        //     the cached visibility (the client only renders workflows it
+        //     could see); with no cache entry, only admins get the frame.
         ws.data.unsubscribe = workflowsBroadcaster.subscribe(
           WORKFLOWS_CHANNEL,
-          (msg: WorkflowsWsMessage) => safeSend(ws, msg),
+          (msg: WorkflowsWsMessage) => {
+            if (ws.data.actor.user.role === 'admin') {
+              safeSend(ws, msg)
+              return
+            }
+            if (msg.type === 'workflow.acl.updated') {
+              ws.data.visibilityCache.delete(`wf:${msg.workflowId}`)
+            }
+            if (msg.type === 'workflow.deleted') {
+              const cached = ws.data.visibilityCache.get(`wf:${msg.workflowId}`)
+              if (cached === true) safeSend(ws, msg)
+              ws.data.visibilityCache.delete(`wf:${msg.workflowId}`)
+              return
+            }
+            cachedIsWorkflowVisible(ws, msg.workflowId)
+              .then((visible) => {
+                if (visible) safeSend(ws, msg)
+              })
+              .catch((err) => {
+                log.warn('workflows visibility check threw', {
+                  workflowId: msg.workflowId,
+                  err: err instanceof Error ? err.message : String(err),
+                })
+              })
+          },
         )
         safeSend(ws, { type: 'hello', channel: 'workflows' } satisfies WsControlMessage)
         return

@@ -184,6 +184,7 @@ export interface CreateSourceInput {
 export async function createSkillSource(
   db: DbClient,
   input: CreateSourceInput,
+  aclOpts?: { createdBy?: string },
 ): Promise<{ source: SkillSourceWithStats; outcome: ReconcileOutcome }> {
   const expanded = expandHome(input.path)
   if (!isAbsolute(expanded)) {
@@ -216,6 +217,9 @@ export async function createSkillSource(
     enabled: true,
     lastScannedAt: null,
     lastScanError: null,
+    // RFC-099 (D11): the registrar; skills imported from this source inherit
+    // this user as their owner.
+    createdBy: aclOpts?.createdBy ?? null,
     createdAt: now,
     updatedAt: now,
   })
@@ -436,6 +440,9 @@ export async function reconcileSource(
         managedPath: null,
         externalPath: c.absPath,
         sourceId: source.id,
+        // RFC-099 (D11): imported skills inherit the source registrar as owner.
+        ownerUserId: source.createdBy ?? null,
+        visibility: 'public',
         createdAt: now,
         updatedAt: now,
       })
@@ -524,6 +531,7 @@ function rowToSource(row: SkillSourceRow): SkillSource {
     enabled: row.enabled,
     lastScannedAt: row.lastScannedAt ?? null,
     lastScanError: row.lastScanError ?? null,
+    createdBy: row.createdBy ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
@@ -534,6 +542,9 @@ function skillRowToShape(row: typeof skills.$inferSelect): Skill {
     id: row.id,
     name: row.name,
     description: row.description,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     sourceKind: row.sourceKind as 'managed' | 'external',
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,

@@ -24,7 +24,11 @@ export async function getAgent(db: DbClient, name: string): Promise<Agent | null
   return row ? rowToAgent(row) : null
 }
 
-export async function createAgent(db: DbClient, input: CreateAgent): Promise<Agent> {
+export async function createAgent(
+  db: DbClient,
+  input: CreateAgent,
+  opts?: { ownerUserId?: string },
+): Promise<Agent> {
   const existing = await getAgent(db, input.name)
   if (existing !== null) {
     throw new ConflictError('agent-name-in-use', `agent '${input.name}' already exists`)
@@ -84,6 +88,9 @@ export async function createAgent(db: DbClient, input: CreateAgent): Promise<Age
     plugins: JSON.stringify(dedupePreservingOrder(input.plugins ?? [])),
     frontmatterExtra: JSON.stringify(fmExtra),
     bodyMd: input.bodyMd,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: opts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -467,6 +474,9 @@ function rowToAgent(row: AgentRow): Agent {
     plugins: parseStringArrayColumn(row.plugins),
     frontmatterExtra: exposedFm,
     bodyMd: row.bodyMd,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

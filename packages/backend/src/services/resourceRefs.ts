@@ -1,0 +1,99 @@
+// RFC-099 (D15) — save-time reference usability check.
+//
+// Editing a workflow (or an agent) is the ONLY place per-resource use rights
+// are enforced: launching a task checks just the workflow itself (D3), so the
+// save-time gate is what stops a user from referencing a private agent /
+// skill / mcp / plugin they cannot see. Per D15 the check covers NEW
+// references only — references already present in the stored row are
+// grandfathered, so losing a grant never bricks saving your own resource.
+//
+// Names that do not resolve to any row are NOT this module's business — the
+// existing existence validators (validateDependsOn / validateMcpReferences /
+// validatePluginReferences; workflows tolerate dangling agent names until
+// launch validation) keep their behavior. We only reject names that resolve
+// to a row the editor cannot view, and the error deliberately echoes ONLY the
+// name the editor typed (no id / description / owner — D1).
+
+import type { AclResourceType } from '@agent-workflow/shared'
+import { inArray } from 'drizzle-orm'
+import type { Actor } from '@/auth/actor'
+import type { DbClient } from '@/db/client'
+import { ValidationError } from '@/util/errors'
+import {
+  ACL_TABLES,
+  isAdminActor,
+  isVisibleRow,
+  listGrantedResourceIds,
+  type AclRow,
+} from './resourceAcl'
+
+/** Agent names referenced by a workflow definition (agent-single nodes; accepts legacy `agent` key). */
+export function extractWorkflowAgentNames(def: {
+  nodes?: ReadonlyArray<Record<string, unknown>>
+}): Set<string> {
+  const out = new Set<string>()
+  for (const node of def.nodes ?? []) {
+    if (typeof node !== 'object' || node === null) continue
+    if (node.kind !== 'agent-single') continue
+    const name =
+      typeof node.agentName === 'string' && node.agentName.length > 0
+        ? node.agentName
+        : typeof node.agent === 'string' && node.agent.length > 0
+          ? node.agent
+          : null
+    if (name !== null) out.add(name)
+  }
+  return out
+}
+
+/** Names in `next` that are not in `prev` — the D15 "new references". */
+export function diffNewNames(prev: ReadonlySet<string>, next: ReadonlySet<string>): string[] {
+  return [...next].filter((n) => !prev.has(n))
+}
+
+export interface RefCheckGroup {
+  type: AclResourceType
+  names: readonly string[]
+}
+
+/**
+ * Throws 422 `acl-missing-refs` when any name resolves to a row the actor
+ * cannot view. Unresolvable names pass through (existence validators own
+ * them). Admins short-circuit.
+ */
+export async function assertNewRefsUsable(
+  db: DbClient,
+  actor: Actor,
+  groups: readonly RefCheckGroup[],
+): Promise<void> {
+  if (isAdminActor(actor)) return
+  const missing: Array<{ type: AclResourceType; name: string }> = []
+  for (const group of groups) {
+    const names = [...new Set(group.names)].filter((n) => n.length > 0)
+    if (names.length === 0) continue
+    const table = ACL_TABLES[group.type]
+    const rows = (await db
+      .select({
+        id: table.id,
+        name: table.name,
+        ownerUserId: table.ownerUserId,
+        visibility: table.visibility,
+      })
+      .from(table)
+      .where(inArray(table.name, names))) as Array<AclRow & { name: string }>
+    if (rows.length === 0) continue
+    const granted = await listGrantedResourceIds(db, actor, group.type)
+    for (const row of rows) {
+      if (!isVisibleRow(actor, row, granted)) {
+        missing.push({ type: group.type, name: row.name })
+      }
+    }
+  }
+  if (missing.length > 0) {
+    throw new ValidationError(
+      'acl-missing-refs',
+      `you do not have access to: ${missing.map((m) => `${m.type} '${m.name}'`).join(', ')}`,
+      { missing },
+    )
+  }
+}

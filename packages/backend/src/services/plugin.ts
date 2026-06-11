@@ -70,6 +70,7 @@ export async function createPlugin(
   db: DbClient,
   input: CreatePluginInput,
   deps: PluginServiceDeps = {},
+  aclOpts?: { ownerUserId?: string },
 ): Promise<Plugin> {
   if ((await getPlugin(db, input.name)) !== null) {
     throw new ConflictError('plugin-name-in-use', `plugin '${input.name}' already exists`)
@@ -98,6 +99,9 @@ export async function createPlugin(
     cachedPath: install.cachedPath,
     resolvedVersion: install.resolvedVersion,
     installedAt: now,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: aclOpts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -318,6 +322,9 @@ function rowToPlugin(row: PluginRow): Plugin {
     spec: row.spec,
     options,
     description: row.description,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     enabled: row.enabled,
     sourceKind: row.sourceKind,
     cachedPath: row.cachedPath,

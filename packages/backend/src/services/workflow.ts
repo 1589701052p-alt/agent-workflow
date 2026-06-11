@@ -33,7 +33,11 @@ export async function getWorkflow(db: DbClient, id: string): Promise<Workflow | 
   return row ? rowToWorkflow(row) : null
 }
 
-export async function createWorkflow(db: DbClient, input: CreateWorkflow): Promise<Workflow> {
+export async function createWorkflow(
+  db: DbClient,
+  input: CreateWorkflow,
+  opts?: { ownerUserId?: string },
+): Promise<Workflow> {
   const id = ulid()
   const now = Date.now()
   // Normalize incoming v1 → v2 (RFC-005) so new rows always land at the
@@ -45,6 +49,9 @@ export async function createWorkflow(db: DbClient, input: CreateWorkflow): Promi
     description: input.description,
     definition: JSON.stringify(normalized),
     version: 1,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: opts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -169,6 +176,9 @@ function rowToWorkflow(row: WorkflowRow): Workflow {
     description: row.description,
     definition,
     version: row.version,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

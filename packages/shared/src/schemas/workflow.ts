@@ -19,6 +19,7 @@
 // never carry the new node kind, so the upgrade is a metadata bump.
 
 import { z } from 'zod'
+import { ResourceVisibilitySchema } from './resourceAcl'
 
 /** Currently-written schema version. New writes always set this value. */
 export const WORKFLOW_SCHEMA_VERSION = 4
@@ -204,6 +205,10 @@ export const WorkflowSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
+  /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+  ownerUserId: z.string().nullable().optional(),
+  /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+  visibility: ResourceVisibilitySchema.optional(),
   definition: WorkflowDefinitionSchema,
   version: z.number().int(),
   schemaVersion: z.number().int(),

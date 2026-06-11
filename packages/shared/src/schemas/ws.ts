@@ -237,6 +237,10 @@ export const WorkflowsWsMessageSchema = z.discriminatedUnion('type', [
     updatedAt: z.number().int(),
   }),
   z.object({ type: z.literal('workflow.deleted'), workflowId: z.string() }),
+  // RFC-099 — fired on PUT /api/workflows/:id/acl. Carries no ACL payload;
+  // clients re-fetch, and the WS server uses it to invalidate its
+  // per-connection visibility cache for this workflowId.
+  z.object({ type: z.literal('workflow.acl.updated'), workflowId: z.string() }),
 ])
 export type WorkflowsWsMessage = z.infer<typeof WorkflowsWsMessageSchema>
 

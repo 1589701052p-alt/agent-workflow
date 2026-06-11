@@ -14,8 +14,15 @@ import type { Workflow, WorkflowDefinition } from '@agent-workflow/shared'
 import { WorkflowDefinitionSchema } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import type { Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { workflows } from '@/db/schema'
+import { requireResourceOwner } from '@/services/resourceAcl'
+import {
+  assertNewRefsUsable,
+  diffNewNames,
+  extractWorkflowAgentNames,
+} from '@/services/resourceRefs'
 import { createWorkflow, getWorkflow, updateWorkflow } from '@/services/workflow'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 
@@ -41,6 +48,13 @@ export interface ImportYamlOptions {
    *   - 'new': inserts as a brand-new workflow (id discarded)
    */
   onConflict?: 'fail' | 'overwrite' | 'new'
+  /**
+   * RFC-099 — the importing user. When present: create path stamps them as
+   * owner + checks agent-reference usability; overwrite path additionally
+   * requires them to own the existing workflow. Absent (internal/test
+   * callers) skips ACL entirely (daemon-context back-compat).
+   */
+  actor?: Actor
 }
 
 export interface YamlImportPreview {
@@ -103,7 +117,19 @@ export async function importWorkflowYaml(
           },
         )
       }
-      // overwrite
+      // overwrite — RFC-099: only the owner (or admin) may overwrite, and
+      // newly-added agent references must be usable by the importer.
+      if (opts.actor !== undefined) {
+        await requireResourceOwner(db, opts.actor, 'workflow', existing)
+        const prevDef = JSON.parse(existing.definition) as {
+          nodes?: Array<Record<string, unknown>>
+        }
+        const newNames = diffNewNames(
+          extractWorkflowAgentNames(prevDef),
+          extractWorkflowAgentNames(preview.definition),
+        )
+        await assertNewRefsUsable(db, opts.actor, [{ type: 'agent', names: newNames }])
+      }
       return await updateWorkflow(db, preview.id, {
         name: preview.name,
         description: preview.description,
@@ -113,11 +139,21 @@ export async function importWorkflowYaml(
   }
 
   // Either no id, or onConflict==='new', or id had no collision — create.
-  return await createWorkflow(db, {
-    name: preview.name,
-    description: preview.description,
-    definition: preview.definition,
-  })
+  // RFC-099: importer becomes owner; on create every reference is new.
+  if (opts.actor !== undefined) {
+    await assertNewRefsUsable(db, opts.actor, [
+      { type: 'agent', names: [...extractWorkflowAgentNames(preview.definition)] },
+    ])
+  }
+  return await createWorkflow(
+    db,
+    {
+      name: preview.name,
+      description: preview.description,
+      definition: preview.definition,
+    },
+    opts.actor !== undefined ? { ownerUserId: opts.actor.user.id } : undefined,
+  )
 }
 
 function safeParse(yamlText: string): unknown {

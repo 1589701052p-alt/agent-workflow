@@ -31,7 +31,11 @@ export async function getMcp(db: DbClient, name: string): Promise<Mcp | null> {
   return row ? rowToMcp(row) : null
 }
 
-export async function createMcp(db: DbClient, input: CreateMcp): Promise<Mcp> {
+export async function createMcp(
+  db: DbClient,
+  input: CreateMcp,
+  aclOpts?: { ownerUserId?: string },
+): Promise<Mcp> {
   if ((await getMcp(db, input.name)) !== null) {
     throw new ConflictError('mcp-name-in-use', `mcp '${input.name}' already exists`)
   }
@@ -50,6 +54,9 @@ export async function createMcp(db: DbClient, input: CreateMcp): Promise<Mcp> {
     type: input.type,
     config: JSON.stringify(input.config),
     enabled: input.enabled,
+    // RFC-099: creator becomes owner; new resources default to 'public' (D18).
+    ownerUserId: aclOpts?.ownerUserId ?? null,
+    visibility: 'public',
     createdAt: now,
     updatedAt: now,
   })
@@ -219,6 +226,9 @@ function rowToMcp(row: McpRow): Mcp {
     id: row.id,
     name: row.name,
     description: row.description,
+    // RFC-099 ACL projection — routes filter on these.
+    ownerUserId: row.ownerUserId,
+    visibility: row.visibility,
     type: row.type,
     config,
     enabled: row.enabled,

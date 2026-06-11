@@ -12,6 +12,7 @@
 // services/runner.ts buildInlineConfig). Do NOT rename here.
 
 import { z } from 'zod'
+import { ResourceVisibilitySchema } from './resourceAcl'
 
 /** Permitted characters in mcp name (URL-safe; matches `/api/mcps/:name`). */
 export const MCP_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/
@@ -73,6 +74,10 @@ export const McpSchema = z.discriminatedUnion('type', [
     id: z.string(),
     name: McpNameSchema,
     description: z.string(),
+    /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+    ownerUserId: z.string().nullable().optional(),
+    /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+    visibility: ResourceVisibilitySchema.optional(),
     type: z.literal('local'),
     config: McpLocalConfigSchema,
     enabled: z.boolean(),
@@ -84,6 +89,10 @@ export const McpSchema = z.discriminatedUnion('type', [
     id: z.string(),
     name: McpNameSchema,
     description: z.string(),
+    /** RFC-099 ACL — owner (users.id or '__system__'); null until first owner write. */
+    ownerUserId: z.string().nullable().optional(),
+    /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
+    visibility: ResourceVisibilitySchema.optional(),
     type: z.literal('remote'),
     config: McpRemoteConfigSchema,
     enabled: z.boolean(),

@@ -241,7 +241,8 @@ describe('PATs', () => {
       '/api/auth/pats',
       {
         method: 'POST',
-        body: JSON.stringify({ name: 'overreach', scopes: ['agents:write', 'tasks:launch'] }),
+        // RFC-099: agents:write moved to user baseline; users:read stays admin-only.
+        body: JSON.stringify({ name: 'overreach', scopes: ['users:read', 'tasks:launch'] }),
       },
       { Authorization: `Bearer ${sessionToken}` },
     )
