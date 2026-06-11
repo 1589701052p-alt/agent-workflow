@@ -148,6 +148,37 @@ describe('RFC-099 prompt isolation — runtime', () => {
   })
 })
 
+describe('RFC-099 prompt isolation — opencode injection', () => {
+  test('buildInlineAgentEntry never serializes ownerUserId / visibility into OPENCODE_CONFIG_CONTENT', async () => {
+    const { buildInlineAgentEntry } = await import('../src/services/runner')
+    const entry = buildInlineAgentEntry({
+      id: 'a1',
+      name: 'leaky',
+      description: 'd',
+      outputs: [],
+      readonly: false,
+      syncOutputsOnIterate: true,
+      permission: {},
+      skills: [],
+      dependsOn: [],
+      mcp: [],
+      plugins: [],
+      frontmatterExtra: {},
+      bodyMd: 'prompt body',
+      ownerUserId: USER_ID,
+      visibility: 'private',
+      schemaVersion: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    })
+    const serialized = JSON.stringify(entry)
+    expect(serialized).toContain('prompt body')
+    expect(serialized).not.toContain(USER_ID)
+    expect(serialized).not.toContain('ownerUserId')
+    expect(serialized).not.toContain('visibility')
+  })
+})
+
 describe('RFC-099 prompt isolation — source level', () => {
   const backendSrc = (p: string) => readFileSync(resolve(import.meta.dir, '..', 'src', p), 'utf8')
 
