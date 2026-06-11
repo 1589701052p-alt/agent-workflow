@@ -85,7 +85,10 @@ export function MemoryApprovalQueue({ isAdmin }: MemoryApprovalQueueProps) {
 
   return (
     <div className="memory-approval-queue" data-testid="memory-approval-queue">
-      {!isAdmin && (
+      {/* RFC-099 (D12): non-admins may still manage rows whose scoped
+          resource they OWN — the banner only shows when nothing here is
+          manageable by them. */}
+      {!isAdmin && rows.every((m) => m.canManage !== true) && rows.length > 0 && (
         <div className="info-box info-box--muted" data-testid="memory-admin-only-banner">
           {t('memory.adminOnly')}
         </div>
@@ -95,12 +98,12 @@ export function MemoryApprovalQueue({ isAdmin }: MemoryApprovalQueueProps) {
           <CandidateCard
             key={mem.id}
             candidate={mem}
-            isAdmin={isAdmin}
+            isAdmin={mem.canManage ?? isAdmin}
             disabled={promote.isPending}
             onApprove={() => promote.mutate({ id: mem.id, body: { action: 'approve' } })}
             onReject={() => promote.mutate({ id: mem.id, body: { action: 'reject' } })}
             onCompare={(refId) => setCompareWith({ candidate: mem, existingId: refId })}
-            onEdit={isAdmin ? () => setEditingId(mem.id) : undefined}
+            onEdit={(mem.canManage ?? isAdmin) ? () => setEditingId(mem.id) : undefined}
           />
         ))}
       </ul>

@@ -152,6 +152,9 @@ function McpRow(props: McpRowProps) {
           <Link to="/mcps/$name" params={{ name: props.mcp.name }} className="data-table__link">
             {props.mcp.name}
           </Link>
+          {props.mcp.visibility === 'private' && (
+            <span className="chip chip--tight">{t('acl.privateChip')}</span>
+          )}
         </td>
         <td className="data-table__nowrap">
           <span className="chip chip--tight">

@@ -31,6 +31,20 @@ export function mountUserRoutes(app: Hono, deps: AppDeps): void {
     return c.json(rows)
   })
 
+  // RFC-099 — batch id → public-fields resolve for attribution chips
+  // (review comments / clarify per-question editors / owner badges). Same
+  // users:search permission class as the picker: public fields only, never
+  // emails. Unknown ids are silently dropped so callers can blind-resolve.
+  app.post('/api/users/lookup', requirePermission('users:search'), async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { ids?: unknown }
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((x): x is string => typeof x === 'string' && x.length > 0).slice(0, 200)
+      : []
+    if (ids.length === 0) return c.json([])
+    const { lookupUsersPublic } = await import('@/services/users')
+    return c.json(await lookupUsersPublic(deps.db, ids))
+  })
+
   // Everything below is admin-only.
   app.get('/api/users', requirePermission('users:read'), async (c) => {
     const rows = await listAllUsers(deps.db)

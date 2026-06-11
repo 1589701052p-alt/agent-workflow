@@ -714,3 +714,51 @@ export async function filterMemoriesByScopeVisibility<T extends MemoryScopeRef>(
     return r.scopeType === 'agent' ? visibleAgents.has(r.scopeId) : visibleWorkflows.has(r.scopeId)
   })
 }
+
+/**
+ * RFC-099 (D12) — stamp per-row `canManage` for the UI (approve/edit/archive
+ * buttons): admin → all true; otherwise true only on agent/workflow rows
+ * whose scope resource the actor OWNS. One query per scope type.
+ */
+export async function annotateMemoryManageRights<T extends MemoryScopeRef>(
+  db: DbClient,
+  actor: Actor,
+  rows: readonly T[],
+): Promise<Array<T & { canManage: boolean }>> {
+  if (isAdminActor(actor)) return rows.map((r) => ({ ...r, canManage: true }))
+  const agentIds = [
+    ...new Set(
+      rows.filter((r) => r.scopeType === 'agent' && r.scopeId !== null).map((r) => r.scopeId!),
+    ),
+  ]
+  const workflowIds = [
+    ...new Set(
+      rows.filter((r) => r.scopeType === 'workflow' && r.scopeId !== null).map((r) => r.scopeId!),
+    ),
+  ]
+  const ownedAgents = new Set<string>()
+  if (agentIds.length > 0) {
+    const aRows = await db
+      .select({ id: agentsTable.id, ownerUserId: agentsTable.ownerUserId })
+      .from(agentsTable)
+      .where(inArray(agentsTable.id, agentIds))
+    for (const r of aRows) if (r.ownerUserId === actor.user.id) ownedAgents.add(r.id)
+  }
+  const ownedWorkflows = new Set<string>()
+  if (workflowIds.length > 0) {
+    const wRows = await db
+      .select({ id: workflowsTable.id, ownerUserId: workflowsTable.ownerUserId })
+      .from(workflowsTable)
+      .where(inArray(workflowsTable.id, workflowIds))
+    for (const r of wRows) if (r.ownerUserId === actor.user.id) ownedWorkflows.add(r.id)
+  }
+  return rows.map((r) => ({
+    ...r,
+    canManage:
+      r.scopeType === 'agent'
+        ? r.scopeId !== null && ownedAgents.has(r.scopeId)
+        : r.scopeType === 'workflow'
+          ? r.scopeId !== null && ownedWorkflows.has(r.scopeId)
+          : false,
+  }))
+}

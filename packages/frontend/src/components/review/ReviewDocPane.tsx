@@ -29,6 +29,8 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { ReviewComment, ReviewCommentAnchor } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { AttributionChip } from '@/components/AttributionChip'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { Prose } from '@/components/prose/Prose'
 import { useResizable } from '@/hooks/useResizable'
 import { anchorKey, computeAnchorFromSelection, selectionCrossesHeading } from '@/lib/review/anchor'
@@ -184,6 +186,8 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
     onShortcutCaptureChange,
   } = props
   const { t } = useTranslation()
+  // RFC-099 — resolve comment author ids to display names (one batched call).
+  const authors = useUserLookup(comments.map((c) => c.author))
   const diffActive = diffMode === true
 
   const markdownRef = useRef<HTMLDivElement>(null)
@@ -722,6 +726,14 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
                     ) : (
                       <p className="comment-bubble__body">{c.commentText}</p>
                     )}
+                    {/* RFC-099 (D7): who commented, with their task role. */}
+                    <footer className="comment-bubble__attribution">
+                      <AttributionChip
+                        userId={c.author}
+                        role={c.authorRole ?? null}
+                        user={authors.get(c.author)}
+                      />
+                    </footer>
                   </article>
                 )
               })

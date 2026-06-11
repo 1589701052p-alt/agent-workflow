@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type {
+  UserPublic,
   RecentRepo,
   RepoRefsResponse,
   Task,
@@ -18,6 +19,8 @@ import type {
 } from '@agent-workflow/shared'
 import { isLooseValidBranchName } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { useActor } from '@/hooks/useActor'
+import { UserPicker } from '@/components/UserPicker'
 import { EnumPicker } from '@/components/launch/EnumPicker'
 import { FilesPicker } from '@/components/launch/FilesPicker'
 import { GitPicker } from '@/components/launch/GitPicker'
@@ -56,6 +59,9 @@ function LaunchPage() {
 
   // RFC-037: user-supplied display name for this task. Required for submit.
   const [taskName, setTaskName] = useState('')
+  // RFC-099 (D10) — optional initial task users (launcher = owner automatically).
+  const [collaborators, setCollaborators] = useState<UserPublic[]>([])
+  const actor = useActor()
   // RFC-067: optional per-task Git commit identity. Both blank → daemon
   // default (legacy behavior). Both set → runner injects GIT_AUTHOR_* /
   // GIT_COMMITTER_*. Half-set → blocked client-side (matches StartTaskSchema
@@ -141,6 +147,9 @@ function LaunchPage() {
         workflowId: id,
         name,
         inputs,
+        ...(collaborators.length > 0
+          ? { collaboratorUserIds: collaborators.map((u) => u.id) }
+          : {}),
         ...(trimGitName !== '' && trimGitEmail !== ''
           ? { gitUserName: trimGitName, gitUserEmail: trimGitEmail }
           : {}),
@@ -270,6 +279,19 @@ function LaunchPage() {
             data-testid="launch-task-name"
           />
         </Field>
+
+        {/* RFC-099 (D10): optional initial task users. Hidden in single-user
+            (daemon-token) mode — UserPicker search needs real accounts. */}
+        {actor.data !== null && actor.data !== undefined && actor.data.source !== 'daemon' && (
+          <Field label={t('members.users')} hint={t('members.hint')}>
+            <UserPicker
+              value={collaborators}
+              onChange={setCollaborators}
+              excludeIds={[actor.data.user.id]}
+              testidPrefix="launch-collaborators"
+            />
+          </Field>
+        )}
 
         {/* RFC-067: optional per-task Git commit identity. Both blank → daemon
             default (legacy). Both filled → runner injects GIT_AUTHOR_* /

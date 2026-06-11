@@ -2,7 +2,7 @@
 // bootstrap log + future-PR retro-fit (PR2 layers in last-admin-protection /
 // soft-delete logic).
 
-import { and, eq, like, ne, or } from 'drizzle-orm'
+import { inArray, and, eq, like, ne, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import {
   type CreateUserBody,
@@ -176,6 +176,27 @@ export interface SearchInput {
   q?: string
   limit?: number
   excludeIds?: string[]
+}
+
+/**
+ * RFC-099 — resolve a batch of user ids to their PUBLIC projection (id /
+ * username / displayName / role / status). Unknown ids and the __system__
+ * sentinel drop out silently. Disabled users ARE returned — historic
+ * attribution chips must keep rendering after an account is disabled.
+ */
+export async function lookupUsersPublic(db: DbClient, ids: string[]): Promise<UserPublic[]> {
+  const wanted = [...new Set(ids)].filter((id) => id !== SYSTEM_USER_ID)
+  if (wanted.length === 0) return []
+  const rows = await db.select().from(users).where(inArray(users.id, wanted))
+  return rows.map(
+    (r): UserPublic => ({
+      id: r.id,
+      username: r.username,
+      displayName: r.displayName,
+      role: r.role as Role,
+      status: r.status as UserPublic['status'],
+    }),
+  )
 }
 
 export async function searchUsersPublic(db: DbClient, input: SearchInput): Promise<UserPublic[]> {

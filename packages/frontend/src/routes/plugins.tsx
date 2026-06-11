@@ -114,6 +114,9 @@ function PluginsPage() {
                     <Link to="/plugins/$id" params={{ id: p.id }} className="data-table__link">
                       {p.name}
                     </Link>
+                    {p.visibility === 'private' && (
+                      <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                    )}
                   </td>
                   <td className="data-table__truncate" title={p.spec}>
                     <code className="muted">{p.spec}</code>

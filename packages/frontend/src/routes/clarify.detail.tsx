@@ -30,11 +30,22 @@ import type {
 } from '@agent-workflow/shared'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { AttributionChip } from '@/components/AttributionChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
+import { useActor } from '@/hooks/useActor'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { Dialog } from '@/components/Dialog'
 import { useClarifyWs } from '@/hooks/useClarifyWs'
 import { deleteClarifyDraft, getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
 import { Route as RootRoute } from './__root'
+
+/** RFC-099 — user-state equality for drafts (labels are server-refilled, ignored). */
+function answersEqual(a: ClarifyAnswer, b: ClarifyAnswer): boolean {
+  const ai = [...a.selectedOptionIndices].sort((x, y) => x - y)
+  const bi = [...b.selectedOptionIndices].sort((x, y) => x - y)
+  if (ai.length !== bi.length || ai.some((v, i) => v !== bi[i])) return false
+  return a.customText === b.customText
+}
 
 /** RFC-058: REST returns a single ClarifyRound shape with `kind` discriminator. */
 type ClarifyDetailEntry = ClarifyRound
@@ -74,9 +85,21 @@ export function ClarifyDetailPage() {
   // Subscribe to the host task's WS channel for clarify.* events so
   // sibling tabs picking up the same session see a real-time re-fetch
   // when the other tab submits.
+  // RFC-099 (D14) — live "X just edited question N" hint, auto-cleared.
+  const actorQuery = useActor()
+  const [draftHint, setDraftHint] = useState<{ name: string; question: string } | null>(null)
+  const draftHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useClarifyWs({
     taskId: session.data?.taskId ?? null,
     intermediaryNodeRunId: nodeRunId,
+    onDraftUpdated: (frame) => {
+      const myId = actorQuery.data?.user.id
+      if (myId !== undefined && frame.editor.userId === myId) return
+      const question = session.data?.questions.find((q) => q.id === frame.questionId)
+      setDraftHint({ name: frame.editor.displayName, question: question?.title ?? '' })
+      if (draftHintTimerRef.current !== null) clearTimeout(draftHintTimerRef.current)
+      draftHintTimerRef.current = setTimeout(() => setDraftHint(null), 5000)
+    },
   })
 
   // ----------------------------------------------------------------------
@@ -93,6 +116,22 @@ export function ClarifyDetailPage() {
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftSaving, setDraftSaving] = useState(false)
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // RFC-099 (D8/D14) — server-side collaborative drafts. `serverDraftRef`
+  // mirrors the last server-acknowledged value per question; the autosave
+  // diff and the remote-merge effect both compare against it so a remote
+  // editor's change never clobbers text the local user typed since.
+  const serverDraftRef = useRef<Record<string, ClarifyAnswer>>({})
+  const serverDraftDisabledRef = useRef(false)
+  // Resolve attribution ids (per-question editors + submitter) to names.
+  const attributionUserIds = useMemo(() => {
+    const s = session.data
+    if (s === undefined) return [] as string[]
+    return [
+      ...Object.values(s.answerAttributions ?? {}).map((a) => a.userId),
+      ...(s.answeredBy !== null ? [s.answeredBy] : []),
+    ]
+  }, [session.data])
+  const attributionLookup = useUserLookup(attributionUserIds)
   // RFC-051: `initialFocusedRef` is declared up here (alongside the other
   // session-scoped refs) instead of further down with the keyboard-nav
   // refs, because the reset-on-nodeRunId effect right below needs to
@@ -121,6 +160,9 @@ export function ClarifyDetailPage() {
     setScopes({})
     setDraftLoaded(false)
     initialFocusedRef.current = false
+    serverDraftRef.current = {}
+    serverDraftDisabledRef.current = false
+    setDraftHint(null)
     if (draftTimerRef.current !== null) {
       clearTimeout(draftTimerRef.current)
       draftTimerRef.current = null
@@ -175,6 +217,28 @@ export function ClarifyDetailPage() {
       setDraftLoaded(true)
       return
     }
+    // RFC-099 (D8): the SERVER draft is the collaborative source of truth.
+    // When present it wins over the local IDB copy (another member may have
+    // edited from a different machine); IDB stays as the single-user /
+    // offline fallback only.
+    const serverDrafts = s.draftAnswers ?? null
+    if (serverDrafts !== null && Object.keys(serverDrafts).length > 0) {
+      for (const [qid, v] of Object.entries(serverDrafts)) {
+        if (fresh[qid] !== undefined) {
+          fresh[qid] = {
+            questionId: qid,
+            selectedOptionIndices: v.selectedOptionIndices ?? [],
+            selectedOptionLabels: [],
+            customText: v.customText ?? '',
+          }
+        }
+      }
+      serverDraftRef.current = { ...fresh }
+      setAnswers(fresh)
+      setDraftLoaded(true)
+      return
+    }
+    serverDraftRef.current = { ...fresh }
     // Try to restore the IDB draft (if any) for this session.
     const key = {
       taskId: s.taskId,
@@ -195,7 +259,10 @@ export function ClarifyDetailPage() {
       })
   }, [draftLoaded, session.data])
 
-  // Debounced IDB write.
+  // Debounced draft write: IDB (offline fallback) + RFC-099 server drafts —
+  // one PUT per question whose value changed since the last server ack, so
+  // concurrent members editing DIFFERENT questions merge (D14 per-question
+  // last-write-wins).
   useEffect(() => {
     const s = session.data
     if (s === undefined || !draftLoaded) return
@@ -212,15 +279,76 @@ export function ClarifyDetailPage() {
             customText: '',
           },
       )
-      void setClarifyDraft(
-        { taskId: s.taskId, intermediaryNodeRunId: s.intermediaryNodeRunId, roundId: s.id },
-        arr,
-      ).finally(() => setDraftSaving(false))
+      const serverPuts: Array<Promise<unknown>> = []
+      if (!serverDraftDisabledRef.current) {
+        for (const a of arr) {
+          const prev = serverDraftRef.current[a.questionId]
+          if (prev !== undefined && answersEqual(prev, a)) continue
+          serverDraftRef.current[a.questionId] = a
+          serverPuts.push(
+            api
+              .put(`/api/clarify/${s.intermediaryNodeRunId}/draft`, {
+                roundId: s.id,
+                questionId: a.questionId,
+                selectedOptionIndices: a.selectedOptionIndices,
+                customText: a.customText,
+              })
+              .catch(() => {
+                // 403 (not a member) / 409 (round sealed under us) — stop
+                // hammering the server; the IDB draft keeps working locally.
+                serverDraftDisabledRef.current = true
+              }),
+          )
+        }
+      }
+      void Promise.allSettled([
+        setClarifyDraft(
+          { taskId: s.taskId, intermediaryNodeRunId: s.intermediaryNodeRunId, roundId: s.id },
+          arr,
+        ),
+        ...serverPuts,
+      ]).finally(() => setDraftSaving(false))
     }, DRAFT_DEBOUNCE_MS)
     return () => {
       if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current)
     }
   }, [answers, draftLoaded, session.data])
+
+  // RFC-099 (D14) — merge REMOTE draft changes (refetched after a
+  // clarify.draft.updated frame) into the form. A remote value is adopted
+  // only when the local user hasn't diverged from the last server-acked
+  // value for that question — the local editor always wins locally, and
+  // their next autosave settles the race server-side (LWW).
+  useEffect(() => {
+    const s = session.data
+    if (s === undefined || !draftLoaded || s.status !== 'awaiting_human') return
+    const serverDrafts = s.draftAnswers ?? null
+    if (serverDrafts === null) return
+    setAnswers((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const [qid, v] of Object.entries(serverDrafts)) {
+        if (prev[qid] === undefined) continue
+        const remote: ClarifyAnswer = {
+          questionId: qid,
+          selectedOptionIndices: v.selectedOptionIndices ?? [],
+          selectedOptionLabels: [],
+          customText: v.customText ?? '',
+        }
+        const acked = serverDraftRef.current[qid]
+        if (answersEqual(remote, prev[qid])) {
+          serverDraftRef.current[qid] = remote
+          continue
+        }
+        if (acked !== undefined && answersEqual(prev[qid], acked)) {
+          next[qid] = remote
+          serverDraftRef.current[qid] = remote
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [session.data, draftLoaded])
 
   // ----------------------------------------------------------------------
   // RFC-023 shard switcher — peer awaiting_human sessions for the same task +
@@ -638,6 +766,22 @@ export function ClarifyDetailPage() {
           {isCross && <> · {t('crossClarify.questionScope.shortcutHint')}</>}
         </p>
       )}
+      {draftHint !== null && (
+        <div className="clarify-draft-hint" role="status" data-testid="clarify-draft-hint">
+          {t('attribution.justEdited', { name: draftHint.name, question: draftHint.question })}
+        </div>
+      )}
+      {/* RFC-099 (D7): sealed rounds show who submitted, with their task role. */}
+      {s.status === 'answered' && s.answeredBy !== null && (
+        <p className="page__hint" data-testid="clarify-submitter">
+          {t('attribution.submittedBy')}:{' '}
+          <AttributionChip
+            userId={s.answeredBy}
+            role={s.submittedByRole ?? null}
+            user={attributionLookup.get(s.answeredBy)}
+          />
+        </p>
+      )}
       <section className="clarify-questions">
         {s.questions.map((q, idx) => {
           const a = answers[q.id]
@@ -721,6 +865,25 @@ export function ClarifyDetailPage() {
                 onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
                 onAdvance={() => advanceFromQuestion(q.id)}
               />
+              {/* RFC-099 (D7/D8): per-question last editor, live while
+                  drafting and frozen after submit. Audit display only. */}
+              {(() => {
+                const attr = s.answerAttributions?.[q.id]
+                if (attr === undefined) return null
+                return (
+                  <div
+                    className="clarify-question__attribution"
+                    data-testid={`clarify-attribution-${q.id}`}
+                  >
+                    {t('attribution.lastEditedBy')}:{' '}
+                    <AttributionChip
+                      userId={attr.userId}
+                      role={attr.role}
+                      user={attributionLookup.get(attr.userId)}
+                    />
+                  </div>
+                )
+              })()}
             </div>
           )
         })}

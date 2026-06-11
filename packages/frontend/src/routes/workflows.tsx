@@ -115,6 +115,9 @@ function WorkflowsPage() {
                   <Link to="/workflows/$id" params={{ id: w.id }} className="data-table__link">
                     {w.name}
                   </Link>
+                  {w.visibility === 'private' && (
+                    <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                  )}
                 </td>
                 <td className="data-table__muted">v{w.version}</td>
                 <td className="data-table__muted">

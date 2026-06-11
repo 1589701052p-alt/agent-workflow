@@ -97,6 +97,9 @@ function SkillsPage() {
                     >
                       {s.name}
                     </Link>
+                    {s.visibility === 'private' && (
+                      <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                    )}
                     {s.sourceId !== undefined && (
                       <a
                         href={`#source-${s.sourceId}`}

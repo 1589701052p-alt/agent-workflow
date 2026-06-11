@@ -9,7 +9,7 @@ import type { Memory, MemoryScope, MemorySummary } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/LoadingState'
-import { usePermission } from '@/hooks/useActor'
+import { useActor } from '@/hooks/useActor'
 import { describeApiError } from '@/i18n'
 import { MemoryEditDialog } from './MemoryEditDialog'
 import { MemoryRow } from './MemoryRow'
@@ -26,7 +26,9 @@ export interface MemoryScopedListProps {
 
 export function MemoryScopedList(props: MemoryScopedListProps) {
   const { t } = useTranslation()
-  const isAdmin = usePermission('memory:edit')
+  // RFC-099 (D12): per-row canManage is the gate; admin role is the fallback
+  // for payloads predating the annotation.
+  const isAdmin = useActor().data?.user.role === 'admin'
   const [editingId, setEditingId] = useState<string | null>(null)
   const query: Record<string, string> = { status: 'approved', scopeType: props.scopeType }
   if (props.scopeId !== null) query.scopeId = props.scopeId
@@ -66,8 +68,8 @@ export function MemoryScopedList(props: MemoryScopedListProps) {
           <MemoryRow
             key={m.id}
             memory={m}
-            editable={isAdmin}
-            onEdit={isAdmin ? () => setEditingId(m.id) : undefined}
+            editable={(m.canManage ?? isAdmin) === true}
+            onEdit={(m.canManage ?? isAdmin) === true ? () => setEditingId(m.id) : undefined}
           />
         ))}
       </ul>

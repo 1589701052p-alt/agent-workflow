@@ -2479,4 +2479,44 @@ export const enUS: Resources = {
       },
     },
   },
+  // RFC-099 — ownership ACL + attribution UI
+  acl: {
+    title: 'Permissions',
+    owner: 'Owner',
+    systemOwner: 'System (no owner)',
+    visibility: 'Visibility',
+    visibilityValue: { public: 'Everyone', private: 'Private' },
+    members: 'Authorized users',
+    noMembers: 'No authorized users yet',
+    privateHint:
+      'Private resources are visible and usable only by the owner and authorized users; admins always see everything.',
+    save: 'Save permissions',
+    transferOwner: 'Transfer',
+    transferTitle: 'Transfer ownership',
+    transferHint:
+      'After the transfer you stay an authorized user but can no longer manage its permissions.',
+    transferConfirm: 'Confirm transfer',
+    ownerBadge: 'Owner',
+    privateChip: 'Private',
+  },
+  members: {
+    title: 'Task members',
+    users: 'Task users',
+    noUsers: 'No other members yet',
+    hint: "Task users share the owner's operational rights (cancel/retry/resume, answer reviews & clarifications); only member management and transfer stay with the owner and admins.",
+    transferHint: 'After the transfer you stay a task user.',
+  },
+  userPicker: {
+    placeholder: 'Search users…',
+    noResults: 'No matching users',
+    remove: 'Remove {{name}}',
+  },
+  attribution: {
+    localHistoric: 'Local user (historic)',
+    role: { owner: 'Owner', user: 'User', admin: 'Admin' },
+    submittedBy: 'Submitted by',
+    lastEditedBy: 'Last edited by',
+    decidedBy: 'Decided by',
+    justEdited: '{{name}} just updated "{{question}}"',
+  },
 }

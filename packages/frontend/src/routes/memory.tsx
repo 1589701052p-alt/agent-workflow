@@ -22,9 +22,9 @@ import { MemoryAllList } from '@/components/memory/MemoryAllList'
 import { MemoryByScopeBrowser } from '@/components/memory/MemoryByScopeBrowser'
 import { MemoryDistillJobsTable } from '@/components/memory/MemoryDistillJobsTable'
 import { MemoryNewDialog } from '@/components/memory/MemoryNewDialog'
+import { useActor } from '@/hooks/useActor'
 import { useMemoryWs } from '@/hooks/useMemoryWs'
 import { useMemoryDistillJobWs } from '@/hooks/useMemoryDistillJobWs'
-import { usePermission } from '@/hooks/useActor'
 
 type MemoryTab = 'approval-queue' | 'all' | 'by-scope' | 'distill-jobs'
 
@@ -38,7 +38,11 @@ export const Route = createRoute({
 
 function MemoryPage() {
   const { t } = useTranslation()
-  const isAdmin = usePermission('memory:approve')
+  // RFC-099 (D12): memory:approve moved into the user baseline (the real
+  // gate is per-row canManage), so the ADMIN surfaces here key off the
+  // actor's role instead of the permission point.
+  const actor = useActor()
+  const isAdmin = actor.data?.user.role === 'admin'
   const [tab, setTab] = useState<MemoryTab>('approval-queue')
   const [newDialogOpen, setNewDialogOpen] = useState(false)
 
@@ -53,16 +57,17 @@ function MemoryPage() {
           <h1>{t('memory.title')}</h1>
           <p className="muted">{t('memory.hint')}</p>
         </div>
-        {isAdmin && (
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={() => setNewDialogOpen(true)}
-            data-testid="memory-new-button"
-          >
-            {t('memory.action.new')}
-          </button>
-        )}
+        {/* RFC-099: resource owners may create memories for their own
+            agents/workflows — show the button to everyone; the backend
+            enforces per-scope manage rights. */}
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={() => setNewDialogOpen(true)}
+          data-testid="memory-new-button"
+        >
+          {t('memory.action.new')}
+        </button>
       </header>
       {newDialogOpen && (
         <MemoryNewDialog

@@ -19,11 +19,26 @@ import {
 import { setBaseUrl, setToken } from '../src/stores/auth'
 import '../src/i18n'
 
-// Flip admin vs non-admin via this mock.
+// Flip admin vs non-admin via this mock. RFC-099: the page keys off the
+// actor's ROLE (memory:approve moved into the user baseline).
 vi.mock('../src/hooks/useActor', () => ({
   usePermission: (perm: string) =>
     perm === 'memory:approve' ? mockIsAdmin : perm === 'memory:edit' ? mockIsAdmin : false,
-  useActor: () => ({ data: null }),
+  useActor: () => ({
+    data: {
+      user: {
+        id: 'u1',
+        username: 'u1',
+        displayName: 'U1',
+        role: mockIsAdmin ? 'admin' : 'user',
+        status: 'active',
+      },
+      source: 'session',
+      permissions: [],
+      linkedIdentities: [],
+      pats: [],
+    },
+  }),
 }))
 let mockIsAdmin = true
 
@@ -88,14 +103,16 @@ describe('/memory page header — [+ New memory] (RFC-045)', () => {
     expect(btn).toBeTruthy()
   })
 
-  test('non-admin does NOT see the New button', async () => {
+  test('non-admin ALSO sees the New button (RFC-099 D12 — owners create scoped memories)', async () => {
     mockIsAdmin = false
     await loadMemoryPage()
     await waitFor(() => {
       // Wait for the page header to render in either branch.
       expect(screen.getByTestId('memory-tab-bar')).toBeTruthy()
     })
-    expect(screen.queryByTestId('memory-new-button')).toBeNull()
+    // RFC-099 flipped this assertion: the button shows for every logged-in
+    // user; the backend enforces per-scope manage rights at POST time.
+    expect(screen.queryByTestId('memory-new-button')).toBeTruthy()
   })
 
   test('clicking the New button opens the MemoryNewDialog', async () => {

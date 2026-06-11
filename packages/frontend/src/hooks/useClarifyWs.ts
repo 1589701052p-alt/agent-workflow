@@ -22,15 +22,35 @@ export interface UseClarifyWsOpts {
   /** Intermediary node_run id currently focused — used to scope the detail
    *  invalidation. RFC-058 renamed from `clarifyNodeRunId`. */
   intermediaryNodeRunId: string | null
+  /** RFC-099 (D14) — fired when another member saves a draft on the focused
+   *  round (frames for other node_runs are ignored). */
+  onDraftUpdated?: (frame: {
+    questionId: string
+    editor: { userId: string; displayName: string; role: 'owner' | 'user' | 'admin' }
+  }) => void
 }
 
-export function useClarifyWs({ taskId, intermediaryNodeRunId }: UseClarifyWsOpts): void {
+export function useClarifyWs({
+  taskId,
+  intermediaryNodeRunId,
+  onDraftUpdated,
+}: UseClarifyWsOpts): void {
   const qc = useQueryClient()
   useWebSocket({
     path: taskId === null ? '' : `/ws/tasks/${encodeURIComponent(taskId)}`,
     enabled: taskId !== null,
     onMessage: (raw) => {
       const msg = raw as TaskWsMessage
+      // RFC-099 (D14): collaborative draft frames — refetch the focused round
+      // (brings the latest draftAnswers + per-question attribution) and let
+      // the page show "X just edited question N".
+      if (msg.type === 'clarify.draft.updated') {
+        if (intermediaryNodeRunId !== null && msg.nodeRunId === intermediaryNodeRunId) {
+          void qc.invalidateQueries({ queryKey: ['clarify', 'detail', intermediaryNodeRunId] })
+          onDraftUpdated?.({ questionId: msg.questionId, editor: msg.editor })
+        }
+        return
+      }
       const isSelfClarify = msg.type === 'clarify.created' || msg.type === 'clarify.answered'
       const isCrossClarify =
         msg.type === 'cross-clarify.created' ||

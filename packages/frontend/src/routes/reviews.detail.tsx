@@ -18,6 +18,8 @@ import type {
 } from '@agent-workflow/shared'
 import type { DocVersion } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
+import { AttributionChip } from '@/components/AttributionChip'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
 import { Dialog } from '@/components/Dialog'
 import { MultiDocReviewView } from '@/components/review/MultiDocReviewView'
@@ -333,6 +335,14 @@ function ReviewDetailPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [paneCapturing, onApprove, onReject, onIterate, diffMode, readonly])
 
+  // RFC-099 (D7) — resolve the decider id for the attribution chip. Hook must
+  // sit above the early returns; tolerant of undefined while loading.
+  const deciderLookup = useUserLookup([
+    view.mode === 'historical'
+      ? historicalDetail.data?.decidedBy
+      : detail.data?.currentVersion.decidedBy,
+  ])
+
   if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
   if (detail.error !== null && detail.error !== undefined) {
     const err = detail.error as ApiError
@@ -356,6 +366,13 @@ function ReviewDetailPage() {
     view.mode === 'historical'
       ? (view.decision ?? historicalDetail.data?.decision)
       : data.currentVersion.decision
+  // RFC-099 (D7): show who decided the viewed version (audit display only).
+  const deciderId =
+    view.mode === 'historical' ? historicalDetail.data?.decidedBy : data.currentVersion.decidedBy
+  const deciderRole =
+    view.mode === 'historical'
+      ? historicalDetail.data?.decidedByRole
+      : data.currentVersion.decidedByRole
 
   // Download the markdown body the user is currently viewing (current or
   // historical version) as a `.md` file. Filename combines a sanitized title
@@ -414,6 +431,20 @@ function ReviewDetailPage() {
           {data.summary.description !== '' && data.summary.description !== data.summary.title && (
             <p className="page__hint review-detail__description">{data.summary.description}</p>
           )}
+          {headerDecision !== undefined &&
+            headerDecision !== 'pending' &&
+            deciderId !== null &&
+            deciderId !== undefined &&
+            deciderId !== 'system' && (
+              <p className="page__hint review-detail__decider" data-testid="review-decider">
+                {t('attribution.decidedBy')}:{' '}
+                <AttributionChip
+                  userId={deciderId}
+                  role={deciderRole ?? null}
+                  user={deciderLookup.get(deciderId)}
+                />
+              </p>
+            )}
           {!readonly && (
             <p className="page__hint">
               {t('reviews.detailHint', {

@@ -314,6 +314,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // ---- users (RFC-036) ----
   { method: 'GET', path: '/api/users' },
   { method: 'GET', path: '/api/users/search' },
+  // RFC-099: batch id → public fields for attribution chips.
+  { method: 'POST', path: '/api/users/lookup' },
   { method: 'GET', path: '/api/users/:id' },
   { method: 'POST', path: '/api/users' },
   { method: 'PATCH', path: '/api/users/:id' },

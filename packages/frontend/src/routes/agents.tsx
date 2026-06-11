@@ -68,6 +68,9 @@ function AgentsPage() {
                   <Link to="/agents/$name" params={{ name: a.name }} className="data-table__link">
                     {a.name}
                   </Link>
+                  {a.visibility === 'private' && (
+                    <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                  )}
                 </td>
                 <td
                   className="data-table__muted data-table__truncate"

@@ -27,6 +27,7 @@ import {
   deleteMemory,
   getMemoryById,
   listMemories,
+  annotateMemoryManageRights,
   canManageMemory,
   canViewMemory,
   filterMemoriesByScopeVisibility,
@@ -104,10 +105,12 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
     const actor = actorOf(c)
     if (includeRaw === 'body') {
       const items = await listMemories(deps.db, parsed.data, { includeBody: true })
-      return c.json({ items: await filterMemoriesByScopeVisibility(deps.db, actor, items) })
+      const visible = await filterMemoriesByScopeVisibility(deps.db, actor, items)
+      return c.json({ items: await annotateMemoryManageRights(deps.db, actor, visible) })
     }
     const items = await listMemories(deps.db, parsed.data)
-    return c.json({ items: await filterMemoriesByScopeVisibility(deps.db, actor, items) })
+    const visible = await filterMemoriesByScopeVisibility(deps.db, actor, items)
+    return c.json({ items: await annotateMemoryManageRights(deps.db, actor, visible) })
   })
 
   app.get('/api/memories/:id', requirePermission('memory:read'), async (c) => {
@@ -120,8 +123,12 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
       scopeId: found.memory.scopeId,
     })
     if (!visible) throw new NotFoundError('memory-not-found', `memory ${id} not found`)
+    const canManage = await canManageMemory(deps.db, actorOf(c), {
+      scopeType: found.memory.scopeType,
+      scopeId: found.memory.scopeId,
+    })
     return c.json({
-      memory: found.memory,
+      memory: { ...found.memory, canManage },
       ancestors: found.ancestors.map((m) => toSummary(m)),
     })
   })

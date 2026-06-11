@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, CreateAgent } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { AclPanel } from '@/components/AclPanel'
 import { AgentForm, emptyAgent } from '@/components/AgentForm'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { describeApiError } from '@/i18n'
@@ -100,6 +101,10 @@ function AgentDetailPage() {
         </div>
       ) : null}
       <AgentForm value={draft} onChange={setDraft} nameLocked />
+      <AclPanel
+        resourceBaseUrl={`/api/agents/${encodeURIComponent(name)}`}
+        invalidateKey={['agents']}
+      />
     </div>
   )
 }

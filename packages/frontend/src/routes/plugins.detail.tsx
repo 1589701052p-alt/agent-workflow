@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Plugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { AclPanel } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { PluginFields } from '@/components/PluginFields'
 import { describeApiError } from '@/i18n'
@@ -123,6 +124,11 @@ function PluginDetailPage() {
       ) : null}
 
       <PluginFields value={form} onChange={setForm} nameLocked errors={errors} />
+
+      <AclPanel
+        resourceBaseUrl={`/api/plugins/${encodeURIComponent(id)}`}
+        invalidateKey={['plugins']}
+      />
     </div>
   )
 }

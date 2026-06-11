@@ -8,7 +8,7 @@ import { api } from '@/api/client'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/LoadingState'
 import { groupCandidatesByScope, SCOPE_TABS } from '@/lib/memory'
-import { usePermission } from '@/hooks/useActor'
+import { useActor } from '@/hooks/useActor'
 import { MemoryEditDialog } from './MemoryEditDialog'
 import { MemoryRow } from './MemoryRow'
 import { describeApiError } from '@/i18n'
@@ -19,7 +19,9 @@ interface ListResponse {
 
 export function MemoryByScopeBrowser() {
   const { t } = useTranslation()
-  const isAdmin = usePermission('memory:edit')
+  // RFC-099 (D12): per-row canManage is the gate; admin role is the fallback
+  // for payloads predating the annotation.
+  const isAdmin = useActor().data?.user.role === 'admin'
   const [editingId, setEditingId] = useState<string | null>(null)
   const approved = useQuery<ListResponse>({
     queryKey: ['memories', 'all'],
@@ -57,8 +59,8 @@ export function MemoryByScopeBrowser() {
                 <MemoryRow
                   key={m.id}
                   memory={m}
-                  editable={isAdmin}
-                  onEdit={isAdmin ? () => setEditingId(m.id) : undefined}
+                  editable={(m.canManage ?? isAdmin) === true}
+                  onEdit={(m.canManage ?? isAdmin) === true ? () => setEditingId(m.id) : undefined}
                 />
               ))}
             </ul>

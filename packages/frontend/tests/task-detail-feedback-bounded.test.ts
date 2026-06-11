@@ -30,7 +30,11 @@ describe('routes/tasks.detail.tsx — feedback lives in its own tab pane', () =>
     // The pane wraps the feedback list and is hidden unless the feedback
     // tab is selected. Locking the regex here so a future refactor can't
     // re-promote the list outside the panes track without tripping the test.
-    expect(SRC).toMatch(/hidden=\{tab !== 'feedback'\}>\s*\n\s*<TaskFeedbackList taskId=\{id\} \/>/)
+    // RFC-099: the members panel (TaskMembersPanel) sits in the same pane,
+    // ABOVE the feedback list — both stay inside the bounded pane track.
+    expect(SRC).toMatch(
+      /hidden=\{tab !== 'feedback'\}>\s*\n\s*<TaskMembersPanel taskId=\{id\} \/>\s*\n\s*<TaskFeedbackList taskId=\{id\} \/>/,
+    )
   })
 
   test('there is exactly one <TaskFeedbackList /> render and it sits BEFORE the closing panes div', () => {

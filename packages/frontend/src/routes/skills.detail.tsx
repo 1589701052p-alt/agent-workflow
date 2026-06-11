@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Skill, SkillContent } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { AclPanel } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
 import { MarkdownEditor } from '@/components/MarkdownEditor'
@@ -147,6 +148,11 @@ function SkillDetailPage() {
         <h2>{t('skills.filesSection')}</h2>
         <SkillFileTree skillName={name} readonly={!isManaged} />
       </section>
+
+      <AclPanel
+        resourceBaseUrl={`/api/skills/${encodeURIComponent(name)}`}
+        invalidateKey={['skills']}
+      />
     </div>
   )
 }

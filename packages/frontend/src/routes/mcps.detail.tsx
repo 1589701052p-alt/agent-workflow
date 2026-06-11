@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Mcp } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { AclPanel } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { describeApiError } from '@/i18n'
 import { McpFields } from '@/components/McpFields'
@@ -118,6 +119,11 @@ function McpDetailPage() {
       <McpInventoryPanel mcpName={name} />
 
       <McpFields value={form} onChange={setForm} nameLocked errors={errors} />
+
+      <AclPanel
+        resourceBaseUrl={`/api/mcps/${encodeURIComponent(name)}`}
+        invalidateKey={['mcps']}
+      />
     </div>
   )
 }

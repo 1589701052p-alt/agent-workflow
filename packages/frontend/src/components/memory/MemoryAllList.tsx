@@ -117,7 +117,7 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
         onArchive: (id) => setPending({ kind: 'archive', id }),
         onUnarchive: (id) => unarchive.mutate(id),
         onDelete: (id) => setPending({ kind: 'delete', id }),
-        onEdit: isAdmin ? (id) => setEditingId(id) : undefined,
+        onEdit: (id) => setEditingId(id),
         t,
       })}
 
@@ -209,48 +209,54 @@ function renderBody(args: BodyArgs) {
 
   return (
     <ul className="memory-all-list" data-testid="memory-all-list">
-      {rows.map((m) => (
-        <MemoryRow
-          key={m.id}
-          memory={m}
-          onEdit={onEdit !== undefined ? () => onEdit(m.id) : undefined}
-          editable={isAdmin}
-          actions={
-            <>
-              {view === 'approved' ? (
+      {rows.map((m) => {
+        // RFC-099 (D12): per-row manage rights — scope-resource owners manage
+        // their own rows; `canManage` comes from the backend annotation and
+        // falls back to the admin role for older payloads.
+        const rowManage = m.canManage ?? isAdmin
+        return (
+          <MemoryRow
+            key={m.id}
+            memory={m}
+            onEdit={onEdit !== undefined && rowManage ? () => onEdit(m.id) : undefined}
+            editable={rowManage}
+            actions={
+              <>
+                {view === 'approved' ? (
+                  <button
+                    type="button"
+                    className="btn btn--xs"
+                    onClick={() => onArchive(m.id)}
+                    disabled={!rowManage || archivePending}
+                    data-testid={`memory-all-${m.id}-archive`}
+                  >
+                    {t('memory.action.archive')}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--xs"
+                    onClick={() => onUnarchive(m.id)}
+                    disabled={!rowManage || unarchivePending}
+                    data-testid={`memory-all-${m.id}-unarchive`}
+                  >
+                    {t('memory.action.unarchive')}
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="btn btn--xs"
-                  onClick={() => onArchive(m.id)}
-                  disabled={!isAdmin || archivePending}
-                  data-testid={`memory-all-${m.id}-archive`}
+                  className="btn btn--xs btn--danger"
+                  onClick={() => onDelete(m.id)}
+                  disabled={!rowManage || delPending}
+                  data-testid={`memory-all-${m.id}-delete`}
                 >
-                  {t('memory.action.archive')}
+                  {t('memory.action.delete')}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn--xs"
-                  onClick={() => onUnarchive(m.id)}
-                  disabled={!isAdmin || unarchivePending}
-                  data-testid={`memory-all-${m.id}-unarchive`}
-                >
-                  {t('memory.action.unarchive')}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn--xs btn--danger"
-                onClick={() => onDelete(m.id)}
-                disabled={!isAdmin || delPending}
-                data-testid={`memory-all-${m.id}-delete`}
-              >
-                {t('memory.action.delete')}
-              </button>
-            </>
-          }
-        />
-      ))}
+              </>
+            }
+          />
+        )
+      })}
     </ul>
   )
 }

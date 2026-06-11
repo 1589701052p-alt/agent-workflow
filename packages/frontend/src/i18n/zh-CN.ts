@@ -2247,6 +2247,44 @@ export interface Resources {
       }
     }
   }
+  // RFC-099 — ownership ACL + attribution UI
+  acl: {
+    title: string
+    owner: string
+    systemOwner: string
+    visibility: string
+    visibilityValue: { public: string; private: string }
+    members: string
+    noMembers: string
+    privateHint: string
+    save: string
+    transferOwner: string
+    transferTitle: string
+    transferHint: string
+    transferConfirm: string
+    ownerBadge: string
+    privateChip: string
+  }
+  members: {
+    title: string
+    users: string
+    noUsers: string
+    hint: string
+    transferHint: string
+  }
+  userPicker: {
+    placeholder: string
+    noResults: string
+    remove: string
+  }
+  attribution: {
+    localHistoric: string
+    role: { owner: string; user: string; admin: string }
+    submittedBy: string
+    lastEditedBy: string
+    decidedBy: string
+    justEdited: string
+  }
 }
 
 export const zhCN: Resources = {
@@ -4630,5 +4668,43 @@ export const zhCN: Resources = {
         },
       },
     },
+  },
+  // RFC-099 — 资源级权限 + 归属展示
+  acl: {
+    title: '权限',
+    owner: '所有者',
+    systemOwner: '系统（无所有者）',
+    visibility: '可见性',
+    visibilityValue: { public: '全员可用', private: '私有' },
+    members: '授权用户',
+    noMembers: '暂无授权用户',
+    privateHint: '私有资源仅所有者与授权用户可见可用；管理员始终可见。',
+    save: '保存权限',
+    transferOwner: '转让',
+    transferTitle: '转让所有者',
+    transferHint: '转让后你将保留为授权用户，但不再能管理该资源的权限。',
+    transferConfirm: '确认转让',
+    ownerBadge: '所有者',
+    privateChip: '私有',
+  },
+  members: {
+    title: '任务成员',
+    users: '任务用户',
+    noUsers: '暂无其他成员',
+    hint: '任务用户与所有者同权（可取消/重试/恢复、回答评审与反问）；仅成员管理与转让保留给所有者和管理员。',
+    transferHint: '转让后你将保留为任务用户。',
+  },
+  userPicker: {
+    placeholder: '搜索用户…',
+    noResults: '没有匹配的用户',
+    remove: '移除 {{name}}',
+  },
+  attribution: {
+    localHistoric: '本地用户（历史）',
+    role: { owner: '所有者', user: '用户', admin: '管理员' },
+    submittedBy: '提交人',
+    lastEditedBy: '最后修改',
+    decidedBy: '决策人',
+    justEdited: '{{name}} 刚刚更新了「{{question}}」',
   },
 }

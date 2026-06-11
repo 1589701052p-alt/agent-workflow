@@ -32,6 +32,8 @@ export const MemorySchema = z
     id: z.string().min(1),
     scopeType: MemoryScopeSchema,
     scopeId: z.string().nullable(),
+    /** RFC-099 (D12) — per-request manage flag (see MemorySummarySchema). */
+    canManage: z.boolean().optional(),
     title: z.string().trim().min(1).max(120),
     bodyMd: z.string().trim().min(1).max(4000),
     tags: tagsArraySchema,
@@ -70,6 +72,10 @@ export const MemorySummarySchema = z.object({
   id: z.string(),
   scopeType: MemoryScopeSchema,
   scopeId: z.string().nullable(),
+  /** RFC-099 (D12) — true when the current actor may approve/edit/archive/
+   *  delete this row (scope-resource owner or admin). Computed per request;
+   *  absent on older payloads ⇒ frontend falls back to admin-only. */
+  canManage: z.boolean().optional(),
   title: z.string(),
   status: MemoryStatusSchema,
   tags: z.array(z.string()),

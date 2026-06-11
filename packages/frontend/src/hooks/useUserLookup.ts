@@ -1,0 +1,32 @@
+// RFC-099 — batch user-id → public-fields resolution for attribution chips
+// (review comment authors, clarify per-question editors, owner badges).
+//
+// One POST /api/users/lookup per distinct id-set, shared via React Query so
+// every chip on a page rides the same request. Ids that fail to resolve
+// (deleted users, '__system__', legacy 'local') simply stay unmapped — the
+// caller renders its own fallback.
+
+import { useQuery } from '@tanstack/react-query'
+import type { UserPublic } from '@agent-workflow/shared'
+import { api } from '@/api/client'
+
+/** ids that are sentinels, never real users — skipped client-side. */
+const SENTINELS = new Set(['local', 'system', '__system__', ''])
+
+export function useUserLookup(ids: ReadonlyArray<string | null | undefined>) {
+  const wanted = [
+    ...new Set(ids.filter((x): x is string => typeof x === 'string' && !SENTINELS.has(x))),
+  ].sort()
+  const query = useQuery<UserPublic[]>({
+    queryKey: ['users', 'lookup', wanted],
+    queryFn: () => api.post('/api/users/lookup', { ids: wanted }),
+    enabled: wanted.length > 0,
+    staleTime: 5 * 60_000,
+  })
+  const byId = new Map((query.data ?? []).map((u) => [u.id, u]))
+  return {
+    /** Resolve one id to its public row, or undefined while loading / unknown. */
+    get: (id: string | null | undefined): UserPublic | undefined => (id ? byId.get(id) : undefined),
+    isLoading: query.isLoading,
+  }
+}
