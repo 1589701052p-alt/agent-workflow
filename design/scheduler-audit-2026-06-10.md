@@ -401,6 +401,8 @@ _报告完。所有行号以调研时 HEAD（f9db99f 附近）为准；落地各
 
 10. **（2026-06-10 RFC-092 对抗检视时新发现）S-2 家族扩展：三处 out-of-band 回滚点同样单轨读 `preSnapshot`，多仓恒 no-op**——clarify 答复重跑前回滚（clarify.ts:425-439）、review iterate/reject 回滚（review.ts:1704-1715）、cross-clarify 回滚（crossClarify.ts:782）。多仓任务在这些路径上的 rerun 起点是上一次运行残留的脏工作区。RFC-092 落地共享 `rollbackNodeRunWorktrees` 后修复为机械接线，归 WP-5 一并走（RFC-092 proposal 非目标有记录）。另：同一检视确认 wrapper 内 clarify 的 mid-run 答复在 RFC-092 后仍会停泊 awaiting*human 需手动 resume（wrapper awaiting*\* 行不走 pending-bypass），该限制归 WP-6c 与 S-3 一并扩展。
 
+11. **（2026-06-11 RFC-095 测试落地时新发现）retryNode 直接以 wrapper 自身的 canceled 行为目标时不走续跑路径**：retryNode 给 wrapper 节点铸 failed 占位行成为 latest，`findResumableWrapperRun` 视 failed 为 terminal → 仍铸新 wrapper 行从 iteration 0 重启（git wrapper 还会重取 baseline）。RFC-095 的 canceled 续跑语义只在 retry 目标为 inner 行（或任务级复活）时生效；前端 `canRetryNodeRun` 若把 wrapper 的 canceled 行列为可重试，该 UI 入口拿不到续跑语义。锁定：`rfc095-wrapper-canceled-revival.test.ts` 用 inner 行做目标绕开此入口。修法（failed 占位行对 wrapper 的复活语义、或 retryNode 对 wrapper 行特判）归 WP-6d wrapper 样板收敛一并决策。
+
 ---
 
 ## ⑦ 调研过程备注（可信度声明）

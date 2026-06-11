@@ -80,7 +80,11 @@ import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondit
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import { areTransitiveUpstreamsCompleted, isNodeRunFresh } from '@/services/freshness'
-import { isDispatchable } from '@/services/dispatchFrontier'
+import {
+  decideScopeOutcome,
+  isDispatchable,
+  isReviewSupersededRow,
+} from '@/services/dispatchFrontier'
 import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
 import { parsePortValidationFailuresJson } from '@/services/envelope'
 import { runCommitPush } from '@/services/commitPushRunner'
@@ -650,41 +654,16 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
     }
 
     if (inFlight.size === 0) {
-      // Quiescent — nothing running and nothing newly ready. Decide the scope
-      // outcome by the SAME priority the batch model used (canceled is handled
-      // above): awaiting_human > awaiting_review > failed > done > stalled. The
-      // distinction between "done" and "stalled" is `allSettled` — every
-      // in-scope node completed vs. a node blocked with no path forward.
-      if (f.awaitingHuman.length > 0) {
-        return { kind: 'awaiting_human', detail: detailFor(f.awaitingHuman[0]!, parkedDetail) }
+      // Quiescent — nothing running and nothing newly ready. The priority
+      // decision (awaiting_human > awaiting_review > firstFailure > exhausted
+      // > done > stalled) lives in the pure decideScopeOutcome (RFC-095,
+      // dispatchFrontier.ts) so it is table-testable; the stalled branch now
+      // names the blocked nodes (audit S-12) instead of a bare message.
+      const outcome = decideScopeOutcome(f, firstFailureDetail)
+      if (outcome.kind === 'awaiting_human' || outcome.kind === 'awaiting_review') {
+        return { kind: outcome.kind, detail: detailFor(outcome.nodeId, parkedDetail) }
       }
-      if (f.awaitingReview.length > 0) {
-        return { kind: 'awaiting_review', detail: detailFor(f.awaitingReview[0]!, parkedDetail) }
-      }
-      if (firstFailureDetail !== undefined) {
-        return { kind: 'failed', detail: firstFailureDetail }
-      }
-      // A terminal 'exhausted' loop in this scope is a failure even on a resume
-      // invocation where it wasn't (re-)dispatched this call (so firstFailureDetail
-      // is unset) — never let it fall through to allSettled→ok.
-      if (f.exhausted.length > 0) {
-        const exId = f.exhausted[0]!
-        return {
-          kind: 'failed',
-          detail: {
-            summary: `wrapper-loop ${exId} exhausted (max iterations reached)`,
-            message: 'wrapper-loop-exhausted',
-            nodeId: exId,
-          },
-        }
-      }
-      if (f.allSettled) {
-        return { kind: 'ok' }
-      }
-      return {
-        kind: 'failed',
-        detail: { summary: 'scheduler stalled', message: 'no ready nodes in scope' },
-      }
+      return outcome
     }
 
     const { nodeId, result } = await Promise.race(inFlight.values())
@@ -1035,6 +1014,14 @@ export interface Frontier {
   failed: string[]
   /** latest 'exhausted' (loop-max) — a terminal FAILURE, surfaced when the scope is quiescent. */
   exhausted: string[]
+  /**
+   * RFC-095 (audit S-12): nodes whose upstreams are complete and which are not
+   * in flight, yet are neither dispatchable nor in any park bucket — the old
+   * silent black holes (orphaned running rows, supersede-marker canceled rows,
+   * consumed pending anchors, skipped, …). Surfaced in the stalled diagnostic;
+   * `reason` is free-text payload, not an API contract.
+   */
+  blocked: Array<{ nodeId: string; status: string; reason: string }>
   /** every in-scope node is completed ⇒ scope may return done. */
   allSettled: boolean
 }
@@ -1140,6 +1127,7 @@ export function deriveFrontier(
   const awaitingReview: string[] = []
   const awaitingHuman: string[] = []
   const failed: string[] = []
+  const blocked: Array<{ nodeId: string; status: string; reason: string }> = []
   const ready: string[] = []
   const pendingAnchors = new Map<string, string>()
   let remainingCount = 0
@@ -1179,10 +1167,100 @@ export function deriveFrontier(
       }
       continue
     }
-    // Terminal bucketing — only nodes that are NOT (re-)dispatchable.
-    if (latest?.status === 'awaiting_review') awaitingReview.push(n.id)
-    else if (latest?.status === 'awaiting_human') awaitingHuman.push(n.id)
-    else if (latest?.status === 'failed') failed.push(n.id)
+    // RFC-095 (audit S-12): EXHAUSTIVE bucketing over the full NodeRunStatus
+    // universe — a new status fails compilation here instead of silently
+    // becoming an undiagnosable "scheduler stalled". The three park buckets
+    // collect UNCONDITIONALLY (pre-RFC-095 semantics: an awaiting/failed row
+    // parks regardless of upstream readiness — quiescent priority awaiting_* >
+    // failed depends on it; derive-frontier.test.ts locks the failed case).
+    // Only the `blocked` diagnostic branches gate on "upstreams complete ∧ not
+    // in flight" — waiting-on-upstream / in-flight nodes are not stuck points.
+    switch (latest?.status) {
+      case 'awaiting_review':
+        awaitingReview.push(n.id)
+        break
+      case 'awaiting_human':
+        awaitingHuman.push(n.id)
+        break
+      case 'failed':
+        failed.push(n.id)
+        break
+      case 'exhausted':
+        break // already collected into the exhausted bucket in pass 1
+      default: {
+        if (!areTransitiveUpstreamsCompleted(n.id, upstreamsOf, completed)) break
+        if (inFlight.has(n.id)) break
+        const st = latest?.status
+        switch (st) {
+          case undefined:
+            // clarify / cross-clarify graph-visit no-ops write no row; with an
+            // open session pass 2 keeps them unsettled — a normal park, not a
+            // dedup pathology. Anything else here was dispatched this
+            // invocation and produced no row.
+            blocked.push({
+              nodeId: n.id,
+              status: 'absent',
+              reason: openClarifyNodeIds.has(n.id) ? 'open-clarify-window' : 'in-invocation-dedup',
+            })
+            break
+          case 'pending':
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: openAskingNodeIds.has(n.id)
+                ? 'open-clarify-window'
+                : 'pending-anchor-consumed',
+            })
+            break
+          case 'running':
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: 'orphaned-running-row (restart daemon to reap, audit S-12)',
+            })
+            break
+          case 'canceled':
+            // RFC-095: plain canceled rows are revival-dispatchable; only
+            // review-supersede marker rows stay parked (see isDispatchable). A
+            // plain canceled row lands here only via the per-invocation dedup.
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: isReviewSupersededRow(latest!)
+                ? 'review-superseded'
+                : 'canceled-in-invocation-dedup',
+            })
+            break
+          case 'skipped':
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: 'skipped-has-no-dispatch-semantics',
+            })
+            break
+          case 'done':
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: 'stale-done-in-invocation-dedup',
+            })
+            break
+          case 'interrupted':
+            blocked.push({
+              nodeId: n.id,
+              status: st,
+              reason: 'interrupted-in-invocation-dedup',
+            })
+            break
+          default: {
+            // awaiting_* / failed / exhausted were collected by the outer
+            // switch — anything reaching here is a NEW NodeRunStatus value.
+            const _exhaustive: never = st
+            void _exhaustive
+          }
+        }
+      }
+    }
   }
   return {
     completed,
@@ -1192,6 +1270,7 @@ export function deriveFrontier(
     awaitingHuman,
     failed,
     exhausted,
+    blocked,
     allSettled: remainingCount === 0,
   }
 }
@@ -2207,12 +2286,13 @@ async function findResumableWrapperRun(
     .limit(1)
   if (rows.length === 0) return null
   const r = rows[0]!
-  if (
-    r.status === 'done' ||
-    r.status === 'failed' ||
-    r.status === 'canceled' ||
-    r.status === 'exhausted'
-  ) {
+  if (r.status === 'done' || r.status === 'failed' || r.status === 'exhausted') {
+    // RFC-095 (audit S-22): 'canceled' is NO LONGER terminal here — a wrapper
+    // row canceled by task-cancel resumes from its persisted progress when the
+    // task is revived via retryNode (loop continues at the parked iteration,
+    // git keeps its pre-inner baseline), exactly like 'interrupted'. Restarting
+    // instead (the old behavior: mint a fresh wrapper row) would rewind the
+    // loop to iteration 0 and re-capture a WRONG git baseline.
     return null
   }
   return r
@@ -2319,11 +2399,13 @@ async function runLoopWrapperNode(
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted', 'canceled'],
         // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
         // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
-        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
-        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // agent nodes which mint a fresh retry row); RFC-095 extends the same
+        // continue-not-restart semantics to 'canceled' (task-cancel revival via
+        // retryNode, audit S-22). Both are terminal statuses, so
+        // setNodeRunStatus's terminal guard would otherwise refuse;
         // allowTerminal bypasses that guard while allowedFrom still restricts the
         // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
         allowTerminal: true,
@@ -2501,11 +2583,13 @@ async function runFanoutWrapperNode(
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted', 'canceled'],
         // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
         // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
-        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
-        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // agent nodes which mint a fresh retry row); RFC-095 extends the same
+        // continue-not-restart semantics to 'canceled' (task-cancel revival via
+        // retryNode, audit S-22). Both are terminal statuses, so
+        // setNodeRunStatus's terminal guard would otherwise refuse;
         // allowTerminal bypasses that guard while allowedFrom still restricts the
         // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
         allowTerminal: true,
@@ -3305,11 +3389,13 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
         db,
         nodeRunId: wrapperRunId,
         to: 'running',
-        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted'],
+        allowedFrom: ['pending', 'awaiting_review', 'awaiting_human', 'interrupted', 'canceled'],
         // Daemon-restart resume legitimately overwrites the reaped 'interrupted'
         // wrapper row (wrappers reuse their row on resume per RFC-040, unlike
-        // agent nodes which mint a fresh retry row). 'interrupted' is a terminal
-        // status, so setNodeRunStatus's terminal guard would otherwise refuse;
+        // agent nodes which mint a fresh retry row); RFC-095 extends the same
+        // continue-not-restart semantics to 'canceled' (task-cancel revival via
+        // retryNode, audit S-22). Both are terminal statuses, so
+        // setNodeRunStatus's terminal guard would otherwise refuse;
         // allowTerminal bypasses that guard while allowedFrom still restricts the
         // legal source set. See scheduler-boundary-wrapper-resume-interrupted.test.ts.
         allowTerminal: true,

@@ -49,6 +49,21 @@ const WRAPPER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'wrapper-fanout',
 ])
 
+/**
+ * RFC-095 — the stable prefix review.ts stamps onto `error_message` when a
+ * supersede flips an old author row to `canceled` (review.ts documents the
+ * prefix as a grep contract). Single source of truth: review.ts imports this
+ * constant to BUILD the marker; isDispatchable uses it to keep marker rows
+ * parked (the pending rerun row minted right after carries the revival —
+ * dispatching the marker row inside the supersede→mint await window would run
+ * the agent without its review context).
+ */
+export const REVIEW_SUPERSEDE_MARKER_PREFIX = 'superseded-by-review-'
+
+export function isReviewSupersededRow(row: Pick<NodeRunRow, 'errorMessage'>): boolean {
+  return row.errorMessage !== null && row.errorMessage.startsWith(REVIEW_SUPERSEDE_MARKER_PREFIX)
+}
+
 /** Safe read of a wrapper node's inner `nodeIds` (absent / non-array → []). */
 function innerNodeIdsOf(node: WorkflowNode | undefined): string[] {
   const raw = (node as { nodeIds?: unknown } | undefined)?.nodeIds
@@ -121,10 +136,13 @@ export function wrapperHasFreshInnerWork(
  *   failed | interrupted → true   (resume / retry re-mint signal — N1; the
  *                                  scheduler mints retry_index=max+1, bounded by
  *                                  runOneNode's attempt ≤ retryIndex+maxRetries)
+ *   canceled             → !superseded (RFC-095 / audit S-22 — revival signal,
+ *                                  same class as interrupted; review-supersede
+ *                                  marker rows stay parked)
  *   wrapper awaiting_*   → wrapperHasFreshInnerWork (N2 resume anchor + HIGH-1)
  *   leaf awaiting_*      → !fresh (stale parked re-runs; fresh parked stays — C2)
- *   else                 → false  (done∧fresh / exhausted [loop-max true
- *                                  terminal, HIGH-2] / canceled / running)
+ *   exhausted | running | skipped → false (loop-max true terminal / in flight /
+ *                                  no mint path — see the exhaustive switch)
  *
  * In-pass busy-loop protection does NOT come from this gate — it comes from the
  * scheduler's per-invocation `dispatchedThisInvocation` set (N3) + runOneNode
@@ -138,25 +156,141 @@ export function isDispatchable(
   definition: WorkflowDefinition,
 ): boolean {
   if (row === undefined) return true
-  if (row.status === 'pending') return true
-  if (row.status === 'done') return !isNodeRunFresh(row, freshestDonePerUpstream)
-  if (row.status === 'failed' || row.status === 'interrupted') return true
-  if (row.status === 'awaiting_human' || row.status === 'awaiting_review') {
-    if (WRAPPER_KINDS.has(kind)) return wrapperHasFreshInnerWork(row, rows, definition)
-    // Leaf parked (review / clarify). C2 keeps a FRESH parked leaf parked — it
-    // is genuinely waiting on a human, and re-dispatching it every tick would
-    // busy-loop. But a parked leaf whose consumed upstream has since advanced is
-    // STALE: the artifact under review changed out from under the pending human
-    // decision. It must re-dispatch (re-park a fresh review against the new
-    // upstream), exactly like a stale `done` row — symmetric with the line
-    // above. Approving a stale parked review would otherwise leave it consuming
-    // an obsolete upstream run, surfacing as a spurious re-review on the next
-    // scope entry (the RFC-074 demote-the-stale-parked-review path the old batch
-    // model performed via recomputeFreshnessAndDemote; combination-scenarios
-    // S8/S11/S12 lock this). `dispatchedThisInvocation` (N3) still bounds it to
-    // one re-dispatch per invocation, so no busy-loop.
-    return !isNodeRunFresh(row, freshestDonePerUpstream)
+  // RFC-095: exhaustive switch over the FULL NodeRunStatus universe — adding a
+  // new status fails compilation here instead of silently falling into the
+  // "not dispatchable" black hole (audit S-12: five historical bucket misses).
+  switch (row.status) {
+    case 'pending':
+      return true
+    case 'done':
+      return !isNodeRunFresh(row, freshestDonePerUpstream)
+    case 'failed':
+    case 'interrupted':
+      return true
+    case 'canceled':
+      // RFC-095 (audit S-22): a canceled row is a REVIVAL signal, same class
+      // as interrupted — execution was externally cut short (task cancel keeps
+      // the worktree; retryNode on a canceled task is a designed UI flow).
+      // EXCEPT a review-supersede marker: submitReviewDecision flips the old
+      // author row to canceled BEFORE minting the pending rerun (review.ts) —
+      // dispatching inside that await window would run the agent without its
+      // review context. The marker row stays parked; the rerun row (fresh
+      // ULID) carries the revival.
+      return !isReviewSupersededRow(row)
+    case 'awaiting_human':
+    case 'awaiting_review': {
+      if (WRAPPER_KINDS.has(kind)) return wrapperHasFreshInnerWork(row, rows, definition)
+      // Leaf parked (review / clarify). C2 keeps a FRESH parked leaf parked — it
+      // is genuinely waiting on a human, and re-dispatching it every tick would
+      // busy-loop. But a parked leaf whose consumed upstream has since advanced is
+      // STALE: the artifact under review changed out from under the pending human
+      // decision. It must re-dispatch (re-park a fresh review against the new
+      // upstream), exactly like a stale `done` row — symmetric with the line
+      // above. Approving a stale parked review would otherwise leave it consuming
+      // an obsolete upstream run, surfacing as a spurious re-review on the next
+      // scope entry (the RFC-074 demote-the-stale-parked-review path the old batch
+      // model performed via recomputeFreshnessAndDemote; combination-scenarios
+      // S8/S11/S12 lock this). `dispatchedThisInvocation` (N3) still bounds it to
+      // one re-dispatch per invocation, so no busy-loop.
+      return !isNodeRunFresh(row, freshestDonePerUpstream)
+    }
+    case 'exhausted':
+      // loop-max true terminal (RFC-076 HIGH-2) — never re-dispatched.
+      return false
+    case 'running':
+      // In flight (or an orphaned row — surfaced via Frontier.blocked, not here).
+      return false
+    case 'skipped':
+      // Zero mint points in src today; whoever enables it must decide its
+      // dispatch semantics HERE first (this case makes that explicit).
+      return false
+    default: {
+      const _exhaustive: never = row.status
+      return _exhaustive
+    }
   }
-  // exhausted (loop-max true terminal) / canceled / running → not dispatchable
-  return false
+}
+
+// -----------------------------------------------------------------------------
+// RFC-095 — decideScopeOutcome (pure; audit WP-2 / S-1 structural finish)
+// -----------------------------------------------------------------------------
+
+export interface BlockedNode {
+  nodeId: string
+  status: string
+  reason: string
+}
+
+export interface ScopeOutcomeInput {
+  awaitingHuman: readonly string[]
+  awaitingReview: readonly string[]
+  exhausted: readonly string[]
+  failed: readonly string[]
+  blocked: readonly BlockedNode[]
+  allSettled: boolean
+}
+
+export type ScopeOutcome =
+  | { kind: 'ok' }
+  | { kind: 'awaiting_human' | 'awaiting_review'; nodeId: string }
+  | { kind: 'failed'; detail: { summary: string; message: string; nodeId?: string } }
+
+/**
+ * The quiescent-scope decision runScope makes once nothing is in flight and
+ * nothing is newly ready, extracted from the inline if-chain so the priority
+ * order is table-testable (rfc095-scope-outcome.test.ts). Priority is
+ * byte-equivalent to the pre-RFC-095 block:
+ *
+ *   awaitingHuman > awaitingReview > firstFailureDetail > exhausted
+ *   > allSettled→ok > stalled
+ *
+ * The only increment: the stalled summary now carries the Frontier.blocked
+ * diagnostics (audit S-12 — "scheduler stalled" used to name no node at all);
+ * the message stays 'no ready nodes in scope' for machine-facing stability.
+ */
+export function decideScopeOutcome(
+  f: ScopeOutcomeInput,
+  firstFailureDetail?: { summary: string; message: string; nodeId?: string },
+): ScopeOutcome {
+  if (f.awaitingHuman.length > 0) {
+    return { kind: 'awaiting_human', nodeId: f.awaitingHuman[0]! }
+  }
+  if (f.awaitingReview.length > 0) {
+    return { kind: 'awaiting_review', nodeId: f.awaitingReview[0]! }
+  }
+  if (firstFailureDetail !== undefined) {
+    return { kind: 'failed', detail: firstFailureDetail }
+  }
+  // A terminal 'exhausted' loop in this scope is a failure even on a resume
+  // invocation where it wasn't (re-)dispatched this call (so firstFailureDetail
+  // is unset) — never let it fall through to allSettled→ok.
+  if (f.exhausted.length > 0) {
+    const exId = f.exhausted[0]!
+    return {
+      kind: 'failed',
+      detail: {
+        summary: `wrapper-loop ${exId} exhausted (max iterations reached)`,
+        message: 'wrapper-loop-exhausted',
+        nodeId: exId,
+      },
+    }
+  }
+  if (f.allSettled) {
+    return { kind: 'ok' }
+  }
+  // Stalled — surface WHICH nodes are stuck and why (the diagnostic payload is
+  // free text for humans/logs, not an API contract; tests prefix-match only).
+  const blockedPart =
+    f.blocked.length > 0
+      ? ` — blocked nodes: ${f.blocked.map((b) => `${b.nodeId}(${b.status}: ${b.reason})`).join(', ')}`
+      : ''
+  const failedPart = f.failed.length > 0 ? `; failed parked: ${f.failed.join(', ')}` : ''
+  return {
+    kind: 'failed',
+    detail: {
+      summary: `scheduler stalled${blockedPart}${failedPart}`,
+      message: 'no ready nodes in scope',
+      ...(f.blocked.length > 0 ? { nodeId: f.blocked[0]!.nodeId } : {}),
+    },
+  }
 }

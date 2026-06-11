@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm'
 import { dbTxSync } from '@/db/txSync'
+import { REVIEW_SUPERSEDE_MARKER_PREFIX } from '@/services/dispatchFrontier'
 import { ulid } from 'ulid'
 import type {
   AgentOutputKind,
@@ -1725,8 +1726,11 @@ export async function submitReviewDecision(
     // a stable prefix on error_message so tests / future GC can grep it.
     // The optional `-rollback` suffix marks "worktree was actually reset to
     // preSnapshot". Substring matches like `.toContain('superseded-by-review-iterated')`
-    // still work either way.
-    const supersedeMarker = `superseded-by-review-${args.decision}${rolledBack ? '-rollback' : ''}`
+    // still work either way. RFC-095: the prefix is now a LOAD-BEARING dispatch
+    // contract — isDispatchable keeps canceled rows carrying it parked while
+    // plain canceled rows are revival-dispatchable; build it from the shared
+    // constant so the two sides cannot drift.
+    const supersedeMarker = `${REVIEW_SUPERSEDE_MARKER_PREFIX}${args.decision}${rolledBack ? '-rollback' : ''}`
     // RFC-053: supersede must be able to cancel BOTH live rows (pending /
     // running / awaiting_*) AND a `done` row (typical case — agent already
     // finished before the review decision triggered an iterate). We use

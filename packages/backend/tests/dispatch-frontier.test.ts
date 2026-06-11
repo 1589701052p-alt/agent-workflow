@@ -3,12 +3,20 @@
 // These lock the much-reviewed (3 adversarial rounds) corrections to the
 // original full-B sketch. Pure-function locks in the style of freshness.test.ts.
 // If any goes red, re-read design/RFC-076-…/design.md §3 + the round-2/3 reports.
+//
+// RFC-095 (audit S-22) flipped the `canceled` half of the old combined
+// "canceled / running → NOT dispatchable" case: a plain canceled row is now a
+// REVIVAL signal (same N1 class as failed/interrupted — task-cancel keeps the
+// worktree; retryNode on a canceled task is a designed UI flow). Only a
+// review-supersede marker row (errorMessage prefixed REVIEW_SUPERSEDE_MARKER_PREFIX)
+// stays parked — see design/RFC-095-scope-outcome-exhaustive/design.md §1.
 
 import { describe, expect, test } from 'bun:test'
 import type { NodeKind, WorkflowDefinition } from '@agent-workflow/shared'
 import type { nodeRuns } from '../src/db/schema'
 import {
   isDispatchable,
+  REVIEW_SUPERSEDE_MARKER_PREFIX,
   wrapperHasFreshInnerWork,
   wrapperInnerDescendants,
 } from '../src/services/dispatchFrontier'
@@ -22,6 +30,9 @@ function run(over: Partial<Row>): Row {
     nodeId: 'n',
     iteration: 0,
     status: 'done',
+    // RFC-095: the canceled branch reads errorMessage (supersede-marker guard);
+    // default to the DB's null so helper-built rows behave like real rows.
+    errorMessage: null,
     consumedUpstreamRunsJson: null,
     wrapperProgressJson: null,
     ...over,
@@ -81,10 +92,52 @@ describe('RFC-076 PR-A — isDispatchable (trim-B status gate)', () => {
       isDispatchable(run({ status: 'exhausted' }), 'wrapper-loop', NO_FRESH, [], emptyDef),
     ).toBe(false)
   })
-  test('canceled / running → NOT dispatchable', () => {
+  // RFC-095 (audit S-22) — the canceled flip: a plain canceled row joins the
+  // N1 revival class (failed/interrupted). Execution was externally cut short;
+  // retryNode→runTask on a canceled task must be able to re-mint the sibling
+  // canceled rows instead of stranding them in the S-12 no-bucket black hole.
+  test('canceled WITHOUT supersede marker → dispatchable (revival signal, RFC-095 S-22)', () => {
     expect(
-      isDispatchable(run({ status: 'canceled' }), 'agent-single', NO_FRESH, [], emptyDef),
+      isDispatchable(
+        run({ status: 'canceled', errorMessage: null }),
+        'agent-single',
+        NO_FRESH,
+        [],
+        emptyDef,
+      ),
+    ).toBe(true)
+    // 'aborted by signal' is what the runner stamps on a task-cancel kill —
+    // an ordinary cancellation, NOT a supersede marker.
+    expect(
+      isDispatchable(
+        run({ status: 'canceled', errorMessage: 'aborted by signal' }),
+        'agent-single',
+        NO_FRESH,
+        [],
+        emptyDef,
+      ),
+    ).toBe(true)
+  })
+  // EXCEPT inside the review-supersede await window: submitReviewDecision flips
+  // the old author row to canceled (errorMessage = marker) BEFORE minting the
+  // pending rerun — dispatching the marker row there would run the agent
+  // without its review context. The marker row stays parked forever; the rerun
+  // row (fresh ULID) carries the revival.
+  test('canceled WITH review-supersede marker → NOT dispatchable (supersede window stays parked)', () => {
+    expect(
+      isDispatchable(
+        run({
+          status: 'canceled',
+          errorMessage: `${REVIEW_SUPERSEDE_MARKER_PREFIX}iterate: superseded by review decision`,
+        }),
+        'agent-single',
+        NO_FRESH,
+        [],
+        emptyDef,
+      ),
     ).toBe(false)
+  })
+  test('running → NOT dispatchable (in flight)', () => {
     expect(isDispatchable(run({ status: 'running' }), 'agent-single', NO_FRESH, [], emptyDef)).toBe(
       false,
     )
