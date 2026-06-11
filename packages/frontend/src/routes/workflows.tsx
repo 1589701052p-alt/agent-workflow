@@ -6,6 +6,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workflow } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
@@ -31,6 +32,9 @@ function WorkflowsPage() {
     mutationFn: (id: string) => api.delete(`/api/workflows/${encodeURIComponent(id)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
   })
+
+  // RFC-099 — resolve owner ids to display names for the list badge.
+  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
 
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
@@ -117,6 +121,11 @@ function WorkflowsPage() {
                   </Link>
                   {w.visibility === 'private' && (
                     <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                  )}
+                  {w.ownerUserId != null && owners.get(w.ownerUserId) !== undefined && (
+                    <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
+                      {owners.get(w.ownerUserId)?.displayName}
+                    </span>
                   )}
                 </td>
                 <td className="data-table__muted">v{w.version}</td>

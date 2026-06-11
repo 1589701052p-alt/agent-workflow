@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Mcp, McpProbe } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -39,6 +40,9 @@ function McpsPage() {
     queryKey: ['mcps'],
     queryFn: ({ signal }) => api.get('/api/mcps', undefined, signal),
   })
+
+  // RFC-099 — resolve owner ids to display names for the list badge.
+  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
   const probesQ = useMcpProbes()
 
   // Local-only expand state — keyed by mcp.name, session-scoped (no IDB).
@@ -106,6 +110,9 @@ function McpsPage() {
                   onToggleExpanded={() => toggleExpanded(m.name)}
                   onDelete={() => del.mutateAsync(m.name)}
                   deleteDisabled={del.isPending}
+                  ownerName={
+                    m.ownerUserId != null ? owners.get(m.ownerUserId)?.displayName : undefined
+                  }
                 />
               )
             })}
@@ -123,6 +130,8 @@ interface McpRowProps {
   onToggleExpanded: () => void
   onDelete: () => Promise<unknown>
   deleteDisabled: boolean
+  /** RFC-099 — resolved owner display name (page-level batch lookup). */
+  ownerName?: string | undefined
 }
 
 function McpRow(props: McpRowProps) {
@@ -154,6 +163,11 @@ function McpRow(props: McpRowProps) {
           </Link>
           {props.mcp.visibility === 'private' && (
             <span className="chip chip--tight">{t('acl.privateChip')}</span>
+          )}
+          {props.ownerName !== undefined && (
+            <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
+              {props.ownerName}
+            </span>
           )}
         </td>
         <td className="data-table__nowrap">

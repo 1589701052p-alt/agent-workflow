@@ -10618,3 +10618,8 @@ mark.comment-anchor[data-active='true'] {
   color: var(--info, #4080ff);
   font-size: 13px;
 }
+
+.data-table__owner {
+  margin-left: 8px;
+  font-size: 12px;
+}

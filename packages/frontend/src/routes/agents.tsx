@@ -5,6 +5,7 @@ import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { Agent } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -29,6 +30,9 @@ function AgentsPage() {
     mutationFn: (name: string) => api.delete(`/api/agents/${encodeURIComponent(name)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
   })
+
+  // RFC-099 — resolve owner ids to display names for the list badge.
+  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
 
   return (
     <div className="page">
@@ -70,6 +74,11 @@ function AgentsPage() {
                   </Link>
                   {a.visibility === 'private' && (
                     <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                  )}
+                  {a.ownerUserId != null && owners.get(a.ownerUserId) !== undefined && (
+                    <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
+                      {owners.get(a.ownerUserId)?.displayName}
+                    </span>
                   )}
                 </td>
                 <td

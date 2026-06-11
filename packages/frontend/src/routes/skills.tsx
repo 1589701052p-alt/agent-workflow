@@ -5,6 +5,7 @@ import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { Skill, SkillSourceWithStats } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -25,6 +26,9 @@ function SkillsPage() {
     queryKey: ['skills'],
     queryFn: ({ signal }) => api.get('/api/skills', undefined, signal),
   })
+
+  // RFC-099 — resolve owner ids to display names for the list badge.
+  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
   const sourceListQuery = useQuery<{ sources: SkillSourceWithStats[] }>({
     queryKey: ['skill-sources'],
     queryFn: ({ signal }) => api.get('/api/skill-sources', undefined, signal),
@@ -99,6 +103,11 @@ function SkillsPage() {
                     </Link>
                     {s.visibility === 'private' && (
                       <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                    )}
+                    {s.ownerUserId != null && owners.get(s.ownerUserId) !== undefined && (
+                      <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
+                        {owners.get(s.ownerUserId)?.displayName}
+                      </span>
                     )}
                     {s.sourceId !== undefined && (
                       <a

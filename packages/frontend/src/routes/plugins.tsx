@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Plugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -34,6 +35,9 @@ function PluginsPage() {
     queryKey: ['plugins'],
     queryFn: ({ signal }) => api.get('/api/plugins', undefined, signal),
   })
+
+  // RFC-099 — resolve owner ids to display names for the list badge.
+  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
 
   const del = useMutation({
     mutationFn: (id: string) => api.delete(`/api/plugins/${encodeURIComponent(id)}`),
@@ -116,6 +120,11 @@ function PluginsPage() {
                     </Link>
                     {p.visibility === 'private' && (
                       <span className="chip chip--tight">{t('acl.privateChip')}</span>
+                    )}
+                    {p.ownerUserId != null && owners.get(p.ownerUserId) !== undefined && (
+                      <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
+                        {owners.get(p.ownerUserId)?.displayName}
+                      </span>
                     )}
                   </td>
                   <td className="data-table__truncate" title={p.spec}>
