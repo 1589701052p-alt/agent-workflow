@@ -90,10 +90,16 @@ const USER_BASELINE: ReadonlyArray<Permission> = [
   'tasks:cancel:own',
   'account:self',
   // RFC-041: anyone logged in can read approved memories and write task
-  // feedback on tasks they can see. approve/archive/delete stay admin-only
-  // until RFC-099 B3 moves them to per-row canManageMemory gating.
+  // feedback on tasks they can see.
   'memory:read',
   'memory:write_feedback',
+  // RFC-099 (D12): memory management moved from admin-only to "scope-resource
+  // owner or admin", enforced per-row by services/memory.ts canManageMemory
+  // (repo/global-scoped rows still reject non-admins at the row check).
+  'memory:approve',
+  'memory:archive',
+  'memory:delete',
+  'memory:edit',
 ]
 
 export const ROLE_PERMISSIONS: Record<Role, ReadonlyArray<Permission>> = {

@@ -187,6 +187,8 @@ export const DocVersionSchema = z.object({
   createdAt: z.number().int(),
   decidedAt: z.number().int().nullable(),
   decidedBy: z.string().nullable(),
+  /** RFC-099 (D7) — role snapshot of the decider; null on historic/system rows. */
+  decidedByRole: z.enum(['owner', 'user', 'admin']).nullable().optional(),
 })
 export type DocVersion = z.infer<typeof DocVersionSchema>
 
@@ -224,6 +226,9 @@ export const ReviewCommentSchema = z.object({
   anchor: ReviewCommentAnchorSchema,
   commentText: z.string().min(1),
   author: z.string(),
+  /** RFC-099 (D7) — task-relationship role snapshot ('owner'|'user'|'admin');
+   *  null on historic rows. UI-only; renderCommentsForPrompt never reads it. */
+  authorRole: z.enum(['owner', 'user', 'admin']).nullable().optional(),
   createdAt: z.number().int(),
 })
 export type ReviewComment = z.infer<typeof ReviewCommentSchema>

@@ -69,13 +69,26 @@ export type ClarifyAnswerAttribution = z.infer<typeof ClarifyAnswerAttributionSc
 export const ClarifyAnswerAttributionsSchema = z.record(z.string(), ClarifyAnswerAttributionSchema)
 export type ClarifyAnswerAttributions = z.infer<typeof ClarifyAnswerAttributionsSchema>
 
-/** PUT /api/clarify/:nodeRunId/draft body — one question per call (per-question last-write-wins). */
+/**
+ * PUT /api/clarify/:nodeRunId/draft body — one question per call
+ * (per-question last-write-wins, D14). The value mirrors the ClarifyAnswer
+ * user-state shape (option indices + custom text); labels are refilled
+ * server-side at submit like the answers path.
+ */
 export const ClarifyDraftSaveBodySchema = z.object({
   roundId: z.string().min(1),
   questionId: z.string().min(1),
-  value: z.string().max(65536),
+  selectedOptionIndices: z.array(z.number().int().nonnegative()).max(64).default([]),
+  customText: z.string().max(65536).default(''),
 })
 export type ClarifyDraftSaveBody = z.infer<typeof ClarifyDraftSaveBodySchema>
+
+/** Per-question draft value stored in clarify_rounds.draft_answers_json. */
+export const ClarifyDraftValueSchema = z.object({
+  selectedOptionIndices: z.array(z.number().int().nonnegative()).default([]),
+  customText: z.string().default(''),
+})
+export type ClarifyDraftValue = z.infer<typeof ClarifyDraftValueSchema>
 
 /** 422 payload listing references the editor may not use (D15 save-time check). */
 export const AclMissingRefSchema = z.object({

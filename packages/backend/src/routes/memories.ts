@@ -27,12 +27,41 @@ import {
   deleteMemory,
   getMemoryById,
   listMemories,
+  canManageMemory,
+  canViewMemory,
+  filterMemoriesByScopeVisibility,
   patchMemory,
   promoteCandidate,
   toSummary,
   unarchiveMemory,
+  type MemoryScopeRef,
 } from '@/services/memory'
-import { NotFoundError, ValidationError } from '@/util/errors'
+import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+
+/**
+ * RFC-099 (D12) — load + gate one memory row for a management operation:
+ * invisible → 404 (existence isolation); visible but not the scope-resource
+ * owner / admin → 403. Returns the loaded row bundle for the handler.
+ */
+async function loadManagedMemory(deps: AppDeps, c: Parameters<typeof actorOf>[0], id: string) {
+  const found = await getMemoryById(deps.db, id)
+  if (found === null) throw new NotFoundError('memory-not-found', `memory ${id} not found`)
+  const actor = actorOf(c)
+  const scope: MemoryScopeRef = {
+    scopeType: found.memory.scopeType,
+    scopeId: found.memory.scopeId,
+  }
+  if (!(await canViewMemory(deps.db, actor, scope))) {
+    throw new NotFoundError('memory-not-found', `memory ${id} not found`)
+  }
+  if (!(await canManageMemory(deps.db, actor, scope))) {
+    throw new ForbiddenError(
+      'forbidden',
+      'only the scoped resource owner or an admin can manage this memory',
+    )
+  }
+  return found
+}
 
 export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/memories', requirePermission('memory:read'), async (c) => {
@@ -71,17 +100,26 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
     if (includeRaw !== undefined && includeRaw !== 'body') {
       throw new ValidationError('invalid-filter', `invalid include: ${includeRaw}`)
     }
-    const items =
-      includeRaw === 'body'
-        ? await listMemories(deps.db, parsed.data, { includeBody: true })
-        : await listMemories(deps.db, parsed.data)
-    return c.json({ items })
+    // RFC-099 (D12): agent/workflow-scoped rows only for viewers of that resource.
+    const actor = actorOf(c)
+    if (includeRaw === 'body') {
+      const items = await listMemories(deps.db, parsed.data, { includeBody: true })
+      return c.json({ items: await filterMemoriesByScopeVisibility(deps.db, actor, items) })
+    }
+    const items = await listMemories(deps.db, parsed.data)
+    return c.json({ items: await filterMemoriesByScopeVisibility(deps.db, actor, items) })
   })
 
   app.get('/api/memories/:id', requirePermission('memory:read'), async (c) => {
     const id = c.req.param('id')
     const found = await getMemoryById(deps.db, id)
     if (found === null) throw new NotFoundError('memory-not-found', `memory ${id} not found`)
+    // RFC-099 (D12): invisible scope → identical 404.
+    const visible = await canViewMemory(deps.db, actorOf(c), {
+      scopeType: found.memory.scopeType,
+      scopeId: found.memory.scopeId,
+    })
+    if (!visible) throw new NotFoundError('memory-not-found', `memory ${id} not found`)
     return c.json({
       memory: found.memory,
       ancestors: found.ancestors.map((m) => toSummary(m)),
@@ -93,6 +131,19 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
     const parsed = MemoryCreateRequestSchema.safeParse(body)
     if (!parsed.success) {
       throw new ValidationError('invalid-body', 'invalid create request', parsed.error.format())
+    }
+    // RFC-099 (D12): creating a memory targets a scope — the creator must
+    // hold management rights on that scope (resource owner or admin;
+    // repo/global stay admin-only).
+    const canCreate = await canManageMemory(deps.db, actorOf(c), {
+      scopeType: parsed.data.scopeType,
+      scopeId: parsed.data.scopeId ?? null,
+    })
+    if (!canCreate) {
+      throw new ForbiddenError(
+        'forbidden',
+        'only the scoped resource owner or an admin can create memories for this scope',
+      )
     }
     const memory = await createManualCandidate(deps.db, parsed.data)
     return c.json({ memory }, 201)
@@ -108,6 +159,7 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
     if (!parsed.success) {
       throw new ValidationError('invalid-body', 'invalid patch request', parsed.error.format())
     }
+    await loadManagedMemory(deps, c, id)
     const actor = actorOf(c)
     const result = await patchMemory(deps.db, id, parsed.data, actor.user.id)
     return c.json({ memory: result.memory, changedFields: result.changedFields })
@@ -120,6 +172,7 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
     if (!parsed.success) {
       throw new ValidationError('invalid-body', 'invalid promote action', parsed.error.format())
     }
+    await loadManagedMemory(deps, c, id)
     const actor = actorOf(c)
     const memory = await promoteCandidate(deps.db, id, parsed.data, actor.user.id)
     return c.json({ memory })
@@ -127,18 +180,21 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
 
   app.post('/api/memories/:id/archive', requirePermission('memory:archive'), async (c) => {
     const id = c.req.param('id')
+    await loadManagedMemory(deps, c, id)
     const memory = await archiveMemory(deps.db, id)
     return c.json({ memory })
   })
 
   app.post('/api/memories/:id/unarchive', requirePermission('memory:archive'), async (c) => {
     const id = c.req.param('id')
+    await loadManagedMemory(deps, c, id)
     const memory = await unarchiveMemory(deps.db, id)
     return c.json({ memory })
   })
 
   app.delete('/api/memories/:id', requirePermission('memory:delete'), async (c) => {
     const id = c.req.param('id')
+    await loadManagedMemory(deps, c, id)
     const confirm = c.req.query('confirm')
     if (confirm !== 'true' && confirm !== '1') {
       throw new ValidationError(

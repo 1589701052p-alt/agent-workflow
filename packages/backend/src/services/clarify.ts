@@ -67,6 +67,7 @@ import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { createLogger } from '@/util/log'
+import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 const log = createLogger('clarify')
@@ -295,6 +296,11 @@ export interface SubmitClarifyAnswersArgs {
   ifMatchIteration?: number
   /** Defaults to 'local'. Reserved for future per-user attribution. */
   answeredBy?: string
+  /** RFC-099 (D7/D8) — task-relationship role of the submitter. When set,
+   *  the clarify_rounds dual-write freezes per-question attribution
+   *  (draft editors kept where the value matches) and records the
+   *  submitter's role. UI/audit only — never enters prompts. */
+  submittedByRole?: 'owner' | 'user' | 'admin'
   /** RFC-023 directive: 'continue' (default) keeps the legacy ask-channel
    *  behaviour for the asking agent's next rerun; 'stop' instructs the runner
    *  to (1) inject a "user wants no more clarifications" sentence into the
@@ -490,6 +496,15 @@ export async function submitClarifyAnswers(
   // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds so
   // the unified service (services/clarifyRounds.ts) sees the latest Q&A
   // history. Idempotent: row exists from createClarifySession's dual-write.
+  // RFC-099: when the route supplied the submitter's role, the same write
+  // freezes per-question attribution + clears the draft (D8).
+  const attributionSet =
+    args.submittedByRole !== undefined
+      ? await buildFrozenAttributionSet(db, sessionRow.id, sealedAnswers, {
+          userId: answeredBy,
+          role: args.submittedByRole,
+        })
+      : {}
   await db
     .update(clarifyRounds)
     .set({
@@ -498,6 +513,7 @@ export async function submitClarifyAnswers(
       answeredAt,
       answeredBy,
       directive,
+      ...attributionSet,
     })
     .where(eq(clarifyRounds.id, sessionRow.id))
 

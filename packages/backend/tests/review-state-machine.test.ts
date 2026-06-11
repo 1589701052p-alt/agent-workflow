@@ -300,7 +300,8 @@ describe('RFC-005 review state machine — dispatch + decisions', () => {
     expect(metaRaw).toBeDefined()
     const meta = JSON.parse(metaRaw!) as Record<string, unknown>
     expect(meta.decision).toBe('approved')
-    expect(meta.decidedBy).toBe('tester')
+    // RFC-099 prompt isolation — no decider identity in the port payload.
+    expect(meta.decidedBy).toBeUndefined()
     expect(typeof meta.decidedAt).toBe('number')
     expect(meta.reviewIteration).toBe(0)
     expect(meta.versionIndex).toBe(1)

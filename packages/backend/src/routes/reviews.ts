@@ -18,13 +18,14 @@ import {
   SubmitReviewDecisionSchema,
   UpdateReviewCommentBodySchema,
 } from '@agent-workflow/shared'
-import { eq } from 'drizzle-orm'
+import type { TaskActorRole } from '@agent-workflow/shared'
+import { eq, inArray } from 'drizzle-orm'
 import type { Hono } from 'hono'
-import type { Actor } from '@/auth/actor'
+import { actorOf, type Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
-import { nodeRuns } from '@/db/schema'
+import { nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
-import { isAssignedReviewer } from '@/services/taskCollab'
+import { canViewTask, requireTaskMember } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
 import {
   addReviewComment,
@@ -45,19 +46,22 @@ import { Paths } from '@/util/paths'
 const log = createLogger('reviews')
 
 /**
- * RFC-036 — guard for review decision endpoint. The actor must be the
- * assigned reviewer for this node, the task owner, or an admin. Legacy
- * tasks (no ownerUserId, no assignment row) fall through to admin / owner-
- * via-collaborator, which already passes for daemon-token actor.
+ * RFC-099 (D5/D7) — answer-rights gate for every review write (decision /
+ * selection / comments): the actor must be a task member (owner or
+ * collaborator) or an admin. Replaces the RFC-036 assigned-reviewer triple
+ * (the node-level assignment mechanism is removed). Returns the role
+ * snapshot to record on the action.
  */
-async function ensureReviewerAuth(deps: AppDeps, nodeRunId: string, actor: Actor): Promise<void> {
-  if (actor.permissions.has('tasks:read:all')) return // admins pass
+async function ensureReviewMember(
+  deps: AppDeps,
+  nodeRunId: string,
+  actor: Actor,
+): Promise<TaskActorRole> {
   const rows = await deps.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
   const run = rows[0]
   if (!run) {
     throw new NotFoundError('node-run-not-found', `node run '${nodeRunId}' not found`)
   }
-  const { tasks: tasksTable } = await import('@/db/schema')
   const taskRows = await deps.db
     .select()
     .from(tasksTable)
@@ -67,12 +71,54 @@ async function ensureReviewerAuth(deps: AppDeps, nodeRunId: string, actor: Actor
   if (!task) {
     throw new NotFoundError('task-not-found', `task '${run.taskId}' not found`)
   }
-  if (task.ownerUserId === actor.user.id) return
-  if (await isAssignedReviewer(deps.db, run.taskId, run.nodeId, actor.user.id)) return
-  throw new ForbiddenError(
-    'not-reviewer',
-    'only the assigned reviewer, task owner, or admin can submit this decision',
-  )
+  return requireTaskMember(deps.db, actor, task)
+}
+
+/**
+ * RFC-099 (D5) — read gate: reviews inherit task visibility. Non-viewers get
+ * the same 403 shape the task routes use ('task-not-visible').
+ */
+async function ensureReviewVisible(deps: AppDeps, nodeRunId: string, actor: Actor): Promise<void> {
+  const rows = await deps.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+  const run = rows[0]
+  if (!run) {
+    throw new NotFoundError('node-run-not-found', `node run '${nodeRunId}' not found`)
+  }
+  const taskRows = await deps.db
+    .select()
+    .from(tasksTable)
+    .where(eq(tasksTable.id, run.taskId))
+    .limit(1)
+  const task = taskRows[0]
+  if (!task) {
+    throw new NotFoundError('task-not-found', `task '${run.taskId}' not found`)
+  }
+  if (!(await canViewTask(deps.db, actor, task))) {
+    throw new ForbiddenError('task-not-visible', `task '${task.id}' is not visible to this actor`)
+  }
+}
+
+/**
+ * RFC-099 (D5) — list filter: keep only summaries whose task is visible to
+ * the actor. One tasks query per distinct taskId batch.
+ */
+async function filterVisibleByTask<T extends { taskId: string }>(
+  deps: AppDeps,
+  actor: Actor,
+  rows: readonly T[],
+): Promise<T[]> {
+  if (actor.permissions.has('tasks:read:all')) return [...rows]
+  const taskIds = [...new Set(rows.map((r) => r.taskId))]
+  if (taskIds.length === 0) return []
+  const taskRows = await deps.db
+    .select({ id: tasksTable.id, ownerUserId: tasksTable.ownerUserId })
+    .from(tasksTable)
+    .where(inArray(tasksTable.id, taskIds))
+  const visible = new Set<string>()
+  for (const t of taskRows) {
+    if (await canViewTask(deps.db, actor, t)) visible.add(t.id)
+  }
+  return rows.filter((r) => visible.has(r.taskId))
 }
 
 function appHomeFor(_deps: AppDeps): string {
@@ -110,22 +156,30 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
       })
     }
     const out = await listReviewSummaries(deps.db, q.data)
-    return c.json(out)
+    return c.json(await filterVisibleByTask(deps, actorOf(c), out))
   })
 
   app.get('/api/reviews/pending-count', async (c) => {
-    const count = await countPendingReviews(deps.db)
-    return c.json({ count })
+    // RFC-099: badge counts only reviews on tasks visible to the actor.
+    const actor = actorOf(c)
+    if (actor.permissions.has('tasks:read:all')) {
+      return c.json({ count: await countPendingReviews(deps.db) })
+    }
+    const pending = await listReviewSummaries(deps.db, { status: 'pending' })
+    const visible = await filterVisibleByTask(deps, actor, pending)
+    return c.json({ count: visible.length })
   })
 
   app.get('/api/reviews/:nodeRunId', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
+    await ensureReviewVisible(deps, nodeRunId, actorOf(c))
     const detail = await getReviewDetail(deps.db, appHomeFor(deps), nodeRunId)
     return c.json(detail)
   })
 
   app.get('/api/reviews/:nodeRunId/versions', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
+    await ensureReviewVisible(deps, nodeRunId, actorOf(c))
     const versions = await listDocVersionsForReview(deps.db, nodeRunId)
     if (versions.length === 0) {
       throw new NotFoundError(
@@ -138,6 +192,7 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/reviews/:nodeRunId/versions/:versionId', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
+    await ensureReviewVisible(deps, nodeRunId, actorOf(c))
     const versionId = c.req.param('versionId')
     // RFC-013: returns body + comments for read-only historical view. The
     // helper validates the version belongs to `nodeRunId` so a caller can't
@@ -158,10 +213,10 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    // RFC-036: reviewer / task owner / admin only. Look up the node_run to
-    // find its task + node id, then check assignments + ownership.
-    const actor = (await import('@/auth/actor')).actorOf(c)
-    await ensureReviewerAuth(deps, nodeRunId, actor)
+    // RFC-099 (D5/D7): any task member (or admin) may decide; record the
+    // user id + role snapshot on the decision row.
+    const actor = actorOf(c)
+    const role = await ensureReviewMember(deps, nodeRunId, actor)
     const args: Parameters<typeof submitReviewDecision>[0] = {
       db: deps.db,
       appHome: appHomeFor(deps),
@@ -169,6 +224,7 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
       decision: parsed.data.decision,
       expectedReviewIteration: parsed.data.reviewIteration,
       author: actor.user.id,
+      authorRole: role,
       ...(parsed.data.rejectReason !== undefined ? { rejectReason: parsed.data.rejectReason } : {}),
     }
     const result = await submitReviewDecision(args)
@@ -214,8 +270,8 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const actor = (await import('@/auth/actor')).actorOf(c)
-    await ensureReviewerAuth(deps, nodeRunId, actor)
+    const actor = actorOf(c)
+    await ensureReviewMember(deps, nodeRunId, actor)
     const result = await setDocumentSelection({
       db: deps.db,
       nodeRunId,
@@ -234,12 +290,17 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    // RFC-099 (D7): record who commented and with which task role.
+    const actor = actorOf(c)
+    const role = await ensureReviewMember(deps, nodeRunId, actor)
     const comment = await addReviewComment({
       db: deps.db,
       appHome: appHomeFor(deps),
       nodeRunId,
       anchor: parsed.data.anchor,
       commentText: parsed.data.commentText,
+      author: actor.user.id,
+      authorRole: role,
       ...(parsed.data.docVersionId !== undefined ? { docVersionId: parsed.data.docVersionId } : {}),
     })
     return c.json(comment, 201)
@@ -255,6 +316,7 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
+    await ensureReviewMember(deps, nodeRunId, actorOf(c))
     const updated = await updateReviewCommentText(
       deps.db,
       nodeRunId,
@@ -267,6 +329,7 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
   app.delete('/api/reviews/:nodeRunId/comments/:commentId', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
     const commentId = c.req.param('commentId')
+    await ensureReviewMember(deps, nodeRunId, actorOf(c))
     await deleteReviewComment(deps.db, nodeRunId, commentId)
     return c.json({ ok: true })
   })

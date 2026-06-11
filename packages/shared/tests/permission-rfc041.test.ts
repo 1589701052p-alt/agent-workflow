@@ -30,17 +30,20 @@ describe('ROLE_PERMISSIONS — RFC-041', () => {
       expect(hasPermission('admin', p)).toBe(true)
     }
   })
-  test('user has only memory:read + memory:write_feedback', () => {
+  // RFC-099 (D12): the memory write surface moved from admin-only to
+  // route-gate-open — the real gate is per-row canManageMemory (scope-
+  // resource owner or admin; repo/global rows stay admin-only at the check).
+  test('user passes the route gate for all 5 memory perms (RFC-099)', () => {
     expect(hasPermission('user', 'memory:read')).toBe(true)
     expect(hasPermission('user', 'memory:write_feedback')).toBe(true)
-    expect(hasPermission('user', 'memory:approve')).toBe(false)
-    expect(hasPermission('user', 'memory:archive')).toBe(false)
-    expect(hasPermission('user', 'memory:delete')).toBe(false)
+    expect(hasPermission('user', 'memory:approve')).toBe(true)
+    expect(hasPermission('user', 'memory:archive')).toBe(true)
+    expect(hasPermission('user', 'memory:delete')).toBe(true)
   })
-  test('ADMIN_ONLY_PERMISSIONS includes the 3 write perms but not read/feedback', () => {
-    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:approve')).toBe(true)
-    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:archive')).toBe(true)
-    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:delete')).toBe(true)
+  test('no memory perm sits in ADMIN_ONLY_PERMISSIONS anymore (RFC-099)', () => {
+    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:approve')).toBe(false)
+    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:archive')).toBe(false)
+    expect(ADMIN_ONLY_PERMISSIONS.includes('memory:delete')).toBe(false)
     expect(ADMIN_ONLY_PERMISSIONS.includes('memory:read')).toBe(false)
     expect(ADMIN_ONLY_PERMISSIONS.includes('memory:write_feedback')).toBe(false)
   })

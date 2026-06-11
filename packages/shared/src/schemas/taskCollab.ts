@@ -1,13 +1,11 @@
-// RFC-036 — task collaboration + node assignment schemas.
+// RFC-036 — task collaboration schemas. RFC-099 (D6) removed the node-level
+// assignment mechanism (NodeAssignment*): task membership is the answer-rights
+// boundary, and the role tags collapsed to 'owner' | 'collaborator'.
 
 import { z } from 'zod'
+import { UserPublicSchema } from './user'
 
-export const TaskCollaboratorRoleSchema = z.enum([
-  'owner',
-  'reviewer',
-  'clarify_target',
-  'collaborator',
-])
+export const TaskCollaboratorRoleSchema = z.enum(['owner', 'collaborator'])
 
 export type TaskCollaboratorRole = z.infer<typeof TaskCollaboratorRoleSchema>
 
@@ -21,26 +19,24 @@ export const TaskCollaboratorSchema = z.object({
 
 export type TaskCollaborator = z.infer<typeof TaskCollaboratorSchema>
 
-export const NodeAssignmentKindSchema = z.enum(['reviewer', 'clarify_target'])
-
-export type NodeAssignmentKind = z.infer<typeof NodeAssignmentKindSchema>
-
-export const NodeAssignmentSchema = z.object({
+/** GET /api/tasks/:id/members response (RFC-099 task members panel). */
+export const TaskMembersSchema = z.object({
   taskId: z.string().min(1),
-  nodeId: z.string().min(1),
-  kind: NodeAssignmentKindSchema,
-  userId: z.string().min(1),
-  assignedBy: z.string().min(1),
-  assignedAt: z.number().int().nonnegative(),
+  ownerUserId: z.string().nullable(),
+  owner: UserPublicSchema.nullable(),
+  users: z.array(UserPublicSchema),
+  /** True when the current actor may PUT members (owner or admin). */
+  canManage: z.boolean(),
 })
+export type TaskMembers = z.infer<typeof TaskMembersSchema>
 
-export type NodeAssignment = z.infer<typeof NodeAssignmentSchema>
-
-/** Payload accepted by POST /api/tasks and PATCH /api/tasks/:id/assignments/:nodeId. */
-export const NodeAssignmentInputSchema = z.object({
-  nodeId: z.string().min(1),
-  kind: NodeAssignmentKindSchema,
-  userId: z.string().min(1),
-})
-
-export type NodeAssignmentInput = z.infer<typeof NodeAssignmentInputSchema>
+/** PUT /api/tasks/:id/members body — full-replace userIds; both optional but at least one. */
+export const UpdateTaskMembersBodySchema = z
+  .object({
+    ownerUserId: z.string().min(1).optional(),
+    userIds: z.array(z.string().min(1)).max(256).optional(),
+  })
+  .refine((b) => b.ownerUserId !== undefined || b.userIds !== undefined, {
+    message: 'at least one of ownerUserId / userIds is required',
+  })
+export type UpdateTaskMembersBody = z.infer<typeof UpdateTaskMembersBodySchema>

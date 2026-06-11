@@ -48,6 +48,17 @@ async function buildHarness(): Promise<Harness> {
   })
   const adminUserToken = (await createSession({ db, userId: admin.id })).token
   const regularUserToken = (await createSession({ db, userId: user.id })).token
+  // RFC-099 (D12): memory rights follow the scoped resource. Seed a real,
+  // PUBLIC, admin-owned agents row for the fixture's scopeId='a1' so the
+  // regular user can VIEW agent-scoped candidates (public) but cannot MANAGE
+  // them (not the owner) — preserving this file's 403 assertions.
+  const { agents } = await import('../src/db/schema')
+  await db.insert(agents).values({
+    id: 'a1',
+    name: 'fixture-agent-a1',
+    ownerUserId: admin.id,
+    visibility: 'public',
+  })
   return { db, app, daemonToken: DAEMON_TOKEN, adminUserToken, regularUserToken }
 }
 

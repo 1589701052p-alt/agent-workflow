@@ -231,7 +231,10 @@ describe('RFC-053 PR-A T1g — review decision full-field assertions', () => {
     expect(meta.reviewIteration).toBe(0)
     expect(meta.sourceNodeId).toBe('doc')
     expect(meta.sourcePortName).toBe('docpath')
-    expect(meta.decidedBy).toBe('tester-123')
+    // RFC-099 prompt isolation — approval_meta is a downstream-consumable
+    // port, so the decider's identity must NOT appear in it (the audit copy
+    // lives on doc_versions.decided_by, asserted above).
+    expect(meta.decidedBy).toBeUndefined()
 
     // Distill enqueue best-effort — should have inserted at least one row.
     const distillRows = await h.db

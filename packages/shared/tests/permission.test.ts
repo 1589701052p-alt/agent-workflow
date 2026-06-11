@@ -25,7 +25,7 @@ describe('PERMISSIONS catalog', () => {
     expect(ROLE_PERMISSIONS.admin.length).toBe(PERMISSIONS.length)
   })
 
-  test('user role contains exactly the documented baseline (19 entries)', () => {
+  test('user role contains exactly the documented baseline (23 entries)', () => {
     const expected: Permission[] = [
       'agents:read',
       'skills:read',
@@ -49,6 +49,11 @@ describe('PERMISSIONS catalog', () => {
       // RFC-041 — read approved memories + write task feedback
       'memory:read',
       'memory:write_feedback',
+      // RFC-099 (D12) — route gate open; per-row canManageMemory is the gate
+      'memory:approve',
+      'memory:archive',
+      'memory:delete',
+      'memory:edit',
     ]
     expect([...ROLE_PERMISSIONS.user].sort()).toEqual(expected.sort())
   })
@@ -67,13 +72,6 @@ describe('PERMISSIONS catalog', () => {
       'backup:run',
       'tasks:read:all',
       'tasks:cancel:all',
-      // RFC-041 write surface on platform memory (B3 moves these to per-row
-      // canManageMemory gating; until then they stay admin-only).
-      'memory:approve',
-      'memory:archive',
-      'memory:delete',
-      // RFC-045 manual edit on candidate / approved / archived rows
-      'memory:edit',
     ]
     for (const p of adminOnly) {
       expect(ROLE_PERMISSIONS.user.includes(p)).toBe(false)

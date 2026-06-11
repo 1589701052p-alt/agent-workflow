@@ -22,6 +22,23 @@ export function requirePermission(perm: Permission): MiddlewareHandler {
   }
 }
 
+/**
+ * RFC-099 — admin-identity gate for surfaces that stay admin-only even though
+ * their permission POINT moved into the user baseline (memory distill jobs:
+ * the route gate was `memory:approve`, which D12 opened to all users for the
+ * per-row canManageMemory model; the distill-jobs operational pages were
+ * explicitly kept 现状/admin-only in the RFC scope).
+ */
+export function requireAdmin(): MiddlewareHandler {
+  return async (c, next) => {
+    const actor = actorOf(c)
+    if (actor.user.role !== 'admin') {
+      throw new ForbiddenError('forbidden', 'admin only')
+    }
+    await next()
+  }
+}
+
 /** Helper for ad-hoc gates inside handlers (e.g. owner-or-admin checks). */
 export function ensurePermission(c: Parameters<MiddlewareHandler>[0], perm: Permission): void {
   const actor = actorOf(c)

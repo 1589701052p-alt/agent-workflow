@@ -88,6 +88,7 @@ import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { createLogger } from '@/util/log'
+import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 const log = createLogger('cross-clarify')
@@ -312,6 +313,9 @@ export interface SubmitCrossClarifyAnswersArgs {
   ifMatchIteration?: number
   /** Defaults to 'local'. Reserved for per-user attribution. */
   answeredBy?: string
+  /** RFC-099 (D7/D8) — task-relationship role of the submitter; enables the
+   *  clarify_rounds attribution freeze. UI/audit only. */
+  submittedByRole?: 'owner' | 'user' | 'admin'
   /** Defaults to Date.now(). */
   now?: () => number
   /** RFC-059: per-question scope decisions. Optional (old clients / all-
@@ -432,7 +436,19 @@ export async function submitCrossClarifyAnswers(
     .where(eq(crossClarifySessions.id, row.id))
 
   // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds,
-  // including the RFC-059 questionScopesJson payload.
+  // including the RFC-059 questionScopesJson payload. RFC-099: with the
+  // submitter's role supplied, the same write records answeredBy + freezes
+  // per-question attribution and clears the draft (D8).
+  const attributionSet =
+    args.submittedByRole !== undefined
+      ? {
+          answeredBy,
+          ...(await buildFrozenAttributionSet(args.db, row.id, sealedAnswers, {
+            userId: answeredBy,
+            role: args.submittedByRole,
+          })),
+        }
+      : {}
   await args.db
     .update(clarifyRounds)
     .set({
@@ -441,6 +457,7 @@ export async function submitCrossClarifyAnswers(
       directive: args.directive,
       answeredAt,
       questionScopesJson,
+      ...attributionSet,
     })
     .where(eq(clarifyRounds.id, row.id))
 

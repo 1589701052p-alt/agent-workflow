@@ -246,7 +246,8 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     // RFC-098 B3 bumped to 43 with 0043_rfc098_shard_value_hash.
     // RFC-098 B4 (WP-10) bumped to 44 with 0044_rfc098_rerun_cause.
     // RFC-099 B1 bumped to 45 with 0045_rfc099_ownership_acl.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(45)
+    // RFC-099 B3 bumped to 46 with 0046_rfc099_drop_node_assignments.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(46)
   })
 
   for (const target of FREEZE_TARGETS) {

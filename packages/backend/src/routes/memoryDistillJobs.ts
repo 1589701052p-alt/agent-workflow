@@ -12,7 +12,7 @@
 import { DistillJobStatusSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
-import { requirePermission } from '@/auth/permissions'
+import { requireAdmin } from '@/auth/permissions'
 import {
   cancelPendingJob,
   listDistillJobs,
@@ -23,7 +23,7 @@ import { getDistillJobSessionView } from '@/services/memoryDistillSessionView'
 import { ConflictError, ValidationError } from '@/util/errors'
 
 export function mountMemoryDistillJobRoutes(app: Hono, deps: AppDeps): void {
-  app.get('/api/memory-distill-jobs', requirePermission('memory:approve'), async (c) => {
+  app.get('/api/memory-distill-jobs', requireAdmin(), async (c) => {
     const statusRaw = c.req.query('status')
     let status: string | undefined
     if (statusRaw !== undefined && statusRaw !== '') {
@@ -37,7 +37,7 @@ export function mountMemoryDistillJobRoutes(app: Hono, deps: AppDeps): void {
     return c.json({ items })
   })
 
-  app.post('/api/memory-distill-jobs/:id/retry', requirePermission('memory:approve'), async (c) => {
+  app.post('/api/memory-distill-jobs/:id/retry', requireAdmin(), async (c) => {
     const id = c.req.param('id')
     const ok = await retryFailedJob(deps.db, id)
     if (!ok) {
@@ -50,34 +50,26 @@ export function mountMemoryDistillJobRoutes(app: Hono, deps: AppDeps): void {
     return c.json({ ok: true })
   })
 
-  app.post(
-    '/api/memory-distill-jobs/:id/cancel',
-    requirePermission('memory:approve'),
-    async (c) => {
-      const id = c.req.param('id')
-      const ok = await cancelPendingJob(deps.db, id)
-      if (!ok) {
-        throw new ConflictError(
-          'distill-job-not-pending',
-          `distill job ${id} is not in 'pending' state (or does not exist)`,
-        )
-      }
-      return c.json({ ok: true })
-    },
-  )
+  app.post('/api/memory-distill-jobs/:id/cancel', requireAdmin(), async (c) => {
+    const id = c.req.param('id')
+    const ok = await cancelPendingJob(deps.db, id)
+    if (!ok) {
+      throw new ConflictError(
+        'distill-job-not-pending',
+        `distill job ${id} is not in 'pending' state (or does not exist)`,
+      )
+    }
+    return c.json({ ok: true })
+  })
 
   // RFC-043: admin-only distill job detail page support.
-  app.get('/api/memory-distill-jobs/:id', requirePermission('memory:approve'), async (c) => {
+  app.get('/api/memory-distill-jobs/:id', requireAdmin(), async (c) => {
     const detail = await getDistillJobDetail(deps.db, c.req.param('id'))
     return c.json(detail)
   })
 
-  app.get(
-    '/api/memory-distill-jobs/:id/session',
-    requirePermission('memory:approve'),
-    async (c) => {
-      const view = await getDistillJobSessionView(deps.db, c.req.param('id'))
-      return c.json(view)
-    },
-  )
+  app.get('/api/memory-distill-jobs/:id/session', requireAdmin(), async (c) => {
+    const view = await getDistillJobSessionView(deps.db, c.req.param('id'))
+    return c.json(view)
+  })
 }

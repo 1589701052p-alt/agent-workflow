@@ -1163,6 +1163,8 @@ export interface AddReviewCommentArgs {
   anchor: ReviewCommentAnchor
   commentText: string
   author?: string
+  /** RFC-099 (D7) — task-relationship role snapshot; UI/audit only. */
+  authorRole?: 'owner' | 'user' | 'admin'
   /**
    * RFC-079: in a multi-document round several doc_versions are pending at once;
    * the caller passes the specific document the comment anchors to. Single-doc
@@ -1212,6 +1214,7 @@ export async function addReviewComment(args: AddReviewCommentArgs): Promise<Revi
     occurrenceIndex: canonical.occurrenceIndex,
     commentText: args.commentText,
     author: args.author ?? 'local',
+    authorRole: args.authorRole ?? null,
     createdAt: now,
   })
 
@@ -1221,6 +1224,7 @@ export async function addReviewComment(args: AddReviewCommentArgs): Promise<Revi
     anchor: canonical,
     commentText: args.commentText,
     author: args.author ?? 'local',
+    authorRole: args.authorRole ?? null,
     createdAt: now,
   }
   emitReviewCommentAddedEvent(dv.taskId, args.nodeRunId, dv.id, comment)
@@ -1334,6 +1338,8 @@ export interface SubmitReviewDecisionArgs {
   /** Optimistic-lock guard against the iteration the client saw. */
   expectedReviewIteration: number
   author?: string
+  /** RFC-099 (D7) — task-relationship role snapshot of the decider. */
+  authorRole?: 'owner' | 'user' | 'admin'
 }
 
 export interface SubmitReviewDecisionResult {
@@ -1364,7 +1370,6 @@ async function approveMultiDocReview(args: {
 }): Promise<SubmitReviewDecisionResult> {
   const { db, appHome, nodeRunId, run, dvs } = args
   const decidedAt = Date.now()
-  const decidedBy = args.author ?? 'local'
   const acceptedItemIndices = dvs
     .filter((d) => d.selection === 'accepted')
     .map((d) => d.itemIndex)
@@ -1392,10 +1397,12 @@ async function approveMultiDocReview(args: {
     acceptedKind = 'list<path<md>>'
   }
   const rep = dvs[0]!
+  // RFC-099 prompt isolation: approval_meta is a downstream-consumable PORT,
+  // so it must NOT carry the decider's identity. doc_versions.decided_by(_role)
+  // keeps the audit record for the UI.
   const meta = JSON.stringify({
     decision: 'approved',
     decidedAt,
-    decidedBy,
     reviewIteration: run.reviewIteration,
     sourceNodeId: rep.sourceNodeId,
     sourcePortName: rep.sourcePortName,
@@ -1518,6 +1525,7 @@ export async function submitReviewDecision(
               : null,
         decidedAt: Date.now(),
         decidedBy: args.author ?? 'local',
+        decidedByRole: args.authorRole ?? null,
         commentsJson: JSON.stringify(commentsArr),
       })
       .where(eq(docVersions.id, d.id))
@@ -1563,7 +1571,6 @@ export async function submitReviewDecision(
     // downstream's resolvePortContent re-reads the file. Inline markdown
     // (no sourceFilePath) still publishes the body verbatim.
     const decidedAt = Date.now()
-    const decidedBy = args.author ?? 'local'
     const sourcePath = dv.sourceFilePath ?? null
     const hasSourcePath = sourcePath !== null && sourcePath.trim().length > 0
     const approvedDocContent = hasSourcePath
@@ -1574,10 +1581,10 @@ export async function submitReviewDecision(
     // the task-detail Outputs tab offers a Download button. Inline-markdown
     // approvals carry the body verbatim → no file kind, no download.
     const approvedDocKind = hasSourcePath ? 'markdown_file' : null
+    // RFC-099 prompt isolation: no decider identity in the port payload.
     const meta = JSON.stringify({
       decision: 'approved',
       decidedAt,
-      decidedBy,
       reviewIteration: run.reviewIteration,
       versionIndex: dv.versionIndex,
       sourceNodeId: dv.sourceNodeId,
@@ -2406,6 +2413,7 @@ function rowToDocVersion(row: typeof docVersions.$inferSelect): DocVersion {
     createdAt: row.createdAt,
     decidedAt: row.decidedAt,
     decidedBy: row.decidedBy,
+    decidedByRole: (row.decidedByRole ?? null) as DocVersion['decidedByRole'],
   }
 }
 
@@ -2425,6 +2433,7 @@ function rowToReviewComment(row: typeof reviewComments.$inferSelect): ReviewComm
     },
     commentText: row.commentText,
     author: row.author,
+    authorRole: (row.authorRole ?? null) as ReviewComment['authorRole'],
     createdAt: row.createdAt,
   }
 }

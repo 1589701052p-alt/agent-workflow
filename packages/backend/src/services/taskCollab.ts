@@ -1,16 +1,21 @@
-// RFC-036 — task collaboration service. PR2 scope: visibility helpers + the
-// minimum reads needed for routes/tasks.ts and routes/reviews.ts to gate
-// access. PR4 layers in launcher-side writes (recordAssignments,
-// recordCollaborators, changeAssignment).
+// RFC-036 — task collaboration service. RFC-099 (D6/D10/D13) removed the
+// dormant node-level assignment helpers (node_assignments never had UI and
+// is dropped by migration 0046) and added member management: task membership
+// (owner + collaborators) is now the single answer-rights boundary for
+// reviews and clarifications, and task users hold the same operational
+// rights as the owner (cancel / retry / resume) — only member management,
+// owner transfer and task deletion stay owner/admin.
 
-import { and, eq } from 'drizzle-orm'
-import type { NodeAssignmentInput } from '@agent-workflow/shared'
+import type { TaskActorRole, TaskMembers, UserPublic } from '@agent-workflow/shared'
+import { and, eq, inArray } from 'drizzle-orm'
 import type { Actor } from '@/auth/actor'
 import { SYSTEM_USER_ID } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import type { tasks } from '@/db/schema'
-import { nodeAssignments, taskCollaborators, users } from '@/db/schema'
-import { ValidationError } from '@/util/errors'
+import { taskCollaborators, tasks as tasksTable, users } from '@/db/schema'
+import { isAdminActor, resolveTaskRole } from '@/services/resourceAcl'
+import { ForbiddenError, ValidationError } from '@/util/errors'
 
 /** Row-shape that visibility checks accept. The full `tasks` row is supersets of this. */
 export type TaskRowForVisibility = Pick<typeof tasks.$inferSelect, 'id' | 'ownerUserId'>
@@ -53,119 +58,166 @@ export async function listCollaborators(
   return db.select().from(taskCollaborators).where(eq(taskCollaborators.taskId, taskId))
 }
 
-export async function listAssignments(
-  db: DbClient,
-  taskId: string,
-): Promise<(typeof nodeAssignments.$inferSelect)[]> {
-  return db.select().from(nodeAssignments).where(eq(nodeAssignments.taskId, taskId))
-}
-
 /**
- * PR4 will replace this with reviewer / clarify_target lookup; PR2 only needs
- * the visibility gate + the helper signature for routes/reviews.ts so the
- * "owner / admin" fallback compiles. The node-level check returns null if
- * there is no assignment row yet (legacy task launched pre-RFC-036).
+ * RFC-099 (D5/D7) — the answer-rights gate for reviews and clarifications,
+ * returning the role snapshot to record on the action. Member identity wins
+ * over the global admin role (D17): owner → 'owner', collaborator → 'user',
+ * non-member admin → 'admin', anyone else → ForbiddenError.
  */
-export async function getNodeAssignment(
+export async function requireTaskMember(
   db: DbClient,
-  taskId: string,
-  nodeId: string,
-  kind: 'reviewer' | 'clarify_target',
-): Promise<typeof nodeAssignments.$inferSelect | null> {
-  const rows = await db
-    .select()
-    .from(nodeAssignments)
-    .where(
-      and(
-        eq(nodeAssignments.taskId, taskId),
-        eq(nodeAssignments.nodeId, nodeId),
-        eq(nodeAssignments.kind, kind),
-      ),
-    )
-    .limit(1)
-  return rows[0] ?? null
+  actor: Actor,
+  task: TaskRowForVisibility,
+): Promise<TaskActorRole> {
+  const member = await hasMembership(db, task.id, actor.user.id)
+  const role = resolveTaskRole(actor, task.ownerUserId ?? null, member)
+  if (role !== null) return role
+  throw new ForbiddenError('not-task-member', 'only task members or an admin can do this')
 }
 
-export async function isAssignedReviewer(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-  userId: string,
-): Promise<boolean> {
-  const row = await getNodeAssignment(db, taskId, nodeId, 'reviewer')
-  return row?.userId === userId
-}
+// ---------------------------------------------------------------------------
+// RFC-099 (D10) — task member management (GET/PUT /api/tasks/:id/members)
+// ---------------------------------------------------------------------------
 
-export async function isAssignedClarifyTarget(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-  userId: string,
-): Promise<boolean> {
-  const row = await getNodeAssignment(db, taskId, nodeId, 'clarify_target')
-  return row?.userId === userId
-}
+type UserRow = typeof users.$inferSelect
 
-/**
- * Pure function — validates the assignments[] payload against the workflow
- * definition. Throws ValidationError with code='invalid-assignment' if any
- * row references a non-existent node, has a kind that doesn't match the
- * node kind, or appears twice. Caller is responsible for the userId active
- * check (DB lookup).
- */
-export function ensureValidAssignments(
-  workflowDef: { nodes?: ReadonlyArray<{ id?: string; kind?: string }> } | null | undefined,
-  items: ReadonlyArray<NodeAssignmentInput>,
-): void {
-  const nodeKindById = new Map<string, string>()
-  for (const n of workflowDef?.nodes ?? []) {
-    if (typeof n.id === 'string' && typeof n.kind === 'string') {
-      nodeKindById.set(n.id, n.kind)
-    }
+function toUserPublic(row: UserRow): UserPublic {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.displayName,
+    role: row.role,
+    status: row.status,
   }
-  const seen = new Set<string>()
-  for (const a of items) {
-    const key = `${a.nodeId}::${a.kind}`
-    if (seen.has(key)) {
-      throw new ValidationError(
-        'invalid-assignment',
-        `duplicate assignment for nodeId='${a.nodeId}' kind='${a.kind}'`,
-      )
-    }
-    seen.add(key)
-    const nodeKind = nodeKindById.get(a.nodeId)
-    if (nodeKind === undefined) {
-      throw new ValidationError(
-        'invalid-assignment',
-        `assignment refers to unknown nodeId='${a.nodeId}'`,
-      )
-    }
-    if (a.kind === 'reviewer' && nodeKind !== 'review') {
-      throw new ValidationError(
-        'invalid-assignment',
-        `assignment kind='reviewer' incompatible with node kind='${nodeKind}'`,
-      )
-    }
-    if (a.kind === 'clarify_target' && nodeKind !== 'clarify') {
-      throw new ValidationError(
-        'invalid-assignment',
-        `assignment kind='clarify_target' incompatible with node kind='${nodeKind}'`,
-      )
-    }
+}
+
+export async function getTaskMembers(
+  db: DbClient,
+  actor: Actor,
+  task: TaskRowForVisibility,
+): Promise<TaskMembers> {
+  const collabRows = await listCollaborators(db, task.id)
+  const collaboratorIds = collabRows.filter((r) => r.role === 'collaborator').map((r) => r.userId)
+  const wanted = [...new Set([...(task.ownerUserId ? [task.ownerUserId] : []), ...collaboratorIds])]
+  const userRows =
+    wanted.length === 0 ? [] : await db.select().from(users).where(inArray(users.id, wanted))
+  const byId = new Map(userRows.map((u) => [u.id, u]))
+  const ownerRow =
+    task.ownerUserId != null && task.ownerUserId !== SYSTEM_USER_ID
+      ? (byId.get(task.ownerUserId) ?? null)
+      : null
+  const memberUsers = collaboratorIds
+    .map((id) => byId.get(id))
+    .filter((u): u is UserRow => u !== undefined)
+    .map(toUserPublic)
+  const canManage =
+    isAdminActor(actor) || (task.ownerUserId != null && task.ownerUserId === actor.user.id)
+  return {
+    taskId: task.id,
+    ownerUserId: task.ownerUserId ?? null,
+    owner: ownerRow ? toUserPublic(ownerRow) : null,
+    users: memberUsers,
+    canManage,
   }
 }
 
 /**
- * Persist a task's launch-time owner / assignments / collaborators. Caller has
- * already inserted the `tasks` row (so taskCollaborators FKs resolve) — this
- * just writes the supporting rows.
+ * PUT members — owner/admin only. `userIds` is full-replace of the
+ * collaborator set. On owner transfer the previous human owner is kept as a
+ * collaborator so they don't lose sight of their own task (mirror of the
+ * resource-ACL rule).
+ */
+export async function updateTaskMembers(
+  db: DbClient,
+  actor: Actor,
+  task: TaskRowForVisibility,
+  body: { ownerUserId?: string; userIds?: string[] },
+): Promise<TaskMembers> {
+  const canManage =
+    isAdminActor(actor) || (task.ownerUserId != null && task.ownerUserId === actor.user.id)
+  if (!canManage) {
+    throw new ForbiddenError('forbidden', 'only the task owner or an admin can manage members')
+  }
+
+  const referenced = new Set<string>(body.userIds ?? [])
+  if (body.ownerUserId !== undefined) referenced.add(body.ownerUserId)
+  if (referenced.size > 0) {
+    const rows = await db
+      .select({ id: users.id, status: users.status })
+      .from(users)
+      .where(inArray(users.id, [...referenced]))
+    const active = new Set(rows.filter((r) => r.status === 'active').map((r) => r.id))
+    const bad = [...referenced].filter((id) => id === SYSTEM_USER_ID || !active.has(id))
+    if (bad.length > 0) {
+      throw new ValidationError('members-user-invalid', 'referenced user(s) not active', {
+        userIds: bad,
+      })
+    }
+  }
+
+  const prevOwner = task.ownerUserId ?? null
+  const nextOwner = body.ownerUserId !== undefined ? body.ownerUserId : prevOwner
+
+  let nextUserIds: string[]
+  if (body.userIds !== undefined) {
+    nextUserIds = [...new Set(body.userIds)]
+  } else {
+    const current = await listCollaborators(db, task.id)
+    nextUserIds = current.filter((r) => r.role === 'collaborator').map((r) => r.userId)
+  }
+  if (
+    nextOwner !== prevOwner &&
+    prevOwner !== null &&
+    prevOwner !== SYSTEM_USER_ID &&
+    !nextUserIds.includes(prevOwner)
+  ) {
+    nextUserIds.push(prevOwner)
+  }
+  nextUserIds = nextUserIds.filter((id) => id !== nextOwner)
+
+  const now = Date.now()
+  dbTxSync(db, (tx) => {
+    if (nextOwner !== prevOwner) {
+      tx.update(tasksTable).set({ ownerUserId: nextOwner }).where(eq(tasksTable.id, task.id)).run()
+    }
+    tx.delete(taskCollaborators).where(eq(taskCollaborators.taskId, task.id)).run()
+    const values: (typeof taskCollaborators.$inferInsert)[] = []
+    if (nextOwner !== null) {
+      values.push({
+        taskId: task.id,
+        userId: nextOwner,
+        role: 'owner',
+        addedBy: actor.user.id,
+        addedAt: now,
+      })
+    }
+    for (const userId of nextUserIds) {
+      values.push({
+        taskId: task.id,
+        userId,
+        role: 'collaborator',
+        addedBy: actor.user.id,
+        addedAt: now,
+      })
+    }
+    if (values.length > 0) {
+      tx.insert(taskCollaborators).values(values).run()
+    }
+  })
+
+  return getTaskMembers(db, actor, { id: task.id, ownerUserId: nextOwner })
+}
+
+/**
+ * Persist a task's launch-time owner + collaborators. Caller has already
+ * inserted the `tasks` row (so taskCollaborators FKs resolve) — this just
+ * writes the supporting rows. (RFC-099 removed the assignments leg.)
  */
 export async function recordLaunchContext(
   db: DbClient,
   args: {
     taskId: string
     ownerUserId: string
-    assignments: ReadonlyArray<NodeAssignmentInput>
     collaboratorUserIds: ReadonlyArray<string>
     now: number
   },
@@ -173,7 +225,6 @@ export async function recordLaunchContext(
   // 1. Validate every referenced user is active.
   const referenced = new Set<string>()
   referenced.add(args.ownerUserId)
-  for (const a of args.assignments) referenced.add(a.userId)
   for (const u of args.collaboratorUserIds) referenced.add(u)
   if (referenced.size > 0) {
     const ids = [...referenced]
@@ -181,13 +232,12 @@ export async function recordLaunchContext(
     const active = new Set(rows.filter((r) => r.status === 'active').map((r) => r.id))
     for (const id of ids) {
       if (!active.has(id)) {
-        throw new ValidationError('invalid-assignment', `referenced user '${id}' is not active`)
+        throw new ValidationError('invalid-collaborator', `referenced user '${id}' is not active`)
       }
     }
   }
 
-  // 2. Insert owner row + collaborator + per-assignment rows in a single batch.
-  // SQLite primary-key conflict ignored on duplicate (owner==collaborator).
+  // 2. Insert owner row + collaborator rows in a single batch.
   const collabValues: (typeof taskCollaborators.$inferInsert)[] = []
   collabValues.push({
     taskId: args.taskId,
@@ -206,15 +256,6 @@ export async function recordLaunchContext(
       addedAt: args.now,
     })
   }
-  for (const a of args.assignments) {
-    collabValues.push({
-      taskId: args.taskId,
-      userId: a.userId,
-      role: a.kind === 'reviewer' ? 'reviewer' : 'clarify_target',
-      addedBy: args.ownerUserId,
-      addedAt: args.now,
-    })
-  }
   // de-dup by (taskId, userId, role) to satisfy the composite PK.
   const seenPK = new Set<string>()
   const insertCollab = collabValues.filter((v) => {
@@ -226,72 +267,4 @@ export async function recordLaunchContext(
   if (insertCollab.length > 0) {
     await db.insert(taskCollaborators).values(insertCollab)
   }
-  if (args.assignments.length > 0) {
-    await db.insert(nodeAssignments).values(
-      args.assignments.map((a) => ({
-        taskId: args.taskId,
-        nodeId: a.nodeId,
-        kind: a.kind,
-        userId: a.userId,
-        assignedBy: args.ownerUserId,
-        assignedAt: args.now,
-      })),
-    )
-  }
-}
-
-/** RFC-036 PATCH `/api/tasks/:id/assignments/:nodeId`. */
-export async function changeNodeAssignment(
-  db: DbClient,
-  args: {
-    taskId: string
-    nodeId: string
-    kind: 'reviewer' | 'clarify_target'
-    newUserId: string
-    actorId: string
-    now: number
-  },
-): Promise<void> {
-  // Validate new user is active.
-  const rows = await db.select().from(users).where(eq(users.id, args.newUserId)).limit(1)
-  if (!rows[0] || rows[0].status !== 'active') {
-    throw new ValidationError(
-      'invalid-assignment',
-      `referenced user '${args.newUserId}' is not active`,
-    )
-  }
-  const existing = await getNodeAssignment(db, args.taskId, args.nodeId, args.kind)
-  if (existing) {
-    await db
-      .update(nodeAssignments)
-      .set({ userId: args.newUserId, assignedBy: args.actorId, assignedAt: args.now })
-      .where(
-        and(
-          eq(nodeAssignments.taskId, args.taskId),
-          eq(nodeAssignments.nodeId, args.nodeId),
-          eq(nodeAssignments.kind, args.kind),
-        ),
-      )
-  } else {
-    await db.insert(nodeAssignments).values({
-      taskId: args.taskId,
-      nodeId: args.nodeId,
-      kind: args.kind,
-      userId: args.newUserId,
-      assignedBy: args.actorId,
-      assignedAt: args.now,
-    })
-  }
-  // Mirror to task_collaborators so visibility queries pick the new user up.
-  const role = args.kind === 'reviewer' ? 'reviewer' : 'clarify_target'
-  await db
-    .insert(taskCollaborators)
-    .values({
-      taskId: args.taskId,
-      userId: args.newUserId,
-      role,
-      addedBy: args.actorId,
-      addedAt: args.now,
-    })
-    .onConflictDoNothing()
 }

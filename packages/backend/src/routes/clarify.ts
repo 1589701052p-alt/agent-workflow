@@ -12,17 +12,26 @@
 // `clarify-iteration-mismatch` when stale. (Hono auto-maps DomainError to
 // 409, not 412; we keep 409 to match the rest of the API surface.)
 
-import { ListClarifyQuerySchema, SubmitClarifyAnswersSchema } from '@agent-workflow/shared'
-import { eq } from 'drizzle-orm'
+import {
+  ClarifyDraftSaveBodySchema,
+  ListClarifyQuerySchema,
+  SubmitClarifyAnswersSchema,
+  type TaskActorRole,
+} from '@agent-workflow/shared'
+import { desc, eq, inArray } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import { actorOf, type Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
-import { clarifySessions, crossClarifySessions, nodeRuns, tasks as tasksTable } from '@/db/schema'
+import { clarifyRounds, nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
 import { countPendingClarifications, submitClarifyAnswers } from '@/services/clarify'
 import { submitCrossClarifyAnswers } from '@/services/crossClarify'
-import { getClarifyRoundDetail, listClarifyRoundSummaries } from '@/services/clarifyRounds'
-import { isAssignedClarifyTarget } from '@/services/taskCollab'
+import {
+  getClarifyRoundDetail,
+  listClarifyRoundSummaries,
+  saveClarifyDraft,
+} from '@/services/clarifyRounds'
+import { canViewTask, requireTaskMember } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
 import { Paths } from '@/util/paths'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
@@ -43,70 +52,91 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
   return undefined
 }
 
-async function ensureClarifyAnswerAuth(
+/**
+ * RFC-099 (D5/D7) — answer-rights gate for clarify writes: any task member
+ * (owner or collaborator) or an admin. Replaces the RFC-036 assigned-
+ * clarify_target triple (node assignments are removed). Keyed off
+ * clarify_rounds (the RFC-058 authoritative table — every legacy session has
+ * a dual-written round). Returns the role snapshot to record.
+ */
+async function ensureClarifyMember(
   deps: AppDeps,
-  clarifyNodeRunId: string,
+  intermediaryNodeRunId: string,
+  actor: Actor,
+): Promise<TaskActorRole> {
+  const rounds = await deps.db
+    .select({ taskId: clarifyRounds.taskId })
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.intermediaryNodeRunId, intermediaryNodeRunId))
+    .orderBy(desc(clarifyRounds.createdAt))
+    .limit(1)
+  const round = rounds[0]
+  if (!round) {
+    // No round → keep the legacy 404 shape (after confirming the node_run
+    // itself is absent too; an existing run without a round is a service bug
+    // the detail endpoint reports consistently).
+    const runs = await deps.db
+      .select({ id: nodeRuns.id })
+      .from(nodeRuns)
+      .where(eq(nodeRuns.id, intermediaryNodeRunId))
+      .limit(1)
+    if (!runs[0]) {
+      throw new NotFoundError('clarify-session-not-found', 'clarify session not found')
+    }
+    throw new NotFoundError('clarify-round-not-found', 'clarify round not found')
+  }
+  const taskRow = (
+    await deps.db.select().from(tasksTable).where(eq(tasksTable.id, round.taskId)).limit(1)
+  )[0]
+  if (!taskRow) {
+    throw new NotFoundError('task-not-found', `task '${round.taskId}' not found`)
+  }
+  return requireTaskMember(deps.db, actor, taskRow)
+}
+
+/** RFC-099 (D5) — read gate: clarify inherits task visibility (403 mirror of task routes). */
+async function ensureClarifyVisible(
+  deps: AppDeps,
+  intermediaryNodeRunId: string,
   actor: Actor,
 ): Promise<void> {
-  if (actor.permissions.has('tasks:read:all')) return
-  // RFC-023: lookup self-clarify session first.
-  const sess = await deps.db
-    .select()
-    .from(clarifySessions)
-    .where(eq(clarifySessions.clarifyNodeRunId, clarifyNodeRunId))
+  const rounds = await deps.db
+    .select({ taskId: clarifyRounds.taskId })
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.intermediaryNodeRunId, intermediaryNodeRunId))
     .limit(1)
-  if (sess[0]) {
-    const taskRow = (
-      await deps.db.select().from(tasksTable).where(eq(tasksTable.id, sess[0].taskId)).limit(1)
-    )[0]
-    if (!taskRow) {
-      throw new NotFoundError('task-not-found', `task '${sess[0].taskId}' not found`)
-    }
-    if (taskRow.ownerUserId === actor.user.id) return
-    if (
-      await isAssignedClarifyTarget(deps.db, sess[0].taskId, sess[0].clarifyNodeId, actor.user.id)
-    ) {
-      return
-    }
+  const round = rounds[0]
+  if (!round) return // detail endpoint produces its own 404
+  const taskRow = (
+    await deps.db.select().from(tasksTable).where(eq(tasksTable.id, round.taskId)).limit(1)
+  )[0]
+  if (!taskRow) return
+  if (!(await canViewTask(deps.db, actor, taskRow))) {
     throw new ForbiddenError(
-      'not-clarify-target',
-      'only the assigned clarify target, task owner, or admin can submit this answer',
+      'task-not-visible',
+      `task '${taskRow.id}' is not visible to this actor`,
     )
   }
-  // RFC-056: cross-clarify session auth fallback. Same shape as RFC-023 —
-  // owner / assigned clarify_target / admin only.
-  const xc = await deps.db
-    .select()
-    .from(crossClarifySessions)
-    .where(eq(crossClarifySessions.crossClarifyNodeRunId, clarifyNodeRunId))
-    .limit(1)
-  if (xc[0]) {
-    const taskRow = (
-      await deps.db.select().from(tasksTable).where(eq(tasksTable.id, xc[0].taskId)).limit(1)
-    )[0]
-    if (!taskRow) {
-      throw new NotFoundError('task-not-found', `task '${xc[0].taskId}' not found`)
-    }
-    if (taskRow.ownerUserId === actor.user.id) return
-    if (
-      await isAssignedClarifyTarget(deps.db, xc[0].taskId, xc[0].crossClarifyNodeId, actor.user.id)
-    ) {
-      return
-    }
-    throw new ForbiddenError(
-      'not-clarify-target',
-      'only the assigned clarify target, task owner, or admin can submit this answer',
-    )
+}
+
+/** RFC-099 (D5) — list filter by task visibility (admin shortcut). */
+async function filterRoundsByTaskVisibility<T extends { taskId: string }>(
+  deps: AppDeps,
+  actor: Actor,
+  rows: readonly T[],
+): Promise<T[]> {
+  if (actor.permissions.has('tasks:read:all')) return [...rows]
+  const taskIds = [...new Set(rows.map((r) => r.taskId))]
+  if (taskIds.length === 0) return []
+  const taskRows = await deps.db
+    .select({ id: tasksTable.id, ownerUserId: tasksTable.ownerUserId })
+    .from(tasksTable)
+    .where(inArray(tasksTable.id, taskIds))
+  const visible = new Set<string>()
+  for (const t of taskRows) {
+    if (await canViewTask(deps.db, actor, t)) visible.add(t.id)
   }
-  // Neither — let the service path produce the 404.
-  const runs = await deps.db
-    .select()
-    .from(nodeRuns)
-    .where(eq(nodeRuns.id, clarifyNodeRunId))
-    .limit(1)
-  if (!runs[0]) {
-    throw new NotFoundError('clarify-session-not-found', 'clarify session not found')
-  }
+  return rows.filter((r) => visible.has(r.taskId))
 }
 
 /** RFC-056: extract a node's `kind` field from a serialized
@@ -151,16 +181,23 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
     if (q.data.taskId !== undefined) filter.taskId = q.data.taskId
     if (q.data.limit !== undefined) filter.limit = q.data.limit
     const summaries = await listClarifyRoundSummaries(deps.db, filter)
-    return c.json(summaries)
+    return c.json(await filterRoundsByTaskVisibility(deps, actorOf(c), summaries))
   })
 
   app.get('/api/clarify/pending-count', async (c) => {
-    const count = await countPendingClarifications(deps.db)
-    return c.json({ count })
+    // RFC-099: badge counts only rounds on tasks visible to the actor.
+    const actor = actorOf(c)
+    if (actor.permissions.has('tasks:read:all')) {
+      return c.json({ count: await countPendingClarifications(deps.db) })
+    }
+    const pending = await listClarifyRoundSummaries(deps.db, { status: 'awaiting_human' })
+    const visible = await filterRoundsByTaskVisibility(deps, actor, pending)
+    return c.json({ count: visible.length })
   })
 
   app.get('/api/clarify/:nodeRunId', async (c) => {
     const nodeRunId = c.req.param('nodeRunId')
+    await ensureClarifyVisible(deps, nodeRunId, actorOf(c))
     // RFC-058 T14: single ClarifyRound shape; `kind` discriminator
     // distinguishes self vs cross. The keying by intermediary node_run id
     // works for both because dual-write already mints the matching
@@ -186,9 +223,9 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         ifMatch = Number.parseInt(header, 10)
       }
     }
-    // RFC-036: clarify_target / task owner / admin only.
+    // RFC-099 (D5/D7): any task member (or admin); capture the role snapshot.
     const actor = actorOf(c)
-    await ensureClarifyAnswerAuth(deps, nodeRunId, actor)
+    const role = await ensureClarifyMember(deps, nodeRunId, actor)
 
     // RFC-056: branch by node kind. Cross-clarify routes through
     // submitCrossClarifyAnswers which knows the 'continue' (submit) +
@@ -210,6 +247,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         answers: parsed.data.answers,
         directive: parsed.data.directive,
         answeredBy: actor.user.id,
+        submittedByRole: role,
         ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
         // RFC-059: per-question scope mapping. Self-clarify branch below
         // intentionally does NOT receive this field (the asking agent is
@@ -243,6 +281,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       answers: parsed.data.answers,
       directive: parsed.data.directive,
       answeredBy: actor.user.id,
+      submittedByRole: role,
       ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
     })
     // Re-enter the scheduler so the freshly minted rerun node_run starts.
@@ -279,6 +318,35 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         taskId: result.session.taskId,
         error: err instanceof Error ? err.message : String(err),
       })
+    })
+    return c.json({ ok: true, ...result })
+  })
+
+  // RFC-099 (D8/D14) — collaborative answer draft, one question per call,
+  // per-question last-write-wins. Members only; the editor's identity + role
+  // are recorded per question and broadcast to other open forms via the
+  // task channel ('clarify.draft.updated').
+  app.put('/api/clarify/:nodeRunId/draft', async (c) => {
+    const nodeRunId = c.req.param('nodeRunId')
+    const raw: unknown = await c.req.json().catch(() => null)
+    const parsed = ClarifyDraftSaveBodySchema.safeParse(raw)
+    if (!parsed.success) {
+      throw new ValidationError('clarify-draft-invalid', 'invalid clarify draft body', {
+        issues: parsed.error.issues,
+      })
+    }
+    const actor = actorOf(c)
+    const role = await ensureClarifyMember(deps, nodeRunId, actor)
+    const result = await saveClarifyDraft({
+      db: deps.db,
+      intermediaryNodeRunId: nodeRunId,
+      roundId: parsed.data.roundId,
+      questionId: parsed.data.questionId,
+      value: {
+        selectedOptionIndices: parsed.data.selectedOptionIndices,
+        customText: parsed.data.customText,
+      },
+      editor: { userId: actor.user.id, displayName: actor.user.displayName, role },
     })
     return c.json({ ok: true, ...result })
   })

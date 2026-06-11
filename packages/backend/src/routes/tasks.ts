@@ -24,11 +24,10 @@ import { actorOf } from '@/auth/actor'
 import { loadConfig } from '@/config'
 import { tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
-import {
-  canViewTask,
-  ensureValidAssignments as ensureValidAssignmentsForRoute,
-} from '@/services/taskCollab'
+import { canViewTask, getTaskMembers, updateTaskMembers } from '@/services/taskCollab'
+import { canViewResource } from '@/services/resourceAcl'
 import { ForbiddenError } from '@/util/errors'
+import { UpdateTaskMembersBodySchema } from '@agent-workflow/shared'
 import {
   cancelTask,
   getNodeRunEvents,
@@ -211,25 +210,41 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     // JSON-encoded StartTask; files[<inputKey>][] fields are the binary
     // contents bound to `kind: 'upload'` inputs.
     if (ct.toLowerCase().startsWith('multipart/form-data')) {
-      const task = await handleMultipartTaskStart(c.req.raw, deps, opencodeCmd)
+      const task = await handleMultipartTaskStart(c.req.raw, deps, opencodeCmd, actorOf(c))
       return c.json(task, 201)
     }
 
-    const parsed = StartTaskSchema.safeParse(await safeJson(c.req.raw))
+    const bodyJson = await safeJson(c.req.raw)
+    // RFC-099 (D6): the per-node assignments field is gone. Reject payloads
+    // still carrying it with a structured 422 instead of silently stripping,
+    // so automation callers notice the breaking change.
+    if (
+      typeof bodyJson === 'object' &&
+      bodyJson !== null &&
+      Object.prototype.hasOwnProperty.call(bodyJson, 'assignments')
+    ) {
+      throw new ValidationError(
+        'assignments-removed',
+        'RFC-099 removed per-node assignments; task members answer reviews/clarifications now',
+      )
+    }
+    const parsed = StartTaskSchema.safeParse(bodyJson)
     if (!parsed.success) {
       throw new ValidationError('task-invalid', 'invalid task payload', {
         issues: parsed.error.issues,
       })
     }
     const actor = actorOf(c)
-    // RFC-036: validate assignments against the workflow definition before
-    // we materialize the worktree (avoid orphan worktrees on 422 paths).
-    const assignments = parsed.data.assignments ?? []
-    if (assignments.length > 0) {
-      const { getWorkflow } = await import('@/services/workflow')
+    // RFC-099 (D3): launching requires the WORKFLOW to be usable by the
+    // launcher; the referenced agent/skill/mcp/plugin closure is implicitly
+    // authorized. Invisible and missing produce the identical 404.
+    {
       const wf = await getWorkflow(deps.db, parsed.data.workflowId)
-      if (wf) {
-        ensureValidAssignmentsForRoute(wf.definition, assignments)
+      if (wf === null || !(await canViewResource(deps.db, actor, 'workflow', wf))) {
+        throw new NotFoundError(
+          'workflow-not-found',
+          `workflow '${parsed.data.workflowId}' not found`,
+        )
       }
     }
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
@@ -244,41 +259,29 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     return c.json(task, 201)
   })
 
-  app.patch('/api/tasks/:id/assignments/:nodeId', async (c) => {
-    const actor = actorOf(c)
+  // RFC-099 (D10) — task members panel. Read open to anyone who can see the
+  // task (the visibility middleware above already gated us); writes are
+  // owner/admin only (enforced in updateTaskMembers).
+  app.get('/api/tasks/:id/members', async (c) => {
     const taskId = c.req.param('id')
-    const nodeId = c.req.param('nodeId')
-    const body = (await safeJson(c.req.raw)) as Record<string, unknown>
-    const kind = typeof body.kind === 'string' ? body.kind : null
-    const newUserId = typeof body.userId === 'string' ? body.userId : null
-    if (kind !== 'reviewer' && kind !== 'clarify_target') {
-      throw new ValidationError('invalid-assignment', `kind must be reviewer | clarify_target`)
+    const rows = await deps.db.select().from(tasksTable).where(eq(tasksTable.id, taskId)).limit(1)
+    const task = rows[0]
+    if (!task) throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
+    return c.json(await getTaskMembers(deps.db, actorOf(c), task))
+  })
+
+  app.put('/api/tasks/:id/members', async (c) => {
+    const taskId = c.req.param('id')
+    const parsed = UpdateTaskMembersBodySchema.safeParse(await safeJson(c.req.raw))
+    if (!parsed.success) {
+      throw new ValidationError('members-invalid', 'invalid members payload', {
+        issues: parsed.error.issues,
+      })
     }
-    if (!newUserId) {
-      throw new ValidationError('invalid-assignment', `userId is required`)
-    }
-    // Only the task owner or an admin may PATCH assignments.
-    const taskRows = await deps.db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, taskId))
-      .limit(1)
-    const task = taskRows[0]
-    if (!task) throw new NotFoundError('task-not-found', `task ${taskId} not found`)
-    const isAdmin = actor.permissions.has('tasks:read:all')
-    if (!isAdmin && task.ownerUserId !== actor.user.id) {
-      throw new ForbiddenError('forbidden', 'only task owner or admin can change assignments')
-    }
-    const { changeNodeAssignment } = await import('@/services/taskCollab')
-    await changeNodeAssignment(deps.db, {
-      taskId,
-      nodeId,
-      kind,
-      newUserId,
-      actorId: actor.user.id,
-      now: Date.now(),
-    })
-    return c.json({ ok: true })
+    const rows = await deps.db.select().from(tasksTable).where(eq(tasksTable.id, taskId)).limit(1)
+    const task = rows[0]
+    if (!task) throw new NotFoundError('task-not-found', `task '${taskId}' not found`)
+    return c.json(await updateTaskMembers(deps.db, actorOf(c), task, parsed.data))
   })
 
   app.post('/api/tasks/:id/cancel', async (c) => {
@@ -618,6 +621,7 @@ async function handleMultipartTaskStart(
   req: Request,
   deps: AppDeps,
   opencodeCmd: string[] | undefined,
+  actor: ReturnType<typeof actorOf>,
 ) {
   let form: Awaited<ReturnType<typeof req.formData>>
   try {
@@ -652,6 +656,17 @@ async function handleMultipartTaskStart(
       `payload field is not valid JSON: ${(err as Error).message}`,
     )
   }
+  // RFC-099 (D6): reject payloads still carrying the removed assignments field.
+  if (
+    typeof payloadJson === 'object' &&
+    payloadJson !== null &&
+    Object.prototype.hasOwnProperty.call(payloadJson, 'assignments')
+  ) {
+    throw new ValidationError(
+      'assignments-removed',
+      'RFC-099 removed per-node assignments; task members answer reviews/clarifications now',
+    )
+  }
   const parsed = StartTaskSchema.safeParse(payloadJson)
   if (!parsed.success) {
     throw new ValidationError('task-invalid', 'invalid task payload', {
@@ -660,9 +675,10 @@ async function handleMultipartTaskStart(
   }
   const startInput = parsed.data
 
-  // 2. Resolve workflow → extract upload input declarations.
+  // 2. Resolve workflow → extract upload input declarations. RFC-099 (D3):
+  // the launcher must be able to use the workflow; invisible == missing.
   const workflow = await getWorkflow(deps.db, startInput.workflowId)
-  if (workflow === null) {
+  if (workflow === null || !(await canViewResource(deps.db, actor, 'workflow', workflow))) {
     throw new NotFoundError('workflow-not-found', `workflow '${startInput.workflowId}' not found`)
   }
   const uploadDefs = collectUploadInputDefs(workflow.definition.inputs)
@@ -755,6 +771,7 @@ async function handleMultipartTaskStart(
     // user sees the error. No files were written (worktree never existed).
     const task = await startTask(startInput, {
       db: deps.db,
+      actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
     })
@@ -779,6 +796,7 @@ async function handleMultipartTaskStart(
       { ...startInput, inputs: inputsOut },
       {
         db: deps.db,
+        actorUserId: actor.user.id,
         ...(opencodeCmd ? { opencodeCmd } : {}),
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
         preCreatedWorktree: {

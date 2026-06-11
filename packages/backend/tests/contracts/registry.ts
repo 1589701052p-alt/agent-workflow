@@ -257,7 +257,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/session' },
   { method: 'GET', path: '/api/tasks/:id/nodes/:nodeRunId/stdout' },
   { method: 'POST', path: '/api/tasks/:id/nodes/:nodeRunId/retry' },
-  { method: 'PATCH', path: '/api/tasks/:id/assignments/:nodeId' },
+  // RFC-099 (D6): the per-node assignments endpoint was removed — task
+  // membership is the answer-rights boundary. Members panel replaces it.
+  { method: 'GET', path: '/api/tasks/:id/members' },
+  { method: 'PUT', path: '/api/tasks/:id/members' },
   // RFC-065: task detail page "工作目录" tab — list + read worktree files.
   { method: 'GET', path: '/api/tasks/:id/worktree-tree' },
   { method: 'GET', path: '/api/tasks/:id/worktree-file' },
@@ -284,6 +287,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/clarify/pending-count' },
   { method: 'GET', path: '/api/clarify/:nodeRunId' },
   { method: 'POST', path: '/api/clarify/:nodeRunId/answers' },
+  // RFC-099 (D8): collaborative per-question answer draft.
+  { method: 'PUT', path: '/api/clarify/:nodeRunId/draft' },
 
   // ---- memories (RFC-041 / RFC-043 / RFC-045) ----
   { method: 'GET', path: '/api/memories' },

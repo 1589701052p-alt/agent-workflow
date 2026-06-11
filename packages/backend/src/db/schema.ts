@@ -1223,9 +1223,10 @@ export const userIdentities = sqliteTable(
 )
 
 // -----------------------------------------------------------------------------
-// RFC-036 task_collaborators — owner + collaborators + role-tagged members
-// (reviewer/clarify_target). Composite PK lets the same user hold multiple
-// roles on a task without losing audit context.
+// RFC-036 task_collaborators — owner + collaborators ("任务用户"). RFC-099
+// (D6) collapsed the reviewer/clarify_target role tags (migration 0046) and
+// dropped the node_assignments table that backed the never-shipped node-level
+// assignment UI: task membership IS the answer-rights boundary now.
 // -----------------------------------------------------------------------------
 export const taskCollaborators = sqliteTable(
   'task_collaborators',
@@ -1237,7 +1238,7 @@ export const taskCollaborators = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
     role: text('role', {
-      enum: ['owner', 'reviewer', 'clarify_target', 'collaborator'],
+      enum: ['owner', 'collaborator'],
     }).notNull(),
     addedBy: text('added_by').notNull(),
     addedAt: integer('added_at').notNull(),
@@ -1246,32 +1247,6 @@ export const taskCollaborators = sqliteTable(
     pk: primaryKey({ columns: [t.taskId, t.userId, t.role] }),
     userIdx: index('idx_task_collab_user').on(t.userId),
     taskIdx: index('idx_task_collab_task').on(t.taskId),
-  }),
-)
-
-// -----------------------------------------------------------------------------
-// RFC-036 node_assignments — per-node reviewer / clarify_target assignments
-// recorded at launch time. PATCH `/api/tasks/:id/assignments/:nodeId` mutates
-// in place (owner or admin only).
-// -----------------------------------------------------------------------------
-export const nodeAssignments = sqliteTable(
-  'node_assignments',
-  {
-    taskId: text('task_id')
-      .notNull()
-      .references(() => tasks.id, { onDelete: 'cascade' }),
-    nodeId: text('node_id').notNull(),
-    kind: text('kind', { enum: ['reviewer', 'clarify_target'] }).notNull(),
-    userId: text('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
-    assignedBy: text('assigned_by').notNull(),
-    assignedAt: integer('assigned_at').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.taskId, t.nodeId, t.kind] }),
-    userIdx: index('idx_node_assign_user').on(t.userId),
-    taskIdx: index('idx_node_assign_task').on(t.taskId),
   }),
 )
 

@@ -585,3 +585,132 @@ export async function deleteMemory(db: DbClient, id: string): Promise<void> {
 export function _scopeKey(scope: MemoryScope, id: string | null): string {
   return `${scope}:${id ?? '__global__'}`
 }
+
+// ---------------------------------------------------------------------------
+// RFC-099 (D12) — memory visibility + management rights follow the scoped
+// resource: agent-scoped rows are visible to whoever can view that agent and
+// manageable by its owner (+admin); workflow-scoped rows likewise; repo and
+// global rows stay all-readable / admin-managed. Runtime injection
+// (memoryInject.ts) is untouched — the daemon actor is the __system__ admin.
+// ---------------------------------------------------------------------------
+
+import type { Actor } from '@/auth/actor'
+import { agents as agentsTable, workflows as workflowsTable } from '@/db/schema'
+import {
+  canViewResource,
+  filterVisibleRows,
+  isAdminActor,
+  isResourceOwner,
+  type AclRow,
+} from '@/services/resourceAcl'
+
+export interface MemoryScopeRef {
+  scopeType: 'agent' | 'workflow' | 'repo' | 'global'
+  scopeId: string | null
+}
+
+async function loadScopeAclRow(db: DbClient, scope: MemoryScopeRef): Promise<AclRow | null> {
+  if (scope.scopeId === null) return null
+  if (scope.scopeType === 'agent') {
+    const rows = await db
+      .select({
+        id: agentsTable.id,
+        ownerUserId: agentsTable.ownerUserId,
+        visibility: agentsTable.visibility,
+      })
+      .from(agentsTable)
+      .where(eq(agentsTable.id, scope.scopeId))
+      .limit(1)
+    return rows[0] ?? null
+  }
+  if (scope.scopeType === 'workflow') {
+    const rows = await db
+      .select({
+        id: workflowsTable.id,
+        ownerUserId: workflowsTable.ownerUserId,
+        visibility: workflowsTable.visibility,
+      })
+      .from(workflowsTable)
+      .where(eq(workflowsTable.id, scope.scopeId))
+      .limit(1)
+    return rows[0] ?? null
+  }
+  return null
+}
+
+/** Read visibility (D12): repo/global → everyone; agent/workflow → resource viewers. */
+export async function canViewMemory(
+  db: DbClient,
+  actor: Actor,
+  scope: MemoryScopeRef,
+): Promise<boolean> {
+  if (isAdminActor(actor)) return true
+  if (scope.scopeType === 'repo' || scope.scopeType === 'global') return true
+  const row = await loadScopeAclRow(db, scope)
+  // Scope resource vanished → fail closed for non-admins (nothing to anchor
+  // visibility on; admins still see it for cleanup).
+  if (row === null) return false
+  return canViewResource(db, actor, scope.scopeType, row)
+}
+
+/** Management rights (D12): scope-resource owner or admin; repo/global admin-only. */
+export async function canManageMemory(
+  db: DbClient,
+  actor: Actor,
+  scope: MemoryScopeRef,
+): Promise<boolean> {
+  if (isAdminActor(actor)) return true
+  if (scope.scopeType === 'repo' || scope.scopeType === 'global') return false
+  const row = await loadScopeAclRow(db, scope)
+  if (row === null) return false
+  return isResourceOwner(actor, row)
+}
+
+/**
+ * List filter: one pass that resolves the visible agent/workflow id sets,
+ * then filters in memory. Admins short-circuit.
+ */
+export async function filterMemoriesByScopeVisibility<T extends MemoryScopeRef>(
+  db: DbClient,
+  actor: Actor,
+  rows: readonly T[],
+): Promise<T[]> {
+  if (isAdminActor(actor)) return [...rows]
+  const agentIds = new Set(
+    rows.filter((r) => r.scopeType === 'agent' && r.scopeId !== null).map((r) => r.scopeId!),
+  )
+  const workflowIds = new Set(
+    rows.filter((r) => r.scopeType === 'workflow' && r.scopeId !== null).map((r) => r.scopeId!),
+  )
+  const visibleAgents = new Set<string>()
+  if (agentIds.size > 0) {
+    const aRows = await db
+      .select({
+        id: agentsTable.id,
+        ownerUserId: agentsTable.ownerUserId,
+        visibility: agentsTable.visibility,
+      })
+      .from(agentsTable)
+      .where(inArray(agentsTable.id, [...agentIds]))
+    for (const r of await filterVisibleRows(db, actor, 'agent', aRows)) visibleAgents.add(r.id)
+  }
+  const visibleWorkflows = new Set<string>()
+  if (workflowIds.size > 0) {
+    const wRows = await db
+      .select({
+        id: workflowsTable.id,
+        ownerUserId: workflowsTable.ownerUserId,
+        visibility: workflowsTable.visibility,
+      })
+      .from(workflowsTable)
+      .where(inArray(workflowsTable.id, [...workflowIds]))
+    for (const r of await filterVisibleRows(db, actor, 'workflow', wRows)) {
+      visibleWorkflows.add(r.id)
+    }
+  }
+  return rows.filter((r) => {
+    if (r.scopeType === 'repo' || r.scopeType === 'global') return true
+    if (r.scopeId === null) return false
+    return r.scopeType === 'agent' ? visibleAgents.has(r.scopeId) : visibleWorkflows.has(r.scopeId)
+  })
+}

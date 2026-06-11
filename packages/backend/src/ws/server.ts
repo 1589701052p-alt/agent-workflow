@@ -29,8 +29,9 @@ import { and, eq, gt, asc } from 'drizzle-orm'
 import type { Actor } from '@/auth/actor'
 import { resolveActor } from '@/auth/session'
 import type { DbClient } from '@/db/client'
-import { nodeRunEvents, nodeRuns, tasks, workflows } from '@/db/schema'
+import { memories as memoriesTable, nodeRunEvents, nodeRuns, tasks, workflows } from '@/db/schema'
 import { canViewResource } from '@/services/resourceAcl'
+import { canViewMemory } from '@/services/memory'
 import { canViewTask } from '@/services/taskCollab'
 import { createLogger } from '@/util/log'
 import {
@@ -396,8 +397,50 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         return
       }
       case 'memories': {
-        ws.data.unsubscribe = memoryBroadcaster.subscribe(MEMORY_CHANNEL, (msg: MemoryWsMessage) =>
-          safeSend(ws, msg),
+        // RFC-099 (D12) — per-frame scope-visibility filter. candidate.created
+        // carries the scope inline; the id-only variants resolve scope from
+        // the row (no cache: memory events are low-frequency and RFC-045
+        // edits can move a row between scopes).
+        ws.data.unsubscribe = memoryBroadcaster.subscribe(
+          MEMORY_CHANNEL,
+          (msg: MemoryWsMessage) => {
+            if (ws.data.actor.user.role === 'admin') {
+              safeSend(ws, msg)
+              return
+            }
+            const check =
+              msg.type === 'memory.candidate.created'
+                ? canViewMemory(deps.db, ws.data.actor, {
+                    scopeType: msg.memory.scopeType,
+                    scopeId: msg.memory.scopeId,
+                  })
+                : (async () => {
+                    const memoryId = (msg as { memoryId?: string }).memoryId
+                    if (typeof memoryId !== 'string') return false // unknown shape → drop
+                    const rows = await deps.db
+                      .select({
+                        scopeType: memoriesTable.scopeType,
+                        scopeId: memoriesTable.scopeId,
+                      })
+                      .from(memoriesTable)
+                      .where(eq(memoriesTable.id, memoryId))
+                      .limit(1)
+                    const row = rows[0]
+                    // Row already hard-deleted → only admins (handled above)
+                    // get the frame.
+                    if (row === undefined) return false
+                    return canViewMemory(deps.db, ws.data.actor, row)
+                  })()
+            check
+              .then((visible) => {
+                if (visible) safeSend(ws, msg)
+              })
+              .catch((err) => {
+                log.warn('memories visibility check threw', {
+                  err: err instanceof Error ? err.message : String(err),
+                })
+              })
+          },
         )
         safeSend(ws, { type: 'hello', channel: 'memories' } satisfies WsControlMessage)
         return

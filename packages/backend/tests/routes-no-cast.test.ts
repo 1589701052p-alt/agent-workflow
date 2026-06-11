@@ -52,7 +52,8 @@ const FILE_LINE_ALLOWLIST = new Set<string>([
   // body schema. Manual `typeof` narrowing keeps these safe at runtime;
   // they're listed so new code doesn't follow the same pattern.
   'oidc-auth.ts:const body = (await safeJson(c.req.raw)) as Record<string, unknown>',
-  'tasks.ts:const body = (await safeJson(c.req.raw)) as Record<string, unknown>',
+  // (RFC-099: the tasks.ts assignments PATCH handler that carried the same
+  // cast was removed along with the node-assignment mechanism.)
   // tasks.ts:496 — multipart FormData entries; web spec types are wrong-shape.
   // Re-typing FormData iterators upstream is out of scope here.
   'tasks.ts:const entries = form.entries() as unknown as Iterable<[string, string | File]>',

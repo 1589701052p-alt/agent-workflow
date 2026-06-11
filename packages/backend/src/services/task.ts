@@ -751,22 +751,19 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   // runner fall back to the parent repo's default user, matching
   // pre-RFC-067 behaviour.
 
-  // RFC-036: record collaborators + node assignments. ensureValidAssignments
-  // has already been run by the caller against the user-provided payload.
+  // RFC-036/RFC-099: record owner + collaborators (assignments removed, D6).
   if (deps.actorUserId) {
     const { recordLaunchContext } = await import('@/services/taskCollab')
     try {
       await recordLaunchContext(deps.db, {
         taskId,
         ownerUserId: deps.actorUserId,
-        assignments: input.assignments ?? [],
         collaboratorUserIds: input.collaboratorUserIds ?? [],
         now,
       })
     } catch (err) {
       // Roll back the task row so the caller sees a clean 422 with no
-      // half-created row in /api/tasks. Use deletedAt soft-delete since
-      // SQLite FKs may still hold partial node_assignments inserts.
+      // half-created row in /api/tasks.
       await deps.db.delete(tasks).where(eq(tasks.id, taskId))
       throw err
     }

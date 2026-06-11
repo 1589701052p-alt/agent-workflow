@@ -410,6 +410,34 @@ export const ClarifyRoundSchema = z.object({
   createdAt: z.number().int(),
   answeredAt: z.number().int().nullable().default(null),
   answeredBy: z.string().nullable().default(null),
+  /** RFC-099 (D7) — task-relationship role snapshot of answeredBy. UI-only.
+   *  Optional so pre-RFC-099 fixtures keep compiling; backend always sets it. */
+  submittedByRole: z.enum(['owner', 'user', 'admin']).nullable().optional(),
+  /** RFC-099 (D8) — Record<questionId, {userId, role, updatedAt}>; live during
+   *  drafting, frozen at submit. NEVER injected into agent prompts. */
+  answerAttributions: z
+    .record(
+      z.string(),
+      z.object({
+        userId: z.string(),
+        role: z.enum(['owner', 'user', 'admin']),
+        updatedAt: z.number().int(),
+      }),
+    )
+    .nullable()
+    .optional(),
+  /** RFC-099 (D8/D14) — server-side per-question draft values
+   *  ({selectedOptionIndices, customText} per questionId); null once submitted. */
+  draftAnswers: z
+    .record(
+      z.string(),
+      z.object({
+        selectedOptionIndices: z.array(z.number().int().nonnegative()).default([]),
+        customText: z.string().default(''),
+      }),
+    )
+    .nullable()
+    .optional(),
 })
 export type ClarifyRound = z.infer<typeof ClarifyRoundSchema>
 

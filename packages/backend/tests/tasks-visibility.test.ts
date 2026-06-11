@@ -112,7 +112,8 @@ async function buildHarness(): Promise<Harness> {
   })
   await db.insert(taskCollaborators).values([
     { taskId: bobTaskId, userId: bob.id, role: 'owner', addedBy: bob.id, addedAt: now },
-    { taskId: bobTaskId, userId: carol.id, role: 'reviewer', addedBy: bob.id, addedAt: now },
+    // RFC-099: the 'reviewer' role tag is gone — plain collaborator membership.
+    { taskId: bobTaskId, userId: carol.id, role: 'collaborator', addedBy: bob.id, addedAt: now },
   ])
   await db.insert(tasks).values({
     name: 'fixture-task',

@@ -22,21 +22,26 @@
 import { and, desc, eq, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import { clarifyRounds, clarifySessions, crossClarifySessions, tasks } from '@/db/schema'
 import {
   buildClarifyPromptBlock,
   renderClarifyQuestionsBlock,
   type ClarifyAnswer,
+  type ClarifyAnswerAttributions,
   type ClarifyDirective,
+  type ClarifyDraftValue,
   type ClarifyPromptContext,
   type ClarifyQuestion,
   type ClarifyQuestionScope,
   type ClarifyRound,
   type ClarifyRoundSummary,
+  type TaskActorRole,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { NotFoundError } from '@/util/errors'
+import { ConflictError, NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
+import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 const log = createLogger('clarify-rounds')
 
@@ -615,6 +620,25 @@ function rowToDetail(
     createdAt: row.createdAt,
     answeredAt: row.answeredAt,
     answeredBy: row.answeredBy,
+    // RFC-099 (D7/D8) — UI-only attribution + live draft state. These fields
+    // are NEVER read by buildPromptContext above (prompt isolation).
+    submittedByRole: (row.submittedByRole ?? null) as ClarifyRound['submittedByRole'],
+    answerAttributions: parseJsonRecord<ClarifyRound['answerAttributions']>(
+      row.answerAttributionsJson,
+    ),
+    draftAnswers: parseJsonRecord<ClarifyRound['draftAnswers']>(row.draftAnswersJson),
+  }
+}
+
+/** Defensive JSON parse → null on malformed / non-object. */
+function parseJsonRecord<T>(raw: string | null): T | null {
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    return parsed as T
+  } catch {
+    return null
   }
 }
 
@@ -687,4 +711,180 @@ async function loadNodeTitlesByTask(
     out.set(t.id, inner)
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// RFC-099 (D8/D14) — collaborative answer drafts + attribution freeze.
+// All of this is UI/audit plumbing: none of these columns are read by
+// buildPromptContext / buildClarifyPromptBlock (locked by the rfc099
+// prompt-isolation tests).
+// ---------------------------------------------------------------------------
+
+export interface SaveClarifyDraftArgs {
+  db: DbClient
+  /** The intermediary (clarify / clarify-cross-agent) node_run the client is on. */
+  intermediaryNodeRunId: string
+  roundId: string
+  questionId: string
+  value: ClarifyDraftValue
+  editor: { userId: string; displayName: string; role: TaskActorRole }
+}
+
+export interface SaveClarifyDraftResult {
+  roundId: string
+  questionId: string
+  updatedAt: number
+}
+
+/**
+ * Per-question last-write-wins draft save. The read-modify-write of the two
+ * JSON columns runs inside a synchronous transaction, so concurrent saves on
+ * DIFFERENT questions merge instead of clobbering each other; same-question
+ * races resolve to the later writer (D14).
+ */
+export async function saveClarifyDraft(
+  args: SaveClarifyDraftArgs,
+): Promise<SaveClarifyDraftResult> {
+  const rows = await args.db
+    .select()
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.id, args.roundId))
+    .limit(1)
+  const row = rows[0]
+  if (row === undefined || row.intermediaryNodeRunId !== args.intermediaryNodeRunId) {
+    throw new NotFoundError('clarify-round-not-found', `clarify round '${args.roundId}' not found`)
+  }
+  if (row.status !== 'awaiting_human') {
+    throw new ConflictError(
+      'clarify-round-not-awaiting',
+      `clarify round '${args.roundId}' is '${row.status}' — drafts only apply while awaiting_human`,
+    )
+  }
+  const questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
+  if (!questions.some((q) => q.id === args.questionId)) {
+    throw new NotFoundError(
+      'clarify-question-not-found',
+      `question '${args.questionId}' not in round '${args.roundId}'`,
+    )
+  }
+  const now = Date.now()
+  dbTxSync(args.db, (tx) => {
+    const fresh = tx
+      .select({
+        draftAnswersJson: clarifyRounds.draftAnswersJson,
+        answerAttributionsJson: clarifyRounds.answerAttributionsJson,
+        status: clarifyRounds.status,
+      })
+      .from(clarifyRounds)
+      .where(eq(clarifyRounds.id, args.roundId))
+      .get()
+    if (fresh === undefined || fresh.status !== 'awaiting_human') {
+      throw new ConflictError(
+        'clarify-round-not-awaiting',
+        `clarify round '${args.roundId}' is no longer awaiting_human`,
+      )
+    }
+    const drafts = parseJsonRecord<Record<string, ClarifyDraftValue>>(fresh.draftAnswersJson) ?? {}
+    const attrs = parseJsonRecord<ClarifyAnswerAttributions>(fresh.answerAttributionsJson) ?? {}
+    drafts[args.questionId] = args.value
+    attrs[args.questionId] = { userId: args.editor.userId, role: args.editor.role, updatedAt: now }
+    tx.update(clarifyRounds)
+      .set({
+        draftAnswersJson: JSON.stringify(drafts),
+        answerAttributionsJson: JSON.stringify(attrs),
+      })
+      .where(eq(clarifyRounds.id, args.roundId))
+      .run()
+  })
+  // Live-sync other members' open forms ("X just edited question N").
+  taskBroadcaster.broadcast(TASK_CHANNEL(row.taskId), {
+    id: -1,
+    type: 'clarify.draft.updated',
+    nodeRunId: args.intermediaryNodeRunId,
+    roundId: args.roundId,
+    questionId: args.questionId,
+    editor: args.editor,
+    ts: now,
+  })
+  return { roundId: args.roundId, questionId: args.questionId, updatedAt: now }
+}
+
+/** True when a submitted answer's user-state equals the stored draft value. */
+function draftMatchesAnswer(draft: ClarifyDraftValue | undefined, answer: ClarifyAnswer): boolean {
+  if (draft === undefined) return false
+  const a = [...(draft.selectedOptionIndices ?? [])].sort((x, y) => x - y)
+  const b = [...(answer.selectedOptionIndices ?? [])].sort((x, y) => x - y)
+  if (a.length !== b.length || a.some((v, i) => v !== b[i])) return false
+  return (draft.customText ?? '') === (answer.customText ?? '')
+}
+
+/**
+ * Pure attribution freeze (D8): per answered question, keep the draft's last
+ * editor when the submitted value matches the draft; otherwise the submitter
+ * modified it at submit time and the attribution becomes theirs.
+ */
+export function freezeAnswerAttributions(args: {
+  answers: readonly ClarifyAnswer[]
+  draftAnswers: Record<string, ClarifyDraftValue> | null
+  draftAttributions: ClarifyAnswerAttributions | null
+  submitter: { userId: string; role: TaskActorRole }
+  now: number
+}): ClarifyAnswerAttributions {
+  const out: ClarifyAnswerAttributions = {}
+  for (const answer of args.answers) {
+    const draft = args.draftAnswers?.[answer.questionId]
+    const draftAttr = args.draftAttributions?.[answer.questionId]
+    if (draftAttr !== undefined && draftMatchesAnswer(draft, answer)) {
+      out[answer.questionId] = draftAttr
+    } else {
+      out[answer.questionId] = {
+        userId: args.submitter.userId,
+        role: args.submitter.role,
+        updatedAt: args.now,
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Build the clarify_rounds `.set()` fragment that freezes attribution at
+ * submit time. Reads the round's current draft columns; returns the frozen
+ * attribution + cleared draft. Callers (submitClarifyAnswers /
+ * submitCrossClarifyAnswers) spread it into their existing rounds update so
+ * the freeze rides the same write.
+ */
+export async function buildFrozenAttributionSet(
+  db: DbClient,
+  roundId: string,
+  answers: readonly ClarifyAnswer[],
+  submitter: { userId: string; role: TaskActorRole },
+): Promise<{
+  submittedByRole: TaskActorRole
+  answerAttributionsJson: string
+  draftAnswersJson: null
+}> {
+  const rows = await db
+    .select({
+      draftAnswersJson: clarifyRounds.draftAnswersJson,
+      answerAttributionsJson: clarifyRounds.answerAttributionsJson,
+    })
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.id, roundId))
+    .limit(1)
+  const row = rows[0]
+  const frozen = freezeAnswerAttributions({
+    answers,
+    draftAnswers: parseJsonRecord<Record<string, ClarifyDraftValue>>(row?.draftAnswersJson ?? null),
+    draftAttributions: parseJsonRecord<ClarifyAnswerAttributions>(
+      row?.answerAttributionsJson ?? null,
+    ),
+    submitter,
+    now: Date.now(),
+  })
+  return {
+    submittedByRole: submitter.role,
+    answerAttributionsJson: JSON.stringify(frozen),
+    draftAnswersJson: null,
+  }
 }

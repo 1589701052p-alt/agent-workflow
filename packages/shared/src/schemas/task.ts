@@ -269,23 +269,10 @@ export const StartTaskSchema = z
     maxDurationMs: z.number().int().nonnegative().optional(),
     maxTotalTokens: z.number().int().nonnegative().optional(),
     /**
-     * RFC-036 — optional per-node reviewer / clarify_target assignments
-     * recorded at launch time. Each entry's `nodeId` must exist in the
-     * workflow definition and its kind must match the node's runtime kind.
-     */
-    assignments: z
-      .array(
-        z.object({
-          nodeId: z.string().min(1),
-          kind: z.enum(['reviewer', 'clarify_target']),
-          userId: z.string().min(1),
-        }),
-      )
-      .optional(),
-    /**
-     * RFC-036 — additional collaborator user IDs (besides the launcher).
-     * Owner / reviewer / clarify_target are recorded automatically; this
-     * field is for "share with me" peers without an assignment role.
+     * RFC-036 / RFC-099 — initial task users besides the launcher (the
+     * launcher is recorded as owner automatically). RFC-099 removed the
+     * per-node `assignments` field — POST /api/tasks now rejects payloads
+     * still carrying it with 422 `assignments-removed`.
      */
     collaboratorUserIds: z.array(z.string().min(1)).optional(),
     /**

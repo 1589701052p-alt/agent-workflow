@@ -147,6 +147,22 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     rerunNodeRunId: z.string(),
     session: ClarifySessionSchema,
   }),
+  // RFC-099 (D8/D14) — synthetic frame (id:-1 like clarify.answered) fired on
+  // every clarify draft save so other members' open forms live-update and
+  // show "X just edited this question".
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify.draft.updated'),
+    nodeRunId: z.string(),
+    roundId: z.string(),
+    questionId: z.string(),
+    editor: z.object({
+      userId: z.string(),
+      displayName: z.string(),
+      role: z.enum(['owner', 'user', 'admin']),
+    }),
+    ts: z.number().int(),
+  }),
   // -------------------------------------------------------------------------
   // RFC-056 cross-clarify events. Parallel to clarify.created / clarify.answered
   // but for the cross-agent path (different node kind + multi-source aggregation
