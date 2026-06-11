@@ -49,7 +49,6 @@ import {
 } from '@/services/fanout'
 import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
-import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import {
   clarifySessions,
@@ -79,6 +78,7 @@ import {
 } from '@/services/clarifyFallback'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
+import { isClarifyRerunCause, mintNodeRun, schedulerMintCause } from '@/services/nodeRunMint'
 import { getTaskWriteSem, gcTaskWriteSem } from '@/services/taskWriteLocks'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import {
@@ -967,18 +967,14 @@ async function maybeRunCommitPush(
       // owns it cleanly — reusing the commit container row would collide with
       // its mark-running transition. The child's parent is the container, so
       // the detail page groups the captured session(s) under the commit row.
-      const sessionRunId = ulid()
       try {
-        await db.insert(nodeRuns).values({
-          id: sessionRunId,
+        const sessionRunId = await mintNodeRun(db, {
           taskId: task.id,
           nodeId,
-          parentNodeRunId: ctx.nodeRunId,
           status: 'pending',
-          retryIndex: 0,
+          cause: 'commit-push-session',
           iteration,
-          shardKey: null,
-          startedAt: Date.now(),
+          overrides: { parentNodeRunId: ctx.nodeRunId },
         })
         const result = await runNode({
           taskId: task.id,
@@ -1450,7 +1446,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     // lifecycle invariant T3 (task done ⟹ every output node has a done run)
     // is satisfied.
     const bindings = readBindings(node, 'ports')
-    const nrId = await insertNodeRun(db, taskId, node.id, 'done', 0, iteration)
+    const nrId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'done',
+      cause: 'io-virtual',
+      iteration,
+    })
     for (const b of bindings) {
       const content = await readPortAtIteration(
         db,
@@ -1543,7 +1545,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     // Validator runtime defense: a node without a questioner means the
     // workflow is malformed — fail and let the user see it in the UI.
     if (findQuestionerNodeForCrossClarify(definition, node.id) === undefined) {
-      const failId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+      const failId = await mintNodeRun(db, {
+        taskId,
+        nodeId: node.id,
+        status: 'pending',
+        cause: 'cross-clarify-guard',
+        iteration,
+      })
       await setNodeRunStatus({
         db,
         nodeRunId: failId,
@@ -1563,7 +1571,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     // advances past this point without parking awaiting_human.
     const stopped = await hasPersistentStop(db, taskId, node.id)
     if (stopped) {
-      const stopRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+      const stopRunId = await mintNodeRun(db, {
+        taskId,
+        nodeId: node.id,
+        status: 'pending',
+        cause: 'cross-clarify-guard',
+        iteration,
+      })
       await setNodeRunStatus({
         db,
         nodeRunId: stopRunId,
@@ -1593,7 +1607,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       }
     }
     const value = inputsMap[inputKey] ?? ''
-    const nrId = await insertNodeRun(db, taskId, node.id, 'done', 0, iteration)
+    const nrId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'done',
+      cause: 'io-virtual',
+      iteration,
+    })
     // RFC-004: an input node's single output port is named after its inputKey,
     // so edges authored on the canvas (whose source.portName defaults to the
     // visible handle label = inputKey) actually resolve. Previously hardcoded
@@ -1725,11 +1745,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   } else {
     retryIndex =
       sameNodeIterRuns.length === 0 ? 0 : Math.max(...sameNodeIterRuns.map((r) => r.retryIndex)) + 1
-    nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', retryIndex, iteration, {
-      reviewIteration: inheritedReviewIteration,
-      shardKey: inheritedShardKey,
-      parentNodeRunId: inheritedParentNodeRunId,
-      consumedUpstreamRunsJson: consumedUpstreamJson,
+    // RFC-098 WP-10: the cause splits on what the freshest existing top-level
+    // row is — undefined→'initial', done/awaiting_*→'stale-redispatch',
+    // failed/interrupted/canceled/exhausted→'revival' (对抗检视修订 #11,
+    // pinned by rfc098-rerun-cause-gates.test.ts).
+    nodeRunId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'pending',
+      cause: schedulerMintCause(latestExisting),
+      retryIndex,
+      iteration,
+      overrides: {
+        reviewIteration: inheritedReviewIteration,
+        shardKey: inheritedShardKey,
+        parentNodeRunId: inheritedParentNodeRunId,
+        consumedUpstreamRunsJson: consumedUpstreamJson,
+      },
     })
   }
   broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
@@ -1868,11 +1900,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // the answered Q&A via id-order generation derivation + the RFC-070
         // consumed-by stamps, not a carried clarifyIteration. shardKey /
         // parentNodeRunId still belong to this run-of-the-node and persist.
-        nodeRunId = await insertNodeRun(db, taskId, node.id, 'pending', attempt, iteration, {
-          reviewIteration: inheritedReviewIteration,
-          shardKey: inheritedShardKey,
-          parentNodeRunId: inheritedParentNodeRunId,
-          consumedUpstreamRunsJson: consumedUpstreamJson,
+        nodeRunId = await mintNodeRun(db, {
+          taskId,
+          nodeId: node.id,
+          status: 'pending',
+          cause: 'process-retry',
+          retryIndex: attempt,
+          iteration,
+          overrides: {
+            reviewIteration: inheritedReviewIteration,
+            shardKey: inheritedShardKey,
+            parentNodeRunId: inheritedParentNodeRunId,
+            consumedUpstreamRunsJson: consumedUpstreamJson,
+          },
         })
         broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
 
@@ -2018,12 +2058,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         const clarifyGeneration = priorDoneGenerations.length
 
         // RFC-026: resolve sessionMode from the clarify node attached to this
-        // agent (if any). `inline` only takes effect when the current run is
-        // a clarify-driven rerun (a later generation AND retryIndex === 0):
-        //   - generation === 0  → first run, no prior session to resume
-        //   - retryIndex > 0    → technical retry within same clarify round;
-        //     design.md §7 forbids inline on retries to keep retry behavior
-        //     deterministic when something went wrong mid-session
+        // agent (if any). `inline` only takes effect when the current run IS
+        // a clarify-driven rerun.
+        // RFC-098 WP-10 (audit S-25): "is a clarify-driven rerun" is read off
+        // the row itself now — the mint factory records WHY every row exists
+        // (node_runs.rerun_cause, migration 0044) and gate-2 switches on it
+        // instead of the old `clarifyGeneration > 0 && retryIndex === 0`
+        // proxy:
+        //   - 'clarify-answer' / 'cross-clarify-questioner-rerun' → TRUE
+        //     (the same logical round continues after a human answered);
+        //   - 'process-retry' → FALSE (design.md §7 forbids inline resume on
+        //     technical retries — deterministic retry behavior);
+        //   - fresh scheduler mints ('initial' / 'stale-redispatch' /
+        //     'revival') → FALSE (no prior session of the same round);
+        //   - NULL (pre-0044 row dispatched across a daemon upgrade) → FALSE
+        //     (documented boundary degradation — see isClarifyRerunCause).
+        // The (consumerKind × cause) truth table is pinned by
+        // rfc098-rerun-cause-gates.test.ts.
         const clarifyNodeForGate = hasClarifyChannel
           ? findClarifyNodeForAgent(definition, node.id)
           : undefined
@@ -2033,7 +2084,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         const sessionMode = clarifyNodeObjForGate
           ? resolveClarifySessionMode(clarifyNodeObjForGate)
           : 'isolated'
-        const isClarifyRerun = clarifyGeneration > 0 && (currentRunRow?.retryIndex ?? 0) === 0
+        const isClarifyRerun = isClarifyRerunCause(currentRunRow?.rerunCause)
         const priorSessionId =
           isClarifyRerun && currentRunRow
             ? await readPriorAgentSessionId(db, {
@@ -2077,6 +2128,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // generation so it sees the same draft. The topology gate
         // `hasExternalFeedbackChannel` filters out nodes with no incoming
         // cross-clarify edge.
+        //
+        // RFC-098 WP-10 (对抗检视修订 #11): this gate deliberately does NOT
+        // switch on rerun_cause — it is a retry-AGNOSTIC lineage signal. An
+        // in-attempt RFC-042 process retry (cause='process-retry') must see
+        // the same working draft as the designer rerun it retries, so the
+        // generation-derived form stays (rfc098-rerun-cause-gates.test.ts
+        // pins this shape).
         const isCrossClarifyTriggeredRerun = hasExternalFeedbackChannel && clarifyGeneration > 0
         let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
         if (isCrossClarifyTriggeredRerun) {
@@ -2192,9 +2250,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // session id (captured above into `followupResumeSessionId`) AND swap
         // the prompt for a short re-anchor directive. The RFC-026 inline
         // clarify-rerun resume path only fires on the FIRST attempt of a
-        // clarify-driven rerun (`retryIndex === 0`); follow-up attempts are
-        // strictly attempt > retryIndex so the two paths cannot fight over
-        // the same `resumeSessionId` slot. When both contexts are present,
+        // clarify-driven rerun (rows whose rerun_cause is in the gate-2 set;
+        // follow-up attempt rows are minted cause='process-retry' and gate
+        // FALSE) so the two paths cannot fight over the same
+        // `resumeSessionId` slot. When both contexts are present,
         // follow-up wins because it expresses what THIS attempt is for.
         const effectiveResumeSessionId = followupDecision.followup
           ? followupResumeSessionId
@@ -2693,8 +2752,13 @@ async function runLoopWrapperNode(
     // now demotes this wrapper's done row to stale and the loop re-runs from
     // iteration 0 on the next dispatch.
     const consumed = await computeWrapperConsumed(db, taskId, definition, node.id, parentIteration)
-    wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, parentIteration, {
-      consumedUpstreamRunsJson: JSON.stringify(consumed),
+    wrapperRunId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'pending',
+      cause: 'wrapper-init',
+      iteration: parentIteration,
+      overrides: { consumedUpstreamRunsJson: JSON.stringify(consumed) },
     })
     // RFC-098 B3 (audit S-28): flip the freshly-minted row pending→running
     // BEFORE the broadcast (DB-first rule, lifecycle.ts) and before any
@@ -2884,7 +2948,13 @@ async function runFanoutWrapperNode(
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
     }
   } else {
-    wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration)
+    wrapperRunId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'pending',
+      cause: 'wrapper-init',
+      iteration,
+    })
     // RFC-098 B3 (audit S-28): mark-running immediately after the mint — it
     // must precede EVERY reachable markWrapperTerminal below (empty-source
     // short-circuit done, cartesian guard, inner/agent-missing failures) so
@@ -3406,18 +3476,17 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
     await db.update(nodeRuns).set({ shardValueHash: valueHash }).where(eq(nodeRuns.id, shardRunId))
   } else {
     // Branch 3 — mint a fresh row under this wrapper.
-    shardRunId = ulid()
-    await db.insert(nodeRuns).values({
-      id: shardRunId,
+    shardRunId = await mintNodeRun(db, {
       taskId,
       nodeId: innerNode.id,
       status: 'pending',
-      retryIndex: 0,
+      cause: 'fanout-shard',
       iteration,
-      parentNodeRunId: wrapperRunId,
-      shardKey: rowShardKey,
-      shardValueHash: valueHash,
-      startedAt: Date.now(),
+      overrides: {
+        parentNodeRunId: wrapperRunId,
+        shardKey: rowShardKey,
+        shardValueHash: valueHash,
+      },
     })
   }
   broadcastNodeStatus(taskId, shardRunId, innerNode.id, 'pending')
@@ -3723,17 +3792,13 @@ async function dispatchFanoutAggregator(
       reason: 'fanout-aggregator-resume',
     })
   } else {
-    aggRunId = ulid()
-    await db.insert(nodeRuns).values({
-      id: aggRunId,
+    aggRunId = await mintNodeRun(db, {
       taskId,
       nodeId: aggNode.id,
       status: 'pending',
-      retryIndex: 0,
+      cause: 'fanout-aggregator',
       iteration,
-      parentNodeRunId: wrapperRunId,
-      shardKey: null,
-      startedAt: Date.now(),
+      overrides: { parentNodeRunId: wrapperRunId },
     })
   }
   broadcastNodeStatus(taskId, aggRunId, aggNode.id, 'pending')
@@ -3970,8 +4035,13 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     // the done wrapper row to stale; the next dispatch mints a new generation
     // that re-captures baseline + pre-set below.
     const consumed = await computeWrapperConsumed(db, taskId, definition, node.id, iteration)
-    wrapperRunId = await insertNodeRun(db, taskId, node.id, 'pending', 0, iteration, {
-      consumedUpstreamRunsJson: JSON.stringify(consumed),
+    wrapperRunId = await mintNodeRun(db, {
+      taskId,
+      nodeId: node.id,
+      status: 'pending',
+      cause: 'wrapper-init',
+      iteration,
+      overrides: { consumedUpstreamRunsJson: JSON.stringify(consumed) },
     })
     // RFC-098 B3 (audit S-28): mark-running before the broadcast and before
     // any reachable markWrapperTerminal (DB-first rule, lifecycle.ts).
@@ -4116,39 +4186,8 @@ function broadcastNodeStatus(
   })
 }
 
-async function insertNodeRun(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-  status: 'pending' | 'done' | 'awaiting_review' | 'awaiting_human',
-  retryIndex: number = 0,
-  iteration: number = 0,
-  inherit?: {
-    reviewIteration?: number
-    shardKey?: string | null
-    parentNodeRunId?: string | null
-    /** RFC-074 provenance: JSON `{upstreamNodeId: nodeRunId}` this run consumed. */
-    consumedUpstreamRunsJson?: string | null
-  },
-): Promise<string> {
-  const id = ulid()
-  const now = Date.now()
-  await db.insert(nodeRuns).values({
-    id,
-    taskId,
-    nodeId,
-    status,
-    retryIndex,
-    iteration,
-    reviewIteration: inherit?.reviewIteration ?? 0,
-    shardKey: inherit?.shardKey ?? null,
-    parentNodeRunId: inherit?.parentNodeRunId ?? null,
-    consumedUpstreamRunsJson: inherit?.consumedUpstreamRunsJson ?? null,
-    startedAt: now,
-    finishedAt: status === 'done' ? now : null,
-  })
-  return id
-}
+// RFC-098 WP-10 T-a: the old `insertNodeRun` half-factory was absorbed into
+// the single mint factory — see services/nodeRunMint.ts (grep-guarded).
 
 async function failTask(
   db: DbClient,

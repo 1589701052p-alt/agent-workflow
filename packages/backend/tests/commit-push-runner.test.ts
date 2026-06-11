@@ -65,6 +65,13 @@ exit 0
       base_branch, branch, status, inputs, started_at, schema_version)
     VALUES (${taskId}, 'cpr', 'wf', '{}', ${repo}, ${repo}, 'main', 'feature/x', 'running', '{}', 1, 1)
   `)
+  // RFC-098 WP-10: the commit container row is born 'running' and the mint
+  // factory enforces "born-running ⟹ child row" (frontier invisibility), so
+  // the fixture provides the triggering agent run the way production does.
+  await db.run(sql`
+    INSERT INTO node_runs (id, task_id, node_id, status, retry_index, iteration, started_at)
+    VALUES ('parent-agent-run', ${taskId}, 'agent-1', 'done', 0, 0, 1)
+  `)
 
   return {
     repo,
@@ -83,7 +90,7 @@ function baseParams(f: Fixture, over: Partial<CommitPushParams> = {}): CommitPus
     taskId: f.taskId,
     agentNodeId: 'agent-1',
     agentName: 'fixer',
-    parentNodeRunId: null,
+    parentNodeRunId: 'parent-agent-run',
     worktreePath: f.repo,
     repoBranch: 'feature/x',
     baseRef: 'main',

@@ -564,6 +564,18 @@ export const nodeRuns = sqliteTable(
      * and on every non-fanout run.
      */
     shardValueHash: text('shard_value_hash'),
+    /**
+     * RFC-098 WP-10 (audit S-25): WHY this row was minted — RerunCause enum
+     * (shared/schemas/task.ts), written by the single mint factory
+     * (services/nodeRunMint.ts) on every insert. The scheduler's gate-2
+     * (isClarifyRerun) switches on it (cause ∈ {'clarify-answer',
+     * 'cross-clarify-questioner-rerun'}) instead of the old proxy
+     * `clarifyGeneration > 0 && retryIndex === 0`. NULL on pre-0044 rows —
+     * they gate FALSE (documented daemon-upgrade boundary degradation, see
+     * isClarifyRerunCause). Plain TEXT on purpose: the enum is enforced at
+     * the TypeScript boundary so new causes never need a migration.
+     */
+    rerunCause: text('rerun_cause'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),

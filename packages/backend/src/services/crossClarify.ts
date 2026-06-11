@@ -82,6 +82,7 @@ import type { DbClient } from '@/db/client'
 import { clarifyRounds, crossClarifySessions, nodeRuns, tasks } from '@/db/schema'
 import { sealAnswersServerSide } from '@/services/clarify'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
+import { mintNodeRun } from '@/services/nodeRunMint'
 import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
@@ -207,15 +208,13 @@ export async function createCrossClarifySession(
   // park-human enforces pending|running → awaiting_human; we mint at
   // 'awaiting_human' directly so the runner doesn't need a separate
   // pending->awaiting_human leg.
-  const crossClarifyNodeRunId = ulid()
-  await args.db.insert(nodeRuns).values({
-    id: crossClarifyNodeRunId,
+  const crossClarifyNodeRunId = await mintNodeRun(args.db, {
     taskId: args.taskId,
     nodeId: args.crossClarifyNodeId,
     status: 'awaiting_human',
-    retryIndex: 0,
+    cause: 'cross-clarify-park',
     iteration: args.loopIter,
-    startedAt: createdAt,
+    overrides: { startedAt: createdAt },
   })
 
   const sessionId = ulid()
@@ -811,21 +810,19 @@ export async function triggerDesignerRerun(
   // Mint a fresh designer node_run. RFC-074 PR-C: freshness is now pure ULID
   // id-order, so the new row — being the latest insert — ALWAYS wins
   // `isFresherNodeRun` over any prior done row. No clarifyIteration counter is
-  // computed or written. retry_index still tracks process attempts; we keep the
-  // max+1 bump so the attempts switcher / lineage stays monotonic, but it is no
-  // longer load-bearing for freshness (the entire cci-bump-over-all-participants
-  // machinery — the source of patch-2026-05-23/25 — is gone).
+  // computed or written.
   //
-  // ⚠️ Deliberately retry_index ≥ 1, NOT 0: the scheduler's self-clarify inline
-  // gate `isClarifyRerun = clarifyGeneration>0 && retryIndex===0` (scheduler.ts)
-  // must stay FALSE for a cross-clarify designer rerun (it uses the separate
-  // retry-agnostic `isCrossClarifyTriggeredRerun` update-mode path instead). So
-  // a designer rerun is INTENTIONALLY indistinguishable-by-retryIndex from a
-  // process retry. Every "clarify generation" consumer is therefore retry-
-  // AGNOSTIC and keys on prior-`done` id-order (priorDoneGenerationsForRun /
-  // memoryInject anchor / frontend clarifyRoundForRun) — do NOT re-introduce a
-  // retry===0 assumption keyed on this mint or those will mis-count designer
-  // reruns. See design §6.4.1 / §6.5.
+  // RFC-098 WP-10 (对抗检视修订 #11): the rerun_cause column is explicit now
+  // ('cross-clarify-answer' below), so the scheduler's gate-2 no longer keys
+  // on retryIndex at all — the old "deliberately retry_index ≥ 1 so
+  // isClarifyRerun stays FALSE" proxy hack is dead. The max+1 bump below is
+  // kept ONLY so the attempts switcher / lineage stays monotonic per
+  // (node, iteration) (cross-clarify-designer-retry-index.test.ts pins it;
+  // it deliberately did NOT flip with WP-10). The designer rerun keeps riding
+  // the separate retry-agnostic `isCrossClarifyTriggeredRerun` update-mode
+  // path, and every "clarify generation" consumer stays retry-AGNOSTIC,
+  // keyed on prior-`done` id-order (priorDoneGenerationsForRun / memoryInject
+  // anchor / frontend clarifyRoundForRun). See design §6.4.1 / §6.5.
   const topLevelDesignerRows = designerRows.filter(
     (r) => r.parentNodeRunId === null && r.iteration === lastDesigner.iteration,
   )
@@ -833,18 +830,15 @@ export async function triggerDesignerRerun(
     topLevelDesignerRows.length === 0
       ? 0
       : Math.max(...topLevelDesignerRows.map((r) => r.retryIndex)) + 1
-  const designerNodeRunId = ulid()
-  await args.db.insert(nodeRuns).values({
-    id: designerNodeRunId,
+  const designerNodeRunId = await mintNodeRun(args.db, {
     taskId: args.taskId,
     nodeId: args.designerNodeId,
     status: 'pending',
+    cause: 'cross-clarify-answer',
     retryIndex: newDesignerRetryIndex,
     iteration: lastDesigner.iteration,
-    parentNodeRunId: lastDesigner.parentNodeRunId ?? null,
-    shardKey: lastDesigner.shardKey ?? null,
-    reviewIteration: lastDesigner.reviewIteration,
-    preSnapshot: lastDesigner.preSnapshot,
+    inheritFrom: lastDesigner,
+    overrides: { startedAt: null },
   })
 
   // RFC-074 (T-B8): no downstream sibling cascade. Pre-minting downstream
@@ -949,18 +943,18 @@ async function mintQuestionerRerun(args: {
     )
   }
 
-  const newId = ulid()
-  await args.db.insert(nodeRuns).values({
-    id: newId,
+  // RFC-098 WP-10: cause='cross-clarify-questioner-rerun' rides the same
+  // scheduler gate-2 set as 'clarify-answer' (the questioner's stop-directive
+  // scoping / inline behavior is "same logical round continues") — stated
+  // outright now instead of the old "retryIndex 0 + generation > 0" proxy.
+  const newId = await mintNodeRun(args.db, {
     taskId: args.taskId,
     nodeId: lastRun.nodeId,
     status: 'pending',
-    retryIndex: 0,
+    cause: 'cross-clarify-questioner-rerun',
     iteration: lastRun.iteration,
-    parentNodeRunId: lastRun.parentNodeRunId ?? null,
-    shardKey: lastRun.shardKey ?? null,
-    reviewIteration: lastRun.reviewIteration,
-    preSnapshot: lastRun.preSnapshot,
+    inheritFrom: lastRun,
+    overrides: { startedAt: null },
   })
   return { questionerNodeRunId: newId }
 }

@@ -176,8 +176,10 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
       resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
       'utf8',
     )
-    // The rerun mint: db.insert(nodeRuns) ... status: 'pending' with rerunNodeRunId.
-    const rerunInsertIdx = src.indexOf('id: rerunNodeRunId,')
+    // The rerun mint: RFC-098 WP-10 moved the raw insert into the mint
+    // factory — the lexical anchor is now the mintNodeRun call that returns
+    // rerunNodeRunId (same T0 position in submitClarifyAnswers).
+    const rerunInsertIdx = src.indexOf('const rerunNodeRunId = await mintNodeRun(')
     // The clarify→done flip: transitionNodeRunStatus with the resume-clarify event.
     const flipIdx = src.indexOf("kind: 'resume-clarify'")
     // RFC-076 T0-extend: the clarify_session → answered flip. submitClarifyAnswers

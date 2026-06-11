@@ -215,13 +215,14 @@ describe('S-13 freshest-run comparator forks — source-text guards (all forks c
     //     all-rows max reduce (G3 pins its exact text). NOT a freshness pick —
     //     it allocates the next UNIQUE retryIndex and intentionally scans ALL
     //     rows including children, never selecting a row to inherit from.
-    //   - services/scheduler.ts (1): comment-only ("retryIndex > 0 →
-    //     technical retry within same clarify round" — prose explaining
-    //     clarify-round semantics, no code).
+    //   - services/scheduler.ts: 0 since RFC-098 WP-10 — its only occurrence
+    //     was comment-only prose ("retryIndex > 0 → technical retry within
+    //     same clarify round") teaching the old gate-2 retryIndex proxy; the
+    //     gate now switches on node_runs.rerun_cause and the prose went with
+    //     it (ratchet tightened).
     // Counts are pinned exactly: a second occurrence inside a whitelisted
     // file also flips red.
     expect(srcInventory('retryIndex > ')).toEqual({
-      'services/scheduler.ts': 1,
       'services/task.ts': 1,
     })
   })

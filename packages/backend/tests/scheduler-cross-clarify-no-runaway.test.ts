@@ -167,9 +167,11 @@ describe('RFC-056 scheduler — no runaway pending cross-clarify rows', () => {
     const src = readFileSync(SCHEDULER_TS, 'utf-8')
     const branchIdx = src.indexOf("if (node.kind === 'clarify-cross-agent') {")
     expect(branchIdx).toBeGreaterThan(-1)
-    const body = src.slice(branchIdx, branchIdx + 3500)
+    // Window sized for the branch body; RFC-098 WP-10 widened it (the two
+    // guard mints now go through the multi-line mintNodeRun factory call).
+    const body = src.slice(branchIdx, branchIdx + 4500)
     // Three locks: live-row probe, persistent-stop fallback, and the
-    // common path explicitly returning without insertNodeRun.
+    // common path explicitly returning without minting a row.
     expect(body).toContain('cross-clarify-live-row-exists')
     expect(body).toContain('hasPersistentStop(db, taskId, node.id)')
     expect(body).toContain('// Common path: no live row, no persistent stop')

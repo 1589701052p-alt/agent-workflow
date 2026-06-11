@@ -302,6 +302,13 @@
       "when": 1781800000000,
       "tag": "0043_rfc098_shard_value_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1781900000000,
+      "tag": "0044_rfc098_rerun_cause",
+      "breakpoints": true
     }
   ]
 }

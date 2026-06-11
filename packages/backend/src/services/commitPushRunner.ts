@@ -14,10 +14,10 @@
 // honored never loses the agent's work — the local commit always lands first.
 
 import { eq } from 'drizzle-orm'
-import { ulid } from 'ulid'
 import type { CommitPushMeta, CommitPushOutcome } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
+import { mintNodeRun } from '@/services/nodeRunMint'
 import { createLogger, type Logger } from '@/util/log'
 import { runGit as realRunGit } from '@/util/git'
 import {
@@ -120,19 +120,18 @@ export async function runCommitPush(
   const idArgs = identityArgs(params.gitUserName, params.gitUserEmail)
   const g = (args: string[]) => runGit(W, args)
 
-  const nodeRunId = ulid()
   const nodeId = commitPushNodeId(params.agentNodeId, params.repoSlug)
   const startedAt = Date.now()
-  await db.insert(nodeRuns).values({
-    id: nodeRunId,
+  // Born 'running' (NOT through the RFC-053 state machine — it governs
+  // updates, not inserts): this container row is always a CHILD of the
+  // triggering agent run, so it never enters deriveFrontier's in-flight set.
+  // mintNodeRun enforces exactly that invariant (RFC-098 revision #10).
+  const nodeRunId = await mintNodeRun(db, {
     taskId: params.taskId,
     nodeId,
-    parentNodeRunId: params.parentNodeRunId,
     status: 'running',
-    retryIndex: 0,
-    iteration: 0,
-    shardKey: null,
-    startedAt,
+    cause: 'commit-push',
+    overrides: { parentNodeRunId: params.parentNodeRunId, startedAt },
   })
 
   const pushTarget = `${remote}/${params.repoBranch}`

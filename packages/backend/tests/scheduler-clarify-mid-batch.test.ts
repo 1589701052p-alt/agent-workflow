@@ -187,6 +187,9 @@ describe('runScope — mid-batch rescan + no-fail-fast (RFC-023 bug 13)', () => 
       retryIndex: 0,
       iteration: 0,
       startedAt: null,
+      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
+      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      rerunCause: 'clarify-answer',
     })
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'ok-after-clarify' }) }, () =>

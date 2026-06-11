@@ -1,0 +1,26 @@
+-- RFC-098 WP-10 (audit S-25) — node_runs.rerun_cause.
+--
+--   * `node_runs.rerun_cause` (nullable TEXT): WHY this row was minted,
+--     written by the single mint factory (services/nodeRunMint.ts) at insert
+--     time. Values are the RerunCause enum (shared/schemas/task.ts, ~21
+--     values: 'initial' / 'stale-redispatch' / 'revival' / 'process-retry' /
+--     'clarify-answer' / 'cross-clarify-questioner-rerun' / ...). The column
+--     is plain TEXT — the enum is enforced at the TypeScript boundary, not
+--     by SQLite, so adding a cause never needs another migration.
+--
+-- Why: the scheduler's injection gates inferred "why does this row exist"
+-- from proxy signals (retryIndex parity × derived clarify generation), which
+-- forced producers into contortions like crossClarify's "deliberately mint
+-- at retryIndex ≥ 1 so isClarifyRerun stays FALSE" hack. Recording the cause
+-- on the row lets gate-2 (isClarifyRerun) switch on
+-- cause ∈ {'clarify-answer','cross-clarify-questioner-rerun'} directly
+-- (对抗检视修订 #11; truth table pinned by rfc098-rerun-cause-gates.test.ts).
+--
+-- NULL policy: pre-0044 rows carry NULL and gate FALSE on gate-2 — a parked
+-- pre-upgrade pending rerun dispatched across the daemon upgrade loses only
+-- inline-session resume / latest-directive application for that single
+-- dispatch (its Q&A context is generation-derived and unaffected). Documented
+-- in isClarifyRerunCause (services/nodeRunMint.ts).
+--
+-- See design/RFC-098-scheduler-closeout/design.md §B4 + survey §wp6d-wp10 四.
+ALTER TABLE `node_runs` ADD COLUMN `rerun_cause` text;

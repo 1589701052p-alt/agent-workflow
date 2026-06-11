@@ -451,6 +451,78 @@ export const NodeRunStatusSchema = z.enum(NODE_RUN_STATUS)
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>
 
 /**
+ * RFC-098 WP-10 (audit S-25): WHY a node_run row was minted, persisted on
+ * `node_runs.rerun_cause` (migration 0044) by the single mint factory
+ * (`backend/services/nodeRunMint.ts`). Before this column the scheduler's
+ * injection gates had to infer the cause from proxy signals (retryIndex
+ * parity, derived clarify generation), which is exactly how the crossClarify
+ * "deliberately retryIndex ≥ 1" hack came to exist.
+ *
+ * Scheduler main-mint merge rule (RFC-098 design 对抗检视修订 #11, pinned by
+ * rfc098-rerun-cause-gates.test.ts): when the scheduler mints a fresh
+ * top-level agent row, the cause is derived from the freshest existing
+ * top-level row (`latestExisting`) at the same (node, iteration):
+ *   - undefined                          → 'initial'
+ *   - done (stale, upstream advanced)    → 'stale-redispatch'
+ *   - failed / interrupted / canceled
+ *     / exhausted                        → 'revival'
+ *   - awaiting_review / awaiting_human   → 'stale-redispatch' (stale parked
+ *     row re-dispatched; the park row itself keeps its own *-park cause)
+ *   - pending / running / skipped        → 'stale-redispatch' (defensive —
+ *     pending top-level rows are reused, not re-minted; running rows are
+ *     never co-dispatched)
+ */
+export const RERUN_CAUSES = [
+  /** First dispatch of a node at this (iteration): no prior top-level row. */
+  'initial',
+  /** Fresh re-dispatch because the freshest existing row went stale
+   *  (upstream advanced) — incl. stale parked awaiting_* rows. */
+  'stale-redispatch',
+  /** Re-mint over a terminal-failure-family latest row
+   *  (failed / interrupted / canceled / exhausted) — resume / RFC-095 revival. */
+  'revival',
+  /** RFC-042 in-invocation process retry attempt (scheduler retry loop). */
+  'process-retry',
+  /** RFC-023 self-clarify answer rerun (clarify.ts submitClarifyAnswers). */
+  'clarify-answer',
+  /** RFC-056 cross-clarify designer update rerun (crossClarify.ts). */
+  'cross-clarify-answer',
+  /** RFC-056/059 cross-clarify questioner stop / reject / continue rerun. */
+  'cross-clarify-questioner-rerun',
+  /** RFC-005 review decision=iterated rerun of the source agent. */
+  'review-iterate',
+  /** RFC-005 review decision=rejected rerun of the source agent. */
+  'review-reject',
+  /** RFC-005 review node parked at awaiting_review. */
+  'review-park',
+  /** RFC-023 clarify node parked at awaiting_human. */
+  'clarify-park',
+  /** RFC-056 cross-clarify node parked at awaiting_human. */
+  'cross-clarify-park',
+  /** User-picked retryNode target placeholder row (task.ts). */
+  'retry-node',
+  /** Downstream cascade placeholder minted by retryNode (task.ts). */
+  'retry-node-cascade',
+  /** Fanout shard child row (scheduler dispatchFanoutShard). */
+  'fanout-shard',
+  /** Fanout aggregator row (scheduler). */
+  'fanout-aggregator',
+  /** Wrapper (loop / fanout / git) container fresh-mint. */
+  'wrapper-init',
+  /** RFC-075 commit&push container row (commitPushRunner). */
+  'commit-push',
+  /** Commit&push per-session child row (scheduler genViaOpencode). */
+  'commit-push-session',
+  /** Virtual done row for input / output IO nodes. */
+  'io-virtual',
+  /** Cross-clarify scheduler guard rows (missing-questioner failure /
+   *  persistent-stop short-circuit). */
+  'cross-clarify-guard',
+] as const
+export const RerunCauseSchema = z.enum(RERUN_CAUSES)
+export type RerunCause = z.infer<typeof RerunCauseSchema>
+
+/**
  * RFC-075: metadata recorded on a framework-synthesized commit&push node_run.
  * Non-null presence marks the row as a commit node (the synthetic `nodeId` is
  * `__commit_push__:{agentNodeId}` (+ `:{repoSlug}` in multi-repo); the row's

@@ -62,6 +62,7 @@ import type { DbClient } from '@/db/client'
 import { clarifyRounds, clarifySessions, nodeRuns, tasks } from '@/db/schema'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { transitionNodeRunStatus } from '@/services/lifecycle'
+import { mintNodeRun } from '@/services/nodeRunMint'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
@@ -166,20 +167,20 @@ export async function createClarifySession(
       })
     }
   } else {
-    clarifyNodeRunId = ulid()
     // RFC-074 PR-C: the clarify node_run no longer carries a clarifyIteration
     // counter — freshness is pure id-order and the round index lives on the
     // clarify_sessions / clarify_rounds rows (iterationIndex), not here.
-    await db.insert(nodeRuns).values({
-      id: clarifyNodeRunId,
+    clarifyNodeRunId = await mintNodeRun(db, {
       taskId,
       nodeId: clarifyNodeId,
       status: 'awaiting_human',
-      retryIndex: 0,
+      cause: 'clarify-park',
       iteration: 0,
-      parentNodeRunId: parentNodeRunId ?? null,
-      shardKey: sourceShardKey,
-      startedAt: now(),
+      overrides: {
+        parentNodeRunId: parentNodeRunId ?? null,
+        shardKey: sourceShardKey,
+        startedAt: now(),
+      },
     })
   }
 
@@ -452,25 +453,24 @@ export async function submitClarifyAnswers(
   }
 
   // (1) Mint the source-agent rerun FIRST (T0 / T0-extend ordering).
-  const rerunNodeRunId = ulid()
-  await db.insert(nodeRuns).values({
-    id: rerunNodeRunId,
+  // retryIndex resets to 0 on clarify rerun — clarify_iteration is the
+  // counter that grows; treating clarify as a fresh attempt keeps the
+  // retry budget intact for genuine process failures.
+  // RFC-074 PR-C: no clarifyIteration bump. This fresh insert is the latest
+  // id, so isFresherNodeRun (pure id-order) picks it over the prior done row
+  // automatically; the clarify generation is derived from prior-done id-order
+  // at dispatch time.
+  // RFC-098 WP-10: cause='clarify-answer' is what flips the scheduler's
+  // gate-2 (isClarifyRerun) for this row — inline session resume + latest
+  // directive application key off it instead of the old retryIndex proxy.
+  const rerunNodeRunId = await mintNodeRun(db, {
     taskId: sessionRow.taskId,
     nodeId: sourceRunRow.nodeId,
     status: 'pending',
-    // retryIndex resets to 0 on clarify rerun — clarify_iteration is the
-    // counter that grows; treating clarify as a fresh attempt keeps the
-    // retry budget intact for genuine process failures.
-    retryIndex: 0,
+    cause: 'clarify-answer',
     iteration: sourceRunRow.iteration,
-    parentNodeRunId: sourceRunRow.parentNodeRunId ?? null,
-    shardKey: sourceRunRow.shardKey ?? null,
-    reviewIteration: sourceRunRow.reviewIteration,
-    // RFC-074 PR-C: no clarifyIteration bump. This fresh insert is the latest
-    // id, so isFresherNodeRun (pure id-order) picks it over the prior done row
-    // automatically; the clarify generation is derived from prior-done id-order
-    // at dispatch time.
-    preSnapshot: sourceRunRow.preSnapshot,
+    inheritFrom: sourceRunRow,
+    overrides: { startedAt: null },
   })
 
   // (2) Flip the session → answered SECOND — only now that the rerun exists, so

@@ -68,6 +68,7 @@ import { pickFreshestRun } from '@/services/freshness'
 import { parseConsumedJson } from '@/services/freshness'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
+import { mintNodeRun } from '@/services/nodeRunMint'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -571,18 +572,14 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
     // OLDER source (RFC-005 US-2 re-review: upstream re-ran after approve /
     // reject / iterate). Mint a fresh awaiting_review row carrying the prior
     // reviewIteration — same review round, re-evaluated on the new content.
-    reviewNodeRunId = ulid()
     reviewIteration = reuse?.reviewIteration ?? 0
-    await db.insert(nodeRuns).values({
-      id: reviewNodeRunId,
+    reviewNodeRunId = await mintNodeRun(db, {
       taskId,
       nodeId: node.id,
       status: 'awaiting_review',
-      retryIndex: 0,
+      cause: 'review-park',
       iteration,
-      reviewIteration,
-      consumedUpstreamRunsJson: consumedJson,
-      startedAt: Date.now(),
+      overrides: { reviewIteration, consumedUpstreamRunsJson: consumedJson },
     })
   }
 
@@ -1754,15 +1751,19 @@ export async function submitReviewDecision(
         errorMessage: `${supersedeMarker}: Replaced by retry_index ${nextRetryIndex} due to review ${args.decision} of ${dv.reviewNodeId}`,
       },
     })
-    await args.db.insert(nodeRuns).values({
-      id: ulid(),
+    await mintNodeRun(args.db, {
       taskId: dv.taskId,
       nodeId,
       status: 'pending',
+      cause: args.decision === 'iterated' ? 'review-iterate' : 'review-reject',
       retryIndex: nextRetryIndex,
       iteration: latest.iteration,
-      parentNodeRunId: null,
-      preSnapshot: latest.preSnapshot,
+      // No inheritFrom: this mint historically carried ONLY preSnapshot from
+      // the superseded row (reviewIteration / shardKey stay at their column
+      // defaults) plus an explicit top-level parent — keep that byte-for-byte.
+      // startedAt: null preserves the legacy "no timing until it actually
+      // runs" shape of this rerun row.
+      overrides: { parentNodeRunId: null, preSnapshot: latest.preSnapshot, startedAt: null },
       // RFC-074 PR-C: no clarifyIteration inherit. This fresh insert is the
       // latest id, so isFresherNodeRun (pure id-order) ranks it above the prior
       // clarify-rerun done row automatically — the scheduler runs the agent

@@ -400,6 +400,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
+      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
+      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      rerunCause: 'clarify-answer',
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
@@ -523,6 +526,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
+      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
+      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      rerunCause: 'clarify-answer',
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
@@ -632,6 +638,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
+      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
+      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      rerunCause: 'clarify-answer',
     })
 
     // Step 3: simulate the daemon restart sweep — the rerun row never got a
@@ -751,6 +760,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
+      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
+      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      rerunCause: 'clarify-answer',
     })
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
     const ROUND2_BODY = JSON.stringify({

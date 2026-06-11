@@ -42,6 +42,7 @@ import { WRAPPER_KINDS } from '@/services/dispatchFrontier'
 import type { RollbackOutcome } from '@/services/nodeRollback'
 import { killStaleRunProcessTree } from '@/util/process'
 import { setTaskStatus, trySetTaskStatus } from '@/services/lifecycle'
+import { mintNodeRun } from '@/services/nodeRunMint'
 import { pickFreshestRun } from '@/services/freshness'
 import { listAvailableRefs, resolveCachedRepo } from '@/services/gitRepoCache'
 import { createWorktree, gitDiffSnapshot, isGitWorkTree, worktreeDiff } from '@/util/git'
@@ -1343,21 +1344,15 @@ export async function retryNode(
     const maxRetry = existing.reduce((mx, r) => (r.retryIndex > mx ? r.retryIndex : mx), -1)
     const nextRetry = maxRetry + 1
     const inherit = nodeId === runRow.nodeId ? runRow : prev
-    const newId = ulid()
-    await db.insert(nodeRuns).values({
-      id: newId,
+    await mintNodeRun(db, {
       taskId,
       nodeId,
       status: 'failed',
+      cause: nodeId === runRow.nodeId ? 'retry-node' : 'retry-node-cascade',
       retryIndex: nextRetry,
       iteration: inherit?.iteration ?? 0,
-      reviewIteration: inherit?.reviewIteration ?? 0,
-      shardKey: inherit?.shardKey ?? null,
-      parentNodeRunId: inherit?.parentNodeRunId ?? null,
-      preSnapshot: inherit?.preSnapshot ?? null,
-      startedAt: Date.now(),
-      finishedAt: Date.now(),
-      errorMessage: 'queued for retry',
+      inheritFrom: inherit ?? null,
+      overrides: { finishedAt: Date.now(), errorMessage: 'queued for retry' },
     })
   }
 
