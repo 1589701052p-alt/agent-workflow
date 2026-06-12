@@ -152,6 +152,20 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   await alicePage.getByTestId('acl-save').click()
   await expect(alicePage.getByTestId('acl-save')).toBeDisabled()
 
+  // (3b) NESTED dialog smoke — the owner-transfer dialog opens INSIDE the
+  // permissions dialog. Pre-fix the two focus traps locked the page solid
+  // (user report: "转让所有者的弹窗弹出来后，界面必死"), so every
+  // interaction below would time out. Type into the picker, then Escape:
+  // only the INNER dialog closes; the permissions dialog must survive.
+  await alicePage.getByTestId('acl-transfer-owner').click()
+  const transferInput = alicePage.getByTestId('acl-transfer-input')
+  await expect(transferInput).toBeVisible()
+  await transferInput.fill('carol')
+  await expect(alicePage.getByTestId('acl-transfer-option-carol99')).toBeVisible()
+  await alicePage.keyboard.press('Escape')
+  await expect(transferInput).toHaveCount(0)
+  await expect(alicePage.getByTestId('acl-panel')).toBeVisible()
+
   // (4) carol sees it again; her panel (behind the same header button) is
   // read-only (no save / transfer).
   await carolPage.goto(`${daemon.baseUrl}/agents/${AGENT_NAME}`)

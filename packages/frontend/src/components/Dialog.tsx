@@ -46,6 +46,20 @@ export interface DialogProps {
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+// Module-level stack of currently-OPEN dialog panels, in mount order. Nested
+// dialogs (RFC-099's owner-transfer dialog lives inside the permissions
+// dialog) register here so that only the TOPMOST dialog runs its focus trap
+// and its ESC handler:
+//   - two live traps yank focus at each other in a synchronous focusin loop
+//     and freeze the page (user report: "转让所有者的弹窗弹出来后，界面必死");
+//   - two live ESC listeners both fire on one keypress (stopPropagation does
+//     not stop sibling listeners on the same window node), closing BOTH
+//     layers at once.
+// When the inner dialog closes it pops off, the outer becomes top again, and
+// the inner's focus-restore lands back on its trigger inside the outer panel.
+// Locked by tests/dialog-nested.test.tsx.
+const openDialogStack: Array<RefObject<HTMLDivElement | null>> = []
+
 // Focus is "inside the dialog" if it's in the panel itself OR inside a
 // popover that a control *within* the panel owns via `aria-controls`. The
 // latter covers floating layers that are intentionally portaled to
@@ -88,11 +102,29 @@ export function Dialog(props: DialogProps): ReactElement | null {
     }
   }, [props.open])
 
+  // Register on the open-dialog stack (see openDialogStack above). This
+  // effect is declared BEFORE the initial-focus effect so a nested dialog is
+  // already top-of-stack by the time its 0ms focus timer moves focus — the
+  // outer dialog's trap must already be inert at that point.
+  useEffect(() => {
+    if (!props.open) return
+    openDialogStack.push(panelRef)
+    return () => {
+      const i = openDialogStack.indexOf(panelRef)
+      if (i >= 0) openDialogStack.splice(i, 1)
+    }
+  }, [props.open])
+
+  const isTopDialog = () => openDialogStack[openDialogStack.length - 1] === panelRef
+
   // ESC handler.
   useEffect(() => {
     if (!props.open || !closeOnEsc) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Nested dialogs: only the topmost layer answers ESC — sibling
+        // window listeners all see the event regardless of stopPropagation.
+        if (!isTopDialog()) return
         e.stopPropagation()
         props.onClose()
       }
@@ -140,6 +172,9 @@ export function Dialog(props: DialogProps): ReactElement | null {
   useEffect(() => {
     if (!props.open) return
     const yankBack = () => {
+      // Nested dialogs: an inert lower layer must never fight the top
+      // dialog's trap — that tug-of-war is a synchronous focusin loop.
+      if (!isTopDialog()) return
       const panel = panelRef.current
       if (panel === null) return
       const ae = document.activeElement
@@ -148,6 +183,7 @@ export function Dialog(props: DialogProps): ReactElement | null {
       ;(focusables[0] ?? panel).focus?.()
     }
     const onFocusIn = (e: FocusEvent) => {
+      if (!isTopDialog()) return
       const panel = panelRef.current
       if (panel === null) return
       const target = e.target as Node | null
