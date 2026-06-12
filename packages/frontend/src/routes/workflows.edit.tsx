@@ -337,6 +337,7 @@ function WorkflowEditPage() {
           onConfirm={() => del.mutateAsync()}
           danger
           disabled={del.isPending}
+          size="sm"
         />
       </div>
     ),

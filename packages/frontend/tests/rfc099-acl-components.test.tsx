@@ -224,3 +224,33 @@ describe('AclPanel', () => {
     expect(screen.queryByTestId('acl-dialog-button')).toBeNull()
   })
 })
+
+// --- Header-button size uniformity (user report ×2: "权限按钮和同页面其他
+// 按钮大小不一致"). The workflows editor toolbar renders 启动/校验/导出/权限
+// as `btn--sm`; the delete ConfirmButton shipped WITHOUT size="sm", so its
+// 16px label sat next to the 13px 权限 button. Rendering the whole editor
+// route needs router + xyflow scaffolding, so this is a source-level
+// assertion (sanctioned fallback): every action in the editor's
+// headerActions block must opt into the sm size. ---
+
+describe('workflows editor header — uniform btn--sm sizing', () => {
+  test('every headerActions button in workflows.edit.tsx is sm-sized', async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const here = path.dirname(new URL(import.meta.url).pathname)
+    const src = await fs.readFile(path.join(here, '../src/routes/workflows.edit.tsx'), 'utf8')
+    const start = src.indexOf('const headerActions')
+    expect(start).toBeGreaterThan(-1)
+    const end = src.indexOf('</div>\n    ),', start)
+    expect(end).toBeGreaterThan(start)
+    const block = src.slice(start, end)
+    // Raw `className="btn ..."` usages must all carry btn--sm.
+    for (const m of block.matchAll(/className="([^"]*)"/g)) {
+      const cls = m[1] ?? ''
+      if (cls.split(/\s+/).includes('btn')) expect(cls).toContain('btn--sm')
+    }
+    // Component-based buttons (AclDialogButton / ConfirmButton) opt in via
+    // the size prop — one each.
+    expect(block.match(/size="sm"/g)?.length).toBe(2)
+  })
+})
