@@ -1,12 +1,16 @@
-// RFC-099 — shared "权限" panel for the five ACL'd resource detail pages
+// RFC-099 — shared permissions panel for the five ACL'd resource types
 // (agents / skills / mcps / plugins / workflows).
 //
-// Shows owner + visibility + member list to every viewer (D16); owner and
-// admins additionally edit visibility / members and transfer ownership
-// (D9). Hidden entirely under the daemon token (single-user mode — D19).
+// The ONE sanctioned entry point is AclDialogButton: a header button that
+// opens the panel inside a Dialog — every surface looks identical. The panel
+// itself renders WITHOUT its own title/border chrome (the Dialog provides
+// both) and ends in a footer-styled action row: 取消 closes, 保存权限 saves
+// AND closes on success (user feedback: the dialog must not linger after a
+// successful save).
 //
-// Save model: explicit 保存 button per panel (matches the surrounding detail
-// pages, which are explicit-save too); owner transfer confirms via Dialog.
+// Visibility rules: owner + visibility + member list are readable by every
+// viewer (D16); only the owner and admins edit (D9). Hidden entirely under
+// the daemon token (single-user mode — D19).
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
@@ -18,14 +22,27 @@ import { useActor } from '@/hooks/useActor'
 import { Dialog } from './Dialog'
 import { UserPicker } from './UserPicker'
 
+interface AclPanelProps {
+  /** e.g. '/api/agents/my-agent' — the panel appends '/acl'. */
+  resourceBaseUrl: string
+  /** Query key segment to invalidate the parent resource on changes. */
+  invalidateKey: readonly unknown[]
+  /** Called after a successful save — the hosting dialog closes itself. */
+  onSaved?: () => void
+  /** Called by the 取消/关闭 footer button. */
+  onCancel?: () => void
+}
+
 /**
- * RFC-099 — the ONE sanctioned entry point for resource permissions: a
- * top-right header button that opens the AclPanel in a Dialog. Every ACL'd
- * resource detail page (agents / skills / mcps / plugins / workflows editor)
- * mounts this instead of inlining the panel, so the permissions surface looks
- * identical everywhere. Hidden under the daemon token (single-user mode).
+ * Uniform top-right entry point: header button → Dialog → AclPanel.
+ * `size` matches the neighboring header buttons (detail pages use full-size
+ * buttons, the workflows editor header uses `sm`).
  */
-export function AclDialogButton({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
+export function AclDialogButton({
+  resourceBaseUrl,
+  invalidateKey,
+  size,
+}: Pick<AclPanelProps, 'resourceBaseUrl' | 'invalidateKey'> & { size?: 'sm' | 'md' }) {
   const { t } = useTranslation()
   const actor = useActor()
   const [open, setOpen] = useState(false)
@@ -36,27 +53,25 @@ export function AclDialogButton({ resourceBaseUrl, invalidateKey }: AclPanelProp
     <>
       <button
         type="button"
-        className="btn btn--sm"
+        className={size === 'sm' ? 'btn btn--sm' : 'btn'}
         data-testid="acl-dialog-button"
         onClick={() => setOpen(true)}
       >
         {t('acl.title')}
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title={t('acl.title')} size="md">
-        <AclPanel resourceBaseUrl={resourceBaseUrl} invalidateKey={invalidateKey} />
+        <AclPanel
+          resourceBaseUrl={resourceBaseUrl}
+          invalidateKey={invalidateKey}
+          onSaved={() => setOpen(false)}
+          onCancel={() => setOpen(false)}
+        />
       </Dialog>
     </>
   )
 }
 
-interface AclPanelProps {
-  /** e.g. '/api/agents/my-agent' — the panel appends '/acl'. */
-  resourceBaseUrl: string
-  /** Query key segment to invalidate the parent resource on changes. */
-  invalidateKey: readonly unknown[]
-}
-
-export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
+export function AclPanel({ resourceBaseUrl, invalidateKey, onSaved, onCancel }: AclPanelProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const actor = useActor()
@@ -88,12 +103,15 @@ export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
       userIds?: string[]
       ownerUserId?: string
     }) => api.put<ResourceAcl>(aclUrl, body),
-    onSuccess: (next) => {
+    onSuccess: (next, body) => {
       qc.setQueryData(['acl', aclUrl], next)
       setDirty(false)
       setTransferOpen(false)
       setTransferTo([])
       void qc.invalidateQueries({ queryKey: invalidateKey })
+      // Owner transfer keeps the main dialog open (the panel just changed
+      // under you and is worth a glance); a plain save closes it.
+      if (body.ownerUserId === undefined) onSaved?.()
     },
   })
 
@@ -108,14 +126,12 @@ export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
   const canManage = acl.canManage
 
   return (
-    <section className="page__section acl-panel" data-testid="acl-panel">
-      <h2 className="acl-panel__title">{t('acl.title')}</h2>
-
+    <div className="acl-panel" data-testid="acl-panel">
       <div className="acl-panel__row">
         <span className="acl-panel__label">{t('acl.owner')}</span>
         <span className="acl-panel__value">
           {acl.owner !== null ? (
-            <span className="chip chip--tight">
+            <span className="chip">
               {acl.owner.displayName}
               <span className="user-picker__username">@{acl.owner.username}</span>
             </span>
@@ -176,7 +192,7 @@ export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
         ) : (
           <span className="acl-panel__value">
             {members.map((u) => (
-              <span key={u.id} className="chip chip--tight">
+              <span key={u.id} className="chip">
                 {u.displayName}
               </span>
             ))}
@@ -184,24 +200,30 @@ export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
         )}
       </div>
 
-      {visibility === 'private' && <p className="page__hint">{t('acl.privateHint')}</p>}
+      {visibility === 'private' && (
+        <p className="acl-panel__hint page__hint">{t('acl.privateHint')}</p>
+      )}
 
-      {canManage && (
-        <div className="acl-panel__actions">
+      {save.error !== null && save.error !== undefined && (
+        <p className="form-actions__error">{describeApiError(save.error)}</p>
+      )}
+
+      <div className="acl-panel__footer">
+        <button type="button" className="btn" onClick={() => onCancel?.()}>
+          {canManage ? t('common.cancel') : t('common.close')}
+        </button>
+        {canManage && (
           <button
             type="button"
-            className="btn btn--primary btn--sm"
+            className="btn btn--primary"
             disabled={!dirty || save.isPending}
             data-testid="acl-save"
             onClick={() => save.mutate({ visibility, userIds: members.map((u) => u.id) })}
           >
             {save.isPending ? t('common.saving') : t('acl.save')}
           </button>
-          {save.error !== null && save.error !== undefined && (
-            <span className="form-actions__error">{describeApiError(save.error)}</span>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       <Dialog
         open={transferOpen}
@@ -237,6 +259,6 @@ export function AclPanel({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
           testidPrefix="acl-transfer"
         />
       </Dialog>
-    </section>
+    </div>
   )
 }

@@ -133,8 +133,8 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   await expect(alicePage.getByTestId('acl-panel')).toContainText('alice99')
   await alicePage.getByTestId('acl-visibility-private').click()
   await alicePage.getByTestId('acl-save').click()
-  // Save settles → button disables again (dirty cleared on success).
-  await expect(alicePage.getByTestId('acl-save')).toBeDisabled()
+  // A successful save CLOSES the dialog (user feedback).
+  await expect(alicePage.getByTestId('acl-panel')).toHaveCount(0)
 
   // (2) carol: list no longer contains the agent; direct URL dead-ends.
   await carolPage.goto(`${daemon.baseUrl}/agents`)
@@ -146,17 +146,19 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   // list is PORTALED to document.body (the original in-panel dropdown was
   // clipped by .dialog__body's scroll region and unclickable — the user-
   // reported "搜索用户无法点击" bug this flow now locks).
+  await alicePage.getByTestId('acl-dialog-button').click()
   await alicePage.getByTestId('acl-members-input').click()
   await alicePage.getByTestId('acl-members-input').fill('carol')
   await alicePage.getByTestId('acl-members-option-carol99').click()
   await alicePage.getByTestId('acl-save').click()
-  await expect(alicePage.getByTestId('acl-save')).toBeDisabled()
+  await expect(alicePage.getByTestId('acl-panel')).toHaveCount(0)
 
   // (3b) NESTED dialog smoke — the owner-transfer dialog opens INSIDE the
   // permissions dialog. Pre-fix the two focus traps locked the page solid
   // (user report: "转让所有者的弹窗弹出来后，界面必死"), so every
   // interaction below would time out. Type into the picker, then Escape:
   // only the INNER dialog closes; the permissions dialog must survive.
+  await alicePage.getByTestId('acl-dialog-button').click()
   await alicePage.getByTestId('acl-transfer-owner').click()
   const transferInput = alicePage.getByTestId('acl-transfer-input')
   await expect(transferInput).toBeVisible()

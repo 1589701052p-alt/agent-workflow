@@ -195,7 +195,23 @@ export function Dialog(props: DialogProps): ReactElement | null {
     // last focusable. The corresponding `focusout` on the panel-side
     // element DOES fire — defer via microtask so `document.activeElement`
     // has settled, then redirect if it ended up outside.
-    const onFocusOut = () => queueMicrotask(yankBack)
+    //
+    // RFC-099 follow-up: when focus is moving WITHIN the dialog (e.g. from
+    // the × button to an input the user just clicked), do NOT queue the
+    // yank. The microtask checkpoint runs between the native blur and the
+    // native focus — at that instant activeElement is transiently <body>,
+    // so an unconditional yank steals the in-flight focus and lands it on
+    // the panel's first focusable (the ×), eating the click ("搜索用户
+    // textbox 无法使用" was exactly this race). `relatedTarget` on focusout
+    // is the element about to RECEIVE focus; inside-the-dialog moves skip
+    // the net, while real escapes (relatedTarget outside or null) keep it.
+    const onFocusOut = (e: FocusEvent) => {
+      const panel = panelRef.current
+      if (panel === null) return
+      const next = e.relatedTarget as Node | null
+      if (next !== null && isFocusInsideDialog(panel, next)) return
+      queueMicrotask(yankBack)
+    }
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
     return () => {

@@ -10479,24 +10479,22 @@ mark.comment-anchor[data-active='true'] {
 
 /* ---- RFC-099: ownership ACL panel + user picker + attribution chips ---- */
 
+/* RFC-099 — permissions / task-members panel. Always hosted inside a
+   Dialog (AclDialogButton / TaskMembersDialogButton), so the panel carries
+   no border or title of its own: just label/value rows + a footer action
+   row mirroring .dialog__footer. */
 .acl-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3, 12px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
-  padding: 16px;
-}
-
-.acl-panel__title {
-  margin: 0;
-  font-size: 15px;
+  gap: var(--space-4, 16px);
+  padding-top: 4px;
 }
 
 .acl-panel__row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4, 16px);
+  min-height: 32px;
 }
 
 .acl-panel__row--members {
@@ -10504,22 +10502,30 @@ mark.comment-anchor[data-active='true'] {
 }
 
 .acl-panel__label {
-  flex: 0 0 96px;
+  flex: 0 0 72px;
   font-size: 13px;
   color: var(--muted);
+  line-height: 32px;
 }
 
 .acl-panel__value {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
-.acl-panel__actions {
+.acl-panel__hint {
+  margin: -6px 0 0 calc(72px + var(--space-4, 16px));
+}
+
+.acl-panel__footer {
   display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  margin-top: var(--space-2, 8px);
+  padding-top: var(--space-4, 16px);
+  border-top: 1px solid var(--border);
 }
 
 .user-picker {

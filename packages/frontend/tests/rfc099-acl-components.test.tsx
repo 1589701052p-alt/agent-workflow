@@ -195,13 +195,26 @@ describe('AclPanel', () => {
     expect(screen.queryByTestId('acl-panel')).toBeNull()
   })
 
-  test('AclDialogButton: the uniform header entry opens the panel in a Dialog', async () => {
+  test('AclDialogButton: opens the panel in a Dialog; a successful save CLOSES it', async () => {
     setupGet({ canManage: true })
+    mockedPut.mockResolvedValue({
+      resourceType: 'agent',
+      resourceId: 'a1',
+      ownerUserId: 'owner-1',
+      owner: user('owner-1', 'alice'),
+      visibility: 'private',
+      users: [],
+      canManage: true,
+    })
     wrap(<AclDialogButton resourceBaseUrl="/api/agents/x" invalidateKey={['agents']} />)
     const btn = await screen.findByTestId('acl-dialog-button')
     expect(screen.queryByTestId('acl-panel')).toBeNull()
     fireEvent.click(btn)
     await waitFor(() => expect(screen.queryByTestId('acl-panel')).toBeTruthy())
+    // dirty the form, save → dialog closes (user feedback: 保存后必须关闭).
+    fireEvent.click(screen.getByTestId('acl-visibility-private'))
+    fireEvent.click(screen.getByTestId('acl-save'))
+    await waitFor(() => expect(screen.queryByTestId('acl-panel')).toBeNull())
   })
 
   test('AclDialogButton hidden under the daemon token (D19)', async () => {

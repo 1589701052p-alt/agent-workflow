@@ -1,7 +1,13 @@
-// RFC-099 (D10) — task members panel on the task detail page. Shows owner +
-// task users to every member; owner/admin add & remove users and transfer
-// ownership. Task users hold the same operational rights as the owner (D13)
-// — this panel is the only owner-gated surface besides task deletion.
+// RFC-099 (D10) — task members panel, hosted in a Dialog behind the
+// TaskMembersDialogButton header button (uniform with AclDialogButton on the
+// resource pages). Shows owner + task users to every member; owner/admin add
+// & remove users and transfer ownership. Task users hold the same
+// operational rights as the owner (D13) — this panel is the only owner-gated
+// surface besides task deletion.
+//
+// Like AclPanel, the panel renders without its own title/border chrome (the
+// Dialog provides both) and ends in a footer action row; a successful save
+// closes the dialog.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
@@ -13,12 +19,19 @@ import { useActor } from '@/hooks/useActor'
 import { Dialog } from '../Dialog'
 import { UserPicker } from '../UserPicker'
 
+interface TaskMembersPanelProps {
+  taskId: string
+  /** Called after a successful save — the hosting dialog closes itself. */
+  onSaved?: () => void
+  /** Called by the 取消/关闭 footer button. */
+  onCancel?: () => void
+}
+
 /**
- * RFC-099 — uniform top-right entry point for task members, mirroring
- * AclDialogButton on the resource pages: a header button opening the panel
- * in a Dialog. Hidden under the daemon token (single-user mode).
+ * Uniform top-right entry point for task members: header button → Dialog →
+ * panel. Hidden under the daemon token (single-user mode).
  */
-export function TaskMembersDialogButton({ taskId }: TaskMembersPanelProps) {
+export function TaskMembersDialogButton({ taskId }: { taskId: string }) {
   const { t } = useTranslation()
   const actor = useActor()
   const [open, setOpen] = useState(false)
@@ -29,24 +42,24 @@ export function TaskMembersDialogButton({ taskId }: TaskMembersPanelProps) {
     <>
       <button
         type="button"
-        className="btn btn--sm"
+        className="btn"
         data-testid="task-members-dialog-button"
         onClick={() => setOpen(true)}
       >
         {t('members.title')}
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title={t('members.title')} size="md">
-        <TaskMembersPanel taskId={taskId} />
+        <TaskMembersPanel
+          taskId={taskId}
+          onSaved={() => setOpen(false)}
+          onCancel={() => setOpen(false)}
+        />
       </Dialog>
     </>
   )
 }
 
-interface TaskMembersPanelProps {
-  taskId: string
-}
-
-export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
+export function TaskMembersPanel({ taskId, onSaved, onCancel }: TaskMembersPanelProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const actor = useActor()
@@ -70,12 +83,13 @@ export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
   const save = useMutation({
     mutationFn: (body: { userIds?: string[]; ownerUserId?: string }) =>
       api.put<TaskMembers>(url, body),
-    onSuccess: (next) => {
+    onSuccess: (next, body) => {
       qc.setQueryData(['tasks', taskId, 'members'], next)
       setDirty(false)
       setTransferOpen(false)
       setTransferTo([])
       void qc.invalidateQueries({ queryKey: ['tasks'] })
+      if (body.ownerUserId === undefined) onSaved?.()
     },
   })
 
@@ -86,14 +100,12 @@ export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
   const data = query.data
 
   return (
-    <section className="page__section acl-panel" data-testid="task-members-panel">
-      <h2 className="acl-panel__title">{t('members.title')}</h2>
-
+    <div className="acl-panel" data-testid="task-members-panel">
       <div className="acl-panel__row">
         <span className="acl-panel__label">{t('acl.owner')}</span>
         <span className="acl-panel__value">
           {data.owner !== null ? (
-            <span className="chip chip--tight">
+            <span className="chip">
               {data.owner.displayName}
               <span className="user-picker__username">@{data.owner.username}</span>
             </span>
@@ -130,7 +142,7 @@ export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
         ) : (
           <span className="acl-panel__value">
             {members.map((u) => (
-              <span key={u.id} className="chip chip--tight">
+              <span key={u.id} className="chip">
                 {u.displayName}
               </span>
             ))}
@@ -138,24 +150,28 @@ export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
         )}
       </div>
 
-      <p className="page__hint">{t('members.hint')}</p>
+      <p className="acl-panel__hint page__hint">{t('members.hint')}</p>
 
-      {data.canManage && (
-        <div className="acl-panel__actions">
+      {save.error !== null && save.error !== undefined && (
+        <p className="form-actions__error">{describeApiError(save.error)}</p>
+      )}
+
+      <div className="acl-panel__footer">
+        <button type="button" className="btn" onClick={() => onCancel?.()}>
+          {data.canManage ? t('common.cancel') : t('common.close')}
+        </button>
+        {data.canManage && (
           <button
             type="button"
-            className="btn btn--primary btn--sm"
+            className="btn btn--primary"
             disabled={!dirty || save.isPending}
             data-testid="members-save"
             onClick={() => save.mutate({ userIds: members.map((u) => u.id) })}
           >
             {save.isPending ? t('common.saving') : t('acl.save')}
           </button>
-          {save.error !== null && save.error !== undefined && (
-            <span className="form-actions__error">{describeApiError(save.error)}</span>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       <Dialog
         open={transferOpen}
@@ -191,6 +207,6 @@ export function TaskMembersPanel({ taskId }: TaskMembersPanelProps) {
           testidPrefix="members-transfer"
         />
       </Dialog>
-    </section>
+    </div>
   )
 }

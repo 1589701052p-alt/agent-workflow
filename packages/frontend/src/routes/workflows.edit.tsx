@@ -330,6 +330,7 @@ function WorkflowEditPage() {
         <AclDialogButton
           resourceBaseUrl={`/api/workflows/${encodeURIComponent(id)}`}
           invalidateKey={['workflows']}
+          size="sm"
         />
         <ConfirmButton
           label={t('common.delete')}
