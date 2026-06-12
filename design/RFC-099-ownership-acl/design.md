@@ -8,6 +8,11 @@
 
 ## 1. 数据模型（migration 0045_rfc099_ownership_acl.sql）
 
+> **D20（2026-06-12 需求修订）**：visibility 列只属于五资源表。**tasks 表不加
+> visibility**——任务恒为成员制私有（owner + task_collaborators + admin），
+> 默认即私有且无公开档位；列表/详情/评审/反问/WS 各读取面全部走
+> canViewTask，与 D18 的资源默认 public 形成有意的不对称。
+
 **五资源表加列**（agents / skills / mcps / plugins / workflows）：
 
 ```sql

@@ -102,6 +102,9 @@ describe('RFC-099 — agents route ACL', () => {
     expect(res.status).toBe(200)
   }
 
+  // D18/D20 asymmetric defaults: the five ACL'd resource types default
+  // PUBLIC (this test); tasks default PRIVATE with no visibility switch
+  // (locked in tasks-visibility.test.ts). 2026-06-12 user adjustment.
   test('user creates agent → becomes owner, default public, everyone sees it', async () => {
     await createAgentAsAlice()
     const detail = await req(h.app, h.bob.token, '/api/agents/secret-agent')

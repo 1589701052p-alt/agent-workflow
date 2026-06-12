@@ -85,6 +85,7 @@ owner+collaborator 可见性（taskCollab.ts:25 `canViewTask`）、节点级 rev
 | D17 | 角色快照优先级   | 成员身份优先：owner > user > admin                                             |
 | D18 | 新建资源默认档位 | **public（全员可用）**，owner 可随时收紧为 private（用户批准 RFC 时修订）     |
 | D19 | 单用户模式       | 沿用 RFC-036 multiUserEnabled gating：daemon/单用户下 `__system__`=admin，行为零变化 |
+| D20 | 任务默认私有     | （2026-06-12 用户「调整下要求，任务默认私有，其他默认public」）任务**不随 D18**：无 visibility 开关、恒为成员制私有——仅 owner + 任务用户 + admin 可见（列表/详情/评审/反问/WS 全链路），非成员 403/不可见；五类资源维持 D18 默认 public。实现上任务本就如此（tasks 表无 visibility 列），本条把不对称默认值钉为正式要求，防止后续把任务并入 D18 | 
 
 ## 用户故事
 
