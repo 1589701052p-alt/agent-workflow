@@ -140,12 +140,20 @@ export async function patchUser(
   id: string,
   patch: PatchUserBody,
   now: number = Date.now(),
+  actorId?: string,
 ): Promise<UserRow> {
   if (id === SYSTEM_USER_ID) {
     throw new ValidationError('system-user-immutable', 'cannot modify __system__ user')
   }
   const row = await findById(db, id)
   if (!row) throw new NotFoundError('user-not-found', `user ${id} not found`)
+
+  // Self-role lockout guard: an admin demoting themselves loses the very
+  // permission needed to undo it, so role changes must come from another
+  // admin. Same-value writes pass so full-object PATCHes stay idempotent.
+  if (actorId === id && patch.role !== undefined && patch.role !== row.role) {
+    throw new ValidationError('self-role-change-forbidden', 'cannot change your own role')
+  }
 
   // Last-admin protection for role changes / status flips.
   if (patch.role && patch.role !== 'admin' && row.role === 'admin') {

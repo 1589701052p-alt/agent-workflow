@@ -100,6 +100,46 @@ describe('/api/users (admin only)', () => {
     expect(body.displayName).toBe('Carol Liu')
   })
 
+  // Self-role lockout guard: an admin demoting themselves would lose the very
+  // permission needed to undo it. PATCHing your own role → 422
+  // self-role-change-forbidden; another admin's session can still do it.
+  test('PATCH /api/users/:id — admin cannot change own role', async () => {
+    const alice = await createUser(h.db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    const { token } = await createSession({ db: h.db, userId: alice.id })
+    const res = await reqAs(h.app, token, `/api/users/${alice.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role: 'user' }),
+    })
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { code: string }
+    expect(body.code).toBe('self-role-change-forbidden')
+    // Non-role self-edits still work.
+    const rename = await reqAs(h.app, token, `/api/users/${alice.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ displayName: 'Alice Liu' }),
+    })
+    expect(rename.status).toBe(200)
+    // A different admin session can change Alice's role.
+    const boss = await createUser(h.db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    const bossSession = await createSession({ db: h.db, userId: boss.id })
+    const demoted = await reqAs(h.app, bossSession.token, `/api/users/${alice.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role: 'user' }),
+    })
+    expect(demoted.status).toBe(200)
+    expect(((await demoted.json()) as { role: string }).role).toBe('user')
+  })
+
   test('DELETE /api/users/:id soft-disables', async () => {
     const created = await reqAs(h.app, DAEMON_TOKEN, '/api/users', {
       method: 'POST',

@@ -76,7 +76,13 @@ export function mountUserRoutes(app: Hono, deps: AppDeps): void {
         issues: parsed.error.issues,
       })
     }
-    const updated = await patchUser(deps.db, c.req.param('id'), parsed.data)
+    const updated = await patchUser(
+      deps.db,
+      c.req.param('id'),
+      parsed.data,
+      Date.now(),
+      actorOf(c).user.id,
+    )
     return c.json(materializePublicAdminView(updated))
   })
 

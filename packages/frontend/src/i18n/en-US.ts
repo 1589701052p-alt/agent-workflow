@@ -367,6 +367,7 @@ export const enUS: Resources = {
       userDesc: 'Resource read + launch tasks + manage own account.',
       adminDesc: 'Full access: users, settings, OIDC, all tasks.',
     },
+    selfRoleLocked: 'You cannot change your own role — ask another admin.',
     noPermission: {
       title: 'Admin permission required',
       body: 'This page is only available to administrators.',

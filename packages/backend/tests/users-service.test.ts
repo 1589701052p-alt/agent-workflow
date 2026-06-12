@@ -132,6 +132,40 @@ describe('users service', () => {
     expect(updated.role).toBe('user')
   })
 
+  // Self-role lockout guard — an admin who demotes themselves loses the very
+  // permission needed to undo it, so patchUser refuses role changes where
+  // actorId === target id (regardless of direction).
+  test('patchUser blocks changing your own role', async () => {
+    const a = await createUser(db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    await expect(patchUser(db, a.id, { role: 'user' }, Date.now(), a.id)).rejects.toThrow(
+      /cannot change your own role/,
+    )
+    // Same-value role in a full-object PATCH stays idempotent.
+    const same = await patchUser(
+      db,
+      a.id,
+      { role: 'admin', displayName: 'Alice 2' },
+      Date.now(),
+      a.id,
+    )
+    expect(same.role).toBe('admin')
+    expect(same.displayName).toBe('Alice 2')
+    // A different admin can still change Alice's role.
+    const b = await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    const updated = await patchUser(db, a.id, { role: 'user' }, Date.now(), b.id)
+    expect(updated.role).toBe('user')
+  })
+
   test('resetPassword rehashes + revokes sessions', async () => {
     const a = await createUser(db, {
       username: 'alice',

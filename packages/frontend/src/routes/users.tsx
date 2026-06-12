@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
 import { Select } from '@/components/Select'
-import { usePermission } from '@/hooks/useActor'
+import { useActor, usePermission } from '@/hooks/useActor'
 import { Route as RootRoute } from './__root'
 
 interface UserRow {
@@ -30,6 +30,7 @@ export const Route = createRoute({
 function UsersPage() {
   const { t } = useTranslation()
   const allowed = usePermission('users:read')
+  const { data: me } = useActor()
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
 
@@ -109,6 +110,10 @@ function UsersPage() {
         <tbody>
           {(data ?? []).map((u) => {
             const isSystem = u.id === '__system__'
+            // Self-role lockout guard (mirrors the backend's
+            // self-role-change-forbidden): show a static chip instead of the
+            // select so an admin can't demote themselves out of /users.
+            const isSelf = u.id === me?.user.id
             const showRoleError = roleError?.id === u.id
             return (
               <tr key={u.id}>
@@ -117,8 +122,19 @@ function UsersPage() {
                 </td>
                 <td>{u.displayName}</td>
                 <td>
-                  {isSystem ? (
-                    <span className="role-chip role-chip--admin">{u.role}</span>
+                  {isSystem || isSelf ? (
+                    <span
+                      className={`role-chip role-chip--${u.role}`}
+                      title={
+                        isSelf
+                          ? t('users.selfRoleLocked', {
+                              defaultValue: 'You cannot change your own role.',
+                            })
+                          : undefined
+                      }
+                    >
+                      {u.role}
+                    </span>
                   ) : (
                     <Select<'admin' | 'user'>
                       value={u.role}

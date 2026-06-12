@@ -496,6 +496,7 @@ export interface Resources {
       userDesc: string
       adminDesc: string
     }
+    selfRoleLocked: string
     noPermission: {
       title: string
       body: string
@@ -2636,6 +2637,7 @@ export const zhCN: Resources = {
       userDesc: '只读资源 + 启动任务 + 管理自己的账户。',
       adminDesc: '完整权限：用户、设置、OIDC、所有任务。',
     },
+    selfRoleLocked: '不能修改自己的角色 —— 需要另一位管理员代为操作。',
     noPermission: {
       title: '需要管理员权限',
       body: '该页面仅管理员角色可访问。',
