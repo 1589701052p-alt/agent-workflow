@@ -8,6 +8,14 @@
   --bg: #f8f9fb;
   --panel: #ffffff;
   --border: #e3e5ea;
+  /* Button-grade border. --border (#e3e5ea) is fine for hairline panel
+     separators but nearly invisible as a BUTTON boundary on white — a plain
+     .btn next to a filled --primary / red-edged --danger reads as a smaller
+     object because the eye only sees its text, not its box (user report ×3:
+     "权限按钮和保存、删除按钮大小不一" — geometry was identical, the edge
+     contrast was not). Derived via color-mix so both themes resolve
+     automatically. */
+  --border-strong: color-mix(in srgb, var(--border) 55%, var(--muted));
   --text: #1f2328;
   /* RFC-054 W2-6 KNOWN_VIOLATIONS fix: bumped #6b7180 → #5b6271 to clear
      the WCAG 2.1 AA contrast threshold of 4.5:1 on --bg / --panel.
@@ -2367,7 +2375,7 @@ code {
   align-items: center;
   justify-content: center;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 8px 14px;
   color: var(--text);
