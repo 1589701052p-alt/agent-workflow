@@ -42,7 +42,9 @@ describe('routes/tasks.tsx — RFC-037 Linear-style first column', () => {
 
   test('styles.css declares the .task-name-cell layout family', () => {
     const css = readFileSync(resolve(import.meta.dirname, '..', 'src', 'styles.css'), 'utf-8')
-    expect(css).toMatch(/\.task-name-cell\s*\{[^}]*display:\s*flex/)
+    // The flex column sits on the inner wrapper, not the <td> — see
+    // tasks-list-name-cell-row-alignment.test.ts for why that must hold.
+    expect(css).toMatch(/\.task-name-cell__inner\s*\{[^}]*display:\s*flex/)
     expect(css).toMatch(/\.task-name-cell__name/)
     expect(css).toMatch(/\.task-name-cell__id/)
   })

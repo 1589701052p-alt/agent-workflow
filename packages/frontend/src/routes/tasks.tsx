@@ -98,15 +98,22 @@ function TasksPage() {
             {data.map((row) => (
               <tr key={row.id}>
                 <td className="task-name-cell">
-                  <Link
-                    to="/tasks/$id"
-                    params={{ id: row.id }}
-                    className="data-table__link task-name-cell__name"
-                    title={row.name}
-                  >
-                    {row.name}
-                  </Link>
-                  <code className="task-name-cell__id">{row.id}</code>
+                  {/* Flex column lives on this inner wrapper, NOT the <td> —
+                      a flex <td> drops out of row-height equalization and its
+                      bottom border paints ~3px above the neighbors' (stepped
+                      row separator). See .skills__name-cell__inner for the
+                      same pattern. */}
+                  <div className="task-name-cell__inner">
+                    <Link
+                      to="/tasks/$id"
+                      params={{ id: row.id }}
+                      className="data-table__link task-name-cell__name"
+                      title={row.name}
+                    >
+                      {row.name}
+                    </Link>
+                    <code className="task-name-cell__id">{row.id}</code>
+                  </div>
                 </td>
                 <td>
                   <Link

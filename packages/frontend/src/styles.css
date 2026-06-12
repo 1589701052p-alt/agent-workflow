@@ -2772,7 +2772,13 @@ code {
 /* RFC-037: tasks list "Linear-style" first column. Task name is the primary
    identifier; the ULID short-hash drops to a muted subtitle inside the same
    cell so users can still copy / disambiguate when names repeat. */
-.task-name-cell {
+/* The flex column lives on an inner wrapper (not the <td>) so the cell stays
+   a real table-cell — same caveat as .skills__name-cell__inner and
+   .data-table__actions. With `display: flex` on the <td> itself the cell
+   dropped out of row-height equalization: its bottom border painted ~3px
+   above the neighbors', breaking every row separator into a stepped line at
+   the Name/Workflow boundary, and `vertical-align: middle` stopped applying. */
+.task-name-cell__inner {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -2780,7 +2786,9 @@ code {
   /* Cap the name column so a pathological 100+ char title can't dominate the
      row — without this the column auto-sizes to fit and squeezes Repo / Error
      into unreadable widths. Pair with single-line ellipsis on the name and a
-     `title` attr for hover, so the full string is still recoverable. */
+     `title` attr for hover, so the full string is still recoverable. The cap
+     works from the inner wrapper because the auto-layout <td> sizes to its
+     content, same trick as `.data-table__clip`. */
   max-width: 320px;
 }
 

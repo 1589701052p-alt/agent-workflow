@@ -1,8 +1,9 @@
 // Locks in the long-task-name visual fix: a 100+ char task name must not
 // stretch the name column or balloon the row height. The contract is:
 //
-//   1. `.task-name-cell` carries a `max-width` so the column can't be sized
-//      to the longest name in the table.
+//   1. `.task-name-cell__inner` carries a `max-width` so the column can't be
+//      sized to the longest name in the table. (The cap lives on the inner
+//      wrapper, not the <td> — see tasks-list-name-cell-row-alignment.test.ts.)
 //   2. `.task-name-cell__name` truncates to a single line with ellipsis
 //      (white-space: nowrap + overflow: hidden + text-overflow: ellipsis).
 //   3. `routes/tasks.tsx` puts `title={row.name}` on the name link, so
@@ -34,8 +35,8 @@ function ruleBody(css: string, selector: string): string {
 }
 
 describe('tasks list — long task name does not blow up the row', () => {
-  test('.task-name-cell caps its width so the column cannot autosize to the longest name', () => {
-    const body = ruleBody(CSS, '.task-name-cell ')
+  test('.task-name-cell__inner caps its width so the column cannot autosize to the longest name', () => {
+    const body = ruleBody(CSS, '.task-name-cell__inner ')
     expect(body).toMatch(/max-width:\s*\d+px/)
   })
 
