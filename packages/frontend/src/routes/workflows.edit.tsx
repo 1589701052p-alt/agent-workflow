@@ -17,9 +17,8 @@ import { syncInputDefs } from '@/components/canvas/syncInputDefs'
 import { clearWrapperSize } from '@/components/canvas/wrapperOps'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasSelection } from '@/components/canvas/nodes/types'
-import { AclPanel } from '@/components/AclPanel'
+import { AclDialogButton } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
-import { Dialog } from '@/components/Dialog'
 import { Field, TextInput } from '@/components/Form'
 import { useWorkflowSync } from '@/hooks/useWorkflowSync'
 import { Route as RootRoute } from './__root'
@@ -280,8 +279,6 @@ function WorkflowEditPage() {
   // the view via react-query; suppress the noisy toast and keep the
   // delete-elsewhere signal which is genuinely user-actionable.
   const [remoteToast, setRemoteToast] = useState<string | null>(null)
-  // RFC-099 — workflow permissions dialog (owner/visibility/members).
-  const [aclOpen, setAclOpen] = useState(false)
   useWorkflowSync({
     workflowId: id,
     currentVersion: query.data?.version ?? null,
@@ -330,14 +327,10 @@ function WorkflowEditPage() {
         >
           {t('editor.exportYaml')}
         </a>
-        <button
-          type="button"
-          className="btn btn--sm"
-          data-testid="workflow-acl-button"
-          onClick={() => setAclOpen(true)}
-        >
-          {t('acl.title')}
-        </button>
+        <AclDialogButton
+          resourceBaseUrl={`/api/workflows/${encodeURIComponent(id)}`}
+          invalidateKey={['workflows']}
+        />
         <ConfirmButton
           label={t('common.delete')}
           onConfirm={() => del.mutateAsync()}
@@ -346,7 +339,7 @@ function WorkflowEditPage() {
         />
       </div>
     ),
-    [id, navigate, validate, del, t, setAclOpen],
+    [id, navigate, validate, del, t],
   )
 
   if (query.isLoading || draft === null)
@@ -370,12 +363,6 @@ function WorkflowEditPage() {
         </div>
         {headerActions}
       </header>
-      <Dialog open={aclOpen} onClose={() => setAclOpen(false)} title={t('acl.title')} size="md">
-        <AclPanel
-          resourceBaseUrl={`/api/workflows/${encodeURIComponent(id)}`}
-          invalidateKey={['workflows']}
-        />
-      </Dialog>
 
       <div className="form-grid form-grid--cols-2">
         <Field label={t('editor.fieldName')} required>

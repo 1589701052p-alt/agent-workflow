@@ -21,7 +21,7 @@ import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
-import { TaskMembersPanel } from '@/components/tasks/TaskMembersPanel'
+import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
@@ -182,6 +182,7 @@ function TaskDetailPage() {
           </div>
         </div>
         <div className="page__actions">
+          <TaskMembersDialogButton taskId={id} />
           {resumability === 'ready' && (
             <button
               type="button"
@@ -516,7 +517,6 @@ function TaskDetailPage() {
             zero and hid the task area. Promoting it to its own tab keeps
             the run-monitoring panes their full height. */}
         <div className="task-detail__pane" hidden={tab !== 'feedback'}>
-          <TaskMembersPanel taskId={id} />
           <TaskFeedbackList taskId={id} />
         </div>
       </div>

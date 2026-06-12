@@ -25,7 +25,7 @@ vi.mock('../src/api/client', async () => {
 })
 
 import { api } from '../src/api/client'
-import { AclPanel } from '../src/components/AclPanel'
+import { AclDialogButton, AclPanel } from '../src/components/AclPanel'
 import { AttributionChip } from '../src/components/AttributionChip'
 import { UserPicker } from '../src/components/UserPicker'
 import { setToken } from '../src/stores/auth'
@@ -180,5 +180,21 @@ describe('AclPanel', () => {
     // Give the /me query a tick to resolve, then assert absence.
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByTestId('acl-panel')).toBeNull()
+  })
+
+  test('AclDialogButton: the uniform header entry opens the panel in a Dialog', async () => {
+    setupGet({ canManage: true })
+    wrap(<AclDialogButton resourceBaseUrl="/api/agents/x" invalidateKey={['agents']} />)
+    const btn = await screen.findByTestId('acl-dialog-button')
+    expect(screen.queryByTestId('acl-panel')).toBeNull()
+    fireEvent.click(btn)
+    await waitFor(() => expect(screen.queryByTestId('acl-panel')).toBeTruthy())
+  })
+
+  test('AclDialogButton hidden under the daemon token (D19)', async () => {
+    setupGet({ canManage: true, source: 'daemon' })
+    wrap(<AclDialogButton resourceBaseUrl="/api/agents/x" invalidateKey={['agents']} />)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByTestId('acl-dialog-button')).toBeNull()
   })
 })

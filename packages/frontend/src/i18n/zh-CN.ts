@@ -698,6 +698,7 @@ export interface Resources {
     optionalPlaceholder: string
     confirmPrompt: string
     close: string
+    cancel: string
     selectAnOption: string
     ariaActions: string
     ariaExpandColumn: string
@@ -2849,6 +2850,7 @@ export const zhCN: Resources = {
     optionalPlaceholder: '（可选）',
     confirmPrompt: '确认？',
     close: '关闭',
+    cancel: '取消',
     selectAnOption: '请选择',
     ariaActions: '操作',
     ariaExpandColumn: '展开',

@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Plugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { AclPanel } from '@/components/AclPanel'
+import { AclDialogButton } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { PluginFields } from '@/components/PluginFields'
 import { describeApiError } from '@/i18n'
@@ -93,6 +93,10 @@ function PluginDetailPage() {
           <p className="page__hint">{t('plugins.detailHint')}</p>
         </div>
         <div className="page__actions">
+          <AclDialogButton
+            resourceBaseUrl={`/api/plugins/${encodeURIComponent(id)}`}
+            invalidateKey={['plugins']}
+          />
           <button
             type="button"
             className="btn btn--primary"
@@ -124,11 +128,6 @@ function PluginDetailPage() {
       ) : null}
 
       <PluginFields value={form} onChange={setForm} nameLocked errors={errors} />
-
-      <AclPanel
-        resourceBaseUrl={`/api/plugins/${encodeURIComponent(id)}`}
-        invalidateKey={['plugins']}
-      />
     </div>
   )
 }

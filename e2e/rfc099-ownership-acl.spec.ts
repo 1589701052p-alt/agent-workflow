@@ -123,9 +123,12 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   await carolPage.goto(`${daemon.baseUrl}/agents`)
   await expect(carolPage.getByRole('link', { name: AGENT_NAME }).first()).toBeVisible()
 
-  // (1) alice opens the detail page; the AclPanel shows her as owner and she
-  // flips visibility to private.
+  // (1) alice opens the detail page → top-right 「Permissions」 button →
+  // the AclPanel dialog shows her as owner and she flips visibility to
+  // private. (RFC-099 follow-up unified ALL permission surfaces behind this
+  // header button.)
   await alicePage.goto(`${daemon.baseUrl}/agents/${AGENT_NAME}`)
+  await alicePage.getByTestId('acl-dialog-button').click()
   await expect(alicePage.getByTestId('acl-panel')).toBeVisible()
   await expect(alicePage.getByTestId('acl-panel')).toContainText('alice99')
   await alicePage.getByTestId('acl-visibility-private').click()
@@ -139,15 +142,20 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   await carolPage.goto(`${daemon.baseUrl}/agents/${AGENT_NAME}`)
   await expect(carolPage.getByTestId('acl-panel')).toHaveCount(0)
 
-  // (3) alice grants carol through the UserPicker and saves.
+  // (3) alice grants carol through the UserPicker and saves. The results
+  // list is PORTALED to document.body (the original in-panel dropdown was
+  // clipped by .dialog__body's scroll region and unclickable — the user-
+  // reported "搜索用户无法点击" bug this flow now locks).
   await alicePage.getByTestId('acl-members-input').click()
   await alicePage.getByTestId('acl-members-input').fill('carol')
   await alicePage.getByTestId('acl-members-option-carol99').click()
   await alicePage.getByTestId('acl-save').click()
   await expect(alicePage.getByTestId('acl-save')).toBeDisabled()
 
-  // (4) carol sees it again; her panel is read-only (no save / transfer).
+  // (4) carol sees it again; her panel (behind the same header button) is
+  // read-only (no save / transfer).
   await carolPage.goto(`${daemon.baseUrl}/agents/${AGENT_NAME}`)
+  await carolPage.getByTestId('acl-dialog-button').click()
   await expect(carolPage.getByTestId('acl-panel')).toBeVisible()
   await expect(carolPage.getByTestId('acl-panel')).toContainText('alice99')
   await expect(carolPage.getByTestId('acl-save')).toHaveCount(0)
@@ -171,7 +179,7 @@ test('RFC-099: private agent disappears for strangers; granting via AclPanel res
   })
   const wf = (await wfRes.json()) as { id: string }
   await alicePage.goto(`${daemon.baseUrl}/workflows/${wf.id}`)
-  await alicePage.getByTestId('workflow-acl-button').click()
+  await alicePage.getByTestId('acl-dialog-button').click()
   await expect(alicePage.getByTestId('acl-panel')).toBeVisible()
   await expect(alicePage.getByTestId('acl-panel')).toContainText('alice99')
 

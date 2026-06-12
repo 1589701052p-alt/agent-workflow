@@ -18,6 +18,37 @@ import { useActor } from '@/hooks/useActor'
 import { Dialog } from './Dialog'
 import { UserPicker } from './UserPicker'
 
+/**
+ * RFC-099 — the ONE sanctioned entry point for resource permissions: a
+ * top-right header button that opens the AclPanel in a Dialog. Every ACL'd
+ * resource detail page (agents / skills / mcps / plugins / workflows editor)
+ * mounts this instead of inlining the panel, so the permissions surface looks
+ * identical everywhere. Hidden under the daemon token (single-user mode).
+ */
+export function AclDialogButton({ resourceBaseUrl, invalidateKey }: AclPanelProps) {
+  const { t } = useTranslation()
+  const actor = useActor()
+  const [open, setOpen] = useState(false)
+  if (actor.data === null || actor.data === undefined || actor.data.source === 'daemon') {
+    return null
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--sm"
+        data-testid="acl-dialog-button"
+        onClick={() => setOpen(true)}
+      >
+        {t('acl.title')}
+      </button>
+      <Dialog open={open} onClose={() => setOpen(false)} title={t('acl.title')} size="md">
+        <AclPanel resourceBaseUrl={resourceBaseUrl} invalidateKey={invalidateKey} />
+      </Dialog>
+    </>
+  )
+}
+
 interface AclPanelProps {
   /** e.g. '/api/agents/my-agent' — the panel appends '/acl'. */
   resourceBaseUrl: string

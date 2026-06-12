@@ -586,6 +586,7 @@ export const enUS: Resources = {
     optionalPlaceholder: '(optional)',
     confirmPrompt: 'Confirm?',
     close: 'Close',
+    cancel: 'Cancel',
     selectAnOption: 'Select an option',
     ariaActions: 'actions',
     ariaExpandColumn: 'expand',

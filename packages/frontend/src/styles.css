@@ -10529,11 +10529,10 @@ mark.comment-anchor[data-active='true'] {
 }
 
 .user-picker__results {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
+  /* Portaled to document.body — coords are set inline from the field's
+     bounding rect (mirror of .select__listbox). z-index matches the Select
+     listbox so the list floats above .dialog__overlay too. */
+  z-index: 1200;
   max-height: 248px;
   overflow-y: auto;
   margin: 0;

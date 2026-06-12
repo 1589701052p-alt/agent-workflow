@@ -3,12 +3,21 @@
 // UI never shipped; this is the canonical implementation.
 //
 // Search hits GET /api/users/search (users:search — available to every
-// logged-in user, public fields only) with a 200 ms debounce; results render
-// in a plain list below the field; selected users render as removable chips
-// (same .chip primitives as ChipsInput).
+// logged-in user, public fields only) with a 200 ms debounce; selected users
+// render as removable chips (same .chip primitives as ChipsInput).
+//
+// The results list is PORTALED to document.body and positioned from the
+// field's bounding rect — the same pattern as <Select>'s listbox — so it
+// never gets clipped by ancestors with overflow (most notably
+// `.dialog__body`, the Dialog's scroll region: the pre-portal version was
+// unclickable inside the owner-transfer dialog). The input carries
+// `aria-controls={listId}` pointing at the portaled <ul>, which is exactly
+// the hook Dialog's focus trap uses to treat the floating layer as
+// "inside the dialog" (Dialog.tsx isFocusInsideDialog).
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { UserPublic } from '@agent-workflow/shared'
 import { api } from '@/api/client'
@@ -39,22 +48,51 @@ export function UserPicker({
   const [debounced, setDebounced] = useState('')
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const listRef = useRef<HTMLUListElement | null>(null)
+  const listId = useId()
+  const [popPos, setPopPos] = useState<{ left: number; top: number; width: number } | null>(null)
 
   useEffect(() => {
     const handle = setTimeout(() => setDebounced(input.trim()), 200)
     return () => clearTimeout(handle)
   }, [input])
 
-  // Close the result list on outside click.
+  // Position the portaled list under the field; track scroll/resize while
+  // open (mirror of Select.tsx — window-scroll coords, no ancestor chasing).
+  useLayoutEffect(() => {
+    if (!open) return
+    function recompute() {
+      const el = rootRef.current
+      if (el === null) return
+      const r = el.getBoundingClientRect()
+      setPopPos({
+        left: r.left + window.scrollX,
+        top: r.bottom + window.scrollY + 4,
+        width: r.width,
+      })
+    }
+    recompute()
+    window.addEventListener('scroll', recompute, true)
+    window.addEventListener('resize', recompute)
+    return () => {
+      window.removeEventListener('scroll', recompute, true)
+      window.removeEventListener('resize', recompute)
+    }
+  }, [open])
+
+  // Close on outside click — outside means outside BOTH the field and the
+  // portaled list (the list lives on document.body, not under rootRef).
   useEffect(() => {
+    if (!open) return
     function onMouseDown(e: MouseEvent) {
-      if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (rootRef.current?.contains(target) === true) return
+      if (listRef.current?.contains(target) === true) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [])
+  }, [open])
 
   const search = useQuery<UserPublic[]>({
     queryKey: ['users', 'search', debounced],
@@ -101,6 +139,10 @@ export function UserPicker({
           value={input}
           placeholder={placeholder ?? t('userPicker.placeholder')}
           disabled={disabled}
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-autocomplete="list"
           data-testid={testidPrefix ? `${testidPrefix}-input` : undefined}
           onFocus={() => setOpen(true)}
           onChange={(e) => {
@@ -109,31 +151,46 @@ export function UserPicker({
           }}
         />
       </div>
-      {open && !disabled && (
-        <ul className="user-picker__results" role="listbox">
-          {results.length === 0 ? (
-            <li className="user-picker__empty">
-              {search.isLoading ? t('common.loading') : t('userPicker.noResults')}
-            </li>
-          ) : (
-            results.map((u) => (
-              <li key={u.id}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  className="user-picker__option"
-                  data-testid={testidPrefix ? `${testidPrefix}-option-${u.username}` : undefined}
-                  onClick={() => add(u)}
-                >
-                  <span className="user-picker__name">{u.displayName}</span>
-                  <span className="user-picker__username">@{u.username}</span>
-                </button>
+      {open &&
+        !disabled &&
+        popPos !== null &&
+        createPortal(
+          <ul
+            id={listId}
+            ref={listRef}
+            role="listbox"
+            className="user-picker__results"
+            style={{
+              position: 'absolute',
+              left: popPos.left,
+              top: popPos.top,
+              minWidth: popPos.width,
+            }}
+          >
+            {results.length === 0 ? (
+              <li className="user-picker__empty">
+                {search.isLoading ? t('common.loading') : t('userPicker.noResults')}
               </li>
-            ))
-          )}
-        </ul>
-      )}
+            ) : (
+              results.map((u) => (
+                <li key={u.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    className="user-picker__option"
+                    data-testid={testidPrefix ? `${testidPrefix}-option-${u.username}` : undefined}
+                    onClick={() => add(u)}
+                  >
+                    <span className="user-picker__name">{u.displayName}</span>
+                    <span className="user-picker__username">@{u.username}</span>
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>,
+          document.body,
+        )}
     </div>
   )
 }

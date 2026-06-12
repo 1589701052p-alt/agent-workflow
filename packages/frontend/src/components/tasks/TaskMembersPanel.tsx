@@ -13,6 +13,35 @@ import { useActor } from '@/hooks/useActor'
 import { Dialog } from '../Dialog'
 import { UserPicker } from '../UserPicker'
 
+/**
+ * RFC-099 — uniform top-right entry point for task members, mirroring
+ * AclDialogButton on the resource pages: a header button opening the panel
+ * in a Dialog. Hidden under the daemon token (single-user mode).
+ */
+export function TaskMembersDialogButton({ taskId }: TaskMembersPanelProps) {
+  const { t } = useTranslation()
+  const actor = useActor()
+  const [open, setOpen] = useState(false)
+  if (actor.data === null || actor.data === undefined || actor.data.source === 'daemon') {
+    return null
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--sm"
+        data-testid="task-members-dialog-button"
+        onClick={() => setOpen(true)}
+      >
+        {t('members.title')}
+      </button>
+      <Dialog open={open} onClose={() => setOpen(false)} title={t('members.title')} size="md">
+        <TaskMembersPanel taskId={taskId} />
+      </Dialog>
+    </>
+  )
+}
+
 interface TaskMembersPanelProps {
   taskId: string
 }
