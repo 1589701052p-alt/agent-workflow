@@ -76,8 +76,13 @@ if [ -n "${CROSS_CLARIFY_PROMPT_LOG:-}" ]; then
 fi
 
 # Decide what to emit based on (agent, count).
-if [ "$agent" = "questioner" ] && [ "$count" -eq 1 ]; then
-  # Round 2 (questioner.first): emit a cross-clarify question.
+# RFC-100: the questioner has a clarify channel ⇒ mandatory ask-back. A
+# 'continue' answer makes it ask AGAIN (it may not finalize until 'stop'), so the
+# questioner emits a cross-clarify question on BOTH its first (count 1) and its
+# cascade-rerun (count 2) invocations; only after the user answers with 'stop'
+# does its third invocation (count 3) emit <workflow-output>.
+if [ "$agent" = "questioner" ] && [ "$count" -le 2 ]; then
+  # questioner.first (count 1) + questioner.cascade (count 2): emit a cross-clarify question.
   body='{"questions":[{"id":"q-redis","title":"Should we use Redis for caching?","kind":"single","recommended":true,"options":["Yes","No","Maybe"]}]}'
   printf '%s\n' "{\"type\":\"text\",\"timestamp\":0,\"part\":{\"type\":\"text\",\"text\":\"<workflow-clarify>$body</workflow-clarify>\"}}"
   exit 0

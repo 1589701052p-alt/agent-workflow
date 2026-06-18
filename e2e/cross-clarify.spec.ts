@@ -332,7 +332,38 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     )
     expectOk(submitRes, 'POST cross-clarify answers')
 
-    // 5. Task reaches terminal done after designer round 2 + questioner round 2.
+    // 4b. RFC-100: the cross-clarify questioner is MANDATORY ask-back — a
+    //     'continue' answer makes it ask AGAIN (it may not finalize with
+    //     <workflow-output> until the user clicks "Stop clarifying"). The
+    //     designer still reran with External Feedback (asserted at step 6).
+    //     Poll for the questioner's second cross-clarify round and answer it
+    //     with 'stop' so the questioner finalizes and the task can complete.
+    const row2 = await pollCrossClarifyAwaiting(daemon, taskId, 30_000)
+    expect(row2.askingNodeId).toBe('questioner')
+    expect(row2.intermediaryNodeRunId).not.toBe(row.intermediaryNodeRunId)
+    const submitRes2 = await fetch(
+      `${daemon.baseUrl}/api/clarify/${row2.intermediaryNodeRunId}/answers`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          answers: [
+            {
+              questionId: 'q-redis',
+              selectedOptionIndices: [0],
+              selectedOptionLabels: [],
+              customText: '',
+            },
+          ],
+          directive: 'stop',
+          ifMatchIteration: row2.iteration,
+        }),
+      },
+    )
+    expectOk(submitRes2, 'POST cross-clarify answers (stop)')
+
+    // 5. Task reaches terminal done after the designer's external-feedback rerun
+    //    and the questioner's stop-released final output.
     const final = await pollTaskStatus(daemon, taskId, (t) => t.status === 'done', 30_000)
     expect(final.status).toBe('done')
 

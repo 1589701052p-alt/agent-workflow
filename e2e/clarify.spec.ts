@@ -369,6 +369,8 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
               customText: '',
             },
           ],
+          // RFC-100: stop releases the designer from mandatory ask-back so its rerun outputs.
+          directive: 'stop',
           ifMatchIteration: session.iteration,
         }),
       },
@@ -816,6 +818,8 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
               customText: '',
             },
           ],
+          // RFC-100: stop releases the designer from mandatory ask-back so its rerun outputs.
+          directive: 'stop',
           ifMatchIteration: session.iteration,
         }),
       }),
