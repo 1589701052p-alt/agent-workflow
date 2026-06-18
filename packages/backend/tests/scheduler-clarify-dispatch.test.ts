@@ -630,12 +630,13 @@ describe('scheduler RFC-023 clarify dispatch', () => {
         status: 'answered',
         answeredAt: Date.now(),
         answeredBy: 'local',
-        // RFC-100 + RFC-098 revival boundary: the interrupted rerun below is
-        // revived with cause='revival', which isClarifyRerunCause excludes — so
-        // applyLatestDirective=false and the revived run re-enters mandatory
-        // ask-back regardless of this directive. The directive is therefore not
-        // load-bearing here; the revived run is driven by a clarify body below
-        // (it asks again rather than finalizing). Documented RFC-100 limitation.
+        // RFC-100 + RFC-098 + Codex review #2: the interrupted rerun below is
+        // revived with cause='revival'. isClarifyRerunCause excludes 'revival',
+        // BUT applyLatestDirective = isClarifyRerun || reviewContext === undefined
+        // and a revival is NOT review-driven — so the directive IS applied now.
+        // Here it is 'continue' → mandatory ask-back stays ON → the revived run
+        // asks again (driven by the clarify body below). The STOP-revival sibling
+        // test locks the other half: a revived 'stop' round stays RELEASED.
         directive: 'continue',
         answersJson: ANSWERS_JSON_S2B,
       })
@@ -671,9 +672,10 @@ describe('scheduler RFC-023 clarify dispatch', () => {
 
     // Step 4: re-enter the scheduler (what /resume or runTask after restart
     // does). The scheduler must mint a fresh attempt that INHERITS
-    // clarifyIteration=1 — not reset it to 0. RFC-100: the revived run is
-    // mandatory ask-back (directive dropped on revival), so the agent asks
-    // again — the assertions below lock clarifyIteration inheritance + Q&A.
+    // clarifyIteration=1 — not reset it to 0. RFC-100 (Codex review #2): the
+    // revived run APPLIES the 'continue' directive (revival is not review-driven)
+    // → mandatory ask-back → the agent asks again — the assertions below lock
+    // clarifyIteration inheritance + Q&A.
     await withEnv({ MOCK_OPENCODE_CLARIFY_BODY: CLARIFY_BODY }, () =>
       runTask({
         taskId,
@@ -693,6 +695,113 @@ describe('scheduler RFC-023 clarify dispatch', () => {
     expect(fresh.status).toBe('done')
     expect(fresh.promptText ?? '').toContain('Clarify Q&A')
     expect(fresh.promptText ?? '').toContain('Postgres')
+  })
+
+  // RFC-100 (Codex review #2 / documented limitation-1 fix): a 'stop' (finalize)
+  // round that is interrupted then REVIVED must stay RELEASED — the revived run
+  // is handed the <workflow-output> format, NOT mandatory ask-back. Before the
+  // fix, revival (cause='revival') dropped the stored directive →
+  // applyLatestDirective=false → effectiveHasClarifyChannel was re-forced true →
+  // the agent's final <workflow-output> was rejected (clarify-required) and the
+  // finalize round could never complete after a daemon restart.
+  test('interrupted STOP-clarify rerun: revival stays released (outputs), not re-forced into ask-back', async () => {
+    await seedAgent(h.db, 'designer', ['design'])
+    const def: WorkflowDefinition = {
+      $schema_version: 3,
+      inputs: [{ kind: 'text', key: 'req', label: 'r' }],
+      nodes: [
+        { id: 'in1', kind: 'input', inputKey: 'req' } as WorkflowNode,
+        { id: 'd', kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+        { id: 'c', kind: 'clarify', title: 'Clarify me' } as WorkflowNode,
+      ],
+      edges: [
+        {
+          id: 'e_in',
+          source: { nodeId: 'in1', portName: 'req' },
+          target: { nodeId: 'd', portName: 'req' },
+        },
+        {
+          id: 'e_ask',
+          source: { nodeId: 'd', portName: '__clarify__' },
+          target: { nodeId: 'c', portName: 'questions' },
+        },
+        {
+          id: 'e_ans',
+          source: { nodeId: 'c', portName: 'answers' },
+          target: { nodeId: 'd', portName: '__clarify_response__' },
+        },
+      ],
+    }
+    const { taskId } = await seedWorkflowAndTask(h, def, { req: 'go' })
+
+    // Step 1: first run — agent asks, parks at awaiting_human.
+    await withEnv({ MOCK_OPENCODE_CLARIFY_BODY: CLARIFY_BODY }, () =>
+      runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', MOCK_OPENCODE] }),
+    )
+
+    // Step 2: synthesize the answered session with directive='stop' (the user
+    // clicked Stop → finalize round) + the clarify-rerun row.
+    const sessRow = (
+      await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
+    )[0]!
+    const ANSWERS_JSON = JSON.stringify([
+      {
+        questionId: 'qdb',
+        selectedOptionIndices: [0],
+        selectedOptionLabels: ['Postgres'],
+        customText: '',
+      },
+    ])
+    await h.db
+      .update(clarifySessions)
+      .set({
+        status: 'answered',
+        answeredAt: Date.now(),
+        answeredBy: 'local',
+        directive: 'stop',
+        answersJson: ANSWERS_JSON,
+      })
+      .where(eq(clarifySessions.id, sessRow.id))
+    await mirrorClarifyAnswered(h.db, sessRow.id, { answersJson: ANSWERS_JSON, directive: 'stop' })
+    await h.db
+      .update(nodeRuns)
+      .set({ status: 'done', finishedAt: Date.now() })
+      .where(eq(nodeRuns.id, sessRow.clarifyNodeRunId))
+    const rerunId = ulid()
+    await h.db.insert(nodeRuns).values({
+      id: rerunId,
+      taskId,
+      nodeId: 'd',
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+    })
+
+    // Step 3: simulate the daemon restart sweep → the rerun row is interrupted.
+    await h.db
+      .update(nodeRuns)
+      .set({ status: 'interrupted', finishedAt: Date.now() })
+      .where(eq(nodeRuns.id, rerunId))
+    await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
+
+    // Step 4: re-enter the scheduler. The revived stop-round run must be RELEASED
+    // → it sees the <workflow-output> format → emits output → done. The mock
+    // emits OUTPUT (not clarify), proving the runtime guard did NOT reject it.
+    await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'FINAL_V1' }) }, () =>
+      runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', MOCK_OPENCODE] }),
+    )
+
+    const allRuns = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const fresh = allRuns
+      .filter((r) => r.nodeId === 'd' && r.parentNodeRunId === null)
+      .sort((a, b) => b.retryIndex - a.retryIndex)[0]!
+    expect(fresh.id).not.toBe(rerunId)
+    // RELEASED: the revived finalize round got the output format, NOT ask-back.
+    expect(fresh.promptText ?? '').toContain('You MUST end your reply with a')
+    expect(fresh.promptText ?? '').not.toContain('MANDATORY ASK-BACK (clarify) mode')
+    // And it actually finalized (output accepted, not clarify-required looped).
+    expect(fresh.status).toBe('done')
   })
 
   // Multi-round boundary: with TWO already-answered rounds (ci=0 and ci=1)

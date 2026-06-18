@@ -103,17 +103,21 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
     expect(occurrences.length).toBeGreaterThanOrEqual(2)
   })
 
-  // The agent-single buildClarifyPromptContext call MUST pass
-  // `applyLatestDirective: isClarifyRerun` so the prior round's
-  // directive='stop' only suppresses the IMMEDIATE clarify-rerun (the row
-  // submitClarifyAnswers minted at retryIndex=0). Review-iterate /
-  // process-retry reruns inherit clarifyIteration via review.ts's mint, and
-  // without this gate they'd re-pick the stale 'stop' and refuse to
-  // surface the clarify protocol block while addressing fresh reviewer
-  // comments. See clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
-  test('scheduler.ts wires applyLatestDirective=isClarifyRerun on the agent-single clarify context call', () => {
+  // The agent-single buildPromptContext call MUST pass the shared
+  // `applyLatestDirective` local (= `isClarifyRerun || reviewContext === undefined`,
+  // RFC-100 Codex review #2). The prior round's directive='stop' suppresses the
+  // IMMEDIATE clarify-rerun (the row submitClarifyAnswers minted at retryIndex=0)
+  // AND any non-review-driven process-retry / revival of that same round (so a
+  // 'stop' finalize stays released across retries instead of being re-forced into
+  // ask-back). Only a review-iterate rerun (reviewContext set) strips the
+  // directive while addressing fresh reviewer comments. See
+  // clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
+  test('scheduler.ts wires the shared applyLatestDirective local on the agent-single clarify context call', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
-    expect(src).toContain('applyLatestDirective: isClarifyRerun')
+    expect(src).toContain(
+      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
+    )
+    expect(src).toContain('applyLatestDirective,')
   })
 
   // RFC-058 T13 + T17 was a grep guard on the single `computeHistoryCutoff`

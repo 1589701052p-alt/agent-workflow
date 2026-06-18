@@ -20,9 +20,13 @@
 //   gate-4 (isQuestionerCrossClarifyRerun — questioner Q&A context): pure
 //     topology (clarifyMode === 'cross') + RFC-070 consumed-by self-gating
 //     inside buildPromptContext; cause is NOT consulted.
-//   gate-5 (stop-directive single-round scoping): follows gate-2 via
-//     `applyLatestDirective: isClarifyRerun` (both prompt-context branches;
-//     also locked by rfc064-source-grep-guards.test.ts).
+//   gate-5 (stop-directive single-round scoping): follows gate-2 OR
+//     "not review-driven" — `applyLatestDirective = isClarifyRerun ||
+//     reviewContext === undefined`, consumed by both prompt-context branches
+//     (RFC-100 Codex review #2: a process-retry / revival of a clarify round is
+//     NOT review-driven, so it keeps its directive — a 'stop' finalize round
+//     stays released across retries instead of being re-forced into ask-back).
+//     Also locked by rfc064-source-grep-guards.test.ts.
 //
 // End-to-end behavior sits in the existing ≈14-file gating regression net
 // (clarify-prompt-injection / scheduler-clarify-inline / *stop-directive* /
@@ -114,8 +118,16 @@ describe('RFC-098 WP-10 — scheduler gate wiring', () => {
     expect(SCHEDULER_SRC).toContain("const isQuestionerCrossClarifyRerun = clarifyMode === 'cross'")
   })
 
-  test('gate-5 (stop scoping) follows gate-2 in BOTH prompt-context branches', () => {
-    const matches = SCHEDULER_SRC.match(/applyLatestDirective:\s*isClarifyRerun/g) ?? []
+  test('gate-5 (stop scoping) follows gate-2 OR not-review-driven, in BOTH prompt-context branches', () => {
+    // RFC-100 (Codex review #2 fix): gate-5 no longer STRICTLY follows gate-2.
+    // A process-retry / revival of a clarify round (NOT review-driven) must keep
+    // its directive so a 'stop' finalize round stays released across retries —
+    // hence `isClarifyRerun || reviewContext === undefined`.
+    expect(SCHEDULER_SRC).toContain(
+      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
+    )
+    // Both prompt-context branches consume the shared local (object shorthand).
+    const matches = SCHEDULER_SRC.match(/\bapplyLatestDirective,/g) ?? []
     expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 })

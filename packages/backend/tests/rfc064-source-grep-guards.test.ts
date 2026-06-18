@@ -12,8 +12,10 @@
 //   C6: `isFresherForCutoff` (services/clarifyRounds.ts) ranks on the
 //       3-layer key (clarifyIteration → retryIndex → id).
 //   C9-747dcae: scheduler.ts has both branches of the
-//       `applyLatestDirective` gate using the shared `isClarifyRerun`
-//       variable. The OR-pattern source-text guard in
+//       `applyLatestDirective` gate using ONE shared local
+//       (`isClarifyRerun || reviewContext === undefined`; RFC-100 Codex
+//       review #2 broadened it so a process-retry / revival of a clarify
+//       round keeps its directive). The OR-pattern source-text guard in
 //       cross-clarify-stop-directive-scoped-to-cci-rerun.test.ts already
 //       enforces the cross-questioner branch; this file adds a count check
 //       so both branches stay in sync.
@@ -85,30 +87,33 @@ describe('RFC-064 C3 — cross-clarify counter absent from live source code', ()
 // guard that locked the 3-layer sort key would now fail vacuously; the
 // `rfc070-aging-stamp-grep-guards.test.ts` C-group locks the new contract.
 
-describe('RFC-064 C9 — applyLatestDirective gate merged into shared isClarifyRerun', () => {
+describe('RFC-064 C9 — applyLatestDirective gate merged into one shared local', () => {
   test('scheduler.ts has at least 2 applyLatestDirective occurrences (self + cross-questioner branches)', () => {
     const src = readFileSync(
       resolve(REPO_ROOT, 'packages/backend/src/services/scheduler.ts'),
       'utf8',
     )
     const matches = src.match(/applyLatestDirective/g) ?? []
-    // Each branch's buildPromptContext call passes applyLatestDirective; the
-    // gate's `const isClarifyRerun = ...` definition (~scheduler.ts:1381)
-    // does not itself contain the literal `applyLatestDirective`. So the
-    // minimum is exactly the two branch usages.
+    // One `const applyLatestDirective = ...` definition + the two branch
+    // usages → ≥ 3 in code; the floor we lock is the two branch usages.
     expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 
-  test('scheduler.ts uses applyLatestDirective: isClarifyRerun in at least 2 places (747dcae merger)', () => {
+  test('scheduler.ts shares one applyLatestDirective local across BOTH branches (no literal split)', () => {
     const src = readFileSync(
       resolve(REPO_ROOT, 'packages/backend/src/services/scheduler.ts'),
       'utf8',
     )
-    const matches = src.match(/applyLatestDirective:\s*isClarifyRerun/g) ?? []
-    // PR-B merged the two branches' gate expressions to the shared
-    // variable. Both branches MUST use it; if a future refactor reverts
-    // one branch back to a literal `(currentRunRow?.retryIndex ?? 0) === 0`,
-    // this guard catches the silent split.
+    // RFC-100 (Codex review #2 fix): the shared gate is now
+    // `isClarifyRerun || reviewContext === undefined` (a process-retry / revival
+    // of a clarify round is NOT review-driven, so it keeps its directive — a
+    // 'stop' finalize round stays released across retries). Both branches MUST
+    // consume the ONE shared local; if a future refactor reverts one branch to
+    // a literal, this guard catches the silent split.
+    expect(src).toContain(
+      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
+    )
+    const matches = src.match(/\bapplyLatestDirective,/g) ?? []
     expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 })

@@ -2201,6 +2201,16 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // (returns undefined when there is no unconsumed answered round), so the
         // cci proxy is no longer needed.
         const isQuestionerCrossClarifyRerun = clarifyMode === 'cross'
+        // RFC-100 (Codex review #2 fix): the latest answered directive applies to
+        // this run when it CONTINUES the clarify round — a clarify-answer rerun
+        // (isClarifyRerun) OR a process-retry / revival of the same round (which
+        // are NOT review-driven, i.e. reviewContext === undefined). It is stripped
+        // ONLY for review reject/iterate reruns (reviewContext set), which address
+        // NEW reviewer comments and must not inherit a stale directive. Without the
+        // `reviewContext === undefined` arm, a process-retry / revival of a 'stop'
+        // (finalize) round dropped the directive → re-forced mandatory ask-back →
+        // rejected the agent's <workflow-output> even though the user clicked Stop.
+        const applyLatestDirective = isClarifyRerun || reviewContext === undefined
         const clarifyContext = hasClarifyChannel
           ? isQuestionerCrossClarifyRerun
             ? await buildPromptContext({
@@ -2217,7 +2227,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 // block, so renderUserPrompt emits the short inline reminder
                 // (continue) / the output protocol block (stop) instead.
                 ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-                applyLatestDirective: isClarifyRerun,
+                applyLatestDirective,
               })
             : await buildPromptContext({
                 db,
@@ -2228,7 +2238,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 targetIteration: clarifyGeneration,
                 shardKey: currentShardKey,
                 ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-                applyLatestDirective: isClarifyRerun,
+                applyLatestDirective,
               })
           : undefined
         // RFC-056: build the External Feedback context + (if update-mode)
@@ -2276,16 +2286,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         //     the answersBlock already carries the STOP CLARIFYING sentence. The
         //     next round walks back through scheduleAgentNode and re-derives the
         //     flag, so 'stop' naturally scopes to one rerun, AND
-        //   - reviewContext === undefined (RFC-100): this is NOT a review reject/
-        //     iterate rerun. A review-driven rerun RE-PRODUCES output to address
-        //     the reviewer's comments — it must NOT be compelled back into ask-back
-        //     mode (the prior clarify round is over; its Q&A ages out via RFC-070).
-        //     Without this, a clarify-channel designer could never satisfy a review
-        //     iterate — its <workflow-output> v2 would be rejected as
-        //     clarify-required. The agent may still CHOOSE to emit <workflow-clarify>
-        //     on an iterate (the runner accepts it); it just isn't forced to.
+        //   - (reviewContext === undefined || isClarifyRerun) (RFC-100 + Codex
+        //     review #1 fix): a review reject/iterate RE-PRODUCTION run is NOT a
+        //     clarify round — it must produce <workflow-output> to address the
+        //     reviewer's comments, so reviewContext disables mandatory ask-back for
+        //     it (without this a clarify-channel designer could never satisfy a
+        //     review iterate; its v2 output would be rejected as clarify-required).
+        //     BUT a clarify-answer rerun that happens DURING a review-iterate cycle
+        //     (the designer asked back, the user answered) IS a clarify round and
+        //     must honor its directive — so isClarifyRerun re-enables the gate
+        //     there. Otherwise a "Keep clarifying" answer mid-review would be
+        //     bypassed and the agent could finalize before the user clicks Stop.
+        //     The agent may still CHOOSE to emit <workflow-clarify> on a pure
+        //     iterate (the runner accepts it); it just isn't forced to.
         const effectiveHasClarifyChannel =
-          hasClarifyChannel && clarifyContext?.directive !== 'stop' && reviewContext === undefined
+          hasClarifyChannel &&
+          clarifyContext?.directive !== 'stop' &&
+          (reviewContext === undefined || isClarifyRerun)
         if (resumeDecision.inlineMode && resumeDecision.resumeSessionId !== undefined) {
           await recordClarifyInlineEvent(db, nodeRunId, {
             level: 'info',

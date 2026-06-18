@@ -25,11 +25,12 @@
 //      answersBlock has neither STOP CLARIFYING nor KEEP CLARIFYING
 //      trailer, but Q&A body stays (so the questioner still sees its
 //      own past questions + the downstream answers).
-//   2. SCHEDULER WIRING: scheduler.ts passes
-//      `applyLatestDirective: (currentRunRow?.retryIndex ?? 0) === 0`
-//      to the cross-questioner branch of `buildPromptContext`.
-//      Source-text guard catches a future refactor that drops the gate
-//      back to the default.
+//   2. SCHEDULER WIRING: scheduler.ts passes the shared `applyLatestDirective`
+//      local (now `isClarifyRerun || reviewContext === undefined` — RFC-100
+//      Codex review #2 broadened it so a non-review-driven process-retry /
+//      revival keeps the directive) to the cross-questioner branch of
+//      `buildPromptContext`. Source-text guard catches a future refactor that
+//      drops the gate back to the default.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -254,29 +255,31 @@ describe('scheduler wiring: cross-questioner buildPromptContext must pass applyL
     // applyLatestDirective gate into a shared `isClarifyRerun` variable
     // (semantically equivalent under unified clarifyIteration; single-point
     // change structurally eliminates the "missed-mirror gate" class of bug
-    // that 747dcae fixed). The OR pattern below accepts either the original
-    // literal (`(currentRunRow?.retryIndex ?? 0) === 0`) or the new common
-    // variable name (`isClarifyRerun`) — pre-PR-B both forms are valid;
-    // post-PR-B only the variable name remains. See RFC-064 design.md §5.5
-    // + plan.md T15 A-class for the implementation order constraint.
+    // that 747dcae fixed). RFC-100 Codex review #2 then lifted the gate
+    // EXPRESSION out of both branches into one shared local —
+    // `const applyLatestDirective = isClarifyRerun || reviewContext === undefined`
+    // — so each branch now passes it by object shorthand (`applyLatestDirective,`).
+    // We assert the branch consumes the shared local AND the local carries the
+    // gate expression; a future refactor that inlines a literal back into one
+    // branch (re-splitting the gate) still trips this.
     const source = readFileSync(
       resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
       'utf8',
+    )
+    // The shared gate local must exist (carries the isClarifyRerun gate).
+    expect(source).toContain(
+      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
     )
     // Locate the cross-questioner branch by its consumerKind literal.
     const idx = source.indexOf("consumerKind: 'cross-questioner'")
     expect(idx).toBeGreaterThan(-1)
     // The branch's buildPromptContext call ends at the next closing `})`
     // followed by `: await buildPromptContext` (the self branch). Slice
-    // the cross-questioner call body and assert the gate is present.
+    // the cross-questioner call body and assert it consumes the shared local.
     const tail = source.slice(idx)
     const selfBranchIdx = tail.indexOf(': await buildPromptContext({')
     expect(selfBranchIdx).toBeGreaterThan(-1)
     const crossBranchBody = tail.slice(0, selfBranchIdx)
-    expect(crossBranchBody).toContain('applyLatestDirective')
-    expect(
-      crossBranchBody.includes('(currentRunRow?.retryIndex ?? 0) === 0') ||
-        crossBranchBody.includes('isClarifyRerun'),
-    ).toBe(true)
+    expect(crossBranchBody).toContain('applyLatestDirective,')
   })
 })

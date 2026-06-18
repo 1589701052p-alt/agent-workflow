@@ -481,6 +481,20 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // clarify #2
 
+    // RFC-100 (Codex review #1) regression: the `continue` answer ABOVE happened
+    // DURING a review-iterate cycle (reviewContext is populated). Mandatory
+    // ask-back must still apply — the designer's rerun prompt here must carry the
+    // MANDATORY ask-back preamble and NOT the <workflow-output> format. Without
+    // the `|| isClarifyRerun` arm on effectiveHasClarifyChannel, the review
+    // exemption would hand a real agent (unlike this scripted stub) the output
+    // format and let it finalize before the user clicks Stop, silently bypassing
+    // "Keep clarifying".
+    const continueRerun = (await topLevel(c.db, task.id, 'designer')).sort((a, b) =>
+      a.id < b.id ? 1 : -1,
+    )[0]
+    expect(continueRerun?.promptText ?? '').toContain('MANDATORY ASK-BACK (clarify) mode')
+    expect(continueRerun?.promptText ?? '').not.toContain('You MUST end your reply with a')
+
     // answer clarify #2 → designer reruns, emits output v2 → review awaiting v2
     await submitClarifyAnswers({
       db: c.db,

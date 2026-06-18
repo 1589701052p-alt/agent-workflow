@@ -81,11 +81,18 @@
 附带（实现期定，非用户决策）：preamble 加"用 inputs/用户的语言提问"一行；`buildProtocolBlock` 去 `hasClarifyChannel`
 形参降 2 参；followup 的 `port-validation` 一律走输出向 bullets（它只在 output 被接受后触发，反问激活期不可达）。
 
-## 已知限制
+## 已知限制 / Codex 检视修订
 
-- **中断的 stop（收尾）轮被 daemon 重启复活后丢失 directive**：`isClarifyRerunCause` 不含 `'revival'`
-  （RFC-098 既有 `applyLatestDirective` 门），故复活的收尾轮 `directive` 被丢、回落"continue"→重新进入强制 ask-back，
-  Agent **再问一轮**（用户再答 stop 即收尾）。RFC-100 前此降级因输出逃逸口而无感，现表现为"多问一轮"。罕见
-  （需在收尾 rerun 完成前的窄窗重启），登记为后续可选修复（让复活保留 clarify 谱系的 directive）。
+- **[已修复 · Codex 检视 #2] 中断的 stop（收尾）轮被 daemon 重启复活 / 进程重试后丢失 directive**：原实现 `applyLatestDirective`
+  仅 `= isClarifyRerun`，而 `isClarifyRerunCause` 不含 `'revival'` / `'process-retry'`，故复活 / 进程重试的收尾轮 `directive`
+  被丢、回落"continue"→重新进入强制 ask-back→Agent 的 `<workflow-output>` 被运行时拒（`clarify-required`）。RFC-100 前此降级
+  因输出逃逸口而无感，RFC-100 下从"多问一轮"恶化为**收尾轮无法完成、死循环到失败**。**修复**：
+  `applyLatestDirective = isClarifyRerun || reviewContext === undefined`——非 review 驱动的复跑（复活 / 进程重试）保留本轮
+  directive，stop 收尾轮跨重启 / 重试保持 released。回归：`scheduler-clarify-dispatch.test.ts` 的
+  "interrupted STOP-clarify rerun: revival stays released"。
+- **[已修复 · Codex 检视 #1] review-iterate 周期内的 continue 反问被绕过**：`effectiveHasClarifyChannel` 的
+  `&& reviewContext === undefined` 门把 review-iterate 周期内的 **clarify-answer 复跑**也压成"非反问"——即便用户点"继续反问"
+  也给输出格式，真 Agent 可在用户点"停止反问"前提前收尾。**修复**：`(reviewContext === undefined || isClarifyRerun)`
+  ——clarify-answer 复跑不吃 review 豁免，仍按 directive 强制 ask-back。回归：`clarify-review-combination-scenarios.test.ts` S3。
 - **编辑器 Prompt 预览不传 `hasClarifyChannel`**：`PromptPreview.tsx` 一直只渲染输出格式（预览与反问节点运行时本就
   有差异，非本 RFC 引入）。本 RFC 维持现状（D1 决定无前端改动），登记为已知差异。
