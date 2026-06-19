@@ -10,41 +10,16 @@ const log = createLogger('opencode')
 /**
  * Minimum supported opencode version.
  * Below this the daemon refuses to start (design.md §11.2).
+ *
+ * There is intentionally NO upper bound: the daemon accepts any version
+ * `>= MIN_OPENCODE_VERSION`. A cap used to exist as a "you just bumped past a
+ * minor — manually re-verify" tripwire, but the PWD/cwd spawn regression that
+ * motivated it is now handled at the spawn site (services/runner.ts +
+ * services/memoryDistiller.ts explicitly set `PWD = cwd`), so newer opencode
+ * releases no longer need a gate to admit them. See the test file for the full
+ * historical rationale.
  */
 export const MIN_OPENCODE_VERSION = '1.14.0'
-
-/**
- * Exclusive upper bound — a permissive tripwire for the next major-ish
- * upstream change. Currently set to `1.17.0`, allowing every `1.14.x`,
- * `1.15.x`, AND `1.16.x` release.
- *
- * Historical context: opencode 1.14.51 shipped commit 7f2b5ee8c (the Effect-TS
- * rewrite of `packages/opencode/src/cli/cmd/run.ts`), which changed root
- * resolution from `process.cwd()` to `process.env.PWD ?? process.cwd()`.
- * Combined with `Bun.spawn({cwd: ...})` (which updates the child's
- * `process.cwd()` but inherits `PWD` from the parent), opencode loaded TWO
- * Instances and dropped `--format json` events on the floor. Root cause was
- * traced to OUR spawn missing an explicit `PWD = cwd`; the fix landed in
- * `services/runner.ts` + `services/memoryDistiller.ts` (search "PWD:
- * opts.worktreePath" / "PWD: input.cwd" — they carry the full rationale).
- *
- * 1.15.0+ additionally absorbs upstream commit e11e089e4 ("Add Effect-native
- * core event system") which makes the SSE path resilient to the PWD-vs-cwd
- * mismatch even without our spawn fix. Combined with our spawn fix, 1.15.x
- * is verified-working — reproduced 2026-05-20 against 1.15.5 with the same
- * worktree + clarify-iteration fixture that broke 1.14.51.
- *
- * 1.16.x was admitted on 2026-06-05 (ceiling moved 1.16.0 -> 1.17.0) because
- * `opencode-ai@latest` released 1.16.0 and the old cap blocked it at daemon
- * startup. NOTE: this was a compat bump to track the released line, not a fresh
- * end-to-end isolation re-validation — 1.16.x should still be smoke-tested
- * against a clarify-iteration agent node when a 1.16.x binary is in hand.
- *
- * The cap now exists only as a "you just bumped past a minor — manually
- * re-verify" tripwire; bump it forward once you've smoke-tested a 1.17.x
- * or 2.x against a clarify-iteration agent node end-to-end.
- */
-export const MAX_OPENCODE_VERSION_EXCLUSIVE = '1.17.0'
 
 export interface OpencodeProbe {
   /** Resolved binary path (absolute when overridden, "opencode" when on PATH). */
@@ -52,12 +27,12 @@ export interface OpencodeProbe {
   /** Parsed "X.Y.Z" string, or null if not found / parse failed. */
   version: string | null
   /**
-   * True iff `MIN_OPENCODE_VERSION <= version < MAX_OPENCODE_VERSION_EXCLUSIVE`.
-   * False on probe failure, too old, OR known-broken upper range.
+   * True iff `version >= MIN_OPENCODE_VERSION`.
+   * False on probe failure or too old (there is no upper bound).
    */
   compatible: boolean
   /**
-   * When the binary is present but in the known-broken range, this carries a
+   * When the binary is present but below the minimum, this carries a
    * human-readable reason so the daemon log / runtime route surfaces "why
    * incompatible" rather than just "<= min".
    */
@@ -96,14 +71,6 @@ export async function probeOpencode(opencodePath?: string): Promise<OpencodeProb
       version,
       compatible: false,
       incompatibleReason: `opencode ${version} is older than required minimum ${MIN_OPENCODE_VERSION}`,
-    }
-  }
-  if (compareSemver(version, MAX_OPENCODE_VERSION_EXCLUSIVE) >= 0) {
-    return {
-      binary,
-      version,
-      compatible: false,
-      incompatibleReason: `opencode ${version} is at/above the unverified ceiling ${MAX_OPENCODE_VERSION_EXCLUSIVE}. Pin to ${MIN_OPENCODE_VERSION}..<${MAX_OPENCODE_VERSION_EXCLUSIVE} or smoke-test a clarify-iteration agent node end-to-end against this version before bumping the cap.`,
     }
   }
   return { binary, version, compatible: true }

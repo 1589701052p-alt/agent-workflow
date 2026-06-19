@@ -9,7 +9,7 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
 import { applyConfigPatch, loadConfig } from '../src/config'
 import { clearOpencodeModelsCache } from '../src/util/opencode-models'
-import { MAX_OPENCODE_VERSION_EXCLUSIVE, MIN_OPENCODE_VERSION } from '../src/util/opencode'
+import { MIN_OPENCODE_VERSION } from '../src/util/opencode'
 
 const TOKEN = 'a'.repeat(64)
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -54,9 +54,8 @@ function writeBinary(
   },
 ): void {
   const {
-    // 1.14.25 is the verified-working last version inside the supported
-    // [MIN_OPENCODE_VERSION, MAX_OPENCODE_VERSION_EXCLUSIVE) range — see
-    // `packages/backend/src/util/opencode.ts` for why the upper bound exists.
+    // 1.14.25 is a verified-working version at/above MIN_OPENCODE_VERSION —
+    // there is no upper bound, see `packages/backend/src/util/opencode.ts`.
     versionStdout = 'stub-opencode 1.14.25',
     versionExit = 0,
     modelsStdout = '',
@@ -112,7 +111,7 @@ describe('GET /api/runtime/opencode', () => {
     expect(json.version).toBe('1.14.25')
     expect(json.compatible).toBe(true)
     expect(json.minVersion).toBe(MIN_OPENCODE_VERSION)
-    expect(json.maxVersionExclusive).toBe(MAX_OPENCODE_VERSION_EXCLUSIVE)
+    expect(json.maxVersionExclusive).toBeUndefined()
     expect(json.incompatibleReason).toBeUndefined()
   })
 
@@ -135,20 +134,19 @@ describe('GET /api/runtime/opencode', () => {
     expect(json.incompatibleReason as string).toContain(MIN_OPENCODE_VERSION)
   })
 
-  test('flags version >= MAX_OPENCODE_VERSION_EXCLUSIVE as incompatible (next-minor tripwire)', async () => {
-    // Why this exists: MAX_OPENCODE_VERSION_EXCLUSIVE is the "you bumped past
-    // a minor — re-verify" gate. The probe must surface this as
-    // compatible=false + a reason that points the user at the manual smoke
-    // test before flipping the cap forward.
-    writeBinary(h.binaryPath, { versionStdout: 'stub-opencode 1.17.0' })
-    const res = await req(h.app, '/api/runtime/opencode')
-    const json = (await res.json()) as Record<string, unknown>
-    expect(json.version).toBe('1.17.0')
-    expect(json.compatible).toBe(false)
-    expect(typeof json.incompatibleReason).toBe('string')
-    const reason = json.incompatibleReason as string
-    expect(reason).toContain('1.17.0')
-    expect(reason).toContain(MAX_OPENCODE_VERSION_EXCLUSIVE)
+  test('accepts versions above the former upper bound (no version ceiling)', async () => {
+    // Regression guard: the upper-bound gate was removed (user request
+    // 2026-06-19). Any version >= MIN_OPENCODE_VERSION must probe as
+    // compatible — including ones that the old 1.17.0 cap rejected, and far
+    // beyond it. If a ceiling is ever reintroduced, this test goes red.
+    for (const v of ['1.17.0', '1.99.99', '2.0.0', '10.0.0']) {
+      writeBinary(h.binaryPath, { versionStdout: `stub-opencode ${v}` })
+      const res = await req(h.app, '/api/runtime/opencode')
+      const json = (await res.json()) as Record<string, unknown>
+      expect(json.version).toBe(v)
+      expect(json.compatible).toBe(true)
+      expect(json.incompatibleReason).toBeUndefined()
+    }
   })
 
   test('401 without token', async () => {

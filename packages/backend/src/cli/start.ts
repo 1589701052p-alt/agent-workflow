@@ -20,11 +20,7 @@ import {
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
-import {
-  MAX_OPENCODE_VERSION_EXCLUSIVE,
-  MIN_OPENCODE_VERSION,
-  probeOpencode,
-} from '@/util/opencode'
+import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
 import { buildWebSocketAdapter } from '@/ws/server'
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -83,14 +79,14 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   if (!probe.compatible) {
     log.error('opencode incompatible', {
       found: probe.version,
-      requiredRange: `${MIN_OPENCODE_VERSION}..<${MAX_OPENCODE_VERSION_EXCLUSIVE}`,
+      requiredMinimum: MIN_OPENCODE_VERSION,
       reason: probe.incompatibleReason,
     })
     console.error(
       `agent-workflow: opencode ${probe.version} is incompatible.\n` +
-        `  required range: ${MIN_OPENCODE_VERSION} <= version < ${MAX_OPENCODE_VERSION_EXCLUSIVE}\n` +
+        `  required: version >= ${MIN_OPENCODE_VERSION}\n` +
         `  reason: ${probe.incompatibleReason ?? 'unknown'}\n` +
-        `  to recover: \`npm install -g opencode-ai@1.15.5\` (or any 1.14.x / 1.15.x / 1.16.x) or set 'opencodePath' in ${Paths.config}.`,
+        `  to recover: \`npm install -g opencode-ai@latest\` (or any version >= ${MIN_OPENCODE_VERSION}) or set 'opencodePath' in ${Paths.config}.`,
     )
     lock.release()
     process.exit(1)

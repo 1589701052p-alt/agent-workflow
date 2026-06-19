@@ -4,13 +4,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { loadConfig } from '@/config'
 import { countEmbeddedSqlMigrations, IS_EMBEDDED } from '@/embed'
-import {
-  compareSemver,
-  extractVersion,
-  MAX_OPENCODE_VERSION_EXCLUSIVE,
-  MIN_OPENCODE_VERSION,
-  probeOpencode,
-} from '@/util/opencode'
+import { compareSemver, extractVersion, MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
 
 export interface CheckResult {
@@ -47,13 +41,13 @@ export async function doctorCommand(): Promise<DoctorResult> {
       ok: false,
       message:
         probe.incompatibleReason ??
-        `${probe.version} is outside the supported range ${MIN_OPENCODE_VERSION}..<${MAX_OPENCODE_VERSION_EXCLUSIVE}`,
+        `${probe.version} is older than required minimum ${MIN_OPENCODE_VERSION}`,
     })
   } else {
     checks.push({
       name: 'opencode version',
       ok: true,
-      message: `${probe.version} (in ${MIN_OPENCODE_VERSION}..<${MAX_OPENCODE_VERSION_EXCLUSIVE})`,
+      message: `${probe.version} (>= ${MIN_OPENCODE_VERSION})`,
     })
   }
 
