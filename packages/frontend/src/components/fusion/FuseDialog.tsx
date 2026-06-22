@@ -115,6 +115,7 @@ export function FuseDialog({
       onClose={onClose}
       title={t('fusion.launchTitle')}
       size="lg"
+      panelClassName="fuse-dialog"
       footer={
         <>
           <button type="button" className="btn" onClick={onClose} disabled={launch.isPending}>
@@ -172,7 +173,7 @@ export function FuseDialog({
                     <span className={`memory-row__scope memory-row__scope--${m.scopeType}`}>
                       {t(`memory.scope.${m.scopeType}`)}
                     </span>
-                    <span>{m.title}</span>
+                    <span className="fusion-picker__title">{m.title}</span>
                   </label>
                 </li>
               ))}

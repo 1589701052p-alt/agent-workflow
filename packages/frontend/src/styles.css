@@ -8652,9 +8652,32 @@ mark.comment-anchor[data-active='true'] {
   gap: 8px;
   padding: 6px 10px;
   cursor: pointer;
+  min-width: 0; /* allow long titles to truncate instead of widening the row */
 }
 .fusion-picker__row:hover {
   background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+/* Truncate a long memory title so it never forces the dialog wider than its
+   fixed-width panel (which would clip the full-width intent textarea). */
+.fusion-picker__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* RFC-101 — the launch dialog body must shrink to the panel width so the
+   intent textarea / fields can never overflow + get clipped (.dialog__body is
+   a flex item; without min-width:0 a wide child pushes it past the fixed-width
+   .dialog__panel). Scoped to the fuse dialog to keep other dialogs untouched. */
+.fuse-dialog .dialog__body,
+.fuse-dialog .form-field {
+  min-width: 0;
+}
+/* RFC-101 — breathing room between the "Fuse into skill" bulk toolbar and the
+   memory list below it on /memory. */
+.memory-all__bulk {
+  margin: 6px 0 14px;
 }
 
 /* RFC-050 — per-candidate distill output language chip. Lives next to the
