@@ -346,12 +346,16 @@ export const CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT = 'to_questioner' as const
 export const CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT = '__external_feedback__' as const
 
 /**
- * RFC-056: opencode session reuse mode per re-run direction. Two independent
- * fields on the cross-clarify node — one for the designer's rerun on submit,
- * one for the questioner's rerun on reject + cascade. Both inherit RFC-026
- * semantics (isolated = fresh process every rerun; inline = `--session <id>`).
- * Missing field is resolved to `'isolated'` via the helper in
+ * RFC-056: opencode session reuse mode for the QUESTIONER rerun (reject +
+ * cascade). RFC-026 semantics: isolated = fresh process every rerun; inline =
+ * `--session <id>`. Missing field resolves to `'isolated'` via the helper in
  * shared/clarify-cross.ts (`resolveCrossClarifySessionMode`).
+ *
+ * The designer-rerun session-mode field was removed by RFC-056 patch
+ * 2026-06-22: the designer rerun never resumed a session (always isolated), so
+ * `sessionModeForDesigner` was dead config. A stored workflow that still
+ * carries it parses fine via `.passthrough()` (back-compat locked by the v4
+ * fixture in compat-workflow-schema.test.ts).
  */
 export const ClarifyCrossAgentSessionModeSchema = z.enum(['isolated', 'inline'])
 export type ClarifyCrossAgentSessionMode = z.infer<typeof ClarifyCrossAgentSessionModeSchema>
@@ -367,12 +371,6 @@ export const ClarifyCrossAgentNodeSchema = z
     description: z.string().default(''),
     /** Reserved for future per-user assignment; UI does not expose it in v1. */
     assignee: z.string().optional(),
-    /**
-     * RFC-056 + RFC-026: opencode session reuse mode for the DESIGNER agent's
-     * rerun triggered when the human submits answers. Optional; missing field
-     * resolves to `'isolated'` (default — fresh opencode process each rerun).
-     */
-    sessionModeForDesigner: ClarifyCrossAgentSessionModeSchema.optional(),
     /**
      * RFC-056 + RFC-026: opencode session reuse mode for the QUESTIONER agent's
      * rerun triggered when the human rejects (or when cascade reset re-dispatches

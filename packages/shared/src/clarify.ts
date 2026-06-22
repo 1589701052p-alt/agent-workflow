@@ -588,16 +588,14 @@ export function summariseCrossAnswer(question: ClarifyQuestion, answer: ClarifyA
 }
 
 /**
- * RFC-056 + RFC-026: resolve which sessionMode to use for a particular rerun
- * direction off a cross-clarify node.
+ * RFC-056 + RFC-026: resolve the QUESTIONER rerun's opencode session mode off a
+ * cross-clarify node. The designer rerun is always isolated — it never resumes
+ * a session — so RFC-056 patch 2026-06-22 removed the dead
+ * `sessionModeForDesigner` and this helper no longer takes a direction.
  */
 export function resolveCrossClarifySessionMode(
   node: ClarifyCrossAgentNode,
-  direction: 'designer' | 'questioner',
 ): ClarifyCrossAgentSessionMode {
-  if (direction === 'designer') {
-    return node.sessionModeForDesigner ?? 'isolated'
-  }
   return node.sessionModeForQuestioner ?? 'isolated'
 }
 

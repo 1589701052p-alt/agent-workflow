@@ -2118,7 +2118,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
             ) as ClarifyCrossAgentNode | undefined)
           : undefined
         const sessionMode = crossQuestionerNode
-          ? resolveCrossClarifySessionMode(crossQuestionerNode, 'questioner')
+          ? resolveCrossClarifySessionMode(crossQuestionerNode)
           : clarifyNodeObjForGate
             ? resolveClarifySessionMode(clarifyNodeObjForGate)
             : 'isolated'

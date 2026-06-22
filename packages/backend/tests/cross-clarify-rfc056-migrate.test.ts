@@ -59,7 +59,6 @@ describe('RFC-056 — v3 → v4 transparent upgrade (no cross-clarify node yet)'
           id: 'cc1',
           kind: 'clarify-cross-agent',
           title: 'Cross feedback',
-          sessionModeForDesigner: 'inline',
           sessionModeForQuestioner: 'isolated',
         },
       ],

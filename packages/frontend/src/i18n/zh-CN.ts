@@ -1896,7 +1896,6 @@ export interface Resources {
     }
     inspector: {
       title: string
-      sessionModeForDesigner: string
       sessionModeForQuestioner: string
       sessionModeIsolated: string
       sessionModeInline: string
@@ -4223,7 +4222,6 @@ export const zhCN: Resources = {
     },
     inspector: {
       title: '跨 agent 反问节点',
-      sessionModeForDesigner: 'designer 重跑 session',
       sessionModeForQuestioner: 'questioner 重跑 session',
       sessionModeIsolated: '独立（每轮新进程）',
       sessionModeInline: '续接（resume）',

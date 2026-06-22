@@ -3,9 +3,10 @@
 // LOCKS:
 //   1. NodeInspector renders a section keyed by `data-testid='cross-clarify-inspector'`
 //      when the selected node is `clarify-cross-agent`.
-//   2. The two segmented controls fire `onPatch` with sessionModeForDesigner /
-//      sessionModeForQuestioner deltas when clicked.
-//   3. Both segmented controls default to 'isolated' on a freshly-dropped node.
+//   2. The questioner segmented control fires `onPatch` with a
+//      sessionModeForQuestioner delta when clicked. (The designer-rerun
+//      session toggle was removed by RFC-056 patch 2026-06-22 — dead config.)
+//   3. The questioner segmented control defaults to 'isolated' on a fresh node.
 //   4. Palette catalog exposes a `clarify-cross-agent` entry under the
 //      Human section.
 //   5. Source-text guard: clarify-cross-agent reaches NodeInspector.tsx /
@@ -70,28 +71,11 @@ describe('RFC-056 NodeInspector — clarify-cross-agent', () => {
     renderInspector(def, vi.fn())
     expect(document.querySelector('[data-testid="cross-clarify-inspector"]')).not.toBeNull()
     expect(
-      document.querySelector('[data-testid="cross-clarify-session-mode-designer"]'),
-    ).not.toBeNull()
-    expect(
       document.querySelector('[data-testid="cross-clarify-session-mode-questioner"]'),
     ).not.toBeNull()
-  })
-
-  test('clicking the designer "inline" segmented option fires onChange with sessionModeForDesigner=inline', () => {
-    const def = mkDef()
-    const onChange = vi.fn<(next: WorkflowDefinition) => void>()
-    renderInspector(def, onChange)
-    const btn = document.querySelector(
-      '[data-testid="cross-clarify-session-mode-designer-inline"]',
-    ) as HTMLButtonElement | null
-    expect(btn).not.toBeNull()
-    fireEvent.click(btn!)
-    const lastDef = onChange.mock.calls.at(-1)?.[0]
-    expect(lastDef).toBeDefined()
-    const node = lastDef!.nodes.find((n) => n.id === 'cc1') as
-      | (WorkflowNode & { sessionModeForDesigner?: string })
-      | undefined
-    expect(node?.sessionModeForDesigner).toBe('inline')
+    // The designer session-mode control is intentionally absent (removed by
+    // RFC-056 patch 2026-06-22 — the designer rerun is always isolated).
+    expect(document.querySelector('[data-testid="cross-clarify-session-mode-designer"]')).toBeNull()
   })
 
   test('clicking the questioner "inline" segmented option fires onChange with sessionModeForQuestioner=inline', () => {
@@ -111,16 +95,12 @@ describe('RFC-056 NodeInspector — clarify-cross-agent', () => {
     expect(node?.sessionModeForQuestioner).toBe('inline')
   })
 
-  test('both segmented controls default to "isolated" on a freshly-dropped node', () => {
+  test('the questioner segmented control defaults to "isolated" on a freshly-dropped node', () => {
     const def = mkDef()
     renderInspector(def, vi.fn())
-    const isolatedDesigner = document.querySelector(
-      '[data-testid="cross-clarify-session-mode-designer-isolated"]',
-    ) as HTMLButtonElement | null
     const isolatedQuestioner = document.querySelector(
       '[data-testid="cross-clarify-session-mode-questioner-isolated"]',
     ) as HTMLButtonElement | null
-    expect(isolatedDesigner?.getAttribute('aria-checked')).toBe('true')
     expect(isolatedQuestioner?.getAttribute('aria-checked')).toBe('true')
   })
 })
@@ -216,10 +196,10 @@ describe('RFC-056 source-text grep guards (T9)', () => {
   test('NodeInspector.tsx references cross-clarify-inspector + session-mode-* testids', () => {
     const src = readFileSync(NODE_INSPECTOR_TSX, 'utf-8')
     expect(src).toContain('cross-clarify-inspector')
-    expect(src).toContain('cross-clarify-session-mode-designer')
     expect(src).toContain('cross-clarify-session-mode-questioner')
-    expect(src).toContain('sessionModeForDesigner')
     expect(src).toContain('sessionModeForQuestioner')
+    // Designer session-mode toggle removed (RFC-056 patch 2026-06-22).
+    expect(src).not.toContain('sessionModeForDesigner')
   })
 
   test('nodePalette.ts has clarify-cross-agent in PaletteItem + SHORT', () => {

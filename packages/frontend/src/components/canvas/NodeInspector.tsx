@@ -1066,16 +1066,13 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
     }
     case 'clarify-cross-agent': {
       // RFC-056 cross-clarify node inspector — title + description (same as
-      // RFC-023) plus two segmented `sessionModeFor*` selectors. Mirrors the
-      // RFC-023 same-node clarify inspector's read-only status fields so the
+      // RFC-023) plus a segmented `sessionModeForQuestioner` selector. Mirrors
+      // the RFC-023 same-node clarify inspector's read-only status fields so the
       // two detail panels stay visually aligned: linked questioner / linked
-      // designer / wrapper-loop containment.
+      // designer / wrapper-loop containment. (The designer-rerun session toggle
+      // was removed by RFC-056 patch 2026-06-22 — it was dead config; the
+      // designer rerun is always isolated.)
       const description = typeof rec.description === 'string' ? rec.description : ''
-      const sessionModeForDesigner =
-        typeof rec.sessionModeForDesigner === 'string' &&
-        (rec.sessionModeForDesigner === 'inline' || rec.sessionModeForDesigner === 'isolated')
-          ? (rec.sessionModeForDesigner as 'inline' | 'isolated')
-          : 'isolated'
       const sessionModeForQuestioner =
         typeof rec.sessionModeForQuestioner === 'string' &&
         (rec.sessionModeForQuestioner === 'inline' || rec.sessionModeForQuestioner === 'isolated')
@@ -1161,37 +1158,6 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                 {t('crossClarify.inspector.inLoopNo')}
               </div>
             )}
-          </Field>
-          <Field
-            label={t('crossClarify.inspector.sessionModeForDesigner')}
-            hint={t('crossClarify.inspector.sessionModeHint')}
-            group
-          >
-            <div
-              className="segmented"
-              role="radiogroup"
-              aria-label={t('crossClarify.inspector.sessionModeForDesigner')}
-              data-testid="cross-clarify-session-mode-designer"
-            >
-              {(['isolated', 'inline'] as const).map((mode) => {
-                const active = sessionModeForDesigner === mode
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    className={'segmented__option' + (active ? ' segmented__option--active' : '')}
-                    data-testid={`cross-clarify-session-mode-designer-${mode}`}
-                    onClick={() => patchCrossClarify({ sessionModeForDesigner: mode })}
-                  >
-                    {mode === 'isolated'
-                      ? t('crossClarify.inspector.sessionModeIsolated')
-                      : t('crossClarify.inspector.sessionModeInline')}
-                  </button>
-                )
-              })}
-            </div>
           </Field>
           <Field
             label={t('crossClarify.inspector.sessionModeForQuestioner')}

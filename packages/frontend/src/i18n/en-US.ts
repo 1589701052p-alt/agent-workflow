@@ -2024,7 +2024,6 @@ export const enUS: Resources = {
     },
     inspector: {
       title: 'Cross Clarify',
-      sessionModeForDesigner: 'Designer rerun session',
       sessionModeForQuestioner: 'Questioner rerun session',
       sessionModeIsolated: 'Isolated (fresh)',
       sessionModeInline: 'Inline (resume)',

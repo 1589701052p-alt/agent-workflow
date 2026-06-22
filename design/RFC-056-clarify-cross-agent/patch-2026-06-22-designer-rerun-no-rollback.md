@@ -178,12 +178,10 @@ New file `packages/backend/tests/cross-clarify-designer-rerun-no-rollback.test.t
 
 ## 6. Out of scope / follow-up
 
-- **Dead `sessionModeForDesigner` toggle (§2.3).** With "never roll back",
-  the editor's designer session-mode control does nothing (the designer
-  never resumes inline anyway). Two independent follow-ups for the user to
-  pick later: (a) wire `inline` to actually resume `--session` on the
-  designer rerun (completes RFC-056 §5.5), or (b) remove the cosmetic
-  toggle. Not addressed here.
+- **Dead `sessionModeForDesigner` toggle (§2.3).** RESOLVED by the same-day
+  follow-up below (§8): the user chose to remove the cosmetic toggle and the
+  dead config behind it. (The alternative — wiring `inline` to resume
+  `--session` on the designer rerun — was declined.)
 - **Downstream rerun base state.** Documented in §3 as intended; no
   behavior knob added.
 
@@ -195,3 +193,33 @@ New file `packages/backend/tests/cross-clarify-designer-rerun-no-rollback.test.t
   prior output supplied via the prompt block), cross-referencing this patch.
 - `design.md` §5.5: drop the rollback implication; keep the External
   Feedback aggregation + prompt construction unchanged.
+
+## 8. Follow-up (same patch, 2026-06-22): remove the dead `sessionModeForDesigner`
+
+The editor exposed a "Designer rerun session: inline | isolated" segmented
+control whose value the backend never consumed (§2.3). With the rollback gone it
+was doubly dead. Per the user's instruction it is removed in full:
+
+- **shared** — dropped the `sessionModeForDesigner` field from
+  `ClarifyCrossAgentNodeSchema`; `resolveCrossClarifySessionMode(node)` lost its
+  `direction` param (questioner-only now — the only rerun with a configurable
+  session mode). `ClarifyCrossAgentSessionMode` (enum/type) stays — the
+  questioner field still uses it.
+- **backend** — `scheduler.ts` call site drops the `'questioner'` arg.
+- **frontend** — removed the designer segmented control + its i18n
+  (`crossClarify.inspector.sessionModeForDesigner`: en value + zh value + zh
+  type). The questioner control is untouched (functional — RFC-056 A16).
+- **back-compat** — the schema is `.passthrough()`, so a stored workflow that
+  still carries `sessionModeForDesigner` parses unchanged. The v4 fixture
+  `workflow-schema-versions/v4-with-cross-clarify.json` deliberately RETAINS the
+  legacy key as the passthrough back-compat lock (compat-workflow-schema.test.ts
+  asserts every version fixture still parses cleanly).
+- **tests** — collapsed the designer dimension out of
+  `cross-clarify-inline-fallback` / `clarify-cross-rfc056` /
+  `cross-clarify-rfc056-shared` / `cross-clarify-rfc056-migrate`; the inspector
+  test now POSITIVELY asserts the designer control is ABSENT, and its source
+  guard asserts `sessionModeForDesigner` no longer appears in NodeInspector.tsx.
+
+The questioner inline path (`sessionModeForQuestioner`, RFC-056 A16) is
+unaffected throughout. Gate: typecheck (3 pkgs) + shared/backend/frontend tests
++ format all green.

@@ -1,24 +1,21 @@
 // RFC-056 PR-D C7 — inline fallback enumeration 守门.
 //
-// Cross-clarify nodes carry TWO inline session-mode fields:
-//   * sessionModeForDesigner  — applies when the designer reruns on submit.
-//   * sessionModeForQuestioner — applies when the questioner reruns on
-//                                reject (with STOP CLARIFYING anchor).
+// The cross-clarify QUESTIONER rerun (reject, with STOP CLARIFYING anchor)
+// carries an inline session-mode field `sessionModeForQuestioner`, resolved via
+// `resolveCrossClarifySessionMode`, composing with the RFC-026 fallback helpers
+// (`decideResumeSessionId` + `detectSessionNotFoundFromStderr`) the scheduler
+// already uses for the self-clarify path. The fallback contract: when inline
+// can't run (missing session id / opencode rejected it / version too old), we
+// degrade transparently to isolated + record a warning event with the specific
+// reason.
 //
-// Each is resolved independently via `resolveCrossClarifySessionMode`, and
-// each composes with the RFC-026 fallback helpers (`decideResumeSessionId`
-// + `detectSessionNotFoundFromStderr`) the scheduler already uses for the
-// self-clarify path. The fallback contract says: when inline can't run
-// (missing session id / opencode rejected it / version too old), we
-// degrade transparently to isolated + record a warning event with the
-// specific reason.
+// (The DESIGNER rerun's session-mode field was removed by RFC-056 patch
+// 2026-06-22 — it was dead config; the designer rerun is always isolated.)
 //
 // LOCKS:
-//   1. resolveCrossClarifySessionMode defaults to 'isolated' for BOTH
-//      directions when the field is undefined.
-//   2. resolveCrossClarifySessionMode reads the right field per direction
-//      ('designer' → sessionModeForDesigner, 'questioner' →
-//      sessionModeForQuestioner) — no cross-talk.
+//   1. resolveCrossClarifySessionMode defaults to 'isolated' when the
+//      questioner field is undefined.
+//   2. resolveCrossClarifySessionMode reads sessionModeForQuestioner.
 //   3. decideResumeSessionId composed with 'inline' + missing session id
 //      returns fallbackReason='missing-session-id' + inlineMode=false.
 //   4. decideResumeSessionId composed with 'inline' + null session id
@@ -29,11 +26,11 @@
 //   6. The 3 fallback reasons enumerated by RFC-026
 //      (ClarifyInlineFallbackReason) — `missing-session-id`,
 //      `session-not-found`, `unsupported-opencode-version` — are all
-//      reachable from cross-clarify direction compositions.
+//      reachable from the questioner composition + direct compositions.
 //
-// If any of these go red the inline-mode fallback path on cross-clarify
-// designer / questioner reruns has drifted from RFC-026's contract —
-// investigate before relaxing.
+// If any of these go red the inline-mode fallback path on the cross-clarify
+// questioner rerun has drifted from RFC-026's contract — investigate before
+// relaxing.
 
 import { describe, expect, test } from 'bun:test'
 
@@ -56,22 +53,14 @@ function ccNode(overrides: Partial<ClarifyCrossAgentNode> = {}): ClarifyCrossAge
 }
 
 describe('RFC-056 C7 — inline fallback enumeration', () => {
-  test('resolveCrossClarifySessionMode defaults to isolated when fields are undefined', () => {
+  test('resolveCrossClarifySessionMode defaults to isolated when the field is undefined', () => {
     const node = ccNode()
-    expect(resolveCrossClarifySessionMode(node, 'designer')).toBe('isolated')
-    expect(resolveCrossClarifySessionMode(node, 'questioner')).toBe('isolated')
+    expect(resolveCrossClarifySessionMode(node)).toBe('isolated')
   })
 
-  test('resolveCrossClarifySessionMode reads sessionModeForDesigner for direction=designer (no cross-talk)', () => {
-    const node = ccNode({ sessionModeForDesigner: 'inline', sessionModeForQuestioner: 'isolated' })
-    expect(resolveCrossClarifySessionMode(node, 'designer')).toBe('inline')
-    expect(resolveCrossClarifySessionMode(node, 'questioner')).toBe('isolated')
-  })
-
-  test('resolveCrossClarifySessionMode reads sessionModeForQuestioner for direction=questioner (no cross-talk)', () => {
-    const node = ccNode({ sessionModeForDesigner: 'isolated', sessionModeForQuestioner: 'inline' })
-    expect(resolveCrossClarifySessionMode(node, 'designer')).toBe('isolated')
-    expect(resolveCrossClarifySessionMode(node, 'questioner')).toBe('inline')
+  test('resolveCrossClarifySessionMode reads sessionModeForQuestioner', () => {
+    const node = ccNode({ sessionModeForQuestioner: 'inline' })
+    expect(resolveCrossClarifySessionMode(node)).toBe('inline')
   })
 
   test('decideResumeSessionId({sessionMode:inline}) + missing session id → fallback missing-session-id', () => {
@@ -133,17 +122,17 @@ describe('RFC-056 C7 — inline fallback enumeration', () => {
     expect(reasons.length).toBe(3)
   })
 
-  test('cross-clarify designer direction + inline mode reaches missing-session-id fallback (full composition)', () => {
-    const node = ccNode({ sessionModeForDesigner: 'inline' })
-    const sessionMode = resolveCrossClarifySessionMode(node, 'designer')
+  test('cross-clarify questioner + inline mode reaches missing-session-id fallback (full composition)', () => {
+    const node = ccNode({ sessionModeForQuestioner: 'inline' })
+    const sessionMode = resolveCrossClarifySessionMode(node)
     const ret = decideResumeSessionId({ sessionMode, sourceSessionId: undefined })
     expect(sessionMode).toBe('inline')
     expect(ret.fallbackReason).toBe('missing-session-id')
   })
 
-  test('cross-clarify questioner direction + inline mode reaches unsupported-opencode-version fallback (full composition)', () => {
+  test('cross-clarify questioner + inline mode reaches unsupported-opencode-version fallback (full composition)', () => {
     const node = ccNode({ sessionModeForQuestioner: 'inline' })
-    const sessionMode = resolveCrossClarifySessionMode(node, 'questioner')
+    const sessionMode = resolveCrossClarifySessionMode(node)
     const ret = decideResumeSessionId({
       sessionMode,
       sourceSessionId: 'opc_xyz',

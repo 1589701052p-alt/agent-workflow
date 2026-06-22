@@ -6,7 +6,9 @@
 //     funnels through the RFC-023 parser.
 //   * buildExternalFeedbackBlock sorts sources dictionary-order by
 //     `sourceQuestionerNodeId`; per-source body uses RFC-023 synthesis lines.
-//   * resolveCrossClarifySessionMode defaults to 'isolated' per direction.
+//   * resolveCrossClarifySessionMode returns the questioner session mode
+//     (defaults to 'isolated'). The designer direction was removed by RFC-056
+//     patch 2026-06-22 (dead config — designer rerun is always isolated).
 //
 // If any of these go red the runtime / prompt assembly for the cross-clarify
 // path has drifted — investigate before relaxing.
@@ -274,29 +276,26 @@ describe('RFC-056 summariseCrossAnswer — reuses RFC-023 single-question synthe
   })
 })
 
-describe('RFC-056 resolveCrossClarifySessionMode — defaults to isolated per direction', () => {
-  test('missing fields → isolated', () => {
+describe('RFC-056 resolveCrossClarifySessionMode — questioner session mode', () => {
+  test('missing field → isolated', () => {
     const node = {
       id: 'cc1',
       kind: 'clarify-cross-agent' as const,
       title: '',
       description: '',
     }
-    expect(resolveCrossClarifySessionMode(node, 'designer')).toBe('isolated')
-    expect(resolveCrossClarifySessionMode(node, 'questioner')).toBe('isolated')
+    expect(resolveCrossClarifySessionMode(node)).toBe('isolated')
   })
 
-  test('explicit fields round-trip independently', () => {
+  test('explicit questioner field round-trips', () => {
     const node = {
       id: 'cc1',
       kind: 'clarify-cross-agent' as const,
       title: '',
       description: '',
-      sessionModeForDesigner: 'inline' as const,
-      sessionModeForQuestioner: 'isolated' as const,
+      sessionModeForQuestioner: 'inline' as const,
     }
-    expect(resolveCrossClarifySessionMode(node, 'designer')).toBe('inline')
-    expect(resolveCrossClarifySessionMode(node, 'questioner')).toBe('isolated')
+    expect(resolveCrossClarifySessionMode(node)).toBe('inline')
   })
 })
 

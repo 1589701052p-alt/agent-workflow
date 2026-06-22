@@ -83,20 +83,17 @@ describe('RFC-056 ClarifyCrossAgentNodeSchema parsing', () => {
     expect(parsed.kind).toBe('clarify-cross-agent')
     expect(parsed.title).toBe('')
     expect(parsed.description).toBe('')
-    expect(parsed.sessionModeForDesigner).toBeUndefined()
     expect(parsed.sessionModeForQuestioner).toBeUndefined()
   })
 
-  test('explicit sessionMode fields round-trip', () => {
+  test('explicit questioner session mode round-trips', () => {
     const parsed = ClarifyCrossAgentNodeSchema.parse({
       id: 'cc1',
       kind: 'clarify-cross-agent',
       title: 'Cross feedback',
-      sessionModeForDesigner: 'inline',
-      sessionModeForQuestioner: 'isolated',
+      sessionModeForQuestioner: 'inline',
     })
-    expect(parsed.sessionModeForDesigner).toBe('inline')
-    expect(parsed.sessionModeForQuestioner).toBe('isolated')
+    expect(parsed.sessionModeForQuestioner).toBe('inline')
   })
 
   test('rejects kind mismatch', () => {
