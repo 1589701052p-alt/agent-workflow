@@ -22,6 +22,7 @@ function fakeSkill(name: string, description = ''): Skill {
     sourceKind: 'managed',
     managedPath: `/x/${name}`,
     schemaVersion: 1,
+    contentVersion: 1,
     createdAt: 0,
     updatedAt: 0,
   }

@@ -155,6 +155,18 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     })
   }
 
+  // 5d. RFC-101: backfill a v1 snapshot for any managed skill predating skill
+  // versioning, and re-sync a live files/ left stale by a crash between the
+  // version-archive tx and the live-files copy. Idempotent + best-effort.
+  try {
+    const { reconcileSkillLiveFiles } = await import('@/services/skillVersion')
+    reconcileSkillLiveFiles(db, { appHome: Paths.root })
+  } catch (err) {
+    log.warn('skill-version reconcile on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })

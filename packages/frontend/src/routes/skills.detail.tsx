@@ -11,6 +11,7 @@ import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
 import { MarkdownEditor } from '@/components/MarkdownEditor'
 import { SkillFileTree } from '@/components/SkillFileTree'
+import { SkillVersionHistory } from '@/components/skill/SkillVersionHistory'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -152,6 +153,10 @@ function SkillDetailPage() {
         <h2>{t('skills.filesSection')}</h2>
         <SkillFileTree skillName={name} readonly={!isManaged} />
       </section>
+
+      {isManaged && (
+        <SkillVersionHistory skillName={name} currentVersion={meta.data.contentVersion} />
+      )}
     </div>
   )
 }

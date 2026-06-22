@@ -547,6 +547,7 @@ function skillRowToShape(row: typeof skills.$inferSelect): Skill {
     visibility: row.visibility,
     sourceKind: row.sourceKind as 'managed' | 'external',
     schemaVersion: row.schemaVersion,
+    contentVersion: row.contentVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }

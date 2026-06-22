@@ -20,6 +20,7 @@
 import {
   CreateManagedSkillSchema,
   ImportExternalSkillSchema,
+  RestoreSkillVersionSchema,
   SkillZipDecisionMapSchema,
   UpdateSkillContentSchema,
   UpdateSkillSchema,
@@ -46,6 +47,12 @@ import {
   type SkillFsOptions,
 } from '@/services/skill'
 import { commitSkillZipBuffer, parseSkillZipBuffer, ZIP_LIMITS } from '@/services/skill-zip'
+import {
+  diffSkillVersions,
+  getSkillVersionContent,
+  listSkillVersions,
+  restoreSkillVersion,
+} from '@/services/skillVersion'
 import { NotFoundError, ValidationError } from '@/util/errors'
 import { mountAclEndpoints } from './resourceAcl'
 
@@ -179,7 +186,9 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
     const actor = actorOf(c)
     const existing = await loadVisibleSkill(actor, c.req.param('name'))
     await requireResourceOwner(deps.db, actor, 'skill', existing)
-    return c.json(await writeSkillContent(deps.db, fsOpts, c.req.param('name'), parsed.data))
+    return c.json(
+      await writeSkillContent(deps.db, fsOpts, c.req.param('name'), parsed.data, actor.user.id),
+    )
   })
 
   // File tree + single-file CRUD.
@@ -206,7 +215,14 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
     const actor = actorOf(c)
     const existing = await loadVisibleSkill(actor, c.req.param('name'))
     await requireResourceOwner(deps.db, actor, 'skill', existing)
-    await writeSkillFile(deps.db, fsOpts, c.req.param('name'), path, parsed.data.content)
+    await writeSkillFile(
+      deps.db,
+      fsOpts,
+      c.req.param('name'),
+      path,
+      parsed.data.content,
+      actor.user.id,
+    )
     return c.json({ ok: true, path })
   })
 
@@ -215,8 +231,49 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
     const existing = await loadVisibleSkill(actor, c.req.param('name'))
     await requireResourceOwner(deps.db, actor, 'skill', existing)
     const path = requirePath(c.req.query('path'))
-    await deleteSkillFile(deps.db, fsOpts, c.req.param('name'), path)
+    await deleteSkillFile(deps.db, fsOpts, c.req.param('name'), path, actor.user.id)
     return c.body(null, 204)
+  })
+
+  // RFC-101 — skill content version history.
+  app.get('/api/skills/:name/versions', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
+    return c.json(listSkillVersions(deps.db, fsOpts, c.req.param('name')))
+  })
+
+  app.get('/api/skills/:name/versions/diff', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
+    const from = parseVersionParam(c.req.query('from'), 'from')
+    const to = parseVersionParam(c.req.query('to'), 'to')
+    return c.json(diffSkillVersions(deps.db, fsOpts, c.req.param('name'), from, to))
+  })
+
+  app.get('/api/skills/:name/versions/:v/content', async (c) => {
+    await loadVisibleSkill(actorOf(c), c.req.param('name'))
+    const v = parseVersionParam(c.req.param('v'), 'v')
+    return c.json(getSkillVersionContent(deps.db, fsOpts, c.req.param('name'), v))
+  })
+
+  app.post('/api/skills/:name/versions/:v/restore', async (c) => {
+    const parsed = RestoreSkillVersionSchema.safeParse(await safeJson(c.req.raw))
+    if (!parsed.success) {
+      throw new ValidationError('skill-restore-invalid', 'invalid restore payload', {
+        issues: parsed.error.issues,
+      })
+    }
+    const actor = actorOf(c)
+    const existing = await loadVisibleSkill(actor, c.req.param('name'))
+    await requireResourceOwner(deps.db, actor, 'skill', existing)
+    const v = parseVersionParam(c.req.param('v'), 'v')
+    const result = restoreSkillVersion(
+      deps.db,
+      fsOpts,
+      c.req.param('name'),
+      v,
+      actor.user.id,
+      parsed.data.reason,
+    )
+    return c.json(result)
   })
 
   // RFC-099 — GET/PUT /api/skills/:name/acl
@@ -233,6 +290,14 @@ function requirePath(p: string | undefined): string {
     throw new ValidationError('path-required', "'path' query parameter is required")
   }
   return p
+}
+
+function parseVersionParam(raw: string | undefined, field: string): number {
+  const n = Number(raw)
+  if (raw === undefined || raw === '' || !Number.isInteger(n) || n < 1) {
+    throw new ValidationError('skill-version-invalid', `'${field}' must be a positive integer`)
+  }
+  return n
 }
 
 async function safeJson(req: Request): Promise<unknown> {

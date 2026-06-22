@@ -6,7 +6,15 @@
 // All `text` columns holding JSON are documented in comments; runtime parses with zod.
 
 import { sql } from 'drizzle-orm'
-import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import {
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core'
 
 // -----------------------------------------------------------------------------
 // agents — DB is source of truth. Frontmatter fields are split into columns.
@@ -243,6 +251,10 @@ export const skills = sqliteTable(
       .notNull()
       .default('public'),
     schemaVersion: integer('schema_version').notNull().default(1),
+    // RFC-101: monotonic CONTENT version (distinct from schema_version, the
+    // DB-migration version). Bumps on every write through commitSkillVersion;
+    // always equals the latest skill_versions.version_index for this skill.
+    contentVersion: integer('content_version').notNull().default(1),
     createdAt: integer('created_at')
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -252,6 +264,41 @@ export const skills = sqliteTable(
   },
   (t) => ({
     sourceIdx: index('skills_source_id_idx').on(t.sourceId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// skill_versions — RFC-101 skill content history.
+//
+// One immutable snapshot per (skill, version_index). Every write to a managed
+// skill's files/ (editor save, fusion apply, restore) archives the new tree
+// under ~/.agent-workflow/skills/{name}/versions/v{n}/files and inserts a row.
+// Mirrors doc_versions (RFC-005): the DB stays small, the files stay grep-able.
+// -----------------------------------------------------------------------------
+export const skillVersions = sqliteTable(
+  'skill_versions',
+  {
+    id: text('id').primaryKey(), // ULID
+    skillName: text('skill_name')
+      .notNull()
+      .references(() => skills.name, { onDelete: 'cascade' }),
+    versionIndex: integer('version_index').notNull(), // 1-based; == skills.content_version at archive
+    filesPath: text('files_path').notNull(), // relative to app home: skills/{name}/versions/v{n}/files
+    source: text('source', {
+      enum: ['initial', 'editor', 'fusion', 'restore'],
+    }).notNull(),
+    summary: text('summary'), // change note (fusion changelog / restore auto-text); nullable
+    fusionId: text('fusion_id'), // RFC-101 PR-B: set when source='fusion'; weak ref (no cascade)
+    restoredFromVersion: integer('restored_from_version'), // set when source='restore'
+    authorUserId: text('author_user_id'), // users.id or '__system__'
+    contentHash: text('content_hash'), // sha256 of normalized files/ tree; used for empty-write skip
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    skillVersionIdx: uniqueIndex('uq_skill_versions_skill_v').on(t.skillName, t.versionIndex),
+    createdIdx: index('idx_skill_versions_created').on(t.createdAt),
   }),
 )
 

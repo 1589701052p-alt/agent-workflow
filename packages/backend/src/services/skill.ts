@@ -33,6 +33,7 @@ import { dirname, join, sep } from 'node:path'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, skills } from '@/db/schema'
+import { commitSkillVersion } from '@/services/skillVersion'
 import { parseFrontmatter, stringifyFrontmatter } from '@/util/frontmatter'
 import { safeJoin } from '@/util/safePath'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -115,6 +116,21 @@ export async function createManagedSkill(
     createdAt: now,
     updatedAt: now,
   })
+
+  // RFC-101: archive the freshly-written files/ as v1. produce is a no-op —
+  // SKILL.md is already on disk; commitSkillVersion snapshots it + records the
+  // skill_versions(v1) row. On failure, unwind the half-created skill so we
+  // never leave a row without a v1 (mirrors the original fail-safe intent).
+  try {
+    commitSkillVersion(db, opts, input.name, () => {}, {
+      source: 'initial',
+      authorUserId: aclOpts?.ownerUserId ?? null,
+    })
+  } catch (err) {
+    await db.delete(skills).where(eq(skills.name, input.name))
+    rmSync(join(opts.appHome, 'skills', input.name), { recursive: true, force: true })
+    throw err
+  }
 
   const created = await getSkill(db, input.name)
   if (created === null) throw new Error('skill disappeared right after insert')
@@ -244,6 +260,7 @@ export async function writeSkillContent(
   opts: SkillFsOptions,
   name: string,
   patch: UpdateSkillContent,
+  authorUserId?: string | null,
 ): Promise<SkillContent> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
@@ -262,21 +279,27 @@ export async function writeSkillContent(
     frontmatterExtra: patch.frontmatterExtra ?? current.frontmatterExtra,
   }
 
-  const root = skillRoot(skill, opts)
-  mkdirSync(root, { recursive: true })
   const md = stringifyFrontmatter({
     data: { name: next.name, description: next.description, ...next.frontmatterExtra },
     body: next.bodyMd,
   })
-  writeFileSync(join(root, 'SKILL.md'), md, 'utf-8')
 
-  // Keep the DB description in sync with SKILL.md.
-  if (patch.description !== undefined) {
-    await db
-      .update(skills)
-      .set({ description: patch.description, updatedAt: Date.now() })
-      .where(eq(skills.name, name))
-  }
+  // RFC-101: route through the single versioning funnel — archives the prior
+  // files/ as a version, writes the new SKILL.md, bumps content_version, and
+  // (when description changed) syncs the DB description in the same tx.
+  commitSkillVersion(
+    db,
+    opts,
+    name,
+    (staging) => {
+      writeFileSync(join(staging, 'SKILL.md'), md, 'utf-8')
+    },
+    {
+      source: 'editor',
+      authorUserId: authorUserId ?? null,
+      setDescription: patch.description !== undefined ? patch.description : undefined,
+    },
+  )
 
   return next
 }
@@ -346,17 +369,23 @@ export async function writeSkillFile(
   name: string,
   relPath: string,
   content: string,
+  authorUserId?: string | null,
 ): Promise<void> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
   ensureSkillIsWritable(skill)
-  const root = skillRoot(skill, opts)
-  const abs = safeJoin(root, relPath)
-  mkdirSync(dirname(abs), { recursive: true })
-  writeFileSync(abs, content, 'utf-8')
-
-  // Touch DB updatedAt.
-  await db.update(skills).set({ updatedAt: Date.now() }).where(eq(skills.name, name))
+  // RFC-101: support-file writes version the whole files/ tree too.
+  commitSkillVersion(
+    db,
+    opts,
+    name,
+    (staging) => {
+      const abs = safeJoin(staging, relPath)
+      mkdirSync(dirname(abs), { recursive: true })
+      writeFileSync(abs, content, 'utf-8')
+    },
+    { source: 'editor', authorUserId: authorUserId ?? null },
+  )
 }
 
 export async function deleteSkillFile(
@@ -364,6 +393,7 @@ export async function deleteSkillFile(
   opts: SkillFsOptions,
   name: string,
   relPath: string,
+  authorUserId?: string | null,
 ): Promise<void> {
   const skill = await getSkill(db, name)
   if (skill === null) throw new NotFoundError('skill-not-found', `skill '${name}' not found`)
@@ -376,21 +406,25 @@ export async function deleteSkillFile(
     )
   }
   const root = skillRoot(skill, opts)
-  const abs = safeJoin(root, relPath)
-  if (!existsSync(abs)) {
+  if (!existsSync(safeJoin(root, relPath))) {
     throw new NotFoundError(
       'skill-file-not-found',
       `file '${relPath}' not found in skill '${name}'`,
     )
   }
-  const st = statSync(abs)
-  if (st.isDirectory()) {
-    rmSync(abs, { recursive: true })
-  } else {
-    unlinkSync(abs)
-  }
-
-  await db.update(skills).set({ updatedAt: Date.now() }).where(eq(skills.name, name))
+  // RFC-101: deletion versions the tree (the removal IS the change).
+  commitSkillVersion(
+    db,
+    opts,
+    name,
+    (staging) => {
+      const abs = safeJoin(staging, relPath)
+      if (!existsSync(abs)) return
+      if (statSync(abs).isDirectory()) rmSync(abs, { recursive: true })
+      else unlinkSync(abs)
+    },
+    { source: 'editor', authorUserId: authorUserId ?? null },
+  )
 }
 
 // --- helpers ---
@@ -405,6 +439,7 @@ function rowToSkill(row: SkillRow): Skill {
     visibility: row.visibility,
     sourceKind: row.sourceKind as 'managed' | 'external',
     schemaVersion: row.schemaVersion,
+    contentVersion: row.contentVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }

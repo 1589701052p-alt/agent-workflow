@@ -824,6 +824,22 @@ export interface Resources {
     zipParseFailedFallback: string
     zipCommitFailedFallback: string
     zipErrorWholeArchiveLabel: string
+    versionsSection: string
+    versionsEmpty: string
+    versionLabel: string
+    versionCurrent: string
+    versionSourceInitial: string
+    versionSourceEditor: string
+    versionSourceFusion: string
+    versionSourceRestore: string
+    versionRestoredFrom: string
+    versionCompare: string
+    versionRestore: string
+    versionRestoreConfirm: string
+    versionDiffTitle: string
+    versionBy: string
+    versionRestoreReasonPlaceholder: string
+    versionRestoreFusionNote: string
   }
   workflows: {
     title: string
@@ -2976,6 +2992,22 @@ export const zhCN: Resources = {
     zipParseFailedFallback: '解析 zip 失败',
     zipCommitFailedFallback: '提交失败（{{status}}）',
     zipErrorWholeArchiveLabel: '(zip)',
+    versionsSection: '版本历史',
+    versionsEmpty: '暂无版本历史。',
+    versionLabel: 'v{{n}}',
+    versionCurrent: '当前',
+    versionSourceInitial: '创建',
+    versionSourceEditor: '编辑',
+    versionSourceFusion: '融合',
+    versionSourceRestore: '回退',
+    versionRestoredFrom: '回退自 v{{n}}',
+    versionCompare: '与当前对比',
+    versionRestore: '回退到此版本',
+    versionRestoreConfirm: '将技能回退到 v{{n}}？这会以 v{{n}} 的内容生成一个新版本。',
+    versionDiffTitle: '技能 diff：v{{from}} → v{{to}}',
+    versionBy: '由 {{who}}',
+    versionRestoreReasonPlaceholder: '回退原因（可选）',
+    versionRestoreFusionNote: 'v{{n}} 之后被融合的记忆将被解融合并退回审批池。',
   },
   mcps: {
     title: 'MCP 服务器',
