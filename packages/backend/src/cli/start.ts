@@ -167,6 +167,18 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     })
   }
 
+  // 5e. RFC-101: ensure the built-in skill-fusion agent + workflow exist (so a
+  // fusion launch never has to seed them on the hot path, and they show up in
+  // the workflows list). Idempotent; createFusion also lazy-seeds defensively.
+  try {
+    const { seedFusionResources } = await import('@/services/fusion')
+    await seedFusionResources(db)
+  } catch (err) {
+    log.warn('fusion resource seed on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })
