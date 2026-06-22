@@ -39,7 +39,7 @@ import { getSkill } from '@/services/skill'
 import { commitSkillVersion, type SkillVersionFsOptions } from '@/services/skillVersion'
 import { cancelTask, getTask, startTask, type StartTaskDeps } from '@/services/task'
 import { listWorkflows, createWorkflow } from '@/services/workflow'
-import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
+import { ConflictError, NotFoundError } from '@/util/errors'
 import { gitDiffSnapshot, runGit } from '@/util/git'
 
 export const SKILL_MERGER_AGENT_NAME = 'aw-skill-merger'

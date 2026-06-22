@@ -10,7 +10,7 @@
 // (skill version bump + memory fuse) + OCC).
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join as pjoin } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -106,9 +106,8 @@ function approvedGlobalMemory(db: DbClient, title: string): string {
 }
 
 function statusOf(db: DbClient, id: string): string {
-  const { eq: eqf } = require('drizzle-orm') as typeof import('drizzle-orm')
   return (
-    db.select().from(memories).where(eqf(memories.id, id)).all() as Array<{ status: string }>
+    db.select().from(memories).where(eq(memories.id, id)).all() as Array<{ status: string }>
   )[0]!.status
 }
 
@@ -200,7 +199,6 @@ describe('launch → reconcile → approve', () => {
       pjoin(wt, 'SKILL.md'),
       '---\nname: lint\ndescription: d\n---\nfused body (2 spaces)',
     )
-    const { mkdirSync } = require('node:fs') as typeof import('node:fs')
     mkdirSync(pjoin(wt, '__fusion__'), { recursive: true })
     writeFileSync(
       pjoin(wt, '__fusion__', 'result.json'),
@@ -256,7 +254,6 @@ describe('launch → reconcile → approve', () => {
     const task = await getTask(h.db, fusion.currentTaskId!)
     const wt = task!.worktreePath
     writeFileSync(pjoin(wt, 'SKILL.md'), '---\nname: lint\ndescription: d\n---\nproposed')
-    const { mkdirSync } = require('node:fs') as typeof import('node:fs')
     mkdirSync(pjoin(wt, '__fusion__'), { recursive: true })
     writeFileSync(
       pjoin(wt, '__fusion__', 'result.json'),

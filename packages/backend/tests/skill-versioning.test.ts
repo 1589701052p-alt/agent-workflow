@@ -26,7 +26,6 @@ import {
 import {
   commitSkillVersion,
   diffSkillVersions,
-  ensureInitialSkillVersion,
   getSkillVersionContent,
   gitStyleDirDiff,
   hashDir,

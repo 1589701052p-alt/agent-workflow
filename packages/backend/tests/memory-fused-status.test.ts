@@ -7,6 +7,7 @@
 // in the current skill version).
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { eq } from 'drizzle-orm'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -58,8 +59,6 @@ function statusOf(db: DbClient, id: string): string {
   return rows[0]!.status
 }
 function eqId(id: string) {
-  // tiny local helper to avoid importing drizzle eq just for reads
-  const { eq } = require('drizzle-orm') as typeof import('drizzle-orm')
   return eq(memories.id, id)
 }
 
