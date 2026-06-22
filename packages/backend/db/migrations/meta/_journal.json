@@ -330,6 +330,13 @@
       "when": 1782200000000,
       "tag": "0047_rfc101_skill_versioning",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1782300000000,
+      "tag": "0048_rfc101_fusion",
+      "breakpoints": true
     }
   ]
 }

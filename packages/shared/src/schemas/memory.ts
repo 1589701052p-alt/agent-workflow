@@ -13,6 +13,8 @@ export const MemoryStatusSchema = z.enum([
   'archived',
   'superseded',
   'rejected',
+  // RFC-101: terminal — knowledge fused into a skill; no longer injected.
+  'fused',
 ])
 export type MemoryStatus = z.infer<typeof MemoryStatusSchema>
 
@@ -49,6 +51,11 @@ export const MemorySchema = z
     approvedAt: z.number().int().nullable(),
     createdAt: z.number().int(),
     version: z.number().int().min(1),
+    // RFC-101 fusion provenance — non-null iff status='fused'.
+    fusedIntoSkill: z.string().nullable().optional(),
+    fusedIntoSkillVersion: z.number().int().nullable().optional(),
+    fusedAt: z.number().int().nullable().optional(),
+    fusedByUserId: z.string().nullable().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.scopeType === 'global' && v.scopeId !== null) {
@@ -82,6 +89,10 @@ export const MemorySummarySchema = z.object({
   approvedAt: z.number().int().nullable(),
   version: z.number().int(),
   distillAction: DistillActionSchema.nullable(),
+  // RFC-101: fusion provenance for the "fused → {skill} v{n}" chip (non-null
+  // only on status='fused' rows).
+  fusedIntoSkill: z.string().nullable().optional(),
+  fusedIntoSkillVersion: z.number().int().nullable().optional(),
   // RFC-050: distiller output language for this row's distill job.
   // Only present on rows produced by the distiller (NULL for manual /
   // legacy rows). The frontend shows a small LangChip when this is

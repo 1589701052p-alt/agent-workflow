@@ -1314,8 +1314,11 @@ export const memories = sqliteTable(
     title: text('title').notNull(),
     bodyMd: text('body_md').notNull(),
     tags: text('tags').notNull().default('[]'), // JSON string[]
+    // RFC-101: 'fused' is a terminal status — the memory's knowledge has been
+    // merged into a skill (provenance below). Excluded from runtime injection
+    // (memoryInject filters status='approved').
     status: text('status', {
-      enum: ['candidate', 'approved', 'archived', 'superseded', 'rejected'],
+      enum: ['candidate', 'approved', 'archived', 'superseded', 'rejected', 'fused'],
     }).notNull(),
     sourceKind: text('source_kind', {
       enum: ['clarify', 'review', 'feedback', 'manual'],
@@ -1332,12 +1335,58 @@ export const memories = sqliteTable(
     approvedAt: integer('approved_at'),
     createdAt: integer('created_at').notNull(),
     version: integer('version').notNull().default(1),
+    // RFC-101 fusion provenance — set iff status='fused' (DB CHECK enforces).
+    fusedIntoSkill: text('fused_into_skill'),
+    fusedIntoSkillVersion: integer('fused_into_skill_version'),
+    fusedAt: integer('fused_at'),
+    fusedByUserId: text('fused_by_user_id'),
+    fusedFusionId: text('fused_fusion_id'),
   },
   (t) => ({
     scopeStatusIdx: index('idx_memories_scope_status').on(t.scopeType, t.scopeId, t.status),
     statusCreatedIdx: index('idx_memories_status_created').on(t.status, t.createdAt),
     supersedesIdx: index('idx_memories_supersedes').on(t.supersedesId),
     sourceIdx: index('idx_memories_source').on(t.sourceKind, t.sourceEventId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// fusions — RFC-101 memory→skill fusion record (product-level orchestration).
+// One row per fusion, spanning N engine-task iterations. The proposed skill
+// change lives in the current engine task's ephemeral worktree until the
+// merger approves (apply → bump skill version + fuse memories) or rejects.
+// -----------------------------------------------------------------------------
+export const fusions = sqliteTable(
+  'fusions',
+  {
+    id: text('id').primaryKey(), // ULID
+    skillName: text('skill_name').notNull(),
+    baseSkillVersion: integer('base_skill_version').notNull(), // OCC baseline
+    memoryIdsJson: text('memory_ids_json').notNull(), // string[] selected memory ids
+    intent: text('intent').notNull().default(''),
+    status: text('status', {
+      enum: ['running', 'awaiting_approval', 'applying', 'done', 'rejected', 'canceled', 'failed'],
+    })
+      .notNull()
+      .default('running'),
+    iteration: integer('iteration').notNull().default(1),
+    currentTaskId: text('current_task_id'), // engine task for the current iteration
+    proposedWorktreePath: text('proposed_worktree_path'),
+    proposedDiff: text('proposed_diff'), // current vs proposed, for the approval gate
+    incorporatedMemoryIdsJson: text('incorporated_memory_ids_json'),
+    skippedJson: text('skipped_json'), // [{memoryId, reason}]
+    changelog: text('changelog'),
+    appliedSkillVersion: integer('applied_skill_version'),
+    ownerUserId: text('owner_user_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+    decidedByUserId: text('decided_by_user_id'),
+    decidedAt: integer('decided_at'),
+    decisionReason: text('decision_reason'),
+    error: text('error'),
+  },
+  (t) => ({
+    skillIdx: index('idx_fusions_skill').on(t.skillName),
+    statusIdx: index('idx_fusions_status').on(t.status),
   }),
 )
 

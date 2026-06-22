@@ -16,7 +16,7 @@
 // `adminUserId` for write paths so the audit trail (`approved_by_user_id`)
 // is always populated.
 
-import { and, desc, eq, inArray, like, or } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, like, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type {
   Memory,
@@ -32,7 +32,7 @@ import type {
 } from '@agent-workflow/shared'
 import { MemorySchema } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
-import { dbTxSync } from '@/db/txSync'
+import { dbTxSync, type DbTxSync } from '@/db/txSync'
 import { memories, memoryDistillJobs } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { MEMORY_CHANNEL, memoryBroadcaster } from '@/ws/broadcaster'
@@ -51,7 +51,7 @@ interface MemoryRow {
   title: string
   bodyMd: string
   tags: string
-  status: 'candidate' | 'approved' | 'archived' | 'superseded' | 'rejected'
+  status: 'candidate' | 'approved' | 'archived' | 'superseded' | 'rejected' | 'fused'
   sourceKind: 'clarify' | 'review' | 'feedback' | 'manual'
   sourceEventId: string | null
   sourceTaskId: string | null
@@ -63,6 +63,11 @@ interface MemoryRow {
   approvedAt: number | null
   createdAt: number
   version: number
+  fusedIntoSkill: string | null
+  fusedIntoSkillVersion: number | null
+  fusedAt: number | null
+  fusedByUserId: string | null
+  fusedFusionId: string | null
 }
 
 function parseTags(s: string): string[] {
@@ -95,6 +100,10 @@ function rowToMemory(row: MemoryRow): Memory {
     approvedAt: row.approvedAt,
     createdAt: row.createdAt,
     version: row.version,
+    fusedIntoSkill: row.fusedIntoSkill,
+    fusedIntoSkillVersion: row.fusedIntoSkillVersion,
+    fusedAt: row.fusedAt,
+    fusedByUserId: row.fusedByUserId,
   })
 }
 
@@ -112,6 +121,8 @@ export function toSummary(
     approvedAt: m.approvedAt,
     version: m.version,
     distillAction: m.distillAction,
+    fusedIntoSkill: m.fusedIntoSkill ?? null,
+    fusedIntoSkillVersion: m.fusedIntoSkillVersion ?? null,
     // RFC-050: only candidate rows carry the lang chip — approved /
     // archived / superseded / rejected are "facts" whose generation
     // language we no longer surface.
@@ -424,7 +435,7 @@ export async function patchMemory(
       throw new NotFoundError('memory-not-found', `memory ${id} not found`)
     }
     const row = rows[0]!
-    if (row.status === 'superseded' || row.status === 'rejected') {
+    if (row.status === 'superseded' || row.status === 'rejected' || row.status === 'fused') {
       throw new ConflictError(
         'memory-terminal-status',
         `memory ${id} is in terminal status '${row.status}'; cannot edit`,
@@ -572,6 +583,82 @@ export async function unarchiveMemory(db: DbClient, id: string): Promise<Memory>
   const m = await transitionStatus(db, id, ['archived'], 'approved', 'memory-not-archived')
   publish({ type: 'memory.unarchived', memoryId: id })
   return m
+}
+
+/**
+ * RFC-101: fuse memories into a skill INSIDE an existing transaction (called
+ * from commitSkillVersion's txExtra during fusion apply, so the skill version
+ * bump + the memory status flip commit atomically). Only `approved` memories
+ * transition to `fused` + provenance; ids that drifted out of `approved`
+ * (archived/superseded/deleted between launch and apply) are skipped. Returns
+ * the ids actually fused.
+ */
+export function fuseMemoriesTx(
+  tx: DbTxSync,
+  args: {
+    memoryIds: readonly string[]
+    skillName: string
+    skillVersion: number
+    fusionId: string
+    userId: string | null
+    now: number
+  },
+): string[] {
+  const fused: string[] = []
+  for (const id of args.memoryIds) {
+    const rows = tx.select().from(memories).where(eq(memories.id, id)).limit(1).all() as MemoryRow[]
+    const row = rows[0]
+    if (!row || row.status !== 'approved') continue
+    tx.update(memories)
+      .set({
+        status: 'fused',
+        fusedIntoSkill: args.skillName,
+        fusedIntoSkillVersion: args.skillVersion,
+        fusedAt: args.now,
+        fusedByUserId: args.userId,
+        fusedFusionId: args.fusionId,
+      })
+      .where(eq(memories.id, id))
+      .run()
+    fused.push(id)
+  }
+  return fused
+}
+
+/**
+ * RFC-101: un-fuse memories whose knowledge no longer lives in the skill after
+ * a restore to `aboveVersion` (status fused→approved, provenance cleared).
+ * Runs inside the restore transaction. Returns the un-fused ids.
+ */
+export function unfuseMemoriesTx(
+  tx: DbTxSync,
+  args: { skillName: string; aboveVersion: number },
+): string[] {
+  const rows = tx
+    .select()
+    .from(memories)
+    .where(
+      and(
+        eq(memories.status, 'fused'),
+        eq(memories.fusedIntoSkill, args.skillName),
+        gt(memories.fusedIntoSkillVersion, args.aboveVersion),
+      ),
+    )
+    .all() as MemoryRow[]
+  for (const row of rows) {
+    tx.update(memories)
+      .set({
+        status: 'approved',
+        fusedIntoSkill: null,
+        fusedIntoSkillVersion: null,
+        fusedAt: null,
+        fusedByUserId: null,
+        fusedFusionId: null,
+      })
+      .where(eq(memories.id, row.id))
+      .run()
+  }
+  return rows.map((r) => r.id)
 }
 
 export async function deleteMemory(db: DbClient, id: string): Promise<void> {
