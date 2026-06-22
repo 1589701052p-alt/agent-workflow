@@ -185,7 +185,7 @@ questioner node_run done 后，runner 检查 envelope kind：
     - `abandoned` → 跳过（已失效）。
   - 全部就绪 → return true + 收集 directive='continue' 的 session 列表。
 - ready=true → `triggerDesignerRerun(designerNodeId, sources)`：
-  1. RFC-014 `rollbackBeforeRetry(designerNodeRunId)`。
+  1. **不回退 worktree**（patch 2026-06-22）：cross-clarify `continue` 是"带 External Feedback 修订"而非重试，designer 既有产出与下游叠加的改动一律保留（prior 草稿经 scheduler `## Prior Output (to be updated)` prompt 块回灌）。旧版此步为 RFC-014 `rollbackBeforeRetry(designerNodeRunId)`，已撤——见 [patch-2026-06-22-designer-rerun-no-rollback](./patch-2026-06-22-designer-rerun-no-rollback.md)。
   2. 新建 designer node_run，`cross_clarify_iteration = max(prev) + 1`。
   3. prompt 构造（见 §6）。
   4. 触发 sibling cascade（下游全 reset pending、复用 RFC-014 helper）。被持久 stop 的 cross-clarify 节点 cascade 时**仍 reset 为 pending 但 dispatch 时检测 directive='stop' 跳过 awaiting**，questioner 重跑带 STOP CLARIFYING 注入（见 §5.4）。
@@ -216,6 +216,8 @@ designer node_run 新建后 dispatch：
 - 收集 External Feedback sources（multi-source aggregation）：按 source_questioner_node_id 字典序、对每个 source 拉取该 source 在 latest loop_iter 内最新一条 directive='continue' 的 answered session。
 - prompt 构造（见 §6）。
 - inline session 模式（sessionModeForDesigner='inline'）：spawn 命令行追加 `--session <designer.opencode_session_id>`，prompt 走精简版（仅追加 External Feedback 本轮 diff + 短指令），与 RFC-026 inline 路径同模式 + fallback 同模式。
+- **不回退 worktree**（patch 2026-06-22）：designer 重跑不再 rollback 到 pre_snapshot，在现有工作树上原地修订（§5.2 步骤 1）；prior 草稿经 scheduler `## Prior Output (to be updated)` prompt 块回灌。
+- **现状勘误**：上面这条 inline session 接线后端**尚未消费**——`cross-clarify-answer` 重跑被排除在 `isClarifyRerunCause` 之外，designer 重跑恒以 isolated 跑，`sessionModeForDesigner`（含编辑器开关）当前为空配置。inline 续接为待办（见 [patch-2026-06-22-designer-rerun-no-rollback](./patch-2026-06-22-designer-rerun-no-rollback.md) §2.3 / §6）。
 
 ### 5.6 reject 后 cascade 与持久 stop 优先级
 

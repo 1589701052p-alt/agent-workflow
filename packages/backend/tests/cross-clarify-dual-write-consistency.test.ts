@@ -122,7 +122,7 @@ async function seedTask(db: DbClient): Promise<string> {
     workflowId: wfId,
     workflowSnapshot: JSON.stringify(def),
     repoPath: '/tmp/aw-cross-dualwrite',
-    // worktreePath '' keeps triggerDesignerRerun's git ops a no-op (hermetic).
+    // Hermetic fixture — these are source-text ordering assertions; no git runs.
     worktreePath: '',
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,

@@ -111,7 +111,11 @@ describe('RFC-098 B1 — taskWriteLocks registry identity & gc', () => {
   test('revision #1 source guard: gc is called ONLY from runTask finally — HTTP rollback services never gc', () => {
     // An HTTP-side gc would race the scheduler's cached SchedulerState.writeSem
     // reference (delete + recreate ⇒ two instances ⇒ mutex silently split).
-    for (const f of ['clarify.ts', 'review.ts', 'crossClarify.ts']) {
+    // crossClarify.ts dropped from this list per RFC-056 patch 2026-06-22: its
+    // cross-clarify designer rerun no longer rolls back the worktree, so it no
+    // longer takes the task write lock at all. clarify.ts + review.ts still roll
+    // back under getTaskWriteSem and must never gc.
+    for (const f of ['clarify.ts', 'review.ts']) {
       const src = readFileSync(SRC(f), 'utf-8')
       expect(src).toContain('getTaskWriteSem')
       expect(src.includes('gcTaskWriteSem')).toBe(false)

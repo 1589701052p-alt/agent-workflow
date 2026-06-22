@@ -22,12 +22,13 @@
 //     ONLY when every such node's latest session is in a terminal state
 //     (answered or abandoned). Sessions with directive='continue' feed
 //     External Feedback; directive='stop' / 'abandoned' are skipped.
-//   - triggerDesignerRerun: rolls back the designer's prior node_run via
-//     RFC-014 cascade, mints a fresh designer node_run with
-//     clarifyIteration = max-participant + 1 (RFC-064 unified counter),
-//     retryIndex = 0, sibling cascade downstream. Persistent-stop
-//     cross-clarify nodes stay reset to pending but dispatch detects them
-//     via hasPersistentStop.
+//   - triggerDesignerRerun: mints a fresh designer node_run (cause
+//     'cross-clarify-answer', retryIndex = prior-max + 1) that revises in
+//     place. It does NOT roll back the worktree (patch 2026-06-22) — the
+//     prior draft is supplied via the scheduler's `## Prior Output (to be
+//     updated)` prompt block, and downstream re-dispatch is lazy (RFC-074).
+//     Persistent-stop cross-clarify nodes stay reset to pending but dispatch
+//     detects them via hasPersistentStop.
 //   - triggerQuestionerStopRerun: cascade-reset the questioner. dispatch
 //     time the questioner's prompt picks up the STOP CLARIFYING anchor +
 //     full Q&A history via the cross-clarify path.
@@ -85,8 +86,6 @@ import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { mintNodeRun } from '@/services/nodeRunMint'
 import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
-import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
-import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { createLogger } from '@/util/log'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
@@ -588,7 +587,6 @@ export async function submitCrossClarifyAnswers(
     designerNodeId,
     sources: readiness.sources,
     loopIter: row.loopIter,
-    worktreePath: taskRow.worktreePath,
     definition,
     now,
   })
@@ -739,7 +737,7 @@ export async function evaluateDesignerRerunReadiness(
 }
 
 // ---------------------------------------------------------------------------
-// triggerDesignerRerun — RFC-014 rollback + new node_run + cascade.
+// triggerDesignerRerun — new designer node_run (no worktree rollback).
 // ---------------------------------------------------------------------------
 
 export interface TriggerDesignerRerunArgs {
@@ -748,7 +746,6 @@ export interface TriggerDesignerRerunArgs {
   designerNodeId: string
   sources: DesignerRerunReadinessSource[]
   loopIter: number
-  worktreePath: string
   /** RFC-056 §5.2 step 4 (patch 2026-05-22) sibling cascade walks the
    *  workflow's edges. Threading the definition from the caller avoids a
    *  second DB hop for the workflow snapshot; the helper falls back to
@@ -763,24 +760,28 @@ export interface TriggerDesignerRerunResult {
 }
 
 /**
- * Roll the designer back to its pre_snapshot (RFC-014 style), mint a fresh
- * designer node_run with clarifyIteration = max-participant + 1 (RFC-064
- * unified counter) / retryIndex = 0, and cascade-reset every downstream
- * node to pending so the scheduler re-dispatches them. The caller is
- * expected to call resumeTask once.
+ * Mint a fresh designer node_run (cause 'cross-clarify-answer', retryIndex =
+ * prior-max + 1) to revise with the aggregated External Feedback. The
+ * worktree is NOT rolled back (patch 2026-06-22 — the designer revises in
+ * place; its prior draft is re-supplied via the scheduler's
+ * `## Prior Output (to be updated)` prompt block). Downstream re-dispatch is
+ * lazy (RFC-074): once this rerun produces a fresh done row,
+ * recomputeFreshnessAndDemote demotes + re-dispatches stale downstream. The
+ * caller is expected to call resumeTask once.
  */
 export async function triggerDesignerRerun(
   args: TriggerDesignerRerunArgs,
 ): Promise<TriggerDesignerRerunResult> {
   const now = (args.now ?? Date.now)()
 
-  // Latest designer node_run (any status, ANY parent) — the cascade source.
+  // Latest designer node_run (any status, ANY parent) — the inheritance
+  // source for the fresh mint below.
   // RFC-096 (audit S-13 / 附录 C #7): pick by pure ULID id via the shared
   // picker. The old `desc(startedAt)` had two pathologies — freshly minted
   // rerun rows never write startedAt (NULL sorts LAST under DESC, so they
   // could never be selected and a second trigger re-picked the stale row) and
   // mark-running REWRITES startedAt (a resumed old-iteration row jumped to the
-  // front, anchoring rollback/inheritance/retry-bump on the wrong iteration —
+  // front, anchoring inheritance/retry-bump on the wrong iteration —
   // the minted pending row was then invisible to the current frontier and
   // cross-clarify stalled). Child rows stay SELECTABLE on purpose: a designer
   // inside a wrapper-fanout lives on shard child rows, and its rerun must
@@ -798,31 +799,15 @@ export async function triggerDesignerRerun(
     )
   }
 
-  // RFC-014: roll worktree back to designer's pre_snapshot before reruns so
-  // file-level effects are erased. Failure is logged + suppressed; rerun
-  // proceeds (worktree may diverge but the designer rewrites the file).
-  // RFC-098 B1 (audit S-9 / ⑥-10): write-lock + shared multi-repo rollback.
-  // `args.worktreePath !== ''` stays as the seal gate (tests construct args
-  // with '' to disable rollback entirely); the target itself is loaded from
-  // the DB so multi-repo tasks roll per sub-worktree.
-  if (
-    (lastDesigner.preSnapshot !== null || lastDesigner.preSnapshotReposJson !== null) &&
-    args.worktreePath !== ''
-  ) {
-    const target = await loadRollbackTarget(args.db, args.taskId)
-    if (target !== null) {
-      try {
-        await getTaskWriteSem(args.taskId).run(() =>
-          rollbackNodeRunWorktrees(target, lastDesigner, { resetOnEmptySnapshot: false }, log),
-        )
-      } catch (err) {
-        log.warn('designer rollback failed', {
-          nodeRunId: lastDesigner.id,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-  }
+  // patch 2026-06-22 (RFC-056): the cross-clarify-answer designer rerun does
+  // NOT roll the worktree back to pre_snapshot. The designer is revising with
+  // External Feedback — a continuation, not a retry — so its prior output (and
+  // any downstream work sitting on top) is preserved; the prior draft is
+  // re-supplied via the scheduler's `## Prior Output (to be updated)` prompt
+  // block. A genuine process-retry of THIS rerun still rolls back to its own
+  // fresh pre_snapshot via the scheduler retry path; only this revise-with-
+  // feedback rerun stops rolling back. See
+  // design/RFC-056-clarify-cross-agent/patch-2026-06-22-designer-rerun-no-rollback.md.
 
   // Mint a fresh designer node_run. RFC-074 PR-C: freshness is now pure ULID
   // id-order, so the new row — being the latest insert — ALWAYS wins

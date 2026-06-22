@@ -1,16 +1,16 @@
 // LOCKS: RFC-096 (audit S-13 / 附录 C #7) — triggerDesignerRerun row selection.
 //
 // `triggerDesignerRerun` (crossClarify.ts) anchors EVERYTHING on the
-// "latest designer node_run": rollback target (preSnapshot), the minted
-// pending row's inherited iteration / reviewIteration / shardKey /
-// parentNodeRunId, and the retry-index bump scope. Before RFC-096 it picked
+// "latest designer node_run": the minted pending row's inherited iteration /
+// reviewIteration / shardKey / parentNodeRunId, and the retry-index bump
+// scope. Before RFC-096 it picked
 // that row with SQL `desc(startedAt)`, which had two live pathologies this
 // file locks the fixes for (red before the fix):
 //
 //   1. NULL-startedAt sinks — freshly minted rerun rows (review / cross-
 //      clarify mint pending rows WITHOUT writing startedAt) sort LAST under
 //      DESC, so a second trigger re-picked the STALE old row and anchored
-//      rollback + inheritance on the wrong generation.
+//      inheritance on the wrong generation.
 //   2. mark-running startedAt rewrite — a resumed old-iteration row jumps to
 //      the front of the startedAt order, again hijacking the anchor.
 //
@@ -142,7 +142,6 @@ describe('RFC-096 triggerDesignerRerun — freshest-row pick (pure id order)', (
       designerNodeId: 'designer',
       sources: [],
       loopIter: 1,
-      worktreePath: '', // skip the git rollback; we assert the anchor row instead
     })
 
     // The minted pending row inherits every anchor field from the NULL-
@@ -185,7 +184,6 @@ describe('RFC-096 triggerDesignerRerun — freshest-row pick (pure id order)', (
       designerNodeId: 'designer',
       sources: [],
       loopIter: 1,
-      worktreePath: '',
     })
 
     const minted = await loadRun(db, ret.designerNodeRunId)
@@ -215,7 +213,6 @@ describe('RFC-096 triggerDesignerRerun — freshest-row pick (pure id order)', (
       designerNodeId: 'designer',
       sources: [],
       loopIter: 0,
-      worktreePath: '',
     })
 
     const minted = await loadRun(db, ret.designerNodeRunId)
@@ -254,7 +251,6 @@ describe('RFC-096 triggerDesignerRerun — freshest-row pick (pure id order)', (
       designerNodeId: 'designer',
       sources: [],
       loopIter: 0,
-      worktreePath: '',
     })
 
     const minted = await loadRun(db, ret.designerNodeRunId)

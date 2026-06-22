@@ -168,7 +168,6 @@ describe('RFC-058 baseline T4 — patch-2026-05-23 designer retry index', () => 
         },
       ],
       loopIter: 0,
-      worktreePath: '',
       definition,
     })
     const newRun = (
@@ -347,7 +346,6 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 cascade BFS smoke', () => {
         },
       ],
       loopIter: 0,
-      worktreePath: '',
       definition,
     })
     expect(result.designerNodeRunId).toBeTruthy()

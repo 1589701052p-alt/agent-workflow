@@ -685,7 +685,6 @@ describe('RFC-056 triggerDesignerRerun', () => {
       designerNodeId: 'designer',
       sources: [],
       loopIter: 0,
-      worktreePath: '',
     })
     const fresh = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, out.designerNodeRunId))
