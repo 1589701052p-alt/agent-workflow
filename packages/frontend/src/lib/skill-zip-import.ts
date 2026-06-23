@@ -20,12 +20,27 @@ export interface RowState {
 
 /**
  * Compute the initial decision per candidate row when a parse response comes
- * in: no conflict → import; managed conflict → skip (safer than overwrite);
- * external conflict → skip (and overwrite/rename will be disabled in UI).
+ * in: no conflict → import; any conflict → skip (safer than overwrite). The
+ * user can switch to rename always, and to overwrite only when `canOverwrite`
+ * (see availableActionsFor).
  */
 export function initialDecisionFor(c: SkillZipCandidateView): DecisionState {
   if (c.conflict === undefined) return { action: 'import', newName: '' }
   return { action: 'skip', newName: '' }
+}
+
+/**
+ * RFC-102: actions offered for a candidate row, gated by conflict + write
+ * permission.
+ *   no conflict             → import / skip
+ *   managed + canOverwrite  → skip / overwrite / rename
+ *   managed + !canOverwrite → skip / rename   (no write permission — can't replace)
+ *   external                → skip / rename   (zip can't overwrite the on-disk truth)
+ */
+export function availableActionsFor(c: SkillZipCandidateView): DecisionAction[] {
+  if (c.conflict === undefined) return ['import', 'skip']
+  if (c.conflict === 'managed' && c.canOverwrite === true) return ['skip', 'overwrite', 'rename']
+  return ['skip', 'rename']
 }
 
 export interface RenameValidation {

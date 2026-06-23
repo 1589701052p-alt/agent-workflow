@@ -12,6 +12,7 @@ import type { CommitSkillZipResponse, ParseSkillZipResponse, Skill } from '@agen
 import { Select } from '@/components/Select'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import {
+  availableActionsFor,
   buildDecisionMap,
   rowsFromParseResponse,
   summarizeRows,
@@ -291,11 +292,8 @@ function CandidateRow({ row, idx, allRows, existingNames, onUpdate }: CandidateR
       ? validateRenameTarget(row.decision.newName, row.candidate.name, allRows, existingNames)
       : null
 
-  const availableActions: DecisionAction[] = isExternalConflict
-    ? ['skip']
-    : isManagedConflict
-      ? ['skip', 'overwrite', 'rename']
-      : ['import', 'skip']
+  // RFC-102: actions are gated by conflict kind + write permission (canOverwrite).
+  const availableActions: DecisionAction[] = availableActionsFor(row.candidate)
 
   return (
     <tr data-testid={`zip-row-${row.candidate.name}`}>
@@ -324,7 +322,9 @@ function CandidateRow({ row, idx, allRows, existingNames, onUpdate }: CandidateR
           </span>
         ) : isManagedConflict ? (
           <span className="zip-import__conflict zip-import__conflict--managed">
-            {t('skills.zipConflictManaged')}
+            {row.candidate.canOverwrite === true
+              ? t('skills.zipConflictManaged')
+              : t('skills.zipConflictManagedReadonly')}
           </span>
         ) : (
           <span className="zip-import__muted">—</span>
@@ -334,7 +334,7 @@ function CandidateRow({ row, idx, allRows, existingNames, onUpdate }: CandidateR
         <Select<DecisionAction>
           value={row.decision.action}
           onChange={(action) => onUpdate(idx, { action })}
-          disabled={isExternalConflict}
+          disabled={availableActions.length <= 1}
           data-testid={`zip-action-${row.candidate.name}`}
           options={availableActions.map((a) => ({ value: a, label: labelForAction(t, a) }))}
         />

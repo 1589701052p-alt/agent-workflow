@@ -814,6 +814,7 @@ export interface Resources {
     zipRenameDup: string
     zipRenameConflict: string
     zipConflictManaged: string
+    zipConflictManagedReadonly: string
     zipConflictExternal: string
     fileDiscardConfirm: string
     fileErrPathRequired: string
@@ -3036,6 +3037,7 @@ export const zhCN: Resources = {
     zipRenameDup: '与本批次其他重名',
     zipRenameConflict: '名称已被占用',
     zipConflictManaged: '已存在 managed 技能',
+    zipConflictManagedReadonly: '已存在 managed 技能 — 无权限替换',
     zipConflictExternal: 'external 技能 — 不支持 ZIP 覆盖',
     fileDiscardConfirm: '放弃未保存的修改？',
     fileErrPathRequired: '路径必填',

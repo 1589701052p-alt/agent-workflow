@@ -705,6 +705,7 @@ export const enUS: Resources = {
     zipRenameDup: 'duplicate within this import',
     zipRenameConflict: 'name already in use',
     zipConflictManaged: 'Existing managed skill',
+    zipConflictManagedReadonly: 'Existing managed skill — no permission to replace',
     zipConflictExternal: 'External skill — cannot overwrite from ZIP',
     fileDiscardConfirm: 'Discard unsaved changes?',
     fileErrPathRequired: 'path required',

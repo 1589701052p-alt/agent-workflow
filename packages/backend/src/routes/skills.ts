@@ -102,7 +102,7 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
 
   app.post('/api/skills/import-zip/parse', async (c) => {
     const buffer = await readZipFileFromMultipart(c.req.raw)
-    const { response } = await parseSkillZipBuffer(deps.db, buffer)
+    const { response } = await parseSkillZipBuffer(deps.db, actorOf(c), buffer)
     return c.json(response)
   })
 
@@ -140,7 +140,7 @@ export function mountSkillRoutes(app: Hono, deps: AppDeps): void {
       })
     }
     const result = await commitSkillZipBuffer(deps.db, fsOpts, buffer, decisionsParsed.data, {
-      ownerUserId: actorOf(c).user.id,
+      actor: actorOf(c),
     })
     return c.json(result)
   })

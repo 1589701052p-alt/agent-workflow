@@ -165,6 +165,7 @@ describe('ImportZipPanel', () => {
             totalBytes: 50,
             warnings: [],
             conflict: 'managed',
+            canOverwrite: true,
           },
           {
             name: 'existing-external',
@@ -209,13 +210,53 @@ describe('ImportZipPanel', () => {
       [actionLabel.overwrite(), actionLabel.rename(), actionLabel.skip()].sort(),
     )
 
-    // external row: only skip + disabled (a disabled trigger never opens).
+    // RFC-102: external row can't overwrite the on-disk truth, but may
+    // rename-import a copy — so the select is enabled with skip + rename.
     expect((screen.getByTestId('zip-action-existing-external') as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     )
-    expect(screen.getByTestId('zip-action-existing-external').textContent).toContain(
-      actionLabel.skip(),
+    expect(actionOptionLabels('zip-action-existing-external').sort()).toEqual(
+      [actionLabel.rename(), actionLabel.skip()].sort(),
     )
+  })
+
+  test('managed conflict without write permission omits overwrite (RFC-102)', async () => {
+    const fetchMock = mockFetch({
+      parse: {
+        skills: [
+          {
+            name: 'locked',
+            description: 'owned by someone else',
+            fileCount: 1,
+            totalBytes: 50,
+            warnings: [],
+            conflict: 'managed',
+            canOverwrite: false,
+          },
+        ],
+        errors: [],
+      },
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const Wrapper = makeWrapper()
+    render(
+      <Wrapper>
+        <ImportZipPanel />
+      </Wrapper>,
+    )
+    fireEvent.change(screen.getByTestId('zip-file-input'), {
+      target: { files: [fakeZipFile()] },
+    })
+    fireEvent.click(screen.getByTestId('zip-parse-button'))
+    await waitFor(() => screen.getByTestId('zip-candidate-table'))
+
+    // No overwrite option — only skip + rename.
+    expect(actionOptionLabels('zip-action-locked').sort()).toEqual(
+      [actionLabel.rename(), actionLabel.skip()].sort(),
+    )
+    // Conflict pill shows the "no permission to replace" copy.
+    expect(screen.getByText(i18n.t('skills.zipConflictManagedReadonly'))).toBeTruthy()
   })
 
   test('rename inline error appears when target name collides with another candidate', async () => {

@@ -16,6 +16,7 @@ import {
   type ParseSkillZipResponse,
   type Skill,
   type SkillCandidate,
+  type SkillZipCandidateConflict,
   type SkillZipCandidateView,
   type SkillZipCommitFailure,
   type SkillZipCommitSkipped,
@@ -24,10 +25,12 @@ import {
   type ZipEntryRef,
 } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
+import type { Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { skills } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { getSkill, listSkills } from '@/services/skill'
+import { isResourceOwner } from '@/services/resourceAcl'
 import { ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import { stringifyFrontmatter } from '@/util/frontmatter'
@@ -139,8 +142,28 @@ export function decodeZip(buffer: Uint8Array): ZipEntryRef[] {
 
 // --- parse (HTTP-facing) -----------------------------------------------------
 
+/**
+ * RFC-102: derive the per-candidate conflict view fields from the actor and the
+ * same-named existing skill (if any). Pure — directly unit-testable.
+ *   external ⇒ conflict='external', canOverwrite=false (the skill's source of
+ *              truth lives on disk; a zip must not overwrite it)
+ *   managed  ⇒ conflict='managed',  canOverwrite=isResourceOwner(actor, existing)
+ *   none     ⇒ {}
+ * Never leaks owner identity: a private same-named skill the actor cannot see
+ * is still owned by someone else, so isResourceOwner yields false.
+ */
+export function computeConflictView(
+  actor: Actor,
+  existing: Skill | undefined,
+): { conflict?: SkillZipCandidateConflict; canOverwrite?: boolean } {
+  if (existing === undefined) return {}
+  if (existing.sourceKind === 'external') return { conflict: 'external', canOverwrite: false }
+  return { conflict: 'managed', canOverwrite: isResourceOwner(actor, existing) }
+}
+
 export async function parseSkillZipBuffer(
   db: DbClient,
+  actor: Actor,
   buffer: Uint8Array,
 ): Promise<{ response: ParseSkillZipResponse; candidates: SkillCandidate[] }> {
   const entries = decodeZip(buffer)
@@ -150,16 +173,13 @@ export async function parseSkillZipBuffer(
   const byName = new Map(existing.map((s) => [s.name, s] as const))
 
   const skillsView: SkillZipCandidateView[] = parsed.skills.map((c) => {
-    const conflict = byName.get(c.name)
     const view: SkillZipCandidateView = {
       name: c.name,
       description: c.description,
       fileCount: c.files.length,
       totalBytes: c.totalBytes,
       warnings: c.warnings,
-    }
-    if (conflict !== undefined) {
-      view.conflict = conflict.sourceKind
+      ...computeConflictView(actor, byName.get(c.name)),
     }
     return view
   })
@@ -184,9 +204,9 @@ export async function commitSkillZipBuffer(
   opts: SkillZipFsOptions,
   buffer: Uint8Array,
   decisions: SkillZipDecisionMap,
-  aclOpts?: { ownerUserId?: string },
+  aclOpts: { actor: Actor },
 ): Promise<CommitSkillZipResponse> {
-  const { candidates } = await parseSkillZipBuffer(db, buffer)
+  const { candidates } = await parseSkillZipBuffer(db, aclOpts.actor, buffer)
   const decisionFor = new Map(Object.entries(decisions))
 
   // Track target names already touched in this commit so a rename collision
@@ -241,6 +261,18 @@ export async function commitSkillZipBuffer(
       continue
     }
 
+    // RFC-102: overwriting a managed skill requires write permission (owner or
+    // admin) — the same gate PUT /api/skills/:name enforces. The front-end
+    // disables the option, but a direct API call must be rejected here too.
+    if (existing !== null && isOverwrite && !isResourceOwner(aclOpts.actor, existing)) {
+      outcome.failed.push({
+        name: candidate.name,
+        code: 'skill-overwrite-forbidden',
+        message: `skill '${targetName}' is owned by another user; you cannot overwrite it (rename to import a copy)`,
+      })
+      continue
+    }
+
     if (existing !== null && !isOverwrite) {
       // Either action=import on top of an existing skill, or rename collided
       // with a DB row we didn't see during parse.
@@ -268,7 +300,7 @@ export async function commitSkillZipBuffer(
           db,
           targetName,
           candidate.description,
-          aclOpts?.ownerUserId,
+          aclOpts.actor.user.id,
         )
         outcome.created.push(created)
       } else {

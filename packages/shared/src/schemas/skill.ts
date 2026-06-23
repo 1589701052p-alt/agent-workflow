@@ -212,6 +212,14 @@ export const SkillZipCandidateViewSchema = z.object({
   totalBytes: z.number().int().nonnegative(),
   warnings: z.array(z.string()),
   conflict: SkillZipCandidateConflictSchema.optional(),
+  /**
+   * RFC-102: whether the current actor may replace this same-named skill.
+   * Only meaningful when `conflict` is set. `external` ⇒ always false (the
+   * skill's source of truth lives on disk; a zip cannot overwrite it).
+   * `managed` ⇒ isResourceOwner(actor, existing). Never leaks owner identity:
+   * a private same-named skill the actor cannot see naturally yields false.
+   */
+  canOverwrite: z.boolean().optional(),
 })
 export type SkillZipCandidateView = z.infer<typeof SkillZipCandidateViewSchema>
 
@@ -240,6 +248,8 @@ export const SkillZipCommitFailureCodeSchema = z.enum([
   'skill-write-failed',
   'skill-md-missing',
   'skill-name-invalid',
+  // RFC-102: overwrite requested but the actor is not the owner/admin.
+  'skill-overwrite-forbidden',
 ])
 export type SkillZipCommitFailureCode = z.infer<typeof SkillZipCommitFailureCodeSchema>
 

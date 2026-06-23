@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'vitest'
 import type { SkillZipCandidateView } from '@agent-workflow/shared'
 import {
+  availableActionsFor,
   buildDecisionMap,
   effectiveTargetName,
   initialDecisionFor,
@@ -15,7 +16,11 @@ import {
   type RowState,
 } from '../src/lib/skill-zip-import'
 
-function candidate(name: string, conflict?: 'managed' | 'external'): SkillZipCandidateView {
+function candidate(
+  name: string,
+  conflict?: 'managed' | 'external',
+  canOverwrite?: boolean,
+): SkillZipCandidateView {
   return {
     name,
     description: '',
@@ -23,6 +28,7 @@ function candidate(name: string, conflict?: 'managed' | 'external'): SkillZipCan
     totalBytes: 10,
     warnings: [],
     ...(conflict !== undefined ? { conflict } : {}),
+    ...(canOverwrite !== undefined ? { canOverwrite } : {}),
   }
 }
 
@@ -35,6 +41,28 @@ describe('initialDecisionFor', () => {
   })
   test('external conflict → skip', () => {
     expect(initialDecisionFor(candidate('a', 'external')).action).toBe('skip')
+  })
+})
+
+describe('availableActionsFor (RFC-102)', () => {
+  test('no conflict → import + skip', () => {
+    expect(availableActionsFor(candidate('a'))).toEqual(['import', 'skip'])
+  })
+  test('managed + canOverwrite → skip / overwrite / rename', () => {
+    expect(availableActionsFor(candidate('a', 'managed', true))).toEqual([
+      'skip',
+      'overwrite',
+      'rename',
+    ])
+  })
+  test('managed without write permission → skip / rename (no overwrite)', () => {
+    expect(availableActionsFor(candidate('a', 'managed', false))).toEqual(['skip', 'rename'])
+  })
+  test('managed with canOverwrite absent → skip / rename (default deny)', () => {
+    expect(availableActionsFor(candidate('a', 'managed'))).toEqual(['skip', 'rename'])
+  })
+  test('external → skip / rename (zip never overwrites on-disk truth)', () => {
+    expect(availableActionsFor(candidate('a', 'external', false))).toEqual(['skip', 'rename'])
   })
 })
 
