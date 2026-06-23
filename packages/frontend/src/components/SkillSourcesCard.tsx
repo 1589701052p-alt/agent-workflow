@@ -26,13 +26,16 @@ interface BlockersPayload {
 /**
  * RFC-102: whether the current actor may replace the skill occupying a source
  * same-name conflict. Only name-conflict-* rows are replaceable; admins always
- * can; otherwise the occupier must be visible AND owned by the current user.
- * An invisible occupier (a private skill owned by someone else) is absent from
- * `visibleSkills` → false, which is correct (you can't own what you can't see)
- * and never leaks the owner's identity.
+ * can; otherwise BOTH server gates must pass — the actor is the source
+ * registrar (route requireSourceRegistrar) AND owns the occupying skill
+ * (service requireResourceOwner). Mirroring both client-side avoids enabling a
+ * button whose POST is a guaranteed 403. An invisible occupier (a private skill
+ * owned by someone else) is absent from `visibleSkills` → false, which is
+ * correct (you can't own what you can't see) and never leaks the owner identity.
  */
 export function canReplaceConflict(
   report: SkillSkipReport,
+  source: SkillSourceWithStats,
   visibleSkills: Skill[],
   currentUserId: string | null,
   isAdmin: boolean,
@@ -42,6 +45,9 @@ export function canReplaceConflict(
   }
   if (isAdmin) return true
   if (currentUserId === null) return false
+  // Gate 1 — source registrar (route requireSourceRegistrar rejects others 403).
+  if (source.createdBy == null || source.createdBy !== currentUserId) return false
+  // Gate 2 — owner of the occupying skill (service requireResourceOwner).
   const occupying = visibleSkills.find((s) => s.name === report.proposedName)
   return occupying !== undefined && occupying.ownerUserId === currentUserId
 }
@@ -129,7 +135,7 @@ export function SkillSourcesCard() {
                       (sk.reason === 'name-conflict-manual' ||
                         sk.reason === 'name-conflict-source') &&
                       sk.proposedName !== undefined
-                    const allowed = canReplaceConflict(sk, visibleSkills, currentUserId, isAdmin)
+                    const allowed = canReplaceConflict(sk, s, visibleSkills, currentUserId, isAdmin)
                     return (
                       <li key={idx}>
                         <code>{sk.proposedName ?? sk.childPath}</code> — {sk.reason}

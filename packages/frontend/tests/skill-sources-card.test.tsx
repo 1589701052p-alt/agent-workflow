@@ -198,36 +198,50 @@ const conflictReport = (name: string): SkillSkipReport => ({
 
 describe('canReplaceConflict (RFC-102)', () => {
   const rep = conflictReport('dup')
+  const srcBy = (createdBy: string | null) => fakeSource(createdBy === null ? {} : { createdBy })
+
   test('non-conflict reasons are never replaceable (even for admin)', () => {
     expect(
       canReplaceConflict(
         { childPath: '', proposedName: 'dup', reason: 'no-skill-md' },
+        srcBy('me'),
         [],
-        'u1',
+        'me',
         true,
       ),
     ).toBe(false)
   })
-  test('admin can replace any conflict', () => {
-    expect(canReplaceConflict(rep, [], 'admin', true)).toBe(true)
+  test('admin can replace any conflict (non-registrar, non-owner)', () => {
+    expect(canReplaceConflict(rep, srcBy('other'), [], 'admin', true)).toBe(true)
   })
-  test('owner of the visible occupier can replace', () => {
-    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u1')], 'u1', false)).toBe(true)
+  test('source registrar who owns the visible occupier can replace', () => {
+    expect(canReplaceConflict(rep, srcBy('me'), [visibleSkill('dup', 'me')], 'me', false)).toBe(
+      true,
+    )
   })
-  test('non-owner of a visible occupier cannot', () => {
-    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u2')], 'u1', false)).toBe(false)
+  test('owns the occupier but is NOT the source registrar → cannot (would 403)', () => {
+    expect(canReplaceConflict(rep, srcBy('other'), [visibleSkill('dup', 'me')], 'me', false)).toBe(
+      false,
+    )
   })
-  test('invisible occupier (absent from list) cannot be replaced by non-admin', () => {
-    expect(canReplaceConflict(rep, [], 'u1', false)).toBe(false)
+  test('source registrar but not owner of the occupier → cannot', () => {
+    expect(canReplaceConflict(rep, srcBy('me'), [visibleSkill('dup', 'other')], 'me', false)).toBe(
+      false,
+    )
   })
-  test('null current user cannot replace', () => {
-    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u1')], null, false)).toBe(false)
+  test('invisible occupier (absent from list) → cannot for non-admin', () => {
+    expect(canReplaceConflict(rep, srcBy('me'), [], 'me', false)).toBe(false)
+  })
+  test('null current user → cannot', () => {
+    expect(canReplaceConflict(rep, srcBy('me'), [visibleSkill('dup', 'me')], null, false)).toBe(
+      false,
+    )
   })
 })
 
 describe('SkillSourcesCard — RFC-102 conflict replace', () => {
   function mountWithConflict(occupierOwner: string | null, meRole: 'admin' | 'user' = 'user') {
-    const source = fakeSource({ skipped: [conflictReport('dup')] })
+    const source = fakeSource({ skipped: [conflictReport('dup')], createdBy: 'me' })
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       const method = (init?.method ?? 'GET').toUpperCase()

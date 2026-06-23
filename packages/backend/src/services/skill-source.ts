@@ -343,6 +343,15 @@ export async function replaceSourceConflict(
   if (!sourceRow) {
     throw new NotFoundError('skill-source-not-found', `source '${sourceId}' not found`)
   }
+  // RFC-102 (Codex P2): a disabled source's children are purged, not imported —
+  // resolving a conflict against it would resurrect a child that lazy reconcile
+  // skips and never cleans up. Reject until the source is re-enabled.
+  if (!sourceRow.enabled) {
+    throw new ValidationError(
+      'skill-source-disabled',
+      `source '${sourceId}' is disabled; re-enable it before resolving conflicts`,
+    )
+  }
 
   // `name` must still be a live candidate under the source directory.
   const discovered = discoverSkillsInDir(sourceRow.path)

@@ -12,8 +12,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
+import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { agents, skills } from '../src/db/schema'
+import { agents, skillSources, skills } from '../src/db/schema'
 import { createSkillSource, replaceSourceConflict } from '../src/services/skill-source'
 import { createManagedSkill, getSkill, type SkillFsOptions } from '../src/services/skill'
 import { buildActor, type Actor } from '../src/auth/actor'
@@ -174,5 +175,20 @@ describe('replaceSourceConflict (RFC-102)', () => {
       (e) => e,
     )
     expect(err.code).toBe('skill-source-conflict-stale')
+  })
+
+  test('replacing under a disabled source is rejected (no resurrection)', async () => {
+    await seedManaged(h, 'dup', ALICE)
+    addSourceSkill(h.parent, 'dup')
+    const { source } = await createSkillSource(
+      h.db,
+      { path: h.parent },
+      { createdBy: ALICE.user.id },
+    )
+    await h.db.update(skillSources).set({ enabled: false }).where(eq(skillSources.id, source.id))
+    const err = await replaceSourceConflict(h.db, h.fsOpts, ALICE, source.id, 'dup').catch((e) => e)
+    expect(err.code).toBe('skill-source-disabled')
+    // Occupier untouched — not resurrected from the disabled folder.
+    expect((await getSkill(h.db, 'dup'))!.sourceKind).toBe('managed')
   })
 })
