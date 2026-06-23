@@ -10,8 +10,7 @@
 // Authentication is the /api/* multiAuth gate; per-fusion authorization (skill
 // write, memory manage, fusion ownership) is enforced in services/fusion.ts.
 
-import { LaunchFusionSchema, RejectFusionSchema } from '@agent-workflow/shared'
-import type { FusionStatus } from '@agent-workflow/shared'
+import { FusionStatusSchema, LaunchFusionSchema, RejectFusionSchema } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { actorOf } from '@/auth/actor'
 import type { AppDeps } from '@/server'
@@ -62,7 +61,12 @@ export function mountFusionRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/fusions', async (c) => {
     const actor = actorOf(c)
     const skillName = c.req.query('skillName')
-    const status = c.req.query('status') as FusionStatus | undefined
+    // Validate ?status against the enum (no `as` cast — RFC-054 W1-7); an
+    // unknown value is treated as "no status filter".
+    const statusRaw = c.req.query('status')
+    const statusParsed =
+      statusRaw !== undefined ? FusionStatusSchema.safeParse(statusRaw) : undefined
+    const status = statusParsed?.success === true ? statusParsed.data : undefined
     // listFusionSummaries pushes status/skillName into SQL and never reads the
     // proposedDiff, so the inbox's 15s poll stays cheap. Full diff: /:id.
     const all = await listFusionSummaries(fusionDeps(), {
