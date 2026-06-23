@@ -41,6 +41,7 @@ import {
   resolveClarifySessionMode,
   resolveCrossClarifySessionMode,
   resolveKeyOf,
+  stringifyKind,
   tryParseKind,
 } from '@agent-workflow/shared'
 import {
@@ -3593,19 +3594,12 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
         if (wp.isShardSource === true) {
           const lk = tryParseKind(wp.kind)
           if (lk !== null && lk.kind === 'list') {
-            // stringify the item kind so the runner side can re-parse.
-            const itemRepr = (() => {
-              const item = lk.item
-              if (item.kind === 'base') return item.name
-              if (item.kind === 'path') return `path<${item.ext}>`
-              // nested list<list<...>> — uncommon, but stringify recursively
-              if (item.kind === 'list') {
-                // delegated to stringifyKind via JSON-friendly fallback
-                return 'list'
-              }
-              return 'string'
-            })()
-            inputPortKinds[e.target.portName] = itemRepr
+            // The shard item's effective kind is the list's ITEM kind, stringified
+            // so the runner can re-parse it. Use the canonical stringifyKind rather
+            // than a hand-rolled per-kind switch: the old inline version dropped a
+            // nested list<list<...>> item to a bare 'list' (losing the inner kind);
+            // stringifyKind round-trips path<md> / list<...> items intact.
+            inputPortKinds[e.target.portName] = stringifyKind(lk.item)
           } else {
             inputPortKinds[e.target.portName] = wp.kind
           }
