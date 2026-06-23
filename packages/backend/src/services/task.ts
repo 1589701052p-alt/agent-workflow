@@ -55,7 +55,7 @@ import {
   taskBroadcaster,
   tasksListBroadcaster,
 } from '@/ws/broadcaster'
-import { runTask } from './scheduler'
+import { runTask, type RunTaskOptions } from './scheduler'
 import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
 import { parseInjectedSnapshotJson } from './memoryInject'
@@ -116,6 +116,14 @@ export interface StartTaskDeps {
    * opencode-default model + DEFAULT_COMMIT_PUSH_* constants.
    */
   commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+  /**
+   * RFC-103 T2 (02-SCHED): global concurrency cap, resolved from settings
+   * `maxConcurrentNodes` by the route and threaded into `RunTaskOptions` across
+   * start / resume / retry. Omitted → scheduler default (4). Before RFC-103
+   * this was never wired from the HTTP layer, so production tasks always ran at
+   * the default regardless of the configured value.
+   */
+  maxConcurrentNodes?: number
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -371,6 +379,53 @@ function resolveMultiRepoDirName(rawBasename: string, used: Set<string>): string
   let suffix = 2
   while (used.has(`${rawBasename}-${suffix}`)) suffix += 1
   return `${rawBasename}-${suffix}`
+}
+
+/**
+ * RFC-103 T1 (01-LIFE-05) — pick the rollback targets for resume: the freshest
+ * top-level (`parentNodeRunId === null`) run per node, kept only when it is in a
+ * resumable terminal state (failed/interrupted). fanout/loop child rows are
+ * excluded so a shard/iteration child (which carries a parentNodeRunId and can
+ * have a later ULID than its node's top-level row) can't shadow the node row and
+ * force a rollback to the wrong (child) `pre_snapshot`. Mirrors the authoritative
+ * `pickFreshestRun` `topLevelOnly` default (freshness.ts).
+ */
+export function selectResumeRollbackTargets<
+  R extends { id: string; nodeId: string; parentNodeRunId: string | null; status: string },
+>(runs: readonly R[]): R[] {
+  const latestPerNode = new Map<string, R>()
+  for (const r of runs) {
+    if (r.parentNodeRunId !== null) continue
+    const prev = latestPerNode.get(r.nodeId)
+    if (prev === undefined || r.id > prev.id) latestPerNode.set(r.nodeId, r)
+  }
+  return [...latestPerNode.values()].filter(
+    (r) => r.status === 'failed' || r.status === 'interrupted',
+  )
+}
+
+/**
+ * RFC-103 T2 — single source for threading runtime config (auto commit&push +
+ * global concurrency) from `StartTaskDeps` into `RunTaskOptions`. Used by
+ * startTask / resumeTask / retryNode so the three kick sites can't drift: the
+ * historical bug (01-LIFE-06) was retryNode dropping commit&push entirely, and
+ * `maxConcurrentNodes` was never threaded from any HTTP entry (02-SCHED).
+ */
+export function runtimeConfigOpts(
+  deps: Pick<StartTaskDeps, 'commitPush' | 'maxConcurrentNodes'>,
+): Partial<RunTaskOptions> {
+  return {
+    ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
+    ...(deps.commitPush?.maxRepairRetries !== undefined
+      ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
+      : {}),
+    ...(deps.commitPush?.diffMaxBytes !== undefined
+      ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
+      : {}),
+    ...(deps.maxConcurrentNodes !== undefined
+      ? { maxConcurrentNodes: deps.maxConcurrentNodes }
+      : {}),
+  }
 }
 
 export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<Task> {
@@ -821,14 +876,9 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
-    // RFC-075: thread commit&push runtime config through to the scheduler.
-    ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
-    ...(deps.commitPush?.maxRepairRetries !== undefined
-      ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
-      : {}),
-    ...(deps.commitPush?.diffMaxBytes !== undefined
-      ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
-      : {}),
+    // RFC-075 + RFC-103 T2: thread commit&push + maxConcurrentNodes runtime
+    // config through to the scheduler (single source, see runtimeConfigOpts).
+    ...runtimeConfigOpts(deps),
     log,
     signal: controller.signal,
   })
@@ -1042,14 +1092,7 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
   // the worktree back to the wrong row's pre_snapshot. See
   // scheduler-boundary-resume-retryindex-vs-id.test.ts.
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, id))
-  const latestPerNode = new Map<string, (typeof runs)[number]>()
-  for (const r of runs) {
-    const prev = latestPerNode.get(r.nodeId)
-    if (prev === undefined || r.id > prev.id) latestPerNode.set(r.nodeId, r)
-  }
-  const toRollback = [...latestPerNode.values()].filter(
-    (r) => r.status === 'failed' || r.status === 'interrupted',
-  )
+  const toRollback = selectResumeRollbackTargets(runs)
 
   for (const r of toRollback) {
     // RFC-098 WP-8 (audit S-15): kill-then-proceed, not 409 — if the row's
@@ -1104,14 +1147,9 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
-    // RFC-075: thread commit&push runtime config through to the scheduler.
-    ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
-    ...(deps.commitPush?.maxRepairRetries !== undefined
-      ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
-      : {}),
-    ...(deps.commitPush?.diffMaxBytes !== undefined
-      ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
-      : {}),
+    // RFC-075 + RFC-103 T2: thread commit&push + maxConcurrentNodes runtime
+    // config through to the scheduler (single source, see runtimeConfigOpts).
+    ...runtimeConfigOpts(deps),
     log,
     signal: controller.signal,
   })
@@ -1370,6 +1408,9 @@ export async function retryNode(
     ...(opts.deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: opts.deps.subagentLiveCapture }
       : {}),
+    // RFC-103 T2 (01-LIFE-06): retryNode historically dropped commit&push +
+    // maxConcurrentNodes; thread them like start/resume via the single source.
+    ...runtimeConfigOpts(opts.deps),
     log,
     signal: controller.signal,
   })

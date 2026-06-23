@@ -1786,8 +1786,14 @@ export function accumulateTokens(evt: Record<string, unknown>, acc: RunResult['t
   if (!tokens) return
   const input = numOrZero(tokens.input ?? tokens.input_tokens ?? tokens.prompt_tokens)
   const output = numOrZero(tokens.output ?? tokens.output_tokens ?? tokens.completion_tokens)
-  const cacheCreate = numOrZero(tokens.cache_creation ?? tokens.cacheCreation)
-  const cacheRead = numOrZero(tokens.cache_read ?? tokens.cacheRead)
+  // RFC-103 T3 (06-OCI-06): real opencode (1.15.5+) nests cache counts under a
+  // `cache: { read, write }` object; the older flat `cache_read/cache_creation`
+  // keys are kept as fallbacks for backward compat. Reading only the flat keys
+  // silently dropped cache tokens (~15× undercount on the recorded fixture →
+  // max_total_tokens limits applied against a wrong small total).
+  const cacheObj = tokens.cache as Record<string, unknown> | undefined
+  const cacheCreate = numOrZero(tokens.cache_creation ?? tokens.cacheCreation ?? cacheObj?.write)
+  const cacheRead = numOrZero(tokens.cache_read ?? tokens.cacheRead ?? cacheObj?.read)
   acc.input += input
   acc.output += output
   acc.cacheCreate += cacheCreate

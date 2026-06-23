@@ -130,6 +130,34 @@ function resolveCommitPushConfig(
   }
 }
 
+/**
+ * RFC-103 T2: resolve runtime config (auto commit&push + global concurrency
+ * cap) from settings ONCE, for every task-launch entry point (JSON start /
+ * multipart start / resume / retry). Before RFC-103 only JSON start passed
+ * commitPush, and `maxConcurrentNodes` was never wired from any HTTP entry, so
+ * production tasks ignored the configured concurrency and resume/retry/upload
+ * starts silently fell back to default commit&push behavior (01-LIFE-06 /
+ * 02-SCHED). Single source so the entries can't drift again.
+ */
+function resolveLaunchRuntimeConfig(configPath: string): {
+  commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+  maxConcurrentNodes?: number
+} {
+  const out: {
+    commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+    maxConcurrentNodes?: number
+  } = {}
+  const commitPush = resolveCommitPushConfig(configPath)
+  if (commitPush !== undefined) out.commitPush = commitPush
+  try {
+    const cfg = loadConfig(configPath)
+    if (cfg.maxConcurrentNodes !== undefined) out.maxConcurrentNodes = cfg.maxConcurrentNodes
+  } catch {
+    // fall back to the scheduler default (4)
+  }
+  return out
+}
+
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {
     const actor = actorOf(c)
@@ -248,13 +276,13 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       }
     }
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
-    const commitPush = resolveCommitPushConfig(deps.configPath)
     const task = await startTask(parsed.data, {
       db: deps.db,
       actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
-      ...(commitPush !== undefined ? { commitPush } : {}),
+      // RFC-103 T2: commit&push + maxConcurrentNodes from settings (all entries).
+      ...resolveLaunchRuntimeConfig(deps.configPath),
     })
     return c.json(task, 201)
   })
@@ -380,6 +408,8 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       db: deps.db,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+      // RFC-103 T2: resume must thread commit&push + maxConcurrentNodes too.
+      ...resolveLaunchRuntimeConfig(deps.configPath),
     })
     return c.json(task)
   })
@@ -453,6 +483,8 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         db: deps.db,
         ...(opencodeCmd ? { opencodeCmd } : {}),
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+        // RFC-103 T2: retry must thread commit&push + maxConcurrentNodes too.
+        ...resolveLaunchRuntimeConfig(deps.configPath),
       },
     })
     return c.json(task)
@@ -774,6 +806,8 @@ async function handleMultipartTaskStart(
       actorUserId: actor.user.id,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+      // RFC-103 T2: multipart (upload) start must thread runtime config too.
+      ...resolveLaunchRuntimeConfig(deps.configPath),
     })
     return task
   }
@@ -799,6 +833,8 @@ async function handleMultipartTaskStart(
         actorUserId: actor.user.id,
         ...(opencodeCmd ? { opencodeCmd } : {}),
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+        // RFC-103 T2: multipart (upload) start must thread runtime config too.
+        ...resolveLaunchRuntimeConfig(deps.configPath),
         preCreatedWorktree: {
           taskId,
           worktreePath: wt.worktreePath,
