@@ -36,6 +36,9 @@ export interface Resources {
       tabAll: string
       tabReviews: string
       tabClarify: string
+      tabFusion: string
+      fusionTitle: string
+      fusionSubtitle: string
       empty: string
       errorReviews: string
       errorClarify: string
@@ -2383,6 +2386,9 @@ export const zhCN: Resources = {
       tabAll: '全部',
       tabReviews: '评审',
       tabClarify: '反问',
+      tabFusion: '融合',
+      fusionTitle: '融合 → {{skill}}',
+      fusionSubtitle: '技能变更待批准 · {{n}} 条记忆',
       empty: '当前没有待处理事项',
       errorReviews: '评审列表加载失败',
       errorClarify: '反问列表加载失败',

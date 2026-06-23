@@ -516,6 +516,31 @@ export async function reconcileRunningFusions(deps: FusionDeps): Promise<void> {
   }
 }
 
+/**
+ * Daemon background loop: periodically settle running fusions against their
+ * engine task's terminal state, so a fusion whose task finished reaches
+ * awaiting_approval (or failed) even when no client is polling /api/fusions.
+ * Reconcile only needs db + appHome (no opencode), so the lighter FusionDeps
+ * suffices. Non-overlapping; best-effort.
+ */
+export function startFusionReconcileLoop(
+  deps: FusionDeps,
+  opts: { intervalMs?: number } = {},
+): { stop: () => void } {
+  const intervalMs = opts.intervalMs ?? 60_000
+  let busy = false
+  const timer = setInterval(() => {
+    if (busy) return
+    busy = true
+    void reconcileRunningFusions(deps)
+      .catch(() => undefined)
+      .finally(() => {
+        busy = false
+      })
+  }, intervalMs)
+  return { stop: () => clearInterval(timer) }
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------

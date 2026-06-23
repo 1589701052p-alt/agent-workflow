@@ -192,6 +192,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // ---- fusions (RFC-101 memory→skill fusion) ----
   { method: 'POST', path: '/api/fusions' },
   { method: 'GET', path: '/api/fusions' },
+  { method: 'GET', path: '/api/fusions/pending-count' },
   { method: 'GET', path: '/api/fusions/:id' },
   { method: 'POST', path: '/api/fusions/:id/approve' },
   { method: 'POST', path: '/api/fusions/:id/reject' },

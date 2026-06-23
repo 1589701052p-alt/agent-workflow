@@ -9,7 +9,11 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { ClarifyPendingCount, ReviewPendingCount } from '@agent-workflow/shared'
+import type {
+  ClarifyPendingCount,
+  FusionPendingCount,
+  ReviewPendingCount,
+} from '@agent-workflow/shared'
 import { api } from '@/api/client'
 
 interface InboxFooterButtonProps {
@@ -29,13 +33,22 @@ export function InboxFooterButton({ open, onToggle }: InboxFooterButtonProps) {
     queryFn: ({ signal }) => api.get('/api/clarify/pending-count', undefined, signal),
     refetchInterval: 15_000,
   })
+  // RFC-101: awaiting-approval fusions. The poll also drives lazy done-detection
+  // server-side (the endpoint reconciles running fusions), so a just-finished
+  // fusion lights the badge within one interval.
+  const fusions = useQuery<FusionPendingCount>({
+    queryKey: ['fusions', 'pending-count'],
+    queryFn: ({ signal }) => api.get('/api/fusions/pending-count', undefined, signal),
+    refetchInterval: 15_000,
+  })
 
   const reviewsCount = reviews.data?.count ?? 0
   const clarifyCount = clarify.data?.count ?? 0
-  const bothFailed = reviews.error && clarify.error
-  // Even if one feed errors the other still contributes — design.md §5.
-  const total = reviewsCount + clarifyCount
-  const showBadge = !bothFailed && total > 0
+  const fusionsCount = fusions.data?.count ?? 0
+  const allFailed = reviews.error && clarify.error && fusions.error
+  // Even if one feed errors the others still contribute — design.md §5.
+  const total = reviewsCount + clarifyCount + fusionsCount
+  const showBadge = !allFailed && total > 0
   const badgeText = total > 99 ? '99+' : String(total)
 
   return (

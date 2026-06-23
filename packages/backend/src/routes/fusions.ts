@@ -60,9 +60,22 @@ export function mountFusionRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/fusions', async (c) => {
     const actor = actorOf(c)
     const skillName = c.req.query('skillName')
+    const status = c.req.query('status')
     const all = await listFusions(fusionDeps(), skillName ? { skillName } : {})
-    const visible = isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
+    const visible = (
+      isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
+    ).filter((f) => status === undefined || f.status === status)
     return c.json(visible)
+  })
+
+  // Left-nav inbox badge. Reconciles running fusions (lazy done-detection), so
+  // a fusion whose engine task just finished is surfaced within one poll. MUST
+  // precede '/api/fusions/:id' so 'pending-count' isn't captured as an id.
+  app.get('/api/fusions/pending-count', async (c) => {
+    const actor = actorOf(c)
+    const all = await listFusions(fusionDeps())
+    const mine = isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
+    return c.json({ count: mine.filter((f) => f.status === 'awaiting_approval').length })
   })
 
   app.get('/api/fusions/:id', async (c) => {

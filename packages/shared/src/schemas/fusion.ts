@@ -65,6 +65,10 @@ export const RejectFusionSchema = z.object({
 })
 export type RejectFusion = z.infer<typeof RejectFusionSchema>
 
+/** GET /api/fusions/pending-count — awaiting_approval count for the inbox badge. */
+export const FusionPendingCountSchema = z.object({ count: z.number().int().nonnegative() })
+export type FusionPendingCount = z.infer<typeof FusionPendingCountSchema>
+
 /**
  * The manifest the skill-merger agent writes to `__fusion__/result.json` in
  * its worktree, declaring which selected memories it incorporated vs skipped.

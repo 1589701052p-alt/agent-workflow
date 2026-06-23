@@ -15,11 +15,16 @@ import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import type { ClarifyRoundSummary, MemorySummary, ReviewSummary } from '@agent-workflow/shared'
+import type {
+  ClarifyRoundSummary,
+  Fusion,
+  MemorySummary,
+  ReviewSummary,
+} from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { usePermission } from '@/hooks/useActor'
 
-export type InboxTab = 'all' | 'reviews' | 'clarify' | 'memory'
+export type InboxTab = 'all' | 'reviews' | 'clarify' | 'fusion' | 'memory'
 
 interface InboxDrawerProps {
   open: boolean
@@ -53,6 +58,14 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
   const clarify = useQuery<ClarifyRoundSummary[]>({
     queryKey: ['clarify', 'inbox', 'pending'],
     queryFn: ({ signal }) => api.get('/api/clarify?status=awaiting_human', undefined, signal),
+    enabled: open,
+    refetchInterval: open ? 15_000 : false,
+  })
+
+  // RFC-101: fusions awaiting the merger's approval (the skill diff is ready).
+  const fusionsQuery = useQuery<Fusion[]>({
+    queryKey: ['fusions', 'inbox', 'awaiting'],
+    queryFn: ({ signal }) => api.get('/api/fusions?status=awaiting_approval', undefined, signal),
     enabled: open,
     refetchInterval: open ? 15_000 : false,
   })
@@ -137,6 +150,22 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
         })
       }
     }
+    if (tab === 'all' || tab === 'fusion') {
+      for (const f of fusionsQuery.data ?? []) {
+        rows.push({
+          kind: 'fusion',
+          rowKey: f.id,
+          id: f.id,
+          taskId: f.currentTaskId ?? '',
+          taskName: '',
+          title: t('nav.inbox.fusionTitle', { skill: f.skillName }),
+          subtitle: t('nav.inbox.fusionSubtitle', {
+            n: f.incorporatedMemoryIds?.length ?? f.memoryIds.length,
+          }),
+          createdAt: f.createdAt,
+        })
+      }
+    }
     if (canSeeMemory && (tab === 'all' || tab === 'memory')) {
       for (const m of memoryQuery.data?.items ?? []) {
         rows.push({
@@ -158,7 +187,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
     }
     rows.sort((a, b) => b.createdAt - a.createdAt)
     return rows
-  }, [tab, reviews.data, clarify.data, memoryQuery.data, canSeeMemory, t])
+  }, [tab, reviews.data, clarify.data, fusionsQuery.data, memoryQuery.data, canSeeMemory, t])
 
   if (!open) return null
 
@@ -172,8 +201,8 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
     >
       <div className="inbox-drawer__tabs" role="tablist">
         {(canSeeMemory
-          ? (['all', 'reviews', 'clarify', 'memory'] as const)
-          : (['all', 'reviews', 'clarify'] as const)
+          ? (['all', 'reviews', 'clarify', 'fusion', 'memory'] as const)
+          : (['all', 'reviews', 'clarify', 'fusion'] as const)
         ).map((k, i) => (
           <button
             key={k}
@@ -214,7 +243,9 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
                   ? { to: '/reviews/$nodeRunId', params: { nodeRunId: it.id } }
                   : it.kind === 'clarify'
                     ? { to: '/clarify/$nodeRunId', params: { nodeRunId: it.id } }
-                    : { to: '/memory' }
+                    : it.kind === 'fusion'
+                      ? { to: '/fusions/$id', params: { id: it.id } }
+                      : { to: '/memory' }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               void navigate(target as any)
             }}
@@ -227,7 +258,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
             </span>
             <span className="inbox-drawer__title">{it.title}</span>
             <span className="inbox-drawer__subtitle muted">{it.subtitle}</span>
-            {it.kind !== 'memory' && (
+            {it.kind !== 'memory' && it.kind !== 'fusion' && (
               <>
                 {/* RFC-037: surface the user-supplied task name so the inbox
                     disambiguates same-workflow tasks. Falls back to the short
@@ -284,7 +315,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
 }
 
 interface InboxItem {
-  kind: 'review' | 'clarify' | 'memory'
+  kind: 'review' | 'clarify' | 'memory' | 'fusion'
   /**
    * Stable, row-unique identifier used for the React `key` and the row's
    * `data-testid`. For reviews this is `nodeRunId` (unique per pending
@@ -311,17 +342,21 @@ function inboxTabLabelKey(k: InboxTab): string {
       return 'nav.inbox.tabReviews'
     case 'clarify':
       return 'nav.inbox.tabClarify'
+    case 'fusion':
+      return 'nav.inbox.tabFusion'
     case 'memory':
       return 'nav.memory'
   }
 }
 
-function inboxKindLabelKey(kind: 'review' | 'clarify' | 'memory'): string {
+function inboxKindLabelKey(kind: InboxItem['kind']): string {
   switch (kind) {
     case 'review':
       return 'nav.inbox.tabReviews'
     case 'clarify':
       return 'nav.inbox.tabClarify'
+    case 'fusion':
+      return 'nav.inbox.tabFusion'
     case 'memory':
       return 'nav.memory'
   }

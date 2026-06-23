@@ -6,6 +6,7 @@ import { loadConfig } from '@/config'
 import { openDb } from '@/db/client'
 import { extractMigrationsTo, IS_EMBEDDED } from '@/embed'
 import { createApp } from '@/server'
+import { startFusionReconcileLoop } from '@/services/fusion'
 import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
 import { startEventsArchiver } from '@/services/eventsArchive'
@@ -298,6 +299,10 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     onAlert: broadcastAlert,
   })
 
+  // RFC-101: settle running fusions (engine task done → awaiting_approval) so
+  // the inbox badge lights up without a client poll.
+  const fusionReconcileTicker = startFusionReconcileLoop({ db, appHome: Paths.root })
+
   // 9. Graceful shutdown (P-4-06).
   //
   // SIGTERM/SIGINT:
@@ -333,6 +338,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     memoryDistillTicker.stop()
     lifecycleInvariantsTicker.stop()
     stuckDetectorTicker.stop()
+    fusionReconcileTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {
