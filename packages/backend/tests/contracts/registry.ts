@@ -204,6 +204,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'PATCH', path: '/api/skill-sources/:id' },
   { method: 'DELETE', path: '/api/skill-sources/:id' },
   { method: 'POST', path: '/api/skill-sources/:id/rescan' },
+  { method: 'POST', path: '/api/skill-sources/:id/conflicts/replace' }, // RFC-102
 
   // ---- workflows ----
   {
