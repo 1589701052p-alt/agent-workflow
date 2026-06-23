@@ -28,6 +28,7 @@ import type {
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
 import {
+  BUILTIN_VARS,
   CLARIFY_SOURCE_PORT_NAME,
   countFanoutAggregators,
   isClarifyChannelEdge,
@@ -43,25 +44,9 @@ import { listSkills } from '@/services/skill'
 import { getWorkflow } from '@/services/workflow'
 import { NotFoundError } from '@/util/errors'
 
-const BUILTIN_PROMPT_VARS = new Set([
-  '__repo_path__',
-  '__base_branch__',
-  '__task_id__',
-  '__node_id__',
-  '__iteration__',
-  '__shard_key__',
-  // RFC-005 review tokens.
-  '__review_rejection__',
-  '__review_comments__',
-  '__iterate_target_port__',
-  // RFC-014 sibling outputs.
-  '__sibling_outputs__',
-  // RFC-023 clarify tokens.
-  '__clarify_questions__',
-  '__clarify_answers__',
-  '__clarify_iteration__',
-  '__clarify_remaining__',
-])
+// RFC-103 T5 (04-WFM-06/07): the built-in prompt-var set is now the single
+// source `BUILTIN_VARS` from shared/prompt.ts (was a local copy that lagged the
+// substitution engine and falsely rejected RFC-066 `{{__repos__}}` etc.).
 
 // -----------------------------------------------------------------------------
 // Entry points
@@ -1377,7 +1362,7 @@ export function validateWorkflowDef(
     // boundary-input edge — that edge already lives in the graph, so the
     // standard inbound-port set captures the reference correctly.
     for (const ref of refs) {
-      if (BUILTIN_PROMPT_VARS.has(ref)) continue
+      if (BUILTIN_VARS.has(ref)) continue
       if (!inboundPorts.has(ref)) {
         issues.push({
           code: 'prompt-template-unresolved',

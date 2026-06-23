@@ -80,23 +80,19 @@ describe('RFC-005 resolvePortContent', () => {
     ).toThrow(ValidationError)
   })
 
-  test('attack 4: symlink inside worktree pointing outside → ValidationError', () => {
-    // We can't fully defeat symlink-following without realpath checks; the
-    // current contract is "lexical containment + readFile follows symlinks".
-    // The lexical guard catches the common case (the symlink path itself
-    // stays inside the worktree), and the read still succeeds — so this case
-    // doc-tests the *limit* of the containment check. A future hardening pass
-    // could add realpath verification; locked here so a future change is
-    // intentional, not silent.
+  test('attack 4: symlink inside worktree pointing outside → ValidationError (RFC-103 T7)', () => {
+    // RFC-103 T7 (05-PORT security): a symlink that lives INSIDE the worktree
+    // but resolves OUTSIDE it must be rejected (realpath containment). Before
+    // RFC-103 this was the documented lexical-only limit and read the outside
+    // file through; now it is closed (aligns with worktreeFiles' realpath guard).
     symlinkSync(join(outside, 'secrets.txt'), join(worktree, 'evil-link.md'))
-    const result = resolvePortContent({
-      rawContent: 'evil-link.md',
-      kind: 'markdown_file',
-      worktreePath: worktree,
-    })
-    // ⚠ This is the documented limit — symlinks following outside read through.
-    // If you tighten the check, flip this assertion to a `.toThrow(ValidationError)`.
-    expect(result).toBe('TOP SECRET')
+    expect(() =>
+      resolvePortContent({
+        rawContent: 'evil-link.md',
+        kind: 'markdown_file',
+        worktreePath: worktree,
+      }),
+    ).toThrow(ValidationError)
   })
 
   test('attack 5: empty / whitespace-only path → ValidationError', () => {

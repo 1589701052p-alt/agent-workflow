@@ -38,9 +38,12 @@ import {
   findFanoutAggregator,
   findQuestionerNodeForCrossClarify,
   isClarifyChannelEdge,
+  isInlineMarkdownItemKind,
   resolveClarifySessionMode,
   resolveCrossClarifySessionMode,
   resolveKeyOf,
+  splitListItems,
+  splitMarkdownDocs,
   stringifyKind,
   tryParseKind,
 } from '@agent-workflow/shared'
@@ -3126,10 +3129,13 @@ async function runFanoutWrapperNode(
   const derivedOutputs = deriveWrapperFanoutOutputs(definition, node.id, agentsMap)
 
   // 6. Empty source: short-circuit done with empty outlets.
-  const items = rawContent
-    .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
+  // RFC-103 T4 (05-PORT-06/07): split via the single-source listWire codec,
+  // kind-aware — `list<markdown>` items are inline multi-line bodies framed by
+  // MARKDOWN_DOC_BOUNDARY; `list<path<md>>` / `list<string>` are one-per-line.
+  // Hand-rolling `.split('\n')` here shredded each markdown document per line.
+  const items = isInlineMarkdownItemKind(itemKind)
+    ? splitMarkdownDocs(rawContent)
+    : splitListItems(rawContent)
   if (items.length === 0) {
     for (const port of derivedOutputs) {
       await db

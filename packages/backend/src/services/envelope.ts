@@ -20,7 +20,7 @@
 // resolution + traversal hardening before the content lands in
 // node_run_outputs.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import {
   getHandlerForParsedKind,
@@ -123,11 +123,22 @@ const NODE_VALIDATE_IO: ValidateIO = {
   resolveWorktreePath(worktreeAbsPath, rawContent) {
     const rootAbs = resolve(worktreeAbsPath)
     const targetAbs = isAbsolute(rawContent) ? resolve(rawContent) : resolve(rootAbs, rawContent)
-    // Lexical containment — same rule the pre-RFC-049 code used. realpath()
-    // is intentionally NOT done here; the documented limit (a symlink inside
-    // the worktree pointing outside still reads through) is locked by
-    // envelope-parse-md-edge-cases.test.ts.
-    const insideWorktree = targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep)
+    // RFC-103 T7 (05-PORT security): lexical containment FIRST, then realpath
+    // containment so a symlink INSIDE the worktree pointing OUTSIDE it cannot
+    // read through (`path` / `markdown_file` ports could otherwise exfiltrate
+    // arbitrary files). Aligns with worktreeFiles' realpath guard. A
+    // non-existent target falls back to the lexical verdict — existence is
+    // checked separately by the handler.
+    let insideWorktree = targetAbs === rootAbs || targetAbs.startsWith(rootAbs + sep)
+    if (insideWorktree) {
+      try {
+        const realTarget = realpathSync(targetAbs)
+        const realRoot = realpathSync(rootAbs)
+        insideWorktree = realTarget === realRoot || realTarget.startsWith(realRoot + sep)
+      } catch {
+        // target (or root) not resolvable yet → keep the lexical verdict.
+      }
+    }
     const relativePath = relative(rootAbs, targetAbs)
     return { targetAbs, relativePath, insideWorktree }
   },
@@ -139,8 +150,11 @@ const NODE_VALIDATE_IO: ValidateIO = {
 const ENVELOPE_RE = /<workflow-output>([\s\S]*?)<\/workflow-output>/g
 const CLARIFY_ENVELOPE_RE = /<workflow-clarify>([\s\S]*?)<\/workflow-clarify>/g
 // Accept both "name" and 'name' attribute quotes. Tolerant of arbitrary
-// whitespace inside the opening tag.
-const PORT_RE = /<port\s+name=(?:"([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/port>/g
+// whitespace inside the opening tag. RFC-103 T6: matches only the OPENING tag;
+// each port's content is delimited by the next opening tag (container-based,
+// see parseEnvelope) instead of a non-greedy `</port>` that truncated a port
+// whose content legitimately contained a literal `</port>` string.
+const PORT_OPEN_RE = /<port\s+name=(?:"([^"]+)"|'([^']+)')\s*>/g
 
 export interface EnvelopeParseResult {
   /**
@@ -251,9 +265,42 @@ export function parseEnvelope(envelopeXml: string, declaredOutputs: string[]): E
   const collected = new Map<string, string>()
   const undeclared: Array<{ name: string; content: string }> = []
 
-  for (const m of envelopeXml.matchAll(PORT_RE)) {
+  // RFC-103 T6 (05-PORT-02): structural port parsing. Reduce to the inner body
+  // (so the last port can't absorb `</workflow-output>`), then for each
+  // `<port name=...>` opening the content runs to its STRUCTURAL close — the
+  // first `</port>` whose following non-whitespace is another `<port name=`
+  // opening or the envelope-body end. This keeps BOTH a literal `</port>` AND a
+  // literal `<port name=` inside a port's content intact (the old non-greedy
+  // `</port>` truncated content containing a literal `</port>`). Residual
+  // limit: content containing the exact sequence `</port>` + `<port name=`
+  // (a fake port boundary) still mis-frames — the protocol forbids it.
+  const inner = envelopeXml
+    .replace(/^[\s\S]*?<workflow-output>/, '')
+    .replace(/<\/workflow-output>[\s\S]*$/, '')
+  const CLOSE = '</port>'
+  PORT_OPEN_RE.lastIndex = 0
+  for (let m = PORT_OPEN_RE.exec(inner); m !== null; m = PORT_OPEN_RE.exec(inner)) {
     const name = m[1] ?? m[2] ?? ''
-    const content = (m[3] ?? '').trim()
+    const contentStart = m.index + m[0].length
+    let searchFrom = contentStart
+    let closeIdx = -1
+    let resumeFrom = inner.length
+    for (;;) {
+      const c = inner.indexOf(CLOSE, searchFrom)
+      if (c === -1) break
+      const afterStart = c + CLOSE.length
+      const after = inner.slice(afterStart).replace(/^\s+/, '')
+      if (after.length === 0 || /^<port\s+name=/.test(after)) {
+        closeIdx = c
+        resumeFrom = afterStart
+        break
+      }
+      searchFrom = afterStart
+    }
+    const content = (
+      closeIdx >= 0 ? inner.slice(contentStart, closeIdx) : inner.slice(contentStart)
+    ).trim()
+    PORT_OPEN_RE.lastIndex = resumeFrom
     if (name.length === 0) continue
     if (declaredOutputs.includes(name)) {
       // If an agent emits the same port name twice, keep the LAST one — most

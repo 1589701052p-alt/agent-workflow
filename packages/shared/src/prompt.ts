@@ -235,7 +235,16 @@ export interface RenderPromptInput {
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
 
-const BUILTIN_VARS = new Set([
+/**
+ * RFC-103 T5 (04-WFM-06/07): single source of truth for the set of built-in
+ * `{{__var__}}` prompt placeholders. The substitution engine (renderUserPrompt)
+ * and the static validator (workflow.validator.ts) MUST share this set — they
+ * were two hand-maintained copies and the validator's copy lagged behind
+ * (missing RFC-056 cross-clarify + RFC-066 multi-repo tokens), so valid
+ * `{{__repos__}}` / `{{__external_feedback__}}` templates were falsely reported
+ * `prompt-template-unresolved` and blocked at launch.
+ */
+export const BUILTIN_VARS = new Set([
   '__repo_path__',
   '__base_branch__',
   '__task_id__',

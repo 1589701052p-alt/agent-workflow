@@ -7,7 +7,19 @@
 // oracles for that behavior — no Bun / Node / DB imports, so they test in
 // either runtime and back the source-level regression locks (RFC-079 C2/C3).
 
-import { tryParseKind, isReviewableBodyKind } from './kindParser'
+import { tryParseKind, isReviewableBodyKind, type ParsedKind } from './kindParser'
+
+/**
+ * RFC-103 T4 (05-PORT-06/07): the single predicate for "this list item is an
+ * INLINE markdown body" — i.e. its wire form frames documents with
+ * MARKDOWN_DOC_BOUNDARY (splitMarkdownDocs) rather than one-per-line
+ * (splitListItems). Shared by review (multi-doc) AND fanout shard splitting so
+ * the two can't drift; fanout was hand-rolling `.split('\n')` and shredding
+ * `list<markdown>` documents per line.
+ */
+export function isInlineMarkdownItemKind(item: ParsedKind): boolean {
+  return item.kind === 'base' && item.name === 'markdown'
+}
 
 // -----------------------------------------------------------------------------
 // Mode detection: which review inputs trigger multi-document mode.
@@ -49,12 +61,7 @@ export function isNonMarkdownListReviewInput(kind: string): boolean {
  */
 export function isInlineMarkdownListReviewInput(kind: string): boolean {
   const parsed = tryParseKind(kind)
-  return (
-    parsed !== null &&
-    parsed.kind === 'list' &&
-    parsed.item.kind === 'base' &&
-    parsed.item.name === 'markdown'
-  )
+  return parsed !== null && parsed.kind === 'list' && isInlineMarkdownItemKind(parsed.item)
 }
 
 /**

@@ -75,13 +75,18 @@ describe('RFC-049 envelope.ts source-level prefix swap guard', () => {
     }
   })
 
-  test('forgiveness path `tryReadInWorktreeMarkdownPath` is gone (RFC-049 PR-B)', () => {
-    // PR-B removed the auto-promote helper + its caller; undeclared kinds
-    // now return rawContent verbatim. If this grep ever flips back to
-    // `.toContain`, the breaking change has silently regressed.
+  test('forgiveness READ path is gone; realpath is containment-only (RFC-049 PR-B / RFC-103 T7)', () => {
+    // RFC-049 PR-B removed the auto-promote helper + its caller; undeclared
+    // kinds now return rawContent verbatim. The forgiveness READ/auto-promote
+    // path must stay gone (if this grep flips to `.toContain`, it regressed).
     expect(ENVELOPE_SRC).not.toContain('tryReadInWorktreeMarkdownPath')
-    expect(ENVELOPE_SRC).not.toContain('realpathSync')
+    // statSync (a forgiveness existence-probe) stays gone.
     expect(ENVELOPE_SRC).not.toContain('statSync')
+    // RFC-103 T7: realpathSync IS now used — but ONLY for symlink-escape
+    // containment in resolveWorktreePath, never for an auto-read/promote path.
+    // Locked here so the realpath use stays containment-only.
+    expect(ENVELOPE_SRC).toContain('realpathSync')
+    expect(ENVELOPE_SRC).toMatch(/resolveWorktreePath[\s\S]*?realpathSync/)
   })
 
   test('PortValidationError is exported with a structured failure payload field', () => {
