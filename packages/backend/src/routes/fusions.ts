@@ -16,6 +16,7 @@ import { actorOf } from '@/auth/actor'
 import type { AppDeps } from '@/server'
 import {
   approveFusion,
+  awaitingApprovalFusionOwners,
   cancelFusion,
   createFusion,
   getFusion,
@@ -65,17 +66,23 @@ export function mountFusionRoutes(app: Hono, deps: AppDeps): void {
     const visible = (
       isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
     ).filter((f) => status === undefined || f.status === status)
-    return c.json(visible)
+    // The list (inbox / overview) only needs metadata; drop the potentially
+    // large proposedDiff so a 15s poll doesn't ship/parse every diff. The full
+    // diff stays on GET /api/fusions/:id.
+    return c.json(visible.map((f) => ({ ...f, proposedDiff: null })))
   })
 
   // Left-nav inbox badge. Reconciles running fusions (lazy done-detection), so
   // a fusion whose engine task just finished is surfaced within one poll. MUST
   // precede '/api/fusions/:id' so 'pending-count' isn't captured as an id.
+  // Uses a narrow (id, ownerUserId) projection — no diff read/parse per poll.
   app.get('/api/fusions/pending-count', async (c) => {
     const actor = actorOf(c)
-    const all = await listFusions(fusionDeps())
-    const mine = isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
-    return c.json({ count: mine.filter((f) => f.status === 'awaiting_approval').length })
+    const owners = await awaitingApprovalFusionOwners(fusionDeps())
+    const count = isAdminActor(actor)
+      ? owners.length
+      : owners.filter((o) => o.ownerUserId === actor.user.id).length
+    return c.json({ count })
   })
 
   app.get('/api/fusions/:id', async (c) => {

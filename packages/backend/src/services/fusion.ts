@@ -501,6 +501,22 @@ export async function reconcileFusion(deps: FusionDeps, id: string): Promise<voi
   }
 }
 
+/**
+ * Reconcile running fusions, then return just (id, ownerUserId) of every
+ * awaiting_approval fusion — a NARROW projection (no proposedDiff) so the
+ * always-on inbox badge poll never reads/parses large diffs just to count.
+ */
+export async function awaitingApprovalFusionOwners(
+  deps: FusionDeps,
+): Promise<Array<{ id: string; ownerUserId: string }>> {
+  await reconcileRunningFusions(deps)
+  return deps.db
+    .select({ id: fusions.id, ownerUserId: fusions.ownerUserId })
+    .from(fusions)
+    .where(eq(fusions.status, 'awaiting_approval'))
+    .all() as Array<{ id: string; ownerUserId: string }>
+}
+
 export async function reconcileRunningFusions(deps: FusionDeps): Promise<void> {
   const rows = deps.db
     .select({ id: fusions.id })
