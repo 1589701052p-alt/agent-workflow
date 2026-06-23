@@ -3060,8 +3060,8 @@ export const zhCN: Resources = {
     versionRestoreFusionNote: 'v{{n}} 之后被融合的记忆将被解融合并退回审批池。',
   },
   fusion: {
-    launchButton: '融合进技能…',
-    launchFromSkillButton: '融合记忆…',
+    launchButton: '融合进技能',
+    launchFromSkillButton: '融合记忆',
     launchTitle: '把记忆融合进技能',
     fieldSkill: '目标技能',
     fieldSkillHint: '只能融合进 managed 技能。',

@@ -735,8 +735,8 @@ export const enUS: Resources = {
       'Memories fused after v{{n}} will be un-fused and returned to the approval pool.',
   },
   fusion: {
-    launchButton: 'Fuse into skill…',
-    launchFromSkillButton: 'Fuse memories…',
+    launchButton: 'Fuse into skill',
+    launchFromSkillButton: 'Fuse memories',
     launchTitle: 'Fuse memories into a skill',
     fieldSkill: 'Target skill',
     fieldSkillHint: 'Only managed skills can be fused into.',

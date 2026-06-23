@@ -8674,6 +8674,14 @@ mark.comment-anchor[data-active='true'] {
 .fuse-dialog .form-field {
   min-width: 0;
 }
+/* RFC-101 — .dialog__body has overflow-y:auto, which forces overflow-x to auto
+   too, so it clips a full-width input's 2px :focus outline (outline-offset:0)
+   on the left/right edges. Inset the scrollable body horizontally so the
+   outline has room to render fully. */
+.fuse-dialog .dialog__body {
+  padding-left: 4px;
+  padding-right: 4px;
+}
 /* RFC-101 — breathing room between the "Fuse into skill" bulk toolbar and the
    memory list below it on /memory. */
 .memory-all__bulk {
