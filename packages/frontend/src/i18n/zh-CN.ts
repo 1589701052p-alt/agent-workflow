@@ -42,6 +42,7 @@ export interface Resources {
       empty: string
       errorReviews: string
       errorClarify: string
+      errorFusion: string
       retry: string
       sourceTask: string
       openReviews: string
@@ -2392,6 +2393,7 @@ export const zhCN: Resources = {
       empty: '当前没有待处理事项',
       errorReviews: '评审列表加载失败',
       errorClarify: '反问列表加载失败',
+      errorFusion: '融合列表加载失败',
       retry: '重试',
       sourceTask: '任务 {{taskId}}',
       openReviews: '查看全部评审 →',

@@ -11,6 +11,7 @@
 // write, memory manage, fusion ownership) is enforced in services/fusion.ts.
 
 import { LaunchFusionSchema, RejectFusionSchema } from '@agent-workflow/shared'
+import type { FusionStatus } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { actorOf } from '@/auth/actor'
 import type { AppDeps } from '@/server'
@@ -20,7 +21,7 @@ import {
   cancelFusion,
   createFusion,
   getFusion,
-  listFusions,
+  listFusionSummaries,
   rejectFusion,
   type FusionDeps,
 } from '@/services/fusion'
@@ -61,15 +62,15 @@ export function mountFusionRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/fusions', async (c) => {
     const actor = actorOf(c)
     const skillName = c.req.query('skillName')
-    const status = c.req.query('status')
-    const all = await listFusions(fusionDeps(), skillName ? { skillName } : {})
-    const visible = (
-      isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
-    ).filter((f) => status === undefined || f.status === status)
-    // The list (inbox / overview) only needs metadata; drop the potentially
-    // large proposedDiff so a 15s poll doesn't ship/parse every diff. The full
-    // diff stays on GET /api/fusions/:id.
-    return c.json(visible.map((f) => ({ ...f, proposedDiff: null })))
+    const status = c.req.query('status') as FusionStatus | undefined
+    // listFusionSummaries pushes status/skillName into SQL and never reads the
+    // proposedDiff, so the inbox's 15s poll stays cheap. Full diff: /:id.
+    const all = await listFusionSummaries(fusionDeps(), {
+      ...(skillName ? { skillName } : {}),
+      ...(status ? { status } : {}),
+    })
+    const visible = isAdminActor(actor) ? all : all.filter((f) => f.ownerUserId === actor.user.id)
+    return c.json(visible)
   })
 
   // Left-nav inbox badge. Reconciles running fusions (lazy done-detection), so

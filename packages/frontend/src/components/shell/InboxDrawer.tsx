@@ -225,10 +225,19 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
       {(tab === 'all' || tab === 'clarify') && clarify.error !== null && (
         <ErrorRow message={t('nav.inbox.errorClarify')} onRetry={() => void clarify.refetch()} />
       )}
-
-      {items.length === 0 && !reviews.isLoading && !clarify.isLoading && (
-        <div className="inbox-drawer__empty muted">{t('nav.inbox.empty')}</div>
+      {(tab === 'all' || tab === 'fusion') && fusionsQuery.error !== null && (
+        <ErrorRow
+          message={t('nav.inbox.errorFusion')}
+          onRetry={() => void fusionsQuery.refetch()}
+        />
       )}
+
+      {items.length === 0 &&
+        !reviews.isLoading &&
+        !clarify.isLoading &&
+        !fusionsQuery.isLoading && (
+          <div className="inbox-drawer__empty muted">{t('nav.inbox.empty')}</div>
+        )}
 
       <div className="inbox-drawer__list">
         {items.map((it) => (

@@ -38,6 +38,7 @@ export const enUS: Resources = {
       empty: 'Nothing waiting for you',
       errorReviews: 'Failed to load reviews',
       errorClarify: 'Failed to load clarify sessions',
+      errorFusion: 'Failed to load fusions',
       retry: 'Retry',
       sourceTask: 'task {{taskId}}',
       openReviews: 'View all reviews →',

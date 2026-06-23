@@ -14,7 +14,7 @@
 // runtime imports imports fusion.ts back (only routes + the boot tick do), so
 // importing task/skill/skillVersion/memory here is acyclic.
 
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import {
   cpSync,
   existsSync,
@@ -567,17 +567,47 @@ export async function getFusion(deps: FusionDeps, id: string): Promise<Fusion | 
   return row ? rowToFusion(row) : null
 }
 
-export async function listFusions(
+/**
+ * List fusions for the overview / inbox. METADATA ONLY — the (potentially
+ * large) proposedDiff is never read from the DB (projected away) so an open
+ * inbox polling every 15s doesn't materialize every historical diff. The full
+ * diff is served by getFusion (GET /api/fusions/:id). The status + skillName
+ * filters are pushed into SQL.
+ */
+export async function listFusionSummaries(
   deps: FusionDeps,
-  filter: { skillName?: string } = {},
+  filter: { skillName?: string; status?: FusionStatus } = {},
 ): Promise<Fusion[]> {
   await reconcileRunningFusions(deps)
-  const rows = (
-    filter.skillName !== undefined
-      ? deps.db.select().from(fusions).where(eq(fusions.skillName, filter.skillName))
-      : deps.db.select().from(fusions)
-  ).all() as FusionRow[]
-  return rows.sort((a, b) => b.createdAt - a.createdAt).map(rowToFusion)
+  const conds = []
+  if (filter.skillName !== undefined) conds.push(eq(fusions.skillName, filter.skillName))
+  if (filter.status !== undefined) conds.push(eq(fusions.status, filter.status))
+  const base = deps.db
+    .select({
+      id: fusions.id,
+      skillName: fusions.skillName,
+      baseSkillVersion: fusions.baseSkillVersion,
+      memoryIdsJson: fusions.memoryIdsJson,
+      intent: fusions.intent,
+      status: fusions.status,
+      iteration: fusions.iteration,
+      currentTaskId: fusions.currentTaskId,
+      incorporatedMemoryIdsJson: fusions.incorporatedMemoryIdsJson,
+      skippedJson: fusions.skippedJson,
+      changelog: fusions.changelog,
+      appliedSkillVersion: fusions.appliedSkillVersion,
+      ownerUserId: fusions.ownerUserId,
+      createdAt: fusions.createdAt,
+      decidedByUserId: fusions.decidedByUserId,
+      decidedAt: fusions.decidedAt,
+      decisionReason: fusions.decisionReason,
+      error: fusions.error,
+    })
+    .from(fusions)
+  const rows = (conds.length > 0 ? base.where(and(...conds)) : base).all()
+  return rows
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((row) => rowToFusion({ ...row, proposedDiff: null } as FusionRow))
 }
 
 // ---------------------------------------------------------------------------
