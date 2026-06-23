@@ -297,11 +297,15 @@ export function parseEnvelope(envelopeXml: string, declaredOutputs: string[]): E
       }
       searchFrom = afterStart
     }
-    const content = (
-      closeIdx >= 0 ? inner.slice(contentStart, closeIdx) : inner.slice(contentStart)
-    ).trim()
     PORT_OPEN_RE.lastIndex = resumeFrom
+    // RFC-103 T6 (Codex impl-gate): a port with NO structural close is malformed
+    // (e.g. the agent dropped the trailing `</port>`). The pre-RFC-103 regex
+    // required `</port>`, so such a port was simply not collected → reported as
+    // missing → repair path. Keep that: skip ports without a structural close so
+    // truncated/garbled output is not silently marked successful.
+    if (closeIdx < 0) continue
     if (name.length === 0) continue
+    const content = inner.slice(contentStart, closeIdx).trim()
     if (declaredOutputs.includes(name)) {
       // If an agent emits the same port name twice, keep the LAST one — most
       // intuitive for a buggy / iterating agent.

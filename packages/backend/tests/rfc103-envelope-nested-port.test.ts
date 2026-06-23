@@ -80,6 +80,15 @@ some chatter
     expect(content).toContain('</port>') // 内层 </port> 也保留
   })
 
+  test('缺失闭合 </port> 的端口判为缺失（不静默标成功，走 repair）—— Codex impl-gate P2', () => {
+    // 端口无 structural close（漏了 </port>）→ 不采集 → missingDeclared，而非
+    // 把 envelope 剩余内容误当作该端口的值标成功（旧非贪婪正则也要求 </port>）。
+    const xml = `<workflow-output><port name="summary">ok</workflow-output>`
+    const r = parseEnvelope(xml, ['summary'])
+    expect(r.ports.get('summary')).toBe('')
+    expect(r.missingDeclared).toContain('summary')
+  })
+
   test('负向（真·残留限制）：内容含 </port> 紧跟 <port name= 会 mis-frame —— 协议禁止', () => {
     // 仅当内容里出现「</port> 后面紧跟 <port name=」这个伪边界时才会错切；这是
     // 已声明的协议约束（端口内容不得含此序列），此处锁定为「有意」残留。
