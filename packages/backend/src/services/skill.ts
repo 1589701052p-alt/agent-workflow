@@ -203,12 +203,27 @@ export async function deleteSkill(db: DbClient, opts: SkillFsOptions, name: stri
     })
   }
 
+  await removeSkillRowAndFiles(db, opts, existing)
+}
+
+/**
+ * RFC-102: drop a skill's DB row plus (for managed skills) its files directory.
+ * NO agent-reference check — callers that must preserve referential integrity
+ * (deleteSkill) check first; the source-conflict replace path intentionally
+ * skips it because the skill name is preserved across the replace, so agent
+ * references stay valid.
+ */
+export async function removeSkillRowAndFiles(
+  db: DbClient,
+  opts: SkillFsOptions,
+  skill: Skill,
+): Promise<void> {
   // Managed: delete the directory. External: just drop the DB row.
-  if (existing.sourceKind === 'managed') {
-    const dir = join(opts.appHome, 'skills', name)
+  if (skill.sourceKind === 'managed') {
+    const dir = join(opts.appHome, 'skills', skill.name)
     rmSync(dir, { recursive: true, force: true })
   }
-  await db.delete(skills).where(eq(skills.name, name))
+  await db.delete(skills).where(eq(skills.name, skill.name))
 }
 
 async function findAgentsUsingSkill(

@@ -3,8 +3,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import type { SkillSourceWithStats } from '@agent-workflow/shared'
-import { SkillSourcesCard } from '../src/components/SkillSourcesCard'
+import type { Skill, SkillSkipReport, SkillSourceWithStats } from '@agent-workflow/shared'
+import { SkillSourcesCard, canReplaceConflict } from '../src/components/SkillSourcesCard'
 import { setBaseUrl, setToken } from '../src/stores/auth'
 
 function wrap(node: React.ReactElement) {
@@ -153,5 +153,124 @@ describe('SkillSourcesCard', () => {
     const alert = screen.getByRole('alert')
     expect(alert.textContent ?? '').toContain('pinned')
     expect(alert.textContent ?? '').toContain('agent-a')
+  })
+})
+
+// --- RFC-102: same-name conflict replace -----------------------------------
+
+function jsonRes(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+function visibleSkill(name: string, ownerUserId: string | null): Skill {
+  return {
+    id: name,
+    name,
+    description: '',
+    ownerUserId,
+    visibility: 'public',
+    sourceKind: 'managed',
+    schemaVersion: 1,
+    contentVersion: 1,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+}
+
+function meResponse(id: string, role: 'admin' | 'user') {
+  return {
+    user: { id, username: id, displayName: id, role, status: 'active' },
+    source: 'session',
+    permissions: [],
+    linkedIdentities: [],
+    pats: [],
+  }
+}
+
+const conflictReport = (name: string): SkillSkipReport => ({
+  childPath: `/x/${name}`,
+  proposedName: name,
+  reason: 'name-conflict-manual',
+})
+
+describe('canReplaceConflict (RFC-102)', () => {
+  const rep = conflictReport('dup')
+  test('non-conflict reasons are never replaceable (even for admin)', () => {
+    expect(
+      canReplaceConflict(
+        { childPath: '', proposedName: 'dup', reason: 'no-skill-md' },
+        [],
+        'u1',
+        true,
+      ),
+    ).toBe(false)
+  })
+  test('admin can replace any conflict', () => {
+    expect(canReplaceConflict(rep, [], 'admin', true)).toBe(true)
+  })
+  test('owner of the visible occupier can replace', () => {
+    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u1')], 'u1', false)).toBe(true)
+  })
+  test('non-owner of a visible occupier cannot', () => {
+    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u2')], 'u1', false)).toBe(false)
+  })
+  test('invisible occupier (absent from list) cannot be replaced by non-admin', () => {
+    expect(canReplaceConflict(rep, [], 'u1', false)).toBe(false)
+  })
+  test('null current user cannot replace', () => {
+    expect(canReplaceConflict(rep, [visibleSkill('dup', 'u1')], null, false)).toBe(false)
+  })
+})
+
+describe('SkillSourcesCard — RFC-102 conflict replace', () => {
+  function mountWithConflict(occupierOwner: string | null, meRole: 'admin' | 'user' = 'user') {
+    const source = fakeSource({ skipped: [conflictReport('dup')] })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (method === 'GET' && url.endsWith('/api/skill-sources')) {
+        return jsonRes({ sources: [source] })
+      }
+      if (method === 'GET' && url.endsWith('/api/skills')) {
+        return jsonRes(occupierOwner === null ? [] : [visibleSkill('dup', occupierOwner)])
+      }
+      if (method === 'GET' && url.endsWith('/api/auth/me')) {
+        return jsonRes(meResponse('me', meRole))
+      }
+      if (method === 'POST' && url.endsWith('/api/skill-sources/src1/conflicts/replace')) {
+        return jsonRes({ source, replaced: 'dup', imported: visibleSkill('dup', 'me') })
+      }
+      return jsonRes({})
+    })
+    wrap(<SkillSourcesCard />)
+    return fetchSpy
+  }
+
+  test('owned occupier → enabled Replace button POSTs to the replace endpoint', async () => {
+    const fetchSpy = mountWithConflict('me')
+    const btn = (await screen.findByTestId('source-conflict-replace-dup')) as HTMLButtonElement
+    await waitFor(() => expect(btn.disabled).toBe(false))
+    fireEvent.click(btn)
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map((c) =>
+        typeof c[0] === 'string' ? c[0] : (c[0] as Request).url,
+      )
+      expect(calls.some((u) => u.endsWith('/api/skill-sources/src1/conflicts/replace'))).toBe(true)
+    })
+  })
+
+  test('occupier owned by someone else → Replace is disabled', async () => {
+    mountWithConflict('other')
+    const btn = (await screen.findByTestId('source-conflict-replace-dup')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+
+  test('invisible occupier (absent from /api/skills) → Replace disabled for non-admin', async () => {
+    mountWithConflict(null)
+    const btn = (await screen.findByTestId('source-conflict-replace-dup')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
   })
 })

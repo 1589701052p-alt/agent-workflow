@@ -37,8 +37,11 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'n
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { ulid } from 'ulid'
+import type { Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { agents, skillSources, skills } from '@/db/schema'
+import { getSkill, removeSkillRowAndFiles, type SkillFsOptions } from '@/services/skill'
+import { requireResourceOwner } from '@/services/resourceAcl'
 import { parseFrontmatter } from '@/util/frontmatter'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
@@ -312,6 +315,65 @@ export async function rescanSkillSource(db: DbClient, id: string): Promise<Recon
     return purgeSourceChildren(db, row)
   }
   return reconcileSource(db, row)
+}
+
+/**
+ * RFC-102: resolve a `name-conflict-*` by replacing the occupying same-named
+ * skill with this source's version of `name`. The route layer has already
+ * enforced source-registrar rights; here we enforce the second gate — write
+ * permission on the *occupying* skill (owner/admin). This is the "no permission
+ * ⇒ cannot replace" rule.
+ *
+ * Replacing keeps the skill `name`, so agent references stay valid; we drop the
+ * occupier without the reference check (via removeSkillRowAndFiles) and let the
+ * source reconcile re-import `name` as its own external skill. Idempotent: if
+ * the occupier is already gone or already owned by this source, we just
+ * reconcile and return.
+ */
+export async function replaceSourceConflict(
+  db: DbClient,
+  fsOpts: SkillFsOptions,
+  actor: Actor,
+  sourceId: string,
+  name: string,
+): Promise<{ source: SkillSourceWithStats; replaced: string; imported: Skill }> {
+  const sourceRow = (
+    await db.select().from(skillSources).where(eq(skillSources.id, sourceId)).limit(1)
+  )[0]
+  if (!sourceRow) {
+    throw new NotFoundError('skill-source-not-found', `source '${sourceId}' not found`)
+  }
+
+  // `name` must still be a live candidate under the source directory.
+  const discovered = discoverSkillsInDir(sourceRow.path)
+  if (!discovered.candidates.some((c) => c.name === name)) {
+    throw new ValidationError(
+      'skill-source-conflict-stale',
+      `'${name}' is no longer an importable skill under this source`,
+    )
+  }
+
+  const occupying = await getSkill(db, name)
+  if (occupying !== null && occupying.sourceId !== sourceId) {
+    // Second permission gate: replacing requires write permission on the
+    // occupier (invisible private skills 404 here — can't replace what you
+    // can't see, and we never leak the owner).
+    await requireResourceOwner(db, actor, 'skill', occupying)
+    await removeSkillRowAndFiles(db, fsOpts, occupying)
+  }
+
+  await reconcileSource(db, sourceRow)
+
+  const imported = await getSkill(db, name)
+  if (imported === null) {
+    throw new ValidationError(
+      'skill-source-conflict-stale',
+      `'${name}' could not be imported from this source`,
+    )
+  }
+  const stats = await getSkillSourceWithStats(db, sourceId)
+  if (stats === null) throw new Error('skill source vanished mid-replace')
+  return { source: stats, replaced: name, imported }
 }
 
 /**

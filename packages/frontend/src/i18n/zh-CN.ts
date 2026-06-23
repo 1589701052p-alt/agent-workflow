@@ -787,6 +787,8 @@ export interface Resources {
     sourceRemoveConfirmTitle: string
     sourceRemoveConfirmBlocked: string
     sourceSkippedBanner: string
+    sourceConflictReplace: string
+    sourceConflictNoPermission: string
     sourceSkippedDetails: string
     sourceFromPill: string
     sourceReadonlyHint: string
@@ -3010,6 +3012,8 @@ export const zhCN: Resources = {
     sourceRemoveConfirmTitle: '解除登记 "{{label}}"？将删除它带进来的全部子技能。',
     sourceRemoveConfirmBlocked: '无法解除登记：以下子技能仍被代理引用，请先解绑。',
     sourceSkippedBanner: '本次扫描跳过 {{n}} 条候选',
+    sourceConflictReplace: '替换',
+    sourceConflictNoPermission: '无权限替换（你不是该技能的所有者）',
     sourceSkippedDetails: '展开详情',
     sourceFromPill: '来自 {{label}}',
     sourceReadonlyHint: '此技能由父目录纳管，请在外部目录里编辑文件。',

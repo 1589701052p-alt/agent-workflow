@@ -177,6 +177,21 @@ export const RescanSkillSourceResponseSchema = z.object({
 })
 export type RescanSkillSourceResponse = z.infer<typeof RescanSkillSourceResponseSchema>
 
+/**
+ * RFC-102: POST /api/skill-sources/:id/conflicts/replace body. Resolve a
+ * `name-conflict-*` by replacing the occupying skill with this source's version
+ * of `name` (requires write permission on the occupying skill).
+ */
+export const ReplaceSourceConflictSchema = z.object({ name: SkillNameSchema })
+export type ReplaceSourceConflict = z.infer<typeof ReplaceSourceConflictSchema>
+
+export const ReplaceSourceConflictResponseSchema = z.object({
+  source: SkillSourceWithStatsSchema,
+  replaced: z.string(),
+  imported: SkillSchema,
+})
+export type ReplaceSourceConflictResponse = z.infer<typeof ReplaceSourceConflictResponseSchema>
+
 // ---------------------------------------------------------------------------
 // RFC-019: ZIP batch import. parse end-point returns the candidate list +
 // per-candidate errors; commit end-point takes a decision map keyed by

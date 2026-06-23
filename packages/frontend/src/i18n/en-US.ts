@@ -677,6 +677,8 @@ export const enUS: Resources = {
     sourceRemoveConfirmBlocked:
       'Cannot remove: the following child skills are still referenced by agents.',
     sourceSkippedBanner: '{{n}} candidate(s) skipped during the last scan',
+    sourceConflictReplace: 'Replace',
+    sourceConflictNoPermission: 'No permission to replace (you do not own this skill)',
     sourceSkippedDetails: 'View details',
     sourceFromPill: 'from {{label}}',
     sourceReadonlyHint: 'This skill is managed by a folder; edit files in the source directory.',

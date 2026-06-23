@@ -6,22 +6,31 @@
 //   DELETE /api/skill-sources/:id           cascade-delete child skills + source row
 //   POST   /api/skill-sources/:id/rescan    manual rescan
 
-import { CreateSkillSourceSchema, UpdateSkillSourceSchema } from '@agent-workflow/shared'
+import {
+  CreateSkillSourceSchema,
+  ReplaceSourceConflictSchema,
+  UpdateSkillSourceSchema,
+} from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
 import { isAdminActor } from '@/services/resourceAcl'
+import type { SkillFsOptions } from '@/services/skill'
 import {
   createSkillSource,
   deleteSkillSource,
   getSkillSourceWithStats,
   listSkillSourcesWithStats,
+  replaceSourceConflict,
   rescanSkillSource,
   updateSkillSource,
 } from '@/services/skill-source'
 import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { Paths } from '@/util/paths'
 
 export function mountSkillSourceRoutes(app: Hono, deps: AppDeps): void {
+  const fsOpts: SkillFsOptions = { appHome: Paths.root }
+
   // RFC-099 (D11): every user may register a source; mutating an existing one
   // is reserved for its registrar (created_by) or an admin. Sources predating
   // RFC-099 (created_by NULL) stay admin-managed.
@@ -100,6 +109,22 @@ export function mountSkillSourceRoutes(app: Hono, deps: AppDeps): void {
       deleted: outcome.deleted,
       skipped: outcome.skipped,
     })
+  })
+
+  // RFC-102: resolve a same-name conflict by replacing the occupying skill with
+  // this source's version. requireSourceRegistrar gates source rights; the
+  // service enforces write permission on the occupying skill (no perm → 403).
+  app.post('/api/skill-sources/:id/conflicts/replace', async (c) => {
+    const id = c.req.param('id')
+    await requireSourceRegistrar(actorOf(c), id)
+    const parsed = ReplaceSourceConflictSchema.safeParse(await safeJson(c.req.raw))
+    if (!parsed.success) {
+      throw new ValidationError('skill-source-invalid', 'invalid conflict-replace payload', {
+        issues: parsed.error.issues,
+      })
+    }
+    const result = await replaceSourceConflict(deps.db, fsOpts, actorOf(c), id, parsed.data.name)
+    return c.json(result)
   })
 }
 

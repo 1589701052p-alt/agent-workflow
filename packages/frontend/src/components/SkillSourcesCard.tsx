@@ -10,9 +10,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { SkillSourceWithStats } from '@agent-workflow/shared'
+import type { Skill, SkillSkipReport, SkillSourceWithStats } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
+import { useActor } from '@/hooks/useActor'
 
 interface SourcesResponse {
   sources: SkillSourceWithStats[]
@@ -20,6 +21,29 @@ interface SourcesResponse {
 
 interface BlockersPayload {
   blockers?: Array<{ skillName: string; byAgent: string }>
+}
+
+/**
+ * RFC-102: whether the current actor may replace the skill occupying a source
+ * same-name conflict. Only name-conflict-* rows are replaceable; admins always
+ * can; otherwise the occupier must be visible AND owned by the current user.
+ * An invisible occupier (a private skill owned by someone else) is absent from
+ * `visibleSkills` → false, which is correct (you can't own what you can't see)
+ * and never leaks the owner's identity.
+ */
+export function canReplaceConflict(
+  report: SkillSkipReport,
+  visibleSkills: Skill[],
+  currentUserId: string | null,
+  isAdmin: boolean,
+): boolean {
+  if (report.reason !== 'name-conflict-manual' && report.reason !== 'name-conflict-source') {
+    return false
+  }
+  if (isAdmin) return true
+  if (currentUserId === null) return false
+  const occupying = visibleSkills.find((s) => s.name === report.proposedName)
+  return occupying !== undefined && occupying.ownerUserId === currentUserId
 }
 
 export function SkillSourcesCard() {
@@ -40,6 +64,28 @@ export function SkillSourcesCard() {
 
   const remove = useMutation({
     mutationFn: (id: string) => api.delete(`/api/skill-sources/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['skill-sources'] })
+      void qc.invalidateQueries({ queryKey: ['skills'] })
+    },
+  })
+
+  // RFC-102: replace a same-name conflict with this source's version. canReplace
+  // is derived client-side from the visible skills + current actor (no extra
+  // endpoint, no owner-identity leak); the backend re-checks write permission.
+  const { data: me } = useActor()
+  const currentUserId = me?.user?.id ?? null
+  const isAdmin = me?.user?.role === 'admin'
+
+  const skillsList = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    queryFn: ({ signal }) => api.get<Skill[]>('/api/skills', undefined, signal),
+  })
+  const visibleSkills = Array.isArray(skillsList.data) ? skillsList.data : []
+
+  const replace = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.post(`/api/skill-sources/${id}/conflicts/replace`, { name }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['skill-sources'] })
       void qc.invalidateQueries({ queryKey: ['skills'] })
@@ -78,12 +124,34 @@ export function SkillSourcesCard() {
               <details className="skill-sources__skipped">
                 <summary>{t('skills.sourceSkippedBanner', { n: s.skipped.length })}</summary>
                 <ul>
-                  {s.skipped.map((sk, idx: number) => (
-                    <li key={idx}>
-                      <code>{sk.proposedName ?? sk.childPath}</code> — {sk.reason}
-                    </li>
-                  ))}
+                  {s.skipped.map((sk, idx: number) => {
+                    const replaceable =
+                      (sk.reason === 'name-conflict-manual' ||
+                        sk.reason === 'name-conflict-source') &&
+                      sk.proposedName !== undefined
+                    const allowed = canReplaceConflict(sk, visibleSkills, currentUserId, isAdmin)
+                    return (
+                      <li key={idx}>
+                        <code>{sk.proposedName ?? sk.childPath}</code> — {sk.reason}
+                        {replaceable && (
+                          <button
+                            type="button"
+                            className="btn btn--xs"
+                            disabled={!allowed || replace.isPending}
+                            title={allowed ? undefined : t('skills.sourceConflictNoPermission')}
+                            onClick={() => replace.mutate({ id: s.id, name: sk.proposedName! })}
+                            data-testid={`source-conflict-replace-${sk.proposedName}`}
+                          >
+                            {t('skills.sourceConflictReplace')}
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
+                {replace.error !== null && replace.error !== undefined && (
+                  <div className="form-actions__error">{describeError(replace.error, t)}</div>
+                )}
               </details>
             )}
             <div className="skill-sources__actions">
