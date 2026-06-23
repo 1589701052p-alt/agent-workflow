@@ -7,13 +7,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Fusion } from '@agent-workflow/shared'
+import type { Fusion, Memory } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Dialog } from '@/components/Dialog'
 import { DiffViewer } from '@/components/DiffViewer'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Field, TextArea } from '@/components/Form'
+import { MemoryReviewItem } from '@/components/fusion/MemoryReviewItem'
 import { LoadingState } from '@/components/LoadingState'
 import { Route as RootRoute } from './__root'
 
@@ -42,6 +43,25 @@ function FusionDetailPage() {
   })
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['fusions', id] })
+
+  // Fetch the involved memories' title/scope/body so the reviewer can judge
+  // what was incorporated/skipped — a bare id list is unreviewable.
+  const memoryIds = fusion.data?.memoryIds ?? []
+  const memDetails = useQuery<Record<string, Memory | null>>({
+    queryKey: ['fusions', id, 'memory-details', memoryIds.join(',')],
+    enabled: memoryIds.length > 0,
+    queryFn: async ({ signal }) => {
+      const entries = await Promise.all(
+        memoryIds.map((mid) =>
+          api
+            .get<{ memory: Memory }>(`/api/memories/${encodeURIComponent(mid)}`, undefined, signal)
+            .then((r) => [mid, r.memory] as const)
+            .catch(() => [mid, null] as const),
+        ),
+      )
+      return Object.fromEntries(entries)
+    },
+  })
 
   const approve = useMutation<Fusion, ApiError>({
     mutationFn: () => api.post(`/api/fusions/${encodeURIComponent(id)}/approve`),
@@ -137,21 +157,28 @@ function FusionDetailPage() {
       {(isAwaiting || f.status === 'done') && (
         <section className="page__section">
           <h2>{t('fusion.incorporatedHeading', { n: f.incorporatedMemoryIds?.length ?? 0 })}</h2>
-          <ul>
-            {(f.incorporatedMemoryIds ?? []).map((m) => (
-              <li key={m}>
-                <code>{m}</code>
-              </li>
+          <ul className="fusion-mem-list">
+            {(f.incorporatedMemoryIds ?? []).map((mid) => (
+              <MemoryReviewItem
+                key={mid}
+                id={mid}
+                mem={memDetails.data?.[mid] ?? null}
+                loading={memDetails.isLoading}
+              />
             ))}
           </ul>
           {(f.skipped?.length ?? 0) > 0 && (
             <>
               <h2>{t('fusion.skippedHeading', { n: f.skipped?.length ?? 0 })}</h2>
-              <ul>
+              <ul className="fusion-mem-list">
                 {(f.skipped ?? []).map((s) => (
-                  <li key={s.memoryId}>
-                    <code>{s.memoryId}</code> — <span className="muted">{s.reason}</span>
-                  </li>
+                  <MemoryReviewItem
+                    key={s.memoryId}
+                    id={s.memoryId}
+                    mem={memDetails.data?.[s.memoryId] ?? null}
+                    loading={memDetails.isLoading}
+                    reason={s.reason}
+                  />
                 ))}
               </ul>
             </>

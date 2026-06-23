@@ -8687,6 +8687,48 @@ mark.comment-anchor[data-active='true'] {
 .memory-all__bulk {
   margin: 6px 0 14px;
 }
+/* RFC-101 — incorporated/skipped memory cards on the fusion approval page, so
+   the reviewer sees each memory's title + scope + body, not a bare id. */
+.fusion-mem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fusion-mem {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.fusion-mem__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fusion-mem__title {
+  font-weight: 500;
+}
+.fusion-mem__id {
+  font-size: 0.72rem;
+}
+.fusion-mem__reason {
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+.fusion-mem__body {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  color: var(--text);
+  max-height: 180px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
 
 /* RFC-050 — per-candidate distill output language chip. Lives next to the
    status chip in the row head; only rendered when the row is still a
