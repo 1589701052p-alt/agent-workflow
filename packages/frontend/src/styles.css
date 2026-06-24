@@ -2764,6 +2764,15 @@ code {
   color: var(--text-muted);
 }
 
+/* Workflow jump link under the task ID — same muted subtitle treatment as
+   .task-detail__id (kept as its own rule so the .task-detail__id selector
+   stays byte-identical for the RFC-037 H1 test). */
+.task-detail__workflow {
+  margin-top: var(--space-1);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
 .task-detail__id-label {
   text-transform: uppercase;
   letter-spacing: 0.04em;

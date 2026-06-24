@@ -180,6 +180,23 @@ function TaskDetailPage() {
             <span className="task-detail__id-label">{t('tasks.detailTitleIdLabel')}</span>{' '}
             <code>{tk.id}</code>
           </div>
+          {/* Jump link to the owning workflow, surfaced in the always-visible
+              page header. The full meta row (with parenthesised ULID) still
+              lives in the "details" tab, but that tab isn't the default — so
+              without this a user landing on a task can't reach its workflow
+              without first switching tabs. Reuses the same data-table__link
+              style the details-tab + tasks-list workflow links use. */}
+          <div className="task-detail__workflow">
+            <span className="task-detail__id-label">{t('tasks.metaWorkflow')}</span>{' '}
+            <Link
+              to="/workflows/$id"
+              params={{ id: tk.workflowId }}
+              className="data-table__link"
+              data-testid="task-detail-header-workflow-link"
+            >
+              {tk.workflowName ?? tk.workflowId}
+            </Link>
+          </div>
         </div>
         <div className="page__actions">
           <TaskMembersDialogButton taskId={id} />
