@@ -15,7 +15,7 @@
 // DB-level "≤1 built-in per name" guarantee that de-ambiguates fusionWorkflowId.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { and, eq } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Hono } from 'hono'
@@ -33,7 +33,6 @@ import { listWorkflows } from '../src/services/workflow'
 import { createApp } from '../src/server'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import { ForbiddenError } from '../src/util/errors'
-import type { Workflow } from '@agent-workflow/shared'
 
 const TOKEN = 'a'.repeat(64) // 64-char hex → the __system__ ADMIN daemon actor
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
