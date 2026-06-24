@@ -2,11 +2,34 @@ name: Release
 
 # P-5-06: cut a GitHub Release whenever a tag matching `v*` is pushed.
 #
-# Per OS in the matrix we run the same `bun run build:binary` pipeline the CI
-# job uses, then upload the resulting executable as a release asset. The
-# build script names the file from process.platform + process.arch
-# (scripts/build-binary.ts), so simply running on each runner produces the
-# correct asset name automatically:
+# Three-phase, so the release only goes public once every binary is in place
+# AND without the create-race the old single-matrix design hit:
+#   1. `create-release` (one job) creates the Release as a DRAFT — only if it
+#      doesn't already exist — with auto-generated notes. Draft = not yet
+#      visible to users; the existence guard keeps a full re-run from
+#      re-drafting a release that is already published.
+#   2. `build` (per-OS matrix, needs: create-release) builds each binary and
+#      uploads it to that draft via `gh release upload --clobber`.
+#   3. `publish` (needs: build) flips the draft public — and only runs if ALL
+#      three build jobs succeeded.
+#
+# Why this shape:
+#   - Create-race: the old workflow had all three matrix jobs call
+#     `softprops/action-gh-release` with `generate_release_notes: true`
+#     concurrently; they raced to CREATE the same tag's release and one job
+#     routinely failed with `Validation Failed … code:"already_exists"
+#     field:"tag_name"` (e.g. v0.12.2's linux-x86_64 — the binary built fine,
+#     only its asset upload was lost). A single creation job removes the race.
+#   - No public empty/partial release: creating as a draft and publishing only
+#     after the matrix finishes means a build failure leaves a hidden draft
+#     (re-run the failed build job, then re-run / un-draft to finish) instead of
+#     a public release missing binaries.
+#   - `gh release upload --clobber` is a pure asset POST (no release-metadata
+#     mutation), so the three parallel uploads never contend and re-runs
+#     overwrite the asset cleanly.
+#
+# The build script names the file from process.platform + process.arch
+# (scripts/build-binary.ts), so each runner produces the correct asset name:
 # - macos-latest      (Apple Silicon) -> dist/agent-workflow-macos-arm64
 # - ubuntu-latest     (x86_64)        -> dist/agent-workflow-linux-x86_64
 # - ubuntu-24.04-arm  (arm64)         -> dist/agent-workflow-linux-arm64
@@ -14,9 +37,8 @@ name: Release
 #
 # Cutting a release:
 #   git tag v0.1.0 && git push origin v0.1.0
-#
-# Re-runs are idempotent — softprops/action-gh-release creates the release on
-# first run and appends assets on subsequent runs for the same tag.
+# The custom Chinese release note is applied (overwriting the auto-generated
+# placeholder) after the workflow finishes — see the release-process notes.
 
 on:
   push:
@@ -27,8 +49,34 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    steps:
+      # Create the Release exactly once, as a DRAFT, so the parallel build jobs
+      # only ever UPLOAD to an existing, not-yet-public release (no concurrent
+      # creation = no already_exists race; draft = nothing public until assets
+      # are in place). Guarded on non-existence so a FULL re-run of a tag whose
+      # release is already published never flips it back to draft (which, if a
+      # later build then failed before `publish`, would hide a live release).
+      - name: Create draft release if missing
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — leaving its draft/published state untouched."
+            exit 0
+          fi
+          flags=(--draft --generate-notes)
+          case "${GITHUB_REF_NAME}" in
+            *-*) flags+=(--prerelease) ;;
+          esac
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" "${flags[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build ${{ matrix.os }}
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -51,22 +99,29 @@ jobs:
       - name: Show artifact size
         run: ls -lh dist/
 
-      # Stage uploads per-OS so the next step's glob is unambiguous.
-      - name: Stage binary
-        id: stage
+      # Upload the freshly built binary to the draft release. `gh release
+      # upload --clobber` only POSTs the asset (it does not touch the release
+      # body/metadata), so the three matrix jobs never contend, and re-runs
+      # overwrite the asset cleanly instead of erroring on a duplicate.
+      - name: Upload release asset
         run: |
           set -euo pipefail
           file=$(find dist -maxdepth 1 -type f -name 'agent-workflow-*' | head -n 1)
-          echo "asset=$file" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$file")" >> "$GITHUB_OUTPUT"
+          test -n "$file"
+          echo "Uploading $file -> ${GITHUB_REF_NAME}"
+          gh release upload "${GITHUB_REF_NAME}" "$file" --repo "${GITHUB_REPOSITORY}" --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v3
-        with:
-          files: ${{ steps.stage.outputs.asset }}
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Flip the draft public only after every binary has been uploaded (this
+      # job needs all three build jobs to succeed). A build failure skips this
+      # step, leaving a hidden draft rather than a public partial release.
+      - name: Publish (un-draft) the release
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
