@@ -624,7 +624,7 @@ export function ClarifyDetailPage() {
 
   return (
     <div
-      className="page"
+      className="page page--clarify-detail"
       data-testid="clarify-detail-page"
       data-status={s.status}
       data-kind={s.kind}

@@ -5597,6 +5597,37 @@ code {
   line-height: 1;
 }
 
+/* ---- Detail-header compaction (review single / multi-doc + clarify) ----
+   These node-scoped detail pages want the BODY (doc / question form) to own the
+   viewport — the header is pure context. The header stacks an <h1> + breadcrumbs
+   + optional description / decider / hint rows, each carrying the UA-default
+   <h1> (~32px font, ~21px margins) / <p> (~16px margins) box. Collapse those
+   margins to a 4px token rhythm and shrink the heading to --font-xl (22px) so
+   the header footprint drops sharply WITHOUT dropping any row. Scoped per page;
+   no global heading/paragraph rules are touched. */
+.review-detail__page-header-text > *,
+.review-multidoc > .page__header .page__title,
+.review-multidoc > .page__header > div > .muted,
+.page--clarify-detail > .page__header > * {
+  margin: 0;
+}
+.review-detail__page-header-text > * + *,
+.page--clarify-detail > .page__header > * + * {
+  margin-top: var(--space-1);
+}
+.review-detail__page-header-text h1,
+.review-multidoc > .page__header .page__title,
+.page--clarify-detail > .page__header h1 {
+  font-size: var(--font-xl);
+  line-height: 1.25;
+}
+/* Clarify isn't a viewport-locked flex column (the form flows and the page
+   scrolls), but dropping the default 24px header margin still lifts the
+   question form up toward the top. */
+.page--clarify-detail > .page__header {
+  margin-bottom: var(--space-2);
+}
+
 /* ---- Review detail (RFC-005) ---- */
 
 /* Lock the review-detail page to the available viewport height so the body
@@ -5608,7 +5639,7 @@ code {
   max-width: none;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -6028,7 +6059,7 @@ mark.comment-anchor[data-active='true'] {
 .page.review-multidoc {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
   height: 100%;
   min-height: 0;
   overflow: hidden;
