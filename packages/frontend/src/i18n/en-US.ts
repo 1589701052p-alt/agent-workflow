@@ -359,6 +359,7 @@ export const enUS: Resources = {
     role: 'Role',
     status: 'Status',
     disable: 'Disable',
+    enable: 'Enable',
     cancel: 'Cancel',
     password: 'Password (leave blank for invite-only)',
     create: {

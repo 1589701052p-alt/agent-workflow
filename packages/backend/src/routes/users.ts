@@ -87,7 +87,7 @@ export function mountUserRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.delete('/api/users/:id', requirePermission('users:write'), async (c) => {
-    await disableUser(deps.db, c.req.param('id'))
+    await disableUser(deps.db, c.req.param('id'), Date.now(), actorOf(c).user.id)
     return c.json({ ok: true, code: 'user-deletion-soft' })
   })
 

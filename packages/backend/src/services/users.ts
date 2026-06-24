@@ -108,31 +108,75 @@ export async function resetPassword(
   // PR2 handles revokePats; left as TODO so the API contract is stable.
 }
 
+/**
+ * Count active admins OTHER than `excludeId`, EXCLUDING the `__system__`
+ * sentinel. `__system__` is permanently role=admin/status=active but is not a
+ * real login account, so it must never satisfy last-admin-protection — counting
+ * it once let an operator disable the only *human* admin and lock everyone out
+ * (2026-06-24 incident: the admin row had to be re-activated directly in
+ * sqlite). Single source of truth for every last-admin check below.
+ */
+async function countOtherActiveAdmins(db: DbClient, excludeId: string): Promise<number> {
+  const rows = await db
+    .select()
+    .from(users)
+    .where(
+      and(
+        eq(users.role, 'admin'),
+        eq(users.status, 'active'),
+        ne(users.id, excludeId),
+        ne(users.id, SYSTEM_USER_ID),
+      ),
+    )
+  return rows.length
+}
+
 export async function disableUser(
+  db: DbClient,
+  id: string,
+  now: number = Date.now(),
+  actorId?: string,
+): Promise<void> {
+  if (id === SYSTEM_USER_ID) {
+    throw new ValidationError('system-user-immutable', 'cannot disable __system__')
+  }
+  // Self-disable lockout: disabling your own account revokes your sessions and
+  // strips the permission needed to undo it. Mirror self-role-change-forbidden
+  // and force the action through another admin (or the CLI break-glass path,
+  // which passes no actorId). A disabled actor can't reach this code, so this
+  // never collides with the idempotent already-disabled return below.
+  if (actorId === id) {
+    throw new ValidationError('self-disable-forbidden', 'cannot disable your own account')
+  }
+  const row = await findById(db, id)
+  if (!row) throw new NotFoundError('user-not-found', `user ${id} not found`)
+  if (row.status === 'disabled') return
+  if (row.role === 'admin' && (await countOtherActiveAdmins(db, id)) === 0) {
+    throw new ValidationError('last-admin-protection', 'cannot disable the last active admin user')
+  }
+  await db.update(users).set({ status: 'disabled', updatedAt: now }).where(eq(users.id, id))
+  await revokeAllSessionsForUser(db, id, now)
+}
+
+/**
+ * Re-activate a disabled (or invited) account — the inverse of disableUser.
+ * The web UI re-enables via PATCH {status:'active'} (patchUser); this focused
+ * setter backs the CLI `enable` break-glass subcommand and any programmatic
+ * caller. No last-admin / self guards: re-enabling can only ADD an active
+ * admin, and a disabled user can't be logged in to re-enable themselves.
+ */
+export async function enableUser(
   db: DbClient,
   id: string,
   now: number = Date.now(),
 ): Promise<void> {
   if (id === SYSTEM_USER_ID) {
-    throw new ValidationError('system-user-immutable', 'cannot disable __system__')
+    throw new ValidationError('system-user-immutable', 'cannot modify __system__')
   }
   const row = await findById(db, id)
   if (!row) throw new NotFoundError('user-not-found', `user ${id} not found`)
-  if (row.status === 'disabled') return
-  if (row.role === 'admin') {
-    const otherAdmins = await db
-      .select()
-      .from(users)
-      .where(and(eq(users.role, 'admin'), eq(users.status, 'active'), ne(users.id, id)))
-    if (otherAdmins.length === 0) {
-      throw new ValidationError(
-        'last-admin-protection',
-        'cannot disable the last active admin user',
-      )
-    }
-  }
-  await db.update(users).set({ status: 'disabled', updatedAt: now }).where(eq(users.id, id))
-  await revokeAllSessionsForUser(db, id, now)
+  if (row.status === 'active') return
+  await db.update(users).set({ status: 'active', updatedAt: now }).where(eq(users.id, id))
 }
 
 export async function patchUser(
@@ -155,14 +199,28 @@ export async function patchUser(
     throw new ValidationError('self-role-change-forbidden', 'cannot change your own role')
   }
 
-  // Last-admin protection for role changes / status flips.
+  // Self-disable lockout — same rationale as disableUser: refuse flipping your
+  // OWN status to disabled. Same-value writes pass so full-object PATCHes stay
+  // idempotent.
+  if (actorId === id && patch.status === 'disabled' && row.status !== 'disabled') {
+    throw new ValidationError('self-disable-forbidden', 'cannot disable your own account')
+  }
+
+  // Last-admin protection — demoting the last real admin out of the admin role…
   if (patch.role && patch.role !== 'admin' && row.role === 'admin') {
-    const others = await db
-      .select()
-      .from(users)
-      .where(and(eq(users.role, 'admin'), eq(users.status, 'active'), ne(users.id, id)))
-    if (others.length === 0) {
+    if ((await countOtherActiveAdmins(db, id)) === 0) {
       throw new ValidationError('last-admin-protection', 'cannot demote the last active admin user')
+    }
+  }
+  // …and disabling the last real admin via a status flip. This comment block
+  // historically claimed to cover "status flips" but only role was checked —
+  // a PATCH {status:'disabled'} on the last admin slipped straight through.
+  if (patch.status === 'disabled' && row.status !== 'disabled' && row.role === 'admin') {
+    if ((await countOtherActiveAdmins(db, id)) === 0) {
+      throw new ValidationError(
+        'last-admin-protection',
+        'cannot disable the last active admin user',
+      )
     }
   }
 

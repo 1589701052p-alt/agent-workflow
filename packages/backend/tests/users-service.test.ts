@@ -8,6 +8,7 @@ import {
   countNonSystemUsers,
   createUser,
   disableUser,
+  enableUser,
   findByUsername,
   listAllUsers,
   patchUser,
@@ -104,30 +105,99 @@ describe('users service', () => {
     await expect(disableUser(db, SYSTEM_USER_ID)).rejects.toThrow(/cannot disable __system__/)
   })
 
-  test('last-admin-protection blocks disabling the only active admin', async () => {
+  // Self-disable lockout — an actor disabling their own account would revoke
+  // their own sessions and strip the permission to undo it. Mirrors the
+  // self-role-change guard; the CLI break-glass path (no actorId) is exempt.
+  test('disableUser blocks disabling your own account', async () => {
     const a = await createUser(db, {
       username: 'alice',
       displayName: 'Alice',
       role: 'admin',
       password: 'pw12345678',
     })
-    // __system__ is admin but seeded — service still counts active admins
-    // including __system__ (it has status='active'), so first disable succeeds.
-    await disableUser(db, a.id)
-    // After Alice is disabled, only __system__ left as active admin. Try to
-    // disable it → blocked by immutability (also covered by last-admin guard).
-    await expect(disableUser(db, SYSTEM_USER_ID)).rejects.toThrow()
+    // A second admin so the refusal is the self-guard, NOT last-admin-protection.
+    await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    await expect(disableUser(db, a.id, Date.now(), a.id)).rejects.toThrow(/your own account/)
+    // Another actor — or the CLI, which passes no actorId — can still disable alice.
+    await disableUser(db, a.id, Date.now(), 'some-other-admin-id')
+    expect((await findByUsername(db, 'alice'))?.status).toBe('disabled')
   })
 
-  test('patchUser role demotion blocked when no other admin', async () => {
+  test('enableUser flips disabled → active and is idempotent', async () => {
+    await createUser(db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    const bob = await createUser(db, {
+      username: 'bob',
+      displayName: 'Bob',
+      role: 'user',
+      password: 'pw12345678',
+    })
+    await disableUser(db, bob.id)
+    expect((await findByUsername(db, 'bob'))?.status).toBe('disabled')
+    await enableUser(db, bob.id)
+    expect((await findByUsername(db, 'bob'))?.status).toBe('active')
+    // idempotent — enabling an already-active user is a no-op.
+    await enableUser(db, bob.id)
+    expect((await findByUsername(db, 'bob'))?.status).toBe('active')
+  })
+
+  test('enableUser refuses __system__', async () => {
+    await expect(enableUser(db, SYSTEM_USER_ID)).rejects.toThrow(/cannot modify __system__/)
+  })
+
+  // Regression (2026-06-24 incident): __system__ is seeded as an active admin
+  // but is a non-login sentinel, so it must NOT count toward
+  // last-admin-protection. Before the fix this test's body asserted the
+  // OPPOSITE — that disabling the only human admin "succeeds because __system__
+  // is counted" — the very bug that let an operator disable the last admin and
+  // lock everyone out (the admin row had to be re-activated directly in sqlite).
+  test('last-admin-protection blocks disabling the last human admin (ignores __system__)', async () => {
     const a = await createUser(db, {
       username: 'alice',
       displayName: 'Alice',
       role: 'admin',
       password: 'pw12345678',
     })
-    // Disable __system__ is blocked, but Alice can be demoted IF __system__
-    // is still an active admin (it is). So demotion should succeed.
+    // Alice is the only human admin; __system__ doesn't count → refused.
+    await expect(disableUser(db, a.id)).rejects.toThrow(/last active admin/)
+    // A second human admin lifts the protection.
+    await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    await disableUser(db, a.id)
+    expect((await findByUsername(db, 'alice'))?.status).toBe('disabled')
+  })
+
+  test('patchUser role demotion blocked when alice is the last human admin', async () => {
+    const a = await createUser(db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    // __system__ is excluded from the active-admin count, so Alice is the last
+    // real admin and the demotion is refused (pre-fix this wrongly succeeded
+    // because __system__ was counted).
+    await expect(patchUser(db, a.id, { role: 'user' })).rejects.toThrow(/last active admin/)
+    // With another human admin present, demotion goes through.
+    await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
     const updated = await patchUser(db, a.id, { role: 'user' })
     expect(updated.role).toBe('user')
   })
@@ -164,6 +234,48 @@ describe('users service', () => {
     })
     const updated = await patchUser(db, a.id, { role: 'user' }, Date.now(), b.id)
     expect(updated.role).toBe('user')
+  })
+
+  test('patchUser blocks disabling your own account via status flip', async () => {
+    const a = await createUser(db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    // Second admin isolates the self-guard from last-admin-protection.
+    await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    await expect(patchUser(db, a.id, { status: 'disabled' }, Date.now(), a.id)).rejects.toThrow(
+      /your own account/,
+    )
+  })
+
+  test('patchUser status disable respects last-admin-protection (ignores __system__)', async () => {
+    const a = await createUser(db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    // Alice is the last human admin; a status→disabled flip by another actor is
+    // refused — the patchUser comment used to claim this without enforcing it.
+    await expect(
+      patchUser(db, a.id, { status: 'disabled' }, Date.now(), SYSTEM_USER_ID),
+    ).rejects.toThrow(/last active admin/)
+    // With a second human admin, the disable goes through.
+    const boss = await createUser(db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'pw12345678',
+    })
+    const updated = await patchUser(db, a.id, { status: 'disabled' }, Date.now(), boss.id)
+    expect(updated.status).toBe('disabled')
   })
 
   test('resetPassword rehashes + revokes sessions', async () => {

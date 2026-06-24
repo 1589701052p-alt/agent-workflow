@@ -158,6 +158,71 @@ describe('/api/users (admin only)', () => {
     const body = (await get.json()) as { status: string }
     expect(body.status).toBe('disabled')
   })
+
+  // Self-disable lockout (mirrors self-role-change-forbidden): an admin's own
+  // session cannot DELETE (soft-disable) itself; another admin's session can.
+  test('DELETE /api/users/:id — admin cannot disable own account', async () => {
+    const alice = await createUser(h.db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    const boss = await createUser(h.db, {
+      username: 'boss',
+      displayName: 'Boss',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    const { token } = await createSession({ db: h.db, userId: alice.id })
+    const selfDel = await reqAs(h.app, token, `/api/users/${alice.id}`, { method: 'DELETE' })
+    expect(selfDel.status).toBe(422)
+    expect(((await selfDel.json()) as { code: string }).code).toBe('self-disable-forbidden')
+    // A different admin session CAN disable alice.
+    const bossSession = await createSession({ db: h.db, userId: boss.id })
+    const del = await reqAs(h.app, bossSession.token, `/api/users/${alice.id}`, {
+      method: 'DELETE',
+    })
+    expect(del.status).toBe(200)
+  })
+
+  // last-admin-protection at the HTTP layer: __system__ must NOT count, so
+  // disabling the only human admin is refused (regression for the 2026-06-24
+  // incident). DAEMON_TOKEN acts as __system__ (a different id) so this isn't
+  // the self-guard.
+  test('DELETE /api/users/:id — refuses disabling the last human admin', async () => {
+    const alice = await createUser(h.db, {
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      password: 'longEnoughPassword',
+    })
+    const res = await reqAs(h.app, DAEMON_TOKEN, `/api/users/${alice.id}`, { method: 'DELETE' })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe('last-admin-protection')
+  })
+
+  // Re-enable path: a soft-disabled user is restored via PATCH {status:'active'}
+  // (the inverse of the DELETE soft-disable), so accounts are never stranded.
+  test('PATCH /api/users/:id — re-enables a disabled user', async () => {
+    const created = await reqAs(h.app, DAEMON_TOKEN, '/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'dave',
+        displayName: 'Dave',
+        role: 'user',
+        password: 'longEnoughPassword',
+      }),
+    })
+    const { id } = (await created.json()) as { id: string }
+    await reqAs(h.app, DAEMON_TOKEN, `/api/users/${id}`, { method: 'DELETE' })
+    const reenabled = await reqAs(h.app, DAEMON_TOKEN, `/api/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'active' }),
+    })
+    expect(reenabled.status).toBe(200)
+    expect(((await reenabled.json()) as { status: string }).status).toBe('active')
+  })
 })
 
 describe('/api/users/search — admin + user (public 5-field view)', () => {

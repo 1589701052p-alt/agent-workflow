@@ -27,7 +27,7 @@ export const Route = createRoute({
   component: UsersPage,
 })
 
-function UsersPage() {
+export function UsersPage() {
   const { t } = useTranslation()
   const allowed = usePermission('users:read')
   const { data: me } = useActor()
@@ -53,6 +53,13 @@ function UsersPage() {
   })
   const disable = useMutation({
     mutationFn: (id: string) => api.delete(`/api/users/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+  // Re-enable a soft-disabled account. The backend allows status flips via
+  // PATCH (PatchUserBodySchema includes `status`); this is the inverse of the
+  // Disable button so a disabled user is never stranded with no UI path back.
+  const enable = useMutation({
+    mutationFn: (id: string) => api.patch(`/api/users/${id}`, { status: 'active' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
   // RFC-036 — inline role change. The backend's last-admin-protection
@@ -169,12 +176,20 @@ function UsersPage() {
                 </td>
                 <td>{u.status}</td>
                 <td>
-                  {!isSystem && u.status === 'active' && (
+                  {/* Self-disable lockout mirrors the self-role guard above
+                      (backend enforces self-disable-forbidden too): an admin
+                      can't disable their own account from the UI. */}
+                  {!isSystem && !isSelf && u.status === 'active' && (
                     <button
                       className="btn btn--ghost btn--xs btn--danger"
                       onClick={() => disable.mutate(u.id)}
                     >
                       {t('users.disable', { defaultValue: 'Disable' })}
+                    </button>
+                  )}
+                  {!isSystem && u.status === 'disabled' && (
+                    <button className="btn btn--ghost btn--xs" onClick={() => enable.mutate(u.id)}>
+                      {t('users.enable', { defaultValue: 'Enable' })}
                     </button>
                   )}
                 </td>

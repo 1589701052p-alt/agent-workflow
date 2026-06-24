@@ -488,6 +488,7 @@ export interface Resources {
     role: string
     status: string
     disable: string
+    enable: string
     cancel: string
     password: string
     create: {
@@ -2701,6 +2702,7 @@ export const zhCN: Resources = {
     role: '角色',
     status: '状态',
     disable: '停用',
+    enable: '启用',
     cancel: '取消',
     password: '密码（留空则状态为已邀请）',
     create: {

@@ -9,6 +9,7 @@ import { Paths } from '@/util/paths'
 import {
   createUser,
   disableUser,
+  enableUser,
   findByUsername,
   listAllUsers,
   resetPassword,
@@ -87,12 +88,13 @@ export async function userCommand(
   if (!sub) {
     return {
       output:
-        'usage: agent-workflow user <create|reset-password|list|disable> [options]\n' +
+        'usage: agent-workflow user <create|reset-password|list|disable|enable> [options]\n' +
         '  user create --username <name> [--admin] [--role admin|user]\n' +
         '               [--display "Name"] [--email <em>] [--password <pw>]\n' +
         '  user reset-password --username <name> --new-password <pw>\n' +
         '  user list\n' +
-        '  user disable --username <name>\n',
+        '  user disable --username <name>\n' +
+        '  user enable --username <name>\n',
       status: 'error',
     }
   }
@@ -142,6 +144,13 @@ export async function userCommand(
       if (!row) return { output: `user ${flags.username} not found\n`, status: 'error' }
       await disableUser(db, row.id)
       return { output: `disabled ${flags.username}\n`, status: 'ok' }
+    }
+    if (sub === 'enable') {
+      if (!flags.username) return badUsage('--username is required')
+      const row = await findByUsername(db, flags.username)
+      if (!row) return { output: `user ${flags.username} not found\n`, status: 'error' }
+      await enableUser(db, row.id)
+      return { output: `enabled ${flags.username}\n`, status: 'ok' }
     }
     return badUsage(`unknown subcommand: ${sub}`)
   } catch (err) {

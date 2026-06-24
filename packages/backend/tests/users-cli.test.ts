@@ -69,6 +69,29 @@ describe('user CLI', () => {
     expect(disableSys.status).toBe('error')
   })
 
+  test('disable + enable round-trip on a non-admin user', async () => {
+    const { userCommand } = await import('../src/cli/user')
+    await userCommand(['create', '--username', 'alice', '--admin', '--password', 'correctPw123'])
+    await userCommand(['create', '--username', 'bob', '--password', 'correctPw123'])
+
+    const disabled = await userCommand(['disable', '--username', 'bob'])
+    expect(disabled.status).toBe('ok')
+    expect(disabled.output).toMatch(/disabled bob/)
+    expect((await userCommand(['list'])).output).toMatch(/bob\tuser\tdisabled/)
+
+    const enabled = await userCommand(['enable', '--username', 'bob'])
+    expect(enabled.status).toBe('ok')
+    expect(enabled.output).toMatch(/enabled bob/)
+    expect((await userCommand(['list'])).output).toMatch(/bob\tuser\tactive/)
+  })
+
+  test('enable on a missing user errors out', async () => {
+    const { userCommand } = await import('../src/cli/user')
+    const r = await userCommand(['enable', '--username', 'ghost'])
+    expect(r.status).toBe('error')
+    expect(r.output).toMatch(/not found/)
+  })
+
   test('user create without --username errors out', async () => {
     const { userCommand } = await import('../src/cli/user')
     const r = await userCommand(['create', '--admin'])
