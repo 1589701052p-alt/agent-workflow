@@ -57,6 +57,11 @@ describe('clarify header compaction', () => {
       /\.page--clarify-detail > \.page__header h1[^{]*\{[^}]*font-size:\s*var\(--font-xl\)/,
     )
   })
+  test('clarify header no longer carries the back-to-/clarify-list link', () => {
+    // User ask (2026-06-24): drop the "返回" back-to-list row entirely so the
+    // header is even shorter — global nav + the task-name link cover navigation.
+    expect(CLARIFY).not.toContain('clarify.detail.back')
+  })
 })
 
 describe('compaction does not disturb the locked layout invariants', () => {

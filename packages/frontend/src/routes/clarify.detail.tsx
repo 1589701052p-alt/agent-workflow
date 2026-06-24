@@ -630,9 +630,6 @@ export function ClarifyDetailPage() {
       data-kind={s.kind}
     >
       <header className="page__header">
-        <Link to="/clarify" className="link">
-          {t('clarify.detail.back')}
-        </Link>
         {/* RFC-037 + follow-up: lead with the user-supplied task name (when
             loaded), then the clarify node title (workflowSnapshot's
             `WorkflowNode.title`) with a fall-back to the clarify node id —
