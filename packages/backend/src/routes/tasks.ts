@@ -26,6 +26,7 @@ import { tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
 import { canViewTask, getTaskMembers, updateTaskMembers } from '@/services/taskCollab'
 import { canViewResource } from '@/services/resourceAcl'
+import { assertNotBuiltin } from '@/services/systemResources'
 import { ForbiddenError } from '@/util/errors'
 import { UpdateTaskMembersBodySchema } from '@agent-workflow/shared'
 import {
@@ -274,6 +275,10 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
           `workflow '${parsed.data.workflowId}' not found`,
         )
       }
+      // RFC-104: built-in workflows cannot be launched manually — only the
+      // fusion engine drives aw-skill-fusion, via the service layer (which is
+      // intentionally not guarded). 403 here, not 404 (the row IS visible).
+      assertNotBuiltin('workflow', wf)
     }
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await startTask(parsed.data, {
@@ -402,6 +407,7 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.post('/api/tasks/:id/resume', async (c) => {
+    await assertTaskWorkflowNotBuiltin(deps, c.req.param('id')) // RFC-104: no manual exec of built-ins
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await resumeTask(deps.db, c.req.param('id'), {
@@ -473,6 +479,7 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.post('/api/tasks/:id/nodes/:nodeRunId/retry', async (c) => {
+    await assertTaskWorkflowNotBuiltin(deps, c.req.param('id')) // RFC-104: no manual exec of built-ins
     const cascadeRaw = c.req.query('cascade')
     const cascade = cascadeRaw === undefined ? true : cascadeRaw !== 'false'
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
@@ -596,6 +603,20 @@ async function visibilityCheck(c: Context, deps: AppDeps): Promise<void> {
 }
 
 /**
+ * RFC-104: refuse manual resume/retry of a task whose workflow is a built-in.
+ * Built-in workflows cannot be manually executed; only the fusion engine drives
+ * aw-skill-fusion, and its own continuation (clarify / review → resumeTask) plus
+ * daemon recovery (lifecycleRepair) call the SERVICE directly, bypassing these
+ * user-facing routes. A null task returns so the route's own 404 still fires.
+ */
+async function assertTaskWorkflowNotBuiltin(deps: AppDeps, taskId: string): Promise<void> {
+  const task = await getTask(deps.db, taskId)
+  if (task === null) return
+  const wf = await getWorkflow(deps.db, task.workflowId)
+  if (wf !== null) assertNotBuiltin('workflow', wf)
+}
+
+/**
  * RFC-020: read `uploadLimits` from settings, falling back to defaults. Kept
  * narrow so the multipart handler stays declarative.
  */
@@ -713,6 +734,8 @@ async function handleMultipartTaskStart(
   if (workflow === null || !(await canViewResource(deps.db, actor, 'workflow', workflow))) {
     throw new NotFoundError('workflow-not-found', `workflow '${startInput.workflowId}' not found`)
   }
+  // RFC-104: built-in workflows cannot be launched manually (multipart path).
+  assertNotBuiltin('workflow', workflow)
   const uploadDefs = collectUploadInputDefs(workflow.definition.inputs)
 
   // 3. Walk multipart fields, bind each file blob to its inputKey.

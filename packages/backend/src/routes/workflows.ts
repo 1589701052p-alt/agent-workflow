@@ -12,7 +12,7 @@ import type { Hono } from 'hono'
 import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
 import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
-import { excludeBuiltinWorkflows } from '@/services/systemResources'
+import { assertNotBuiltin, excludeBuiltinWorkflows } from '@/services/systemResources'
 import {
   assertNewRefsUsable,
   diffNewNames,
@@ -85,6 +85,7 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
     }
     const actor = actorOf(c)
     const existing = await loadVisibleWorkflow(actor, id)
+    assertNotBuiltin('workflow', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'workflow', existing)
     // RFC-099 (D15): only NEWLY-added agent references are checked.
     if (parsed.data.definition !== undefined) {
@@ -100,6 +101,7 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
   app.delete('/api/workflows/:id', async (c) => {
     const actor = actorOf(c)
     const existing = await loadVisibleWorkflow(actor, c.req.param('id'))
+    assertNotBuiltin('workflow', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'workflow', existing)
     await deleteWorkflow(deps.db, c.req.param('id'))
     return c.body(null, 204)

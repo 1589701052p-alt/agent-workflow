@@ -16,6 +16,7 @@ import {
   updateResourceAcl,
   type AclRow,
 } from '@/services/resourceAcl'
+import { assertNotBuiltin } from '@/services/systemResources'
 import { NotFoundError, ValidationError } from '@/util/errors'
 import { WORKFLOWS_CHANNEL, workflowsBroadcaster } from '@/ws/broadcaster'
 
@@ -49,6 +50,11 @@ export function mountAclEndpoints(app: Hono, deps: AppDeps, cfg: AclEndpointConf
     if (row === null || !(await canViewResource(deps.db, actor, cfg.type, row))) {
       throw new NotFoundError(`${cfg.type}-not-found`, `${cfg.type} '${key}' not found`)
     }
+    // RFC-104: built-in resources are read-only — refuse owner / visibility /
+    // grants changes (the footgun that un-hid + unlocked a built-in). Placed
+    // after can-view (D1 isolation) and before owner enforcement. No-op for
+    // resource types with no built-in rows (skill/mcp/plugin).
+    assertNotBuiltin(cfg.type, row)
     const body: unknown = await c.req.json().catch(() => ({}))
     const parsed = UpdateResourceAclBodySchema.safeParse(body)
     if (!parsed.success) {

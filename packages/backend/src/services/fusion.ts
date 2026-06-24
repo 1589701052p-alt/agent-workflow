@@ -14,7 +14,7 @@
 // runtime imports imports fusion.ts back (only routes + the boot tick do), so
 // importing task/skill/skillVersion/memory here is acyclic.
 
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import {
   cpSync,
   existsSync,
@@ -31,7 +31,7 @@ import { FusionResultManifestSchema } from '@agent-workflow/shared'
 import type { Actor } from '@/auth/actor'
 import { SYSTEM_USER_ID } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
-import { agents, fusions } from '@/db/schema'
+import { agents, fusions, workflows } from '@/db/schema'
 import { createAgent } from '@/services/agent'
 import { canManageMemory, fuseMemoriesTx, getMemoryById } from '@/services/memory'
 import { canViewResource, isAdminActor, isResourceOwner } from '@/services/resourceAcl'
@@ -39,7 +39,7 @@ import { getSkill } from '@/services/skill'
 import { commitSkillVersion, type SkillVersionFsOptions } from '@/services/skillVersion'
 import { trySetTaskStatus } from '@/services/lifecycle'
 import { cancelTask, getTask, startTask, type StartTaskDeps } from '@/services/task'
-import { listWorkflows, createWorkflow } from '@/services/workflow'
+import { createWorkflow } from '@/services/workflow'
 import { ConflictError, NotFoundError } from '@/util/errors'
 import { gitDiffSnapshot, runGit } from '@/util/git'
 
@@ -180,11 +180,13 @@ const MERGER_PROMPT_TEMPLATE = `Fuse the following approved memories into this s
 The skill's files are in your working directory. Clarify with the merger first (mandatory), then edit the files in place and write the result manifest.`
 
 export async function seedFusionResources(db: DbClient): Promise<void> {
-  // Agent
-  const existingAgent = db.select({ name: agents.name }).from(agents).all() as Array<{
-    name: string
-  }>
-  if (!existingAgent.some((a) => a.name === SKILL_MERGER_AGENT_NAME)) {
+  // Agent — agents.name is UNIQUE, so at most one row; repair-or-create.
+  const mergerRow = db
+    .select()
+    .from(agents)
+    .where(eq(agents.name, SKILL_MERGER_AGENT_NAME))
+    .all()[0]
+  if (!mergerRow) {
     await createAgent(
       db,
       {
@@ -202,12 +204,64 @@ export async function seedFusionResources(db: DbClient): Promise<void> {
         frontmatterExtra: {},
         bodyMd: MERGER_BODY,
       },
-      { ownerUserId: SYSTEM_USER_ID },
+      { ownerUserId: SYSTEM_USER_ID, builtin: true },
     )
+  } else if (mergerRow.builtin === true || mergerRow.ownerUserId === SYSTEM_USER_ID) {
+    // The row IS the framework's (built-in flag set, or __system__-owned). Repair
+    // any owner/visibility/builtin drift via raw drizzle (the framework-internal
+    // path that bypasses the RFC-104 read-only lock). A reserved-name row that is
+    // NEITHER built-in NOR __system__-owned is left UNTOUCHED — never hijack a
+    // user agent that squats the name (Codex impl-gate P2). In practice
+    // agents.name is unique and the framework seeds at first boot, so this row is
+    // the framework's; the user-squatter case is contrived but must not be
+    // clobbered. (Full owner-drift off __system__ is likewise left for ops.)
+    if (
+      mergerRow.builtin !== true ||
+      mergerRow.ownerUserId !== SYSTEM_USER_ID ||
+      mergerRow.visibility !== 'public'
+    ) {
+      db.update(agents)
+        .set({ builtin: true, ownerUserId: SYSTEM_USER_ID, visibility: 'public' })
+        .where(eq(agents.name, SKILL_MERGER_AGENT_NAME))
+        .run()
+    }
   }
-  // Workflow (find by name — names are not unique, so guard on existence)
-  const wfs = await listWorkflows(db)
-  if (!wfs.some((w) => w.name === SKILL_FUSION_WORKFLOW_NAME)) {
+  // Workflow — name is NON-unique. The canonical built-in is the builtin=true
+  // row (≤1 by the partial unique index). Repair-or-adopt-or-create:
+  const builtinWf = db
+    .select()
+    .from(workflows)
+    .where(and(eq(workflows.builtin, true), eq(workflows.name, SKILL_FUSION_WORKFLOW_NAME)))
+    .all()[0]
+  const adoptWf = builtinWf
+    ? undefined
+    : db
+        .select()
+        .from(workflows)
+        .where(
+          and(
+            eq(workflows.name, SKILL_FUSION_WORKFLOW_NAME),
+            eq(workflows.ownerUserId, SYSTEM_USER_ID),
+          ),
+        )
+        .orderBy(asc(workflows.id))
+        .all()[0]
+  if (builtinWf) {
+    // Repair owner/visibility drift on the canonical row (raw drizzle, as above).
+    if (builtinWf.ownerUserId !== SYSTEM_USER_ID || builtinWf.visibility !== 'public') {
+      db.update(workflows)
+        .set({ ownerUserId: SYSTEM_USER_ID, visibility: 'public' })
+        .where(eq(workflows.id, builtinWf.id))
+        .run()
+    }
+  } else if (adoptWf) {
+    // Adopt the oldest __system__-owned same-name row (matches the migration's
+    // deterministic pick) — heals owner-drift the backfill couldn't mark.
+    db.update(workflows)
+      .set({ builtin: true, visibility: 'public' })
+      .where(eq(workflows.id, adoptWf.id))
+      .run()
+  } else {
     await createWorkflow(
       db,
       {
@@ -255,16 +309,23 @@ export async function seedFusionResources(db: DbClient): Promise<void> {
           outputs: [],
         },
       },
-      { ownerUserId: SYSTEM_USER_ID },
+      { ownerUserId: SYSTEM_USER_ID, builtin: true },
     )
   }
 }
 
 async function fusionWorkflowId(db: DbClient): Promise<string> {
-  const wfs = await listWorkflows(db)
-  const wf = wfs.find((w) => w.name === SKILL_FUSION_WORKFLOW_NAME)
-  if (!wf) throw new Error('aw-skill-fusion workflow missing after seed')
-  return wf.id
+  // RFC-104: resolve by the immutable `builtin` flag, not by name — a user may
+  // own a same-named workflow (builtin=false); the framework drives only its
+  // own canonical row. seedFusionResources runs before every call, so exactly
+  // one builtin=true row exists here.
+  const row = db
+    .select({ id: workflows.id })
+    .from(workflows)
+    .where(and(eq(workflows.builtin, true), eq(workflows.name, SKILL_FUSION_WORKFLOW_NAME)))
+    .all()[0]
+  if (!row) throw new Error('aw-skill-fusion built-in workflow missing after seed')
+  return row.id
 }
 
 // ---------------------------------------------------------------------------

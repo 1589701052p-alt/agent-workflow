@@ -12,19 +12,19 @@
 // daemon. The fix (systemResources.excludeBuiltin*) restores that invariant for
 // the persisted built-ins.
 //
-// The discriminator is "reserved built-in NAME *and* `__system__` owner", and
-// the tests pin why NEITHER half alone is enough:
-//   1. The daemon token authenticates as the `__system__` ADMIN, and admins
-//      bypass `filterVisibleRows` — so `visibility:'private'` would NOT have
-//      hidden the built-ins. The requests below use the daemon token (the same
-//      actor the visual-regression spec primes), proving the admin path.
-//   2. That same daemon token OWNS anything it creates as `__system__` too, so
-//      an owner-only "drop everything __system__ owns" filter (the first
-//      attempt) wrongly hid a solo operator's own daemon-token-created agents —
-//      see the "stays visible" test.
-//   3. `workflows.name` is non-unique, so a name-only filter would wrongly hide
-//      a user-created/imported workflow that reuses the reserved name — see the
-//      pure matrix test (user-owned `aw-skill-fusion` survives).
+// RFC-104 update: the discriminator is now the immutable `builtin` COLUMN (set
+// only by seedFusionResources), NOT the old "reserved NAME *and* __system__
+// owner" heuristic. The integration tests still use the daemon `__system__`
+// ADMIN token (admins bypass `filterVisibleRows`, so the hide must come from
+// `excludeBuiltin*`, not visibility). The pure test pins the column semantics:
+//   1. A built-in stays hidden even if its OWNER is transferred away — the old
+//      heuristic un-hid it the moment owner drifted (the RFC-104 footgun); the
+//      column survives drift.
+//   2. A daemon-token-created NORMAL agent (also `__system__`-owned but
+//      builtin=false) stays visible — see the "stays visible" test.
+//   3. A user who reuses the reserved name (builtin=false) stays visible —
+//      `workflows.name` is non-unique and the framework owns only its builtin=1
+//      row.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { Hono } from 'hono'
@@ -138,29 +138,30 @@ describe('RFC-101 built-in fusion resources are hidden from user-facing lists', 
     expect(body.some((a) => a.name === SKILL_MERGER_AGENT_NAME)).toBe(false)
   })
 
-  test('excludeBuiltin* drop a row only when reserved-name AND __system__-owned (pure)', () => {
+  test('excludeBuiltin* drop a row iff its `builtin` column is set — drift-proof (pure)', () => {
+    // RFC-104: the column is the discriminator. Owner/name are irrelevant to the
+    // hide — a built-in whose owner DRIFTED is still hidden (the footgun), and a
+    // user row reusing the reserved name (builtin=false) is always kept.
     const agentRows = [
-      { name: SKILL_MERGER_AGENT_NAME, ownerUserId: SYSTEM_USER_ID }, // seeded built-in → drop
-      { name: SKILL_MERGER_AGENT_NAME, ownerUserId: 'user_real' }, // user reused the name → keep
-      { name: 'my-coder', ownerUserId: SYSTEM_USER_ID }, // daemon-token normal agent → keep
-      { name: 'my-coder', ownerUserId: 'user_real' }, // keep
+      { name: SKILL_MERGER_AGENT_NAME, ownerUserId: SYSTEM_USER_ID, builtin: true }, // built-in → drop
+      { name: SKILL_MERGER_AGENT_NAME, ownerUserId: 'user_real', builtin: true }, // built-in, owner DRIFTED → still drop
+      { name: 'my-coder', ownerUserId: SYSTEM_USER_ID, builtin: false }, // daemon-token normal agent → keep
+      { name: SKILL_MERGER_AGENT_NAME, ownerUserId: 'user_real', builtin: false }, // user reused the name → keep
     ]
-    expect(excludeBuiltinAgents(agentRows).map((r) => `${r.name}:${r.ownerUserId}`)).toEqual([
-      `${SKILL_MERGER_AGENT_NAME}:user_real`,
-      'my-coder:__system__',
-      'my-coder:user_real',
-    ])
+    expect(
+      excludeBuiltinAgents(agentRows).map((r) => `${r.name}:${r.ownerUserId}:${r.builtin}`),
+    ).toEqual(['my-coder:__system__:false', `${SKILL_MERGER_AGENT_NAME}:user_real:false`])
 
-    // workflows.name is NON-unique: a user-owned aw-skill-fusion must survive
-    // (Codex P2). Only the __system__-owned seeded row is dropped.
+    // workflows.name is NON-unique: a user-owned aw-skill-fusion (builtin=false)
+    // must survive; only the framework's builtin=true row is dropped.
     const wfRows = [
-      { name: SKILL_FUSION_WORKFLOW_NAME, ownerUserId: SYSTEM_USER_ID }, // seeded → drop
-      { name: SKILL_FUSION_WORKFLOW_NAME, ownerUserId: 'user_real' }, // user import → keep
-      { name: 'my-pipeline', ownerUserId: 'user_real' }, // keep
+      { name: SKILL_FUSION_WORKFLOW_NAME, ownerUserId: SYSTEM_USER_ID, builtin: true }, // built-in → drop
+      { name: SKILL_FUSION_WORKFLOW_NAME, ownerUserId: 'user_real', builtin: false }, // user import → keep
+      { name: 'my-pipeline', ownerUserId: 'user_real', builtin: false }, // keep
     ]
-    expect(excludeBuiltinWorkflows(wfRows).map((r) => `${r.name}:${r.ownerUserId}`)).toEqual([
-      `${SKILL_FUSION_WORKFLOW_NAME}:user_real`,
-      'my-pipeline:user_real',
+    expect(excludeBuiltinWorkflows(wfRows).map((r) => `${r.name}:${r.builtin}`)).toEqual([
+      `${SKILL_FUSION_WORKFLOW_NAME}:false`,
+      'my-pipeline:false',
     ])
   })
 })

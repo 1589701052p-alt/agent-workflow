@@ -27,7 +27,7 @@ export async function getAgent(db: DbClient, name: string): Promise<Agent | null
 export async function createAgent(
   db: DbClient,
   input: CreateAgent,
-  opts?: { ownerUserId?: string },
+  opts?: { ownerUserId?: string; builtin?: boolean },
 ): Promise<Agent> {
   const existing = await getAgent(db, input.name)
   if (existing !== null) {
@@ -91,6 +91,9 @@ export async function createAgent(
     // RFC-099: creator becomes owner; new resources default to 'public' (D18).
     ownerUserId: opts?.ownerUserId ?? null,
     visibility: 'public',
+    // RFC-104: built-in marker — only seedFusionResources passes builtin:true;
+    // never set via any HTTP path (CreateAgentSchema omits it).
+    builtin: opts?.builtin ?? false,
     createdAt: now,
     updatedAt: now,
   })
@@ -477,6 +480,8 @@ function rowToAgent(row: AgentRow): Agent {
     // RFC-099 ACL projection — routes filter on these.
     ownerUserId: row.ownerUserId,
     visibility: row.visibility,
+    // RFC-104 built-in marker (read-only response field).
+    builtin: row.builtin,
     schemaVersion: row.schemaVersion,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

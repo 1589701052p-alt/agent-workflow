@@ -25,7 +25,7 @@ import {
 } from '@/services/agent'
 import { resolveDependsClosure, validateDependsOn } from '@/services/agentDeps'
 import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
-import { excludeBuiltinAgents } from '@/services/systemResources'
+import { assertNotBuiltin, excludeBuiltinAgents } from '@/services/systemResources'
 import { assertNewRefsUsable, diffNewNames } from '@/services/resourceRefs'
 import { mountAclEndpoints } from './resourceAcl'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
@@ -87,6 +87,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     }
     const actor = actorOf(c)
     const existing = await loadVisibleAgent(actor, name)
+    assertNotBuiltin('agent', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'agent', existing)
     // RFC-099 (D15): only NEWLY-added references are usability-checked.
     await assertNewRefsUsable(deps.db, actor, [
@@ -131,6 +132,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     const name = c.req.param('name')
     const actor = actorOf(c)
     const existing = await loadVisibleAgent(actor, name)
+    assertNotBuiltin('agent', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'agent', existing)
     await deleteAgent(deps.db, name)
     return c.body(null, 204)
@@ -147,6 +149,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     }
     const actor = actorOf(c)
     const existing = await loadVisibleAgent(actor, name)
+    assertNotBuiltin('agent', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'agent', existing)
     const renamed = await renameAgent(deps.db, name, parsed.data)
     return c.json(renamed)

@@ -18,6 +18,7 @@ import type { Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { workflows } from '@/db/schema'
 import { requireResourceOwner } from '@/services/resourceAcl'
+import { assertNotBuiltin } from '@/services/systemResources'
 import {
   assertNewRefsUsable,
   diffNewNames,
@@ -106,6 +107,9 @@ export async function importWorkflowYaml(
       await db.select().from(workflows).where(eq(workflows.id, preview.id)).limit(1)
     )[0]
     if (existing !== undefined) {
+      // RFC-104: never let a YAML import target a built-in workflow (by id) —
+      // neither overwrite nor the fail-path conflict; built-ins are read-only.
+      assertNotBuiltin('workflow', existing)
       if (onConflict === 'fail') {
         throw new ConflictError(
           'workflow-import-conflict',

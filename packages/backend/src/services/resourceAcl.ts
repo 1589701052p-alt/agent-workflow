@@ -46,6 +46,9 @@ export interface AclRow {
   id: string
   ownerUserId?: string | null
   visibility?: ResourceVisibility
+  /** RFC-104 — built-in marker; present on agent/workflow DTOs, absent (→ not
+   *  built-in) on skill/mcp/plugin rows. Read by assertNotBuiltin. */
+  builtin?: boolean | null
 }
 
 /** Drizzle table per ACL resource type — used by routes to share generic helpers. */

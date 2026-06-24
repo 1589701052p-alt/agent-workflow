@@ -209,6 +209,8 @@ export const WorkflowSchema = z.object({
   ownerUserId: z.string().nullable().optional(),
   /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
   visibility: ResourceVisibilitySchema.optional(),
+  /** RFC-104 — read-only built-in marker (response-only; see AgentSchema). */
+  builtin: z.boolean().optional(),
   definition: WorkflowDefinitionSchema,
   version: z.number().int(),
   schemaVersion: z.number().int(),

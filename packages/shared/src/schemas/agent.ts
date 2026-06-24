@@ -75,6 +75,9 @@ export const AgentSchema = z.object({
   ownerUserId: z.string().nullable().optional(),
   /** RFC-099 ACL — 'public' = every user; 'private' = owner + grants. Absent ⇒ 'public'. */
   visibility: ResourceVisibilitySchema.optional(),
+  /** RFC-104 — read-only built-in marker. Response-only: Create/Update bodies
+   *  are separate schemas that never accept it, and zod strips it if sent. */
+  builtin: z.boolean().optional(),
   outputs: z.array(z.string()),
   outputKinds: AgentOutputKindsMapSchema.optional(),
   /**

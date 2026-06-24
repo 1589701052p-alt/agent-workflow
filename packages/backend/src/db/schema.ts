@@ -69,6 +69,12 @@ export const agents = sqliteTable('agents', {
   visibility: text('visibility', { enum: ['private', 'public'] })
     .notNull()
     .default('public'),
+  // RFC-104: framework-seeded built-in marker. Set ONLY by seedFusionResources
+  // (the RFC-101 rows); never writable via any HTTP path (absent from
+  // Create*/Update* schemas). isBuiltinRow reads it for the read-only lock
+  // (assertNotBuiltin) + list-hide (excludeBuiltin*). Immutable identity anchor:
+  // survives owner/visibility drift, unlike the old owner+name heuristic.
+  builtin: integer('builtin', { mode: 'boolean' }).notNull().default(false),
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
@@ -316,6 +322,7 @@ export const workflows = sqliteTable('workflows', {
   visibility: text('visibility', { enum: ['private', 'public'] })
     .notNull()
     .default('public'),
+  builtin: integer('builtin', { mode: 'boolean' }).notNull().default(false), // RFC-104 (see agents)
   schemaVersion: integer('schema_version').notNull().default(1),
   createdAt: integer('created_at')
     .notNull()
