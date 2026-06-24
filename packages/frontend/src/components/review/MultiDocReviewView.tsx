@@ -12,6 +12,7 @@
 // round-level approve/iterate/reject decision.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -21,6 +22,7 @@ import type {
   ReviewDetail,
 } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { goToTaskDetail } from '@/lib/nav/taskNav'
 import { Dialog } from '@/components/Dialog'
 import { TextArea } from '@/components/Form'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -47,6 +49,7 @@ type DecisionDialog =
 export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const navigate = useNavigate()
 
   const detail = useQuery<ReviewDetail>({
     queryKey: ['reviews', 'detail', nodeRunId],
@@ -112,6 +115,11 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
       await qc.invalidateQueries({ queryKey: ['reviews', 'detail', nodeRunId] })
       await qc.invalidateQueries({ queryKey: ['reviews', 'list'] })
       await qc.invalidateQueries({ queryKey: ['reviews', 'pending-count'] })
+      // RFC-023 bugfix #8 parity (see lib/nav/taskNav): bounce the reviewer
+      // to the owning task so they see the round resume / rerun instead of
+      // being stranded on the multi-doc review page.
+      const taskId = detail.data?.summary.taskId
+      if (taskId !== undefined) goToTaskDetail(qc, navigate, taskId)
     },
   })
 

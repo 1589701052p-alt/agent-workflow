@@ -37,6 +37,7 @@ import { useUserLookup } from '@/hooks/useUserLookup'
 import { Dialog } from '@/components/Dialog'
 import { useClarifyWs } from '@/hooks/useClarifyWs'
 import { deleteClarifyDraft, getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
+import { goToTaskDetail } from '@/lib/nav/taskNav'
 import { Route as RootRoute } from './__root'
 
 /** RFC-099 — user-state equality for drafts (labels are server-refilled, ignored). */
@@ -476,9 +477,7 @@ export function ClarifyDetailPage() {
       // the task's queries upfront in case WS is delayed/dropped.
       const taskId = session.data?.taskId
       if (taskId !== undefined) {
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-        void navigate({ to: '/tasks/$id', params: { id: taskId } })
+        goToTaskDetail(qc, navigate, taskId)
       } else {
         void navigate({ to: '/clarify' })
       }

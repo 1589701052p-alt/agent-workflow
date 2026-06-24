@@ -27,6 +27,7 @@ import { ReviewDocPane } from '@/components/review/ReviewDocPane'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { listDrafts } from '@/lib/review/draftStore'
 import { resolveReviewView } from '@/lib/review/readonly'
+import { goToTaskDetail } from '@/lib/nav/taskNav'
 import { Route as RootRoute } from './__root'
 
 // RFC-013: optional ?version=<vid> for the read-only historical view.
@@ -196,6 +197,15 @@ function ReviewDetailPage() {
       await qc.invalidateQueries({ queryKey: ['reviews', 'detail', nodeRunId] })
       await qc.invalidateQueries({ queryKey: ['reviews', 'list'] })
       await qc.invalidateQueries({ queryKey: ['reviews', 'pending-count'] })
+      // RFC-023 bugfix #8 parity (see lib/nav/taskNav): after deciding, take
+      // the reviewer to the owning task's detail page so they immediately
+      // see the agent resume (approve) / rerun (iterate · reject) kick off
+      // via useTaskSync's review.decision_made handler — the previous
+      // behavior stranded them on the review page relying on WS to mutate
+      // the buttons in place, the same "did anything happen?" gap clarify
+      // already closed.
+      const taskId = detail.data?.summary.taskId
+      if (taskId !== undefined) goToTaskDetail(qc, navigate, taskId)
     },
   })
 
