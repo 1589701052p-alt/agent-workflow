@@ -16,7 +16,6 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
-  Config,
   DocVersionWithBodyAndComments,
   ReviewComment,
   ReviewDetail,
@@ -57,11 +56,6 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
     refetchInterval: 8000,
   })
   useTaskSync(detail.data?.summary.taskId ?? null)
-
-  const config = useQuery<Config>({
-    queryKey: ['config'],
-    queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
-  })
 
   const documents = useMemo(() => detail.data?.documents ?? [], [detail.data])
   const firstDocId = detail.data?.currentVersion.id ?? ''
@@ -366,8 +360,6 @@ export function MultiDocReviewView({ nodeRunId }: { nodeRunId: string }) {
               comments={activeComments}
               readonly={!awaiting}
               awaiting={awaiting}
-              plantumlEndpoint={config.data?.plantumlEndpoint}
-              plantumlAuthHeader={config.data?.plantumlAuthHeader}
               onInvalidate={invalidate}
               onShortcutCaptureChange={setPaneCapturing}
             />

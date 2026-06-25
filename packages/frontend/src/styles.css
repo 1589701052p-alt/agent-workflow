@@ -9663,6 +9663,43 @@ mark.comment-anchor[data-active='true'] {
   gap: var(--space-2);
 }
 
+/* RFC-105 — standalone Markdown preview page (/tasks/$id/preview). Reuses the
+   `.page` skeleton + `.prose` renderer; only the header row + a centered,
+   width-constrained body need bespoke rules. */
+.md-preview__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.md-preview__title {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-preview__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.md-preview__prose {
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.md-preview__oversized {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
 .worktree-files-preview__header-actions {
   flex: 0 0 auto;
   display: flex;

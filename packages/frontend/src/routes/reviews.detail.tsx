@@ -11,7 +11,6 @@ import { createRoute, useNavigate, useSearch, Link } from '@tanstack/react-route
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
-  Config,
   DocVersionWithBodyAndComments,
   ReviewComment,
   ReviewDetail,
@@ -166,12 +165,6 @@ function ReviewDetailPage() {
       replace: true,
     })
   }, [requestedInvalid, navigate, nodeRunId, t])
-
-  // Config needed for plantuml endpoint passthrough.
-  const config = useQuery<Config>({
-    queryKey: ['config'],
-    queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
-  })
 
   // RFC-082: the markdown body + anchored comment sidebar + popover + comment
   // CRUD all live in <ReviewDocPane> now (shared with the multi-doc page). The
@@ -591,8 +584,6 @@ function ReviewDetailPage() {
         comments={activeComments}
         readonly={readonly}
         awaiting={isAwaiting}
-        plantumlEndpoint={config.data?.plantumlEndpoint}
-        plantumlAuthHeader={config.data?.plantumlAuthHeader}
         onInvalidate={invalidateDetail}
         onShortcutCaptureChange={setPaneCapturing}
         diffMode={diffMode}

@@ -10,10 +10,16 @@
 // port's full-height detail (value + Copy + Download-for-file-kinds).
 
 import type { NodeRun, NodeRunOutput, Task } from '@agent-workflow/shared'
+import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { copyText } from '@/lib/clipboard'
+import {
+  buildPreviewTarget,
+  isMarkdownPreviewable,
+  type PreviewSource,
+} from '@/lib/markdown-preview'
 import { isFileOutputKind, isSingleLinePath } from '@/lib/output-port'
 import { downloadWorktreeFile } from '@/lib/worktree-download'
 
@@ -36,6 +42,8 @@ interface ResolvedPort {
   port: DeclaredPort
   value: string | null
   kind: string | null
+  /** Source node_run id (latest run of the bound node) — for inline-md preview. */
+  runId: string | null
 }
 
 export function TaskOutputPanel({ task, runs, outputs }: Props) {
@@ -70,6 +78,7 @@ export function TaskOutputPanel({ task, runs, outputs }: Props) {
       port,
       value: key === null ? null : (valueByRunPort.get(key) ?? null),
       kind: key === null ? null : (kindByRunPort.get(key) ?? null),
+      runId: run?.id ?? null,
     }
   })
 
@@ -112,6 +121,7 @@ export function TaskOutputPanel({ task, runs, outputs }: Props) {
               port={selected.port}
               value={selected.value}
               kind={selected.kind}
+              sourceRunId={selected.runId}
             />
           )}
         </div>
@@ -125,15 +135,29 @@ interface DetailProps {
   port: DeclaredPort
   value: string | null
   kind: string | null
+  /** Latest source run id of the bound node — needed for inline-md preview. */
+  sourceRunId: string | null
 }
 
-function OutputDetail({ taskId, port, value, kind }: DetailProps) {
+function OutputDetail({ taskId, port, value, kind, sourceRunId }: DetailProps) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadFailed, setDownloadFailed] = useState(false)
 
   const showDownload = isFileOutputKind(kind) && isSingleLinePath(value)
+
+  // RFC-105: a "预览" button for markdown-renderable ports — file ports whose
+  // value is a `.md` path (file mode) or inline `markdown` ports (port mode,
+  // body re-resolved from the source run+port on the preview route).
+  const previewSource: PreviewSource | null =
+    !isMarkdownPreviewable(kind, value) || value === null
+      ? null
+      : isFileOutputKind(kind)
+        ? { kind: 'file', path: value.trim() }
+        : sourceRunId !== null
+          ? { kind: 'port', runId: sourceRunId, port: port.portName }
+          : null
 
   function handleCopy() {
     if (value === null) return
@@ -166,6 +190,15 @@ function OutputDetail({ taskId, port, value, kind }: DetailProps) {
           </div>
         </div>
         <div className="task-outputs-panel__actions">
+          {previewSource !== null && (
+            <Link
+              {...buildPreviewTarget(taskId, previewSource, port.name)}
+              className="btn btn--sm"
+              data-testid="task-output-preview"
+            >
+              {t('taskPreview.button')}
+            </Link>
+          )}
           {showDownload && (
             <button
               type="button"

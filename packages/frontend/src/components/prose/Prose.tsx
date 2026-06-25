@@ -39,10 +39,6 @@ export interface ProseProps {
   body: string
   /** Task id for resolving workspace-relative image hrefs. */
   taskId?: string
-  /** PlantUML render endpoint (kroki-compatible). */
-  plantumlEndpoint?: string
-  /** Authorization header for the plantuml endpoint. */
-  plantumlAuthHeader?: string
   /** Additional class on the outer wrapper (joins `.prose`). */
   className?: string
   /**
@@ -57,22 +53,15 @@ export interface ProseProps {
   anchors?: ReadonlyArray<AnchorWrapInput>
 }
 
-export function Prose({
-  body,
-  taskId,
-  plantumlEndpoint,
-  plantumlAuthHeader,
-  className,
-  anchors,
-}: ProseProps) {
+export function Prose({ body, taskId, className, anchors }: ProseProps) {
   const components = useMemo<Components>(
     () =>
       ({
         pre: PassThroughPre,
-        code: makeCode({ plantumlEndpoint, plantumlAuthHeader }),
+        code: makeCode(),
         img: makeProseImage({ taskId }),
       }) as Components,
-    [plantumlEndpoint, plantumlAuthHeader, taskId],
+    [taskId],
   )
 
   const rehypePlugins = useMemo(() => {

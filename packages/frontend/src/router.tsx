@@ -22,6 +22,7 @@ import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
 import { Route as tasksRoute } from '@/routes/tasks'
 import { Route as taskDetailRoute } from '@/routes/tasks.detail'
+import { Route as taskPreviewRoute } from '@/routes/tasks.preview'
 import { Route as reviewsRoute } from '@/routes/reviews'
 import { Route as reviewDetailRoute } from '@/routes/reviews.detail'
 import { Route as clarifyRoute } from '@/routes/clarify'
@@ -59,6 +60,8 @@ const routeTree = rootRoute.addChildren([
   workflowLaunchRoute,
   workflowEditRoute,
   workflowsRoute,
+  // RFC-105: '/tasks/$id/preview' (longer literal) before '/tasks/$id'.
+  taskPreviewRoute,
   taskDetailRoute,
   tasksRoute,
   // '/reviews/$nodeRunId' must come before '/reviews' so the literal wins.

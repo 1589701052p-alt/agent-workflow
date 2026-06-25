@@ -1856,6 +1856,13 @@ export const enUS: Resources = {
     downloading: 'Downloading…',
     downloadFailed: 'Download failed',
   },
+  taskPreview: {
+    button: 'Preview',
+    back: 'Back',
+    title: 'Markdown preview',
+    invalidLink: 'Invalid preview link.',
+    pending: 'Output not produced yet.',
+  },
   settingsForm: {
     opencodePath: 'opencode path',
     opencodePathHint: 'Defaults to `which opencode` from PATH.',

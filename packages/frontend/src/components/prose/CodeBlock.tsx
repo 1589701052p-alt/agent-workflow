@@ -24,11 +24,6 @@ import { PlantUmlBlock } from '../review/PlantUmlBlock'
 import { getHighlighter } from './highlighter'
 import { useResolvedTheme } from '@/hooks/useTheme'
 
-export interface MakeCodeOptions {
-  plantumlEndpoint?: string
-  plantumlAuthHeader?: string
-}
-
 export function PassThroughPre({ children }: { children?: ReactNode }) {
   // Strip react-markdown's wrapping <pre> — fenced-code overrides own their
   // <pre> output. Inline code never lands here (no <pre> parent), so this
@@ -36,7 +31,9 @@ export function PassThroughPre({ children }: { children?: ReactNode }) {
   return <Fragment>{children}</Fragment>
 }
 
-export function makeCode({ plantumlEndpoint, plantumlAuthHeader }: MakeCodeOptions = {}) {
+// RFC-105 WP-B — PlantUML now renders via the backend proxy, so no endpoint /
+// auth header is threaded through Prose any more (the server holds them).
+export function makeCode() {
   return function Code({
     className,
     children,
@@ -67,15 +64,7 @@ export function makeCode({ plantumlEndpoint, plantumlAuthHeader }: MakeCodeOptio
     }
     const source = childrenToString(children).replace(/\n$/, '')
     if (lang === 'mermaid') return <MermaidDiagram source={source} />
-    if (lang === 'plantuml') {
-      return (
-        <PlantUmlDiagram
-          source={source}
-          endpoint={plantumlEndpoint}
-          authHeader={plantumlAuthHeader}
-        />
-      )
-    }
+    if (lang === 'plantuml') return <PlantUmlDiagram source={source} />
     return <ShikiPre source={source} lang={lang} />
   }
 }
@@ -120,24 +109,16 @@ function MermaidDiagram({ source }: { source: string }) {
   )
 }
 
-function PlantUmlDiagram({
-  source,
-  endpoint,
-  authHeader,
-}: {
-  source: string
-  endpoint: string | undefined
-  authHeader: string | undefined
-}) {
+function PlantUmlDiagram({ source }: { source: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current === null) return
     const mount = ref.current
-    PlantUmlBlock.render(mount, source, endpoint, authHeader)
+    PlantUmlBlock.renderViaProxy(mount, source)
     return () => {
       mount.innerHTML = ''
     }
-  }, [source, endpoint, authHeader])
+  }, [source])
   return (
     <div
       ref={ref}

@@ -1,18 +1,15 @@
 // RFC-008 T1 — ```plantuml blocks route to the PlantUmlBlock React shell.
+// RFC-105 WP-B — the shell now calls PlantUmlBlock.renderViaProxy (the backend
+// proxy holds the endpoint/auth), so Prose no longer threads plantuml config.
 
 import { describe, expect, test, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
 
-const renderSpy = vi.fn()
+const proxySpy = vi.fn()
 vi.mock('@/components/review/PlantUmlBlock', () => ({
   PlantUmlBlock: {
-    render: (
-      mount: HTMLElement,
-      source: string,
-      endpoint: string | undefined,
-      authHeader: string | undefined,
-    ) => {
-      renderSpy(source, endpoint, authHeader)
+    renderViaProxy: (mount: HTMLElement, source: string) => {
+      proxySpy(source)
       mount.innerHTML = '<div data-mocked="plantuml"/>'
     },
   },
@@ -22,7 +19,7 @@ import { Prose } from '@/components/prose/Prose'
 
 describe('Prose — plantuml fenced block', () => {
   beforeEach(() => {
-    renderSpy.mockClear()
+    proxySpy.mockClear()
   })
 
   test('mounts prose__diagram--plantuml container', () => {
@@ -32,14 +29,12 @@ describe('Prose — plantuml fenced block', () => {
     expect(node).not.toBeNull()
   })
 
-  test('endpoint + authHeader threaded into PlantUmlBlock.render', () => {
+  test('routes the source to renderViaProxy (no endpoint/auth in the client)', () => {
     const md = '```plantuml\n@startuml\nA -> B\n@enduml\n```'
-    render(
-      <Prose body={md} plantumlEndpoint="https://kroki.example/" plantumlAuthHeader="Bearer abc" />,
-    )
-    expect(renderSpy).toHaveBeenCalledTimes(1)
-    expect(renderSpy.mock.calls[0]?.[0]).toContain('@startuml')
-    expect(renderSpy.mock.calls[0]?.[1]).toBe('https://kroki.example/')
-    expect(renderSpy.mock.calls[0]?.[2]).toBe('Bearer abc')
+    render(<Prose body={md} />)
+    expect(proxySpy).toHaveBeenCalledTimes(1)
+    expect(proxySpy.mock.calls[0]?.[0]).toContain('@startuml')
+    // The shell passes only (mount, source) — no endpoint/auth args.
+    expect(proxySpy.mock.calls[0]?.length).toBe(1)
   })
 })

@@ -12,7 +12,16 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router'
 
+import { validatePreviewSearch } from '../src/lib/markdown-preview'
 import { setBaseUrl, setToken } from '../src/stores/auth'
 import {
   WorktreeFilesPanel,
@@ -54,9 +63,28 @@ function installFetch(handlers: Map<string, () => unknown>) {
 
 function wrap() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // RFC-105: the panel's file preview now renders a <Link> (Markdown preview),
+  // which needs a router context. Wrap in a memory router with the preview
+  // route registered so href resolution works.
+  const rootRoute = createRootRoute({ component: () => <Outlet /> })
+  const index = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => <WorktreeFilesPanel taskId="task_X" />,
+  })
+  const preview = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/tasks/$id/preview',
+    validateSearch: (raw: Record<string, unknown>) => validatePreviewSearch(raw),
+    component: () => null,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([index, preview]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
   return render(
     <QueryClientProvider client={qc}>
-      <WorktreeFilesPanel taskId="task_X" />
+      <RouterProvider router={router as never} />
     </QueryClientProvider>,
   )
 }

@@ -1,0 +1,168 @@
+// RFC-105 — /tasks/$id/preview — standalone Markdown preview page.
+//
+// A dedicated route (not a modal) so the preview is shareable + browser-back
+// returns. Reuses the review interface's renderer (`components/prose/Prose`):
+// mermaid / PlantUML / KaTeX / shiki / GFM / heading anchors all render exactly
+// as in the review pane. The markdown body is rebuilt from the URL search:
+//   - file source   `?path=<worktree-rel>`   → GET worktree-file (shared cache)
+//   - inline port    `?runId=&port=`          → value from the node-runs outputs
+// A "← 返回" link goes back to the owning task detail.
+
+import { useQuery } from '@tanstack/react-query'
+import { createRoute, Link } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
+import type { NodeRunOutput, TaskNodeRuns, WorktreeFileResponse } from '@agent-workflow/shared'
+import { WORKTREE_FILE_MAX_BYTES } from '@agent-workflow/shared'
+import { api } from '@/api/client'
+import { fetchWorktreeFile } from '@/api/worktreeFiles'
+import { ErrorBanner } from '@/components/ErrorBanner'
+import { LoadingState } from '@/components/LoadingState'
+import { Prose } from '@/components/prose/Prose'
+import { formatBytes } from '@/components/WorktreeFilesPanel'
+import { downloadWorktreeFile } from '@/lib/worktree-download'
+import {
+  resolvePreviewSource,
+  validatePreviewSearch,
+  type PreviewResolution,
+} from '@/lib/markdown-preview'
+import { useState } from 'react'
+import { Route as RootRoute } from './__root'
+
+export const Route = createRoute({
+  getParentRoute: () => RootRoute,
+  path: '/tasks/$id/preview',
+  validateSearch: (raw: Record<string, unknown>) => validatePreviewSearch(raw),
+  component: TaskMarkdownPreviewPage,
+})
+
+function deriveTitle(source: PreviewResolution, explicit: string | undefined): string {
+  if (explicit !== undefined && explicit.length > 0) return explicit
+  if (source.mode === 'file') {
+    const segs = source.path.split('/').filter((s) => s.length > 0)
+    return segs.length > 0 ? (segs[segs.length - 1] as string) : source.path
+  }
+  if (source.mode === 'port') return source.port
+  return ''
+}
+
+export function TaskMarkdownPreviewPage() {
+  const { t } = useTranslation()
+  const { id } = Route.useParams()
+  const search = Route.useSearch()
+  const source = resolvePreviewSource(search)
+  const title = deriveTitle(source, search.title) || t('taskPreview.title')
+
+  return (
+    <div className="page page--md-preview">
+      <header className="page__header page__header--row">
+        <div className="md-preview__head">
+          <Link
+            to="/tasks/$id"
+            params={{ id }}
+            className="btn btn--sm"
+            data-testid="md-preview-back"
+          >
+            ← {t('taskPreview.back')}
+          </Link>
+          <h1 className="md-preview__title" title={title}>
+            {title}
+          </h1>
+        </div>
+      </header>
+      <div className="md-preview__body">
+        {source.mode === 'invalid' ? (
+          <div className="error-box" data-testid="md-preview-invalid">
+            {t('taskPreview.invalidLink')}
+          </div>
+        ) : source.mode === 'file' ? (
+          <FilePreviewBody taskId={id} path={source.path} />
+        ) : (
+          <PortPreviewBody taskId={id} runId={source.runId} port={source.port} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FilePreviewBody({ taskId, path }: { taskId: string; path: string }) {
+  const q = useQuery<WorktreeFileResponse>({
+    // Same key as WorktreeFilesPanel → a file the user just viewed renders from
+    // cache (a staleTime:0 background revalidate still fires, which is fine).
+    queryKey: ['worktreeFile', taskId, path],
+    queryFn: ({ signal }) => fetchWorktreeFile(taskId, path, signal),
+    staleTime: 0,
+  })
+  if (q.isLoading) return <LoadingState size="compact" />
+  if (q.error !== null && q.error !== undefined) return <ErrorBanner error={q.error} />
+  const data = q.data
+  if (data === undefined) return null
+  if (data.oversized) return <OversizedHint taskId={taskId} path={path} size={data.size} />
+  return <PreviewContent body={data.content} taskId={taskId} />
+}
+
+function PortPreviewBody({ taskId, runId, port }: { taskId: string; runId: string; port: string }) {
+  const q = useQuery<TaskNodeRuns>({
+    queryKey: ['tasks', taskId, 'node-runs'],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${encodeURIComponent(taskId)}/node-runs`, undefined, signal),
+  })
+  if (q.isLoading) return <LoadingState size="compact" />
+  if (q.error !== null && q.error !== undefined) return <ErrorBanner error={q.error} />
+  const data = q.data
+  if (data === undefined) return null
+  const out = data.outputs.find((o: NodeRunOutput) => o.nodeRunId === runId && o.port === port)
+  return <PreviewContent body={out?.value ?? null} taskId={taskId} />
+}
+
+function PreviewContent({ body, taskId }: { body: string | null; taskId: string }) {
+  const { t } = useTranslation()
+  if (body === null) {
+    return (
+      <div className="muted" data-testid="md-preview-missing">
+        {t('taskPreview.pending')}
+      </div>
+    )
+  }
+  if (body.trim() === '') {
+    return (
+      <div className="muted" data-testid="md-preview-empty">
+        {t('common.empty')}
+      </div>
+    )
+  }
+  return <Prose body={body} taskId={taskId} className="md-preview__prose" />
+}
+
+function OversizedHint({ taskId, path, size }: { taskId: string; path: string; size: number }) {
+  const { t } = useTranslation()
+  const [downloading, setDownloading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  function onDownload() {
+    if (downloading) return
+    setDownloading(true)
+    setFailed(false)
+    void downloadWorktreeFile(taskId, path)
+      .catch(() => setFailed(true))
+      .finally(() => setDownloading(false))
+  }
+  return (
+    <div className="md-preview__oversized" data-testid="md-preview-oversized">
+      <p className="muted">
+        {t('tasks.worktreeFilesOversized', {
+          size: formatBytes(size),
+          limit: formatBytes(WORKTREE_FILE_MAX_BYTES),
+        })}
+      </p>
+      <button type="button" className="btn btn--sm" onClick={onDownload} disabled={downloading}>
+        <span aria-hidden="true">↓</span>{' '}
+        {downloading ? t('tasks.worktreeFilesDownloading') : t('tasks.worktreeFilesDownload')}
+      </button>
+      {failed && (
+        <span className="muted" role="alert">
+          {' '}
+          {t('tasks.worktreeFilesDownloadError')}
+        </span>
+      )}
+    </div>
+  )
+}

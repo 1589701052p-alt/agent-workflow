@@ -70,8 +70,6 @@ export interface ReviewDocPaneProps {
   readonly: boolean
   /** Within a writable view, gate edit/delete (current-but-decided → shown yet disabled). */
   awaiting: boolean
-  plantumlEndpoint?: string
-  plantumlAuthHeader?: string
   /** Called after any comment create/edit/delete so the host refetches. */
   onInvalidate: () => Promise<void>
   /**
@@ -178,8 +176,6 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
     comments,
     readonly,
     awaiting,
-    plantumlEndpoint,
-    plantumlAuthHeader,
     onInvalidate,
     diffMode,
     bodySlot,
@@ -520,8 +516,6 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
             <Prose
               body={body}
               taskId={taskId}
-              plantumlEndpoint={plantumlEndpoint}
-              plantumlAuthHeader={plantumlAuthHeader}
               // Diff-loading flash: suppress marks until DiffView swaps in.
               anchors={diffActive ? undefined : proseAnchors}
             />

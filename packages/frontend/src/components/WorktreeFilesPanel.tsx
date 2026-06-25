@@ -12,17 +12,18 @@
 
 import { useMemo, useState, type ReactElement } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
-import { ApiError, api } from '@/api/client'
+import { ApiError } from '@/api/client'
+import { fetchWorktreeFile, fetchWorktreeTree } from '@/api/worktreeFiles'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { buildPreviewTarget, isMarkdownPath } from '@/lib/markdown-preview'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import {
   WORKTREE_DIR_MAX_ENTRIES,
   WORKTREE_FILE_MAX_BYTES,
-  worktreeFileResponseSchema,
-  worktreeTreeResponseSchema,
   type WorktreeFileResponse,
   type WorktreeTreeEntry,
   type WorktreeTreeResponse,
@@ -68,32 +69,8 @@ export function downloadBaseName(relPath: string): string {
 }
 
 // ---------- API client wrappers ----------
-
-async function fetchTree(
-  taskId: string,
-  path: string,
-  signal?: AbortSignal,
-): Promise<WorktreeTreeResponse> {
-  const raw = await api.get<unknown>(
-    `/api/tasks/${encodeURIComponent(taskId)}/worktree-tree`,
-    { path },
-    signal,
-  )
-  return worktreeTreeResponseSchema.parse(raw)
-}
-
-async function fetchFile(
-  taskId: string,
-  path: string,
-  signal?: AbortSignal,
-): Promise<WorktreeFileResponse> {
-  const raw = await api.get<unknown>(
-    `/api/tasks/${encodeURIComponent(taskId)}/worktree-file`,
-    { path },
-    signal,
-  )
-  return worktreeFileResponseSchema.parse(raw)
-}
+// RFC-105: the tree + file fetchers moved to `@/api/worktreeFiles` so the
+// Markdown preview route shares the exact fetch + query key. Imported above.
 
 // ---------- Components ----------
 
@@ -173,7 +150,7 @@ function DirChildren(props: DirChildrenProps): ReactElement {
   const { t } = useTranslation()
   const q = useQuery<WorktreeTreeResponse>({
     queryKey: ['worktreeTree', props.taskId, props.dirPath],
-    queryFn: ({ signal }) => fetchTree(props.taskId, props.dirPath, signal),
+    queryFn: ({ signal }) => fetchWorktreeTree(props.taskId, props.dirPath, signal),
     // Cache forever within this mount — collapsing and re-expanding a folder
     // should not re-hit the server (RFC-065 acceptance §3). Worktrees do
     // change as the worker writes files, but a refresh requires leaving
@@ -386,7 +363,7 @@ export function WorktreeFilePreview({
   const enabled = path !== null
   const q = useQuery<WorktreeFileResponse>({
     queryKey: ['worktreeFile', taskId, path],
-    queryFn: ({ signal }) => fetchFile(taskId, path as string, signal),
+    queryFn: ({ signal }) => fetchWorktreeFile(taskId, path as string, signal),
     enabled,
     staleTime: 0,
   })
@@ -437,6 +414,17 @@ export function WorktreeFilePreview({
           <span className="worktree-files-preview__size muted">
             {t('tasks.worktreeFilesSizeHeader', { size: sizeLabelData ?? '' })}
           </span>
+          {/* RFC-105: render-preview for markdown files (opens the standalone
+              /tasks/$id/preview page reusing the review renderer). */}
+          {isMarkdownPath(path) && (
+            <Link
+              {...buildPreviewTarget(taskId, { kind: 'file', path })}
+              className="btn btn--sm"
+              data-testid="worktree-files-preview-btn"
+            >
+              {t('taskPreview.button')}
+            </Link>
+          )}
           <DownloadFileButton taskId={taskId} path={path} />
         </div>
       </div>

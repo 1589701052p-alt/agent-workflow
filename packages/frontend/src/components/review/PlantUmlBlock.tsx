@@ -29,6 +29,7 @@
 import DOMPurify from 'dompurify'
 import pako from 'pako'
 
+import { api } from '@/api/client'
 import i18n from '@/i18n'
 
 export const PlantUmlBlock = {
@@ -55,6 +56,19 @@ export const PlantUmlBlock = {
     mount.appendChild(buildPrivacyNote(hostOf(endpoint)))
     mount.appendChild(buildLoading())
     void fetchAndSwap(mount, source, endpoint, authHeader)
+  },
+
+  /**
+   * RFC-105 WP-B — render via the backend proxy (`POST /api/plantuml/render`).
+   * Unlike `render` (which the Settings connectivity test uses to hit an
+   * UNSAVED endpoint straight from the admin's browser), this path needs no
+   * endpoint/auth in the client: the server holds them, so PlantUML works for
+   * every logged-in user. The SVG is still DOMPurify-sanitized here.
+   */
+  renderViaProxy(mount: HTMLElement, source: string): void {
+    mount.innerHTML = ''
+    mount.appendChild(buildLoading())
+    void proxyRender(mount, source)
   },
 
   /** Hostname of a configured renderer endpoint, for the privacy notice.
@@ -162,44 +176,8 @@ async function fetchAndSwap(
 
   mount.innerHTML = ''
   if (svg !== null && svg.includes('<svg')) {
-    const wrap = document.createElement('div')
-    wrap.className = 'review-diagram__svg'
-    wrap.innerHTML = DOMPurify.sanitize(svg, {
-      USE_PROFILES: { svg: true, svgFilters: true },
-    })
-    // PlantUML emits `preserveAspectRatio="none"` + fixed `width="…px"` /
-    // `height="…px"` on the <svg>. Combined with our `max-width: 100%` CSS
-    // that constrains width only, the SVG gets squashed horizontally
-    // (height keeps the original px, width shrinks to container width,
-    // and `none` disables aspect-ratio preservation). Strip all three.
-    //
-    // Then: SVG with a viewBox is a replaced element whose intrinsic
-    // dimensions equal the viewBox in raw pixels (e.g. 2547×1580). Once
-    // intrinsic dimensions exist, `height: auto` resolves to the intrinsic
-    // pixel height — NOT to `width × aspect-ratio` — so the SVG still
-    // renders 1580px tall inside a 1180px-wide container, leaving huge
-    // vertical whitespace from `xMidYMid meet`. The reliable fix is the
-    // padding-bottom hack: set the wrap to `position: relative` with
-    // `padding-bottom: (vbH/vbW)*100%`, then absolutely-fill the SVG
-    // inside it. Works in every browser without ResizeObserver gymnastics.
-    const svgEl = wrap.querySelector('svg')
-    if (svgEl !== null) {
-      svgEl.removeAttribute('preserveAspectRatio')
-      svgEl.removeAttribute('width')
-      svgEl.removeAttribute('height')
-      const vb = (svgEl.getAttribute('viewBox') ?? '').trim().split(/\s+/).map(Number)
-      if (vb.length === 4 && vb[2]! > 0 && vb[3]! > 0) {
-        wrap.style.position = 'relative'
-        wrap.style.paddingBottom = `${(vb[3]! / vb[2]!) * 100}%`
-        wrap.style.height = '0'
-        svgEl.style.position = 'absolute'
-        svgEl.style.inset = '0'
-        svgEl.style.width = '100%'
-        svgEl.style.height = '100%'
-      }
-    }
     mount.appendChild(buildPrivacyNote(hostOf(endpoint)))
-    mount.appendChild(wrap)
+    mount.appendChild(swapSvg(svg))
     return
   }
   const msg =
@@ -207,6 +185,84 @@ async function fetchAndSwap(
       ? plantumlSyntaxError
       : (lastErr?.message ?? i18n.t('reviews.plantumlUnknownError'))
   mount.appendChild(buildErrorWithSource(source, msg))
+}
+
+// RFC-105 WP-B — proxy render path. One POST to /api/plantuml/render; the
+// response is a discriminated union ({svg,host} | {unconfigured} | {errorSvg}
+// | {error}). Syntax-error extraction + i18n stay here (the locale bundle
+// lives on the client), fed the raw diagnostic SVG the proxy forwards.
+async function proxyRender(mount: HTMLElement, source: string): Promise<void> {
+  let resp: {
+    svg?: string
+    host?: string
+    unconfigured?: boolean
+    errorSvg?: string
+    error?: string
+  }
+  try {
+    resp = await api.post('/api/plantuml/render', { source })
+  } catch (err) {
+    mount.innerHTML = ''
+    const msg = err instanceof Error ? err.message : i18n.t('reviews.plantumlUnknownError')
+    mount.appendChild(buildErrorWithSource(source, msg))
+    return
+  }
+  mount.innerHTML = ''
+  if (resp.unconfigured === true) {
+    mount.appendChild(buildUnconfigured(source))
+    return
+  }
+  if (typeof resp.errorSvg === 'string') {
+    const syntaxErr = extractPlantUmlSyntaxError(resp.errorSvg)
+    if (syntaxErr !== null) {
+      mount.appendChild(buildErrorWithSource(source, syntaxErr))
+      return
+    }
+  }
+  if (typeof resp.svg === 'string' && resp.svg.includes('<svg')) {
+    if (typeof resp.host === 'string' && resp.host.length > 0) {
+      mount.appendChild(buildPrivacyNote(resp.host))
+    }
+    mount.appendChild(swapSvg(resp.svg))
+    return
+  }
+  mount.appendChild(
+    buildErrorWithSource(source, resp.error ?? i18n.t('reviews.plantumlUnknownError')),
+  )
+}
+
+// Sanitize a PlantUML SVG string and wrap it with the aspect-ratio-preserving
+// container. Shared by the direct (Settings test) + proxy render paths.
+//
+// PlantUML emits `preserveAspectRatio="none"` + fixed `width="…px"` /
+// `height="…px"`. Combined with `max-width: 100%` the SVG squashes
+// horizontally; and a viewBox SVG's intrinsic height resolves to raw px (not
+// width×ratio), leaving huge vertical whitespace. The padding-bottom hack
+// (position:relative + padding-bottom = vbH/vbW%, absolutely-fill the SVG)
+// fixes both cross-browser without ResizeObserver gymnastics.
+function swapSvg(svg: string): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'review-diagram__svg'
+  wrap.innerHTML = DOMPurify.sanitize(svg, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+  })
+  const svgEl = wrap.querySelector('svg')
+  if (svgEl !== null) {
+    svgEl.removeAttribute('preserveAspectRatio')
+    svgEl.removeAttribute('width')
+    svgEl.removeAttribute('height')
+    const vb = (svgEl.getAttribute('viewBox') ?? '').trim().split(/\s+/).map(Number)
+    if (vb.length === 4 && vb[2]! > 0 && vb[3]! > 0) {
+      wrap.style.position = 'relative'
+      wrap.style.paddingBottom = `${(vb[3]! / vb[2]!) * 100}%`
+      wrap.style.height = '0'
+      svgEl.style.position = 'absolute'
+      svgEl.style.inset = '0'
+      svgEl.style.width = '100%'
+      svgEl.style.height = '100%'
+    }
+  }
+  return wrap
 }
 
 /**

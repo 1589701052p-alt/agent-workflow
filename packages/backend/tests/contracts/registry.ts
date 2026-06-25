@@ -345,6 +345,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   },
   { method: 'PUT', path: '/api/config' },
 
+  // ---- plantuml proxy (RFC-105 WP-B; any logged-in user) ----
+  // No endpoint configured in the contract harness → 200 { unconfigured: true }.
+  {
+    method: 'POST',
+    path: '/api/plantuml/render',
+    happy: { body: { source: '@startuml\nA->B\n@enduml' }, schema: z.object({}).passthrough() },
+  },
+
   // ---- runtime ----
   {
     method: 'GET',

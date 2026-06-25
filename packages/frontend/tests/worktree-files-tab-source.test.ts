@@ -36,14 +36,21 @@ describe('RFC-065 source-level guard', () => {
     expect(tsx).toContain("from '@/components/WorktreeFilesPanel'")
   })
 
-  test('WorktreeFilesPanel.tsx wires both worktree endpoints via api.get', () => {
+  test('WorktreeFilesPanel wires both worktree endpoints via the shared api module', () => {
     const panel = read('src/components/WorktreeFilesPanel.tsx')
+    const apiMod = read('src/api/worktreeFiles.ts')
     expect(panel).toContain('useQuery')
-    expect(panel).toContain('worktree-tree')
-    expect(panel).toContain('worktree-file')
-    // Forces the panel to keep validating server payloads via the shared
-    // schemas; if these go away the runtime safety net is gone.
-    expect(panel).toContain('worktreeTreeResponseSchema')
-    expect(panel).toContain('worktreeFileResponseSchema')
+    // RFC-105: the tree + file fetch (and their schema.parse) moved to
+    // `@/api/worktreeFiles` so the Markdown preview route shares the exact
+    // fetch + query key. The panel now imports the shared fetchers...
+    expect(panel).toContain("from '@/api/worktreeFiles'")
+    expect(panel).toContain('fetchWorktreeTree')
+    expect(panel).toContain('fetchWorktreeFile')
+    // ...and the single-sourced module keeps validating server payloads via the
+    // shared schemas; if these go away the runtime safety net is gone.
+    expect(apiMod).toContain('worktree-tree')
+    expect(apiMod).toContain('worktree-file')
+    expect(apiMod).toContain('worktreeTreeResponseSchema')
+    expect(apiMod).toContain('worktreeFileResponseSchema')
   })
 })

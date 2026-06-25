@@ -1764,6 +1764,13 @@ export interface Resources {
     downloading: string
     downloadFailed: string
   }
+  taskPreview: {
+    button: string
+    back: string
+    title: string
+    invalidLink: string
+    pending: string
+  }
   settingsForm: {
     opencodePath: string
     opencodePathHint: string
@@ -4136,6 +4143,13 @@ export const zhCN: Resources = {
     download: '下载',
     downloading: '下载中…',
     downloadFailed: '下载失败',
+  },
+  taskPreview: {
+    button: '预览',
+    back: '返回',
+    title: 'Markdown 预览',
+    invalidLink: '无效的预览链接。',
+    pending: '输出尚未产生。',
   },
   settingsForm: {
     opencodePath: 'opencode 路径',

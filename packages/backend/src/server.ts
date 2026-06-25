@@ -23,6 +23,7 @@ import { mountMemoryDistillJobRoutes } from '@/routes/memoryDistillJobs'
 import { mountTaskFeedbackRoutes } from '@/routes/taskFeedback'
 import { mountOidcRoutes } from '@/routes/oidc'
 import { mountOidcAuthRoutes } from '@/routes/oidc-auth'
+import { mountPlantumlRoutes } from '@/routes/plantuml'
 import { mountPluginRoutes } from '@/routes/plugins'
 import { mountUserRoutes } from '@/routes/users'
 import { mountRepoRoutes } from '@/routes/repos'
@@ -141,6 +142,7 @@ export function createApp(deps: AppDeps): Hono {
   app.use('/api/runtime/*', requirePermission('runtime:read'))
 
   mountConfigRoutes(app, deps)
+  mountPlantumlRoutes(app, deps)
   mountRuntimeRoutes(app, deps)
   mountAgentRoutes(app, deps)
   mountMcpRoutes(app, deps)

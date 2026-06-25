@@ -30,7 +30,11 @@ export const Route = createRootRoute({
   beforeLoad: ({ location }) => {
     if (location.pathname === '/auth') return
     if (getToken() === null) {
-      throw redirect({ to: '/auth', search: { redirect: location.pathname } })
+      // RFC-105: store the full relative href (pathname + search), not just
+      // pathname, so a shared deep link with search params — e.g. a Markdown
+      // preview `/tasks/t/preview?path=docs/report.md` — survives the login
+      // round-trip instead of collapsing to the invalid-link state.
+      throw redirect({ to: '/auth', search: { redirect: location.href } })
     }
   },
   component: RootComponent,

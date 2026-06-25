@@ -7,7 +7,7 @@
 // origin (vite proxy in dev, same-host bundle in prod); remote setups can
 // still override BASE_URL_KEY via localStorage for now.
 
-import { createRoute, useNavigate, useSearch } from '@tanstack/react-router'
+import { createRoute, useRouter, useSearch } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
@@ -17,6 +17,19 @@ import { Route as RootRoute } from './__root'
 
 interface AuthSearch {
   redirect?: string
+}
+
+/**
+ * RFC-105 — post-login destination guard. The `redirect` search param is
+ * user-controlled (it rides the shared URL), so only same-origin relative
+ * paths are honored: it must start with a single `/` and not `//` or `/\`
+ * (protocol-relative / backslash open-redirect tricks). Anything else falls
+ * back to the default landing page. Preserves the query string so deep links
+ * like `/tasks/t/preview?path=docs/report.md` survive login.
+ */
+export function safeInternalRedirect(redirect: string | undefined): string {
+  if (redirect === undefined || !/^\/(?![/\\])/.test(redirect)) return '/agents'
+  return redirect
 }
 
 interface OidcProvider {
@@ -39,7 +52,7 @@ export const Route = createRoute({
 })
 
 function AuthPage() {
-  const navigate = useNavigate()
+  const router = useRouter()
   const { redirect } = useSearch({ from: Route.id }) as AuthSearch
   const { t } = useTranslation()
   const [providers, setProviders] = useState<OidcProvider[]>([])
@@ -85,7 +98,10 @@ function AuthPage() {
         password,
       })
       setToken(r.sessionToken)
-      navigate({ to: (redirect as '/agents' | undefined) ?? '/agents' })
+      // history.push (not navigate({to})) so a redirect carrying a query
+      // string (shared deep link) is honored verbatim; guarded against
+      // open redirects by safeInternalRedirect.
+      router.history.push(safeInternalRedirect(redirect))
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setError(t('auth.invalidCredentials'))
@@ -104,7 +120,7 @@ function AuthPage() {
     setToken(tokenInput)
     try {
       await api.get('/api/whoami')
-      navigate({ to: (redirect as '/agents' | undefined) ?? '/agents' })
+      router.history.push(safeInternalRedirect(redirect))
     } catch (e) {
       setError(describeApiError(e))
     } finally {
@@ -116,7 +132,10 @@ function AuthPage() {
     setError(null)
     try {
       const r = await api.post<{ authorizeUrl: string }>(`/api/auth/oidc/${slug}/login/start`, {
-        postLoginRedirect: redirect ?? '/',
+        // Strip any #fragment: the OIDC callback appends `#aw_session=…`, and a
+        // second fragment (e.g. a preview heading anchor) would break the
+        // `^#aw_session=` consumer in stores/auth.ts → login bounces.
+        postLoginRedirect: safeInternalRedirect(redirect).split('#')[0] || '/agents',
       })
       window.location.href = r.authorizeUrl
     } catch (e) {
