@@ -24,6 +24,8 @@
 
 import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
 import {
+  CLARIFY_INPUT_PORT_NAME,
+  CLARIFY_OUTPUT_PORT_NAME,
   CLARIFY_RESPONSE_TARGET_PORT_NAME,
   CLARIFY_SOURCE_PORT_NAME,
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
@@ -299,6 +301,49 @@ export function classifyCrossClarifyConnection(
     }
   }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// stray-drop guard — used by WorkflowCanvas.isValidConnection
+// ---------------------------------------------------------------------------
+
+/**
+ * RFC-023/056 — the complete set of clarify / cross-clarify channel system
+ * handles a GENERIC data edge must never land on. These ports are wired
+ * EXCLUSIVELY by the reverse/forward drag helpers as fixed channel pairs, and
+ * the scheduler's `buildScopeUpstreams` (scheduler.ts) strips every edge
+ * touching them. A stray drop here therefore creates an edge that is silently
+ * removed from the dispatch graph — erasing the target node's real upstream
+ * dependency and turning it into a FALSE dispatch root (premature execution).
+ *
+ * `isValidConnection` calls this AFTER both channel classifiers
+ * (`classifyClarifyConnection` / `classifyCrossClarifyConnection`) have
+ * declined the drop, so a legitimate ask / answer / designer-feedback drag
+ * never reaches here — only stray drops do, and they get the red-dashed
+ * rejection.
+ *
+ * The historical inline guard listed `__external_feedback__` (designer side)
+ * but OMITTED `__clarify_response__` (questioner side) and `__clarify__` (ask
+ * source) — that asymmetry let an upstream output be dropped onto an agent's
+ * `__clarify_response__`, the false-root incident this list closes. Keep it
+ * symmetric: every clarify-channel handle name belongs here. Note
+ * `CLARIFY_INPUT_PORT_NAME` and `CROSS_CLARIFY_INPUT_PORT_NAME` share the
+ * literal value `'questions'`; both are listed for explicitness.
+ */
+export function isStrayClarifyChannelDrop(conn: {
+  sourceHandle: string | null
+  targetHandle: string | null
+}): boolean {
+  return (
+    conn.targetHandle === CLARIFY_INPUT_PORT_NAME ||
+    conn.sourceHandle === CLARIFY_OUTPUT_PORT_NAME ||
+    conn.sourceHandle === CLARIFY_SOURCE_PORT_NAME ||
+    conn.targetHandle === CLARIFY_RESPONSE_TARGET_PORT_NAME ||
+    conn.targetHandle === CROSS_CLARIFY_INPUT_PORT_NAME ||
+    conn.sourceHandle === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT ||
+    conn.sourceHandle === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
+    conn.targetHandle === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT
+  )
 }
 
 // ---------------------------------------------------------------------------

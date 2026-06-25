@@ -42,8 +42,6 @@ import {
   applyClarifyReverseDrag,
   cascadeRemoveClarifyChannel,
   classifyClarifyConnection,
-  CLARIFY_INPUT_PORT_NAME,
-  CLARIFY_OUTPUT_PORT_NAME,
   clarifyHasAttachedAgent,
   clearClarifyEdgesForRemovedNodes,
   hasExistingClarifyChannel,
@@ -55,12 +53,9 @@ import {
   cascadeRemoveCrossClarifyChannel,
   classifyCrossClarifyConnection,
   clearCrossClarifyEdgesForRemovedNodes,
-  CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
-  CROSS_CLARIFY_INPUT_PORT_NAME,
-  CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
-  CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
   crossClarifyHasAttachedQuestioner,
   crossClarifyHasDesignerEdge,
+  isStrayClarifyChannelDrop,
   isValidCrossClarifyQuestioner,
   questionerHasExistingClarifyChannel,
 } from './crossClarifyDragHelper'
@@ -582,22 +577,14 @@ function CanvasInner({
       }
       // Merged defensive guard for BOTH RFC-023 + RFC-056 clarify-channel
       // system port handles. Runs only AFTER both classifiers had a chance
-      // to match; if a drop is still carrying these handle names without
-      // a matching channel target, it's a stray drop the generic catch-all
-      // path would turn into a junk edge — reject up-front so xyflow shows
-      // the red dashed feedback. Note `CLARIFY_INPUT_PORT_NAME` and
-      // `CROSS_CLARIFY_INPUT_PORT_NAME` share the literal value `'questions'`;
-      // by the time we reach this guard, neither classifier matched, which
-      // means the target node is neither `'clarify'` nor
-      // `'clarify-cross-agent'`.
-      if (
-        conn.targetHandle === CLARIFY_INPUT_PORT_NAME ||
-        conn.sourceHandle === CLARIFY_OUTPUT_PORT_NAME ||
-        conn.targetHandle === CROSS_CLARIFY_INPUT_PORT_NAME ||
-        conn.sourceHandle === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT ||
-        conn.sourceHandle === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
-        conn.targetHandle === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT
-      ) {
+      // to match; if a drop is still carrying any channel handle name, it's a
+      // stray drop the generic catch-all path would turn into a junk edge that
+      // buildScopeUpstreams silently strips (→ false dispatch root) — reject
+      // up-front so xyflow shows the red dashed feedback. The handle name list
+      // (incl. `__clarify_response__` + `__clarify__`, the false-root incident
+      // ports) lives in the pure `isStrayClarifyChannelDrop` so it is
+      // unit-testable and stays symmetric.
+      if (isStrayClarifyChannelDrop(guardConn)) {
         return false
       }
       // RFC-007 task-detail iterate lock.

@@ -1615,7 +1615,12 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
         {
           id: 'e6',
           source: { nodeId: 'cross1', portName: 'to_questioner' },
-          target: { nodeId: 'questioner', portName: '__external_feedback__' },
+          // canonical answer-injection target is `__clarify_response__` (was a
+          // copy-paste `__external_feedback__`; both are stripped identically by
+          // buildScopeUpstreams so runtime is unchanged, but the launch-time
+          // validator now rejects the non-canonical shape — see
+          // workflow-validator-system-port-edges.test.ts).
+          target: { nodeId: 'questioner', portName: '__clarify_response__' },
         },
       ],
     }

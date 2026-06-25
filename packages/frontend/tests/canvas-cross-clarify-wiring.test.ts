@@ -56,7 +56,7 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
     expect(matches.length).toBeGreaterThanOrEqual(3)
   })
 
-  test('isValidConnection runs classifyCrossClarifyConnection BEFORE the CLARIFY_INPUT_PORT_NAME defensive guard (cross-clarify reuses targetHandle="questions")', () => {
+  test('isValidConnection runs classifyCrossClarifyConnection BEFORE the stray-channel-drop defensive guard (cross-clarify reuses targetHandle="questions")', () => {
     const src = readFileSync(WORKFLOW_CANVAS_TSX, 'utf8')
     const isValidIdx = src.indexOf('const isValidConnection = useCallback')
     expect(isValidIdx).toBeGreaterThan(-1)
@@ -65,7 +65,9 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
     // useCallback's deps array.
     const body = src.slice(isValidIdx, isValidIdx + 6000)
     const crossClassifyIdx = body.indexOf('classifyCrossClarifyConnection(definition')
-    const defensiveGuardIdx = body.indexOf('conn.targetHandle === CLARIFY_INPUT_PORT_NAME')
+    // The defensive guard was extracted into the pure isStrayClarifyChannelDrop
+    // (2026-06 false-root fix); the ordering invariant is unchanged.
+    const defensiveGuardIdx = body.indexOf('isStrayClarifyChannelDrop(guardConn)')
     expect(crossClassifyIdx).toBeGreaterThan(-1)
     expect(defensiveGuardIdx).toBeGreaterThan(-1)
     // The cross-clarify classifier must come FIRST so it can claim drops
@@ -73,17 +75,23 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
     expect(crossClassifyIdx).toBeLessThan(defensiveGuardIdx)
   })
 
-  test('isValidConnection covers all 4 cross-clarify system port handles in its defensive guard', () => {
-    const src = readFileSync(WORKFLOW_CANVAS_TSX, 'utf8')
-    // CROSS_CLARIFY_INPUT_PORT_NAME ('questions') / OUT_TO_QUESTIONER ('to_questioner')
-    // / OUT_TO_DESIGNER ('to_designer') / EXTERNAL_FEEDBACK ('__external_feedback__')
-    // — all four must reach the defensive guard so a stray drop with one
-    // of these handles can't fall through to the generic catch-all that
-    // would mint a junk edge.
-    expect(src).toContain('CROSS_CLARIFY_INPUT_PORT_NAME')
-    expect(src).toContain('CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT')
-    expect(src).toContain('CROSS_CLARIFY_OUT_TO_DESIGNER_PORT')
-    expect(src).toContain('CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT')
+  test('isStrayClarifyChannelDrop covers ALL clarify + cross-clarify system port handles', () => {
+    // The defensive guard was extracted from WorkflowCanvas into the pure
+    // isStrayClarifyChannelDrop (2026-06 false-root fix). All four cross
+    // handles PLUS both clarify answer/ask ports must be covered so a stray
+    // drop carrying any of them is rejected before the generic catch-all mints
+    // a junk edge that buildScopeUpstreams strips (→ false dispatch root).
+    const src = readFileSync(CROSS_CLARIFY_HELPER_TS, 'utf8')
+    const fnIdx = src.indexOf('export function isStrayClarifyChannelDrop')
+    expect(fnIdx).toBeGreaterThan(-1)
+    const body = src.slice(fnIdx, fnIdx + 900)
+    expect(body).toContain('CROSS_CLARIFY_INPUT_PORT_NAME')
+    expect(body).toContain('CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT')
+    expect(body).toContain('CROSS_CLARIFY_OUT_TO_DESIGNER_PORT')
+    expect(body).toContain('CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT')
+    // the two false-root incident ports the old inline guard OMITTED:
+    expect(body).toContain('CLARIFY_RESPONSE_TARGET_PORT_NAME')
+    expect(body).toContain('CLARIFY_SOURCE_PORT_NAME')
   })
 
   test('palette label carries an icon prefix in both i18n bundles', () => {

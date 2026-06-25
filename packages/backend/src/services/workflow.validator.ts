@@ -1265,6 +1265,168 @@ export function validateWorkflowDef(
     }
   }
 
+  // 4d-bis. clarify / cross-clarify channel system-port edge integrity ------
+  // The answer-injection target ports (`__clarify_response__`,
+  // `__external_feedback__`) and the cross output source ports (`to_questioner`,
+  // `to_designer`) are wired EXCLUSIVELY by the reverse/forward drag helpers as
+  // fixed channel pairs. `buildScopeUpstreams` (scheduler.ts) strips EVERY edge
+  // touching them, so a stray plain-DATA edge onto one of these ports is
+  // silently removed from the dispatch graph — erasing the node's real upstream
+  // dependency and turning it into a FALSE dispatch root (premature execution).
+  // The canvas (`isValidConnection` → `isStrayClarifyChannelDrop`) blocks this
+  // on drop; THIS is the authoritative gate that also catches YAML import /
+  // hand-edits the canvas can't. Incident (2026-06): an upstream output dropped
+  // onto an agent's `__clarify_response__` made the agent run before its real
+  // predecessor. Each channel-port edge must be the canonical pair shape.
+  //
+  // Pre-index each clarify / cross-clarify node's "asker" agents — the nodes
+  // whose `__clarify__` source feeds the node's `questions` port. A canonical
+  // answer-injection edge must point the answer BACK at that same asker;
+  // buildScopeUpstreams strips the edge either way, so an answer aimed at a
+  // different agent makes that agent a false dispatch root even though the
+  // source side is valid (Codex P2: target-not-paired-agent).
+  const clarifyAskersByNode = new Map<string, Set<string>>()
+  for (const edge of edges) {
+    if (edge.source.portName !== '__clarify__' || edge.target.portName !== 'questions') continue
+    const tgtKind = nodeById.get(edge.target.nodeId)?.kind
+    if (tgtKind !== 'clarify' && tgtKind !== 'clarify-cross-agent') continue
+    const set = clarifyAskersByNode.get(edge.target.nodeId) ?? new Set<string>()
+    set.add(edge.source.nodeId)
+    clarifyAskersByNode.set(edge.target.nodeId, set)
+  }
+  for (const edge of edges) {
+    const src = nodeById.get(edge.source.nodeId)
+    if (src === undefined) continue // unknown source node reported elsewhere
+    const tgt = nodeById.get(edge.target.nodeId)
+    const sp = edge.source.portName
+    const tp = edge.target.portName
+    // (a) the answer-injection TARGET ports (`__clarify_response__`,
+    // `__external_feedback__`) are AGENT system ports — the generic port-missing
+    // check (above) only validates output/wrapper targets, so without this a
+    // hand-edited `cross.to_designer → review.__external_feedback__` would pass
+    // and the runtime would try to rerun a non-agent node as the designer.
+    if (
+      (tp === '__clarify_response__' || tp === '__external_feedback__') &&
+      tgt !== undefined &&
+      tgt.kind !== 'agent-single'
+    ) {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': '${tp}' is an agent answer-injection port, but target '${edge.target.nodeId}' is kind '${tgt.kind}' (must be agent-single); the scheduler strips this edge and the runtime would resolve the wrong node`,
+        pointer: edge.target.nodeId,
+      })
+    }
+    // accept only the channel source AND (for `__clarify_response__`) inject the
+    // answer back into the asking agent that owns the channel.
+    if (tp === '__clarify_response__') {
+      const okSource =
+        (src.kind === 'clarify' && sp === 'answers') ||
+        (src.kind === 'clarify-cross-agent' && sp === 'to_questioner')
+      if (!okSource) {
+        issues.push({
+          code: 'system-port-illegal-source',
+          message: `edge '${edge.id}': port '__clarify_response__' on '${edge.target.nodeId}' may only be fed by a clarify node's 'answers' port or a clarify-cross-agent node's 'to_questioner' port (got '${edge.source.nodeId}.${sp}', kind '${src.kind}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+          pointer: edge.target.nodeId,
+        })
+      } else {
+        // Source is canonical — verify the answer returns to the SAME agent that
+        // asked. `askers` empty ⇒ the channel's `__clarify__ → questions` edge is
+        // missing, already reported by the per-node clarify/cross rules; skip to
+        // avoid a confusing double error.
+        const askers = clarifyAskersByNode.get(edge.source.nodeId)
+        if (askers !== undefined && askers.size > 0 && !askers.has(edge.target.nodeId)) {
+          const owners = [...askers].map((a) => `'${a}'`).join(' / ')
+          issues.push({
+            code: 'system-port-mispaired-target',
+            message: `edge '${edge.id}': '${edge.source.nodeId}' answers must be injected into the agent that asked it (${owners}), not '${edge.target.nodeId}'; buildScopeUpstreams strips this edge, so the wrong target launches as a false dispatch root`,
+            pointer: edge.target.nodeId,
+          })
+        }
+      }
+    }
+    if (tp === '__external_feedback__') {
+      const ok = src.kind === 'clarify-cross-agent' && sp === 'to_designer'
+      if (!ok) {
+        issues.push({
+          code: 'system-port-illegal-source',
+          message: `edge '${edge.id}': port '__external_feedback__' on '${edge.target.nodeId}' may only be fed by a clarify-cross-agent node's 'to_designer' port (got '${edge.source.nodeId}.${sp}', kind '${src.kind}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+          pointer: edge.target.nodeId,
+        })
+      }
+    }
+    // (c) the clarify / cross-clarify `questions` input may ONLY be fed by an
+    // agent's `__clarify__` port. Runtime channel discovery keys on the
+    // `__clarify__` source port, so a normal output (or a clarify node) wired
+    // into `questions` leaves the channel unrecognized — and the existing
+    // per-node check only requires the source to be agent-single, not that the
+    // source PORT is `__clarify__`. Mirrors the canvas guard, which rejects any
+    // drop onto a `questions` handle.
+    if (
+      tp === 'questions' &&
+      (tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') &&
+      sp !== '__clarify__'
+    ) {
+      issues.push({
+        code: 'system-port-illegal-source',
+        message: `edge '${edge.id}': the 'questions' port on ${tgt.kind} '${edge.target.nodeId}' may only be fed by an agent's '__clarify__' port (got '${edge.source.nodeId}.${sp}'); runtime channel discovery keys on '__clarify__', so any other source leaves the clarify channel broken`,
+        pointer: edge.target.nodeId,
+      })
+    }
+    // (d) the agent `__clarify__` ask port may ONLY feed a clarify / cross
+    // `questions` port (the complement of rule (c) — mirrors the canvas guard
+    // which rejects `__clarify__` as a stray source). Any other target leaves
+    // a dangling ask channel the runtime never discovers.
+    if (
+      sp === '__clarify__' &&
+      !((tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') && tp === 'questions')
+    ) {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': the '__clarify__' ask port on '${edge.source.nodeId}' may only feed a clarify / clarify-cross-agent node's 'questions' port (got target '${edge.target.nodeId}.${tp}')`,
+        pointer: edge.source.nodeId,
+      })
+    }
+    // (e) a clarify node's `answers` output may ONLY feed an agent's
+    // `__clarify_response__` injection port. A normal downstream consumer wired
+    // to `answers` would dispatch the moment the clarify node settles (it has no
+    // structural upstream), i.e. before the asking agent has actually run.
+    if (src.kind === 'clarify' && sp === 'answers' && tp !== '__clarify_response__') {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': clarify node '${edge.source.nodeId}' 'answers' port may only feed an agent's '__clarify_response__' port (got target '${edge.target.nodeId}.${tp}')`,
+        pointer: edge.source.nodeId,
+      })
+    }
+    // (b) reserved cross output SOURCE ports may ONLY appear as the canonical
+    // `clarify-cross-agent → injection-port` edge. Gated on the PORT NAME, not
+    // src.kind: buildScopeUpstreams strips `to_questioner` / `to_designer` by
+    // source-port name regardless of the source node's kind, so a non-cross
+    // node that (mis)declares such an output is dropped from dispatch too — its
+    // target would still become a false root. The full canonical shape (right
+    // source kind AND right injection target) is required, closing both the
+    // wrong-source-node and wrong-target gaps.
+    if (
+      sp === 'to_questioner' &&
+      !(src.kind === 'clarify-cross-agent' && tp === '__clarify_response__')
+    ) {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': reserved port 'to_questioner' on '${edge.source.nodeId}' (kind '${src.kind}') may only appear as a clarify-cross-agent node feeding a questioner's '__clarify_response__' port (got target '${edge.target.nodeId}.${tp}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+        pointer: edge.source.nodeId,
+      })
+    }
+    if (
+      sp === 'to_designer' &&
+      !(src.kind === 'clarify-cross-agent' && tp === '__external_feedback__')
+    ) {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': reserved port 'to_designer' on '${edge.source.nodeId}' (kind '${src.kind}') may only appear as a clarify-cross-agent node feeding a designer's '__external_feedback__' port (got target '${edge.target.nodeId}.${tp}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+        pointer: edge.source.nodeId,
+      })
+    }
+  }
+
   // 4d. RFC-060 — wrapper-fanout cross-cutting validation -----------------
   // Runs AFTER reference-resolution so agentByName is populated; also
   // depends on innerToWrapper and outputPorts from rule 1 + the loop above.
