@@ -33,6 +33,7 @@ import {
 } from '@/services/clarifyRounds'
 import { canViewTask, requireTaskMember } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
+import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { Paths } from '@/util/paths'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
@@ -305,6 +306,10 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       db: deps.db,
       appHome: Paths.root,
       ...(opencodeCmd ? { opencodeCmd } : {}),
+      // RFC-108 T4 (Codex impl gate P2): a parked-clarify answer resumes the
+      // task; thread the per-node timeout floor (+commit&push/concurrency) so
+      // the continued nodes are not unbounded.
+      ...resolveLaunchRuntimeConfig(deps.configPath),
     }
     void resumeTask(deps.db, result.session.taskId, resumeDeps).catch((err) => {
       if (err instanceof ConflictError && err.code === 'task-not-resumable') {

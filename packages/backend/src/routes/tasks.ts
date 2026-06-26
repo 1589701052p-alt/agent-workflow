@@ -61,6 +61,7 @@ import { getSessionTree } from '@/services/sessionView'
 import { getInventorySnapshot } from '@/services/inventory'
 import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
+import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
@@ -121,72 +122,13 @@ function resolveSubagentLiveCapture(
   }
 }
 
-/** RFC-075: read the auto commit&push runtime config from settings. */
-function resolveCommitPushConfig(
-  configPath: string,
-): { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } | undefined {
-  try {
-    const cfg = loadConfig(configPath)
-    const out: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } = {}
-    if (cfg.commitPushModel !== undefined) out.model = cfg.commitPushModel
-    if (cfg.commitPushMaxRepairRetries !== undefined)
-      out.maxRepairRetries = cfg.commitPushMaxRepairRetries
-    if (cfg.commitPushDiffMaxBytes !== undefined) out.diffMaxBytes = cfg.commitPushDiffMaxBytes
-    return Object.keys(out).length > 0 ? out : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * RFC-103 T2: resolve runtime config (auto commit&push + global concurrency
- * cap) from settings ONCE, for every task-launch entry point (JSON start /
- * multipart start / resume / retry). Before RFC-103 only JSON start passed
- * commitPush, and `maxConcurrentNodes` was never wired from any HTTP entry, so
- * production tasks ignored the configured concurrency and resume/retry/upload
- * starts silently fell back to default commit&push behavior (01-LIFE-06 /
- * 02-SCHED). Single source so the entries can't drift again.
- */
-// RFC-108 T4/T5: exported so a unit test can assert the launch-path resolver
-// threads the per-node timeout floor + per-task budgets from settings (these
-// config fields existed but were consumed nowhere — see AR-01/AR-02).
-export function resolveLaunchRuntimeConfig(configPath: string): {
-  commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
-  maxConcurrentNodes?: number
-  defaultPerNodeTimeoutMs?: number
-  defaultPerTaskMaxDurationMs?: number
-  defaultPerTaskMaxTotalTokens?: number
-} {
-  const out: {
-    commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
-    maxConcurrentNodes?: number
-    defaultPerNodeTimeoutMs?: number
-    defaultPerTaskMaxDurationMs?: number
-    defaultPerTaskMaxTotalTokens?: number
-  } = {}
-  const commitPush = resolveCommitPushConfig(configPath)
-  if (commitPush !== undefined) out.commitPush = commitPush
-  try {
-    const cfg = loadConfig(configPath)
-    if (cfg.maxConcurrentNodes !== undefined) out.maxConcurrentNodes = cfg.maxConcurrentNodes
-    // RFC-108 T4 (AR-01): per-node hard-timeout floor. The scheduler reads this
-    // as `pickNumber(node,'timeoutMs') ?? opts.defaultPerNodeTimeoutMs`, so
-    // threading it here gives every node a default kill bound; a per-node
-    // override still RAISES it. Always thread when set (positive in schema).
-    if (cfg.defaultPerNodeTimeoutMs !== undefined && cfg.defaultPerNodeTimeoutMs > 0)
-      out.defaultPerNodeTimeoutMs = cfg.defaultPerNodeTimeoutMs
-    // RFC-108 T5 (AR-02): per-task budget defaults. Only thread when positive —
-    // 0 means "no default cap" (unlimited); startTask falls back to NULL so a
-    // canceled-on-budget (non-resumable) task is never imposed by default.
-    if (cfg.defaultPerTaskMaxDurationMs !== undefined && cfg.defaultPerTaskMaxDurationMs > 0)
-      out.defaultPerTaskMaxDurationMs = cfg.defaultPerTaskMaxDurationMs
-    if (cfg.defaultPerTaskMaxTotalTokens !== undefined && cfg.defaultPerTaskMaxTotalTokens > 0)
-      out.defaultPerTaskMaxTotalTokens = cfg.defaultPerTaskMaxTotalTokens
-  } catch {
-    // fall back to the scheduler defaults
-  }
-  return out
-}
+// RFC-103 T2 + RFC-108 T4: `resolveLaunchRuntimeConfig` (commit&push +
+// maxConcurrentNodes + per-node timeout floor) lives in
+// @/services/launchRuntimeConfig (imported above) so EVERY scheduler-kicking
+// route — tasks (start/resume/retry/repair), fusions, parked clarify/review
+// resume — threads the same runtime config from one source (Codex impl gate
+// P2: the floor must reach all StartTaskDeps construction sites, not just the
+// task routes). Call sites below are unchanged.
 
 export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks', async (c) => {

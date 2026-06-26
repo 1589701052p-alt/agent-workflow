@@ -61,6 +61,13 @@ export interface FusionDeps {
   opencodeCmd?: string[]
   /** Run the scheduler inline (tests). Production leaves it to the daemon loop. */
   awaitScheduler?: boolean
+  /**
+   * RFC-108 T4 (AR-01 / Codex impl gate P2): per-node hard-timeout floor from
+   * settings, threaded into the fusion engine's internal startTask so a fusion
+   * agent that hangs is bounded like any other node. Route resolves it via
+   * resolveLaunchRuntimeConfig; omitted → scheduler runs with no floor.
+   */
+  defaultPerNodeTimeoutMs?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +459,10 @@ export async function createFusion(
     preCreatedWorktree: { taskId, worktreePath: workDir, branch: 'fusion', baseCommit },
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     ...(deps.awaitScheduler !== undefined ? { awaitScheduler: deps.awaitScheduler } : {}),
+    // RFC-108 T4: thread the per-node timeout floor into the fusion task.
+    ...(deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
   }
   await startTask(
     {
@@ -836,6 +847,10 @@ export async function rejectFusion(
     preCreatedWorktree: { taskId, worktreePath: workDir, branch: 'fusion', baseCommit },
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     ...(deps.awaitScheduler !== undefined ? { awaitScheduler: deps.awaitScheduler } : {}),
+    // RFC-108 T4: thread the per-node timeout floor into the fusion task.
+    ...(deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
   }
   const intentWithFeedback = `${row.intent}\n\n## Merger feedback on the previous attempt (revise accordingly)\n${feedback}`
   await startTask(

@@ -12,8 +12,8 @@
 | T2 | AR-19 | 共享状态集模块（terminal/retryable/tone）穷举 + 前端 4 站接线 | S | — |
 | T3 | AR-11 | `recovery_events` 表 + `recordRecoveryEvent` 原语 + 现有 5 actor 接线 + counters + `/api/recovery`(or /health) | M | — |
 | **PR-B 配置接线（P0 / 低风险 / 即时收益）** |
-| T4 | AR-01 | `resolveLaunchRuntimeConfig` 透传 `defaultPerNodeTimeoutMs` → 三入口 deps（30min 硬超时下限，可配 — D2） | S | **生效**（行为变更） |
-| T5 | AR-02 | `startTask` per-task 预算 fallback config 默认（duration 1h 可配 / token 0 unlimited） | S | duration 生效 |
+| T4 ✅ | AR-01 | `resolveLaunchRuntimeConfig`（上移共享模块）透传 `defaultPerNodeTimeoutMs` → **全部 StartTaskDeps 站点**（tasks start/resume/retry/repair + clarify/review resume + fusion，30min 硬超时下限，可配 — D2） | S | **生效**（行为变更） |
+| ~~T5~~ | AR-02 | per-task 预算自动默认——**移出 PR-B / 不做**（Codex 实现 gate P1：stale-config 1h 误杀，canceled 非 resumable；需 config-migration 框架，推后续）。显式 `input.maxDuration/Tokens` 仍生效 | — | 不做 |
 | **PR-C 独立安全/正确性修复** |
 | T6 | AR-15 | GC 排除可恢复(failed/interrupted)任务 + `resumeTask` worktree 前检 410 + 多仓 GC repoCount-aware | M | 生效 |
 | T7 | AR-17 | resume 跨 node_run 回滚 all-or-nothing 前置 pre-flight | S | 生效 |

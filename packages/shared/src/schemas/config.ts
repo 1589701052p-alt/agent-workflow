@@ -268,13 +268,7 @@ export const DEFAULT_CONFIG: Config = {
   $schema_version: CONFIG_SCHEMA_VERSION,
   maxConcurrentNodes: 4,
   multiProcessSubprocessConcurrency: 4,
-  // RFC-108 T5/AR-02: per-task budgets default to unlimited. The field was a
-  // dead no-op before RFC-108 (consumed nowhere); RFC-108 wires it through
-  // startTask, so the shipped default is 0 (=unlimited) to avoid imposing a
-  // NON-resumable per-task cancel on legit long multi-node workflows. The
-  // per-node 30min floor below already bounds a hung child; operators set a
-  // positive value here to enforce a per-task ceiling.
-  defaultPerTaskMaxDurationMs: 0, // 0 = unlimited
+  defaultPerTaskMaxDurationMs: 60 * 60 * 1000, // 1 hour
   defaultPerTaskMaxTotalTokens: 0, // 0 = unlimited
   // RFC-108 T4/AR-01: actually wired into the launch path (resolveLaunchRuntimeConfig)
   // so every node has a hard-timeout floor; was defined-but-never-threaded before.

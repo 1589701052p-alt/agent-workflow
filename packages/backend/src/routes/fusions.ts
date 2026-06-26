@@ -25,6 +25,7 @@ import {
   type FusionDeps,
 } from '@/services/fusion'
 import { loadConfig } from '@/config'
+import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { isAdminActor } from '@/services/resourceAcl'
 import { NotFoundError, ValidationError } from '@/util/errors'
 import { Paths } from '@/util/paths'
@@ -44,7 +45,15 @@ function resolveOpencodeCmd(configPath: string): string[] | undefined {
 export function mountFusionRoutes(app: Hono, deps: AppDeps): void {
   function fusionDeps(): FusionDeps {
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
-    return { db: deps.db, appHome: Paths.root, ...(opencodeCmd ? { opencodeCmd } : {}) }
+    // RFC-108 T4 (Codex impl gate P2): thread the per-node timeout floor so a
+    // hung fusion agent is bounded like any other node.
+    const { defaultPerNodeTimeoutMs } = resolveLaunchRuntimeConfig(deps.configPath)
+    return {
+      db: deps.db,
+      appHome: Paths.root,
+      ...(opencodeCmd ? { opencodeCmd } : {}),
+      ...(defaultPerNodeTimeoutMs !== undefined ? { defaultPerNodeTimeoutMs } : {}),
+    }
   }
 
   app.post('/api/fusions', async (c) => {

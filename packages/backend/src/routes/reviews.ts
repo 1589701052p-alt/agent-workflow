@@ -27,6 +27,7 @@ import { nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
 import { canViewTask, requireTaskMember } from '@/services/taskCollab'
 import { resumeTask } from '@/services/task'
+import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import {
   addReviewComment,
   countPendingReviews,
@@ -235,6 +236,10 @@ export function mountReviewRoutes(app: Hono, deps: AppDeps): void {
         db: deps.db,
         appHome: appHomeFor(deps),
         ...(opencodeCmd ? { opencodeCmd } : {}),
+        // RFC-108 T4 (Codex impl gate P2): a review decision resumes the task;
+        // thread the per-node timeout floor (+commit&push/concurrency) so the
+        // continued nodes are not unbounded.
+        ...resolveLaunchRuntimeConfig(deps.configPath),
       }
       // RFC-097 (audit S-27): classified swallow — `task-not-resumable` is
       // EXPECTED when the task is still running or actively driven (the live
