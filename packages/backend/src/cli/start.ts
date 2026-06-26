@@ -11,6 +11,7 @@ import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
 import { autoResumeInterruptedTasks } from '@/services/autoResume'
 import { startAutoRepairLoop } from '@/services/autoRepair'
+import { startHeartbeatKillLoop } from '@/services/autoKill'
 import { resumeTask } from '@/services/task'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
@@ -315,6 +316,9 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     configPath: Paths.config,
   })
 
+  // RFC-108 T20 (AR-05a) — heartbeat stalled-child auto-kill (DEFAULT OFF).
+  const heartbeatKillTicker = startHeartbeatKillLoop({ db, configPath: Paths.config })
+
   // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes
   // the daemon-restart loop: every task `reapOrphanRuns` just flipped to
   // `interrupted` is re-driven automatically, but only through the breaker +
@@ -381,6 +385,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     stuckDetectorTicker.stop()
     fusionReconcileTicker.stop()
     autoRepairTicker.stop()
+    heartbeatKillTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {
