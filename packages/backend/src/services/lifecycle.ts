@@ -194,10 +194,20 @@ export async function setNodeRunStatus(args: {
 // `update(tasks).set({ status: … })` out of every other module.
 // -----------------------------------------------------------------------------
 
-import type { TaskStatus } from '@agent-workflow/shared'
+import {
+  TERMINAL_TASK_STATUSES,
+  allowedFromForTaskEvent,
+  targetForTaskEvent,
+  type TaskStatus,
+  type TaskTransitionEvent,
+} from '@agent-workflow/shared'
 import { tasks } from '@/db/schema'
 
-export const TERMINAL_TASK_STATUSES = ['done', 'failed', 'canceled', 'interrupted'] as const
+// RFC-108 T2 (AR-19 / 01-LIFE-08): the terminal-task-status set now lives in
+// @agent-workflow/shared (symmetric with node_run) so the frontend imports the
+// same source instead of hand-enumerating it. Re-exported here for the many
+// backend call sites that import it from this module.
+export { TERMINAL_TASK_STATUSES }
 
 export function isTerminalTaskStatus(s: string): boolean {
   return (TERMINAL_TASK_STATUSES as readonly string[]).includes(s)
@@ -293,4 +303,37 @@ export async function trySetTaskStatus(args: {
     if (err instanceof ConflictError || err instanceof NotFoundError) return false
     throw err
   }
+}
+
+/**
+ * RFC-108 T1 (AR-12 / 01-LIFE-01): event-path task-status write. Derives `to` +
+ * `allowedFrom` from the shared `nextTaskStatus` oracle (`targetForTaskEvent` /
+ * `allowedFromForTaskEvent`) instead of a hand-copied allowlist, so new
+ * recovery writers (auto-resume, etc.) route through the single transition
+ * table and can't drift (the half RFC-097 left undone). Thin wrapper over
+ * setTaskStatus — keeps the RFC-097 CAS + `allowTerminal` escape hatch.
+ *
+ * NOTE: `resume` / `retry` events have terminal sources (failed/interrupted/
+ * canceled/done) in their allowed-from set, so callers using those MUST pass
+ * `allowTerminal: true` (mirrors resumeTask/retryNode). Existing call sites are
+ * NOT migrated by this RFC — they keep their explicit `allowedFrom` and move
+ * over incrementally (Codex audit cross-check: two-step, no big-bang churn).
+ */
+export async function transitionTaskStatusByEvent(args: {
+  db: DbClient
+  taskId: string
+  event: TaskTransitionEvent
+  allowTerminal?: boolean
+  extra?: TaskStatusUpdateExtra
+  reason: string
+}): Promise<{ from: TaskStatus; to: TaskStatus }> {
+  return setTaskStatus({
+    db: args.db,
+    taskId: args.taskId,
+    to: targetForTaskEvent(args.event),
+    allowedFrom: allowedFromForTaskEvent(args.event),
+    ...(args.allowTerminal !== undefined ? { allowTerminal: args.allowTerminal } : {}),
+    ...(args.extra !== undefined ? { extra: args.extra } : {}),
+    reason: args.reason,
+  })
 }

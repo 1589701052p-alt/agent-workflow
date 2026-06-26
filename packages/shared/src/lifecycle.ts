@@ -14,7 +14,7 @@
 // Status universe — re-export from schemas/task (the DB-authoritative one).
 // ---------------------------------------------------------------------------
 
-import { NODE_RUN_STATUS, type NodeRunStatus } from './schemas/task'
+import { NODE_RUN_STATUS, type NodeRunStatus, TASK_STATUS, type TaskStatus } from './schemas/task'
 
 /** Terminal statuses: once a row reaches one of these, no out-transition is legal. */
 export const TERMINAL_NODE_RUN_STATUSES = [
@@ -174,6 +174,152 @@ export function allowedFromStatusesForEvent(ev: NodeRunTransitionEvent): readonl
     if (isTerminalNodeRunStatus(s)) continue
     try {
       nextNodeRunStatus(s, ev)
+      allowed.push(s)
+    } catch {
+      // not allowed from this status
+    }
+  }
+  return allowed
+}
+
+// ===========================================================================
+// RFC-108 T1/T2 (AR-12 / AR-19 / 01-LIFE-01) — task.status state machine.
+//
+// node_run has had `nextNodeRunStatus` (transition-table SSOT) since RFC-053,
+// but task-level was CAS-only (RFC-097) with `allowedFrom` hand-copied at ~20
+// call sites (01-LIFE-01/02 drift). This adds the SYMMETRIC oracle so any new
+// recovery status write (auto-resume, etc.) routes through one table instead
+// of a fresh hand-written `allowedFrom`. Per the Codex audit cross-check this
+// lands as a NON-disruptive two-step: introduce the oracle + an event-path
+// wrapper that NEW callers use; the existing call sites keep their explicit
+// `allowedFrom` and migrate incrementally (no big-bang churn).
+//
+// New task status or event? The `switch` below fails compilation (`never`)
+// until you fill it in.
+// ===========================================================================
+
+/** Terminal task statuses — once reached, only resume/retry may move out (and
+ *  only via the `allowTerminal` escape hatch held by resume/retry/repair). */
+export const TERMINAL_TASK_STATUSES = [
+  'done',
+  'failed',
+  'canceled',
+  'interrupted',
+] as const satisfies readonly TaskStatus[]
+
+export function isTerminalTaskStatus(s: TaskStatus): boolean {
+  return (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(s)
+}
+
+/** Task-level transition events (business transitions). Mirrors the node_run
+ *  ADT. Targets are fixed per event (independent of the source within the
+ *  event's allowed-from set), so `targetForTaskEvent` is total. */
+export type TaskTransitionEvent =
+  | { kind: 'claim' } // pending → running (scheduler picks up)
+  | { kind: 'complete' } // running → done
+  | { kind: 'park-review' } // pending|running → awaiting_review
+  | { kind: 'park-human' } // pending|running → awaiting_human
+  | { kind: 'unpark' } // awaiting_* → running (gate answered, work continues)
+  | { kind: 'fail'; reason?: string } // pending|running|awaiting_* → failed
+  | { kind: 'cancel'; reason?: string } // pending|running|awaiting_* → canceled
+  | { kind: 'interrupt' } // pending|running → interrupted (reaper / shutdown)
+  | { kind: 'resume' } // failed|interrupted|awaiting_* → pending (resumeTask / auto-resume)
+  | { kind: 'retry' } // done|failed|canceled|interrupted → pending (retryNode)
+
+export class IllegalTaskTransition extends Error {
+  readonly code = 'illegal-task-transition' as const
+  constructor(
+    readonly from: TaskStatus,
+    readonly eventKind: TaskTransitionEvent['kind'],
+    extra?: string,
+  ) {
+    super(
+      `illegal task transition: from='${from}' via event='${eventKind}'${extra ? ` (${extra})` : ''}`,
+    )
+  }
+}
+
+/** The fixed target status an event drives toward (does not depend on source). */
+export function targetForTaskEvent(ev: TaskTransitionEvent): TaskStatus {
+  switch (ev.kind) {
+    case 'claim':
+    case 'unpark':
+      return 'running'
+    case 'complete':
+      return 'done'
+    case 'park-review':
+      return 'awaiting_review'
+    case 'park-human':
+      return 'awaiting_human'
+    case 'fail':
+      return 'failed'
+    case 'cancel':
+      return 'canceled'
+    case 'interrupt':
+      return 'interrupted'
+    case 'resume':
+    case 'retry':
+      return 'pending'
+    default: {
+      const _exhaustive: never = ev
+      void _exhaustive
+      throw new IllegalTaskTransition(
+        'pending',
+        (ev as TaskTransitionEvent).kind,
+        'unhandled event',
+      )
+    }
+  }
+}
+
+/**
+ * Canonical (status, event) → status table for tasks — the single source of
+ * truth for "is this task transition legal at all". Callers that need a
+ * NARROWER allowed-from (e.g. scheduler cancel only from `running` because it
+ * already holds the claim) may still pass an explicit subset; this oracle is
+ * the superset. Throws IllegalTaskTransition for illegal pairs.
+ */
+export function nextTaskStatus(cur: TaskStatus, ev: TaskTransitionEvent): TaskStatus {
+  const ok = (froms: readonly TaskStatus[]): TaskStatus => {
+    if (froms.includes(cur)) return targetForTaskEvent(ev)
+    throw new IllegalTaskTransition(cur, ev.kind)
+  }
+  switch (ev.kind) {
+    case 'claim':
+      return ok(['pending'])
+    case 'complete':
+      return ok(['running'])
+    case 'park-review':
+    case 'park-human':
+      return ok(['pending', 'running'])
+    case 'unpark':
+      return ok(['awaiting_review', 'awaiting_human'])
+    case 'fail':
+      return ok(['pending', 'running', 'awaiting_review', 'awaiting_human'])
+    case 'cancel':
+      return ok(['pending', 'running', 'awaiting_review', 'awaiting_human'])
+    case 'interrupt':
+      return ok(['pending', 'running'])
+    case 'resume':
+      // resume reanimates a parked or terminal-but-recoverable task.
+      return ok(['failed', 'interrupted', 'awaiting_review', 'awaiting_human'])
+    case 'retry':
+      // single-node retry can re-open any terminal task.
+      return ok(['done', 'failed', 'canceled', 'interrupted'])
+    default: {
+      const _exhaustive: never = ev
+      void _exhaustive
+      throw new IllegalTaskTransition(cur, (ev as TaskTransitionEvent).kind, 'unhandled event')
+    }
+  }
+}
+
+/** The set of `from` statuses for which `nextTaskStatus(from, ev)` is legal. */
+export function allowedFromForTaskEvent(ev: TaskTransitionEvent): readonly TaskStatus[] {
+  const allowed: TaskStatus[] = []
+  for (const s of TASK_STATUS) {
+    try {
+      nextTaskStatus(s, ev)
       allowed.push(s)
     } catch {
       // not allowed from this status
