@@ -3682,11 +3682,20 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   const releaseGlobal = await state.globalSem.acquire()
   const releaseSub = await state.subprocessSem.acquire()
   try {
+    // RFC-111 D15 (Codex impl-gate P2-1): freeze the runtime for the fanout shard
+    // so a claude-selected agent-multi dispatches its shards on claude, not opencode.
+    const shardRuntime = await resolveFrozenRuntime(
+      db,
+      shardRunId,
+      innerAgent.runtime,
+      opts.defaultRuntime,
+    )
     const result = await runNode({
       taskId,
       nodeRunId: shardRunId,
       nodeId: innerNode.id,
       agent: innerAgent,
+      runtime: shardRuntime,
       inputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout shard dispatch.
@@ -3940,11 +3949,19 @@ async function dispatchFanoutAggregator(
   const releaseGlobal = await state.globalSem.acquire()
   const releaseSub = await state.subprocessSem.acquire()
   try {
+    // RFC-111 D15 (Codex impl-gate P2-1): freeze the runtime for the aggregator.
+    const aggRuntime = await resolveFrozenRuntime(
+      db,
+      aggRunId,
+      aggAgent.runtime,
+      opts.defaultRuntime,
+    )
     const result = await runNode({
       taskId,
       nodeRunId: aggRunId,
       nodeId: aggNode.id,
       agent: aggAgent,
+      runtime: aggRuntime,
       inputs: aggInputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.

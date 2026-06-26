@@ -123,7 +123,7 @@ function runClaude(o: RunOpts) {
     skills: [],
     appHome: o.h.appHome,
     runtime: 'claude-code',
-    opencodeCmd: ['bun', 'run', MOCK_CLAUDE],
+    runtimeCmd: ['bun', 'run', MOCK_CLAUDE],
     db: o.h.db,
   })
 }
@@ -267,7 +267,7 @@ describe('runNode — claude injection parity (RFC-111 PR-C)', () => {
           ],
           appHome: h.appHome,
           runtime: 'claude-code',
-          opencodeCmd: ['bun', 'run', MOCK_CLAUDE],
+          runtimeCmd: ['bun', 'run', MOCK_CLAUDE],
           db: h.db,
         }),
     )
@@ -288,5 +288,37 @@ describe('runNode — claude injection parity (RFC-111 PR-C)', () => {
     // is cleaned up afterwards, so the mock captures it live).
     const injectedSkills = JSON.parse(readFileSync(skillsCapFile, 'utf-8')) as string[]
     expect(injectedSkills).toContain('my-skill')
+  })
+})
+
+describe('runNode — runtime spawn failure (RFC-111 Codex P1-2)', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+  afterEach(() => h.cleanup())
+
+  test('missing runtime binary → status=failed (no throw, row not stranded running)', async () => {
+    const agent = makeAgent()
+    // pending row; runNode marks it running, then the bad binary fails the spawn.
+    const nodeRunId = await insertNodeRun(h.db, h.taskId)
+    const result = await runNode({
+      taskId: h.taskId,
+      nodeRunId,
+      nodeId: 'node1',
+      agent,
+      inputs: {},
+      worktreePath: h.worktreePath,
+      templateMeta: { repoPath: '/tmp/repo', baseBranch: 'main', taskId: h.taskId },
+      skills: [],
+      appHome: h.appHome,
+      runtime: 'claude-code',
+      runtimeCmd: ['/definitely/not/a/real/binary/claude-xyz'],
+      db: h.db,
+    })
+    expect(result.status).toBe('failed')
+    expect(result.errorMessage).toContain('spawn claude-code failed')
+    const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]
+    expect(row?.status).toBe('failed') // NOT stranded at 'running'
   })
 })

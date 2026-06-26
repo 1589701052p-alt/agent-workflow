@@ -248,11 +248,20 @@ export interface RunNodeOptions {
   /** App home dir (parent of runs/, snapshots/, worktrees/, ...). */
   appHome: string
   /**
-   * Command to spawn instead of the runtime's default binary. Tests pass
-   * `['bun', 'run', /path/to/mock-opencode.ts]` (or mock-claude). Used as the
-   * argv head for whichever runtime this node resolves to.
+   * Override the OPENCODE binary head. Production sets this from
+   * `config.opencodePath` (resolveOpencodeCmd); opencode tests pass
+   * `['bun','run',mock-opencode.ts]`. NOTE: opencode-specific — the claude
+   * branch must NOT reuse it (Codex impl-gate P1-1), or a custom opencodePath
+   * would spawn opencode with claude flags + skip the credential bridge.
    */
   opencodeCmd?: string[]
+  /**
+   * RFC-111: generic runtime-binary head override for TESTS only (mock-claude /
+   * a future mock). Production never sets it → claude resolves to `['claude']`
+   * (PATH) and the subscription credential bridge runs. Its presence is the
+   * test signal that gates the bridge off so CI never touches the keychain.
+   */
+  runtimeCmd?: string[]
   /**
    * RFC-111 D15: the FROZEN runtime for this node_run (resolved once at dispatch
    * from `agent.runtime ?? config.defaultRuntime`, persisted to
@@ -737,7 +746,9 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     const claudeMcp = toClaudeMcpConfig(opts.mcps ?? [])
     const claudeAgents = toClaudeAgents(opts.dependents ?? [])
     plan = buildClaudeSpawn({
-      claudeCmd: opts.opencodeCmd,
+      // Codex impl-gate P1-1: claude uses runtimeCmd (test-only), NEVER the
+      // opencode-specific opencodeCmd. Production → undefined → ['claude'].
+      claudeCmd: opts.runtimeCmd,
       prompt,
       systemPromptText,
       model: opts.overrides?.model ?? opts.agent.model,
@@ -750,8 +761,8 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       skills: opts.skills,
       ...(claudeMcp !== null ? { mcpConfigJson: JSON.stringify(claudeMcp) } : {}),
       ...(claudeAgents !== null ? { agentsJson: JSON.stringify(claudeAgents) } : {}),
-      // bridge subscription creds only on REAL claude runs (tests pass a cmd).
-      bridgeCredentials: opts.opencodeCmd === undefined,
+      // bridge subscription creds only on REAL claude runs (tests set runtimeCmd).
+      bridgeCredentials: opts.runtimeCmd === undefined,
       log,
     })
   } else {
@@ -803,21 +814,51 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // env (PWD fix / OPENCODE_CONFIG_DIR+CONTENT / RFC-029 inventory path /
   // RFC-067 git identity) is assembled above by buildOpencodeSpawn — see
   // ./runtime/opencode/spawn.ts for the byte-for-byte construction.
-  const child = Bun.spawn({
-    cmd,
-    cwd: opts.worktreePath,
-    env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    // RFC-111 D12: claude receives the prompt over stdin (avoids argv E2BIG);
-    // opencode passes it positionally and ignores stdin.
-    stdin: plan.stdin?.mode === 'pipe' ? 'pipe' : 'ignore',
-    // RFC-098 WP-8 (audit S-15): POSIX setsid() — the child becomes its own
-    // process-group leader, so killTree's `process.kill(-pid, sig)` reaches
-    // grandchildren (docker MCP / shell-tool descendants) that a single-pid
-    // SIGTERM would orphan with the write end of our pipes still open.
-    detached: true,
-  })
+  const trySpawn = (): Bun.Subprocess<'ignore' | 'pipe', 'pipe', 'pipe'> =>
+    Bun.spawn({
+      cmd,
+      cwd: opts.worktreePath,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // RFC-111 D12: claude receives the prompt over stdin (avoids argv E2BIG);
+      // opencode passes it positionally and ignores stdin.
+      stdin: plan.stdin?.mode === 'pipe' ? 'pipe' : 'ignore',
+      // RFC-098 WP-8 (audit S-15): POSIX setsid() — the child becomes its own
+      // process-group leader, so killTree's `process.kill(-pid, sig)` reaches
+      // grandchildren (docker MCP / shell-tool descendants) that a single-pid
+      // SIGTERM would orphan with the write end of our pipes still open.
+      detached: true,
+    })
+  let child: ReturnType<typeof trySpawn>
+  try {
+    child = trySpawn()
+  } catch (err) {
+    // RFC-111 (Codex impl-gate P1-2): a missing / unspawnable runtime binary
+    // (the OPTIONAL claude not installed, a bad path) throws ENOENT here. Mark
+    // the node failed cleanly instead of throwing out of runNode and stranding
+    // the row at 'running' (opencode is hard-required at startup, so in practice
+    // this only fires for claude). The spawn driver's temp dir is cleaned up.
+    const errorMessage = `spawn ${runtime} failed: ${err instanceof Error ? err.message : String(err)}`
+    log.warn('runtime-spawn-failed', { nodeRunId: opts.nodeRunId, runtime, errorMessage })
+    plan.cleanup?.()
+    await setNodeRunStatus({
+      db: opts.db,
+      nodeRunId: opts.nodeRunId,
+      to: 'failed',
+      allowedFrom: ['running', 'pending'],
+      reason: 'runtime-spawn-failed',
+      extra: { finishedAt: Date.now(), errorMessage },
+    })
+    return {
+      status: 'failed',
+      exitCode: null,
+      outputs: {},
+      tokenUsage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+      prompt,
+      errorMessage,
+    }
+  }
 
   // RFC-111 D12: stream the prompt into the child's stdin then close it (claude).
   if (plan.stdin?.mode === 'pipe') {
@@ -1112,7 +1153,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     errorMessage = `node-timeout: exceeded ${opts.timeoutMs ?? 0}ms`
   } else if (exitCode !== 0) {
     status = 'failed'
-    errorMessage = `opencode exited with code ${exitCode}`
+    errorMessage = `${runtime} exited with code ${exitCode}` // RFC-111 P3: name the actual runtime
   } else {
     status = 'done'
   }

@@ -27,6 +27,7 @@ import type { NodeRunStatus, RerunCause } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
 import { resolveRuntime, type RuntimeKind } from '@/services/runtime'
+import { createLogger } from '@/util/log'
 
 /**
  * Statuses a row may be BORN with. Everything else (canceled / interrupted /
@@ -234,6 +235,18 @@ export async function resolveFrozenRuntime(
       .limit(1)
   )[0]
   if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') return row.runtime
+  // Codex impl-gate P2-2: a NON-null stored value that isn't a known kind means
+  // corruption or a future runtime that was downgraded away. We re-resolve (a
+  // recovery that keeps the run alive — forward-compatible) but log loudly so it
+  // is never silent. The D15 session/runtime pairing is only at risk if a
+  // captured session id is ALSO present; resolveResumeSessionId pairs the id with
+  // this frozen value, so a re-resolved opencode run simply starts a fresh session.
+  if (row?.runtime != null && row.runtime !== '') {
+    createLogger('nodeRunMint').warn('frozen-runtime-invalid-reresolved', {
+      nodeRunId,
+      stored: row.runtime,
+    })
+  }
   const resolved = resolveRuntime(agentRuntime, defaultRuntime)
   await db.update(nodeRuns).set({ runtime: resolved }).where(eq(nodeRuns.id, nodeRunId))
   return resolved
