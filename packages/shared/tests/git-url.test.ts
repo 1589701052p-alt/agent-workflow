@@ -2,7 +2,13 @@
 
 import { createHash } from 'node:crypto'
 import { describe, expect, test } from 'bun:test'
-import { gitUrlCacheKey, gitUrlCacheKeyWith, parseGitUrl, redactGitUrl } from '../src/git-url'
+import {
+  canonicalRepoKey,
+  gitUrlCacheKey,
+  gitUrlCacheKeyWith,
+  parseGitUrl,
+  redactGitUrl,
+} from '../src/git-url'
 
 const sha1Hex = (s: string) => createHash('sha1').update(s).digest('hex')
 
@@ -195,5 +201,54 @@ describe('gitUrlCacheKey (Web Crypto)', () => {
     expect(async_.hash).toBe(sync.hash)
     expect(async_.slug).toBe(sync.slug)
     expect(async_.canonical).toBe(sync.canonical)
+  })
+})
+
+// RFC-110 — canonicalRepoKey: launcher-side URL→cache matching reuses the SAME
+// canonicalization the cache key derives from, so a frontend "hit" lines up with
+// the backend's cache bucket. Folds within a protocol; HTTPS and SSH are distinct.
+describe('canonicalRepoKey (RFC-110)', () => {
+  test('HTTPS variants collapse to one key (.git / trailing slash / creds / case / http→https)', () => {
+    const base = canonicalRepoKey('https://github.com/foo/bar')
+    expect(base).not.toBeNull()
+    expect(canonicalRepoKey('https://github.com/foo/bar.git')).toBe(base)
+    expect(canonicalRepoKey('https://github.com/foo/bar/')).toBe(base)
+    expect(canonicalRepoKey('https://user:tok@github.com/foo/bar')).toBe(base)
+    expect(canonicalRepoKey('https://GitHub.com/foo/bar')).toBe(base)
+    // http and https collapse to https (mirrors backend cache-key semantics).
+    expect(canonicalRepoKey('http://github.com/foo/bar')).toBe(base)
+  })
+
+  test('SSH variants (scp + uri) collapse to one key', () => {
+    const ssh = canonicalRepoKey('git@github.com:foo/bar.git')
+    expect(ssh).toBe('ssh://git@github.com/foo/bar')
+    expect(canonicalRepoKey('git@github.com:foo/bar')).toBe(ssh)
+    expect(canonicalRepoKey('ssh://git@github.com/foo/bar')).toBe(ssh)
+    expect(canonicalRepoKey('ssh://git@github.com/foo/bar.git')).toBe(ssh)
+  })
+
+  test('cross-protocol does NOT match — HTTPS key !== SSH key (v1 no cross-match)', () => {
+    expect(canonicalRepoKey('https://github.com/foo/bar')).not.toBe(
+      canonicalRepoKey('git@github.com:foo/bar.git'),
+    )
+  })
+
+  test('different repos → different keys', () => {
+    expect(canonicalRepoKey('https://github.com/foo/bar')).not.toBe(
+      canonicalRepoKey('https://github.com/foo/baz'),
+    )
+  })
+
+  test('unparseable input → null', () => {
+    expect(canonicalRepoKey('')).toBeNull()
+    expect(canonicalRepoKey('   ')).toBeNull()
+    expect(canonicalRepoKey('not a url')).toBeNull()
+    expect(canonicalRepoKey('https://')).toBeNull()
+  })
+
+  test('equals the canonical string the cache key derives from (frontend↔backend parity)', () => {
+    const parsed = parseGitUrl('https://github.com/foo/bar.git')!
+    const { canonical } = gitUrlCacheKeyWith(parsed, sha1Hex)
+    expect(canonicalRepoKey('https://github.com/foo/bar.git')).toBe(canonical)
   })
 })

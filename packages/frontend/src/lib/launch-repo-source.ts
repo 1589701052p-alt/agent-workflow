@@ -3,7 +3,7 @@
 // Keeping these out of the route component so the body / formdata shape is
 // trivially unit-testable without spinning up the route harness.
 
-import { parseGitUrl } from '@agent-workflow/shared'
+import { canonicalRepoKey, parseGitUrl, type CachedRepo } from '@agent-workflow/shared'
 
 export type RepoSource =
   | {
@@ -131,6 +131,29 @@ export function validateRepoUrl(input: string): 'empty' | 'invalid' | null {
   if (v.length === 0) return 'empty'
   if (parseGitUrl(v) === null) return 'invalid'
   return null
+}
+
+/**
+ * RFC-110 — resolve the local `repoPath` the launch-form pickers (FilesPicker /
+ * GitPicker) should enumerate against:
+ *   - path mode → `source.repoPath` verbatim (may be '' — path mode handles that).
+ *   - url  mode → canonicalize `source.repoUrl` and find the cached repo with the
+ *                 SAME canonical key; return its `localPath`. No match / unparseable
+ *                 URL → '' (the picker falls back to a text input in url mode).
+ *
+ * Pure: no hooks, no side effects. Matching reuses the backend cache-key
+ * canonicalization (`canonicalRepoKey`), so a hit here means the backend would
+ * reuse the same cache dir at launch (modulo the pre-existing 8-char sha1
+ * collision caveat). Folds within a protocol only — HTTPS and SSH URLs for the
+ * same repo are different keys and will NOT cross-match (mirrors the backend's
+ * separate cache dirs).
+ */
+export function resolveUrlRepoPath(source: RepoSource, cached: CachedRepo[]): string {
+  if (source.kind === 'path') return source.repoPath
+  const key = canonicalRepoKey(source.repoUrl)
+  if (key === null) return ''
+  const hit = cached.find((c) => canonicalRepoKey(c.url) === key)
+  return hit?.localPath ?? ''
 }
 
 /**

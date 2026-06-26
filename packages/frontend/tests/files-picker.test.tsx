@@ -3,9 +3,10 @@
 // every toggle.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { WorkflowInput } from '@agent-workflow/shared'
+import { api } from '@/api/client'
 import { FilesPicker } from '../src/components/launch/FilesPicker'
 
 function def(extra: Record<string, unknown> = {}): WorkflowInput {
@@ -26,7 +27,125 @@ function wrap(node: React.ReactElement, files: string[]) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   document.body.innerHTML = ''
+})
+
+// RFC-110 — url launch mode: enumerate the matched cached clone (repoPath is the
+// cache localPath), fall back to a text input when uncached / errored, and never
+// hide a selected-but-unlisted path (it stays visible + removable).
+describe('FilesPicker (RFC-110 url mode)', () => {
+  function wrapUrl(node: React.ReactElement, repoPath: string, files: string[]) {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    qc.setQueryData(['repos', 'files', repoPath], { files })
+    return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>)
+  }
+
+  test('uncached url (repoPath="") → text fallback, not "pick a repo first"', () => {
+    const onChange = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <FilesPicker
+          def={def()}
+          repoPath=""
+          sourceKind="url"
+          value="src/x.ts"
+          onChange={onChange}
+        />
+      </QueryClientProvider>,
+    )
+    const ta = screen.getByTestId('files-picker-url-fallback') as HTMLTextAreaElement
+    expect(ta.value).toBe('src/x.ts')
+    expect(screen.queryByText(/Pick a repo first/i)).toBeNull()
+    fireEvent.change(ta, { target: { value: 'src/y.ts' } })
+    expect(onChange).toHaveBeenLastCalledWith('src/y.ts')
+  })
+
+  test('cache hit → cache snapshot hint + checkbox list', () => {
+    wrapUrl(
+      <FilesPicker def={def()} repoPath="/cache/x" sourceKind="url" value="" onChange={() => {}} />,
+      '/cache/x',
+      ['a.ts', 'b.ts'],
+    )
+    expect(screen.getByTestId('files-picker-cache-hint')).toBeTruthy()
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2)
+  })
+
+  test('cache hit surfaces selected-but-not-in-listing paths as removable rows', () => {
+    const onChange = vi.fn()
+    wrapUrl(
+      <FilesPicker
+        def={def()}
+        repoPath="/cache/x"
+        sourceKind="url"
+        value={'a.ts\nb.ts'}
+        onChange={onChange}
+      />,
+      '/cache/x',
+      ['b.ts'],
+    )
+    const extra = screen.getByTestId('files-picker-extra-selected')
+    expect(within(extra).getByText('a.ts')).toBeTruthy()
+    // Unchecking the surfaced stale row removes it from the packed value.
+    fireEvent.click(within(extra).getByRole('checkbox'))
+    expect(onChange).toHaveBeenLastCalledWith('b.ts')
+  })
+
+  test('enumeration error → text fallback (no error-box)', async () => {
+    vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('boom'))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <FilesPicker
+          def={def()}
+          repoPath="/cache/x"
+          sourceKind="url"
+          value=""
+          onChange={() => {}}
+        />
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByTestId('files-picker-url-fallback')).toBeTruthy()
+    expect(screen.queryByText(/error/i)).toBeNull()
+  })
+
+  test('cache listing still loading → current selection stays visible + removable', () => {
+    // Keep the files query pending so the component sits in the loading state.
+    vi.spyOn(api, 'get').mockReturnValue(new Promise(() => {}))
+    const onChange = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <FilesPicker
+          def={def()}
+          repoPath="/cache/x"
+          sourceKind="url"
+          value={'a.ts\nb.ts'}
+          onChange={onChange}
+        />
+      </QueryClientProvider>,
+    )
+    // The stale value is NOT hidden behind "Loading…" — it shows as removable rows.
+    const loadingSel = screen.getByTestId('files-picker-loading-selected')
+    expect(within(loadingSel).getByText('a.ts')).toBeTruthy()
+    expect(within(loadingSel).getByText('b.ts')).toBeTruthy()
+    fireEvent.click(within(loadingSel).getAllByRole('checkbox')[0]!)
+    expect(onChange).toHaveBeenLastCalledWith('b.ts')
+  })
+
+  test('path mode (default) keeps "pick a repo first" for empty repoPath', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <FilesPicker def={def()} repoPath="" value="" onChange={() => {}} />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByText(/Pick a repo first/i)).toBeTruthy()
+    expect(screen.queryByTestId('files-picker-url-fallback')).toBeNull()
+  })
 })
 
 describe('FilesPicker', () => {

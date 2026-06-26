@@ -1341,12 +1341,17 @@ export interface Resources {
       maxSuffix: string
       kindSuffix: string
       moreHint: string
+      cacheSnapshotHint: string
+      urlFallbackHint: string
+      extraSelectedHint: string
     }
     gitPicker: {
       branchLabel: string
       fromLabel: string
       toLabel: string
       prLabel: string
+      currentRefOption: string
+      urlFallbackHint: string
     }
   }
   inspector: {
@@ -3748,12 +3753,17 @@ export const zhCN: Resources = {
       maxSuffix: ' / 最多 {{max}}',
       kindSuffix: ' · 类型：{{kinds}}',
       moreHint: '…还有 {{n}} 项，请收窄筛选条件。',
+      cacheSnapshotHint: '列表来自缓存克隆快照（克隆时的默认分支），可能与所选 ref 不一致。',
+      urlFallbackHint: '该远程仓库尚未缓存，无法浏览文件；请手动填写路径（每行一个）。',
+      extraSelectedHint: '以下已选路径不在当前列表，取消勾选可移除：',
     },
     gitPicker: {
       branchLabel: '分支',
       fromLabel: '起始 (sha / ref)',
       toLabel: '结束 (sha / ref)',
       prLabel: 'Pull request #',
+      currentRefOption: '{{ref}}（当前值，不在缓存分支列表）',
+      urlFallbackHint: '该远程仓库尚未缓存，无法列出分支；请手动填写分支名。',
     },
   },
   inspector: {

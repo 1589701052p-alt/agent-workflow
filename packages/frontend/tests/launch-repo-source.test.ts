@@ -5,9 +5,11 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import type { CachedRepo } from '@agent-workflow/shared'
 import {
   buildLaunchBody,
   buildLaunchFormDataV2,
+  resolveUrlRepoPath,
   validateRepoUrl,
   type RepoSource,
 } from '@/lib/launch-repo-source'
@@ -192,5 +194,93 @@ describe('RepoSourceTabs RFC-068 source-level wiring', () => {
 
   test('source switch defaults path mode fetchBeforeLaunch from loaded pref', () => {
     expect(SRC).toContain('loadFetchBeforeLaunchPref')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// RFC-110 — resolveUrlRepoPath: url-mode pickers enumerate the matched cached
+// clone; cross-protocol / miss / unparseable → '' (text fallback upstream).
+// -----------------------------------------------------------------------------
+
+function cachedRepo(url: string, localPath: string): CachedRepo {
+  return {
+    id: `id-${localPath}`,
+    url,
+    urlRedacted: url,
+    localPath,
+    defaultBranch: 'main',
+    lastFetchedAt: '2026-01-01T00:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    referencingTaskCount: 0,
+    hasSubmodules: null,
+    lastSubmoduleSyncOk: null,
+    lastSubmoduleSyncError: null,
+  }
+}
+
+describe('resolveUrlRepoPath (RFC-110)', () => {
+  test('path mode → source.repoPath verbatim (incl. empty)', () => {
+    expect(resolveUrlRepoPath({ kind: 'path', repoPath: '/local/x', baseBranch: 'main' }, [])).toBe(
+      '/local/x',
+    )
+    expect(resolveUrlRepoPath({ kind: 'path', repoPath: '', baseBranch: '' }, [])).toBe('')
+  })
+
+  test('url mode hit → cached localPath, robust to .git / trailing slash', () => {
+    const list = [cachedRepo('https://github.com/foo/bar.git', '/cache/bar')]
+    expect(
+      resolveUrlRepoPath({ kind: 'url', repoUrl: 'https://github.com/foo/bar', ref: '' }, list),
+    ).toBe('/cache/bar')
+    expect(
+      resolveUrlRepoPath({ kind: 'url', repoUrl: 'https://github.com/foo/bar/', ref: '' }, list),
+    ).toBe('/cache/bar')
+    expect(
+      resolveUrlRepoPath(
+        { kind: 'url', repoUrl: 'https://user:tok@github.com/foo/bar.git', ref: '' },
+        list,
+      ),
+    ).toBe('/cache/bar')
+  })
+
+  test('url mode cross-protocol → no match (SSH cache, HTTPS typed)', () => {
+    const list = [cachedRepo('git@github.com:foo/bar.git', '/cache/ssh')]
+    expect(
+      resolveUrlRepoPath({ kind: 'url', repoUrl: 'https://github.com/foo/bar', ref: '' }, list),
+    ).toBe('')
+  })
+
+  test('url mode miss / unparseable / empty cache → ""', () => {
+    const list = [cachedRepo('https://github.com/foo/bar', '/cache/bar')]
+    expect(
+      resolveUrlRepoPath({ kind: 'url', repoUrl: 'https://github.com/foo/other', ref: '' }, list),
+    ).toBe('')
+    expect(resolveUrlRepoPath({ kind: 'url', repoUrl: 'not a url', ref: '' }, list)).toBe('')
+    expect(
+      resolveUrlRepoPath({ kind: 'url', repoUrl: 'https://github.com/foo/bar', ref: '' }, []),
+    ).toBe('')
+  })
+})
+
+describe('workflows.launch.tsx wiring (RFC-110 source-level)', () => {
+  const SRC = readFileSync(
+    resolve(import.meta.dirname, '..', 'src', 'routes', 'workflows.launch.tsx'),
+    'utf-8',
+  )
+
+  test('resolves the picker repoPath via resolveUrlRepoPath (not the old url-clearing hardcode)', () => {
+    expect(SRC).toContain('resolveUrlRepoPath')
+    // The old `primarySource.kind === 'path' ? primarySource.repoPath : ''`
+    // hardcode that broke file/git pickers in url mode must be gone.
+    expect(SRC).not.toMatch(
+      /repoPath=\{primarySource\.kind === 'path' \? primarySource\.repoPath : ''\}/,
+    )
+  })
+
+  test('threads sourceKind into the dynamic input so pickers can fall back', () => {
+    expect(SRC).toContain('sourceKind={primarySource.kind}')
+  })
+
+  test('queries cached-repos so url-mode pickers can resolve a localPath', () => {
+    expect(SRC).toContain("queryKey: ['cached-repos']")
   })
 })

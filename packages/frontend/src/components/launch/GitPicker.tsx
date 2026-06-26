@@ -20,6 +20,13 @@ interface Props {
   repoPath: string
   value: string
   onChange: (next: string) => void
+  /**
+   * RFC-110: repo-source mode. In 'url' mode, a branch sub-kind with no cached
+   * repo (empty repoPath) or a failed ref listing falls back to a free-text
+   * branch input so the form stays launchable. Defaults to 'path' so existing
+   * callers stay byte-baseline.
+   */
+  sourceKind?: 'path' | 'url'
 }
 
 type GitKind = 'branch' | 'commit-range' | 'pr'
@@ -40,8 +47,9 @@ interface PrValue {
 
 type GitValue = BranchValue | CommitRangeValue | PrValue
 
-export function GitPicker({ def, repoPath, value, onChange }: Props) {
+export function GitPicker({ def, repoPath, value, onChange, sourceKind = 'path' }: Props) {
   const { t } = useTranslation()
+  const urlMode = sourceKind === 'url'
   const gitKind = ((def as Record<string, unknown>).gitKind as GitKind | undefined) ?? 'branch'
   const refs = useQuery<RepoRefsResponse>({
     queryKey: ['repos', 'refs', repoPath],
@@ -66,6 +74,33 @@ export function GitPicker({ def, repoPath, value, onChange }: Props) {
 
   if (gitKind === 'branch') {
     const current = parsed?.kind === 'branch' ? parsed.ref : ''
+    // RFC-110: url mode without a cached repo (no repoPath) or a failed ref
+    // listing → free-text fallback so a branch can still be entered manually.
+    const noRefs = repoPath === '' || (refs.error !== null && refs.error !== undefined)
+    if (urlMode && noRefs) {
+      return (
+        <Field
+          label={t('launch.gitPicker.branchLabel')}
+          required
+          hint={t('launch.gitPicker.urlFallbackHint')}
+        >
+          <TextInput
+            value={current}
+            onChange={(ref) => emit({ kind: 'branch', ref })}
+            data-testid="git-picker-branch-fallback"
+          />
+        </Field>
+      )
+    }
+    const branches = refs.data?.branches ?? []
+    // RFC-110: surface a stored ref that isn't in the (cached) branch list as an
+    // explicit option, so it stays visible/selected instead of the Select
+    // silently falling back to the placeholder while the value still submits
+    // (Codex design gate P2).
+    const extraOption =
+      current !== '' && !branches.includes(current)
+        ? [{ value: current, label: t('launch.gitPicker.currentRefOption', { ref: current }) }]
+        : []
     return (
       <Field label={t('launch.gitPicker.branchLabel')} required>
         <Select<string>
@@ -75,7 +110,8 @@ export function GitPicker({ def, repoPath, value, onChange }: Props) {
           onChange={(ref) => emit({ kind: 'branch', ref })}
           options={[
             { value: '', label: t('launch.pickBranchPlaceholder') },
-            ...(refs.data?.branches ?? []).map((b) => ({ value: b, label: b })),
+            ...extraOption,
+            ...branches.map((b) => ({ value: b, label: b })),
           ]}
         />
       </Field>

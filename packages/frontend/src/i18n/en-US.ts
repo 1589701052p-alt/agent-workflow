@@ -1403,12 +1403,20 @@ export const enUS: Resources = {
       maxSuffix: ' / max {{max}}',
       kindSuffix: ' · kind: {{kinds}}',
       moreHint: '…and {{n}} more. Tighten the filter.',
+      cacheSnapshotHint:
+        'Listing is from the cached clone snapshot (its default branch at clone time); may differ from the selected ref.',
+      urlFallbackHint:
+        "This remote repo isn't cached yet — file browsing is unavailable. Enter paths manually (one per line).",
+      extraSelectedHint: 'Selected paths not in the current listing — uncheck to remove:',
     },
     gitPicker: {
       branchLabel: 'Branch',
       fromLabel: 'From (sha / ref)',
       toLabel: 'To (sha / ref)',
       prLabel: 'Pull request #',
+      currentRefOption: '{{ref}} (current — not in cached branch list)',
+      urlFallbackHint:
+        "This remote repo isn't cached yet — can't list branches. Enter a branch name manually.",
     },
   },
   inspector: {

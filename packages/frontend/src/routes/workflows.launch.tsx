@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type {
+  CachedRepo,
   UserPublic,
   RecentRepo,
   RepoRefsResponse,
@@ -33,6 +34,7 @@ import {
   buildLaunchBodyMultiRepo,
   buildLaunchFormDataV2,
   defaultRepoSource,
+  resolveUrlRepoPath,
   validateRepoUrl,
   type RepoSource,
 } from '@/lib/launch-repo-source'
@@ -122,6 +124,20 @@ function LaunchPage() {
       ),
     enabled: primarySource.kind === 'path' && primarySource.repoPath !== '',
   })
+
+  // RFC-110: cached-repo list (shared queryKey with RepoSourceRow → React Query
+  // dedups to one request) so url-mode file/git pickers can resolve the typed
+  // URL to an already-cached clone's localPath and enumerate it. A query failure
+  // simply yields no matches → pickers fall back to a text input, never blocking.
+  const cachedRepos = useQuery<{ items: CachedRepo[] }>({
+    queryKey: ['cached-repos'],
+    queryFn: ({ signal }) => api.get('/api/cached-repos', undefined, signal),
+    enabled: primarySource.kind === 'url',
+  })
+  // The local repoPath the file/git pickers enumerate against: the chosen local
+  // path in path mode, or the matched cached clone in url mode ('' when uncached
+  // → picker shows a text fallback).
+  const effectiveRepoPath = resolveUrlRepoPath(primarySource, cachedRepos.data?.items ?? [])
 
   const hasUploads = Object.values(uploads).some((arr) => arr.length > 0)
   const start = useMutation({
@@ -390,7 +406,8 @@ function LaunchPage() {
               <DynamicInput
                 def={def}
                 t={t}
-                repoPath={primarySource.kind === 'path' ? primarySource.repoPath : ''}
+                repoPath={effectiveRepoPath}
+                sourceKind={primarySource.kind}
                 value={inputs[def.key] ?? ''}
                 onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
               />
@@ -420,12 +437,14 @@ function DynamicInput({
   def,
   t,
   repoPath,
+  sourceKind,
   value,
   onChange,
 }: {
   def: WorkflowInput
   t: TFunction
   repoPath: string
+  sourceKind: 'path' | 'url'
   value: string
   onChange: (next: string) => void
 }) {
@@ -445,13 +464,29 @@ function DynamicInput({
     return <TextInput value={value} onChange={onChange} required={def.required === true} />
   }
   if (def.kind === 'files') {
-    return <FilesPicker def={def} repoPath={repoPath} value={value} onChange={onChange} />
+    return (
+      <FilesPicker
+        def={def}
+        repoPath={repoPath}
+        sourceKind={sourceKind}
+        value={value}
+        onChange={onChange}
+      />
+    )
   }
   if (def.kind === 'enum') {
     return <EnumPicker def={def} value={value} onChange={onChange} />
   }
   if (def.kind === 'git') {
-    return <GitPicker def={def} repoPath={repoPath} value={value} onChange={onChange} />
+    return (
+      <GitPicker
+        def={def}
+        repoPath={repoPath}
+        sourceKind={sourceKind}
+        value={value}
+        onChange={onChange}
+      />
+    )
   }
   return (
     <TextInput

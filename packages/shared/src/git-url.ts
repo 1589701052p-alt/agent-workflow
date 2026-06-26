@@ -202,6 +202,29 @@ function canonicalForHash(parsed: GitUrl): string {
   return `ssh://${sshUser.toLowerCase()}@${host}/${stripPath(parsed.path)}`
 }
 
+/**
+ * RFC-110 — public canonical key for a raw Git URL: parse + canonicalize via the
+ * SAME `canonicalForHash` the cache-key derivation (`gitUrlCacheKey`) uses. Two
+ * surface forms of the same repo (with/without `.git`, trailing slash, ssh-scp vs
+ * ssh-uri, with/without credentials, case) collapse to one key; unparseable input
+ * → null.
+ *
+ * Used by the launcher (frontend) to match a typed URL against an already-cached
+ * repo WITHOUT hashing — comparing canonical strings is enough and stays sync /
+ * crypto-free. Match parity with the backend's `urlHash` bucket holds except under
+ * the pre-existing 8-char sha1 collision risk (not introduced here).
+ *
+ * IMPORTANT: folds within a protocol family only — http(s) canonicalize to
+ * `https://host/path`, SSH (scp or uri) to `ssh://user@host/path`. So HTTPS and
+ * SSH for the same repo are DIFFERENT keys (mirrors the backend's separate cache
+ * dirs); v1 launcher matching is intentionally not cross-protocol.
+ */
+export function canonicalRepoKey(rawUrl: string): string | null {
+  const parsed = parseGitUrl(rawUrl)
+  if (parsed === null) return null
+  return canonicalForHash(parsed)
+}
+
 function lastPathSegment(p: string): string {
   let r = normalizePath(p)
   if (r.endsWith('/')) r = r.slice(0, -1)
