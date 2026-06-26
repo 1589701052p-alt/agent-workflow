@@ -64,6 +64,7 @@ import { buildOpencodeSpawn } from './runtime/opencode/spawn'
 import { buildClaudeSpawn } from './runtime/claudeCode/spawn'
 import { toClaudeAgents, toClaudeMcpConfig } from './runtime/claudeCode/inject'
 import { captureChildSessions } from './sessionCapture'
+import { captureClaudeSessions } from './runtime/claudeCode/sessionCapture'
 import { startLiveSubagentCapture } from './subagentLiveCapture'
 import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
 import { markClarifyRoundsConsumedBy } from './clarifyRounds'
@@ -1309,14 +1310,29 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // call falls back to RFC-027 byte-for-byte behavior.
   if (sessionId !== undefined) {
     try {
-      await captureChildSessions({
-        rootSessionId: sessionId,
-        nodeRunId: opts.nodeRunId,
-        taskId: opts.taskId,
-        db: opts.db,
-        log,
-        alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
-      })
+      if (runtime === 'claude-code') {
+        // RFC-111 PR-D: claude persists subagent transcripts as JSONL files
+        // under the per-run CLAUDE_CONFIG_DIR's projects dir (parent turns are
+        // already captured live by the stdout pump). Mirrors RFC-027 for claude.
+        await captureClaudeSessions({
+          rootSessionId: sessionId,
+          nodeRunId: opts.nodeRunId,
+          taskId: opts.taskId,
+          db: opts.db,
+          log,
+          configDir: join(runRoot, '.claude'),
+          worktreePath: opts.worktreePath,
+        })
+      } else {
+        await captureChildSessions({
+          rootSessionId: sessionId,
+          nodeRunId: opts.nodeRunId,
+          taskId: opts.taskId,
+          db: opts.db,
+          log,
+          alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
+        })
+      }
     } catch (err) {
       log.warn('subagent-capture-unhandled', {
         nodeRunId: opts.nodeRunId,
