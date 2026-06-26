@@ -35,6 +35,38 @@ export interface RepairOptionMeta {
   risk: RepairRisk
   /** True ⟹ frontend renders second confirm modal with destructive styling. */
   destructive: boolean
+  /**
+   * RFC-108 T13 (AR-07): may the auto-repair loop apply this WITHOUT a human?
+   * INVARIANT (enforced by `autoApplyInvariantHolds` + a property test):
+   *   autoApplyEligible === true  ⟹  risk === 'low' && destructive === false
+   * AND it must be a single-valued deterministic finalizer (no genuine human
+   * choice among equally-valid recoveries). Omitted ⟹ false. The v1 set is
+   * deliberately minimal (only `S4.kick-task`, per decision D5); expansion is
+   * per-rule, each behind its own green idempotency oracle. The auto-loop also
+   * requires the rule to have EXACTLY ONE eligible+available option at apply
+   * time (see `selectAutoApplyOption`), so an ambiguous moment never auto-fires.
+   */
+  autoApplyEligible?: boolean
+}
+
+/** RFC-108 T13: the hard safety invariant for an auto-applicable repair option. */
+export function autoApplyInvariantHolds(
+  o: Pick<RepairOptionMeta, 'autoApplyEligible' | 'risk' | 'destructive'>,
+): boolean {
+  if (o.autoApplyEligible !== true) return true
+  return o.risk === 'low' && o.destructive === false
+}
+
+/**
+ * RFC-108 T13/T19: pick the SINGLE option the auto-repair loop may apply for an
+ * alert, or null. Returns a value only when EXACTLY ONE option is both
+ * `autoApplyEligible` AND `available` (preflight passed) — any ambiguity (zero
+ * or multiple) escalates to a human. This is the gate that keeps the loop from
+ * guessing among genuine human choices.
+ */
+export function selectAutoApplyOption(options: ReadonlyArray<RepairOption>): RepairOption | null {
+  const candidates = options.filter((o) => o.autoApplyEligible === true && o.available)
+  return candidates.length === 1 ? candidates[0]! : null
 }
 
 /** Backend-resolved option for a specific (alert, option). Includes preflight. */
