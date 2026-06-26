@@ -21,6 +21,10 @@ export const LIFECYCLE_ALERT_RULES = [
   'S4',
   // RFC-098 WP-8: running task, active node_run(s), events stalled.
   'S5',
+  // RFC-108 T14 (AR-06): awaiting_* task whose every member (owner +
+  // collaborators) is non-active — nobody can answer the review/clarify, so the
+  // task is deadlocked. Detect-only (decision D4): the alert + S6.acknowledge.
+  'S6',
 ] as const
 
 export type LifecycleAlertRule = (typeof LIFECYCLE_ALERT_RULES)[number]

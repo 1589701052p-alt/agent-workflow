@@ -30,7 +30,16 @@
 import { and, eq, inArray, isNull, max } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, docVersions, nodeRunEvents, nodeRuns, tasks } from '@/db/schema'
+import {
+  clarifyRounds,
+  docVersions,
+  nodeRunEvents,
+  nodeRuns,
+  taskCollaborators,
+  tasks,
+  users,
+} from '@/db/schema'
+import { SYSTEM_USER_ID } from '@/auth/actor'
 import { createLogger } from '@/util/log'
 
 import {
@@ -81,6 +90,7 @@ interface StuckCandidate {
   taskId: string
   status: string
   startedAt: number
+  ownerUserId: string | null
 }
 
 async function loadCandidates(db: DbClient, filter?: readonly string[]): Promise<StuckCandidate[]> {
@@ -96,6 +106,7 @@ async function loadCandidates(db: DbClient, filter?: readonly string[]): Promise
       id: tasks.id,
       status: tasks.status,
       startedAt: tasks.startedAt,
+      ownerUserId: tasks.ownerUserId,
     })
     .from(tasks)
     .where(
@@ -103,7 +114,12 @@ async function loadCandidates(db: DbClient, filter?: readonly string[]): Promise
         ? baseWhere
         : and(baseWhere, inArray(tasks.id, filter as string[])),
     )
-  return rows.map((r) => ({ taskId: r.id, status: r.status, startedAt: r.startedAt }))
+  return rows.map((r) => ({
+    taskId: r.id,
+    status: r.status,
+    startedAt: r.startedAt,
+    ownerUserId: r.ownerUserId,
+  }))
 }
 
 /**
@@ -204,6 +220,35 @@ async function nodeRunCounts(db: DbClient, taskId: string): Promise<NodeRunCount
   return { total: rows.length, terminal, active: rows.length - terminal, activeRows }
 }
 
+/**
+ * RFC-108 T14 (AR-06): does this task have NO active member who could answer a
+ * review/clarify? True only when the task HAS a human membership boundary (owner
+ * and/or collaborators, excluding the __system__ sentinel) and EVERY such member
+ * is non-active — disabled, or a dangling id with no users row. A system-owned /
+ * no-auth task (no human members) returns false: there's no membership boundary
+ * to deadlock.
+ */
+async function taskHasNoActiveMember(db: DbClient, c: StuckCandidate): Promise<boolean> {
+  const collabRows = await db
+    .select({ userId: taskCollaborators.userId, role: taskCollaborators.role })
+    .from(taskCollaborators)
+    .where(eq(taskCollaborators.taskId, c.taskId))
+  const collaboratorIds = collabRows.filter((r) => r.role === 'collaborator').map((r) => r.userId)
+  const memberIds = [
+    ...new Set([
+      ...(c.ownerUserId !== null && c.ownerUserId !== SYSTEM_USER_ID ? [c.ownerUserId] : []),
+      ...collaboratorIds,
+    ]),
+  ]
+  if (memberIds.length === 0) return false // no human membership boundary
+  const userRows = await db
+    .select({ status: users.status })
+    .from(users)
+    .where(inArray(users.id, memberIds))
+  // A member id with no users row (deleted) counts as non-active.
+  return !userRows.some((u) => u.status === 'active')
+}
+
 interface StuckTaskFinding extends LifecycleAlertFinding {
   rule: StuckRule
 }
@@ -234,6 +279,24 @@ async function checkOne(
       })
     }
     return out
+  }
+
+  // RFC-108 T14 (AR-06) — S6 member-deadlock. Independent of the freshness gate:
+  // an awaiting_* task with no active member to answer is deadlocked the moment
+  // it parks, regardless of recent activity. Emitted alongside any S1/S2 finding
+  // (different concern). reconcileLifecycleAlerts dedups to one open S6 per task.
+  if (c.status === 'awaiting_review' || c.status === 'awaiting_human') {
+    if (await taskHasNoActiveMember(db, c)) {
+      out.push({
+        taskId: c.taskId,
+        rule: 'S6',
+        detail: {
+          rule: 'S6',
+          message: 'awaiting task has no active member to answer the review/clarify',
+          status: c.status,
+        },
+      })
+    }
   }
 
   // S1/S2/S3 share the freshness gate: only flag tasks that have gone

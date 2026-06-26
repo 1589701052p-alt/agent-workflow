@@ -1083,6 +1083,7 @@ export const enUS: Resources = {
         S3: 'Task running but every node_run is terminal',
         S4: 'Task pending without scheduler pickup',
         S5: 'Task running with active node_run(s) but events stopped landing',
+        S6: 'Task awaiting review/clarify but every member (owner + collaborators) is inactive — nobody can answer',
       },
       repair: {
         openButton: 'Repair…',
@@ -2600,6 +2601,12 @@ export const enUS: Resources = {
         acknowledge: {
           label: 'Acknowledge (no DB change)',
           desc: 'Active run(s) exist but events stopped landing — inspect the pids in the alert detail; cancel/resume the task to recover (live children are group-killed before rollback). Acknowledging only resolves the alert.',
+        },
+      },
+      S6: {
+        acknowledge: {
+          label: 'Acknowledge (no DB change)',
+          desc: 'Every member (owner + collaborators) of this task is inactive, so nobody can answer the review/clarify. Recover by re-activating a disabled user, inviting a collaborator, or transferring ownership — a user-management action outside the repair engine. Acknowledging only resolves the alert.',
         },
       },
     },

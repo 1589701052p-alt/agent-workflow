@@ -1020,6 +1020,7 @@ export interface Resources {
         S3: string
         S4: string
         S5: string
+        S6: string
       }
       // RFC-057: UI strings for the repair dialog + confirm modal. The
       // option-specific labels (R1.approveRun.label / etc.) live at root
@@ -2361,6 +2362,10 @@ export interface Resources {
       S5: {
         acknowledge: { label: string; desc: string }
       }
+      // RFC-108 T14: S6 (awaiting_* with no active member) — acknowledge only.
+      S6: {
+        acknowledge: { label: string; desc: string }
+      }
     }
   }
   // RFC-099 — ownership ACL + attribution UI
@@ -3445,6 +3450,7 @@ export const zhCN: Resources = {
         S3: 'task 状态 running，但所有 node_run 都已落终态',
         S4: 'task 长时间处于 pending，调度器未拣选',
         S5: 'task 在 running 且存在活跃 node_run，但事件流长时间停滞',
+        S6: 'task 在 awaiting_review/awaiting_human，但所有成员（属主+协作者）均非活跃，无人可应答',
       },
       repair: {
         openButton: '修复…',
@@ -4898,6 +4904,12 @@ export const zhCN: Resources = {
         acknowledge: {
           label: '确认知悉（不改数据）',
           desc: '存在活跃 node_run 但事件流已停滞——告警详情携带各活跃行的 pid，可通过取消/恢复任务走 RFC-098 的进程治理回收（回滚前组杀存活子进程）。确认仅关闭该告警。',
+        },
+      },
+      S6: {
+        acknowledge: {
+          label: '确认知悉（不改数据）',
+          desc: '该任务所有成员（属主+协作者）均非活跃，无人能应答 review/clarify。恢复需重新启用被停用的用户、邀请新协作者或转移属主——属于用户管理操作，不在修复引擎内。确认仅关闭该告警。',
         },
       },
     },

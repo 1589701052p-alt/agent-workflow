@@ -61,7 +61,7 @@ export type InvariantRule = 'R1' | 'R2' | 'C1' | 'T1' | 'T2' | 'T3' | 'U1' | 'CR
 
 /** RFC-053 P-6 stuck-task detector emits these. Shares lifecycle_alerts table.
  *  S5 added by RFC-098 WP-8 (running task, active runs, events stalled). */
-export type StuckRule = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
+export type StuckRule = 'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6'
 
 /** Union of every rule kind that can appear in lifecycle_alerts.rule.
  *
@@ -100,7 +100,7 @@ export const INVARIANT_RULES: readonly InvariantRule[] = [
 ]
 
 /** Canonical list of the five stuck-task rules. */
-export const STUCK_RULES: readonly StuckRule[] = ['S1', 'S2', 'S3', 'S4', 'S5']
+export const STUCK_RULES: readonly StuckRule[] = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
 
 export interface LifecycleInvariantFinding {
   taskId: string

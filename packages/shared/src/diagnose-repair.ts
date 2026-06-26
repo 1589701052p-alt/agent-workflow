@@ -141,6 +141,10 @@ export const REPAIR_OPTION_IDS = {
   // orphan reaping / kill-then-proceed on cancel+resume); the repair option
   // is an acknowledge mirroring CR-1.acknowledge.
   S5: ['S5.acknowledge'],
+  // RFC-108 T14: member-deadlock is detect-only (D4) — restoring a member is an
+  // admin/user-management action outside the repair engine; the option is an
+  // acknowledge.
+  S6: ['S6.acknowledge'],
 } as const satisfies Record<LifecycleAlertRule, readonly string[]>
 
 export type RepairOptionId = (typeof REPAIR_OPTION_IDS)[keyof typeof REPAIR_OPTION_IDS][number]

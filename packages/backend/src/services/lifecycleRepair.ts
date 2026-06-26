@@ -52,6 +52,7 @@ import { S2_OPTIONS } from './lifecycleRepair/options-S2'
 import { S3_OPTIONS } from './lifecycleRepair/options-S3'
 import { S4_OPTIONS } from './lifecycleRepair/options-S4'
 import { S5_OPTIONS } from './lifecycleRepair/options-S5'
+import { S6_OPTIONS } from './lifecycleRepair/options-S6'
 import { T1_OPTIONS } from './lifecycleRepair/options-T1'
 import { T2_OPTIONS } from './lifecycleRepair/options-T2'
 import { T3_OPTIONS } from './lifecycleRepair/options-T3'
@@ -87,6 +88,7 @@ export const REPAIR_OPTIONS = {
   S3: S3_OPTIONS,
   S4: S4_OPTIONS,
   S5: S5_OPTIONS,
+  S6: S6_OPTIONS,
 } as const satisfies Record<LifecycleAlertRule, readonly [RepairOptionDef, ...RepairOptionDef[]]>
 
 // Runtime guard: every implemented option id must appear in the shared
