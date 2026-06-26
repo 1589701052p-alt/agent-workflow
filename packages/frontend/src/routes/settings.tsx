@@ -30,6 +30,7 @@ export const Route = createRoute({
 type Tab =
   | 'runtime'
   | 'limits'
+  | 'recovery'
   | 'gc'
   | 'network'
   | 'appearance'
@@ -77,6 +78,7 @@ function SettingsPage() {
           [
             ['runtime', t('settings.tabRuntime')],
             ['limits', t('settings.tabLimits')],
+            ['recovery', t('settings.tabRecovery')],
             ['gc', t('settings.tabGc')],
             ['network', t('settings.tabNetwork')],
             ['appearance', t('settings.tabAppearance')],
@@ -105,6 +107,7 @@ function SettingsPage() {
         <>
           {tab === 'runtime' && <RuntimeTab config={config.data} flashKey={runtimeFlashKey} />}
           {tab === 'limits' && <LimitsTab config={config.data} />}
+          {tab === 'recovery' && <RecoveryTab config={config.data} />}
           {tab === 'gc' && <GcTab config={config.data} />}
           {tab === 'network' && <NetworkTab config={config.data} />}
           {tab === 'appearance' && <AppearanceTab config={config.data} />}
@@ -352,6 +355,83 @@ function LimitsTab({ config }: TabProps) {
           onChange={(v) => setState({ ...state, largeOutputThresholdBytes: v ?? 1_048_576 })}
           min={1024}
           step={1024}
+        />
+      </Field>
+    </SectionForm>
+  )
+}
+
+// RFC-108 T24 (AR-config) — auto-recovery knobs. Every auto-execution toggle
+// defaults OFF (decision D1); this tab is where an operator opts in + tunes the
+// circuit-breaker. Reuses the shared Switch / Field / NumberInput primitives.
+function RecoveryTab({ config }: TabProps) {
+  const { t } = useTranslation()
+  const { state, setState, save } = useTabState(config, [
+    'autoResumeOnBoot',
+    'autoRepair',
+    'autoKillStalledChild',
+    'heartbeatStallMs',
+    'maxAutoRecoveriesPerWindow',
+    'autoRecoveryWindowMs',
+    'periodicOrphanReconcileMs',
+  ])
+  return (
+    <SectionForm
+      onSave={save.mutate}
+      busy={save.isPending}
+      error={save.error}
+      success={save.isSuccess && save.error === null ? 'saved' : null}
+    >
+      <Switch
+        checked={state.autoResumeOnBoot ?? false}
+        onChange={(v) => setState({ ...state, autoResumeOnBoot: v })}
+        label={t('settingsForm.autoResumeOnBoot')}
+        hint={t('settingsForm.autoResumeOnBootHint')}
+      />
+      <Switch
+        checked={(state.autoRepair ?? {}).S4 === true}
+        onChange={(v) => setState({ ...state, autoRepair: { ...(state.autoRepair ?? {}), S4: v } })}
+        label={t('settingsForm.autoRepairS4')}
+        hint={t('settingsForm.autoRepairS4Hint')}
+      />
+      <Switch
+        checked={state.autoKillStalledChild ?? false}
+        onChange={(v) => setState({ ...state, autoKillStalledChild: v })}
+        label={t('settingsForm.autoKillStalledChild')}
+        hint={t('settingsForm.autoKillStalledChildHint')}
+      />
+      <Field label={t('settingsForm.heartbeatStallMs')} required>
+        <NumberInput
+          value={state.heartbeatStallMs}
+          onChange={(v) => setState({ ...state, heartbeatStallMs: v ?? 1_800_000 })}
+          min={1000}
+          step={60_000}
+        />
+      </Field>
+      <Field label={t('settingsForm.maxAutoRecoveriesPerWindow')} required>
+        <NumberInput
+          value={state.maxAutoRecoveriesPerWindow}
+          onChange={(v) => setState({ ...state, maxAutoRecoveriesPerWindow: v ?? 3 })}
+          min={1}
+        />
+      </Field>
+      <Field label={t('settingsForm.autoRecoveryWindowMs')} required>
+        <NumberInput
+          value={state.autoRecoveryWindowMs}
+          onChange={(v) => setState({ ...state, autoRecoveryWindowMs: v ?? 3_600_000 })}
+          min={1000}
+          step={60_000}
+        />
+      </Field>
+      <Field
+        label={t('settingsForm.periodicOrphanReconcileMs')}
+        hint={t('settingsForm.zeroDisabled')}
+      >
+        <NumberInput
+          value={state.periodicOrphanReconcileMs}
+          onChange={(v) => setState({ ...state, periodicOrphanReconcileMs: v ?? 0 })}
+          min={0}
+          step={60_000}
         />
       </Field>
     </SectionForm>

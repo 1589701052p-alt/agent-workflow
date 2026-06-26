@@ -562,6 +562,7 @@ export interface Resources {
     hintRestart: string
     tabRuntime: string
     tabLimits: string
+    tabRecovery: string
     tabGc: string
     tabNetwork: string
     tabConnection: string
@@ -1825,6 +1826,17 @@ export interface Resources {
     perTaskDuration: string
     perTaskTokens: string
     perNodeTimeout: string
+    autoResumeOnBoot: string
+    autoResumeOnBootHint: string
+    autoRepairS4: string
+    autoRepairS4Hint: string
+    autoKillStalledChild: string
+    autoKillStalledChildHint: string
+    heartbeatStallMs: string
+    maxAutoRecoveriesPerWindow: string
+    autoRecoveryWindowMs: string
+    periodicOrphanReconcileMs: string
+    zeroDisabled: string
     largeOutputThreshold: string
     zeroUnlimited: string
     autoGcLabel: string
@@ -2823,6 +2835,7 @@ export const zhCN: Resources = {
     hintRestart: '。标注 restart 的字段需重启守护进程才生效。',
     tabRuntime: '运行时',
     tabLimits: '限额',
+    tabRecovery: '恢复',
     tabGc: 'GC',
     tabNetwork: '网络',
     tabConnection: '连接',
@@ -4249,6 +4262,20 @@ export const zhCN: Resources = {
     perTaskDuration: '单 task 最大时长 (ms)',
     perTaskTokens: '单 task 最大 token 数',
     perNodeTimeout: '单节点超时 (ms)',
+    autoResumeOnBoot: '启动时自动续跑被中断的任务',
+    autoResumeOnBootHint:
+      '默认关闭。开启后 daemon 启动时自动续跑因重启而中断的任务（穿熔断/隔离/租约/审计）。',
+    autoRepairS4: '自动修复卡死的 pending 任务（S4.kick）',
+    autoRepairS4Hint:
+      '默认关闭。仅对唯一安全的 S4.kick-task 启用自动修复（重新推送调度器漏掉的 pending 任务）。',
+    autoKillStalledChild: '自动杀死心跳停滞的子进程',
+    autoKillStalledChildHint:
+      '默认关闭。子进程事件流静默超过下方阈值即自动杀死（复用 PID 身份门，绝不误杀回收 pid）。',
+    heartbeatStallMs: '心跳停滞阈值 (ms)',
+    maxAutoRecoveriesPerWindow: '熔断：每窗口最大自动恢复次数',
+    autoRecoveryWindowMs: '熔断：滚动窗口 (ms)',
+    periodicOrphanReconcileMs: '周期孤儿回收间隔 (ms)',
+    zeroDisabled: '0 表示禁用',
     largeOutputThreshold: '大输出阈值 (bytes)',
     zeroUnlimited: '0 = 无限制。',
     autoGcLabel: '自动 GC 已合并的 worktree',

@@ -435,6 +435,7 @@ export const enUS: Resources = {
     hintRestart: '. Fields marked restart only apply on the next daemon start.',
     tabRuntime: 'Runtime',
     tabLimits: 'Limits',
+    tabRecovery: 'Recovery',
     tabGc: 'GC',
     tabNetwork: 'Network',
     tabConnection: 'Connection',
@@ -1928,6 +1929,20 @@ export const enUS: Resources = {
     perTaskDuration: 'Per-task max duration (ms)',
     perTaskTokens: 'Per-task max total tokens',
     perNodeTimeout: 'Per-node timeout (ms)',
+    autoResumeOnBoot: 'Auto-resume interrupted tasks on boot',
+    autoResumeOnBootHint:
+      'Default off. When on, the daemon re-drives tasks interrupted by a restart at boot (gated by breaker / quarantine / lease / audit).',
+    autoRepairS4: 'Auto-repair stuck pending tasks (S4.kick)',
+    autoRepairS4Hint:
+      'Default off. Enables auto-repair only for the one safe option, S4.kick-task (re-poke a pending task the scheduler missed).',
+    autoKillStalledChild: 'Auto-kill a heartbeat-stalled child',
+    autoKillStalledChildHint:
+      'Default off. Kills a child whose event stream has been silent past the threshold below (reuses the PID-identity gate — never an unrelated recycled pid).',
+    heartbeatStallMs: 'Heartbeat-stall threshold (ms)',
+    maxAutoRecoveriesPerWindow: 'Breaker: max auto-recoveries per window',
+    autoRecoveryWindowMs: 'Breaker: rolling window (ms)',
+    periodicOrphanReconcileMs: 'Periodic orphan-reconcile interval (ms)',
+    zeroDisabled: '0 disables it',
     largeOutputThreshold: 'Large output threshold (bytes)',
     zeroUnlimited: '0 = unlimited.',
     autoGcLabel: 'Auto-GC merged worktrees',
