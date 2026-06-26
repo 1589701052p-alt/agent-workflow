@@ -8,11 +8,15 @@
 import {
   Background,
   type Connection,
+  type ConnectionLineComponentProps,
   Controls,
   type Edge,
+  getBezierPath,
   MiniMap,
   type Node,
   type NodeChange,
+  type OnConnectEnd,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   applyEdgeChanges,
@@ -59,6 +63,9 @@ import {
   isValidCrossClarifyQuestioner,
   questionerHasExistingClarifyChannel,
 } from './crossClarifyDragHelper'
+import { existingInputPorts, nextFreeInputPort } from './dropTarget'
+import { getNodeBoxes, resolveDropTarget } from './connectResolve'
+import { ConnectDropHint, type ConnectPreviewTarget } from './ConnectDropHint'
 import { ClarifyNode } from './nodes/ClarifyNode'
 import { CrossClarifyNode } from './nodes/CrossClarifyNode'
 import { applyConnectionForReviewOutput, applyDisconnectForReviewOutput } from './connectionSync'
@@ -413,9 +420,25 @@ function CanvasInner({
 
   const deleteKeyCodes = useMemo(() => ['Backspace', 'Delete'], [])
 
+  // RFC-106: true once onConnect (xyflow snapped to a real handle) has handled
+  // the gesture this drag. onConnectEnd reads it to decide whether a body drop
+  // (no handle snapped → onConnect never fired) still needs a new-input edge.
+  const connectHandledRef = useRef(false)
+  // RFC-106: latest pointer (screen px) during a connection drag. onConnect has
+  // no event, but the build needs the precise drop point to resolve new-vs-reuse
+  // — so we track pointermove from onConnectStart..onConnectEnd. The last move
+  // before pointerup ≈ the drop point.
+  const connectPointer = useRef<{ x: number; y: number } | null>(null)
+  const trackConnectPointer = useCallback((e: PointerEvent) => {
+    connectPointer.current = { x: e.clientX, y: e.clientY }
+  }, [])
+
   const handleConnect = useCallback(
     (conn: Connection) => {
       if (readOnly === true || onChange === undefined) return
+      // RFC-106: xyflow fired onConnect ⇒ it snapped to a real handle; the
+      // body-drop fallback in onConnectEnd must NOT also fire.
+      connectHandledRef.current = true
       // RFC-015 fast-path: a drop on the agent-multi node's top handle
       // writes node.sourcePort directly and produces NO edge. Must be
       // checked before translateInboundConnection rewrites targetHandle.
@@ -471,27 +494,70 @@ function CanvasInner({
       }
       // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
       // on a specific named handle" BEFORE translateInboundConnection rewrites
-      // targetHandle. Output's catch-all path always appends a new port (with
-      // disambiguating `_2` / `_3` suffix on name collisions) so a single
-      // output node can collect many independent upstreams; named-handle
-      // drops keep the explicit single-port rebind semantics.
-      const viaCatchAll = conn.targetHandle === INBOUND_HANDLE_ID
-      const builtRaw = buildEdgeFromConnection(definition, translateInboundConnection(conn))
+      // targetHandle.
+      let viaCatchAll = conn.targetHandle === INBOUND_HANDLE_ID
+      let translated = translateInboundConnection(conn)
+      let reusePort: string | null = null
+      // RFC-106: a catch-all drop on an agent-single / output target ALWAYS
+      // allocates a NEW input whose name is deconflicted against this node's
+      // existing inputs (`nextFreeInputPort`), so two upstreams both exposing
+      // `result` land on `result` / `result_2` instead of colliding on one
+      // `result`. We key off the KNOWN target node (`conn.target`), not the
+      // cursor hit-test — the catch-all strip overhangs the node edge, so a drop
+      // on its outside sliver leaves the pointer outside node bounds yet is still
+      // a valid new input here (Codex P2). The pointer only decides the precise
+      // REUSE override (drop landed on an existing port of THIS node). Channels /
+      // review / wrappers fall through to the legacy path untouched.
+      const targetNode =
+        conn.targetHandle === INBOUND_HANDLE_ID
+          ? definition.nodes.find((n) => n.id === conn.target)
+          : undefined
+      if (
+        targetNode !== undefined &&
+        (targetNode.kind === 'agent-single' || targetNode.kind === 'output') &&
+        conn.source != null &&
+        conn.sourceHandle != null
+      ) {
+        let portName = nextFreeInputPort(
+          existingInputPorts(definition, targetNode),
+          conn.sourceHandle,
+        )
+        if (connectPointer.current !== null) {
+          const screenPt = connectPointer.current
+          const resolved = resolveDropTarget(
+            definition,
+            getNodeBoxes(rf),
+            rf.screenToFlowPosition(screenPt),
+            screenPt,
+            conn.source,
+            conn.sourceHandle,
+          )
+          if (resolved !== null && resolved.nodeId === conn.target && resolved.kind === 'reuse') {
+            portName = resolved.portName
+            reusePort = portName
+          }
+        }
+        translated = { ...conn, targetHandle: portName }
+        viaCatchAll = reusePort === null
+      }
+      const builtRaw = buildEdgeFromConnection(definition, translated)
       if (builtRaw === null) return
-      // RFC-060 §3 — when the user drags between a wrapper-fanout boundary
-      // port and an inner node, the resulting edge is a boundary edge
-      // (`boundary: 'wrapper-input'` for outer→inner, `'wrapper-output'`
-      // for inner→outer). Tag it here so the scheduler / aggregator paths
-      // pick it up — `services/fanout.ts` iterates only edges with the
-      // correct boundary marker; without the tag the edge would render on
-      // the canvas but never fan out / aggregate at runtime. The two
-      // helpers are mutually exclusive (an edge can only match one
-      // direction), so chaining them is safe.
-      const built = markBoundaryWrapperOutput(
-        definition,
-        markBoundaryWrapperInput(definition, builtRaw),
-      )
-      const withEdge = { ...definition, edges: [...definition.edges, built] }
+      // A reuse drop overwrites that input's source — drop any prior edge into it.
+      const baseDef =
+        reusePort !== null
+          ? {
+              ...definition,
+              edges: definition.edges.filter(
+                (e) =>
+                  !(e.target.nodeId === builtRaw.target.nodeId && e.target.portName === reusePort),
+              ),
+            }
+          : definition
+      // RFC-060 §3 — tag wrapper-fanout boundary edges so the scheduler /
+      // aggregator paths pick them up. The two helpers are mutually exclusive,
+      // so chaining them is safe.
+      const built = markBoundaryWrapperOutput(baseDef, markBoundaryWrapperInput(baseDef, builtRaw))
+      const withEdge = { ...baseDef, edges: [...baseDef.edges, built] }
       const synced = applyConnectionForReviewOutput(withEdge, built, { viaCatchAll })
       // RFC-060 — wrapper-fanout inputs[] is the single source of truth for
       // declared ports. If the user dragged an edge that lands on a port
@@ -502,8 +568,167 @@ function CanvasInner({
       const reconciled = ensureWrapperFanoutInputForEdge(synced, built)
       commitChange(reconciled)
     },
-    [commitChange, definition, onChange, readOnly],
+    [commitChange, definition, onChange, readOnly, rf],
   )
+
+  // RFC-106: a fresh drag starts un-handled; onConnect flips the flag when it
+  // snaps to a real handle. Track the pointer for the whole drag (see
+  // connectPointer).
+  const handleConnectStart = useCallback(() => {
+    connectHandledRef.current = false
+    connectPointer.current = null
+    document.addEventListener('pointermove', trackConnectPointer)
+  }, [trackConnectPointer])
+
+  // RFC-106: body-drop fallback. When the drag ends over a node BODY (not near
+  // any handle), xyflow never fires onConnect — so we resolve the drop pointer
+  // against node bounds ourselves and add a NEW input (or REUSE an existing one),
+  // matching the live ConnectDropHint preview. Handle drops (catch-all, channel
+  // ports) are already handled by onConnect, guarded by connectHandledRef.
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (event, connState) => {
+      document.removeEventListener('pointermove', trackConnectPointer)
+      // Drop the tracked pointer so it can't leak into the NEXT gesture. ReactFlow's
+      // click-to-connect never fires onConnectStart, so a stale point from a prior
+      // drag could otherwise push a later catch-all CLICK into the reuse branch and
+      // rebind an existing input instead of adding a new one (Codex P2). onConnect
+      // for THIS drag already ran (and consumed connectPointer) before this fires.
+      connectPointer.current = null
+      if (readOnly === true || onChange === undefined) return
+      if (connectHandledRef.current) {
+        connectHandledRef.current = false
+        return
+      }
+      // Only a drag that STARTED from a SOURCE (output) handle creates an input
+      // edge. xyflow lets a reverse drag start from a TARGET/input handle, and
+      // `fromHandle` is just where it started — treating that input as the edge
+      // source would persist an invalid `C.requirement →` / `C.__inbound__ →`
+      // edge (Codex P2). Those gestures are owned by onConnect's normalization.
+      if (connState.fromHandle?.type !== 'source') return
+      const src = connState.fromNode?.id
+      const srcH = connState.fromHandle?.id
+      if (src == null || srcH == null) return
+      const p = 'changedTouches' in event ? event.changedTouches[0] : event
+      if (p == null) return
+      const screenPt = { x: p.clientX, y: p.clientY }
+      const flowPt = rf.screenToFlowPosition(screenPt)
+      const target = resolveDropTarget(definition, getNodeBoxes(rf), flowPt, screenPt, src, srcH)
+      if (target === null) return
+      const built0: WorkflowEdge = {
+        id: `edge_${ulid().slice(-6).toLowerCase()}`,
+        source: { nodeId: src, portName: srcH },
+        target: { nodeId: target.nodeId, portName: target.portName },
+      }
+      // A reuse drop overwrites that port's source — drop any prior edge into it.
+      const baseEdges =
+        target.kind === 'reuse'
+          ? definition.edges.filter(
+              (e) => !(e.target.nodeId === target.nodeId && e.target.portName === target.portName),
+            )
+          : definition.edges
+      const built = markBoundaryWrapperOutput(
+        { ...definition, edges: baseEdges },
+        markBoundaryWrapperInput({ ...definition, edges: baseEdges }, built0),
+      )
+      const withEdge = { ...definition, edges: [...baseEdges, built] }
+      const synced = applyConnectionForReviewOutput(withEdge, built, {
+        viaCatchAll: target.kind === 'new',
+      })
+      const reconciled = ensureWrapperFanoutInputForEdge(synced, built)
+      commitChange(reconciled)
+    },
+    [commitChange, definition, onChange, readOnly, rf, trackConnectPointer],
+  )
+
+  // RFC-106: inject (or clear) the live preview input port on the hovered node.
+  // ConnectDropHint resolves the target during the drag and calls this; the
+  // canvas owns `nodes` state so the mutation goes through setNodes (NOT the
+  // definition — `previewInputPort` is transient UI state, never persisted).
+  // Reference-stable when nothing changes so a redundant call is a no-op.
+  const handlePreviewChange = useCallback((target: ConnectPreviewTarget | null) => {
+    setNodes((prev) => {
+      let changed = false
+      const next = prev.map((n) => {
+        const onThis = target !== null && target.nodeId === n.id
+        const wantPreview = onThis && target.kind === 'new' ? target.port : undefined
+        const wantReuse = onThis && target.kind === 'reuse' ? target.port : undefined
+        const data = n.data as CanvasNodeData
+        if (data.previewInputPort === wantPreview && data.reuseInputPort === wantReuse) return n
+        changed = true
+        return {
+          ...n,
+          data: { ...n.data, previewInputPort: wantPreview, reuseInputPort: wantReuse },
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [])
+
+  // RFC-106: custom connection line. When the drag is over a node that will get
+  // a NEW input (or REUSE an existing one), end the line exactly on that resolved
+  // port's handle (queried from the DOM — ConnectDropHint already injected the
+  // preview port / highlighted the reused one) instead of leaving it floating at
+  // the pointer, so the in-flight line === the released edge. Falls back to a
+  // plain bezier to the pointer otherwise (channels, empty canvas), matching
+  // xyflow's default line.
+  const ConnectionLine = useMemo(() => {
+    function PreviewConnectionLine({
+      fromX,
+      fromY,
+      fromPosition,
+      toX,
+      toY,
+      toPosition,
+      fromNode,
+      fromHandle,
+    }: ConnectionLineComponentProps) {
+      let endX = toX
+      let endY = toY
+      let endPosition = toPosition
+      // Only anchor the line to a resolved port for SOURCE-handle drags — a
+      // reverse drag from a target handle isn't honored on release (Codex P2),
+      // so it keeps the default bezier-to-pointer.
+      if (fromNode != null && fromHandle?.id != null && fromHandle.type === 'source') {
+        // toX/toY are already FLOW coords: the connection-line component reads
+        // `to` from useConnection(), whose selector converts it via
+        // pointToRendererPoint(to, transform) (@xyflow/react storeSelector$1), and
+        // the line renders inside the transformed Viewport. So hit-test them
+        // DIRECTLY — converting again would double-apply the transform and break
+        // anchoring under pan/zoom. The CLIENT pointer is only the reuse probe
+        // (`to` is snapped to the catch-all, so it can't be).
+        const resolved = resolveDropTarget(
+          definition,
+          getNodeBoxes(rf),
+          { x: toX, y: toY },
+          connectPointer.current ?? rf.flowToScreenPosition({ x: toX, y: toY }),
+          fromNode.id,
+          fromHandle.id,
+        )
+        if (resolved !== null) {
+          const el = document.querySelector(
+            `.react-flow__node[data-id="${CSS.escape(resolved.nodeId)}"] .react-flow__handle[data-handleid="${CSS.escape(resolved.portName)}"]`,
+          )
+          if (el !== null) {
+            const r = el.getBoundingClientRect()
+            const fp = rf.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+            endX = fp.x
+            endY = fp.y
+            endPosition = Position.Left
+          }
+        }
+      }
+      const [path] = getBezierPath({
+        sourceX: fromX,
+        sourceY: fromY,
+        sourcePosition: fromPosition,
+        targetX: endX,
+        targetY: endY,
+        targetPosition: endPosition,
+      })
+      return <path d={path} fill="none" className="react-flow__connection-path" />
+    }
+    return PreviewConnectionLine
+  }, [definition, rf])
 
   /**
    * RFC-007 task-detail iterate lock. Editor canvas leaves taskContext
@@ -969,6 +1194,8 @@ function CanvasInner({
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
+        onConnectStart={handleConnectStart}
+        onConnectEnd={handleConnectEnd}
         isValidConnection={isValidConnection}
         onSelectionChange={(s) => {
           const ns = s.nodes.map((n) => n.id)
@@ -1147,10 +1374,34 @@ function CanvasInner({
         fitView
         minZoom={0.2}
         maxZoom={2}
+        // RFC-106 T2 — tighten the connection snap so the small named input
+        // handles (7px dots) only capture a PRECISE drop; elsewhere over the
+        // node's left edge the full-height catch-all (`__inbound__`) wins and
+        // the drop becomes a new input. Default 20 was loose enough that the
+        // dots "grabbed" most of the edge, causing accidental reuse.
+        connectionRadius={10}
+        connectionLineComponent={ConnectionLine}
+        // RFC-106: drag-only wiring. With named input handles non-connectable, a
+        // click-to-connect onto one would silently no-op (xyflow rejects the
+        // click-end), and click-to-connect can't show the live drag preview
+        // anyway. Disabling it keeps one consistent gesture — drag from an output
+        // onto the target — with no silent dead-ends (Codex P2).
+        connectOnClick={false}
       >
         <Background />
         <MiniMap pannable zoomable />
         <Controls showInteractive={false} />
+        {readOnly !== true && (
+          <ConnectDropHint
+            definition={definition}
+            labels={{
+              newInput: t('canvas.connect.newInput'),
+              reuseInput: t('canvas.connect.reuseInput'),
+            }}
+            pointerRef={connectPointer}
+            onPreviewChange={handlePreviewChange}
+          />
+        )}
       </ReactFlow>
       <ContextMenu
         open={menu !== null}

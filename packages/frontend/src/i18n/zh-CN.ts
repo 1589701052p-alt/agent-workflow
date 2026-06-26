@@ -1866,6 +1866,10 @@ export interface Resources {
   agentNode: {
     label: string
   }
+  /** RFC-106 — live drag-connect badge (new input vs reuse existing). */
+  canvas: {
+    connect: { newInput: string; reuseInput: string }
+  }
   /** Canvas chip label for review nodes (⚖ icon). */
   reviewNode: {
     label: string
@@ -4238,6 +4242,9 @@ export const zhCN: Resources = {
   },
   agentNode: {
     label: '代理',
+  },
+  canvas: {
+    connect: { newInput: '新增输入', reuseInput: '复用输入' },
   },
   reviewNode: {
     label: '评审',

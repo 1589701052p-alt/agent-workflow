@@ -1954,6 +1954,9 @@ export const enUS: Resources = {
   agentNode: {
     label: 'agent',
   },
+  canvas: {
+    connect: { newInput: 'New input', reuseInput: 'Reuse input' },
+  },
   reviewNode: {
     label: 'review',
   },

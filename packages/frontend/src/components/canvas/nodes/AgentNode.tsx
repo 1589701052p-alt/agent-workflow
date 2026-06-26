@@ -22,7 +22,13 @@ export function AgentNode({ data, selected }: Props) {
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>
-      <PortHandles side="left" ports={data.inputPorts} catchAll={{ id: INBOUND_HANDLE_ID }} />
+      <PortHandles
+        side="left"
+        ports={data.inputPorts}
+        catchAll={{ id: INBOUND_HANDLE_ID }}
+        previewPort={data.previewInputPort}
+        reusePort={data.reuseInputPort}
+      />
       <PortHandles side="right" ports={data.outputPorts} />
       {/* xyflow needs at least one Handle of each type for valid drag flows;
           the right-side PortHandles cover outputs but agent-single also needs

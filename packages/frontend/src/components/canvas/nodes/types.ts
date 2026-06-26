@@ -28,6 +28,21 @@ export interface CanvasNodeData extends Record<string, unknown> {
   /** Input ports declared by this node (rendered on the left). */
   inputPorts: string[]
   /**
+   * RFC-106: while a connection is being dragged over this node, the name of
+   * the NEW input port the drop will create. Rendered as a live preview port
+   * row (identical to a real one) so the author sees exactly what will be wired
+   * before releasing. Injected during the drag and cleared on drag end. Absent
+   * when nothing is being dragged onto this node.
+   */
+  previewInputPort?: string
+  /**
+   * RFC-106: while a precise drop onto an EXISTING input port is hovered, the
+   * name of that port — PortHandles highlights its row so the author sees the
+   * drop will REUSE it (rather than add a new input). Mutually exclusive with
+   * `previewInputPort`.
+   */
+  reuseInputPort?: string
+  /**
    * Status color hint — populated by the task-detail canvas later. v1
    * editor leaves this `undefined` for the neutral default.
    */

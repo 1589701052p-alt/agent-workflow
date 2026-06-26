@@ -4897,6 +4897,71 @@ code {
   transform: none !important;
 }
 
+/* RFC-106 — live new-input PREVIEW port. While a connection is dragged over a
+ * node, ConnectDropHint injects a real preview input port row (PortHandles) and
+ * the custom connection line ends on its handle, so the author sees exactly the
+ * port + line that releasing will create. It looks like a real port (the whole
+ * point — "identical to released"); a faint accent + soft pulse just flags it
+ * as the incoming one. */
+.canvas-node__port-row--preview .canvas-node__port-label {
+  color: var(--accent);
+  font-style: italic;
+}
+.canvas-node__port-row--preview .canvas-node__handle {
+  background: var(--accent) !important;
+  animation: canvas-connect-preview-pulse 1s ease-in-out infinite;
+}
+@keyframes canvas-connect-preview-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+/* REUSE target: a precise drop onto an EXISTING input. Same pulse as the new
+ * preview so the highlight reads the same way, but in the warning hue so the
+ * author can tell new (accent) from reuse (warning) at a glance. */
+.canvas-node__port-row--reuse-target .canvas-node__port-label {
+  color: var(--warning, #e0a000);
+  font-weight: 600;
+}
+.canvas-node__port-row--reuse-target .canvas-node__handle {
+  background: var(--warning, #e0a000) !important;
+  animation: canvas-connect-reuse-pulse 1s ease-in-out infinite;
+}
+@keyframes canvas-connect-reuse-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning, #e0a000) 60%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning, #e0a000) 0%, transparent);
+  }
+}
+
+/* Floating NEW/REUSE badge (ConnectDropHint), follows the drag pointer. */
+.canvas-connect-badge {
+  pointer-events: none;
+  z-index: 10;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+  color: var(--panel);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+.canvas-connect-badge--new {
+  background: var(--accent);
+}
+.canvas-connect-badge--reuse {
+  background: var(--warning, #e0a000);
+}
+
 /* RFC-060 PR-E: RFC-015 agent-multi sourcePort handle styles are kept as
  * fanoutSourceSync stub remnants — no NodeKind renders them any more. They
  * stay as orphaned CSS until a future cleanup PR sweeps them out (low-risk
