@@ -4,8 +4,10 @@
 
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import type { CreateAgent } from '@agent-workflow/shared'
+import { useQuery } from '@tanstack/react-query'
+import type { Config, CreateAgent } from '@agent-workflow/shared'
 import { AGENT_NAME_RE } from '@agent-workflow/shared'
+import { api } from '@/api/client'
 import { AgentDependsPicker } from './AgentDependsPicker'
 import { DependencyAutodetectButton } from './agents/DependencyAutodetectButton'
 import { DependencyTreePreview } from './agents/DependencyTreePreview'
@@ -49,9 +51,28 @@ export function emptyAgent(): CreateAgent {
 export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // RFC-111: the runtime selector + claude model namespace are gated on the
+  // runtime config. Shares the ['config'] cache the agent routes already
+  // populate (ModelSelect already requires a QueryClientProvider here).
+  const config = useQuery<Config>({
+    queryKey: ['config'],
+    queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
+    staleTime: 30_000,
+    retry: false,
+  })
   function patch<K extends keyof CreateAgent>(key: K, next: CreateAgent[K]) {
     onChange({ ...value, [key]: next })
   }
+
+  // RFC-111 D17: surface the runtime selector unless claude is explicitly
+  // disabled (undefined ⇒ enabled now parity shipped). Keep showing it when
+  // the agent already pins a runtime so an existing value is never hidden.
+  const claudeEnabled = config.data?.claudeCodeEnabled !== false
+  const showRuntime = claudeEnabled || value.runtime != null
+  // Effective runtime = agent override → global default → opencode. Drives the
+  // model namespace + whether variant/temperature apply (claude has neither).
+  const effectiveRuntime = value.runtime ?? config.data?.defaultRuntime ?? 'opencode'
+  const isClaude = effectiveRuntime === 'claude-code'
 
   return (
     <div className="agent-form">
@@ -178,18 +199,49 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           </Field>
         ) : null}
 
+        {/* RFC-111: per-agent runtime override. Empty = inherit the global
+            default. Hidden only when claude is explicitly disabled in config
+            (and the agent doesn't already pin a runtime). */}
+        {showRuntime && (
+          <Field label={t('agentForm.fieldRuntime')} hint={t('agentForm.fieldRuntimeHint')}>
+            <Select<'' | 'opencode' | 'claude-code'>
+              value={value.runtime ?? ''}
+              ariaLabel={t('agentForm.fieldRuntime')}
+              onChange={(v) => patch('runtime', v === '' ? undefined : v)}
+              options={[
+                { value: '', label: t('agentForm.runtimeInherit') },
+                { value: 'opencode', label: t('agentForm.runtimeOpencode') },
+                { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
+              ]}
+            />
+          </Field>
+        )}
+
         <div className="form-grid form-grid--cols-3">
           <Field label={t('agentForm.fieldModel')}>
-            <ModelSelect value={value.model} onChange={(v) => patch('model', v)} />
+            <ModelSelect
+              value={value.model}
+              onChange={(v) => patch('model', v)}
+              runtime={isClaude ? 'claude' : 'opencode'}
+            />
           </Field>
-          <Field label={t('agentForm.fieldVariant')}>
+          {/* RFC-111: variant + temperature are opencode-only — Claude Code's
+              CLI has no equivalent. Disable + explain when claude is active. */}
+          <Field
+            label={t('agentForm.fieldVariant')}
+            hint={isClaude ? t('agentForm.claudeOptionsHint') : undefined}
+          >
             <TextInput
               value={value.variant ?? ''}
               onChange={(v) => patch('variant', v === '' ? undefined : v)}
               placeholder={t('common.optionalPlaceholder')}
+              disabled={isClaude}
             />
           </Field>
-          <Field label={t('agentForm.fieldTemperature')}>
+          <Field
+            label={t('agentForm.fieldTemperature')}
+            hint={isClaude ? t('agentForm.claudeOptionsHint') : undefined}
+          >
             <NumberInput
               value={value.temperature}
               onChange={(v) => patch('temperature', v)}
@@ -197,6 +249,7 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
               max={2}
               step={0.1}
               placeholder={t('agentForm.temperaturePlaceholder')}
+              disabled={isClaude}
             />
           </Field>
           <Field label={t('agentForm.fieldSteps')}>

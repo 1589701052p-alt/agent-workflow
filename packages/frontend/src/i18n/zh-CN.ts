@@ -1054,8 +1054,24 @@ export interface Resources {
     worktreePreserved: string
     recovery: {
       title: string
+      quarantineTitle: string
       quarantined: string
       clearQuarantine: string
+      summary: string
+      expand: string
+      collapse: string
+      kind: {
+        'boot-reap': string
+        'periodic-reap': string
+        'shutdown-flip': string
+        'limit-cancel': string
+        'snapshot-lost': string
+        'live-child-survived': string
+        'auto-resume': string
+        'auto-repair': string
+        'heartbeat-kill': string
+        quarantine: string
+      }
     }
     stuckBadge: string
     sectionWorkflowStatus: string
@@ -1582,6 +1598,13 @@ export interface Resources {
     roleAggregator: string
     fieldOutputWrapperPortNames: string
     fieldOutputWrapperPortNamesHint: string
+    /** RFC-111 — per-agent runtime selector + opencode-only field hint. */
+    fieldRuntime: string
+    fieldRuntimeHint: string
+    runtimeInherit: string
+    runtimeOpencode: string
+    runtimeClaudeCode: string
+    claudeOptionsHint: string
     fieldModel: string
     modelPlaceholder: string
     fieldVariant: string
@@ -1814,6 +1837,13 @@ export interface Resources {
     opencodePathHint: string
     defaultModel: string
     defaultModelHint: string
+    /** RFC-111 — global default runtime + claude-code default model. */
+    defaultRuntime: string
+    defaultRuntimeHint: string
+    defaultRuntimeOpencode: string
+    defaultRuntimeClaudeCode: string
+    defaultClaudeModel: string
+    defaultClaudeModelHint: string
     commitPushModel: string
     commitPushModelHint: string
     commitPushMaxRepairRetries: string
@@ -1871,6 +1901,11 @@ export interface Resources {
     runtimeStatusReprobe: string
     runtimeStatusMinVersion: string
     runtimeStatusHint: string
+    /** RFC-111 — soft claude-code probe card copy (optional runtime). */
+    claudeRuntimeStatusTitle: string
+    claudeRuntimeStatusProbing: string
+    claudeRuntimeStatusNotFound: string
+    claudeRuntimeStatusHint: string
     modelLoadFailed: string
     modelLoading: string
     modelRefresh: string
@@ -3500,8 +3535,24 @@ export const zhCN: Resources = {
       'Worktree 仍保留在 {{path}}。可手动检查；结束后执行 git worktree remove 清理。',
     recovery: {
       title: '恢复',
+      quarantineTitle: '自动恢复已暂停',
       quarantined: '该任务因反复自动恢复失败被熔断隔离，已暂停自动恢复。',
       clearQuarantine: '解除隔离',
+      summary: '系统已自动恢复此任务 {{count}} 次',
+      expand: '展开恢复记录',
+      collapse: '收起',
+      kind: {
+        'boot-reap': '启动时回收了中断的运行',
+        'periodic-reap': '巡检时回收了中断的运行',
+        'shutdown-flip': '守护进程关停时将运行标记为中断',
+        'limit-cancel': '因触及资源上限被取消',
+        'snapshot-lost': '快照已丢失，无法自动恢复',
+        'live-child-survived': '回滚后仍有未结束的子进程',
+        'auto-resume': '自动从断点继续运行',
+        'auto-repair': '自动修复了一处异常状态',
+        'heartbeat-kill': '终止了无响应的子进程',
+        quarantine: '多次自动恢复失败，已暂停自动恢复',
+      },
     },
     stuckBadge: '{{count}} 告警',
     sectionWorkflowStatus: '工作流状态',
@@ -4023,6 +4074,13 @@ export const zhCN: Resources = {
     fieldOutputWrapperPortNames: '输出 → wrapper 端口名映射',
     fieldOutputWrapperPortNamesHint:
       '仅聚合 agent 生效。JSON 对象，键为本 agent 声明的 output 端口名，值为 promote 到 wrapper-fanout 出口时的端口名；缺省即同名 mirror。',
+    fieldRuntime: '运行时',
+    fieldRuntimeHint:
+      '驱动该代理的 CLI 运行时。选"继承"则跟随全局默认。Claude Code 有独立的模型命名空间，且不支持 variant / temperature。',
+    runtimeInherit: '继承（全局默认）',
+    runtimeOpencode: 'opencode',
+    runtimeClaudeCode: 'Claude Code',
+    claudeOptionsHint: '仅 opencode 适用 — Claude Code 不支持 variant / temperature。',
     fieldModel: 'Model',
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
     fieldVariant: 'Variant',
@@ -4253,6 +4311,14 @@ export const zhCN: Resources = {
     opencodePathHint: '缺省走 PATH 上的 `which opencode`。',
     defaultModel: '默认 model',
     defaultModelHint: '没声明 model 的 agent 使用。',
+    defaultRuntime: '默认运行时',
+    defaultRuntimeHint:
+      '未指定运行时的代理所用的默认运行时。opencode 仍为硬性要求；claude-code 是可选的第二运行时。',
+    defaultRuntimeOpencode: 'opencode',
+    defaultRuntimeClaudeCode: 'Claude Code',
+    defaultClaudeModel: '默认 Claude Code 模型',
+    defaultClaudeModelHint:
+      'claude-code 代理未显式指定 model 时使用的模型（opus / sonnet / haiku 或完整模型 id）。',
     commitPushModel: '提交&推送模型',
     commitPushModelHint:
       'RFC-075 自动提交时生成 commit message / 修复被拒推送的模型；留空用 opencode 默认（建议填便宜模型）。',
@@ -4316,6 +4382,12 @@ export const zhCN: Resources = {
     runtimeStatusReprobe: '重新探测',
     runtimeStatusMinVersion: '最低 {{version}}',
     runtimeStatusHint: '红色状态请检查 opencode 路径字段。',
+    claudeRuntimeStatusTitle: 'Claude Code 运行状态（可选）',
+    claudeRuntimeStatusProbing: '正在探测 Claude Code…',
+    claudeRuntimeStatusNotFound:
+      '未找到 Claude Code 二进制 — 仅当你运行 claude-code 代理时才需要安装。',
+    claudeRuntimeStatusHint:
+      'Claude Code 是可选的第二运行时 — opencode 仍是默认；即便它不可用也不影响 opencode。',
     modelLoadFailed: '模型列表加载失败 — 已降级为手动输入。',
     modelLoading: '加载模型列表…',
     modelRefresh: '刷新',

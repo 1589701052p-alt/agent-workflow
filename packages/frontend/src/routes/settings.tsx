@@ -15,7 +15,11 @@ import { Dialog } from '@/components/Dialog'
 import { Field, NumberInput, Switch, TextInput } from '@/components/Form'
 import { ModelSelect } from '@/components/ModelSelect'
 import { Select } from '@/components/Select'
-import { RUNTIME_OPENCODE_QUERY_KEY, RuntimeStatusCard } from '@/components/RuntimeStatusCard'
+import {
+  RUNTIME_CLAUDE_QUERY_KEY,
+  RUNTIME_OPENCODE_QUERY_KEY,
+  RuntimeStatusCard,
+} from '@/components/RuntimeStatusCard'
 import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
 import { isSupportedLanguage } from '@/hooks/useLanguage'
 import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
@@ -152,6 +156,9 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
     [
       'opencodePath',
       'defaultModel',
+      // RFC-111: global default runtime + claude-code default model.
+      'defaultRuntime',
+      'defaultClaudeModel',
       'defaultVariant',
       'defaultTemperature',
       'defaultSteps',
@@ -168,6 +175,9 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
       onSaved: () => {
         // opencodePath may have changed — refresh the runtime status badge.
         void qc.invalidateQueries({ queryKey: RUNTIME_OPENCODE_QUERY_KEY })
+        // RFC-111: claudeCodePath / defaultRuntime may have moved — re-probe
+        // claude. The ['runtime','models'] prefix also drops the claude list.
+        void qc.invalidateQueries({ queryKey: RUNTIME_CLAUDE_QUERY_KEY })
         void qc.invalidateQueries({ queryKey: ['runtime', 'models'] })
       },
     },
@@ -181,6 +191,8 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
       >
         <RuntimeStatusCard />
       </div>
+      {/* RFC-111: claude-code is an optional second runtime — soft probe card. */}
+      <RuntimeStatusCard runtime="claude" />
       <SectionForm
         onSave={save.mutate}
         busy={save.isPending}
@@ -197,6 +209,28 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
           <ModelSelect
             value={state.defaultModel}
             onChange={(v) => setState({ ...state, defaultModel: v })}
+          />
+        </Field>
+        {/* RFC-111: global default runtime + claude-code default model. */}
+        <Field label={t('settingsForm.defaultRuntime')} hint={t('settingsForm.defaultRuntimeHint')}>
+          <Select<'opencode' | 'claude-code'>
+            value={state.defaultRuntime ?? 'opencode'}
+            ariaLabel={t('settingsForm.defaultRuntime')}
+            onChange={(v) => setState({ ...state, defaultRuntime: v })}
+            options={[
+              { value: 'opencode', label: t('settingsForm.defaultRuntimeOpencode') },
+              { value: 'claude-code', label: t('settingsForm.defaultRuntimeClaudeCode') },
+            ]}
+          />
+        </Field>
+        <Field
+          label={t('settingsForm.defaultClaudeModel')}
+          hint={t('settingsForm.defaultClaudeModelHint')}
+        >
+          <ModelSelect
+            runtime="claude"
+            value={state.defaultClaudeModel}
+            onChange={(v) => setState({ ...state, defaultClaudeModel: v })}
           />
         </Field>
         <Field label={t('settingsForm.defaultVariant')}>

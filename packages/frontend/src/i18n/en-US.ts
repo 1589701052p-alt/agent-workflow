@@ -1115,9 +1115,25 @@ export const enUS: Resources = {
       'Worktree preserved at {{path}}. You can inspect it manually, or run git worktree remove when done.',
     recovery: {
       title: 'Recovery',
+      quarantineTitle: 'Auto-recovery paused',
       quarantined:
         'This task was quarantined by the circuit-breaker after repeated auto-recovery failures; auto-recovery is paused.',
       clearQuarantine: 'Clear quarantine',
+      summary: 'The system auto-recovered this task {{count}} time(s)',
+      expand: 'Show history',
+      collapse: 'Hide',
+      kind: {
+        'boot-reap': 'Reclaimed an interrupted run at startup',
+        'periodic-reap': 'Reclaimed an interrupted run during a sweep',
+        'shutdown-flip': 'Marked the run interrupted on shutdown',
+        'limit-cancel': 'Canceled after hitting a resource limit',
+        'snapshot-lost': 'Snapshot lost — cannot auto-recover',
+        'live-child-survived': 'A child process survived the rollback',
+        'auto-resume': 'Auto-resumed from the last checkpoint',
+        'auto-repair': 'Auto-repaired an abnormal state',
+        'heartbeat-kill': 'Terminated an unresponsive child process',
+        quarantine: 'Paused auto-recovery after repeated failures',
+      },
     },
     stuckBadge: '{{count}} alert',
     sectionWorkflowStatus: 'Workflow status',
@@ -1675,6 +1691,13 @@ export const enUS: Resources = {
     fieldOutputWrapperPortNames: 'Output → wrapper port name map',
     fieldOutputWrapperPortNamesHint:
       "Aggregator-only. JSON object keyed by this agent's declared output port names; the value renames that port when it is promoted to the wrapper-fanout outlet. Missing keys mirror the original name.",
+    fieldRuntime: 'Runtime',
+    fieldRuntimeHint:
+      'Which CLI runtime drives this agent. Leave on "inherit" to follow the global default. Claude Code has its own model namespace and ignores variant / temperature.',
+    runtimeInherit: 'Inherit (global default)',
+    runtimeOpencode: 'opencode',
+    runtimeClaudeCode: 'Claude Code',
+    claudeOptionsHint: 'opencode-only — Claude Code ignores variant / temperature.',
     fieldModel: 'Model',
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
     fieldVariant: 'Variant',
@@ -1913,6 +1936,14 @@ export const enUS: Resources = {
     opencodePathHint: 'Defaults to `which opencode` from PATH.',
     defaultModel: 'Default model',
     defaultModelHint: 'Used by agents without an explicit `model`.',
+    defaultRuntime: 'Default runtime',
+    defaultRuntimeHint:
+      'Runtime used by agents that do not set their own. opencode stays a hard requirement; claude-code is an optional second runtime.',
+    defaultRuntimeOpencode: 'opencode',
+    defaultRuntimeClaudeCode: 'Claude Code',
+    defaultClaudeModel: 'Default Claude Code model',
+    defaultClaudeModelHint:
+      'Model for claude-code agents without an explicit model (opus / sonnet / haiku or a full model id).',
     commitPushModel: 'Commit & push model',
     commitPushModelHint:
       'Model that writes commit messages / repairs rejected pushes for RFC-075 auto commit&push. Blank = opencode default (a cheap model is recommended).',
@@ -1978,6 +2009,12 @@ export const enUS: Resources = {
     runtimeStatusReprobe: 'Re-probe',
     runtimeStatusMinVersion: 'Minimum {{version}}',
     runtimeStatusHint: 'Check the opencode path field if this shows red.',
+    claudeRuntimeStatusTitle: 'Claude Code runtime (optional)',
+    claudeRuntimeStatusProbing: 'Probing Claude Code…',
+    claudeRuntimeStatusNotFound:
+      'Claude Code binary not found — install it only if you run claude-code agents.',
+    claudeRuntimeStatusHint:
+      'Claude Code is an optional second runtime — opencode stays the default and is unaffected when this is unavailable.',
     modelLoadFailed: 'Failed to load model list — falling back to text input.',
     modelLoading: 'Loading models…',
     modelRefresh: 'Refresh',

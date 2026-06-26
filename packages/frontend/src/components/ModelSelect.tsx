@@ -20,27 +20,46 @@ import { TextInput } from '@/components/Form'
 import { Select, type SelectOption } from '@/components/Select'
 
 export const RUNTIME_MODELS_QUERY_KEY = ['runtime', 'models'] as const
+/**
+ * RFC-111: the claude-code model list is a separate cache entry (the backend
+ * returns a curated static list at `/api/runtime/models?runtime=claude`). The
+ * extra `'claude'` segment keeps it from colliding with the live opencode list.
+ */
+export const RUNTIME_CLAUDE_MODELS_QUERY_KEY = ['runtime', 'models', 'claude'] as const
 
 const CUSTOM_OPTION = '__custom__'
 
 interface Props {
   value: string | undefined
   onChange: (next: string | undefined) => void
+  /**
+   * RFC-111: which runtime's model namespace to list. `'opencode'` (default)
+   * is byte-identical to the pre-RFC-111 behavior; `'claude'` swaps the query
+   * key + appends `?runtime=claude` so the curated Claude Code list loads.
+   */
+  runtime?: 'opencode' | 'claude'
 }
 
-export function ModelSelect({ value, onChange }: Props) {
+export function ModelSelect({ value, onChange, runtime = 'opencode' }: Props) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const isClaude = runtime === 'claude'
+  const queryKey = isClaude ? RUNTIME_CLAUDE_MODELS_QUERY_KEY : RUNTIME_MODELS_QUERY_KEY
   const list = useQuery<RuntimeModelsResponse>({
-    queryKey: RUNTIME_MODELS_QUERY_KEY,
-    queryFn: ({ signal }) => api.get('/api/runtime/models', undefined, signal),
+    queryKey,
+    queryFn: ({ signal }) =>
+      api.get('/api/runtime/models', isClaude ? { runtime: 'claude' } : undefined, signal),
     staleTime: Infinity,
     retry: false,
   })
   const refresh = useMutation({
-    mutationFn: () => api.get<RuntimeModelsResponse>('/api/runtime/models', { refresh: '1' }),
+    mutationFn: () =>
+      api.get<RuntimeModelsResponse>(
+        '/api/runtime/models',
+        isClaude ? { runtime: 'claude', refresh: '1' } : { refresh: '1' },
+      ),
     onSuccess: (next) => {
-      qc.setQueryData(RUNTIME_MODELS_QUERY_KEY, next)
+      qc.setQueryData(queryKey, next)
     },
   })
 
