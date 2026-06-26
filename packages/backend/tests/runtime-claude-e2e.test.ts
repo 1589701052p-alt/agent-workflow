@@ -8,7 +8,7 @@
 import type { Agent } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
@@ -220,5 +220,73 @@ describe('runNode — claude-code runtime (RFC-111 PR-B)', () => {
     )
     expect(result.status).toBe('failed')
     expect(result.exitCode).toBe(1)
+  })
+})
+
+describe('runNode — claude injection parity (RFC-111 PR-C)', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+  afterEach(() => h.cleanup())
+
+  test('mcp → --mcp-config + --strict-mcp-config; dependsOn closure → --agents; skill copied', async () => {
+    const agent = makeAgent({ name: 'primary' })
+    const nodeRunId = await insertNodeRun(h.db, h.taskId)
+    // a managed skill on disk
+    const skillSrc = join(h.appHome, 'skill-src')
+    mkdirSync(skillSrc, { recursive: true })
+    writeFileSync(join(skillSrc, 'SKILL.md'), '# skill')
+    const dep: Agent = makeAgent({ name: 'reviewer', bodyMd: 'You review.' })
+    const argvFile = join(h.appHome, 'inj-argv.jsonl')
+    const skillsCapFile = join(h.appHome, 'inj-skills.json')
+    const result = await withEnv(
+      {
+        MOCK_CLAUDE_OUTPUTS: JSON.stringify({ summary: 'ok' }),
+        MOCK_CLAUDE_CAPTURE_ARGV_TO: argvFile,
+        MOCK_CLAUDE_CAPTURE_SKILLS_TO: skillsCapFile,
+      },
+      () =>
+        runNode({
+          taskId: h.taskId,
+          nodeRunId,
+          nodeId: 'node1',
+          agent,
+          inputs: {},
+          worktreePath: h.worktreePath,
+          templateMeta: { repoPath: '/tmp/repo', baseBranch: 'main', taskId: h.taskId },
+          skills: [{ name: 'my-skill', sourceKind: 'managed', sourcePath: skillSrc }],
+          dependents: [dep],
+          mcps: [
+            {
+              name: 'fs',
+              type: 'local',
+              enabled: true,
+              config: { command: ['npx', 'server'] },
+            } as never,
+          ],
+          appHome: h.appHome,
+          runtime: 'claude-code',
+          opencodeCmd: ['bun', 'run', MOCK_CLAUDE],
+          db: h.db,
+        }),
+    )
+    expect(result.status).toBe('done')
+    const argv = JSON.parse(readFileSync(argvFile, 'utf-8').trim()) as string[]
+    expect(argv).toContain('--mcp-config')
+    expect(argv).toContain('--strict-mcp-config')
+    expect(argv).toContain('--agents')
+    // the mcp/agents JSON payloads are present + well-formed
+    const mcpJson = JSON.parse(argv[argv.indexOf('--mcp-config') + 1]!) as {
+      mcpServers: Record<string, unknown>
+    }
+    expect(mcpJson.mcpServers.fs).toBeDefined()
+    const agentsJson = JSON.parse(argv[argv.indexOf('--agents') + 1]!) as Record<string, unknown>
+    expect(agentsJson.reviewer).toBeDefined()
+    // managed skill copied into CLAUDE_CONFIG_DIR/skills
+    // managed skill present in CLAUDE_CONFIG_DIR/skills at RUN time (the run dir
+    // is cleaned up afterwards, so the mock captures it live).
+    const injectedSkills = JSON.parse(readFileSync(skillsCapFile, 'utf-8')) as string[]
+    expect(injectedSkills).toContain('my-skill')
   })
 })

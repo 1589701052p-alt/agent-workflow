@@ -20,7 +20,8 @@
 //   MOCK_CLAUDE_CAPTURE_PROMPT_TO         path ← the stdin prompt verbatim
 //   MOCK_CLAUDE_CAPTURE_SYSTEM_PROMPT_TO  path ← the --append-system-prompt-file content
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const env = process.env
 const argv = process.argv.slice(2)
@@ -45,6 +46,14 @@ if (env.MOCK_CLAUDE_CAPTURE_SYSTEM_PROMPT_TO) {
   const file = i >= 0 ? argv[i + 1] : undefined
   if (file === undefined) fail('--append-system-prompt-file not in argv')
   writeFileSync(env.MOCK_CLAUDE_CAPTURE_SYSTEM_PROMPT_TO, readFileSync(file, 'utf-8'))
+}
+// RFC-111 PR-C: capture the skills the runner injected into CLAUDE_CONFIG_DIR at
+// RUN time (the runner cleans up the run dir afterwards, so the e2e can only see
+// injection through the live process).
+if (env.MOCK_CLAUDE_CAPTURE_SKILLS_TO) {
+  const skillsDir = env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, 'skills') : ''
+  const names = skillsDir && existsSync(skillsDir) ? readdirSync(skillsDir) : []
+  writeFileSync(env.MOCK_CLAUDE_CAPTURE_SKILLS_TO, JSON.stringify(names))
 }
 
 const sessionId = env.MOCK_CLAUDE_SESSION_ID || 'mock-claude-session-0001'

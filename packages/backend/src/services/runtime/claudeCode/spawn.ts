@@ -17,7 +17,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createLogger, type Logger } from '@/util/log'
 import type { SpawnPlan } from '../types'
+import { type ClaudeSkillInjection, prepareClaudeConfigDir } from './config'
 
 export interface ClaudeSpawnContext {
   /** Override `['claude']` (tests pass `['bun','run',mock]`). */
@@ -39,14 +41,31 @@ export interface ClaudeSpawnContext {
   /** RFC-067 per-task git identity (both non-empty to inject). */
   gitUserName?: string | null
   gitUserEmail?: string | null
+  /** RFC-111 PR-C: managed/external skills to inject into CLAUDE_CONFIG_DIR/skills. */
+  skills?: readonly ClaudeSkillInjection[]
+  /** RFC-111 PR-C: pre-built `--mcp-config` JSON (toClaudeMcpConfig); omitted → no MCP. */
+  mcpConfigJson?: string
+  /** RFC-111 PR-C: pre-built `--agents` JSON (toClaudeAgents); omitted → no subagents. */
+  agentsJson?: string
+  /**
+   * RFC-111 PR-C: bridge the subscription credential into the relocated config
+   * dir (macOS keychain / Linux file). Only true for REAL claude runs — tests
+   * (mock-claude) leave it false so CI never touches the keychain.
+   */
+  bridgeCredentials?: boolean
+  log?: Logger
 }
 
 /** Best-effort readonly write-tool denial (D7 — not a sandbox; Bash/MCP still write). */
 export const CLAUDE_READONLY_DISALLOWED_TOOLS = 'Write Edit MultiEdit NotebookEdit'
 
 export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
+  const log: Logger = ctx.log ?? createLogger('claude-code')
   const configDir = join(ctx.attemptDir, '.claude')
-  mkdirSync(configDir, { recursive: true })
+  mkdirSync(ctx.attemptDir, { recursive: true })
+  // RFC-111 PR-C: prepare CLAUDE_CONFIG_DIR — inject skills + (real runs only)
+  // bridge the subscription credential so the relocated dir can still auth.
+  prepareClaudeConfigDir(configDir, ctx.skills ?? [], log, ctx.bridgeCredentials === true)
   // Persona file consumed by --append-system-prompt-file (append, not replace:
   // keeps Claude Code's own tool/harness scaffolding — RFC-111 D6).
   const systemPromptFile = join(ctx.attemptDir, 'system.md')
@@ -66,6 +85,15 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
   if (ctx.model !== undefined && ctx.model.length > 0) cmd.push('--model', ctx.model)
   cmd.push('--append-system-prompt-file', systemPromptFile)
   if (ctx.readonly === true) cmd.push('--disallowed-tools', CLAUDE_READONLY_DISALLOWED_TOOLS)
+  // RFC-111 PR-C: MCP via --mcp-config (+ --strict-mcp-config so repo .mcp.json
+  // can't shadow the platform set, mirroring opencode's inline-config precedence).
+  if (ctx.mcpConfigJson !== undefined && ctx.mcpConfigJson.length > 0) {
+    cmd.push('--mcp-config', ctx.mcpConfigJson, '--strict-mcp-config')
+  }
+  // RFC-111 PR-C: dependsOn closure → claude subagents.
+  if (ctx.agentsJson !== undefined && ctx.agentsJson.length > 0) {
+    cmd.push('--agents', ctx.agentsJson)
+  }
   if (ctx.resumeSessionId !== undefined && ctx.resumeSessionId.length > 0) {
     cmd.push('--resume', ctx.resumeSessionId)
   }

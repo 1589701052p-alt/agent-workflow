@@ -62,6 +62,7 @@ import { getRuntimeDriver, type RuntimeKind } from './runtime'
 import type { SpawnPlan } from './runtime/types'
 import { buildOpencodeSpawn } from './runtime/opencode/spawn'
 import { buildClaudeSpawn } from './runtime/claudeCode/spawn'
+import { toClaudeAgents, toClaudeMcpConfig } from './runtime/claudeCode/inject'
 import { captureChildSessions } from './sessionCapture'
 import { startLiveSubagentCapture } from './subagentLiveCapture'
 import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
@@ -731,6 +732,9 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       injectedMemoryBlock !== null
         ? `${opts.agent.bodyMd}\n\n${injectedMemoryBlock}`
         : opts.agent.bodyMd
+    // RFC-111 PR-C: MCP + dependsOn-closure subagents → inline-JSON flags.
+    const claudeMcp = toClaudeMcpConfig(opts.mcps ?? [])
+    const claudeAgents = toClaudeAgents(opts.dependents ?? [])
     plan = buildClaudeSpawn({
       claudeCmd: opts.opencodeCmd,
       prompt,
@@ -742,6 +746,12 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       worktreePath: opts.worktreePath,
       gitUserName: opts.gitUserName,
       gitUserEmail: opts.gitUserEmail,
+      skills: opts.skills,
+      ...(claudeMcp !== null ? { mcpConfigJson: JSON.stringify(claudeMcp) } : {}),
+      ...(claudeAgents !== null ? { agentsJson: JSON.stringify(claudeAgents) } : {}),
+      // bridge subscription creds only on REAL claude runs (tests pass a cmd).
+      bridgeCredentials: opts.opencodeCmd === undefined,
+      log,
     })
   } else {
     plan = buildOpencodeSpawn({

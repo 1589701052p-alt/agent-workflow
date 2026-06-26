@@ -366,6 +366,12 @@ export const ENDPOINTS: EndpointSpec[] = [
     path: '/api/runtime/opencode',
     happy: { schema: z.object({}).passthrough() },
   },
+  // RFC-111: claude-code probe (soft).
+  {
+    method: 'GET',
+    path: '/api/runtime/claude',
+    happy: { schema: z.object({}).passthrough() },
+  },
   { method: 'GET', path: '/api/runtime/models' },
 
   // ---- backup ----
