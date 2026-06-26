@@ -57,6 +57,34 @@ export const ConfigSchema = z.object({
   defaultPerTaskMaxTotalTokens: z.number().int().nonnegative(),
   defaultPerNodeTimeoutMs: z.number().int().positive(),
 
+  // --- RFC-108 task auto-check & recovery (all default-safe; auto-execution OFF) ---
+  /** T18: auto-resume daemon-restart-interrupted tasks at boot. Default OFF. */
+  autoResumeOnBoot: z.boolean().default(false),
+  /** T19: per-rule auto-repair enablement (e.g. {"S4": true}). Default empty = all OFF. */
+  autoRepair: z.record(z.string(), z.boolean()).default({}),
+  /** T20: auto-kill a node whose opencode child went silent past heartbeatStallMs. Default OFF. */
+  autoKillStalledChild: z.boolean().default(false),
+  /** T20: event-silence window before a running node's child is considered wedged. */
+  heartbeatStallMs: z
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60 * 1000),
+  /** T11 circuit-breaker: auto-recovery attempts per window before quarantine. */
+  maxAutoRecoveriesPerWindow: z.number().int().positive().default(3),
+  /** T11 circuit-breaker: rolling window for the attempt count. */
+  autoRecoveryWindowMs: z
+    .number()
+    .int()
+    .positive()
+    .default(60 * 60 * 1000),
+  /** T17: periodic in-daemon orphan reconciler cadence (ms). 0 = off; reap-to-interrupted is safe-on. */
+  periodicOrphanReconcileMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(10 * 60 * 1000),
+
   // --- GC ---
   worktreeAutoGc: WorktreeGcSchema,
   eventsArchiveThresholds: EventsArchiveThresholdsSchema,
@@ -273,6 +301,14 @@ export const DEFAULT_CONFIG: Config = {
   // RFC-108 T4/AR-01: actually wired into the launch path (resolveLaunchRuntimeConfig)
   // so every node has a hard-timeout floor; was defined-but-never-threaded before.
   defaultPerNodeTimeoutMs: 30 * 60 * 1000, // 30 min
+  // RFC-108 auto-recovery knobs — auto-execution OFF by default (decision D1).
+  autoResumeOnBoot: false,
+  autoRepair: {},
+  autoKillStalledChild: false,
+  heartbeatStallMs: 30 * 60 * 1000,
+  maxAutoRecoveriesPerWindow: 3,
+  autoRecoveryWindowMs: 60 * 60 * 1000,
+  periodicOrphanReconcileMs: 10 * 60 * 1000,
   worktreeAutoGc: { enabled: false },
   eventsArchiveThresholds: {
     perNodeRunRows: 50_000,

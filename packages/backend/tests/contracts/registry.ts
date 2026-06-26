@@ -265,6 +265,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/alerts' },
   // RFC-108 T3: per-task system-recovery audit trail.
   { method: 'GET', path: '/api/tasks/:id/recovery-events' },
+  // RFC-108 T11: clear an auto-recovery quarantine.
+  { method: 'POST', path: '/api/tasks/:id/clear-recovery-suspension' },
   // RFC-057: Diagnose-Panel repair options.
   { method: 'GET', path: '/api/tasks/:id/alerts/:alertId/repair-options' },
   { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },

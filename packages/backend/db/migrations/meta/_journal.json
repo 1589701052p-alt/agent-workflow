@@ -365,6 +365,13 @@
       "when": 1782700000000,
       "tag": "0052_rfc108_recovery_events",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1782800000000,
+      "tag": "0053_rfc108_task_auto_recovery_breaker",
+      "breakpoints": true
     }
   ]
 }

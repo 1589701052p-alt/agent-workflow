@@ -444,6 +444,10 @@ export const tasks = sqliteTable(
     errorSummary: text('error_summary'),
     errorMessage: text('error_message'),
     failedNodeId: text('failed_node_id'),
+    // RFC-108 T11 (AR-09): circuit-breaker / quarantine accounting.
+    autoRecoveryAttempts: integer('auto_recovery_attempts').notNull().default(0),
+    autoRecoverySuspended: integer('auto_recovery_suspended').notNull().default(0),
+    autoRecoveryWindowStartedAt: integer('auto_recovery_window_started_at'),
     // optional expiry (soft delete after expires_at)
     expiresAt: integer('expires_at'),
     deletedAt: integer('deleted_at'),

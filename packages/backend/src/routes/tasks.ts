@@ -70,6 +70,7 @@ import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { listRecoveryEventsForTask } from '@/services/recovery'
+import { clearAutoRecoverySuspension } from '@/services/recoveryBreaker'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
@@ -352,6 +353,14 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/tasks/:id/recovery-events', async (c) => {
     const events = await listRecoveryEventsForTask(deps.db, c.req.param('id'))
     return c.json({ events })
+  })
+
+  // RFC-108 T11 (AR-09): human one-click clear of an auto-recovery quarantine
+  // (a task that crash-looped past the breaker threshold). Behind the same
+  // /api/tasks/:id visibility middleware (owner / collaborator / admin).
+  app.post('/api/tasks/:id/clear-recovery-suspension', async (c) => {
+    await clearAutoRecoverySuspension(deps.db, c.req.param('id'))
+    return c.json({ ok: true })
   })
 
   // RFC-053 P-3: on-demand invariant scan for the diagnose panel. Reads

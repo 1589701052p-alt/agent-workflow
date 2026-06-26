@@ -47,6 +47,10 @@ const STATUS_WRITE_ALLOWLIST: Record<string, number> = {
  */
 const NON_STATUS_UPDATE_TASKS_SNAPSHOT: Record<string, number> = {
   'services/limits.ts': 1,
+  // RFC-108 T11 (AR-09): circuit-breaker accounting — recordAutoRecoveryAttempt
+  // updates auto_recovery_{attempts,window_started_at,suspended};
+  // clearAutoRecoverySuspension resets them. Neither touches `status`.
+  'services/recoveryBreaker.ts': 2,
 }
 
 function walkTsFiles(dir: string): string[] {
