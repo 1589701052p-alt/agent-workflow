@@ -9,6 +9,9 @@ import { createApp } from '@/server'
 import { startFusionReconcileLoop } from '@/services/fusion'
 import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
+import { autoResumeInterruptedTasks } from '@/services/autoResume'
+import { resumeTask } from '@/services/task'
+import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
 import { startLifecycleInvariantsLoop } from '@/services/lifecycleInvariants'
@@ -302,6 +305,35 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // RFC-101: settle running fusions (engine task done → awaiting_approval) so
   // the inbox badge lights up without a client poll.
   const fusionReconcileTicker = startFusionReconcileLoop({ db, appHome: Paths.root })
+
+  // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes
+  // the daemon-restart loop: every task `reapOrphanRuns` just flipped to
+  // `interrupted` is re-driven automatically, but only through the breaker +
+  // quarantine + driver-lease + recovery audit (autoResumeInterruptedTasks).
+  // Non-blocking — never hold the ready line on N resumes; resumeTask's CAS
+  // ownership claim keeps it safe against the scheduler / a human racing in.
+  if (config.autoResumeOnBoot) {
+    const resumeDeps = {
+      db,
+      ...(config.opencodePath ? { opencodeCmd: [config.opencodePath] } : {}),
+      ...(config.subagentLiveCapture !== undefined
+        ? { subagentLiveCapture: config.subagentLiveCapture }
+        : {}),
+      ...resolveLaunchRuntimeConfig(Paths.config),
+    }
+    void autoResumeInterruptedTasks({
+      db,
+      breaker: {
+        maxPerWindow: config.maxAutoRecoveriesPerWindow,
+        windowMs: config.autoRecoveryWindowMs,
+      },
+      resume: (taskId) => resumeTask(db, taskId, resumeDeps).then(() => undefined),
+    }).catch((err) =>
+      log.warn('boot auto-resume failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
 
   // 9. Graceful shutdown (P-4-06).
   //
