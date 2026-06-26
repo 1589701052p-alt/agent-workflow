@@ -104,6 +104,12 @@ export const AgentSchema = z.object({
    */
   syncOutputsOnIterate: z.boolean(),
   model: z.string().optional(),
+  /**
+   * RFC-111: agent runtime. Absent → inherit config.defaultRuntime (→ opencode).
+   * The model namespace follows the runtime (opencode: provider/model; claude:
+   * opus/sonnet/full-id). variant/temperature are opencode-only.
+   */
+  runtime: z.enum(['opencode', 'claude-code']).optional(),
   variant: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema,
@@ -163,6 +169,8 @@ export const CreateAgentSchema = z.object({
   /** RFC-014: default true — author must explicitly opt-out. */
   syncOutputsOnIterate: z.boolean().default(true),
   model: z.string().min(1).optional(),
+  /** RFC-111: agent runtime; absent → inherit config.defaultRuntime. */
+  runtime: z.enum(['opencode', 'claude-code']).optional(),
   variant: z.string().min(1).optional(),
   temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema.default({}),

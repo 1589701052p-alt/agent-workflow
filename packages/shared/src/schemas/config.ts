@@ -35,6 +35,21 @@ export const ConfigSchema = z.object({
   // --- Runtime ---
   /** Override opencode binary path. Falls back to `which opencode` (PATH). */
   opencodePath: z.string().min(1).optional(),
+  /**
+   * RFC-111: global default runtime for agents that don't set their own.
+   * Omitted → 'opencode' (zero behavior change). opencode stays a hard daemon
+   * requirement; claude-code is an additional, optional runtime (D14).
+   */
+  defaultRuntime: z.enum(['opencode', 'claude-code']).optional(),
+  /** RFC-111: override the `claude` binary path. Falls back to PATH. */
+  claudeCodePath: z.string().min(1).optional(),
+  /** RFC-111: default model for claude-code agents (own namespace: opus/sonnet/full-id). */
+  defaultClaudeModel: z.string().min(1).optional(),
+  /**
+   * RFC-111 D17: gate user-visible claude-code selection (Agent form / settings)
+   * until injection parity (PR-C) + capture (PR-D) land. Default off.
+   */
+  claudeCodeEnabled: z.boolean().optional(),
   /** Default model for agents without an explicit model. */
   defaultModel: z.string().min(1).optional(),
   defaultVariant: z.string().min(1).optional(),

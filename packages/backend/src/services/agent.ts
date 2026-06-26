@@ -75,6 +75,7 @@ export async function createAgent(
     readonly: input.readonly,
     syncOutputsOnIterate: input.syncOutputsOnIterate,
     model: input.model ?? null,
+    runtime: input.runtime ?? null, // RFC-111
     variant: input.variant ?? null,
     temperature: input.temperature ?? null,
     permission: JSON.stringify(input.permission),
@@ -492,6 +493,8 @@ function rowToAgent(row: AgentRow): Agent {
     agent.outputWrapperPortNames = outputWrapperPortNames
   }
   if (row.model !== null) agent.model = row.model
+  // RFC-111: map the runtime column; unknown/legacy values stay absent (→ inherit).
+  if (row.runtime === 'opencode' || row.runtime === 'claude-code') agent.runtime = row.runtime
   if (row.variant !== null) agent.variant = row.variant
   if (row.temperature !== null) agent.temperature = row.temperature
   if (row.steps !== null) agent.steps = row.steps

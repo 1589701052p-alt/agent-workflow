@@ -43,11 +43,13 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
   commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number
+  defaultRuntime?: 'opencode' | 'claude-code'
 } {
   const out: {
     commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
     maxConcurrentNodes?: number
     defaultPerNodeTimeoutMs?: number
+    defaultRuntime?: 'opencode' | 'claude-code'
   } = {}
   const commitPush = resolveCommitPushConfig(configPath)
   if (commitPush !== undefined) out.commitPush = commitPush
@@ -56,6 +58,8 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
     if (cfg.maxConcurrentNodes !== undefined) out.maxConcurrentNodes = cfg.maxConcurrentNodes
     if (cfg.defaultPerNodeTimeoutMs !== undefined && cfg.defaultPerNodeTimeoutMs > 0)
       out.defaultPerNodeTimeoutMs = cfg.defaultPerNodeTimeoutMs
+    // RFC-111: global default runtime threaded to the scheduler dispatch site.
+    if (cfg.defaultRuntime !== undefined) out.defaultRuntime = cfg.defaultRuntime
   } catch {
     // fall back to the scheduler defaults
   }

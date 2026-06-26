@@ -21,10 +21,12 @@
 // deriveFrontier's in-flight set and freeze the frontier. Violation throws
 // (pinned by node-run-mint.test.ts).
 
+import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { NodeRunStatus, RerunCause } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
+import { resolveRuntime, type RuntimeKind } from '@/services/runtime'
 
 /**
  * Statuses a row may be BORN with. Everything else (canceled / interrupted /
@@ -208,4 +210,31 @@ export function schedulerMintCause(
  */
 export function isClarifyRerunCause(cause: string | null | undefined): boolean {
   return cause === 'clarify-answer' || cause === 'cross-clarify-questioner-rerun'
+}
+
+/**
+ * RFC-111 D15 — read the runtime frozen onto a node_run, or on the FIRST
+ * dispatch (runtime still NULL) resolve it from `agent.runtime ?? defaultRuntime`
+ * and freeze it. resume/retry of the SAME row read the frozen value, so a
+ * mutated agent / default can't re-route a captured session to the wrong
+ * runtime (session id + runtime must be consumed as a pair, D11). An
+ * unrecognized stored value reads as 'opencode' (legacy rows are NULL).
+ */
+export async function resolveFrozenRuntime(
+  db: DbClient,
+  nodeRunId: string,
+  agentRuntime: string | null | undefined,
+  defaultRuntime: string | null | undefined,
+): Promise<RuntimeKind> {
+  const row = (
+    await db
+      .select({ runtime: nodeRuns.runtime })
+      .from(nodeRuns)
+      .where(eq(nodeRuns.id, nodeRunId))
+      .limit(1)
+  )[0]
+  if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') return row.runtime
+  const resolved = resolveRuntime(agentRuntime, defaultRuntime)
+  await db.update(nodeRuns).set({ runtime: resolved }).where(eq(nodeRuns.id, nodeRunId))
+  return resolved
 }

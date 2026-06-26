@@ -33,6 +33,9 @@ export const agents = sqliteTable('agents', {
     .notNull()
     .default(true),
   model: text('model'), // nullable; falls back to settings.defaultModel
+  // RFC-111: per-agent runtime ('opencode' | 'claude-code'); NULL = inherit
+  // config.defaultRuntime (→ 'opencode'). Model namespace follows the runtime.
+  runtime: text('runtime'),
   variant: text('variant'),
   temperature: real('temperature'),
   permission: text('permission').notNull().default('{}'), // JSON: opencode permission schema
@@ -611,6 +614,14 @@ export const nodeRuns = sqliteTable(
      * the prior session's full transcript is resumed.
      */
     opencodeSessionId: text('opencode_session_id'),
+    /**
+     * RFC-111 D15: the runtime ('opencode' | 'claude-code') frozen onto this
+     * node_run at dispatch time (resolved once from agent.runtime ??
+     * config.defaultRuntime). resume/retry read this instead of re-resolving so
+     * a mutated agent/default can't re-route a captured session to the wrong
+     * runtime. NULL on legacy rows → read as 'opencode'.
+     */
+    runtime: text('runtime'),
     /**
      * RFC-029: serialized `InventorySnapshot` (shared/inventory.ts) — what the
      * opencode child process actually loaded (agents / skills / mcps /

@@ -84,7 +84,13 @@ import {
 } from '@/services/clarifyFallback'
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
-import { isClarifyRerunCause, mintNodeRun, schedulerMintCause } from '@/services/nodeRunMint'
+import {
+  isClarifyRerunCause,
+  mintNodeRun,
+  resolveFrozenRuntime,
+  schedulerMintCause,
+} from '@/services/nodeRunMint'
+import type { RuntimeKind } from '@/services/runtime'
 import { getTaskWriteSem, gcTaskWriteSem } from '@/services/taskWriteLocks'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import {
@@ -188,6 +194,14 @@ export interface RunTaskOptions {
   commitPushMaxRepairRetries?: number
   /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
   commitPushDiffMaxBytes?: number
+  /**
+   * RFC-111 D1/D15: global default runtime (from config.defaultRuntime). At the
+   * agent-dispatch site each node's runtime is resolved once from
+   * `agent.runtime ?? defaultRuntime` and frozen onto node_runs.runtime; resume
+   * reads the frozen value. Omitted → 'opencode'. Internal agents (commit&push)
+   * stay on opencode regardless (D14).
+   */
+  defaultRuntime?: RuntimeKind
 }
 
 type NodeStatus =
@@ -2353,11 +2367,22 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           followupDecision.followup && effectiveHasClarifyChannel
             ? clarifyContext?.directive
             : undefined
+        // RFC-111 D15: read the runtime frozen onto this node_run, or freeze it
+        // now (agent.runtime ?? config.defaultRuntime) on the first dispatch.
+        // resume/retry of the same row read the frozen value so a mutated
+        // agent / default can't re-route a captured session to the wrong runtime.
+        const frozenRuntime = await resolveFrozenRuntime(
+          db,
+          nodeRunId,
+          agent.runtime,
+          state.opts.defaultRuntime,
+        )
         lastResult = await runNode({
           taskId,
           nodeRunId,
           nodeId: node.id,
           agent,
+          runtime: frozenRuntime,
           inputs: upstreamInputs,
           worktreePath: task.worktreePath,
           // RFC-067: thread per-task Git commit identity through to the runner
