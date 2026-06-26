@@ -124,6 +124,15 @@ export interface StartTaskDeps {
    * the default regardless of the configured value.
    */
   maxConcurrentNodes?: number
+  /**
+   * RFC-108 T5 (AR-02): per-task budget defaults resolved from settings
+   * (`defaultPerTaskMaxDurationMs` / `defaultPerTaskMaxTotalTokens`) by the
+   * route. `startTask` uses them as the fallback when the launch input omits an
+   * explicit limit, so the previously-dead config fields actually bound a task.
+   * Only present when positive (0 = unlimited → omitted → row stays NULL).
+   */
+  defaultPerTaskMaxDurationMs?: number
+  defaultPerTaskMaxTotalTokens?: number
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -760,8 +769,11 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     baseCommit: headBaseCommit,
     status: earlyError === null ? 'pending' : 'failed',
     inputs: JSON.stringify(input.inputs),
-    maxDurationMs: input.maxDurationMs ?? null,
-    maxTotalTokens: input.maxTotalTokens ?? null,
+    // RFC-108 T5 (AR-02): fall back to the settings default when the launch
+    // input omits a limit, so `defaultPerTaskMax*` is actually consumed. deps
+    // carries the value only when positive (0 = unlimited → stays NULL).
+    maxDurationMs: input.maxDurationMs ?? deps.defaultPerTaskMaxDurationMs ?? null,
+    maxTotalTokens: input.maxTotalTokens ?? deps.defaultPerTaskMaxTotalTokens ?? null,
     // RFC-067: per-task Git commit identity (NULL when omitted or only
     // half-set; runner.ts skips env injection when these are NULL).
     gitUserName: persistedGitUserName,

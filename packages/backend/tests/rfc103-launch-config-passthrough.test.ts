@@ -43,10 +43,13 @@ describe('RFC-103 T2 源码层接线断言（防再漂）', () => {
   const routesSrc = readFileSync(join(import.meta.dir, '../src/routes/tasks.ts'), 'utf8')
   const taskSrc = readFileSync(join(import.meta.dir, '../src/services/task.ts'), 'utf8')
 
-  test('routes/tasks.ts 的 5 个 launch 入口都调用 resolveLaunchRuntimeConfig', () => {
+  test('routes/tasks.ts 的 7 个入口都调用 resolveLaunchRuntimeConfig', () => {
     const calls = routesSrc.match(/resolveLaunchRuntimeConfig\(deps\.configPath\)/g) ?? []
-    // JSON start / multipart-start(fail) / multipart-start(success) / resume / retry
-    expect(calls.length).toBe(5)
+    // RFC-103 (5): JSON start / multipart-start(fail) / multipart-start(success) / resume / retry
+    // RFC-108 T4 (+2, Codex design gate P2): repair-options + repair — a repair
+    // option may resumeAfterApply → resumeTask(deps), which must carry the
+    // timeout floor + commit&push + concurrency just like the launch entries.
+    expect(calls.length).toBe(7)
   })
 
   test('routes 不再保留旧的「只 start 传 commitPush」单点写法', () => {

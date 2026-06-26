@@ -147,21 +147,43 @@ function resolveCommitPushConfig(
  * starts silently fell back to default commit&push behavior (01-LIFE-06 /
  * 02-SCHED). Single source so the entries can't drift again.
  */
-function resolveLaunchRuntimeConfig(configPath: string): {
+// RFC-108 T4/T5: exported so a unit test can assert the launch-path resolver
+// threads the per-node timeout floor + per-task budgets from settings (these
+// config fields existed but were consumed nowhere — see AR-01/AR-02).
+export function resolveLaunchRuntimeConfig(configPath: string): {
   commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
   maxConcurrentNodes?: number
+  defaultPerNodeTimeoutMs?: number
+  defaultPerTaskMaxDurationMs?: number
+  defaultPerTaskMaxTotalTokens?: number
 } {
   const out: {
     commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
     maxConcurrentNodes?: number
+    defaultPerNodeTimeoutMs?: number
+    defaultPerTaskMaxDurationMs?: number
+    defaultPerTaskMaxTotalTokens?: number
   } = {}
   const commitPush = resolveCommitPushConfig(configPath)
   if (commitPush !== undefined) out.commitPush = commitPush
   try {
     const cfg = loadConfig(configPath)
     if (cfg.maxConcurrentNodes !== undefined) out.maxConcurrentNodes = cfg.maxConcurrentNodes
+    // RFC-108 T4 (AR-01): per-node hard-timeout floor. The scheduler reads this
+    // as `pickNumber(node,'timeoutMs') ?? opts.defaultPerNodeTimeoutMs`, so
+    // threading it here gives every node a default kill bound; a per-node
+    // override still RAISES it. Always thread when set (positive in schema).
+    if (cfg.defaultPerNodeTimeoutMs !== undefined && cfg.defaultPerNodeTimeoutMs > 0)
+      out.defaultPerNodeTimeoutMs = cfg.defaultPerNodeTimeoutMs
+    // RFC-108 T5 (AR-02): per-task budget defaults. Only thread when positive —
+    // 0 means "no default cap" (unlimited); startTask falls back to NULL so a
+    // canceled-on-budget (non-resumable) task is never imposed by default.
+    if (cfg.defaultPerTaskMaxDurationMs !== undefined && cfg.defaultPerTaskMaxDurationMs > 0)
+      out.defaultPerTaskMaxDurationMs = cfg.defaultPerTaskMaxDurationMs
+    if (cfg.defaultPerTaskMaxTotalTokens !== undefined && cfg.defaultPerTaskMaxTotalTokens > 0)
+      out.defaultPerTaskMaxTotalTokens = cfg.defaultPerTaskMaxTotalTokens
   } catch {
-    // fall back to the scheduler default (4)
+    // fall back to the scheduler defaults
   }
   return out
 }
@@ -442,6 +464,10 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         db: deps.db,
         ...(opencodeCmd ? { opencodeCmd } : {}),
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+        // RFC-108 T4 (Codex design gate P2): a repair option may resumeAfterApply
+        // → resumeTask(deps); thread the same runtime config (timeout floor +
+        // commit&push + concurrency) so repair-kicked nodes are not unbounded.
+        ...resolveLaunchRuntimeConfig(deps.configPath),
       },
     })
     return c.json(result)
@@ -471,6 +497,10 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         db: deps.db,
         ...(opencodeCmd ? { opencodeCmd } : {}),
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
+        // RFC-108 T4 (Codex design gate P2): repair → resumeAfterApply →
+        // resumeTask(deps) must carry the runtime config (timeout floor +
+        // commit&push + concurrency), else auto/manual repairs kick unbounded nodes.
+        ...resolveLaunchRuntimeConfig(deps.configPath),
       },
       onAlert: (row, transition) => {
         tasksListBroadcaster.broadcast(TASKS_LIST_CHANNEL, {
