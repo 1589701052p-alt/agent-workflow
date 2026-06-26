@@ -10,6 +10,7 @@ import { startFusionReconcileLoop } from '@/services/fusion'
 import { startLimitsTicker } from '@/services/limits'
 import { reapOrphanRuns } from '@/services/orphans'
 import { autoResumeInterruptedTasks } from '@/services/autoResume'
+import { startAutoRepairLoop } from '@/services/autoRepair'
 import { resumeTask } from '@/services/task'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
@@ -306,6 +307,14 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // the inbox badge lights up without a client poll.
   const fusionReconcileTicker = startFusionReconcileLoop({ db, appHome: Paths.root })
 
+  // RFC-108 T19 (AR-04) — closed auto-repair loop (DEFAULT OFF). Free until an
+  // operator enables a rule in config.autoRepair (each tick early-outs in O(1)).
+  const autoRepairTicker = startAutoRepairLoop({
+    db,
+    appHome: Paths.root,
+    configPath: Paths.config,
+  })
+
   // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes
   // the daemon-restart loop: every task `reapOrphanRuns` just flipped to
   // `interrupted` is re-driven automatically, but only through the breaker +
@@ -371,6 +380,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     lifecycleInvariantsTicker.stop()
     stuckDetectorTicker.stop()
     fusionReconcileTicker.stop()
+    autoRepairTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {

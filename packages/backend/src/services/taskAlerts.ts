@@ -39,6 +39,26 @@ export async function listOpenLifecycleAlertsForTask(
   }))
 }
 
+/**
+ * RFC-108 T19: all open lifecycle alerts across every task (the auto-repair loop
+ * scans globally, not per-task). Oldest first.
+ */
+export async function listAllOpenLifecycleAlerts(db: DbClient): Promise<OpenLifecycleAlert[]> {
+  const rows = await db
+    .select()
+    .from(lifecycleAlerts)
+    .where(isNull(lifecycleAlerts.resolvedAt))
+    .orderBy(asc(lifecycleAlerts.detectedAt))
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.taskId,
+    rule: r.rule as LifecycleAlertRule,
+    severity: r.severity as InvariantSeverity,
+    detail: safeParseDetail(r.detail),
+    detectedAt: r.detectedAt,
+  }))
+}
+
 function safeParseDetail(raw: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(raw)

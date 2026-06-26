@@ -168,6 +168,9 @@ export async function listRepairOptionsForAlert(
       destructive: def.destructive,
       available: pre.available,
       previewSteps: pre.previewSteps,
+      // RFC-108 T13: thread the auto-apply classifier flag to the resolved option
+      // so the auto-repair loop's selector (and the frontend) can see it.
+      ...(def.autoApplyEligible ? { autoApplyEligible: true } : {}),
       ...(pre.unavailableReasonKey ? { unavailableReasonKey: pre.unavailableReasonKey } : {}),
     }
     options.push(o)
