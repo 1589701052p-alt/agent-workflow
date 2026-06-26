@@ -76,7 +76,16 @@ export async function loadRollbackTarget(
 export async function rollbackNodeRunWorktrees(
   target: RollbackTarget,
   run: RollbackRunRow,
-  opts: { resetOnEmptySnapshot: boolean },
+  opts: {
+    resetOnEmptySnapshot: boolean
+    /**
+     * RFC-108 T7 (AR-17): dry-run. Runs the same fail-closed `gitCommitExists`
+     * existence checks (populating `snapshot-missing` failures) but NEVER
+     * touches a worktree. Used by resumeKick's cross-node-run pre-pass so a
+     * LATER row's pruned snapshot is detected BEFORE any earlier row is reset.
+     */
+    checkOnly?: boolean
+  },
   log: Logger,
 ): Promise<RollbackOutcome> {
   const outcome: RollbackOutcome = { attempted: false, failures: [] }
@@ -131,6 +140,8 @@ export async function rollbackNodeRunWorktrees(
       }
     }
     if (outcome.failures.length > 0) return outcome
+    // RFC-108 T7: dry-run stops here — existence verified, nothing reset.
+    if (opts.checkOnly) return outcome
 
     // Phase 2: every snapshot verified — execute the per-repo rollback.
     for (const repo of target.repos) {
@@ -160,6 +171,18 @@ export async function rollbackNodeRunWorktrees(
   if (target.worktreePath === '') return outcome
   const snap = run.preSnapshot ?? ''
   if (snap === '' && !opts.resetOnEmptySnapshot) return outcome
+  // RFC-108 T7: dry-run existence check (cross-row pre-pass) — verify the
+  // snapshot resolves to a commit without touching the worktree. An empty snap
+  // in retry mode ('' = reset-only) has no object to verify, so it never fails.
+  if (opts.checkOnly) {
+    if (snap !== '' && !(await gitCommitExists(target.worktreePath, snap))) {
+      outcome.failures.push({
+        code: 'snapshot-missing',
+        message: `snapshot ${snap} not found in the object database (pruned by gc?); no repo touched`,
+      })
+    }
+    return outcome
+  }
   try {
     await rollbackToSnapshot(target.worktreePath, snap)
     outcome.attempted = true

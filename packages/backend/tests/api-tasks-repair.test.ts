@@ -14,7 +14,9 @@
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { Hono } from 'hono'
-import { resolve } from 'node:path'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 
 import type { TasksListWsMessage, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -59,13 +61,16 @@ async function seedRunningTaskWithS3(
   const taskId = ulid()
   const workflowId = ulid()
   await db.insert(workflows).values({ id: workflowId, name: 'w', definition: JSON.stringify(def) })
+  // RFC-108 T6 (AR-15): repair's resumeAfterApply → resumeTask now 410s on a
+  // MISSING worktree dir. Give the fixture a present dir (no git ops needed).
+  const wt = mkdtempSync(join(tmpdir(), 'aw-repair-wt-'))
   await db.insert(tasks).values({
     id: taskId,
     name: 't',
     workflowId,
     workflowSnapshot: JSON.stringify(def),
     repoPath: '/tmp/r',
-    worktreePath: '/tmp/wt',
+    worktreePath: wt,
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,
     status: 'running',

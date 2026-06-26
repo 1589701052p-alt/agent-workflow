@@ -70,13 +70,17 @@ async function seedTask(
     createdAt: Date.now(),
     updatedAt: Date.now(),
   })
+  // RFC-108 T6 (AR-15): resumeTask now 410s on a MISSING worktree dir (gc
+  // reclaim). This DB-level fixture used a non-existent '/tmp/wt' stub; give it a
+  // present dir so the existence pre-flight passes (still no git ops — empty wf).
+  const wt = mkdtempSync(join(tmpdir(), 'aw-gap1-wt-'))
   await db.insert(tasks).values({
     name: 'fixture-task',
     id: taskId,
     workflowId,
     workflowSnapshot: EMPTY_DEF,
     repoPath: '/tmp/repo',
-    worktreePath: '/tmp/wt',
+    worktreePath: wt,
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,
     status: 'running',

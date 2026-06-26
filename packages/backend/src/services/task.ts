@@ -993,13 +993,47 @@ async function rollbackNodeRunForResume(
   task: Task,
   run: { id: string; preSnapshot: string | null; preSnapshotReposJson: string | null },
   log: ReturnType<typeof createLogger>,
+  opts?: { checkOnly?: boolean },
 ): Promise<RollbackOutcome> {
   return await rollbackNodeRunWorktrees(
     { repoCount: task.repoCount, worktreePath: task.worktreePath, repos: task.repos },
     run,
-    { resetOnEmptySnapshot: false },
+    { resetOnEmptySnapshot: false, ...(opts?.checkOnly ? { checkOnly: true } : {}) },
     log,
   )
+}
+
+/**
+ * RFC-108 T6 (AR-15): fail CLEAN with 410 if a resumable task's worktree is
+ * gone (e.g. `worktreeAutoGc` reclaimed a still-`failed`/`interrupted` task —
+ * the gc.ts blindspot) BEFORE the ownership CAS flips the row to pending.
+ * Otherwise resumeKick CAS-flips to pending then warn-and-continues into a
+ * scheduler kick whose cwd no longer exists (a generic 500). Mirrors
+ * getTaskDiff's worktree-missing guard (single vs multi-repo).
+ */
+function assertWorktreePresentForResume(task: Task, verb: string): void {
+  const gone = (msg: string): never => {
+    throw new DomainError(
+      'task-worktree-missing',
+      `${msg}; cannot ${verb} — the worktree was likely reclaimed by worktree GC`,
+      410,
+    )
+  }
+  // AR-15's concern is `worktreeAutoGc` REMOVING the worktree (removeWorktree
+  // deletes the dir), so an existence check is the right gate — and it does not
+  // false-fire on tasks whose worktree dir is present but not (yet) a git repo
+  // (a per-repo "source moved" edge that the diff path handles separately).
+  if (!existsSync(task.worktreePath)) {
+    gone(`worktree '${task.worktreePath}' does not exist`)
+  }
+  // Multi-repo: the container survived but every per-repo worktree was reclaimed.
+  if (
+    task.repoCount > 1 &&
+    task.repos.length > 0 &&
+    !task.repos.some((r) => existsSync(r.worktreePath))
+  ) {
+    gone(`task '${task.id}' has no remaining repo worktree (all reclaimed by gc)`)
+  }
 }
 
 /**
@@ -1109,6 +1143,7 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
     reason: 'resumeTask',
     conflictCode: 'task-not-resumable',
     verb: 'resume',
+    worktreePreflight: true, // RFC-108 T6 (AR-15)
   })
 }
 
@@ -1137,6 +1172,13 @@ async function resumeKick(
     reason: 'resumeTask' | 'syncTaskWorkflow'
     conflictCode: string
     verb: string
+    /**
+     * RFC-108 T6 (AR-15): when true, 410 before the CAS if the worktree is gone
+     * (gc reclaimed a resumable task). resumeTask opts in; syncTaskWorkflow
+     * (RFC-109) leaves it off for now (it may opt in once its harness uses a
+     * real worktree). The T7 cross-row snapshot pre-pass below is unconditional.
+     */
+    worktreePreflight?: boolean
   },
 ): Promise<Task> {
   const task = await getTask(db, id)
@@ -1157,6 +1199,13 @@ async function resumeKick(
       opts.conflictCode,
       `task '${id}' is ${task.status}; only [${allowedFrom.join('/')}] tasks can ${opts.verb}`,
     )
+  }
+
+  // RFC-108 T6 (AR-15): 410 before the ownership CAS when the worktree is gone
+  // (gc reclaimed a resumable task) — never flip to pending then 500 on a
+  // missing cwd. Gated per-caller (resumeTask opts in).
+  if (opts.worktreePreflight === true) {
+    assertWorktreePresentForResume(task, opts.verb)
   }
 
   // RFC-097 ownership lock — the pending CAS moves BEFORE the git rollback so a
@@ -1197,6 +1246,19 @@ async function resumeKick(
   // scheduler-boundary-resume-retryindex-vs-id.test.ts.
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, id))
   const toRollback = opts.selectRollback(runs)
+
+  // RFC-108 T7 (AR-17): cross-node-run all-or-nothing pre-pass. The within-row
+  // rollback is fail-closed, but the reset loop below touches rows one at a
+  // time — if a LATER row's pre_snapshot was gc-pruned, earlier rows are already
+  // reset (and their children killed) when escalateSnapshotLost fires, leaving a
+  // half-rolled-back worktree. Verify EVERY row's snapshot still resolves to a
+  // commit (side-effect-free `checkOnly`) BEFORE killing/resetting anything.
+  for (const r of toRollback) {
+    const probe = await rollbackNodeRunForResume(task, r, log, { checkOnly: true })
+    if (probe.failures.some((f) => f.code === 'snapshot-missing')) {
+      await escalateSnapshotLost(db, id, r, probe, opts.reason) // throws 409
+    }
+  }
 
   for (const r of toRollback) {
     // RFC-098 WP-8 (audit S-15): kill-then-proceed, not 409 — if the row's
