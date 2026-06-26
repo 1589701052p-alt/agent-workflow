@@ -4732,9 +4732,23 @@ code {
   margin-top: 2px;
 }
 
-/* Status overlay (populated by the task-detail canvas later). */
+/* Loop body styling — blue when contained in a loop wrapper. Declared BEFORE the
+ * runtime status overlay below: on the task-detail canvas a node's live run
+ * status (running / done / failed …) must own the border color, while this
+ * static loop tint still shows in the editor where no run status is set. Both
+ * `[data-loop-body]` and `[data-status]` are a single class + single attribute
+ * (equal specificity), so source order decides — status has to come last to win.
+ * (Previously this rule sat AFTER the status block and silently overrode the
+ * running/done border for any node inside a loop, so a running node in a loop
+ * never lit up.) */
+.canvas-node[data-loop-body='true'] {
+  border-color: #1d4ed8;
+}
+
+/* Runtime status overlay (populated by the task-detail canvas). */
 .canvas-node[data-status='running'] {
   border-color: var(--accent);
+  animation: canvas-node-running-pulse 1.4s ease-in-out infinite;
 }
 .canvas-node[data-status='done'] {
   border-color: #2da44e;
@@ -4752,9 +4766,43 @@ code {
   border-color: #b45309;
   border-style: dotted;
 }
-/* Loop body styling — blue when contained in a loop wrapper. */
-.canvas-node[data-loop-body='true'] {
-  border-color: #1d4ed8;
+
+/* Highlight the *running* node so it's unmistakable on a busy canvas full of
+ * done/pending peers: an accent halo that breathes on a ~1.4s loop (same
+ * box-shadow ring language as the RFC-106 canvas-connect-*-pulse hints). The
+ * shadow is layered so the node (a) keeps the same drop-shadow elevation as its
+ * peers, (b) gains a constant inner accent ring that reads as a bolder border
+ * *without* changing border-width — bumping the 1px border would shift the
+ * port-handle offsets and make incident edges jump a pixel each time a node
+ * flips running→done — and (c) pulses via the expanding outer ring. Several
+ * nodes can run at once (parallel readonly nodes / fanout shards); each animates
+ * independently. */
+@keyframes canvas-node-running-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px var(--accent),
+      0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px var(--accent),
+      0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+/* Accessibility: honor "reduce motion" — drop the infinite pulse but keep a
+ * strong static accent halo so the running node is still obviously the active
+ * one. */
+@media (prefers-reduced-motion: reduce) {
+  .canvas-node[data-status='running'] {
+    animation: none;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px var(--accent),
+      0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
 }
 
 /* Port rows rendered inside the node body (RFC-006). The old layout
