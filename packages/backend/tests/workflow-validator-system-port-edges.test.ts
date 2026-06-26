@@ -307,3 +307,110 @@ describe('clarify-channel system-port edge integrity', () => {
     expect(codesOf(def)).toContain('system-port-illegal-target')
   })
 })
+
+// ---------------------------------------------------------------------------
+// 2026-06-26 — false-root family, REVIEW-APPROVAL flavor.
+//
+// Bug report: "edge wrong port — use `accepted`, not clarify response." A review
+// node's approval output (`accepted` for multi-document review, `approved_doc`
+// for single-document) is a NORMAL downstream payload that must land on a
+// consumer's real input. Dropping it onto an agent's `__clarify_response__`
+// injection port — or feeding the consumer from a clarify channel where the
+// review approval was the intended source — is the SAME stripped-edge →
+// false-root incident the suite above locks. But every poison case above sources
+// the stray edge from a plain AGENT output; the review-output variant the report
+// describes was never exercised. RFC-079 already renamed this port once
+// (approved_doc → accepted for multi-doc); these lock that a future rename can't
+// silently slip a review approval past the system-port guard.
+describe('system-port edge integrity — review approval output flavor', () => {
+  // markdown upstreams so each review's own inputSource is valid and the only
+  // surfaced system-port issue is the poison edge under test.
+  const dSingle: Agent = { ...agent('d_single', ['design']), outputKinds: { design: 'markdown' } }
+  const dMulti: Agent = {
+    ...agent('d_multi', ['designs']),
+    outputKinds: { designs: 'list<path<md>>' },
+  }
+  const sink = agent('sink', ['out'])
+  const codesR = (def: WorkflowDefinition): string[] =>
+    validateWorkflowDef(def, { agents: [dSingle, dMulti, sink], skills: [] }).issues.map(
+      (i) => i.code,
+    )
+
+  test('CONTROL: review.approved_doc → a normal consumer input is clean', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'in', kind: 'input', inputKey: 'topic' } as never,
+        { id: 'd', kind: 'agent-single', agentName: 'd_single' } as never,
+        { id: 'rev', kind: 'review', inputSource: { nodeId: 'd', portName: 'design' } } as never,
+        { id: 'sink', kind: 'agent-single', agentName: 'sink' } as never,
+      ],
+      edges: [
+        E('e_in', ['in', 'topic'], ['d', 'topic']),
+        E('e_rev', ['d', 'design'], ['rev', '__review_input__']),
+        E('e_out', ['rev', 'approved_doc'], ['sink', 'doc']),
+      ],
+    })
+    const codes = codesR(def)
+    expect(codes).not.toContain('system-port-illegal-source')
+    expect(codes).not.toContain('system-port-illegal-target')
+  })
+
+  test('POISON: review.approved_doc dropped onto an agent `__clarify_response__` port', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'in', kind: 'input', inputKey: 'topic' } as never,
+        { id: 'd', kind: 'agent-single', agentName: 'd_single' } as never,
+        { id: 'rev', kind: 'review', inputSource: { nodeId: 'd', portName: 'design' } } as never,
+        { id: 'sink', kind: 'agent-single', agentName: 'sink' } as never,
+      ],
+      edges: [
+        E('e_in', ['in', 'topic'], ['d', 'topic']),
+        E('e_rev', ['d', 'design'], ['rev', '__review_input__']),
+        // approval payload is NOT a clarify answer — stripped → sink false root
+        E('e_poison', ['rev', 'approved_doc'], ['sink', '__clarify_response__']),
+      ],
+    })
+    expect(codesR(def)).toContain('system-port-illegal-source')
+  })
+
+  test('POISON (multi-doc): review.accepted dropped onto an agent `__clarify_response__` port', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'in', kind: 'input', inputKey: 'topic' } as never,
+        { id: 'd', kind: 'agent-single', agentName: 'd_multi' } as never,
+        { id: 'rev', kind: 'review', inputSource: { nodeId: 'd', portName: 'designs' } } as never,
+        { id: 'sink', kind: 'agent-single', agentName: 'sink' } as never,
+      ],
+      edges: [
+        E('e_in', ['in', 'topic'], ['d', 'topic']),
+        E('e_rev', ['d', 'designs'], ['rev', '__review_input__']),
+        // the literal report: `accepted` is the multi-doc approval port; it belongs
+        // on a normal consumer input, not the clarify-answer injection port.
+        E('e_poison', ['rev', 'accepted'], ['sink', '__clarify_response__']),
+      ],
+    })
+    expect(codesR(def)).toContain('system-port-illegal-source')
+  })
+
+  test('POISON: a consumer fed from clarify.answers where the review approval was intended', () => {
+    const def = makeDef({
+      nodes: [
+        { id: 'in', kind: 'input', inputKey: 'topic' } as never,
+        { id: 'd', kind: 'agent-single', agentName: 'd_single' } as never,
+        { id: 'clr', kind: 'clarify' } as never,
+        { id: 'rev', kind: 'review', inputSource: { nodeId: 'd', portName: 'design' } } as never,
+        { id: 'sink', kind: 'agent-single', agentName: 'sink' } as never,
+      ],
+      edges: [
+        E('e_in', ['in', 'topic'], ['d', 'topic']),
+        E('e_ask', ['d', '__clarify__'], ['clr', 'questions']),
+        E('e_ans', ['clr', 'answers'], ['d', '__clarify_response__']), // canonical
+        E('e_rev', ['d', 'design'], ['rev', '__review_input__']),
+        // sink should consume rev.approved_doc; instead it reads the clarify
+        // "response" — clarify.answers may only feed `__clarify_response__` (rule e).
+        E('e_poison', ['clr', 'answers'], ['sink', 'doc']),
+      ],
+    })
+    expect(codesR(def)).toContain('system-port-illegal-target')
+  })
+})

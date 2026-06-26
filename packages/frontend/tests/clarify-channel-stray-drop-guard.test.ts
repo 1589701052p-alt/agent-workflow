@@ -35,6 +35,14 @@ describe('isStrayClarifyChannelDrop — clarify-channel stray-drop guard', () =>
       'target __clarify_response__',
       { sourceHandle: 'design', targetHandle: '__clarify_response__' },
     ],
+    // 2026-06-26 report ("use accepted, not clarify response"): a review node's
+    // approval output dropped onto the clarify-answer injection port. The guard
+    // keys on the target handle, so the review `accepted` source is rejected the
+    // same as any other — locked here to make the review flavor explicit.
+    [
+      'review accepted → __clarify_response__',
+      { sourceHandle: 'accepted', targetHandle: '__clarify_response__' },
+    ],
     // ask source port (was UNGUARDED)
     ['source __clarify__', { sourceHandle: '__clarify__', targetHandle: 'context' }],
     // designer answer-injection port (already guarded — no regression)
