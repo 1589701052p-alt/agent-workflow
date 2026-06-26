@@ -1565,3 +1565,26 @@ export const lifecycleRepairAudit = sqliteTable(
     ruleIdx: index('idx_lifecycle_repair_audit_rule').on(t.alertRule, t.appliedAt),
   }),
 )
+
+// RFC-108 T3 (AR-11) — recovery_events: append-only audit of every SYSTEM-initiated
+// recovery action (boot-reap / shutdown-flip / limit-cancel / snapshot-lost /
+// live-child-survived / auto-resume / auto-repair / heartbeat-kill / quarantine).
+// lifecycle_repair_audit is the MANUAL counterpart (human repair clicks).
+export const recoveryEvents = sqliteTable(
+  'recovery_events',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id'),
+    nodeRunId: text('node_run_id'),
+    actor: text('actor').notNull(),
+    kind: text('kind').notNull(),
+    reason: text('reason'),
+    beforeJson: text('before_json'),
+    afterJson: text('after_json'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    taskIdx: index('idx_recovery_events_task').on(t.taskId, t.createdAt),
+    kindIdx: index('idx_recovery_events_kind').on(t.kind, t.createdAt),
+  }),
+)

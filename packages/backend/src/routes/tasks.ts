@@ -69,6 +69,7 @@ import { getInventorySnapshot } from '@/services/inventory'
 import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
+import { listRecoveryEventsForTask } from '@/services/recovery'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
@@ -343,6 +344,14 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     const taskId = c.req.param('id')
     const alerts = await listOpenLifecycleAlertsForTask(deps.db, taskId)
     return c.json({ alerts })
+  })
+
+  // RFC-108 T3 (AR-11): per-task system-recovery audit trail (boot-reap /
+  // shutdown-flip / limit-cancel / snapshot-lost / live-child-survived / …).
+  // Behind the same /api/tasks/:id visibility middleware mounted above.
+  app.get('/api/tasks/:id/recovery-events', async (c) => {
+    const events = await listRecoveryEventsForTask(deps.db, c.req.param('id'))
+    return c.json({ events })
   })
 
   // RFC-053 P-3: on-demand invariant scan for the diagnose panel. Reads

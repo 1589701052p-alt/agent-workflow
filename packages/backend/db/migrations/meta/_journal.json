@@ -358,6 +358,13 @@
       "when": 1782600000000,
       "tag": "0051_rfc108_node_run_spawn_binary",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1782700000000,
+      "tag": "0052_rfc108_recovery_events",
+      "breakpoints": true
     }
   ]
 }

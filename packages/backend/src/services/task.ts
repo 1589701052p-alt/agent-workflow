@@ -57,6 +57,7 @@ import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { WRAPPER_KINDS } from '@/services/dispatchFrontier'
 import type { RollbackOutcome } from '@/services/nodeRollback'
 import { killStaleRunProcessTree } from '@/util/process'
+import { recordRecoveryEvent } from '@/services/recovery'
 import { setTaskStatus, transitionTaskStatusByEvent, trySetTaskStatus } from '@/services/lifecycle'
 import type { TaskStatusUpdateExtra } from '@/services/lifecycle'
 import { mintNodeRun } from '@/services/nodeRunMint'
@@ -1072,6 +1073,14 @@ async function escalateSnapshotLost(
     },
     reason: `${reason}:snapshot-lost`,
   })
+  await recordRecoveryEvent(db, {
+    taskId,
+    nodeRunId: run.id,
+    kind: 'snapshot-lost',
+    reason: detail,
+    before: { status: 'pending' },
+    after: { status: 'failed' },
+  })
   const failed = await getTask(db, taskId)
   if (failed !== null) emitTaskStatus(failed)
   throw new ConflictError(
@@ -1106,6 +1115,14 @@ async function escalateLiveChildSurvived(
       failedNodeId: run.nodeId,
     },
     reason: `${reason}:live-child-survived`,
+  })
+  await recordRecoveryEvent(db, {
+    taskId,
+    nodeRunId: run.id,
+    kind: 'live-child-survived',
+    reason: `pid ${run.pid ?? '?'} survived SIGKILL`,
+    before: { status: 'pending' },
+    after: { status: 'failed' },
   })
   const failed = await getTask(db, taskId)
   if (failed !== null) emitTaskStatus(failed)

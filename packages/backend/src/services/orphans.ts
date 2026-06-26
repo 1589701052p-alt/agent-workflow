@@ -19,6 +19,7 @@ import { inArray } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { nodeRuns, tasks } from '@/db/schema'
 import { transitionNodeRunStatus, trySetTaskStatus } from '@/services/lifecycle'
+import { recordRecoveryEvent } from '@/services/recovery'
 import { killStaleRunProcessTree } from '@/util/process'
 import { createLogger } from '@/util/log'
 
@@ -66,7 +67,19 @@ export async function reapOrphanRuns(db: DbClient): Promise<ReapResult> {
       },
       reason: 'reapOrphanRuns',
     })
-    if (!won) log.warn('orphan task reap lost a race — skipping', { taskId: t.id })
+    if (!won) {
+      log.warn('orphan task reap lost a race — skipping', { taskId: t.id })
+      continue
+    }
+    // RFC-108 T3 (AR-11): durable audit of the boot reap.
+    await recordRecoveryEvent(db, {
+      taskId: t.id,
+      kind: 'boot-reap',
+      reason: 'daemon-restart',
+      before: { status: t.status },
+      after: { status: 'interrupted' },
+      now,
+    })
   }
   let runsReaped = 0
   for (const r of runningRuns) {

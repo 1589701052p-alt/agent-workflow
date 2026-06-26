@@ -263,6 +263,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/tasks/:id/sync-workflow' },
   { method: 'POST', path: '/api/tasks/:id/diagnose' },
   { method: 'GET', path: '/api/tasks/:id/alerts' },
+  // RFC-108 T3: per-task system-recovery audit trail.
+  { method: 'GET', path: '/api/tasks/:id/recovery-events' },
   // RFC-057: Diagnose-Panel repair options.
   { method: 'GET', path: '/api/tasks/:id/alerts/:alertId/repair-options' },
   { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },

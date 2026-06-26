@@ -16,6 +16,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { nodeRuns, tasks } from '@/db/schema'
 import { cancelTask } from '@/services/task'
+import { recordRecoveryEvent } from '@/services/recovery'
 import { createLogger, type Logger } from '@/util/log'
 
 const log: Logger = createLogger('limits')
@@ -53,6 +54,15 @@ export async function enforceLimits(
       .where(and(eq(tasks.id, t.id), eq(tasks.status, 'canceled')))
     canceled.push(t.id)
     log.warn('limit exceeded', { taskId: t.id, summary: reason.summary })
+    // RFC-108 T3 (AR-11): durable audit of the resource-limit cancel.
+    await recordRecoveryEvent(db, {
+      taskId: t.id,
+      kind: 'limit-cancel',
+      reason: reason.summary,
+      before: { status: 'running' },
+      after: { status: 'canceled' },
+      now,
+    })
   }
 
   return { scanned: running.length, canceled }

@@ -5,6 +5,7 @@ import type { Hono } from 'hono'
 import type { AppDeps } from '@/server'
 import { sql } from 'drizzle-orm'
 import { tasks } from '@/db/schema'
+import { recoveryCountersSnapshot } from '@/services/recovery'
 
 export function mountHealthRoutes(app: Hono, deps: AppDeps): void {
   app.get('/health', async (c) => {
@@ -26,6 +27,9 @@ export function mountHealthRoutes(app: Hono, deps: AppDeps): void {
       dbVersion: deps.dbVersion,
       uptime: Math.round(process.uptime()),
       runningTasks,
+      // RFC-108 T3 (AR-11): since-boot counters of system recovery actions, so a
+      // daemon that silently reaps orphans every restart is no longer invisible.
+      recovery: recoveryCountersSnapshot(),
     })
   })
 }

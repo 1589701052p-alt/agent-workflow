@@ -14,6 +14,7 @@ import { eq } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { tasks } from '@/db/schema'
 import { abortAllActiveTasks } from '@/services/task'
+import { recordRecoveryEvent } from '@/services/recovery'
 import { createLogger } from '@/util/log'
 import { trySetTaskStatus } from '@/services/lifecycle'
 
@@ -38,7 +39,7 @@ export async function gracefulShutdown(db: DbClient, budgetMs: number = 30_000):
   for (const t of survivors) {
     // RFC-097: CAS from running; a task that settled inside the budget window
     // keeps its real terminal status.
-    await trySetTaskStatus({
+    const won = await trySetTaskStatus({
       db,
       taskId: t.id,
       to: 'interrupted',
@@ -50,5 +51,15 @@ export async function gracefulShutdown(db: DbClient, budgetMs: number = 30_000):
       },
       reason: 'graceful-shutdown',
     })
+    // RFC-108 T3 (AR-11): durable audit of the shutdown survivor flip.
+    if (won) {
+      await recordRecoveryEvent(db, {
+        taskId: t.id,
+        kind: 'shutdown-flip',
+        reason: 'daemon-shutdown',
+        before: { status: 'running' },
+        after: { status: 'interrupted' },
+      })
+    }
   }
 }
