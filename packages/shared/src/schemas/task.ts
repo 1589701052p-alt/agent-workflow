@@ -244,6 +244,13 @@ export const TaskSummarySchema = z.object({
    * predating PR-A T4 keep parsing.
    */
   repoCount: z.number().int().positive().default(1),
+  /**
+   * RFC-108 T22: count of OPEN lifecycle_alerts for this task, so the list can
+   * render a "stuck" badge without a per-row fetch. Optional (the single-task
+   * serializers omit it; only the list query populates it) — the UI treats
+   * undefined as 0.
+   */
+  openAlertCount: z.number().int().nonnegative().optional(),
 })
 export type TaskSummary = z.infer<typeof TaskSummarySchema>
 

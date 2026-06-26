@@ -1057,6 +1057,7 @@ export interface Resources {
       quarantined: string
       clearQuarantine: string
     }
+    stuckBadge: string
     sectionWorkflowStatus: string
     sectionNodeRuns: string
     sectionWorktreeDiff: string
@@ -3502,6 +3503,7 @@ export const zhCN: Resources = {
       quarantined: '该任务因反复自动恢复失败被熔断隔离，已暂停自动恢复。',
       clearQuarantine: '解除隔离',
     },
+    stuckBadge: '{{count}} 告警',
     sectionWorkflowStatus: '工作流状态',
     sectionNodeRuns: '节点运行',
     sectionWorktreeDiff: 'Worktree diff',

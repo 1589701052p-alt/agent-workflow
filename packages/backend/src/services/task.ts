@@ -33,13 +33,14 @@ import type {
   WorkflowDefinition,
   WorkflowSyncPreview,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, inArray, isNull, ne, or } from 'drizzle-orm'
 import { existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import {
   docVersions,
+  lifecycleAlerts,
   nodeRunEvents,
   nodeRunOutputs,
   nodeRuns,
@@ -2101,7 +2102,22 @@ export async function listTasks(
     .where(where)
     .orderBy(desc(tasks.startedAt))
     .limit(filters.limit ?? 100)
-  return rows.map((r) => rowToSummary(r.task, r.workflowName))
+  // RFC-108 T22: one grouped query for the open-alert count of every listed
+  // task, so the list can render a "stuck" badge without a per-row fetch.
+  const taskIds = rows.map((r) => r.task.id)
+  const alertCounts =
+    taskIds.length === 0
+      ? []
+      : await db
+          .select({ taskId: lifecycleAlerts.taskId, n: count() })
+          .from(lifecycleAlerts)
+          .where(and(inArray(lifecycleAlerts.taskId, taskIds), isNull(lifecycleAlerts.resolvedAt)))
+          .groupBy(lifecycleAlerts.taskId)
+  const openByTask = new Map(alertCounts.map((a) => [a.taskId, Number(a.n)]))
+  return rows.map((r) => ({
+    ...rowToSummary(r.task, r.workflowName),
+    openAlertCount: openByTask.get(r.task.id) ?? 0,
+  }))
 }
 
 /**

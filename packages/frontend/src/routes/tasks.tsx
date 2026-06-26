@@ -10,6 +10,7 @@ import { api } from '@/api/client'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { StatusChip } from '@/components/StatusChip'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { useTasksSync } from '@/hooks/useTasksSync'
 import { Route as RootRoute } from './__root'
@@ -126,6 +127,19 @@ function TasksPage() {
                 </td>
                 <td>
                   <TaskStatusChip status={row.status} />
+                  {/* RFC-108 T22: stuck badge — open lifecycle alerts on this task. */}
+                  {(row.openAlertCount ?? 0) > 0 && (
+                    <>
+                      {' '}
+                      <StatusChip
+                        kind="warn"
+                        size="sm"
+                        aria-label={t('tasks.stuckBadge', { count: row.openAlertCount })}
+                      >
+                        {t('tasks.stuckBadge', { count: row.openAlertCount })}
+                      </StatusChip>
+                    </>
+                  )}
                 </td>
                 <td className="data-table__muted">
                   <RelativeTime ts={row.startedAt} />

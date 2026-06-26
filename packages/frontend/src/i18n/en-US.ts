@@ -1119,6 +1119,7 @@ export const enUS: Resources = {
         'This task was quarantined by the circuit-breaker after repeated auto-recovery failures; auto-recovery is paused.',
       clearQuarantine: 'Clear quarantine',
     },
+    stuckBadge: '{{count}} alert',
     sectionWorkflowStatus: 'Workflow status',
     sectionNodeRuns: 'Node runs',
     sectionWorktreeDiff: 'Worktree diff',
