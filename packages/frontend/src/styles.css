@@ -4839,6 +4839,48 @@ code {
   }
 }
 
+/* Highlight a node the task is currently *parked at, waiting for a human*: a
+ * review awaiting a decision (data-status='awaiting', mapped from the
+ * awaiting_review node_run via canvasStatus) or a clarify / cross-clarify
+ * awaiting answers (data-status='awaiting_human', which Clarify/CrossClarifyNode
+ * render after translating the unified 'awaiting' hint). Same breathing-halo
+ * mechanism as the running node, but in the review/clarify amber (#d97706)
+ * instead of the running blue — so "needs you" reads differently from "running"
+ * at a glance, matching the amber the table status chips already use for these
+ * states (noderunTone). The [data-status] attribute (one class + one attribute)
+ * outweighs the single-class .canvas-node--clarify*-awaiting_human border tint,
+ * and sits after the loop-body tint so it owns the border on the run view. */
+.canvas-node[data-status='awaiting'],
+.canvas-node[data-status='awaiting_human'] {
+  border-color: #d97706;
+  animation: canvas-node-awaiting-pulse 1.4s ease-in-out infinite;
+}
+@keyframes canvas-node-awaiting-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px #d97706,
+      0 0 0 0 color-mix(in srgb, #d97706 55%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px #d97706,
+      0 0 0 6px color-mix(in srgb, #d97706 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-node[data-status='awaiting'],
+  .canvas-node[data-status='awaiting_human'] {
+    animation: none;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px #d97706,
+      0 0 0 3px color-mix(in srgb, #d97706 35%, transparent);
+  }
+}
+
 /* Port rows rendered inside the node body (RFC-006). The old layout
  * absolutely-positioned chip-style labels on a -6px strip hanging off
  * the node edge; chip text extended back into the node body covering

@@ -642,7 +642,8 @@ function TaskStatusCanvas({
   )
 }
 
-function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
+// Map a node_run status to the canvas color hint. Exported for unit tests.
+export function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
   switch (s) {
     case 'running':
       return 'running'
@@ -658,10 +659,14 @@ function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
       return 'pending'
     case 'skipped':
       return 'skipped'
-    // RFC-005: review nodes get their own canvas visual in PR-D. For now,
-    // map to pending so the existing color palette doesn't crash.
+    // The task is parked at a human-in-the-loop node: a review awaiting a
+    // decision (awaiting_review) or a clarify / cross-clarify awaiting answers
+    // (awaiting_human). Both collapse to the unified 'awaiting' canvas state so
+    // the node gets the amber pulse highlight. Clarify/CrossClarifyNode translate
+    // 'awaiting' back to their own 'awaiting_human' palette value.
     case 'awaiting_review':
-      return 'pending'
+    case 'awaiting_human':
+      return 'awaiting'
   }
 }
 

@@ -55,6 +55,12 @@ export interface CanvasNodeData extends Record<string, unknown> {
     | 'skipped'
     | 'interrupted'
     | 'exhausted'
+    // Unified "task is parked here waiting for a human" state — review awaiting a
+    // decision (node_run `awaiting_review`) and clarify/cross-clarify awaiting
+    // answers (node_run `awaiting_human`) both map to this so the canvas can
+    // highlight them with one amber-pulse treatment. Clarify/CrossClarifyNode
+    // translate it back to their own `awaiting_human` palette value.
+    | 'awaiting'
   /** True when this node sits inside a wrapper-loop body (blue accent). */
   loopBody?: boolean
   /**

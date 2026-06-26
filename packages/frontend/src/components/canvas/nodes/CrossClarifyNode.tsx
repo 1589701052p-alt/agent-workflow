@@ -113,6 +113,10 @@ export function CrossClarifyNode({ data, selected }: Props) {
 function mapFallbackStatus(status: CanvasNodeData['status']): CrossClarifyStatus {
   if (status === 'failed') return 'failed'
   if (status === 'done') return 'answered'
+  // The task-detail canvas collapses node_run `awaiting_human` to the unified
+  // 'awaiting' hint (canvasStatus); translate it back to this node's own amber
+  // `awaiting_human` state so a cross-clarify node parked for answers lights up.
+  if (status === 'awaiting') return 'awaiting_human'
   if (status === 'running' || status === 'pending') return 'pending'
   return 'pending'
 }
