@@ -53,6 +53,10 @@ import {
   type PortValidationFailure,
 } from './envelope'
 import { renderUserPrompt } from './protocol'
+// RFC-111 PR-A: opencode stdout event parsing extracted to a leaf module. The
+// runNode pump uses these imports locally; runner.ts re-exports them below so
+// existing importers (tests, memoryDistiller) keep resolving from './runner'.
+import { accumulateTokens, extractTextFromEvent, inferEventKind } from './runtime/opencode/events'
 import { captureChildSessions } from './sessionCapture'
 import { startLiveSubagentCapture } from './subagentLiveCapture'
 import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
@@ -1759,116 +1763,9 @@ function pumpLines(
   }
 }
 
-/**
- * Pull out the agent's text contribution from one opencode event, if any.
- * Different opencode versions / part kinds put it in different shapes; we
- * tolerate the common ones.
- */
-export function extractTextFromEvent(evt: Record<string, unknown>): string | null {
-  const part = evt.part as Record<string, unknown> | undefined
-  // shape: { type: 'text', part: { type: 'text', text: '...' } }
-  if (part && typeof part === 'object') {
-    const ptype = part.type
-    const ptext = part.text
-    if (ptype === 'text' && typeof ptext === 'string') return ptext
-  }
-  // shape: { type: 'text', text: '...' }  (older / synthetic)
-  if (evt.type === 'text' && typeof evt.text === 'string') return evt.text
-  return null
-}
-
-/** Map an opencode JSON event to one of our enum kinds. */
-export function inferEventKind(
-  evt: Record<string, unknown>,
-): 'tool_use' | 'text' | 'reasoning' | 'permission_asked' | 'error' | 'step_start' | 'step_finish' {
-  const t = evt.type
-  if (typeof t === 'string') {
-    if (t === 'tool_use') return 'tool_use'
-    if (t === 'text') return 'text'
-    if (t === 'reasoning') return 'reasoning'
-    if (t === 'permission.asked' || t === 'permission_asked') return 'permission_asked'
-    if (t === 'error') return 'error'
-    if (t === 'step_start') return 'step_start'
-    if (t === 'step_finish') return 'step_finish'
-  }
-  return 'text'
-}
-
-/**
- * P-4-05: token accumulation across opencode `--format json` events.
- *
- * opencode emits step-finish events with token usage at several possible
- * paths. We probe in priority order:
- *   evt.tokens              top-level (test fixtures, some old shapes)
- *   evt.part.tokens         inside a text/step event part
- *   evt.usage               inside a step-finish summary
- *   evt.step.tokens         inside a step event
- *   evt.message.usage       message-style assistant turn
- * and within each, accept both snake_case (`input/output/cache_creation/
- * cache_read`) and camelCase. The first event with token fields wins per
- * field — we don't double-count if multiple shapes appear in one event.
- */
-export function accumulateTokens(evt: Record<string, unknown>, acc: RunResult['tokenUsage']): void {
-  const tokens = pickTokens([
-    evt,
-    evt.part as Record<string, unknown> | undefined,
-    evt.usage as Record<string, unknown> | undefined,
-    evt.step as Record<string, unknown> | undefined,
-    evt.message as Record<string, unknown> | undefined,
-  ])
-  if (!tokens) return
-  const input = numOrZero(tokens.input ?? tokens.input_tokens ?? tokens.prompt_tokens)
-  const output = numOrZero(tokens.output ?? tokens.output_tokens ?? tokens.completion_tokens)
-  // RFC-103 T3 (06-OCI-06): real opencode (1.15.5+) nests cache counts under a
-  // `cache: { read, write }` object; the older flat `cache_read/cache_creation`
-  // keys are kept as fallbacks for backward compat. Reading only the flat keys
-  // silently dropped cache tokens (~15× undercount on the recorded fixture →
-  // max_total_tokens limits applied against a wrong small total).
-  const cacheObj = tokens.cache as Record<string, unknown> | undefined
-  const cacheCreate = numOrZero(tokens.cache_creation ?? tokens.cacheCreation ?? cacheObj?.write)
-  const cacheRead = numOrZero(tokens.cache_read ?? tokens.cacheRead ?? cacheObj?.read)
-  acc.input += input
-  acc.output += output
-  acc.cacheCreate += cacheCreate
-  acc.cacheRead += cacheRead
-  acc.total = acc.input + acc.output + acc.cacheCreate + acc.cacheRead
-}
-
-function pickTokens(
-  candidates: Array<Record<string, unknown> | undefined>,
-): Record<string, unknown> | null {
-  for (const c of candidates) {
-    if (!c || typeof c !== 'object') continue
-    // Direct token-bearing object.
-    const t = c.tokens
-    if (t && typeof t === 'object') return t as Record<string, unknown>
-    // Some shapes inline input/output at the object level.
-    if (
-      typeof c.input_tokens === 'number' ||
-      typeof c.output_tokens === 'number' ||
-      typeof c.prompt_tokens === 'number' ||
-      typeof c.completion_tokens === 'number'
-    ) {
-      return c
-    }
-    // Some shapes inline usage directly.
-    const usage = c.usage
-    if (usage && typeof usage === 'object') {
-      const u = usage as Record<string, unknown>
-      if (
-        typeof u.input === 'number' ||
-        typeof u.output === 'number' ||
-        typeof u.input_tokens === 'number' ||
-        typeof u.output_tokens === 'number'
-      ) {
-        return u
-      }
-    }
-  }
-  return null
-}
-
-function numOrZero(v: unknown): number {
-  const n = Number(v ?? 0)
-  return Number.isFinite(n) ? n : 0
-}
+// RFC-111 PR-A: extractTextFromEvent / inferEventKind / accumulateTokens (+ the
+// private pickTokens / numOrZero) moved verbatim to ./runtime/opencode/events.ts
+// (a leaf module, no runner.ts import → no module-init cycle). Re-exported here
+// so the existing import sites (tests, memoryDistiller) keep resolving from
+// './runner'. The runNode stdout pump uses the top-of-file imports.
+export { accumulateTokens, extractTextFromEvent, inferEventKind }
