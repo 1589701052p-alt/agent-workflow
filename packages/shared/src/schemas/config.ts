@@ -47,25 +47,11 @@ export const ConfigSchema = z.object({
   defaultRuntime: z.string().min(1).optional(),
   /** RFC-111: override the `claude` binary path. Falls back to PATH. */
   claudeCodePath: z.string().min(1).optional(),
-  /** RFC-111: default model for claude-code agents (own namespace: opus/sonnet/full-id). */
-  defaultClaudeModel: z.string().min(1).optional(),
   /**
    * RFC-111 D17: gate user-visible claude-code selection (Agent form / settings)
    * until injection parity (PR-C) + capture (PR-D) land. Default off.
    */
   claudeCodeEnabled: z.boolean().optional(),
-  /** Default model for agents without an explicit model. */
-  defaultModel: z.string().min(1).optional(),
-  defaultVariant: z.string().min(1).optional(),
-  defaultTemperature: z.number().min(0).max(2).optional(),
-  /**
-   * Default agent steps / max-steps surfaced on the Add Agent form. Pure UX:
-   * the value is snapshotted into the new agent row at creation time, after
-   * which the agent row is authoritative (changing these later does not
-   * propagate). See design/RFC-002-agent-defaults-from-runtime/.
-   */
-  defaultSteps: z.number().int().positive().optional(),
-  defaultMaxSteps: z.number().int().positive().optional(),
   /** Global semaphore capacity. design.md §11 default = 4. */
   maxConcurrentNodes: z.number().int().positive(),
   /** Independent sub-process pool capacity inside a multi-process node. */

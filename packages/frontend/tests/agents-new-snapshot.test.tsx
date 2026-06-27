@@ -58,11 +58,6 @@ describe('applyDefaults (RFC-113: runtime selection only)', () => {
       emptyDraft(),
       cfg({
         defaultRuntime: 'opencode',
-        defaultModel: 'anthropic/sonnet',
-        defaultVariant: 'thinking',
-        defaultTemperature: 0.2,
-        defaultSteps: 10,
-        defaultMaxSteps: 50,
       }),
     )
     expect(next.runtime).toBe('opencode')

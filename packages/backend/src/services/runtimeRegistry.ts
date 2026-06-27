@@ -422,51 +422,27 @@ export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
 
 // --- RFC-113 one-time startup migrations ------------------------------------
 
-/** RFC-113 §3.1: backfill config defaults into the built-in rows — NULL cols
- *  ONLY (`??=`), so it's idempotent + never clobbers an admin-edited built-in. */
+/** RFC-113 §3.1 / RFC-115: backfill the built-in runtimes' binary paths from
+ *  config — NULL `binary_path` ONLY, so it's idempotent + never clobbers an
+ *  admin-edited built-in. RFC-115 dropped the dead generation-param backfill
+ *  (defaultModel / variant / temperature / steps / maxSteps / defaultClaudeModel
+ *  are gone from config); generation params now live solely on the runtime
+ *  profile rows, edited via the Settings runtime list. */
 export async function migrateConfigIntoBuiltins(
   db: DbClient,
   config: {
     opencodePath?: string | null
     claudeCodePath?: string | null
-    defaultModel?: string | null
-    defaultClaudeModel?: string | null
-    defaultVariant?: string | null
-    defaultTemperature?: number | null
-    defaultSteps?: number | null
-    defaultMaxSteps?: number | null
   },
 ): Promise<void> {
-  const backfill = async (
-    name: string,
-    fields: Partial<RuntimeProfile & { binaryPath: string }>,
-  ) => {
+  const backfillBinary = async (name: string, binaryPath: string | null | undefined) => {
     const row = await getRuntime(db, name)
-    if (row === null) return
-    const patch: Record<string, unknown> = {}
-    if (row.binaryPath === null && fields.binaryPath != null) patch.binaryPath = fields.binaryPath
-    if (row.model === null && fields.model != null) patch.model = fields.model
-    if (row.variant === null && fields.variant != null) patch.variant = fields.variant
-    if (row.temperature === null && fields.temperature != null)
-      patch.temperature = fields.temperature
-    if (row.steps === null && fields.steps != null) patch.steps = fields.steps
-    if (row.maxSteps === null && fields.maxSteps != null) patch.maxSteps = fields.maxSteps
-    if (Object.keys(patch).length > 0)
-      await db
-        .update(runtimes)
-        .set({ ...patch, updatedAt: Date.now() })
-        .where(eq(runtimes.name, name))
+    if (row === null || row.binaryPath !== null || binaryPath == null) return
+    await db
+      .update(runtimes)
+      .set({ binaryPath, updatedAt: Date.now() })
+      .where(eq(runtimes.name, name))
   }
-  await backfill('opencode', {
-    binaryPath: config.opencodePath ?? undefined,
-    model: config.defaultModel ?? undefined,
-    variant: config.defaultVariant ?? undefined,
-    temperature: config.defaultTemperature ?? undefined,
-    steps: config.defaultSteps ?? undefined,
-    maxSteps: config.defaultMaxSteps ?? undefined,
-  } as Partial<RuntimeProfile & { binaryPath: string }>)
-  await backfill('claude-code', {
-    binaryPath: config.claudeCodePath ?? undefined,
-    model: config.defaultClaudeModel ?? undefined,
-  } as Partial<RuntimeProfile & { binaryPath: string }>)
+  await backfillBinary('opencode', config.opencodePath)
+  await backfillBinary('claude-code', config.claudeCodePath)
 }

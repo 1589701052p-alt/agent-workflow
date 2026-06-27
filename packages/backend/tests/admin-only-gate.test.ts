@@ -73,7 +73,7 @@ describe('regular-user session token — admin-only endpoints all return 403', (
   test('PUT /api/config → 403 (settings:write)', async () => {
     const res = await reqAs(h.app, h.userToken, '/api/config', {
       method: 'PUT',
-      body: JSON.stringify({ defaultModel: 'x' }),
+      body: JSON.stringify({ logLevel: 'debug' }),
     })
     expect(res.status).toBe(403)
     const body = (await res.json()) as { details?: Record<string, unknown> }

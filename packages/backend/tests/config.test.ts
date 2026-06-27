@@ -40,10 +40,10 @@ describe('config load/save', () => {
     // and one field. loadConfig should round-trip with defaults filled in.
     writeFileSync(
       path,
-      JSON.stringify({ $schema_version: 1, defaultModel: 'anthropic/claude-opus-4-7' }),
+      JSON.stringify({ $schema_version: 1, opencodePath: '/opt/homebrew/bin/opencode' }),
     )
     const cfg = loadConfig(path)
-    expect(cfg.defaultModel).toBe('anthropic/claude-opus-4-7')
+    expect(cfg.opencodePath).toBe('/opt/homebrew/bin/opencode')
     expect(cfg.maxConcurrentNodes).toBe(DEFAULT_CONFIG.maxConcurrentNodes)
     expect(cfg.bindHost).toBe('127.0.0.1')
     expect(cfg.worktreeAutoGc.enabled).toBe(false)
@@ -75,14 +75,14 @@ describe('config load/save', () => {
     loadConfig(path) // create defaults
     const updated = applyConfigPatch(path, {
       maxConcurrentNodes: 8,
-      defaultModel: 'anthropic/claude-opus-4-7',
+      opencodePath: '/opt/homebrew/bin/opencode',
     })
     expect(updated.maxConcurrentNodes).toBe(8)
-    expect(updated.defaultModel).toBe('anthropic/claude-opus-4-7')
+    expect(updated.opencodePath).toBe('/opt/homebrew/bin/opencode')
 
     const reread = loadConfig(path)
     expect(reread.maxConcurrentNodes).toBe(8)
-    expect(reread.defaultModel).toBe('anthropic/claude-opus-4-7')
+    expect(reread.opencodePath).toBe('/opt/homebrew/bin/opencode')
   })
 
   test('applyConfigPatch rejects invalid field type', () => {
@@ -104,31 +104,6 @@ describe('config load/save', () => {
     // ConfigPatchSchema omits $schema_version so it's just ignored.
     const updated = applyConfigPatch(path, { $schema_version: 999 })
     expect(updated.$schema_version).toBe(1)
-  })
-
-  test('RFC-002 defaultSteps / defaultMaxSteps round-trip', () => {
-    loadConfig(path)
-    const updated = applyConfigPatch(path, { defaultSteps: 12, defaultMaxSteps: 48 })
-    expect(updated.defaultSteps).toBe(12)
-    expect(updated.defaultMaxSteps).toBe(48)
-    const reread = loadConfig(path)
-    expect(reread.defaultSteps).toBe(12)
-    expect(reread.defaultMaxSteps).toBe(48)
-  })
-
-  test('RFC-002 defaultSteps must be a positive integer', () => {
-    loadConfig(path)
-    expect(() => applyConfigPatch(path, { defaultSteps: 0 })).toThrow(ValidationError)
-    expect(() => applyConfigPatch(path, { defaultSteps: -1 })).toThrow(ValidationError)
-    expect(() => applyConfigPatch(path, { defaultMaxSteps: 1.5 })).toThrow(ValidationError)
-  })
-
-  test('RFC-002 legacy config (missing new fields) loads with undefined', () => {
-    writeFileSync(path, JSON.stringify({ $schema_version: 1, maxConcurrentNodes: 6 }))
-    const cfg = loadConfig(path)
-    expect(cfg.defaultSteps).toBeUndefined()
-    expect(cfg.defaultMaxSteps).toBeUndefined()
-    expect(cfg.maxConcurrentNodes).toBe(6)
   })
 
   // RFC-115: the per-node `retries` override was removed from the workflow node

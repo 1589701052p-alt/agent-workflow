@@ -1975,8 +1975,6 @@ export const enUS: Resources = {
   settingsForm: {
     opencodePath: 'opencode path',
     opencodePathHint: 'Defaults to `which opencode` from PATH.',
-    defaultModel: 'Default model',
-    defaultModelHint: 'Used by agents without an explicit `model`.',
     defaultRuntime: 'Default runtime',
     defaultRuntimeHint:
       'Runtime used by agents that do not set their own. opencode stays a hard requirement; claude-code is an optional second runtime.',
@@ -1994,14 +1992,6 @@ export const enUS: Resources = {
     commitPushDiffMaxBytes: 'Commit-message diff byte cap',
     commitPushDiffMaxBytesHint:
       'Truncation cap for the diff fed to the commit-message session (default 16384; 0 = --stat only).',
-    defaultVariant: 'Default variant',
-    defaultTemperature: 'Default temperature',
-    defaultSteps: 'Default steps',
-    defaultStepsHint:
-      "Pre-filled when creating a new agent; leave blank to fall back to opencode's built-in default.",
-    defaultMaxSteps: 'Default max steps',
-    defaultMaxStepsHint:
-      "Pre-filled when creating a new agent; leave blank to fall back to opencode's built-in default.",
     maxConcurrentNodes: 'Max concurrent nodes',
     multiProcessConc: 'Multi-process subprocess concurrency',
     logLevel: 'Log level',

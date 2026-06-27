@@ -1869,8 +1869,6 @@ export interface Resources {
   settingsForm: {
     opencodePath: string
     opencodePathHint: string
-    defaultModel: string
-    defaultModelHint: string
     /** RFC-111 — global default runtime + claude-code default model. */
     defaultRuntime: string
     defaultRuntimeHint: string
@@ -1884,12 +1882,6 @@ export interface Resources {
     commitPushMaxRepairRetriesHint: string
     commitPushDiffMaxBytes: string
     commitPushDiffMaxBytesHint: string
-    defaultVariant: string
-    defaultTemperature: string
-    defaultSteps: string
-    defaultStepsHint: string
-    defaultMaxSteps: string
-    defaultMaxStepsHint: string
     maxConcurrentNodes: string
     multiProcessConc: string
     logLevel: string
@@ -4381,8 +4373,6 @@ export const zhCN: Resources = {
   settingsForm: {
     opencodePath: 'opencode 路径',
     opencodePathHint: '缺省走 PATH 上的 `which opencode`。',
-    defaultModel: '默认 model',
-    defaultModelHint: '没声明 model 的 agent 使用。',
     defaultRuntime: '默认运行时',
     defaultRuntimeHint:
       '未指定运行时的代理所用的默认运行时。opencode 仍为硬性要求；claude-code 是可选的第二运行时。',
@@ -4400,12 +4390,6 @@ export const zhCN: Resources = {
     commitPushDiffMaxBytes: 'commit message diff 字节上限',
     commitPushDiffMaxBytesHint:
       '喂给生成 commit message 的 diff 截断阈值（默认 16384；0 表示只用 --stat）。',
-    defaultVariant: '默认 variant',
-    defaultTemperature: '默认 temperature',
-    defaultSteps: '默认 steps',
-    defaultStepsHint: '新建代理时默认填入此值；留空走 opencode 内置默认。',
-    defaultMaxSteps: '默认 max steps',
-    defaultMaxStepsHint: '新建代理时默认填入此值；留空走 opencode 内置默认。',
     maxConcurrentNodes: '最大并发节点数',
     multiProcessConc: 'Multi-process 子进程并发',
     logLevel: '日志级别',
