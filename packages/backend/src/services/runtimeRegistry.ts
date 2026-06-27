@@ -465,8 +465,8 @@ export async function migrateConfigIntoBuiltins(
 /** Canonical profile key for dedup (RFC-113 §3.2 Codex P3-1: null-norm + fixed
  *  numeric serialization so REAL float equality / undefined don't split groups). */
 function profileKey(protocol: string, binary: string | null, p: RuntimeProfile): string {
-  const norm = (v: unknown): string => (v == null ? ' ' : String(v))
-  const temp = p.temperature == null ? ' ' : p.temperature.toFixed(4)
+  const norm = (v: unknown): string => (v == null ? '\x00' : String(v))
+  const temp = p.temperature == null ? '\x00' : p.temperature.toFixed(4)
   return [
     protocol,
     norm(binary),
