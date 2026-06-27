@@ -64,4 +64,13 @@ describe('RFC-115 assertConfigDefaultsMigrated — config skip-upgrade guard', (
     writeFileSync(cfg, JSON.stringify({ $schema_version: 1, defaultClaudeModel: 'claude-opus' }))
     await expect(assertConfigDefaultsMigrated(db, cfg)).rejects.toThrow(/defaultClaudeModel/)
   })
+
+  // F4 (Codex audit): built-ins missing entirely (seed failed/skipped) must NOT
+  // be misread as "un-migrated config" — that empty-set false ABORT would mask
+  // the real seed failure with a misleading "backfill never ran" message.
+  test('built-ins absent (seed failed) + legacy config → skips, no misleading ABORT', async () => {
+    await db.delete(runtimes) // simulate seedBuiltinRuntimes never having run
+    writeFileSync(cfg, JSON.stringify({ $schema_version: 1, defaultModel: 'anthropic/opus' }))
+    await expect(assertConfigDefaultsMigrated(db, cfg)).resolves.toBeUndefined()
+  })
 })

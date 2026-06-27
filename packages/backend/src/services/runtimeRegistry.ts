@@ -493,6 +493,12 @@ export async function assertConfigDefaultsMigrated(
     })
     .from(runtimes)
     .where(eq(runtimes.builtin, true))
+  // F4 (Codex audit): if the built-ins aren't present at all (seedBuiltinRuntimes
+  // failed/was skipped upstream — already warn-logged in start.ts), don't
+  // misattribute the empty set to an un-migrated config: the "every profile NULL"
+  // check below would FALSE-ABORT with a misleading "backfill never ran" message
+  // when the real cause is the missing seed. Let the seed warning surface instead.
+  if (builtins.length === 0) return
   const anyProfileSet = builtins.some(
     (r) =>
       r.model !== null ||
