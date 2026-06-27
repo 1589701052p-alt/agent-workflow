@@ -190,4 +190,4 @@ config.json defaultNodeRetries(3)
 - **F3 [medium] 运行时列显示执行不用的默认运行时**：`config.defaultRuntime` 未接进 StartTaskDeps→runTask（`runtimeConfigOpts` 只转发 commitPush/maxConcurrent，timeout 还是手动 spread），生产路径 fallback opencode。→ Fold：新增 D10 + §2.4 把 `defaultRuntime` + `defaultNodeRetries` 收进 `runtimeConfigOpts` 单一漏斗（收编 timeout 手动 spread）+ §6 加 `node_runs.runtime` 冻结回归；PR-B 标依赖 PR-A 接线修复。
 
 ### 实现 gate
-（实现后跑，findings 在此登记。）
+- **PR-A（adversarial-review，base HEAD~1，verdict needs-attention）— 1 finding [high] 已 fold**：旧 RFC-042 后端测试仍锁死 per-node retries 语义——`scheduler-envelope-followup-integration.test.ts` 用 `node.retries:0/1/3` 驱动重试、`envelope-followup-source-grep.test.ts` 锁 `pickNumber(node,'retries') ?? 3`；RFC-115 把预算切到 `opts.defaultNodeRetries ?? 3` 后这些 stale→红（全 backend 9 fail 中的 5 个）。Fold：4 个集成测试改用 `runTask({ defaultNodeRetries })` 驱动（保留显式 `defaultNodeRetries:0` no-retry 路径），grep guard 改锁 `opts.defaultNodeRetries ?? 3` + 断言 per-node lookup 已删。修后这俩文件 6 pass；其余 4 fail = 本机已知 git flaky（CI 外）。

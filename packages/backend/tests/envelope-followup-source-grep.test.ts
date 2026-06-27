@@ -2,8 +2,9 @@
 //
 // Locks in:
 //   1. scheduler.ts must NOT regress to `?? 0` for the retries fallback
-//      (RFC-042 §A4 default 3). A future refactor that re-introduces the
-//      old fallback will trip this test.
+//      (RFC-042 §A4 default 3). RFC-115 moved the budget from a per-node
+//      `retries` override to the global `opts.defaultNodeRetries ?? 3`; this
+//      guards that fallback (and that the per-node lookup stays removed).
 //   2. shared/prompt.ts must export `renderEnvelopeFollowupPrompt` — this
 //      function is the contract the runner depends on for follow-up
 //      attempts. If renamed / removed without notice, this test goes red.
@@ -18,10 +19,13 @@ describe('RFC-042 source-code-text guards', () => {
       resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
       'utf8',
     )
-    // Allow the literal pattern `pickNumber(node, 'retries') ?? 3` with any
-    // whitespace; forbid the legacy `?? 0` next to the same lookup.
-    expect(src).toMatch(/pickNumber\(\s*node\s*,\s*['"]retries['"]\s*\)\s*\?\?\s*3\b/)
-    expect(src).not.toMatch(/pickNumber\(\s*node\s*,\s*['"]retries['"]\s*\)\s*\?\?\s*0\b/)
+    // RFC-115: the per-node `retries` override was removed; the budget is now
+    // the global `opts.defaultNodeRetries`. The RFC-042 §A4 invariant (default
+    // 3, never the legacy `?? 0`) lives on that fallback now.
+    expect(src).toMatch(/opts\.defaultNodeRetries\s*\?\?\s*3\b/)
+    expect(src).not.toMatch(/opts\.defaultNodeRetries\s*\?\?\s*0\b/)
+    // The per-node retries lookup is gone entirely (RFC-115 D2 — node no longer overrides).
+    expect(src).not.toMatch(/pickNumber\(\s*node\s*,\s*['"]retries['"]/)
   })
 
   test('shared/prompt.ts exports renderEnvelopeFollowupPrompt', () => {

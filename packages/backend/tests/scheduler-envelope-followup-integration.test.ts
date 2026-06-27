@@ -129,7 +129,7 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
     const def: WorkflowDefinition = {
       $schema_version: 1,
       inputs: [],
-      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1', retries: 1 }],
+      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1' }],
       edges: [],
     }
     const { taskId } = await seedTask(h, def)
@@ -147,6 +147,8 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
           db: h.db,
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          // RFC-115: retry budget now comes from runTask opts (was node.retries: 1).
+          defaultNodeRetries: 1,
         }),
     )
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
@@ -176,7 +178,7 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
     const def: WorkflowDefinition = {
       $schema_version: 1,
       inputs: [],
-      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1', retries: 1 }],
+      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1' }],
       edges: [],
     }
     const { taskId } = await seedTask(h, def)
@@ -193,6 +195,8 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
           db: h.db,
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          // RFC-115: retry budget now comes from runTask opts (was node.retries: 1).
+          defaultNodeRetries: 1,
         }),
     )
     const argvs = readArgvLog(h.argvLog)
@@ -211,7 +215,7 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
     const def: WorkflowDefinition = {
       $schema_version: 1,
       inputs: [],
-      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1', retries: 0 }],
+      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1' }],
       edges: [],
     }
     const { taskId } = await seedTask(h, def)
@@ -228,6 +232,8 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
           db: h.db,
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          // RFC-115: explicit no-retry path — global budget 0 (was node.retries: 0).
+          defaultNodeRetries: 0,
         }),
     )
     const argvs = readArgvLog(h.argvLog)
@@ -242,7 +248,7 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
     const def: WorkflowDefinition = {
       $schema_version: 1,
       inputs: [],
-      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1', retries: 3 }],
+      nodes: [{ id: 'n1', kind: 'agent-single', agentName: 'a1' }],
       edges: [],
     }
     const { taskId } = await seedTask(h, def)
@@ -259,6 +265,8 @@ describe('RFC-042 scheduler envelope follow-up integration', () => {
           db: h.db,
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+          // RFC-115: retry budget now comes from runTask opts (was node.retries: 3).
+          defaultNodeRetries: 3,
         }),
     )
     const argvs = readArgvLog(h.argvLog)
