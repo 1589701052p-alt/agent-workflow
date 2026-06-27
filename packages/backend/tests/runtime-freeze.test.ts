@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { resolveFrozenRuntime } from '../src/services/nodeRunMint'
+import { frozenRuntimeOfSession, resolveFrozenRuntime } from '../src/services/nodeRunMint'
 import { createRuntime, seedBuiltinRuntimes, updateRuntime } from '../src/services/runtimeRegistry'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -129,5 +129,70 @@ describe('resolveFrozenRuntime — custom runtimes freeze a (protocol, binary) s
     const r = await resolveFrozenRuntime(db, id, 'my-oc', undefined)
     expect(r.protocol).toBe('opencode')
     expect(r.binary).toBe('/opt/oc')
+  })
+})
+
+describe('resume inherits the session owner’s frozen runtime (RFC-112 Codex impl-gate P1)', () => {
+  test('frozenRuntimeOfSession returns the (protocol, binary) of the row that captured a session', async () => {
+    const { db, id } = await seedRun()
+    await db
+      .update(nodeRuns)
+      .set({ runtime: 'claude-code', runtimeBinary: '/opt/my-cc', opencodeSessionId: 'sess-X' })
+      .where(eq(nodeRuns.id, id))
+    expect(await frozenRuntimeOfSession(db, 'sess-X')).toEqual({
+      protocol: 'claude-code',
+      binary: '/opt/my-cc',
+    })
+    expect(await frozenRuntimeOfSession(db, 'no-such-session')).toBeNull()
+  })
+
+  test('a FRESH retry row that carries a prior session inherits its frozen runtime, NOT a re-resolve', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const wfId = ulid()
+    const taskId = ulid()
+    await db
+      .insert(workflows)
+      .values({ id: wfId, name: 'wf', definition: '{}', createdAt: 0, updatedAt: 0 })
+    await db.insert(tasks).values({
+      id: taskId,
+      name: 't',
+      workflowId: wfId,
+      workflowSnapshot: '{}',
+      repoPath: '/r',
+      worktreePath: '/w',
+      baseBranch: 'main',
+      branch: 'b',
+      status: 'running',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    // original row R1: ran on a custom claude fork, captured session S.
+    const r1 = ulid()
+    await db.insert(nodeRuns).values({
+      id: r1,
+      taskId,
+      nodeId: 'n1',
+      status: 'done',
+      runtime: 'claude-code',
+      runtimeBinary: '/opt/v1',
+      opencodeSessionId: 'sess-S',
+    })
+    // the custom runtime is later DELETED / the agent flipped to opencode.
+    // a fresh retry row R2 carries session S and resolves with the inherited pair.
+    const r2 = ulid()
+    await db.insert(nodeRuns).values({ id: r2, taskId, nodeId: 'n1', status: 'pending' })
+    const inherited = await frozenRuntimeOfSession(db, 'sess-S')
+    const frozen = await resolveFrozenRuntime(db, r2, 'opencode', 'opencode', inherited)
+    // re-resolving 'opencode' would have mispaired the claude session S with the
+    // opencode driver; inheriting keeps (claude-code, /opt/v1).
+    expect(frozen).toEqual({ protocol: 'claude-code', binary: '/opt/v1' })
+    const row = (
+      await db
+        .select({ runtime: nodeRuns.runtime, binary: nodeRuns.runtimeBinary })
+        .from(nodeRuns)
+        .where(eq(nodeRuns.id, r2))
+    )[0]
+    expect(row?.runtime).toBe('claude-code')
+    expect(row?.binary).toBe('/opt/v1')
   })
 })

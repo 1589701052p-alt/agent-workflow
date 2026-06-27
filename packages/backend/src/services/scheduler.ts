@@ -85,6 +85,7 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import {
+  frozenRuntimeOfSession,
   isClarifyRerunCause,
   mintNodeRun,
   resolveFrozenRuntime,
@@ -201,6 +202,13 @@ export interface RunTaskOptions {
    * Omitted → 'opencode'. Internal agents (commit&push) stay on opencode (D14).
    */
   defaultRuntime?: string
+  /**
+   * RFC-112 (Codex impl-gate P2): the built-in claude runtime's binary
+   * (config.claudeCodePath). Threaded to runNode so a built-in claude dispatch
+   * runs the configured binary — symmetric with opencode's opencodeCmd — instead
+   * of always PATH ['claude']. A CUSTOM runtime's frozen binary still wins.
+   */
+  claudeCodePath?: string
 }
 
 type NodeStatus =
@@ -2370,11 +2378,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // now (agent.runtime ?? config.defaultRuntime) on the first dispatch.
         // resume/retry of the same row read the frozen value so a mutated
         // agent / default can't re-route a captured session to the wrong runtime.
+        // RFC-112 P1: a retry / clarify-rerun mints a FRESH row but may carry a
+        // prior session id — inherit that session owner's frozen (protocol,
+        // binary) so the id + runtime stay a pair across the new row.
+        const inheritedRuntime =
+          effectiveResumeSessionId !== undefined
+            ? await frozenRuntimeOfSession(db, effectiveResumeSessionId)
+            : null
         const frozenRuntime = await resolveFrozenRuntime(
           db,
           nodeRunId,
           agent.runtime,
           state.opts.defaultRuntime,
+          inheritedRuntime,
         )
         lastResult = await runNode({
           taskId,
@@ -2383,6 +2399,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           agent,
           runtime: frozenRuntime.protocol,
           runtimeBinary: frozenRuntime.binary,
+          ...(state.opts.claudeCodePath !== undefined
+            ? { claudeCodePath: state.opts.claudeCodePath }
+            : {}),
           inputs: upstreamInputs,
           worktreePath: task.worktreePath,
           // RFC-067: thread per-task Git commit identity through to the runner
@@ -3697,6 +3716,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       agent: innerAgent,
       runtime: shardRuntime.protocol,
       runtimeBinary: shardRuntime.binary,
+      ...(opts.claudeCodePath !== undefined ? { claudeCodePath: opts.claudeCodePath } : {}),
       inputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout shard dispatch.
@@ -3964,6 +3984,7 @@ async function dispatchFanoutAggregator(
       agent: aggAgent,
       runtime: aggRuntime.protocol,
       runtimeBinary: aggRuntime.binary,
+      ...(opts.claudeCodePath !== undefined ? { claudeCodePath: opts.claudeCodePath } : {}),
       inputs: aggInputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.

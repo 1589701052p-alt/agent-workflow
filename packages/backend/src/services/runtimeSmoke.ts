@@ -123,6 +123,7 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
 
   let child: Bun.Subprocess<'ignore' | 'pipe', 'pipe', 'pipe'> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let sigkillTimer: ReturnType<typeof setTimeout> | null = null
   let timedOut = false
   try {
     let plan: SpawnPlan
@@ -181,8 +182,12 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     timer = setTimeout(() => {
       timedOut = true
       killGroup(liveChild, 'SIGTERM')
-      setTimeout(() => killGroup(liveChild, 'SIGKILL'), 2_000)
+      // Codex P2: track the SIGKILL escalation timer so finally can clear it —
+      // an untracked one could fire after cleanup and keep the loop alive 2s.
+      sigkillTimer = setTimeout(() => killGroup(liveChild, 'SIGKILL'), 2_000)
+      sigkillTimer.unref?.()
     }, timeoutMs)
+    timer.unref?.()
 
     // drain stdout (parse events) + stderr (auth/model signatures), both capped.
     let sessionId: string | undefined
@@ -222,20 +227,21 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
       }
     }
 
-    const checkText = (text: string): void => {
-      if (text.includes(nonce)) sawNonce = true
-      if (text.includes('<workflow-output')) sawEnvelope = true
-    }
-
-    await Promise.all([
+    // Codex P2: the nonce + envelope are detected ONLY in PARSED event text —
+    // proving the model produced them THROUGH the protocol stream, not on a raw
+    // stdout line a non-protocol binary could also print. drainAll runs
+    // concurrently; the timeout timer kills the child if it overruns.
+    const drainAll = Promise.all([
       readStream(child.stdout as ReadableStream<Uint8Array> | undefined, (line) => {
         const ev = driver.parseEvent(line)
         if (ev !== null) {
           sawEvent = true
           if (ev.sessionId !== undefined && sessionId === undefined) sessionId = ev.sessionId
-          if (typeof ev.text === 'string') checkText(ev.text)
+          if (typeof ev.text === 'string') {
+            if (ev.text.includes(nonce)) sawNonce = true
+            if (ev.text.includes('<workflow-output')) sawEnvelope = true
+          }
         }
-        checkText(line)
       }),
       readStream(child.stderr as ReadableStream<Uint8Array> | undefined, (line) => {
         if (stderrText.length < 8_192) stderrText += line + '\n'
@@ -247,16 +253,26 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
       clearTimeout(timer)
       timer = null
     }
+    if (sigkillTimer !== null) {
+      clearTimeout(sigkillTimer)
+      sigkillTimer = null
+    }
+    // Codex P2: bounded post-exit flush — a grandchild that inherited the stdout
+    // pipe must not wedge the probe; classify on whatever drained within 2s.
+    await Promise.race([
+      drainAll,
+      new Promise<void>((resolve) => {
+        const g = setTimeout(resolve, 2_000)
+        g.unref?.()
+      }),
+    ])
 
     const haystack = `${stderrText}`.toLowerCase()
     const authHit = AUTH_SIGNATURES.test(haystack)
     const modelHit = MODEL_FAIL_SIGNATURES.test(haystack)
-    const conformed =
-      !timedOut &&
-      exitCode === 0 &&
-      sawEvent &&
-      sessionId !== undefined &&
-      (sawNonce || sawEnvelope)
+    // Codex P2: conformance REQUIRES the nonce round-trip (a real protocol turn
+    // consumed the prompt) — sawEnvelope alone is too weak (a canned emitter).
+    const conformed = !timedOut && exitCode === 0 && sawEvent && sessionId !== undefined && sawNonce
 
     let outcome: SmokeOutcome
     let detail: string
@@ -293,6 +309,7 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     }
   } finally {
     if (timer !== null) clearTimeout(timer)
+    if (sigkillTimer !== null) clearTimeout(sigkillTimer)
     if (child !== null) {
       killGroup(child, 'SIGKILL')
     }

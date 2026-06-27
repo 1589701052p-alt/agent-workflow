@@ -236,6 +236,15 @@ export async function resolveFrozenRuntime(
   nodeRunId: string,
   agentRuntime: string | null | undefined,
   defaultRuntime: string | null | undefined,
+  /**
+   * RFC-112 (Codex impl-gate P1): when this dispatch RESUMES a captured session,
+   * the runtime must be INHERITED from the row that owns that session — NOT
+   * re-resolved from the (mutable) registry — or a changed / deleted runtime
+   * could resume the session under the wrong driver/binary. The caller passes the
+   * source row's frozen `{protocol, binary}` here; it is used only when THIS row
+   * isn't frozen yet (the first dispatch of a fresh retry / clarify-rerun row).
+   */
+  inheritFrom?: FrozenRuntime | null,
 ): Promise<FrozenRuntime> {
   const row = (
     await db
@@ -257,12 +266,41 @@ export async function resolveFrozenRuntime(
       stored: row.runtime,
     })
   }
-  // First dispatch: resolve the runtime NAME (agent ?? default) through the
-  // registry to (protocol, binary) and freeze both.
-  const resolved = await resolveAgentRuntime(db, agentRuntime, defaultRuntime)
+  // RFC-112 P1: a resuming row inherits the session-owner's frozen pair so the
+  // session id + (protocol, binary) stay consumed together across the new row.
+  const frozen =
+    inheritFrom != null
+      ? inheritFrom
+      : await resolveAgentRuntime(db, agentRuntime, defaultRuntime).then((r) => ({
+          protocol: r.protocol,
+          binary: r.binaryPath,
+        }))
   await db
     .update(nodeRuns)
-    .set({ runtime: resolved.protocol, runtimeBinary: resolved.binaryPath })
+    .set({ runtime: frozen.protocol, runtimeBinary: frozen.binary })
     .where(eq(nodeRuns.id, nodeRunId))
-  return { protocol: resolved.protocol, binary: resolved.binaryPath }
+  return frozen
+}
+
+/**
+ * RFC-112 (Codex impl-gate P1): the frozen runtime of the node_run that CAPTURED
+ * a given session id — used to inherit (protocol, binary) when a retry /
+ * clarify-rerun resumes that session under a fresh row. Returns null if no frozen
+ * row owns the session (then the caller resolves fresh).
+ */
+export async function frozenRuntimeOfSession(
+  db: DbClient,
+  sessionId: string,
+): Promise<FrozenRuntime | null> {
+  const row = (
+    await db
+      .select({ runtime: nodeRuns.runtime, runtimeBinary: nodeRuns.runtimeBinary })
+      .from(nodeRuns)
+      .where(eq(nodeRuns.opencodeSessionId, sessionId))
+      .limit(1)
+  )[0]
+  if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') {
+    return { protocol: row.runtime, binary: row.runtimeBinary ?? null }
+  }
+  return null
 }

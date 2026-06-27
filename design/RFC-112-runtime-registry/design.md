@@ -237,4 +237,13 @@ runtimes 列表 / 表单 / 协议名 / 冒烟状态 / 操作 中英对称。
 | 7 | P3 | name 规范未定 | `^[a-z0-9][a-z0-9-]{0,30}$` 小写 URL-safe + trim + 保留内置名（§4）。 |
 | 8 | P3 | admin 执行二进制边界未明 | 显式声明 admin=受信本机执行角色（非提权）；binary_path 校验单可执行路径、spawn 用 argv 数组非 shell、写路由 admin-only（§4）。 |
 
-（实现 gate 各 PR 复审 findings 后续在此追加。）
+2026-06-27 **实现 gate**（codex-cli read-only，范围限定 RFC-112 实现、排除 RFC-111/其它）。verdict=needs-fix，**4 findings 全部修复 + 各带回归测试**：
+
+| # | 级别 | finding | 修复 |
+|---|---|---|---|
+| 1 | P1 | retry/clarify-rerun 铸**新** node_run 行但携带前一行 session id，`resolveFrozenRuntime` 在新行重解析（查可变 registry）而非继承——改/删自定义运行时后捕获 session 在错误驱动/二进制上 resume | `nodeRunMint.frozenRuntimeOfSession(sessionId)` 查拥有该 session 的行返其 {protocol,binary}；`resolveFrozenRuntime` 加 `inheritFrom` 参数；主派发点 resume 时传入 → 新行继承源行冻结对、不重解析。回归：fresh retry 行携带 claude session + agent 翻 opencode → 仍冻结 (claude,/opt/v1)。 |
+| 2 | P2 | 冒烟超时仅 signal 进程组后等 EOF，逃逸孙进程持管道可 hang；2s SIGKILL timer 未 track/unref | track+clear+unref SIGTERM/SIGKILL 两 timer（finally 清）；drain 改并发 + `await child.exited` 后 `Promise.race([drainAll, 2s])` **bounded flush**——孙进程持管道不再 wedge。 |
+| 3 | P2 | `conformed` 用 `(sawNonce ∨ sawEnvelope)` 且 nonce 在裸 stdout 行也算 → 非协议二进制假阳 | nonce/信封**仅在 parsed event text** 检测（去裸行检查）；`conformed` **要求 sawNonce**（信封仅咨询）——证明真按协议吐出且消费了 prompt。回归：emit 信封但不回显 nonce → stream-nonconforming。 |
+| 4 | P2 | 内置 claude 探测用 `claudeCodePath`，但 dispatch 走 `['claude']`（RFC-111 未透传）→ 探测与实跑测不同二进制 | 经 `resolveLaunchRuntimeConfig`→`StartTaskDeps.claudeCodePath`→3 派发点→runNode 透传 config.claudeCodePath；claude 分支 head fallback 链 `runtimeBinary ?? runtimeCmd ?? claudeCodePath ?? ['claude']`（自定义 fork 仍 win）——闭合 RFC-111 已知 gap，探测/实跑一致。 |
+
+门禁：typecheck×3 + lint + format + 全量 backend 4151 pass/0 fail。

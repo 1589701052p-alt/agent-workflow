@@ -279,6 +279,14 @@ export interface RunNodeOptions {
    * (a custom fork) overrides the head for BOTH protocols.
    */
   runtimeBinary?: string | null
+  /**
+   * RFC-112 (Codex impl-gate P2): the built-in claude binary (config.claudeCodePath),
+   * threaded from the scheduler. Used as the claude head ONLY for a built-in
+   * claude run (runtimeBinary null + no test runtimeCmd) so it honors the
+   * configured path instead of PATH ['claude'] — symmetric with opencode's
+   * opencodeCmd, and consistent with what the registry smoke probe tests.
+   */
+  claudeCodePath?: string
   db: DbClient
   log?: Logger
   /** When aborted, runner SIGTERMs the child and returns status='canceled'. */
@@ -771,8 +779,15 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     plan = buildClaudeSpawn({
       // Codex impl-gate P1-1: claude uses runtimeCmd (test-only), NEVER the
       // opencode-specific opencodeCmd. RFC-112: a custom claude fork's binary
-      // wins; else production → undefined → ['claude'].
-      claudeCmd: pickRuntimeHead(opts.runtimeBinary, opts.runtimeCmd),
+      // wins; else a test runtimeCmd; else config.claudeCodePath (built-in, P2);
+      // else production → undefined → ['claude'].
+      claudeCmd: pickRuntimeHead(
+        opts.runtimeBinary,
+        opts.runtimeCmd ??
+          (opts.claudeCodePath !== undefined && opts.claudeCodePath.length > 0
+            ? [opts.claudeCodePath]
+            : undefined),
+      ),
       prompt,
       systemPromptText,
       model: opts.overrides?.model ?? opts.agent.model,

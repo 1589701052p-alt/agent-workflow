@@ -29,6 +29,7 @@ const SET_ENV_KEYS = [
   'MOCK_CLAUDE_ECHO_PROMPT',
   'MOCK_CLAUDE_SESSION_ID',
   'MOCK_CLAUDE_SKIP_ENVELOPE',
+  'MOCK_CLAUDE_OUTPUTS',
   'MOCK_OPENCODE_ECHO_PROMPT',
   'MOCK_OPENCODE_EMIT_SESSION_ID',
 ]
@@ -90,6 +91,28 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
       expect(r.outcome).toBe('stream-nonconforming')
       expect(r.conforms).toBe(false)
       expect(r.sawNonce).toBe(false)
+    },
+    SMOKE_TIMEOUT,
+  )
+
+  test(
+    'a binary that emits an envelope but never echoes the nonce → stream-nonconforming (Codex P2: nonce required)',
+    async () => {
+      // envelope present (sawEnvelope) but no prompt echo → the nonce never
+      // round-trips. The old (sawNonce ∨ sawEnvelope) gate would have FALSELY
+      // passed this; conformance now requires the nonce.
+      process.env.MOCK_CLAUDE_SESSION_ID = 'smoke-sess-env'
+      process.env.MOCK_CLAUDE_OUTPUTS = '{"ok":"done"}'
+      const r = await smokeRuntime({
+        protocol: 'claude-code',
+        binaryPath: wrapperFor(MOCK_CLAUDE),
+        bridgeCredentials: false,
+        timeoutMs: SMOKE_TIMEOUT,
+      })
+      expect(r.sawEnvelope).toBe(true)
+      expect(r.sawNonce).toBe(false)
+      expect(r.outcome).toBe('stream-nonconforming')
+      expect(r.conforms).toBe(false)
     },
     SMOKE_TIMEOUT,
   )
