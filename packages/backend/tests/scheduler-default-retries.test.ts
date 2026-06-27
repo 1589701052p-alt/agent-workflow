@@ -1,7 +1,9 @@
 // RFC-042 §A4 / §5.4 — default retries fallback = 3.
 //
-// Locks in: when the workflow node definition omits `retries`, the scheduler
-// treats it as 3 (not 0). Explicit values still win; absence falls back.
+// Locks in: when no per-task retry budget is supplied, the scheduler treats it
+// as 3 (not 0). RFC-115: the budget moved from a per-node `retries` override to
+// the global config.defaultNodeRetries (threaded via runTask opts). Explicit
+// values still win; absence falls back to 3.
 //
 // We drive runTask with mock-opencode set to "always fail / always skip
 // envelope" and count invocations to read the effective retry budget out of
@@ -109,11 +111,6 @@ async function runScenario(
         id: 'n1',
         kind: 'agent-single',
         agentName: 'agent1',
-        // Force the SAME-session follow-up path so retries are counted as
-        // opencode invocations (one per attempt). We crash via SIGTERM-style
-        // non-zero exit so each retry takes the fresh-session path and we
-        // still count invocations cleanly.
-        ...(retries !== undefined ? { retries } : {}),
       },
     ],
     edges: [],
@@ -126,11 +123,16 @@ async function runScenario(
       MOCK_OPENCODE_SKIP_ENVELOPE: '1',
     },
     () =>
+      // RFC-115: the retry budget is global now (was the per-node `retries`
+      // override) — drive it through runTask's defaultNodeRetries; omitted →
+      // scheduler fallback 3. The mock crashes (exit 9 + skip envelope) so every
+      // attempt fails and we count one opencode invocation per attempt.
       runTask({
         taskId,
         db: h.db,
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+        ...(retries !== undefined ? { defaultNodeRetries: retries } : {}),
       }),
   )
   const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
@@ -150,17 +152,17 @@ describe('RFC-042 default retries fallback = 3', () => {
     expect(n).toBe(4)
   })
 
-  test('retries=0 honored verbatim → 1 attempt', async () => {
+  test('defaultNodeRetries=0 honored verbatim → 1 attempt', async () => {
     const n = await runScenario(0, h)
     expect(n).toBe(1)
   })
 
-  test('retries=5 honored verbatim → 6 attempts', async () => {
+  test('defaultNodeRetries=5 honored verbatim → 6 attempts', async () => {
     const n = await runScenario(5, h)
     expect(n).toBe(6)
   })
 
-  test('retries=1 honored verbatim → 2 attempts', async () => {
+  test('defaultNodeRetries=1 honored verbatim → 2 attempts', async () => {
     const n = await runScenario(1, h)
     expect(n).toBe(2)
   })
