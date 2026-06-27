@@ -229,6 +229,17 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     })
   }
 
+  // RFC-115 (Codex impl-gate): fail-loud guard for the config-only skip-upgrade
+  // data-loss path — OUTSIDE the warn-and-continue try above so it actually
+  // aborts boot (symmetric with migration 0057's agents guard). If raw config
+  // still has the 6 dropped generation defaults but every built-in runtime
+  // profile is NULL, RFC-113's config→runtime backfill never ran and continuing
+  // would silently change every inherited runtime's default model.
+  {
+    const { assertConfigDefaultsMigrated } = await import('@/services/runtimeRegistry')
+    await assertConfigDefaultsMigrated(db, Paths.config)
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })

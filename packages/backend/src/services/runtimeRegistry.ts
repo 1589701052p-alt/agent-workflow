@@ -7,6 +7,7 @@
 // no per-user ACL — a runtime is machine-level config including a local binary
 // path (RFC-112 D3).
 
+import { readFileSync } from 'node:fs'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -445,4 +446,66 @@ export async function migrateConfigIntoBuiltins(
   }
   await backfillBinary('opencode', config.opencodePath)
   await backfillBinary('claude-code', config.claudeCodePath)
+}
+
+/**
+ * RFC-115 (Codex impl-gate F-high): fail-loud guard for the CONFIG-only
+ * skip-upgrade path — the symmetric counterpart of migration 0057's agents
+ * guard. The 6 generation-default config keys (defaultModel / defaultVariant /
+ * defaultTemperature / defaultSteps / defaultMaxSteps / defaultClaudeModel) were
+ * dropped from ConfigSchema, so `loadConfig()` (Zod) strips them silently.
+ * RFC-113 had backfilled them into the built-in runtime rows' profile. A DB that
+ * jumps pre-RFC-113 → here still has those keys on disk but never ran that
+ * backfill, so silently dropping them would change every inherited runtime's
+ * default model (and the next config save permanently deletes them from disk).
+ * We read the RAW config (Zod can't see the stripped keys) and ABORT if legacy
+ * defaults are present while EVERY built-in runtime profile is still NULL
+ * (un-migrated). Already-migrated DBs (a built-in profile is non-NULL) and fresh
+ * installs (no legacy keys / no config file) pass through untouched.
+ */
+export async function assertConfigDefaultsMigrated(
+  db: DbClient,
+  configPath: string,
+): Promise<void> {
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>
+  } catch {
+    return // no / unreadable config = fresh install, nothing to migrate or lose
+  }
+  const LEGACY = [
+    'defaultModel',
+    'defaultVariant',
+    'defaultTemperature',
+    'defaultSteps',
+    'defaultMaxSteps',
+    'defaultClaudeModel',
+  ] as const
+  const present = LEGACY.filter((k) => raw[k] !== undefined && raw[k] !== null)
+  if (present.length === 0) return
+  const builtins = await db
+    .select({
+      model: runtimes.model,
+      variant: runtimes.variant,
+      temperature: runtimes.temperature,
+      steps: runtimes.steps,
+      maxSteps: runtimes.maxSteps,
+    })
+    .from(runtimes)
+    .where(eq(runtimes.builtin, true))
+  const anyProfileSet = builtins.some(
+    (r) =>
+      r.model !== null ||
+      r.variant !== null ||
+      r.temperature !== null ||
+      r.steps !== null ||
+      r.maxSteps !== null,
+  )
+  if (!anyProfileSet) {
+    throw new Error(
+      `RFC-115: config.json still has un-migrated generation defaults (${present.join(', ')}) ` +
+        `but every built-in runtime profile is NULL — RFC-113's config→runtime backfill never ran. ` +
+        `Start the RFC-113 build once to migrate them, or remove these keys from config.json before upgrading.`,
+    )
+  }
 }
