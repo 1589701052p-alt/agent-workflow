@@ -12,12 +12,11 @@ import { AgentDependsPicker } from './AgentDependsPicker'
 import { DependencyAutodetectButton } from './agents/DependencyAutodetectButton'
 import { DependencyTreePreview } from './agents/DependencyTreePreview'
 import { mergeAgentDeps } from '@/lib/agent-dep-detect'
-import { Field, NumberInput, Switch, TextArea, TextInput } from './Form'
+import { Field, Switch, TextArea, TextInput } from './Form'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
 import { McpsPicker } from './McpsPicker'
 import { PluginsPicker } from './PluginsPicker'
-import { ModelSelect } from './ModelSelect'
 import { OutputsEditor } from './OutputsEditor'
 import { Select } from './Select'
 import { SkillsPicker } from './SkillsPicker'
@@ -77,14 +76,9 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
     staleTime: 30_000,
   })
   const registeredRuntimes = runtimesQuery.data?.runtimes ?? []
+  // RFC-113: the runtime selector shows unless claude is explicitly disabled (and
+  // the agent doesn't already pin a runtime). model/params now live on the runtime.
   const showRuntime = claudeEnabled || value.runtime != null
-  // Effective runtime = agent override → global default → opencode. Drives the
-  // model namespace + whether variant/temperature apply (claude has neither).
-  const effectiveRuntime = value.runtime ?? config.data?.defaultRuntime ?? 'opencode'
-  const effectiveProtocol =
-    registeredRuntimes.find((r) => r.name === effectiveRuntime)?.protocol ??
-    (effectiveRuntime === 'claude-code' ? 'claude-code' : 'opencode')
-  const isClaude = effectiveProtocol === 'claude-code'
 
   return (
     <div className="agent-form">
@@ -235,58 +229,9 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           </Field>
         )}
 
-        <div className="form-grid form-grid--cols-3">
-          <Field label={t('agentForm.fieldModel')}>
-            <ModelSelect
-              value={value.model}
-              onChange={(v) => patch('model', v)}
-              runtime={isClaude ? 'claude' : 'opencode'}
-            />
-          </Field>
-          {/* RFC-111: variant + temperature are opencode-only — Claude Code's
-              CLI has no equivalent. Disable + explain when claude is active. */}
-          <Field
-            label={t('agentForm.fieldVariant')}
-            hint={isClaude ? t('agentForm.claudeOptionsHint') : undefined}
-          >
-            <TextInput
-              value={value.variant ?? ''}
-              onChange={(v) => patch('variant', v === '' ? undefined : v)}
-              placeholder={t('common.optionalPlaceholder')}
-              disabled={isClaude}
-            />
-          </Field>
-          <Field
-            label={t('agentForm.fieldTemperature')}
-            hint={isClaude ? t('agentForm.claudeOptionsHint') : undefined}
-          >
-            <NumberInput
-              value={value.temperature}
-              onChange={(v) => patch('temperature', v)}
-              min={0}
-              max={2}
-              step={0.1}
-              placeholder={t('agentForm.temperaturePlaceholder')}
-              disabled={isClaude}
-            />
-          </Field>
-          <Field label={t('agentForm.fieldSteps')}>
-            <NumberInput
-              value={value.steps}
-              onChange={(v) => patch('steps', v)}
-              min={1}
-              placeholder={t('common.optionalPlaceholder')}
-            />
-          </Field>
-          <Field label={t('agentForm.fieldMaxSteps')}>
-            <NumberInput
-              value={value.maxSteps}
-              onChange={(v) => patch('maxSteps', v)}
-              min={1}
-              placeholder={t('common.optionalPlaceholder')}
-            />
-          </Field>
-        </div>
+        {/* RFC-113: model / variant / temperature / steps / maxSteps moved to the
+            RUNTIME (Settings → Runtimes). The agent only SELECTS a runtime above;
+            the chosen runtime decides the model + generation params. */}
 
         <Field label={t('agentForm.fieldPermission')} hint={t('agentForm.fieldPermissionHint')}>
           <JsonField

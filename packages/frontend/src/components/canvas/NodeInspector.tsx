@@ -27,7 +27,6 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChipsInput } from '@/components/ChipsInput'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
-import { ModelSelect } from '@/components/ModelSelect'
 import { KindSelect } from '@/components/KindSelect'
 import { Select } from '@/components/Select'
 import { computePorts } from './WorkflowCanvas'
@@ -1198,11 +1197,6 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
       const promptTemplate = typeof rec.promptTemplate === 'string' ? rec.promptTemplate : ''
       const retries = typeof rec.retries === 'number' ? rec.retries : undefined
       const timeoutMs = typeof rec.timeoutMs === 'number' ? rec.timeoutMs : undefined
-      const overrides =
-        typeof rec.overrides === 'object' && rec.overrides !== null
-          ? (rec.overrides as Record<string, unknown>)
-          : {}
-      const selectedAgent = agents.find((a) => a.name === agentName)
       const ports = computePorts(node, new Map(agents.map((a) => [a.name, a])), definition)
 
       function update(p: Record<string, unknown>) {
@@ -1242,6 +1236,10 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             <MissingRefList template={promptTemplate} inputPorts={ports.inputs} />
           </Field>
 
+          {/* RFC-113: per-node model/variant/temperature overrides removed — the
+              runtime (selected on the agent) owns every generation param now.
+              retries + timeout stay: they're node execution policy, not runtime
+              params. */}
           <div className="form-grid form-grid--cols-2">
             <Field label={t('inspector.fieldRetries')} hint={t('inspector.fieldRetriesHint')}>
               <NumberInput value={retries} onChange={(v) => update({ retries: v ?? 0 })} min={0} />
@@ -1252,44 +1250,6 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
                 onChange={(v) => update({ timeoutMs: v })}
                 min={1000}
                 step={1000}
-              />
-            </Field>
-            <Field
-              label={t('inspector.fieldModelOverride')}
-              hint={
-                selectedAgent?.model
-                  ? t('inspector.fieldModelOverrideHint', { model: selectedAgent.model })
-                  : undefined
-              }
-            >
-              <ModelSelect
-                value={
-                  typeof overrides.model === 'string'
-                    ? overrides.model
-                    : (selectedAgent?.model ?? undefined)
-                }
-                onChange={(v) => update({ overrides: { ...overrides, model: v } })}
-              />
-            </Field>
-            <Field label={t('inspector.fieldVariant')}>
-              <TextInput
-                value={typeof overrides.variant === 'string' ? overrides.variant : ''}
-                onChange={(v) =>
-                  update({
-                    overrides: { ...overrides, ...(v ? { variant: v } : { variant: undefined }) },
-                  })
-                }
-              />
-            </Field>
-            <Field label={t('inspector.fieldTemperatureOverride')}>
-              <NumberInput
-                value={
-                  typeof overrides.temperature === 'number' ? overrides.temperature : undefined
-                }
-                onChange={(v) => update({ overrides: { ...overrides, temperature: v } })}
-                min={0}
-                max={2}
-                step={0.1}
               />
             </Field>
           </div>

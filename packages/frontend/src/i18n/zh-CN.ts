@@ -739,6 +739,14 @@ export interface Resources {
     fieldProtocolHint: string
     fieldBinary: string
     fieldBinaryHint: string
+    fieldModel: string
+    fieldModelHint: string
+    fieldVariant: string
+    fieldTemperature: string
+    fieldSteps: string
+    fieldMaxSteps: string
+    isDefault: string
+    setDefault: string
     smoke: {
       conforms: string
       'spawn-failed': string
@@ -3096,6 +3104,14 @@ export const zhCN: Resources = {
     fieldProtocolHint: '该二进制遵循哪种运行时协议——opencode 或 Claude Code。',
     fieldBinary: '二进制路径',
     fieldBinaryHint: '可执行文件的绝对路径。留空则用该协议的默认二进制（PATH）。',
+    fieldModel: '模型',
+    fieldModelHint: '该运行时上的 agent 启动时所用模型。留空则用二进制自身默认。',
+    fieldVariant: '变体',
+    fieldTemperature: '温度',
+    fieldSteps: '步数',
+    fieldMaxSteps: '最大步数',
+    isDefault: '默认',
+    setDefault: '设为默认',
     smoke: {
       conforms: '符合',
       'spawn-failed': '无法启动',

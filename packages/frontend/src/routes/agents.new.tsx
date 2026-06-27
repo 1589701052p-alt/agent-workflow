@@ -25,18 +25,14 @@ export const Route = createRoute({
 })
 
 /**
- * Copy Runtime defaults from `cfg` onto `draft` for fields the user hasn't
- * touched yet (i.e. still `undefined`). Pure, exported for unit tests.
+ * Pre-select the configured default runtime on a fresh draft (if the user
+ * hasn't picked one yet). RFC-113: model/variant/temperature/steps live on the
+ * RUNTIME now, not the agent — so the only Runtime default an agent draft seeds
+ * is which runtime it points at. Pure, exported for unit tests.
  */
 export function applyDefaults(draft: CreateAgent, cfg: Config): CreateAgent {
   const next: CreateAgent = { ...draft }
-  if (draft.model === undefined && cfg.defaultModel) next.model = cfg.defaultModel
-  if (draft.variant === undefined && cfg.defaultVariant) next.variant = cfg.defaultVariant
-  if (draft.temperature === undefined && cfg.defaultTemperature !== undefined)
-    next.temperature = cfg.defaultTemperature
-  if (draft.steps === undefined && cfg.defaultSteps !== undefined) next.steps = cfg.defaultSteps
-  if (draft.maxSteps === undefined && cfg.defaultMaxSteps !== undefined)
-    next.maxSteps = cfg.defaultMaxSteps
+  if (draft.runtime === undefined && cfg.defaultRuntime) next.runtime = cfg.defaultRuntime
   return next
 }
 

@@ -15,11 +15,7 @@ import { Dialog } from '@/components/Dialog'
 import { Field, NumberInput, Switch, TextInput } from '@/components/Form'
 import { ModelSelect } from '@/components/ModelSelect'
 import { Select } from '@/components/Select'
-import {
-  RUNTIME_CLAUDE_QUERY_KEY,
-  RUNTIME_OPENCODE_QUERY_KEY,
-} from '@/components/RuntimeStatusCard'
-import { RuntimeList, RUNTIMES_QUERY_KEY } from '@/components/RuntimeList'
+import { RuntimeList } from '@/components/RuntimeList'
 import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
 import { isSupportedLanguage } from '@/hooks/useLanguage'
 import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
@@ -109,7 +105,7 @@ function SettingsPage() {
       )}
       {config.data !== undefined && (
         <>
-          {tab === 'runtime' && <RuntimeTab config={config.data} flashKey={runtimeFlashKey} />}
+          {tab === 'runtime' && <RuntimeTab flashKey={runtimeFlashKey} />}
           {tab === 'limits' && <LimitsTab config={config.data} />}
           {tab === 'recovery' && <RecoveryTab config={config.data} />}
           {tab === 'gc' && <GcTab config={config.data} />}
@@ -133,30 +129,12 @@ interface TabProps {
   config: Config
 }
 
-function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) {
-  const { t } = useTranslation()
-  const qc = useQueryClient()
+function RuntimeTab({ flashKey = 0 }: { flashKey?: number }) {
   const runtimeRef = useRef<HTMLDivElement | null>(null)
   const [flashing, setFlashing] = useState(false)
 
-  // RFC-112: the default-runtime picker lists every registered runtime by name
-  // (shares the RuntimeList query cache via the same key). Falls back to the two
-  // built-in names while loading so the select is never empty.
-  const runtimesQuery = useQuery<{ runtimes: Array<{ name: string }> }>({
-    queryKey: RUNTIMES_QUERY_KEY,
-    queryFn: ({ signal }) => api.get('/api/runtimes', undefined, signal),
-    staleTime: 30_000,
-  })
-  const runtimeOptions = (
-    runtimesQuery.data?.runtimes.length
-      ? runtimesQuery.data.runtimes.map((r) => r.name)
-      : ['opencode', 'claude-code']
-  ).map((name) => ({ value: name, label: name }))
-
-  // RFC-032: scroll the runtime status block into view + briefly highlight it
-  // when the sidebar runtime row navigates here. flashKey > 0 means the
-  // parent has just observed `location.hash === '#runtime'`; we restart the
-  // 2 s flash + scroll any time it bumps.
+  // RFC-032: scroll + flash the runtime block when the sidebar runtime row
+  // navigates here (location.hash === '#runtime' bumps flashKey).
   useEffect(() => {
     if (flashKey === 0) return
     setFlashing(true)
@@ -165,191 +143,18 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
     return () => window.clearTimeout(id)
   }, [flashKey])
 
-  const { state, setState, save } = useTabState(
-    config,
-    [
-      'opencodePath',
-      'defaultModel',
-      // RFC-111: global default runtime + claude-code default model.
-      'defaultRuntime',
-      'defaultClaudeModel',
-      'defaultVariant',
-      'defaultTemperature',
-      'defaultSteps',
-      'defaultMaxSteps',
-      'maxConcurrentNodes',
-      'multiProcessSubprocessConcurrency',
-      'logLevel',
-      // RFC-075: auto commit&push runtime config.
-      'commitPushModel',
-      'commitPushMaxRepairRetries',
-      'commitPushDiffMaxBytes',
-    ],
-    {
-      onSaved: () => {
-        // opencodePath may have changed — refresh the runtime status badge.
-        void qc.invalidateQueries({ queryKey: RUNTIME_OPENCODE_QUERY_KEY })
-        // RFC-111: claudeCodePath / defaultRuntime may have moved — re-probe
-        // claude. The ['runtime','models'] prefix also drops the claude list.
-        void qc.invalidateQueries({ queryKey: RUNTIME_CLAUDE_QUERY_KEY })
-        void qc.invalidateQueries({ queryKey: ['runtime', 'models'] })
-        // RFC-112: opencodePath / claudeCodePath feed the built-in runtimes'
-        // default binary — refresh the registry list too.
-        void qc.invalidateQueries({ queryKey: RUNTIMES_QUERY_KEY })
-      },
-    },
-  )
+  // RFC-113: the Runtime tab is JUST the runtimes table. Every runtime/model
+  // setting (binary, model, variant, temperature, steps + the in-table default
+  // marker) lives on the rows now; the global execution knobs (concurrency / log
+  // level / auto commit&push) moved to the Limits tab.
   return (
-    <>
-      {/* RFC-112: the runtime registry list (opencode / claude-code built-ins +
-          custom forks) replaces the two stacked RFC-111 status cards. */}
-      <div
-        ref={runtimeRef}
-        className={`runtime-status-anchor${flashing ? ' runtime-status-anchor--flash' : ''}`}
-        data-flash={flashing ? '1' : '0'}
-      >
-        <RuntimeList />
-      </div>
-      <SectionForm
-        onSave={save.mutate}
-        busy={save.isPending}
-        error={save.error}
-        success={save.isSuccess && save.error === null ? 'saved' : null}
-      >
-        <Field label={t('settingsForm.opencodePath')} hint={t('settingsForm.opencodePathHint')}>
-          <TextInput
-            value={state.opencodePath ?? ''}
-            onChange={(v) => setState({ ...state, opencodePath: v === '' ? undefined : v })}
-          />
-        </Field>
-        <Field label={t('settingsForm.defaultModel')} hint={t('settingsForm.defaultModelHint')}>
-          <ModelSelect
-            value={state.defaultModel}
-            onChange={(v) => setState({ ...state, defaultModel: v })}
-          />
-        </Field>
-        {/* RFC-111: global default runtime + claude-code default model. */}
-        <Field label={t('settingsForm.defaultRuntime')} hint={t('settingsForm.defaultRuntimeHint')}>
-          {/* RFC-112: options come from the runtimes registry (built-ins +
-              custom forks), not the two hardcoded RFC-111 values. */}
-          <Select<string>
-            value={state.defaultRuntime ?? 'opencode'}
-            ariaLabel={t('settingsForm.defaultRuntime')}
-            onChange={(v) => setState({ ...state, defaultRuntime: v })}
-            options={runtimeOptions}
-          />
-        </Field>
-        <Field
-          label={t('settingsForm.defaultClaudeModel')}
-          hint={t('settingsForm.defaultClaudeModelHint')}
-        >
-          <ModelSelect
-            runtime="claude"
-            value={state.defaultClaudeModel}
-            onChange={(v) => setState({ ...state, defaultClaudeModel: v })}
-          />
-        </Field>
-        <Field label={t('settingsForm.defaultVariant')}>
-          <TextInput
-            value={state.defaultVariant ?? ''}
-            onChange={(v) => setState({ ...state, defaultVariant: v === '' ? undefined : v })}
-          />
-        </Field>
-        <Field label={t('settingsForm.defaultTemperature')}>
-          <NumberInput
-            value={state.defaultTemperature}
-            onChange={(v) => setState({ ...state, defaultTemperature: v })}
-            min={0}
-            max={2}
-            step={0.1}
-          />
-        </Field>
-        <div className="form-grid form-grid--cols-2">
-          <Field label={t('settingsForm.defaultSteps')} hint={t('settingsForm.defaultStepsHint')}>
-            <NumberInput
-              value={state.defaultSteps}
-              onChange={(v) => setState({ ...state, defaultSteps: v })}
-              min={1}
-            />
-          </Field>
-          <Field
-            label={t('settingsForm.defaultMaxSteps')}
-            hint={t('settingsForm.defaultMaxStepsHint')}
-          >
-            <NumberInput
-              value={state.defaultMaxSteps}
-              onChange={(v) => setState({ ...state, defaultMaxSteps: v })}
-              min={1}
-            />
-          </Field>
-        </div>
-        <div className="form-grid form-grid--cols-2">
-          <Field label={t('settingsForm.maxConcurrentNodes')} required>
-            <NumberInput
-              value={state.maxConcurrentNodes}
-              onChange={(v) => setState({ ...state, maxConcurrentNodes: v ?? 1 })}
-              min={1}
-            />
-          </Field>
-          <Field label={t('settingsForm.multiProcessConc')} required>
-            <NumberInput
-              value={state.multiProcessSubprocessConcurrency}
-              onChange={(v) => setState({ ...state, multiProcessSubprocessConcurrency: v ?? 1 })}
-              min={1}
-            />
-          </Field>
-        </div>
-        <Field label={t('settingsForm.logLevel')}>
-          <Select<NonNullable<Config['logLevel']>>
-            value={state.logLevel ?? config.logLevel}
-            ariaLabel={t('settingsForm.logLevel')}
-            onChange={(v) => setState({ ...state, logLevel: v })}
-            options={[
-              { value: 'debug', label: 'debug' },
-              { value: 'info', label: 'info' },
-              { value: 'warn', label: 'warn' },
-              { value: 'error', label: 'error' },
-            ]}
-          />
-        </Field>
-        {/* RFC-075: auto commit&push runtime knobs (the per-task toggles live
-            on the launch form). The model label namespaces these clearly so no
-            separate subheading / bespoke CSS is needed. */}
-        <Field
-          label={t('settingsForm.commitPushModel')}
-          hint={t('settingsForm.commitPushModelHint')}
-        >
-          <ModelSelect
-            value={state.commitPushModel}
-            onChange={(v) => setState({ ...state, commitPushModel: v })}
-          />
-        </Field>
-        <div className="form-grid form-grid--cols-2">
-          <Field
-            label={t('settingsForm.commitPushMaxRepairRetries')}
-            hint={t('settingsForm.commitPushMaxRepairRetriesHint')}
-          >
-            <NumberInput
-              value={state.commitPushMaxRepairRetries}
-              onChange={(v) => setState({ ...state, commitPushMaxRepairRetries: v })}
-              min={0}
-              max={10}
-            />
-          </Field>
-          <Field
-            label={t('settingsForm.commitPushDiffMaxBytes')}
-            hint={t('settingsForm.commitPushDiffMaxBytesHint')}
-          >
-            <NumberInput
-              value={state.commitPushDiffMaxBytes}
-              onChange={(v) => setState({ ...state, commitPushDiffMaxBytes: v })}
-              min={0}
-              max={262144}
-            />
-          </Field>
-        </div>
-      </SectionForm>
-    </>
+    <div
+      ref={runtimeRef}
+      className={`runtime-status-anchor${flashing ? ' runtime-status-anchor--flash' : ''}`}
+      data-flash={flashing ? '1' : '0'}
+    >
+      <RuntimeList />
+    </div>
   )
 }
 
@@ -360,6 +165,14 @@ function LimitsTab({ config }: TabProps) {
     'defaultPerTaskMaxTotalTokens',
     'defaultPerNodeTimeoutMs',
     'largeOutputThresholdBytes',
+    // RFC-113: global execution knobs relocated here from the Runtime tab (which
+    // is now just the runtimes table).
+    'maxConcurrentNodes',
+    'multiProcessSubprocessConcurrency',
+    'logLevel',
+    'commitPushModel',
+    'commitPushMaxRepairRetries',
+    'commitPushDiffMaxBytes',
   ])
   return (
     <SectionForm
@@ -407,6 +220,66 @@ function LimitsTab({ config }: TabProps) {
           step={1024}
         />
       </Field>
+      {/* RFC-113: global execution knobs relocated from the Runtime tab. */}
+      <div className="form-grid form-grid--cols-2">
+        <Field label={t('settingsForm.maxConcurrentNodes')} required>
+          <NumberInput
+            value={state.maxConcurrentNodes}
+            onChange={(v) => setState({ ...state, maxConcurrentNodes: v ?? 1 })}
+            min={1}
+          />
+        </Field>
+        <Field label={t('settingsForm.multiProcessConc')} required>
+          <NumberInput
+            value={state.multiProcessSubprocessConcurrency}
+            onChange={(v) => setState({ ...state, multiProcessSubprocessConcurrency: v ?? 1 })}
+            min={1}
+          />
+        </Field>
+      </div>
+      <Field label={t('settingsForm.logLevel')}>
+        <Select<NonNullable<Config['logLevel']>>
+          value={state.logLevel ?? config.logLevel}
+          ariaLabel={t('settingsForm.logLevel')}
+          onChange={(v) => setState({ ...state, logLevel: v })}
+          options={[
+            { value: 'debug', label: 'debug' },
+            { value: 'info', label: 'info' },
+            { value: 'warn', label: 'warn' },
+            { value: 'error', label: 'error' },
+          ]}
+        />
+      </Field>
+      <Field label={t('settingsForm.commitPushModel')} hint={t('settingsForm.commitPushModelHint')}>
+        <ModelSelect
+          value={state.commitPushModel}
+          onChange={(v) => setState({ ...state, commitPushModel: v })}
+        />
+      </Field>
+      <div className="form-grid form-grid--cols-2">
+        <Field
+          label={t('settingsForm.commitPushMaxRepairRetries')}
+          hint={t('settingsForm.commitPushMaxRepairRetriesHint')}
+        >
+          <NumberInput
+            value={state.commitPushMaxRepairRetries}
+            onChange={(v) => setState({ ...state, commitPushMaxRepairRetries: v })}
+            min={0}
+            max={10}
+          />
+        </Field>
+        <Field
+          label={t('settingsForm.commitPushDiffMaxBytes')}
+          hint={t('settingsForm.commitPushDiffMaxBytesHint')}
+        >
+          <NumberInput
+            value={state.commitPushDiffMaxBytes}
+            onChange={(v) => setState({ ...state, commitPushDiffMaxBytes: v })}
+            min={0}
+            max={262144}
+          />
+        </Field>
+      </div>
     </SectionForm>
   )
 }

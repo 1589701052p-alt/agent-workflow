@@ -10,11 +10,14 @@
 //  3. <AgentForm> renders the Runtime <Select> (public combobox chrome, not a
 //     raw <select>) defaulting to "inherit", and selecting "Claude Code"
 //     surfaces runtime: 'claude-code' upward.
-//  4. When the effective runtime is claude-code the model field switches to the
-//     claude namespace (`?runtime=claude`) and variant + temperature are
-//     disabled (opencode-only — Claude Code's CLI has no equivalent).
+//  4. RFC-113: the AgentForm renders ONLY that runtime Select for runtime
+//     concerns — model / variant / temperature / steps moved onto the runtime, so
+//     the agent form no longer carries any generation-param field.
 //  5. The Runtime selector is gated: hidden when config.claudeCodeEnabled is
 //     explicitly false (and the agent doesn't already pin a runtime).
+//
+// The ModelSelect runtime-namespace behavior (#1/#2) still matters — RFC-113's
+// RuntimeFormDialog reuses <ModelSelect> per protocol — so those tests stay.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -63,16 +66,6 @@ function clickSelectOption(triggerName: RegExp, optionLabel: string) {
   )
   if (opt === undefined) throw new Error(`option '${optionLabel}' not found`)
   fireEvent.mouseDown(opt)
-}
-
-// The variant / temperature inputs live inside a <label class="form-field">; the
-// label span text is exactly the field label (the hint is a sibling span), so we
-// can reach the input deterministically without a testid.
-function inputUnderLabel(labelText: string): HTMLInputElement {
-  const span = screen.getByText(labelText, { selector: '.form-field__label' })
-  const input = span.closest('label')?.querySelector('input') ?? null
-  if (input === null) throw new Error(`no input under label '${labelText}'`)
-  return input as HTMLInputElement
 }
 
 beforeEach(() => {
@@ -134,32 +127,24 @@ describe('AgentForm — runtime selector (RFC-111)', () => {
     expect(next.runtime).toBe('claude-code')
   })
 
-  test('claude-code agent: model uses claude namespace + variant/temperature disabled', async () => {
+  // RFC-113: model / variant / temperature / steps moved to the RUNTIME. The
+  // AgentForm must render NO generation-param field (they'd let an agent override
+  // its runtime's params, which RFC-113 forbids) and must NOT fetch the model
+  // list (no ModelSelect in the form). A regression that re-adds any of them — or
+  // a model dropdown — turns this red.
+  test('renders no model/variant/temperature/steps fields and does not fetch models', async () => {
     const initial: CreateAgent = { ...emptyAgent(), name: 'demo', runtime: 'claude-code' }
     wrap(<AgentForm value={initial} onChange={() => {}} />)
 
-    // Model field switched to the claude namespace.
-    await waitFor(() => {
-      expect(fetchUrls.some((u) => u.includes('/api/runtime/models?runtime=claude'))).toBe(true)
-    })
-
-    // variant + temperature are opencode-only → disabled with an explanatory hint.
-    expect(inputUnderLabel('Variant').disabled).toBe(true)
-    expect(inputUnderLabel('Temperature').disabled).toBe(true)
-    expect(screen.getAllByText(/opencode-only/).length).toBeGreaterThanOrEqual(1)
-  })
-
-  test('opencode agent keeps the opencode model namespace + enabled variant/temperature', async () => {
-    const initial: CreateAgent = { ...emptyAgent(), name: 'demo', runtime: 'opencode' }
-    wrap(<AgentForm value={initial} onChange={() => {}} />)
-
-    await waitFor(() => {
-      expect(fetchUrls.some((u) => u.includes('/api/runtime/models'))).toBe(true)
-    })
-    const modelUrls = fetchUrls.filter((u) => u.includes('/api/runtime/models'))
-    expect(modelUrls.every((u) => !u.includes('runtime=claude'))).toBe(true)
-    expect(inputUnderLabel('Variant').disabled).toBe(false)
-    expect(inputUnderLabel('Temperature').disabled).toBe(false)
+    // the runtime Select is the only runtime-concern control:
+    expect(screen.getByRole('combobox', { name: /^Runtime$/ })).toBeTruthy()
+    // none of the removed generation-param field labels render:
+    for (const label of ['Model', 'Variant', 'Temperature', 'Steps', 'Max steps']) {
+      expect(screen.queryByText(label, { selector: '.form-field__label' })).toBeNull()
+    }
+    // and the form never reaches for /api/runtime/models (that was the ModelSelect).
+    await waitFor(() => expect(fetchUrls.some((u) => u.includes('/api/config'))).toBe(true))
+    expect(fetchUrls.some((u) => u.includes('/api/runtime/models'))).toBe(false)
   })
 
   test('Runtime selector hidden when config.claudeCodeEnabled === false', async () => {

@@ -1,10 +1,14 @@
-// RFC-112 — runtime registry list (replaces the two stacked RuntimeStatusCards
-// in Settings → Runtime). Each row is a registered runtime: name + protocol +
-// deep-smoke conformance chip + binary path + actions. The two built-ins
-// (opencode / claude-code) are read-only (Test only); custom forks add Edit /
-// Delete. "Add runtime" + Edit open a Dialog that deep-smokes the binary before
-// saving. Admin-only writes are enforced server-side; non-admins still see the
-// list (the agent / settings runtime pickers read it).
+// RFC-112 / RFC-113 — runtime registry list (replaces the two stacked
+// RuntimeStatusCards in Settings → Runtime, and now carries the whole Runtime
+// tab). Each row is a registered runtime: name + protocol + the in-table default
+// marker + deep-smoke conformance chip + binary path + the execution profile
+// (model / variant / temperature / steps), with Test / Set-default / Edit /
+// Delete actions. RFC-113 D8: built-ins (opencode / claude-code) are EDITABLE
+// (binary / model / profile) — only their name + protocol identity is locked, and
+// only custom forks can be Deleted. "Add runtime" + Edit open a Dialog that
+// deep-smokes the binary before saving. Admin-only writes are enforced
+// server-side; non-admins still see the list (the agent / settings pickers read
+// it).
 //
 // Reuses the shared primitives only: Dialog, Form Field/TextInput, Select,
 // StatusChip, ErrorBanner/LoadingState — no native modal chrome / inputs.
@@ -14,8 +18,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
-import { Field, TextInput } from '@/components/Form'
+import { Field, NumberInput, TextInput } from '@/components/Form'
 import { Select } from '@/components/Select'
+import { ModelSelect } from '@/components/ModelSelect'
 import { StatusChip } from '@/components/StatusChip'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
@@ -43,6 +48,13 @@ interface RuntimeView {
   protocol: RuntimeProtocol
   binaryPath: string | null
   builtin: boolean
+  isDefault: boolean
+  // RFC-113: the execution profile (variant/temperature/steps are opencode-only).
+  model: string | null
+  variant: string | null
+  temperature: number | null
+  steps: number | null
+  maxSteps: number | null
   lastProbe: SmokeResult | null
   createdAt: number
   updatedAt: number
@@ -78,6 +90,15 @@ export function RuntimeList() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: RUNTIMES_QUERY_KEY }),
   })
 
+  // RFC-113 D3: the in-table "set as default" marker writes config.defaultRuntime.
+  const setDefault = useMutation({
+    mutationFn: (name: string) => api.put('/api/config', { defaultRuntime: name }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: RUNTIMES_QUERY_KEY })
+      void qc.invalidateQueries({ queryKey: ['config'] })
+    },
+  })
+
   const runtimes = list.data?.runtimes ?? []
 
   return (
@@ -103,9 +124,18 @@ export function RuntimeList() {
       ) : (
         <ul className="runtime-list" role="list">
           {runtimes.map((rt) => (
-            <li key={rt.name} className="runtime-list__row" role="listitem">
+            <li
+              key={rt.name}
+              className={`runtime-list__row${rt.isDefault ? ' runtime-list__row--default' : ''}`}
+              role="listitem"
+            >
               <div className="runtime-list__main">
                 <span className="runtime-list__name">{rt.name}</span>
+                {rt.isDefault && (
+                  <StatusChip kind="success" size="sm">
+                    {t('runtimes.isDefault')}
+                  </StatusChip>
+                )}
                 <StatusChip kind="neutral" size="sm">
                   {rt.protocol === 'claude-code'
                     ? t('runtimes.protocolClaude')
@@ -128,6 +158,16 @@ export function RuntimeList() {
                 </code>
               </div>
               <div className="runtime-list__actions">
+                {!rt.isDefault && (
+                  <button
+                    type="button"
+                    className="btn btn--xs"
+                    disabled={setDefault.isPending}
+                    onClick={() => setDefault.mutate(rt.name)}
+                  >
+                    {t('runtimes.setDefault')}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn--xs"
@@ -136,20 +176,22 @@ export function RuntimeList() {
                 >
                   {t('runtimes.test')}
                 </button>
+                {/* RFC-113 D8: built-ins are editable too (binary / model /
+                    profile params) — only name + protocol identity stay locked
+                    (the dialog disables those when editing). Delete stays
+                    custom-only: a built-in can't be removed. */}
+                <button type="button" className="btn btn--xs" onClick={() => setEditing(rt)}>
+                  {t('runtimes.edit')}
+                </button>
                 {!rt.builtin && (
-                  <>
-                    <button type="button" className="btn btn--xs" onClick={() => setEditing(rt)}>
-                      {t('runtimes.edit')}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--xs btn--danger"
-                      disabled={del.isPending}
-                      onClick={() => del.mutate(rt.name)}
-                    >
-                      {t('runtimes.delete')}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="btn btn--xs btn--danger"
+                    disabled={del.isPending}
+                    onClick={() => del.mutate(rt.name)}
+                  >
+                    {t('runtimes.delete')}
+                  </button>
                 )}
               </div>
             </li>
@@ -183,6 +225,25 @@ function RuntimeFormDialog(props: {
   const [protocol, setProtocol] = useState<RuntimeProtocol>(props.existing?.protocol ?? 'opencode')
   const [binaryPath, setBinaryPath] = useState(props.existing?.binaryPath ?? '')
   const [smoke, setSmoke] = useState<SmokeResult | null>(props.existing?.lastProbe ?? null)
+  // RFC-113: the runtime IS the execution profile.
+  const [model, setModel] = useState<string | undefined>(props.existing?.model ?? undefined)
+  const [variant, setVariant] = useState(props.existing?.variant ?? '')
+  const [temperature, setTemperature] = useState<number | undefined>(
+    props.existing?.temperature ?? undefined,
+  )
+  const [steps, setSteps] = useState<number | undefined>(props.existing?.steps ?? undefined)
+  const [maxSteps, setMaxSteps] = useState<number | undefined>(
+    props.existing?.maxSteps ?? undefined,
+  )
+  const isOpencode = protocol === 'opencode'
+  // variant/temperature/steps are opencode-only; null them out for claude.
+  const profileBody = () => ({
+    model: model ?? null,
+    variant: isOpencode && variant.trim() !== '' ? variant.trim() : null,
+    temperature: isOpencode ? (temperature ?? null) : null,
+    steps: isOpencode ? (steps ?? null) : null,
+    maxSteps: maxSteps ?? null,
+  })
 
   const test = useMutation({
     mutationFn: () =>
@@ -199,6 +260,7 @@ function RuntimeFormDialog(props: {
       if (isEdit) {
         return api.put(`/api/runtimes/${encodeURIComponent(name)}`, {
           binaryPath: trimmed === '' ? null : trimmed,
+          ...profileBody(),
         })
       }
       return api.post('/api/runtimes', {
@@ -206,6 +268,7 @@ function RuntimeFormDialog(props: {
         protocol,
         ...(trimmed === '' ? {} : { binaryPath: trimmed }),
         probe: trimmed !== '',
+        ...profileBody(),
       })
     },
     onSuccess: () => props.onSaved(),
@@ -263,6 +326,40 @@ function RuntimeFormDialog(props: {
           data-testid="runtime-binary"
         />
       </Field>
+      {/* RFC-113: the runtime's execution profile. variant/temperature/steps are
+          opencode-only (claude has none) — shown only for the opencode protocol. */}
+      <Field label={t('runtimes.fieldModel')} hint={t('runtimes.fieldModelHint')}>
+        <ModelSelect
+          value={model}
+          onChange={setModel}
+          runtime={isOpencode ? 'opencode' : 'claude'}
+        />
+      </Field>
+      {isOpencode && (
+        <div className="form-grid form-grid--cols-2">
+          <Field label={t('runtimes.fieldVariant')}>
+            <TextInput
+              value={variant}
+              onChange={setVariant}
+              placeholder={t('common.optionalPlaceholder')}
+            />
+          </Field>
+          <Field label={t('runtimes.fieldTemperature')}>
+            <NumberInput value={temperature} onChange={setTemperature} min={0} max={2} step={0.1} />
+          </Field>
+          <Field label={t('runtimes.fieldSteps')}>
+            <NumberInput value={steps} onChange={setSteps} min={1} />
+          </Field>
+          <Field label={t('runtimes.fieldMaxSteps')}>
+            <NumberInput value={maxSteps} onChange={setMaxSteps} min={1} />
+          </Field>
+        </div>
+      )}
+      {!isOpencode && (
+        <Field label={t('runtimes.fieldMaxSteps')}>
+          <NumberInput value={maxSteps} onChange={setMaxSteps} min={1} />
+        </Field>
+      )}
       {smoke !== null && (
         <div style={{ marginTop: 8 }}>
           <StatusChip kind={smokeChipKind(smoke)} size="sm" withDot>

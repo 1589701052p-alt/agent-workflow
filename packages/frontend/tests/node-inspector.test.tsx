@@ -3,7 +3,7 @@
 // WorkflowDefinition with the right node updated.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Agent, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -301,57 +301,24 @@ describe('NodeInspector', () => {
 
   // When no override is set, the model dropdown shows the agent's own
   // default model — so the displayed value matches what'll actually run.
-  test('agent-single: model dropdown defaults to the agent model when no override is set', async () => {
-    vi.restoreAllMocks()
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          binary: 'opencode',
-          cached: false,
-          models: [{ id: 'anthropic/sonnet', provider: 'anthropic', modelID: 'sonnet' }],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-    )
+  // RFC-113: per-node model/variant/temperature OVERRIDES were removed — the
+  // runtime (selected on the agent) owns every generation param. The inspector
+  // must no longer render those override controls, while keeping the node-policy
+  // fields (retries + timeout) it always had. A regression that re-adds an
+  // override control turns this red.
+  test('agent-single: no model/variant/temperature override controls; retries + timeout stay', () => {
     setup({
       id: 'a1',
       kind: 'agent-single',
       agentName: 'coder',
       promptTemplate: '',
     })
-    // No override → ModelSelect value falls back to the agent's own model, so
-    // once the list loads the model combobox trigger displays "sonnet".
-    await waitFor(() => expect(comboboxShowing(/sonnet/i)).toBeTruthy())
-  })
-
-  // Locks in the swap from a free-text model field to a ModelSelect dropdown
-  // for the workflow node's model override (mirrors the AgentForm dropdown).
-  test('agent-single: model override renders as a dropdown listing fetched models', async () => {
-    vi.restoreAllMocks()
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          binary: 'opencode',
-          cached: false,
-          models: [{ id: 'anthropic/sonnet', provider: 'anthropic', modelID: 'sonnet' }],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-    )
-    const { onChange } = setup({
-      id: 'a1',
-      kind: 'agent-single',
-      agentName: 'coder',
-      promptTemplate: '',
-    })
-    // Wait for the models to load so the override dropdown becomes a Select
-    // (an unknown value would otherwise fall back to the custom text input).
-    await waitFor(() => expect(comboboxShowing(/sonnet/i)).toBeTruthy())
-    pickFromCombobox(comboboxShowing(/sonnet/i)!, 'sonnet')
-    const after = lastPatchedNode(onChange) as unknown as {
-      overrides: { model?: string }
-    }
-    expect(after.overrides.model).toBe('anthropic/sonnet')
+    // the removed runtime-param overrides:
+    expect(screen.queryByText('Model override')).toBeNull()
+    expect(screen.queryByText('Temperature override')).toBeNull()
+    // the kept node-execution policy:
+    expect(screen.getByText('Retries')).toBeTruthy()
+    expect(screen.getByText('Timeout (ms)')).toBeTruthy()
   })
 
   test('agent-single: editing the prompt template patches promptTemplate', () => {

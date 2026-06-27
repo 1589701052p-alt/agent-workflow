@@ -11136,6 +11136,13 @@ mark.comment-anchor[data-active='true'] {
   background: var(--bg);
 }
 
+/* RFC-113: the default runtime row is accented so the in-table default marker
+   reads at a glance (mirrors the success StatusChip on the row). */
+.runtime-list__row--default {
+  border-color: var(--success, #16a34a);
+  background: var(--success-bg, rgba(22, 163, 74, 0.06));
+}
+
 .runtime-list__main {
   display: flex;
   align-items: center;

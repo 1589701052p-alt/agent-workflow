@@ -630,6 +630,15 @@ export const enUS: Resources = {
     fieldBinary: 'Binary path',
     fieldBinaryHint:
       'Absolute path to the executable. Leave empty for the protocol default (PATH).',
+    fieldModel: 'Model',
+    fieldModelHint:
+      'The model agents on this runtime spawn with. Empty = the binary’s own default.',
+    fieldVariant: 'Variant',
+    fieldTemperature: 'Temperature',
+    fieldSteps: 'Steps',
+    fieldMaxSteps: 'Max steps',
+    isDefault: 'default',
+    setDefault: 'Set default',
     smoke: {
       conforms: 'conforms',
       'spawn-failed': 'cannot start',
