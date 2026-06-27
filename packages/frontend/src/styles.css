@@ -8559,10 +8559,29 @@ mark.comment-anchor[data-active='true'] {
   font-size: var(--font-md);
   color: var(--text);
   /* Scroll region between the pinned header and footer. min-height:0 lets
-     this flex child shrink below its content height so overflow kicks in. */
+     this flex child shrink below its content height so overflow kicks in;
+     min-width:0 lets it shrink below a wide child's width instead of pushing
+     past the fixed-width .dialog__panel. */
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  /* overflow-y:auto forces overflow-x to compute to `auto` too (CSS overflow
+     spec — the two axes can't be visible/non-visible independently), so the
+     scroll box clips a full-width .form-input's 2px :focus outline
+     (outline-offset:0) on its LEFT/RIGHT edges. That is the recurring "弹窗
+     输入框选中时左右被盖住 / 黑边" bug (runtime add/edit dialog + the other
+     dialogs that embed form inputs). Fix it ONCE on the shared body: borrow
+     4px of the panel's horizontal padding via a negative margin, then give it
+     straight back as the body's own padding — content edges stay put (zero
+     visible shift) but the scroll box now has 4px of horizontal room for the
+     outline to paint. This lifts RFC-101's .fuse-dialog-scoped patch (further
+     down) onto the shared rule; that scoped block now overlaps here harmlessly.
+     Locked by tests/dialog-body-focus-outline-clip.test.ts. */
+  padding-left: 4px;
+  padding-right: 4px;
+  margin-left: -4px;
+  margin-right: -4px;
 }
 
 .dialog__footer {
