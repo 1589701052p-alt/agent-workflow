@@ -565,7 +565,6 @@ export interface Resources {
     tabRecovery: string
     tabGc: string
     tabNetwork: string
-    tabConnection: string
     tabAppearance: string
     tabMemory: string
     tabRendering: string
@@ -1915,11 +1914,6 @@ export interface Resources {
     bindHostHint: string
     bindPort: string
     bindPortHint: string
-    daemonUrl: string
-    tokenLabel: string
-    tokenNone: string
-    tokenMask: string
-    signOut: string
     runtimeStatusTitle: string
     runtimeStatusProbing: string
     runtimeStatusOk: string
@@ -2907,7 +2901,6 @@ export const zhCN: Resources = {
     tabRecovery: '恢复',
     tabGc: 'GC',
     tabNetwork: '网络',
-    tabConnection: '连接',
     tabAppearance: '外观',
     tabMemory: '记忆',
     tabRendering: '渲染',
@@ -4426,11 +4419,6 @@ export const zhCN: Resources = {
     bindHostHint: '需要重启。默认 127.0.0.1 使 daemon 仅本机可达。',
     bindPort: '监听 port',
     bindPortHint: '需要重启。0 让启动时自动挑空闲端口。',
-    daemonUrl: 'Daemon URL',
-    tokenLabel: 'Token',
-    tokenNone: '无',
-    tokenMask: '{{prefix}}…{{suffix}}（共 {{len}} 字符）',
-    signOut: '登出 / 重新输入 token',
     runtimeStatusTitle: 'opencode 运行状态',
     runtimeStatusProbing: '正在探测 opencode…',
     runtimeStatusOk: '兼容 — {{version}}',

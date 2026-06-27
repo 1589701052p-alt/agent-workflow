@@ -38,12 +38,14 @@ describe('Phase C bundles', () => {
     setLanguage('en-US')
     expect(i18n.t('settingsForm.bindHost')).toBe('Bind host')
     expect(i18n.t('settingsForm.archiveGlobal')).toContain('global')
-    expect(i18n.t('settingsForm.tokenMask', { prefix: 'abcd', suffix: 'wxyz', len: 64 })).toBe(
-      'abcd…wxyz (64 chars)',
+    // tokenMask was removed with the Settings "Connection" tab; runtimeStatusBinary
+    // keeps this test's settingsForm interpolation coverage on a live key.
+    expect(i18n.t('settingsForm.runtimeStatusBinary', { path: '/opt/opencode' })).toBe(
+      'Binary: /opt/opencode',
     )
     setLanguage('zh-CN')
-    expect(i18n.t('settingsForm.tokenMask', { prefix: 'abcd', suffix: 'wxyz', len: 64 })).toBe(
-      'abcd…wxyz（共 64 字符）',
+    expect(i18n.t('settingsForm.runtimeStatusBinary', { path: '/opt/opencode' })).toBe(
+      '二进制：/opt/opencode',
     )
   })
 

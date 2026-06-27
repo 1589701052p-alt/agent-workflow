@@ -1,12 +1,16 @@
-// /settings — Config editor with 4 sections (Runtime / Limits / GC / Network).
-// Auth section moved to /settings/connection so the daemon URL + token live
-// next to the sign-out button.
+// /settings — config editor split into per-concern tabs (Runtime / Limits /
+// Recovery / GC / Network / Appearance / Memory / Rendering / Authentication).
 //
 // Each section owns a draft slice of the config, posts ConfigPatch via PUT,
 // shows a "saved" toast, and labels fields that need a daemon restart.
+//
+// Sign-out + the daemon URL / token readout used to live here in a "Connection"
+// tab; that was removed. Sign-out is the UserMenu's job (it also invalidates the
+// server session via /api/auth/logout, which this tab never did), and active
+// sessions / tokens are managed on /account.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoute, useNavigate, useRouterState } from '@tanstack/react-router'
+import { createRoute, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Config, ConfigPatch } from '@agent-workflow/shared'
@@ -18,7 +22,6 @@ import { Select } from '@/components/Select'
 import { RuntimeList } from '@/components/RuntimeList'
 import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
 import { isSupportedLanguage } from '@/hooks/useLanguage'
-import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -35,7 +38,6 @@ type Tab =
   | 'network'
   | 'appearance'
   | 'memory'
-  | 'connection'
   | 'rendering'
   | 'authentication'
 
@@ -85,7 +87,6 @@ function SettingsPage() {
             ['memory', t('settings.tabMemory')],
             ['rendering', t('settings.tabRendering')],
             ['authentication', t('settings.tabAuthentication')],
-            ['connection', t('settings.tabConnection')],
           ] as Array<[Tab, string]>
         ).map(([k, label]) => (
           <button
@@ -114,7 +115,6 @@ function SettingsPage() {
           {tab === 'memory' && <MemoryTab config={config.data} />}
           {tab === 'rendering' && <RenderingTab config={config.data} />}
           {tab === 'authentication' && <AuthenticationTab />}
-          {tab === 'connection' && <ConnectionTab />}
         </>
       )}
     </div>
@@ -1207,40 +1207,6 @@ function OidcProviderDialog(props: {
   )
 }
 
-function ConnectionTab() {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const token = getToken()
-  const baseUrl = getBaseUrl()
-  function signOut() {
-    clearToken()
-    navigate({ to: '/auth' })
-  }
-  return (
-    <div className="form-grid">
-      <Field label={t('settingsForm.daemonUrl')}>
-        <div>
-          <code>{baseUrl}</code>
-        </div>
-      </Field>
-      <Field label={t('settingsForm.tokenLabel')}>
-        <div>
-          {token === null ? (
-            <em>{t('settingsForm.tokenNone')}</em>
-          ) : (
-            <code>{maskToken(token, t)}</code>
-          )}
-        </div>
-      </Field>
-      <div>
-        <button type="button" onClick={signOut} className="btn btn--danger">
-          {t('settingsForm.signOut')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1353,18 +1319,6 @@ function SectionForm({
       )}
     </div>
   )
-}
-
-function maskToken(
-  token: string,
-  t: (key: string, opts?: Record<string, unknown>) => string,
-): string {
-  if (token.length <= 8) return '••••'
-  return t('settingsForm.tokenMask', {
-    prefix: token.slice(0, 4),
-    suffix: token.slice(-4),
-    len: token.length,
-  })
 }
 
 function describeError(e: unknown): string {
