@@ -48,6 +48,42 @@ export interface ResolvedRuntime {
   binaryPath: string | null
 }
 
+export interface RuntimeView {
+  name: string
+  protocol: RuntimeProtocol
+  binaryPath: string | null
+  builtin: boolean
+  lastProbe: unknown
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * Public view of a row for the HTTP layer — parses the cached probe JSON back to
+ * an object. Lives here (not in the route) so the route file stays free of the
+ * `as` cast the RFC-054 W1-7 guard bans; this is our own serialized data, not
+ * unvalidated user input.
+ */
+export function runtimeRowToView(row: RuntimeRow): RuntimeView {
+  let lastProbe: unknown = null
+  if (row.lastProbeJson !== null) {
+    try {
+      lastProbe = JSON.parse(row.lastProbeJson)
+    } catch {
+      lastProbe = null
+    }
+  }
+  return {
+    name: row.name,
+    protocol: row.protocol,
+    binaryPath: row.binaryPath,
+    builtin: row.builtin,
+    lastProbe,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
 // --- reads -----------------------------------------------------------------
 
 export async function listRuntimes(db: DbClient): Promise<RuntimeRow[]> {
@@ -217,6 +253,22 @@ export async function updateRuntime(
   const updated = await getRuntime(db, name)
   if (updated === null) throw new Error('runtime update vanished')
   return updated
+}
+
+/**
+ * Cache a deep-smoke result onto a row's `last_probe_json` for display. Allowed
+ * on BUILT-INS (unlike updateRuntime) — a probe result is advisory display, not
+ * an identity edit, so it doesn't trip the read-only lock. No-op if the row is gone.
+ */
+export async function cacheRuntimeProbe(
+  db: DbClient,
+  name: string,
+  lastProbeJson: string,
+): Promise<void> {
+  await db
+    .update(runtimes)
+    .set({ lastProbeJson, updatedAt: Date.now() })
+    .where(eq(runtimes.name, name))
 }
 
 export async function deleteRuntime(

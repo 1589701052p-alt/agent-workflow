@@ -374,6 +374,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   },
   { method: 'GET', path: '/api/runtime/models' },
 
+  // ---- runtime registry (RFC-112) ----
+  {
+    method: 'GET',
+    path: '/api/runtimes',
+    happy: { schema: z.object({}).passthrough() },
+  },
+  { method: 'POST', path: '/api/runtimes/probe' },
+  { method: 'POST', path: '/api/runtimes' },
+  { method: 'PUT', path: '/api/runtimes/:name' },
+  { method: 'DELETE', path: '/api/runtimes/:name' },
+  { method: 'POST', path: '/api/runtimes/:name/probe' },
+
   // ---- backup ----
   { method: 'POST', path: '/api/backup' },
 ]

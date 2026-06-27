@@ -28,6 +28,7 @@ import { mountPluginRoutes } from '@/routes/plugins'
 import { mountUserRoutes } from '@/routes/users'
 import { mountRepoRoutes } from '@/routes/repos'
 import { mountRuntimeRoutes } from '@/routes/runtime'
+import { mountRuntimesRoutes } from '@/routes/runtimes'
 import { mountSkillRoutes } from '@/routes/skills'
 import { mountSkillSourceRoutes } from '@/routes/skill-sources'
 import { mountClarifyRoutes } from '@/routes/clarify'
@@ -144,6 +145,7 @@ export function createApp(deps: AppDeps): Hono {
   mountConfigRoutes(app, deps)
   mountPlantumlRoutes(app, deps)
   mountRuntimeRoutes(app, deps)
+  mountRuntimesRoutes(app, deps)
   mountAgentRoutes(app, deps)
   mountMcpRoutes(app, deps)
   mountPluginRoutes(app, deps)

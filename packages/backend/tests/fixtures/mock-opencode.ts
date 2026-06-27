@@ -273,6 +273,20 @@ if (env.MOCK_OPENCODE_EMIT_SESSION_ID) {
   )
 }
 
+// RFC-112 runtime-smoke: echo the received positional prompt as agent text so
+// the smoke probe's freshly-generated nonce round-trips (proving the binary
+// consumed the prompt + ran a turn). A binary that ignores the prompt would not
+// echo the nonce → smoke classifies it stream-nonconforming.
+if (env.MOCK_OPENCODE_ECHO_PROMPT === '1') {
+  process.stdout.write(
+    JSON.stringify({
+      type: 'text',
+      timestamp: Date.now(),
+      part: { type: 'text', text: argv[1] ?? '' },
+    }) + '\n',
+  )
+}
+
 // Emit stdout events.
 try {
   const events = JSON.parse(env.MOCK_OPENCODE_EVENTS ?? '[]') as unknown[]

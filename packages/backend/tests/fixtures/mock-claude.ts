@@ -73,7 +73,13 @@ emit({ type: 'system', subtype: 'init', session_id: sessionId, model, apiKeySour
 
 // Build the assistant turn text (envelope / raw / clarify / nothing).
 let text = ''
-if (env.MOCK_CLAUDE_RAW_AGENT_TEXT !== undefined) {
+if (env.MOCK_CLAUDE_ECHO_PROMPT === '1') {
+  // RFC-112 runtime-smoke: echo the received prompt verbatim so the smoke
+  // probe's freshly-generated nonce appears in the assistant output (proving a
+  // real binary consumed the prompt). A canned emitter that ignores the prompt
+  // would NOT round-trip the nonce → smoke classifies it stream-nonconforming.
+  text = prompt
+} else if (env.MOCK_CLAUDE_RAW_AGENT_TEXT !== undefined) {
   text = env.MOCK_CLAUDE_RAW_AGENT_TEXT
 } else if (env.MOCK_CLAUDE_SKIP_ENVELOPE !== '1') {
   const blocks: string[] = []

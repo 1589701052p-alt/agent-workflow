@@ -8,6 +8,7 @@ import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { listOpencodeModels } from '@/util/opencode-models'
 import { MIN_CLAUDE_CODE_VERSION, probeClaudeCode } from '@/services/runtime/claudeCode/probe'
 import { listClaudeModels } from '@/services/runtime/claudeCode/models'
+import { resolveRuntimeByName } from '@/services/runtimeRegistry'
 
 export function mountRuntimeRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/runtime/opencode', async (c) => {
@@ -38,9 +39,17 @@ export function mountRuntimeRoutes(app: Hono, deps: AppDeps): void {
 
   app.get('/api/runtime/models', async (c) => {
     const cfg = loadConfig(deps.configPath)
-    // RFC-111: ?runtime=claude returns the curated static claude model list;
-    // default / ?runtime=opencode keeps the live `opencode models` behavior.
-    if (c.req.query('runtime') === 'claude') {
+    // RFC-111 / RFC-112: ?runtime= returns the curated static claude model list
+    // when it names a claude-PROTOCOL runtime; default / opencode-protocol keeps
+    // the live `opencode models` behavior. Accepts the legacy 'claude' alias AND
+    // any registered runtime NAME (a custom claude fork resolves to claude models).
+    const rtParam = c.req.query('runtime')
+    let claudeProtocol = rtParam === 'claude' || rtParam === 'claude-code'
+    if (!claudeProtocol && rtParam !== undefined && rtParam.length > 0) {
+      const resolved = await resolveRuntimeByName(deps.db, rtParam)
+      claudeProtocol = resolved.protocol === 'claude-code'
+    }
+    if (claudeProtocol) {
       const models = listClaudeModels()
       return c.json({
         binary: cfg.claudeCodePath ?? 'claude',
