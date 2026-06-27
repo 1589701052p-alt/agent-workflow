@@ -164,6 +164,7 @@ function LimitsTab({ config }: TabProps) {
     'defaultPerTaskMaxDurationMs',
     'defaultPerTaskMaxTotalTokens',
     'defaultPerNodeTimeoutMs',
+    'defaultNodeRetries',
     'largeOutputThresholdBytes',
     // RFC-113: global execution knobs relocated here from the Runtime tab (which
     // is now just the runtimes table).
@@ -210,6 +211,17 @@ function LimitsTab({ config }: TabProps) {
           onChange={(v) => setState({ ...state, defaultPerNodeTimeoutMs: v ?? 60_000 })}
           min={1000}
           step={60_000}
+        />
+      </Field>
+      <Field
+        label={t('settingsForm.nodeRetries')}
+        required
+        hint={t('settingsForm.nodeRetriesHint')}
+      >
+        <NumberInput
+          value={state.defaultNodeRetries}
+          onChange={(v) => setState({ ...state, defaultNodeRetries: v ?? 0 })}
+          min={0}
         />
       </Field>
       <Field label={t('settingsForm.largeOutputThreshold')} required>

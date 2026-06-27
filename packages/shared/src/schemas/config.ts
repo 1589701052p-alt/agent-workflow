@@ -75,6 +75,10 @@ export const ConfigSchema = z.object({
   defaultPerTaskMaxDurationMs: z.number().int().nonnegative(),
   defaultPerTaskMaxTotalTokens: z.number().int().nonnegative(),
   defaultPerNodeTimeoutMs: z.number().int().positive(),
+  // RFC-115: global per-node retry budget (replaces the per-node `retries`
+  // override). nonnegative (not positive) — retries:0 is a valid explicit
+  // "no retries"; default 3 matches RFC-042's former hard-coded fallback.
+  defaultNodeRetries: z.number().int().nonnegative(),
 
   // --- RFC-108 task auto-check & recovery (all default-safe; auto-execution OFF) ---
   /** T18: auto-resume daemon-restart-interrupted tasks at boot. Default OFF. */
@@ -320,6 +324,7 @@ export const DEFAULT_CONFIG: Config = {
   // RFC-108 T4/AR-01: actually wired into the launch path (resolveLaunchRuntimeConfig)
   // so every node has a hard-timeout floor; was defined-but-never-threaded before.
   defaultPerNodeTimeoutMs: 30 * 60 * 1000, // 30 min
+  defaultNodeRetries: 3, // RFC-115 — was RFC-042's hard-coded `?? 3` in scheduler
   // RFC-108 auto-recovery knobs — auto-execution OFF by default (decision D1).
   autoResumeOnBoot: false,
   autoRepair: {},

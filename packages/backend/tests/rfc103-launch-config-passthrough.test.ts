@@ -37,6 +37,33 @@ describe('RFC-103 T2 runtimeConfigOpts — 单一事实源摊配置', () => {
   test('commitPush 部分字段只摊存在的', () => {
     expect(runtimeConfigOpts({ commitPush: { model: 'm' } })).toEqual({ commitPushModel: 'm' })
   })
+
+  // RFC-115: timeout (was hand-spread at each runTask site) + the new retry
+  // budget + defaultRuntime (Codex F3: never threaded before) all flow through
+  // this single funnel now.
+  test('RFC-115: defaultPerNodeTimeoutMs / defaultNodeRetries / defaultRuntime 经同一漏斗摊出', () => {
+    expect(
+      runtimeConfigOpts({
+        defaultPerNodeTimeoutMs: 1000,
+        defaultNodeRetries: 5,
+        defaultRuntime: 'claude-code',
+      }),
+    ).toEqual({
+      defaultPerNodeTimeoutMs: 1000,
+      defaultNodeRetries: 5,
+      defaultRuntime: 'claude-code',
+    })
+  })
+
+  test('RFC-115 (Codex F3): defaultRuntime 单独也摊出 — 修复它从未接进 startTask 的 gap', () => {
+    expect(runtimeConfigOpts({ defaultRuntime: 'opencode-opus' })).toEqual({
+      defaultRuntime: 'opencode-opus',
+    })
+  })
+
+  test('RFC-115: defaultNodeRetries 0 也摊出（nonnegative，不被当 falsy 跳过）', () => {
+    expect(runtimeConfigOpts({ defaultNodeRetries: 0 })).toEqual({ defaultNodeRetries: 0 })
+  })
 })
 
 describe('RFC-103 T2 源码层接线断言（防再漂）', () => {
@@ -61,5 +88,16 @@ describe('RFC-103 T2 源码层接线断言（防再漂）', () => {
     const spreads = taskSrc.match(/\.\.\.runtimeConfigOpts\(/g) ?? []
     // startTask + resumeTask（同块 replace_all）+ retryNode = 3
     expect(spreads.length).toBe(3)
+  })
+
+  test('RFC-115: 三处 runTask 调用点不再手动 spread per-node timeout（收进漏斗）', () => {
+    // Before RFC-115 each runTask({...}) hand-spread defaultPerNodeTimeoutMs;
+    // now runtimeConfigOpts injects it, so the only remaining textual occurrence
+    // of the deps spread is INSIDE runtimeConfigOpts itself, and the retryNode
+    // `opts.deps.*` variant is gone entirely (Codex F3 single funnel).
+    expect(taskSrc).not.toContain('defaultPerNodeTimeoutMs: opts.deps.defaultPerNodeTimeoutMs')
+    const depSpreads =
+      taskSrc.match(/defaultPerNodeTimeoutMs: deps\.defaultPerNodeTimeoutMs/g) ?? []
+    expect(depSpreads.length).toBe(1) // only the funnel
   })
 })

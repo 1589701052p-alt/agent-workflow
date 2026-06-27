@@ -130,4 +130,29 @@ describe('config load/save', () => {
     expect(cfg.defaultMaxSteps).toBeUndefined()
     expect(cfg.maxConcurrentNodes).toBe(6)
   })
+
+  // RFC-115: the per-node `retries` override was removed from the workflow node
+  // and replaced by this global config (default 3, matching RFC-042's former
+  // hard-coded `?? 3`). Unlike the optional RFC-002 fields it is required-with-
+  // default, so a legacy config backfills to 3 rather than undefined.
+  test('RFC-115 defaultNodeRetries round-trips and defaults to 3', () => {
+    const cfg = loadConfig(path)
+    expect(cfg.defaultNodeRetries).toBe(3)
+    const updated = applyConfigPatch(path, { defaultNodeRetries: 5 })
+    expect(updated.defaultNodeRetries).toBe(5)
+    expect(loadConfig(path).defaultNodeRetries).toBe(5)
+  })
+
+  test('RFC-115 defaultNodeRetries accepts 0 (nonnegative) but rejects negatives / floats', () => {
+    loadConfig(path)
+    // 0 = explicit "no retries" — must be valid (nonnegative, NOT positive).
+    expect(applyConfigPatch(path, { defaultNodeRetries: 0 }).defaultNodeRetries).toBe(0)
+    expect(() => applyConfigPatch(path, { defaultNodeRetries: -1 })).toThrow(ValidationError)
+    expect(() => applyConfigPatch(path, { defaultNodeRetries: 2.5 })).toThrow(ValidationError)
+  })
+
+  test('RFC-115 legacy config (missing defaultNodeRetries) backfills to 3', () => {
+    writeFileSync(path, JSON.stringify({ $schema_version: 1, maxConcurrentNodes: 6 }))
+    expect(loadConfig(path).defaultNodeRetries).toBe(3)
+  })
 })

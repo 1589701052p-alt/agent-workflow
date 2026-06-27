@@ -143,6 +143,20 @@ export interface StartTaskDeps {
    * the default regardless of the configured value.
    */
   maxConcurrentNodes?: number
+  /**
+   * RFC-115: global per-node retry budget (config.defaultNodeRetries) threaded
+   * via runtimeConfigOpts → RunTaskOptions across start / resume / retry.
+   * Replaces the removed per-node `retries` override. Omitted → scheduler `?? 3`.
+   */
+  defaultNodeRetries?: number
+  /**
+   * RFC-115 (Codex F3): global default runtime NAME (config.defaultRuntime),
+   * threaded via runtimeConfigOpts → RunTaskOptions. Before RFC-115 this was
+   * resolved by resolveLaunchRuntimeConfig but NEVER forwarded from here, so
+   * `config.defaultRuntime` had no effect on production task launches (every
+   * agent.runtime=null node fell back to opencode). Omitted → scheduler default.
+   */
+  defaultRuntime?: string
   /** Override opencode command (tests inject mock-opencode). */
   opencodeCmd?: string[]
   /** Await scheduler completion in this call (tests). HTTP route does NOT pass this. */
@@ -479,7 +493,14 @@ export function selectSyncRollbackTargets<
  * `maxConcurrentNodes` was never threaded from any HTTP entry (02-SCHED).
  */
 export function runtimeConfigOpts(
-  deps: Pick<StartTaskDeps, 'commitPush' | 'maxConcurrentNodes'>,
+  deps: Pick<
+    StartTaskDeps,
+    | 'commitPush'
+    | 'maxConcurrentNodes'
+    | 'defaultPerNodeTimeoutMs'
+    | 'defaultNodeRetries'
+    | 'defaultRuntime'
+  >,
 ): Partial<RunTaskOptions> {
   return {
     ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
@@ -492,6 +513,17 @@ export function runtimeConfigOpts(
     ...(deps.maxConcurrentNodes !== undefined
       ? { maxConcurrentNodes: deps.maxConcurrentNodes }
       : {}),
+    // RFC-115: per-node timeout + retry budget + default runtime. Previously
+    // timeout was hand-spread at each runTask call site and defaultRuntime was
+    // never threaded at all (Codex F3) — single funnel now so every start /
+    // resume / retry / fusion entry gets all three consistently.
+    ...(deps.defaultPerNodeTimeoutMs !== undefined
+      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
+      : {}),
+    ...(deps.defaultNodeRetries !== undefined
+      ? { defaultNodeRetries: deps.defaultNodeRetries }
+      : {}),
+    ...(deps.defaultRuntime !== undefined ? { defaultRuntime: deps.defaultRuntime } : {}),
   }
 }
 
@@ -943,9 +975,6 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     db: deps.db,
     appHome,
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
-    ...(deps.defaultPerNodeTimeoutMs !== undefined
-      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
-      : {}),
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
@@ -1368,9 +1397,6 @@ async function resumeKick(
     db,
     appHome: deps.appHome ?? Paths.root,
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
-    ...(deps.defaultPerNodeTimeoutMs !== undefined
-      ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
-      : {}),
     ...(deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: deps.subagentLiveCapture }
       : {}),
@@ -1956,9 +1982,6 @@ export async function retryNode(
     db,
     appHome: opts.deps.appHome ?? Paths.root,
     ...(opts.deps.opencodeCmd ? { opencodeCmd: opts.deps.opencodeCmd } : {}),
-    ...(opts.deps.defaultPerNodeTimeoutMs !== undefined
-      ? { defaultPerNodeTimeoutMs: opts.deps.defaultPerNodeTimeoutMs }
-      : {}),
     ...(opts.deps.subagentLiveCapture !== undefined
       ? { subagentLiveCapture: opts.deps.subagentLiveCapture }
       : {}),

@@ -112,7 +112,7 @@ import {
   wrapperExternalUpstreamSources,
   wrapperRevivalEvidence,
 } from '@/services/dispatchFrontier'
-import { runNode, type AgentOverrides, type ResolvedSkill, type RunResult } from '@/services/runner'
+import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import {
   CLARIFY_REQUIRED_PREFIX,
   ENVELOPE_PORT_MALFORMED_PREFIX,
@@ -163,8 +163,16 @@ export interface RunTaskOptions {
    * task transitions to status=canceled. Subsequent nodes are not started.
    */
   signal?: AbortSignal
-  /** Default per-node timeout in ms (from settings); node-level override wins. */
+  /**
+   * Default per-node timeout in ms (from settings). RFC-115: the per-node
+   * `timeoutMs` override is removed — this global value applies to every node.
+   */
   defaultPerNodeTimeoutMs?: number
+  /**
+   * RFC-115: global per-node retry budget (from config.defaultNodeRetries).
+   * Replaces the per-node `retries` override; `?? 3` fallback for mock/unwired.
+   */
+  defaultNodeRetries?: number
   /** Global concurrency limit for agent nodes within this task. Default 4. */
   maxConcurrentNodes?: number
   /** Concurrency cap for fan-out child subprocesses (P-3-02). Default 4. */
@@ -1711,15 +1719,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   if (injection.kind === 'failed') return injection
   const { dependents, resolvedSkills, mcps, plugins } = injection
   const promptTemplate = pickString(node, 'promptTemplate') ?? undefined
-  const nodeTimeoutMs = pickNumber(node, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
-  // RFC-042: default retries bumped from 0 → 3 so that recoverable failure
-  // modes (in particular the model forgetting to emit a `<workflow-output>` /
-  // `<workflow-clarify>` envelope after a long tool-using session) get a
-  // chance to recover via same-session follow-up before the task is failed.
-  // Workflow authors who explicitly set `retries: 0` keep that — the change
-  // is only the fallback when the field is absent.
-  const maxRetries = pickNumber(node, 'retries') ?? 3
-  const nodeOverrides = pickOverrides(node)
+  const nodeTimeoutMs = opts.defaultPerNodeTimeoutMs
+  // RFC-042: retries default to 3 so recoverable failure modes (in particular
+  // the model forgetting to emit a `<workflow-output>` / `<workflow-clarify>`
+  // envelope after a long tool-using session) get a chance to recover via
+  // same-session follow-up before the task is failed. RFC-115: the per-node
+  // `retries` override is removed — the budget is the global
+  // config.defaultNodeRetries (`?? 3` only for mock/unwired callers).
+  const maxRetries = opts.defaultNodeRetries ?? 3
 
   // RFC-005: when this node is being re-run because a downstream review node
   // was rejected/iterated, surface the rendered comments / rejection reason
@@ -2420,7 +2427,6 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
           ...(crossClarifyContext !== undefined ? { crossClarifyContext } : {}),
           ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
-          ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
           ...(effectiveResumeSessionId !== undefined
             ? { resumeSessionId: effectiveResumeSessionId }
             : {}),
@@ -3683,8 +3689,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
     return { kind: 'failed', shardKey, outputs: {}, message: injection.message }
   }
   const promptTemplate = pickString(innerNode, 'promptTemplate') ?? undefined
-  const nodeTimeoutMs = pickNumber(innerNode, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
-  const nodeOverrides = pickOverrides(innerNode)
+  const nodeTimeoutMs = opts.defaultPerNodeTimeoutMs
 
   // Concurrency: fan-out shards previously bypassed every cap. Acquire the
   // global node slot + the fan-out subprocess slot (the previously-dead
@@ -3728,7 +3733,6 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-      ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
       hasClarifyChannel: false, // PR-D2: per-shard clarify
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
@@ -3953,8 +3957,7 @@ async function dispatchFanoutAggregator(
     return { kind: 'failed', summary: injection.summary, message: injection.message, outputs: {} }
   }
   const promptTemplate = pickString(aggNode, 'promptTemplate') ?? undefined
-  const nodeTimeoutMs = pickNumber(aggNode, 'timeoutMs') ?? opts.defaultPerNodeTimeoutMs
-  const nodeOverrides = pickOverrides(aggNode)
+  const nodeTimeoutMs = opts.defaultPerNodeTimeoutMs
 
   // Concurrency: the aggregator is a real opencode subprocess too — count it
   // against the global node + fan-out subprocess caps (and the write slot when
@@ -3995,7 +3998,6 @@ async function dispatchFanoutAggregator(
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-      ...(nodeOverrides !== undefined ? { overrides: nodeOverrides } : {}),
       hasClarifyChannel: false, // PR-D2
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
@@ -4715,26 +4717,6 @@ function pickStringArray(node: WorkflowNode, key: string): string[] {
   const v = (node as Record<string, unknown>)[key]
   if (!Array.isArray(v)) return []
   return v.filter((s): s is string => typeof s === 'string')
-}
-
-/**
- * Read per-node model/variant/temperature overrides written by the canvas
- * inspector under `node.overrides`. Returns undefined when no usable override
- * is present so the caller can omit the field entirely (keeps the runner's
- * `overrides ?? agent.<field>` fallback identity-preserving). An empty string
- * model/variant is treated as "cleared" and not forwarded.
- */
-function pickOverrides(node: WorkflowNode): AgentOverrides | undefined {
-  const raw = (node as Record<string, unknown>).overrides
-  if (typeof raw !== 'object' || raw === null) return undefined
-  const rec = raw as Record<string, unknown>
-  const out: AgentOverrides = {}
-  if (typeof rec.model === 'string' && rec.model.length > 0) out.model = rec.model
-  if (typeof rec.variant === 'string' && rec.variant.length > 0) out.variant = rec.variant
-  if (typeof rec.temperature === 'number' && Number.isFinite(rec.temperature)) {
-    out.temperature = rec.temperature
-  }
-  return Object.keys(out).length === 0 ? undefined : out
 }
 
 interface Binding {

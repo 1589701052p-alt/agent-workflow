@@ -68,6 +68,10 @@ export interface FusionDeps {
    * resolveLaunchRuntimeConfig; omitted → scheduler runs with no floor.
    */
   defaultPerNodeTimeoutMs?: number
+  /** RFC-115: global per-node retry budget, threaded into the fusion task. */
+  defaultNodeRetries?: number
+  /** RFC-115 (Codex F3): global default runtime NAME, threaded into the fusion task. */
+  defaultRuntime?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -459,10 +463,14 @@ export async function createFusion(
     preCreatedWorktree: { taskId, worktreePath: workDir, branch: 'fusion', baseCommit },
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     ...(deps.awaitScheduler !== undefined ? { awaitScheduler: deps.awaitScheduler } : {}),
-    // RFC-108 T4: thread the per-node timeout floor into the fusion task.
+    // RFC-108 T4 + RFC-115: thread per-node timeout / retry budget / default runtime.
     ...(deps.defaultPerNodeTimeoutMs !== undefined
       ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
       : {}),
+    ...(deps.defaultNodeRetries !== undefined
+      ? { defaultNodeRetries: deps.defaultNodeRetries }
+      : {}),
+    ...(deps.defaultRuntime !== undefined ? { defaultRuntime: deps.defaultRuntime } : {}),
   }
   await startTask(
     {
@@ -847,10 +855,14 @@ export async function rejectFusion(
     preCreatedWorktree: { taskId, worktreePath: workDir, branch: 'fusion', baseCommit },
     ...(deps.opencodeCmd ? { opencodeCmd: deps.opencodeCmd } : {}),
     ...(deps.awaitScheduler !== undefined ? { awaitScheduler: deps.awaitScheduler } : {}),
-    // RFC-108 T4: thread the per-node timeout floor into the fusion task.
+    // RFC-108 T4 + RFC-115: thread per-node timeout / retry budget / default runtime.
     ...(deps.defaultPerNodeTimeoutMs !== undefined
       ? { defaultPerNodeTimeoutMs: deps.defaultPerNodeTimeoutMs }
       : {}),
+    ...(deps.defaultNodeRetries !== undefined
+      ? { defaultNodeRetries: deps.defaultNodeRetries }
+      : {}),
+    ...(deps.defaultRuntime !== undefined ? { defaultRuntime: deps.defaultRuntime } : {}),
   }
   const intentWithFeedback = `${row.intent}\n\n## Merger feedback on the previous attempt (revise accordingly)\n${feedback}`
   await startTask(

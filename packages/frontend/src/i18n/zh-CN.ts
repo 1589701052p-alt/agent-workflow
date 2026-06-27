@@ -1512,10 +1512,6 @@ export interface Resources {
     fieldSourcePort: string
     fieldPromptTemplate: string
     fieldPromptTemplateHint: string
-    fieldRetries: string
-    fieldRetriesHint: string
-    fieldTimeoutMs: string
-    fieldTimeoutMsHint: string
     fieldModelOverride: string
     fieldModelOverrideHint: string
     modelPlaceholder: string
@@ -1903,6 +1899,8 @@ export interface Resources {
     perTaskDuration: string
     perTaskTokens: string
     perNodeTimeout: string
+    nodeRetries: string
+    nodeRetriesHint: string
     autoResumeOnBoot: string
     autoResumeOnBootHint: string
     autoRepairS4: string
@@ -4028,10 +4026,6 @@ export const zhCN: Resources = {
     fieldSourcePort: 'sourcePort (nodeId.portName)',
     fieldPromptTemplate: 'Prompt 模板',
     fieldPromptTemplateHint: '使用 {{port_name}} 引用入边端口；内置变量如 {{__repo_path__}}。',
-    fieldRetries: '重试次数',
-    fieldRetriesHint: '默认 0',
-    fieldTimeoutMs: '超时 (ms)',
-    fieldTimeoutMsHint: '缺省走 settings.defaultPerNodeTimeoutMs',
     fieldModelOverride: '模型覆盖',
     fieldModelOverrideHint: '默认沿用 Agent 的模型（{{model}}）；改成其他值即覆盖。',
     modelPlaceholder: 'anthropic/claude-sonnet-4-6',
@@ -4424,6 +4418,8 @@ export const zhCN: Resources = {
     perTaskDuration: '单 task 最大时长 (ms)',
     perTaskTokens: '单 task 最大 token 数',
     perNodeTimeout: '单节点超时 (ms)',
+    nodeRetries: '默认节点重试次数',
+    nodeRetriesHint: '每个节点可恢复失败的重试预算（0 = 不重试）。默认 3。',
     autoResumeOnBoot: '启动时自动续跑被中断的任务',
     autoResumeOnBootHint:
       '默认关闭。开启后 daemon 启动时自动续跑因重启而中断的任务（穿熔断/隔离/租约/审计）。',

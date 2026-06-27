@@ -33,23 +33,26 @@ export function resolveCommitPushConfig(
  * point. Single source so the entries can't drift again.
  *
  * RFC-108 T4 (AR-01): `defaultPerNodeTimeoutMs` (config default 30min) is read
- * here and threaded into `StartTaskDeps`; the scheduler uses it as
- * `pickNumber(node,'timeoutMs') ?? opts.defaultPerNodeTimeoutMs`, so every node
- * gets a hard kill bound (a per-node override still RAISES it). Before RFC-108
- * this field existed but was threaded NOWHERE — default-config nodes ran with
- * no timeout, so a hung-but-alive opencode child was effectively immortal.
+ * here and threaded into `StartTaskDeps`; the scheduler applies it to every
+ * node as a hard kill bound. RFC-115 removed the per-node `timeoutMs` override
+ * (and added `defaultNodeRetries` + threads `defaultRuntime` through the same
+ * funnel), so the global value is now the single source. Before RFC-108 this
+ * field was threaded NOWHERE — default-config nodes ran with no timeout, so a
+ * hung-but-alive opencode child was effectively immortal.
  */
 export function resolveLaunchRuntimeConfig(configPath: string): {
   commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number
   defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
+  defaultNodeRetries?: number // RFC-115: global per-node retry budget
 } {
   const out: {
     commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
     maxConcurrentNodes?: number
     defaultPerNodeTimeoutMs?: number
     defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
+    defaultNodeRetries?: number // RFC-115: global per-node retry budget
     claudeCodePath?: string // RFC-112: built-in claude binary (config.claudeCodePath)
   } = {}
   const commitPush = resolveCommitPushConfig(configPath)
@@ -61,6 +64,8 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
       out.defaultPerNodeTimeoutMs = cfg.defaultPerNodeTimeoutMs
     // RFC-111: global default runtime threaded to the scheduler dispatch site.
     if (cfg.defaultRuntime !== undefined) out.defaultRuntime = cfg.defaultRuntime
+    // RFC-115: global per-node retry budget (no `> 0` guard — 0 disables retries).
+    if (cfg.defaultNodeRetries !== undefined) out.defaultNodeRetries = cfg.defaultNodeRetries
     // RFC-113 §5: claudeCodePath is no longer threaded (the claude runtime row's
     // binary_path carries it now — RFC-112 P2 is收口).
   } catch {

@@ -97,12 +97,6 @@ export interface ResolvedSkill {
   sourcePath?: string
 }
 
-export interface AgentOverrides {
-  model?: string
-  variant?: string
-  temperature?: number
-}
-
 export interface RunNodeOptions {
   taskId: string
   /** ULID of a pre-existing node_runs row in 'pending' state. */
@@ -118,7 +112,6 @@ export interface RunNodeOptions {
   agent: Agent
   /** Resolved upstream port values (already concatenated by the scheduler). */
   inputs: Record<string, string>
-  overrides?: AgentOverrides
   /** opencode subprocess cwd = task worktree. */
   worktreePath: string
   /** Template variable substitutions for {{__repo_path__}} etc. */
@@ -869,7 +862,6 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     inlineModel: primaryInline?.model ?? null,
     inlineVariant: primaryInline?.variant ?? null,
     inlineTemperature: primaryInline?.temperature ?? null,
-    overrides: opts.overrides ?? null,
     mcpCount: inlineConfig.mcp ? Object.keys(inlineConfig.mcp).length : 0,
     mcpKeys: inlineConfig.mcp ? Object.keys(inlineConfig.mcp) : [],
     // RFC-031: log only the count + names of injected plugins — never the

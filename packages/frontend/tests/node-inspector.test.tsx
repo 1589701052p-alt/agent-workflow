@@ -301,24 +301,25 @@ describe('NodeInspector', () => {
 
   // When no override is set, the model dropdown shows the agent's own
   // default model — so the displayed value matches what'll actually run.
-  // RFC-113: per-node model/variant/temperature OVERRIDES were removed — the
-  // runtime (selected on the agent) owns every generation param. The inspector
-  // must no longer render those override controls, while keeping the node-policy
-  // fields (retries + timeout) it always had. A regression that re-adds an
-  // override control turns this red.
-  test('agent-single: no model/variant/temperature override controls; retries + timeout stay', () => {
+  // RFC-113 removed per-node model/variant/temperature OVERRIDES; RFC-115 then
+  // removed the last two per-node overrides — retries + timeout — moving them to
+  // global config (config.defaultNodeRetries / defaultPerNodeTimeoutMs, set in
+  // Settings → Limits). The agent-single inspector now carries NO execution-param
+  // override controls at all. A regression that re-adds any of them (an override
+  // field OR a per-node retries/timeout input) turns this red.
+  test('agent-single: no per-node execution-param override controls (model/variant/temperature/retries/timeout)', () => {
     setup({
       id: 'a1',
       kind: 'agent-single',
       agentName: 'coder',
       promptTemplate: '',
     })
-    // the removed runtime-param overrides:
+    // RFC-113 removed runtime-param overrides:
     expect(screen.queryByText('Model override')).toBeNull()
     expect(screen.queryByText('Temperature override')).toBeNull()
-    // the kept node-execution policy:
-    expect(screen.getByText('Retries')).toBeTruthy()
-    expect(screen.getByText('Timeout (ms)')).toBeTruthy()
+    // RFC-115 removed the per-node execution policy (now global, in Settings):
+    expect(screen.queryByText('Retries')).toBeNull()
+    expect(screen.queryByText('Timeout (ms)')).toBeNull()
   })
 
   test('agent-single: editing the prompt template patches promptTemplate', () => {

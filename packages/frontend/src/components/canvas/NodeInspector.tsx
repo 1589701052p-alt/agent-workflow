@@ -3,10 +3,11 @@
 // and Preview (live prompt assembly).
 //
 // Field set is kind-specific:
-//   - agent-single: agentName, promptTemplate, retries, timeoutMs,
-//     temperature override, model override, variant override
-//     (RFC-060 PR-E removed agent-multi; fan-out work goes through
-//      wrapper-fanout, which has its own inspector branch below.)
+//   - agent-single: agentName, promptTemplate
+//     (RFC-113 moved model/variant/temperature to the runtime; RFC-115 moved
+//      retries/timeout to global config — the node carries no execution-param
+//      overrides anymore. RFC-060 PR-E removed agent-multi; fan-out work goes
+//      through wrapper-fanout, which has its own inspector branch below.)
 //   - input: inputKey
 //   - output: ports list (name + binding)
 //   - wrappers: inner node ids (read-only in this drawer — wire-up moves
@@ -1195,8 +1196,6 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
     case 'agent-single': {
       const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
       const promptTemplate = typeof rec.promptTemplate === 'string' ? rec.promptTemplate : ''
-      const retries = typeof rec.retries === 'number' ? rec.retries : undefined
-      const timeoutMs = typeof rec.timeoutMs === 'number' ? rec.timeoutMs : undefined
       const ports = computePorts(node, new Map(agents.map((a) => [a.name, a])), definition)
 
       function update(p: Record<string, unknown>) {
@@ -1235,24 +1234,9 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
             <PortRefList ports={ports.inputs} />
             <MissingRefList template={promptTemplate} inputPorts={ports.inputs} />
           </Field>
-
-          {/* RFC-113: per-node model/variant/temperature overrides removed — the
-              runtime (selected on the agent) owns every generation param now.
-              retries + timeout stay: they're node execution policy, not runtime
-              params. */}
-          <div className="form-grid form-grid--cols-2">
-            <Field label={t('inspector.fieldRetries')} hint={t('inspector.fieldRetriesHint')}>
-              <NumberInput value={retries} onChange={(v) => update({ retries: v ?? 0 })} min={0} />
-            </Field>
-            <Field label={t('inspector.fieldTimeoutMs')} hint={t('inspector.fieldTimeoutMsHint')}>
-              <NumberInput
-                value={timeoutMs}
-                onChange={(v) => update({ timeoutMs: v })}
-                min={1000}
-                step={1000}
-              />
-            </Field>
-          </div>
+          {/* RFC-115: per-node retries + timeout overrides removed — both are
+              now global execution policy (config.defaultNodeRetries /
+              defaultPerNodeTimeoutMs), set in Settings → Limits. */}
         </div>
       )
     }
