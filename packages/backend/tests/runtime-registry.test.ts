@@ -60,15 +60,13 @@ describe('seedBuiltinRuntimes (RFC-112 PR-A)', () => {
 
   test('hard-resets a poisoned built-in row to canonical shape (Codex P2)', async () => {
     // simulate corruption: an `opencode` row with wrong protocol + a binary path
-    await db
-      .insert(runtimes)
-      .values({
-        id: ulid(),
-        name: 'opencode',
-        protocol: 'claude-code',
-        binaryPath: '/evil',
-        builtin: false,
-      })
+    await db.insert(runtimes).values({
+      id: ulid(),
+      name: 'opencode',
+      protocol: 'claude-code',
+      binaryPath: '/evil',
+      builtin: false,
+    })
     await seedBuiltinRuntimes(db)
     const oc = await getRuntime(db, 'opencode')
     expect(oc!.protocol).toBe('opencode')
