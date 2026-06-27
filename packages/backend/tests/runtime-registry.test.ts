@@ -6,7 +6,6 @@
 // freeze (protocol, binary) so the registry stays mutable (tested in PR-C).
 
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { eq } from 'drizzle-orm'
 import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
