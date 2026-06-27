@@ -1,6 +1,6 @@
 # RFC-113 — 运行时即执行 profile（代理只选运行时、参数归运行时所有）
 
-状态：**Draft**（Codex 设计 gate **已跑** → 10 findings〔4 P1 + 4 P2 + 2 P3〕**全部 fold**〔见 design §9〕，verdict needs-rework → 已处置；**待用户批准后进入实现**）
+状态：**Done**（3 PR 全部上库 + 双 gate：`9f54502` PR-A〔profile 数据层 + 两段迁移〕/ `97902d4` PR-B〔runner 读运行时参数 + 节点去参数 + 二进制收口〕/ `bbaf94c` PR-C〔前端选择器-only + 纯表 + profile 编辑 + 行级默认 + 全局项搬迁〕；Codex 设计 gate 10 findings 全 fold〔见 design §9〕；前端 vitest 2759 pass + backend 全量 + typecheck/lint/format 全绿。顺带修 smoke 缺 mkdir〔`b86eac9`〕+ 源码字面 NUL 字节〔`d15546d`〕）
 
 触发：2026-06-27 用户两轮：「运行时页签应该只承载一张表才对啊，下面所有的配置都是运行时独有的了」+「代理配置里只能选择运行时而不允许修改运行时参数；工作流编排里也不允许修改运行时参数；运行时配置时支持同一个二进制创建多个运行时，按名称区分，每个运行时可以有不一样的运行时参数」。
 

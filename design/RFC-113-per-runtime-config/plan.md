@@ -51,12 +51,12 @@
 
 ## 全局验收清单
 
-- [ ] PR-A：profile 列 + 同二进制多运行时 + seed 保留 + 两段迁移幂等无损（黄金不变式）。
-- [ ] PR-B：runner 读运行时参数 + agent/节点参数不生效 + 二进制单一来源。
-- [ ] PR-C：AgentForm/节点去参数 + 运行时页签纯表 + profile 编辑 + 行级默认 + 全局项搬迁 + i18n。
-- [ ] 迁移无损（黄金：迁移前后 inline model/variant/temp/steps 逐字一致）+ 幂等（跑两次不变）。
-- [ ] 门禁全绿：typecheck×3 + backend bun test + 前端 vitest + format + lint + binary smoke。
-- [ ] Codex 设计 gate + 实现 gate fold。STATE.md/plan.md 索引 Done。
+- [x] PR-A（`9f54502`）：profile 列（migration 0056）+ 同二进制多运行时 + seed 保留 binary/profile + 两段迁移幂等无损（黄金不变式 + 跳过全 NULL 裸代理保幂等）。
+- [x] PR-B（`97902d4`）：runner buildInlineAgentEntry 读运行时参数 + agent/节点参数不生效 + 二进制单一来源。
+- [x] PR-C（`bbaf94c`）：AgentForm/节点去参数 + 运行时页签纯表 + RuntimeFormDialog profile 编辑 + 行级默认 + 全局项搬迁（**全部并入 Limits 页**：并发/multiProcess/logLevel/commit&push 同处——比 T17「分散到 limits/appearance」更聚合，「全局执行旋钮」单页更顺）+ i18n。
+- [x] 迁移无损（黄金：迁移前后 inline model/variant/temp/steps 逐字一致）+ 幂等（跑两次不变；`runtime-profile-migration.test.ts` 11 测试）。
+- [x] 门禁全绿：typecheck×3 + backend bun test + 前端 vitest 2759 + format + lint。
+- [x] Codex 设计 gate 10 findings fold。STATE.md/plan.md/proposal 索引 Done。实现 gate 跑中（base `97902d4`，含 smoke/NUL 修复）。
 
 ## 与 RFC-112 / 在途衔接
 - 复用 RFC-112：runtimes 表/CRUD/runtimeBinary 冻结/pickRuntimeHead/RuntimeList——本 RFC 加 profile 列 + 改参数归属 + 两段迁移 + UI 重排。
