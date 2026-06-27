@@ -31,11 +31,6 @@ const FRONTMATTER_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/
 const KNOWN_KEYS = new Set<string>([
   'name',
   'description',
-  'model',
-  'variant',
-  'temperature',
-  'steps',
-  'maxSteps',
   'permission',
   'tools',
   // RFC-022: list of agent names the imported agent depends on at runtime.
@@ -59,14 +54,6 @@ const AGENT_NAME_RE_LOCAL = /^[a-z0-9][a-z0-9_-]*$/
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
-function isPositiveInt(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v > 0
-}
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v)
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -132,67 +119,14 @@ export function parseAgentMarkdown(
     }
   }
 
-  // model
-  if (data.model !== undefined) {
-    if (isNonEmptyString(data.model)) {
-      partial.model = data.model
-    } else {
-      extras.model = data.model
-      warnings.push('model must be non-empty string; kept in frontmatterExtra')
-    }
-  }
-
-  // variant
-  if (data.variant !== undefined) {
-    if (isNonEmptyString(data.variant)) {
-      partial.variant = data.variant
-    } else {
-      extras.variant = data.variant
-      warnings.push('variant must be non-empty string; kept in frontmatterExtra')
-    }
-  }
-
-  // temperature
-  if (data.temperature !== undefined) {
-    if (isFiniteNumber(data.temperature)) {
-      partial.temperature = data.temperature
-    } else {
-      extras.temperature = data.temperature
-      warnings.push('temperature must be finite number; kept in frontmatterExtra')
-    }
-  }
-
-  // steps
-  let stepsFromFile: number | undefined
-  if (data.steps !== undefined) {
-    if (isPositiveInt(data.steps)) {
-      stepsFromFile = data.steps
-    } else {
-      extras.steps = data.steps
-      warnings.push('steps must be positive integer; kept in frontmatterExtra')
-    }
-  }
-
-  // maxSteps (also a deprecated alias of `steps` in opencode)
-  let maxStepsFromFile: number | undefined
-  if (data.maxSteps !== undefined) {
-    if (isPositiveInt(data.maxSteps)) {
-      maxStepsFromFile = data.maxSteps
-    } else {
-      extras.maxSteps = data.maxSteps
-      warnings.push('maxSteps must be positive integer; kept in frontmatterExtra')
-    }
-  }
-
-  // steps ?? maxSteps coalesce (opencode normalize parity)
-  if (stepsFromFile !== undefined) {
-    partial.steps = stepsFromFile
-  } else if (maxStepsFromFile !== undefined) {
-    partial.steps = maxStepsFromFile
-  }
-  if (maxStepsFromFile !== undefined) {
-    partial.maxSteps = maxStepsFromFile
-  }
+  // RFC-115: model / variant / temperature / steps / maxSteps are no longer
+  // first-class agent fields — they moved onto the runtime profile in RFC-113
+  // and the agent contract dropped them entirely in RFC-115. A legacy agent.md
+  // that still carries any of them is NOT rejected: those keys are absent from
+  // KNOWN_KEYS, so they fall through to the unrecognized-key catch-all below and
+  // land in `frontmatterExtra` (surfaced in the import preview), never in
+  // `partial`. This preserves the author's data without re-introducing the
+  // dropped fields onto CreateAgent.
 
   // tools + permission normalization
   const derivedPermission: AgentPermission = {}

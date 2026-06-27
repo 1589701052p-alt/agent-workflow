@@ -133,11 +133,6 @@ export function agentToDraft(a: Agent): CreateAgent {
     bodyMd: a.bodyMd,
   }
   if (a.outputKinds !== undefined) out.outputKinds = a.outputKinds
-  if (a.model !== undefined) out.model = a.model
-  if (a.variant !== undefined) out.variant = a.variant
-  if (a.temperature !== undefined) out.temperature = a.temperature
-  if (a.steps !== undefined) out.steps = a.steps
-  if (a.maxSteps !== undefined) out.maxSteps = a.maxSteps
   // RFC-115 round-trip fix: carry the agent's pinned runtime into the draft. The
   // edit form's Runtime selector reads `draft.runtime`; dropping it here made every
   // agent render as "inherit (global default)" regardless of its real pin — and the

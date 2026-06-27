@@ -74,13 +74,8 @@ export async function createAgent(
     outputs: JSON.stringify(input.outputs),
     readonly: input.readonly,
     syncOutputsOnIterate: input.syncOutputsOnIterate,
-    model: input.model ?? null,
     runtime: input.runtime ?? null, // RFC-111
-    variant: input.variant ?? null,
-    temperature: input.temperature ?? null,
     permission: JSON.stringify(input.permission),
-    steps: input.steps ?? null,
-    maxSteps: input.maxSteps ?? null,
     skills: JSON.stringify(input.skills),
     dependsOn: JSON.stringify(dedupePreservingOrder(input.dependsOn)),
     mcp: JSON.stringify(dedupePreservingOrder(input.mcp)),
@@ -132,12 +127,7 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   if (patch.readonly !== undefined) set.readonly = patch.readonly
   if (patch.syncOutputsOnIterate !== undefined)
     set.syncOutputsOnIterate = patch.syncOutputsOnIterate
-  if (patch.model !== undefined) set.model = patch.model
-  if (patch.variant !== undefined) set.variant = patch.variant
-  if (patch.temperature !== undefined) set.temperature = patch.temperature
   if (patch.permission !== undefined) set.permission = JSON.stringify(patch.permission)
-  if (patch.steps !== undefined) set.steps = patch.steps
-  if (patch.maxSteps !== undefined) set.maxSteps = patch.maxSteps
   // RFC-115 round-trip fix: actually persist the runtime column. A registry NAME
   // pins; null clears back to inherit (config.defaultRuntime); undefined leaves it
   // untouched (sparse-patch). Before this branch the set-builder skipped runtime
@@ -497,14 +487,9 @@ function rowToAgent(row: AgentRow): Agent {
   if (outputWrapperPortNames !== undefined) {
     agent.outputWrapperPortNames = outputWrapperPortNames
   }
-  if (row.model !== null) agent.model = row.model
   // RFC-111 / RFC-112: map the runtime column — now any registered runtime NAME
   // (built-ins 'opencode'/'claude-code' + custom). Empty/NULL stays absent (→
   // inherit config.defaultRuntime). An unknown name fail-safes at dispatch.
   if (typeof row.runtime === 'string' && row.runtime.length > 0) agent.runtime = row.runtime
-  if (row.variant !== null) agent.variant = row.variant
-  if (row.temperature !== null) agent.temperature = row.temperature
-  if (row.steps !== null) agent.steps = row.steps
-  if (row.maxSteps !== null) agent.maxSteps = row.maxSteps
   return agent
 }

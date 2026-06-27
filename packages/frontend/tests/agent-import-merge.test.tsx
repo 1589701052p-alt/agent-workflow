@@ -19,14 +19,14 @@ describe('mergeAgentImport', () => {
       makeResult({
         name: 'r',
         description: 'd',
-        model: 'm',
-        steps: 4,
+        runtime: 'opencode',
+        dependsOn: ['dep-a'],
       }),
     )
     expect(merged.name).toBe('r')
     expect(merged.description).toBe('d')
-    expect(merged.model).toBe('m')
-    expect(merged.steps).toBe(4)
+    expect(merged.runtime).toBe('opencode')
+    expect(merged.dependsOn).toEqual(['dep-a'])
     // untouched defaults preserved
     expect(merged.outputs).toEqual([])
     expect(merged.skills).toEqual([])
@@ -74,7 +74,7 @@ describe('fieldsOverwrittenByImport', () => {
     const empty = emptyAgent()
     const fields = fieldsOverwrittenByImport(
       empty,
-      makeResult({ description: 'new', model: 'm' }),
+      makeResult({ description: 'new', runtime: 'opencode' }),
       empty,
     )
     expect(fields).toEqual([])
@@ -82,13 +82,13 @@ describe('fieldsOverwrittenByImport', () => {
 
   test('lists fields the user has already edited that would be replaced', () => {
     const empty = emptyAgent()
-    const current: CreateAgent = { ...empty, description: 'edited', steps: 7 }
+    const current: CreateAgent = { ...empty, description: 'edited', runtime: 'claude-code' }
     const fields = fieldsOverwrittenByImport(
       current,
-      makeResult({ description: 'imported', steps: 9, bodyMd: 'new' }),
+      makeResult({ description: 'imported', runtime: 'opencode', bodyMd: 'new' }),
       empty,
     )
-    expect(fields.sort()).toEqual(['description', 'steps'])
+    expect(fields.sort()).toEqual(['description', 'runtime'])
   })
 
   test('ignores frontmatterExtra (shallow merge, not overwrite)', () => {

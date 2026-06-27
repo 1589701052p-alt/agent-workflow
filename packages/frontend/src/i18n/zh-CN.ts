@@ -1699,11 +1699,6 @@ export interface Resources {
       routedTo: {
         name: string
         description: string
-        model: string
-        variant: string
-        temperature: string
-        steps: string
-        maxSteps: string
         permission: string
         bodyMd: string
         frontmatterExtra: string
@@ -4220,11 +4215,6 @@ export const zhCN: Resources = {
       routedTo: {
         name: '→ 名称',
         description: '→ 描述',
-        model: '→ 模型',
-        variant: '→ 变体',
-        temperature: '→ 温度',
-        steps: '→ Steps',
-        maxSteps: '→ Max steps',
         permission: '→ Permission',
         bodyMd: '→ 正文（Markdown）',
         frontmatterExtra: '→ frontmatterExtra',

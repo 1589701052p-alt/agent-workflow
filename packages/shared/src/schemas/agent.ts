@@ -103,7 +103,6 @@ export const AgentSchema = z.object({
    * reviewed port regenerates (RFC-005 §2.1 #8 legacy behavior).
    */
   syncOutputsOnIterate: z.boolean(),
-  model: z.string().optional(),
   /**
    * RFC-111 / RFC-112: agent runtime — a registered runtime NAME (the built-ins
    * are 'opencode' / 'claude-code'; custom forks add more). Absent → inherit
@@ -112,11 +111,7 @@ export const AgentSchema = z.object({
    * registry at dispatch, and the model namespace follows the protocol.
    */
   runtime: z.string().min(1).optional(),
-  variant: z.string().optional(),
-  temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema,
-  steps: z.number().int().positive().optional(),
-  maxSteps: z.number().int().positive().optional(),
   skills: z.array(z.string()),
   /**
    * RFC-022: agent names this agent transitively requires at runtime. The
@@ -170,15 +165,10 @@ export const CreateAgentSchema = z.object({
   readonly: z.boolean().default(false),
   /** RFC-014: default true — author must explicitly opt-out. */
   syncOutputsOnIterate: z.boolean().default(true),
-  model: z.string().min(1).optional(),
   /** RFC-111 / RFC-112: agent runtime — a registered runtime NAME (built-ins
    *  'opencode' / 'claude-code'; custom forks add more). Absent → inherit. */
   runtime: z.string().min(1).optional(),
-  variant: z.string().min(1).optional(),
-  temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema.default({}),
-  steps: z.number().int().positive().optional(),
-  maxSteps: z.number().int().positive().optional(),
   skills: z.array(z.string()).default([]),
   /** RFC-022 — see AgentSchema.dependsOn. */
   dependsOn: z.array(AgentNameSchema).max(64).default([]),

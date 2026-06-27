@@ -5,6 +5,8 @@
 // round-trip on the detail page.
 
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { Agent } from '@agent-workflow/shared'
 import { agentToDraft } from '../src/routes/agents.detail'
 
@@ -66,4 +68,19 @@ describe('agentToDraft', () => {
       done: 'signal',
     })
   })
+})
+
+// RFC-115 anti-regression: agentToDraft must never read or write the dropped
+// generation fields (model/variant/temperature/steps/maxSteps). The type system
+// already forbids them (they're gone from Agent/CreateAgent), but a future
+// refactor could resurrect a read via `(a as any).model`, silently leaking a
+// non-existent column. Lock the source text so any reintroduction turns red.
+describe('agents.detail source — RFC-115 dropped agent params stay gone', () => {
+  const SRC = readFileSync(resolve(__dirname, '..', 'src', 'routes', 'agents.detail.tsx'), 'utf-8')
+  for (const field of ['model', 'variant', 'temperature', 'steps', 'maxSteps'] as const) {
+    test(`never references a.${field} / out.${field}`, () => {
+      expect(SRC.includes(`a.${field}`)).toBe(false)
+      expect(SRC.includes(`out.${field}`)).toBe(false)
+    })
+  }
 })

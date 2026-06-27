@@ -66,11 +66,15 @@ describe('applyDefaults (RFC-113: runtime selection only)', () => {
       }),
     )
     expect(next.runtime).toBe('opencode')
-    expect(next.model).toBeUndefined()
-    expect(next.variant).toBeUndefined()
-    expect(next.temperature).toBeUndefined()
-    expect(next.steps).toBeUndefined()
-    expect(next.maxSteps).toBeUndefined()
+    // RFC-115: model/variant/temperature/steps/maxSteps were dropped from the
+    // agent contract entirely — applyDefaults can no longer (re)introduce them.
+    // The type system already forbids the keys; lock the runtime shape too so a
+    // regression that stuffs a config default back onto the draft turns red.
+    expect('model' in next).toBe(false)
+    expect('variant' in next).toBe(false)
+    expect('temperature' in next).toBe(false)
+    expect('steps' in next).toBe(false)
+    expect('maxSteps' in next).toBe(false)
   })
 
   test('returns a new object — never mutates the input draft', () => {

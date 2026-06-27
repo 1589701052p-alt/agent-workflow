@@ -215,7 +215,7 @@ describe('runNode — claude-code runtime (RFC-111 PR-B)', () => {
   })
 
   test('non-readonly agent omits --disallowed-tools; no --model when unset', async () => {
-    const agent = makeAgent({ readonly: false, model: undefined })
+    const agent = makeAgent({ readonly: false })
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     const argvFile = join(h.appHome, 'argv2.jsonl')
     await withEnv(

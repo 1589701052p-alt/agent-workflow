@@ -48,11 +48,12 @@ describe('RFC-022 buildInlineConfig (primary + dependents)', () => {
     expect(cfg.agent['unit-test-runner']?.prompt).toBe('runner body')
   })
 
-  test('RFC-113: each agent entry uses ITS runtime profile from the params map, NOT agent.model', () => {
-    // agent.model is set but DEPRECATED — the inline params now come from the
-    // per-agent runtime profile map (each agent resolves its own runtime).
-    const primary = mkAgent({ name: 'orchestrator', model: 'anthropic/claude-opus-4-7' })
-    const dep = mkAgent({ name: 'code-auditor', model: 'anthropic/claude-haiku-4-5' })
+  test('RFC-113: each agent entry uses ITS runtime profile from the params map', () => {
+    // RFC-115: agents no longer carry model/variant/etc. — the inline params
+    // come solely from the per-agent runtime profile map (each agent resolves
+    // its own runtime).
+    const primary = mkAgent({ name: 'orchestrator' })
+    const dep = mkAgent({ name: 'code-auditor' })
     const params = new Map<string, RuntimeProfile>([
       [
         'orchestrator',
@@ -74,7 +75,7 @@ describe('RFC-022 buildInlineConfig (primary + dependents)', () => {
   })
 
   test('RFC-113: an agent absent from the params map emits NO model/variant/etc (omit → binary default)', () => {
-    const primary = mkAgent({ name: 'orchestrator', model: 'anthropic/claude-opus-4-7' })
+    const primary = mkAgent({ name: 'orchestrator' })
     const cfg = buildInlineConfig(primary, new Map(), [])
     expect(cfg.agent.orchestrator?.model).toBeUndefined()
     expect(cfg.agent.orchestrator?.temperature).toBeUndefined()

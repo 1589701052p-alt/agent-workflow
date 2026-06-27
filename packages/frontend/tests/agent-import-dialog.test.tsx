@@ -49,7 +49,9 @@ describe('AgentImportDialog', () => {
     expect(onApply).toHaveBeenCalledTimes(1)
     const result = onApply.mock.calls[0]![0]
     expect(result.partial.description).toBe('A reviewer')
-    expect(result.partial.model).toBe('x')
+    // RFC-115: `model` is no longer a first-class agent field — a legacy
+    // `model:` frontmatter key routes into frontmatterExtra, never partial.model.
+    expect(result.partial.frontmatterExtra?.model).toBe('x')
     expect(result.partial.bodyMd).toBe('body line')
     expect(onClose).toHaveBeenCalled()
   })

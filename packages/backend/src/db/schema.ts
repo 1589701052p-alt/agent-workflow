@@ -32,15 +32,13 @@ export const agents = sqliteTable('agents', {
   syncOutputsOnIterate: integer('sync_outputs_on_iterate', { mode: 'boolean' })
     .notNull()
     .default(true),
-  model: text('model'), // nullable; falls back to settings.defaultModel
   // RFC-111: per-agent runtime ('opencode' | 'claude-code'); NULL = inherit
   // config.defaultRuntime (→ 'opencode'). Model namespace follows the runtime.
+  // RFC-115: the agent's own model/variant/temperature/steps/maxSteps columns
+  // were dropped (DROP via migration 0057) — generation params now live solely
+  // on the runtime profile (RFC-113); the agent only SELECTS a runtime by name.
   runtime: text('runtime'),
-  variant: text('variant'),
-  temperature: real('temperature'),
   permission: text('permission').notNull().default('{}'), // JSON: opencode permission schema
-  steps: integer('steps'),
-  maxSteps: integer('max_steps'),
   skills: text('skills').notNull().default('[]'), // JSON string[]
   // RFC-022: agent name list (JSON string[]) of agents this one transitively
   // requires. Closure (BFS) gets injected into the same opencode subprocess

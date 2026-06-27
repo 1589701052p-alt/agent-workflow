@@ -1,6 +1,8 @@
 // Tests for RFC-018 shared parser (parseAgentMarkdown).
-// Locks in mapping rules, opencode normalize parity (tools→permission,
-// steps?? maxSteps), and the unrecognized-key → frontmatterExtra fallback.
+// Locks in mapping rules, opencode normalize parity (tools→permission), and the
+// unrecognized-key → frontmatterExtra fallback — including the RFC-115 rule that
+// the dropped generation keys (model/variant/temperature/steps/maxSteps) now
+// fall through to frontmatterExtra instead of becoming first-class fields.
 
 import { describe, expect, test } from 'bun:test'
 import { parseAgentMarkdown } from '../src/agent-md'
@@ -37,18 +39,28 @@ describe('parseAgentMarkdown', () => {
     const r = parseAgentMarkdown(src)
     expect(r.partial.name).toBe('reviewer')
     expect(r.partial.description).toBe('A reviewer')
-    expect(r.partial.model).toBe('anthropic/claude-sonnet-4-6')
-    expect(r.partial.variant).toBe('balanced')
-    expect(r.partial.temperature).toBe(0.2)
-    expect(r.partial.steps).toBe(12)
     expect(r.partial.permission).toEqual({ edit: 'ask' })
     expect(r.partial.bodyMd).toBe('body line')
+    // RFC-115: model/variant/temperature/steps are no longer first-class fields —
+    // they land in frontmatterExtra alongside the genuinely unknown keys.
     expect(r.partial.frontmatterExtra).toEqual({
+      model: 'anthropic/claude-sonnet-4-6',
+      variant: 'balanced',
+      temperature: 0.2,
+      steps: 12,
       mode: 'subagent',
       color: '#FF5733',
       hidden: true,
     })
-    expect(r.unrecognizedKeys.sort()).toEqual(['color', 'hidden', 'mode'])
+    expect(r.unrecognizedKeys.sort()).toEqual([
+      'color',
+      'hidden',
+      'mode',
+      'model',
+      'steps',
+      'temperature',
+      'variant',
+    ])
     expect(r.warnings).toEqual([])
   })
 
@@ -87,14 +99,47 @@ describe('parseAgentMarkdown', () => {
     expect(r.partial.permission?.edit).toBe('ask')
   })
 
-  test('maxSteps coalesces into steps when steps missing; both preserved when both present', () => {
-    const a = parseAgentMarkdown('---\nmaxSteps: 50\n---\n')
-    expect(a.partial.steps).toBe(50)
-    expect(a.partial.maxSteps).toBe(50)
-
-    const b = parseAgentMarkdown('---\nsteps: 10\nmaxSteps: 50\n---\n')
-    expect(b.partial.steps).toBe(10)
-    expect(b.partial.maxSteps).toBe(50)
+  // RFC-115 regression lock: the agent contract dropped model/variant/
+  // temperature/steps/maxSteps (they moved onto the runtime profile in RFC-113).
+  // A legacy agent.md carrying them must NOT re-introduce them as first-class
+  // CreateAgent fields — they route into frontmatterExtra verbatim (no data
+  // loss, surfaced in the import preview) and emit no validation warning.
+  test('RFC-115: dropped generation keys route to frontmatterExtra, never partial', () => {
+    const r = parseAgentMarkdown(
+      [
+        '---',
+        'model: anthropic/claude-sonnet-4-6',
+        'variant: balanced',
+        'temperature: 0.4',
+        'steps: 10',
+        'maxSteps: 50',
+        '---',
+        'body',
+      ].join('\n'),
+    )
+    // Not first-class fields any more.
+    expect('model' in r.partial).toBe(false)
+    expect('variant' in r.partial).toBe(false)
+    expect('temperature' in r.partial).toBe(false)
+    expect('steps' in r.partial).toBe(false)
+    expect('maxSteps' in r.partial).toBe(false)
+    // Preserved verbatim in frontmatterExtra instead.
+    expect(r.partial.frontmatterExtra).toEqual({
+      model: 'anthropic/claude-sonnet-4-6',
+      variant: 'balanced',
+      temperature: 0.4,
+      steps: 10,
+      maxSteps: 50,
+    })
+    expect(r.unrecognizedKeys.sort()).toEqual([
+      'maxSteps',
+      'model',
+      'steps',
+      'temperature',
+      'variant',
+    ])
+    // No "must be non-empty/positive" warnings — plain passthrough now.
+    expect(r.warnings).toEqual([])
   })
 
   test('malformed YAML surfaces yaml-parse-failed warning, partial keeps body', () => {
@@ -144,11 +189,13 @@ describe('parseAgentMarkdown', () => {
     expect(r.partial.name).toBe('explicit')
   })
 
-  test('type mismatch routes value to extras + warning (model number)', () => {
+  test('RFC-115: a numeric model value passes through to frontmatterExtra with no warning', () => {
     const r = parseAgentMarkdown('---\nmodel: 42\n---\n')
-    expect(r.partial.model).toBeUndefined()
+    // model is no longer validated — any value (even a number) is just an
+    // unrecognized key that lands in frontmatterExtra without a warning.
+    expect('model' in r.partial).toBe(false)
     expect(r.partial.frontmatterExtra).toEqual({ model: 42 })
-    expect(r.warnings.some((w) => w.startsWith('model must be non-empty string'))).toBe(true)
+    expect(r.warnings.some((w) => w.startsWith('model must be'))).toBe(false)
   })
 
   test('non-object permission falls back to extras', () => {

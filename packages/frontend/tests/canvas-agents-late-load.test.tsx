@@ -45,7 +45,6 @@ function makeDef(): WorkflowDefinition {
 const CODER: Agent = {
   name: 'coder',
   description: 'coder',
-  model: 'stub/stub',
   outputs: ['software_design', 'test_design'],
   readonly: false,
   skills: [],

@@ -77,7 +77,6 @@ describe('agent service', () => {
       outputs: ['findings', 'summary'],
       readonly: true,
       syncOutputsOnIterate: true,
-      model: 'anthropic/claude-opus-4-7',
       permission: { edit: 'deny', bash: 'deny' },
       skills: ['go-conventions'],
       dependsOn: [],

@@ -48,7 +48,6 @@ const CODER: Agent = {
   schemaVersion: 1,
   createdAt: 0,
   updatedAt: 0,
-  model: 'anthropic/sonnet',
 }
 
 function makeDef(nodes: WorkflowNode[]): WorkflowDefinition {

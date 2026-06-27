@@ -1801,11 +1801,6 @@ export const enUS: Resources = {
       routedTo: {
         name: '→ name',
         description: '→ description',
-        model: '→ model',
-        variant: '→ variant',
-        temperature: '→ temperature',
-        steps: '→ steps',
-        maxSteps: '→ max steps',
         permission: '→ permission',
         bodyMd: '→ body (markdown)',
         frontmatterExtra: '→ frontmatterExtra',

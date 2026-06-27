@@ -26,11 +26,6 @@ type Tab = 'upload' | 'paste'
 const ROUTE_KEYS = {
   name: 'agentForm.importDialog.routedTo.name',
   description: 'agentForm.importDialog.routedTo.description',
-  model: 'agentForm.importDialog.routedTo.model',
-  variant: 'agentForm.importDialog.routedTo.variant',
-  temperature: 'agentForm.importDialog.routedTo.temperature',
-  steps: 'agentForm.importDialog.routedTo.steps',
-  maxSteps: 'agentForm.importDialog.routedTo.maxSteps',
   permission: 'agentForm.importDialog.routedTo.permission',
   bodyMd: 'agentForm.importDialog.routedTo.bodyMd',
   frontmatterExtra: 'agentForm.importDialog.routedTo.frontmatterExtra',
@@ -110,11 +105,6 @@ export function AgentImportDialog({
     }
     add('name', ROUTE_KEYS.name)
     add('description', ROUTE_KEYS.description)
-    add('model', ROUTE_KEYS.model)
-    add('variant', ROUTE_KEYS.variant)
-    add('temperature', ROUTE_KEYS.temperature)
-    add('steps', ROUTE_KEYS.steps)
-    add('maxSteps', ROUTE_KEYS.maxSteps)
     add('permission', ROUTE_KEYS.permission)
     if (p.frontmatterExtra !== undefined) {
       for (const key of Object.keys(p.frontmatterExtra)) {
