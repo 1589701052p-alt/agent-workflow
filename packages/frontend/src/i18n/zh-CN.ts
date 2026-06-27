@@ -717,6 +717,36 @@ export interface Resources {
     startedAt: string
     finishedAt: string
   }
+  runtimes: {
+    title: string
+    subtitle: string
+    add: string
+    builtin: string
+    protocolOpencode: string
+    protocolClaude: string
+    defaultBinary: string
+    smokeUntested: string
+    test: string
+    edit: string
+    delete: string
+    addTitle: string
+    editTitle: string
+    testBinary: string
+    testing: string
+    fieldName: string
+    fieldNameHint: string
+    fieldProtocol: string
+    fieldProtocolHint: string
+    fieldBinary: string
+    fieldBinaryHint: string
+    smoke: {
+      conforms: string
+      'spawn-failed': string
+      'auth-missing': string
+      'model-call-failed': string
+      'stream-nonconforming': string
+    }
+  }
   agents: {
     title: string
     hint: string
@@ -3041,6 +3071,38 @@ export const zhCN: Resources = {
     emptyResource: '暂无{{title}}。',
     startedAt: '开始时间',
     finishedAt: '完成时间',
+  },
+  // RFC-112：运行时注册表（设置 → 运行时列表 + 增改对话框）。
+  runtimes: {
+    title: '运行时',
+    subtitle:
+      '注册 opencode / Claude Code 二进制——包括改名的定制 fork。Agent 按名称选用运行时，框架以对应协议驱动它。',
+    add: '+ 添加运行时',
+    builtin: '内置',
+    protocolOpencode: 'opencode',
+    protocolClaude: 'Claude Code',
+    defaultBinary: '默认（PATH / 已配置）',
+    smokeUntested: '未测试',
+    test: '测试',
+    edit: '编辑',
+    delete: '删除',
+    addTitle: '添加运行时',
+    editTitle: '编辑运行时',
+    testBinary: '测试二进制',
+    testing: '测试中…',
+    fieldName: '名称',
+    fieldNameHint: '小写、URL 安全（a-z、0-9、-）。Agent 以此名称引用该运行时。',
+    fieldProtocol: '协议',
+    fieldProtocolHint: '该二进制遵循哪种运行时协议——opencode 或 Claude Code。',
+    fieldBinary: '二进制路径',
+    fieldBinaryHint: '可执行文件的绝对路径。留空则用该协议的默认二进制（PATH）。',
+    smoke: {
+      conforms: '符合',
+      'spawn-failed': '无法启动',
+      'auth-missing': '缺少鉴权',
+      'model-call-failed': '模型调用失败',
+      'stream-nonconforming': '不符合',
+    },
   },
   agents: {
     title: '代理',

@@ -18,8 +18,8 @@ import { Select } from '@/components/Select'
 import {
   RUNTIME_CLAUDE_QUERY_KEY,
   RUNTIME_OPENCODE_QUERY_KEY,
-  RuntimeStatusCard,
 } from '@/components/RuntimeStatusCard'
+import { RuntimeList, RUNTIMES_QUERY_KEY } from '@/components/RuntimeList'
 import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
 import { isSupportedLanguage } from '@/hooks/useLanguage'
 import { clearToken, getBaseUrl, getToken } from '@/stores/auth'
@@ -139,6 +139,20 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
   const runtimeRef = useRef<HTMLDivElement | null>(null)
   const [flashing, setFlashing] = useState(false)
 
+  // RFC-112: the default-runtime picker lists every registered runtime by name
+  // (shares the RuntimeList query cache via the same key). Falls back to the two
+  // built-in names while loading so the select is never empty.
+  const runtimesQuery = useQuery<{ runtimes: Array<{ name: string }> }>({
+    queryKey: RUNTIMES_QUERY_KEY,
+    queryFn: ({ signal }) => api.get('/api/runtimes', undefined, signal),
+    staleTime: 30_000,
+  })
+  const runtimeOptions = (
+    runtimesQuery.data?.runtimes.length
+      ? runtimesQuery.data.runtimes.map((r) => r.name)
+      : ['opencode', 'claude-code']
+  ).map((name) => ({ value: name, label: name }))
+
   // RFC-032: scroll the runtime status block into view + briefly highlight it
   // when the sidebar runtime row navigates here. flashKey > 0 means the
   // parent has just observed `location.hash === '#runtime'`; we restart the
@@ -179,20 +193,23 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
         // claude. The ['runtime','models'] prefix also drops the claude list.
         void qc.invalidateQueries({ queryKey: RUNTIME_CLAUDE_QUERY_KEY })
         void qc.invalidateQueries({ queryKey: ['runtime', 'models'] })
+        // RFC-112: opencodePath / claudeCodePath feed the built-in runtimes'
+        // default binary — refresh the registry list too.
+        void qc.invalidateQueries({ queryKey: RUNTIMES_QUERY_KEY })
       },
     },
   )
   return (
     <>
+      {/* RFC-112: the runtime registry list (opencode / claude-code built-ins +
+          custom forks) replaces the two stacked RFC-111 status cards. */}
       <div
         ref={runtimeRef}
         className={`runtime-status-anchor${flashing ? ' runtime-status-anchor--flash' : ''}`}
         data-flash={flashing ? '1' : '0'}
       >
-        <RuntimeStatusCard />
+        <RuntimeList />
       </div>
-      {/* RFC-111: claude-code is an optional second runtime — soft probe card. */}
-      <RuntimeStatusCard runtime="claude" />
       <SectionForm
         onSave={save.mutate}
         busy={save.isPending}
@@ -213,16 +230,13 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
         </Field>
         {/* RFC-111: global default runtime + claude-code default model. */}
         <Field label={t('settingsForm.defaultRuntime')} hint={t('settingsForm.defaultRuntimeHint')}>
-          {/* RFC-112: widened to a string (runtime name); PR-D sources options
-              from the runtimes registry list instead of the two hardcoded. */}
+          {/* RFC-112: options come from the runtimes registry (built-ins +
+              custom forks), not the two hardcoded RFC-111 values. */}
           <Select<string>
             value={state.defaultRuntime ?? 'opencode'}
             ariaLabel={t('settingsForm.defaultRuntime')}
             onChange={(v) => setState({ ...state, defaultRuntime: v })}
-            options={[
-              { value: 'opencode', label: t('settingsForm.defaultRuntimeOpencode') },
-              { value: 'claude-code', label: t('settingsForm.defaultRuntimeClaudeCode') },
-            ]}
+            options={runtimeOptions}
           />
         </Field>
         <Field

@@ -68,11 +68,23 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   // disabled (undefined ⇒ enabled now parity shipped). Keep showing it when
   // the agent already pins a runtime so an existing value is never hidden.
   const claudeEnabled = config.data?.claudeCodeEnabled !== false
+  // RFC-112: registered runtimes (GET /api/runtimes — open to all users, unlike
+  // admin-only /api/config) drive the picker options + the selected runtime's
+  // protocol, so a custom claude-protocol fork uses the claude model namespace.
+  const runtimesQuery = useQuery<{ runtimes: Array<{ name: string; protocol: string }> }>({
+    queryKey: ['runtimes'],
+    queryFn: ({ signal }) => api.get('/api/runtimes', undefined, signal),
+    staleTime: 30_000,
+  })
+  const registeredRuntimes = runtimesQuery.data?.runtimes ?? []
   const showRuntime = claudeEnabled || value.runtime != null
   // Effective runtime = agent override → global default → opencode. Drives the
   // model namespace + whether variant/temperature apply (claude has neither).
   const effectiveRuntime = value.runtime ?? config.data?.defaultRuntime ?? 'opencode'
-  const isClaude = effectiveRuntime === 'claude-code'
+  const effectiveProtocol =
+    registeredRuntimes.find((r) => r.name === effectiveRuntime)?.protocol ??
+    (effectiveRuntime === 'claude-code' ? 'claude-code' : 'opencode')
+  const isClaude = effectiveProtocol === 'claude-code'
 
   return (
     <div className="agent-form">
@@ -204,16 +216,20 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             (and the agent doesn't already pin a runtime). */}
         {showRuntime && (
           <Field label={t('agentForm.fieldRuntime')} hint={t('agentForm.fieldRuntimeHint')}>
-            {/* RFC-112: widened to a string (registered runtime name); PR-D
-                replaces the hardcoded options with the runtimes registry list. */}
+            {/* RFC-112: options are the registered runtimes (built-ins + custom
+                forks) by name, plus the inherit-default sentinel. */}
             <Select<string>
               value={value.runtime ?? ''}
               ariaLabel={t('agentForm.fieldRuntime')}
               onChange={(v) => patch('runtime', v === '' ? undefined : v)}
               options={[
                 { value: '', label: t('agentForm.runtimeInherit') },
-                { value: 'opencode', label: t('agentForm.runtimeOpencode') },
-                { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
+                ...(registeredRuntimes.length > 0
+                  ? registeredRuntimes.map((r) => ({ value: r.name, label: r.name }))
+                  : [
+                      { value: 'opencode', label: t('agentForm.runtimeOpencode') },
+                      { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
+                    ]),
               ]}
             />
           </Field>
