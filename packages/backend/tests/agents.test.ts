@@ -155,6 +155,35 @@ describe('agent service', () => {
     expect(updated.bodyMd).toBe('body') // preserved
   })
 
+  // RFC-115: updateAgent must WRITE the runtime column — pin, preserve, AND clear.
+  // The bug: the set-builder handled model/variant/temperature/steps/maxSteps but
+  // skipped runtime, so the edit form (PUT) could neither repoint nor un-pin an
+  // agent — invisible because the RFC-113 migration had pinned every user agent.
+  test('update writes runtime: pin, preserve on unrelated patch, clear to inherit', async () => {
+    await createAgent(db, {
+      name: 'rt',
+      description: 'orig',
+      outputs: [],
+      readonly: false,
+      syncOutputsOnIterate: true,
+      permission: {},
+      skills: [],
+      dependsOn: [],
+      mcp: [],
+      plugins: [],
+      frontmatterExtra: {},
+      bodyMd: '',
+    })
+    // starts unpinned (inherits config.defaultRuntime → absent on the view)
+    expect((await getAgent(db, 'rt'))?.runtime).toBeUndefined()
+    // pin to a registry name
+    expect((await updateAgent(db, 'rt', { runtime: 'opencode-1' })).runtime).toBe('opencode-1')
+    // an unrelated patch leaves the pin untouched (sparse-patch semantics)
+    expect((await updateAgent(db, 'rt', { description: 'x' })).runtime).toBe('opencode-1')
+    // explicit null clears back to inherit (absent on the Agent view again)
+    expect((await updateAgent(db, 'rt', { runtime: null })).runtime).toBeUndefined()
+  })
+
   test('update on missing agent throws NotFoundError', async () => {
     await expect(updateAgent(db, 'missing', { description: 'x' })).rejects.toBeInstanceOf(
       NotFoundError,

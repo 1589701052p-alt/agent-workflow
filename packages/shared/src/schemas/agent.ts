@@ -192,7 +192,14 @@ export const CreateAgentSchema = z.object({
 export type CreateAgent = z.infer<typeof CreateAgentSchema>
 
 /** PUT /api/agents/:name body. Name changes happen via /rename. */
-export const UpdateAgentSchema = CreateAgentSchema.omit({ name: true }).partial()
+export const UpdateAgentSchema = CreateAgentSchema.omit({ name: true })
+  .partial()
+  .extend({
+    // RFC-115: unlike create (absent already means "no pin"), an UPDATE can
+    // explicitly CLEAR a pinned runtime back to inherit by sending null.
+    // undefined = leave the current value untouched (sparse-patch semantics).
+    runtime: z.string().min(1).nullable().optional(),
+  })
 export type UpdateAgent = z.infer<typeof UpdateAgentSchema>
 
 /** POST /api/agents/:name/rename body. */

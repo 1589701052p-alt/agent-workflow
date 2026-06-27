@@ -138,6 +138,11 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   if (patch.permission !== undefined) set.permission = JSON.stringify(patch.permission)
   if (patch.steps !== undefined) set.steps = patch.steps
   if (patch.maxSteps !== undefined) set.maxSteps = patch.maxSteps
+  // RFC-115 round-trip fix: actually persist the runtime column. A registry NAME
+  // pins; null clears back to inherit (config.defaultRuntime); undefined leaves it
+  // untouched (sparse-patch). Before this branch the set-builder skipped runtime
+  // entirely, so the edit form could neither repoint nor un-pin an agent.
+  if (patch.runtime !== undefined) set.runtime = patch.runtime
   if (patch.skills !== undefined) set.skills = JSON.stringify(patch.skills)
   if (patch.dependsOn !== undefined)
     set.dependsOn = JSON.stringify(dedupePreservingOrder(patch.dependsOn))

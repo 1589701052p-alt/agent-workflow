@@ -43,7 +43,12 @@ function AgentDetailPage() {
 
   const save = useMutation({
     mutationFn: () => {
-      const { name: _drop, ...patch } = draft
+      const { name: _drop, ...rest } = draft
+      // RFC-115: send an explicit `runtime: null` when the agent inherits, so a PUT
+      // can CLEAR a previously-pinned runtime. A bare `undefined` is dropped by
+      // JSON.stringify, which updateAgent reads as "leave untouched" → the old pin
+      // would survive and the selector would keep lying about it.
+      const patch = { ...rest, runtime: draft.runtime ?? null }
       return api.put<Agent>(`/api/agents/${encodeURIComponent(name)}`, patch)
     },
     onSuccess: (a) => {
@@ -133,5 +138,11 @@ export function agentToDraft(a: Agent): CreateAgent {
   if (a.temperature !== undefined) out.temperature = a.temperature
   if (a.steps !== undefined) out.steps = a.steps
   if (a.maxSteps !== undefined) out.maxSteps = a.maxSteps
+  // RFC-115 round-trip fix: carry the agent's pinned runtime into the draft. The
+  // edit form's Runtime selector reads `draft.runtime`; dropping it here made every
+  // agent render as "inherit (global default)" regardless of its real pin — and the
+  // RFC-113 startup migration pinned every user agent, so this mis-displayed all of
+  // them (and masked that switching the global default no longer moved them).
+  if (a.runtime !== undefined) out.runtime = a.runtime
   return out
 }
