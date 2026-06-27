@@ -61,19 +61,19 @@ function plugin(name: string, partial: Partial<Plugin> = {}): Plugin {
 
 describe('buildInlineConfig — RFC-031 plugin injection', () => {
   test('no plugins → inline config has no `plugin` key', () => {
-    const cfg = buildInlineConfig(agent('w'), undefined, [], [], [])
+    const cfg = buildInlineConfig(agent('w'), new Map(), [], [], [])
     expect((cfg as { plugin?: unknown }).plugin).toBeUndefined()
   })
 
   test('single plugin without options → `file://<path>` string', () => {
-    const cfg = buildInlineConfig(agent('w'), undefined, [], [], [plugin('dd')])
+    const cfg = buildInlineConfig(agent('w'), new Map(), [], [], [plugin('dd')])
     expect(cfg.plugin).toEqual([`file:///tmp/aw-plugins/dd/node_modules/dd`])
   })
 
   test('single plugin with options → `[file://..., options]` tuple', () => {
     const cfg = buildInlineConfig(
       agent('w'),
-      undefined,
+      new Map(),
       [],
       [],
       [plugin('dd', { options: { apiKey: 'x' } })],
@@ -84,7 +84,7 @@ describe('buildInlineConfig — RFC-031 plugin injection', () => {
   test('cachedPath already a file:// URL is passed through verbatim', () => {
     const cfg = buildInlineConfig(
       agent('w'),
-      undefined,
+      new Map(),
       [],
       [],
       [plugin('local', { cachedPath: 'file:///abs/path/plugin.ts' })],
@@ -95,7 +95,7 @@ describe('buildInlineConfig — RFC-031 plugin injection', () => {
   test('enabled=false entries skipped', () => {
     const cfg = buildInlineConfig(
       agent('w'),
-      undefined,
+      new Map(),
       [],
       [],
       [plugin('on'), plugin('off', { enabled: false })],
@@ -108,7 +108,7 @@ describe('buildInlineConfig — RFC-031 plugin injection', () => {
   test('all entries disabled → no `plugin` key emitted', () => {
     const cfg = buildInlineConfig(
       agent('w'),
-      undefined,
+      new Map(),
       [],
       [],
       [plugin('off', { enabled: false })],
@@ -118,12 +118,12 @@ describe('buildInlineConfig — RFC-031 plugin injection', () => {
 
   test('dedupe by name across closure', () => {
     const same = plugin('same')
-    const cfg = buildInlineConfig(agent('w'), undefined, [], [], [same, same])
+    const cfg = buildInlineConfig(agent('w'), new Map(), [], [], [same, same])
     expect((cfg.plugin as unknown[]).length).toBe(1)
   })
 
   test('mcp + plugin can coexist on the same inline config', () => {
-    const cfg = buildInlineConfig(agent('w'), undefined, [], [], [plugin('dd')])
+    const cfg = buildInlineConfig(agent('w'), new Map(), [], [], [plugin('dd')])
     expect(cfg.plugin).toBeDefined()
     expect(cfg.agent).toBeDefined()
   })

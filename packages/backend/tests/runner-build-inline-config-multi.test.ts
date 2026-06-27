@@ -10,6 +10,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Agent } from '@agent-workflow/shared'
 import { buildInlineAgentEntry, buildInlineConfig } from '../src/services/runner'
+import type { RuntimeProfile } from '../src/services/runtimeRegistry'
 
 function mkAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -39,7 +40,7 @@ describe('RFC-022 buildInlineConfig (primary + dependents)', () => {
     const dep1 = mkAgent({ name: 'code-auditor', bodyMd: 'auditor body' })
     const dep2 = mkAgent({ name: 'unit-test-runner', bodyMd: 'runner body' })
 
-    const cfg = buildInlineConfig(primary, undefined, [dep1, dep2])
+    const cfg = buildInlineConfig(primary, new Map(), [dep1, dep2])
     const keys = Object.keys(cfg.agent)
     expect(keys).toEqual(['orchestrator', 'code-auditor', 'unit-test-runner'])
     expect(cfg.agent.orchestrator?.prompt).toBe('orchestrator body')
@@ -47,43 +48,48 @@ describe('RFC-022 buildInlineConfig (primary + dependents)', () => {
     expect(cfg.agent['unit-test-runner']?.prompt).toBe('runner body')
   })
 
-  test('per-node overrides apply ONLY to primary; dependents keep their own model/variant/temperature', () => {
-    const primary = mkAgent({
-      name: 'orchestrator',
-      model: 'anthropic/claude-opus-4-7',
-      variant: 'default',
-      temperature: 0.2,
-    })
-    const dep = mkAgent({
-      name: 'code-auditor',
-      model: 'anthropic/claude-haiku-4-5',
-      variant: 'auditor-variant',
-      temperature: 0.7,
-    })
-    const cfg = buildInlineConfig(
-      primary,
-      { model: 'openrouter/o1-preview', variant: 'override-variant', temperature: 1.5 },
-      [dep],
-    )
-    expect(cfg.agent.orchestrator?.model).toBe('openrouter/o1-preview')
-    expect(cfg.agent.orchestrator?.variant).toBe('override-variant')
-    expect(cfg.agent.orchestrator?.temperature).toBe(1.5)
-    // Dependent must NOT inherit the per-node override.
-    expect(cfg.agent['code-auditor']?.model).toBe('anthropic/claude-haiku-4-5')
-    expect(cfg.agent['code-auditor']?.variant).toBe('auditor-variant')
-    expect(cfg.agent['code-auditor']?.temperature).toBe(0.7)
+  test('RFC-113: each agent entry uses ITS runtime profile from the params map, NOT agent.model', () => {
+    // agent.model is set but DEPRECATED — the inline params now come from the
+    // per-agent runtime profile map (each agent resolves its own runtime).
+    const primary = mkAgent({ name: 'orchestrator', model: 'anthropic/claude-opus-4-7' })
+    const dep = mkAgent({ name: 'code-auditor', model: 'anthropic/claude-haiku-4-5' })
+    const params = new Map<string, RuntimeProfile>([
+      [
+        'orchestrator',
+        { model: 'opus', variant: 'v1', temperature: 0.2, steps: null, maxSteps: 50 },
+      ],
+      [
+        'code-auditor',
+        { model: 'haiku', variant: 'va', temperature: 0.7, steps: 100, maxSteps: null },
+      ],
+    ])
+    const cfg = buildInlineConfig(primary, params, [dep])
+    // each agent gets ITS runtime's params (not the agent.model column).
+    expect(cfg.agent.orchestrator?.model).toBe('opus')
+    expect(cfg.agent.orchestrator?.variant).toBe('v1')
+    expect(cfg.agent.orchestrator?.temperature).toBe(0.2)
+    expect(cfg.agent.orchestrator?.maxSteps).toBe(50)
+    expect(cfg.agent['code-auditor']?.model).toBe('haiku')
+    expect(cfg.agent['code-auditor']?.steps).toBe(100)
+  })
+
+  test('RFC-113: an agent absent from the params map emits NO model/variant/etc (omit → binary default)', () => {
+    const primary = mkAgent({ name: 'orchestrator', model: 'anthropic/claude-opus-4-7' })
+    const cfg = buildInlineConfig(primary, new Map(), [])
+    expect(cfg.agent.orchestrator?.model).toBeUndefined()
+    expect(cfg.agent.orchestrator?.temperature).toBeUndefined()
   })
 
   test('legacy single-agent shape preserved when dependents is empty', () => {
     const primary = mkAgent({ name: 'lonely' })
-    const cfg = buildInlineConfig(primary, undefined, [])
+    const cfg = buildInlineConfig(primary, new Map(), [])
     expect(Object.keys(cfg.agent)).toEqual(['lonely'])
   })
 
   test('defensive: a dependent matching the primary name is skipped (would otherwise overwrite primary entry)', () => {
     const primary = mkAgent({ name: 'a', bodyMd: 'primary body' })
     const collision = mkAgent({ name: 'a', bodyMd: 'collision body' })
-    const cfg = buildInlineConfig(primary, undefined, [collision])
+    const cfg = buildInlineConfig(primary, new Map(), [collision])
     expect(Object.keys(cfg.agent)).toEqual(['a'])
     expect(cfg.agent.a?.prompt).toBe('primary body')
   })

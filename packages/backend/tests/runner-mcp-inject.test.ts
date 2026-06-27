@@ -74,7 +74,7 @@ function remoteMcp(name: string, partial: Partial<Mcp['config']> = {}): Mcp {
 
 describe('RFC-028 buildInlineConfig MCP injection', () => {
   test('empty mcps[] → output omits `mcp` key entirely', () => {
-    const out = buildInlineConfig(agent('a'), undefined, [], [])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [])
     expect('mcp' in out).toBe(false)
   })
 
@@ -84,7 +84,7 @@ describe('RFC-028 buildInlineConfig MCP injection', () => {
       env: { PG_URL: 'postgresql://localhost/x' },
       timeoutMs: 5000,
     })
-    const out = buildInlineConfig(agent('a'), undefined, [], [m])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [m])
     expect(out.mcp).toBeDefined()
     const entry = out.mcp!['pg']
     expect(entry).toEqual({
@@ -103,7 +103,7 @@ describe('RFC-028 buildInlineConfig MCP injection', () => {
 
   test('local mcp: undefined env / timeoutMs are stripped (not emitted as null)', () => {
     const m = localMcp('pg')
-    const out = buildInlineConfig(agent('a'), undefined, [], [m])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [m])
     const entry = out.mcp!['pg']
     expect(entry).toEqual({
       type: 'local',
@@ -119,7 +119,7 @@ describe('RFC-028 buildInlineConfig MCP injection', () => {
       oauth: { clientId: 'abc', scope: 'read' },
       timeoutMs: 10_000,
     })
-    const out = buildInlineConfig(agent('a'), undefined, [], [m])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [m])
     expect(out.mcp!['sentry']).toEqual({
       type: 'remote',
       enabled: true,
@@ -132,21 +132,21 @@ describe('RFC-028 buildInlineConfig MCP injection', () => {
 
   test('remote mcp: oauth=false survives as literal false (NOT coerced)', () => {
     const m = remoteMcp('s', { url: 'https://s.io', oauth: false })
-    const out = buildInlineConfig(agent('a'), undefined, [], [m])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [m])
     expect(out.mcp!['s']!.oauth).toBe(false)
   })
 
   test('enabled=false → entry omitted entirely from inline output', () => {
     const enabled = localMcp('on')
     const disabled = { ...localMcp('off'), enabled: false } as Mcp
-    const out = buildInlineConfig(agent('a'), undefined, [], [enabled, disabled])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [enabled, disabled])
     expect(Object.keys(out.mcp ?? {})).toEqual(['on'])
   })
 
   test('dedupe: same name appearing twice (closure union) collapses to one entry', () => {
     const a = localMcp('shared')
     const b = localMcp('shared')
-    const out = buildInlineConfig(agent('a'), undefined, [], [a, b])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [a, b])
     expect(Object.keys(out.mcp ?? {})).toEqual(['shared'])
   })
 
@@ -156,7 +156,7 @@ describe('RFC-028 buildInlineConfig MCP injection', () => {
       env: { K: 'v' },
       timeoutMs: 1234,
     })
-    const out = buildInlineConfig(agent('a'), undefined, [], [m])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [m])
     const serialized = JSON.stringify(out)
     expect(serialized).toContain('"environment"')
     expect(serialized).toContain('"timeout":1234')

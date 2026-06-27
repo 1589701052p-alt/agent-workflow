@@ -8,6 +8,7 @@
 import type { Agent } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
+import type { RuntimeProfile } from '../src/services/runtimeRegistry'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -110,6 +111,8 @@ interface RunOpts {
   agent: Agent
   nodeRunId: string
   h: Harness
+  /** RFC-113: claude's model now comes from the runtime profile, not agent.model. */
+  runtimeParams?: RuntimeProfile
 }
 function runClaude(o: RunOpts) {
   return runNode({
@@ -124,6 +127,7 @@ function runClaude(o: RunOpts) {
     appHome: o.h.appHome,
     runtime: 'claude-code',
     runtimeCmd: ['bun', 'run', MOCK_CLAUDE],
+    ...(o.runtimeParams ? { runtimeParams: o.runtimeParams } : {}),
     db: o.h.db,
   })
 }
@@ -166,7 +170,9 @@ describe('runNode — claude-code runtime (RFC-111 PR-B)', () => {
   })
 
   test('argv contract: -p / stream-json / --append-system-prompt-file(=bodyMd) / --model / --disallowed-tools', async () => {
-    const agent = makeAgent({ model: 'opus', readonly: true })
+    // RFC-113: --model now comes from the RUNTIME profile (runtimeParams), not
+    // agent.model. readonly stays an agent concern.
+    const agent = makeAgent({ readonly: true })
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     const argvFile = join(h.appHome, 'argv.jsonl')
     const sysFile = join(h.appHome, 'sys.md')
@@ -178,7 +184,19 @@ describe('runNode — claude-code runtime (RFC-111 PR-B)', () => {
         MOCK_CLAUDE_CAPTURE_SYSTEM_PROMPT_TO: sysFile,
         MOCK_CLAUDE_CAPTURE_PROMPT_TO: promptFile,
       },
-      () => runClaude({ agent, nodeRunId, h }),
+      () =>
+        runClaude({
+          agent,
+          nodeRunId,
+          h,
+          runtimeParams: {
+            model: 'opus',
+            variant: null,
+            temperature: null,
+            steps: null,
+            maxSteps: null,
+          },
+        }),
     )
     expect(result.status).toBe('done')
     const argv = JSON.parse(readFileSync(argvFile, 'utf-8').trim()) as string[]

@@ -55,10 +55,18 @@ export interface RuntimeRow extends RuntimeProfile {
   updatedAt: number
 }
 
-export interface ResolvedRuntime {
+export interface ResolvedRuntime extends RuntimeProfile {
   name: string
   protocol: RuntimeKind
   binaryPath: string | null
+}
+
+const NULL_PROFILE: RuntimeProfile = {
+  model: null,
+  variant: null,
+  temperature: null,
+  steps: null,
+  maxSteps: null,
 }
 
 export interface RuntimeView extends RuntimeProfile {
@@ -141,17 +149,24 @@ export async function resolveRuntimeByName(
   const n = typeof name === 'string' && name.length > 0 ? name : null
   if (n !== null) {
     const row = await getRuntime(db, n)
-    if (row !== null) return { name: row.name, protocol: row.protocol, binaryPath: row.binaryPath }
+    if (row !== null)
+      return {
+        name: row.name,
+        protocol: row.protocol,
+        binaryPath: row.binaryPath,
+        ...runtimeProfileOf(row),
+      }
     // RFC-112: the two built-in NAMES resolve to their protocol (default binary)
     // even when the registry row isn't seeded — so RFC-111 'opencode' /
     // 'claude-code' values keep working in any context (tests, a dispatch that
-    // races startup seeding). Only CUSTOM names require a registered row.
+    // races startup seeding). Only CUSTOM names require a registered row. RFC-113:
+    // no row → no profile params (NULL = the binary's own default).
     if (n === 'opencode' || n === 'claude-code') {
-      return { name: n, protocol: n, binaryPath: null }
+      return { name: n, protocol: n, binaryPath: null, ...NULL_PROFILE }
     }
     log.warn('runtime-name-unknown-fallback-opencode', { name: n })
   }
-  return { name: 'opencode', protocol: 'opencode', binaryPath: null }
+  return { name: 'opencode', protocol: 'opencode', binaryPath: null, ...NULL_PROFILE }
 }
 
 /** agent.runtime ?? config.defaultRuntime ?? 'opencode', resolved to a row. */

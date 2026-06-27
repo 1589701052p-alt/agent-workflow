@@ -139,7 +139,7 @@ describe('resume inherits the session owner’s frozen runtime (RFC-112 Codex im
       .update(nodeRuns)
       .set({ runtime: 'claude-code', runtimeBinary: '/opt/my-cc', opencodeSessionId: 'sess-X' })
       .where(eq(nodeRuns.id, id))
-    expect(await frozenRuntimeOfSession(db, 'sess-X')).toEqual({
+    expect(await frozenRuntimeOfSession(db, 'sess-X')).toMatchObject({
       protocol: 'claude-code',
       binary: '/opt/my-cc',
     })
@@ -185,7 +185,7 @@ describe('resume inherits the session owner’s frozen runtime (RFC-112 Codex im
     const frozen = await resolveFrozenRuntime(db, r2, 'opencode', 'opencode', inherited)
     // re-resolving 'opencode' would have mispaired the claude session S with the
     // opencode driver; inheriting keeps (claude-code, /opt/v1).
-    expect(frozen).toEqual({ protocol: 'claude-code', binary: '/opt/v1' })
+    expect(frozen).toMatchObject({ protocol: 'claude-code', binary: '/opt/v1' })
     const row = (
       await db
         .select({ runtime: nodeRuns.runtime, binary: nodeRuns.runtimeBinary })
@@ -194,5 +194,27 @@ describe('resume inherits the session owner’s frozen runtime (RFC-112 Codex im
     )[0]
     expect(row?.runtime).toBe('claude-code')
     expect(row?.binary).toBe('/opt/v1')
+  })
+})
+
+describe('resolveFrozenRuntime — freezes the runtime PARAMS too (RFC-113 Codex P1-2)', () => {
+  test('first dispatch freezes model/params; resume reads the snapshot, not the mutated runtime', async () => {
+    const { db, id } = await seedRun()
+    await seedBuiltinRuntimes(db)
+    await createRuntime(db, {
+      name: 'cc-opus',
+      protocol: 'claude-code',
+      binaryPath: '/opt/cc',
+      model: 'opus',
+      temperature: 0.5,
+    })
+    const r = await resolveFrozenRuntime(db, id, 'cc-opus', undefined)
+    expect(r.protocol).toBe('claude-code')
+    expect(r.params.model).toBe('opus')
+    expect(r.params.temperature).toBe(0.5)
+    // the runtime's model is later changed — a resume must use the FROZEN params.
+    await updateRuntime(db, 'cc-opus', { model: 'haiku' })
+    const resume = await resolveFrozenRuntime(db, id, 'cc-opus', undefined)
+    expect(resume.params.model).toBe('opus') // frozen snapshot, NOT 'haiku'
   })
 })

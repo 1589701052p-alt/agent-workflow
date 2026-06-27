@@ -198,7 +198,7 @@ describe('resolution: name → (protocol, binary) (RFC-112 PR-A)', () => {
   })
 
   test('built-in name resolves to its protocol with NULL binary', async () => {
-    expect(await resolveRuntimeByName(db, 'opencode')).toEqual({
+    expect(await resolveRuntimeByName(db, 'opencode')).toMatchObject({
       name: 'opencode',
       protocol: 'opencode',
       binaryPath: null,
@@ -206,7 +206,7 @@ describe('resolution: name → (protocol, binary) (RFC-112 PR-A)', () => {
   })
 
   test('custom name resolves to its protocol + binary', async () => {
-    expect(await resolveRuntimeByName(db, 'my-claude')).toEqual({
+    expect(await resolveRuntimeByName(db, 'my-claude')).toMatchObject({
       name: 'my-claude',
       protocol: 'claude-code',
       binaryPath: '/opt/my-cc',
@@ -214,7 +214,7 @@ describe('resolution: name → (protocol, binary) (RFC-112 PR-A)', () => {
   })
 
   test('unknown name fail-safes to built-in opencode', async () => {
-    expect(await resolveRuntimeByName(db, 'ghost')).toEqual({
+    expect(await resolveRuntimeByName(db, 'ghost')).toMatchObject({
       name: 'opencode',
       protocol: 'opencode',
       binaryPath: null,
@@ -236,17 +236,50 @@ describe('resolution: name → (protocol, binary) (RFC-112 PR-A)', () => {
 describe('runtimeHead (RFC-112 PR-A)', () => {
   test('custom binary → that binary', () => {
     expect(
-      runtimeHead({ name: 'my-oc', protocol: 'opencode', binaryPath: '/a/my-oc' }, {}),
+      runtimeHead(
+        {
+          name: 'my-oc',
+          protocol: 'opencode',
+          binaryPath: '/a/my-oc',
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        },
+        {},
+      ),
     ).toEqual(['/a/my-oc'])
   })
 
   test('built-in opencode → config.opencodePath ?? PATH', () => {
-    expect(runtimeHead({ name: 'opencode', protocol: 'opencode', binaryPath: null }, {})).toEqual([
-      'opencode',
-    ])
     expect(
       runtimeHead(
-        { name: 'opencode', protocol: 'opencode', binaryPath: null },
+        {
+          name: 'opencode',
+          protocol: 'opencode',
+          binaryPath: null,
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        },
+        {},
+      ),
+    ).toEqual(['opencode'])
+    expect(
+      runtimeHead(
+        {
+          name: 'opencode',
+          protocol: 'opencode',
+          binaryPath: null,
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        },
         { opencodePath: '/p/oc' },
       ),
     ).toEqual(['/p/oc'])
@@ -254,11 +287,32 @@ describe('runtimeHead (RFC-112 PR-A)', () => {
 
   test('built-in claude → config.claudeCodePath ?? PATH', () => {
     expect(
-      runtimeHead({ name: 'claude-code', protocol: 'claude-code', binaryPath: null }, {}),
+      runtimeHead(
+        {
+          name: 'claude-code',
+          protocol: 'claude-code',
+          binaryPath: null,
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        },
+        {},
+      ),
     ).toEqual(['claude'])
     expect(
       runtimeHead(
-        { name: 'claude-code', protocol: 'claude-code', binaryPath: null },
+        {
+          name: 'claude-code',
+          protocol: 'claude-code',
+          binaryPath: null,
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        },
         { claudeCodePath: '/p/cc' },
       ),
     ).toEqual(['/p/cc'])

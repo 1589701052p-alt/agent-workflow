@@ -59,7 +59,7 @@ describe('RFC-028 end-to-end inline injection', () => {
     if (closure.ok === false) throw new Error('cycle: ' + closure.cyclePath.join(' → '))
     const mcpNames = collectMcpNamesFromClosure(closure.agents)
     const mcps = await loadMcpsByNames(db, mcpNames)
-    const inline = buildInlineConfig(agent, undefined, closure.agents.slice(1), mcps)
+    const inline = buildInlineConfig(agent, new Map(), closure.agents.slice(1), mcps)
 
     // The env-var contents (what opencode actually sees on its stdin):
     const env = JSON.stringify(inline)
@@ -152,7 +152,7 @@ describe('RFC-028 end-to-end inline injection', () => {
     if (closure.ok === false) throw new Error('cycle')
     const mcpNames = collectMcpNamesFromClosure(closure.agents)
     const mcps = await loadMcpsByNames(db, mcpNames)
-    const inline = buildInlineConfig(agent, undefined, closure.agents.slice(1), mcps)
+    const inline = buildInlineConfig(agent, new Map(), closure.agents.slice(1), mcps)
 
     // All three agents present in the inline agent map.
     expect(Object.keys(inline.agent).sort()).toEqual(['leaf', 'mid', 'root'])
@@ -196,7 +196,7 @@ describe('RFC-028 end-to-end inline injection', () => {
     const closure = await resolveDependsClosure(db, agent)
     if (closure.ok === false) throw new Error('cycle')
     const mcps = await loadMcpsByNames(db, collectMcpNamesFromClosure(closure.agents))
-    const inline = buildInlineConfig(agent, undefined, closure.agents.slice(1), mcps)
+    const inline = buildInlineConfig(agent, new Map(), closure.agents.slice(1), mcps)
     expect(Object.keys(inline.mcp ?? {})).toEqual(['on'])
   })
 
@@ -219,7 +219,7 @@ describe('RFC-028 end-to-end inline injection', () => {
     const closure = await resolveDependsClosure(db, agent)
     if (closure.ok === false) throw new Error('cycle')
     const mcps = await loadMcpsByNames(db, collectMcpNamesFromClosure(closure.agents))
-    const inline = buildInlineConfig(agent, undefined, closure.agents.slice(1), mcps)
+    const inline = buildInlineConfig(agent, new Map(), closure.agents.slice(1), mcps)
     expect('mcp' in inline).toBe(false)
     expect(JSON.stringify(inline)).not.toContain('"mcp"')
   })

@@ -24,6 +24,7 @@ import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { agents, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
+import { createRuntime, seedBuiltinRuntimes } from '../src/services/runtimeRegistry'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -57,6 +58,18 @@ async function seedAgentWithDefaults(
   outputs: string[],
   defaults: { model?: string; variant?: string; temperature?: number },
 ): Promise<void> {
+  // RFC-113: the model/variant/temperature live on the agent's RUNTIME, not the
+  // agent. Create a per-agent runtime carrying the defaults + point the agent at
+  // it (the agent itself no longer stores model/variant/temperature).
+  await seedBuiltinRuntimes(db)
+  const runtimeName = `rt-${name}`
+  await createRuntime(db, {
+    name: runtimeName,
+    protocol: 'opencode',
+    model: defaults.model ?? null,
+    variant: defaults.variant ?? null,
+    temperature: defaults.temperature ?? null,
+  })
   await db.insert(agents).values({
     id: ulid(),
     name,
@@ -67,9 +80,7 @@ async function seedAgentWithDefaults(
     skills: '[]',
     frontmatterExtra: '{}',
     bodyMd: '',
-    model: defaults.model ?? null,
-    variant: defaults.variant ?? null,
-    temperature: defaults.temperature ?? null,
+    runtime: runtimeName,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   })
@@ -134,14 +145,14 @@ function readCapture(path: string): Array<{
     .map((l) => JSON.parse(l))
 }
 
-describe('scheduler forwards node-level overrides to runner', () => {
+describe("RFC-113: the agent's RUNTIME drives the model; node param overrides are IGNORED", () => {
   let h: Harness
   beforeEach(() => {
     h = buildHarness()
   })
   afterEach(() => h.cleanup())
 
-  test('agent-single: node.overrides.model wins over agent default model', async () => {
+  test('a node param override is IGNORED — the agent runtime model comes through (D3)', async () => {
     await seedAgentWithDefaults(h.db, 'writer', ['summary'], {
       model: 'anthropic/claude-haiku-4-5',
     })
@@ -191,15 +202,17 @@ describe('scheduler forwards node-level overrides to runner', () => {
 
     const rows = readCapture(h.capturePath)
     expect(rows.length).toBe(1)
+    // RFC-113: the node override (opus/high/0.4) is IGNORED — the model/variant/
+    // temperature come from the agent's RUNTIME (haiku, the seeded default).
     expect(rows[0]).toEqual({
       agent: 'writer',
-      model: 'anthropic/claude-opus-4-7',
-      variant: 'high',
-      temperature: 0.4,
+      model: 'anthropic/claude-haiku-4-5',
+      variant: null,
+      temperature: null,
     })
   })
 
-  test('agent-single: missing overrides falls back to agent defaults (no regression)', async () => {
+  test('the agent runtime model/variant/temperature flow to the opencode inline config', async () => {
     await seedAgentWithDefaults(h.db, 'writer', ['summary'], {
       model: 'anthropic/claude-haiku-4-5',
       variant: 'low',
@@ -247,7 +260,7 @@ describe('scheduler forwards node-level overrides to runner', () => {
     })
   })
 
-  test('agent-single: empty-string overrides are ignored (treated as cleared)', async () => {
+  test('empty-string node overrides are ignored; the runtime model still comes through', async () => {
     await seedAgentWithDefaults(h.db, 'writer', ['summary'], {
       model: 'anthropic/claude-haiku-4-5',
     })

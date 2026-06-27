@@ -202,13 +202,9 @@ export interface RunTaskOptions {
    * Omitted → 'opencode'. Internal agents (commit&push) stay on opencode (D14).
    */
   defaultRuntime?: string
-  /**
-   * RFC-112 (Codex impl-gate P2): the built-in claude runtime's binary
-   * (config.claudeCodePath). Threaded to runNode so a built-in claude dispatch
-   * runs the configured binary — symmetric with opencode's opencodeCmd — instead
-   * of always PATH ['claude']. A CUSTOM runtime's frozen binary still wins.
-   */
-  claudeCodePath?: string
+  // RFC-113 §5: the RFC-112 P2 `claudeCodePath` thread is GONE — the built-in
+  // claude binary now lives on the claude runtime row's binary_path (config
+  // migrated into it) and flows through the normal runtimeBinary freeze.
 }
 
 type NodeStatus =
@@ -2399,9 +2395,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           agent,
           runtime: frozenRuntime.protocol,
           runtimeBinary: frozenRuntime.binary,
-          ...(state.opts.claudeCodePath !== undefined
-            ? { claudeCodePath: state.opts.claudeCodePath }
-            : {}),
+          runtimeParams: frozenRuntime.params,
           inputs: upstreamInputs,
           worktreePath: task.worktreePath,
           // RFC-067: thread per-task Git commit identity through to the runner
@@ -3716,7 +3710,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       agent: innerAgent,
       runtime: shardRuntime.protocol,
       runtimeBinary: shardRuntime.binary,
-      ...(opts.claudeCodePath !== undefined ? { claudeCodePath: opts.claudeCodePath } : {}),
+      runtimeParams: shardRuntime.params,
       inputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout shard dispatch.
@@ -3984,7 +3978,7 @@ async function dispatchFanoutAggregator(
       agent: aggAgent,
       runtime: aggRuntime.protocol,
       runtimeBinary: aggRuntime.binary,
-      ...(opts.claudeCodePath !== undefined ? { claudeCodePath: opts.claudeCodePath } : {}),
+      runtimeParams: aggRuntime.params,
       inputs: aggInputs,
       worktreePath: task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.

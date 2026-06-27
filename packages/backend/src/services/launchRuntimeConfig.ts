@@ -44,7 +44,6 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number
   defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
-  claudeCodePath?: string // RFC-112: built-in claude binary (config.claudeCodePath)
 } {
   const out: {
     commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
@@ -62,11 +61,8 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
       out.defaultPerNodeTimeoutMs = cfg.defaultPerNodeTimeoutMs
     // RFC-111: global default runtime threaded to the scheduler dispatch site.
     if (cfg.defaultRuntime !== undefined) out.defaultRuntime = cfg.defaultRuntime
-    // RFC-112 (Codex impl-gate P2): the built-in claude runtime's binary. Threaded
-    // so claude dispatch honors config.claudeCodePath (symmetric with opencode's
-    // opencodePath), matching what the registry smoke probe tests — before this,
-    // claude ran on PATH ['claude'] while the probe tested claudeCodePath.
-    if (cfg.claudeCodePath !== undefined) out.claudeCodePath = cfg.claudeCodePath
+    // RFC-113 §5: claudeCodePath is no longer threaded (the claude runtime row's
+    // binary_path carries it now — RFC-112 P2 is收口).
   } catch {
     // fall back to the scheduler defaults
   }

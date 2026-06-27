@@ -215,15 +215,15 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // them by name and the Settings runtime list always shows them. Hard-resets
   // them to canonical shape (Codex P2); idempotent.
   try {
-    const { seedBuiltinRuntimes, migrateConfigIntoBuiltins } =
+    const { seedBuiltinRuntimes, migrateConfigIntoBuiltins, migrateAgentParamsToRuntimes } =
       await import('@/services/runtimeRegistry')
     await seedBuiltinRuntimes(db)
-    // RFC-113 §3.1: backfill config defaults onto the built-in runtime rows
-    // (idempotent, NULL-cols only). The built-in rows now carry the model/params
-    // but nothing READS them until PR-B switches the runner — safe intermediate.
-    // migrateAgentParamsToRuntimes (§3.2, which clears agent params) is wired in
-    // PR-B ALONGSIDE the runner change, so the two land atomically.
+    // RFC-113 (idempotent, order matters): config defaults land on the built-in
+    // rows FIRST (§3.1), then user agents' params are re-homed onto deduped
+    // runtime profiles (§3.2) — which the runner (this PR) now reads from. The two
+    // land atomically with the runner switch so behavior is preserved (golden).
     await migrateConfigIntoBuiltins(db, config)
+    await migrateAgentParamsToRuntimes(db, config)
   } catch (err) {
     log.warn('builtin runtime seed/migration on boot failed', {
       error: err instanceof Error ? err.message : String(err),

@@ -49,12 +49,12 @@ function agent(name: string, permission: Record<string, unknown> = {}): Agent {
 
 describe('RFC-073 buildInlineConfig global permission injection', () => {
   test('injects top-level permission = {"*":"allow","question":"deny"}', () => {
-    const out = buildInlineConfig(agent('a'), undefined, [], [])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [])
     expect(out.permission).toEqual({ '*': 'allow', question: 'deny' })
   })
 
   test('permission is ALWAYS present (unlike the optional mcp/plugin keys)', () => {
-    const out = buildInlineConfig(agent('a'), undefined, [], [])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [])
     expect('permission' in out).toBe(true)
   })
 
@@ -63,7 +63,7 @@ describe('RFC-073 buildInlineConfig global permission injection', () => {
     // findLast; for `question` both {*,allow} and {question,deny} match, so the
     // last one must be deny. If a refactor reorders the object literal, this
     // breaks and question stops being disabled — re-introducing the deadlock.
-    const out = buildInlineConfig(agent('a'), undefined, [], [])
+    const out = buildInlineConfig(agent('a'), new Map(), [], [])
     const s = JSON.stringify(out.permission)
     expect(s.indexOf('"question"')).toBeGreaterThan(s.indexOf('"*"'))
   })
@@ -79,7 +79,7 @@ describe('RFC-073 buildInlineConfig global permission injection', () => {
   test('anti-revival: a dependent (subagent) entry also has question stripped', () => {
     const root = agent('root')
     const dep = agent('dep', { question: 'allow', edit: 'allow' })
-    const out = buildInlineConfig(root, undefined, [dep], [])
+    const out = buildInlineConfig(root, new Map(), [dep], [])
     const depPerm = out.agent['dep']!.permission as Record<string, unknown>
     expect('question' in depPerm).toBe(false)
     expect(depPerm.edit).toBe('allow')

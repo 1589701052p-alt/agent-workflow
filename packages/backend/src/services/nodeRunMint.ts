@@ -27,7 +27,7 @@ import type { NodeRunStatus, RerunCause } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
 import type { RuntimeKind } from '@/services/runtime'
-import { resolveAgentRuntime } from '@/services/runtimeRegistry'
+import { resolveAgentRuntime, type RuntimeProfile } from '@/services/runtimeRegistry'
 import { createLogger } from '@/util/log'
 
 /**
@@ -214,12 +214,33 @@ export function isClarifyRerunCause(cause: string | null | undefined): boolean {
   return cause === 'clarify-answer' || cause === 'cross-clarify-questioner-rerun'
 }
 
-/** RFC-112: the frozen (protocol, binary) pair a node_run dispatches/resumes on. */
+/** RFC-112/113: the frozen runtime snapshot a node_run dispatches/resumes on. */
 export interface FrozenRuntime {
   /** RuntimeDriver kind — decides the driver + session-id format. */
   protocol: RuntimeKind
   /** The custom binary head snapshot, or null = the protocol's default binary. */
   binary: string | null
+  /** RFC-113 (Codex P1-2): the execution params (model/variant/...) frozen too. */
+  params: RuntimeProfile
+}
+
+/** Parse the frozen `runtime_params_json`, tolerating legacy NULL / bad JSON. */
+function parseFrozenParams(json: string | null | undefined): RuntimeProfile {
+  if (json != null && json.length > 0) {
+    try {
+      const p = JSON.parse(json) as Partial<RuntimeProfile>
+      return {
+        model: p.model ?? null,
+        variant: p.variant ?? null,
+        temperature: p.temperature ?? null,
+        steps: p.steps ?? null,
+        maxSteps: p.maxSteps ?? null,
+      }
+    } catch {
+      /* fall through to empty */
+    }
+  }
+  return { model: null, variant: null, temperature: null, steps: null, maxSteps: null }
 }
 
 /**
@@ -248,14 +269,22 @@ export async function resolveFrozenRuntime(
 ): Promise<FrozenRuntime> {
   const row = (
     await db
-      .select({ runtime: nodeRuns.runtime, runtimeBinary: nodeRuns.runtimeBinary })
+      .select({
+        runtime: nodeRuns.runtime,
+        runtimeBinary: nodeRuns.runtimeBinary,
+        runtimeParamsJson: nodeRuns.runtimeParamsJson,
+      })
       .from(nodeRuns)
       .where(eq(nodeRuns.id, nodeRunId))
       .limit(1)
   )[0]
   if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') {
     // already frozen — return the self-contained snapshot, registry-independent.
-    return { protocol: row.runtime, binary: row.runtimeBinary ?? null }
+    return {
+      protocol: row.runtime,
+      binary: row.runtimeBinary ?? null,
+      params: parseFrozenParams(row.runtimeParamsJson),
+    }
   }
   // Codex impl-gate P2-2: a NON-null stored value that isn't a known protocol
   // means corruption or a future runtime downgraded away. Re-resolve (a recovery
@@ -266,18 +295,30 @@ export async function resolveFrozenRuntime(
       stored: row.runtime,
     })
   }
-  // RFC-112 P1: a resuming row inherits the session-owner's frozen pair so the
-  // session id + (protocol, binary) stay consumed together across the new row.
-  const frozen =
+  // RFC-112 P1: a resuming row inherits the session-owner's frozen snapshot so the
+  // session id + (protocol, binary, params) stay consumed together across the new
+  // row. RFC-113: params are part of the snapshot.
+  const frozen: FrozenRuntime =
     inheritFrom != null
       ? inheritFrom
       : await resolveAgentRuntime(db, agentRuntime, defaultRuntime).then((r) => ({
           protocol: r.protocol,
           binary: r.binaryPath,
+          params: {
+            model: r.model,
+            variant: r.variant,
+            temperature: r.temperature,
+            steps: r.steps,
+            maxSteps: r.maxSteps,
+          },
         }))
   await db
     .update(nodeRuns)
-    .set({ runtime: frozen.protocol, runtimeBinary: frozen.binary })
+    .set({
+      runtime: frozen.protocol,
+      runtimeBinary: frozen.binary,
+      runtimeParamsJson: JSON.stringify(frozen.params),
+    })
     .where(eq(nodeRuns.id, nodeRunId))
   return frozen
 }
@@ -294,13 +335,21 @@ export async function frozenRuntimeOfSession(
 ): Promise<FrozenRuntime | null> {
   const row = (
     await db
-      .select({ runtime: nodeRuns.runtime, runtimeBinary: nodeRuns.runtimeBinary })
+      .select({
+        runtime: nodeRuns.runtime,
+        runtimeBinary: nodeRuns.runtimeBinary,
+        runtimeParamsJson: nodeRuns.runtimeParamsJson,
+      })
       .from(nodeRuns)
       .where(eq(nodeRuns.opencodeSessionId, sessionId))
       .limit(1)
   )[0]
   if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') {
-    return { protocol: row.runtime, binary: row.runtimeBinary ?? null }
+    return {
+      protocol: row.runtime,
+      binary: row.runtimeBinary ?? null,
+      params: parseFrozenParams(row.runtimeParamsJson),
+    }
   }
   return null
 }

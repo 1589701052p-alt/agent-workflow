@@ -59,7 +59,17 @@ import { renderUserPrompt } from './protocol'
 // event helpers + buildCommand are re-exported at the bottom so existing
 // importers (tests, memoryDistiller) keep resolving from './runner'.
 import { getRuntimeDriver, type RuntimeKind } from './runtime'
+import { resolveAgentRuntime, type RuntimeProfile } from '@/services/runtimeRegistry'
 import type { SpawnPlan } from './runtime/types'
+
+/** RFC-113: a profile that omits all params (the binary uses its own defaults). */
+const EMPTY_RUNTIME_PROFILE: RuntimeProfile = {
+  model: null,
+  variant: null,
+  temperature: null,
+  steps: null,
+  maxSteps: null,
+}
 import { buildOpencodeSpawn } from './runtime/opencode/spawn'
 import { buildClaudeSpawn } from './runtime/claudeCode/spawn'
 import { toClaudeAgents, toClaudeMcpConfig } from './runtime/claudeCode/inject'
@@ -280,13 +290,16 @@ export interface RunNodeOptions {
    */
   runtimeBinary?: string | null
   /**
-   * RFC-112 (Codex impl-gate P2): the built-in claude binary (config.claudeCodePath),
-   * threaded from the scheduler. Used as the claude head ONLY for a built-in
-   * claude run (runtimeBinary null + no test runtimeCmd) so it honors the
-   * configured path instead of PATH ['claude'] — symmetric with opencode's
-   * opencodeCmd, and consistent with what the registry smoke probe tests.
+   * RFC-113 (Codex P1-2): the runtime's execution params (model/variant/...),
+   * resolved + frozen at dispatch. The runner spawns the ROOT agent with these
+   * (the agent itself no longer carries model/variant/steps). Omitted → no params
+   * (the binary uses its own defaults). Dependents resolve their own live.
+   *
+   * NOTE (RFC-113 §5): the RFC-112 P2 `claudeCodePath` thread is GONE — the
+   * built-in claude binary now comes from the claude runtime row's binary_path
+   * (config.claudeCodePath migrated into it), surfacing as `runtimeBinary`.
    */
-  claudeCodePath?: string
+  runtimeParams?: RuntimeProfile
   db: DbClient
   log?: Logger
   /** When aborted, runner SIGTERMs the child and returns status='canceled'. */
@@ -461,13 +474,32 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     agent: Record<string, Record<string, unknown>>
     mcp?: Record<string, Record<string, unknown>>
     plugin?: Array<string | [string, Record<string, unknown>]>
-  } = buildInlineConfig(
-    opts.agent,
-    opts.overrides,
-    opts.dependents ?? [],
-    opts.mcps ?? [],
-    opts.plugins ?? [],
-  )
+  } = await (async () => {
+    // RFC-113: the root agent uses its FROZEN runtime profile (opts.runtimeParams);
+    // each dependent subagent uses ITS OWN runtime's profile (resolved live — they
+    // aren't the session owner, so they don't need freezing). Built once here so
+    // buildInlineConfig stays a pure function over the resolved map.
+    const paramsByAgent = new Map<string, RuntimeProfile>()
+    paramsByAgent.set(opts.agent.name, opts.runtimeParams ?? EMPTY_RUNTIME_PROFILE)
+    for (const dep of opts.dependents ?? []) {
+      if (paramsByAgent.has(dep.name)) continue
+      const r = await resolveAgentRuntime(opts.db, dep.runtime, undefined)
+      paramsByAgent.set(dep.name, {
+        model: r.model,
+        variant: r.variant,
+        temperature: r.temperature,
+        steps: r.steps,
+        maxSteps: r.maxSteps,
+      })
+    }
+    return buildInlineConfig(
+      opts.agent,
+      paramsByAgent,
+      opts.dependents ?? [],
+      opts.mcps ?? [],
+      opts.plugins ?? [],
+    )
+  })()
 
   // RFC-029: only wire the dump plugin for agent kinds (single / multi). For
   // wrapper / clarify / review etc. runNode is not invoked anyway, but the
@@ -778,19 +810,14 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     const claudeAgents = toClaudeAgents(opts.dependents ?? [])
     plan = buildClaudeSpawn({
       // Codex impl-gate P1-1: claude uses runtimeCmd (test-only), NEVER the
-      // opencode-specific opencodeCmd. RFC-112: a custom claude fork's binary
-      // wins; else a test runtimeCmd; else config.claudeCodePath (built-in, P2);
-      // else production → undefined → ['claude'].
-      claudeCmd: pickRuntimeHead(
-        opts.runtimeBinary,
-        opts.runtimeCmd ??
-          (opts.claudeCodePath !== undefined && opts.claudeCodePath.length > 0
-            ? [opts.claudeCodePath]
-            : undefined),
-      ),
+      // opencode-specific opencodeCmd. RFC-112/113: a custom claude fork's binary
+      // (runtimeBinary, incl. the built-in's migrated config.claudeCodePath) wins;
+      // else a test runtimeCmd; else production → undefined → ['claude'].
+      claudeCmd: pickRuntimeHead(opts.runtimeBinary, opts.runtimeCmd),
       prompt,
       systemPromptText,
-      model: opts.overrides?.model ?? opts.agent.model,
+      // RFC-113 (Codex P1-3): claude's model is the RUNTIME's, not the agent's.
+      model: opts.runtimeParams?.model ?? undefined,
       readonly: opts.agent.readonly,
       resumeSessionId: opts.resumeSessionId,
       attemptDir: runRoot,
@@ -1609,7 +1636,10 @@ function sanitizeInjectedAgentPermission(
  */
 export function buildInlineAgentEntry(
   agent: Agent,
-  overrides: AgentOverrides = {},
+  // RFC-113: model/variant/temperature/steps/maxSteps now come from the agent's
+  // RUNTIME (resolved + frozen at dispatch), NOT from the agent or a node
+  // override. The caller passes the resolved profile for THIS agent.
+  params: RuntimeProfile = EMPTY_RUNTIME_PROFILE,
 ): Record<string, unknown> {
   const inlineAgent: Record<string, unknown> = {
     prompt: agent.bodyMd,
@@ -1622,19 +1652,21 @@ export function buildInlineAgentEntry(
     // for observability when an operator dumps `opencode debug agent`.
     options: { outputs: agent.outputs, readonly: agent.readonly },
   }
-  const model = overrides.model ?? agent.model
-  if (model !== undefined) inlineAgent.model = model
-  const variant = overrides.variant ?? agent.variant
-  if (variant !== undefined) inlineAgent.variant = variant
-  const temperature = overrides.temperature ?? agent.temperature
-  if (temperature !== undefined) inlineAgent.temperature = temperature
-  if (agent.steps !== undefined) inlineAgent.steps = agent.steps
+  // RFC-113: emit only the params the runtime actually set (NULL = omit, so the
+  // binary uses its own default — a distinct, preserved profile).
+  if (params.model !== null) inlineAgent.model = params.model
+  if (params.variant !== null) inlineAgent.variant = params.variant
+  if (params.temperature !== null) inlineAgent.temperature = params.temperature
+  if (params.steps !== null) inlineAgent.steps = params.steps
+  if (params.maxSteps !== null) inlineAgent.maxSteps = params.maxSteps // Codex P2-3
   return inlineAgent
 }
 
 export function buildInlineConfig(
   agent: Agent,
-  overrides: AgentOverrides | undefined,
+  // RFC-113: resolved runtime profile per agent name (root + each dependent).
+  // Missing → EMPTY_RUNTIME_PROFILE (omit all params).
+  paramsByAgent: ReadonlyMap<string, RuntimeProfile>,
   dependents: readonly Agent[],
   mcps: readonly Mcp[] = [],
   plugins: readonly Plugin[] = [],
@@ -1653,12 +1685,12 @@ export function buildInlineConfig(
   permission?: Record<string, string>
 } {
   const map: Record<string, Record<string, unknown>> = {
-    [agent.name]: buildInlineAgentEntry(agent, overrides),
+    [agent.name]: buildInlineAgentEntry(agent, paramsByAgent.get(agent.name)),
   }
   for (const dep of dependents) {
     if (dep.name === agent.name) continue // root would shadow itself; defensive
     if (map[dep.name] !== undefined) continue // closure already deduped, but guard anyway
-    map[dep.name] = buildInlineAgentEntry(dep)
+    map[dep.name] = buildInlineAgentEntry(dep, paramsByAgent.get(dep.name))
   }
   const out: {
     agent: Record<string, Record<string, unknown>>
