@@ -1513,11 +1513,6 @@ export interface Resources {
     fieldSourcePort: string
     fieldPromptTemplate: string
     fieldPromptTemplateHint: string
-    fieldModelOverride: string
-    fieldModelOverrideHint: string
-    modelPlaceholder: string
-    fieldVariant: string
-    fieldTemperatureOverride: string
     sourcePortNodePlaceholder: string
     sourcePortPlaceholder: string
     sourcePortMissingSuffix: string
@@ -1642,14 +1637,6 @@ export interface Resources {
     runtimeInherit: string
     runtimeOpencode: string
     runtimeClaudeCode: string
-    claudeOptionsHint: string
-    fieldModel: string
-    modelPlaceholder: string
-    fieldVariant: string
-    fieldTemperature: string
-    temperaturePlaceholder: string
-    fieldSteps: string
-    fieldMaxSteps: string
     fieldPermission: string
     fieldPermissionHint: string
     permissionPlaceholder: string
@@ -1866,15 +1853,6 @@ export interface Resources {
     pending: string
   }
   settingsForm: {
-    opencodePath: string
-    opencodePathHint: string
-    /** RFC-111 — global default runtime + claude-code default model. */
-    defaultRuntime: string
-    defaultRuntimeHint: string
-    defaultRuntimeOpencode: string
-    defaultRuntimeClaudeCode: string
-    defaultClaudeModel: string
-    defaultClaudeModelHint: string
     commitPushModel: string
     commitPushModelHint: string
     commitPushMaxRepairRetries: string
@@ -4010,11 +3988,6 @@ export const zhCN: Resources = {
     fieldSourcePort: 'sourcePort (nodeId.portName)',
     fieldPromptTemplate: 'Prompt 模板',
     fieldPromptTemplateHint: '使用 {{port_name}} 引用入边端口；内置变量如 {{__repo_path__}}。',
-    fieldModelOverride: '模型覆盖',
-    fieldModelOverrideHint: '默认沿用 Agent 的模型（{{model}}）；改成其他值即覆盖。',
-    modelPlaceholder: 'anthropic/claude-sonnet-4-6',
-    fieldVariant: 'Variant',
-    fieldTemperatureOverride: 'Temperature 覆盖',
     sourcePortNodePlaceholder: '— 选上游节点 —',
     sourcePortPlaceholder: '— 选输出端口 —',
     sourcePortMissingSuffix: '（已失效）',
@@ -4142,14 +4115,6 @@ export const zhCN: Resources = {
     runtimeInherit: '继承（全局默认）',
     runtimeOpencode: 'opencode',
     runtimeClaudeCode: 'Claude Code',
-    claudeOptionsHint: '仅 opencode 适用 — Claude Code 不支持 variant / temperature。',
-    fieldModel: 'Model',
-    modelPlaceholder: 'anthropic/claude-sonnet-4-6',
-    fieldVariant: 'Variant',
-    fieldTemperature: 'Temperature',
-    temperaturePlaceholder: '0–2',
-    fieldSteps: 'Steps',
-    fieldMaxSteps: 'Max steps',
     fieldPermission: 'Permission JSON',
     fieldPermissionHint: 'opencode permission 对象，透传。',
     permissionPlaceholder: '{"edit":"allow","webfetch":"deny"}',
@@ -4364,16 +4329,6 @@ export const zhCN: Resources = {
     pending: '输出尚未产生。',
   },
   settingsForm: {
-    opencodePath: 'opencode 路径',
-    opencodePathHint: '缺省走 PATH 上的 `which opencode`。',
-    defaultRuntime: '默认运行时',
-    defaultRuntimeHint:
-      '未指定运行时的代理所用的默认运行时。opencode 仍为硬性要求；claude-code 是可选的第二运行时。',
-    defaultRuntimeOpencode: 'opencode',
-    defaultRuntimeClaudeCode: 'Claude Code',
-    defaultClaudeModel: '默认 Claude Code 模型',
-    defaultClaudeModelHint:
-      'claude-code 代理未显式指定 model 时使用的模型（opus / sonnet / haiku 或完整模型 id）。',
     commitPushModel: '提交&推送模型',
     commitPushModelHint:
       'RFC-075 自动提交时生成 commit message / 修复被拒推送的模型；留空用 opencode 默认（建议填便宜模型）。',

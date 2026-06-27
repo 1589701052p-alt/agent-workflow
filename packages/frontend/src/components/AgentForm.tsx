@@ -50,9 +50,11 @@ export function emptyAgent(): CreateAgent {
 export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // RFC-111: the runtime selector + claude model namespace are gated on the
-  // runtime config. Shares the ['config'] cache the agent routes already
-  // populate (ModelSelect already requires a QueryClientProvider here).
+  // RFC-113: the runtime selector is the only per-agent profile control here —
+  // model / variant / temperature / steps now live on the runtime profile, so
+  // AgentForm no longer renders ModelSelect. We still read the ['config'] cache
+  // (shared with the agent routes) for `claudeCodeEnabled`, which gates whether
+  // claude-protocol runtimes are offered in the picker.
   const config = useQuery<Config>({
     queryKey: ['config'],
     queryFn: ({ signal }) => api.get('/api/config', undefined, signal),
@@ -68,8 +70,8 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   // the agent already pins a runtime so an existing value is never hidden.
   const claudeEnabled = config.data?.claudeCodeEnabled !== false
   // RFC-112: registered runtimes (GET /api/runtimes — open to all users, unlike
-  // admin-only /api/config) drive the picker options + the selected runtime's
-  // protocol, so a custom claude-protocol fork uses the claude model namespace.
+  // admin-only /api/config) drive the picker options + each runtime's protocol,
+  // which is used below to hide claude-protocol runtimes when claude-code is off.
   const runtimesQuery = useQuery<{ runtimes: Array<{ name: string; protocol: string }> }>({
     queryKey: ['runtimes'],
     queryFn: ({ signal }) => api.get('/api/runtimes', undefined, signal),

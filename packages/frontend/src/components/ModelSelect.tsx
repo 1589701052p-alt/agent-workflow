@@ -1,11 +1,14 @@
-// RFC-001: provider-grouped dropdown + custom text fallback for the Default
-// Model field on the Settings → Runtime tab. Backs onto GET /api/runtime/models
-// with a "Refresh" button that forwards ?refresh=1 (which makes the daemon
-// call `opencode models --refresh`).
+// RFC-001: provider-grouped dropdown + custom text fallback for picking a model
+// id. Backs onto GET /api/runtime/models with a "Refresh" button that forwards
+// ?refresh=1 (which makes the daemon call `opencode models --refresh`).
 //
-// Value contract matches the underlying Config.defaultModel:
+// Live callers (RFC-113/115): Settings → commit&push model + memory-distill
+// model, and the runtime profile model field in RuntimeList / RuntimeFormDialog.
+// (The old Settings "Default Model" field / Config.defaultModel were removed.)
+//
+// Value contract — a `string | undefined`:
 //   string  - either a known "provider/modelID" or a custom user input
-//   undefined - empty (no default model set)
+//   undefined - empty (no model selected)
 //
 // When the persisted value isn't in the loaded list, the component
 // auto-switches into "custom" mode and prefills the text input — so users
