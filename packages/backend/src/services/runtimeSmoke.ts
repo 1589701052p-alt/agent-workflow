@@ -11,7 +11,7 @@
 // throwaway temp cwd, a try/finally that drains stdout+stderr under a byte cap,
 // a process-group kill escalation on timeout, and temp-dir cleanup on every exit.
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -93,6 +93,12 @@ function buildSmokePlan(
     })
   }
   // opencode: prompt is positional; a minimal inline agent named aw-smoke.
+  // opencode 1.17+ writes a `.gitignore` into OPENCODE_CONFIG_DIR on startup, so
+  // the dir MUST exist before spawn. The real runner mkdirs runRoot (runner.ts);
+  // the smoke path must do the same — otherwise opencode exits 1 before emitting
+  // a single event and EVERY probe misclassifies as `stream-nonconforming`.
+  const runDir = join(attemptDir, '.opencode')
+  mkdirSync(runDir, { recursive: true })
   const { cmd, env } = buildOpencodeSpawn({
     opencodeCmd: [binaryPath],
     agentName: 'aw-smoke',
@@ -100,7 +106,7 @@ function buildSmokePlan(
     inlineConfigSerialized: JSON.stringify({
       agent: { 'aw-smoke': { prompt: 'You are a runtime smoke-test agent.' } },
     }),
-    runDir: join(attemptDir, '.opencode'),
+    runDir,
     worktreePath: attemptDir,
   })
   return { cmd, env }

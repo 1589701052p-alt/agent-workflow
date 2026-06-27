@@ -18,6 +18,10 @@
 //   MOCK_OPENCODE_DELAY_MS       sleep this long before exiting (for timeout tests)
 //   MOCK_OPENCODE_STDERR         emit this string on stderr (line by line)
 //   MOCK_OPENCODE_REQUIRE_TOKEN  '1' to assert OPENCODE_CONFIG_CONTENT contains a marker
+//   MOCK_OPENCODE_REQUIRE_CONFIG_DIR_EXISTS  '1' to write a `.gitignore` into
+//                                OPENCODE_CONFIG_DIR (like real opencode 1.17+) and
+//                                exit 1 if the dir is missing. Locks the smoke
+//                                probe's runDir mkdir fix.
 //   MOCK_OPENCODE_FAIL_COUNTER   path to a file holding an integer attempt counter
 //   MOCK_OPENCODE_FAIL_UNTIL     fail (exit 1, skip envelope) while counter < this number
 //   MOCK_OPENCODE_CLARIFY_BODY   JSON for the <workflow-clarify> envelope body
@@ -111,6 +115,20 @@ if (agentFlagIdx < 0 || !argv[agentFlagIdx + 1]) fail('missing --agent <name>')
 if (env.MOCK_OPENCODE_REQUIRE_TOKEN === '1') {
   if (!env.OPENCODE_CONFIG_CONTENT.includes('"prompt"')) {
     fail('OPENCODE_CONFIG_CONTENT does not contain inline agent prompt')
+  }
+}
+
+// RFC-112 runtime-smoke regression: real opencode (1.17+) writes a `.gitignore`
+// into OPENCODE_CONFIG_DIR on startup and exits 1 (emitting NO json events)
+// when that dir does not exist. The smoke probe must `mkdirSync` the dir before
+// spawn (runtimeSmoke.ts) — the real runner already does. With this flag set the
+// mock reproduces that write so the smoke test goes RED if the dir-creation fix
+// ever regresses (the probe would misclassify every runtime as non-conforming).
+if (env.MOCK_OPENCODE_REQUIRE_CONFIG_DIR_EXISTS === '1') {
+  try {
+    writeFileSync(join(env.OPENCODE_CONFIG_DIR, '.gitignore'), '*\n')
+  } catch (e) {
+    fail(`OPENCODE_CONFIG_DIR does not exist (NotFound): ${(e as Error).message}`, 1)
   }
 }
 

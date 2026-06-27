@@ -32,6 +32,7 @@ const SET_ENV_KEYS = [
   'MOCK_CLAUDE_OUTPUTS',
   'MOCK_OPENCODE_ECHO_PROMPT',
   'MOCK_OPENCODE_EMIT_SESSION_ID',
+  'MOCK_OPENCODE_REQUIRE_CONFIG_DIR_EXISTS',
 ]
 afterEach(() => {
   for (const k of SET_ENV_KEYS) delete process.env[k]
@@ -72,6 +73,30 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
       expect(r.conforms).toBe(true)
       expect(r.sawNonce).toBe(true)
       expect(r.capturedSessionId).toBe('opc_mock_session_01')
+    },
+    SMOKE_TIMEOUT,
+  )
+
+  // Regression: opencode 1.17+ writes a `.gitignore` into OPENCODE_CONFIG_DIR on
+  // startup and exits 1 (no events) if the dir is missing. The smoke probe set
+  // OPENCODE_CONFIG_DIR=<attemptDir>/.opencode but never mkdir'd it, so EVERY
+  // real opencode probe failed → stream-nonconforming ("no parseable events").
+  // The mock now reproduces the startup write; with the runDir mkdir in place
+  // this conforms, and reverting the mkdir turns it red.
+  test(
+    'opencode whose startup writes into OPENCODE_CONFIG_DIR → conforms (smoke must create the runDir)',
+    async () => {
+      process.env.MOCK_OPENCODE_ECHO_PROMPT = '1'
+      process.env.MOCK_OPENCODE_EMIT_SESSION_ID = '1'
+      process.env.MOCK_OPENCODE_REQUIRE_CONFIG_DIR_EXISTS = '1'
+      const r = await smokeRuntime({
+        protocol: 'opencode',
+        binaryPath: wrapperFor(MOCK_OPENCODE),
+        timeoutMs: SMOKE_TIMEOUT,
+      })
+      expect(r.outcome).toBe('conforms')
+      expect(r.conforms).toBe(true)
+      expect(r.exitCode).toBe(0)
     },
     SMOKE_TIMEOUT,
   )
