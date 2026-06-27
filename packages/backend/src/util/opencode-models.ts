@@ -14,6 +14,7 @@
 
 import type { OpencodeModel } from '@agent-workflow/shared'
 import { createLogger } from './log'
+import { killProcessTree } from './process'
 
 const log = createLogger('opencode-models')
 
@@ -85,12 +86,18 @@ export async function listOpencodeModels(
   const cmd = [binary, 'models', '--verbose']
   if (opts?.refresh) cmd.push('--refresh')
 
-  const proc = Bun.spawn({ cmd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' })
+  // detached → the child leads its own process group, so the timeout can group-
+  // kill it. A binary that forks a grandchild (a shell stub `sleep`s, real
+  // opencode can spawn helpers) would otherwise keep the inherited stdout pipe
+  // open and block the drain past the timeout (CI caught this — a plain
+  // `proc.kill` left the grandchild alive). Mirrors runtimeSmoke.
+  const proc = Bun.spawn({ cmd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true })
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
     try {
-      proc.kill('SIGKILL')
+      if (typeof proc.pid === 'number') killProcessTree(proc.pid, 'SIGKILL')
+      else proc.kill('SIGKILL')
     } catch {
       /* already gone */
     }
