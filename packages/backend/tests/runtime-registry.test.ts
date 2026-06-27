@@ -57,20 +57,24 @@ describe('seedBuiltinRuntimes (RFC-112 PR-A)', () => {
     expect((await listRuntimes(db)).length).toBe(2)
   })
 
-  test('hard-resets a poisoned built-in row to canonical shape (Codex P2)', async () => {
-    // simulate corruption: an `opencode` row with wrong protocol + a binary path
+  test('resets IDENTITY (protocol/builtin) but PRESERVES binary/profile (RFC-113 D8)', async () => {
+    // corruption: wrong protocol + non-builtin. RFC-113 narrows the reset to
+    // identity only — a legitimately admin-set binary_path / model must survive
+    // (built-in rows now carry editable binary + profile params).
     await db.insert(runtimes).values({
       id: ulid(),
       name: 'opencode',
       protocol: 'claude-code',
-      binaryPath: '/evil',
+      binaryPath: '/usr/local/bin/oc',
+      model: 'opus',
       builtin: false,
     })
     await seedBuiltinRuntimes(db)
     const oc = await getRuntime(db, 'opencode')
-    expect(oc!.protocol).toBe('opencode')
-    expect(oc!.binaryPath).toBeNull()
-    expect(oc!.builtin).toBe(true)
+    expect(oc!.protocol).toBe('opencode') // identity corrected
+    expect(oc!.builtin).toBe(true) // identity corrected
+    expect(oc!.binaryPath).toBe('/usr/local/bin/oc') // PRESERVED (was reset to NULL pre-RFC-113)
+    expect(oc!.model).toBe('opus') // PRESERVED
   })
 })
 
@@ -137,21 +141,23 @@ describe('updateRuntime / deleteRuntime guards (RFC-112 PR-A)', () => {
     await createRuntime(db, { name: 'my-oc', protocol: 'opencode', binaryPath: '/a' })
   })
 
-  test('built-in update is 403 read-only', async () => {
-    await expect(updateRuntime(db, 'opencode', { binaryPath: '/x' })).rejects.toMatchObject({
-      code: 'runtime-builtin-readonly',
-    })
+  test('built-in update of binary/model is ALLOWED (RFC-113 D8 — config面 editable)', async () => {
+    const updated = await updateRuntime(db, 'opencode', { binaryPath: '/x', model: 'opus' })
+    expect(updated.binaryPath).toBe('/x')
+    expect(updated.model).toBe('opus')
+    expect(updated.protocol).toBe('opencode') // identity still immutable
   })
 
-  test('built-in delete is 403 read-only', async () => {
+  test('built-in delete is 403 read-only (identity locked)', async () => {
     await expect(deleteRuntime(db, 'claude-code', null)).rejects.toMatchObject({
       code: 'runtime-builtin-readonly',
     })
   })
 
-  test('custom update changes binary_path only', async () => {
-    const updated = await updateRuntime(db, 'my-oc', { binaryPath: '/b' })
+  test('custom update changes binary_path + profile', async () => {
+    const updated = await updateRuntime(db, 'my-oc', { binaryPath: '/b', temperature: 0.5 })
     expect(updated.binaryPath).toBe('/b')
+    expect(updated.temperature).toBe(0.5)
     expect(updated.protocol).toBe('opencode') // immutable
   })
 

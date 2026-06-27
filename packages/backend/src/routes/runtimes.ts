@@ -29,16 +29,27 @@ const ProbeBody = z.object({
   binaryPath: z.string().min(1),
 })
 
+// RFC-113: per-runtime execution profile params.
+const ProfileFields = {
+  model: z.string().nullable().optional(),
+  variant: z.string().nullable().optional(),
+  temperature: z.number().min(0).max(2).nullable().optional(),
+  steps: z.number().int().positive().nullable().optional(),
+  maxSteps: z.number().int().positive().nullable().optional(),
+}
+
 const CreateBody = z.object({
   name: z.string().min(1),
   protocol: ProtocolSchema,
   binaryPath: z.string().min(1).optional(),
   /** run the deep-smoke probe before saving (default true when a path is given). */
   probe: z.boolean().optional(),
+  ...ProfileFields,
 })
 
 const UpdateBody = z.object({
   binaryPath: z.string().nullable().optional(),
+  ...ProfileFields,
 })
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -53,7 +64,8 @@ export function mountRuntimesRoutes(app: Hono, deps: AppDeps): void {
   // List — any authed user (the agent/settings runtime pickers read this).
   app.get('/api/runtimes', async (c) => {
     const rows = await listRuntimes(deps.db)
-    return c.json({ runtimes: rows.map(runtimeRowToView) })
+    const defaultRuntime = loadConfig(deps.configPath).defaultRuntime
+    return c.json({ runtimes: rows.map((r) => runtimeRowToView(r, defaultRuntime)) })
   })
 
   // Deep-smoke a given (protocol, binary) WITHOUT saving — registration preflight
@@ -93,21 +105,33 @@ export function mountRuntimesRoutes(app: Hono, deps: AppDeps): void {
       binaryPath: body.binaryPath ?? null,
       lastProbeJson: smoke !== undefined ? JSON.stringify(smoke) : null,
       createdBy: actor.user.id,
+      model: body.model,
+      variant: body.variant,
+      temperature: body.temperature,
+      steps: body.steps,
+      maxSteps: body.maxSteps,
     })
+    const def = loadConfig(deps.configPath).defaultRuntime
     return c.json(
-      { runtime: runtimeRowToView(row), ...(smoke !== undefined ? { smoke } : {}) },
+      { runtime: runtimeRowToView(row, def), ...(smoke !== undefined ? { smoke } : {}) },
       201,
     )
   })
 
-  // Update a custom runtime's binary path (name + protocol are immutable).
+  // Update a runtime's binary path + profile params (name + protocol immutable;
+  // RFC-113 D8: built-ins editable here, only delete/identity stays locked).
   app.put('/api/runtimes/:name', requireAdmin(), async (c) => {
     const name = c.req.param('name')
     const body = parseBody(UpdateBody, await c.req.json().catch(() => ({})))
     const row = await updateRuntime(deps.db, name, {
       ...(body.binaryPath !== undefined ? { binaryPath: body.binaryPath } : {}),
+      model: body.model,
+      variant: body.variant,
+      temperature: body.temperature,
+      steps: body.steps,
+      maxSteps: body.maxSteps,
     })
-    return c.json({ runtime: runtimeRowToView(row) })
+    return c.json({ runtime: runtimeRowToView(row, loadConfig(deps.configPath).defaultRuntime) })
   })
 
   // Delete a custom runtime (blocked while referenced by an agent / the default).

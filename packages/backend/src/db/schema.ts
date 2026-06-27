@@ -104,6 +104,16 @@ export const runtimes = sqliteTable('runtimes', {
   protocol: text('protocol', { enum: ['opencode', 'claude-code'] }).notNull(), // = RuntimeDriver kind
   binaryPath: text('binary_path'), // NULL → protocol default binary (RFC-111 behavior)
   builtin: integer('builtin', { mode: 'boolean' }).notNull().default(false), // RFC-104 read-only lock
+  // RFC-113: a runtime IS a full execution profile. These are the model + gen
+  // params the runner spawns with (agents only SELECT a runtime; they no longer
+  // carry their own). variant/temperature/steps are opencode-only (claude has
+  // none → NULL for claude rows). NULL model = "omit model, let the binary pick
+  // its own default" (a distinct profile from an explicit model).
+  model: text('model'),
+  variant: text('variant'),
+  temperature: real('temperature'),
+  steps: integer('steps'),
+  maxSteps: integer('max_steps'),
   // RFC-112: cached deep-smoke SmokeResult (JSON) from the last probe; NULL =
   // never probed. Display-only — conformance is advisory (an admin may save an
   // auth-unverified custom runtime).
@@ -662,6 +672,15 @@ export const nodeRuns = sqliteTable(
      * captured session to the wrong binary. NULL on legacy rows + built-in default.
      */
     runtimeBinary: text('runtime_binary'),
+    /**
+     * RFC-113 (Codex design-gate P1-2): the runtime's execution PARAMS
+     * (model/variant/temperature/steps/maxSteps) JSON-frozen alongside
+     * `runtime`/`runtime_binary` at dispatch. resume/retry read this instead of
+     * re-resolving from the mutable runtime row, so a runtime whose params change
+     * mid-task can't make a resumed session continue under a different model. NULL
+     * on legacy rows / runs predating RFC-113 → fall back to live resolution.
+     */
+    runtimeParamsJson: text('runtime_params_json'),
     /**
      * RFC-029: serialized `InventorySnapshot` (shared/inventory.ts) — what the
      * opencode child process actually loaded (agents / skills / mcps /

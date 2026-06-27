@@ -69,7 +69,7 @@ ALTER TABLE `node_runs` ADD COLUMN `runtime_params_json` text;
 - `protocol` = `resolveRuntimeByName(agent.runtime ?? config.defaultRuntime).protocol`
 - `binary` = 该运行时行的 binary_path（规范化：NULL/'' 归一为 null）
 - `model/variant/temperature/steps/maxSteps` = agent 当前列值（规范化：`undefined`→`null`；`temperature` 按定点字符串序列化进 key 避 REAL 浮点等值裂分，如 `t.toFixed(4)`）
-- **NULL model 保留为独立维度**（Codex P1-1）：`model=null` 的 agent（依赖「不传 model→运行时自挑默认」）profile 的 model=null，**只匹配 model=null 的运行时**，绝不并入「model=defaultModel」的内置行——否则 inline 从「省略 model」变「显式 model」破坏黄金。即内置 opencode（§3.1 迁入了 config.defaultModel）与「裸 opencode（model=null）」是**两个** profile。
+- **裸 agent（全 NULL 参数）跳过 → 采用其运行时**（实装细化 Codex P1-1 + 幂等根因）：只迁移**至少有一个非 NULL 参数**的 agent。原 P1-1 拟给 model=null 的 agent 建独立「省略 model」运行时，但实装发现这与**幂等**不可兼得——迁移清空 agent 参数后，全 NULL 的 agent 无法与「已迁移(haiku) 的 agent」区分，重跑会误重建。结论：**裸 agent（无显式参数）跳过**——它本就无 model 偏好，在「运行时决定」新模型里直接采用其运行时 profile；黄金不变式只锁**有显式参数**的 agent（它们各自得到承载其参数的运行时）。这同时让重跑天然 no-op（迁移后所有用户 agent 参数全 NULL→全跳过）。
 
 匹配/建库（**优先当前运行时** Codex P2-1）：
 1. **若 agent 当前 `runtime` 指向的行 profile 恰等于其有效 profile → 保持不动**（不 re-point，保自定义运行时身份）。

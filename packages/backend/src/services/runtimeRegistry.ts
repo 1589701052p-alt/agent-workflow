@@ -30,7 +30,20 @@ const BUILTIN_NAMES = new Set(BUILTIN_RUNTIMES.map((b) => b.name))
 /** RFC-112 Codex P3: runtime names are lowercase, URL-safe (used in /:name routes). */
 export const RUNTIME_NAME_RE = /^[a-z0-9][a-z0-9-]{0,30}$/
 
-export interface RuntimeRow {
+/**
+ * RFC-113: the execution params a runtime spawns with (agents only SELECT a
+ * runtime). variant/temperature/steps/maxSteps are opencode-only. NULL model =
+ * "omit model" (a distinct profile from an explicit model).
+ */
+export interface RuntimeProfile {
+  model: string | null
+  variant: string | null
+  temperature: number | null
+  steps: number | null
+  maxSteps: number | null
+}
+
+export interface RuntimeRow extends RuntimeProfile {
   id: string
   name: string
   protocol: RuntimeProtocol
@@ -48,23 +61,40 @@ export interface ResolvedRuntime {
   binaryPath: string | null
 }
 
-export interface RuntimeView {
+export interface RuntimeView extends RuntimeProfile {
   name: string
   protocol: RuntimeProtocol
   binaryPath: string | null
   builtin: boolean
+  /** RFC-113: this row is the global default (name === config.defaultRuntime). */
+  isDefault: boolean
   lastProbe: unknown
   createdAt: number
   updatedAt: number
+}
+
+/** Extract just the execution params from a row. */
+export function runtimeProfileOf(row: RuntimeProfile): RuntimeProfile {
+  return {
+    model: row.model,
+    variant: row.variant,
+    temperature: row.temperature,
+    steps: row.steps,
+    maxSteps: row.maxSteps,
+  }
 }
 
 /**
  * Public view of a row for the HTTP layer — parses the cached probe JSON back to
  * an object. Lives here (not in the route) so the route file stays free of the
  * `as` cast the RFC-054 W1-7 guard bans; this is our own serialized data, not
- * unvalidated user input.
+ * unvalidated user input. `defaultRuntimeName` (config.defaultRuntime) drives the
+ * in-table default marker (RFC-113 D3/D7).
  */
-export function runtimeRowToView(row: RuntimeRow): RuntimeView {
+export function runtimeRowToView(
+  row: RuntimeRow,
+  defaultRuntimeName: string | null | undefined,
+): RuntimeView {
   let lastProbe: unknown = null
   if (row.lastProbeJson !== null) {
     try {
@@ -78,6 +108,8 @@ export function runtimeRowToView(row: RuntimeRow): RuntimeView {
     protocol: row.protocol,
     binaryPath: row.binaryPath,
     builtin: row.builtin,
+    isDefault: row.name === (defaultRuntimeName ?? 'opencode'),
+    ...runtimeProfileOf(row),
     lastProbe,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -205,7 +237,39 @@ export async function findRuntimeReferences(
 
 // --- CRUD ------------------------------------------------------------------
 
-export interface CreateRuntimeInput {
+/** RFC-113: optional per-field profile params on create/update. */
+export interface RuntimeProfileInput {
+  model?: string | null
+  variant?: string | null
+  temperature?: number | null
+  steps?: number | null
+  maxSteps?: number | null
+}
+
+/** Validate + normalize profile params into the row columns (only present keys). */
+function profilePatch(input: RuntimeProfileInput): Partial<RuntimeProfile> {
+  const out: Partial<RuntimeProfile> = {}
+  const str = (v: string | null | undefined): string | null =>
+    typeof v === 'string' && v.trim().length > 0 ? v.trim() : null
+  if (input.model !== undefined) out.model = str(input.model)
+  if (input.variant !== undefined) out.variant = str(input.variant)
+  if (input.temperature !== undefined) {
+    if (input.temperature !== null && (input.temperature < 0 || input.temperature > 2))
+      throw new ValidationError('runtime-temperature-invalid', 'temperature must be 0–2')
+    out.temperature = input.temperature
+  }
+  for (const k of ['steps', 'maxSteps'] as const) {
+    const v = input[k]
+    if (v !== undefined) {
+      if (v !== null && (!Number.isInteger(v) || v < 1))
+        throw new ValidationError(`runtime-${k}-invalid`, `${k} must be a positive integer`)
+      out[k] = v
+    }
+  }
+  return out
+}
+
+export interface CreateRuntimeInput extends RuntimeProfileInput {
   name: string
   protocol: string
   binaryPath?: string | null
@@ -228,22 +292,23 @@ export async function createRuntime(db: DbClient, input: CreateRuntimeInput): Pr
     builtin: false,
     lastProbeJson: input.lastProbeJson ?? null,
     createdBy: input.createdBy ?? null,
+    ...profilePatch(input),
   })
   const row = await getRuntime(db, input.name)
   if (row === null) throw new Error('runtime insert vanished')
   return row
 }
 
-export interface UpdateRuntimeInput {
+export interface UpdateRuntimeInput extends RuntimeProfileInput {
   binaryPath?: string | null
   lastProbeJson?: string | null
 }
 
 /**
- * Update a CUSTOM runtime's binary_path / cached probe. `name` and `protocol`
- * are IMMUTABLE: name is the reference key, and protocol pins the driver + the
- * frozen-session id format (changing it would orphan resumable node_runs that
- * froze the old protocol). Rename / re-flavor = delete + recreate.
+ * Update a runtime's binary_path / profile params / cached probe. `name` and
+ * `protocol` are IMMUTABLE (the reference key + the driver/session-format pin).
+ * RFC-113 D8: BUILT-INS are editable here (binary/model/params) — only their
+ * identity (name/protocol) + deletion stay locked (deleteRuntime guards those).
  */
 export async function updateRuntime(
   db: DbClient,
@@ -252,8 +317,7 @@ export async function updateRuntime(
 ): Promise<RuntimeRow> {
   const row = await getRuntime(db, name)
   if (row === null) throw new NotFoundError('runtime-not-found', `runtime '${name}' not found`)
-  assertNotBuiltinRuntime(row)
-  const patch: Record<string, unknown> = { updatedAt: Date.now() }
+  const patch: Record<string, unknown> = { updatedAt: Date.now(), ...profilePatch(input) }
   if (input.binaryPath !== undefined) patch.binaryPath = validateBinaryPath(input.binaryPath)
   if (input.lastProbeJson !== undefined) patch.lastProbeJson = input.lastProbeJson
   await db.update(runtimes).set(patch).where(eq(runtimes.name, name))
@@ -303,11 +367,13 @@ export async function deleteRuntime(
 // --- seed ------------------------------------------------------------------
 
 /**
- * RFC-112 Codex P2: hard-reset the two built-in rows to their canonical shape on
- * every startup ({protocol, binary_path=NULL, builtin=1}) — NOT adopt. If a row
- * with a built-in name exists with a wrong protocol / non-null binary_path
- * (corruption, or a user who somehow acquired the reserved name), overwrite it
- * so bad state can't become immutable. Idempotent: a correct row is left alone.
+ * Ensure the two built-in rows exist with the canonical IDENTITY (protocol +
+ * builtin=1). RFC-112 Codex P2 reset them fully; RFC-113 D8 narrows the reset to
+ * IDENTITY ONLY — `binary_path` + the profile params (model/variant/...) are now
+ * admin-editable + carry migrated config values (§3), so they must be PRESERVED
+ * across restarts. Only a wrong protocol / non-builtin flag (corruption, or a
+ * user who acquired the reserved name) is corrected. A row not present is created
+ * with NULL binary/params (the config→builtin migration fills them next).
  */
 export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
   for (const b of BUILTIN_RUNTIMES) {
@@ -316,15 +382,227 @@ export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
       await db
         .insert(runtimes)
         .values({ id: ulid(), name: b.name, protocol: b.protocol, binaryPath: null, builtin: true })
-    } else if (row.protocol !== b.protocol || row.binaryPath !== null || !row.builtin) {
-      log.warn('runtime-builtin-hard-reset', {
+    } else if (row.protocol !== b.protocol || !row.builtin) {
+      // identity drift only — preserve binary_path + profile params.
+      log.warn('runtime-builtin-identity-reset', {
         name: b.name,
-        was: { protocol: row.protocol, binaryPath: row.binaryPath, builtin: row.builtin },
+        was: { protocol: row.protocol, builtin: row.builtin },
       })
       await db
         .update(runtimes)
-        .set({ protocol: b.protocol, binaryPath: null, builtin: true, updatedAt: Date.now() })
+        .set({ protocol: b.protocol, builtin: true, updatedAt: Date.now() })
         .where(eq(runtimes.name, b.name))
+    }
+  }
+}
+
+// --- RFC-113 one-time startup migrations ------------------------------------
+
+/** RFC-113 §3.1: backfill config defaults into the built-in rows — NULL cols
+ *  ONLY (`??=`), so it's idempotent + never clobbers an admin-edited built-in. */
+export async function migrateConfigIntoBuiltins(
+  db: DbClient,
+  config: {
+    opencodePath?: string | null
+    claudeCodePath?: string | null
+    defaultModel?: string | null
+    defaultClaudeModel?: string | null
+    defaultVariant?: string | null
+    defaultTemperature?: number | null
+    defaultSteps?: number | null
+    defaultMaxSteps?: number | null
+  },
+): Promise<void> {
+  const backfill = async (
+    name: string,
+    fields: Partial<RuntimeProfile & { binaryPath: string }>,
+  ) => {
+    const row = await getRuntime(db, name)
+    if (row === null) return
+    const patch: Record<string, unknown> = {}
+    if (row.binaryPath === null && fields.binaryPath != null) patch.binaryPath = fields.binaryPath
+    if (row.model === null && fields.model != null) patch.model = fields.model
+    if (row.variant === null && fields.variant != null) patch.variant = fields.variant
+    if (row.temperature === null && fields.temperature != null)
+      patch.temperature = fields.temperature
+    if (row.steps === null && fields.steps != null) patch.steps = fields.steps
+    if (row.maxSteps === null && fields.maxSteps != null) patch.maxSteps = fields.maxSteps
+    if (Object.keys(patch).length > 0)
+      await db
+        .update(runtimes)
+        .set({ ...patch, updatedAt: Date.now() })
+        .where(eq(runtimes.name, name))
+  }
+  await backfill('opencode', {
+    binaryPath: config.opencodePath ?? undefined,
+    model: config.defaultModel ?? undefined,
+    variant: config.defaultVariant ?? undefined,
+    temperature: config.defaultTemperature ?? undefined,
+    steps: config.defaultSteps ?? undefined,
+    maxSteps: config.defaultMaxSteps ?? undefined,
+  } as Partial<RuntimeProfile & { binaryPath: string }>)
+  await backfill('claude-code', {
+    binaryPath: config.claudeCodePath ?? undefined,
+    model: config.defaultClaudeModel ?? undefined,
+  } as Partial<RuntimeProfile & { binaryPath: string }>)
+}
+
+/** Canonical profile key for dedup (RFC-113 §3.2 Codex P3-1: null-norm + fixed
+ *  numeric serialization so REAL float equality / undefined don't split groups). */
+function profileKey(protocol: string, binary: string | null, p: RuntimeProfile): string {
+  const norm = (v: unknown): string => (v == null ? ' ' : String(v))
+  const temp = p.temperature == null ? ' ' : p.temperature.toFixed(4)
+  return [
+    protocol,
+    norm(binary),
+    norm(p.model),
+    norm(p.variant),
+    temp,
+    norm(p.steps),
+    norm(p.maxSteps),
+  ].join('\x1f')
+}
+
+/**
+ * RFC-113 §3.2 (D6 + Codex P1-1/P1-4/P2-1/P3-1): re-home each USER agent's
+ * model/params onto a runtime profile. Excludes built-in / internal agents.
+ * Dedups by canonical profile key; PREFERS the agent's current runtime when it
+ * matches; preserves NULL model as a distinct profile; clears the deprecated
+ * agent columns so the runtime is the single source. Idempotent.
+ */
+export async function migrateAgentParamsToRuntimes(
+  db: DbClient,
+  config: { defaultRuntime?: string | null },
+): Promise<void> {
+  const agentRows = (await db
+    .select({
+      id: agents.id,
+      runtime: agents.runtime,
+      model: agents.model,
+      variant: agents.variant,
+      temperature: agents.temperature,
+      steps: agents.steps,
+      maxSteps: agents.maxSteps,
+    })
+    .from(agents)
+    .where(eq(agents.builtin, false))) as Array<{
+    id: string
+    runtime: string | null
+    model: string | null
+    variant: string | null
+    temperature: number | null
+    steps: number | null
+    maxSteps: number | null
+  }>
+
+  const allRuntimes = await listRuntimes(db)
+  const rowByName = new Map(allRuntimes.map((r) => [r.name, r]))
+  const nameByKey = new Map<string, string>()
+  const usedNames = new Set<string>(allRuntimes.map((r) => r.name))
+  for (const r of allRuntimes)
+    nameByKey.set(profileKey(r.protocol, r.binaryPath, runtimeProfileOf(r)), r.name)
+
+  const seq: Record<string, number> = {}
+  const nextName = (protocol: string): string => {
+    for (;;) {
+      seq[protocol] = (seq[protocol] ?? 0) + 1
+      const cand = `${protocol}-${seq[protocol]}`
+      if (!usedNames.has(cand)) {
+        usedNames.add(cand)
+        return cand
+      }
+    }
+  }
+
+  // group agents by canonical profile key.
+  const groups = new Map<
+    string,
+    {
+      protocol: RuntimeProtocol
+      binary: string | null
+      profile: RuntimeProfile
+      ids: string[]
+      current: Set<string>
+    }
+  >()
+  for (const a of agentRows) {
+    // RFC-113: an agent with NO explicit params has nothing to re-home — in the
+    // new model it simply ADOPTS its runtime's profile. Skipping it (a) preserves
+    // that, and (b) makes the migration idempotent: after a re-home the agent's
+    // params are cleared (all-NULL), so a re-run leaves it on its new runtime
+    // instead of re-deriving a (now-NULL) profile that no longer matches.
+    if (
+      a.model == null &&
+      a.variant == null &&
+      a.temperature == null &&
+      a.steps == null &&
+      a.maxSteps == null
+    )
+      continue
+    const resolved = await resolveRuntimeByName(db, a.runtime ?? config.defaultRuntime)
+    const profile: RuntimeProfile = {
+      model: a.model,
+      variant: a.variant,
+      temperature: a.temperature,
+      steps: a.steps,
+      maxSteps: a.maxSteps,
+    }
+    const key = profileKey(resolved.protocol, resolved.binaryPath, profile)
+    let g = groups.get(key)
+    if (g === undefined) {
+      g = {
+        protocol: resolved.protocol,
+        binary: resolved.binaryPath,
+        profile,
+        ids: [],
+        current: new Set(),
+      }
+      groups.set(key, g)
+    }
+    g.ids.push(a.id)
+    if (a.runtime != null) g.current.add(a.runtime)
+  }
+
+  for (const key of [...groups.keys()].sort()) {
+    const g = groups.get(key)
+    if (g === undefined) continue
+    // 1. prefer a CURRENT runtime of this group whose profile already matches.
+    let target: string | undefined
+    for (const rt of g.current) {
+      const row = rowByName.get(rt)
+      if (row && profileKey(row.protocol, row.binaryPath, runtimeProfileOf(row)) === key) {
+        target = rt
+        break
+      }
+    }
+    // 2. else any existing runtime with this profile.
+    if (target === undefined) target = nameByKey.get(key)
+    // 3. else create a new runtime capturing the profile.
+    if (target === undefined) {
+      target = nextName(g.protocol)
+      await db.insert(runtimes).values({
+        id: ulid(),
+        name: target,
+        protocol: g.protocol,
+        binaryPath: g.binary,
+        builtin: false,
+        ...g.profile,
+      })
+      nameByKey.set(key, target)
+    }
+    // 4. repoint agents + clear deprecated params (single source = runtime).
+    for (const id of g.ids) {
+      await db
+        .update(agents)
+        .set({
+          runtime: target,
+          model: null,
+          variant: null,
+          temperature: null,
+          steps: null,
+          maxSteps: null,
+        })
+        .where(eq(agents.id, id))
     }
   }
 }

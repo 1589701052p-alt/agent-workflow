@@ -256,7 +256,8 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     // RFC-108 PR-D bumped to 53 with 0053_rfc108_task_auto_recovery_breaker.
     // RFC-111 PR-B bumped to 54 with 0054_rfc111_runtime.
     // RFC-112 PR-A bumped to 55 with 0055_rfc112_runtimes.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(55)
+    // RFC-113 PR-A bumped to 56 with 0056_rfc113_runtime_profile.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(56)
   })
 
   for (const target of FREEZE_TARGETS) {

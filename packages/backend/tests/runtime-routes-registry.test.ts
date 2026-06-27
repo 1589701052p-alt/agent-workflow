@@ -124,21 +124,24 @@ describe('runtime registry routes (RFC-112 PR-B)', () => {
     expect(json.code).toBe('runtime-name-reserved')
   })
 
-  test('PUT /api/runtimes/:name updates a custom binary; built-in PUT → 403', async () => {
+  test('PUT /api/runtimes/:name updates a custom binary; built-in PUT now ALLOWED (RFC-113 D8)', async () => {
     await createRuntime(h.db, { name: 'my-oc', protocol: 'opencode', binaryPath: '/a' })
     const ok = await reqAs(h.app, DAEMON_TOKEN, '/api/runtimes/my-oc', {
       method: 'PUT',
-      body: JSON.stringify({ binaryPath: '/b' }),
+      body: JSON.stringify({ binaryPath: '/b', model: 'opus' }),
     })
     expect(ok.status).toBe(200)
-    expect(((await ok.json()) as { runtime: { binaryPath: string } }).runtime.binaryPath).toBe('/b')
+    const okJson = (await ok.json()) as { runtime: { binaryPath: string; model: string } }
+    expect(okJson.runtime.binaryPath).toBe('/b')
+    expect(okJson.runtime.model).toBe('opus')
 
+    // RFC-113: built-in binary/model IS editable (config面). Only identity/delete locked.
     const builtin = await reqAs(h.app, DAEMON_TOKEN, '/api/runtimes/opencode', {
       method: 'PUT',
-      body: JSON.stringify({ binaryPath: '/x' }),
+      body: JSON.stringify({ binaryPath: '/x', model: 'sonnet' }),
     })
-    expect(builtin.status).toBe(403)
-    expect(((await builtin.json()) as { code: string }).code).toBe('runtime-builtin-readonly')
+    expect(builtin.status).toBe(200)
+    expect(((await builtin.json()) as { runtime: { model: string } }).runtime.model).toBe('sonnet')
   })
 
   test('DELETE custom ok; built-in → 403; in-use → 409', async () => {
