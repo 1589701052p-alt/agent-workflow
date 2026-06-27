@@ -195,13 +195,13 @@ export interface RunTaskOptions {
   /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
   commitPushDiffMaxBytes?: number
   /**
-   * RFC-111 D1/D15: global default runtime (from config.defaultRuntime). At the
-   * agent-dispatch site each node's runtime is resolved once from
-   * `agent.runtime ?? defaultRuntime` and frozen onto node_runs.runtime; resume
-   * reads the frozen value. Omitted → 'opencode'. Internal agents (commit&push)
-   * stay on opencode regardless (D14).
+   * RFC-111 D1/D15 + RFC-112: global default runtime NAME (from
+   * config.defaultRuntime). At the agent-dispatch site each node's runtime is
+   * resolved once from `agent.runtime ?? defaultRuntime` (name → protocol+binary
+   * via the registry) and frozen onto node_runs. resume reads the frozen value.
+   * Omitted → 'opencode'. Internal agents (commit&push) stay on opencode (D14).
    */
-  defaultRuntime?: RuntimeKind
+  defaultRuntime?: string
 }
 
 type NodeStatus =

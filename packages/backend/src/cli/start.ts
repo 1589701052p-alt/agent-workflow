@@ -210,6 +210,19 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     })
   }
 
+  // 5f. RFC-112: ensure the two built-in runtimes (opencode / claude-code) exist
+  // as read-only registry rows so agents / config.defaultRuntime can reference
+  // them by name and the Settings runtime list always shows them. Hard-resets
+  // them to canonical shape (Codex P2); idempotent.
+  try {
+    const { seedBuiltinRuntimes } = await import('@/services/runtimeRegistry')
+    await seedBuiltinRuntimes(db)
+  } catch (err) {
+    log.warn('builtin runtime seed on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // 6. Token (generate-on-first-run, chmod 600).
   const token = ensureTokenFile(Paths.tokenFile)
   log.info('token ready', { tokenFile: Paths.tokenFile })

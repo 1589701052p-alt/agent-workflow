@@ -213,7 +213,9 @@ function RuntimeTab({ config, flashKey = 0 }: TabProps & { flashKey?: number }) 
         </Field>
         {/* RFC-111: global default runtime + claude-code default model. */}
         <Field label={t('settingsForm.defaultRuntime')} hint={t('settingsForm.defaultRuntimeHint')}>
-          <Select<'opencode' | 'claude-code'>
+          {/* RFC-112: widened to a string (runtime name); PR-D sources options
+              from the runtimes registry list instead of the two hardcoded. */}
+          <Select<string>
             value={state.defaultRuntime ?? 'opencode'}
             ariaLabel={t('settingsForm.defaultRuntime')}
             onChange={(v) => setState({ ...state, defaultRuntime: v })}

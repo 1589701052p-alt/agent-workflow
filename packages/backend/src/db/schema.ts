@@ -88,6 +88,36 @@ export const agents = sqliteTable('agents', {
 })
 
 // -----------------------------------------------------------------------------
+// runtimes — RFC-112. Named runtime INSTANCES: each row is a registered binary
+// that speaks one of the two RuntimeDriver protocols (opencode | claude-code).
+// The two built-ins (opencode, claude-code) are framework-seeded (builtin=1,
+// RFC-104 read-only lock) with binary_path=NULL → the protocol's default binary
+// (config.opencodePath / claudeCodePath / PATH). Custom forks (renamed binaries)
+// register additional rows. agents.runtime / config.defaultRuntime reference a
+// row by `name`; node_runs freeze (protocol, binary) so the registry stays
+// mutable without re-routing live sessions. Admin-managed (no per-user ACL —
+// machine-level config including a local binary path).
+// -----------------------------------------------------------------------------
+export const runtimes = sqliteTable('runtimes', {
+  id: text('id').primaryKey(), // ULID
+  name: text('name').notNull().unique(), // referenced by agents.runtime / config.defaultRuntime
+  protocol: text('protocol', { enum: ['opencode', 'claude-code'] }).notNull(), // = RuntimeDriver kind
+  binaryPath: text('binary_path'), // NULL → protocol default binary (RFC-111 behavior)
+  builtin: integer('builtin', { mode: 'boolean' }).notNull().default(false), // RFC-104 read-only lock
+  // RFC-112: cached deep-smoke SmokeResult (JSON) from the last probe; NULL =
+  // never probed. Display-only — conformance is advisory (an admin may save an
+  // auth-unverified custom runtime).
+  lastProbeJson: text('last_probe_json'),
+  createdBy: text('created_by'), // admin users.id who registered it (audit; NULL for built-ins)
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+})
+
+// -----------------------------------------------------------------------------
 // skill_sources — RFC-017. Parent directory whose direct child subdirectories
 // (each containing a SKILL.md) get auto-imported into `skills` with
 // sourceKind='external' + sourceId = this row's id. Reconciled lazily on
@@ -622,6 +652,16 @@ export const nodeRuns = sqliteTable(
      * runtime. NULL on legacy rows → read as 'opencode'.
      */
     runtime: text('runtime'),
+    /**
+     * RFC-112 (Codex P1): the BINARY HEAD snapshot frozen alongside `runtime`
+     * (the protocol) at dispatch — the resolved custom binary path, or NULL when
+     * the dispatch used the protocol's default binary (config.opencodePath /
+     * claudeCodePath / PATH). resume reads (runtime, runtime_binary) and re-spawns
+     * the EXACT same (driver, binary) without consulting the mutable runtimes
+     * registry, so deleting / renaming / re-pointing a runtime can't re-route a
+     * captured session to the wrong binary. NULL on legacy rows + built-in default.
+     */
+    runtimeBinary: text('runtime_binary'),
     /**
      * RFC-029: serialized `InventorySnapshot` (shared/inventory.ts) — what the
      * opencode child process actually loaded (agents / skills / mcps /

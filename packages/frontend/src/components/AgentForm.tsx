@@ -204,7 +204,9 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             (and the agent doesn't already pin a runtime). */}
         {showRuntime && (
           <Field label={t('agentForm.fieldRuntime')} hint={t('agentForm.fieldRuntimeHint')}>
-            <Select<'' | 'opencode' | 'claude-code'>
+            {/* RFC-112: widened to a string (registered runtime name); PR-D
+                replaces the hardcoded options with the runtimes registry list. */}
+            <Select<string>
               value={value.runtime ?? ''}
               ariaLabel={t('agentForm.fieldRuntime')}
               onChange={(v) => patch('runtime', v === '' ? undefined : v)}

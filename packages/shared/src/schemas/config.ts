@@ -36,11 +36,15 @@ export const ConfigSchema = z.object({
   /** Override opencode binary path. Falls back to `which opencode` (PATH). */
   opencodePath: z.string().min(1).optional(),
   /**
-   * RFC-111: global default runtime for agents that don't set their own.
-   * Omitted → 'opencode' (zero behavior change). opencode stays a hard daemon
-   * requirement; claude-code is an additional, optional runtime (D14).
+   * RFC-111 / RFC-112: global default runtime for agents that don't set their
+   * own. Omitted → 'opencode' (zero behavior change). RFC-112 widens this from
+   * the two-value enum to any registered runtime NAME (the built-ins are still
+   * named 'opencode' / 'claude-code', so existing values stay valid); the name
+   * is resolved to a (protocol, binary) via the runtimes registry at dispatch.
+   * opencode stays a hard daemon requirement; claude-code + custom forks are
+   * additional, optional runtimes (D14).
    */
-  defaultRuntime: z.enum(['opencode', 'claude-code']).optional(),
+  defaultRuntime: z.string().min(1).optional(),
   /** RFC-111: override the `claude` binary path. Falls back to PATH. */
   claudeCodePath: z.string().min(1).optional(),
   /** RFC-111: default model for claude-code agents (own namespace: opus/sonnet/full-id). */

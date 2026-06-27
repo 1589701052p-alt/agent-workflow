@@ -43,13 +43,13 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
   commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number
-  defaultRuntime?: 'opencode' | 'claude-code'
+  defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
 } {
   const out: {
     commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
     maxConcurrentNodes?: number
     defaultPerNodeTimeoutMs?: number
-    defaultRuntime?: 'opencode' | 'claude-code'
+    defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
   } = {}
   const commitPush = resolveCommitPushConfig(configPath)
   if (commitPush !== undefined) out.commitPush = commitPush

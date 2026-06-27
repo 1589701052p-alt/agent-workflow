@@ -105,11 +105,13 @@ export const AgentSchema = z.object({
   syncOutputsOnIterate: z.boolean(),
   model: z.string().optional(),
   /**
-   * RFC-111: agent runtime. Absent → inherit config.defaultRuntime (→ opencode).
-   * The model namespace follows the runtime (opencode: provider/model; claude:
-   * opus/sonnet/full-id). variant/temperature are opencode-only.
+   * RFC-111 / RFC-112: agent runtime — a registered runtime NAME (the built-ins
+   * are 'opencode' / 'claude-code'; custom forks add more). Absent → inherit
+   * config.defaultRuntime (→ opencode). RFC-112 widens this from the two-value
+   * enum to any name; the name resolves to a (protocol, binary) via the runtimes
+   * registry at dispatch, and the model namespace follows the protocol.
    */
-  runtime: z.enum(['opencode', 'claude-code']).optional(),
+  runtime: z.string().min(1).optional(),
   variant: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema,
@@ -169,8 +171,9 @@ export const CreateAgentSchema = z.object({
   /** RFC-014: default true — author must explicitly opt-out. */
   syncOutputsOnIterate: z.boolean().default(true),
   model: z.string().min(1).optional(),
-  /** RFC-111: agent runtime; absent → inherit config.defaultRuntime. */
-  runtime: z.enum(['opencode', 'claude-code']).optional(),
+  /** RFC-111 / RFC-112: agent runtime — a registered runtime NAME (built-ins
+   *  'opencode' / 'claude-code'; custom forks add more). Absent → inherit. */
+  runtime: z.string().min(1).optional(),
   variant: z.string().min(1).optional(),
   temperature: z.number().min(0).max(2).optional(),
   permission: AgentPermissionSchema.default({}),

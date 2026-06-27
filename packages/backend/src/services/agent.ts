@@ -493,8 +493,10 @@ function rowToAgent(row: AgentRow): Agent {
     agent.outputWrapperPortNames = outputWrapperPortNames
   }
   if (row.model !== null) agent.model = row.model
-  // RFC-111: map the runtime column; unknown/legacy values stay absent (→ inherit).
-  if (row.runtime === 'opencode' || row.runtime === 'claude-code') agent.runtime = row.runtime
+  // RFC-111 / RFC-112: map the runtime column — now any registered runtime NAME
+  // (built-ins 'opencode'/'claude-code' + custom). Empty/NULL stays absent (→
+  // inherit config.defaultRuntime). An unknown name fail-safes at dispatch.
+  if (typeof row.runtime === 'string' && row.runtime.length > 0) agent.runtime = row.runtime
   if (row.variant !== null) agent.variant = row.variant
   if (row.temperature !== null) agent.temperature = row.temperature
   if (row.steps !== null) agent.steps = row.steps
