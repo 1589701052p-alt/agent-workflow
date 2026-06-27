@@ -121,6 +121,47 @@ describe('RuntimeList (RFC-112 PR-D)', () => {
     expect(screen.getByText('/usr/local/bin/my-oc')).toBeTruthy()
   })
 
+  // RFC-116: a network-blocked smoke result renders the "endpoint unreachable"
+  // label (NOT "auth missing") as a warn/amber chip — signalling the operator to
+  // fix the daemon's network/proxy, not the credentials.
+  test('a network-blocked smoke result renders the endpoint-unreachable warn chip', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as URL | Request).toString()
+      if (url.includes('/api/runtime/models'))
+        return jsonResponse({ binary: 'claude', cached: false, models: [] })
+      if (url.includes('/api/runtimes'))
+        return jsonResponse({
+          runtimes: [
+            {
+              name: 'claude-code',
+              protocol: 'claude-code',
+              binaryPath: null,
+              builtin: true,
+              isDefault: false,
+              ...NULL_PROFILE,
+              lastProbe: {
+                outcome: 'network-blocked',
+                conforms: false,
+                detail: 'binary started but the model endpoint is unreachable ...',
+                sawNonce: false,
+                sawEnvelope: false,
+                exitCode: 1,
+              },
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          ],
+        })
+      return jsonResponse({})
+    })
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(document.querySelector('.runtime-list__name')).toBeTruthy())
+    const chip = screen.getByText('endpoint unreachable')
+    expect(chip).toBeTruthy()
+    expect(screen.queryByText('auth missing')).toBeNull()
+    expect(chip.closest('.status-chip')?.className).toContain('status-chip--warn')
+  })
+
   test('every row is editable (RFC-113 D8); only the custom row can be Deleted', async () => {
     wrap(<RuntimeList />)
     await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())

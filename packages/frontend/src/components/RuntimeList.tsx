@@ -34,6 +34,7 @@ interface SmokeResult {
     | 'conforms'
     | 'spawn-failed'
     | 'auth-missing'
+    | 'network-blocked'
     | 'model-call-failed'
     | 'stream-nonconforming'
   conforms: boolean
@@ -64,7 +65,12 @@ interface RuntimeView {
 function smokeChipKind(probe: SmokeResult | null): 'success' | 'warn' | 'danger' | 'neutral' {
   if (probe === null) return 'neutral'
   if (probe.conforms) return 'success'
-  if (probe.outcome === 'auth-missing' || probe.outcome === 'model-call-failed') return 'warn'
+  if (
+    probe.outcome === 'auth-missing' ||
+    probe.outcome === 'network-blocked' ||
+    probe.outcome === 'model-call-failed'
+  )
+    return 'warn'
   return 'danger'
 }
 

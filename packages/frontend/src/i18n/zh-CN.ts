@@ -753,6 +753,7 @@ export interface Resources {
       conforms: string
       'spawn-failed': string
       'auth-missing': string
+      'network-blocked': string
       'model-call-failed': string
       'stream-nonconforming': string
     }
@@ -3080,6 +3081,7 @@ export const zhCN: Resources = {
       conforms: '符合',
       'spawn-failed': '无法启动',
       'auth-missing': '缺少鉴权',
+      'network-blocked': '网络不可达',
       'model-call-failed': '模型调用失败',
       'stream-nonconforming': '不符合',
     },

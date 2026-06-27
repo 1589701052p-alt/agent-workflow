@@ -145,21 +145,43 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
     SMOKE_TIMEOUT,
   )
 
-  // Regression: claude reports auth / API failures on STDOUT (the stream-json
-  // `result` event, e.g. "...authentication failed... 403 Request not allowed"),
-  // not stderr — so a reachable-but-unauthenticated (or proxy-blocked) claude
-  // that speaks the protocol perfectly was misclassified as `stream-nonconforming`
-  // ("doesn't speak the protocol"). The smoke now scans stdout too, so this lands
-  // as `auth-missing`. The user-facing symptom was claude probes showing red
-  // "non-conforming" when the daemon simply lacked the proxy to reach the API.
+  // RFC-116 regression: claude's region/proxy block is reported on STDOUT as
+  // "Failed to authenticate. API Error: 403 Request not allowed" — it carries the
+  // auth word AND the 403/network signal. The classifier checks NETWORK_SIGNATURES
+  // BEFORE AUTH_SIGNATURES, so this lands as `network-blocked` (root cause = the
+  // daemon can't reach the API, e.g. missing HTTP(S)_PROXY), NOT `auth-missing`.
+  // (RFC-112 first rescued this from `stream-nonconforming`; RFC-116 splits the
+  // proxy/network case out of `auth-missing` so the operator fixes the right thing.)
   test(
-    'claude that emits an auth error on stdout → auth-missing (not stream-nonconforming)',
+    'claude that emits a 403 region/proxy block on stdout → network-blocked (not auth-missing)',
+    async () => {
+      process.env.MOCK_CLAUDE_SESSION_ID = 'smoke-sess-netblock'
+      process.env.MOCK_CLAUDE_IS_ERROR = '1'
+      process.env.MOCK_CLAUDE_EXIT_CODE = '1'
+      process.env.MOCK_CLAUDE_RESULT_TEXT =
+        'Failed to authenticate. API Error: 403 Request not allowed'
+      const r = await smokeRuntime({
+        protocol: 'claude-code',
+        binaryPath: wrapperFor(MOCK_CLAUDE),
+        bridgeCredentials: false,
+        timeoutMs: SMOKE_TIMEOUT,
+      })
+      expect(r.outcome).toBe('network-blocked')
+      expect(r.conforms).toBe(false)
+      expect(r.sawNonce).toBe(false)
+    },
+    SMOKE_TIMEOUT,
+  )
+
+  // RFC-116: a GENUINE credential failure (no network signal) must still land as
+  // `auth-missing` — proves networkHit-before-authHit didn't swallow the auth path.
+  test(
+    'claude that emits a genuine auth error (no network signal) on stdout → auth-missing',
     async () => {
       process.env.MOCK_CLAUDE_SESSION_ID = 'smoke-sess-autherr'
       process.env.MOCK_CLAUDE_IS_ERROR = '1'
       process.env.MOCK_CLAUDE_EXIT_CODE = '1'
-      process.env.MOCK_CLAUDE_RESULT_TEXT =
-        'API Error: 403 Request not allowed (authentication failed)'
+      process.env.MOCK_CLAUDE_RESULT_TEXT = 'Invalid API key · Please run /login'
       const r = await smokeRuntime({
         protocol: 'claude-code',
         binaryPath: wrapperFor(MOCK_CLAUDE),
@@ -168,7 +190,27 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
       })
       expect(r.outcome).toBe('auth-missing')
       expect(r.conforms).toBe(false)
-      expect(r.sawNonce).toBe(false)
+    },
+    SMOKE_TIMEOUT,
+  )
+
+  // RFC-116: a pure OS/transport network failure (no auth word at all) → network-blocked.
+  test(
+    'claude that emits a pure network error on stdout → network-blocked',
+    async () => {
+      process.env.MOCK_CLAUDE_SESSION_ID = 'smoke-sess-enet'
+      process.env.MOCK_CLAUDE_IS_ERROR = '1'
+      process.env.MOCK_CLAUDE_EXIT_CODE = '1'
+      process.env.MOCK_CLAUDE_RESULT_TEXT =
+        'request failed: getaddrinfo ENOTFOUND api.anthropic.com'
+      const r = await smokeRuntime({
+        protocol: 'claude-code',
+        binaryPath: wrapperFor(MOCK_CLAUDE),
+        bridgeCredentials: false,
+        timeoutMs: SMOKE_TIMEOUT,
+      })
+      expect(r.outcome).toBe('network-blocked')
+      expect(r.conforms).toBe(false)
     },
     SMOKE_TIMEOUT,
   )

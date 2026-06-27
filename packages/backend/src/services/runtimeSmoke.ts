@@ -25,6 +25,9 @@ export type SmokeOutcome =
   | 'conforms'
   | 'spawn-failed'
   | 'auth-missing'
+  // RFC-116: binary speaks the protocol but the model endpoint is unreachable
+  // (403 region block / connection refused/timeout/DNS / missing proxy).
+  | 'network-blocked'
   | 'model-call-failed'
   | 'stream-nonconforming'
 
@@ -59,6 +62,19 @@ const AUTH_SIGNATURES =
   /not logged in|unauthorized|authentication|invalid api key|please run .*login|no api key|anthropic_api_key|log ?in to/i
 const MODEL_FAIL_SIGNATURES =
   /rate limit|overloaded|quota|model .*not found|insufficient|too many requests|503|529/i
+// RFC-116: endpoint reachability failures — the binary speaks the protocol but the
+// request to the model API is refused/unreachable: 403 region block, connection
+// refused/reset/timeout, DNS failure, no route, broken proxy tunnel. Checked BEFORE
+// auth (see the classifier): claude's region-block text is "Failed to authenticate.
+// API Error: 403 Request not allowed" — it carries the auth word too, but the root
+// cause is the network.
+// Codex impl-gate P2: bare `proxy` / `request not allowed` are deliberately NOT
+// matched — they show up in generic auth/model error guidance too, and matching them
+// before authHit would mis-route credential failures to networking. Every alternative
+// below is an explicit connectivity signal (403-region phrase / *nix errno / DNS /
+// fetch-failed / tunnel), so it can safely win over authHit.
+const NETWORK_SIGNATURES =
+  /403 request not allowed|not available in your (?:region|country|location)|fetch failed|network error|connection (?:error|refused|reset|timed ?out)|econnrefused|econnreset|econnaborted|enetunreach|ehostunreach|enetdown|enotfound|etimedout|eai_again|getaddrinfo|socket hang up|no route to host|network is unreachable|tunneling socket|unable to connect|could not connect|failed to connect/i
 
 /** kill the whole process group (the child is `detached`), best-effort. */
 function killGroup(child: Bun.Subprocess, signal: 'SIGTERM' | 'SIGKILL'): void {
@@ -202,12 +218,12 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     let sawEnvelope = false
     let outBytes = 0
     let stderrText = ''
-    // claude reports auth / API errors on STDOUT (the stream-json `result` event
-    // carries `is_error` + e.g. "Failed to authenticate. API Error: 403 Request
-    // not allowed"), not stderr. Accumulate stdout too so the auth/model
-    // classifier sees those — else a reachable-but-unauthenticated (or
-    // proxy-blocked) claude misclassifies as `stream-nonconforming` ("doesn't
-    // speak the protocol") when it actually spoke it fine and just couldn't auth.
+    // claude reports auth / API / network errors on STDOUT (the stream-json `result`
+    // event carries `is_error` + e.g. "Failed to authenticate. API Error: 403 Request
+    // not allowed"), not stderr. Accumulate stdout too so the network/auth/model
+    // classifier sees those — else a reachable-but-unauthenticated, or (RFC-116)
+    // proxy/region-blocked, claude misclassifies as `stream-nonconforming` when it
+    // actually spoke the protocol fine and just couldn't reach/authenticate the API.
     let stdoutText = ''
 
     const readStream = async (
@@ -287,6 +303,11 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     // stderr. Only consulted when the run didn't conform, so a healthy nonce echo
     // never trips a false auth/model hit.
     const haystack = `${stderrText}\n${stdoutText}`.toLowerCase()
+    // RFC-116: networkHit is evaluated BEFORE authHit (see the if-chain). claude's
+    // region/proxy block reads "Failed to authenticate. API Error: 403 Request not
+    // allowed" — it carries the auth word AND the 403/network signal, but the root
+    // cause is endpoint reachability (e.g. daemon lacks HTTP(S)_PROXY), not creds.
+    const networkHit = NETWORK_SIGNATURES.test(haystack)
     const authHit = AUTH_SIGNATURES.test(haystack)
     const modelHit = MODEL_FAIL_SIGNATURES.test(haystack)
     // Codex P2: conformance REQUIRES the nonce round-trip (a real protocol turn
@@ -301,6 +322,10 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     } else if (timedOut) {
       outcome = 'model-call-failed'
       detail = `timed out after ${timeoutMs}ms`
+    } else if (networkHit) {
+      outcome = 'network-blocked'
+      detail =
+        'binary started but the model endpoint is unreachable (e.g. 403 Request not allowed / connection failed). Check the daemon network/proxy (HTTP(S)_PROXY) so it can reach the model API, then re-probe.'
     } else if (authHit) {
       outcome = 'auth-missing'
       detail = 'binary started but authentication failed (may still conform once credentials exist)'

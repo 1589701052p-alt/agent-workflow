@@ -648,6 +648,7 @@ export const enUS: Resources = {
       conforms: 'conforms',
       'spawn-failed': 'cannot start',
       'auth-missing': 'auth missing',
+      'network-blocked': 'endpoint unreachable',
       'model-call-failed': 'model call failed',
       'stream-nonconforming': 'not conforming',
     },
