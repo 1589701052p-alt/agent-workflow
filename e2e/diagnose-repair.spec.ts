@@ -231,10 +231,10 @@ function plantR1Violation(taskId: string): { nodeRunId: string; docVersionId: st
     INSERT INTO doc_versions (id, task_id, review_node_id, review_node_run_id,
       source_node_id, source_port_name, version_index, review_iteration,
       body_path, comments_json, decision, decision_reason, prompt_snapshot,
-      agent_snapshot, source_file_path, created_at, decided_at, decided_by)
+      source_file_path, created_at, decided_at, decided_by)
     VALUES ('${docVersionId}', '${taskId}', 'rev_r1', '${nodeRunId}',
       'agent_1', 'answer', 1, 0, 'dv/v1.md', '[]', 'approved', NULL, NULL,
-      NULL, NULL, ${now}, ${now}, 'e2e-fixture');
+      NULL, ${now}, ${now}, 'e2e-fixture');
   `)
   return { nodeRunId, docVersionId }
 }
