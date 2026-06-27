@@ -639,6 +639,10 @@ export const enUS: Resources = {
     fieldMaxSteps: 'Max steps',
     claudeModelOnlyHint:
       'Claude Code runtimes use only the model — variant / temperature / steps don’t apply.',
+    newRuntimeModelHint:
+      'Save the runtime first, then edit it to pick a model from this binary’s own list.',
+    claudeStaticModelHint:
+      'The model list is Anthropic’s static set — not probed from this binary.',
     isDefault: 'default',
     setDefault: 'Set default',
     smoke: {

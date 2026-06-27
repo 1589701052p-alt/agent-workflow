@@ -25,38 +25,104 @@ export interface ListOpencodeModelsResult {
   cached: boolean
 }
 
-let cache: { binary: string; models: OpencodeModel[] } | null = null
+// RFC-114 D4: keyed by binary so multiple registered runtimes (a custom fork +
+// the default opencode) cache independently — a single slot would thrash to
+// `cached:false` whenever two binaries are queried alternately. admin-managed +
+// low-cardinality (a handful of runtimes), so an unbounded Map is fine; it's
+// also evicted on runtime delete / binary change (evictOpencodeModelsCache).
+const cache = new Map<string, OpencodeModel[]>()
 
-/** Test hook: drop the in-memory cache. */
+/** Test hook: drop the entire in-memory cache. */
 export function clearOpencodeModelsCache(): void {
-  cache = null
+  cache.clear()
+}
+
+/** RFC-114 P3-6: drop one binary's slot (call on runtime delete / binary change). */
+export function evictOpencodeModelsCache(binary: string): void {
+  cache.delete(binary)
+}
+
+// RFC-114 P2-3: `<binary> models` now runs arbitrary admin-registered fork
+// binaries, so bound it like the smoke probe — a hung fork must not wedge the
+// daemon, and a flooding one must not OOM it.
+const DEFAULT_MODELS_TIMEOUT_MS = 30_000
+const MAX_MODELS_OUTPUT_BYTES = 4 * 1024 * 1024 // 4 MiB per stream
+
+/** Drain a stream to EOF but stop ACCUMULATING past `cap` bytes (keep reading so
+ *  the child's pipe never wedges). Returns the captured (possibly truncated) text. */
+async function readCapped(
+  stream: ReadableStream<Uint8Array> | undefined,
+  cap: number,
+): Promise<string> {
+  if (stream === undefined) return ''
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value !== undefined && total < cap) {
+        chunks.push(value)
+        total += value.byteLength
+      }
+    }
+  } catch {
+    /* stream closed under us (kill) */
+  }
+  return Buffer.concat(chunks).toString('utf-8')
 }
 
 export async function listOpencodeModels(
   binary: string,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; timeoutMs?: number },
 ): Promise<ListOpencodeModelsResult> {
-  if (!opts?.refresh && cache !== null && cache.binary === binary) {
-    return { binary, models: cache.models, cached: true }
+  if (!opts?.refresh) {
+    const hit = cache.get(binary)
+    if (hit !== undefined) return { binary, models: hit, cached: true }
   }
 
   const cmd = [binary, 'models', '--verbose']
   if (opts?.refresh) cmd.push('--refresh')
 
-  const proc = Bun.spawn({ cmd, stdout: 'pipe', stderr: 'pipe' })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
+  const proc = Bun.spawn({ cmd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' })
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+  }, opts?.timeoutMs ?? DEFAULT_MODELS_TIMEOUT_MS)
+  ;(timer as { unref?: () => void }).unref?.()
 
+  let stdout = ''
+  let stderr = ''
+  let exitCode: number | null = null
+  try {
+    ;[stdout, stderr, exitCode] = await Promise.all([
+      readCapped(proc.stdout as ReadableStream<Uint8Array> | undefined, MAX_MODELS_OUTPUT_BYTES),
+      readCapped(proc.stderr as ReadableStream<Uint8Array> | undefined, MAX_MODELS_OUTPUT_BYTES),
+      proc.exited,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (timedOut) {
+    log.warn('opencode models timed out', { binary })
+    throw new Error(
+      `opencode models timed out after ${opts?.timeoutMs ?? DEFAULT_MODELS_TIMEOUT_MS}ms`,
+    )
+  }
   if (exitCode !== 0) {
     log.warn('opencode models non-zero exit', { binary, exitCode })
     throw new Error(`opencode models exited ${exitCode}: ${stderr.trim() || '(no stderr)'}`)
   }
 
   const models = parseModelsOutput(stdout)
-  cache = { binary, models }
+  cache.set(binary, models)
   return { binary, models, cached: false }
 }
 

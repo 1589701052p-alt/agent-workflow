@@ -14,6 +14,7 @@ import { agents, runtimes } from '@/db/schema'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import type { RuntimeKind } from '@/services/runtime'
 import { createLogger } from '@/util/log'
+import { evictOpencodeModelsCache } from '@/util/opencode-models'
 
 const log = createLogger('runtimeRegistry')
 
@@ -338,6 +339,12 @@ export async function updateRuntime(
   await db.update(runtimes).set(patch).where(eq(runtimes.name, name))
   const updated = await getRuntime(db, name)
   if (updated === null) throw new Error('runtime update vanished')
+  // RFC-114 P3-6: a changed binary makes any cached `<binary> models` stale —
+  // evict the old + new path so the next list re-runs the right binary.
+  if (input.binaryPath !== undefined) {
+    if (row.binaryPath !== null) evictOpencodeModelsCache(row.binaryPath)
+    if (updated.binaryPath !== null) evictOpencodeModelsCache(updated.binaryPath)
+  }
   return updated
 }
 
@@ -377,6 +384,8 @@ export async function deleteRuntime(
     )
   }
   await db.delete(runtimes).where(eq(runtimes.name, name))
+  // RFC-114 P3-6: drop this binary's cached model list.
+  if (row.binaryPath !== null) evictOpencodeModelsCache(row.binaryPath)
 }
 
 // --- seed ------------------------------------------------------------------

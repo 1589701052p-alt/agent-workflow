@@ -746,6 +746,8 @@ export interface Resources {
     fieldSteps: string
     fieldMaxSteps: string
     claudeModelOnlyHint: string
+    newRuntimeModelHint: string
+    claudeStaticModelHint: string
     isDefault: string
     setDefault: string
     smoke: {
@@ -3112,6 +3114,8 @@ export const zhCN: Resources = {
     fieldSteps: '步数',
     fieldMaxSteps: '最大步数',
     claudeModelOnlyHint: 'Claude Code 运行时只用模型 —— 变体 / 温度 / 步数 不生效。',
+    newRuntimeModelHint: '先保存运行时，再编辑它以从该二进制自己的模型列表里选择。',
+    claudeStaticModelHint: '模型列表是 Anthropic 的静态集 —— 未按该二进制探测。',
     isDefault: '默认',
     setDefault: '设为默认',
     smoke: {

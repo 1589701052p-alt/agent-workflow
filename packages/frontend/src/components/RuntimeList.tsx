@@ -334,12 +334,31 @@ function RuntimeFormDialog(props: {
       </Field>
       {/* RFC-113: the runtime's execution profile. variant/temperature/steps are
           opencode-only (claude has none) — shown only for the opencode protocol. */}
+      {/* RFC-114: editing an existing runtime lists ITS binary's models
+          (?runtime=<name>); a NEW custom binary can't be listed before it's saved
+          (O1(a)) so the model is free-text + a "save first" hint — showing the
+          DEFAULT opencode list there would invite saving a model the fork doesn't
+          have. claude (incl. forks) is a static list → a "not probed" note. */}
       <Field label={t('runtimes.fieldModel')} hint={t('runtimes.fieldModelHint')}>
-        <ModelSelect
-          value={model}
-          onChange={setModel}
-          runtime={isOpencode ? 'opencode' : 'claude'}
-        />
+        {isEdit ? (
+          <ModelSelect value={model} onChange={setModel} runtimeName={name} />
+        ) : (
+          <>
+            <TextInput
+              value={model ?? ''}
+              onChange={(v) => setModel(v === '' ? undefined : v)}
+              placeholder="anthropic/claude-sonnet-4-6"
+            />
+            <p className="muted" style={{ margin: '4px 0 0 0', fontSize: 13 }}>
+              {t('runtimes.newRuntimeModelHint')}
+            </p>
+          </>
+        )}
+        {isEdit && !isOpencode && (
+          <p className="muted" style={{ margin: '4px 0 0 0', fontSize: 13 }}>
+            {t('runtimes.claudeStaticModelHint')}
+          </p>
+        )}
       </Field>
       {isOpencode && (
         <div className="form-grid form-grid--cols-2">

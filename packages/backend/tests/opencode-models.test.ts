@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   clearOpencodeModelsCache,
+  evictOpencodeModelsCache,
   listOpencodeModels,
   parseModelsOutput,
 } from '../src/util/opencode-models'
@@ -125,6 +126,47 @@ describe('listOpencodeModels cache', () => {
     expect(threw).not.toBeNull()
     expect(threw?.message).toContain('exited 7')
     expect(threw?.message).toContain('boom')
+  })
+
+  // RFC-114 D4: the Map keeps EACH binary's list — querying B between two A calls
+  // must NOT evict A. The old single-slot cache returned cached:false on the 2nd A.
+  test('different binaries cache independently — an intervening binary does not evict (D4)', async () => {
+    writeStub(stub, 'anthropic/a')
+    const otherStub = join(tmp, 'stub-other.sh')
+    writeStub(otherStub, 'openai/b')
+    expect((await listOpencodeModels(stub)).cached).toBe(false) // A: miss
+    expect((await listOpencodeModels(otherStub)).cached).toBe(false) // B: miss
+    expect((await listOpencodeModels(stub)).cached).toBe(true) // A again: STILL cached (Map)
+    expect((await listOpencodeModels(otherStub)).cached).toBe(true) // B again: STILL cached
+  })
+
+  // RFC-114 P3-6: evicting one binary's slot forces a re-run for it only.
+  test('evictOpencodeModelsCache drops one binary, leaving others cached', async () => {
+    writeStub(stub, 'anthropic/a')
+    const otherStub = join(tmp, 'stub-other2.sh')
+    writeStub(otherStub, 'openai/b')
+    await listOpencodeModels(stub)
+    await listOpencodeModels(otherStub)
+    evictOpencodeModelsCache(stub)
+    expect((await listOpencodeModels(stub)).cached).toBe(false) // re-run
+    expect((await listOpencodeModels(otherStub)).cached).toBe(true) // untouched
+  })
+
+  // RFC-114 P2-3: a hung fork binary must be killed by the timeout, not wedge the
+  // daemon. With a 200ms timeout against a `sleep 5` stub, the call rejects fast.
+  test('a hung binary is killed by the timeout', async () => {
+    const hung = join(tmp, 'stub-hung.sh')
+    writeFileSync(hung, '#!/bin/sh\nsleep 5\n')
+    chmodSync(hung, 0o755)
+    const t0 = Date.now()
+    let threw: Error | null = null
+    try {
+      await listOpencodeModels(hung, { timeoutMs: 200 })
+    } catch (e) {
+      threw = e as Error
+    }
+    expect(threw?.message).toMatch(/timed out/i)
+    expect(Date.now() - t0).toBeLessThan(3_000) // killed well before the 5s sleep
   })
 })
 

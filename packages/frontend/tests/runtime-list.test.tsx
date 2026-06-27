@@ -76,11 +76,23 @@ function wrap(node: React.ReactNode) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)
 }
 
+let fetchUrls: string[] = []
+
 beforeEach(() => {
   setBaseUrl('http://daemon.test')
   setToken('tok')
+  fetchUrls = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : (input as URL | Request).toString()
+    fetchUrls.push(url)
+    // note: '/api/runtime/models' (singular) is checked BEFORE '/api/runtimes'.
+    if (url.includes('/api/runtime/models')) {
+      return jsonResponse({
+        binary: 'opencode',
+        cached: true,
+        models: [{ id: 'anthropic/opus', provider: 'anthropic', modelID: 'opus', name: 'Opus' }],
+      })
+    }
     if (url.includes('/api/runtimes')) return jsonResponse(RUNTIMES_BODY)
     return jsonResponse({})
   })
@@ -161,5 +173,30 @@ describe('RuntimeList (RFC-112 PR-D)', () => {
     expect(screen.queryByText('Variant')).toBeNull()
     expect(screen.queryByText('Temperature')).toBeNull()
     expect(screen.getByText(/use only the model/i)).toBeTruthy()
+  })
+
+  // RFC-114: editing an existing runtime lists ITS binary's models — the model
+  // fetch must carry ?runtime=<that runtime's name> (a custom opencode fork shows
+  // its own models, not the default opencode's).
+  test('editing a custom runtime fetches models with ?runtime=<name> (RFC-114 D1)', async () => {
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    // my-oc is the 3rd row (opencode / claude-code / my-oc) → its Edit button.
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/ })[2]!)
+    await waitFor(() =>
+      expect(fetchUrls.some((u) => /\/api\/runtime\/models\?.*runtime=my-oc/.test(u))).toBe(true),
+    )
+  })
+
+  // RFC-114 O1(a): a NEW custom binary can't be listed before it's saved — the
+  // model field is free-text with a "save first" hint, and the form must NOT
+  // fetch the default opencode model list (which would mislead).
+  test('new-runtime form: model is free-text + save-first hint, no model fetch (RFC-114 O1a)', async () => {
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add runtime/i }))
+    expect(screen.getByText(/save the runtime first/i)).toBeTruthy()
+    // no ModelSelect → no /api/runtime/models fetch for the new form.
+    expect(fetchUrls.some((u) => u.includes('/api/runtime/models'))).toBe(false)
   })
 })

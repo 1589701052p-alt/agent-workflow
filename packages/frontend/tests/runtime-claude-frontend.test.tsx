@@ -118,6 +118,35 @@ describe('ModelSelect — runtime namespace (RFC-111)', () => {
       expect(fetchUrls.some((u) => u.includes('/api/runtime/models?runtime=claude'))).toBe(true)
     })
   })
+
+  // RFC-114 D6/P2-4: runtimeName fetches that runtime's binary list...
+  test('runtimeName=<name> hits /api/runtime/models?runtime=<name>', async () => {
+    wrap(<ModelSelect runtimeName="oc-fork" value={undefined} onChange={() => {}} />)
+    await waitFor(() => {
+      expect(fetchUrls.some((u) => u.includes('/api/runtime/models?runtime=oc-fork'))).toBe(true)
+    })
+  })
+
+  // ...and on failure surfaces the backend's (already-sanitized) reason, never a
+  // fallback to some other binary's list.
+  test('a failed model fetch shows the backend reason, not a generic line (P2-4)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as URL | Request).toString()
+      if (url.includes('/api/runtime/models')) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            code: 'opencode-models-failed',
+            message: 'opencode models exited 4: provider config missing',
+          }),
+          { status: 502, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return jsonResponse({})
+    })
+    wrap(<ModelSelect runtimeName="oc-fork" value={undefined} onChange={() => {}} />)
+    expect(await screen.findByText(/provider config missing/i)).toBeTruthy()
+  })
 })
 
 describe('AgentForm — runtime selector (RFC-111)', () => {

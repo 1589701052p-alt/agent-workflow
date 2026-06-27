@@ -38,26 +38,44 @@ interface Props {
    * key + appends `?runtime=claude` so the curated Claude Code list loads.
    */
   runtime?: 'opencode' | 'claude'
+  /**
+   * RFC-114: list models for a SPECIFIC registered runtime (its binary), via
+   * `?runtime=<name>`. Overrides `runtime` when set. Used by RuntimeFormDialog
+   * when editing a runtime so a custom opencode fork shows ITS models. Settings
+   * (no `runtimeName`) keeps the protocol-based default fetch byte-identical.
+   */
+  runtimeName?: string
 }
 
-export function ModelSelect({ value, onChange, runtime = 'opencode' }: Props) {
+export function ModelSelect({ value, onChange, runtime = 'opencode', runtimeName }: Props) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const isClaude = runtime === 'claude'
-  const queryKey = isClaude ? RUNTIME_CLAUDE_MODELS_QUERY_KEY : RUNTIME_MODELS_QUERY_KEY
+  // RFC-114: a named runtime wins; else the protocol namespace; else default.
+  const queryParam: Record<string, string> | undefined =
+    runtimeName !== undefined
+      ? { runtime: runtimeName }
+      : isClaude
+        ? { runtime: 'claude' }
+        : undefined
+  const queryKey =
+    runtimeName !== undefined
+      ? (['runtime', 'models', 'rt', runtimeName] as const)
+      : isClaude
+        ? RUNTIME_CLAUDE_MODELS_QUERY_KEY
+        : RUNTIME_MODELS_QUERY_KEY
   const list = useQuery<RuntimeModelsResponse>({
     queryKey,
-    queryFn: ({ signal }) =>
-      api.get('/api/runtime/models', isClaude ? { runtime: 'claude' } : undefined, signal),
+    queryFn: ({ signal }) => api.get('/api/runtime/models', queryParam, signal),
     staleTime: Infinity,
     retry: false,
   })
   const refresh = useMutation({
     mutationFn: () =>
-      api.get<RuntimeModelsResponse>(
-        '/api/runtime/models',
-        isClaude ? { runtime: 'claude', refresh: '1' } : { refresh: '1' },
-      ),
+      api.get<RuntimeModelsResponse>('/api/runtime/models', {
+        ...(queryParam ?? {}),
+        refresh: '1',
+      }),
     onSuccess: (next) => {
       qc.setQueryData(queryKey, next)
     },
@@ -75,6 +93,11 @@ export function ModelSelect({ value, onChange, runtime = 'opencode' }: Props) {
   }, [value, isCustom])
 
   if (failed) {
+    // RFC-114 P2-4: surface the actual (backend-sanitized) reason — e.g. a custom
+    // fork's `models` failing — not just a generic line, and never fall back to
+    // some OTHER binary's list. Falls back to the generic copy when the error
+    // carries no message.
+    const reason = list.error instanceof ApiError ? list.error.message : ''
     return (
       <div>
         <TextInput
@@ -83,7 +106,7 @@ export function ModelSelect({ value, onChange, runtime = 'opencode' }: Props) {
           placeholder="anthropic/claude-sonnet-4-6"
         />
         <p style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }} className="muted" role="alert">
-          {t('settingsForm.modelLoadFailed')}
+          {reason.length > 0 ? reason : t('settingsForm.modelLoadFailed')}
         </p>
       </div>
     )

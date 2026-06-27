@@ -10,6 +10,7 @@ import { createApp } from '../src/server'
 import { applyConfigPatch, loadConfig } from '../src/config'
 import { clearOpencodeModelsCache } from '../src/util/opencode-models'
 import { MIN_OPENCODE_VERSION } from '../src/util/opencode'
+import { createRuntime, seedBuiltinRuntimes } from '../src/services/runtimeRegistry'
 
 const TOKEN = 'a'.repeat(64)
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -282,5 +283,70 @@ describe('GET /api/runtime/claude + models?runtime=claude (RFC-111)', () => {
     expect(json.models.length).toBeGreaterThan(0)
     expect(json.models.some((m) => m.id === 'opus')).toBe(true)
     expect(json.models.every((m) => m.provider === 'anthropic')).toBe(true)
+  })
+})
+
+// RFC-114 — /api/runtime/models?runtime=<name> resolves THAT runtime's binary.
+describe('GET /api/runtime/models?runtime=<name> — runtime-aware binary (RFC-114)', () => {
+  let h: Harness
+  let customBin: string
+  beforeEach(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aw-rt114-default-'))
+    const defaultBin = join(dir, 'opencode')
+    writeBinary(defaultBin, { modelsStdout: 'default/d-model' })
+    h = makeHarness({ binary: defaultBin })
+    clearOpencodeModelsCache()
+    await seedBuiltinRuntimes(h.db)
+    customBin = join(h.tmp, 'oc-fork')
+    writeBinary(customBin, { modelsStdout: 'fork/special' })
+    await createRuntime(h.db, { name: 'oc-fork', protocol: 'opencode', binaryPath: customBin })
+  })
+  afterEach(() => rmSync(h.tmp, { recursive: true, force: true }))
+
+  test('?runtime=<custom opencode> lists the custom binary models, not the default (D1)', async () => {
+    const res = await req(h.app, '/api/runtime/models?runtime=oc-fork')
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as Record<string, unknown>
+    expect(json.binary).toBe(customBin)
+    expect(json.models).toEqual([{ id: 'fork/special', provider: 'fork', modelID: 'special' }])
+  })
+
+  test('no ?runtime= still uses the default opencodePath (backward-compat / P2-5)', async () => {
+    const res = await req(h.app, '/api/runtime/models')
+    const json = (await res.json()) as Record<string, unknown>
+    expect(json.binary).toBe(h.binaryPath)
+    expect(json.models).toEqual([
+      { id: 'default/d-model', provider: 'default', modelID: 'd-model' },
+    ])
+  })
+
+  test('P1-1: a runtime NAMED "claude" (opencode) is NOT hijacked into the static list', async () => {
+    const claudeNamedBin = join(h.tmp, 'oc-claude')
+    writeBinary(claudeNamedBin, { modelsStdout: 'fork/named-claude' })
+    await createRuntime(h.db, { name: 'claude', protocol: 'opencode', binaryPath: claudeNamedBin })
+    const res = await req(h.app, '/api/runtime/models?runtime=claude')
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as Record<string, unknown>
+    // its own opencode binary + live list — NOT the static Anthropic list.
+    expect(json.binary).toBe(claudeNamedBin)
+    expect(json.models).toEqual([
+      { id: 'fork/named-claude', provider: 'fork', modelID: 'named-claude' },
+    ])
+  })
+
+  test('502 carries the runtime name + a redacted message (P2-4)', async () => {
+    const failBin = join(h.tmp, 'oc-fail')
+    writeBinary(failBin, {
+      modelsExit: 4,
+      modelsStderr: 'clone https://u:supersecrettoken@github.com/x.git failed',
+    })
+    await createRuntime(h.db, { name: 'oc-fail', protocol: 'opencode', binaryPath: failBin })
+    const res = await req(h.app, '/api/runtime/models?runtime=oc-fail')
+    expect(res.status).toBe(502)
+    const json = (await res.json()) as Record<string, unknown>
+    expect(json.code).toBe('opencode-models-failed')
+    expect(json.runtime).toBe('oc-fail')
+    // the git-URL credential is redacted before reaching the client.
+    expect(String(json.message)).not.toContain('supersecrettoken')
   })
 })
