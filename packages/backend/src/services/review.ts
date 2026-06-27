@@ -702,8 +702,6 @@ export interface CreateDocVersionArgs {
   body: string
   /** Optional snapshot of the prompt that produced this version. */
   promptSnapshot?: string
-  /** Optional JSON snapshot of {model, variant, temperature}. */
-  agentSnapshot?: string
   /**
    * Worktree-relative path the body was read from, when the upstream port
    * resolved as a markdown_file (or the forgiveness branch silently read a
@@ -780,7 +778,6 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
     decision: 'pending',
     decisionReason: null,
     promptSnapshot: args.promptSnapshot ?? null,
-    agentSnapshot: args.agentSnapshot ?? null,
     sourceFilePath,
     itemIndex,
     selection,
@@ -804,7 +801,6 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
     decision: 'pending',
     decisionReason: null,
     promptSnapshot: args.promptSnapshot ?? null,
-    agentSnapshot: args.agentSnapshot ?? null,
     sourceFilePath,
     itemIndex,
     selection,
@@ -2405,7 +2401,6 @@ function rowToDocVersion(row: typeof docVersions.$inferSelect): DocVersion {
     decision: row.decision as DocVersionDecision,
     decisionReason: row.decisionReason,
     promptSnapshot: row.promptSnapshot,
-    agentSnapshot: row.agentSnapshot,
     sourceFilePath: row.sourceFilePath,
     // RFC-079: multi-document fields (NULL on single-document rows).
     itemIndex: row.itemIndex,

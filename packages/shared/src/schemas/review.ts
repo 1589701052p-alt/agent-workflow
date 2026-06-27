@@ -159,8 +159,6 @@ export const DocVersionSchema = z.object({
   decisionReason: z.string().nullable(),
   /** The prompt actually sent when this version was generated; nullable for v1 if not yet captured. */
   promptSnapshot: z.string().nullable(),
-  /** JSON: {model, variant, temperature} at generation time. */
-  agentSnapshot: z.string().nullable(),
   /**
    * Worktree-relative file path captured when this version was generated, if
    * the upstream port resolved as a `markdown_file` (or the forgiveness path

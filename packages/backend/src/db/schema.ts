@@ -844,7 +844,9 @@ export const docVersions = sqliteTable(
       .default('pending'),
     decisionReason: text('decision_reason'),
     promptSnapshot: text('prompt_snapshot'), // user prompt sent when generating this version
-    agentSnapshot: text('agent_snapshot'), // JSON: {model, variant, temperature}
+    // RFC-115: agent_snapshot column dropped (migration 0058). It was reserved
+    // for per-agent {model,variant,temperature} but never populated; RFC-113/115
+    // moved generation params onto the runtime, so it was always NULL.
     // Worktree-relative path captured at dispatch time when the upstream port
     // resolved as a markdown_file (or the forgiveness branch silently read a
     // .md file). Carried through into renderCommentsForPrompt so the iterate

@@ -400,6 +400,13 @@
       "when": 1783200000000,
       "tag": "0057_rfc115_drop_agent_params",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1783300000000,
+      "tag": "0058_rfc115_drop_agent_snapshot",
+      "breakpoints": true
     }
   ]
 }

@@ -79,7 +79,6 @@ async function seed(opts: SeedOptions): Promise<{ db: DbClient; taskId: string }
       decision: 'pending',
       decisionReason: null,
       promptSnapshot: null,
-      agentSnapshot: null,
       createdAt: 1100 + i,
       decidedAt: null,
       decidedBy: null,

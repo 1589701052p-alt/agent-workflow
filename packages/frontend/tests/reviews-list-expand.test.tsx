@@ -82,7 +82,6 @@ function makeVersion(id: string, idx: number, decision: DocVersion['decision']):
     decision,
     decisionReason: null,
     promptSnapshot: null,
-    agentSnapshot: null,
     sourceFilePath: null,
     createdAt: 0,
     decidedAt: null,

@@ -42,7 +42,6 @@ function doc(id: string): DocVersion {
     decision: 'pending',
     decisionReason: null,
     promptSnapshot: null,
-    agentSnapshot: null,
     createdAt: 0,
     decidedAt: null,
     decidedBy: null,

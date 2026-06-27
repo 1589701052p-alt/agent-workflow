@@ -24,7 +24,6 @@ function v(id: string, idx: number, decision: DocVersion['decision'] = 'pending'
     decision,
     decisionReason: null,
     promptSnapshot: null,
-    agentSnapshot: null,
     sourceFilePath: null,
     createdAt: 0,
     decidedAt: null,
