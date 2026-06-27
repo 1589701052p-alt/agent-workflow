@@ -637,6 +637,8 @@ export const enUS: Resources = {
     fieldTemperature: 'Temperature',
     fieldSteps: 'Steps',
     fieldMaxSteps: 'Max steps',
+    claudeModelOnlyHint:
+      'Claude Code runtimes use only the model — variant / temperature / steps don’t apply.',
     isDefault: 'default',
     setDefault: 'Set default',
     smoke: {

@@ -30,6 +30,9 @@ const SET_ENV_KEYS = [
   'MOCK_CLAUDE_SESSION_ID',
   'MOCK_CLAUDE_SKIP_ENVELOPE',
   'MOCK_CLAUDE_OUTPUTS',
+  'MOCK_CLAUDE_IS_ERROR',
+  'MOCK_CLAUDE_RESULT_TEXT',
+  'MOCK_CLAUDE_EXIT_CODE',
   'MOCK_OPENCODE_ECHO_PROMPT',
   'MOCK_OPENCODE_EMIT_SESSION_ID',
   'MOCK_OPENCODE_REQUIRE_CONFIG_DIR_EXISTS',
@@ -138,6 +141,34 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
       expect(r.sawNonce).toBe(false)
       expect(r.outcome).toBe('stream-nonconforming')
       expect(r.conforms).toBe(false)
+    },
+    SMOKE_TIMEOUT,
+  )
+
+  // Regression: claude reports auth / API failures on STDOUT (the stream-json
+  // `result` event, e.g. "...authentication failed... 403 Request not allowed"),
+  // not stderr — so a reachable-but-unauthenticated (or proxy-blocked) claude
+  // that speaks the protocol perfectly was misclassified as `stream-nonconforming`
+  // ("doesn't speak the protocol"). The smoke now scans stdout too, so this lands
+  // as `auth-missing`. The user-facing symptom was claude probes showing red
+  // "non-conforming" when the daemon simply lacked the proxy to reach the API.
+  test(
+    'claude that emits an auth error on stdout → auth-missing (not stream-nonconforming)',
+    async () => {
+      process.env.MOCK_CLAUDE_SESSION_ID = 'smoke-sess-autherr'
+      process.env.MOCK_CLAUDE_IS_ERROR = '1'
+      process.env.MOCK_CLAUDE_EXIT_CODE = '1'
+      process.env.MOCK_CLAUDE_RESULT_TEXT =
+        'API Error: 403 Request not allowed (authentication failed)'
+      const r = await smokeRuntime({
+        protocol: 'claude-code',
+        binaryPath: wrapperFor(MOCK_CLAUDE),
+        bridgeCredentials: false,
+        timeoutMs: SMOKE_TIMEOUT,
+      })
+      expect(r.outcome).toBe('auth-missing')
+      expect(r.conforms).toBe(false)
+      expect(r.sawNonce).toBe(false)
     },
     SMOKE_TIMEOUT,
   )

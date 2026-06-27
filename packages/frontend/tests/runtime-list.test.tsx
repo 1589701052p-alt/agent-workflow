@@ -138,4 +138,28 @@ describe('RuntimeList (RFC-112 PR-D)', () => {
     // the protocol picker is the public Select combobox, not a raw <select>.
     expect(screen.getByRole('combobox', { name: /protocol/i })).toBeTruthy()
   })
+
+  // Codex P3 regression: the claude spawn path consumes ONLY `model`, so a
+  // claude-code runtime must NOT offer variant/temperature/steps/maxSteps inputs
+  // (a saved value would silently do nothing). opencode keeps the full profile.
+  test('claude-code runtime form shows only Model — no Max steps / variant / temperature', async () => {
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add runtime/i }))
+    // Default protocol is opencode → the full profile incl. Max steps renders.
+    expect(screen.getByText('Max steps')).toBeTruthy()
+    // Switch the protocol Select to Claude Code (public combobox: click → mouseDown option).
+    fireEvent.click(screen.getByRole('combobox', { name: /protocol/i }))
+    const list = document.querySelector('ul[role="listbox"]') as HTMLUListElement
+    const claudeOpt = Array.from(list.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('Claude Code'),
+    )!
+    fireEvent.mouseDown(claudeOpt)
+    // Model stays; the opencode-only params are gone; the explanatory hint shows.
+    expect(screen.getByText('Model')).toBeTruthy()
+    expect(screen.queryByText('Max steps')).toBeNull()
+    expect(screen.queryByText('Variant')).toBeNull()
+    expect(screen.queryByText('Temperature')).toBeNull()
+    expect(screen.getByText(/use only the model/i)).toBeTruthy()
+  })
 })

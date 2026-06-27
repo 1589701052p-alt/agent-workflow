@@ -236,13 +236,15 @@ function RuntimeFormDialog(props: {
     props.existing?.maxSteps ?? undefined,
   )
   const isOpencode = protocol === 'opencode'
-  // variant/temperature/steps are opencode-only; null them out for claude.
+  // Codex P3: the claude spawn path consumes ONLY `model` — variant / temperature
+  // / steps / maxSteps are all opencode-only, so null them out for claude (else a
+  // user could save a Claude runtime param that never affects execution).
   const profileBody = () => ({
     model: model ?? null,
     variant: isOpencode && variant.trim() !== '' ? variant.trim() : null,
     temperature: isOpencode ? (temperature ?? null) : null,
     steps: isOpencode ? (steps ?? null) : null,
-    maxSteps: maxSteps ?? null,
+    maxSteps: isOpencode ? (maxSteps ?? null) : null,
   })
 
   const test = useMutation({
@@ -356,9 +358,9 @@ function RuntimeFormDialog(props: {
         </div>
       )}
       {!isOpencode && (
-        <Field label={t('runtimes.fieldMaxSteps')}>
-          <NumberInput value={maxSteps} onChange={setMaxSteps} min={1} />
-        </Field>
+        <p className="muted" style={{ margin: '4px 0 0 0', fontSize: 13 }}>
+          {t('runtimes.claudeModelOnlyHint')}
+        </p>
       )}
       {smoke !== null && (
         <div style={{ marginTop: 8 }}>

@@ -76,9 +76,18 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
     staleTime: 30_000,
   })
   const registeredRuntimes = runtimesQuery.data?.runtimes ?? []
-  // RFC-113: the runtime selector shows unless claude is explicitly disabled (and
-  // the agent doesn't already pin a runtime). model/params now live on the runtime.
-  const showRuntime = claudeEnabled || value.runtime != null
+  // When claude is disabled, hide claude-protocol runtimes from the options — an
+  // agent can't run on a disabled runtime (Codex P2: but DON'T hide the whole
+  // picker, opencode profiles must stay selectable).
+  const selectableRuntimes = claudeEnabled
+    ? registeredRuntimes
+    : registeredRuntimes.filter((r) => r.protocol !== 'claude-code')
+  // RFC-113: the runtime selector is the ONLY per-agent profile control, so show it
+  // whenever there's a real choice — claude available, the agent already pins a
+  // runtime, or custom (non-built-in) opencode profiles exist (e.g. opencode-opus /
+  // opencode-haiku on a claude-disabled install). Only a single built-in opencode
+  // and claude off ⇒ nothing to choose ⇒ hide.
+  const showRuntime = claudeEnabled || value.runtime != null || selectableRuntimes.length > 1
 
   return (
     <div className="agent-form">
@@ -218,12 +227,17 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
               onChange={(v) => patch('runtime', v === '' ? undefined : v)}
               options={[
                 { value: '', label: t('agentForm.runtimeInherit') },
-                ...(registeredRuntimes.length > 0
-                  ? registeredRuntimes.map((r) => ({ value: r.name, label: r.name }))
-                  : [
-                      { value: 'opencode', label: t('agentForm.runtimeOpencode') },
-                      { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
-                    ]),
+                // Loaded registry wins; while it's empty (query in flight) fall back
+                // to the built-in name(s) — both when claude is on, opencode-only
+                // when it's off (mirrors the claude-protocol filter above).
+                ...(selectableRuntimes.length > 0
+                  ? selectableRuntimes.map((r) => ({ value: r.name, label: r.name }))
+                  : claudeEnabled
+                    ? [
+                        { value: 'opencode', label: t('agentForm.runtimeOpencode') },
+                        { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
+                      ]
+                    : [{ value: 'opencode', label: t('agentForm.runtimeOpencode') }]),
               ]}
             />
           </Field>

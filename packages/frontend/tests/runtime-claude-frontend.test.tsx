@@ -30,6 +30,14 @@ import { setBaseUrl, setToken } from '../src/stores/auth'
 let fetchUrls: string[] = []
 // Each test may override what `/api/config` returns (drives the gating).
 let configResponse: unknown = { claudeCodeEnabled: true }
+// Each test may override the registered-runtimes list (drives the picker options).
+// Default mirrors a real daemon: the two read-only built-ins are always present.
+let runtimesResponse: unknown = {
+  runtimes: [
+    { name: 'opencode', protocol: 'opencode' },
+    { name: 'claude-code', protocol: 'claude-code' },
+  ],
+}
 
 const MODELS_BODY = {
   binary: 'claude',
@@ -73,10 +81,17 @@ beforeEach(() => {
   setToken('tok')
   fetchUrls = []
   configResponse = { claudeCodeEnabled: true }
+  runtimesResponse = {
+    runtimes: [
+      { name: 'opencode', protocol: 'opencode' },
+      { name: 'claude-code', protocol: 'claude-code' },
+    ],
+  }
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : (input as URL | Request).toString()
     fetchUrls.push(url)
     if (url.includes('/api/runtime/models')) return jsonResponse(MODELS_BODY)
+    if (url.includes('/api/runtimes')) return jsonResponse(runtimesResponse)
     if (url.includes('/api/config')) return jsonResponse(configResponse)
     return jsonResponse([])
   })
@@ -156,5 +171,36 @@ describe('AgentForm — runtime selector (RFC-111)', () => {
     await waitFor(() => {
       expect(screen.queryByRole('combobox', { name: /^Runtime$/ })).toBeNull()
     })
+  })
+
+  // Codex P2 regression: with claude disabled, the runtime selector is the ONLY
+  // way to assign a custom opencode profile (opencode-opus / opencode-haiku), so
+  // it must STAY visible when such runtimes exist — only the claude-protocol
+  // options get filtered out. Before the fix the whole picker was hidden when
+  // claude was off, stranding opencode-only installs on the default runtime.
+  test('claude disabled + custom opencode runtimes → selector shows, claude options filtered', async () => {
+    configResponse = { claudeCodeEnabled: false }
+    runtimesResponse = {
+      runtimes: [
+        { name: 'opencode', protocol: 'opencode' },
+        { name: 'claude-code', protocol: 'claude-code' },
+        { name: 'opencode-opus', protocol: 'opencode' },
+      ],
+    }
+    const initial: CreateAgent = { ...emptyAgent(), name: 'demo' }
+    wrap(<AgentForm value={initial} onChange={() => {}} />)
+
+    // The picker stays visible (custom opencode profile to choose). Open it and
+    // wait for the registry to load into the options (the open listbox re-renders
+    // when the /api/runtimes query resolves).
+    const trigger = await screen.findByRole('combobox', { name: /^Runtime$/ })
+    fireEvent.click(trigger)
+    // the custom opencode profile appears once the query resolves...
+    const opt = await screen.findByRole('option', { name: 'opencode-opus' })
+    // ...and the claude-protocol runtime is filtered out (claude disabled).
+    expect(screen.queryByRole('option', { name: 'claude-code' })).toBeNull()
+    // select it → closes the portaled listbox so afterEach teardown doesn't clash
+    // with the open Select portal (happy-dom + React 19 removeChild).
+    fireEvent.mouseDown(opt)
   })
 })

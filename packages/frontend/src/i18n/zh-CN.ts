@@ -745,6 +745,7 @@ export interface Resources {
     fieldTemperature: string
     fieldSteps: string
     fieldMaxSteps: string
+    claudeModelOnlyHint: string
     isDefault: string
     setDefault: string
     smoke: {
@@ -3110,6 +3111,7 @@ export const zhCN: Resources = {
     fieldTemperature: '温度',
     fieldSteps: '步数',
     fieldMaxSteps: '最大步数',
+    claudeModelOnlyHint: 'Claude Code 运行时只用模型 —— 变体 / 温度 / 步数 不生效。',
     isDefault: '默认',
     setDefault: '设为默认',
     smoke: {

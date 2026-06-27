@@ -202,6 +202,13 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     let sawEnvelope = false
     let outBytes = 0
     let stderrText = ''
+    // claude reports auth / API errors on STDOUT (the stream-json `result` event
+    // carries `is_error` + e.g. "Failed to authenticate. API Error: 403 Request
+    // not allowed"), not stderr. Accumulate stdout too so the auth/model
+    // classifier sees those — else a reachable-but-unauthenticated (or
+    // proxy-blocked) claude misclassifies as `stream-nonconforming` ("doesn't
+    // speak the protocol") when it actually spoke it fine and just couldn't auth.
+    let stdoutText = ''
 
     const readStream = async (
       stream: ReadableStream<Uint8Array> | undefined,
@@ -239,6 +246,9 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
     // concurrently; the timeout timer kills the child if it overruns.
     const drainAll = Promise.all([
       readStream(child.stdout as ReadableStream<Uint8Array> | undefined, (line) => {
+        // raw line (capped) feeds the auth/model classifier — claude's error is
+        // here, not on stderr (see stdoutText decl).
+        if (stdoutText.length < 8_192) stdoutText += line + '\n'
         const ev = driver.parseEvent(line)
         if (ev !== null) {
           sawEvent = true
@@ -273,7 +283,10 @@ export async function smokeRuntime(opts: SmokeOptions): Promise<SmokeResult> {
       }),
     ])
 
-    const haystack = `${stderrText}`.toLowerCase()
+    // Scan BOTH streams: claude's auth/API errors land on stdout, opencode's on
+    // stderr. Only consulted when the run didn't conform, so a healthy nonce echo
+    // never trips a false auth/model hit.
+    const haystack = `${stderrText}\n${stdoutText}`.toLowerCase()
     const authHit = AUTH_SIGNATURES.test(haystack)
     const modelHit = MODEL_FAIL_SIGNATURES.test(haystack)
     // Codex P2: conformance REQUIRES the nonce round-trip (a real protocol turn

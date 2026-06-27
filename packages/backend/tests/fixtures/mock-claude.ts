@@ -13,6 +13,8 @@
 //   MOCK_CLAUDE_MODEL           echoed in the system/init event
 //   MOCK_CLAUDE_EXIT_CODE       process exit code (default 0)
 //   MOCK_CLAUDE_IS_ERROR        '1' → result.is_error=true (+ result text)
+//   MOCK_CLAUDE_RESULT_TEXT     override the is_error result text (default 'mock
+//                               error') — e.g. an auth/API-error string on stdout
 //   MOCK_CLAUDE_INPUT_TOKENS / _OUTPUT_TOKENS / _CACHE_READ / _CACHE_CREATE
 //   MOCK_CLAUDE_STDERR          emitted on stderr
 //   MOCK_CLAUDE_DELAY_MS        sleep before exit (timeout tests)
@@ -121,11 +123,14 @@ emit({
 
 const isError = env.MOCK_CLAUDE_IS_ERROR === '1'
 // result — terminal event; usage here is the cumulative total the driver reads.
+// MOCK_CLAUDE_RESULT_TEXT overrides the error result text so a test can reproduce
+// claude's real auth/API failure string (e.g. "...authentication failed...") on
+// STDOUT — the smoke probe scans stdout for those signatures (runtimeSmoke).
 emit({
   type: 'result',
   subtype: isError ? 'error' : 'success',
   is_error: isError,
-  result: isError ? 'mock error' : text,
+  result: isError ? (env.MOCK_CLAUDE_RESULT_TEXT ?? 'mock error') : text,
   session_id: sessionId,
   total_cost_usd: 0,
   num_turns: 1,
