@@ -163,14 +163,40 @@ function resolveTriggerForEntry(
 
 /** Resolve one entry's phase inputs from the round + the task's runs. The handler
  *  run is looked up by the stamp id DIRECTLY (authoritative, includes fanout child
- *  rows — Codex impl gate F2); an answered round without a stamp is in-flight. */
+ *  rows — Codex impl gate F2); an answered round without a stamp is in-flight.
+ *
+ *  RFC-120 T9 (Codex H2): for a DEFERRED task, a designer entry's OWN
+ *  `trigger_run_id` (stamped by dispatchTaskQuestions) is the dispatch signal —
+ *  NULL means NOT yet dispatched (the task is parked awaiting_human), so the row
+ *  reads pending/staged, NOT processing. Once stamped, resolve that dispatched
+ *  rerun (processing → awaiting_confirm). For NON-deferred tasks (and
+ *  questioner/self entries), the immediate flow never stamps `trigger_run_id`, so
+ *  the consumption-stamp logic stays byte-for-byte (golden-lock). */
 function resolveEntryHandler(
   round: ClarifyRoundRow,
-  roleKind: TaskQuestionRow['roleKind'],
+  entry: TaskQuestionRow,
   runs: NodeRunRow[],
   outputRunIds: Set<string>,
+  deferred: boolean,
 ): { handlerRun: HandlerRunView | null; dispatchedInFlight: boolean } {
-  const triggerRunId = resolveTriggerForEntry(round, roleKind)
+  if (deferred && entry.roleKind === 'designer') {
+    if (entry.triggerRunId === null) {
+      // Not yet dispatched → pending/staged (the gate parks the task here).
+      return { handlerRun: null, dispatchedInFlight: false }
+    }
+    const dispatchedRow = runs.find((r) => r.id === entry.triggerRunId)
+    // Stamped but the run row is gone (GC) → treat as in-flight rather than reset.
+    if (!dispatchedRow) return { handlerRun: null, dispatchedInFlight: true }
+    return {
+      handlerRun: {
+        status: dispatchedRow.status,
+        startedAt: dispatchedRow.startedAt,
+        hasOutput: outputRunIds.has(dispatchedRow.id),
+      },
+      dispatchedInFlight: false,
+    }
+  }
+  const triggerRunId = resolveTriggerForEntry(round, entry.roleKind)
   const row = triggerRunId ? runs.find((r) => r.id === triggerRunId) : undefined
   if (!row) return { handlerRun: null, dispatchedInFlight: round.status === 'answered' }
   return {
@@ -197,6 +223,17 @@ export async function listTaskQuestions(
   const entries = await db.select().from(taskQuestions).where(eq(taskQuestions.taskId, taskId))
   if (entries.length === 0) return []
 
+  // RFC-120 T9 (Codex H2): the task's deferred flag picks the phase signal — the
+  // entry's own trigger_run_id (deferred) vs the round consumption stamp (legacy).
+  const taskRow = (
+    await db
+      .select({ deferred: tasks.deferredQuestionDispatch })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+  )[0]
+  const deferred = taskRow?.deferred === true
+
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
   const outputRunIds = await runIdsWithOutput(
     db,
@@ -211,9 +248,10 @@ export async function listTaskQuestions(
     const effectiveTargetNodeId = e.overrideTargetNodeId ?? e.defaultTargetNodeId
     const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
       round,
-      e.roleKind,
+      e,
       runs,
       outputRunIds,
+      deferred,
     )
     const phase = deriveQuestionPhase({
       roundStatus: round.status,
@@ -370,11 +408,21 @@ async function deriveEntryPhase(db: DbClient, entry: TaskQuestionRow): Promise<T
     db,
     runs.map((r) => r.id),
   )
+  // RFC-120 T9 (Codex H2): deferred tasks read the dispatch signal off the entry's
+  // own trigger_run_id (see resolveEntryHandler); non-deferred stays byte-for-byte.
+  const taskRow = (
+    await db
+      .select({ deferred: tasks.deferredQuestionDispatch })
+      .from(tasks)
+      .where(eq(tasks.id, entry.taskId))
+      .limit(1)
+  )[0]
   const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
     round,
-    entry.roleKind,
+    entry,
     runs,
     outputRunIds,
+    taskRow?.deferred === true,
   )
   return deriveQuestionPhase({
     roundStatus: round.status,
@@ -447,6 +495,17 @@ export async function reassignTaskQuestion(
   const phase = await deriveEntryPhase(db, entry)
   if (phase === 'done' || phase === 'closed') {
     throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
+  }
+  // RFC-120 T9 (Codex M1): once dispatched (trigger_run_id stamped), the minted
+  // handler run is already carrying this entry's answer (run-scoped injection) and
+  // will consume its round — a late reassign would silently re-target work in
+  // flight. Post-dispatch retargeting is reopen's job, not reassign's. (Non-deferred
+  // tasks never stamp trigger_run_id, so this is byte-for-byte for them.)
+  if (entry.triggerRunId !== null) {
+    throw new ConflictError(
+      'task-question-already-dispatched',
+      `cannot reassign a dispatched question (trigger_run_id is set) — use reopen to re-target after dispatch`,
+    )
   }
   await db
     .update(taskQuestions)

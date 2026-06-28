@@ -28,7 +28,14 @@ import { join } from 'node:path'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
-import { crossClarifySessions, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
+import {
+  crossClarifySessions,
+  nodeRunOutputs,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
 import { markClarifyRoundsConsumedBy } from '../src/services/clarifyRounds'
 import {
   buildExternalFeedbackContext,
@@ -36,8 +43,10 @@ import {
   submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import {
+  listTaskQuestions,
   loadUndispatchedDesignerTargets,
   reassignTaskQuestion,
+  stageTaskQuestion,
 } from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { deriveFrontier } from '../src/services/scheduler'
@@ -867,5 +876,107 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       body: JSON.stringify({ entryIds: [] }),
     })
     expect(res.status).toBe(422)
+  })
+
+  test('H1(re-gate): dispatch on a NON-deferred task is rejected — no extra rerun, nothing stamped', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: false })
+    // non-deferred designer-scoped submit → immediate designer rerun.
+    const submit = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    expect(submit.outcome.kind).toBe('designer-rerun-triggered')
+    // lazy reconcile creates the designer entry (trigger_run_id NULL).
+    await listTaskQuestions(db, taskId)
+    const entry = (await designerEntries(db, taskId))[0]!
+    expect(entry.triggerRunId).toBeNull()
+    const before = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-not-deferred-dispatch')
+    // no DUPLICATE rerun minted; entry still un-stamped.
+    const after = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+    expect(after.length).toBe(before.length)
+    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBeNull()
+  })
+
+  test('H2(re-gate): deferred designer entry reads pending→staged pre-dispatch, processing→awaiting_confirm after', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
+      directive: 'continue',
+    })
+    const phaseOf = async () =>
+      (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!.phase
+
+    // Pre-dispatch: NOT processing — the task is parked, the row is pending.
+    expect(await phaseOf()).toBe('pending')
+    const entry = (await designerEntries(db, taskId))[0]!
+    await stageTaskQuestion(db, entry.id, true, actor)
+    expect(await phaseOf()).toBe('staged')
+
+    // Dispatch → the entry's own trigger_run_id (pending rerun) → processing.
+    const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    const runId = result.reruns[0]!.nodeRunId
+    expect(await phaseOf()).toBe('processing')
+
+    // Run finishes done + output → awaiting_confirm.
+    await db.update(nodeRuns).set({ status: 'done' }).where(eq(nodeRuns.id, runId))
+    await db.insert(nodeRunOutputs).values({ nodeRunId: runId, portName: 'result', content: 'x' })
+    expect(await phaseOf()).toBe('awaiting_confirm')
+  })
+
+  test('M1(re-gate): reassign allowed pre-dispatch (NULL trigger) but rejected post-dispatch (stamped)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await db.insert(nodeRuns).values({
+      id: `nr_other_${taskId}`,
+      taskId,
+      nodeId: OTHER,
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      startedAt: Date.now() - 500,
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+
+    // pre-dispatch (trigger_run_id NULL) → reassign allowed.
+    await reassignTaskQuestion(db, entry.id, OTHER, actor)
+    expect((await designerEntries(db, taskId))[0]?.overrideTargetNodeId).toBe(OTHER)
+
+    // dispatch stamps trigger_run_id.
+    await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+
+    // post-dispatch → reassign rejected (reopen is the post-dispatch path).
+    let threw: unknown = null
+    try {
+      await reassignTaskQuestion(db, entry.id, DESIGNER, actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-already-dispatched')
   })
 })

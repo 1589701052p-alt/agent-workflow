@@ -110,6 +110,25 @@ export async function dispatchTaskQuestions(
 ): Promise<DispatchTaskQuestionsResult> {
   if (entryIds.length === 0) return { reruns: [] }
 
+  // 0. Codex H1 — batch-dispatch is ONLY valid on an opted-in deferred task. On a
+  //    non-deferred task the immediate flow already minted the designer rerun, so
+  //    minting again off a lazily-reconciled (NULL trigger_run_id) entry would
+  //    DOUBLE-mint. The /questions/dispatch route rejects this too; this is the
+  //    defensive net for any direct service caller.
+  const taskRow = (
+    await db
+      .select({ deferred: tasks.deferredQuestionDispatch, snapshot: tasks.workflowSnapshot })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+  )[0]
+  if (taskRow?.deferred !== true) {
+    throw new ConflictError(
+      'task-not-deferred-dispatch',
+      `task ${taskId} is not a deferred-dispatch task; refusing to mint (its designer rerun already fired immediately at submit)`,
+    )
+  }
+
   // 1. The requested still-undispatched designer entries (NULL trigger_run_id).
   const requested = await db
     .select()
@@ -186,13 +205,6 @@ export async function dispatchTaskQuestions(
     else byTarget.set(t, [e])
   }
   if (byTarget.size === 0) return { reruns: [] }
-  const taskRow = (
-    await db
-      .select({ snapshot: tasks.workflowSnapshot })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
-  )[0]
   const definition = taskRow ? parseDefinition(taskRow.snapshot) : null
   for (const [targetNodeId, group] of byTarget) {
     await assertSafeDispatchTarget(db, taskId, targetNodeId, group, definition)
