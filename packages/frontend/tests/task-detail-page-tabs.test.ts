@@ -83,8 +83,9 @@ describe('TaskDetailPage tab structure', () => {
     // Counts panes vs occurrences of the panes wrapper — the wrapper
     // should appear exactly once and contain every `.task-detail__pane`.
     // RFC-065 added the worktree-files pane between outputs and worktree-diff.
+    // RFC-120 added the task-questions pane (board) after feedback.
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(8)
+    expect(paneCount).toBe(9)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })

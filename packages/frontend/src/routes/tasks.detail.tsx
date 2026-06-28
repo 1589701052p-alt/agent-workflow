@@ -23,6 +23,7 @@ import { RecoverySection } from '@/components/tasks/RecoverySection'
 import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { WorkflowSyncBanner } from '@/components/tasks/WorkflowSyncBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
+import { TaskQuestionList } from '@/components/tasks/TaskQuestionList'
 import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
@@ -155,6 +156,15 @@ function TaskDetailPage() {
   const hasOutputs =
     task.data === undefined ? false : collectPorts(task.data.workflowSnapshot).length > 0
   const tabs = availableTabs({ hasOutputs })
+  // RFC-120: agent nodes of the frozen snapshot — reassign candidates for the
+  // task question board (only agent nodes are valid handlers).
+  const agentNodeOptions = useMemo(() => {
+    const snap = task.data?.workflowSnapshot as WorkflowDefinition | undefined
+    if (!snap?.nodes) return []
+    return snap.nodes
+      .filter((n) => n.kind.startsWith('agent'))
+      .map((n) => ({ id: n.id, label: n.id }))
+  }, [task.data?.workflowSnapshot])
   // If the user was on the outputs tab and hasOutputs flips false (mostly
   // defensive — the snapshot is frozen at task start), fall back to the
   // canvas. Always-mount strategy keeps panes in the DOM, but the tab
@@ -548,6 +558,10 @@ function TaskDetailPage() {
         <div className="task-detail__pane" hidden={tab !== 'feedback'}>
           <TaskFeedbackList taskId={id} />
         </div>
+        {/* RFC-120: task question list / 任务中心 board. */}
+        <div className="task-detail__pane" hidden={tab !== 'task-questions'}>
+          <TaskQuestionList taskId={id} nodeOptions={agentNodeOptions} />
+        </div>
       </div>
     </div>
   )
@@ -571,6 +585,8 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabWorktreeStructure')
     case 'feedback':
       return t('tasks.tabFeedback')
+    case 'task-questions':
+      return t('tasks.tabQuestions')
   }
 }
 

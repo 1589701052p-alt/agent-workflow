@@ -14,6 +14,8 @@ export type TaskDetailTab =
   | 'worktree-diff'
   | 'worktree-structure'
   | 'feedback'
+  // RFC-120: task question list / 任务中心 board.
+  | 'task-questions'
 
 /** Canonical left-to-right tab order shown in the page tab bar. The
  *  product spec pins this sequence; do not reorder without an RFC.
@@ -31,6 +33,8 @@ export const TAB_ORDER: readonly TaskDetailTab[] = [
   // RFC-083: structural-diff overlay, immediately after the textual diff.
   'worktree-structure',
   'feedback',
+  // RFC-120: task question list / 任务中心 board (always present).
+  'task-questions',
 ] as const
 
 /**

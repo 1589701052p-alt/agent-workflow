@@ -11209,3 +11209,65 @@ mark.comment-anchor[data-active='true'] {
   gap: 6px;
   flex-shrink: 0;
 }
+
+/* RFC-120 — task question list / 任务中心 board (kanban columns by phase). */
+.task-questions {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 8px 0;
+  align-items: flex-start;
+}
+.task-questions__col {
+  flex: 0 0 220px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-questions__col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-questions__count {
+  font-size: 12px;
+  color: var(--muted);
+}
+.task-questions__card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-questions__title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.task-questions__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+  font-size: 12px;
+  align-items: center;
+}
+.task-questions__meta dt {
+  color: var(--muted);
+}
+.task-questions__meta dd {
+  margin: 0;
+}
+.task-questions__answer {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+  padding-left: 6px;
+}
+.task-questions__actions {
+  display: flex;
+  gap: 6px;
+}

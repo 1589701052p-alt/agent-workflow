@@ -50,11 +50,12 @@ describe('TAB_ORDER', () => {
       'worktree-diff',
       'worktree-structure',
       'feedback',
+      'task-questions',
     ])
   })
 
   test('is readonly (frozen at the type level — defense against accidental sort)', () => {
-    expect(TAB_ORDER).toHaveLength(8)
+    expect(TAB_ORDER).toHaveLength(9)
   })
 
   test('worktree-structure sits immediately after worktree-diff', () => {
@@ -79,6 +80,7 @@ describe('availableTabs', () => {
       'worktree-diff',
       'worktree-structure',
       'feedback',
+      'task-questions',
     ])
   })
 
@@ -92,6 +94,7 @@ describe('availableTabs', () => {
       'worktree-diff',
       'worktree-structure',
       'feedback',
+      'task-questions',
     ])
     expect(tabs.includes('outputs' as never)).toBe(false)
     // worktree-files is unconditional — a task's worktree is always worth

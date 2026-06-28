@@ -1218,6 +1218,7 @@ export interface Resources {
     structWalkthroughTitle: string
     structWalkthroughMore: string
     tabFeedback: string
+    tabQuestions: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
     worktreeFilesOversized: string
@@ -2436,6 +2437,24 @@ export interface Resources {
     placeholder: string
     noResults: string
     remove: string
+  }
+  taskQuestions: {
+    empty: string
+    source: string
+    target: string
+    noTarget: string
+    reassign: string
+    confirm: string
+    stage: string
+    unstage: string
+    phase: {
+      pending: string
+      staged: string
+      processing: string
+      awaiting_confirm: string
+      done: string
+      closed: string
+    }
   }
   attribution: {
     localHistoric: string
@@ -3686,6 +3705,7 @@ export const zhCN: Resources = {
     structWalkthroughTitle: '重点改动(按风险)',
     structWalkthroughMore: '还有 {{n}} 处',
     tabFeedback: '留言',
+    tabQuestions: '问题',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',
     worktreeFilesOversized: '文件过大（{{size}}），超过 {{limit}} 阈值，未预览。',
@@ -5030,6 +5050,24 @@ export const zhCN: Resources = {
     placeholder: '搜索用户…',
     noResults: '没有匹配的用户',
     remove: '移除 {{name}}',
+  },
+  taskQuestions: {
+    empty: '暂无反问问题。',
+    source: '来源节点',
+    target: '处理节点',
+    noTarget: '未指定',
+    reassign: '改派处理节点',
+    confirm: '确认',
+    stage: '加入待下发',
+    unstage: '移出待下发',
+    phase: {
+      pending: '待指派',
+      staged: '待下发',
+      processing: '处理中',
+      awaiting_confirm: '已处理待确认',
+      done: '完成',
+      closed: '已关闭',
+    },
   },
   attribution: {
     localHistoric: '本地用户（历史）',
