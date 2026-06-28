@@ -32,6 +32,7 @@ import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
+import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
 import { useActor } from '@/hooks/useActor'
 import { useUserLookup } from '@/hooks/useUserLookup'
 import { Dialog } from '@/components/Dialog'
@@ -795,6 +796,10 @@ export function ClarifyDetailPage() {
           const scope: ClarifyQuestionScope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
           return (
             <div key={q.id} className="clarify-question-wrapper" data-question-wrapper-id={q.id}>
+              {/* RFC-120 D12: per-question handler echo + picker. Self-filters to
+                  designer-domain questions (renders null otherwise) and reads the
+                  same override SoT the board edits. */}
+              <ClarifyQuestionHandler taskId={s.taskId} questionId={q.id} />
               {/* RFC-059: per-question scope picker. Only rendered for
                   cross-clarify nodes (self-clarify has no scope split).
                   In awaiting_human → editable Segmented; in sealed states

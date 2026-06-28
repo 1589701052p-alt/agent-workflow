@@ -11271,3 +11271,12 @@ mark.comment-anchor[data-active='true'] {
   display: flex;
   gap: 6px;
 }
+
+/* RFC-120 D12 — clarify-page per-question handler echo + picker. */
+.clarify-handler {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
