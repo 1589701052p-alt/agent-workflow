@@ -1228,6 +1228,50 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     expect(ctx?.sourcesCsv).toBe('q_b')
   })
 
+  test('C1 golden-lock: a NON-deferred override does NOT drop the source from the immediate graph designer rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: false })
+    await db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId,
+      nodeId: OTHER,
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      startedAt: Date.now() - 500,
+    })
+    // Non-deferred designer-scoped submit → immediate designer rerun.
+    const submit = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    expect(submit.outcome.kind).toBe('designer-rerun-triggered')
+
+    // Lazy reconcile creates the designer entry; the user records an override. In
+    // the NON-deferred flow this is recorded-but-NOT-executed (no batch dispatch, no
+    // run-scoped injection).
+    await listTaskQuestions(db, taskId)
+    const entry = (await designerEntries(db, taskId))[0]!
+    await reassignTaskQuestion(db, entry.id, OTHER, actor)
+
+    // The immediate graph designer rerun MUST STILL receive the source's Q&A — the
+    // C1 exclusion is gated to deferred tasks, so it does NOT fire here (golden-lock;
+    // otherwise the answer would be silently dropped — neither graph nor override
+    // would carry it).
+    const ctx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+    })
+    expect(ctx).toBeDefined()
+    expect(ctx?.sourcesCsv).toBe(QUESTIONER)
+  })
+
   test('H2(final): a directive=stop designer-scoped round never creates a deferred park', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })

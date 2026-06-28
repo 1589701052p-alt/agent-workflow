@@ -1161,6 +1161,19 @@ export async function buildExternalFeedbackContext(
   )
   if (siblingNodeIds.length === 0) return undefined
 
+  // RFC-120 T9 (Codex round-10): the C1 override-divergence exclusion below applies
+  // ONLY to DEFERRED tasks. In the non-deferred flow an override is recorded-but-
+  // NOT-executed (no batch dispatch, no run-scoped injection — the scheduler passes
+  // dispatchedRunId only when deferred), so the immediate designer rerun MUST still
+  // receive a reassigned round's answer; excluding it would silently drop the
+  // feedback (golden-lock regression). Single cheap read.
+  const [taskRow] = await args.db
+    .select({ deferred: tasks.deferredQuestionDispatch })
+    .from(tasks)
+    .where(eq(tasks.id, args.taskId))
+    .limit(1)
+  const taskDeferred = taskRow?.deferred === true
+
   const sources: CrossClarifySourceContext[] = []
   for (const nodeId of siblingNodeIds) {
     const rows = await args.db
@@ -1186,28 +1199,32 @@ export async function buildExternalFeedbackContext(
       .limit(1)
     const latest = rows[0]
     if (latest === undefined) continue
-    // RFC-120 T9 (Codex C1): skip a round REASSIGNED to a different handler — its
-    // answer is carried by that override target's RUN-SCOPED rerun
-    // (buildRunScopedExternalFeedback), NOT this graph designer. Without this, an
-    // override-dispatched (or even pending-override) round would be DOUBLE-handled
-    // when the graph designer later reruns (its session is still
-    // consumedByConsumerRunId=NULL until the override run finishes). Keyed on the
-    // override target diverging from THIS designer (regardless of dispatch state, so
-    // it also covers a pending-override round). Golden-lock: non-deferred /
-    // no-override tasks have no such rows → no exclusion, byte-identical query.
-    const reassignedElsewhere = await args.db
-      .select({ id: taskQuestions.id })
-      .from(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, latest.crossClarifyNodeRunId),
-          eq(taskQuestions.roleKind, 'designer'),
-          isNotNull(taskQuestions.overrideTargetNodeId),
-          ne(taskQuestions.overrideTargetNodeId, args.designerNodeId),
-        ),
-      )
-      .limit(1)
-    if (reassignedElsewhere.length > 0) continue
+    // RFC-120 T9 (Codex C1, gated round-10): for a DEFERRED task, skip a round
+    // REASSIGNED to a different handler — its answer is carried by that override
+    // target's RUN-SCOPED rerun (buildRunScopedExternalFeedback), NOT this graph
+    // designer. Without this, an override-dispatched (or pending-override) round
+    // would be DOUBLE-handled when the graph designer later reruns (its session is
+    // still consumedByConsumerRunId=NULL until the override run finishes). Keyed on
+    // the override diverging from THIS designer (regardless of dispatch state, so it
+    // also covers a pending-override round). For a NON-deferred task the exclusion
+    // is OFF — the override is recorded-but-not-executed there, so the immediate
+    // designer rerun MUST still get the source (golden-lock). The query itself is
+    // skipped when not deferred → byte-identical for non-deferred / no-override.
+    if (taskDeferred) {
+      const reassignedElsewhere = await args.db
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
+        .where(
+          and(
+            eq(taskQuestions.originNodeRunId, latest.crossClarifyNodeRunId),
+            eq(taskQuestions.roleKind, 'designer'),
+            isNotNull(taskQuestions.overrideTargetNodeId),
+            ne(taskQuestions.overrideTargetNodeId, args.designerNodeId),
+          ),
+        )
+        .limit(1)
+      if (reassignedElsewhere.length > 0) continue
+    }
     const questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
     const answers =
       latest.answersJson !== null ? (JSON.parse(latest.answersJson) as ClarifyAnswer[]) : []
