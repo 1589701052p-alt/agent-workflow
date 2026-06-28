@@ -1667,3 +1667,71 @@ export const recoveryEvents = sqliteTable(
     kindIdx: index('idx_recovery_events_kind').on(t.kind, t.createdAt),
   }),
 )
+
+// -----------------------------------------------------------------------------
+// RFC-120 task_questions — per-(clarify question × handler role) tracked entry
+// for the task's "question list / 任务中心". Auto-collected from every clarify
+// round (self + cross). Execution phases (待处理/处理中/已处理待确认) are DERIVED
+// at read time from the handler node_run (see services/taskQuestions.ts +
+// shared/task-questions.ts) — NOT stored; only the manual overlay (confirmation
+// + override target + audit) and the round/role identity persist. role_kind
+// 'designer' is the only re-targetable (修订型) role; 'self'/'questioner' are
+// 阻塞-产出型 (re-target would deadlock). Attribution columns (confirmed_by /
+// last_reassigned_by) are UI/audit-only and must NEVER enter an agent prompt
+// (RFC-099 prompt-isolation; locked by rfc120 tests).
+// -----------------------------------------------------------------------------
+export const taskQuestions = sqliteTable(
+  'task_questions',
+  {
+    id: text('id').primaryKey(), // ULID
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // The source clarify round's intermediary node_run id (locates clarify_rounds).
+    // Plain text (logical pointer; tolerated-if-stale, cleaned up via task cascade).
+    originNodeRunId: text('origin_node_run_id').notNull(),
+    questionId: text('question_id').notNull(), // round-local question id
+    questionTitle: text('question_title').notNull(), // snapshot (title is stable across reopen)
+    sourceKind: text('source_kind', { enum: ['self', 'cross'] }).notNull(),
+    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer'] }).notNull(),
+    // Round iteration / loop_iter snapshot — used by resolveHandlerRun to frame
+    // the exact handler lineage (Codex F1).
+    iteration: integer('iteration').notNull().default(0),
+    loopIter: integer('loop_iter').notNull().default(0),
+    // Graph-resolved default handler node (NULL if the graph could not resolve).
+    defaultTargetNodeId: text('default_target_node_id'),
+    // Human re-target (designer only); NULL = use default. effective target =
+    // override ?? default.
+    overrideTargetNodeId: text('override_target_node_id'),
+    // Anchor rerun this entry currently tracks (NULL until answered; moves
+    // forward on reopen re-fire). Plain text; phase derivation tolerates stale.
+    triggerRunId: text('trigger_run_id'),
+    confirmation: text('confirmation', { enum: ['open', 'confirmed'] })
+      .notNull()
+      .default('open'),
+    confirmedBy: text('confirmed_by'),
+    confirmedByRole: text('confirmed_by_role'),
+    confirmedAt: integer('confirmed_at'),
+    lastReassignedBy: text('last_reassigned_by'),
+    lastReassignedAt: integer('last_reassigned_at'),
+    reopenCount: integer('reopen_count').notNull().default(0),
+    // Pre-edit answer snapshot captured at reopen (audit of the "解冻前" value).
+    priorAnswerSnapshotJson: text('prior_answer_snapshot_json'),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    taskIdx: index('idx_task_questions_task').on(t.taskId),
+    originIdx: index('idx_task_questions_origin').on(t.originNodeRunId),
+    // Natural identity: one entry per (round, question, role).
+    identityIdx: uniqueIndex('uniq_task_questions_identity').on(
+      t.originNodeRunId,
+      t.questionId,
+      t.roleKind,
+    ),
+  }),
+)
