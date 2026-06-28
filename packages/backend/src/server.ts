@@ -32,6 +32,7 @@ import { mountRuntimesRoutes } from '@/routes/runtimes'
 import { mountSkillRoutes } from '@/routes/skills'
 import { mountSkillSourceRoutes } from '@/routes/skill-sources'
 import { mountClarifyRoutes } from '@/routes/clarify'
+import { mountTaskQuestionRoutes } from '@/routes/taskQuestions'
 import { mountFusionRoutes } from '@/routes/fusions'
 import { mountReviewRoutes } from '@/routes/reviews'
 import { mountTaskRoutes } from '@/routes/tasks'
@@ -159,6 +160,7 @@ export function createApp(deps: AppDeps): Hono {
   mountWorktreeFilesRoutes(app, deps)
   mountReviewRoutes(app, deps)
   mountClarifyRoutes(app, deps)
+  mountTaskQuestionRoutes(app, deps)
   mountFusionRoutes(app, deps)
   mountMemoryRoutes(app, deps)
   mountMemoryDistillJobRoutes(app, deps)
