@@ -362,9 +362,18 @@ function summarizeAnswer(round: ClarifyRoundRow, questionId: string): string | n
 // today's behavior for non-deferred tasks — the golden-lock boundary.
 // ---------------------------------------------------------------------------
 
-/** Effective handler nodes (override ?? default designer) of every undispatched
- *  designer entry that should park a deferred-dispatch task. Empty for any
- *  non-deferred task (golden-lock). */
+/** Effective handler nodes (override ?? default designer) that should PARK a
+ *  deferred-dispatch task. A node parks only when it has ≥1 UNDISPATCHED designer entry
+ *  (`dispatched_at` NULL) AND NO IN-FLIGHT one (Codex H1 re-gate).
+ *
+ *  Per-question dispatch (部分或全部问题) means a node can hold q1 dispatched (in-flight)
+ *  AND q2 staged at the same time. Parking such a node would STRAND q1's already-minted
+ *  rerun (deriveFrontier keeps a parked node out of `ready`), so a node with an in-flight
+ *  dispatched designer question is NOT parked — it RUNS for q1; q2 stays staged for a later
+ *  dispatch that reruns the node again. A dispatched question is IN-FLIGHT until consumed
+ *  (its handler run, via the same resolveHandlerRun lineage the read-side uses, reaches
+ *  done+output); once consumed, a still-undispatched sibling re-parks the node so a later
+ *  dispatch isn't stranded. Empty for any non-deferred task (golden-lock). */
 export async function loadUndispatchedDesignerTargets(
   db: DbClient,
   taskId: string,
@@ -377,8 +386,10 @@ export async function loadUndispatchedDesignerTargets(
       .limit(1)
   )[0]
   if (taskRow?.deferred !== true) return new Set()
-  const rows = await db
+  const entries = await db
     .select({
+      dispatchedAt: taskQuestions.dispatchedAt,
+      triggerRunId: taskQuestions.triggerRunId,
       defaultTargetNodeId: taskQuestions.defaultTargetNodeId,
       overrideTargetNodeId: taskQuestions.overrideTargetNodeId,
     })
@@ -391,7 +402,6 @@ export async function loadUndispatchedDesignerTargets(
       and(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
-        isNull(taskQuestions.dispatchedAt),
         ne(taskQuestions.confirmation, 'confirmed'),
         eq(clarifyRounds.status, 'answered'),
         // RFC-120 T9 (Codex H2): a directive='stop' round skips the designer rerun —
@@ -399,11 +409,56 @@ export async function loadUndispatchedDesignerTargets(
         eq(clarifyRounds.directive, 'continue'),
       ),
     )
-  const out = new Set<string>()
-  for (const r of rows) {
-    const target = r.overrideTargetNodeId ?? r.defaultTargetNodeId
-    if (target !== null && target !== '') out.add(target)
+  if (entries.length === 0) return new Set()
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const outputRunIds = await runIdsWithOutput(
+    db,
+    runs.map((r) => r.id),
+  )
+  const lineageViews = runs.map(
+    (r): RunLineageView => ({
+      id: r.id,
+      nodeId: r.nodeId,
+      iteration: r.iteration,
+      loopIter: 0,
+      rerunCause: r.rerunCause,
+      status: r.status,
+      startedAt: r.startedAt,
+      hasOutput: outputRunIds.has(r.id),
+      parentNodeRunId: r.parentNodeRunId,
+    }),
+  )
+  const hasUndispatched = new Set<string>()
+  const hasInFlight = new Set<string>()
+  for (const e of entries) {
+    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
+    if (target === null || target === '') continue
+    if (e.dispatchedAt === null) {
+      hasUndispatched.add(target)
+      continue
+    }
+    // Dispatched → in-flight UNTIL consumed (handler run done+output, via lineage).
+    if (e.triggerRunId === null) {
+      hasInFlight.add(target) // queued (frontier rerun pending; not yet bound)
+      continue
+    }
+    const anchorRow = runs.find((r) => r.id === e.triggerRunId)
+    if (!anchorRow) {
+      hasInFlight.add(target) // stamped but run GC'd → treat as in-flight, not consumed
+      continue
+    }
+    const hr = resolveHandlerRun({
+      effectiveTargetNodeId: anchorRow.nodeId,
+      iteration: anchorRow.iteration,
+      loopIter: 0,
+      triggerRunId: e.triggerRunId,
+      runs: lineageViews,
+    })
+    const consumed = hr !== null && hr.status === 'done' && hr.hasOutput
+    if (!consumed) hasInFlight.add(target)
   }
+  const out = new Set<string>()
+  for (const t of hasUndispatched) if (!hasInFlight.has(t)) out.add(t)
   return out
 }
 

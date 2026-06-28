@@ -589,7 +589,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect(designerRuns.filter((r) => r.status === 'pending').length).toBe(1)
   })
 
-  test('subset dispatch: dispatching ONE entry leaves the same-round sibling parked (NOT stranded)', async () => {
+  test('H1(re-gate): subset dispatch does NOT park the node while q1 is in-flight (q1 runs, q2 stays staged); re-parks once q1 is consumed', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
       deferred: true,
@@ -605,11 +605,107 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     // dispatch ONLY q1 (both → same handler DESIGNER, so the per-origin guard allows it).
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
     expect(result.dispatchedEntryIds).toEqual([entries[0]!.id])
+    const runId = result.reruns[0]!.nodeRunId
     const after = await designerEntries(db, taskId)
     expect(after.find((e) => e.id === entries[0]!.id)?.dispatchedAt).not.toBeNull()
-    expect(after.find((e) => e.id === entries[1]!.id)?.dispatchedAt).toBeNull() // q2 still parked
-    // the task STILL parks on q2 (NOT stranded — it is simply undispatched).
+    expect(after.find((e) => e.id === entries[1]!.id)?.dispatchedAt).toBeNull() // q2 undispatched
+
+    // Codex H1 re-gate: q1 is dispatched + IN-FLIGHT (its rerun pending). The node must NOT
+    // be parked (else q1's minted rerun would be STRANDED) even though q2 is undispatched.
+    expect((await loadUndispatchedDesignerTargets(db, taskId)).has(DESIGNER)).toBe(false)
+
+    // The rerun dispatches → binds q1 (the scheduler calls buildExternalFeedbackContext);
+    // still not parked while the run is in flight.
+    await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: runId,
+    })
+    expect((await loadUndispatchedDesignerTargets(db, taskId)).has(DESIGNER)).toBe(false)
+
+    // q1's rerun finishes done+output → q1 consumed. Now the node RE-PARKS for the still-
+    // undispatched q2 (so a later dispatch of q2 isn't lost to an already-completing task).
+    await db.update(nodeRuns).set({ status: 'done' }).where(eq(nodeRuns.id, runId))
+    await db.insert(nodeRunOutputs).values({ nodeRunId: runId, portName: 'result', content: 'x' })
     expect((await loadUndispatchedDesignerTargets(db, taskId)).has(DESIGNER)).toBe(true)
+  })
+
+  test('H1(re-gate): a node with an in-flight dispatched question is DISPATCHABLE in deriveFrontier (not parked)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor) // dispatch q1 only
+
+    // The park set excludes DESIGNER (in-flight q1) → deriveFrontier does NOT bucket it into
+    // awaitingHuman; its pending rerun is dispatchable (not stranded).
+    const deferred = await loadUndispatchedDesignerTargets(db, taskId)
+    const rows = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const scopeNodes = liveDef().nodes as unknown as WorkflowNode[]
+    const f = deriveFrontier(
+      rows,
+      liveDef(),
+      scopeNodes,
+      new Set(scopeNodes.map((n) => n.id)),
+      0,
+      new Map(),
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      deferred,
+    )
+    expect(f.awaitingHuman).not.toContain(DESIGNER)
+    expect(f.ready).toContain(DESIGNER) // q1's pending rerun runs
+  })
+
+  test('H1(re-gate): concurrent disjoint dispatch on the same node mints ONE pending rerun (idempotent), not two', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    // Two SEPARATE dispatches of disjoint entries on the same handler node.
+    const d1 = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
+    const d2 = await dispatchTaskQuestions(db, taskId, [entries[1]!.id], actor)
+    expect(d1.reruns.length).toBe(1)
+    // The second dispatch REUSES the first's in-flight rerun (idempotent) — same run id.
+    expect(d2.reruns.length).toBe(1)
+    expect(d2.reruns[0]?.nodeRunId).toBe(d1.reruns[0]?.nodeRunId)
+    // EXACTLY ONE pending cross-clarify-answer rerun on DESIGNER (no duplicate / orphan).
+    const pending = await db
+      .select()
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.nodeId, DESIGNER),
+          eq(nodeRuns.status, 'pending'),
+        ),
+      )
+    expect(pending.length).toBe(1)
+    // Both entries are committed; the single rerun injects BOTH via the node queue.
+    expect((await designerEntries(db, taskId)).every((e) => e.dispatchedAt !== null)).toBe(true)
   })
 
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
@@ -1149,6 +1245,186 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     // confirm now works.
     await confirmTaskQuestion(db, entry.id, actor)
     expect(await phaseOf()).toBe('done')
+  })
+
+  test('H2(re-gate): a fresh process-retry STILL carries the External Feedback (lineage select, not == run id)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+    const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    const attempt1 = result.reruns[0]!.nodeRunId
+    const a1Row = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, attempt1)))[0]!
+
+    // attempt1 renders + BINDS the question, then FAILS with no output.
+    const ctx1 = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: attempt1,
+    })
+    expect(ctx1?.block).toContain('A')
+    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(attempt1)
+    await db.update(nodeRuns).set({ status: 'failed' }).where(eq(nodeRuns.id, attempt1))
+
+    // The scheduler mints a FRESH process-retry (different id, same node+iteration).
+    const attempt2 = ulid()
+    await db.insert(nodeRuns).values({
+      id: attempt2,
+      taskId,
+      nodeId: DESIGNER,
+      status: 'pending',
+      retryIndex: 1,
+      iteration: a1Row.iteration,
+      rerunCause: 'process-retry',
+      startedAt: null,
+    })
+
+    // Codex H2 re-gate: the retry's feedback STILL contains the Q&A (selected via the
+    // lineage window, not just == current run id) and REBINDS the question to attempt2.
+    const ctx2 = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: attempt2,
+    })
+    expect(ctx2).toBeDefined()
+    expect(ctx2?.block).toContain('A')
+    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(attempt2)
+  })
+
+  test('H3(re-gate): a mixed {default-to-D, override-to-D} batch STILL gates on D readiness (unresolved sibling → rejected, nothing minted)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    // D has two sibling cross-clarify sources (cc_a, cc_b → D); E has its own (cc_c → E).
+    const D = 'designer'
+    const E = 'designerE'
+    const nodes: WorkflowNode[] = [
+      { id: D, kind: 'agent-single', agentName: 'd' } as WorkflowNode,
+      { id: E, kind: 'agent-single', agentName: 'e' } as WorkflowNode,
+      { id: 'q_a', kind: 'agent-single', agentName: 'qa' } as WorkflowNode,
+      { id: 'q_b', kind: 'agent-single', agentName: 'qb' } as WorkflowNode,
+      { id: 'q_c', kind: 'agent-single', agentName: 'qc' } as WorkflowNode,
+      { id: 'cc_a', kind: 'clarify-cross-agent', title: 'cc_a' } as WorkflowNode,
+      { id: 'cc_b', kind: 'clarify-cross-agent', title: 'cc_b' } as WorkflowNode,
+      { id: 'cc_c', kind: 'clarify-cross-agent', title: 'cc_c' } as WorkflowNode,
+    ]
+    const edges: WorkflowDefinition['edges'] = []
+    for (const { q, cc, d } of [
+      { q: 'q_a', cc: 'cc_a', d: D },
+      { q: 'q_b', cc: 'cc_b', d: D },
+      { q: 'q_c', cc: 'cc_c', d: E },
+    ]) {
+      edges.push({
+        id: `e_q_${cc}`,
+        source: { nodeId: q, portName: '__clarify__' },
+        target: { nodeId: cc, portName: 'questions' },
+      })
+      edges.push({
+        id: `e_d_${cc}`,
+        source: { nodeId: cc, portName: 'to_designer' },
+        target: { nodeId: d, portName: '__external_feedback__' },
+      })
+      edges.push({
+        id: `e_qb_${cc}`,
+        source: { nodeId: cc, portName: 'to_questioner' },
+        target: { nodeId: q, portName: '__clarify_response__' },
+      })
+    }
+    const def: WorkflowDefinition = { $schema_version: 4, inputs: [], nodes, edges, outputs: [] }
+    const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
+    await db.insert(workflows).values({
+      id: `wf_${taskId}`,
+      name: 'h3',
+      description: '',
+      definition: JSON.stringify(def),
+      version: 1,
+      schemaVersion: 4,
+    })
+    await db.insert(tasks).values({
+      id: taskId,
+      name: 'h3',
+      workflowId: `wf_${taskId}`,
+      workflowSnapshot: JSON.stringify(def),
+      repoPath: '/tmp/aw-h3/repo',
+      worktreePath: '',
+      baseBranch: 'main',
+      branch: `agent-workflow/${taskId}`,
+      status: 'running',
+      inputs: JSON.stringify({}),
+      startedAt: Date.now(),
+      deferredQuestionDispatch: true,
+    })
+    for (const n of [D, E]) {
+      await db
+        .insert(nodeRuns)
+        .values({ id: ulid(), taskId, nodeId: n, status: 'done', retryIndex: 0, iteration: 0 })
+    }
+    const openSession = async (q: string, cc: string, d: string, qid: string): Promise<string> => {
+      const runId = ulid()
+      await db
+        .insert(nodeRuns)
+        .values({ id: runId, taskId, nodeId: q, status: 'done', retryIndex: 0, iteration: 0 })
+      const { crossClarifyNodeRunId } = await createCrossClarifySession({
+        db,
+        taskId,
+        crossClarifyNodeId: cc,
+        sourceQuestionerNodeId: q,
+        sourceQuestionerNodeRunId: runId,
+        targetDesignerNodeId: d,
+        loopIter: 0,
+        questions: [mkQ(qid, 'designer-scoped?')],
+      })
+      return crossClarifyNodeRunId
+    }
+    const ccA = await openSession('q_a', 'cc_a', D, 'a1')
+    await openSession('q_b', 'cc_b', D, 'b1') // cc_b stays awaiting_human (unresolved sibling)
+    const ccC = await openSession('q_c', 'cc_c', E, 'c1')
+
+    // Answer cc_a (→ D default entry) and cc_c (→ E default entry). cc_b is NOT answered.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccA,
+      answers: [ans('a1')],
+      directive: 'continue',
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccC,
+      answers: [ans('c1')],
+      directive: 'continue',
+    })
+    const all = await designerEntries(db, taskId)
+    const entryA = all.find((e) => e.defaultTargetNodeId === D)! // default-to-D
+    const entryC = all.find((e) => e.defaultTargetNodeId === E)! // default-to-E
+    await reassignTaskQuestion(db, entryC.id, D, actor) // OVERRIDE entryC to D → mixed group for D
+
+    // The batch's group for D = {entryA (default D), entryC (override D)}. The override's
+    // presence must NOT skip readiness — D's graph subset {entryA} still gates on cc_b.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entryA.id, entryC.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-designer-not-ready')
+    // Nothing minted, nothing stamped (no partial dispatch).
+    expect((await designerEntries(db, taskId)).every((e) => e.dispatchedAt === null)).toBe(true)
+    const pending = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.status, 'pending')))
+    expect(pending.length).toBe(0)
   })
 
   test('H2(final): reassign is a CAS on dispatched_at — a concurrent dispatch makes it affect 0 rows → rejected', async () => {

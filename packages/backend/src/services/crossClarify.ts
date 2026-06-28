@@ -61,6 +61,7 @@ import {
   buildExternalFeedbackBlock,
   countDesignerScopedAcrossSources,
   extractDesignerScopedSubset,
+  NEW_CLARIFY_TRIGGER_CAUSES,
   findCrossClarifyNodesPointingToDesigner,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
@@ -80,7 +81,14 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, crossClarifySessions, nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import {
+  clarifyRounds,
+  crossClarifySessions,
+  nodeRunOutputs,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+} from '@/db/schema'
 import { sealAnswersServerSide } from '@/services/clarify'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { mintNodeRun } from '@/services/nodeRunMint'
@@ -1243,17 +1251,20 @@ export async function buildExternalFeedbackContext(
  *
  *   roleKind='designer' AND dispatched_at IS NOT NULL (committed for execution)
  *   AND effective handler (override ?? graph designer) == `handlerNodeId`
- *   AND (trigger_run_id IS NULL  — not yet bound to a finished run
- *        OR trigger_run_id == dispatchedRunId  — already bound to THIS run, e.g. a
- *           process-retry re-rendering the same run id).
+ *   AND the question renders for THIS run's LINEAGE: trigger_run_id IS NULL (unbound →
+ *       pick + bind), OR trigger_run_id is in the current run's process-retry lineage
+ *       window AND that lineage is NOT yet consumed (no done+output run).
  *
- * The binding (stamp trigger_run_id = dispatchedRunId on the still-unbound rows) is the
- * per-node consumption mechanism: the node's NEXT rerun's queue excludes them
- * (trigger_run_id no longer NULL), and the read-side resolves their handler run by this
- * lineage (processing → awaiting_confirm). The block itself reuses the SAME
- * `buildExternalFeedbackBlock` the graph path uses (group by origin round → designer-
- * scoped Q&A). Returns undefined when the node has no queue (a non-handler node that
- * merely re-ran via cascade → no injection).
+ * Codex H2 (process-retry must keep the feedback): a process-retry mints a FRESH node_run
+ * id. Selecting only `trigger_run_id IS NULL OR == dispatchedRunId` would DROP a question
+ * bound to the FAILED first attempt — the retry's different id can't reselect it, so the
+ * retry would run WITHOUT the External Feedback while the read-side lineage treats it as the
+ * handler continuation → false awaiting_confirm for work that never saw the Q&A. So we
+ * frame the same lineage window resolveHandlerRun uses ([anchor, next-clarify-rerun),
+ * excluding consumed) and re-render + REBIND any question whose binding is an earlier,
+ * still-unconsumed run in THIS run's lineage. The block reuses the SAME
+ * `buildExternalFeedbackBlock` the graph path uses. Returns undefined when the node has no
+ * renderable queue (a non-handler node that merely re-ran via cascade → no injection).
  */
 async function buildNodeQueueExternalFeedback(
   db: DbClient,
@@ -1262,7 +1273,9 @@ async function buildNodeQueueExternalFeedback(
   dispatchedRunId: string,
   generation: number,
 ): Promise<ExternalFeedbackPromptContext | undefined> {
-  const entries = await db
+  // ALL dispatched designer entries whose effective handler is this node (trigger state
+  // filtered in JS by the lineage window below).
+  const candidates = await db
     .select()
     .from(taskQuestions)
     .where(
@@ -1270,8 +1283,6 @@ async function buildNodeQueueExternalFeedback(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
         isNotNull(taskQuestions.dispatchedAt),
-        or(isNull(taskQuestions.triggerRunId), eq(taskQuestions.triggerRunId, dispatchedRunId)),
-        // effective handler (override ?? graph designer) == handlerNodeId
         or(
           eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
           and(
@@ -1281,11 +1292,38 @@ async function buildNodeQueueExternalFeedback(
         ),
       ),
     )
+  if (candidates.length === 0) return undefined
+
+  // Frame the lineage on this run's node + iteration (mirrors resolveHandlerRun). All of
+  // the node's runs at this iteration are the process-retry / clarify-rerun chain.
+  const rRow = (
+    await db.select().from(nodeRuns).where(eq(nodeRuns.id, dispatchedRunId)).limit(1)
+  )[0]
+  const sameNode = rRow
+    ? await db
+        .select()
+        .from(nodeRuns)
+        .where(
+          and(
+            eq(nodeRuns.taskId, taskId),
+            eq(nodeRuns.nodeId, handlerNodeId),
+            eq(nodeRuns.iteration, rRow.iteration),
+          ),
+        )
+    : []
+  const outputRunIds = await runIdsWithOutputCC(
+    db,
+    sameNode.map((r) => r.id),
+  )
+
+  const entries = candidates.filter((e) =>
+    renderableForRun(e.triggerRunId, dispatchedRunId, sameNode, outputRunIds),
+  )
   if (entries.length === 0) return undefined
 
-  // BIND the still-unbound entries to this rerun (the consumption marker). Already-
-  // bound-to-this-run entries (retry re-render) keep their stamp.
-  const toBind = entries.filter((e) => e.triggerRunId === null).map((e) => e.id)
+  // BIND every rendered entry not already pinned to THIS run (unbound NULLs + earlier-
+  // lineage rebinds) → the consumption marker for the node's NEXT rerun + the read-side.
+  const toBind = entries.filter((e) => e.triggerRunId !== dispatchedRunId).map((e) => e.id)
   if (toBind.length > 0) {
     await db
       .update(taskQuestions)
@@ -1342,6 +1380,61 @@ async function buildNodeQueueExternalFeedback(
     .map((s) => s.sourceQuestionerNodeId)
     .join(', ')
   return { block, iteration: String(generation), sourcesCsv: csv, runScoped: true }
+}
+
+/**
+ * RFC-120 §18 (Codex H2) — should a dispatched designer question bound to `triggerRunId`
+ * render for the current run `currentRunId`? `sameNode` is every node_run on the handler
+ * node at the current run's iteration (the process-retry / clarify-rerun chain). A question
+ * renders iff:
+ *   - triggerRunId IS NULL (unbound → first render of this run picks + binds it); OR
+ *   - triggerRunId is in `sameNode` AND the current run is inside triggerRunId's lineage
+ *     WINDOW [triggerRunId, next-clarify-rerun-after-it) AND that window has NO consumed
+ *     (done+output) run. This re-renders a question bound to a FAILED earlier attempt for
+ *     its process-retry, but NOT a question already consumed (done+output), and NOT one
+ *     bound to a SEPARATE later clarify dispatch (that dispatch is the window's upper bound).
+ */
+function renderableForRun(
+  triggerRunId: string | null,
+  currentRunId: string,
+  sameNode: ReadonlyArray<typeof nodeRuns.$inferSelect>,
+  outputRunIds: ReadonlySet<string>,
+): boolean {
+  if (triggerRunId === null) return true
+  const anchor = sameNode.find((r) => r.id === triggerRunId)
+  if (anchor === undefined) return false // bound to a run in another frame / GC'd → not ours
+  const triggerCauses = new Set<string>(NEW_CLARIFY_TRIGGER_CAUSES)
+  // Upper bound = the next NEW-clarify rerun strictly after the anchor (a separate dispatch).
+  let upperBound: string | null = null
+  for (const r of sameNode) {
+    if (r.id > triggerRunId && r.rerunCause !== null && triggerCauses.has(r.rerunCause)) {
+      if (upperBound === null || r.id < upperBound) upperBound = r.id
+    }
+  }
+  const inWindow = (id: string): boolean =>
+    id >= triggerRunId && (upperBound === null || id < upperBound)
+  if (!inWindow(currentRunId)) return false // current run belongs to a later dispatch window
+  // Consumed iff any TOP-LEVEL run in the window already produced output.
+  for (const r of sameNode) {
+    if (
+      r.parentNodeRunId === null &&
+      inWindow(r.id) &&
+      r.status === 'done' &&
+      outputRunIds.has(r.id)
+    )
+      return false
+  }
+  return true
+}
+
+/** node_run ids (within `runIds`) that captured ≥1 `<workflow-output>` row. */
+async function runIdsWithOutputCC(db: DbClient, runIds: string[]): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set()
+  const rows = await db
+    .select({ nodeRunId: nodeRunOutputs.nodeRunId })
+    .from(nodeRunOutputs)
+    .where(inArray(nodeRunOutputs.nodeRunId, runIds))
+  return new Set(rows.map((r) => r.nodeRunId))
 }
 
 // ---------------------------------------------------------------------------

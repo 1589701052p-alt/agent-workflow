@@ -265,8 +265,17 @@ export async function dispatchTaskQuestions(
   // 7. ONE dbTxSync: CAS-stamp dispatched_at on the requested entries + insert the frontier
   //    node_runs. A concurrent dispatcher that already claimed ≥1 → ConcurrentClaim →
   //    rollback (no stamp, no mint, no orphan).
+  //
+  //    Codex H1 (idempotent mint): a per-question dispatch may target a node that ALREADY
+  //    has a pending dispatched rerun (an earlier or concurrent disjoint dispatch of other
+  //    questions on the same node). Minting a SECOND pending row would leave a duplicate /
+  //    orphan — and is needless, since that one pending rerun drains the WHOLE node queue
+  //    (buildExternalFeedbackContext selects every dispatched-unbound question of the node).
+  //    So check, synchronously inside the tx, for an existing pending cross-clarify-answer
+  //    rerun on (node, iteration) and REUSE it instead of inserting a second.
   const requestedIds = requested.map((e) => e.id)
   const now = Date.now()
+  const resolved: Array<{ nodeId: string; nodeRunId: string }> = []
   let committed = false
   try {
     dbTxSync(db, (tx) => {
@@ -281,6 +290,25 @@ export async function dispatchTaskQuestions(
         .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
         .run()
       for (const p of mintPlans) {
+        const existingPending = tx
+          .select({ id: nodeRuns.id })
+          .from(nodeRuns)
+          .where(
+            and(
+              eq(nodeRuns.taskId, taskId),
+              eq(nodeRuns.nodeId, p.nodeId),
+              eq(nodeRuns.iteration, p.iteration),
+              isNull(nodeRuns.parentNodeRunId),
+              eq(nodeRuns.status, 'pending'),
+              eq(nodeRuns.rerunCause, 'cross-clarify-answer'),
+            ),
+          )
+          .all()
+        if (existingPending.length > 0) {
+          // Reuse the in-flight rerun — it will inject this node's whole dispatched queue.
+          resolved.push({ nodeId: p.nodeId, nodeRunId: existingPending[0]!.id })
+          continue
+        }
         // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
         // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
         // factory mintNodeRun uses, so zero hand-copied inheritance / cause drift; (2) the
@@ -288,6 +316,7 @@ export async function dispatchTaskQuestions(
         // (an async mintNodeRun would yield + commit early, defeating the atomicity).
         // rfc098-allow-direct-node-run-insert
         tx.insert(nodeRuns).values(p.values).run()
+        resolved.push({ nodeId: p.nodeId, nodeRunId: p.preId })
       }
       committed = true
     })
@@ -297,10 +326,10 @@ export async function dispatchTaskQuestions(
   }
   if (!committed) return EMPTY_RESULT
 
-  const reruns: DispatchedRerun[] = mintPlans.map((p) => ({
-    targetNodeId: p.nodeId,
-    nodeRunId: p.preId,
-    entryIds: requested.filter((e) => effectiveTarget(e) === p.nodeId).map((e) => e.id),
+  const reruns: DispatchedRerun[] = resolved.map((r) => ({
+    targetNodeId: r.nodeId,
+    nodeRunId: r.nodeRunId,
+    entryIds: requested.filter((e) => effectiveTarget(e) === r.nodeId).map((e) => e.id),
   }))
   log.info('task questions dispatched', {
     taskId,
@@ -346,9 +375,14 @@ async function assertSafeFrontierTarget(
  * readiness the immediate path enforces: every sibling cross-clarify node pointing at the
  * designer (within the round's loop_iter) must be resolved before the designer reruns.
  * Dispatching while a sibling is still awaiting_human would mint a PARTIAL rerun and force
- * a second rerun when it answers. Reject instead. Applies ONLY to a graph-designer frontier
- * (the group handles the designer's OWN rounds); an OVERRIDE target rides the per-node
- * queue with its specific question set and is not gated on the graph designer's siblings.
+ * a second rerun when it answers. Reject instead.
+ *
+ * Re-gate fix (mixed batch): the readiness gate keys on the GRAPH-DESIGNER subset of the
+ * group — the entries whose `default_target_node_id == targetNodeId` (the genuine rounds
+ * this node owns by graph). It must NOT be skipped just because the group ALSO contains an
+ * override-TO this node (an entry whose default was elsewhere). Skip readiness only when
+ * that subset is EMPTY (a pure-override group rides the per-node queue with its own
+ * question set, not the graph designer's siblings).
  */
 async function assertDesignerReady(
   db: DbClient,
@@ -357,9 +391,9 @@ async function assertDesignerReady(
   group: TaskQuestionRow[],
   definition: WorkflowDefinition,
 ): Promise<void> {
-  const overridden = group.some((e) => e.defaultTargetNodeId !== targetNodeId)
-  if (overridden) return // run-scoped override target — not the graph designer
-  for (const loopIter of new Set(group.map((e) => e.loopIter))) {
+  const graphSubset = group.filter((e) => e.defaultTargetNodeId === targetNodeId)
+  if (graphSubset.length === 0) return // pure-override group — not the graph designer
+  for (const loopIter of new Set(graphSubset.map((e) => e.loopIter))) {
     const readiness = await evaluateDesignerRerunReadiness({
       db,
       taskId,
@@ -379,6 +413,7 @@ async function assertDesignerReady(
 interface FrontierMintPlan {
   nodeId: string
   preId: string
+  iteration: number
   values: typeof nodeRuns.$inferInsert
 }
 
@@ -420,5 +455,5 @@ async function buildFrontierMintPlan(
     inheritFrom: last,
     overrides: { startedAt: null },
   })
-  return { nodeId: targetNodeId, preId, values }
+  return { nodeId: targetNodeId, preId, iteration: last.iteration, values }
 }
