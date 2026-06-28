@@ -21,7 +21,6 @@ import {
   workflows,
 } from '../src/db/schema'
 import {
-  DISTILLER_AGENT_NAME,
   DISTILLER_SYSTEM_PROMPT,
   buildDistillerUserPrompt,
   loadScopeContexts,
