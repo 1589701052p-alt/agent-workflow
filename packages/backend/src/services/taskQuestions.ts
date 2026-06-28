@@ -8,12 +8,12 @@
 //   * reconcileTaskQuestionsForRound — one clarify_round → its handler entries
 //     (问题 × 承接角色), upserted idempotently (preserves the manual overlay:
 //     override / confirmation / staged / audit).
-//   * resolveTriggerForEntry — the entry's anchor handler rerun id, resolved from
-//     the round's RFC-070 consumption stamps (authoritative for done handlers,
-//     Codex F4) with a best-effort cause-query fallback for in-flight handlers.
+//   * resolveEntryHandler — the entry's authoritative handler run, looked up by
+//     the round's RFC-070 consumption stamp id (Codex F4; includes fanout child
+//     rows — impl gate F2). Answered-without-stamp = in-flight (no run guessing — F1).
 //   * listTaskQuestions — lazy-reconcile every round of a task, then derive each
-//     entry's phase (pure deriveQuestionPhase + precise resolveHandlerRun lineage)
-//     into a DTO for the board / clarify-page / node badge.
+//     entry's phase (pure deriveQuestionPhase) into a DTO for the board /
+//     clarify-page / node badge.
 //
 // See design/RFC-120-task-question-list §2.3 / §4 / §11.
 
@@ -27,13 +27,11 @@ import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import {
   canReassign,
   deriveQuestionPhase,
-  NEW_CLARIFY_TRIGGER_CAUSES,
   reconcileDesiredEntries,
-  resolveHandlerRun,
   type ClarifyAnswer,
   type ClarifyQuestion,
   type ClarifyQuestionScope,
-  type RunLineageView,
+  type HandlerRunView,
   type TaskQuestionPhase,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
@@ -41,8 +39,6 @@ import {
 type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
-
-const TRIGGER_CAUSES = new Set<string>(NEW_CLARIFY_TRIGGER_CAUSES)
 
 export interface TaskQuestionDTO {
   id: string
@@ -153,37 +149,38 @@ export function reconcileTaskQuestionsForRound(db: DbClient, round: ClarifyRound
   })
 }
 
-/** The entry's anchor handler rerun id. Prefer the RFC-070 consumption stamp
- *  (authoritative once the handler finished done+output, Codex F4); fall back to
- *  the freshest in-flight target-node rerun with a trigger cause minted after the
- *  round's asking run (best-effort for the common single-round case). */
+/** The entry's authoritative handler run id = the RFC-070 consumption stamp (set
+ *  when the handler finished done+output, Codex F4). NULL while in flight / never
+ *  dispatched. We do NOT guess a run from cause+node+iteration (Codex impl gate F1)
+ *  — an in-flight answered round surfaces as `dispatchedInFlight` instead. */
 function resolveTriggerForEntry(
   round: ClarifyRoundRow,
   roleKind: TaskQuestionRow['roleKind'],
-  effectiveTargetNodeId: string | null,
-  runs: NodeRunRow[],
 ): string | null {
   if (round.status !== 'answered') return null // not dispatched
-  const stamp =
-    roleKind === 'questioner' ? round.consumedByQuestionerRunId : round.consumedByConsumerRunId
-  if (stamp) return stamp
-  if (effectiveTargetNodeId === null) return null
-  // best-effort: freshest trigger-cause rerun of the target node at this loopIter,
-  // minted after the round's asking run.
-  let best: string | null = null
-  for (const r of runs) {
-    if (
-      r.nodeId === effectiveTargetNodeId &&
-      r.iteration === round.loopIter &&
-      r.parentNodeRunId === null &&
-      r.rerunCause !== null &&
-      TRIGGER_CAUSES.has(r.rerunCause) &&
-      r.id > round.askingNodeRunId
-    ) {
-      if (best === null || r.id > best) best = r.id
-    }
+  return roleKind === 'questioner' ? round.consumedByQuestionerRunId : round.consumedByConsumerRunId
+}
+
+/** Resolve one entry's phase inputs from the round + the task's runs. The handler
+ *  run is looked up by the stamp id DIRECTLY (authoritative, includes fanout child
+ *  rows — Codex impl gate F2); an answered round without a stamp is in-flight. */
+function resolveEntryHandler(
+  round: ClarifyRoundRow,
+  roleKind: TaskQuestionRow['roleKind'],
+  runs: NodeRunRow[],
+  outputRunIds: Set<string>,
+): { handlerRun: HandlerRunView | null; dispatchedInFlight: boolean } {
+  const triggerRunId = resolveTriggerForEntry(round, roleKind)
+  const row = triggerRunId ? runs.find((r) => r.id === triggerRunId) : undefined
+  if (!row) return { handlerRun: null, dispatchedInFlight: round.status === 'answered' }
+  return {
+    handlerRun: {
+      status: row.status,
+      startedAt: row.startedAt,
+      hasOutput: outputRunIds.has(row.id),
+    },
+    dispatchedInFlight: false,
   }
-  return best
 }
 
 /** Lazy-reconcile every round of a task and project each entry into a DTO with
@@ -212,19 +209,17 @@ export async function listTaskQuestions(
     const round = roundByOrigin.get(e.originNodeRunId)
     if (!round) continue // round vanished (task edited); skip defensively
     const effectiveTargetNodeId = e.overrideTargetNodeId ?? e.defaultTargetNodeId
-    const triggerRunId = resolveTriggerForEntry(round, e.roleKind, effectiveTargetNodeId, runs)
-    const lineageRuns = runs.map((r) => toLineageView(r, outputRunIds))
-    const handlerRun = resolveHandlerRun({
-      effectiveTargetNodeId,
-      iteration: e.loopIter,
-      loopIter: e.loopIter,
-      triggerRunId,
-      runs: lineageRuns,
-    })
+    const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
+      round,
+      e.roleKind,
+      runs,
+      outputRunIds,
+    )
     const phase = deriveQuestionPhase({
       roundStatus: round.status,
       confirmation: e.confirmation,
       isStaged: e.stagedAt !== null,
+      dispatchedInFlight,
       handlerRun,
     })
     if (opts.sourceNodeId && round.askingNodeId !== opts.sourceNodeId) continue
@@ -275,23 +270,6 @@ function summarizeAnswer(round: ClarifyRoundRow, questionId: string): string | n
   return s.length > 200 ? `${s.slice(0, 200)}…` : s || null
 }
 
-/** Project a node_run row → the lineage view resolveHandlerRun expects. node_runs
- *  carries one `iteration` (the loop iteration); both lineage axes use it (the
- *  round-counter is disambiguated by the trigger anchor + window, not a run col). */
-function toLineageView(r: NodeRunRow, outputRunIds: Set<string>): RunLineageView {
-  return {
-    id: r.id,
-    nodeId: r.nodeId,
-    iteration: r.iteration,
-    loopIter: r.iteration,
-    rerunCause: r.rerunCause,
-    status: r.status,
-    startedAt: r.startedAt,
-    hasOutput: outputRunIds.has(r.id),
-    parentNodeRunId: r.parentNodeRunId,
-  }
-}
-
 // ---------------------------------------------------------------------------
 // RFC-120 PR-B writes — confirm / reassign / stage. All write only the manual
 // overlay on task_questions (collision-free; the answer→dispatch backend is
@@ -319,24 +297,22 @@ async function deriveEntryPhase(db: DbClient, entry: TaskQuestionRow): Promise<T
     .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
     .limit(1)
   if (!round) return entry.stagedAt !== null ? 'staged' : 'pending'
-  const effectiveTargetNodeId = entry.overrideTargetNodeId ?? entry.defaultTargetNodeId
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, entry.taskId))
   const outputRunIds = await runIdsWithOutput(
     db,
     runs.map((r) => r.id),
   )
-  const triggerRunId = resolveTriggerForEntry(round, entry.roleKind, effectiveTargetNodeId, runs)
-  const handlerRun = resolveHandlerRun({
-    effectiveTargetNodeId,
-    iteration: entry.loopIter,
-    loopIter: entry.loopIter,
-    triggerRunId,
-    runs: runs.map((r) => toLineageView(r, outputRunIds)),
-  })
+  const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
+    round,
+    entry.roleKind,
+    runs,
+    outputRunIds,
+  )
   return deriveQuestionPhase({
     roundStatus: round.status,
     confirmation: entry.confirmation,
     isStaged: entry.stagedAt !== null,
+    dispatchedInFlight,
     handlerRun,
   })
 }
@@ -397,6 +373,12 @@ export async function reassignTaskQuestion(
       'task-question-reassign-invalid',
       `cannot reassign '${entry.roleKind}' entry to '${targetNodeId}' (designer-only + must be an agent node)`,
     )
+  }
+  // Codex impl gate F3: don't re-target a terminal entry — the work is closed and
+  // an override there only records moot intent / risks confusing the resolution.
+  const phase = await deriveEntryPhase(db, entry)
+  if (phase === 'done' || phase === 'closed') {
+    throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
   }
   await db
     .update(taskQuestions)

@@ -124,7 +124,8 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
                   <dd>{e.sourceNodeId}</dd>
                   <dt>{t('taskQuestions.target')}</dt>
                   <dd>
-                    {e.roleKind === 'designer' ? (
+                    {/* RFC-120 Codex impl gate F3: only re-targetable while non-terminal. */}
+                    {e.roleKind === 'designer' && e.phase !== 'done' && e.phase !== 'closed' ? (
                       <Select
                         value={e.effectiveTargetNodeId ?? ''}
                         ariaLabel={t('taskQuestions.reassign')}

@@ -27,6 +27,9 @@ export function useTaskSync(taskId: string | null): void {
       }
       if (msg.type === 'node.status') {
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
+        // RFC-120: the question board's phases derive from node_runs (handler
+        // pending→running→done) — refresh it on every node status change.
+        void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
       }
       if (msg.type === 'node.event') {
         // Future: render directly on a node-events feed instead of going
@@ -65,6 +68,9 @@ export function useTaskSync(taskId: string | null): void {
         void qc.invalidateQueries({ queryKey: ['clarify', 'detail', msg.nodeRunId] })
         void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
         void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
+        // RFC-120: a new/answered clarify round lazily collects new question
+        // entries and moves their phase — refresh the board.
+        void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
         if (msg.type === 'clarify.answered') {
           void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
           void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })

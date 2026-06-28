@@ -128,8 +128,11 @@ export interface DeriveQuestionPhaseInput {
   confirmation: TaskQuestionConfirmation
   /** 是否已批准进「待下发」暂存（`task_questions.staged_at != null`），但还没下发。 */
   isStaged: boolean
-  /** 本条目的承接 run（service `resolveHandlerRun` 按精确 lineage 取；null=未下发）。
-   *  非 null ⟺ 已下发（trigger 已 mint）。 */
+  /** 已下发但承接 run 尚不可权威解析为 done（轮已答、handler 在跑、RFC-070 消费戳还没落）
+   *  → 处理中。避免在缺权威 trigger 时去猜某条 run（Codex 实现 gate F1）。 */
+  dispatchedInFlight: boolean
+  /** 本条目权威承接 run（service 按消费戳 id 直取，含 fanout 子 run；null=未解析/未下发）。
+   *  非 null ⟺ 已有权威承接 run。 */
   handlerRun: HandlerRunView | null
 }
 
@@ -144,11 +147,15 @@ export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuesti
     return 'done'
   }
   const run = input.handlerRun
-  // 已下发（承接 run 存在）→ 处理中 / 已处理待确认。queued(pending)/running/failed 均处理中。
+  // 已有权威承接 run → 处理中 / 已处理待确认。queued(pending)/running/failed 均处理中。
   if (run !== null) {
     if (run.status === 'done' && run.hasOutput) {
       return 'awaiting_confirm'
     }
+    return 'processing'
+  }
+  // 已下发、handler 在跑但消费戳未落（in-flight）→ 处理中（不去猜具体 run）。
+  if (input.dispatchedInFlight) {
     return 'processing'
   }
   // 未下发：已批准进待下发 → staged；否则待指派 pending。

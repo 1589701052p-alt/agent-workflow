@@ -393,3 +393,79 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     expect((await listTaskQuestions(db, taskId))[0]!.phase).toBe('pending')
   })
 })
+
+describe('RFC-120 Codex impl-gate regressions (F1/F2/F3)', () => {
+  test('F1: answered round with no consumption stamp → processing (in-flight, not a guessed run)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    // a LATER unrelated clarify-answer rerun on the same node must NOT be bound.
+    await seedRun(db, taskId, 'r-later', 'designer', {
+      rerunCause: 'clarify-answer',
+      status: 'running',
+    })
+    await seedRound(db, taskId, {
+      id: 'c1',
+      kind: 'self',
+      askingNodeId: 'designer',
+      intermediaryNodeRunId: 'c1-int',
+      questionsJson: JSON.stringify([Q('q1')]),
+      status: 'answered', // answered but consumedByConsumerRunId is NULL → in-flight
+    })
+    const [entry] = await listTaskQuestions(db, taskId)
+    expect(entry!.phase).toBe('processing')
+  })
+
+  test('F2: stamp points at a fanout CHILD handler run (parentNodeRunId set) → awaiting_confirm', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    await seedRun(db, taskId, 'parent', 'designer', { rerunCause: 'clarify-answer' })
+    // child run (parentNodeRunId set) with output — the authoritative handler.
+    await db.insert(nodeRuns).values({
+      id: 'child',
+      taskId,
+      nodeId: 'designer',
+      status: 'done',
+      parentNodeRunId: 'parent',
+      iteration: 0,
+    })
+    await db.insert(nodeRunOutputs).values({ nodeRunId: 'child', portName: 'result', content: 'x' })
+    await seedRound(db, taskId, {
+      id: 'c2',
+      kind: 'self',
+      askingNodeId: 'designer',
+      intermediaryNodeRunId: 'c2-int',
+      questionsJson: JSON.stringify([Q('q1')]),
+      status: 'answered',
+      consumedByConsumerRunId: 'child', // stamp on the CHILD row
+    })
+    const [entry] = await listTaskQuestions(db, taskId)
+    expect(entry!.phase).toBe('awaiting_confirm')
+  })
+
+  test('F3: reassign rejects a terminal (done) entry', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    await seedRun(db, taskId, 'h', 'coder', {
+      rerunCause: 'cross-clarify-answer',
+      withOutput: true,
+    })
+    await seedRound(db, taskId, {
+      id: 'x1',
+      kind: 'cross',
+      askingNodeId: 'auditor',
+      targetConsumerNodeId: 'coder',
+      intermediaryNodeRunId: 'x1-int',
+      questionsJson: JSON.stringify([Q('q1')]),
+      questionScopesJson: JSON.stringify({ q1: 'designer' }),
+      status: 'answered',
+      consumedByConsumerRunId: 'h',
+    })
+    const designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
+    expect(designer.phase).toBe('awaiting_confirm')
+    await confirmTaskQuestion(db, designer.id, ACTOR)
+    expect(
+      (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!.phase,
+    ).toBe('done')
+    await expect(reassignTaskQuestion(db, designer.id, 'fixer', ACTOR)).rejects.toThrow()
+  })
+})

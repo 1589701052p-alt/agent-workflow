@@ -30,6 +30,7 @@ const input = (over: Partial<DeriveQuestionPhaseInput>): DeriveQuestionPhaseInpu
   roundStatus: 'answered',
   confirmation: 'open',
   isStaged: false,
+  dispatchedInFlight: false,
   handlerRun: null,
   ...over,
 })
@@ -75,6 +76,24 @@ describe('deriveQuestionPhase (v2)', () => {
 
   test('not dispatched + staged → staged (待下发)', () => {
     expect(deriveQuestionPhase(input({ handlerRun: null, isStaged: true }))).toBe('staged')
+  })
+
+  test('dispatched in-flight (answered, handler running, no done-stamp yet) → processing', () => {
+    // Codex impl gate F1: don't guess a run — show processing without binding.
+    expect(deriveQuestionPhase(input({ handlerRun: null, dispatchedInFlight: true }))).toBe(
+      'processing',
+    )
+  })
+
+  test('dispatchedInFlight is overridden by an authoritative handler run', () => {
+    expect(
+      deriveQuestionPhase(
+        input({
+          dispatchedInFlight: true,
+          handlerRun: handler({ status: 'done', hasOutput: true }),
+        }),
+      ),
+    ).toBe('awaiting_confirm')
   })
 
   test('staged is pre-dispatch only — once dispatched, processing wins', () => {
