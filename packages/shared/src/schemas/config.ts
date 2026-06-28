@@ -230,12 +230,18 @@ export const ConfigSchema = z.object({
 
   // --- RFC-075 auto commit & push ---
   /**
-   * Model the built-in "commit" agent uses to summarize a diff into a commit
-   * message and to repair a rejected push. Falls back to opencode's installed
-   * default when unset (mirrors `memoryDistillModel`). Settings → Git section
-   * surfaces this; a cheap/fast model is recommended.
+   * @deprecated RFC-117 — superseded by `commitPushRuntime` (select a full runtime
+   * profile; model comes from it). Transition fallback: when `commitPushRuntime`
+   * is unset but this is set, the commit agent keeps its prior behavior (opencode +
+   * this model). Physical removal is a follow-up cleanup (RFC-113→115 two-phase).
    */
   commitPushModel: z.string().min(1).optional(),
+  /**
+   * RFC-117 — runtime profile NAME the built-in commit agent runs on (like an
+   * agent's `runtime`): protocol + binary + model from the selected profile. Unset
+   * → fall back to deprecated `commitPushModel`, then inherit `defaultRuntime`.
+   */
+  commitPushRuntime: z.string().min(1).optional(),
   /**
    * Max repair-and-repush cycles a commit&push node attempts on a non-auth
    * push rejection before giving up (commit stays local, node failed, task

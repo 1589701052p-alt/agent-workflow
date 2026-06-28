@@ -91,6 +91,7 @@ import {
   resolveFrozenRuntime,
   schedulerMintCause,
 } from '@/services/nodeRunMint'
+import { resolveInternalAgentRuntime } from '@/services/runtimeRegistry'
 import { getTaskWriteSem, gcTaskWriteSem } from '@/services/taskWriteLocks'
 import { buildReviewPromptContext, dispatchReviewNode } from '@/services/review'
 import {
@@ -198,6 +199,8 @@ export interface RunTaskOptions {
    * follow-up; the runtime reads sensible defaults today).
    */
   commitPushModel?: string
+  /** RFC-117: runtime profile NAME for the built-in commit agent (config.commitPushRuntime); wins over commitPushModel. */
+  commitPushRuntime?: string
   /** RFC-075: repair-retry budget; falls back to DEFAULT_COMMIT_PUSH_MAX_REPAIR_RETRIES. */
   commitPushMaxRepairRetries?: number
   /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
@@ -1002,7 +1005,13 @@ async function maybeRunCommitPush(
   const agentLabel: string =
     node.kind === 'agent-single' && typeof node.agentName === 'string' ? node.agentName : node.id
   const branch = task.branch
-  const model = state.opts.commitPushModel
+  // RFC-117: resolve the commit agent's runtime once for this task (profile name →
+  // defaultRuntime → deprecated commitPushModel fallback); frozen per session below.
+  const rt = await resolveInternalAgentRuntime(db, {
+    runtimeName: state.opts.commitPushRuntime,
+    deprecatedModel: state.opts.commitPushModel,
+    defaultRuntime: state.opts.defaultRuntime,
+  })
 
   for (const repo of state.repos) {
     // RFC-098 B1: a cancel that lands mid-commit&push stops at the next repo
@@ -1035,11 +1044,29 @@ async function maybeRunCommitPush(
           iteration,
           overrides: { parentNodeRunId: ctx.nodeRunId },
         })
+        // RFC-117: freeze the resolved commit runtime onto the session row via
+        // inheritFrom — its source is config.commitPushRuntime / deprecated model
+        // (not an agent.runtime row), so we pre-resolved `rt` above and freeze it
+        // here, getting the same node_runs snapshot the other 3 dispatch points do.
+        const frozen = await resolveFrozenRuntime(db, sessionRunId, null, null, {
+          protocol: rt.protocol,
+          binary: rt.binaryPath,
+          params: {
+            model: rt.model,
+            variant: rt.variant,
+            temperature: rt.temperature,
+            steps: rt.steps,
+            maxSteps: rt.maxSteps,
+          },
+        })
         const result = await runNode({
           taskId: task.id,
           nodeRunId: sessionRunId,
           nodeId,
-          agent: buildCommitAgent(model ?? null),
+          agent: buildCommitAgent(),
+          runtime: frozen.protocol,
+          runtimeBinary: frozen.binary,
+          runtimeParams: frozen.params,
           inputs: {},
           worktreePath: repo.worktreePath,
           promptTemplate: prompt,

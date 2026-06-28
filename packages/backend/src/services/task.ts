@@ -134,7 +134,12 @@ export interface StartTaskDeps {
    * route). Threaded into `RunTaskOptions`. Omitted fields fall back to
    * opencode-default model + DEFAULT_COMMIT_PUSH_* constants.
    */
-  commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+  commitPush?: {
+    model?: string
+    runtime?: string
+    maxRepairRetries?: number
+    diffMaxBytes?: number
+  }
   /**
    * RFC-103 T2 (02-SCHED): global concurrency cap, resolved from settings
    * `maxConcurrentNodes` by the route and threaded into `RunTaskOptions` across
@@ -504,6 +509,9 @@ export function runtimeConfigOpts(
 ): Partial<RunTaskOptions> {
   return {
     ...(deps.commitPush?.model !== undefined ? { commitPushModel: deps.commitPush.model } : {}),
+    ...(deps.commitPush?.runtime !== undefined
+      ? { commitPushRuntime: deps.commitPush.runtime }
+      : {}),
     ...(deps.commitPush?.maxRepairRetries !== undefined
       ? { commitPushMaxRepairRetries: deps.commitPush.maxRepairRetries }
       : {}),

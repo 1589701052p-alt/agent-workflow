@@ -38,6 +38,17 @@ describe('RFC-103 T2 runtimeConfigOpts — 单一事实源摊配置', () => {
     expect(runtimeConfigOpts({ commitPush: { model: 'm' } })).toEqual({ commitPushModel: 'm' })
   })
 
+  // RFC-117: the commit agent's runtime profile threads through the same funnel.
+  test('RFC-117: commitPush.runtime 摊成 commitPushRuntime（model 可共存于过渡期）', () => {
+    expect(runtimeConfigOpts({ commitPush: { runtime: 'oc-haiku' } })).toEqual({
+      commitPushRuntime: 'oc-haiku',
+    })
+    expect(runtimeConfigOpts({ commitPush: { model: 'm', runtime: 'oc-haiku' } })).toEqual({
+      commitPushModel: 'm',
+      commitPushRuntime: 'oc-haiku',
+    })
+  })
+
   // RFC-115: timeout (was hand-spread at each runTask site) + the new retry
   // budget + defaultRuntime (Codex F3: never threaded before) all flow through
   // this single funnel now.

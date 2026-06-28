@@ -13,11 +13,20 @@ import { loadConfig } from '@/config'
 /** RFC-075: read the auto commit&push runtime config from settings. */
 export function resolveCommitPushConfig(
   configPath: string,
-): { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } | undefined {
+):
+  | { model?: string; runtime?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+  | undefined {
   try {
     const cfg = loadConfig(configPath)
-    const out: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number } = {}
+    const out: {
+      model?: string
+      runtime?: string
+      maxRepairRetries?: number
+      diffMaxBytes?: number
+    } = {}
     if (cfg.commitPushModel !== undefined) out.model = cfg.commitPushModel
+    // RFC-117: commit agent runtime profile (wins over the deprecated model).
+    if (cfg.commitPushRuntime !== undefined) out.runtime = cfg.commitPushRuntime
     if (cfg.commitPushMaxRepairRetries !== undefined)
       out.maxRepairRetries = cfg.commitPushMaxRepairRetries
     if (cfg.commitPushDiffMaxBytes !== undefined) out.diffMaxBytes = cfg.commitPushDiffMaxBytes
@@ -41,14 +50,24 @@ export function resolveCommitPushConfig(
  * hung-but-alive opencode child was effectively immortal.
  */
 export function resolveLaunchRuntimeConfig(configPath: string): {
-  commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+  commitPush?: {
+    model?: string
+    runtime?: string
+    maxRepairRetries?: number
+    diffMaxBytes?: number
+  }
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number
   defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)
   defaultNodeRetries?: number // RFC-115: global per-node retry budget
 } {
   const out: {
-    commitPush?: { model?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+    commitPush?: {
+      model?: string
+      runtime?: string
+      maxRepairRetries?: number
+      diffMaxBytes?: number
+    }
     maxConcurrentNodes?: number
     defaultPerNodeTimeoutMs?: number
     defaultRuntime?: string // RFC-112: a registered runtime NAME (built-ins or custom)

@@ -26,7 +26,7 @@ export const COMMIT_AGENT_NAME = 'commit'
  * framework runs git), no skills / deps / mcp / plugins. `model` falls back to
  * opencode's installed default when unset.
  */
-export function buildCommitAgent(model?: string | null): Agent {
+export function buildCommitAgent(): Agent {
   const now = Date.now()
   return {
     id: '__commit_agent__',
@@ -47,7 +47,9 @@ export function buildCommitAgent(model?: string | null): Agent {
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
-    ...(model != null && model !== '' ? { model } : {}),
+    // RFC-117: no `model` here — the commit runtime (incl. model) is resolved +
+    // frozen by the scheduler (resolveInternalAgentRuntime → resolveFrozenRuntime)
+    // and the runner reads it from runtimeParams (RFC-113 single-source).
   }
 }
 
