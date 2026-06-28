@@ -10,6 +10,7 @@ import type { DbClient } from '@/db/client'
 import { agents, mcps, plugins, workflows } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { findAgentsDependingOn, validateDependsOn } from './agentDeps'
+import { getRuntime } from './runtimeRegistry'
 
 type AgentRow = typeof agents.$inferSelect
 
@@ -48,6 +49,12 @@ export async function createAgent(
   // RFC-031: every entry in input.plugins must point at an existing + enabled
   // plugins row. Failure here surfaces as 422 plugin-not-found / -disabled.
   await validatePluginReferences(db, input.plugins ?? [])
+
+  // RFC-111 (Codex audit F6): a pinned runtime NAME must resolve to an existing
+  // runtimes row. Without this, an agent.md import / API call can pin an unknown
+  // or typo'd runtime (e.g. `claude_code`) that saves fine but silently falls back
+  // to built-in opencode at dispatch — a hard-to-detect runtime/profile drift.
+  await validateRuntimeReference(db, input.runtime)
 
   const id = ulid()
   const now = Date.now()
@@ -119,6 +126,12 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   // RFC-031 save-time guard — only when caller patched plugins.
   if (patch.plugins !== undefined) {
     await validatePluginReferences(db, patch.plugins)
+  }
+
+  // RFC-111 (Codex audit F6): same guard for a patched runtime pin — a NAME must
+  // resolve to an existing runtimes row (null = clear to inherit, skips the check).
+  if (patch.runtime !== undefined) {
+    await validateRuntimeReference(db, patch.runtime)
   }
 
   const set: Partial<typeof agents.$inferInsert> = { updatedAt: Date.now() }
@@ -334,6 +347,27 @@ function parseDependsOnColumn(value: string | null | undefined): string[] {
  * existing mcps row. Empty input is a no-op. Throws `mcp-not-found` (422)
  * with the list of missing names so the UI can surface them inline.
  */
+/**
+ * RFC-111 (Codex audit F6): assert a pinned runtime NAME maps to an existing
+ * runtimes row. null/undefined = "inherit config.defaultRuntime", a no-op. Throws
+ * `runtime-not-found` (422) — without it an unknown/typo name saves as a pin but
+ * silently falls back to built-in opencode at dispatch (resolveAgentRuntime), a
+ * hard-to-detect runtime + generation-profile drift (the F6 import widened the
+ * exposure: agent.md authors can now pin arbitrary names).
+ */
+async function validateRuntimeReference(
+  db: DbClient,
+  name: string | null | undefined,
+): Promise<void> {
+  if (name === null || name === undefined) return
+  const row = await getRuntime(db, name)
+  if (row === null) {
+    throw new ValidationError('runtime-not-found', `agent references unknown runtime: ${name}`, {
+      notFound: [name],
+    })
+  }
+}
+
 async function validateMcpReferences(db: DbClient, names: readonly string[]): Promise<void> {
   if (names.length === 0) return
   const unique = Array.from(new Set(names))

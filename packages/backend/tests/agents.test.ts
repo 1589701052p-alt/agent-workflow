@@ -17,6 +17,7 @@ import {
   updateAgent,
 } from '../src/services/agent'
 import { ConflictError, NotFoundError } from '../src/util/errors'
+import { createRuntime } from '../src/services/runtimeRegistry'
 
 const TOKEN = 'a'.repeat(64)
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -159,6 +160,9 @@ describe('agent service', () => {
   // skipped runtime, so the edit form (PUT) could neither repoint nor un-pin an
   // agent — invisible because the RFC-113 migration had pinned every user agent.
   test('update writes runtime: pin, preserve on unrelated patch, clear to inherit', async () => {
+    // RFC-111/F6: a pinned runtime must resolve to a runtimes row
+    // (validateRuntimeReference) — seed the registry row this test pins to.
+    await createRuntime(db, { name: 'opencode-1', protocol: 'opencode', binaryPath: null })
     await createAgent(db, {
       name: 'rt',
       description: 'orig',
