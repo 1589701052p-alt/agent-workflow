@@ -101,9 +101,42 @@ export interface RuntimeModel {
 }
 
 /**
- * A pluggable agent runtime. PR-A populates only `kind` + `parseEvent`;
- * `buildSpawn` (later PR-A slice) and `probe`/`listModels`/`captureSession`
- * (PR-B) are added as they are implemented so each commit stays green.
+ * RFC-117 — spawn inputs for a framework "system agent" (distiller / commit /
+ * fusion-merger): one agent with a persona + model, NO skills / mcp / plugins /
+ * inventory / inline-config mutation. Each driver's `buildSpawn` translates this
+ * into its own argv+env (opencode inline config vs claude system-prompt-file).
+ * Distinct from the business-node spawn path in runner.ts, which keeps its
+ * skills/mcp/inventory assembly + golden byte-lock and does NOT route here.
+ */
+export interface SystemAgentSpawnContext {
+  /** The (virtual) agent name — opencode inline config key. */
+  agentName: string
+  /** Persona — opencode inline config `prompt` / claude `--append-system-prompt-file`. */
+  systemPrompt: string
+  /** Model from the resolved runtime profile; null/'' → the runtime's own default. */
+  model?: string | null
+  /** readonly → claude write-tool gate (opencode ignores). */
+  readonly?: boolean
+  /** User prompt — opencode positional argv / claude stdin. */
+  prompt: string
+  /** Subprocess cwd (distiller: a throwaway temp dir). */
+  worktreePath: string
+  /** Config dir (opencode: OPENCODE_CONFIG_DIR; claude: attempt dir holding .claude/). */
+  runDir: string
+  /** Override the default binary head (`[runtimeBinary]` vs `['opencode']`/`['claude']`) — RFC-112 custom fork. */
+  runtimeBinary?: string
+  /** RFC-026 clarify-rerun: resume a prior session. */
+  resumeSessionId?: string
+  /** RFC-111 D16: bridge subscription credential into the relocated claude config dir (real claude runs only; opencode ignores). */
+  bridgeCredentials?: boolean
+  /** RFC-067 per-task git identity (both non-empty to inject). */
+  gitUserName?: string | null
+  gitUserEmail?: string | null
+}
+
+/**
+ * A pluggable agent runtime. `kind` + `parseEvent` + `buildSpawn` are populated;
+ * `probe`/`listModels`/`captureSession` may be added later.
  */
 export interface RuntimeDriver {
   readonly kind: RuntimeKind
@@ -113,4 +146,10 @@ export interface RuntimeDriver {
    * to the pump's raw-text path.
    */
   parseEvent(line: string): NormalizedEvent | null
+  /**
+   * RFC-117 — assemble the spawn plan for a framework system agent (distiller /
+   * commit / fusion). The business-node spawn path (runner.ts) does NOT route
+   * through this — it keeps its own skills/mcp/inventory assembly + golden lock.
+   */
+  buildSpawn(ctx: SystemAgentSpawnContext): SpawnPlan
 }

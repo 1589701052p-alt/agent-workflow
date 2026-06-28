@@ -127,4 +127,8 @@ export interface RuntimeDriver {
 
 ## 9. Codex 设计 gate fold 记录
 
-(落档后跑 codex review,findings 在此追加;实现 gate 各 PR 复审后续追加。)
+**2026-06-28 设计 gate（codex-cli read-only，`--base f7f36bd` 框住三件套 commit `1015803`）= CLEAN**：对 RFC-117 三件套设计**零 findings**（codex 调研了 `runtimeRegistry`/`agent`/`fusion`/`schema`/`start`/migrations 等核实设计与现有代码吻合）。
+
+**顺带发现（非本 RFC 范围）**：因 `--base f7f36bd...HEAD` 区间含协作者并行 commit `e8c796c`（RFC-111/F6 给 agent 保存加 runtime 引用校验），codex 报 1 个 P2——`validateRuntimeReference`（`agent.ts:363`）对内置名 `opencode`/`claude-code` 在 seed 行缺失时误拒（`resolveRuntimeByName` 有 builtin fallback、校验却只查表）。**属协作者 `e8c796c` 代码、不在 RFC-117 范围**；与本 RFC PR-D（放开 builtin agent 选 runtime）弱相关（正常 seed 在时不触发），已转交协作者 / RFC-118 处理。PR-D 实装若需豁免内置名，须与协作者 agent.ts 改动协调（CLAUDE.md 多人协作冲突调和）。
+
+（实现 gate 各 PR 复审后续在此追加。）
