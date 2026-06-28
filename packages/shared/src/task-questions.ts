@@ -30,10 +30,13 @@ export type TaskQuestionRoleKind = 'self' | 'questioner' | 'designer'
 
 export type TaskQuestionSourceKind = 'self' | 'cross'
 
-/** 条目展示态（multica 式四态 + 已关闭终态）。 */
+/** 条目展示态（RFC-120 v2 看板列）。`下发`（mint 承接 rerun）是 pending/staged→processing
+ *  的边界（design §11.2/11.6）——一旦有承接 run 即「已下发=处理中」，不再以 run 是否
+ *  startedAt 分界。 */
 export type TaskQuestionPhase =
-  | 'pending' // 待处理：未答 / 已答但承接 run 未起跑
-  | 'processing' // 处理中：承接 run running / failed（失败仍处理中，D3）
+  | 'pending' // 待指派：未下发、未批准（handler 可能未定 / 待答）
+  | 'staged' // 待下发：已批准·未下发（拖入「准许执行/待下发」、等批量下发）
+  | 'processing' // 处理中：已下发（承接 run 存在，含 queued/running/failed；失败仍处理中 D3）
   | 'awaiting_confirm' // 已处理待确认：承接 run done 且有产出
   | 'done' // 完成：人工确认关闭
   | 'closed' // 已关闭：来源反问轮被取消 / 放弃
@@ -123,11 +126,14 @@ export interface HandlerRunView {
 export interface DeriveQuestionPhaseInput {
   roundStatus: TaskQuestionRoundStatus
   confirmation: TaskQuestionConfirmation
-  /** 本条目的承接 run（service `resolveHandlerRun` 按精确 lineage 取；null=未派发）。 */
+  /** 是否已批准进「待下发」暂存（`task_questions.staged_at != null`），但还没下发。 */
+  isStaged: boolean
+  /** 本条目的承接 run（service `resolveHandlerRun` 按精确 lineage 取；null=未下发）。
+   *  非 null ⟺ 已下发（trigger 已 mint）。 */
   handlerRun: HandlerRunView | null
 }
 
-/** 条目展示态派生（纯）。失败仍归「处理中」(D3)。 */
+/** 条目展示态派生（纯，RFC-120 v2）。「下发」= 边界：有承接 run 即处理中。失败仍归处理中(D3)。 */
 export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuestionPhase {
   // 来源反问轮被取消/放弃 → 已关闭（withdrawn，无需确认）。
   if (input.roundStatus === 'canceled' || input.roundStatus === 'abandoned') {
@@ -138,16 +144,15 @@ export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuesti
     return 'done'
   }
   const run = input.handlerRun
-  // 未派发承接 run，或已 mint 但未起跑（pending，无 startedAt）→ 待处理。
-  if (run === null || run.startedAt === null) {
-    return 'pending'
+  // 已下发（承接 run 存在）→ 处理中 / 已处理待确认。queued(pending)/running/failed 均处理中。
+  if (run !== null) {
+    if (run.status === 'done' && run.hasOutput) {
+      return 'awaiting_confirm'
+    }
+    return 'processing'
   }
-  // 承接 run 成功 done 且有产出 → 已处理待确认。
-  if (run.status === 'done' && run.hasOutput) {
-    return 'awaiting_confirm'
-  }
-  // 其余（running / failed / done-without-output 兜底）→ 处理中。失败不单立态。
-  return 'processing'
+  // 未下发：已批准进待下发 → staged；否则待指派 pending。
+  return input.isStaged ? 'staged' : 'pending'
 }
 
 /** 改派合法性：仅 designer 条目、且目标是工作流 agent 节点（Codex F5）。 */

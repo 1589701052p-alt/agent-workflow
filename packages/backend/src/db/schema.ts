@@ -1706,6 +1706,12 @@ export const taskQuestions = sqliteTable(
     // Anchor rerun this entry currently tracks (NULL until answered; moves
     // forward on reopen re-fire). Plain text; phase derivation tolerates stale.
     triggerRunId: text('trigger_run_id'),
+    // RFC-120 v2: 「待下发」暂存 (migration 0061). staged_at != null = approved into
+    // the 待下发 column, awaiting batch dispatch (trigger_run_id still NULL). After
+    // dispatch staged_at is kept for audit. Drives the staged(待下发) vs pending(待指派)
+    // split in deriveQuestionPhase; task gate parks while any entry is pending/staged.
+    stagedAt: integer('staged_at'),
+    stagedBy: text('staged_by'),
     confirmation: text('confirmation', { enum: ['open', 'confirmed'] })
       .notNull()
       .default('open'),
