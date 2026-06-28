@@ -9,7 +9,11 @@
 import { describe, expect, test } from 'bun:test'
 import { isOverrideTarget, partitionDesignerQuestionsByTarget } from '../src/task-questions'
 
-const q = (questionId: string, graphDesignerNodeId: string, overrideNodeId: string | null = null) => ({
+const q = (
+  questionId: string,
+  graphDesignerNodeId: string,
+  overrideNodeId: string | null = null,
+) => ({
   questionId,
   graphDesignerNodeId,
   overrideNodeId,
