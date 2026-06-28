@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ApiError } from '@/api/client'
+import { api, ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -80,6 +80,18 @@ const PHASE_KIND: Record<TaskQuestionPhase, 'neutral' | 'info' | 'warn' | 'succe
   closed: 'neutral',
 }
 
+// RFC-120 §18 — batch-dispatch ConflictError codes → localized notice keys. These
+// are the terminal (non-retryable) rejections from POST .../questions/dispatch
+// (node busy / designer not ready / mixed-target round / unsafe target). The
+// retryable `task-question-target-changed` is handled separately (re-fetch + retry
+// prompt). Any unmapped code falls back to the raw server message via ErrorBanner.
+const DISPATCH_ERROR_KEYS: Record<string, string> = {
+  'task-question-node-dispatch-in-flight': 'taskQuestions.dispatchInFlight',
+  'task-question-designer-not-ready': 'taskQuestions.dispatchDesignerNotReady',
+  'task-question-round-multi-target': 'taskQuestions.dispatchRoundMultiTarget',
+  'task-question-unsafe-dispatch-target': 'taskQuestions.dispatchUnsafeTarget',
+}
+
 export function TaskQuestionList({
   taskId,
   nodeOptions = [],
@@ -107,6 +119,49 @@ export function TaskQuestionList({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
       api.post(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
     onSuccess: invalidate,
+  })
+  // RFC-120 §18 — 批量下发 (batch-dispatch) of staged (待下发) designer questions.
+  // Selection is LOCAL (a Set of entry ids); only staged cards are selectable
+  // (the backend dispatch operates on dispatched_at IS NULL designer rows). Cleared
+  // on a successful dispatch.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [dispatchError, setDispatchError] = useState<unknown>(null)
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  const dispatchM = useMutation({
+    mutationFn: (entryIds: string[]) =>
+      api.post(`/api/tasks/${taskId}/questions/dispatch`, { entryIds }),
+    onSuccess: () => {
+      setSelected(new Set())
+      setDispatchError(null)
+      invalidate()
+      // Dispatch flips entries into 处理中 and resumes the task → refresh the task +
+      // node-runs queries so the rest of the detail page reflects the processing state.
+      void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
+      void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
+    },
+    onError: (err) => {
+      // RETRYABLE: a concurrent reassign moved a target out from under us. Re-fetch
+      // the board so the user sees the new handler, then prompt re-select + redispatch.
+      if (err instanceof ApiError && err.code === 'task-question-target-changed') {
+        invalidate()
+        setDispatchError(new Error(t('taskQuestions.dispatchTargetChanged')))
+        return
+      }
+      // Terminal ConflictErrors — surface WHY (localized for known codes, raw server
+      // message otherwise so the user still understands the failure).
+      if (err instanceof ApiError) {
+        const mapped = DISPATCH_ERROR_KEYS[err.code]
+        setDispatchError(mapped ? new Error(t(mapped)) : err)
+        return
+      }
+      setDispatchError(err)
+    },
   })
   // RFC-120 D13: source-node filter (per-node pending counts → click to view
   // that node's questions). Delivers the node-badge feature on the board surface.
@@ -144,6 +199,12 @@ export function TaskQuestionList({
   }
   const shown = sourceFilter ? entries.filter((e) => e.sourceNodeId === sourceFilter) : entries
 
+  // RFC-120 §18 — only staged (待下发) cards are dispatch candidates. The board
+  // action bar renders ONLY when ≥1 staged card is visible (golden-lock: no staged
+  // cards ⇒ no batch-dispatch bar); the button enables once ≥1 of them is selected.
+  const stagedShown = shown.filter((e) => e.phase === 'staged')
+  const stagedSelectedIds = stagedShown.filter((e) => selected.has(e.id)).map((e) => e.id)
+
   return (
     <div className="task-questions-wrap">
       <div className="task-questions__filter" data-testid="tq-node-filter">
@@ -166,6 +227,29 @@ export function TaskQuestionList({
           </button>
         ))}
       </div>
+      {/* RFC-120 §18 — batch-dispatch action bar. Only present when there is at
+          least one staged card (golden-lock). The button dispatches the visible
+          staged cards the user has selected. */}
+      {stagedShown.length > 0 && (
+        <div className="task-questions__dispatch-bar" data-testid="tq-batch-dispatch-bar">
+          <button
+            type="button"
+            className="btn btn--primary btn--sm"
+            data-testid="tq-batch-dispatch"
+            disabled={stagedSelectedIds.length === 0 || dispatchM.isPending}
+            onClick={() => {
+              if (stagedSelectedIds.length === 0) return
+              setDispatchError(null)
+              dispatchM.mutate(stagedSelectedIds)
+            }}
+          >
+            {stagedSelectedIds.length > 0
+              ? t('taskQuestions.batchDispatchCount', { count: stagedSelectedIds.length })
+              : t('taskQuestions.batchDispatch')}
+          </button>
+        </div>
+      )}
+      {dispatchError !== null && <ErrorBanner error={dispatchError} />}
       <div className="task-questions" data-testid="task-questions-board">
         {PHASE_ORDER.map((phase) => {
           const col = shown.filter((e) => e.phase === phase)
@@ -179,6 +263,19 @@ export function TaskQuestionList({
               </div>
               {col.map((e) => (
                 <div className="task-questions__card" key={e.id} data-testid={`tq-card-${e.id}`}>
+                  {/* RFC-120 §18 — staged cards are batch-dispatch selectable. */}
+                  {phase === 'staged' && (
+                    <label className="task-questions__select">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(e.id)}
+                        onChange={() => toggleSelected(e.id)}
+                        aria-label={t('taskQuestions.selectForDispatch')}
+                        data-testid={`tq-select-${e.id}`}
+                      />
+                      <span>{t('taskQuestions.selectForDispatch')}</span>
+                    </label>
+                  )}
                   <div className="task-questions__title">{e.questionTitle}</div>
                   {/* RFC-120: 答案紧贴问题——节点信息(meta)不得插在问与答之间（用户反馈）。 */}
                   {e.answerSummary && (

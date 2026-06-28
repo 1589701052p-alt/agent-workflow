@@ -1464,6 +1464,10 @@ export const enUS: Resources = {
       label: 'Auto commit & push on completion',
       hint: 'After each writer agent emits its final output, the framework commits all changes and pushes to the remote',
     },
+    deferredDispatch: {
+      label: 'Defer question dispatch (batch from the task center)',
+      hint: 'When on, designer-scoped clarify answers park on the task center board for you to reassign / batch before dispatching, instead of auto-dispatching on answer',
+    },
     pathFetch: {
       label: 'Refresh remote refs before launch',
       switchLabel: 'Run `git fetch --all --prune --tags` before starting the task',
@@ -2705,6 +2709,15 @@ export const enUS: Resources = {
     answer: 'Answer',
     viewClarify: 'View clarify',
     nodeBadgeAria: '{{count}} pending questions on this node',
+    batchDispatch: 'Batch dispatch',
+    batchDispatchCount: 'Batch dispatch ({{count}})',
+    selectForDispatch: 'Select',
+    dispatchTargetChanged: 'Target changed, please retry',
+    dispatchInFlight: 'That node is re-running; wait for it to finish before dispatching',
+    dispatchDesignerNotReady: 'Designer is not ready yet; dispatch is unavailable',
+    dispatchRoundMultiTarget:
+      'Questions from one round are assigned to multiple handler nodes; in v1 reassign them to a single handler before dispatching',
+    dispatchUnsafeTarget: 'The selected handler node cannot be safely dispatched right now',
     phase: {
       pending: 'To assign',
       staged: 'Staged',

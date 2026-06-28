@@ -14,7 +14,7 @@ import {
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { api } from '@/api/client'
+import { api, ApiError } from '@/api/client'
 import { TaskQuestionList, type TaskQuestionEntry } from '../src/components/tasks/TaskQuestionList'
 
 afterEach(() => {
@@ -216,6 +216,66 @@ describe('TaskQuestionList board', () => {
     fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
     expect(screen.queryByTestId('tq-card-b1')).toBeNull()
+  })
+})
+
+// RFC-120 §18 — batch-dispatch (一键下发) of staged (待下发) designer questions.
+// The staged column cards get a per-card selection checkbox + a board action bar
+// with a "批量下发" button. golden-lock: no staged cards ⇒ no bar.
+describe('TaskQuestionList batch-dispatch (§18)', () => {
+  test('staged 卡片可勾选 → 勾选后点「批量下发」POST dispatch 带所选 entry ids', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
+    await wrap([
+      entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 's2', phase: 'staged', roleKind: 'designer' }),
+    ])
+    // both staged cards expose a selection checkbox (a real <input type=checkbox>)
+    const cb1 = within(screen.getByTestId('tq-card-s1')).getByRole('checkbox')
+    expect(cb1).toBeTruthy()
+    expect(within(screen.getByTestId('tq-card-s2')).getByRole('checkbox')).toBeTruthy()
+    // bar is present but the button is disabled until something is selected
+    const btn = screen.getByTestId('tq-batch-dispatch') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    // select s1 only → button enables → dispatch posts ONLY the selected id
+    fireEvent.click(cb1)
+    expect((screen.getByTestId('tq-batch-dispatch') as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('tq-batch-dispatch'))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/dispatch', {
+        entryIds: ['s1'],
+      }),
+    )
+  })
+
+  test('非 staged 卡片不渲染勾选控件', async () => {
+    await wrap([
+      entry({ id: 'p1', phase: 'pending' }),
+      entry({ id: 'c1', phase: 'awaiting_confirm' }),
+      entry({ id: 'd1', phase: 'done', roleKind: 'designer' }),
+    ])
+    expect(within(screen.getByTestId('tq-card-p1')).queryByRole('checkbox')).toBeNull()
+    expect(within(screen.getByTestId('tq-card-c1')).queryByRole('checkbox')).toBeNull()
+    expect(within(screen.getByTestId('tq-card-d1')).queryByRole('checkbox')).toBeNull()
+  })
+
+  test('golden-lock：无 staged 卡片 → 不渲染批量下发栏', async () => {
+    await wrap([
+      entry({ id: 'p1', phase: 'pending' }),
+      entry({ id: 'c1', phase: 'awaiting_confirm' }),
+    ])
+    expect(screen.queryByTestId('tq-batch-dispatch-bar')).toBeNull()
+    expect(screen.queryByTestId('tq-batch-dispatch')).toBeNull()
+  })
+
+  test('409 task-question-node-dispatch-in-flight → 显示错误提示（ErrorBanner）', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue(
+      new ApiError(409, 'task-question-node-dispatch-in-flight', 'node busy'),
+    )
+    await wrap([entry({ id: 's1', phase: 'staged', roleKind: 'designer' })])
+    fireEvent.click(within(screen.getByTestId('tq-card-s1')).getByRole('checkbox'))
+    fireEvent.click(screen.getByTestId('tq-batch-dispatch'))
+    // ErrorBanner renders a .error-box notice (i18n-agnostic assertion)
+    await waitFor(() => expect(document.querySelector('.error-box')).toBeTruthy())
   })
 })
 
