@@ -158,3 +158,75 @@ export function canReassign(
 ): boolean {
   return entry.roleKind === 'designer' && agentNodeIds.has(targetNodeId)
 }
+
+/** RFC-120 Codex F1：「新一轮反问触发的承接 rerun」的 cause 集合——用作 lineage
+ *  窗口上界。一个条目的承接 lineage = 它的 trigger run + 其 process-retry/级联子代，
+ *  止于**下一条**带这些 cause 的更新 rerun（那属于另一条目/另一轮的承接）。
+ *  必须与 backend `RerunCause` 枚举对应值保持一致（drift 由 T3 集成测试用真 cause 兜）。 */
+export const NEW_CLARIFY_TRIGGER_CAUSES = [
+  'clarify-answer', // self 反问回答 → 提问节点续跑
+  'cross-clarify-answer', // cross 设计者重跑
+  'cross-clarify-questioner-rerun', // cross 反问者续跑
+] as const
+
+/** 一条 node_run 在 lineage 解析时需要的最小视图（service 从 node_runs 投影）。 */
+export interface RunLineageView {
+  id: string // ULID（freshness 比较锚）
+  nodeId: string
+  iteration: number
+  loopIter: number
+  rerunCause: string | null
+  status: NodeRunStatus
+  startedAt: number | null
+  hasOutput: boolean
+  parentNodeRunId: string | null // 非 null = fanout 子 run
+}
+
+export interface ResolveHandlerInput {
+  /** 有效承接节点 = override ?? default；null → 无承接（未派发）。 */
+  effectiveTargetNodeId: string | null
+  iteration: number
+  loopIter: number
+  /** 本条目锚点 rerun id；null → 未派发。 */
+  triggerRunId: string | null
+  /** 候选 node_runs（service 传该任务相关 runs；本函数自行按节点+迭代过滤）。 */
+  runs: RunLineageView[]
+}
+
+/** RFC-120 Codex F1：按**精确 lineage**取本条目的承接 run（非裸 freshest≥anchor）。
+ *
+ *  框窗规则：在「有效承接节点 + 同 iteration/loopIter」的 runs 里，以 triggerRunId
+ *  为下界、以**下一条 NEW_CLARIFY_TRIGGER_CAUSES rerun**（id>anchor）为上界，取窗内
+ *  freshest 的 **top-level**（parentNodeRunId===null）run。这样：
+ *    - 后续不相关反问轮在同节点的新 rerun（带 clarify cause、id 更大）成为上界、被排除
+ *      → 不会把本条目从 awaiting_confirm 误拉回 processing；
+ *    - 窗内的 process-retry（cause='process-retry'）/级联仍计入（它们续的是本次承接）；
+ *    - fanout：取 top-level 父 run 作代表（shard 子 run 不被误当承接代表）。
+ *  v1 已知限制：多进程承接节点的子 run 聚合态以父 run 自身状态近似（design §6 注）。 */
+export function resolveHandlerRun(input: ResolveHandlerInput): HandlerRunView | null {
+  if (input.effectiveTargetNodeId === null || input.triggerRunId === null) return null
+  const anchor = input.triggerRunId
+  const triggerCauses = new Set<string>(NEW_CLARIFY_TRIGGER_CAUSES)
+  const sameNode = input.runs.filter(
+    (r) =>
+      r.nodeId === input.effectiveTargetNodeId &&
+      r.iteration === input.iteration &&
+      r.loopIter === input.loopIter,
+  )
+  // 上界 = 下一条「新反问触发」rerun 的 id（id 严格大于 anchor），否则 +∞。
+  let upperBound: string | null = null
+  for (const r of sameNode) {
+    if (r.id > anchor && r.rerunCause !== null && triggerCauses.has(r.rerunCause)) {
+      if (upperBound === null || r.id < upperBound) upperBound = r.id
+    }
+  }
+  // 窗内 = [anchor, upperBound) 的 top-level run。
+  const lineage = sameNode.filter(
+    (r) =>
+      r.parentNodeRunId === null && r.id >= anchor && (upperBound === null || r.id < upperBound),
+  )
+  if (lineage.length === 0) return null
+  // lineage is non-empty (guarded above) → reduce without seed returns an element.
+  const freshest = lineage.reduce((a, b) => (b.id > a.id ? b : a))
+  return { status: freshest.status, startedAt: freshest.startedAt, hasOutput: freshest.hasOutput }
+}
