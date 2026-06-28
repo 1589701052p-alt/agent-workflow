@@ -28,10 +28,12 @@ import {
   canReassign,
   deriveQuestionPhase,
   reconcileDesiredEntries,
+  resolveHandlerRun,
   type ClarifyAnswer,
   type ClarifyQuestion,
   type ClarifyQuestionScope,
   type HandlerRunView,
+  type RunLineageView,
   type TaskQuestionPhase,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
@@ -184,17 +186,36 @@ function resolveEntryHandler(
       // Not yet dispatched → pending/staged (the gate parks the task here).
       return { handlerRun: null, dispatchedInFlight: false }
     }
-    const dispatchedRow = runs.find((r) => r.id === entry.triggerRunId)
+    const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
     // Stamped but the run row is gone (GC) → treat as in-flight rather than reset.
-    if (!dispatchedRow) return { handlerRun: null, dispatchedInFlight: true }
-    return {
-      handlerRun: {
-        status: dispatchedRow.status,
-        startedAt: dispatchedRow.startedAt,
-        hasOutput: outputRunIds.has(dispatchedRow.id),
-      },
-      dispatchedInFlight: false,
-    }
+    if (!anchorRow) return { handlerRun: null, dispatchedInFlight: true }
+    // RFC-120 T9 (Codex H1): resolve through the dispatched run's LINEAGE — the
+    // anchor + any technical process-retries the scheduler minted (same node +
+    // iteration, cause 'process-retry') up to the next clarify-cause rerun — via the
+    // shared oracle. A later successful retry then reads awaiting_confirm instead of
+    // sticking on a failed anchor. Anchor on the run's OWN node/iteration
+    // (node_runs.iteration IS the loop index; loopIter is projected 0 to neutralize
+    // the unused dimension, since the lineage is already framed by node+iteration).
+    const handlerRun = resolveHandlerRun({
+      effectiveTargetNodeId: anchorRow.nodeId,
+      iteration: anchorRow.iteration,
+      loopIter: 0,
+      triggerRunId: entry.triggerRunId,
+      runs: runs.map(
+        (r): RunLineageView => ({
+          id: r.id,
+          nodeId: r.nodeId,
+          iteration: r.iteration,
+          loopIter: 0,
+          rerunCause: r.rerunCause,
+          status: r.status,
+          startedAt: r.startedAt,
+          hasOutput: outputRunIds.has(r.id),
+          parentNodeRunId: r.parentNodeRunId,
+        }),
+      ),
+    })
+    return { handlerRun, dispatchedInFlight: handlerRun === null }
   }
   const triggerRunId = resolveTriggerForEntry(round, entry.roleKind)
   const row = triggerRunId ? runs.find((r) => r.id === triggerRunId) : undefined
@@ -496,26 +517,40 @@ export async function reassignTaskQuestion(
   if (phase === 'done' || phase === 'closed') {
     throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
   }
-  // RFC-120 T9 (Codex M1): once dispatched (trigger_run_id stamped), the minted
-  // handler run is already carrying this entry's answer (run-scoped injection) and
-  // will consume its round — a late reassign would silently re-target work in
-  // flight. Post-dispatch retargeting is reopen's job, not reassign's. (Non-deferred
-  // tasks never stamp trigger_run_id, so this is byte-for-byte for them.)
-  if (entry.triggerRunId !== null) {
+  // RFC-120 T9 (Codex M1/H2): once dispatched (trigger_run_id stamped), the minted
+  // handler run already carries this entry's answer (run-scoped injection) and will
+  // consume its round — a late reassign would silently re-target work in flight.
+  // Post-dispatch retargeting is reopen's job. dispatchTaskQuestions claims under
+  // `trigger_run_id IS NULL` inside a dbTxSync, so a concurrent dispatch can stamp
+  // between loadEntry and here; do the override write as a CAS on the SAME column so
+  // the two race cleanly — if a dispatch won (the row is no longer NULL), affect 0
+  // rows and reject. (Non-deferred tasks never stamp trigger_run_id, so this is
+  // byte-for-byte for them — the CAS always matches.)
+  let updated = false
+  dbTxSync(db, (tx) => {
+    const stillOpen = tx
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.triggerRunId)))
+      .all()
+    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
+    tx.update(taskQuestions)
+      .set({
+        overrideTargetNodeId: targetNodeId,
+        lastReassignedBy: actor.userId,
+        lastReassignedAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.triggerRunId)))
+      .run()
+    updated = true
+  })
+  if (!updated) {
     throw new ConflictError(
       'task-question-already-dispatched',
       `cannot reassign a dispatched question (trigger_run_id is set) — use reopen to re-target after dispatch`,
     )
   }
-  await db
-    .update(taskQuestions)
-    .set({
-      overrideTargetNodeId: targetNodeId,
-      lastReassignedBy: actor.userId,
-      lastReassignedAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-    .where(eq(taskQuestions.id, entryId))
 }
 
 /** Stage / unstage (拖入·拖出「待下发」). Approves an entry for batch dispatch. */

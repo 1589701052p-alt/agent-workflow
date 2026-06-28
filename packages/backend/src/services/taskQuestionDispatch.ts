@@ -50,6 +50,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
+import { evaluateDesignerRerunReadiness } from '@/services/crossClarify'
 import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
 import { ConflictError } from '@/util/errors'
@@ -208,6 +209,7 @@ export async function dispatchTaskQuestions(
   const definition = taskRow ? parseDefinition(taskRow.snapshot) : null
   for (const [targetNodeId, group] of byTarget) {
     await assertSafeDispatchTarget(db, taskId, targetNodeId, group, definition)
+    await assertDesignerReady(db, taskId, targetNodeId, group, definition)
   }
 
   // 5. Per target: atomic claim+mint (H2).
@@ -274,6 +276,43 @@ async function assertSafeDispatchTarget(
       'task-question-override-to-designer-unsupported',
       `cannot dispatch override to '${targetNodeId}': it is itself a cross-clarify designer (has an __external_feedback__ edge), so the scheduler routes it through the graph path which would not carry the overridden round. Override to a node that is NOT a cross-clarify designer (run-scoped injection), or reassign back to the graph designer.`,
     )
+  }
+}
+
+/**
+ * Codex H3 — a GRAPH-designer dispatch must satisfy the SAME multi-source readiness
+ * the immediate path enforces: every sibling cross-clarify node pointing at the
+ * designer (within the round's loop_iter) must be resolved before the designer
+ * reruns. Dispatching while a sibling is still awaiting_human would mint a PARTIAL
+ * rerun (missing that sibling's feedback) and force a second rerun when it answers.
+ * Reject instead. This applies ONLY to graph-designer dispatch (the group handles
+ * the designer's OWN rounds); an OVERRIDE target rides the run-scoped path with its
+ * specific question set and is not gated on the graph designer's siblings.
+ */
+async function assertDesignerReady(
+  db: DbClient,
+  taskId: string,
+  targetNodeId: string,
+  group: TaskQuestionRow[],
+  definition: WorkflowDefinition | null,
+): Promise<void> {
+  if (definition === null) return
+  const overridden = group.some((e) => e.defaultTargetNodeId !== targetNodeId)
+  if (overridden) return // run-scoped override target — not the graph designer
+  for (const loopIter of new Set(group.map((e) => e.loopIter))) {
+    const readiness = await evaluateDesignerRerunReadiness({
+      db,
+      taskId,
+      designerNodeId: targetNodeId,
+      definition,
+      loopIter,
+    })
+    if (!readiness.ready) {
+      throw new ConflictError(
+        'task-question-designer-not-ready',
+        `cannot dispatch designer '${targetNodeId}' (loop ${loopIter}): sibling cross-clarify node(s) still awaiting an answer (${readiness.pendingCrossClarifyNodeIds.join(', ')}). Answer all of the designer's cross-clarify rounds before dispatching so it reruns with the full feedback in one batch.`,
+      )
+    }
   }
 }
 

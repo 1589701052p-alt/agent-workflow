@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
@@ -43,6 +44,7 @@ import {
   submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import {
+  confirmTaskQuestion,
   listTaskQuestions,
   loadUndispatchedDesignerTargets,
   reassignTaskQuestion,
@@ -147,8 +149,12 @@ async function seedTask(
     startedAt: Date.now(),
     deferredQuestionDispatch: opts.deferred,
   })
+  // ULID ids (production-accurate): node_run freshness — and resolveHandlerRun's
+  // lineage window — is pure ULID id-order, so these seeded runs must sort BEFORE
+  // the later-minted dispatch reruns (a non-ULID string id sorts AFTER ULIDs and
+  // would pollute the lineage window).
   await db.insert(nodeRuns).values({
-    id: `nr_d_${taskId}`,
+    id: ulid(),
     taskId,
     nodeId: DESIGNER,
     status: 'done',
@@ -156,7 +162,7 @@ async function seedTask(
     iteration: 0,
     startedAt: Date.now() - 1000,
   })
-  const questionerRunId = `nr_q_${taskId}`
+  const questionerRunId = ulid()
   await db.insert(nodeRuns).values({
     id: questionerRunId,
     taskId,
@@ -177,6 +183,86 @@ async function seedTask(
     questions: opts.questions ?? [mkQ('q1', 'designer-scoped?')],
   })
   return { taskId, crossClarifyNodeRunId }
+}
+
+/** Seed a DEFERRED task whose designer has TWO sibling cross-clarify nodes
+ *  (cc_a/q_a, cc_b/q_b both → DESIGNER) — for the H3 multi-source readiness gate. */
+async function seedTwoSource(db: DbClient): Promise<{ taskId: string; ccA: string; ccB: string }> {
+  const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
+  const nodes: WorkflowNode[] = [
+    { id: DESIGNER, kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
+    { id: 'q_a', kind: 'agent-single', agentName: 'q_a' } as WorkflowNode,
+    { id: 'q_b', kind: 'agent-single', agentName: 'q_b' } as WorkflowNode,
+    { id: 'cc_a', kind: 'clarify-cross-agent', title: 'cc_a' } as WorkflowNode,
+    { id: 'cc_b', kind: 'clarify-cross-agent', title: 'cc_b' } as WorkflowNode,
+  ]
+  const edges: WorkflowDefinition['edges'] = []
+  for (const { q, cc } of [
+    { q: 'q_a', cc: 'cc_a' },
+    { q: 'q_b', cc: 'cc_b' },
+  ]) {
+    edges.push({
+      id: `e_q_${cc}`,
+      source: { nodeId: q, portName: '__clarify__' },
+      target: { nodeId: cc, portName: 'questions' },
+    })
+    edges.push({
+      id: `e_d_${cc}`,
+      source: { nodeId: cc, portName: 'to_designer' },
+      target: { nodeId: DESIGNER, portName: '__external_feedback__' },
+    })
+    edges.push({
+      id: `e_qb_${cc}`,
+      source: { nodeId: cc, portName: 'to_questioner' },
+      target: { nodeId: q, portName: '__clarify_response__' },
+    })
+  }
+  const def: WorkflowDefinition = { $schema_version: 4, inputs: [], nodes, edges, outputs: [] }
+  await db.insert(workflows).values({
+    id: `wf_${taskId}`,
+    name: 'rfc120-t9-2src',
+    description: '',
+    definition: JSON.stringify(def),
+    version: 1,
+    schemaVersion: 4,
+  })
+  await db.insert(tasks).values({
+    id: taskId,
+    name: 'rfc120-t9-2src',
+    workflowId: `wf_${taskId}`,
+    workflowSnapshot: JSON.stringify(def),
+    repoPath: '/tmp/aw-rfc120-t9-2src/repo',
+    worktreePath: '',
+    baseBranch: 'main',
+    branch: `agent-workflow/${taskId}`,
+    status: 'running',
+    inputs: JSON.stringify({}),
+    startedAt: Date.now(),
+    deferredQuestionDispatch: true,
+  })
+  await db
+    .insert(nodeRuns)
+    .values({ id: ulid(), taskId, nodeId: DESIGNER, status: 'done', retryIndex: 0, iteration: 0 })
+  const open = async (q: string, cc: string): Promise<string> => {
+    const runId = ulid()
+    await db
+      .insert(nodeRuns)
+      .values({ id: runId, taskId, nodeId: q, status: 'done', retryIndex: 0, iteration: 0 })
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
+      db,
+      taskId,
+      crossClarifyNodeId: cc,
+      sourceQuestionerNodeId: q,
+      sourceQuestionerNodeRunId: runId,
+      targetDesignerNodeId: DESIGNER,
+      loopIter: 0,
+      questions: [mkQ(cc === 'cc_a' ? 'a1' : 'b1', 'designer-scoped?')],
+    })
+    return crossClarifyNodeRunId
+  }
+  const ccA = await open('q_a', 'cc_a')
+  const ccB = await open('q_b', 'cc_b')
+  return { taskId, ccA, ccB }
 }
 
 function ans(qid: string) {
@@ -524,7 +610,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     // OTHER has a prior node_run (so it is not never-run) but no feedback edge.
     await db.insert(nodeRuns).values({
-      id: `nr_other_${taskId}`,
+      id: ulid(),
       taskId,
       nodeId: OTHER,
       status: 'done',
@@ -637,7 +723,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
-      id: `nr_other_${taskId}`,
+      id: ulid(),
       taskId,
       nodeId: OTHER,
       status: 'done',
@@ -731,7 +817,7 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
     await db.insert(nodeRuns).values({
-      id: `nr_other_${taskId}`,
+      id: ulid(),
       taskId,
       nodeId: OTHER,
       status: 'done',
@@ -773,7 +859,7 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
-      id: `nr_other_${taskId}`,
+      id: ulid(),
       taskId,
       nodeId: OTHER,
       status: 'done',
@@ -947,7 +1033,7 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
-      id: `nr_other_${taskId}`,
+      id: ulid(),
       taskId,
       nodeId: OTHER,
       status: 'done',
@@ -978,5 +1064,113 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       threw = e
     }
     expect((threw as { code?: string }).code).toBe('task-question-already-dispatched')
+  })
+
+  test('H1(final): a process-retry of the dispatched run resolves awaiting_confirm (not stuck on the failed anchor); confirm works', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+    const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    const anchorRunId = result.reruns[0]!.nodeRunId
+    const anchorRow = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, anchorRunId)))[0]!
+
+    const phaseOf = async () =>
+      (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!.phase
+
+    // The dispatched run FAILS → still processing (D3), confirm would reject.
+    await db.update(nodeRuns).set({ status: 'failed' }).where(eq(nodeRuns.id, anchorRunId))
+    expect(await phaseOf()).toBe('processing')
+
+    // The scheduler mints a technical process-retry (same node + iteration, cause
+    // 'process-retry', fresh ULID > anchor) which succeeds with output.
+    const retryId = ulid()
+    await db.insert(nodeRuns).values({
+      id: retryId,
+      taskId,
+      nodeId: DESIGNER,
+      status: 'done',
+      retryIndex: 1,
+      iteration: anchorRow.iteration,
+      rerunCause: 'process-retry',
+      startedAt: Date.now(),
+    })
+    await db.insert(nodeRunOutputs).values({ nodeRunId: retryId, portName: 'result', content: 'x' })
+
+    // The entry resolves through the LINEAGE → awaiting_confirm (not stuck).
+    expect(await phaseOf()).toBe('awaiting_confirm')
+    // confirm now works.
+    await confirmTaskQuestion(db, entry.id, actor)
+    expect(await phaseOf()).toBe('done')
+  })
+
+  test('H2(final): reassign is a CAS on trigger_run_id — a concurrent stamp makes it affect 0 rows → rejected', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+    // Simulate a dispatch winning the race (stamping trigger_run_id) AFTER reassign
+    // would have read a NULL — the reassign CAS (WHERE trigger_run_id IS NULL) then
+    // affects 0 rows → reject (no silent re-target of in-flight work).
+    await db
+      .update(taskQuestions)
+      .set({ triggerRunId: ulid() })
+      .where(eq(taskQuestions.id, entry.id))
+    let threw: unknown = null
+    try {
+      await reassignTaskQuestion(db, entry.id, OTHER, actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-already-dispatched')
+    // override unchanged (the CAS did not write).
+    expect((await designerEntries(db, taskId))[0]?.overrideTargetNodeId).toBeNull()
+  })
+
+  test('H3(final): graph-designer dispatch is rejected while a sibling cross-clarify is still awaiting; succeeds once answered', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, ccA, ccB } = await seedTwoSource(db)
+
+    // Answer source A (designer-scoped) → deferred. B is still awaiting_human.
+    const subA = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccA,
+      answers: [ans('a1')],
+      directive: 'continue',
+    })
+    expect(subA.outcome.kind).toBe('designer-deferred')
+    const entryA = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccA)!
+
+    // Dispatch A's designer entry → rejected: sibling B unresolved → partial rerun risk.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entryA.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-designer-not-ready')
+    expect((await designerEntries(db, taskId)).every((e) => e.triggerRunId === null)).toBe(true)
+
+    // Answer source B → now all siblings resolved.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccB,
+      answers: [ans('b1')],
+      directive: 'continue',
+    })
+    // Dispatch now succeeds (one designer rerun for the full batch).
+    const result = await dispatchTaskQuestions(db, taskId, [entryA.id], actor)
+    expect(result.reruns.length).toBe(1)
+    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
   })
 })
