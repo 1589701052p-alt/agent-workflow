@@ -112,8 +112,21 @@ export interface MintNodeRunArgs {
  *
  * Resolution order per field: `overrides` ≻ `inheritFrom` ≻ default.
  */
-export async function mintNodeRun(db: DbClient, args: MintNodeRunArgs): Promise<string> {
-  const id = ulid()
+/**
+ * Build the node_runs INSERT row WITHOUT touching the DB (the pure field-
+ * resolution half of {@link mintNodeRun}). Lets a caller that needs the row id
+ * BEFORE the insert (RFC-120 T9 dispatchTaskQuestions — atomic claim+mint inside
+ * one `dbTxSync`) preallocate `id` and run the insert synchronously
+ * (`tx.insert(nodeRuns).values(buildMintNodeRunValues({ id, … })).run()`). The
+ * async {@link mintNodeRun} delegates here, so both paths share one inheritance /
+ * default / guard implementation (no drift).
+ *
+ * Resolution order per field: `overrides` ≻ `inheritFrom` ≻ default.
+ */
+export function buildMintNodeRunValues(
+  args: MintNodeRunArgs & { id?: string },
+): typeof nodeRuns.$inferInsert {
+  const id = args.id ?? ulid()
   const now = Date.now()
   const inherit = args.inheritFrom ?? null
   const o = args.overrides ?? {}
@@ -139,7 +152,7 @@ export async function mintNodeRun(db: DbClient, args: MintNodeRunArgs): Promise<
     )
   }
 
-  await db.insert(nodeRuns).values({
+  return {
     id,
     taskId: args.taskId,
     nodeId: args.nodeId,
@@ -158,8 +171,13 @@ export async function mintNodeRun(db: DbClient, args: MintNodeRunArgs): Promise<
     errorMessage: o.errorMessage ?? null,
     startedAt: o.startedAt !== undefined ? o.startedAt : now,
     finishedAt: o.finishedAt !== undefined ? o.finishedAt : args.status === 'done' ? now : null,
-  })
-  return id
+  }
+}
+
+export async function mintNodeRun(db: DbClient, args: MintNodeRunArgs): Promise<string> {
+  const values = buildMintNodeRunValues(args)
+  await db.insert(nodeRuns).values(values)
+  return values.id
 }
 
 /**

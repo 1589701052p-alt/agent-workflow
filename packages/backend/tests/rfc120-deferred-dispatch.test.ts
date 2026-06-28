@@ -25,7 +25,10 @@ import { and, eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
-import { loadUndispatchedDesignerTargets } from '../src/services/taskQuestions'
+import {
+  loadUndispatchedDesignerTargets,
+  reassignTaskQuestion,
+} from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { deriveFrontier } from '../src/services/scheduler'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
@@ -43,11 +46,15 @@ const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const DESIGNER = 'designer'
 const QUESTIONER = 'questioner'
 const CC = 'cross1'
+// A plain agent node with NO __external_feedback__ edge — a valid reassign target
+// (canReassign accepts any agent node) but an UNSAFE dispatch target in v1 (H3).
+const OTHER = 'other'
 
 function liveDef(): WorkflowDefinition {
   const nodes: WorkflowNode[] = [
     { id: DESIGNER, kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
     { id: QUESTIONER, kind: 'agent-single', agentName: 'questioner' } as WorkflowNode,
+    { id: OTHER, kind: 'agent-single', agentName: 'other' } as WorkflowNode,
     { id: CC, kind: 'clarify-cross-agent', title: 'cc' } as WorkflowNode,
   ]
   return {
@@ -93,7 +100,7 @@ function mkQ(id: string, title: string): ClarifyQuestion {
  *  cross-clarify session and return its node_run id. */
 async function seedTask(
   db: DbClient,
-  opts: { deferred: boolean },
+  opts: { deferred: boolean; questions?: ClarifyQuestion[] },
 ): Promise<{ taskId: string; crossClarifyNodeRunId: string }> {
   const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
   const def = liveDef()
@@ -147,7 +154,7 @@ async function seedTask(
     sourceQuestionerNodeRunId: questionerRunId,
     targetDesignerNodeId: DESIGNER,
     loopIter: 0,
-    questions: [mkQ('q1', 'designer-scoped?')],
+    questions: opts.questions ?? [mkQ('q1', 'designer-scoped?')],
   })
   return { taskId, crossClarifyNodeRunId }
 }
@@ -420,5 +427,110 @@ describe('RFC-120 T9 — dispatchTaskQuestions', () => {
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
     expect(designerRuns.filter((r) => r.status === 'pending').length).toBe(1) // exactly one rerun
+  })
+})
+
+// ---------------------------------------------------------------------------
+// E — Codex impl-gate folds: H1 (graph-node granularity vs round-scoped
+// consumption), H2 (atomic claim+mint, no orphan/phantom), H3 (unsafe targets).
+// ---------------------------------------------------------------------------
+describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () => {
+  const actor = { userId: 'u1', role: 'owner' as const }
+
+  async function designerEntries(db: DbClient, taskId: string) {
+    return db
+      .select()
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
+  }
+
+  test('H1: dispatching ONE entry of a multi-question round stamps the WHOLE node group (no stranded sibling)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    expect(entries.length).toBe(2) // q1 + q2 both → designer
+
+    // dispatch only q1 → expansion stamps BOTH (round/graph-scoped consumption)
+    const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
+    expect(result.reruns.length).toBe(1)
+    expect(result.reruns[0]?.entryIds.length).toBe(2) // whole node group
+
+    const after = await designerEntries(db, taskId)
+    expect(after.every((e) => e.triggerRunId === result.reruns[0]?.nodeRunId)).toBe(true)
+    // no sibling stranded → gate fully released
+    expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(0)
+    // exactly ONE rerun for the node (not one-per-question)
+    const designerRuns = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+    expect(designerRuns.filter((r) => r.status === 'pending').length).toBe(1)
+  })
+
+  test('H2: a stamped entry always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
+    expect(result.reruns.length).toBe(1)
+    const stampedId = (await designerEntries(db, taskId))[0]!.triggerRunId
+    expect(stampedId).toBe(result.reruns[0]!.nodeRunId)
+    // the stamped run is a REAL row (claim+mint committed together, no orphan)
+    const run = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, stampedId!)))[0]
+    expect(run).toBeDefined()
+    expect(run?.nodeId).toBe(DESIGNER)
+  })
+
+  test('H3: dispatching an entry reassigned (override) to a non-graph-designer node is REJECTED, mints nothing, leaves it claimable', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    // reassign the designer entry to OTHER (a valid agent node, but no feedback edge)
+    await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
+
+    // dispatch → rejected (override execution is the next layer), as a clean
+    // ConflictError (NOT an escaping triggerDesignerRerun 500)
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).not.toBeNull()
+    expect((threw as { code?: string }).code).toBe('task-question-override-unsupported')
+
+    // no rerun minted (rollback / no partial); entry stays claimable (NULL trigger)
+    const designerRuns = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+    expect(designerRuns.filter((r) => r.status === 'pending').length).toBe(0)
+    const otherRuns = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, OTHER)))
+    expect(otherRuns.length).toBe(0) // never minted to the unsafe override target
+    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBeNull()
   })
 })
