@@ -203,26 +203,58 @@ describe('RFC-119 — freshestPriorRunWithOutput', () => {
     void failedNoOutput
   })
 
-  test('fan-out shard children (parentNodeRunId set) are excluded (D9)', async () => {
+  // RFC-119 multi-process (D9 revision): the lookup is PARENT-AGNOSTIC so it can
+  // find a fan-out aggregator/shard CHILD (parentNodeRunId set) as the prior run.
+  // No node has both top-level AND child runs at the same (nodeId, shardKey), so
+  // dropping the parent filter is safe; the (nodeId, shardKey) tuple scopes it.
+  test('parent-agnostic: a prior aggregator CHILD (shardKey null) IS found', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    const parent = await seedRun(db, taskId, 'agent', { status: 'done' })
-    const child = await seedRun(db, taskId, 'agent', {
+    const wrapper = await seedRun(db, taskId, 'wrapper', { status: 'done' })
+    const priorAgg = await seedRun(db, taskId, 'aggnode', {
       status: 'done',
-      parentNodeRunId: parent,
+      parentNodeRunId: wrapper,
     })
-    await seedOutput(db, child, 'design', '# shard child output')
+    await seedOutput(db, priorAgg, 'summary', '# prior aggregated output')
     const currentId = seedUlid()
 
-    // Only the child captured output, but it is a fan-out child → excluded.
     const found = await freshestPriorRunWithOutput(db, {
       taskId,
-      nodeId: 'agent',
+      nodeId: 'aggnode',
       iteration: 0,
       shardKey: null,
       id: currentId,
     })
-    expect(found).toBeUndefined()
+    expect(found?.id).toBe(priorAgg)
+  })
+
+  test('parent-agnostic shard lineage: matches prior child with the SAME shardKey only', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const wrapper = await seedRun(db, taskId, 'wrapper', { status: 'done' })
+    const shardA = await seedRun(db, taskId, 'inner', {
+      status: 'done',
+      parentNodeRunId: wrapper,
+      shardKey: 'fileA',
+    })
+    await seedOutput(db, shardA, 'audit', '# fileA audit v1')
+    const shardB = await seedRun(db, taskId, 'inner', {
+      status: 'done',
+      parentNodeRunId: wrapper,
+      shardKey: 'fileB',
+    })
+    await seedOutput(db, shardB, 'audit', '# fileB audit')
+    const currentId = seedUlid()
+
+    // Looking up shardKey 'fileA' must return the fileA child, NOT fileB.
+    const found = await freshestPriorRunWithOutput(db, {
+      taskId,
+      nodeId: 'inner',
+      iteration: 0,
+      shardKey: 'fileA',
+      id: currentId,
+    })
+    expect(found?.id).toBe(shardA)
   })
 
   test('returns the FRESHEST among multiple done-with-output priors', async () => {

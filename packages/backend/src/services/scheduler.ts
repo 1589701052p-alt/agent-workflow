@@ -4037,6 +4037,29 @@ async function dispatchFanoutAggregator(
   const promptTemplate = pickString(aggNode, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = opts.defaultPerNodeTimeoutMs
 
+  // RFC-119 multi-process (D9 revision): surface the aggregator's prior output on
+  // a genuine re-run so it UPDATES the prior aggregated result instead of
+  // regenerating blind — the multi-process analogue of the single-process
+  // review/retry case. We only reach here when the aggregator actually spawns
+  // (the value-hash replay branch above returned early), so this fires exactly on
+  // a real re-run. `freshestPriorRunWithOutput` is parent-agnostic, so it finds
+  // the prior generation's aggregator CHILD (shardKey null) for this aggNode.
+  // SHARDS are deliberately NOT given prior output: their value-hash replay means
+  // an unchanged slice replays without a spawn, and a CHANGED slice's prior
+  // output would mis-anchor the agent to stale content.
+  const aggPriorRun = await freshestPriorRunWithOutput(db, {
+    taskId,
+    nodeId: aggNode.id,
+    iteration,
+    shardKey: null,
+    id: aggRunId,
+  })
+  let aggPriorOutputUpdate: { block: string } | undefined
+  if (aggPriorRun !== undefined) {
+    const block = await composePriorOutputBlock(db, aggPriorRun.id, aggAgent.outputs ?? [])
+    if (block.length > 0) aggPriorOutputUpdate = { block }
+  }
+
   // Concurrency: the aggregator is a real opencode subprocess too — count it
   // against the global node + fan-out subprocess caps (and the write slot when
   // it is non-readonly), like the shards above.
@@ -4076,6 +4099,8 @@ async function dispatchFanoutAggregator(
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
+      // RFC-119 multi-process: prior aggregated output on re-run (see above).
+      ...(aggPriorOutputUpdate !== undefined ? { priorOutputUpdate: aggPriorOutputUpdate } : {}),
       hasClarifyChannel: false, // PR-D2
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
@@ -4852,14 +4877,26 @@ export async function composePriorOutputBlock(
 }
 
 /**
- * RFC-119: the freshest prior TOP-LEVEL run of this node at the SAME
- * (iteration, shardKey), minted before this run (id < current), that captured at
- * least one output row — REGARDLESS of final status. Unlike
- * `priorDoneGenerationsForRun` (deliberately `done`-only, for the clarify
- * generation count) this MUST also see review-supersede `canceled` rows: review
- * reject/iterate flips the prior `done` row to `canceled` but keeps its
- * node_run_outputs. node_run_outputs are written only on a run that reached
- * `done`, so "has an output row" == "this run produced output at some point".
+ * RFC-119: the freshest prior run of this node at the SAME (iteration, shardKey),
+ * minted before this run (id < current), that captured at least one output row —
+ * REGARDLESS of final status. Unlike `priorDoneGenerationsForRun` (deliberately
+ * `done`-only, for the clarify generation count) this MUST also see
+ * review-supersede `canceled` rows: review reject/iterate flips the prior `done`
+ * row to `canceled` but keeps its node_run_outputs. node_run_outputs are written
+ * only on a run that reached `done`, so "has an output row" == "this run produced
+ * output at some point".
+ *
+ * RFC-119 multi-process (D9 revision): **parent-agnostic** — it deliberately does
+ * NOT filter `parentNodeRunId === null`, so it ALSO matches fan-out children
+ * across wrapper generations. The (nodeId, shardKey) tuple is what scopes the
+ * lookup, and no node has both top-level AND child runs at the same
+ * (nodeId, iteration, shardKey): a single-process agent node has only top-level
+ * runs (so the dropped filter is a no-op there); a fan-out inner node has only
+ * shard children (keyed by shardKey); a fan-out aggregator node has only
+ * aggregator children (shardKey null). So id-order within (nodeId, iteration,
+ * shardKey) uniquely identifies the freshest prior run for all three dispatch
+ * sites (single-process / fan-out shard / fan-out aggregator).
+ *
  * Candidate set is tiny (one node's attempts this iteration), so the per-row
  * existence probe is cheap; the freshest candidate normally hits on the first.
  */
@@ -4879,14 +4916,9 @@ export async function freshestPriorRunWithOutput(
     )
   // shardKey filtered in memory (drizzle IS NULL handling varies; see
   // readPriorAgentSessionId). Walk freshest-first (largest id) and return the
-  // first prior top-level run that captured output.
+  // first prior run (any parent — see doc) that captured output.
   const candidates = rows
-    .filter(
-      (r) =>
-        (r.shardKey ?? null) === (run.shardKey ?? null) &&
-        r.parentNodeRunId === null &&
-        r.id < run.id,
-    )
+    .filter((r) => (r.shardKey ?? null) === (run.shardKey ?? null) && r.id < run.id)
     .sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0))
   for (const c of candidates) {
     const has = await db

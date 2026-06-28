@@ -239,7 +239,10 @@ if (
   - inline 端口（string/markdown）正文在 DB → 任何重跑完整可用。
   - 文件端口给路径：不回滚重跑（review-iterate/clarify/cross-clarify）文件在→agent 读；回滚重跑（手动重试等）文件没→agent 读不到就按指令重新生成。**这是正确行为，不是缺陷**——产物本就是路径。
   - **Codex 设计 gate P2 由本决策直接消解**（用户：「输出是路径就只给路径啊，为什么要捕获上下文」）：原拟的 v2「回滚前捕获文件正文」**整条删除**，不引入存储/migration。
-- **D9 不覆盖多进程 shard 子运行**：查找限 `parentNodeRunId=null`；shard 从各自 diff 切片重导。
+- **D9（修订 2026-06-28，用户「两个都要」后）多进程：覆盖聚合(aggregator)、不覆盖 shard**：
+  - **`freshestPriorRunWithOutput` 改 parent-agnostic**（去掉 `parentNodeRunId=null` 过滤）——`(nodeId, shardKey)` 元组已能唯一定位：单进程节点只有 top-level run（过滤去留等价）、fanout 内节点只有 shard 子行（按 shardKey）、聚合节点只有聚合子行（shardKey=null），故同一 lookup 覆盖三类、不 fork。
+  - **聚合(4055 `dispatchFanoutAggregator`)注入 prior-output**：聚合产出多进程节点的最终可审产物，review-iterate/retry 强制重跑（reuseDisabled / shard 更新）时真 spawn → 注入上次聚合结果让其增量更新，是单进程评审场景的多进程对应。仅在真 spawn 时触发（value-hash replay 分支提前 return，不到注入点）。
+  - **shard(3789)仍不注入——但理由从「deferred」改为「有意排除」**：shard 有 value-hash replay（`dispatchFanoutShard` Branch 1）——切片**未变**则 replay 上次输出、不 spawn（无需注入）；切片**变了**才 spawn，而那时上次输出是**旧切片**的、注入会把 agent 锚定到陈旧内容 → **有害**。故 shard 注入既无必要又有害，明确排除。
 - **D10 与 RFC-014 互补去重（用户细化决策）**：review-**iterate** 时 RFC-119 prior-output 只渲染 `reviewContext.iterateTargetPort` 一个端口（兄弟端口由 RFC-014 `## Sibling Outputs` 负责，含其一致性指令）→ 文件兄弟端口路径不重复。review-**reject** 与**非评审重跑**（手动重试/级联/恢复/self-clarify）`iterateTargetPort` 未置位 → 渲染全部端口。语义自洽：iterate=「改这一个端口」只示该端口上次版本；reject/redo=「整体重做」示全部。
 
 ## 5. 失败模式 / 边界
