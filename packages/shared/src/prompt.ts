@@ -3,7 +3,11 @@
 // imports. Mirrors design.md §7.2.
 
 import type { AgentOutputKindsMap } from './schemas/agent'
-import { CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT } from './clarify'
+import {
+  PRIOR_OUTPUT_BLOCK_TITLE,
+  UPDATE_DIRECTIVE_BLOCK_TITLE,
+  UPDATE_DIRECTIVE_TEXT,
+} from './clarify'
 import { groupPortsByParsedKind, parsePortKind, getHandlerForParsedKind } from './outputKinds'
 
 /**
@@ -154,7 +158,7 @@ export interface CrossClarifyPromptContext {
    * RFC-056 §6 update mode (2026-05-22 amendment): pre-rendered markdown body
    * of the designer's last done output (one `### <port_name>` section per
    * declared output port). When present, `shared/prompt.ts` emits a
-   * `## Prior Output (to be updated)` section AND a `## Update Directive`
+   * `## Prior Output (to update or regenerate)` section AND a `## Update Directive`
    * section so the agent knows to update the prior draft rather than
    * regenerate. The scheduler populates this only when the rerun was
    * triggered by a cross-clarify submit (NOT for fresh first-time runs).
@@ -163,6 +167,22 @@ export interface CrossClarifyPromptContext {
    * neither section (legacy regenerate-from-inputs behaviour).
    */
   priorOutputBlock?: string
+}
+
+/**
+ * RFC-119: generalized prior-output context for NON-cross-clarify reruns
+ * (review reject/iterate, manual retry, cascade, resume, self-clarify). The
+ * scheduler populates `block` (via `composePriorOutputBlock` → the shared
+ * `buildPriorOutputBlock`) from the freshest prior run that captured output;
+ * `renderUserPrompt` then emits the same `## Prior Output (to update or
+ * regenerate)` + `## Update Directive` sections cross-clarify uses.
+ *
+ * Mutually exclusive with `crossClarifyContext.priorOutputBlock` — the scheduler
+ * sets at most one, and `renderUserPrompt` suppresses this when cross-clarify is
+ * already rendering its prior output. Empty / undefined `block` ⇒ no sections.
+ */
+export interface PriorOutputUpdateContext {
+  block?: string
 }
 
 export interface RenderPromptInput {
@@ -231,6 +251,14 @@ export interface RenderPromptInput {
    * block is emitted unchanged.
    */
   hasClarifyChannel?: boolean
+  /**
+   * RFC-119: prior-output context for a NON-cross-clarify rerun. When set (and
+   * cross-clarify is not already owning the prior-output block), renderUserPrompt
+   * appends the `## Prior Output (to update or regenerate)` + `## Update
+   * Directive` sections. Absent for first-time runs and any run with no prior
+   * captured output.
+   */
+  priorOutputUpdate?: PriorOutputUpdateContext
 }
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
@@ -477,7 +505,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // after RFC-023 self-clarify auto-append so a designer that has BOTH
   // sources of feedback in the same rerun shows them in stable order:
   //   ## Self Clarify Q&A (RFC-023, if any)
-  //   ## Prior Output (to be updated) (RFC-056 update mode, if any)
+  //   ## Prior Output (to update or regenerate) (RFC-056 update mode, if any)
   //   ## External Feedback (RFC-056, if any)
   //   ## Update Directive (RFC-056 update mode, if any)
   // A single `clarifyIteration` counter covers both self-clarify and
@@ -489,7 +517,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     // so the agent reads "here's the draft you're updating" → "here's what
     // the user wants changed" in that order).
     if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n## Prior Output (to be updated)\n${xcc.priorOutputBlock}`
+      sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${xcc.priorOutputBlock}`
     }
     if (
       xcc.block !== undefined &&
@@ -502,8 +530,32 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     // last instruction before the protocol block — primes the agent's
     // "what do I do this round" mental model on update-mode terms).
     if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n## Update Directive\n${CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT}`
+      sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
     }
+  }
+
+  // RFC-119: generalized rerun prior-output for NON-cross-clarify reruns (review
+  // reject/iterate, manual retry, cascade, resume, self-clarify). Emits the same
+  // `## Prior Output` + `## Update Directive` pair cross-clarify uses, but ONLY
+  // when:
+  //   - the scheduler set priorOutputUpdate.block (a prior run captured output), AND
+  //   - cross-clarify is NOT already rendering its own prior output (mutual
+  //     exclusion — never inject two prior-output blocks in one prompt), AND
+  //   - NOT an inline session resume (the resumed session already holds the prior
+  //     output — re-injecting wastes tokens and re-anchors on stale text), AND
+  //   - mandatory ask-back is OFF (a clarify-only round must ask back, not output;
+  //     "update your output" would contradict it — defense in depth, the scheduler
+  //     already gates on effectiveHasClarifyChannel).
+  const pou = input.priorOutputUpdate
+  if (
+    pou?.block !== undefined &&
+    pou.block.trim().length > 0 &&
+    !(xcc?.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) &&
+    !inlineMode &&
+    input.hasClarifyChannel !== true
+  ) {
+    sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
+    sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
   }
 
   // Trailing protocol selection (RFC-100 — mandatory ask-back).

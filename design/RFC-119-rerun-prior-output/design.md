@@ -182,13 +182,20 @@ prior-output **块本身**逐字相同（helper 即原逻辑）；但 prompt.ts 
 
 ```ts
 // RFC-119: generalized prior-output for NON-cross-clarify reruns. Skip when:
-//   - cross-clarify already owns it (isCrossClarifyTriggeredRerun),
+//   - cross-clarify ACTUALLY rendered its own prior-output block (Codex impl
+//     gate P2: key on crossClarifyContext.priorOutputBlock, NOT the
+//     generation-only isCrossClarifyTriggeredRerun — a cross-clarify designer
+//     rerun for a non-cross reason has clarifyGeneration>0 yet no xcc context,
+//     so the proxy wrongly skipped it),
 //   - inline session resume (session holds the output),
 //   - mandatory ask-back active (clarify-only protocol this round).
+const crossClarifyOwnsPriorOutput =
+  crossClarifyContext?.priorOutputBlock !== undefined &&
+  crossClarifyContext.priorOutputBlock.length > 0
 let priorOutputUpdate: PriorOutputUpdateContext | undefined
 if (
   currentRunRow !== undefined &&
-  !isCrossClarifyTriggeredRerun &&
+  !crossClarifyOwnsPriorOutput &&
   !resumeDecision.inlineMode &&
   !effectiveHasClarifyChannel
 ) {
@@ -224,7 +231,7 @@ if (
 - **D1 cause-agnostic 单注入点**：以「同 iteration 内存在更早 done-产出的 top-level run」为信号，而非逐 cause 特判。覆盖全部重跑原因（用户决策），天然排除首次/循环下一迭代。
 - **D2 放宽查找到「任何状态、有 outputs」**：新建 `freshestPriorRunWithOutput`；**不改** `priorDoneGenerationsForRun`（done-only 服务 clarifyGeneration 计数，是 load-bearing 不变式）。理由：评审 supersede 把旧 done 置 canceled，done-only 取不到。
 - **D3 抽 `composePriorOutputBlock`、复用 `buildPriorOutputBlock`**：cross-clarify 与泛化路径共用同一块渲染件（块本身 byte-identical）。遵守「抽一次别 fork」。
-- **D4 统一中性指令（用户细化决策：统一为中性）**：cross-clarify 与泛化路径**共用同一套中性常量** `PRIOR_OUTPUT_BLOCK_TITLE`/`UPDATE_DIRECTIVE_TEXT`（贴合用户「更新或重新生成」、要求吐完整结果）。**不再保留 RFC-056 严格「Do NOT regenerate」**——原 `CROSS_CLARIFY_*` 三常量改名去前缀、值换中性，cross-clarify prompt 随之改、其既有测试更新到新措辞（design §6.2）。两路径仍**互斥**（prompt 层 `xcc.priorOutputBlock` 占用时泛化不重复 + scheduler 层 `!isCrossClarifyTriggeredRerun`），各自保留原有段落顺序。
+- **D4 统一中性指令（用户细化决策：统一为中性）**：cross-clarify 与泛化路径**共用同一套中性常量** `PRIOR_OUTPUT_BLOCK_TITLE`/`UPDATE_DIRECTIVE_TEXT`（贴合用户「更新或重新生成」、要求吐完整结果）。**不再保留 RFC-056 严格「Do NOT regenerate」**——原 `CROSS_CLARIFY_*` 三常量改名去前缀、值换中性，cross-clarify prompt 随之改、其既有测试更新到新措辞（design §6.2）。两路径仍**互斥**：prompt 层与 scheduler 层都按**真实 ownership 信号** `crossClarifyContext.priorOutputBlock 非空` 判定（Codex 实现 gate P2：scheduler 不再用 generation-only 的 `isCrossClarifyTriggeredRerun` 代理），各自保留原有段落顺序。
 - **D5 同会话续跑不注入**：envelope-followup 天然走 `renderEnvelopeFollowupPrompt`；inline clarify resume 由 `resumeDecision.inlineMode`（scheduler）+ `inlineMode`（prompt）双门控。会话里已有上次输出，重灌浪费 token 且诱发陈旧锚定。
 - **D6 强制反问态不注入**：`effectiveHasClarifyChannel=true` 时协议块是 clarify-only、要求 agent 反问，注入「更新你的输出」自相矛盾。scheduler + prompt 双门控（纯防御——该组合正常流几乎不可能：产出 output 需 'stop' 轮，'stop' 后 effectiveHasClarifyChannel 即 false）。
 - **D7 始终开启、无开关**（用户决策）：前提不满足时自然不注入。
@@ -297,5 +304,5 @@ if (
 
 > 复审说明：第二轮 `--base d4e0b06`（落档前）复审被共享工作树污染（卷入协作者 RFC-117/118 未提交前端改动），未对 RFC-119 产生 findings；首轮 `--base HEAD~1` 命令全程聚焦 RFC-119 代码路径、给出唯一 P2，设计 gate 视为完成。
 
-### 实现 gate
-- 待实现后补跑、findings 记于此。
+### 实现 gate（实现 commit `d843036`，`--base HEAD~1`）—— 1 finding，已 fold
+- **[P2] 不应因「无关的 cross-clarify 历史」跳过 prior-output**（scheduler.ts 泛化门控）：泛化路径原门控 `!isCrossClarifyTriggeredRerun`，而 `isCrossClarifyTriggeredRerun = hasExternalFeedbackChannel && clarifyGeneration > 0`——一个有 cross-clarify 通道、有历史 generation 的 designer，因**非 cross 原因**（评审/手动/级联）重跑时该值仍为 true，但此时 `crossClarifyContext===undefined`、cross-clarify 的 prior-output 并未设置 → 泛化被跳过且 cross-clarify 也没注入 → 该重跑丢失上次输出。**Fold**：门控改为真实 ownership 信号 `crossClarifyOwnsPriorOutput = crossClarifyContext?.priorOutputBlock 非空`（与 prompt.ts 渲染层互斥信号一致），不再用 generation-only 代理。源码守卫测试同步断言新门控 + `not.toContain('!isCrossClarifyTriggeredRerun')`。

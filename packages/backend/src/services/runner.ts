@@ -25,6 +25,7 @@ import type {
   CrossClarifyPromptContext,
   Mcp,
   Plugin,
+  PriorOutputUpdateContext,
   ReviewPromptContext,
 } from '@agent-workflow/shared'
 import {
@@ -168,6 +169,13 @@ export interface RunNodeOptions {
    * cross-agent feedback.
    */
   crossClarifyContext?: CrossClarifyPromptContext
+  /**
+   * RFC-119: prior-output context for a NON-cross-clarify rerun (review
+   * reject/iterate, manual retry, cascade, resume, self-clarify). The scheduler
+   * sets it from the freshest prior run that captured output; threaded straight
+   * into renderUserPrompt. Absent on first runs / followups / cross-clarify.
+   */
+  priorOutputUpdate?: PriorOutputUpdateContext
   /**
    * RFC-023 + RFC-039: when true (scheduler computed
    * `agentHasClarifyChannel(definition, agentNodeId)` from the workflow
@@ -761,6 +769,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
           ...(opts.clarifyContext !== undefined ? { clarifyContext: opts.clarifyContext } : {}),
           ...(opts.crossClarifyContext !== undefined
             ? { crossClarifyContext: opts.crossClarifyContext }
+            : {}),
+          // RFC-119: generalized prior-output for non-cross-clarify reruns.
+          ...(opts.priorOutputUpdate !== undefined
+            ? { priorOutputUpdate: opts.priorOutputUpdate }
             : {}),
           ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),
         })

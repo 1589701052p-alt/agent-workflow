@@ -9,7 +9,7 @@
 //     `inlineMode` (cc.mode==='inline', prompt.ts L327) gates input
 //     substitution (L377→''), the `## ${port}` auto-append (L387 continue),
 //     and trailer selection (L508 → buildClarifyInlineReminder). BUT the xcc
-//     block at L479-499 (## Prior Output (to be updated) / ## External
+//     block at L479-499 (## Prior Output (to update or regenerate) / ## External
 //     Feedback / ## Update Directive) has NO inlineMode guard, so all three
 //     STILL emit in inline mode. The self-clarify QUESTIONS section IS inline-
 //     gated (L447 !inlineMode) while the ANSWERS section is not (L454-464). A
@@ -58,7 +58,7 @@ describe('renderUserPrompt — RFC-026 inline mode × RFC-056 cross-clarify (GAP
 
     // The cross-clarify (xcc) sections all still emit — no inlineMode guard.
     expect(out).toContain('## External Feedback')
-    expect(out).toContain('## Prior Output (to be updated)')
+    expect(out).toContain('## Prior Output (to update or regenerate)')
     expect(out).toContain('## Update Directive')
 
     // Inline trailer wins over the bi-modal protocol block.
@@ -74,7 +74,7 @@ describe('renderUserPrompt — RFC-026 inline mode × RFC-056 cross-clarify (GAP
   test('section ordering: Prior Output < External Feedback < Update Directive < inline reminder', () => {
     const out = renderUserPrompt(baseInput)
 
-    const priorIdx = out.indexOf('## Prior Output (to be updated)')
+    const priorIdx = out.indexOf('## Prior Output (to update or regenerate)')
     const feedbackIdx = out.indexOf('## External Feedback')
     const directiveIdx = out.indexOf('## Update Directive')
     const reminderIdx = out.indexOf(buildClarifyInlineReminder().trim())
@@ -96,7 +96,7 @@ describe('renderUserPrompt — RFC-026 inline mode × RFC-056 cross-clarify (GAP
     // verifier confirmed this section emits at runtime.)
     expect(out).toContain('## Clarify Q&A — User Answers (Current Round)')
     const answersIdx = out.indexOf('## Clarify Q&A — User Answers (Current Round)')
-    const priorIdx = out.indexOf('## Prior Output (to be updated)')
+    const priorIdx = out.indexOf('## Prior Output (to update or regenerate)')
     // Self-clarify answers render before the xcc Prior Output block.
     expect(answersIdx).toBeGreaterThanOrEqual(0)
     expect(answersIdx).toBeLessThan(priorIdx)
@@ -121,7 +121,7 @@ describe('renderUserPrompt — RFC-026 inline mode × RFC-056 cross-clarify (GAP
 
     // The xcc sections emit in both modes (they are mode-agnostic).
     expect(out).toContain('## External Feedback')
-    expect(out).toContain('## Prior Output (to be updated)')
+    expect(out).toContain('## Prior Output (to update or regenerate)')
     expect(out).toContain('## Update Directive')
   })
 })

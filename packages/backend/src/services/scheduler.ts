@@ -2225,7 +2225,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // RFC-056 §6 update mode (2026-05-22 amendment): when this rerun was
         // triggered by a cross-clarify submit, fetch the designer's latest done
         // node_run for this (taskId, nodeId, iteration) so we can inject its
-        // output verbatim as `## Prior Output (to be updated)` and the agent
+        // output verbatim as `## Prior Output (to update or regenerate)` and the agent
         // reads the working draft instead of regenerating from scratch.
         //
         // RFC-074 PR-C: the gate keys on the DERIVED clarify generation
@@ -2342,15 +2342,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           priorDoneDesigner !== undefined &&
           crossClarifyContext !== undefined
         ) {
-          const captured = await db
-            .select()
-            .from(nodeRunOutputs)
-            .where(eq(nodeRunOutputs.nodeRunId, priorDoneDesigner.id))
-          const byPort = new Map(captured.map((r) => [r.portName, r.content]))
-          const ordered = (agent.outputs ?? [])
-            .map((p) => ({ portName: p, content: byPort.get(p) ?? '' }))
-            .filter((o) => o.content.length > 0)
-          const priorOutputBlock = buildPriorOutputBlock(ordered)
+          // RFC-119 D3: shared composer (block byte-identical to the prior
+          // inline read+order+build; only the heading/directive constants are
+          // unified — see prompt.ts).
+          const priorOutputBlock = await composePriorOutputBlock(
+            db,
+            priorDoneDesigner.id,
+            agent.outputs ?? [],
+          )
           if (priorOutputBlock.length > 0) {
             crossClarifyContext.priorOutputBlock = priorOutputBlock
           }
@@ -2381,6 +2380,57 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           hasClarifyChannel &&
           clarifyContext?.directive !== 'stop' &&
           (reviewContext === undefined || isClarifyRerun)
+        // RFC-119: generalized prior-output for a NON-cross-clarify rerun. When
+        // this node has an earlier captured output at the SAME (iteration,
+        // shardKey) — review reject/iterate (supersede→canceled), manual retry,
+        // cascade, resume, self-clarify — surface it so the agent updates/regens
+        // rather than starting blind. Skipped when:
+        //   - cross-clarify ACTUALLY rendered its own prior-output block above
+        //     (no double inject),
+        //   - this is an inline session resume (the resumed session already holds
+        //     the prior output),
+        //   - mandatory ask-back is active (a clarify-only round must ask back, not
+        //     produce output — "update your output" would contradict it).
+        // Codex impl gate P2: gate on the REAL ownership signal
+        // (crossClarifyContext.priorOutputBlock was set), NOT the generation-only
+        // `isCrossClarifyTriggeredRerun` — a cross-clarify designer rerun for a
+        // NON-cross reason (review/manual/cascade) has clarifyGeneration>0 yet
+        // crossClarifyContext===undefined, so the old proxy wrongly skipped it and
+        // dropped the prior output entirely. Mirrors prompt.ts's render-level gate.
+        // D10: on a review-ITERATE, RFC-014's `## Sibling Outputs` already carries
+        // the sibling ports; restrict to the iterate-target port so the two don't
+        // duplicate. review-reject / non-review reruns → all ports (onlyPorts undef).
+        const crossClarifyOwnsPriorOutput =
+          crossClarifyContext?.priorOutputBlock !== undefined &&
+          crossClarifyContext.priorOutputBlock.length > 0
+        let priorOutputUpdate: { block: string } | undefined
+        if (
+          currentRunRow !== undefined &&
+          !crossClarifyOwnsPriorOutput &&
+          !resumeDecision.inlineMode &&
+          !effectiveHasClarifyChannel
+        ) {
+          const priorRun = await freshestPriorRunWithOutput(db, {
+            taskId,
+            nodeId: node.id,
+            iteration: currentRunRow.iteration,
+            shardKey: currentShardKey,
+            id: currentRunRow.id,
+          })
+          if (priorRun !== undefined) {
+            const onlyPorts =
+              reviewContext?.iterateTargetPort !== undefined
+                ? new Set([reviewContext.iterateTargetPort])
+                : undefined
+            const block = await composePriorOutputBlock(
+              db,
+              priorRun.id,
+              agent.outputs ?? [],
+              onlyPorts,
+            )
+            if (block.length > 0) priorOutputUpdate = { block }
+          }
+        }
         if (resumeDecision.inlineMode && resumeDecision.resumeSessionId !== undefined) {
           await recordClarifyInlineEvent(db, nodeRunId, {
             level: 'info',
@@ -2453,6 +2503,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(reviewContext !== undefined ? { reviewContext } : {}),
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
           ...(crossClarifyContext !== undefined ? { crossClarifyContext } : {}),
+          ...(priorOutputUpdate !== undefined ? { priorOutputUpdate } : {}),
           ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
           ...(effectiveResumeSessionId !== undefined
             ? { resumeSessionId: effectiveResumeSessionId }
@@ -4773,6 +4824,80 @@ function readBindings(node: WorkflowNode, key: string): Binding[] {
 // `orderBy(desc(retryIndex))` was one of the audit S-13 freshest-row forks
 // (retry_index ordering was ruled out in favor of id-order, and a followup
 // attempt's snapshot-less row shadowed the real baseline — S-2b).
+
+/**
+ * RFC-119 / RFC-056: read a prior run's captured port outputs and render them in
+ * the agent's declared-output order via the shared `buildPriorOutputBlock`.
+ * Shared by the cross-clarify update-mode path AND the generalized rerun path.
+ * `onlyPorts` (RFC-119 D10) restricts which declared ports render — review-iterate
+ * passes the single iterate-target port so it doesn't duplicate RFC-014's
+ * `## Sibling Outputs`; everything else passes undefined (all ports).
+ */
+export async function composePriorOutputBlock(
+  db: DbClient,
+  priorRunId: string,
+  agentOutputs: readonly string[],
+  onlyPorts?: ReadonlySet<string>,
+): Promise<string> {
+  const captured = await db
+    .select()
+    .from(nodeRunOutputs)
+    .where(eq(nodeRunOutputs.nodeRunId, priorRunId))
+  const byPort = new Map(captured.map((r) => [r.portName, r.content]))
+  const ordered = (agentOutputs ?? [])
+    .filter((p) => onlyPorts === undefined || onlyPorts.has(p))
+    .map((p) => ({ portName: p, content: byPort.get(p) ?? '' }))
+    .filter((o) => o.content.length > 0)
+  return buildPriorOutputBlock(ordered)
+}
+
+/**
+ * RFC-119: the freshest prior TOP-LEVEL run of this node at the SAME
+ * (iteration, shardKey), minted before this run (id < current), that captured at
+ * least one output row — REGARDLESS of final status. Unlike
+ * `priorDoneGenerationsForRun` (deliberately `done`-only, for the clarify
+ * generation count) this MUST also see review-supersede `canceled` rows: review
+ * reject/iterate flips the prior `done` row to `canceled` but keeps its
+ * node_run_outputs. node_run_outputs are written only on a run that reached
+ * `done`, so "has an output row" == "this run produced output at some point".
+ * Candidate set is tiny (one node's attempts this iteration), so the per-row
+ * existence probe is cheap; the freshest candidate normally hits on the first.
+ */
+export async function freshestPriorRunWithOutput(
+  db: DbClient,
+  run: { taskId: string; nodeId: string; iteration: number; shardKey: string | null; id: string },
+): Promise<typeof nodeRuns.$inferSelect | undefined> {
+  const rows = await db
+    .select()
+    .from(nodeRuns)
+    .where(
+      and(
+        eq(nodeRuns.taskId, run.taskId),
+        eq(nodeRuns.nodeId, run.nodeId),
+        eq(nodeRuns.iteration, run.iteration),
+      ),
+    )
+  // shardKey filtered in memory (drizzle IS NULL handling varies; see
+  // readPriorAgentSessionId). Walk freshest-first (largest id) and return the
+  // first prior top-level run that captured output.
+  const candidates = rows
+    .filter(
+      (r) =>
+        (r.shardKey ?? null) === (run.shardKey ?? null) &&
+        r.parentNodeRunId === null &&
+        r.id < run.id,
+    )
+    .sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0))
+  for (const c of candidates) {
+    const has = await db
+      .select({ p: nodeRunOutputs.portName })
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, c.id))
+      .limit(1)
+    if (has.length > 0) return c
+  }
+  return undefined
+}
 
 /**
  * RFC-074 PR-C: derive a node_run's clarify "generation" from id-order instead

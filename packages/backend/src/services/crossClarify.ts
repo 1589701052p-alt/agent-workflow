@@ -764,7 +764,7 @@ export interface TriggerDesignerRerunResult {
  * prior-max + 1) to revise with the aggregated External Feedback. The
  * worktree is NOT rolled back (patch 2026-06-22 — the designer revises in
  * place; its prior draft is re-supplied via the scheduler's
- * `## Prior Output (to be updated)` prompt block). Downstream re-dispatch is
+ * `## Prior Output (to update or regenerate)` prompt block). Downstream re-dispatch is
  * lazy (RFC-074): once this rerun produces a fresh done row,
  * recomputeFreshnessAndDemote demotes + re-dispatches stale downstream. The
  * caller is expected to call resumeTask once.
@@ -803,7 +803,7 @@ export async function triggerDesignerRerun(
   // NOT roll the worktree back to pre_snapshot. The designer is revising with
   // External Feedback — a continuation, not a retry — so its prior output (and
   // any downstream work sitting on top) is preserved; the prior draft is
-  // re-supplied via the scheduler's `## Prior Output (to be updated)` prompt
+  // re-supplied via the scheduler's `## Prior Output (to update or regenerate)` prompt
   // block. A genuine process-retry of THIS rerun still rolls back to its own
   // fresh pre_snapshot via the scheduler retry path; only this revise-with-
   // feedback rerun stops rolling back. See
@@ -1071,7 +1071,7 @@ export interface ExternalFeedbackPromptContext {
    * last done output (via shared `buildPriorOutputBlock`), populated only
    * when the rerun was triggered by a cross-clarify submit AND the prior
    * done node_run captured at least one non-empty port output. The shared
-   * `renderUserPrompt` emits `## Prior Output (to be updated)` +
+   * `renderUserPrompt` emits `## Prior Output (to update or regenerate)` +
    * `## Update Directive` sections when this is set. Undefined / empty
    * preserves legacy regenerate-from-inputs behaviour.
    */

@@ -399,17 +399,29 @@ export function buildClarifyEdges(
  *  user prompt. */
 export const CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE = '## External Feedback' as const
 
-/** RFC-056 §6 update mode (2026-05-22 amendment) heading constants. */
-export const CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE = '## Prior Output (to be updated)' as const
-export const CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE = '## Update Directive' as const
+// RFC-119: prior-output heading + directive constants. Originally RFC-056 §6
+// cross-clarify-only (named CROSS_CLARIFY_*); RFC-119 renamed them to neutral
+// and unified the directive to "update OR regenerate" so BOTH the cross-clarify
+// update-mode path AND the generalized rerun path (review reject/iterate, manual
+// retry, cascade, resume, self-clarify) share one wording. See RFC-119 design
+// §3.1 / D4.
+export const PRIOR_OUTPUT_BLOCK_TITLE = '## Prior Output (to update or regenerate)' as const
+export const UPDATE_DIRECTIVE_BLOCK_TITLE = '## Update Directive' as const
 
-/** Stable English directive text that primes the designer for update mode. */
-export const CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT = [
-  'Your goal this round is to **update** the prior output above to incorporate the',
-  'External Feedback Q&A. Do NOT regenerate the output from scratch. Preserve every',
-  'detail of the prior output that the External Feedback does not contradict; only',
-  'change the parts the cross-clarify answers require. Treat the External Feedback',
-  'as the source of changes, the prior output as the working draft.',
+/** Neutral directive shared by both prior-output paths (RFC-119 D4). Honors the
+ *  user's 「更新或重新生成」: bias toward incremental update, allow a full
+ *  regenerate when the feedback is fundamental, and demand the COMPLETE output
+ *  (never a diff). The closing sentence handles file-path ports (the agent
+ *  re-reads the worktree file). */
+export const UPDATE_DIRECTIVE_TEXT = [
+  'The "Prior Output" section above is what you produced on your previous run of',
+  'this node. This run exists because that output needs to change — see the',
+  'feedback in the sections above. Update the prior output to address that',
+  'feedback, preserving the parts it does not contradict; regenerate it from',
+  'scratch only if the feedback requires fundamental changes. Either way you MUST',
+  'emit the COMPLETE updated output in the workflow-output envelope — never a diff',
+  'or a description of changes alone. When a Prior Output port is a file path,',
+  'read that file for its contents.',
 ].join(' ')
 
 /**

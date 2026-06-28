@@ -1,29 +1,30 @@
 // RFC-056 §6 update mode (2026-05-22 amendment) — pure shared-layer locks.
 //
-// Two product semantics this test pins:
-//   1. `## Prior Output (to be updated)` section emits when
-//      crossClarifyContext.priorOutputBlock is populated; the agent reads
-//      the working draft instead of regenerating from scratch.
-//   2. `## Update Directive` section emits ONLY when priorOutputBlock is
-//      populated — paired one-to-one so the directive never appears
-//      without the draft (would confuse the agent — "update what?").
-//   3. Section order: Prior Output → External Feedback → Update Directive
-//      so the agent reads "here's the draft" → "here's the change driver"
-//      → "your action this round is update, not regenerate".
-//   4. buildPriorOutputBlock empty-input → empty string (renderer suppresses
-//      both sections); single port → `### <port>` + body; multi-port
-//      preserves caller order.
+// RFC-119 (2026-06-28): the prior-output heading + directive were UNIFIED to a
+// neutral "update OR regenerate" wording and the constants renamed off the
+// `CROSS_CLARIFY_` prefix (now shared by the cross-clarify update-mode path AND
+// the generalized rerun path). This test keeps the cross-clarify-SPECIFIC
+// guarantees:
+//   1. `## Prior Output (to update or regenerate)` emits when
+//      crossClarifyContext.priorOutputBlock is populated.
+//   2. `## Update Directive` emits ONLY when priorOutputBlock is populated —
+//      paired one-to-one so the directive never appears without the draft.
+//   3. Section order (cross-clarify): Prior Output → External Feedback → Update
+//      Directive (draft → change driver → "your action is update/regenerate").
+//   4. buildPriorOutputBlock empty-input → empty string; single port → `### <port>`
+//      + body; multi-port preserves caller order.
 //
-// If any of these go red the cross-clarify update-mode prompt contract has
-// drifted — investigate before relaxing.
+// The generalized (non-cross-clarify) rerun path is covered in
+// rerun-prior-output.test.ts. If any of these go red the cross-clarify
+// update-mode prompt contract has drifted — investigate before relaxing.
 
 import { describe, expect, test } from 'bun:test'
 
 import {
   buildPriorOutputBlock,
-  CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE,
-  CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE,
-  CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT,
+  PRIOR_OUTPUT_BLOCK_TITLE,
+  UPDATE_DIRECTIVE_BLOCK_TITLE,
+  UPDATE_DIRECTIVE_TEXT,
   renderUserPrompt,
 } from '@agent-workflow/shared'
 
@@ -60,20 +61,26 @@ describe('RFC-056 §6 update mode — buildPriorOutputBlock', () => {
     expect(out).toContain('real content')
   })
 
-  test('constants resolve to the literal heading strings (regression guard against silent rename)', () => {
-    expect(CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE).toBe('## Prior Output (to be updated)')
-    expect(CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE).toBe('## Update Directive')
-    expect(CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT.length).toBeGreaterThan(50)
-    // The directive must clearly say "update" + "not regenerate" so the
-    // agent's mental model flips. Silent re-wording that drops either
-    // keyword should fail this lock.
-    expect(CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT.toLowerCase()).toContain('update')
-    expect(CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT.toLowerCase()).toContain('not regenerate')
+  test('constants resolve to the literal strings (regression guard against silent rename)', () => {
+    // RFC-119: heading is the NEUTRAL "update or regenerate" form, shared by both
+    // prior-output paths.
+    expect(PRIOR_OUTPUT_BLOCK_TITLE).toBe('## Prior Output (to update or regenerate)')
+    expect(UPDATE_DIRECTIVE_BLOCK_TITLE).toBe('## Update Directive')
+    expect(UPDATE_DIRECTIVE_TEXT.length).toBeGreaterThan(50)
+    // RFC-119: the directive must offer BOTH update and regenerate (neutral) and
+    // demand the COMPLETE output. It must NOT carry the old strict
+    // "do NOT regenerate" bias.
+    const lower = UPDATE_DIRECTIVE_TEXT.toLowerCase()
+    expect(lower).toContain('update')
+    expect(lower).toContain('regenerate')
+    expect(lower).toContain('complete')
+    expect(lower).not.toContain('not regenerate')
+    expect(lower).not.toContain('do not regenerate')
   })
 })
 
 describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering', () => {
-  test('emits `## Prior Output (to be updated)` when crossClarifyContext.priorOutputBlock is set', () => {
+  test('emits `## Prior Output (to update or regenerate)` when crossClarifyContext.priorOutputBlock is set', () => {
     const out = renderUserPrompt({
       promptTemplate: 'Body.',
       inputs: {},
@@ -86,7 +93,7 @@ describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering',
         priorOutputBlock: '### design\n\n# Prior draft body',
       },
     })
-    expect(out).toContain('## Prior Output (to be updated)')
+    expect(out).toContain(PRIOR_OUTPUT_BLOCK_TITLE)
     expect(out).toContain('### design')
     expect(out).toContain('# Prior draft body')
   })
@@ -105,7 +112,7 @@ describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering',
         priorOutputBlock: '### design\n\nbody',
       },
     })
-    expect(withPrior).toContain('## Update Directive')
+    expect(withPrior).toContain(UPDATE_DIRECTIVE_BLOCK_TITLE)
     expect(withPrior).toContain('update')
 
     // Case B: priorOutputBlock empty → directive suppressed (would confuse
@@ -121,8 +128,8 @@ describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering',
         sourcesCsv: '',
       },
     })
-    expect(withoutPrior).not.toContain('## Update Directive')
-    expect(withoutPrior).not.toContain('## Prior Output (to be updated)')
+    expect(withoutPrior).not.toContain(UPDATE_DIRECTIVE_BLOCK_TITLE)
+    expect(withoutPrior).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
   })
 
   test('section order: Prior Output → External Feedback → Update Directive (update-mode logical flow)', () => {
@@ -138,9 +145,9 @@ describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering',
         priorOutputBlock: '### design\n\nbody',
       },
     })
-    const priorIdx = out.indexOf('## Prior Output (to be updated)')
+    const priorIdx = out.indexOf(PRIOR_OUTPUT_BLOCK_TITLE)
     const externalIdx = out.indexOf('## External Feedback')
-    const directiveIdx = out.indexOf('## Update Directive')
+    const directiveIdx = out.indexOf(UPDATE_DIRECTIVE_BLOCK_TITLE)
     expect(priorIdx).toBeGreaterThan(-1)
     expect(externalIdx).toBeGreaterThan(priorIdx)
     expect(directiveIdx).toBeGreaterThan(externalIdx)
@@ -153,8 +160,8 @@ describe('RFC-056 §6 update mode — renderUserPrompt section emit + ordering',
       meta: { repoPath: '', baseBranch: '', taskId: 't1' },
       agentOutputs: ['design'],
     })
-    expect(out).not.toContain('## Prior Output (to be updated)')
-    expect(out).not.toContain('## Update Directive')
+    expect(out).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
+    expect(out).not.toContain(UPDATE_DIRECTIVE_BLOCK_TITLE)
     expect(out).not.toContain('## External Feedback')
     expect(out).toContain('## requirement')
     expect(out).toContain('something')

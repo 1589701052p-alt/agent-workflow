@@ -8,7 +8,7 @@
 // downstream work written on top. The user reported this as unexpected: a
 // cross-clarify `continue` is a *revise-with-feedback* continuation, not a
 // retry, so the worktree must be preserved (the prior draft is re-supplied via
-// the scheduler's `## Prior Output (to be updated)` prompt block).
+// the scheduler's `## Prior Output (to update or regenerate)` prompt block).
 //
 // design/RFC-056-clarify-cross-agent/patch-2026-06-22-designer-rerun-no-rollback.md
 //

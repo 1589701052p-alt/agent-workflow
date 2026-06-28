@@ -9,7 +9,7 @@
 // RFC-042 same-session retries).
 //
 // SIDE EFFECT THIS FILE LOCKS DOWN: the scheduler used to gate
-// "update-mode prompt injection" (the §6 `## Prior Output (to be updated)`
+// "update-mode prompt injection" (the §6 `## Prior Output (to update or regenerate)`
 // + `## Update Directive` sections) on `currentRunRow.retryIndex === 0`.
 // Pre-patch every cross-clarify designer rerun was at retry_index=0 so
 // the gate was effectively a no-op. Post-patch retry_index ≥ 1 for ANY
@@ -31,7 +31,7 @@
 //      scheduler-style priorDoneDesigner lookup resolves it correctly.
 //   2. Render via `renderUserPrompt` with the assembled context
 //      produces the three §6 sections in the canonical order:
-//      `## Prior Output (to be updated)` → `## External Feedback` →
+//      `## Prior Output (to update or regenerate)` → `## External Feedback` →
 //      `## Update Directive`.
 //   3. Source-code-text guard: neither gate condition in scheduler.ts
 //      contains `retryIndex === 0` anymore. If a future refactor re-
@@ -58,8 +58,8 @@ import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-
 import {
   buildPriorOutputBlock,
   renderUserPrompt,
-  CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE,
-  CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE,
+  PRIOR_OUTPUT_BLOCK_TITLE,
+  UPDATE_DIRECTIVE_BLOCK_TITLE,
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE,
 } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
@@ -276,7 +276,7 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     // index). The post-patch scheduler gate (`clarifyIteration > 0`
     // only — no retry_index === 0 sub-gate) must still let update-mode
     // injection through. Pre-patch this returned no priorOutputBlock and
-    // the rendered prompt dropped the `## Prior Output (to be updated)` +
+    // the rendered prompt dropped the `## Prior Output (to update or regenerate)` +
     // `## Update Directive` sections.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
@@ -416,26 +416,26 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
     })
 
     // Each section is present.
-    expect(rendered).toContain(CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE)
+    expect(rendered).toContain(PRIOR_OUTPUT_BLOCK_TITLE)
     expect(rendered).toContain(CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE)
-    expect(rendered).toContain(CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE)
+    expect(rendered).toContain(UPDATE_DIRECTIVE_BLOCK_TITLE)
     // Prior output body landed.
     expect(rendered).toContain('# Prior draft body')
     // External feedback body landed (the question title is the cleanest
     // anchor — guaranteed to appear in `renderClarifyQuestionsBlock`).
     expect(rendered).toContain('测试范围应覆盖哪些系统模块？')
     // Section ordering: Prior Output → External Feedback → Update Directive.
-    const priorIdx = rendered.indexOf(CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE)
+    const priorIdx = rendered.indexOf(PRIOR_OUTPUT_BLOCK_TITLE)
     const extIdx = rendered.indexOf(CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE)
-    const dirIdx = rendered.indexOf(CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE)
+    const dirIdx = rendered.indexOf(UPDATE_DIRECTIVE_BLOCK_TITLE)
     expect(priorIdx).toBeGreaterThan(-1)
     expect(extIdx).toBeGreaterThan(priorIdx)
     expect(dirIdx).toBeGreaterThan(extIdx)
     // The Update Directive's English instruction body must accompany the
-    // heading — without the directive text the agent has no contract to
-    // anchor "update, do not regenerate" on. Cheapest anchor: the literal
-    // 'not regenerate' bigram from CROSS_CLARIFY_UPDATE_DIRECTIVE_TEXT.
-    expect(rendered.toLowerCase()).toContain('not regenerate')
+    // heading. RFC-119 unified the directive to the NEUTRAL "update OR
+    // regenerate" wording, so the cheapest anchor is the 'regenerate' token
+    // (the old strict 'not regenerate' bigram is gone).
+    expect(rendered.toLowerCase()).toContain('regenerate')
   })
 
   test('first-ever rerun (no prior retries) — retry_index=1 still gets update-mode injection', async () => {
@@ -556,8 +556,8 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
         sourcesCsv: 'questioner',
       },
     })
-    expect(rendered).not.toContain(CROSS_CLARIFY_PRIOR_OUTPUT_BLOCK_TITLE)
-    expect(rendered).not.toContain(CROSS_CLARIFY_UPDATE_DIRECTIVE_BLOCK_TITLE)
+    expect(rendered).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
+    expect(rendered).not.toContain(UPDATE_DIRECTIVE_BLOCK_TITLE)
     expect(rendered).toContain(CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE)
   })
 })
