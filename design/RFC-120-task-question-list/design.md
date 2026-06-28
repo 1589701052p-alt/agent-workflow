@@ -274,7 +274,8 @@ Codex adversarial 设计 gate（聚焦本三件套、显式忽略并发 RFC-119 
 
 > **实现状态（2026-06-28）**：
 > - ✅ **已落地 + 全绿 + 已提交**（10 commit，本地领先 origin/main）：数据层（migration 0060/0061 + `task_questions` 表）+ shared 纯 oracle（reconcile/derive/canReassign/resolveHandlerRun，33 测）+ 读侧 service（lazy reconcile + 派生 + list，**全 read-time 派生、零碰 clarify/crossClarify**）+ 写侧（confirm/reassign/stage）+ 路由（`/api/tasks/:id/questions{,/confirm,/reassign,/stage}` + ACL）+ 前端看板页签（`TaskQuestionList`，列=phase、卡片标来源+目标、confirm/stage/reassign 接端点）+ i18n + api-contract 注册。backend 全量 4248 pass。
-> - 🔜 **未做（无冲突 PR-C 后续，可随时补）**：节点级待处理徽标（§11.8，需 xyflow 自定义节点角标）+ 反问页 handler 选择器回显（§11.5，clarify.detail.tsx 加查询 + Select）。
+> - ✅ **D12 + D13 已落（15 commit）**：反问页 per-question handler 回显 + 选择器（`ClarifyQuestionHandler`，写同一 `override` 事实源、自包含·数据缺失即 null·不破 flaky clarify 页〔cross-clarify-scope-control 复跑 3/3 绿〕）+ 看板**来源节点过滤**（每来源节点一枚 chip 显待处理计数、点击收敛看板到该节点——交付 D13「节点级计数 + 点击查看该节点列表」功能于看板面）。各带组件测试。
+> - 🔜 **唯一无冲突遗留（纯视觉占位）**：把 D13 的计数从看板 chip **搬到画布节点本体**（需 xyflow 自定义节点 CanvasNodeData 透传），功能已在看板交付、仅差画布位置。
 > - ⛔ **RFC-119 门控（待其代码真正落库后做）**：派发执行半——批量下发 mint 承接 rerun、override 注入（推广 External Feedback 到任意节点）、`awaiting_human` gate（答非即时下发）、打回 re-fire。这些必须改 `crossClarify.ts`/`scheduler.ts`（当前被并发 RFC-119 未提交 WIP 占用，`d843036` 孤立）。**v1 现状**：reassign/stage 记录意图（override/staged 落库），执行仍走既有反问自动下发；override 暂"记录不执行"，待门控解除接入。
 
 ### 11.8 节点级待处理徽标（决策 D13）
