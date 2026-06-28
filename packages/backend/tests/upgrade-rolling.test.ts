@@ -326,3 +326,83 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// RFC-120 §18 — migration 0063 rolling-upgrade backfill (Codex ship-gate H1).
+// A row dispatched under the PRIOR (pre-§18) contract has trigger_run_id set +
+// the new dispatched_at NULL. The corrected park gate keys on dispatched_at, so
+// 0063 must BACKFILL dispatched_at for such rows (scoped to deferred tasks) or
+// the gate re-parks / duplicate-mints them on upgrade.
+// ---------------------------------------------------------------------------
+describe('RFC-120 §18 — migration 0063 dispatched_at backfill', () => {
+  test('0063 backfills dispatched_at for pre-§18 deferred bound rows; leaves unbound + non-deferred NULL', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'aw-0063-backfill-')), 'db.sqlite')
+
+    // 1. Freeze at idx 61 (0062_rfc120_deferred_dispatch) — schema BEFORE dispatched_at.
+    freezeAt(61, dbPath)
+
+    // 2. Insert pre-§18 rows with raw SQL (the dispatched_at column does not exist yet).
+    {
+      const sqlite = new Database(dbPath)
+      sqlite.exec('PRAGMA foreign_keys = OFF;')
+      const insTask = (id: string, deferred: number): void => {
+        sqlite.run(
+          `INSERT INTO tasks (id, name, workflow_id, workflow_snapshot, repo_path, worktree_path, base_branch, branch, status, inputs, started_at, deferred_question_dispatch) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            id,
+            'n',
+            'wf',
+            '{}',
+            '/tmp',
+            '',
+            'main',
+            `b_${id}`,
+            'running',
+            '{}',
+            Date.now(),
+            deferred,
+          ],
+        )
+      }
+      insTask('t_def', 1)
+      insTask('t_nondef', 0)
+      const insTQ = (id: string, taskId: string, trigger: string | null): void => {
+        // distinct origin per row → satisfies UNIQUE(origin, question_id, role_kind).
+        sqlite.run(
+          `INSERT INTO task_questions (id, task_id, origin_node_run_id, question_id, question_title, source_kind, role_kind, trigger_run_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [id, taskId, `o_${id}`, 'q1', 't', 'cross', 'designer', trigger, 1000, 1000],
+        )
+      }
+      insTQ('tq_def_bound', 't_def', 'run_x') // deferred + bound → BACKFILL
+      insTQ('tq_def_unbound', 't_def', null) // deferred + never bound → stays NULL
+      insTQ('tq_nondef_bound', 't_nondef', 'run_y') // non-deferred → golden-lock NULL
+      sqlite.close()
+    }
+
+    // 3. Apply the full migrations folder → drizzle applies ONLY 0063 (ALTER + backfill).
+    {
+      const sqlite = new Database(dbPath)
+      sqlite.exec('PRAGMA foreign_keys = ON;')
+      migrate(drizzle(sqlite, {}), { migrationsFolder: MIGRATIONS })
+      sqlite.close()
+    }
+
+    // 4. Assert the backfill.
+    {
+      const sqlite = new Database(dbPath, { readonly: true })
+      const dispatchedAt = (id: string): number | null =>
+        (
+          sqlite.query(`SELECT dispatched_at AS d FROM task_questions WHERE id = ?`).get(id) as {
+            d: number | null
+          } | null
+        )?.d ?? null
+      // deferred + bound → backfilled to the row's own created_at (1000).
+      expect(dispatchedAt('tq_def_bound')).toBe(1000)
+      // deferred + never bound (trigger_run_id NULL) → NOT backfilled (still undispatched).
+      expect(dispatchedAt('tq_def_unbound')).toBeNull()
+      // non-deferred → untouched (golden-lock; that contract never set trigger_run_id this way).
+      expect(dispatchedAt('tq_nondef_bound')).toBeNull()
+      sqlite.close()
+    }
+  })
+})

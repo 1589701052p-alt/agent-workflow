@@ -679,7 +679,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect(f.ready).toContain(DESIGNER) // q1's pending rerun runs
   })
 
-  test('H1(re-gate): concurrent disjoint dispatch on the same node mints ONE pending rerun (idempotent), not two', async () => {
+  test('(a) one batch of two same-node questions → exactly ONE rerun rendering BOTH', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
       deferred: true,
@@ -692,15 +692,10 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       directive: 'continue',
     })
     const entries = await designerEntries(db, taskId)
-    // Two SEPARATE dispatches of disjoint entries on the same handler node. The first
-    // rerun has NOT rendered/bound its queue yet (no buildExternalFeedbackContext), so it
-    // is still draining — the second dispatch REUSES it (idempotent) — same run id.
-    const d1 = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
-    const d2 = await dispatchTaskQuestions(db, taskId, [entries[1]!.id], actor)
-    expect(d1.reruns.length).toBe(1)
-    expect(d2.reruns.length).toBe(1)
-    expect(d2.reruns[0]?.nodeRunId).toBe(d1.reruns[0]?.nodeRunId)
-    // EXACTLY ONE pending cross-clarify-answer rerun on DESIGNER (no duplicate / orphan).
+    // q1 + q2 to the same node in ONE dispatch → byTarget groups them → exactly ONE rerun.
+    const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id, entries[1]!.id], actor)
+    expect(result.reruns.length).toBe(1)
+    expect(result.reruns[0]?.entryIds.length).toBe(2)
     const pending = await db
       .select()
       .from(nodeRuns)
@@ -712,11 +707,21 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
         ),
       )
     expect(pending.length).toBe(1)
-    // Both entries are committed; the single rerun injects BOTH via the node queue.
-    expect((await designerEntries(db, taskId)).every((e) => e.dispatchedAt !== null)).toBe(true)
+    // That one rerun renders BOTH q1 + q2 via the node queue.
+    const ctx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: pending[0]!.id,
+    })
+    expect(ctx?.block).toContain('first?')
+    expect(ctx?.block).toContain('second?')
   })
 
-  test('C1(re-gate): a pending rerun that ALREADY bound its queue is NOT reused — q2 gets its OWN runnable rerun (never stuck processing)', async () => {
+  test('(b) dispatching q2 while the node has an IN-FLIGHT rerun → rejected task-question-node-dispatch-in-flight (nothing stamped)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
       deferred: true,
@@ -732,7 +737,49 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const q1 = entries.find((e) => e.questionId === 'q1')!
     const q2 = entries.find((e) => e.questionId === 'q2')!
 
-    // Dispatch q1 → pending P. P RENDERS its prompt (binds q1) while still 'pending'.
+    // Dispatch q1 → DESIGNER's cross-clarify-answer rerun is pending (in-flight).
+    await dispatchTaskQuestions(db, taskId, [q1.id], actor)
+    // A SECOND, separate dispatch of q2 to the same (busy) node is rejected — minting a
+    // second rerun on the same (node, iteration) would conflict via ULID freshness.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [q2.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-node-dispatch-in-flight')
+    // q2 stays uncommitted (nothing stamped); exactly ONE pending rerun on DESIGNER.
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q2.id)?.dispatchedAt).toBeNull()
+    const pending = await db
+      .select()
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.nodeId, DESIGNER),
+          eq(nodeRuns.status, 'pending'),
+        ),
+      )
+    expect(pending.length).toBe(1)
+  })
+
+  test('(c) after the node rerun is DONE, dispatching q2 succeeds with a fresh rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    const q1 = entries.find((e) => e.questionId === 'q1')!
+    const q2 = entries.find((e) => e.questionId === 'q2')!
+
+    // q1 dispatched → P; P renders/binds q1 then finishes done+output (no longer in-flight).
     const d1 = await dispatchTaskQuestions(db, taskId, [q1.id], actor)
     const P = d1.reruns[0]!.nodeRunId
     await buildExternalFeedbackContext({
@@ -744,18 +791,17 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       definition: liveDef(),
       dispatchedRunId: P,
     })
-    expect((await designerEntries(db, taskId)).find((e) => e.id === q1.id)?.triggerRunId).toBe(P)
+    await db.update(nodeRuns).set({ status: 'done' }).where(eq(nodeRuns.id, P))
+    await db.insert(nodeRunOutputs).values({ nodeRunId: P, portName: 'result', content: 'x' })
 
-    // Dispatch q2 while P is STILL pending but already rendered → q2 must NOT reuse P
-    // (P's prompt can't include q2); it gets its OWN fresh runnable rerun P2.
+    // Now the node is free → dispatching q2 mints a FRESH rerun P2 (no conflict).
     const d2 = await dispatchTaskQuestions(db, taskId, [q2.id], actor)
     const P2 = d2.reruns[0]!.nodeRunId
     expect(P2).not.toBe(P)
     const p2row = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, P2)))[0]
     expect(p2row?.status).toBe('pending')
-    expect(p2row?.nodeId).toBe(DESIGNER)
-
-    // P2 renders q2 (NOT q1 — disjoint lineage windows) + binds it. q2 is never stranded.
+    expect(p2row?.rerunCause).toBe('cross-clarify-answer')
+    // P2 renders q2 (its window starts after P, so it does NOT re-carry the consumed q1).
     const ctx2 = await buildExternalFeedbackContext({
       db,
       taskId,
@@ -765,13 +811,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       definition: liveDef(),
       dispatchedRunId: P2,
     })
-    // q2's question is 'second?'; q1's is 'first?'. P2's window carries ONLY q2.
-    expect(ctx2).toBeDefined()
     expect(ctx2?.block).toContain('second?')
     expect(ctx2?.block).not.toContain('first?')
     expect((await designerEntries(db, taskId)).find((e) => e.id === q2.id)?.triggerRunId).toBe(P2)
-    // q1 stays bound to P (not pulled into P2's window).
-    expect((await designerEntries(db, taskId)).find((e) => e.id === q1.id)?.triggerRunId).toBe(P)
   })
 
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {

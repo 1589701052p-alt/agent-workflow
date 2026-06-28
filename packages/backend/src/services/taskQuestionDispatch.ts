@@ -76,6 +76,14 @@ const EMPTY_RESULT: DispatchTaskQuestionsResult = { reruns: [], dispatchedEntryI
  *  claimed part of the selection (→ no stamp, no mint, no orphan). */
 class ConcurrentClaim extends Error {}
 
+/** Thrown inside the atomic tx to roll it back when a concurrent dispatch already minted an
+ *  in-flight cross-clarify-answer rerun for a frontier node (→ converted to a ConflictError). */
+class NodeDispatchInFlight extends Error {
+  constructor(readonly nodeId: string) {
+    super(`node ${nodeId} already has an in-flight cross-clarify-answer rerun`)
+  }
+}
+
 function parseDefinition(snapshot: string): WorkflowDefinition | null {
   try {
     return JSON.parse(snapshot) as WorkflowDefinition
@@ -266,6 +274,17 @@ export async function dispatchTaskQuestions(
     await assertSafeFrontierTarget(db, taskId, nodeId)
   }
 
+  // 5c. Codex C1/H2 (ship-gate) — DO NOT mint a second cross-clarify-answer rerun on a node
+  //     that already has one in flight: two reruns on the same (node, iteration) conflict
+  //     (ULID freshness picks the newer, the older's bound question strands). Instead REJECT
+  //     the dispatch when ANY affected target node already has an in-flight (pending OR
+  //     running, i.e. not yet done) cross-clarify-answer rerun for its current iteration. The
+  //     user dispatches the remaining questions AFTER that node's rerun finishes — the new
+  //     dispatch then mints a fresh rerun (no conflict). A CRASHED bound-pending rerun stays
+  //     'pending' so the scheduler re-dispatches it (re-renders its queue via the lineage
+  //     window) — its question is not stranded.
+  await assertNoInFlightDispatch(db, taskId, affected)
+
   // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
   //    tx body is purely synchronous (atomic with the dispatched_at stamp).
   const mintPlans = await Promise.all(
@@ -274,24 +293,14 @@ export async function dispatchTaskQuestions(
 
   // 7. ONE dbTxSync: CAS-stamp dispatched_at on the requested entries + insert the frontier
   //    node_runs. A concurrent dispatcher that already claimed ≥1 → ConcurrentClaim →
-  //    rollback (no stamp, no mint, no orphan).
-  //
-  //    Codex H1 (idempotent mint): a per-question dispatch may target a node that ALREADY
-  //    has a pending dispatched rerun (an earlier or concurrent disjoint dispatch of other
-  //    questions on the same node). Reusing that one pending rerun avoids a duplicate /
-  //    orphan — BUT ONLY while it has NOT yet rendered its prompt. The queue is bound at
-  //    prompt-build (buildNodeQueueExternalFeedback stamps trigger_run_id on the node's
-  //    dispatched-unbound entries) which happens WHILE the row is still 'pending' (before
-  //    mark-running). If pending P already bound ≥1 entry, its prompt is fixed and can NOT
-  //    include the newly-stamped ones → reusing P would strand them (trigger_run_id NULL
-  //    forever, parked as in-flight, never rendered) (Codex C1). So reuse P only when NO
-  //    task_questions row already claims it (trigger_run_id = P.id); otherwise mint a FRESH
-  //    rerun for the newly-stamped entries — the node reruns AGAIN for them after P finishes
-  //    (the correct per-question increment; the fresh rerun is a later clarify-cause run, so
-  //    it is the upper bound of P's lineage window and the two queues stay disjoint).
+  //    rollback (no stamp, no mint, no orphan). The in-flight check is RE-RUN synchronously
+  //    here as the concurrency net: two dispatches that both pass the async pre-check above
+  //    serialize at the tx — the second sees the first's freshly-committed pending rerun and
+  //    rolls back (NodeDispatchInFlight → the same ConflictError; no double-mint). Within ONE
+  //    dispatch the byTarget grouping already yields exactly one rerun per node (q1+q2 to the
+  //    same node → one mint plan → one rerun rendering both).
   const requestedIds = requested.map((e) => e.id)
   const now = Date.now()
-  const resolved: Array<{ nodeId: string; nodeRunId: string }> = []
   let committed = false
   try {
     dbTxSync(db, (tx) => {
@@ -301,12 +310,8 @@ export async function dispatchTaskQuestions(
         .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
         .all()
       if (stillNull.length !== requestedIds.length) throw new ConcurrentClaim()
-      tx.update(taskQuestions)
-        .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
-        .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
-        .run()
       for (const p of mintPlans) {
-        const existingPending = tx
+        const busy = tx
           .select({ id: nodeRuns.id })
           .from(nodeRuns)
           .where(
@@ -315,30 +320,18 @@ export async function dispatchTaskQuestions(
               eq(nodeRuns.nodeId, p.nodeId),
               eq(nodeRuns.iteration, p.iteration),
               isNull(nodeRuns.parentNodeRunId),
-              eq(nodeRuns.status, 'pending'),
               eq(nodeRuns.rerunCause, 'cross-clarify-answer'),
+              inArray(nodeRuns.status, ['pending', 'running']),
             ),
           )
           .all()
-        // Reuse only an UNRENDERED pending rerun (none of its queue bound yet).
-        let reusableRunId: string | null = null
-        for (const ep of existingPending) {
-          const alreadyBound = tx
-            .select({ id: taskQuestions.id })
-            .from(taskQuestions)
-            .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.triggerRunId, ep.id)))
-            .limit(1)
-            .all()
-          if (alreadyBound.length === 0) {
-            reusableRunId = ep.id
-            break
-          }
-        }
-        if (reusableRunId !== null) {
-          // Reuse the un-rendered rerun — it will inject this node's whole dispatched queue.
-          resolved.push({ nodeId: p.nodeId, nodeRunId: reusableRunId })
-          continue
-        }
+        if (busy.length > 0) throw new NodeDispatchInFlight(p.nodeId)
+      }
+      tx.update(taskQuestions)
+        .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
+        .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
+        .run()
+      for (const p of mintPlans) {
         // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
         // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
         // factory mintNodeRun uses, so zero hand-copied inheritance / cause drift; (2) the
@@ -346,20 +339,25 @@ export async function dispatchTaskQuestions(
         // (an async mintNodeRun would yield + commit early, defeating the atomicity).
         // rfc098-allow-direct-node-run-insert
         tx.insert(nodeRuns).values(p.values).run()
-        resolved.push({ nodeId: p.nodeId, nodeRunId: p.preId })
       }
       committed = true
     })
   } catch (e) {
     if (e instanceof ConcurrentClaim) return EMPTY_RESULT
+    if (e instanceof NodeDispatchInFlight) {
+      throw new ConflictError(
+        'task-question-node-dispatch-in-flight',
+        `cannot dispatch to '${e.nodeId}': it already has an in-flight cross-clarify-answer rerun (a concurrent dispatch won). Dispatch the remaining questions after it finishes.`,
+      )
+    }
     throw e
   }
   if (!committed) return EMPTY_RESULT
 
-  const reruns: DispatchedRerun[] = resolved.map((r) => ({
-    targetNodeId: r.nodeId,
-    nodeRunId: r.nodeRunId,
-    entryIds: requested.filter((e) => effectiveTarget(e) === r.nodeId).map((e) => e.id),
+  const reruns: DispatchedRerun[] = mintPlans.map((p) => ({
+    targetNodeId: p.nodeId,
+    nodeRunId: p.preId,
+    entryIds: requested.filter((e) => effectiveTarget(e) === p.nodeId).map((e) => e.id),
   }))
   log.info('task questions dispatched', {
     taskId,
@@ -369,6 +367,40 @@ export async function dispatchTaskQuestions(
     frontierRerunCount: reruns.length,
   })
   return { reruns, dispatchedEntryIds: requestedIds }
+}
+
+/**
+ * Codex C1/H2 (ship-gate) — reject the dispatch if ANY affected target node already has an
+ * in-flight (pending OR running, not done) cross-clarify-answer rerun for its CURRENT
+ * iteration (the freshest run's iteration). Minting a SECOND such rerun on the same
+ * (node, iteration) is unsafe (ULID freshness picks the newer; the older's bound question
+ * strands), so the dispatch is rejected — the user dispatches the rest after that rerun
+ * finishes. A never-run node has no in-flight rerun (skipped). One DB read of the task's runs.
+ */
+async function assertNoInFlightDispatch(
+  db: DbClient,
+  taskId: string,
+  affected: ReadonlySet<string>,
+): Promise<void> {
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  for (const nodeId of affected) {
+    const forNode = runs.filter((r) => r.nodeId === nodeId)
+    const last = pickFreshestRun(forNode, { topLevelOnly: false })
+    if (last === undefined) continue // never-run → no in-flight rerun
+    const inFlight = forNode.some(
+      (r) =>
+        r.parentNodeRunId === null &&
+        r.iteration === last.iteration &&
+        r.rerunCause === 'cross-clarify-answer' &&
+        (r.status === 'pending' || r.status === 'running'),
+    )
+    if (inFlight) {
+      throw new ConflictError(
+        'task-question-node-dispatch-in-flight',
+        `cannot dispatch to '${nodeId}': it already has an in-flight cross-clarify-answer rerun (pending/running). Dispatch the remaining questions after that rerun finishes.`,
+      )
+    }
+  }
 }
 
 /**
