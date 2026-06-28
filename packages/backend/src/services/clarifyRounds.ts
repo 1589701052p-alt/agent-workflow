@@ -327,6 +327,14 @@ export interface BuildPromptContextArgs {
   /** False on review-iterate / process-retry reruns so a stale 'stop' from
    *  the prior clarify round doesn't follow into the new rerun. */
   applyLatestDirective?: boolean
+  /** RFC-122: per-(task, asking-node) clarify-directive override. When set the
+   *  rendered last-round trailer AND `ctx.directive` use THIS directive instead
+   *  of the answered round's own — so the on-canvas "停止反问" toggle wins over a
+   *  prior "继续反问" answer (otherwise the answersBlock would still carry the
+   *  contradictory KEEP CLARIFYING trailer). Only applied to the last round and
+   *  only when `applyLatestDirective` is in effect, mirroring the row-directive
+   *  gate. `undefined` (default) ⇒ byte-for-byte unchanged. */
+  directiveOverride?: ClarifyDirective
 }
 
 /**
@@ -384,7 +392,13 @@ export async function buildPromptContext(
       continue
     }
     const isLast = i === rows.length - 1
-    const directive = (row.directive ?? 'continue') as ClarifyDirective
+    // RFC-122: the on-canvas STOP/CONTINUE toggle (directiveOverride) takes
+    // precedence over the answered round's own directive for the LAST round —
+    // so a node toggled to 'stop' renders the STOP CLARIFYING trailer + reports
+    // ctx.directive='stop' even if the user's last answer clicked "keep". No
+    // override ⇒ `args.directiveOverride` is undefined ⇒ row directive (unchanged).
+    const rowDirective = (row.directive ?? 'continue') as ClarifyDirective
+    const directive = isLast ? (args.directiveOverride ?? rowDirective) : rowDirective
     if (isLast && applyLatestDirective) latestDirective = directive
     const roundLabel = `### Round ${row.iteration + 1}`
     questionParts.push(`${roundLabel}\n${renderClarifyQuestionsBlock(questions)}`)
@@ -404,6 +418,37 @@ export async function buildPromptContext(
     ...(inlineMode ? { mode: 'inline' as const, currentRoundOnly: true } : {}),
   }
   return ctx
+}
+
+/**
+ * RFC-122: pure oracle for the scheduler's `effectiveHasClarifyChannel` — the
+ * "mandatory ask-back is ACTIVE" signal threaded to the runner. Extracted from
+ * the inline scheduler boolean so the per-node STOP override has a directly
+ * testable surface (golden-lock: `nodeStopOverride=false` reproduces the exact
+ * pre-RFC-122 expression). Ask-back is active ⟺ the node wires a clarify channel
+ * AND no STOP directive is in force (neither a 'stop' answered round nor the
+ * on-canvas per-node toggle) AND the run is a genuine clarify round (not a
+ * review reject/iterate re-production, unless it is itself a clarify-answer
+ * rerun mid-review). Covers BOTH self-clarify and cross-questioner, since
+ * `hasClarifyChannel` (agentHasClarifyChannel) is true for either.
+ */
+export function resolveEffectiveClarifyChannel(args: {
+  hasClarifyChannel: boolean
+  /** `clarifyContext?.directive` — 'stop' from a prior answered round. */
+  contextDirective?: ClarifyDirective
+  /** RFC-122 per-(task, asking-node) override resolved to 'stop' at dispatch. */
+  nodeStopOverride: boolean
+  /** `reviewContext !== undefined`. */
+  reviewActive: boolean
+  /** This run continues a clarify round (clarify-answer rerun). */
+  isClarifyRerun: boolean
+}): boolean {
+  return (
+    args.hasClarifyChannel &&
+    args.contextDirective !== 'stop' &&
+    !args.nodeStopOverride &&
+    (!args.reviewActive || args.isClarifyRerun)
+  )
 }
 
 /**

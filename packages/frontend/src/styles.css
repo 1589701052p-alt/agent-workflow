@@ -4487,6 +4487,21 @@ code {
   filter: brightness(1.08);
 }
 
+/* RFC-122 — per-(task, asking-node) clarify directive toggle. Reuses the shared
+   `.segmented` primitive (sized down to fit on a canvas node); rendered by
+   AgentNode below the node id on the task-detail canvas only. */
+.canvas-node__clarify-directive {
+  display: flex;
+  width: 100%;
+  margin-top: 6px;
+}
+.canvas-node__clarify-directive .segmented__option {
+  flex: 1 1 0;
+  padding: 2px 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .canvas-node--agent {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
 }

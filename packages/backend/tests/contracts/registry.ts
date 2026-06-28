@@ -319,6 +319,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/tasks/:id/questions/:entryId/stage' },
   { method: 'POST', path: '/api/tasks/:id/questions/dispatch' },
 
+  // ---- per-(task, asking-node) clarify directive toggle (RFC-122) ----
+  { method: 'GET', path: '/api/tasks/:id/clarify-directives' },
+  { method: 'POST', path: '/api/tasks/:id/nodes/:nodeId/clarify-directive' },
+
   // ---- memories (RFC-041 / RFC-043 / RFC-045) ----
   { method: 'GET', path: '/api/memories' },
   { method: 'POST', path: '/api/memories' },

@@ -1243,6 +1243,38 @@ export const clarifyRounds = sqliteTable(
 )
 
 // -----------------------------------------------------------------------------
+// RFC-122 — per-(task, asking-node) clarify directive override. A task member
+// flips the on-canvas "继续反问 / 停止反问" toggle for an asking-agent node; the
+// scheduler reads `directive='stop'` AT DISPATCH (parallel to RFC-056
+// hasPersistentStop) and forces the asking agent out of mandatory ask-back for
+// that dispatch — so a not-yet-run node and an error-retry's fresh run both pick
+// up the LATEST toggle for free. Absent row ⇒ 'continue' (legacy behavior,
+// byte-for-byte). `set_by` is audit-only (the task-member user id) and, like
+// every other attribution column, MUST NOT enter any agent prompt.
+// -----------------------------------------------------------------------------
+export const taskNodeClarifyDirectives = sqliteTable(
+  'task_node_clarify_directives',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // Workflow node id of the asking-agent node (validated at the API as
+    // isClarifyAskingNode against the task's workflow snapshot).
+    nodeId: text('node_id').notNull(),
+    directive: text('directive', { enum: ['continue', 'stop'] }).notNull(),
+    // Task-member user id who last set it (UI/audit only).
+    setBy: text('set_by'),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.nodeId] }),
+    taskIdx: index('idx_task_node_clarify_directives_task').on(t.taskId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
 // RFC-036 users — first-class user identity. `__system__` row is seeded by
 // migration 0018 and represents the daemon-token actor (read-only, immutable
 // from the API; reused as the launcher of any task whose actor was the daemon

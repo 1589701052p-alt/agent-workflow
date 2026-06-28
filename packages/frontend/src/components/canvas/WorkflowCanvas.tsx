@@ -37,8 +37,18 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
-import type { Agent, WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
-import { deriveWrapperFanoutOutputs, reviewApprovedPortName } from '@agent-workflow/shared'
+import type {
+  Agent,
+  ClarifyDirective,
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowNode,
+} from '@agent-workflow/shared'
+import {
+  deriveWrapperFanoutOutputs,
+  isClarifyAskingNode,
+  reviewApprovedPortName,
+} from '@agent-workflow/shared'
 import { ulid } from 'ulid'
 import { AgentNode } from './nodes/AgentNode'
 import { applyPaste, buildSlice, getClipboard, setClipboard } from './canvasClipboard'
@@ -154,6 +164,21 @@ export interface WorkflowCanvasProps {
    * filter it to this source node.
    */
   onNodeQuestionBadgeClick?: (nodeId: string) => void
+  /**
+   * RFC-122: per-(task, asking-node) clarify directive map, keyed by workflow
+   * node id. When DEFINED (task-detail canvas) every asking-agent node
+   * (`isClarifyAskingNode`) paints a "继续反问 / 停止反问" toggle showing
+   * `clarifyDirectives[id] ?? 'continue'`; nodes absent from the map default to
+   * 'continue'. Undefined (editor canvas) ⇒ no toggles and a byte-for-byte
+   * unchanged canvas (golden-lock). Changing this map rebuilds node data the same
+   * way `nodeStatuses` / `questionCounts` do.
+   */
+  clarifyDirectives?: Record<string, ClarifyDirective>
+  /**
+   * RFC-122: invoked with (nodeId, next) when an asking node's directive toggle
+   * is flipped. The task-detail page POSTs the new directive + invalidates.
+   */
+  onNodeClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void
 }
 
 /**
@@ -188,6 +213,8 @@ function CanvasInner({
   taskContext,
   questionCounts,
   onNodeQuestionBadgeClick,
+  clarifyDirectives,
+  onNodeClarifyDirectiveToggle,
   handleRef,
 }: WorkflowCanvasProps & {
   handleRef?: React.ForwardedRef<WorkflowCanvasHandle>
@@ -257,6 +284,16 @@ function CanvasInner({
   const handleQuestionBadgeClick = useCallback((nodeId: string) => {
     questionBadgeClickRef.current?.(nodeId)
   }, [])
+  // RFC-122: identical stable-bridge pattern for the clarify directive toggle —
+  // a ref keeps the handle identity-stable so node-data rebuilds (toFlowNodes)
+  // don't churn on a changing callback; the toggle invokes the captured handle.
+  const clarifyDirectiveToggleRef = useRef(onNodeClarifyDirectiveToggle)
+  useEffect(() => {
+    clarifyDirectiveToggleRef.current = onNodeClarifyDirectiveToggle
+  }, [onNodeClarifyDirectiveToggle])
+  const handleClarifyDirectiveToggle = useCallback((nodeId: string, next: ClarifyDirective) => {
+    clarifyDirectiveToggleRef.current?.(nodeId, next)
+  }, [])
 
   const [selection, setSelection] = useState<{ nodes: string[]; edges: string[] }>({
     nodes: [],
@@ -279,7 +316,15 @@ function CanvasInner({
   const [nodes, setNodes] = useState<Node[]>(() =>
     projectDefinitionForXyflow(
       definition,
-      toFlowNodes(definition, agentByName, nodeStatuses, questionCounts, handleQuestionBadgeClick),
+      toFlowNodes(
+        definition,
+        agentByName,
+        nodeStatuses,
+        questionCounts,
+        handleQuestionBadgeClick,
+        clarifyDirectives,
+        handleClarifyDirectiveToggle,
+      ),
     ),
   )
   const [edges, setEdges] = useState<Edge[]>(() => [
@@ -292,6 +337,9 @@ function CanvasInner({
   // def-sync useEffect rebuild node data when only `questionCounts` changes
   // (badge counts arrive async from the questions query, definition unchanged).
   const externalQuestionCountsRef = useRef(questionCounts)
+  // RFC-122: mirror of the questionCounts ref-guard so a directives-only change
+  // (toggle POST resolves, definition unchanged) repaints the toggles.
+  const externalClarifyDirectivesRef = useRef(clarifyDirectives)
   // Track the last agentByName ref we rebuilt against. The canvas is often
   // mounted on the task-detail page before the `useQuery(['agents'])` call
   // resolves; on first render `agents` is `[]`, so agent-node `outputPorts`
@@ -328,11 +376,14 @@ function CanvasInner({
     // RFC-120 D13: question-badge counts also drive a node-data rebuild — same
     // ref-guard shape as `statusChanged` so a counts-only change repaints badges.
     const questionsChanged = questionCounts !== externalQuestionCountsRef.current
-    if (defChanged || statusChanged || agentsChanged || questionsChanged) {
+    // RFC-122: directive map change repaints the toggles (same ref-guard shape).
+    const directivesChanged = clarifyDirectives !== externalClarifyDirectivesRef.current
+    if (defChanged || statusChanged || agentsChanged || questionsChanged || directivesChanged) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
       externalAgentsRef.current = agentByName
       externalQuestionCountsRef.current = questionCounts
+      externalClarifyDirectivesRef.current = clarifyDirectives
       // Preserve `selected: true` across the rebuild. Without this, an
       // inspector edit (which mints a new `definition` reference) wipes
       // the selected flag, xyflow sees a phantom deselect and fires
@@ -350,6 +401,8 @@ function CanvasInner({
               nodeStatuses,
               questionCounts,
               handleQuestionBadgeClick,
+              clarifyDirectives,
+              handleClarifyDirectiveToggle,
             ),
             measured,
           ),
@@ -370,7 +423,15 @@ function CanvasInner({
           ...buildSourcePortDisplayEdges(definition),
         ])
     }
-  }, [definition, agentByName, nodeStatuses, questionCounts, handleQuestionBadgeClick])
+  }, [
+    definition,
+    agentByName,
+    nodeStatuses,
+    questionCounts,
+    handleQuestionBadgeClick,
+    clarifyDirectives,
+    handleClarifyDirectiveToggle,
+  ])
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -1647,6 +1708,11 @@ function toFlowNodes(
   // `questionCount` (golden-lock — data is byte-for-byte identical to before).
   questionCounts?: Record<string, number>,
   onQuestionBadgeClick?: (nodeId: string) => void,
+  // RFC-122: per-(task, asking-node) clarify directive map + toggle handler. When
+  // `clarifyDirectives` is undefined (editor canvas) no node gets a
+  // `clarifyDirective` (golden-lock — data byte-for-byte identical to before).
+  clarifyDirectives?: Record<string, ClarifyDirective>,
+  onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void,
 ): Node[] {
   const loopBodyIds = new Set<string>()
   for (const n of definition.nodes) {
@@ -1676,6 +1742,17 @@ function toFlowNodes(
       if (c !== undefined && c > 0) {
         data.questionCount = c
         if (onQuestionBadgeClick !== undefined) data.onQuestionBadgeClick = onQuestionBadgeClick
+      }
+    }
+    // RFC-122: paint the clarify directive toggle on asking-agent nodes only
+    // (isClarifyAskingNode keys on the same `__clarify__` source edge the runtime
+    // gates ask-back for — so it never lands on the clarify / clarify-cross-agent
+    // CHANNEL nodes). Default 'continue' when no override row exists. Both stay
+    // absent when `clarifyDirectives` isn't supplied (editor canvas → no toggle).
+    if (clarifyDirectives !== undefined && isClarifyAskingNode(definition, n.id)) {
+      data.clarifyDirective = clarifyDirectives[n.id] ?? 'continue'
+      if (onClarifyDirectiveToggle !== undefined) {
+        data.onClarifyDirectiveToggle = onClarifyDirectiveToggle
       }
     }
     if (loopBodyIds.has(n.id)) data.loopBody = true
@@ -2126,6 +2203,10 @@ export const __testToFlowNodes = (
   statuses?: Record<string, CanvasNodeData['status'] | undefined>,
   questionCounts?: Record<string, number>,
   onQuestionBadgeClick?: (nodeId: string) => void,
+  // RFC-122: directive map + toggle handler, so the toggle-threading is testable
+  // the same way the question badge is.
+  clarifyDirectives?: Record<string, ClarifyDirective>,
+  onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void,
 ): Node[] => {
   const def: WorkflowDefinition = {
     $schema_version: 1,
@@ -2135,7 +2216,15 @@ export const __testToFlowNodes = (
   }
   const map = new Map<string, Agent>()
   for (const a of agents) map.set(a.name, a)
-  return toFlowNodes(def, map, statuses, questionCounts, onQuestionBadgeClick)
+  return toFlowNodes(
+    def,
+    map,
+    statuses,
+    questionCounts,
+    onQuestionBadgeClick,
+    clarifyDirectives,
+    onClarifyDirectiveToggle,
+  )
 }
 export const __testToFlowEdges = toFlowEdges
 export const __testToDefinition = toDefinition

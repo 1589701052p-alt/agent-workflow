@@ -2036,6 +2036,11 @@ export const enUS: Resources = {
   agentNode: {
     label: 'agent',
   },
+  clarifyDirective: {
+    groupLabel: 'Clarify directive',
+    continue: 'Keep clarifying',
+    stop: 'Stop clarifying',
+  },
   canvas: {
     connect: { newInput: 'New input', reuseInput: 'Reuse input' },
   },

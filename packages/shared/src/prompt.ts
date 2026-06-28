@@ -7,6 +7,7 @@ import {
   PRIOR_OUTPUT_BLOCK_TITLE,
   UPDATE_DIRECTIVE_BLOCK_TITLE,
   UPDATE_DIRECTIVE_TEXT,
+  renderClarifyDirectiveTrailer,
 } from './clarify'
 import { groupPortsByParsedKind, parsePortKind, getHandlerForParsedKind } from './outputKinds'
 
@@ -259,6 +260,19 @@ export interface RenderPromptInput {
    * captured output.
    */
   priorOutputUpdate?: PriorOutputUpdateContext
+  /**
+   * RFC-122: the scheduler set the per-(task, asking-node) clarify directive to
+   * `stop` for THIS dispatch AND there is no prior-rounds `clarifyContext` whose
+   * `answersBlock` already carries the trailer (i.e. a first run / a run with no
+   * answered clarify round). When true the renderer injects the
+   * `### User directive: STOP CLARIFYING` trailer right before the trailing
+   * output protocol so the agent is told to proceed without asking even on its
+   * very first run. `hasClarifyChannel` is already false by construction (the
+   * scheduler forced ask-back off), so the output protocol is what trails.
+   * Undefined / false (the override is absent or `continue`, or the trailer is
+   * already inside `clarifyContext.answersBlock`) ⇒ byte-for-byte unchanged.
+   */
+  clarifyStopNotice?: boolean
 }
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
@@ -556,6 +570,19 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   ) {
     sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
     sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
+  }
+
+  // RFC-122: per-(task, asking-node) STOP override on a run that has no prior
+  // answered clarify round to carry the trailer (a first run / pre-clarify
+  // error-retry). `hasClarifyChannel` is already false (the scheduler forced
+  // ask-back off), so the agent gets the output protocol below; this section
+  // makes the user's "stop clarifying" decision explicit so the agent doesn't
+  // re-ask out of its own bias. When a prior round exists the scheduler routes
+  // the trailer through `clarifyContext.answersBlock` instead (via
+  // buildPromptContext's directiveOverride) and leaves this flag false — never
+  // both, so the STOP CLARIFYING trailer appears exactly once.
+  if (input.clarifyStopNotice === true && input.hasClarifyChannel !== true) {
+    sections += `\n\n${renderClarifyDirectiveTrailer('stop')}`
   }
 
   // Trailing protocol selection (RFC-100 — mandatory ask-back).

@@ -30,6 +30,10 @@ export function useTaskSync(taskId: string | null): void {
         // RFC-120: the question board's phases derive from node_runs (handler
         // pending→running→done) — refresh it on every node status change.
         void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
+        // RFC-122: reconcile the per-node clarify directive toggles on any node
+        // activity (another tab's flip lands here; the acting tab is already
+        // optimistic + invalidated).
+        void qc.invalidateQueries({ queryKey: ['task-clarify-directives', taskId] })
       }
       if (msg.type === 'node.event') {
         // Future: render directly on a node-events feed instead of going

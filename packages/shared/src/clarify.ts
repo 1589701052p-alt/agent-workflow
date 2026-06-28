@@ -646,6 +646,25 @@ export function findCrossClarifyNodeForQuestioner(
 }
 
 /**
+ * RFC-122: an "asking-agent node" is an agent that can clarify — either it
+ * wires a RFC-023 self-clarify channel (`agentHasClarifyChannel`) OR its
+ * `__clarify__` port feeds a RFC-056 cross-clarify node so it is a questioner
+ * (`findCrossClarifyNodeForQuestioner`). Both predicates key on the same
+ * `__clarify__` SOURCE port, so the second is a (documented) superset guard —
+ * kept explicit so the per-(task, asking-node) clarify-directive toggle shows on
+ * exactly the nodes the runtime gates ask-back for, and never on the
+ * clarify / clarify-cross-agent CHANNEL nodes (which are edge TARGETS, not
+ * sources). Single source of truth for the API validation + the canvas display
+ * gate so the two can never drift.
+ */
+export function isClarifyAskingNode(definition: WorkflowDefinition, nodeId: string): boolean {
+  return (
+    agentHasClarifyChannel(definition, nodeId) ||
+    findCrossClarifyNodeForQuestioner(definition, nodeId) !== undefined
+  )
+}
+
+/**
  * RFC-056: check whether an agent node has at least one inbound
  * `__external_feedback__` system port edge.
  */

@@ -177,6 +177,15 @@ export interface RunNodeOptions {
    */
   priorOutputUpdate?: PriorOutputUpdateContext
   /**
+   * RFC-122: the per-(task, asking-node) clarify directive is 'stop' for this
+   * dispatch AND there is no prior-rounds clarifyContext carrying the trailer
+   * (first run / pre-clarify error-retry). Threaded straight into
+   * renderUserPrompt, which injects the `### User directive: STOP CLARIFYING`
+   * trailer before the output protocol. `hasClarifyChannel` is already false by
+   * construction. Absent ⇒ unchanged.
+   */
+  clarifyStopNotice?: boolean
+  /**
    * RFC-023 + RFC-039: when true (scheduler computed
    * `agentHasClarifyChannel(definition, agentNodeId)` from the workflow
    * definition), the renderer emits a bi-modal trailing block. RFC-039
@@ -775,6 +784,9 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
             ? { priorOutputUpdate: opts.priorOutputUpdate }
             : {}),
           ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),
+          // RFC-122: first-run / pre-clarify STOP override → inject the
+          // STOP CLARIFYING trailer (the answersBlock carries it otherwise).
+          ...(opts.clarifyStopNotice === true ? { clarifyStopNotice: true } : {}),
         })
 
   // Write promptText FIRST (no status change). RFC-053: the status flip

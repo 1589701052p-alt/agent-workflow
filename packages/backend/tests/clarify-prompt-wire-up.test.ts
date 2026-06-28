@@ -95,7 +95,13 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
   // scheduler integration test.
   test('scheduler.ts gates hasClarifyChannel on clarifyContext.directive !== "stop"', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
-    expect(src).toContain("clarifyContext?.directive !== 'stop'")
+    // RFC-122 relocated the inline boolean into the pure
+    // `resolveEffectiveClarifyChannel` oracle (clarifyRounds.ts). The scheduler
+    // still feeds it the prompt context's directive — assert the wiring here AND
+    // the gate itself in the oracle, so a refactor that drops either goes red.
+    expect(src).toContain('contextDirective: clarifyContext?.directive')
+    const oracleSrc = readFileSync(join(BACKEND_SRC, 'clarifyRounds.ts'), 'utf8')
+    expect(oracleSrc).toContain("args.contextDirective !== 'stop'")
     const occurrences = src.match(/effectiveHasClarifyChannel/g) ?? []
     // RFC-060 PR-E removed the agent-multi fan-out call site (was one of the
     // two declarations + passes). The agent-single path still owns one

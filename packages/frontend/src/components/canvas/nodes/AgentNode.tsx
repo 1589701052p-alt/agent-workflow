@@ -4,6 +4,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { QuestionBadge } from './QuestionBadge'
+import { ClarifyDirectiveToggle } from './ClarifyDirectiveToggle'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
@@ -24,6 +25,9 @@ export function AgentNode({ data, selected }: Props) {
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>
+      {/* RFC-122: per-(task, asking-node) clarify directive toggle — only on
+          asking-agent nodes in the task canvas (data.clarifyDirective set). */}
+      <ClarifyDirectiveToggle data={data} />
       <PortHandles
         side="left"
         ports={data.inputPorts}

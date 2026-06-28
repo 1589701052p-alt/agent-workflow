@@ -1933,6 +1933,12 @@ export interface Resources {
   agentNode: {
     label: string
   }
+  /** RFC-122 — on-canvas per-(task, asking-node) clarify directive toggle. */
+  clarifyDirective: {
+    groupLabel: string
+    continue: string
+    stop: string
+  }
   /** RFC-106 — live drag-connect badge (new input vs reuse existing). */
   canvas: {
     connect: { newInput: string; reuseInput: string }
@@ -4430,6 +4436,11 @@ export const zhCN: Resources = {
   },
   agentNode: {
     label: '代理',
+  },
+  clarifyDirective: {
+    groupLabel: '反问指令',
+    continue: '继续反问',
+    stop: '停止反问',
   },
   canvas: {
     connect: { newInput: '新增输入', reuseInput: '复用输入' },

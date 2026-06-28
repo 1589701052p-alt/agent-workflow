@@ -7,6 +7,7 @@ import { createRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type {
   Agent,
+  ClarifyDirective,
   NodeRun,
   StructuralDiff,
   Task,
@@ -657,6 +658,45 @@ function TaskStatusCanvas({
     return out
   }, [questions.data])
 
+  // RFC-122: per-(task, asking-node) clarify directive map for the canvas toggle.
+  // Same query key everywhere so useTaskSync's invalidation refreshes it; resolves
+  // to {} for a fresh / non-member task ⇒ asking nodes default to 'continue'.
+  const qc = useQueryClient()
+  const directives = useQuery<Record<string, ClarifyDirective>, ApiError>({
+    queryKey: ['task-clarify-directives', task.id],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${encodeURIComponent(task.id)}/clarify-directives`, undefined, signal),
+    retry: false,
+  })
+  const setDirective = useMutation<
+    unknown,
+    ApiError,
+    { nodeId: string; directive: ClarifyDirective }
+  >({
+    mutationFn: ({ nodeId, directive }) =>
+      api.post(
+        `/api/tasks/${encodeURIComponent(task.id)}/nodes/${encodeURIComponent(nodeId)}/clarify-directive`,
+        { directive },
+      ),
+    // Optimistic flip so the toggle responds instantly; reconciled on settle.
+    onMutate: ({ nodeId, directive }) => {
+      const key = ['task-clarify-directives', task.id]
+      const prev = qc.getQueryData<Record<string, ClarifyDirective>>(key)
+      qc.setQueryData<Record<string, ClarifyDirective>>(key, {
+        ...(prev ?? {}),
+        [nodeId]: directive,
+      })
+      return { prev }
+    },
+    onError: (_e, _v, ctx) => {
+      const c = ctx as { prev?: Record<string, ClarifyDirective> } | undefined
+      if (c?.prev !== undefined) qc.setQueryData(['task-clarify-directives', task.id], c.prev)
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['task-clarify-directives', task.id] })
+    },
+  })
+
   const statuses = useMemo<Record<string, CanvasNodeData['status']>>(() => {
     const latest = new Map<string, NodeRun>()
     for (const r of runs) {
@@ -698,6 +738,10 @@ function TaskStatusCanvas({
         nodeStatuses={statuses}
         questionCounts={questionCounts}
         onNodeQuestionBadgeClick={onJumpToQuestions}
+        clarifyDirectives={directives.data ?? {}}
+        onNodeClarifyDirectiveToggle={(nodeId, next) =>
+          setDirective.mutate({ nodeId, directive: next })
+        }
         onSelect={(sel) => {
           if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)

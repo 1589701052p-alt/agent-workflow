@@ -2,7 +2,7 @@
 // pre-computes ports from the workflow definition + agents lookup so node
 // components stay dumb.
 
-import type { NodeKind } from '@agent-workflow/shared'
+import type { ClarifyDirective, NodeKind } from '@agent-workflow/shared'
 
 /** Catch-all left-side handle id. WorkflowCanvas.handleConnect translates
  * a connection landing here into target.portName = source.portName, which
@@ -93,4 +93,20 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * canvas (no badge there).
    */
   onQuestionBadgeClick?: (nodeId: string) => void
+  /**
+   * RFC-122: current per-(task, asking-node) clarify directive for THIS node —
+   * 'continue' (default: the agent may clarify) or 'stop' (the runner forces the
+   * agent out of mandatory ask-back). Set by the task-detail canvas ONLY on
+   * asking-agent nodes (`isClarifyAskingNode`); AgentNode renders the
+   * `ClarifyDirectiveToggle` when it is defined. Undefined on the editor canvas
+   * and on every non-asking node ⇒ no toggle (golden-lock — byte-for-byte the
+   * same canvas as before).
+   */
+  clarifyDirective?: ClarifyDirective
+  /**
+   * RFC-122: invoked with (nodeId, next) when the user clicks the other half of
+   * the directive toggle. The task-detail canvas threads it through to POST the
+   * new directive + optimistically update. Undefined on the editor canvas.
+   */
+  onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void
 }
