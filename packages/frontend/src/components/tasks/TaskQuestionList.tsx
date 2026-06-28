@@ -158,6 +158,10 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
               {col.map((e) => (
                 <div className="task-questions__card" key={e.id} data-testid={`tq-card-${e.id}`}>
                   <div className="task-questions__title">{e.questionTitle}</div>
+                  {/* RFC-120: 答案紧贴问题——节点信息(meta)不得插在问与答之间（用户反馈）。 */}
+                  {e.answerSummary && (
+                    <div className="task-questions__answer">{e.answerSummary}</div>
+                  )}
                   <dl className="task-questions__meta">
                     <dt>{t('taskQuestions.source')}</dt>
                     <dd>{e.sourceNodeId}</dd>
@@ -176,9 +180,6 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
                       )}
                     </dd>
                   </dl>
-                  {e.answerSummary && (
-                    <div className="task-questions__answer">{e.answerSummary}</div>
-                  )}
                   <div className="task-questions__actions">
                     {/* RFC-120: the path to ANSWER each question — links to its
                         clarify/cross-clarify page (answer if unanswered, view if

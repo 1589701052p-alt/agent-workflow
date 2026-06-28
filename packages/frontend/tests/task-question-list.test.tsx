@@ -129,6 +129,17 @@ describe('TaskQuestionList board', () => {
     expect(link.getAttribute('href')).toBe('/clarify/run-xyz')
   })
 
+  test('已答卡片：答案紧贴问题、排在节点信息(meta)之前（用户反馈布局）', async () => {
+    await wrap([entry({ id: 'e1', phase: 'awaiting_confirm', answerSummary: 'my answer' })])
+    const card = screen.getByTestId('tq-card-e1')
+    const answer = card.querySelector('.task-questions__answer')
+    const meta = card.querySelector('.task-questions__meta')
+    expect(answer?.textContent).toContain('my answer')
+    expect(meta).toBeTruthy()
+    // DOM 顺序：答案必须在 meta(来源/目标节点信息) 之前——节点信息不得插在问与答之间。
+    expect(answer!.compareDocumentPosition(meta!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   test('D13: source-node filter chips + click narrows the board to that node', async () => {
     await wrap([
       entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'pending' }),
