@@ -55,6 +55,7 @@ import { deriveFrontier } from '../src/services/scheduler'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 import { runStuckTaskDetector } from '../src/services/stuckTaskDetector'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
+import { renderUserPrompt } from '@agent-workflow/shared'
 import type {
   ClarifyQuestion,
   NodeKind,
@@ -2379,5 +2380,126 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
       dispatchedRunId: downRerunId,
     })
     expect(downCtx?.block).toContain("From 'q_b'")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// H — RFC-120 §18 ownership-gated prior output (Codex ship-gate). The cross-clarify
+// `priorOutputBlock` (RFC-119 Prior Output + Update Directive) is TOPOLOGY-gated in the
+// scheduler (hasExternalFeedbackChannel). For a deferred per-node queue that's not an
+// ownership signal: a pure-override target that ALSO has its own __external_feedback__ edge
+// + prior output would be told to rewrite its OWN artifact instead of processing the
+// reassigned question. So buildNodeQueueExternalFeedback exposes `graphOwned`, and the
+// scheduler attaches the prior-output block ONLY when graphOwned is true (deferred).
+// ---------------------------------------------------------------------------
+describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
+  const actor = { userId: 'u1', role: 'owner' as const }
+
+  async function designerEntries(db: DbClient, taskId: string) {
+    return db
+      .select()
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
+  }
+
+  test('graphOwned=false for an OVERRIDE handoff (default target ≠ this node) — the reassigned Q&A still renders', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId,
+      nodeId: OTHER,
+      status: 'done',
+      retryIndex: 0,
+      iteration: 0,
+      startedAt: Date.now() - 500,
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+    await reassignTaskQuestion(db, entry.id, OTHER, actor) // default DESIGNER → override OTHER
+    const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    const ctx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: OTHER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: result.reruns[0]!.nodeRunId,
+    })
+    expect(ctx?.block).toContain('A') // the reassigned Q&A is injected (External Feedback)
+    expect(ctx?.graphOwned).toBe(false) // default target was DESIGNER ≠ OTHER → no graph ownership
+  })
+
+  test('graphOwned=true for a genuine graph-designer round (default target == this node) — RFC-119 update mode preserved', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
+      directive: 'continue',
+    })
+    const entry = (await designerEntries(db, taskId))[0]!
+    const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
+    const ctx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: result.reruns[0]!.nodeRunId,
+    })
+    expect(ctx?.graphOwned).toBe(true) // default target IS DESIGNER → graph-owned work
+  })
+
+  test('render: graphOwned=false context (no priorOutputBlock attached) → External Feedback but NO Prior Output / Update Directive', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'process the reassigned question',
+      inputs: {},
+      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
+      agentOutputs: ['design'],
+      // The scheduler's ownership gate did NOT attach priorOutputBlock (graphOwned=false).
+      crossClarifyContext: {
+        block: "### From 'q'\nQ: reassigned?\nA: do X",
+        iteration: '1',
+        sourcesCsv: 'q',
+      },
+    })
+    expect(out).toContain('## External Feedback')
+    expect(out).toContain('do X')
+    expect(out).not.toContain('## Prior Output')
+    expect(out).not.toContain('## Update Directive')
+  })
+
+  test('render: graphOwned=true context (priorOutputBlock attached) STILL renders Prior Output + Update Directive (graph update mode)', () => {
+    const out = renderUserPrompt({
+      promptTemplate: 'update your design',
+      inputs: {},
+      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
+      agentOutputs: ['design'],
+      // The scheduler's ownership gate DID attach priorOutputBlock (graphOwned=true).
+      crossClarifyContext: {
+        block: "### From 'q'\nQ&A",
+        iteration: '1',
+        sourcesCsv: 'q',
+        priorOutputBlock: '### design\n<prior artifact>',
+      },
+    })
+    expect(out).toContain('## Prior Output')
+    expect(out).toContain('<prior artifact>')
+    expect(out).toContain('## Update Directive')
+    expect(out).toContain('## External Feedback')
+  })
+
+  test('source lock: the scheduler gates the cross-clarify priorOutputBlock on graphOwned for deferred contexts', () => {
+    const src = readFileSync(join(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
+    expect(src).toContain('crossClarifyContext?.graphOwned === true')
   })
 })

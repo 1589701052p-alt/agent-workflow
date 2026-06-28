@@ -2386,10 +2386,22 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // captured port outputs. The agent's declared outputs[] determines
         // the order so the block is deterministic across reruns. Empty
         // outputs are dropped by buildPriorOutputBlock itself.
+        //
+        // RFC-120 §18 (ship-gate): `isCrossClarifyTriggeredRerun` is TOPOLOGY-gated
+        // (hasExternalFeedbackChannel) — NOT an ownership signal. For a DEFERRED
+        // per-node-queue context, attach the prior-output block ONLY when the queue
+        // includes GRAPH-owned work for this node (crossClarifyContext.graphOwned). A
+        // pure-override target that merely happens to have its own __external_feedback__
+        // edge + prior output must PROCESS the reassigned question, not rewrite its own
+        // old artifact. The non-deferred graph path leaves graphOwned undefined → the
+        // gate is a no-op there (golden-lock).
+        const allowPriorOutput =
+          !task.deferredQuestionDispatch || crossClarifyContext?.graphOwned === true
         if (
           isCrossClarifyTriggeredRerun &&
           priorDoneDesigner !== undefined &&
-          crossClarifyContext !== undefined
+          crossClarifyContext !== undefined &&
+          allowPriorOutput
         ) {
           // RFC-119 D3: shared composer (block byte-identical to the prior
           // inline read+order+build; only the heading/directive constants are

@@ -1133,6 +1133,17 @@ export interface ExternalFeedbackPromptContext {
    * outputs is not wrongly told to "update" them (Codex M1).
    */
   runScoped?: boolean
+  /**
+   * RFC-120 §18 (ship-gate): for a deferred per-node-queue context, true iff the rendered
+   * queue includes ≥1 GRAPH-owned round for THIS node (an entry whose default_target_node_id
+   * == this node — a genuine graph-designer round), false for a pure-override handoff. The
+   * scheduler attaches the cross-clarify `priorOutputBlock` (RFC-119 Prior Output + Update
+   * Directive) ONLY when graphOwned is true: an override target that also happens to have its
+   * own `__external_feedback__` edge + prior output must process the REASSIGNED question, NOT
+   * rewrite its own old artifact (the topology gate `hasExternalFeedbackChannel` is not an
+   * ownership signal). Undefined on the non-deferred graph path (untouched, golden-lock).
+   */
+  graphOwned?: boolean
 }
 
 /**
@@ -1373,13 +1384,18 @@ async function buildNodeQueueExternalFeedback(
   }
   if (sources.length === 0) return undefined
 
+  // RFC-120 §18 (ship-gate): does THIS node own ≥1 GRAPH-designer round in the rendered queue
+  // (an entry whose default == this node)? Drives the scheduler's ownership-gated prior-output:
+  // a pure-override handoff (graphOwned=false) must NOT be told to update its own old artifact.
+  const graphOwned = entries.some((e) => e.defaultTargetNodeId === handlerNodeId)
+
   const block = buildExternalFeedbackBlock(sources)
   const csv = sources
     .slice()
     .sort((a, b) => a.sourceQuestionerNodeId.localeCompare(b.sourceQuestionerNodeId))
     .map((s) => s.sourceQuestionerNodeId)
     .join(', ')
-  return { block, iteration: String(generation), sourcesCsv: csv, runScoped: true }
+  return { block, iteration: String(generation), sourcesCsv: csv, runScoped: true, graphOwned }
 }
 
 /**
