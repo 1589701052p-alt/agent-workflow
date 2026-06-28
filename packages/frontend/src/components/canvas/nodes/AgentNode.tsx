@@ -3,6 +3,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
+import { QuestionBadge } from './QuestionBadge'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
 interface Props extends NodeProps {
@@ -17,6 +18,7 @@ export function AgentNode({ data, selected }: Props) {
       data-status={data.status ?? 'default'}
       data-loop-body={data.loopBody ? 'true' : undefined}
     >
+      <QuestionBadge data={data} />
       <div className="canvas-node__header">
         <span className="canvas-node__kind">⚙ {t('agentNode.label')}</span>
         <span className="canvas-node__title">{data.title}</span>

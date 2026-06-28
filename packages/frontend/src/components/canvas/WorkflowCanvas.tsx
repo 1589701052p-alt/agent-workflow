@@ -140,6 +140,20 @@ export interface WorkflowCanvasProps {
    * Editor canvas leaves this undefined → no lock.
    */
   taskContext?: { reviewIteration: Record<string, number> }
+  /**
+   * RFC-120 D13: per source-node count of pending (non-terminal) questions,
+   * keyed by workflow node id. Only entries `> 0` paint a count badge on the
+   * "asking" nodes (agent / clarify / cross-clarify). Undefined (editor canvas)
+   * ⇒ no badges and a byte-for-byte unchanged canvas (golden-lock). Changing
+   * this map rebuilds node data the same way `nodeStatuses` does.
+   */
+  questionCounts?: Record<string, number>
+  /**
+   * RFC-120 D13: invoked with a node id when that node's question badge is
+   * clicked. The task-detail page uses it to switch to the questions board and
+   * filter it to this source node.
+   */
+  onNodeQuestionBadgeClick?: (nodeId: string) => void
 }
 
 /**
@@ -172,6 +186,8 @@ function CanvasInner({
   readOnly,
   nodeStatuses,
   taskContext,
+  questionCounts,
+  onNodeQuestionBadgeClick,
   handleRef,
 }: WorkflowCanvasProps & {
   handleRef?: React.ForwardedRef<WorkflowCanvasHandle>
@@ -230,6 +246,18 @@ function CanvasInner({
     },
     [definition.edges, onChange],
   )
+  // RFC-120 D13: stable bridge to the latest onNodeQuestionBadgeClick prop. A
+  // ref keeps the handle identity-stable across renders so node-data rebuilds
+  // (toFlowNodes) don't need the possibly-changing callback in their deps — the
+  // badge invokes data.onQuestionBadgeClick captured at rebuild time.
+  const questionBadgeClickRef = useRef(onNodeQuestionBadgeClick)
+  useEffect(() => {
+    questionBadgeClickRef.current = onNodeQuestionBadgeClick
+  }, [onNodeQuestionBadgeClick])
+  const handleQuestionBadgeClick = useCallback((nodeId: string) => {
+    questionBadgeClickRef.current?.(nodeId)
+  }, [])
+
   const [selection, setSelection] = useState<{ nodes: string[]; edges: string[] }>({
     nodes: [],
     edges: [],
@@ -249,7 +277,10 @@ function CanvasInner({
   const lastEmittedSelectionSig = useRef<string>('null')
 
   const [nodes, setNodes] = useState<Node[]>(() =>
-    projectDefinitionForXyflow(definition, toFlowNodes(definition, agentByName, nodeStatuses)),
+    projectDefinitionForXyflow(
+      definition,
+      toFlowNodes(definition, agentByName, nodeStatuses, questionCounts, handleQuestionBadgeClick),
+    ),
   )
   const [edges, setEdges] = useState<Edge[]>(() => [
     ...toFlowEdges(definition.edges, buildControlFlowEdgeIds(definition, agentByName)),
@@ -257,6 +288,10 @@ function CanvasInner({
   ])
   const externalDefRef = useRef(definition)
   const externalStatusesRef = useRef(nodeStatuses)
+  // RFC-120 D13: mirror of `nodeStatuses`' externalStatusesRef guard — lets the
+  // def-sync useEffect rebuild node data when only `questionCounts` changes
+  // (badge counts arrive async from the questions query, definition unchanged).
+  const externalQuestionCountsRef = useRef(questionCounts)
   // Track the last agentByName ref we rebuilt against. The canvas is often
   // mounted on the task-detail page before the `useQuery(['agents'])` call
   // resolves; on first render `agents` is `[]`, so agent-node `outputPorts`
@@ -290,10 +325,14 @@ function CanvasInner({
     const defChanged = definition !== externalDefRef.current
     const statusChanged = nodeStatuses !== externalStatusesRef.current
     const agentsChanged = agentByName !== externalAgentsRef.current
-    if (defChanged || statusChanged || agentsChanged) {
+    // RFC-120 D13: question-badge counts also drive a node-data rebuild — same
+    // ref-guard shape as `statusChanged` so a counts-only change repaints badges.
+    const questionsChanged = questionCounts !== externalQuestionCountsRef.current
+    if (defChanged || statusChanged || agentsChanged || questionsChanged) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
       externalAgentsRef.current = agentByName
+      externalQuestionCountsRef.current = questionCounts
       // Preserve `selected: true` across the rebuild. Without this, an
       // inspector edit (which mints a new `definition` reference) wipes
       // the selected flag, xyflow sees a phantom deselect and fires
@@ -305,7 +344,13 @@ function CanvasInner({
         applySelection(
           projectDefinitionForXyflow(
             definition,
-            toFlowNodes(definition, agentByName, nodeStatuses),
+            toFlowNodes(
+              definition,
+              agentByName,
+              nodeStatuses,
+              questionCounts,
+              handleQuestionBadgeClick,
+            ),
             measured,
           ),
           sel.nodes,
@@ -325,7 +370,7 @@ function CanvasInner({
           ...buildSourcePortDisplayEdges(definition),
         ])
     }
-  }, [definition, agentByName, nodeStatuses])
+  }, [definition, agentByName, nodeStatuses, questionCounts, handleQuestionBadgeClick])
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -1597,6 +1642,11 @@ function toFlowNodes(
   definition: WorkflowDefinition,
   agentByName: Map<string, Agent>,
   statuses?: Record<string, CanvasNodeData['status'] | undefined>,
+  // RFC-120 D13: per source-node pending-question counts + the badge click
+  // handler. Both optional; when `questionCounts` is undefined no node gets a
+  // `questionCount` (golden-lock — data is byte-for-byte identical to before).
+  questionCounts?: Record<string, number>,
+  onQuestionBadgeClick?: (nodeId: string) => void,
 ): Node[] {
   const loopBodyIds = new Set<string>()
   for (const n of definition.nodes) {
@@ -1617,6 +1667,16 @@ function toFlowNodes(
     if (statuses !== undefined) {
       const s = statuses[n.id]
       if (s !== undefined) data.status = s
+    }
+    // RFC-120 D13: paint a question badge only when this node has pending
+    // questions. The click handle rides along on the same data so the badge can
+    // jump to the board; both stay absent when `questionCounts` isn't supplied.
+    if (questionCounts !== undefined) {
+      const c = questionCounts[n.id]
+      if (c !== undefined && c > 0) {
+        data.questionCount = c
+        if (onQuestionBadgeClick !== undefined) data.onQuestionBadgeClick = onQuestionBadgeClick
+      }
     }
     if (loopBodyIds.has(n.id)) data.loopBody = true
     if (n.kind === 'wrapper-git' || n.kind === 'wrapper-loop' || n.kind === 'wrapper-fanout') {
@@ -2064,6 +2124,8 @@ export const __testToFlowNodes = (
   agents: Agent[] = [],
   edges: WorkflowEdge[] = [],
   statuses?: Record<string, CanvasNodeData['status'] | undefined>,
+  questionCounts?: Record<string, number>,
+  onQuestionBadgeClick?: (nodeId: string) => void,
 ): Node[] => {
   const def: WorkflowDefinition = {
     $schema_version: 1,
@@ -2073,7 +2135,7 @@ export const __testToFlowNodes = (
   }
   const map = new Map<string, Agent>()
   for (const a of agents) map.set(a.name, a)
-  return toFlowNodes(def, map, statuses)
+  return toFlowNodes(def, map, statuses, questionCounts, onQuestionBadgeClick)
 }
 export const __testToFlowEdges = toFlowEdges
 export const __testToDefinition = toDefinition

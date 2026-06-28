@@ -19,6 +19,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { CLARIFY_INPUT_PORT_NAME, CLARIFY_OUTPUT_PORT_NAME } from '@agent-workflow/shared'
+import { QuestionBadge } from './QuestionBadge'
 import type { CanvasNodeData } from './types'
 
 export type ClarifyStatus = 'pending' | 'awaiting_human' | 'answered' | 'failed'
@@ -53,6 +54,7 @@ export function ClarifyNode({ data, selected }: Props) {
       }
       data-status={status}
     >
+      <QuestionBadge data={data} />
       <Handle
         type="target"
         position={Position.Left}

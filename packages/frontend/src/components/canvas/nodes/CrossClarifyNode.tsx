@@ -24,6 +24,7 @@ import {
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
 } from '@agent-workflow/shared'
+import { QuestionBadge } from './QuestionBadge'
 import type { CanvasNodeData } from './types'
 
 export type CrossClarifyStatus = 'pending' | 'awaiting_human' | 'answered' | 'abandoned' | 'failed'
@@ -54,6 +55,7 @@ export function CrossClarifyNode({ data, selected }: Props) {
       data-status={status}
       data-testid={`canvas-node-cross-clarify-${data.nodeId}`}
     >
+      <QuestionBadge data={data} />
       <Handle
         type="target"
         position={Position.Left}

@@ -2704,6 +2704,7 @@ export const enUS: Resources = {
     allNodes: 'All nodes',
     answer: 'Answer',
     viewClarify: 'View clarify',
+    nodeBadgeAria: '{{count}} pending questions on this node',
     phase: {
       pending: 'To assign',
       staged: 'Staged',

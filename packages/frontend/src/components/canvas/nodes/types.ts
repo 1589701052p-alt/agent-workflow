@@ -77,4 +77,20 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * the fan-out. Undefined on every other node kind.
    */
   shardSourcePort?: string
+  /**
+   * RFC-120 D13: number of pending (non-terminal) questions that originate at
+   * this node. When `> 0` the "asking" node renderers (agent / clarify /
+   * cross-clarify) paint a click-to-jump count badge in the top-right corner.
+   * Undefined / 0 ⇒ no badge. The task-detail canvas populates it from
+   * `GET /api/tasks/:id/questions`; the editor canvas leaves it undefined so a
+   * canvas with no counts is byte-for-byte unchanged (golden-lock).
+   */
+  questionCount?: number
+  /**
+   * RFC-120 D13: click handler for the question badge — receives this node id.
+   * The task-detail canvas threads it through so a badge click jumps to the
+   * questions board filtered to this source node. Undefined on the editor
+   * canvas (no badge there).
+   */
+  onQuestionBadgeClick?: (nodeId: string) => void
 }

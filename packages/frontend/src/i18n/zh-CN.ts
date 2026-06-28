@@ -2450,6 +2450,7 @@ export interface Resources {
     allNodes: string
     answer: string
     viewClarify: string
+    nodeBadgeAria: string
     phase: {
       pending: string
       staged: string
@@ -5067,6 +5068,7 @@ export const zhCN: Resources = {
     allNodes: '全部节点',
     answer: '回答',
     viewClarify: '查看反问',
+    nodeBadgeAria: '该节点 {{count}} 个待处理问题',
     phase: {
       pending: '待指派',
       staged: '待下发',

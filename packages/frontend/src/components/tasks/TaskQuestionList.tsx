@@ -13,7 +13,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -53,6 +53,13 @@ export interface TaskQuestionListProps {
   taskId: string
   /** Agent node ids of the task's workflow (reassign candidates), with labels. */
   nodeOptions?: { id: string; label: string }[]
+  /**
+   * RFC-120 D13: a canvas question-badge click pushes `{ nodeId, key }` here to
+   * focus the board on that source node. A fresh `key` each click re-applies the
+   * filter even for the SAME node (clicking the same badge twice). Undefined /
+   * null ⇒ no effect, so existing callers are unaffected (golden-lock).
+   */
+  focusSourceNode?: { nodeId: string; key: number } | null
 }
 
 const PHASE_ORDER: TaskQuestionPhase[] = [
@@ -73,7 +80,11 @@ const PHASE_KIND: Record<TaskQuestionPhase, 'neutral' | 'info' | 'warn' | 'succe
   closed: 'neutral',
 }
 
-export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListProps) {
+export function TaskQuestionList({
+  taskId,
+  nodeOptions = [],
+  focusSourceNode = null,
+}: TaskQuestionListProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const key = ['task-questions', taskId]
@@ -100,6 +111,17 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
   // RFC-120 D13: source-node filter (per-node pending counts → click to view
   // that node's questions). Delivers the node-badge feature on the board surface.
   const [sourceFilter, setSourceFilter] = useState<string | null>(null)
+  // RFC-120 D13: a canvas badge click focuses the board on a source node. Keyed
+  // off `focusSourceNode.key` (not nodeId) so clicking the SAME node twice still
+  // re-applies the filter — each click mints a fresh key in tasks.detail.
+  const focusKey = focusSourceNode?.key
+  const focusNodeId = focusSourceNode?.nodeId
+  useEffect(() => {
+    if (focusNodeId !== undefined) setSourceFilter(focusNodeId)
+    // Fire on a NEW click (fresh key) only — depending on focusNodeId would
+    // defeat the same-node-twice case (each click mints a fresh key in tasks.detail).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey])
 
   if (query.isLoading) return <LoadingState />
   if (query.error) return <ErrorBanner error={query.error} />

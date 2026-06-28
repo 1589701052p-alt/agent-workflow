@@ -23,7 +23,7 @@ import { RecoverySection } from '@/components/tasks/RecoverySection'
 import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { WorkflowSyncBanner } from '@/components/tasks/WorkflowSyncBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
-import { TaskQuestionList } from '@/components/tasks/TaskQuestionList'
+import { TaskQuestionList, type TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
@@ -43,7 +43,7 @@ import {
   type TaskDetailTab,
 } from '@/lib/task-detail-tabs'
 import { useTaskSync } from '@/hooks/useTaskSync'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -61,6 +61,18 @@ function TaskDetailPage() {
   // RFC-021: page-level tab state. Default is the workflow-status canvas
   // since that's the most actionable view for a running task.
   const [tab, setTab] = useState<TaskDetailTab>('workflow-status')
+  // RFC-120 D13: a canvas question-badge click jumps here. The incrementing
+  // `key` makes each click a fresh signal so clicking the SAME node twice still
+  // re-applies the board filter (TaskQuestionList keys its effect off `.key`).
+  const [focusSourceNode, setFocusSourceNode] = useState<{ nodeId: string; key: number } | null>(
+    null,
+  )
+  const focusKeyRef = useRef(0)
+  const jumpToQuestions = useCallback((nodeId: string) => {
+    focusKeyRef.current += 1
+    setFocusSourceNode({ nodeId, key: focusKeyRef.current })
+    setTab('task-questions')
+  }, [])
   // RFC-083: structural-diff scope — 'task' or `node:${nodeRunId}`.
   const [structScope, setStructScope] = useState<string>('task')
   // RFC-083: engine — 'baseline' (always available) or 'deep' (external SCIP
@@ -320,6 +332,7 @@ function TaskDetailPage() {
               task={tk}
               runs={nodeRuns.data?.runs ?? []}
               onSelectNodeRun={setSelectedNodeRunId}
+              onJumpToQuestions={jumpToQuestions}
             />
             {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
               <NodeDetailDrawer
@@ -560,7 +573,11 @@ function TaskDetailPage() {
         </div>
         {/* RFC-120: task question list / 任务中心 board. */}
         <div className="task-detail__pane" hidden={tab !== 'task-questions'}>
-          <TaskQuestionList taskId={id} nodeOptions={agentNodeOptions} />
+          <TaskQuestionList
+            taskId={id}
+            nodeOptions={agentNodeOptions}
+            focusSourceNode={focusSourceNode}
+          />
         </div>
       </div>
     </div>
@@ -595,11 +612,14 @@ function TaskStatusCanvas({
   task,
   runs,
   onSelectNodeRun,
+  onJumpToQuestions,
 }: {
   canvasRef?: React.Ref<WorkflowCanvasHandle>
   task: Task
   runs: NodeRun[]
   onSelectNodeRun: (id: string | null) => void
+  // RFC-120 D13: invoked with a node id when a canvas question badge is clicked.
+  onJumpToQuestions: (nodeId: string) => void
 }) {
   const { t } = useTranslation()
   const definition = useMemo<WorkflowDefinition | null>(() => {
@@ -614,6 +634,28 @@ function TaskStatusCanvas({
     queryKey: ['agents'],
     queryFn: ({ signal }) => api.get('/api/agents', undefined, signal),
   })
+
+  // RFC-120 D13: per source-node pending-question counts for the canvas badges.
+  // Same query key as TaskQuestionList so the two share one cache entry (and one
+  // useTaskSync invalidation). Non-member / no-questions tasks resolve to {} and
+  // paint no badges (golden-lock — canvas unchanged).
+  const questions = useQuery<TaskQuestionEntry[], ApiError>({
+    queryKey: ['task-questions', task.id],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${encodeURIComponent(task.id)}/questions`, undefined, signal),
+    retry: false,
+  })
+
+  const questionCounts = useMemo<Record<string, number>>(() => {
+    const out: Record<string, number> = {}
+    for (const e of questions.data ?? []) {
+      // "Needs human attention" = non-terminal (mirrors the board filter chips).
+      if (e.phase !== 'done' && e.phase !== 'closed') {
+        out[e.sourceNodeId] = (out[e.sourceNodeId] ?? 0) + 1
+      }
+    }
+    return out
+  }, [questions.data])
 
   const statuses = useMemo<Record<string, CanvasNodeData['status']>>(() => {
     const latest = new Map<string, NodeRun>()
@@ -654,6 +696,8 @@ function TaskStatusCanvas({
         definition={definition}
         agents={agents.data ?? []}
         nodeStatuses={statuses}
+        questionCounts={questionCounts}
+        onNodeQuestionBadgeClick={onJumpToQuestions}
         onSelect={(sel) => {
           if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)
