@@ -31,16 +31,16 @@
 - push 后查 CI（[feedback_post_commit_ci_check]）。
 
 ## 验收清单（对齐 proposal AC）
-- [ ] AC-1 评审 reject/iterate 重跑注入（含 canceled 旧行产物）
-- [ ] AC-2 手动重试/级联/恢复/反问满足前提注入、不满足不注入
-- [ ] AC-3 首次运行不注入
-- [ ] AC-4 循环下一迭代不注入
-- [ ] AC-5 同会话续跑（inline/followup）不注入
-- [ ] AC-6 强制反问态不注入
-- [ ] AC-7 cross-clarify 统一中性指令（块本身不变、测试更新）、不重复注入
-- [ ] AC-8 全端口空不注入
-- [ ] AC-9 零 migration、三门禁全绿、smoke 无环
-- [ ] D10 review-iterate 只示目标端口、reject/非评审示全部
+- [x] AC-1 评审 reject/iterate 重跑注入（含 canceled 旧行产物）
+- [x] AC-2 手动重试/级联/恢复/反问满足前提注入、不满足不注入
+- [x] AC-3 首次运行不注入
+- [x] AC-4 循环下一迭代不注入
+- [x] AC-5 同会话续跑（inline/followup）不注入
+- [x] AC-6 强制反问态不注入
+- [x] AC-7 cross-clarify 统一中性指令（块本身不变、测试更新）、不重复注入
+- [x] AC-8 全端口空不注入
+- [x] AC-9 零 migration、三门禁全绿、smoke 无环
+- [x] D10 review-iterate 只示目标端口、reject/非评审示全部
 
 ## 风险与缓解
 - **R1 误改 `priorDoneGenerationsForRun`**：T2 只**新增** `freshestPriorRunWithOutput`，绝不动前者；§6.4 源码断言锁 done-only。
