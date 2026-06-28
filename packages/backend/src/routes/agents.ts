@@ -25,11 +25,26 @@ import {
 } from '@/services/agent'
 import { resolveDependsClosure, validateDependsOn } from '@/services/agentDeps'
 import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
-import { assertNotBuiltin, excludeBuiltinAgents } from '@/services/systemResources'
+import { assertNotBuiltin, excludeBuiltinAgents, isBuiltinRow } from '@/services/systemResources'
 import { assertNewRefsUsable, diffNewNames } from '@/services/resourceRefs'
 import { mountAclEndpoints } from './resourceAcl'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Agent } from '@agent-workflow/shared'
+
+/**
+ * RFC-117: true iff the raw PUT body sets ONLY `runtime` (no other key). Lets the
+ * built-in commit/merger agents (aw-skill-merger) be re-pointed at a runtime
+ * profile while every OTHER built-in field stays locked (RFC-104) — "select a
+ * runtime" parity with user agents, without un-hiding the infra agent from the
+ * /agents list (it's reached by name from a settings picker). Keyed off the raw
+ * body (not the parsed patch) so a future schema default can't widen the
+ * exemption beyond a literal runtime-only request.
+ */
+function isRuntimeOnlyAgentPatch(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false
+  const keys = Object.keys(body)
+  return keys.length === 1 && keys[0] === 'runtime'
+}
 
 export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
   // RFC-099: load-or-404 that treats "missing" and "not visible" identically
@@ -87,7 +102,14 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     }
     const actor = actorOf(c)
     const existing = await loadVisibleAgent(actor, name)
-    assertNotBuiltin('agent', existing) // RFC-104: built-ins are read-only
+    // RFC-117: built-in framework agents (aw-skill-merger) stay read-only EXCEPT a
+    // runtime-ONLY patch — an admin may point fusion's merger at a runtime profile
+    // (the "select a runtime" parity user agents have). Any other field, or a mixed
+    // patch, on a built-in is still rejected (RFC-104). requireResourceOwner below
+    // still gates it (built-ins are SYSTEM-owned → admin only).
+    if (!(isBuiltinRow(existing) && isRuntimeOnlyAgentPatch(body))) {
+      assertNotBuiltin('agent', existing) // RFC-104: built-ins are read-only
+    }
     await requireResourceOwner(deps.db, actor, 'agent', existing)
     // RFC-099 (D15): only NEWLY-added references are usability-checked.
     await assertNewRefsUsable(deps.db, actor, [

@@ -29,6 +29,7 @@ import {
   seedFusionResources,
 } from '../src/services/fusion'
 import { assertNotBuiltin, isBuiltinRow } from '../src/services/systemResources'
+import { createRuntime } from '../src/services/runtimeRegistry'
 import { listWorkflows } from '../src/services/workflow'
 import { createApp } from '../src/server'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -140,6 +141,40 @@ describe('RFC-104 — route guards refuse mutating a built-in (even as admin)', 
     const row = db.select().from(agents).where(eq(agents.name, SKILL_MERGER_AGENT_NAME)).all()[0]
     expect(row?.description).toContain('skill-fusion worker')
     expect(row?.builtin).toBe(true)
+  })
+
+  // RFC-117: the built-in commit/merger agent (aw-skill-merger) gets a NARROW
+  // exemption — a runtime-ONLY patch is allowed (admin) so fusion can be pointed
+  // at a runtime profile (the "select a runtime" parity user agents have); any
+  // other field, or a mixed patch, is still 403 (RFC-104).
+  test('RFC-117: built-in agent accepts a runtime-ONLY patch; mixed/other fields still 403', async () => {
+    const { db, app } = buildApp()
+    await seedFusionResources(db)
+    await createRuntime(db, { name: 'oc-haiku', protocol: 'opencode', model: 'haiku' })
+    const base = `/api/agents/${SKILL_MERGER_AGENT_NAME}`
+
+    // runtime-only patch lands.
+    const ok = await api(app, base, {
+      method: 'PUT',
+      body: JSON.stringify({ runtime: 'oc-haiku' }),
+    })
+    expect(ok.status).toBe(200)
+    expect(
+      db.select().from(agents).where(eq(agents.name, SKILL_MERGER_AGENT_NAME)).all()[0]?.runtime,
+    ).toBe('oc-haiku')
+
+    // a mixed patch (runtime + another field) is still rejected — no smuggling.
+    await expect403Builtin(
+      await api(app, base, {
+        method: 'PUT',
+        body: JSON.stringify({ runtime: 'oc-haiku', description: 'hijack' }),
+      }),
+    )
+    // built-in description untouched (the mixed patch didn't land).
+    expect(
+      db.select().from(agents).where(eq(agents.name, SKILL_MERGER_AGENT_NAME)).all()[0]
+        ?.description,
+    ).toContain('skill-fusion worker')
   })
 
   test('workflow PUT / DELETE on the built-in → 403 builtin-readonly', async () => {
