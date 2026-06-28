@@ -1449,8 +1449,6 @@ export interface Resources {
     }
     fieldNodeTitle: string
     fieldNodeTitleHint: string
-    fieldReviewTitle: string
-    fieldReviewTitleHint: string
     fieldReviewDescription: string
     fieldReviewDescriptionHint: string
     fieldReviewInputSourceNode: string
@@ -1501,35 +1499,15 @@ export interface Resources {
     fieldOutputBindings: string
     fieldOutputBindingsHint: string
     outputNamePlaceholder: string
-    innerNodeIdPlaceholder: string
     addBinding: string
     loopExitNodeIdSelect: string
     loopExitPortNameSelect: string
     loopExitInvalidNodeId: string
     loopExitInvalidPortName: string
-    loopBindingInvalid: string
     fieldAgent: string
-    fieldAgentHint: string
     pickAgent: string
-    fieldSourcePort: string
     fieldPromptTemplate: string
     fieldPromptTemplateHint: string
-    sourcePortNodePlaceholder: string
-    sourcePortPlaceholder: string
-    sourcePortMissingSuffix: string
-    sourcePortDragHint: string
-    // RFC-055 fanout sharding strategy
-    fieldShardingStrategy: string
-    fieldShardingStrategyHint: string
-    fieldShardingN: string
-    fieldShardingNHint: string
-    fieldShardingDepth: string
-    fieldShardingDepthHint: string
-    shardingKind: {
-      perFile: string
-      perNFiles: string
-      perDirectory: string
-    }
     edgeTitle: string
     edgeSourceLabel: string
     edgeTargetLabel: string
@@ -1539,8 +1517,6 @@ export interface Resources {
     missingRefsLabel: string
     missingRefsHint: string
     // RFC-023 clarify node inspector
-    fieldClarifyTitle: string
-    fieldClarifyTitleHint: string
     fieldClarifyDescription: string
     fieldClarifyDescriptionHint: string
     fieldClarifyLinkedAgent: string
@@ -3923,8 +3899,6 @@ export const zhCN: Resources = {
     },
     fieldNodeTitle: '显示名',
     fieldNodeTitleHint: '画布卡片上的标题；为空时回退到 agent 名 / input key / 节点 id。',
-    fieldReviewTitle: '评审标题',
-    fieldReviewTitleHint: '展示在评审列表与详情头部；可为空，会回退到节点 id。',
     fieldReviewDescription: '评审说明',
     fieldReviewDescriptionHint: '可选 — 给评审者的上下文。',
     fieldReviewInputSourceNode: '上游节点',
@@ -3977,34 +3951,15 @@ export const zhCN: Resources = {
     fieldOutputBindings: '输出绑定',
     fieldOutputBindingsHint: '把内部端口暴露为 wrapper 的输出端口。',
     outputNamePlaceholder: '输出名',
-    innerNodeIdPlaceholder: '内部 nodeId',
     addBinding: '+ 增加绑定',
     loopExitNodeIdSelect: '— 选择一个循环内节点 —',
     loopExitPortNameSelect: '— 选择端口 —',
     loopExitInvalidNodeId: '"{{nodeId}}" 已不在该循环内，请重新选择当前成员节点。',
     loopExitInvalidPortName: '"{{portName}}" 不是该节点声明的输出端口，请重新选择。',
-    loopBindingInvalid: '"{{nodeId}}.{{portName}}" 不是当前循环成员端口，请重新选择。',
     fieldAgent: '代理',
-    fieldAgentHint: 'Fan-out 会按 sourcePort 把子运行切片。',
     pickAgent: '— 选一个代理 —',
-    fieldSourcePort: 'sourcePort (nodeId.portName)',
     fieldPromptTemplate: 'Prompt 模板',
     fieldPromptTemplateHint: '使用 {{port_name}} 引用入边端口；内置变量如 {{__repo_path__}}。',
-    sourcePortNodePlaceholder: '— 选上游节点 —',
-    sourcePortPlaceholder: '— 选输出端口 —',
-    sourcePortMissingSuffix: '（已失效）',
-    sourcePortDragHint: '也可以从节点顶部的端口直接拖入上游输出来设置。',
-    fieldShardingStrategy: '分片策略',
-    fieldShardingStrategyHint: '决定 sourcePort 内容如何被切成 shard，分给多个子进程并行处理。',
-    fieldShardingN: '每分片文件数 (n)',
-    fieldShardingNHint: 'n ≥ 1，整数；最后一片可能不足 n 个文件。',
-    fieldShardingDepth: '目录深度 (depth)',
-    fieldShardingDepthHint: '留空 = 默认 1，即按 top-level 目录分组；2 表示按前两级路径分组。',
-    shardingKind: {
-      perFile: '每个文件一片 (per-file)',
-      perNFiles: '每 N 个文件一片 (per-n-files)',
-      perDirectory: '按目录分片 (per-directory)',
-    },
     edgeTitle: '边设置',
     edgeSourceLabel: '源',
     edgeTargetLabel: '目标节点',
@@ -4013,8 +3968,6 @@ export const zhCN: Resources = {
     edgeDeleteBtn: '删除该边',
     missingRefsLabel: '模板引用但未连入：',
     missingRefsHint: '这些端口名出现在 prompt 模板里但还没有上游边；启动 task 时会被静态校验拦下。',
-    fieldClarifyTitle: '反问节点标题',
-    fieldClarifyTitleHint: '展示在画布和列表头部；可为空，会回退到节点 id。',
     fieldClarifyDescription: '说明',
     fieldClarifyDescriptionHint: '可选；只对作者展示，不影响运行期。',
     fieldClarifyLinkedAgent: '已挂接到 agent',

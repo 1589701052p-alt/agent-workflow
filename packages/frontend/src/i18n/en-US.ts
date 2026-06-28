@@ -1527,9 +1527,6 @@ export const enUS: Resources = {
     fieldNodeTitle: 'Display name',
     fieldNodeTitleHint:
       'Shown on the canvas card. When empty, falls back to the agent name / input key / node id.',
-    fieldReviewTitle: 'Review title',
-    fieldReviewTitleHint:
-      'Shown in the Reviews list + detail header. Falls back to the node id when empty.',
     fieldReviewDescription: 'Review description',
     fieldReviewDescriptionHint: 'Optional context shown to reviewers.',
     fieldReviewInputSourceNode: 'Source node',
@@ -1586,7 +1583,6 @@ export const enUS: Resources = {
     fieldOutputBindings: 'Output bindings',
     fieldOutputBindingsHint: 'Each binding exposes an inner port as a wrapper output port.',
     outputNamePlaceholder: 'output name',
-    innerNodeIdPlaceholder: 'inner nodeId',
     addBinding: '+ Add binding',
     // RFC-016: candidate-driven selects for loop exit + outputBindings.
     loopExitNodeIdSelect: '— pick a loop member —',
@@ -1594,32 +1590,10 @@ export const enUS: Resources = {
     loopExitInvalidNodeId:
       "'{{nodeId}}' is no longer a direct member of this loop; pick a current member.",
     loopExitInvalidPortName: "'{{portName}}' is not declared by this node; pick a current port.",
-    loopBindingInvalid:
-      "'{{nodeId}}.{{portName}}' is not a current loop member port; pick a valid one.",
     fieldAgent: 'Agent',
-    fieldAgentHint: 'Fan-out shards sourcePort across child runs.',
     pickAgent: '— pick an agent —',
-    fieldSourcePort: 'sourcePort (nodeId.portName)',
     fieldPromptTemplate: 'Prompt template',
     fieldPromptTemplateHint: 'Use {{port_name}} + builtins like {{__repo_path__}}.',
-    sourcePortNodePlaceholder: '— pick an upstream node —',
-    sourcePortPlaceholder: '— pick an output port —',
-    sourcePortMissingSuffix: '(missing)',
-    sourcePortDragHint:
-      'You can also drag an upstream output onto the handle at the top of this node to set the source.',
-    fieldShardingStrategy: 'Sharding strategy',
-    fieldShardingStrategyHint:
-      'Controls how the sourcePort content is split into shards that fan out across child processes.',
-    fieldShardingN: 'Files per shard (n)',
-    fieldShardingNHint: 'Integer ≥ 1; the last shard may contain fewer than n files.',
-    fieldShardingDepth: 'Directory depth (depth)',
-    fieldShardingDepthHint:
-      'Leave empty for the default of 1 (group by top-level directory); 2 groups by the first two path components.',
-    shardingKind: {
-      perFile: 'One file per shard (per-file)',
-      perNFiles: 'N files per shard (per-n-files)',
-      perDirectory: 'By directory (per-directory)',
-    },
     edgeTitle: 'Edge',
     edgeSourceLabel: 'Source',
     edgeTargetLabel: 'Target node',
@@ -1630,8 +1604,6 @@ export const enUS: Resources = {
     missingRefsLabel: 'Template refs without inbound edge:',
     missingRefsHint:
       'These names appear in the prompt template but have no inbound edge; task launch will fail static validation.',
-    fieldClarifyTitle: 'Clarify node title',
-    fieldClarifyTitleHint: 'Shown on the canvas and list headers; empty falls back to the node id.',
     fieldClarifyDescription: 'Description',
     fieldClarifyDescriptionHint: 'Optional author-facing note; no runtime impact.',
     fieldClarifyLinkedAgent: 'Linked agent',
