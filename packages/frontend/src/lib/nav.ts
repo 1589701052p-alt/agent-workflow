@@ -107,5 +107,10 @@ export function resolveActiveNav(pathname: string): ActiveNav {
   if (pathname.startsWith('/reviews') || pathname.startsWith('/clarify')) {
     return { onHome: false, onSettings: false, activeGroup: 'workflows', activeItemTo: null }
   }
+  // RFC-121: fusions live under the Memory page now (its "fusion" tab), so a
+  // /fusions/:id detail deep-link keeps the Memory group highlighted.
+  if (pathname.startsWith('/fusions')) {
+    return { onHome: false, onSettings: false, activeGroup: 'memory', activeItemTo: null }
+  }
   return { onHome: false, onSettings: false, activeGroup: null, activeItemTo: null }
 }

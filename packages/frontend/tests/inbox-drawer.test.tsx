@@ -138,6 +138,67 @@ describe('RFC-032 InboxDrawer', () => {
     expect(screen.getByTestId('inbox-tab-all')).toBeTruthy()
     expect(screen.getByTestId('inbox-tab-reviews')).toBeTruthy()
     expect(screen.getByTestId('inbox-tab-clarify')).toBeTruthy()
+    // RFC-121: the fusion + memory groups moved to the /memory page.
+    expect(screen.queryByTestId('inbox-tab-fusion')).toBeNull()
+    expect(screen.queryByTestId('inbox-tab-memory')).toBeNull()
+  })
+
+  // RFC-121 regression: even if the fusion + memory-candidate endpoints
+  // return rows, the inbox drawer must never render them (they live on the
+  // /memory page now). The drawer no longer queries those endpoints at all;
+  // this locks in that it stays that way — including for an admin actor, who
+  // pre-RFC-121 would have seen the memory tab.
+  test('fusion + memory candidate data never leak into the drawer (even for admins)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
+      const s = typeof url === 'string' ? url : url.toString()
+      if (s.includes('/api/auth/me')) {
+        return new Response(
+          JSON.stringify({
+            user: { id: 'u', username: 'u', displayName: 'u', role: 'admin', status: 'active' },
+            source: 'session',
+            permissions: ['memory:approve'],
+            linkedIdentities: [],
+            pats: [],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (s.includes('/api/fusions')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'fus_1',
+              skillName: 'sk',
+              status: 'awaiting_approval',
+              memoryIds: ['m1'],
+              createdAt: 1,
+            },
+          ]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (s.includes('/api/memories')) {
+        return new Response(
+          JSON.stringify({ items: [{ id: 'mem_1', title: 'cand', status: 'candidate' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      // reviews + clarify empty.
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    wrap(<InboxDrawer open={true} onClose={() => {}} />)
+    await waitFor(() => screen.getByTestId('inbox-drawer'))
+    expect(screen.queryByTestId('inbox-tab-fusion')).toBeNull()
+    expect(screen.queryByTestId('inbox-tab-memory')).toBeNull()
+    expect(screen.queryByTestId('inbox-row-fusion-fus_1')).toBeNull()
+    expect(screen.queryByTestId('inbox-row-memory-mem_1')).toBeNull()
+    // Drawer settles into the empty state (no reviews / clarify to show) —
+    // wait for the queries to drain so we assert post-settle, not mid-load.
+    await waitFor(() => {
+      expect(screen.getByTestId('inbox-drawer').textContent ?? '').toMatch(
+        /Nothing waiting|当前没有/,
+      )
+    })
   })
 
   test('All tab merges both feeds; Reviews tab filters to reviews only', async () => {

@@ -10,7 +10,6 @@ import { zhCN } from '../src/i18n/zh-CN'
 import { enUS } from '../src/i18n/en-US'
 
 const NAV_KEYS = ['memory', 'memoryHint', 'memoryBadge'] as const
-const INBOX_KEYS = ['pendingMemoryGroup', 'pendingMemoryEmpty', 'memoryItemSubtitle'] as const
 const MEMORY_TOP = [
   'title',
   'hint',
@@ -23,7 +22,11 @@ const MEMORY_TOP = [
   'dialogCancel',
   'dialogConfirm',
 ] as const
-const MEMORY_TABS = ['approvalQueue', 'all', 'byScope', 'distillJobs'] as const
+// RFC-121: added the "fusion" tab + memory.fusion.* surface; the inbox-side
+// pending-memory keys (pendingMemoryGroup/pendingMemoryEmpty/memoryItemSubtitle)
+// were deleted when fusions + memory candidates left the inbox drawer.
+const MEMORY_TABS = ['approvalQueue', 'all', 'byScope', 'distillJobs', 'fusion'] as const
+const MEMORY_FUSION = ['subtitle', 'empty', 'error', 'retry'] as const
 const MEMORY_ACTIONS = [
   'approve',
   'approveSupersede',
@@ -52,14 +55,10 @@ const FEEDBACK_KEYS = [
 ] as const
 
 describe('RFC-041 PR4 i18n keys present in both locales', () => {
-  test('nav.memory* + inbox additions', () => {
+  test('nav.memory*', () => {
     for (const k of NAV_KEYS) {
       expect(zhCN.nav[k].length, `zhCN.nav.${k}`).toBeGreaterThan(0)
       expect(enUS.nav[k].length, `enUS.nav.${k}`).toBeGreaterThan(0)
-    }
-    for (const k of INBOX_KEYS) {
-      expect(zhCN.nav.inbox[k].length, `zhCN.nav.inbox.${k}`).toBeGreaterThan(0)
-      expect(enUS.nav.inbox[k].length, `enUS.nav.inbox.${k}`).toBeGreaterThan(0)
     }
   })
 
@@ -71,6 +70,10 @@ describe('RFC-041 PR4 i18n keys present in both locales', () => {
     for (const k of MEMORY_TABS) {
       expect(zhCN.memory.tab[k].length).toBeGreaterThan(0)
       expect(enUS.memory.tab[k].length).toBeGreaterThan(0)
+    }
+    for (const k of MEMORY_FUSION) {
+      expect(zhCN.memory.fusion[k].length).toBeGreaterThan(0)
+      expect(enUS.memory.fusion[k].length).toBeGreaterThan(0)
     }
     for (const k of MEMORY_ACTIONS) {
       expect(zhCN.memory.action[k].length).toBeGreaterThan(0)

@@ -4,6 +4,12 @@
 // detail page; the drawer stays open so the user can plough through a
 // queue of pending items.
 //
+// RFC-121: the inbox is scoped back to task-flow to-dos (reviews + clarify).
+// The memory-candidate group (RFC-041 PR4) and the fusion group (RFC-101)
+// were lifted OUT of here and onto the /memory page (its approval-queue +
+// new "fusion" tab), with the sidebar Memory badge carrying their pending
+// count. Keep this drawer to reviews + clarify only.
+//
 // Lifecycle:
 //   - The footer button (lifted in __root.tsx) toggles `open`.
 //   - ESC + outside click close it. Detail-page navigation does NOT.
@@ -15,16 +21,10 @@ import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import type {
-  ClarifyRoundSummary,
-  Fusion,
-  MemorySummary,
-  ReviewSummary,
-} from '@agent-workflow/shared'
+import type { ClarifyRoundSummary, ReviewSummary } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { usePermission } from '@/hooks/useActor'
 
-export type InboxTab = 'all' | 'reviews' | 'clarify' | 'fusion' | 'memory'
+export type InboxTab = 'all' | 'reviews' | 'clarify'
 
 interface InboxDrawerProps {
   open: boolean
@@ -37,16 +37,6 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
   const tabRef = useRef<HTMLButtonElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const navigate = useNavigate()
-  // RFC-041 PR4: pending-memory group is admin-only. Non-admins never see
-  // the tab nor any rows in "all"; their drawer behaves exactly as before.
-  const canSeeMemory = usePermission('memory:approve')
-
-  const memoryQuery = useQuery<{ items: MemorySummary[] }>({
-    queryKey: ['memories', 'inbox', 'candidates'],
-    queryFn: ({ signal }) => api.get('/api/memories?status=candidate', undefined, signal),
-    enabled: open && canSeeMemory,
-    refetchInterval: open && canSeeMemory ? 15_000 : false,
-  })
 
   const reviews = useQuery<ReviewSummary[]>({
     queryKey: ['reviews', 'inbox', 'pending'],
@@ -58,14 +48,6 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
   const clarify = useQuery<ClarifyRoundSummary[]>({
     queryKey: ['clarify', 'inbox', 'pending'],
     queryFn: ({ signal }) => api.get('/api/clarify?status=awaiting_human', undefined, signal),
-    enabled: open,
-    refetchInterval: open ? 15_000 : false,
-  })
-
-  // RFC-101: fusions awaiting the merger's approval (the skill diff is ready).
-  const fusionsQuery = useQuery<Fusion[]>({
-    queryKey: ['fusions', 'inbox', 'awaiting'],
-    queryFn: ({ signal }) => api.get('/api/fusions?status=awaiting_approval', undefined, signal),
     enabled: open,
     refetchInterval: open ? 15_000 : false,
   })
@@ -150,44 +132,9 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
         })
       }
     }
-    if (tab === 'all' || tab === 'fusion') {
-      for (const f of fusionsQuery.data ?? []) {
-        rows.push({
-          kind: 'fusion',
-          rowKey: f.id,
-          id: f.id,
-          taskId: f.currentTaskId ?? '',
-          taskName: '',
-          title: t('nav.inbox.fusionTitle', { skill: f.skillName }),
-          subtitle: t('nav.inbox.fusionSubtitle', {
-            n: f.incorporatedMemoryIds?.length ?? f.memoryIds.length,
-          }),
-          createdAt: f.createdAt,
-        })
-      }
-    }
-    if (canSeeMemory && (tab === 'all' || tab === 'memory')) {
-      for (const m of memoryQuery.data?.items ?? []) {
-        rows.push({
-          kind: 'memory',
-          rowKey: m.id,
-          id: m.id,
-          taskId: '',
-          taskName: '',
-          title: m.title,
-          subtitle: t('nav.inbox.memoryItemSubtitle', {
-            scope: t(`memory.scope.${m.scopeType}`),
-            kind: t(`memory.distillAction.${memoryActionKey(m.distillAction)}`, {
-              id: '',
-            }),
-          }),
-          createdAt: m.approvedAt ?? Date.now(),
-        })
-      }
-    }
     rows.sort((a, b) => b.createdAt - a.createdAt)
     return rows
-  }, [tab, reviews.data, clarify.data, fusionsQuery.data, memoryQuery.data, canSeeMemory, t])
+  }, [tab, reviews.data, clarify.data, t])
 
   if (!open) return null
 
@@ -200,10 +147,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
       data-testid="inbox-drawer"
     >
       <div className="inbox-drawer__tabs" role="tablist">
-        {(canSeeMemory
-          ? (['all', 'reviews', 'clarify', 'fusion', 'memory'] as const)
-          : (['all', 'reviews', 'clarify', 'fusion'] as const)
-        ).map((k, i) => (
+        {(['all', 'reviews', 'clarify'] as const).map((k, i) => (
           <button
             key={k}
             type="button"
@@ -225,19 +169,10 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
       {(tab === 'all' || tab === 'clarify') && clarify.error !== null && (
         <ErrorRow message={t('nav.inbox.errorClarify')} onRetry={() => void clarify.refetch()} />
       )}
-      {(tab === 'all' || tab === 'fusion') && fusionsQuery.error !== null && (
-        <ErrorRow
-          message={t('nav.inbox.errorFusion')}
-          onRetry={() => void fusionsQuery.refetch()}
-        />
-      )}
 
-      {items.length === 0 &&
-        !reviews.isLoading &&
-        !clarify.isLoading &&
-        !fusionsQuery.isLoading && (
-          <div className="inbox-drawer__empty muted">{t('nav.inbox.empty')}</div>
-        )}
+      {items.length === 0 && !reviews.isLoading && !clarify.isLoading && (
+        <div className="inbox-drawer__empty muted">{t('nav.inbox.empty')}</div>
+      )}
 
       <div className="inbox-drawer__list">
         {items.map((it) => (
@@ -250,11 +185,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
               const target =
                 it.kind === 'review'
                   ? { to: '/reviews/$nodeRunId', params: { nodeRunId: it.id } }
-                  : it.kind === 'clarify'
-                    ? { to: '/clarify/$nodeRunId', params: { nodeRunId: it.id } }
-                    : it.kind === 'fusion'
-                      ? { to: '/fusions/$id', params: { id: it.id } }
-                      : { to: '/memory' }
+                  : { to: '/clarify/$nodeRunId', params: { nodeRunId: it.id } }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               void navigate(target as any)
             }}
@@ -267,21 +198,17 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
             </span>
             <span className="inbox-drawer__title">{it.title}</span>
             <span className="inbox-drawer__subtitle muted">{it.subtitle}</span>
-            {it.kind !== 'memory' && it.kind !== 'fusion' && (
-              <>
-                {/* RFC-037: surface the user-supplied task name so the inbox
-                    disambiguates same-workflow tasks. Falls back to the short
-                    ID label when name is blank (defensive — schema requires it). */}
-                <span className="inbox-drawer__task-name" data-testid="inbox-row-task-name">
-                  {it.taskName.length > 0
-                    ? it.taskName
-                    : t('nav.inbox.sourceTask', { taskId: it.taskId })}
-                </span>
-                <span className="inbox-drawer__task muted">
-                  {t('nav.inbox.sourceTask', { taskId: it.taskId })}
-                </span>
-              </>
-            )}
+            {/* RFC-037: surface the user-supplied task name so the inbox
+                disambiguates same-workflow tasks. Falls back to the short
+                ID label when name is blank (defensive — schema requires it). */}
+            <span className="inbox-drawer__task-name" data-testid="inbox-row-task-name">
+              {it.taskName.length > 0
+                ? it.taskName
+                : t('nav.inbox.sourceTask', { taskId: it.taskId })}
+            </span>
+            <span className="inbox-drawer__task muted">
+              {t('nav.inbox.sourceTask', { taskId: it.taskId })}
+            </span>
           </button>
         ))}
       </div>
@@ -324,7 +251,7 @@ export function InboxDrawer({ open, onClose }: InboxDrawerProps) {
 }
 
 interface InboxItem {
-  kind: 'review' | 'clarify' | 'memory' | 'fusion'
+  kind: 'review' | 'clarify'
   /**
    * Stable, row-unique identifier used for the React `key` and the row's
    * `data-testid`. For reviews this is `nodeRunId` (unique per pending
@@ -351,10 +278,6 @@ function inboxTabLabelKey(k: InboxTab): string {
       return 'nav.inbox.tabReviews'
     case 'clarify':
       return 'nav.inbox.tabClarify'
-    case 'fusion':
-      return 'nav.inbox.tabFusion'
-    case 'memory':
-      return 'nav.memory'
   }
 }
 
@@ -364,26 +287,6 @@ function inboxKindLabelKey(kind: InboxItem['kind']): string {
       return 'nav.inbox.tabReviews'
     case 'clarify':
       return 'nav.inbox.tabClarify'
-    case 'fusion':
-      return 'nav.inbox.tabFusion'
-    case 'memory':
-      return 'nav.memory'
-  }
-}
-
-function memoryActionKey(a: MemorySummary['distillAction']): string {
-  switch (a) {
-    case 'new':
-      return 'new'
-    case 'update_of':
-      return 'updateOf'
-    case 'duplicate_of':
-      return 'duplicateOf'
-    case 'conflict_with':
-      return 'conflictWith'
-    case null:
-    default:
-      return 'new'
   }
 }
 

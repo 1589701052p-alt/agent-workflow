@@ -4,9 +4,10 @@
 // Why this test exists: the inbox button is the only entry point to the
 // unified drawer; the badge is the only signal a user gets that anything
 // is waiting. A regression that drops one feed silently or shows a "0"
-// chip would hide pending work. The four cases below cover the math
+// chip would hide pending work. The cases below cover the math
 // (`total = reviewsCount + clarifyCount`), the empty-zero hiding, the
-// `99+` cap, and the both-feeds-failed soft-fail.
+// `99+` cap, the both-feeds-failed soft-fail, and the RFC-121 regression
+// that awaiting fusions are NOT counted here (they moved to /memory).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -15,9 +16,17 @@ import '../src/i18n'
 import { InboxFooterButton } from '../src/components/shell/InboxFooterButton'
 import { setBaseUrl, setToken } from '../src/stores/auth'
 
-function mockCounts(reviews: number | 'error', clarify: number | 'error') {
+function mockCounts(reviews: number | 'error', clarify: number | 'error', fusion?: number) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
     const s = typeof url === 'string' ? url : url.toString()
+    // RFC-121: when a fusion pending-count is mocked, the button must still
+    // ignore it (fusions moved to the Memory badge). Unmocked by default.
+    if (fusion !== undefined && s.includes('/api/fusions/pending-count')) {
+      return new Response(JSON.stringify({ count: fusion }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
     if (s.includes('/api/reviews/pending-count')) {
       if (reviews === 'error') {
         return new Response('{"code":"x"}', {
@@ -106,6 +115,18 @@ describe('RFC-032 InboxFooterButton', () => {
     wrap(<InboxFooterButton open={false} onToggle={() => {}} />)
     await waitFor(() => {
       expect(screen.getByTestId('inbox-footer-badge').textContent).toBe('7')
+    })
+  })
+
+  // RFC-121: fusions left the inbox for the /memory page. Even when the
+  // fusion pending-count endpoint reports work, this badge must not count it
+  // (the sidebar Memory badge carries fusions now). reviews=2 + clarify=1 +
+  // fusion=5 → "3", not "8".
+  test('awaiting fusions are NOT counted in the inbox badge', async () => {
+    mockCounts(2, 1, 5)
+    wrap(<InboxFooterButton open={false} onToggle={() => {}} />)
+    await waitFor(() => {
+      expect(screen.getByTestId('inbox-footer-badge').textContent).toBe('3')
     })
   })
 })

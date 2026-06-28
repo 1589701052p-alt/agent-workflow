@@ -21,14 +21,15 @@ import { MemoryApprovalQueue } from '@/components/memory/MemoryApprovalQueue'
 import { MemoryAllList } from '@/components/memory/MemoryAllList'
 import { MemoryByScopeBrowser } from '@/components/memory/MemoryByScopeBrowser'
 import { MemoryDistillJobsTable } from '@/components/memory/MemoryDistillJobsTable'
+import { MemoryFusionList } from '@/components/memory/MemoryFusionList'
 import { MemoryNewDialog } from '@/components/memory/MemoryNewDialog'
 import { useActor } from '@/hooks/useActor'
 import { useMemoryWs } from '@/hooks/useMemoryWs'
 import { useMemoryDistillJobWs } from '@/hooks/useMemoryDistillJobWs'
 
-type MemoryTab = 'approval-queue' | 'all' | 'by-scope' | 'distill-jobs'
+type MemoryTab = 'approval-queue' | 'all' | 'by-scope' | 'distill-jobs' | 'fusion'
 
-const TABS: MemoryTab[] = ['approval-queue', 'all', 'by-scope', 'distill-jobs']
+const TABS: MemoryTab[] = ['approval-queue', 'all', 'by-scope', 'distill-jobs', 'fusion']
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -108,6 +109,7 @@ function MemoryPage() {
               {t('memory.adminOnly')}
             </div>
           ))}
+        {tab === 'fusion' && <MemoryFusionList />}
       </div>
     </div>
   )
@@ -123,5 +125,7 @@ function tabLabel(t: (key: string) => string, k: MemoryTab): string {
       return t('memory.tab.byScope')
     case 'distill-jobs':
       return t('memory.tab.distillJobs')
+    case 'fusion':
+      return t('memory.tab.fusion')
   }
 }

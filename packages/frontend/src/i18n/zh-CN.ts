@@ -36,21 +36,13 @@ export interface Resources {
       tabAll: string
       tabReviews: string
       tabClarify: string
-      tabFusion: string
-      fusionTitle: string
-      fusionSubtitle: string
       empty: string
       errorReviews: string
       errorClarify: string
-      errorFusion: string
       retry: string
       sourceTask: string
       openReviews: string
       openClarify: string
-      // RFC-041 PR4: admin-only "pending memory" group in the unified inbox.
-      pendingMemoryGroup: string
-      pendingMemoryEmpty: string
-      memoryItemSubtitle: string
       clarifyShardOrIter: string
       clarifySubtitle: string
       badgeAria: string
@@ -2116,6 +2108,14 @@ export interface Resources {
       all: string
       byScope: string
       distillJobs: string
+      fusion: string
+    }
+    // RFC-121: fusions awaiting approval, surfaced on the Memory page.
+    fusion: {
+      subtitle: string
+      empty: string
+      error: string
+      retry: string
     }
     action: {
       approve: string
@@ -2496,20 +2496,13 @@ export const zhCN: Resources = {
       tabAll: '全部',
       tabReviews: '评审',
       tabClarify: '反问',
-      tabFusion: '融合',
-      fusionTitle: '融合 → {{skill}}',
-      fusionSubtitle: '技能变更待批准 · {{n}} 条记忆',
       empty: '当前没有待处理事项',
       errorReviews: '评审列表加载失败',
       errorClarify: '反问列表加载失败',
-      errorFusion: '融合列表加载失败',
       retry: '重试',
       sourceTask: '任务 {{taskId}}',
       openReviews: '查看全部评审 →',
       openClarify: '查看全部反问 →',
-      pendingMemoryGroup: '待审批记忆 ({{count}})',
-      pendingMemoryEmpty: '暂无候选记忆',
-      memoryItemSubtitle: '{{scope}} · {{kind}}',
       clarifyShardOrIter: '分片 {{shard}} / 第 {{iter}} 轮',
       clarifySubtitle: '← {{agent}} · {{detail}}',
       badgeAria: '{{n}} 项待处理',
@@ -4640,6 +4633,14 @@ export const zhCN: Resources = {
       all: '已审批',
       byScope: '按维度',
       distillJobs: '提炼任务',
+      fusion: '融合',
+    },
+    // RFC-121: fusions awaiting approval, surfaced on the Memory page.
+    fusion: {
+      subtitle: '待审批 · 吸收 {{n}} 条记忆',
+      empty: '暂无待审批的融合',
+      error: '融合列表加载失败',
+      retry: '重试',
     },
     action: {
       approve: '批准',

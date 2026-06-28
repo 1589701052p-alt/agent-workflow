@@ -92,6 +92,24 @@ describe('RFC-032 resolveActiveNav — pathname → group / item / chrome flags'
     })
   })
 
+  test('/fusions/:id maps to the memory group (RFC-121 — fusions live on the Memory page)', () => {
+    // RFC-121 moved fusions onto the /memory page (its "fusion" tab); the
+    // detail route keeps the Memory group header highlighted on deep links,
+    // mirroring the /reviews + /clarify → workflows fallback above.
+    expect(resolveActiveNav('/fusions')).toEqual({
+      onHome: false,
+      onSettings: false,
+      activeGroup: 'memory',
+      activeItemTo: null,
+    })
+    expect(resolveActiveNav('/fusions/abc')).toEqual({
+      onHome: false,
+      onSettings: false,
+      activeGroup: 'memory',
+      activeItemTo: null,
+    })
+  })
+
   test('/tasks + /repos both belong to the tasks group', () => {
     expect(resolveActiveNav('/tasks').activeGroup).toBe('tasks')
     expect(resolveActiveNav('/tasks/abc').activeGroup).toBe('tasks')

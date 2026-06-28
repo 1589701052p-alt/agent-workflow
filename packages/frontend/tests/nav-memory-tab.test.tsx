@@ -1,10 +1,16 @@
 // RFC-041 PR4 — Memory group in the sidebar nav.
+// RFC-121 — the badge now also counts fusions awaiting approval: it sums the
+// admin-only candidate count + the owner/admin-scoped fusion count, so a
+// non-admin owner with a pending fusion sees it light up (fusions left the
+// inbox footer badge for this one).
 //
 // Locks:
 // 1. NAV_GROUPS exposes a "memory" group with a single /memory sub-item.
-// 2. <MemoryPendingBadge /> hides when actor lacks memory:approve (no badge,
-//    no fetch fired beyond /api/auth/me).
+// 2. <MemoryPendingBadge /> hides for a non-admin with no pending fusions
+//    (the admin-only candidate query never fires for them).
 // 3. Admin with ≥1 candidate sees a numeric badge.
+// 4. RFC-121: a non-admin owner with a pending fusion sees the badge; the
+//    admin badge sums candidates + fusions.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -33,6 +39,7 @@ function mkSum(overrides: Partial<MemorySummary> = {}): MemorySummary {
 function installFetch(
   meResponse: { permissions: string[] },
   candidates: MemorySummary[],
+  fusionCount = 0,
 ): { urls: string[] } {
   const urls: string[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
@@ -55,6 +62,14 @@ function installFetch(
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )
+    }
+    // RFC-121: the badge fetches the (owner/admin-scoped) fusion pending count
+    // for every signed-in user.
+    if (url.includes('/api/fusions/pending-count')) {
+      return new Response(JSON.stringify({ count: fusionCount }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
     }
     if (url.includes('/api/memories')) {
       return new Response(JSON.stringify({ items: candidates }), {
@@ -121,5 +136,23 @@ describe('MemoryPendingBadge', () => {
     // Wait long enough for the actor + candidate fetches to settle.
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByTestId('nav-memory-badge')).toBeNull()
+  })
+
+  test('RFC-121: non-admin owner with a pending fusion sees the badge', async () => {
+    // No memory:approve → candidate query stays disabled (count 0), but the
+    // owner-scoped fusion count (3) still lights the Memory badge.
+    installFetch({ permissions: ['memory:read'] }, [], 3)
+    renderBadge()
+    await waitFor(() => {
+      expect(screen.getByTestId('nav-memory-badge').textContent).toBe('3')
+    })
+  })
+
+  test('RFC-121: admin badge sums pending candidates + awaiting fusions', async () => {
+    installFetch({ permissions: ['memory:approve'] }, [mkSum(), mkSum({ id: 'm2' })], 3)
+    renderBadge()
+    await waitFor(() => {
+      expect(screen.getByTestId('nav-memory-badge').textContent).toBe('5')
+    })
   })
 })
