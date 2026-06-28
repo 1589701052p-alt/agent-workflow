@@ -170,12 +170,14 @@ function resolveTriggerForEntry(
  *  run is looked up by the stamp id DIRECTLY (authoritative, includes fanout child
  *  rows — Codex impl gate F2); an answered round without a stamp is in-flight.
  *
- *  RFC-120 T9 (Codex H2): for a DEFERRED task, a designer entry's OWN
- *  `trigger_run_id` (stamped by dispatchTaskQuestions) is the dispatch signal —
- *  NULL means NOT yet dispatched (the task is parked awaiting_human), so the row
- *  reads pending/staged, NOT processing. Once stamped, resolve that dispatched
- *  rerun (processing → awaiting_confirm). For NON-deferred tasks (and
- *  questioner/self entries), the immediate flow never stamps `trigger_run_id`, so
+ *  RFC-120 §18 (model A, corrected): for a DEFERRED task, a designer entry's OWN
+ *  `dispatched_at` is the dispatch signal — NULL means NOT yet dispatched (the task
+ *  is parked awaiting_human), so the row reads pending/staged, NOT processing. Once
+ *  dispatched (`dispatched_at` set) but not yet bound to a run (`trigger_run_id`
+ *  NULL), the handler is queued/rerunning → processing (dispatchedInFlight). Once
+ *  bound (`trigger_run_id` set at the node's RERUN), resolve that run's lineage
+ *  (processing → awaiting_confirm). For NON-deferred tasks (and questioner/self
+ *  entries), the immediate flow never touches `dispatched_at`/`trigger_run_id`, so
  *  the consumption-stamp logic stays byte-for-byte (golden-lock). */
 function resolveEntryHandler(
   round: ClarifyRoundRow,
@@ -185,9 +187,16 @@ function resolveEntryHandler(
   deferred: boolean,
 ): { handlerRun: HandlerRunView | null; dispatchedInFlight: boolean } {
   if (deferred && entry.roleKind === 'designer') {
-    if (entry.triggerRunId === null) {
+    if (entry.dispatchedAt === null) {
       // Not yet dispatched → pending/staged (the gate parks the task here).
       return { handlerRun: null, dispatchedInFlight: false }
+    }
+    if (entry.triggerRunId === null) {
+      // Dispatched (committed for execution) but not yet bound to a handler run —
+      // the frontier rerun is queued / a cascade rerun hasn't reached it yet. The
+      // binding happens at the node's RERUN (buildExternalFeedbackContext), not at
+      // batch-dispatch, so the entry reads processing until then.
+      return { handlerRun: null, dispatchedInFlight: true }
     }
     const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
     // Stamped but the run row is gone (GC) → treat as in-flight rather than reset.
@@ -333,14 +342,18 @@ function summarizeAnswer(round: ClarifyRoundRow, questionId: string): string | n
 }
 
 // ---------------------------------------------------------------------------
-// RFC-120 T9 (model A) — deferred-dispatch park gate (read-only).
+// RFC-120 §18 (model A, corrected) — deferred-dispatch park gate (read-only).
 //
 // A deferred-dispatch task parks awaiting_human while it has ANY designer-role
 // task_questions entry whose source round is answered, not yet dispatched
-// (trigger_run_id IS NULL) and not confirmed. The scheduler frontier keeps the
+// (dispatched_at IS NULL) and not confirmed. The scheduler frontier keeps the
 // entry's effective handler node (override ?? default designer) OUT of
 // `completed` and bubbles awaiting_human; the T2 invariant + S2 stuck detector
-// treat that park as VALID (not corrupt/stuck).
+// treat that park as VALID (not corrupt/stuck). RFC-120 §18: the gate key is
+// `dispatched_at` (committed for execution) — NOT `trigger_run_id` (which now binds
+// at the node's RERUN, after dispatch). Dispatching the entry sets dispatched_at →
+// it leaves the gate; the frontier then mints only the upstream-frontier handlers
+// and the scheduler cascade re-dispatches the rest.
 //
 // SELF-GATED on tasks.deferred_question_dispatch: a non-deferred task always
 // resolves to the empty set (its designer rerun already fired immediately at
@@ -378,7 +391,7 @@ export async function loadUndispatchedDesignerTargets(
       and(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
-        isNull(taskQuestions.triggerRunId),
+        isNull(taskQuestions.dispatchedAt),
         ne(taskQuestions.confirmation, 'confirmed'),
         eq(clarifyRounds.status, 'answered'),
         // RFC-120 T9 (Codex H2): a directive='stop' round skips the designer rerun —
@@ -402,6 +415,14 @@ export async function hasUndispatchedDesignerQuestions(
 ): Promise<boolean> {
   return (await loadUndispatchedDesignerTargets(db, taskId)).size > 0
 }
+
+// RFC-120 §18 (model A, corrected) — the per-node INJECTION gate is NOT a separate
+// pre-check: for a deferred task the scheduler ALWAYS calls buildExternalFeedbackContext
+// with the rerun's own node_run id, and that function self-gates (selects the node's
+// dispatched-unbound designer queue by effective handler — `dispatched_at` set,
+// `trigger_run_id` NULL — and returns undefined when empty). So "the gate opens when the
+// node has a non-empty dispatched-unconsumed queue, in addition to topology" is enforced
+// inside the injection path itself; a non-handler node that merely re-ran gets undefined.
 
 // ---------------------------------------------------------------------------
 // RFC-120 PR-B writes — confirm / reassign / stage. All write only the manual
@@ -523,21 +544,21 @@ export async function reassignTaskQuestion(
   if (phase === 'done' || phase === 'closed') {
     throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
   }
-  // RFC-120 T9 (Codex M1/H2): once dispatched (trigger_run_id stamped), the minted
-  // handler run already carries this entry's answer (run-scoped injection) and will
-  // consume its round — a late reassign would silently re-target work in flight.
-  // Post-dispatch retargeting is reopen's job. dispatchTaskQuestions claims under
-  // `trigger_run_id IS NULL` inside a dbTxSync, so a concurrent dispatch can stamp
-  // between loadEntry and here; do the override write as a CAS on the SAME column so
-  // the two race cleanly — if a dispatch won (the row is no longer NULL), affect 0
-  // rows and reject. (Non-deferred tasks never stamp trigger_run_id, so this is
-  // byte-for-byte for them — the CAS always matches.)
+  // RFC-120 §18 (model A, corrected): once dispatched (`dispatched_at` set), the
+  // entry is committed for execution — the upstream-frontier rerun was minted and the
+  // scheduler cascade will bind + inject it; a late reassign would silently re-target
+  // work in flight. Post-dispatch retargeting is reopen's job. dispatchTaskQuestions
+  // claims under `dispatched_at IS NULL` inside a dbTxSync, so a concurrent dispatch
+  // can stamp between loadEntry and here; do the override write as a CAS on the SAME
+  // column so the two race cleanly — if a dispatch won (dispatched_at is no longer
+  // NULL), affect 0 rows and reject. (Non-deferred tasks never set dispatched_at, so
+  // this is byte-for-byte for them — the CAS always matches.)
   let updated = false
   dbTxSync(db, (tx) => {
     const stillOpen = tx
       .select({ id: taskQuestions.id })
       .from(taskQuestions)
-      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.triggerRunId)))
+      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
       .all()
     if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
     tx.update(taskQuestions)
@@ -547,14 +568,14 @@ export async function reassignTaskQuestion(
         lastReassignedAt: Date.now(),
         updatedAt: Date.now(),
       })
-      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.triggerRunId)))
+      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
       .run()
     updated = true
   })
   if (!updated) {
     throw new ConflictError(
       'task-question-already-dispatched',
-      `cannot reassign a dispatched question (trigger_run_id is set) — use reopen to re-target after dispatch`,
+      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
     )
   }
 }

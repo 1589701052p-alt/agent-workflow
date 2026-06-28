@@ -76,7 +76,7 @@ import {
   type CrossClarifySourceContext,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -1089,14 +1089,15 @@ export interface BuildExternalFeedbackArgs {
   designerGeneration: number
   definition: WorkflowDefinition
   /**
-   * RFC-120 T9 (model A, run-scoped injection): the dispatched rerun's OWN
-   * node_run id. When set, buildExternalFeedbackContext first tries the
-   * RUN-SCOPED path — building the block from the task_questions that CLAIM this
-   * run (trigger_run_id = dispatchedRunId), independent of the
-   * `__external_feedback__` graph edge — so a dispatched OVERRIDE rerun on an
-   * arbitrary agent node still carries the human answer. Falls through to the
-   * graph path when no entries claim the run (every normal cross-clarify rerun →
-   * byte-for-byte the existing behaviour). Omitted on the graph path call.
+   * RFC-120 §18 (model A, corrected): the about-to-run node's OWN node_run id.
+   * Passed by the scheduler ONLY for a deferred-dispatch task. When set,
+   * buildExternalFeedbackContext takes the PER-NODE-QUEUE branch — selecting this
+   * node's dispatched-unconsumed designer queue (effective handler == designerNodeId),
+   * BINDING it to this run (trigger_run_id = dispatchedRunId), and building the block —
+   * independent of the `__external_feedback__` graph edge. This is AUTHORITATIVE for
+   * deferred tasks (no graph fall-through): a graph designer and an arbitrary override
+   * target both inject from the same per-node queue. Omitted on the (non-deferred)
+   * graph-path call → byte-for-byte the existing behaviour (golden-lock).
    */
   dispatchedRunId?: string
 }
@@ -1137,20 +1138,24 @@ export interface ExternalFeedbackPromptContext {
 export async function buildExternalFeedbackContext(
   args: BuildExternalFeedbackArgs,
 ): Promise<ExternalFeedbackPromptContext | undefined> {
-  // RFC-120 T9 (model A, run-scoped injection) — a DISPATCHED rerun (an override
-  // target on an arbitrary agent node, dispatchTaskQuestions) carries the human
-  // answer via the task_questions that claim THIS run, independent of the graph
-  // `__external_feedback__` edge. Try that first; fall through to the graph path
-  // when no entries claim the run (every normal cross-clarify rerun → undefined
-  // here, then the graph path runs byte-for-byte → golden-lock).
+  // RFC-120 §18 (model A, corrected) — per-node INJECTION queue. When the scheduler
+  // passes the rerun's OWN node_run id (it does so ONLY for a deferred-dispatch task),
+  // bind + inject THIS node's dispatched-unconsumed designer queue — the questions
+  // whose effective handler (override ?? graph designer) is this node, committed for
+  // execution (`dispatched_at` set) and not yet bound to a finished run. This is
+  // AUTHORITATIVE for deferred tasks (no graph fall-through), so a graph designer and
+  // an arbitrary override target both inject from the same per-node queue and an
+  // overridden-away question is simply absent from the graph designer's queue — no
+  // C1 exclusion, no double-handling (RFC-120 §18.3). The graph `__external_feedback__`
+  // path below is the NON-deferred (golden-lock) mechanism only.
   if (args.dispatchedRunId !== undefined) {
-    const runScoped = await buildRunScopedExternalFeedback(
+    return buildNodeQueueExternalFeedback(
       args.db,
       args.taskId,
+      args.designerNodeId,
       args.dispatchedRunId,
       args.designerGeneration,
     )
-    if (runScoped !== undefined) return runScoped
   }
 
   if (args.designerGeneration <= 0) return undefined
@@ -1160,19 +1165,6 @@ export async function buildExternalFeedbackContext(
     args.designerNodeId,
   )
   if (siblingNodeIds.length === 0) return undefined
-
-  // RFC-120 T9 (Codex round-10): the C1 override-divergence exclusion below applies
-  // ONLY to DEFERRED tasks. In the non-deferred flow an override is recorded-but-
-  // NOT-executed (no batch dispatch, no run-scoped injection — the scheduler passes
-  // dispatchedRunId only when deferred), so the immediate designer rerun MUST still
-  // receive a reassigned round's answer; excluding it would silently drop the
-  // feedback (golden-lock regression). Single cheap read.
-  const [taskRow] = await args.db
-    .select({ deferred: tasks.deferredQuestionDispatch })
-    .from(tasks)
-    .where(eq(tasks.id, args.taskId))
-    .limit(1)
-  const taskDeferred = taskRow?.deferred === true
 
   const sources: CrossClarifySourceContext[] = []
   for (const nodeId of siblingNodeIds) {
@@ -1199,32 +1191,6 @@ export async function buildExternalFeedbackContext(
       .limit(1)
     const latest = rows[0]
     if (latest === undefined) continue
-    // RFC-120 T9 (Codex C1, gated round-10): for a DEFERRED task, skip a round
-    // REASSIGNED to a different handler — its answer is carried by that override
-    // target's RUN-SCOPED rerun (buildRunScopedExternalFeedback), NOT this graph
-    // designer. Without this, an override-dispatched (or pending-override) round
-    // would be DOUBLE-handled when the graph designer later reruns (its session is
-    // still consumedByConsumerRunId=NULL until the override run finishes). Keyed on
-    // the override diverging from THIS designer (regardless of dispatch state, so it
-    // also covers a pending-override round). For a NON-deferred task the exclusion
-    // is OFF — the override is recorded-but-not-executed there, so the immediate
-    // designer rerun MUST still get the source (golden-lock). The query itself is
-    // skipped when not deferred → byte-identical for non-deferred / no-override.
-    if (taskDeferred) {
-      const reassignedElsewhere = await args.db
-        .select({ id: taskQuestions.id })
-        .from(taskQuestions)
-        .where(
-          and(
-            eq(taskQuestions.originNodeRunId, latest.crossClarifyNodeRunId),
-            eq(taskQuestions.roleKind, 'designer'),
-            isNotNull(taskQuestions.overrideTargetNodeId),
-            ne(taskQuestions.overrideTargetNodeId, args.designerNodeId),
-          ),
-        )
-        .limit(1)
-      if (reassignedElsewhere.length > 0) continue
-    }
     const questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
     const answers =
       latest.answersJson !== null ? (JSON.parse(latest.answersJson) as ClarifyAnswer[]) : []
@@ -1270,19 +1236,29 @@ export async function buildExternalFeedbackContext(
 }
 
 /**
- * RFC-120 T9 run-scoped External Feedback — build the `## External Feedback`
- * block from the task_questions that CLAIM `dispatchedRunId` (trigger_run_id =
- * the dispatched rerun's id), independent of any graph `__external_feedback__`
- * edge. Each claiming designer entry → its origin clarify_round → the
- * designer-scoped Q&A for that entry's questionId → one CrossClarifySourceContext
- * per round → the SAME `buildExternalFeedbackBlock` the graph path uses. Returns
- * undefined when no entries claim the run (caller falls through to the graph
- * path). This is what lets a dispatched OVERRIDE rerun on a node with no feedback
- * edge still receive the human answer.
+ * RFC-120 §18 (model A, corrected) per-node-queue External Feedback — build the
+ * `## External Feedback` block from THIS handler node's dispatched-unconsumed designer
+ * queue, and BIND that queue to the current rerun. Selection (independent of any graph
+ * `__external_feedback__` edge):
+ *
+ *   roleKind='designer' AND dispatched_at IS NOT NULL (committed for execution)
+ *   AND effective handler (override ?? graph designer) == `handlerNodeId`
+ *   AND (trigger_run_id IS NULL  — not yet bound to a finished run
+ *        OR trigger_run_id == dispatchedRunId  — already bound to THIS run, e.g. a
+ *           process-retry re-rendering the same run id).
+ *
+ * The binding (stamp trigger_run_id = dispatchedRunId on the still-unbound rows) is the
+ * per-node consumption mechanism: the node's NEXT rerun's queue excludes them
+ * (trigger_run_id no longer NULL), and the read-side resolves their handler run by this
+ * lineage (processing → awaiting_confirm). The block itself reuses the SAME
+ * `buildExternalFeedbackBlock` the graph path uses (group by origin round → designer-
+ * scoped Q&A). Returns undefined when the node has no queue (a non-handler node that
+ * merely re-ran via cascade → no injection).
  */
-async function buildRunScopedExternalFeedback(
+async function buildNodeQueueExternalFeedback(
   db: DbClient,
   taskId: string,
+  handlerNodeId: string,
   dispatchedRunId: string,
   generation: number,
 ): Promise<ExternalFeedbackPromptContext | undefined> {
@@ -1293,12 +1269,31 @@ async function buildRunScopedExternalFeedback(
       and(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
-        eq(taskQuestions.triggerRunId, dispatchedRunId),
+        isNotNull(taskQuestions.dispatchedAt),
+        or(isNull(taskQuestions.triggerRunId), eq(taskQuestions.triggerRunId, dispatchedRunId)),
+        // effective handler (override ?? graph designer) == handlerNodeId
+        or(
+          eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
+          and(
+            isNull(taskQuestions.overrideTargetNodeId),
+            eq(taskQuestions.defaultTargetNodeId, handlerNodeId),
+          ),
+        ),
       ),
     )
   if (entries.length === 0) return undefined
 
-  // Group the claimed questionIds by their origin round.
+  // BIND the still-unbound entries to this rerun (the consumption marker). Already-
+  // bound-to-this-run entries (retry re-render) keep their stamp.
+  const toBind = entries.filter((e) => e.triggerRunId === null).map((e) => e.id)
+  if (toBind.length > 0) {
+    await db
+      .update(taskQuestions)
+      .set({ triggerRunId: dispatchedRunId, updatedAt: Date.now() })
+      .where(inArray(taskQuestions.id, toBind))
+  }
+
+  // Group the queued questionIds by their origin round.
   const byRound = new Map<string, Set<string>>()
   for (const e of entries) {
     const set = byRound.get(e.originNodeRunId) ?? new Set<string>()

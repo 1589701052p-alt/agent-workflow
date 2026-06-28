@@ -1,48 +1,34 @@
-// RFC-120 T9 (model A) — explicit batch-dispatch of deferred designer questions.
+// RFC-120 §18 (model A, corrected) — one-click batch-dispatch of deferred designer
+// questions via UPSTREAM-FRONTIER mint + per-node queue (NOT the old mint-all-upfront).
 //
-// A deferred-dispatch task (tasks.deferred_question_dispatch) records a
-// designer-scoped cross-clarify answer WITHOUT triggering the designer rerun
-// (crossClarify.submitCrossClarifyAnswers → 'designer-deferred'); the round's
-// designer task_questions rows are created undispatched (trigger_run_id NULL) and
-// the scheduler frontier parks the task awaiting_human (see
-// taskQuestions.loadUndispatchedDesignerTargets). dispatchTaskQuestions is the
-// explicit "batch-dispatch" the human triggers once the handlers are chosen: it
-// mints one rerun per handler node and stamps each entry's trigger_run_id, which
-// RELEASES the park (the frontier no longer parks a node once its entries carry a
-// trigger_run_id). Releasing the task to `running` + scheduler re-entry is the
-// CALLER's job (resumeTask), mirroring the clarify route.
+// A deferred-dispatch task (tasks.deferred_question_dispatch) records a designer-scoped
+// cross-clarify answer WITHOUT triggering the designer rerun (crossClarify
+// .submitCrossClarifyAnswers → 'designer-deferred'); the round's designer task_questions
+// rows are created undispatched (dispatched_at NULL) and the scheduler frontier parks the
+// task awaiting_human (taskQuestions.loadUndispatchedDesignerTargets keyed on
+// dispatched_at). dispatchTaskQuestions is the explicit "下发" the human triggers once the
+// handlers are chosen:
 //
-// Codex impl-gate folds (no-ship → fixed):
+//   1. Mark the SELECTED still-undispatched designer entries `dispatched_at` (committed
+//      for execution) — this RELEASES the park (their effective handler nodes leave the
+//      gate). `trigger_run_id` is NOT stamped here: binding happens at the node's RERUN
+//      (buildExternalFeedbackContext), not at batch-dispatch.
+//   2. Mint a rerun for ONLY the UPSTREAM FRONTIER of the affected handler-node set —
+//      the affected nodes with NO affected ancestor in the dataflow DAG. A frontier node
+//      A is upstream of an affected node B ⟹ mint A only; A's fresh `done` then makes B's
+//      downstream draft STALE (RFC-074 provenance freshness) → the scheduler cascade
+//      demotes + re-dispatches B against A's fresh output → B drains ITS queue. A and B
+//      are NEVER minted-to-run simultaneously (the mint-all-upfront double-execution /
+//      ordering / consumption-mismatch bugs are dissolved — §18.3).
+//   3. Resume is the CALLER's job (resumeTask), mirroring the clarify route.
 //
-//   H1 [granularity vs ROUND/GRAPH-scoped consumption]. The runner stamps the
-//   WHOLE cross round consumed for the target node (clarifyRounds.ts
-//   markClarifyRoundsConsumedBy keys on targetConsumerNodeId == run.nodeId), and
-//   the designer prompt reads EVERY unconsumed round pointing at the node
-//   (crossClarify.ts buildExternalFeedbackContext via the graph
-//   findCrossClarifyNodesPointingToDesigner). So one designer rerun consumes +
-//   injects ALL of that node's answered rounds. Dispatching a SUBSET would
-//   consume the rest while leaving their trigger_run_id NULL → the park gate
-//   strands them forever. FIX: the dispatch unit is the GRAPH DESIGNER NODE — a
-//   requested entry expands to ALL open designer entries whose graph designer
-//   (default target) matches, across every round, stamped together.
-//
-//   H2 [atomicity]. The mint must not precede the stamp: a crash between would
-//   orphan a pending rerun while the gate (still NULL) parks the node → stuck;
-//   two concurrent dispatchers would both mint. FIX: claim + mint in ONE dbTxSync
-//   with a PREALLOCATED run id — a SELECT-still-NULL guard + the stamp + the
-//   node_run insert commit together; a concurrent loser's SELECT sees a short
-//   group, throws, and rolls back the whole tx (no stamp, no mint, no orphan).
-//
-//   H3 [unsafe targets]. In v1 consumption + injection are GRAPH-keyed (per the
-//   graph designer's to_designer edges), so an override handing a round's answer
-//   to a DIFFERENT node can't receive that answer — the node would rerun without
-//   it yet be stamped as the handler. Safe run-scoped injection + safe first-run
-//   minting for arbitrary nodes are explicitly the NEXT layer. FIX: REJECT any
-//   open designer entry whose effective target diverges from its graph designer
-//   (stricter — and more correct — than a prior-run/feedback-edge check, which a
-//   run+edge sibling designer would wrongly pass), and defensively guard that the
-//   graph designer itself has (a) a prior node_run to inherit AND (b) an inbound
-//   __external_feedback__ channel.
+// The dispatched_at stamp + the frontier mints commit TOGETHER in one dbTxSync (a crash
+// between would either strand a released-but-un-minted frontier node — its draft is fresh
+// so it never re-runs — or orphan a pending rerun while the gate still parks it; a
+// concurrent dispatcher's SELECT-still-NULL guard sees a short group, throws, and rolls
+// the whole tx back: no stamp, no mint, no orphan). Per-target consumption / C1 graph
+// exclusion / dispatch-time trigger_run_id binding are GONE — the per-node queue model
+// (buildExternalFeedbackContext / markClarifyRoundsConsumedBy) replaces them.
 
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
@@ -55,7 +41,7 @@ import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
 import { ConflictError } from '@/util/errors'
 import { createLogger } from '@/util/log'
-import { agentHasExternalFeedbackChannel, type WorkflowDefinition } from '@agent-workflow/shared'
+import type { WorkflowDefinition, WorkflowEdge } from '@agent-workflow/shared'
 
 const log = createLogger('task-questions.dispatch')
 
@@ -66,22 +52,28 @@ export interface DispatchTaskQuestionsActor {
 }
 
 export interface DispatchedRerun {
-  /** Graph designer node the rerun was minted for. */
+  /** Frontier handler node the rerun was minted for. */
   targetNodeId: string
-  /** The freshly minted handler rerun (cause 'cross-clarify-answer'). */
+  /** The freshly minted handler rerun (cause 'cross-clarify-answer', pending). */
   nodeRunId: string
-  /** task_questions ids stamped with this rerun (the node's whole open group). */
+  /** dispatched entry ids whose effective handler is this frontier node. */
   entryIds: string[]
 }
 
 export interface DispatchTaskQuestionsResult {
+  /** The frontier reruns minted this call (downstream affected nodes are NOT here — the
+   *  scheduler cascade mints them against the frontier's fresh output). */
   reruns: DispatchedRerun[]
+  /** EVERY entry stamped dispatched_at this call (frontier + cascade handler nodes). */
+  dispatchedEntryIds: string[]
 }
 
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
 
-/** Thrown inside the atomic tx to roll it back when a concurrent dispatcher
- *  already claimed part of the group (→ no stamp, no mint, no orphan). */
+const EMPTY_RESULT: DispatchTaskQuestionsResult = { reruns: [], dispatchedEntryIds: [] }
+
+/** Thrown inside the atomic tx to roll it back when a concurrent dispatcher already
+ *  claimed part of the selection (→ no stamp, no mint, no orphan). */
 class ConcurrentClaim extends Error {}
 
 function parseDefinition(snapshot: string): WorkflowDefinition | null {
@@ -92,16 +84,68 @@ function parseDefinition(snapshot: string): WorkflowDefinition | null {
   }
 }
 
-/** The handler that actually runs this entry: the override target if reassigned,
- *  else the graph designer (default). */
+/** The handler that actually runs this entry: the override target if reassigned, else
+ *  the graph designer (default). */
 function effectiveTarget(e: TaskQuestionRow): string | null {
   return e.overrideTargetNodeId ?? e.defaultTargetNodeId
 }
 
+/** Cross-clarify / RFC-023 CHANNEL edges (injected via prompt context, not consumed as
+ *  dataflow inputs) — mirrors the scheduler's buildScopeUpstreams filter, so the frontier
+ *  is computed on the SAME dataflow DAG that drives RFC-074 provenance freshness (the
+ *  cascade). Two agent handler nodes are never connected through a cross-clarify node
+ *  (both hops are channel edges), so dropping these uniformly is exact for agent ancestry. */
+function isChannelEdge(e: WorkflowEdge): boolean {
+  return (
+    e.source.portName === '__clarify__' ||
+    e.target.portName === '__clarify_response__' ||
+    e.target.portName === '__external_feedback__' ||
+    e.source.portName === 'to_designer' ||
+    e.source.portName === 'to_questioner'
+  )
+}
+
+/** Does `node` have ANY node in `affected` as a transitive dataflow ancestor? */
+function hasAffectedAncestor(
+  node: string,
+  upstreams: Map<string, string[]>,
+  affected: ReadonlySet<string>,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const up of upstreams.get(node) ?? []) {
+    if (seen.has(up)) continue
+    seen.add(up)
+    if (affected.has(up)) return true
+    if (hasAffectedAncestor(up, upstreams, affected, seen)) return true
+  }
+  return false
+}
+
+/** RFC-120 §18 — the UPSTREAM FRONTIER of `affected`: the affected nodes with NO affected
+ *  node as a transitive dataflow ancestor. Only these get minted; the scheduler cascade
+ *  re-dispatches the rest against the frontier's fresh output. */
+function computeUpstreamFrontier(
+  definition: WorkflowDefinition,
+  affected: ReadonlySet<string>,
+): Set<string> {
+  const upstreams = new Map<string, string[]>()
+  for (const e of definition.edges ?? []) {
+    if (isChannelEdge(e)) continue
+    const list = upstreams.get(e.target.nodeId) ?? []
+    if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
+    upstreams.set(e.target.nodeId, list)
+  }
+  const frontier = new Set<string>()
+  for (const n of affected) {
+    if (!hasAffectedAncestor(n, upstreams, affected)) frontier.add(n)
+  }
+  return frontier
+}
+
 /**
- * Batch-dispatch the deferred designer task_questions reachable from `entryIds`.
- * Expands to whole graph-designer-node groups (H1), guards override/target safety
- * (H3), and mints one rerun per node atomically (H2). Resume is the caller's job.
+ * Batch-dispatch the deferred designer task_questions in `entryIds`: stamp them
+ * dispatched_at, mint the upstream-frontier handler reruns, leave the rest to the
+ * scheduler cascade. Resume is the caller's job.
  */
 export async function dispatchTaskQuestions(
   db: DbClient,
@@ -109,13 +153,12 @@ export async function dispatchTaskQuestions(
   entryIds: string[],
   actor: DispatchTaskQuestionsActor,
 ): Promise<DispatchTaskQuestionsResult> {
-  if (entryIds.length === 0) return { reruns: [] }
+  if (entryIds.length === 0) return EMPTY_RESULT
 
-  // 0. Codex H1 — batch-dispatch is ONLY valid on an opted-in deferred task. On a
-  //    non-deferred task the immediate flow already minted the designer rerun, so
-  //    minting again off a lazily-reconciled (NULL trigger_run_id) entry would
-  //    DOUBLE-mint. The /questions/dispatch route rejects this too; this is the
-  //    defensive net for any direct service caller.
+  // 0. Batch-dispatch is ONLY valid on an opted-in deferred task. On a non-deferred task
+  //    the immediate flow already minted the designer rerun, so minting again off a
+  //    lazily-reconciled (NULL) entry would DOUBLE-mint. The route rejects this too; this
+  //    is the defensive net for any direct service caller.
   const taskRow = (
     await db
       .select({ deferred: tasks.deferredQuestionDispatch, snapshot: tasks.workflowSnapshot })
@@ -130,7 +173,7 @@ export async function dispatchTaskQuestions(
     )
   }
 
-  // 1. The requested still-undispatched designer entries (NULL trigger_run_id).
+  // 1. The requested still-undispatched designer entries (dispatched_at IS NULL).
   const requested = await db
     .select()
     .from(taskQuestions)
@@ -139,20 +182,17 @@ export async function dispatchTaskQuestions(
         inArray(taskQuestions.id, entryIds),
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
-        isNull(taskQuestions.triggerRunId),
+        isNull(taskQuestions.dispatchedAt),
       ),
     )
-  if (requested.length === 0) return { reruns: [] }
+  if (requested.length === 0) return EMPTY_RESULT
 
-  // 2. Expand to ALL open designer entries sharing a requested EFFECTIVE target
-  //    (override ?? graph designer), across every round. The dispatch +
-  //    consumption unit is the effective handler NODE: one rerun per node carries
-  //    the answer (graph or run-scoped) + consumes every round it handles, so a
-  //    subset dispatch can't strand the rest (Codex H1).
-  const requestedTargets = new Set(
-    requested.map(effectiveTarget).filter((t): t is string => t !== null && t !== ''),
-  )
-  if (requestedTargets.size === 0) return { reruns: [] }
+  // 2. Per-origin single-target validation — a cross round must not be split across
+  //    handlers in v1 (its session is shared). Checked against ALL still-open (un-
+  //    dispatched) designer entries of each TOUCHED origin, not just the requested subset
+  //    (so dispatching q1→X of a round whose q2→default-designer is rejected, not silently
+  //    split). Fail fast — no partial dispatch.
+  const touchedOrigins = new Set(requested.map((e) => e.originNodeRunId))
   const allOpen = await db
     .select()
     .from(taskQuestions)
@@ -160,22 +200,9 @@ export async function dispatchTaskQuestions(
       and(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
-        isNull(taskQuestions.triggerRunId),
+        isNull(taskQuestions.dispatchedAt),
       ),
     )
-  const groupEntries = allOpen.filter((e) => {
-    const t = effectiveTarget(e)
-    return t !== null && requestedTargets.has(t)
-  })
-
-  // 3. A cross round is consumed as a UNIT (round-scoped consumption + G3 block
-  //    2b). So for every origin (round) TOUCHED by this dispatch, EVERY still-open
-  //    designer question of that round must share ONE effective target — checked
-  //    against ALL open entries of the origin, NOT just the requested subset
-  //    (Codex H1: dispatching q1→X of a round whose q2→its graph designer would
-  //    otherwise consume the whole round when X completes and strand q2). Reject —
-  //    fail fast, no partial dispatch.
-  const touchedOrigins = new Set(groupEntries.map((e) => e.originNodeRunId))
   const openByOrigin = new Map<string, TaskQuestionRow[]>()
   for (const e of allOpen) {
     if (!touchedOrigins.has(e.originNodeRunId)) continue
@@ -195,61 +222,108 @@ export async function dispatchTaskQuestions(
     }
   }
 
-  // 4. Group by effective target + guard every target BEFORE minting (fail fast →
-  //    no partial dispatch).
+  // 3. Group the requested entries by effective handler → the AFFECTED handler-node set.
   const byTarget = new Map<string, TaskQuestionRow[]>()
-  for (const e of groupEntries) {
+  for (const e of requested) {
     const t = effectiveTarget(e)
     if (t === null) continue
     const list = byTarget.get(t)
     if (list) list.push(e)
     else byTarget.set(t, [e])
   }
-  if (byTarget.size === 0) return { reruns: [] }
-  const definition = taskRow ? parseDefinition(taskRow.snapshot) : null
-  for (const [targetNodeId, group] of byTarget) {
-    await assertSafeDispatchTarget(db, taskId, targetNodeId, group, definition)
-    await assertDesignerReady(db, taskId, targetNodeId, group, definition)
+  if (byTarget.size === 0) return EMPTY_RESULT
+
+  // 4. The UPSTREAM FRONTIER of the affected set (the only nodes we mint).
+  const definition = parseDefinition(taskRow.snapshot)
+  if (definition === null) {
+    throw new ConflictError(
+      'task-question-snapshot-unparseable',
+      `task ${taskId} workflow snapshot is not valid JSON; cannot compute dispatch frontier`,
+    )
+  }
+  const affected = new Set(byTarget.keys())
+  const frontier = computeUpstreamFrontier(definition, affected)
+
+  // 5. Safety + multi-source readiness — on the FRONTIER nodes only (the ones we mint).
+  //    A frontier mint inherits the node's freshest run, so a never-run frontier target is
+  //    rejected (safe first-run minting is the deferred F3 item). A graph-designer frontier
+  //    must also satisfy the same multi-source readiness the immediate path enforces.
+  //    Cascade (non-frontier) affected nodes are minted by the scheduler (which first-runs
+  //    or demotes naturally), so they carry no prior-run / readiness precondition here.
+  for (const nodeId of frontier) {
+    const group = byTarget.get(nodeId) ?? []
+    await assertSafeFrontierTarget(db, taskId, nodeId)
+    await assertDesignerReady(db, taskId, nodeId, group, definition)
   }
 
-  // 5. Per target: atomic claim+mint (H2).
-  const reruns: DispatchedRerun[] = []
-  for (const [targetNodeId, group] of byTarget) {
-    const groupIds = group.map((e) => e.id)
-    const nodeRunId = await claimAndMint(db, taskId, targetNodeId, groupIds)
-    if (nodeRunId !== null) reruns.push({ targetNodeId, nodeRunId, entryIds: groupIds })
-  }
+  // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
+  //    tx body is purely synchronous (atomic with the dispatched_at stamp).
+  const mintPlans = await Promise.all(
+    [...frontier].map(async (nodeId) => buildFrontierMintPlan(db, taskId, nodeId)),
+  )
 
+  // 7. ONE dbTxSync: CAS-stamp dispatched_at on the requested entries + insert the frontier
+  //    node_runs. A concurrent dispatcher that already claimed ≥1 → ConcurrentClaim →
+  //    rollback (no stamp, no mint, no orphan).
+  const requestedIds = requested.map((e) => e.id)
+  const now = Date.now()
+  let committed = false
+  try {
+    dbTxSync(db, (tx) => {
+      const stillNull = tx
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
+        .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
+        .all()
+      if (stillNull.length !== requestedIds.length) throw new ConcurrentClaim()
+      tx.update(taskQuestions)
+        .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
+        .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
+        .run()
+      for (const p of mintPlans) {
+        // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
+        // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
+        // factory mintNodeRun uses, so zero hand-copied inheritance / cause drift; (2) the
+        // insert MUST be synchronous to commit atomically with the dispatched_at stamp
+        // (an async mintNodeRun would yield + commit early, defeating the atomicity).
+        // rfc098-allow-direct-node-run-insert
+        tx.insert(nodeRuns).values(p.values).run()
+      }
+      committed = true
+    })
+  } catch (e) {
+    if (e instanceof ConcurrentClaim) return EMPTY_RESULT
+    throw e
+  }
+  if (!committed) return EMPTY_RESULT
+
+  const reruns: DispatchedRerun[] = mintPlans.map((p) => ({
+    targetNodeId: p.nodeId,
+    nodeRunId: p.preId,
+    entryIds: requested.filter((e) => effectiveTarget(e) === p.nodeId).map((e) => e.id),
+  }))
   log.info('task questions dispatched', {
     taskId,
     actorUserId: actor.userId,
-    rerunCount: reruns.length,
-    entryCount: groupEntries.length,
+    dispatchedEntryCount: requestedIds.length,
+    affectedNodeCount: affected.size,
+    frontierRerunCount: reruns.length,
   })
-  return { reruns }
+  return { reruns, dispatchedEntryIds: requestedIds }
 }
 
 /**
- * H3 guard (relaxed once run-scoped injection landed). A dispatchable handler
- * node must:
- *   (a) have a prior node_run to inherit — the mint inherits the freshest run;
- *       safe first-run minting for never-run targets is still the deferred F3
- *       item, so a never-run target is rejected; AND
- *   (b) carry the human answer. The GRAPH DESIGNER (its own rounds, has the
- *       __external_feedback__ edge) carries it via the graph path; an OVERRIDE
- *       target (a node with NO edge) carries it via the run-scoped path
- *       (buildRunScopedExternalFeedback). The ONLY remaining reject (besides
- *       never-run) is an override TO a node that ITSELF has a feedback edge — the
- *       scheduler routes edge nodes through the graph path, which wouldn't see the
- *       override-claimed round (overriding to another cross-clarify designer is
- *       v1-unsupported).
+ * A frontier mint inherits the node's freshest run. Reject a never-run target — safe
+ * first-run minting for never-run frontier targets is the deferred F3 item (a never-run
+ * NON-frontier target is fine: the scheduler first-runs it when its upstream frontier
+ * completes). The old "override TO a node that itself has a feedback edge" reject is GONE:
+ * the per-node queue (buildExternalFeedbackContext) injects by effective handler, so an
+ * override to ANY agent node — designer or not — carries the answer without a graph edge.
  */
-async function assertSafeDispatchTarget(
+async function assertSafeFrontierTarget(
   db: DbClient,
   taskId: string,
   targetNodeId: string,
-  group: TaskQuestionRow[],
-  definition: WorkflowDefinition | null,
 ): Promise<void> {
   const hasRun =
     (
@@ -262,41 +336,27 @@ async function assertSafeDispatchTarget(
   if (!hasRun) {
     throw new ConflictError(
       'task-question-unsafe-dispatch-target',
-      `cannot dispatch to '${targetNodeId}': no prior node_run to inherit. Safe first-run minting for never-run targets is the next layer (RFC-120 §16 F3).`,
-    )
-  }
-  // An entry is an OVERRIDE to this target when its graph designer (default) is a
-  // different node. Such an entry rides the run-scoped path, which the scheduler
-  // only takes for a node WITHOUT a feedback edge.
-  const overridden = group.some((e) => e.defaultTargetNodeId !== targetNodeId)
-  const hasFeedback =
-    definition !== null && agentHasExternalFeedbackChannel(definition, targetNodeId)
-  if (overridden && hasFeedback) {
-    throw new ConflictError(
-      'task-question-override-to-designer-unsupported',
-      `cannot dispatch override to '${targetNodeId}': it is itself a cross-clarify designer (has an __external_feedback__ edge), so the scheduler routes it through the graph path which would not carry the overridden round. Override to a node that is NOT a cross-clarify designer (run-scoped injection), or reassign back to the graph designer.`,
+      `cannot dispatch to frontier '${targetNodeId}': no prior node_run to inherit. Safe first-run minting for never-run frontier targets is the next layer (RFC-120 §16 F3).`,
     )
   }
 }
 
 /**
- * Codex H3 — a GRAPH-designer dispatch must satisfy the SAME multi-source readiness
- * the immediate path enforces: every sibling cross-clarify node pointing at the
- * designer (within the round's loop_iter) must be resolved before the designer
- * reruns. Dispatching while a sibling is still awaiting_human would mint a PARTIAL
- * rerun (missing that sibling's feedback) and force a second rerun when it answers.
- * Reject instead. This applies ONLY to graph-designer dispatch (the group handles
- * the designer's OWN rounds); an OVERRIDE target rides the run-scoped path with its
- * specific question set and is not gated on the graph designer's siblings.
+ * Codex H3 — a GRAPH-designer frontier dispatch must satisfy the SAME multi-source
+ * readiness the immediate path enforces: every sibling cross-clarify node pointing at the
+ * designer (within the round's loop_iter) must be resolved before the designer reruns.
+ * Dispatching while a sibling is still awaiting_human would mint a PARTIAL rerun and force
+ * a second rerun when it answers. Reject instead. Applies ONLY to a graph-designer frontier
+ * (the group handles the designer's OWN rounds); an OVERRIDE target rides the per-node
+ * queue with its specific question set and is not gated on the graph designer's siblings.
  */
 async function assertDesignerReady(
   db: DbClient,
   taskId: string,
   targetNodeId: string,
   group: TaskQuestionRow[],
-  definition: WorkflowDefinition | null,
+  definition: WorkflowDefinition,
 ): Promise<void> {
-  if (definition === null) return
   const overridden = group.some((e) => e.defaultTargetNodeId !== targetNodeId)
   if (overridden) return // run-scoped override target — not the graph designer
   for (const loopIter of new Set(group.map((e) => e.loopIter))) {
@@ -316,22 +376,23 @@ async function assertDesignerReady(
   }
 }
 
+interface FrontierMintPlan {
+  nodeId: string
+  preId: string
+  values: typeof nodeRuns.$inferInsert
+}
+
 /**
- * H2 — atomically claim the entry group + mint its rerun in ONE dbTxSync with a
- * PREALLOCATED run id. Returns the minted run id, or null when a concurrent
- * dispatcher won the group (its SELECT-still-NULL guard saw a short group →
- * rolled back: no stamp, no mint, no orphan). The minted row is field-identical
- * to triggerDesignerRerun's (inherits the freshest run, cause
- * 'cross-clarify-answer', retry_index = prior-max + 1, startedAt NULL).
+ * Pre-build a frontier node's pending rerun values (cause 'cross-clarify-answer',
+ * inheriting the node's freshest run, retry_index = prior-top-level-max + 1, startedAt
+ * NULL) with a PREALLOCATED id, so the insert can run synchronously inside the dispatch tx.
+ * Field-identical to triggerDesignerRerun's mint (both go through buildMintNodeRunValues).
  */
-async function claimAndMint(
+async function buildFrontierMintPlan(
   db: DbClient,
   taskId: string,
   targetNodeId: string,
-  groupIds: string[],
-): Promise<string | null> {
-  // Inheritance source read BEFORE the tx (async). assertSafeDispatchTarget has
-  // already proven a prior run exists.
+): Promise<FrontierMintPlan> {
   const targetRuns = await db
     .select()
     .from(nodeRuns)
@@ -340,7 +401,7 @@ async function claimAndMint(
   if (last === undefined) {
     throw new ConflictError(
       'task-question-unsafe-dispatch-target',
-      `cannot dispatch to '${targetNodeId}': no prior node_run to inherit`,
+      `cannot dispatch to frontier '${targetNodeId}': no prior node_run to inherit`,
     )
   }
   const topLevel = targetRuns.filter(
@@ -348,55 +409,16 @@ async function claimAndMint(
   )
   const retryIndex = topLevel.length === 0 ? 0 : Math.max(...topLevel.map((r) => r.retryIndex)) + 1
   const preId = ulid()
-  const now = Date.now()
-
-  let minted = false
-  try {
-    dbTxSync(db, (tx) => {
-      const stillNull = tx
-        .select({ id: taskQuestions.id })
-        .from(taskQuestions)
-        .where(and(inArray(taskQuestions.id, groupIds), isNull(taskQuestions.triggerRunId)))
-        .all()
-      if (stillNull.length !== groupIds.length) {
-        // A concurrent dispatcher already claimed ≥1 of the group → abort the
-        // whole group atomically (rollback): no stamp, no mint, no orphan.
-        throw new ConcurrentClaim()
-      }
-      tx.update(taskQuestions)
-        .set({ triggerRunId: preId, updatedAt: now })
-        .where(and(inArray(taskQuestions.id, groupIds), isNull(taskQuestions.triggerRunId)))
-        .run()
-      // The RFC-098 WP-10 guard forbids direct node_runs inserts outside the mint
-      // factory to prevent hand-copied inheritance drift. This site is exempt and
-      // SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
-      // factory logic mintNodeRun uses, so there is zero hand-copied inheritance /
-      // cause / born-running drift; (2) the insert MUST be synchronous to commit
-      // atomically with the claim stamp inside this dbTxSync (the async mintNodeRun
-      // would yield + commit early, defeating the H2 atomicity the claim+mint
-      // depends on). The factory stays the single value-building authority; only the
-      // insert STATEMENT lives here.
-      // rfc098-allow-direct-node-run-insert
-      tx.insert(nodeRuns)
-        .values(
-          buildMintNodeRunValues({
-            id: preId,
-            taskId,
-            nodeId: targetNodeId,
-            status: 'pending',
-            cause: 'cross-clarify-answer',
-            retryIndex,
-            iteration: last.iteration,
-            inheritFrom: last,
-            overrides: { startedAt: null },
-          }),
-        )
-        .run()
-      minted = true
-    })
-  } catch (e) {
-    if (e instanceof ConcurrentClaim) return null
-    throw e
-  }
-  return minted ? preId : null
+  const values = buildMintNodeRunValues({
+    id: preId,
+    taskId,
+    nodeId: targetNodeId,
+    status: 'pending',
+    cause: 'cross-clarify-answer',
+    retryIndex,
+    iteration: last.iteration,
+    inheritFrom: last,
+    overrides: { startedAt: null },
+  })
+  return { nodeId: targetNodeId, preId, values }
 }

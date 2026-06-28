@@ -1714,8 +1714,17 @@ export const taskQuestions = sqliteTable(
     // Human re-target (designer only); NULL = use default. effective target =
     // override ?? default.
     overrideTargetNodeId: text('override_target_node_id'),
-    // Anchor rerun this entry currently tracks (NULL until answered; moves
-    // forward on reopen re-fire). Plain text; phase derivation tolerates stale.
+    // RFC-120 §18 — committed-for-execution marker (set at batch-dispatch by
+    // dispatchTaskQuestions; migration 0063). dispatched_at != null = the human
+    // clicked "下发"; it is the park-gate key (undispatched = dispatched_at IS NULL)
+    // and DISTINCT from trigger_run_id below. dispatched_by is the audit-only actor —
+    // NEVER enters an agent prompt (RFC-099 prompt-isolation).
+    dispatchedAt: integer('dispatched_at'),
+    dispatchedBy: text('dispatched_by'),
+    // RFC-120 §18 — the handler run that currently RENDERS this entry. Stamped at the
+    // node's RERUN (buildExternalFeedbackContext binds the per-node queue to its run),
+    // NOT at batch-dispatch. NULL = dispatched-but-not-yet-bound (queued) OR
+    // never-dispatched. Plain text; phase derivation tolerates stale.
     triggerRunId: text('trigger_run_id'),
     // RFC-120 v2: 「待下发」暂存 (migration 0061). staged_at != null = approved into
     // the 待下发 column, awaiting batch dispatch (trigger_run_id still NULL). After

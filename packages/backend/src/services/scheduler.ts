@@ -2354,15 +2354,15 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // the prior output block. RFC-070: aging applied inside
         // `buildExternalFeedbackContext` via `consumed_by_consumer_run_id
         // IS NULL`.
-        // RFC-120 T9 (model A, run-scoped injection): a graph designer (node with
-        // an __external_feedback__ edge) uses the graph path unchanged. A node with
-        // NO such edge gets the run-scoped path ONLY in a deferred-dispatch task —
-        // a dispatched OVERRIDE rerun then carries the human answer via the
-        // task_questions claiming its run (dispatchedRunId = nodeRunId). The
-        // `task.deferredQuestionDispatch` guard keeps this zero-cost + byte-for-byte
-        // for every non-deferred task (golden-lock); buildExternalFeedbackContext
-        // returns undefined when no entries claim the run.
-        const crossClarifyContext = hasExternalFeedbackChannel
+        // RFC-120 §18 (model A, corrected): per-node-queue injection. A DEFERRED task
+        // ALWAYS takes the queue branch (pass this rerun's own node_run id): the node
+        // binds + injects its dispatched-unconsumed designer queue — independent of the
+        // graph `__external_feedback__` edge — so a graph designer (frontier mint) AND an
+        // arbitrary override target (frontier OR cascade) both carry the human answer,
+        // and a non-handler node that merely re-ran via cascade gets undefined (no
+        // injection). A NON-deferred task uses the graph path unchanged, gated on the
+        // topology edge (golden-lock: deferred flag false → byte-for-byte today).
+        const crossClarifyContext = task.deferredQuestionDispatch
           ? await buildExternalFeedbackContext({
               db,
               taskId,
@@ -2370,8 +2370,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               loopIter: iteration,
               designerGeneration: clarifyGeneration,
               definition,
+              dispatchedRunId: nodeRunId,
             })
-          : task.deferredQuestionDispatch
+          : hasExternalFeedbackChannel
             ? await buildExternalFeedbackContext({
                 db,
                 taskId,
@@ -2379,7 +2380,6 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 loopIter: iteration,
                 designerGeneration: clarifyGeneration,
                 definition,
-                dispatchedRunId: nodeRunId,
               })
             : undefined
         // Compose the prior-output block from the latest done designer's

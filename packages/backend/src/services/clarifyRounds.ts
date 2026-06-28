@@ -19,17 +19,11 @@
 //     eliminating the cross-iteration vs unified-clarifyIteration counter
 //     mismatch class of bugs (see RFC-070 proposal §1).
 
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
-import {
-  clarifyRounds,
-  clarifySessions,
-  crossClarifySessions,
-  taskQuestions,
-  tasks,
-} from '@/db/schema'
+import { clarifyRounds, clarifySessions, crossClarifySessions, tasks } from '@/db/schema'
 import {
   buildClarifyPromptBlock,
   renderClarifyQuestionsBlock,
@@ -161,51 +155,15 @@ export async function markClarifyRoundsConsumedBy(
         isNull(crossClarifySessions.consumedByConsumerRunId),
       ),
     )
-  // --- 2b. RFC-120 T9 (model A): cross-clarify rounds whose designer questions
-  //         were DISPATCHED to THIS run via an OVERRIDE (run-scoped injection).
-  //         They point at a DIFFERENT graph designer (targetConsumerNodeId !=
-  //         run.nodeId) so block 2 misses them, but this run actually handled them
-  //         (its run-scoped External Feedback carried the answer). Consuming them
-  //         keeps the original graph designer from re-injecting the same question
-  //         on a later run (the double-handling bug). No-op for every non-override
-  //         run — none have task_questions claiming them → golden-lock. ---
-  const claimedOrigins = (
-    await db
-      .select({ origin: taskQuestions.originNodeRunId })
-      .from(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.taskId, run.taskId),
-          eq(taskQuestions.roleKind, 'designer'),
-          eq(taskQuestions.triggerRunId, run.id),
-        ),
-      )
-  ).map((r) => r.origin)
-  if (claimedOrigins.length > 0) {
-    await db
-      .update(clarifyRounds)
-      .set({ consumedByConsumerRunId: run.id })
-      .where(
-        and(
-          eq(clarifyRounds.taskId, run.taskId),
-          eq(clarifyRounds.kind, 'cross'),
-          inArray(clarifyRounds.intermediaryNodeRunId, claimedOrigins),
-          eq(clarifyRounds.status, 'answered'),
-          isNull(clarifyRounds.consumedByConsumerRunId),
-        ),
-      )
-    await db
-      .update(crossClarifySessions)
-      .set({ consumedByConsumerRunId: run.id })
-      .where(
-        and(
-          eq(crossClarifySessions.taskId, run.taskId),
-          inArray(crossClarifySessions.crossClarifyNodeRunId, claimedOrigins),
-          eq(crossClarifySessions.status, 'answered'),
-          isNull(crossClarifySessions.consumedByConsumerRunId),
-        ),
-      )
-  }
+  // RFC-120 §18 (model A, corrected): block 2b (the per-origin "round-scoped" override
+  // consumption keyed on task_questions.trigger_run_id == run.id) is GONE. In the
+  // corrected per-node-queue model an overridden-away question is simply absent from the
+  // graph designer's queue (its effective handler is the override target, so the graph
+  // designer never re-injects it — buildNodeQueueExternalFeedback selects by effective
+  // handler, no graph cross_clarify_sessions read for deferred tasks). The
+  // double-handling that block 2b patched can no longer occur, and consumption is now
+  // per-question via the trigger_run_id BINDING stamped at the node's rerun — not a
+  // whole-round stamp here (which over-consumed sibling questions of a split round).
   // --- 3. cross-clarify questioner (clarify_rounds + cross_clarify_sessions mirror) ---
   await db
     .update(clarifyRounds)
