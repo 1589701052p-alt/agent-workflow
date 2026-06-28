@@ -76,7 +76,7 @@ import {
   type CrossClarifySourceContext,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { and, asc, desc, eq, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -1186,6 +1186,28 @@ export async function buildExternalFeedbackContext(
       .limit(1)
     const latest = rows[0]
     if (latest === undefined) continue
+    // RFC-120 T9 (Codex C1): skip a round REASSIGNED to a different handler — its
+    // answer is carried by that override target's RUN-SCOPED rerun
+    // (buildRunScopedExternalFeedback), NOT this graph designer. Without this, an
+    // override-dispatched (or even pending-override) round would be DOUBLE-handled
+    // when the graph designer later reruns (its session is still
+    // consumedByConsumerRunId=NULL until the override run finishes). Keyed on the
+    // override target diverging from THIS designer (regardless of dispatch state, so
+    // it also covers a pending-override round). Golden-lock: non-deferred /
+    // no-override tasks have no such rows → no exclusion, byte-identical query.
+    const reassignedElsewhere = await args.db
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, latest.crossClarifyNodeRunId),
+          eq(taskQuestions.roleKind, 'designer'),
+          isNotNull(taskQuestions.overrideTargetNodeId),
+          ne(taskQuestions.overrideTargetNodeId, args.designerNodeId),
+        ),
+      )
+      .limit(1)
+    if (reassignedElsewhere.length > 0) continue
     const questions = JSON.parse(latest.questionsJson) as ClarifyQuestion[]
     const answers =
       latest.answersJson !== null ? (JSON.parse(latest.answersJson) as ClarifyAnswer[]) : []

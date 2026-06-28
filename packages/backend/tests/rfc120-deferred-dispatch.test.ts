@@ -187,12 +187,16 @@ async function seedTask(
 
 /** Seed a DEFERRED task whose designer has TWO sibling cross-clarify nodes
  *  (cc_a/q_a, cc_b/q_b both → DESIGNER) — for the H3 multi-source readiness gate. */
-async function seedTwoSource(db: DbClient): Promise<{ taskId: string; ccA: string; ccB: string }> {
+async function seedTwoSource(
+  db: DbClient,
+): Promise<{ taskId: string; ccA: string; ccB: string; def: WorkflowDefinition }> {
   const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
   const nodes: WorkflowNode[] = [
     { id: DESIGNER, kind: 'agent-single', agentName: 'designer' } as WorkflowNode,
     { id: 'q_a', kind: 'agent-single', agentName: 'q_a' } as WorkflowNode,
     { id: 'q_b', kind: 'agent-single', agentName: 'q_b' } as WorkflowNode,
+    // a plain no-edge agent — a valid override target (run-scoped) for the C1 test.
+    { id: 'fixer', kind: 'agent-single', agentName: 'fixer' } as WorkflowNode,
     { id: 'cc_a', kind: 'clarify-cross-agent', title: 'cc_a' } as WorkflowNode,
     { id: 'cc_b', kind: 'clarify-cross-agent', title: 'cc_b' } as WorkflowNode,
   ]
@@ -243,6 +247,10 @@ async function seedTwoSource(db: DbClient): Promise<{ taskId: string; ccA: strin
   await db
     .insert(nodeRuns)
     .values({ id: ulid(), taskId, nodeId: DESIGNER, status: 'done', retryIndex: 0, iteration: 0 })
+  // fixer prior run (so an override dispatch to it is not rejected as never-run).
+  await db
+    .insert(nodeRuns)
+    .values({ id: ulid(), taskId, nodeId: 'fixer', status: 'done', retryIndex: 0, iteration: 0 })
   const open = async (q: string, cc: string): Promise<string> => {
     const runId = ulid()
     await db
@@ -262,7 +270,7 @@ async function seedTwoSource(db: DbClient): Promise<{ taskId: string; ccA: strin
   }
   const ccA = await open('q_a', 'cc_a')
   const ccB = await open('q_b', 'cc_b')
-  return { taskId, ccA, ccB }
+  return { taskId, ccA, ccB, def }
 }
 
 function ans(qid: string) {
@@ -742,7 +750,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
     const overrideRunId = result.reruns[0]!.nodeRunId
 
-    // Before consumption: the graph designer (DESIGNER) would still see the round.
+    // Codex C1: the graph designer EXCLUDES the overridden round at the query level
+    // — it's handled by OTHER's run-scoped rerun — so there is NO double-handling
+    // even BEFORE the override run finishes (the session is still consumed-NULL).
     const before = await buildExternalFeedbackContext({
       db,
       taskId,
@@ -751,10 +761,10 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       designerGeneration: 1,
       definition: liveDef(),
     })
-    expect(before?.block).toContain('A')
+    expect(before).toBeUndefined()
 
-    // The OVERRIDE run completes → override-aware markClarifyRoundsConsumedBy
-    // consumes the round even though its targetConsumerNodeId is DESIGNER, not OTHER.
+    // G3: when the OVERRIDE run completes, override-aware markClarifyRoundsConsumedBy
+    // consumes the round (accounting) even though its targetConsumerNodeId is DESIGNER.
     await markClarifyRoundsConsumedBy(db, {
       id: overrideRunId,
       taskId,
@@ -1172,5 +1182,71 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     const result = await dispatchTaskQuestions(db, taskId, [entryA.id], actor)
     expect(result.reruns.length).toBe(1)
     expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
+  })
+
+  test('C1(final): a graph-designer dispatch excludes a sibling round override-dispatched elsewhere (B only, not A)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, ccA, ccB, def } = await seedTwoSource(db)
+    // Answer BOTH sources (designer-scoped) → deferred designer entries for each.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccA,
+      answers: [{ ...ans('a1'), selectedOptionLabels: ['AAA'] }],
+      directive: 'continue',
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccB,
+      answers: [{ ...ans('b1'), selectedOptionLabels: ['BBB'] }],
+      directive: 'continue',
+    })
+    const entryA = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccA)!
+    const entryB = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccB)!
+
+    // Source A is OVERRIDE-dispatched to 'fixer' (run-scoped, pending); B is left for
+    // the graph designer. A's session stays consumed-NULL while fixer's rerun runs.
+    await reassignTaskQuestion(db, entryA.id, 'fixer', actor)
+    await dispatchTaskQuestions(db, taskId, [entryA.id], actor)
+    const dispB = await dispatchTaskQuestions(db, taskId, [entryB.id], actor)
+    expect(dispB.reruns[0]?.targetNodeId).toBe(DESIGNER)
+
+    // The graph designer's External Feedback must carry B ONLY, not the
+    // override-claimed A (no double-handling — Codex C1).
+    const ctx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: def,
+    })
+    // B's source heading present; A's (override-dispatched to fixer) EXCLUDED.
+    // (sourcesCsv is the authoritative source set; option labels are re-sealed
+    // server-side so we assert on the questioner node ids, not the answer text.)
+    expect(ctx?.block).toContain("From 'q_b'")
+    expect(ctx?.block).not.toContain("From 'q_a'")
+    expect(ctx?.sourcesCsv).toBe('q_b')
+  })
+
+  test('H2(final): a directive=stop designer-scoped round never creates a deferred park', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
+    // A REJECT (directive='stop') round — intentionally skips the designer rerun.
+    const submit = await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1')],
+      directive: 'stop',
+    })
+    expect(submit.outcome.kind).toBe('questioner-stop-triggered')
+
+    // Lazy reconcile (listTaskQuestions) must NOT mint a designer entry for a stop
+    // round → no eternal park. (The questioner entry is still created.)
+    const list = await listTaskQuestions(db, taskId)
+    expect(list.some((e) => e.roleKind === 'questioner')).toBe(true)
+    expect(list.some((e) => e.roleKind === 'designer')).toBe(false)
+    expect((await designerEntries(db, taskId)).length).toBe(0)
+    // The deferred gate stays EMPTY — the task does not get stuck awaiting_human.
+    expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(0)
   })
 })

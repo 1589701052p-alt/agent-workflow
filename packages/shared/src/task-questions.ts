@@ -64,6 +64,10 @@ export interface ReconcileRoundInput {
   /** 轮是否已回答。**false 时（未答 / 取消 / 放弃）cross 只出 questioner 条目**
    *  ——scope 是回答期人工选择，答前未知，不能臆造 designer 条目。 */
   roundAnswered: boolean
+  /** RFC-120 T9 (Codex H2): 本轮 directive。`'stop'`（拒绝轮）**有意跳过设计者重跑**，
+   *  故不产 designer 条目——否则 deferred 任务会在一条永不下发的 stop 轮上永久 park。
+   *  缺省 / null → 按 `'continue'` 处理（向后兼容：既有调用方不传即原行为，黄金锁）。 */
+  directive?: 'continue' | 'stop' | null
   /** RFC-059 逐题 scope（仅 answered 时有意义）；缺省题 → CLARIFY_QUESTION_SCOPE_DEFAULT。 */
   scopes: Record<string, ClarifyQuestionScope>
   /** 冻结工作流图解析出的角色节点 id（解析不到为 null）。 */
@@ -97,8 +101,9 @@ export function reconcileDesiredEntries(input: ReconcileRoundInput): DesiredTask
       roleKind: 'questioner',
       defaultTargetNodeId: input.graph.questionerNodeId,
     })
-    // designer 条目：仅当轮已回答 + 该题 scope=designer 才出（答前 scope 未知）。
-    if (input.roundAnswered) {
+    // designer 条目：仅当轮已回答 + directive≠stop + 该题 scope=designer 才出（答前
+    // scope 未知；stop 轮有意跳过设计者重跑，不产承接条目）。
+    if (input.roundAnswered && input.directive !== 'stop') {
       const scope = input.scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
       if (scope === 'designer') {
         out.push({

@@ -115,6 +115,9 @@ export function reconcileTaskQuestionsForRound(db: DbClient, round: ClarifyRound
     kind: round.kind,
     questions: parseQuestions(round.questionsJson),
     roundAnswered: round.status === 'answered',
+    // RFC-120 T9 (Codex H2): a directive='stop' round intentionally skips the
+    // designer rerun → no designer entry (else a deferred task parks forever on it).
+    directive: round.directive,
     scopes: parseScopes(round.questionScopesJson),
     graph: graphForRound(round),
   })
@@ -378,6 +381,9 @@ export async function loadUndispatchedDesignerTargets(
         isNull(taskQuestions.triggerRunId),
         ne(taskQuestions.confirmation, 'confirmed'),
         eq(clarifyRounds.status, 'answered'),
+        // RFC-120 T9 (Codex H2): a directive='stop' round skips the designer rerun —
+        // never park on it (defense; reconcile no longer creates such designer rows).
+        eq(clarifyRounds.directive, 'continue'),
       ),
     )
   const out = new Set<string>()
