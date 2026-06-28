@@ -26,13 +26,15 @@ import { resolve } from 'node:path'
 // RFC-111 PR-A: the opencode spawn ENV literal (the `const env = {...}` block
 // carrying `PWD = cwd`) moved out of runner.ts into the runtime driver
 // (runtime/opencode/spawn.ts, `PWD: ctx.worktreePath`). runner.ts still owns the
-// `Bun.spawn({ cwd, env })` call. memoryDistiller.ts keeps both inline. So the
-// env-block check and the Bun.spawn-cwd check now target (sometimes) different
-// files; both halves of the PWD=cwd contract stay locked.
+// `Bun.spawn({ cwd, env })` call.
+// RFC-117: memoryDistiller.ts no longer assembles its own env block — it routes
+// through the runtime driver's buildSpawn, so PWD is set by buildOpencodeEnv
+// (locked by the driver site below). The distiller's PWD=cwd contract now holds
+// via (a) buildSpawn({ worktreePath: input.cwd }) and (b) Bun.spawn({ cwd:
+// input.cwd, env: plan.env }) — asserted separately below.
 const ENV_PWD_SITES = [
   // (file, identifier PWD is set from in the env block)
   ['src/services/runtime/opencode/spawn.ts', 'ctx.worktreePath'],
-  ['src/services/memoryDistiller.ts', 'input.cwd'],
 ] as const
 const SPAWN_CWD_SITES = [
   // (file, identifier the Bun.spawn cwd is read from)
@@ -61,6 +63,18 @@ describe('opencode spawn sites set PWD = cwd in env', () => {
       expect(found).toBe(true)
     })
   }
+
+  // RFC-117: the distiller routes through the runtime driver's buildSpawn instead
+  // of an inline env block, so its PWD=cwd holds by passing worktreePath =
+  // input.cwd (→ buildOpencodeEnv sets PWD = ctx.worktreePath). Lock that wiring.
+  test('memoryDistiller.ts passes worktreePath: input.cwd into buildSpawn', () => {
+    const src = readFileSync(
+      resolve(import.meta.dir, '..', 'src/services/memoryDistiller.ts'),
+      'utf-8',
+    )
+    expect(src).toContain('buildSpawn(')
+    expect(src).toContain('worktreePath: input.cwd')
+  })
 
   for (const [rel, cwdExpr] of SPAWN_CWD_SITES) {
     test(`${rel} passes cwd: ${cwdExpr} + env into Bun.spawn`, () => {
