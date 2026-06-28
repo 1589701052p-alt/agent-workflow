@@ -816,6 +816,70 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect((await designerEntries(db, taskId)).find((e) => e.id === q2.id)?.triggerRunId).toBe(P2)
   })
 
+  test('(failed-run guard) q1 bound + its handler run FAILED (unconsumed) → dispatching q2 to the SAME node is REJECTED', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    const q1 = entries.find((e) => e.questionId === 'q1')!
+    const q2 = entries.find((e) => e.questionId === 'q2')!
+
+    // q1 dispatched → P; P binds q1; P FAILS with no output → q1 is UNCONSUMED (not done+output).
+    const d1 = await dispatchTaskQuestions(db, taskId, [q1.id], actor)
+    const P = d1.reruns[0]!.nodeRunId
+    await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: P,
+    })
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q1.id)?.triggerRunId).toBe(P)
+    await db.update(nodeRuns).set({ status: 'failed' }).where(eq(nodeRuns.id, P))
+
+    // Dispatching q2 to the SAME node is REJECTED — q1 is still OPEN (failed ≠ consumed). A
+    // newer rerun would become the upper bound of q1's lineage window, so a later revival /
+    // retry of P would never re-render q1's feedback (stuck processing). So we block it.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [q2.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-node-dispatch-in-flight')
+    // q2 stays uncommitted; P stays the ONLY designer cross-clarify-answer rerun (revivable).
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q2.id)?.dispatchedAt).toBeNull()
+    const designerReruns = await db
+      .select()
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.nodeId, DESIGNER),
+          eq(nodeRuns.rerunCause, 'cross-clarify-answer'),
+        ),
+      )
+    expect(designerReruns.length).toBe(1)
+    expect(designerReruns[0]?.id).toBe(P)
+
+    // Once P's revival reaches done+output (q1 consumed), dispatching q2 SUCCEEDS (test c).
+    await db.update(nodeRuns).set({ status: 'done' }).where(eq(nodeRuns.id, P))
+    await db.insert(nodeRunOutputs).values({ nodeRunId: P, portName: 'result', content: 'x' })
+    const d2 = await dispatchTaskQuestions(db, taskId, [q2.id], actor)
+    expect(d2.reruns.length).toBe(1)
+    expect(d2.reruns[0]?.nodeRunId).not.toBe(P)
+  })
+
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })

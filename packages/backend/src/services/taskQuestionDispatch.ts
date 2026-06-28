@@ -30,18 +30,23 @@
 // exclusion / dispatch-time trigger_run_id binding are GONE — the per-node queue model
 // (buildExternalFeedbackContext / markClarifyRoundsConsumedBy) replaces them.
 
-import { and, eq, inArray, isNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
-import { nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import { nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
 import { evaluateDesignerRerunReadiness } from '@/services/crossClarify'
 import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
 import { ConflictError } from '@/util/errors'
 import { createLogger } from '@/util/log'
-import type { WorkflowDefinition, WorkflowEdge } from '@agent-workflow/shared'
+import {
+  resolveHandlerRun,
+  type RunLineageView,
+  type WorkflowDefinition,
+  type WorkflowEdge,
+} from '@agent-workflow/shared'
 
 const log = createLogger('task-questions.dispatch')
 
@@ -76,11 +81,11 @@ const EMPTY_RESULT: DispatchTaskQuestionsResult = { reruns: [], dispatchedEntryI
  *  claimed part of the selection (→ no stamp, no mint, no orphan). */
 class ConcurrentClaim extends Error {}
 
-/** Thrown inside the atomic tx to roll it back when a concurrent dispatch already minted an
- *  in-flight cross-clarify-answer rerun for a frontier node (→ converted to a ConflictError). */
+/** Thrown inside the atomic tx to roll it back when a concurrent dispatch already left an
+ *  OPEN (unconsumed) dispatched designer question on an affected node (→ ConflictError). */
 class NodeDispatchInFlight extends Error {
   constructor(readonly nodeId: string) {
-    super(`node ${nodeId} already has an in-flight cross-clarify-answer rerun`)
+    super(`node ${nodeId} already has an open (unconsumed) dispatched designer question`)
   }
 }
 
@@ -274,15 +279,16 @@ export async function dispatchTaskQuestions(
     await assertSafeFrontierTarget(db, taskId, nodeId)
   }
 
-  // 5c. Codex C1/H2 (ship-gate) — DO NOT mint a second cross-clarify-answer rerun on a node
-  //     that already has one in flight: two reruns on the same (node, iteration) conflict
-  //     (ULID freshness picks the newer, the older's bound question strands). Instead REJECT
-  //     the dispatch when ANY affected target node already has an in-flight (pending OR
-  //     running, i.e. not yet done) cross-clarify-answer rerun for its current iteration. The
-  //     user dispatches the remaining questions AFTER that node's rerun finishes — the new
-  //     dispatch then mints a fresh rerun (no conflict). A CRASHED bound-pending rerun stays
-  //     'pending' so the scheduler re-dispatches it (re-renders its queue via the lineage
-  //     window) — its question is not stranded.
+  // 5c. Codex (ship-gate) — DO NOT mint a second cross-clarify-answer rerun on a node that
+  //     already holds an OPEN (unconsumed) dispatched designer question: two reruns on the
+  //     same (node, iteration) conflict (ULID freshness picks the newer, the older's bound
+  //     question strands; a NEWER rerun also becomes the upper bound of the prior question's
+  //     lineage window, so a failed-then-revived run never re-renders its feedback). REJECT
+  //     the dispatch when ANY affected target node has an open dispatched question — open ==
+  //     NOT consumed, where "consumed" is the SAME resolveHandlerRun lineage the read-side
+  //     uses (done+output). This covers a pending/running rerun AND a FAILED / un-run one. The
+  //     user dispatches the rest AFTER that node's rerun reaches done+output (its failed run
+  //     can still be revived/retried and render its feedback in the meantime).
   await assertNoInFlightDispatch(db, taskId, affected)
 
   // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
@@ -293,12 +299,13 @@ export async function dispatchTaskQuestions(
 
   // 7. ONE dbTxSync: CAS-stamp dispatched_at on the requested entries + insert the frontier
   //    node_runs. A concurrent dispatcher that already claimed ≥1 → ConcurrentClaim →
-  //    rollback (no stamp, no mint, no orphan). The in-flight check is RE-RUN synchronously
-  //    here as the concurrency net: two dispatches that both pass the async pre-check above
-  //    serialize at the tx — the second sees the first's freshly-committed pending rerun and
-  //    rolls back (NodeDispatchInFlight → the same ConflictError; no double-mint). Within ONE
-  //    dispatch the byTarget grouping already yields exactly one rerun per node (q1+q2 to the
-  //    same node → one mint plan → one rerun rendering both).
+  //    rollback (no stamp, no mint, no orphan). The open-dispatch check is RE-RUN
+  //    synchronously here as the concurrency net (SAME oracle as the async pre-check): two
+  //    dispatches that both pass the async check serialize at the tx — the second sees the
+  //    first's freshly-committed open dispatched question and rolls back (NodeDispatchInFlight
+  //    → the same ConflictError; no double-mint). It reads PRIOR dispatched entries only (this
+  //    batch is stamped BELOW). Within ONE dispatch the byTarget grouping already yields
+  //    exactly one rerun per node (q1+q2 to the same node → one mint plan → one rerun).
   const requestedIds = requested.map((e) => e.id)
   const now = Date.now()
   let committed = false
@@ -310,22 +317,39 @@ export async function dispatchTaskQuestions(
         .where(and(inArray(taskQuestions.id, requestedIds), isNull(taskQuestions.dispatchedAt)))
         .all()
       if (stillNull.length !== requestedIds.length) throw new ConcurrentClaim()
-      for (const p of mintPlans) {
-        const busy = tx
-          .select({ id: nodeRuns.id })
-          .from(nodeRuns)
-          .where(
-            and(
-              eq(nodeRuns.taskId, taskId),
-              eq(nodeRuns.nodeId, p.nodeId),
-              eq(nodeRuns.iteration, p.iteration),
-              isNull(nodeRuns.parentNodeRunId),
-              eq(nodeRuns.rerunCause, 'cross-clarify-answer'),
-              inArray(nodeRuns.status, ['pending', 'running']),
-            ),
-          )
-          .all()
-        if (busy.length > 0) throw new NodeDispatchInFlight(p.nodeId)
+      const txEntries = tx
+        .select()
+        .from(taskQuestions)
+        .where(
+          and(
+            eq(taskQuestions.taskId, taskId),
+            eq(taskQuestions.roleKind, 'designer'),
+            isNotNull(taskQuestions.dispatchedAt),
+          ),
+        )
+        .all()
+      if (txEntries.length > 0) {
+        const txRuns = tx.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId)).all()
+        const outRows =
+          txRuns.length === 0
+            ? []
+            : tx
+                .select({ nodeRunId: nodeRunOutputs.nodeRunId })
+                .from(nodeRunOutputs)
+                .where(
+                  inArray(
+                    nodeRunOutputs.nodeRunId,
+                    txRuns.map((r) => r.id),
+                  ),
+                )
+                .all()
+        const txOutputIds = new Set(outRows.map((r) => r.nodeRunId))
+        const blocker = findOpenDispatchTarget(affected, {
+          entries: txEntries,
+          runs: txRuns,
+          outputRunIds: txOutputIds,
+        })
+        if (blocker !== null) throw new NodeDispatchInFlight(blocker)
       }
       tx.update(taskQuestions)
         .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
@@ -347,7 +371,7 @@ export async function dispatchTaskQuestions(
     if (e instanceof NodeDispatchInFlight) {
       throw new ConflictError(
         'task-question-node-dispatch-in-flight',
-        `cannot dispatch to '${e.nodeId}': it already has an in-flight cross-clarify-answer rerun (a concurrent dispatch won). Dispatch the remaining questions after it finishes.`,
+        `cannot dispatch to '${e.nodeId}': it already has an OPEN (unconsumed) dispatched designer question (a concurrent dispatch won). Dispatch the remaining questions after that node's rerun finishes (done with output).`,
       )
     }
     throw e
@@ -369,38 +393,122 @@ export async function dispatchTaskQuestions(
   return { reruns, dispatchedEntryIds: requestedIds }
 }
 
+/** Minimal projection both the async pre-check and the in-tx recheck pass to the pure
+ *  predicate, so "unconsumed" is defined IDENTICALLY in both (and to the read-side). */
+interface OpenDispatchInputs {
+  /** Every dispatched (dispatched_at-set) designer task_question of the task. */
+  entries: ReadonlyArray<
+    Pick<TaskQuestionRow, 'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId'>
+  >
+  /** Every node_run of the task. */
+  runs: ReadonlyArray<typeof nodeRuns.$inferSelect>
+  /** node_run ids that captured ≥1 <workflow-output> row (the "done == consumed" signal). */
+  outputRunIds: ReadonlySet<string>
+}
+
 /**
- * Codex C1/H2 (ship-gate) — reject the dispatch if ANY affected target node already has an
- * in-flight (pending OR running, not done) cross-clarify-answer rerun for its CURRENT
- * iteration (the freshest run's iteration). Minting a SECOND such rerun on the same
- * (node, iteration) is unsafe (ULID freshness picks the newer; the older's bound question
- * strands), so the dispatch is rejected — the user dispatches the rest after that rerun
- * finishes. A never-run node has no in-flight rerun (skipped). One DB read of the task's runs.
+ * Codex (ship-gate) — the FIRST affected node that already holds an OPEN (unconsumed)
+ * dispatched designer question, or null. "Unconsumed" is the SAME oracle the read-side uses
+ * (resolveHandlerRun lineage → done+output == consumed): a dispatched entry is open while it
+ * is queued (trigger_run_id NULL), running, OR its handler run FAILED with no output — only a
+ * done+output handler run counts as consumed. This is wider than "pending/running rerun":
+ * minting a newer cross-clarify-answer rerun on the same (node, iteration) while a prior
+ * dispatched question is unconsumed would make the newer run the upper bound of the prior
+ * question's lineage window → a later revival/retry of the failed run never re-renders its
+ * feedback → the question strands `processing` forever. So we reject the new dispatch.
+ */
+function findOpenDispatchTarget(
+  affected: ReadonlySet<string>,
+  inputs: OpenDispatchInputs,
+): string | null {
+  const lineageViews: RunLineageView[] = inputs.runs.map((r) => ({
+    id: r.id,
+    nodeId: r.nodeId,
+    iteration: r.iteration,
+    loopIter: 0,
+    rerunCause: r.rerunCause,
+    status: r.status,
+    startedAt: r.startedAt,
+    hasOutput: inputs.outputRunIds.has(r.id),
+    parentNodeRunId: r.parentNodeRunId,
+  }))
+  for (const e of inputs.entries) {
+    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
+    if (target === null || target === '' || !affected.has(target)) continue
+    if (!isDispatchedEntryConsumed(e, inputs.runs, lineageViews)) {
+      return target
+    }
+  }
+  return null
+}
+
+/** Is a dispatched designer entry CONSUMED? = its handler run, resolved through the same
+ *  resolveHandlerRun lineage the read-side uses, is done WITH output (hasOutput is already
+ *  folded into `lineageViews`). Queued (trigger NULL), running, failed, or GC'd anchor →
+ *  NOT consumed (still open). */
+function isDispatchedEntryConsumed(
+  entry: Pick<TaskQuestionRow, 'triggerRunId'>,
+  runs: OpenDispatchInputs['runs'],
+  lineageViews: RunLineageView[],
+): boolean {
+  if (entry.triggerRunId === null) return false // queued (not yet bound) → open
+  const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
+  if (anchorRow === undefined) return false // anchor GC'd → treat as open (conservative)
+  const hr = resolveHandlerRun({
+    effectiveTargetNodeId: anchorRow.nodeId,
+    iteration: anchorRow.iteration,
+    loopIter: 0,
+    triggerRunId: entry.triggerRunId,
+    runs: lineageViews,
+  })
+  return hr !== null && hr.status === 'done' && hr.hasOutput
+}
+
+/**
+ * Async pre-check: reject the dispatch when ANY affected target node already has an OPEN
+ * (unconsumed) dispatched designer question — covers a pending/running rerun AND a FAILED /
+ * un-run one (a dispatched question whose handler run failed is still unconsumed). The user
+ * dispatches the remaining questions AFTER that node's rerun reaches done+output (its failed
+ * run can still be revived/retried and render its feedback in the meantime).
  */
 async function assertNoInFlightDispatch(
   db: DbClient,
   taskId: string,
   affected: ReadonlySet<string>,
 ): Promise<void> {
-  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-  for (const nodeId of affected) {
-    const forNode = runs.filter((r) => r.nodeId === nodeId)
-    const last = pickFreshestRun(forNode, { topLevelOnly: false })
-    if (last === undefined) continue // never-run → no in-flight rerun
-    const inFlight = forNode.some(
-      (r) =>
-        r.parentNodeRunId === null &&
-        r.iteration === last.iteration &&
-        r.rerunCause === 'cross-clarify-answer' &&
-        (r.status === 'pending' || r.status === 'running'),
+  const entries = await db
+    .select()
+    .from(taskQuestions)
+    .where(
+      and(
+        eq(taskQuestions.taskId, taskId),
+        eq(taskQuestions.roleKind, 'designer'),
+        isNotNull(taskQuestions.dispatchedAt),
+      ),
     )
-    if (inFlight) {
-      throw new ConflictError(
-        'task-question-node-dispatch-in-flight',
-        `cannot dispatch to '${nodeId}': it already has an in-flight cross-clarify-answer rerun (pending/running). Dispatch the remaining questions after that rerun finishes.`,
-      )
-    }
+  if (entries.length === 0) return
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const outputRunIds = await runIdsWithOutput(
+    db,
+    runs.map((r) => r.id),
+  )
+  const blocker = findOpenDispatchTarget(affected, { entries, runs, outputRunIds })
+  if (blocker !== null) {
+    throw new ConflictError(
+      'task-question-node-dispatch-in-flight',
+      `cannot dispatch to '${blocker}': it already has an OPEN (unconsumed) dispatched designer question. Dispatch the remaining questions after that node's rerun finishes (done with output).`,
+    )
   }
+}
+
+/** node_run ids (within `runIds`) that captured ≥1 <workflow-output> row. */
+async function runIdsWithOutput(db: DbClient, runIds: string[]): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set()
+  const rows = await db
+    .select({ nodeRunId: nodeRunOutputs.nodeRunId })
+    .from(nodeRunOutputs)
+    .where(inArray(nodeRunOutputs.nodeRunId, runIds))
+  return new Set(rows.map((r) => r.nodeRunId))
 }
 
 /**
