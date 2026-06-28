@@ -27,7 +27,7 @@ export function mountConfigRoutes(app: Hono, deps: AppDeps): void {
         if (row !== null && !row.enabled) {
           throw new ValidationError(
             'runtime-disabled',
-            `cannot set disabled runtime '${body.defaultRuntime}' as the default; enable it first`,
+            `cannot make disabled runtime '${body.defaultRuntime}' the default; enable it first`,
           )
         }
       }

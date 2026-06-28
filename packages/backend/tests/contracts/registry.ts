@@ -385,6 +385,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'PUT', path: '/api/runtimes/:name' },
   { method: 'DELETE', path: '/api/runtimes/:name' },
   { method: 'POST', path: '/api/runtimes/:name/probe' },
+  { method: 'POST', path: '/api/runtimes/:name/enabled' },
 
   // ---- backup ----
   { method: 'POST', path: '/api/backup' },
