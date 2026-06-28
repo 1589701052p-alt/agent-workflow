@@ -244,16 +244,26 @@ export async function dispatchTaskQuestions(
   const affected = new Set(byTarget.keys())
   const frontier = computeUpstreamFrontier(definition, affected)
 
-  // 5. Safety + multi-source readiness — on the FRONTIER nodes only (the ones we mint).
-  //    A frontier mint inherits the node's freshest run, so a never-run frontier target is
-  //    rejected (safe first-run minting is the deferred F3 item). A graph-designer frontier
-  //    must also satisfy the same multi-source readiness the immediate path enforces.
-  //    Cascade (non-frontier) affected nodes are minted by the scheduler (which first-runs
-  //    or demotes naturally), so they carry no prior-run / readiness precondition here.
+  // 5. Multi-source readiness — for EVERY affected GRAPH-DESIGNER node (frontier AND
+  //    non-frontier), BEFORE stamping any dispatched_at (Codex H2 re-gate). The deferred
+  //    submit skipped the immediate multi-source readiness gate, so dispatch is the ONLY
+  //    guard: a non-frontier affected graph designer would otherwise get dispatched_at with
+  //    no check, then the scheduler cascade runs it with a sibling cross-clarify source
+  //    still awaiting_human → partial feedback. assertDesignerReady self-scopes to the
+  //    graph-designer subset of the group (default_target == node), so a pure-override
+  //    target is a no-op (it rides the per-node queue, not the graph siblings). Reject the
+  //    WHOLE dispatch if any affected graph designer isn't ready (fail fast, nothing stamped).
+  for (const nodeId of affected) {
+    await assertDesignerReady(db, taskId, nodeId, byTarget.get(nodeId) ?? [], definition)
+  }
+
+  // 5b. Safety (prior node_run to inherit) — on the FRONTIER nodes only (the ones we mint
+  //     here). A frontier mint inherits the node's freshest run, so a never-run frontier
+  //     target is rejected (safe first-run minting is the deferred F3 item). Cascade
+  //     (non-frontier) affected nodes are minted by the scheduler (first-run / demote
+  //     naturally), so they carry no prior-run precondition here.
   for (const nodeId of frontier) {
-    const group = byTarget.get(nodeId) ?? []
     await assertSafeFrontierTarget(db, taskId, nodeId)
-    await assertDesignerReady(db, taskId, nodeId, group, definition)
   }
 
   // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
@@ -268,11 +278,17 @@ export async function dispatchTaskQuestions(
   //
   //    Codex H1 (idempotent mint): a per-question dispatch may target a node that ALREADY
   //    has a pending dispatched rerun (an earlier or concurrent disjoint dispatch of other
-  //    questions on the same node). Minting a SECOND pending row would leave a duplicate /
-  //    orphan — and is needless, since that one pending rerun drains the WHOLE node queue
-  //    (buildExternalFeedbackContext selects every dispatched-unbound question of the node).
-  //    So check, synchronously inside the tx, for an existing pending cross-clarify-answer
-  //    rerun on (node, iteration) and REUSE it instead of inserting a second.
+  //    questions on the same node). Reusing that one pending rerun avoids a duplicate /
+  //    orphan — BUT ONLY while it has NOT yet rendered its prompt. The queue is bound at
+  //    prompt-build (buildNodeQueueExternalFeedback stamps trigger_run_id on the node's
+  //    dispatched-unbound entries) which happens WHILE the row is still 'pending' (before
+  //    mark-running). If pending P already bound ≥1 entry, its prompt is fixed and can NOT
+  //    include the newly-stamped ones → reusing P would strand them (trigger_run_id NULL
+  //    forever, parked as in-flight, never rendered) (Codex C1). So reuse P only when NO
+  //    task_questions row already claims it (trigger_run_id = P.id); otherwise mint a FRESH
+  //    rerun for the newly-stamped entries — the node reruns AGAIN for them after P finishes
+  //    (the correct per-question increment; the fresh rerun is a later clarify-cause run, so
+  //    it is the upper bound of P's lineage window and the two queues stay disjoint).
   const requestedIds = requested.map((e) => e.id)
   const now = Date.now()
   const resolved: Array<{ nodeId: string; nodeRunId: string }> = []
@@ -304,9 +320,23 @@ export async function dispatchTaskQuestions(
             ),
           )
           .all()
-        if (existingPending.length > 0) {
-          // Reuse the in-flight rerun — it will inject this node's whole dispatched queue.
-          resolved.push({ nodeId: p.nodeId, nodeRunId: existingPending[0]!.id })
+        // Reuse only an UNRENDERED pending rerun (none of its queue bound yet).
+        let reusableRunId: string | null = null
+        for (const ep of existingPending) {
+          const alreadyBound = tx
+            .select({ id: taskQuestions.id })
+            .from(taskQuestions)
+            .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.triggerRunId, ep.id)))
+            .limit(1)
+            .all()
+          if (alreadyBound.length === 0) {
+            reusableRunId = ep.id
+            break
+          }
+        }
+        if (reusableRunId !== null) {
+          // Reuse the un-rendered rerun — it will inject this node's whole dispatched queue.
+          resolved.push({ nodeId: p.nodeId, nodeRunId: reusableRunId })
           continue
         }
         // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This

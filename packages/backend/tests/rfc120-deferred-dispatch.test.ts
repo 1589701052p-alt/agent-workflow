@@ -29,7 +29,14 @@ import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
-import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
+import {
+  crossClarifySessions,
+  nodeRunOutputs,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
 import { markClarifyRoundsConsumedBy } from '../src/services/clarifyRounds'
 import {
   buildExternalFeedbackContext,
@@ -685,11 +692,12 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       directive: 'continue',
     })
     const entries = await designerEntries(db, taskId)
-    // Two SEPARATE dispatches of disjoint entries on the same handler node.
+    // Two SEPARATE dispatches of disjoint entries on the same handler node. The first
+    // rerun has NOT rendered/bound its queue yet (no buildExternalFeedbackContext), so it
+    // is still draining — the second dispatch REUSES it (idempotent) — same run id.
     const d1 = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
     const d2 = await dispatchTaskQuestions(db, taskId, [entries[1]!.id], actor)
     expect(d1.reruns.length).toBe(1)
-    // The second dispatch REUSES the first's in-flight rerun (idempotent) — same run id.
     expect(d2.reruns.length).toBe(1)
     expect(d2.reruns[0]?.nodeRunId).toBe(d1.reruns[0]?.nodeRunId)
     // EXACTLY ONE pending cross-clarify-answer rerun on DESIGNER (no duplicate / orphan).
@@ -706,6 +714,64 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect(pending.length).toBe(1)
     // Both entries are committed; the single rerun injects BOTH via the node queue.
     expect((await designerEntries(db, taskId)).every((e) => e.dispatchedAt !== null)).toBe(true)
+  })
+
+  test('C1(re-gate): a pending rerun that ALREADY bound its queue is NOT reused — q2 gets its OWN runnable rerun (never stuck processing)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, crossClarifyNodeRunId } = await seedTask(db, {
+      deferred: true,
+      questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      directive: 'continue',
+    })
+    const entries = await designerEntries(db, taskId)
+    const q1 = entries.find((e) => e.questionId === 'q1')!
+    const q2 = entries.find((e) => e.questionId === 'q2')!
+
+    // Dispatch q1 → pending P. P RENDERS its prompt (binds q1) while still 'pending'.
+    const d1 = await dispatchTaskQuestions(db, taskId, [q1.id], actor)
+    const P = d1.reruns[0]!.nodeRunId
+    await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: P,
+    })
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q1.id)?.triggerRunId).toBe(P)
+
+    // Dispatch q2 while P is STILL pending but already rendered → q2 must NOT reuse P
+    // (P's prompt can't include q2); it gets its OWN fresh runnable rerun P2.
+    const d2 = await dispatchTaskQuestions(db, taskId, [q2.id], actor)
+    const P2 = d2.reruns[0]!.nodeRunId
+    expect(P2).not.toBe(P)
+    const p2row = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, P2)))[0]
+    expect(p2row?.status).toBe('pending')
+    expect(p2row?.nodeId).toBe(DESIGNER)
+
+    // P2 renders q2 (NOT q1 — disjoint lineage windows) + binds it. q2 is never stranded.
+    const ctx2 = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: DESIGNER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: P2,
+    })
+    // q2's question is 'second?'; q1's is 'first?'. P2's window carries ONLY q2.
+    expect(ctx2).toBeDefined()
+    expect(ctx2?.block).toContain('second?')
+    expect(ctx2?.block).not.toContain('first?')
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q2.id)?.triggerRunId).toBe(P2)
+    // q1 stays bound to P (not pulled into P2's window).
+    expect((await designerEntries(db, taskId)).find((e) => e.id === q1.id)?.triggerRunId).toBe(P)
   })
 
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
@@ -1425,6 +1491,161 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.status, 'pending')))
     expect(pending.length).toBe(0)
+  })
+
+  test('H2(re-gate): a NON-frontier affected graph designer is readiness-gated too — unresolved sibling → whole dispatch rejected, nothing stamped', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    // A --(dataflow)--> B. A is a graph designer (cc_a → A); B is a graph designer with TWO
+    // sibling cross-clarify sources (cc_b1, cc_b2 → B). A is the frontier (upstream of B);
+    // B is NON-frontier (cascade). cc_b2 is left unresolved.
+    const A = 'designer'
+    const B = 'designerB'
+    const nodes: WorkflowNode[] = [
+      { id: A, kind: 'agent-single', agentName: 'a' } as WorkflowNode,
+      { id: B, kind: 'agent-single', agentName: 'b' } as WorkflowNode,
+      { id: 'q_a', kind: 'agent-single', agentName: 'qa' } as WorkflowNode,
+      { id: 'q_b1', kind: 'agent-single', agentName: 'qb1' } as WorkflowNode,
+      { id: 'q_b2', kind: 'agent-single', agentName: 'qb2' } as WorkflowNode,
+      { id: 'cc_a', kind: 'clarify-cross-agent', title: 'cc_a' } as WorkflowNode,
+      { id: 'cc_b1', kind: 'clarify-cross-agent', title: 'cc_b1' } as WorkflowNode,
+      { id: 'cc_b2', kind: 'clarify-cross-agent', title: 'cc_b2' } as WorkflowNode,
+    ]
+    const edges: WorkflowDefinition['edges'] = [
+      // A --(real dataflow edge)--> B → A is a transitive ancestor of B (A frontier, B not).
+      {
+        id: 'e_a_b',
+        source: { nodeId: A, portName: 'result' },
+        target: { nodeId: B, portName: 'input' },
+      },
+    ]
+    for (const { q, cc, d } of [
+      { q: 'q_a', cc: 'cc_a', d: A },
+      { q: 'q_b1', cc: 'cc_b1', d: B },
+      { q: 'q_b2', cc: 'cc_b2', d: B },
+    ]) {
+      edges.push({
+        id: `e_q_${cc}`,
+        source: { nodeId: q, portName: '__clarify__' },
+        target: { nodeId: cc, portName: 'questions' },
+      })
+      edges.push({
+        id: `e_d_${cc}`,
+        source: { nodeId: cc, portName: 'to_designer' },
+        target: { nodeId: d, portName: '__external_feedback__' },
+      })
+      edges.push({
+        id: `e_qb_${cc}`,
+        source: { nodeId: cc, portName: 'to_questioner' },
+        target: { nodeId: q, portName: '__clarify_response__' },
+      })
+    }
+    const def: WorkflowDefinition = { $schema_version: 4, inputs: [], nodes, edges, outputs: [] }
+    const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
+    await db.insert(workflows).values({
+      id: `wf_${taskId}`,
+      name: 'h2ng',
+      description: '',
+      definition: JSON.stringify(def),
+      version: 1,
+      schemaVersion: 4,
+    })
+    await db.insert(tasks).values({
+      id: taskId,
+      name: 'h2ng',
+      workflowId: `wf_${taskId}`,
+      workflowSnapshot: JSON.stringify(def),
+      repoPath: '/tmp/aw-h2ng/repo',
+      worktreePath: '',
+      baseBranch: 'main',
+      branch: `agent-workflow/${taskId}`,
+      status: 'running',
+      inputs: JSON.stringify({}),
+      startedAt: Date.now(),
+      deferredQuestionDispatch: true,
+    })
+    for (const n of [A, B]) {
+      await db
+        .insert(nodeRuns)
+        .values({ id: ulid(), taskId, nodeId: n, status: 'done', retryIndex: 0, iteration: 0 })
+    }
+    const openSession = async (q: string, cc: string, d: string, qid: string): Promise<string> => {
+      const runId = ulid()
+      await db
+        .insert(nodeRuns)
+        .values({ id: runId, taskId, nodeId: q, status: 'done', retryIndex: 0, iteration: 0 })
+      const { crossClarifyNodeRunId } = await createCrossClarifySession({
+        db,
+        taskId,
+        crossClarifyNodeId: cc,
+        sourceQuestionerNodeId: q,
+        sourceQuestionerNodeRunId: runId,
+        targetDesignerNodeId: d,
+        loopIter: 0,
+        questions: [mkQ(qid, 'designer-scoped?')],
+      })
+      return crossClarifyNodeRunId
+    }
+    const ccA = await openSession('q_a', 'cc_a', A, 'a1')
+    const ccB1 = await openSession('q_b1', 'cc_b1', B, 'b1')
+    await openSession('q_b2', 'cc_b2', B, 'b2') // cc_b2 stays awaiting_human (unresolved)
+
+    // Answer cc_a (→ A entry) and cc_b1 (→ B entry). cc_b2 is left unresolved.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccA,
+      answers: [ans('a1')],
+      directive: 'continue',
+    })
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccB1,
+      answers: [ans('b1')],
+      directive: 'continue',
+    })
+    const all = await designerEntries(db, taskId)
+    const entryA = all.find((e) => e.defaultTargetNodeId === A)!
+    const entryB = all.find((e) => e.defaultTargetNodeId === B)!
+
+    // Dispatch BOTH. B is NON-frontier (A is its dataflow ancestor) but is still a graph
+    // designer with an unresolved sibling (cc_b2) → readiness must gate it, so the WHOLE
+    // dispatch is rejected before stamping anything.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entryA.id, entryB.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-designer-not-ready')
+    expect((await designerEntries(db, taskId)).every((e) => e.dispatchedAt === null)).toBe(true)
+    const pendingRuns = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.status, 'pending')))
+    expect(pendingRuns.length).toBe(0)
+
+    // Once cc_b2 is answered, the same dispatch succeeds (A frontier; B left for cascade).
+    const ccB2Run = (
+      await db
+        .select()
+        .from(crossClarifySessions)
+        .where(
+          and(
+            eq(crossClarifySessions.taskId, taskId),
+            eq(crossClarifySessions.crossClarifyNodeId, 'cc_b2'),
+          ),
+        )
+    )[0]!.crossClarifyNodeRunId
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: ccB2Run,
+      answers: [ans('b2')],
+      directive: 'continue',
+    })
+    // Now both of B's siblings are resolved → the same dispatch succeeds (A frontier; B left
+    // for the scheduler cascade). entryA/entryB ids are stable (reconcile is idempotent).
+    const result = await dispatchTaskQuestions(db, taskId, [entryA.id, entryB.id], actor)
+    expect(result.reruns.length).toBe(1)
+    expect(result.reruns[0]?.targetNodeId).toBe(A) // only the frontier minted
   })
 
   test('H2(final): reassign is a CAS on dispatched_at — a concurrent dispatch makes it affect 0 rows → rejected', async () => {
