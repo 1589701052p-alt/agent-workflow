@@ -211,9 +211,12 @@ describe('AgentForm — runtime selector (RFC-111)', () => {
     configResponse = { claudeCodeEnabled: false }
     runtimesResponse = {
       runtimes: [
-        { name: 'opencode', protocol: 'opencode' },
-        { name: 'claude-code', protocol: 'claude-code' },
-        { name: 'opencode-opus', protocol: 'opencode' },
+        // RFC-118 added an `enabled` filter to the AgentForm runtime picker, so
+        // this mock must carry `enabled: true` or every runtime is filtered out
+        // (RFC-117 follow-up: RFC-118 missed updating this mock).
+        { name: 'opencode', protocol: 'opencode', enabled: true },
+        { name: 'claude-code', protocol: 'claude-code', enabled: true },
+        { name: 'opencode-opus', protocol: 'opencode', enabled: true },
       ],
     }
     const initial: CreateAgent = { ...emptyAgent(), name: 'demo' }
