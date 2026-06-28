@@ -272,6 +272,11 @@ Codex adversarial 设计 gate（聚焦本三件套、显式忽略并发 RFC-119 
 - **PR-C**：问题看板（替代 §AC-14 的 table）+ **共享 handler 选择器**（反问页 + 看板卡）+ 反问页 handler 回显/可改 + 批量下发交互。
 - **Phase 2（非 v1）**：全局跨任务看板（统一收件箱）、彻底退役 `/clarify`、multica 式拖拽流转。
 
+> **实现状态（2026-06-28）**：
+> - ✅ **已落地 + 全绿 + 已提交**（10 commit，本地领先 origin/main）：数据层（migration 0060/0061 + `task_questions` 表）+ shared 纯 oracle（reconcile/derive/canReassign/resolveHandlerRun，33 测）+ 读侧 service（lazy reconcile + 派生 + list，**全 read-time 派生、零碰 clarify/crossClarify**）+ 写侧（confirm/reassign/stage）+ 路由（`/api/tasks/:id/questions{,/confirm,/reassign,/stage}` + ACL）+ 前端看板页签（`TaskQuestionList`，列=phase、卡片标来源+目标、confirm/stage/reassign 接端点）+ i18n + api-contract 注册。backend 全量 4248 pass。
+> - 🔜 **未做（无冲突 PR-C 后续，可随时补）**：节点级待处理徽标（§11.8，需 xyflow 自定义节点角标）+ 反问页 handler 选择器回显（§11.5，clarify.detail.tsx 加查询 + Select）。
+> - ⛔ **RFC-119 门控（待其代码真正落库后做）**：派发执行半——批量下发 mint 承接 rerun、override 注入（推广 External Feedback 到任意节点）、`awaiting_human` gate（答非即时下发）、打回 re-fire。这些必须改 `crossClarify.ts`/`scheduler.ts`（当前被并发 RFC-119 未提交 WIP 占用，`d843036` 孤立）。**v1 现状**：reassign/stage 记录意图（override/staged 落库），执行仍走既有反问自动下发；override 暂"记录不执行"，待门控解除接入。
+
 ### 11.8 节点级待处理徽标（决策 D13）
 
 - 任务详情画布（`TaskStatusCanvas`/`WorkflowCanvas` readOnly）上每个节点标一个**待处理问题数徽标**——计数 = 以该节点为**来源节点**、且**需人处理**的问题（phase ∈ `待指派`/`待下发`/`已处理待确认`；具体集合可在实现时收口）。
