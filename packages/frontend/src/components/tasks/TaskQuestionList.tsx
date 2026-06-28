@@ -12,6 +12,7 @@
 // the existing auto-dispatch flow.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -93,6 +94,9 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
       api.post(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
     onSuccess: invalidate,
   })
+  // RFC-120 D13: source-node filter (per-node pending counts → click to view
+  // that node's questions). Delivers the node-badge feature on the board surface.
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null)
 
   if (query.isLoading) return <LoadingState />
   if (query.error) return <ErrorBanner error={query.error} />
@@ -106,60 +110,95 @@ export function TaskQuestionList({ taskId, nodeOptions = [] }: TaskQuestionListP
       ? (nodeOptions.find((n) => n.id === nodeId)?.label ?? nodeId)
       : t('taskQuestions.noTarget')
 
+  // Per source-node count of questions still needing attention (non-terminal).
+  const counts = new Map<string, number>()
+  for (const e of entries) {
+    if (e.phase !== 'done' && e.phase !== 'closed') {
+      counts.set(e.sourceNodeId, (counts.get(e.sourceNodeId) ?? 0) + 1)
+    }
+  }
+  const shown = sourceFilter ? entries.filter((e) => e.sourceNodeId === sourceFilter) : entries
+
   return (
-    <div className="task-questions" data-testid="task-questions-board">
-      {PHASE_ORDER.map((phase) => {
-        const col = entries.filter((e) => e.phase === phase)
-        return (
-          <div className="task-questions__col" key={phase} data-phase={phase}>
-            <div className="task-questions__col-head">
-              <StatusChip kind={PHASE_KIND[phase]}>{t(`taskQuestions.phase.${phase}`)}</StatusChip>
-              <span className="task-questions__count">{col.length}</span>
-            </div>
-            {col.map((e) => (
-              <div className="task-questions__card" key={e.id} data-testid={`tq-card-${e.id}`}>
-                <div className="task-questions__title">{e.questionTitle}</div>
-                <dl className="task-questions__meta">
-                  <dt>{t('taskQuestions.source')}</dt>
-                  <dd>{e.sourceNodeId}</dd>
-                  <dt>{t('taskQuestions.target')}</dt>
-                  <dd>
-                    {/* RFC-120 Codex impl gate F3: only re-targetable while non-terminal. */}
-                    {e.roleKind === 'designer' && e.phase !== 'done' && e.phase !== 'closed' ? (
-                      <Select
-                        value={e.effectiveTargetNodeId ?? ''}
-                        ariaLabel={t('taskQuestions.reassign')}
-                        onChange={(v) => reassignM.mutate({ id: e.id, targetNodeId: v })}
-                        options={nodeOptions.map((n) => ({ value: n.id, label: n.label }))}
-                      />
-                    ) : (
-                      <span>{labelFor(e.effectiveTargetNodeId)}</span>
-                    )}
-                  </dd>
-                </dl>
-                {e.answerSummary && <div className="task-questions__answer">{e.answerSummary}</div>}
-                <div className="task-questions__actions">
-                  {e.phase === 'awaiting_confirm' && (
-                    <ConfirmButton
-                      label={t('taskQuestions.confirm')}
-                      onConfirm={() => confirmM.mutate(e.id)}
-                    />
-                  )}
-                  {(e.phase === 'pending' || e.phase === 'staged') && (
-                    <button
-                      type="button"
-                      className="btn btn--sm"
-                      onClick={() => stageM.mutate({ id: e.id, staged: !e.staged })}
-                    >
-                      {e.staged ? t('taskQuestions.unstage') : t('taskQuestions.stage')}
-                    </button>
-                  )}
-                </div>
+    <div className="task-questions-wrap">
+      <div className="task-questions__filter" data-testid="tq-node-filter">
+        <button
+          type="button"
+          className={'btn btn--xs' + (sourceFilter === null ? ' btn--primary' : '')}
+          onClick={() => setSourceFilter(null)}
+        >
+          {t('taskQuestions.allNodes')} ({entries.length})
+        </button>
+        {[...counts.entries()].map(([nodeId, n]) => (
+          <button
+            key={nodeId}
+            type="button"
+            className={'btn btn--xs' + (sourceFilter === nodeId ? ' btn--primary' : '')}
+            onClick={() => setSourceFilter(nodeId)}
+            data-testid={`tq-node-filter-${nodeId}`}
+          >
+            {nodeId} ({n})
+          </button>
+        ))}
+      </div>
+      <div className="task-questions" data-testid="task-questions-board">
+        {PHASE_ORDER.map((phase) => {
+          const col = shown.filter((e) => e.phase === phase)
+          return (
+            <div className="task-questions__col" key={phase} data-phase={phase}>
+              <div className="task-questions__col-head">
+                <StatusChip kind={PHASE_KIND[phase]}>
+                  {t(`taskQuestions.phase.${phase}`)}
+                </StatusChip>
+                <span className="task-questions__count">{col.length}</span>
               </div>
-            ))}
-          </div>
-        )
-      })}
+              {col.map((e) => (
+                <div className="task-questions__card" key={e.id} data-testid={`tq-card-${e.id}`}>
+                  <div className="task-questions__title">{e.questionTitle}</div>
+                  <dl className="task-questions__meta">
+                    <dt>{t('taskQuestions.source')}</dt>
+                    <dd>{e.sourceNodeId}</dd>
+                    <dt>{t('taskQuestions.target')}</dt>
+                    <dd>
+                      {/* RFC-120 Codex impl gate F3: only re-targetable while non-terminal. */}
+                      {e.roleKind === 'designer' && e.phase !== 'done' && e.phase !== 'closed' ? (
+                        <Select
+                          value={e.effectiveTargetNodeId ?? ''}
+                          ariaLabel={t('taskQuestions.reassign')}
+                          onChange={(v) => reassignM.mutate({ id: e.id, targetNodeId: v })}
+                          options={nodeOptions.map((n) => ({ value: n.id, label: n.label }))}
+                        />
+                      ) : (
+                        <span>{labelFor(e.effectiveTargetNodeId)}</span>
+                      )}
+                    </dd>
+                  </dl>
+                  {e.answerSummary && (
+                    <div className="task-questions__answer">{e.answerSummary}</div>
+                  )}
+                  <div className="task-questions__actions">
+                    {e.phase === 'awaiting_confirm' && (
+                      <ConfirmButton
+                        label={t('taskQuestions.confirm')}
+                        onConfirm={() => confirmM.mutate(e.id)}
+                      />
+                    )}
+                    {(e.phase === 'pending' || e.phase === 'staged') && (
+                      <button
+                        type="button"
+                        className="btn btn--sm"
+                        onClick={() => stageM.mutate({ id: e.id, staged: !e.staged })}
+                      >
+                        {e.staged ? t('taskQuestions.unstage') : t('taskQuestions.stage')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

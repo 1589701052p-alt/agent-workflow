@@ -11280,3 +11280,15 @@ mark.comment-anchor[data-active='true'] {
   font-size: 12px;
   margin-bottom: 6px;
 }
+
+/* RFC-120 D13 — board source-node filter (per-node pending counts). */
+.task-questions-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-questions__filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

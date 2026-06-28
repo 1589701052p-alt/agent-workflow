@@ -95,4 +95,22 @@ describe('TaskQuestionList board', () => {
     wrap([])
     expect(screen.queryByTestId('task-questions-board')).toBeNull()
   })
+
+  test('D13: source-node filter chips + click narrows the board to that node', () => {
+    wrap([
+      entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'pending' }),
+      entry({ id: 'a2', sourceNodeId: 'nodeA', phase: 'processing' }),
+      entry({ id: 'b1', sourceNodeId: 'nodeB', phase: 'pending' }),
+    ])
+    // per-node count chips (non-terminal): nodeA=2, nodeB=1
+    expect(screen.getByTestId('tq-node-filter-nodeA').textContent).toContain('2')
+    expect(screen.getByTestId('tq-node-filter-nodeB').textContent).toContain('1')
+    // all three cards visible initially
+    expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
+    expect(screen.getByTestId('tq-card-b1')).toBeTruthy()
+    // click nodeA → only nodeA's cards remain
+    fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
+    expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
+    expect(screen.queryByTestId('tq-card-b1')).toBeNull()
+  })
 })

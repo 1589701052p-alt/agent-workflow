@@ -2700,6 +2700,7 @@ export const enUS: Resources = {
     confirm: 'Confirm',
     stage: 'Stage',
     unstage: 'Unstage',
+    allNodes: 'All nodes',
     phase: {
       pending: 'To assign',
       staged: 'Staged',

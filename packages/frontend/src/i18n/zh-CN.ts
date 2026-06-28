@@ -2447,6 +2447,7 @@ export interface Resources {
     confirm: string
     stage: string
     unstage: string
+    allNodes: string
     phase: {
       pending: string
       staged: string
@@ -5060,6 +5061,7 @@ export const zhCN: Resources = {
     confirm: '确认',
     stage: '加入待下发',
     unstage: '移出待下发',
+    allNodes: '全部节点',
     phase: {
       pending: '待指派',
       staged: '待下发',
