@@ -113,3 +113,56 @@ describe('RFC-127 scheduler borrow wiring (source-level lock)', () => {
     expect(src).toMatch(/isBorrowed\s*\?\s*undefined/)
   })
 })
+
+// RFC-127 AC-9 — borrow prompt isolation: the reassigner's identity / attribution NEVER
+// reaches the borrowed run (沿用 RFC-099 / RFC-120 D8「归属不进 prompt」铁律). Two layers
+// mirror rfc099-prompt-isolation: (1) source — the borrow wiring references no attribution
+// column; (2) runtime — buildBorrowedAgent surfaces only X's agent def + P's output contract.
+// If layer 1 goes red, someone wired an attribution column into the borrow path; do NOT
+// "fix" the test — re-read RFC-127 proposal 目标 #6 / AC-9.
+describe('RFC-127 AC-9 — borrow prompt isolation (attribution never reaches the borrowed run)', () => {
+  const X = { name: 'X', bodyMd: 'X brain', readonly: true, outputs: ['xout'] } as unknown as Agent
+  const P = {
+    name: 'P',
+    bodyMd: 'P brain',
+    readonly: false,
+    outputs: ['code'],
+  } as unknown as Agent
+
+  test('source: buildBorrowedAgent wires only agent def + P outputs (no attribution)', () => {
+    const src = readFileSync(resolve(import.meta.dir, '..', 'src', 'services', 'agent.ts'), 'utf8')
+    const i = src.indexOf('export function buildBorrowedAgent')
+    expect(i).toBeGreaterThan(-1)
+    const fn = src.slice(i, i + 240)
+    expect(fn).toMatch(/\.\.\.borrowed/)
+    expect(fn).not.toMatch(
+      /confirmedBy|confirmed_by|userId|user_id|reassign|decidedBy|displayName|actor/i,
+    )
+  })
+
+  test('source: borrow resolvers read graph node ids only — no attribution column', () => {
+    const src = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'taskQuestionDispatch.ts'),
+      'utf8',
+    )
+    const i = src.indexOf('export async function resolveBorrowForNode')
+    const j = src.indexOf('async function buildFrontierMintPlan')
+    expect(i).toBeGreaterThan(-1)
+    expect(j).toBeGreaterThan(i)
+    // resolveBorrowForNode + resolveDesigner/ImmediateBorrowForNode + isRoundEntryConsumed: they
+    // read overrideTargetNodeId / defaultTargetNodeId (graph node ids) + askingNodeRunId (a run
+    // id) + resolve agentName — NEVER the attribution columns (confirmedBy / confirmedByRole /
+    // a reassigner user id / display name).
+    const region = src.slice(i, j)
+    expect(region).not.toMatch(/confirmedBy|confirmed_by|confirmedByRole|displayName/i)
+  })
+
+  test('runtime: the borrowed agent object carries no attribution field', () => {
+    const eff = buildBorrowedAgent(X, P)
+    // only X's agent def + P's outputs — no user id / role / reassigner leaks into the object
+    // the runner later turns into prompt context.
+    expect(JSON.stringify(eff)).not.toMatch(/confirmedBy|userId|reassign|decidedBy|displayName/i)
+    expect(eff.name).toBe('X')
+    expect(eff.outputs).toEqual(['code'])
+  })
+})
