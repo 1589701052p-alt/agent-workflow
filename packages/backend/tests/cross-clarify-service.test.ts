@@ -42,6 +42,7 @@ import {
   submitCrossClarifyAnswers,
   triggerDesignerRerun,
 } from '../src/services/crossClarify'
+import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 import { resetBroadcastersForTests, taskBroadcaster, TASK_CHANNEL } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -866,5 +867,75 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
       definition: def,
     })
     expect(ctx).toBeUndefined()
+  })
+})
+
+// RFC-125 follow-up — DATA-LOSS repro (RED until fixed). A failed task's CR-1
+// invariant abandons answered+continue+unconsumed cross rounds (lifecycleInvariants
+// taskStatus==='failed' gate). `abandoned` is sticky (nothing un-abandons on resume)
+// and buildExternalFeedbackContext omits abandoned sessions (like 'stop'), so when a
+// FAILED task is RESUMED the designer rerun never sees the human's already-given
+// answer — it's silently dropped. Desired behavior (user): resume must preserve it
+// (questions should stay in place, not become "closed").
+describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-clarify feedback', () => {
+  test('answered cross-clarify feedback survives a fail → CR-1 → resume cycle', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const def = defaultDef()
+    const { taskId } = await seedTask(db, { definition: def })
+    const qRunId = await seedQuestionerRun(db, taskId)
+    await seedDesignerRun(db, taskId)
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
+      db,
+      taskId,
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: qRunId,
+      targetDesignerNodeId: 'designer',
+      loopIter: 0,
+      questions: [makeQ('q1', 'Why Redis?')],
+    })
+    // Human answers; directive=continue triggers the designer rerun, but it never
+    // completes-with-output (the task fails) → the round stays answered+UNCONSUMED.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [makeAns('q1')],
+      directive: 'continue',
+    })
+
+    // Baseline: the answer DOES reach the designer's External Feedback.
+    const before = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: 'designer',
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: def,
+    })
+    expect(before).toBeDefined()
+    expect(before?.block).toContain('Why Redis?')
+
+    // Task fails before the designer consumes the feedback. RFC-126: CR-1 is
+    // RETIRED → the lifecycle scan must NOT abandon the round; it stays 'answered'.
+    await db.update(tasks).set({ status: 'failed' }).where(eq(tasks.id, taskId))
+    await runLifecycleInvariants({ db })
+    const sess = (
+      await db.select().from(crossClarifySessions).where(eq(crossClarifySessions.taskId, taskId))
+    )[0]
+    expect(sess?.status).toBe('answered') // RFC-126: NOT abandoned anymore
+
+    // RESUME the task. The human's answer still reaches the designer rerun.
+    await db.update(tasks).set({ status: 'running' }).where(eq(tasks.id, taskId))
+    const after = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: 'designer',
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: def,
+    })
+    // RFC-126 fix: the round stays 'answered', so the feedback is preserved on resume.
+    expect(after).toBeDefined()
+    expect(after?.block).toContain('Why Redis?')
   })
 })

@@ -45,7 +45,8 @@ export type TaskQuestionPhase =
   | 'processing' // 处理中：已下发（承接 run 存在，含 queued/running/failed；失败仍处理中 D3）
   | 'awaiting_confirm' // 已处理待确认：承接 run done 且有产出
   | 'done' // 完成：人工确认关闭
-  | 'closed' // 已关闭：来源反问轮被取消 / 放弃
+// RFC-126: 'closed' 相位移除。来源轮取消/放弃不再产生终态条目（CR-1 退役 + migration
+// un-abandon 历史行；canceled 轮在 reconcile 被跳过、不建条目）——问题永远停在自然相位。
 
 /** 来源反问轮的状态（`clarify_rounds.status`）。 */
 export type TaskQuestionRoundStatus = 'awaiting_human' | 'answered' | 'canceled' | 'abandoned'
@@ -149,10 +150,10 @@ export interface DeriveQuestionPhaseInput {
 
 /** 条目展示态派生（纯，RFC-120 v2）。「下发」= 边界：有承接 run 即处理中。失败仍归处理中(D3)。 */
 export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuestionPhase {
-  // 来源反问轮被取消/放弃 → 已关闭（withdrawn，无需确认）。
-  if (input.roundStatus === 'canceled' || input.roundStatus === 'abandoned') {
-    return 'closed'
-  }
+  // RFC-126: no 'closed' terminal. 'abandoned' is no longer produced (CR-1 retired +
+  // migration un-abandons legacy) and 'canceled' rounds are skipped at reconcile (no
+  // entry created), so a terminal/aborted round never reaches here. Entries derive
+  // purely from confirmation + handler-run state → questions stay "in place".
   // 人工已确认 → 完成。
   if (input.confirmation === 'confirmed') {
     return 'done'

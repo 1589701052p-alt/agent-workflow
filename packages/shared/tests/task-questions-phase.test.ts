@@ -7,7 +7,8 @@
 // 处理中 (dispatched), regardless of whether the run has started. design §11.2/11.6.
 //
 // Intent of each lock (so a future refactor that reddens it sees why):
-//   * canceled/abandoned source round → 'closed' (反问 withdrawn), checked FIRST.
+//   * RFC-126: 'closed' removed — canceled/abandoned no longer special-cased here
+//     (reconcile skips them; migration un-abandons legacy abandoned rows).
 //   * confirmation === 'confirmed' → 'done' (the only manual terminal).
 //   * NOT dispatched (no handler run) + isStaged → 'staged' (待下发, approved
 //     awaiting batch dispatch); NOT dispatched + not staged → 'pending' (待指派).
@@ -43,7 +44,12 @@ const handler = (over: Partial<HandlerRunView> = {}): HandlerRunView => ({
 })
 
 describe('deriveQuestionPhase (v2)', () => {
-  test('canceled round → closed (checked before everything)', () => {
+  // RFC-126: 'closed' phase removed. deriveQuestionPhase no longer special-cases
+  // canceled/abandoned — they derive from confirmation/handler-run/staged like any
+  // round. (In practice they never reach here: reconcile skips canceled/abandoned
+  // rounds, and migration 0066 un-abandons legacy 'abandoned' rows.)
+  test('RFC-126: canceled/abandoned no longer force a terminal — derive from the rest', () => {
+    // canceled + confirmed + done-with-output → falls through → 'done' (was 'closed')
     expect(
       deriveQuestionPhase(
         input({
@@ -52,11 +58,9 @@ describe('deriveQuestionPhase (v2)', () => {
           handlerRun: handler({ status: 'done', hasOutput: true }),
         }),
       ),
-    ).toBe('closed')
-  })
-
-  test('abandoned round → closed', () => {
-    expect(deriveQuestionPhase(input({ roundStatus: 'abandoned' }))).toBe('closed')
+    ).toBe('done')
+    // abandoned + nothing else → 'pending' (was 'closed')
+    expect(deriveQuestionPhase(input({ roundStatus: 'abandoned' }))).toBe('pending')
   })
 
   test('confirmed → done', () => {

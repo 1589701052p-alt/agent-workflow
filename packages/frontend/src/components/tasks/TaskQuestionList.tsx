@@ -25,13 +25,8 @@ import { Select } from '@/components/Select'
 import { StatusChip } from '@/components/StatusChip'
 import { QuestionAuthorForm } from '@/components/tasks/QuestionAuthorForm'
 
-export type TaskQuestionPhase =
-  | 'pending'
-  | 'staged'
-  | 'processing'
-  | 'awaiting_confirm'
-  | 'done'
-  | 'closed'
+export type TaskQuestionPhase = 'pending' | 'staged' | 'processing' | 'awaiting_confirm' | 'done'
+// RFC-126: 'closed' 相位移除（不再有 abandon/closed 终态；问题留在原地）。
 
 export interface TaskQuestionEntry {
   id: string
@@ -81,7 +76,6 @@ const PHASE_ORDER: TaskQuestionPhase[] = [
   'processing',
   'awaiting_confirm',
   'done',
-  'closed',
 ]
 
 const PHASE_KIND: Record<TaskQuestionPhase, 'neutral' | 'info' | 'warn' | 'success'> = {
@@ -90,7 +84,6 @@ const PHASE_KIND: Record<TaskQuestionPhase, 'neutral' | 'info' | 'warn' | 'succe
   processing: 'info',
   awaiting_confirm: 'warn',
   done: 'success',
-  closed: 'neutral',
 }
 
 // RFC-120 §18 — batch-dispatch ConflictError codes → localized notice keys. These
@@ -260,7 +253,7 @@ export function TaskQuestionList({
   // questions (sourceNodeId null) have no graph source node → they get no node chip.
   const counts = new Map<string, number>()
   for (const e of entries) {
-    if (e.sourceNodeId !== null && e.phase !== 'done' && e.phase !== 'closed') {
+    if (e.sourceNodeId !== null && e.phase !== 'done') {
       counts.set(e.sourceNodeId, (counts.get(e.sourceNodeId) ?? 0) + 1)
     }
   }
@@ -341,8 +334,7 @@ export function TaskQuestionList({
               </div>
               {col.map((e) => {
                 // RFC-120 Codex impl gate F3: only re-targetable while non-terminal.
-                const reassignable =
-                  e.roleKind === 'designer' && e.phase !== 'done' && e.phase !== 'closed'
+                const reassignable = e.roleKind === 'designer' && e.phase !== 'done'
                 const hasAnswerLink = e.originNodeRunId !== null
                 const hasCopy = deferred && e.phase === 'pending'
                 const hasConfirm = e.phase === 'awaiting_confirm'

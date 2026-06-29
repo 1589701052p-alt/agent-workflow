@@ -2744,7 +2744,6 @@ export const enUS: Resources = {
       processing: 'Processing',
       awaiting_confirm: 'Awaiting confirm',
       done: 'Done',
-      closed: 'Closed',
     },
   },
   attribution: {

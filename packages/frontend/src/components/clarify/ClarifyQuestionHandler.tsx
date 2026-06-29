@@ -51,7 +51,7 @@ export function ClarifyQuestionHandler({ taskId, questionId }: ClarifyQuestionHa
   const agentNodes = nodes
     .filter((n) => n.kind.startsWith('agent'))
     .map((n) => ({ value: n.id, label: n.id }))
-  const editable = entry.phase !== 'done' && entry.phase !== 'closed' && agentNodes.length > 0
+  const editable = entry.phase !== 'done' && agentNodes.length > 0
 
   return (
     <div className="clarify-handler" data-testid={`clarify-handler-${questionId}`}>

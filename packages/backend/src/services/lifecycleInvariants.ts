@@ -31,7 +31,7 @@
 // All seven invariants are read-only against the source tables; only
 // `lifecycle_alerts` is written.
 
-import { and, eq, gte, inArray, isNull, isNotNull, or } from 'drizzle-orm'
+import { and, eq, gte, inArray, isNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type {
@@ -42,9 +42,7 @@ import type {
 
 import type { DbClient } from '@/db/client'
 import {
-  clarifyRounds,
   clarifySessions,
-  crossClarifySessions,
   docVersions,
   lifecycleAlerts,
   nodeRuns,
@@ -487,88 +485,14 @@ async function checkU1(db: DbClient, ctx: TaskScanContext): Promise<LifecycleInv
   return out
 }
 
-async function checkCR1(
-  db: DbClient,
-  ctx: TaskScanContext,
-  now: number,
-): Promise<LifecycleInvariantFinding[]> {
-  // CR-1 (RFC-056 §10 + RFC-064): cross-clarify round answered+continue +
-  // parent task failed + the cross-clarify round was never consumed by a
-  // done-with-output designer run ⟹ upgrade to 'abandoned'. RFC-074 PR-C / D8:
-  // "was this round consumed?" is answered directly by the RFC-070
-  // `consumed_by_consumer_run_id` stamp (set by markRoundsConsumed when the
-  // designer finishes done-with-output) — no more cross-scale clarifyIteration
-  // comparison against the round's local iteration counter.
-  //
-  // Unlike R1/R2/C1/T*/U1, this rule is "auto-upgrade": the violation IS the
-  // signal — we flip the row to abandoned in this pass so the next scan
-  // sees nothing. The lifecycle_alerts breadcrumb is still emitted (with
-  // detail.message = "...upgraded to abandoned") so operators see the
-  // upgrade for audit / debug.
-  //
-  // RFC-058 T15: read path switched to `clarify_rounds WHERE kind='cross'`
-  // (unified table). Column projection keeps the legacy field names so the
-  // detail payload + downstream code path stays byte-identical for the
-  // diagnose panel. UPDATE side still dual-writes to legacy
-  // cross_clarify_sessions + clarify_rounds (kept until T14/T16 finish
-  // reader migration); migration 0032 will drop the legacy table.
-  if (ctx.taskStatus !== 'failed') return []
-  const stuck = await db
-    .select({
-      id: clarifyRounds.id,
-      crossClarifyNodeId: clarifyRounds.intermediaryNodeId,
-      targetDesignerNodeId: clarifyRounds.targetConsumerNodeId,
-      iteration: clarifyRounds.iteration,
-      directive: clarifyRounds.directive,
-      status: clarifyRounds.status,
-    })
-    .from(clarifyRounds)
-    .where(
-      and(
-        eq(clarifyRounds.taskId, ctx.taskId),
-        eq(clarifyRounds.kind, 'cross'),
-        eq(clarifyRounds.status, 'answered'),
-        eq(clarifyRounds.directive, 'continue'),
-        isNotNull(clarifyRounds.targetConsumerNodeId),
-        // RFC-074 PR-C / D8: only un-consumed rounds are abandonment candidates.
-        // The consumed-by stamp is set when a done-with-output designer run bakes
-        // this round in — its presence means the feedback WAS consumed.
-        isNull(clarifyRounds.consumedByConsumerRunId),
-      ),
-    )
-  if (stuck.length === 0) return []
-
-  const out: LifecycleInvariantFinding[] = []
-  for (const s of stuck) {
-    if (s.targetDesignerNodeId === null) continue
-
-    // Upgrade in place.
-    await db
-      .update(crossClarifySessions)
-      .set({ status: 'abandoned', abandonedAt: now })
-      .where(eq(crossClarifySessions.id, s.id))
-
-    // RFC-058 T12 dual-write — mirror CR-1 abandoned upgrade to clarify_rounds.
-    await db
-      .update(clarifyRounds)
-      .set({ status: 'abandoned', abandonedAt: now })
-      .where(eq(clarifyRounds.id, s.id))
-
-    out.push({
-      taskId: ctx.taskId,
-      rule: 'CR-1',
-      detail: {
-        rule: 'CR-1',
-        message: 'cross_clarify_session answered+continue with task failed; upgraded to abandoned',
-        crossClarifySessionId: s.id,
-        crossClarifyNodeId: s.crossClarifyNodeId,
-        targetDesignerNodeId: s.targetDesignerNodeId,
-        iteration: s.iteration,
-      },
-    })
-  }
-  return out
-}
+// RFC-126: CR-1 (cross-clarify "answered+continue but parent task failed → upgrade
+// to 'abandoned'") was RETIRED. Abandoning assumed the failed task would never run
+// again, but `resumeTask` re-runs the designer — and `buildExternalFeedbackContext`
+// skips 'abandoned' rounds, so abandoning SILENTLY DROPPED the human's answer on
+// resume (confirmed data loss). Rounds now stay 'answered' so resume re-consumes
+// them. The 'CR-1' rule name stays registered in INVARIANT_RULES so any legacy
+// open CR-1 alerts auto-resolve via reconcile (no new CR-1 findings are produced).
+// Migration 0066 un-abandons pre-RFC-126 'abandoned' rows back to 'answered'.
 
 // =============================================================================
 // reconciliation: diff findings against currently-open alerts
@@ -743,7 +667,7 @@ export async function runLifecycleInvariants(
     findings.push(...(await checkT2(args.db, ctx)))
     findings.push(...(await checkT3(args.db, ctx)))
     findings.push(...(await checkU1(args.db, ctx)))
-    findings.push(...(await checkCR1(args.db, ctx, now)))
+    // RFC-126: CR-1 retired (no longer abandons cross rounds — see note above).
   }
 
   const reconciled = await reconcileLifecycleAlerts({

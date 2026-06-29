@@ -2489,7 +2489,6 @@ export interface Resources {
       processing: string
       awaiting_confirm: string
       done: string
-      closed: string
     }
   }
   attribution: {
@@ -5138,7 +5137,6 @@ export const zhCN: Resources = {
       processing: '处理中',
       awaiting_confirm: '已处理待确认',
       done: '完成',
-      closed: '已关闭',
     },
   },
   attribution: {

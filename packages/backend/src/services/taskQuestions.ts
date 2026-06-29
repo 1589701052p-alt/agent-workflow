@@ -114,6 +114,11 @@ function graphForRound(round: ClarifyRoundRow) {
 /** One clarify_round → upsert its desired handler entries (idempotent; preserves
  *  override / confirmation / staged / audit on existing rows). */
 export function reconcileTaskQuestionsForRound(db: DbClient, round: ClarifyRoundRow): void {
+  // RFC-126: terminal/aborted rounds produce NO board entries — they aren't
+  // actionable. 'abandoned' is migrated away + CR-1 retired (never produced anew);
+  // 'canceled' (RFC-023 task-cancel path, schema-allowed) is skipped defensively so
+  // it never surfaces as a stage/dispatch-able card.
+  if (round.status === 'canceled' || round.status === 'abandoned') return
   const desired = reconcileDesiredEntries({
     kind: round.kind,
     questions: parseQuestions(round.questionsJson),
@@ -728,7 +733,8 @@ export async function reassignTaskQuestion(
   // Codex impl gate F3: don't re-target a terminal entry — the work is closed and
   // an override there only records moot intent / risks confusing the resolution.
   const phase = await deriveEntryPhase(db, entry)
-  if (phase === 'done' || phase === 'closed') {
+  if (phase === 'done') {
+    // RFC-126: 'closed' removed (no terminal-abandon); only 'done' (confirmed) is terminal.
     throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
   }
   // RFC-120 §15 (Codex re-gate): a MANUAL question has NO graph default to fall back to, so
