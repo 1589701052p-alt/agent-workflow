@@ -790,6 +790,16 @@ export const nodeRuns = sqliteTable(
      * the TypeScript boundary so new causes never need a migration.
      */
     rerunCause: text('rerun_cause'),
+    /**
+     * RFC-127 借壳: borrowed agent name for reassignment. When a clarify rerun
+     * (self/questioner/designer) is reassigned to another workflow node's agent
+     * X, this row keeps node_id = original node P but runs with X's agent
+     * definition (X's body/model/runtime/readonly/skill + P's output port
+     * contract). NULL = the node's own agentName (normal path). The scheduler
+     * resolves this BEFORE agent/runtime/injection resolution (design §3.2);
+     * audit + cross-tick re-dispatch visibility only — NEVER enters a prompt.
+     */
+    agentOverrideName: text('agent_override_name'),
   },
   (t) => ({
     taskIdx: index('idx_node_runs_task').on(t.taskId, t.nodeId, t.iteration, t.retryIndex),

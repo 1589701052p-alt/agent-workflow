@@ -123,11 +123,11 @@ describe('RFC-074 migration 0041 — DROP clarify_iteration preserves row data',
       migrate(drizzle(up, {}), { migrationsFolder: MIGRATIONS })
 
       // 4a. clarify_iteration gone; net column delta vs the 0040 freeze is
-      //     +5: 0041 drops exactly one (cci), and LATER migrations (applied by
-      //     the same HEAD migrate) add SIX back onto node_runs — 0043
+      //     +6: 0041 drops exactly one (cci), and LATER migrations (applied by
+      //     the same HEAD migrate) add SEVEN back onto node_runs — 0043
       //     shard_value_hash + 0044 rerun_cause + 0051 spawn_binary_path (RFC-108 T9)
       //     + 0054 runtime (RFC-111) + 0055 runtime_binary (RFC-112)
-      //     + 0056 runtime_params_json (RFC-113).
+      //     + 0056 runtime_params_json (RFC-113) + 0067 agent_override_name (RFC-127).
       const cols = (up.query('PRAGMA table_info(node_runs)').all() as Array<{ name: string }>).map(
         (c) => c.name,
       )
@@ -139,7 +139,8 @@ describe('RFC-074 migration 0041 — DROP clarify_iteration preserves row data',
       expect(cols).toContain('runtime')
       expect(cols).toContain('runtime_binary')
       expect(cols).toContain('runtime_params_json')
-      expect(cols.length).toBe(cols0040.length - 1 + 6)
+      expect(cols).toContain('agent_override_name')
+      expect(cols.length).toBe(cols0040.length - 1 + 7)
 
       // 4b. row count unchanged.
       const n = (up.query('SELECT count(*) AS n FROM node_runs').get() as { n: number }).n

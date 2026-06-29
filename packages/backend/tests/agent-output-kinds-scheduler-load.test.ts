@@ -61,7 +61,10 @@ describe('scheduler agent-load hydrates outputKinds (regression for task 01KS045
   test('scheduler.ts uses the canonical getAgent loader (no duplicate agent loader)', () => {
     const src = readFileSync(SCHEDULER_SRC, 'utf8')
 
-    expect(src).toContain("import { getAgent } from '@/services/agent'")
+    // RFC-127 借壳 imports buildBorrowedAgent alongside getAgent from the SAME
+    // canonical module — match getAgent in the agent-service import (don't pin the
+    // exact named list) so the "no duplicate loader" intent survives co-imports.
+    expect(src).toMatch(/import \{[^}]*\bgetAgent\b[^}]*\} from '@\/services\/agent'/)
     expect(src).toContain('await getAgent(db, agentName)')
 
     // No local re-declaration. A scheduler-private agent loader would either

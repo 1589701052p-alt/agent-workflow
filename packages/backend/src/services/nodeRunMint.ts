@@ -86,6 +86,13 @@ export interface MintNodeRunOverrides {
   startedAt?: number | null
   /** Default: now for status 'done', NULL otherwise. */
   finishedAt?: number | null
+  /**
+   * RFC-127 借壳: name of the borrowed agent X this row runs under, while
+   * node_id stays the original node P. NULL/undefined = the node's default
+   * agent (normal path). Orthogonal to `inheritFrom` (the inheritance list has
+   * no agent — borrowing is a new dimension).
+   */
+  agentOverrideName?: string | null
 }
 
 export interface MintNodeRunArgs {
@@ -171,6 +178,7 @@ export function buildMintNodeRunValues(
     errorMessage: o.errorMessage ?? null,
     startedAt: o.startedAt !== undefined ? o.startedAt : now,
     finishedAt: o.finishedAt !== undefined ? o.finishedAt : args.status === 'done' ? now : null,
+    agentOverrideName: o.agentOverrideName ?? null,
   }
 }
 

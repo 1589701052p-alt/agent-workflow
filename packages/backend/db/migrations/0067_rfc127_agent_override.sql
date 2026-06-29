@@ -1,0 +1,11 @@
+-- RFC-127 — borrowed-agent reassignment (借壳顶替). Hand-written; additive; registered
+-- in meta/_journal.json. Single ALTER statement (the breakpoint marker only separates
+-- multiple statements, and must never appear inside a comment — RFC-108 0052/0053 incident).
+--
+-- agent_override_name: when a reassigned clarify rerun (借壳) runs under another node's
+-- agent X while keeping node_id = original node P, this column records X's agent name
+-- (the borrowed 'brain'). NULL = the node's own agentName (normal path). The scheduler
+-- reads it BEFORE agent/runtime/injection resolution so runtime/session/skill/mcp/readonly
+-- all follow X, while node_id / promptTemplate / upstream inputs / output port contract
+-- stay with P. Audit + cross-tick re-dispatch visibility only — NEVER enters a prompt.
+ALTER TABLE node_runs ADD COLUMN agent_override_name text;

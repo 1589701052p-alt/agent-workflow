@@ -53,7 +53,7 @@ import {
   estimateShardTotal,
   findBoundaryEdgesToInner,
 } from '@/services/fanout'
-import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 import type { DbClient } from '@/db/client'
 import {
@@ -66,7 +66,7 @@ import {
   taskRepos,
   tasks,
 } from '@/db/schema'
-import { getAgent } from '@/services/agent'
+import { buildBorrowedAgent, getAgent } from '@/services/agent'
 import { resolveDependsClosure } from '@/services/agentDeps'
 import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosure'
 import { collectPluginNamesFromClosure, loadPluginsByNames } from '@/services/pluginClosure'
@@ -1769,9 +1769,56 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       message: 'invalid agent node',
     }
   }
-  const agent = await getAgent(db, agentName)
-  if (agent === null) {
+  const nodeAgent = await getAgent(db, agentName)
+  if (nodeAgent === null) {
     return { kind: 'failed', summary: `agent '${agentName}' not found`, message: 'agent-not-found' }
+  }
+  // RFC-127 借壳顶替: the pending top-level row about to run may carry an
+  // `agent_override_name` (the borrowed agent X stamped at reassign-dispatch).
+  // If so, run with X's agent definition (X's "brain") but KEEP the original
+  // node P's output port contract (outputs/outputKinds) — downstream consumes by
+  // node_id=P so it naturally receives the produced ports (design §3.3 / Codex
+  // F2: runNode renders/validates/persists via agent.outputs/outputKinds, so
+  // passing the effective agent makes the WHOLE path use P's contract). Every
+  // other agent derivative (runtime/session/skill/mcp/readonly) follows X — see
+  // F1 at `effectiveResumeSessionId`. node_id / promptTemplate / upstream inputs
+  // stay P's (they key off node.id, not the agent).
+  const borrowRow = (
+    await db
+      .select({ ov: nodeRuns.agentOverrideName })
+      .from(nodeRuns)
+      .where(
+        and(
+          eq(nodeRuns.taskId, taskId),
+          eq(nodeRuns.nodeId, node.id),
+          eq(nodeRuns.iteration, iteration),
+          isNull(nodeRuns.parentNodeRunId),
+        ),
+      )
+      // Codex impl-gate P2: freshest top-level row of ANY status (not just
+      // pending) — a borrowed row revived from a failed/interrupted attempt has
+      // no pending row at this pre-mint lookup, so pending-only would lose the
+      // override and silently switch back to P. The override is carried onto the
+      // fresh retry row minted below, so the chain survives cross-tick retries.
+      .orderBy(desc(nodeRuns.id))
+      .limit(1)
+  )[0]
+  const overrideName = borrowRow?.ov ?? null
+  let agent = nodeAgent
+  let isBorrowed = false
+  if (overrideName !== null && overrideName !== '') {
+    const borrowed = await getAgent(db, overrideName)
+    if (borrowed === null) {
+      return {
+        kind: 'failed',
+        summary: `borrowed agent '${overrideName}' not found`,
+        message: 'borrowed-agent-not-found',
+      }
+    }
+    // effective agent = X's brain (body/model/runtime/readonly/skill) + P's
+    // output port contract. promptTemplate / upstream inputs are per-node=P.
+    agent = buildBorrowedAgent(borrowed, nodeAgent)
+    isBorrowed = true
   }
 
   // RFC-060 PR-E: agent-multi NodeKind was removed in favor of wrapper-fanout.
@@ -1898,6 +1945,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         shardKey: inheritedShardKey,
         parentNodeRunId: inheritedParentNodeRunId,
         consumedUpstreamRunsJson: consumedUpstreamJson,
+        // RFC-127 (Codex impl-gate P2): carry the borrowed agent onto the fresh
+        // retry/revival row so cross-tick retries keep running under X, not P.
+        agentOverrideName: overrideName,
       },
     })
   }
@@ -2637,10 +2687,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // pre-snapshot stay gated on followupDecision.followup — see the RFC-122
         // residual note: downgrading those needs the directive at loop top, which
         // is entangled with buildPromptContext; tracked as a follow-up.)
+        // RFC-127 F1 + Codex impl-gate P2: a same-attempt envelope follow-up
+        // (followupResumeSessionId is THIS borrowed attempt's own X session) MUST
+        // stay paired with envelopeFollowup mode (the runner renders only the
+        // short repair prompt), so follow-up wins for everyone — borrowed or not.
+        // Only when NOT a follow-up does a borrowed row drop P's inline clarify
+        // resume (undefined ⇒ X fresh session, runtime follows X, no P session-
+        // history leak); a non-borrowed row keeps P's inline resume.
         const effectiveResumeSessionId =
           followupDecision.followup && !clarifyModeFlip
             ? followupResumeSessionId
-            : resumeDecision.resumeSessionId
+            : isBorrowed
+              ? undefined
+              : resumeDecision.resumeSessionId
         const followupClarifyDirective =
           followupDecision.followup && effectiveHasClarifyChannel
             ? clarifyContext?.directive
