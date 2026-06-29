@@ -521,27 +521,31 @@ describe('RFC-127 borrow — Codex P2 regressions', () => {
   // P2-2: the same home with BOTH an open self/questioner reassignment AND an open dispatched
   // designer reassignment is ambiguous (the scheduler can't tell which ledger the rerun belongs
   // to). Must REJECT rather than let the immediate ledger silently win.
-  test('P2-2: same home, self ledger + designer ledger naming DIFFERENT agents → rejected', async () => {
+  test('P2-2: same home, self ledger + designer ledger (DIFFERENT agents) → rejected', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2', { deferred: true })
     // self reassignment on P → X (immediate ledger) ...
     await seedSelfRoundMulti(db, 'p2-2', { questions: [{ qid: 'q1', override: X }] })
     // ... AND a dispatched designer reassignment on the SAME home P → D (designer ledger).
-    // Different borrowed agents (X vs D) ⇒ genuinely ambiguous ⇒ reject.
     await seedDispatchedDesignerEntry(db, 'p2-2', P, D)
     await expect(resolveBorrowForNode(db, 'p2-2', P, 0, liveDef())).rejects.toThrow(
-      /DIFFERENT borrowed agents/i,
+      /duplicate execution/i,
     )
   })
 
-  // Codex re-gate P2: both ledgers AGREEING on the same borrowed agent is NOT ambiguous — the
-  // rerun runs X either way, so it must proceed (the old both-non-null reject failed valid tasks).
-  test('P2-2: same home, both ledgers → SAME agent X → resolves X (no false conflict)', async () => {
+  // Codex impl-gate round 2: even when both ledgers borrow the SAME agent, the overlap is a
+  // duplicate-EXECUTION hazard — they are two separate pending node_runs on the home (the
+  // designer in-flight gate doesn't see the immediate continuation), and runOneNode binds by
+  // node not by ledger, so the first run stamps both ledgers and the other runs stale. Reject
+  // regardless of agent match (round 1's same-agent fast path was unsafe).
+  test('P2-2: same home, both ledgers → SAME agent → STILL rejected (duplicate-execution hazard)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2same', { deferred: true })
     await seedSelfRoundMulti(db, 'p2-2same', { questions: [{ qid: 'q1', override: X }] })
     await seedDispatchedDesignerEntry(db, 'p2-2same', P, X)
-    expect(await resolveBorrowForNode(db, 'p2-2same', P, 0, liveDef())).toBe(X_AGENT)
+    await expect(resolveBorrowForNode(db, 'p2-2same', P, 0, liveDef())).rejects.toThrow(
+      /duplicate execution/i,
+    )
   })
 
   test('P2-2: designer ledger ALONE on a node (no self override) still resolves (no false conflict)', async () => {

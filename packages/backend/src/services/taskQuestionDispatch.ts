@@ -678,15 +678,21 @@ export async function resolveBorrowForNode(
 ): Promise<string | null> {
   const immediate = await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
   const designer = await resolveDesignerBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
-  // P2-2 (Codex re-gate): a self/questioner reassignment AND a dispatched designer reassignment
-  // open on the SAME home+iteration is ambiguous ONLY when they name DIFFERENT borrowed agents —
-  // the scheduler can't tell which ledger the current rerun belongs to. If BOTH ledgers agree on
-  // the same agent there is no selection ambiguity (the rerun runs X either way), so let it
-  // proceed instead of failing a valid task.
-  if (immediate !== null && designer !== null && immediate !== designer) {
+  // P2-2 (Codex impl-gate, 2 rounds): a self/questioner continuation AND a dispatched designer
+  // rerun open on the SAME home+iteration are SEPARATE pending node_runs (clarify-answer /
+  // cross-clarify-questioner-rerun vs cross-clarify-answer; designer dispatch's in-flight gate
+  // only sees dispatched_at rows, NOT the immediate continuation). runOneNode consumes/binds by
+  // NODE (markClarifyRoundsConsumedBy + buildExternalFeedbackContext), not by ledger — the first
+  // run to fire stamps BOTH ledgers and the other pending row runs later as stale duplicate work
+  // (or orphans, per ULID order). So EVEN when both ledgers borrow the SAME agent the EXECUTION
+  // is ambiguous (duplicate work), not merely agent-selection — reject any same-home dual-ledger
+  // overlap; the user resolves one before the node reruns. (Gate round 1 said same-agent was
+  // fine — no agent-selection ambiguity — but round 2 caught the deeper duplicate-execution
+  // hazard; round 2 wins.)
+  if (immediate !== null && designer !== null) {
     throw new ConflictError(
       'task-question-borrow-ledger-conflict',
-      `node '${nodeId}' (iter ${iteration}) has an open self/questioner reassignment (→ ${immediate}) and an open dispatched designer reassignment (→ ${designer}) naming DIFFERENT borrowed agents; resolve one before the node reruns.`,
+      `node '${nodeId}' (iter ${iteration}) has BOTH an open self/questioner reassignment (→ ${immediate}) and an open dispatched designer reassignment (→ ${designer}); they are separate pending reruns that would duplicate execution — resolve one before the node reruns.`,
     )
   }
   return immediate ?? designer
