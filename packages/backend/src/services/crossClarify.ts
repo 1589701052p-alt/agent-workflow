@@ -98,7 +98,7 @@ import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
-import { reconcileTaskQuestionsForRound } from '@/services/taskQuestions'
+import { loadSealedQuestionIds, reconcileTaskQuestionsForRound } from '@/services/taskQuestions'
 import {
   getNodeClarifyDirectiveRow,
   setNodeClarifyDirective,
@@ -423,16 +423,35 @@ export async function submitCrossClarifyAnswers(
   const sealedSubset = sealAnswersServerSide(questions, args.answers)
   // RFC-128 §7 — per-question merge-write. The whole-round quick channel seals every
   // question at once, so for a virgin round (answers_json NULL/empty) the merge returns
-  // `sealedSubset` byte-for-byte (golden-lock vs the old overwrite); it only preserves
-  // prior answers when a sibling was pre-sealed via the per-question control channel.
-  // Parse defensively (non-array '{}' placeholders in some fixtures → []).
-  const sealedAnswers = mergeSealedAnswers(parseAnswersArray(row.answersJson), sealedSubset)
+  // `sealedSubset` byte-for-byte (golden-lock vs the old overwrite). Parse defensively
+  // (non-array '{}' placeholders in some fixtures → []).
+  // RFC-128 P2-2 — protect already-sealed answers: a question pre-sealed via the
+  // per-question control channel is `locked`, so this finalize keeps its locked answer
+  // instead of overwriting it. No prior seal ⇒ lockedIds empty ⇒ old behavior (golden-lock).
+  const lockedIds = await loadSealedQuestionIds(args.db, args.crossClarifyNodeRunId)
+  const sealedAnswers = mergeSealedAnswers(
+    parseAnswersArray(row.answersJson),
+    sealedSubset,
+    lockedIds,
+  )
 
   // RFC-059: validate questionScopes against the session's questions BEFORE
   // any write so a malformed map can't reach the DB. Throws ValidationError
   // 400 'cross-clarify-question-scopes-malformed' on any rejected key / value.
   const validatedScopes = validateQuestionScopes(args.questionScopes, questions)
-  const questionScopesJson = validatedScopes === undefined ? null : JSON.stringify(validatedScopes)
+  // RFC-128 P2-3 — MERGE scopes with the round's already-stored scopes (per-question, like
+  // answers) instead of rebuilding from only this request. A sparse questionScopes that
+  // omits an earlier-sealed questioner-scope question must NOT drop its scope (which would
+  // wrongly fall back to the 'designer' default and mis-route feedback). No stored scopes
+  // + no request scopes ⇒ null (golden-lock); first whole-round submit ⇒ just this request.
+  const existingScopes = parseQuestionScopesJson(row.questionScopesJson)
+  const mergedScopes = { ...(existingScopes ?? {}), ...(validatedScopes ?? {}) }
+  // Normalize to null when empty (matches the old `?? null` convention; `{}` and `null`
+  // resolve identically in resolveQuestionScope → golden-lock for the no-prior-scope case).
+  // Used for BOTH persistence and this submit's designer-split routing so a prior-sealed
+  // questioner-scope question omitted from this request is not re-routed to designer.
+  const effectiveScopes = Object.keys(mergedScopes).length > 0 ? mergedScopes : null
+  const questionScopesJson = effectiveScopes === null ? null : JSON.stringify(effectiveScopes)
 
   const answersJson = JSON.stringify(sealedAnswers)
   // RFC-076 T0-extend note: unlike submitClarifyAnswers, this session → answered
@@ -500,7 +519,7 @@ export async function submitCrossClarifyAnswers(
     sealedAnswers,
     args.directive,
     answeredAt,
-    validatedScopes ?? null,
+    effectiveScopes,
   )
   void answeredBy
 
@@ -540,11 +559,7 @@ export async function submitCrossClarifyAnswers(
   // > 0 will trigger the designer when they submit (their readiness check
   // aggregates all already-resolved peers including this one). Letting the
   // questioner cascade now means the user doesn't wait for peers.
-  const designerSplit = extractDesignerScopedSubset(
-    questions,
-    sealedAnswers,
-    validatedScopes ?? null,
-  )
+  const designerSplit = extractDesignerScopedSubset(questions, sealedAnswers, effectiveScopes)
   if (designerSplit.questions.length === 0) {
     const outcome = await triggerQuestionerContinueRerun({
       db: args.db,

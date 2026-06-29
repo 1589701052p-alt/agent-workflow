@@ -69,6 +69,7 @@ import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRol
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { createLogger } from '@/util/log'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
+import { loadSealedQuestionIds } from '@/services/taskQuestions'
 import { setNodeClarifyDirective } from '@/services/taskClarifyDirective'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -373,11 +374,18 @@ export async function submitClarifyAnswers(
   // RFC-128 §7 — per-question merge-write. The whole-round quick channel seals every
   // question of the round in one shot, so for a virgin round (answers_json NULL/empty)
   // the existing set is empty and the merge returns `sealedSubset` byte-for-byte (golden-
-  // lock vs the old overwrite). The merge only changes anything once a sibling question
-  // was pre-sealed via the per-question control channel (RFC-128 P2+), in which case
-  // those prior answers are preserved instead of clobbered. Parse defensively: a
-  // non-array answers_json (legacy '{}' placeholders seeded in some fixtures) → [].
-  const sealedAnswers = mergeSealedAnswers(parseAnswersArray(sessionRow.answersJson), sealedSubset)
+  // lock vs the old overwrite). Parse defensively: a non-array answers_json (legacy '{}'
+  // placeholders seeded in some fixtures) → [].
+  // RFC-128 P2-2 — protect already-sealed answers: any question pre-sealed via the
+  // per-question control channel is `locked`, so this finalize keeps its locked answer
+  // instead of overwriting it with the posted whole-round value. No prior seal ⇒
+  // lockedIds is empty ⇒ byte-for-byte the old behavior (golden-lock).
+  const lockedIds = await loadSealedQuestionIds(db, clarifyNodeRunId)
+  const sealedAnswers = mergeSealedAnswers(
+    parseAnswersArray(sessionRow.answersJson),
+    sealedSubset,
+    lockedIds,
+  )
 
   const answeredAt = now()
   const answersJson = JSON.stringify(sealedAnswers)

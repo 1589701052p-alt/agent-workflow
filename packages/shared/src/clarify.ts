@@ -572,20 +572,32 @@ export function extractDesignerScopedSubset(
  *  their position (value replaced in place when re-sealed), then never-before-seen
  *  incoming answers are appended in incoming order. So a whole-round one-shot seal
  *  (existing empty) returns exactly the incoming array — byte-for-byte identical to the
- *  pre-RFC-128 overwrite (golden-lock). Returns a fresh array (no input aliasing). */
+ *  pre-RFC-128 overwrite (golden-lock). Returns a fresh array (no input aliasing).
+ *
+ *  RFC-128 P2-2 — `lockedIds`: question ids whose answer is ALREADY sealed (locked) and
+ *  must NOT be changed. For a locked qid the EXISTING answer is preserved and any incoming
+ *  value for it is ignored (a locked qid that has no existing answer — which shouldn't
+ *  happen, since sealed ⇒ present in answers_json — is also dropped from incoming). This
+ *  lets the whole-round quick-channel finalize (which posts ALL question values) coexist
+ *  with the per-question control channel WITHOUT overwriting a sealed answer. Empty/omitted
+ *  `lockedIds` ⇒ unchanged behavior (golden-lock). */
 export function mergeSealedAnswers(
   existing: ClarifyAnswer[],
   incoming: ClarifyAnswer[],
+  lockedIds?: ReadonlySet<string>,
 ): ClarifyAnswer[] {
   const incomingById = new Map(incoming.map((a) => [a.questionId, a]))
+  const isLocked = (qid: string): boolean => lockedIds !== undefined && lockedIds.has(qid)
   const merged: ClarifyAnswer[] = []
   const seen = new Set<string>()
   for (const a of existing) {
-    merged.push(incomingById.get(a.questionId) ?? a)
+    // Locked ⇒ keep the existing (sealed) value; otherwise incoming wins when present.
+    merged.push(isLocked(a.questionId) ? a : (incomingById.get(a.questionId) ?? a))
     seen.add(a.questionId)
   }
   for (const a of incoming) {
-    if (!seen.has(a.questionId)) {
+    // Append a never-before-seen incoming answer — unless it targets a locked qid.
+    if (!seen.has(a.questionId) && !isLocked(a.questionId)) {
       merged.push(a)
       seen.add(a.questionId)
     }

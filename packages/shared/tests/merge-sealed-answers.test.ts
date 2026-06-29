@@ -52,4 +52,28 @@ describe('mergeSealedAnswers', () => {
     expect(out).not.toBe(existing)
     expect(out).not.toBe(incoming)
   })
+
+  // RFC-128 P2-2 — lockedIds protects an already-sealed answer from a whole-round finalize.
+  test('lockedIds: a locked qid keeps its existing value, ignoring the incoming change', () => {
+    const out = mergeSealedAnswers(
+      [ans('q1', 0, 'locked')], // q1 already sealed
+      [ans('q1', 1, 'attempt'), ans('q2', 1)], // finalize posts a new q1 + a new q2
+      new Set(['q1']),
+    )
+    expect(out.find((a) => a.questionId === 'q1')).toEqual(ans('q1', 0, 'locked')) // kept
+    expect(out.find((a) => a.questionId === 'q2')).toEqual(ans('q2', 1)) // unlocked → written
+  })
+
+  test('lockedIds: a stray incoming answer for a locked qid with no existing entry is dropped', () => {
+    const out = mergeSealedAnswers([], [ans('q1', 1)], new Set(['q1']))
+    expect(out).toEqual([]) // locked + no existing ⇒ nothing
+  })
+
+  test('golden-lock: empty lockedIds behaves exactly like the 2-arg call', () => {
+    const existing = [ans('q1', 0)]
+    const incoming = [ans('q1', 1), ans('q2', 1)]
+    expect(mergeSealedAnswers(existing, incoming, new Set())).toEqual(
+      mergeSealedAnswers(existing, incoming),
+    )
+  })
 })

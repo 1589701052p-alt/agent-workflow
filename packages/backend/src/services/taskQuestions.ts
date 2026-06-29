@@ -22,7 +22,7 @@ import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
 import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
-import { dbTxSync } from '@/db/txSync'
+import { dbTxSync, type DbTxSync } from '@/db/txSync'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import {
   canReassign,
@@ -121,82 +121,95 @@ function graphForRound(round: ClarifyRoundRow) {
   }
 }
 
-/** One clarify_round → upsert its desired handler entries (idempotent; preserves
- *  override / confirmation / staged / audit on existing rows).
+/** RFC-128 P2-1 — tx-aware core of {@link reconcileTaskQuestionsForRound}: upsert a
+ *  round's desired handler entries onto the GIVEN transaction. Extracted so the
+ *  per-question seal primitive (services/clarifySeal.ts) can reconcile INSIDE its own
+ *  single atomic dbTxSync (dbTxSync does not nest). Idempotent; preserves the manual
+ *  overlay (override / confirmation / staged / sealed / audit) on existing rows.
  *
- *  RFC-128 §4 — `alsoSealed` lets the per-question seal primitive reconcile the
- *  designer entries for questions it is sealing RIGHT NOW, before it stamps their
- *  `sealed_at` (avoids a chicken-and-egg: the designer entry must exist before it can
- *  be stamped). Lazy callers (listTaskQuestions) pass nothing and the gate derives
- *  the sealed set from the round + already-stamped `sealed_at` markers. */
-export function reconcileTaskQuestionsForRound(
-  db: DbClient,
-  round: ClarifyRoundRow,
-  alsoSealed?: ReadonlySet<string>,
-): void {
-  // RFC-126: terminal/aborted rounds produce NO board entries — they aren't
-  // actionable. 'abandoned' is migrated away + CR-1 retired (never produced anew);
-  // 'canceled' (RFC-023 task-cancel path, schema-allowed) is skipped defensively so
-  // it never surfaces as a stage/dispatch-able card.
+ *  RFC-128 P2-4 option (a): in P1 a designer entry is created ONLY when the WHOLE round
+ *  is sealed (round.status === 'answered') — byte-for-byte the RFC-120 `roundAnswered`
+ *  gate. A PARTIAL seal deliberately produces NO designer entry: dispatch/render
+ *  (assertDesignerReady / buildExternalFeedbackContext / stageTaskQuestion / the §18
+ *  park gate) still key on whole-round answered, so a per-question designer row would be
+ *  half-usable (looks stageable but cannot dispatch/inject until every sibling is
+ *  sealed). Per-question designer entries + per-question dispatch/render land together in
+ *  P3 (designer 逐题下发). The questioner/self entries stay unconditional (always re-run).
+ *  We feed the per-question `questionSealed` gate the AGGREGATE so the pure
+ *  reconcileDesiredEntries stays P3-ready (P3 flips this to a true per-question map). */
+export function reconcileRoundEntriesTx(tx: DbTxSync, round: ClarifyRoundRow): void {
   if (round.status === 'canceled' || round.status === 'abandoned') return
   const questions = parseQuestions(round.questionsJson)
   if (questions.length === 0) return
-  const now = Date.now()
-  dbTxSync(db, (tx) => {
-    // RFC-128 §4 — per-question seal gate. A question counts as sealed when: the whole
-    // round is answered (golden-lock = the old `roundAnswered`), OR an existing entry
-    // for it already carries a `sealed_at` marker (partial seal via the per-question
-    // path), OR the caller is sealing it right now (`alsoSealed`). Read inside the tx so
-    // it's a consistent snapshot with the upsert below.
-    const existing = tx
-      .select({ questionId: taskQuestions.questionId, sealedAt: taskQuestions.sealedAt })
-      .from(taskQuestions)
-      .where(eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId))
-      .all()
-    const sealedIds = new Set<string>()
-    for (const e of existing) if (e.sealedAt !== null) sealedIds.add(e.questionId)
-    if (alsoSealed) for (const id of alsoSealed) sealedIds.add(id)
-    const roundAnswered = round.status === 'answered'
-    const questionSealed: Record<string, boolean> = {}
-    for (const q of questions) questionSealed[q.id] = roundAnswered || sealedIds.has(q.id)
-    const desired = reconcileDesiredEntries({
-      kind: round.kind,
-      questions,
-      questionSealed,
-      // RFC-120 T9 (Codex H2): a directive='stop' round intentionally skips the
-      // designer rerun → no designer entry (else a deferred task parks forever on it).
-      directive: round.directive,
-      scopes: parseScopes(round.questionScopesJson),
-      graph: graphForRound(round),
-    })
-    for (const d of desired) {
-      tx.insert(taskQuestions)
-        .values({
-          id: ulid(),
-          taskId: round.taskId,
-          originNodeRunId: round.intermediaryNodeRunId,
-          questionId: d.questionId,
-          questionTitle: d.questionTitle,
-          sourceKind: d.sourceKind,
-          roleKind: d.roleKind,
-          iteration: round.iteration,
-          loopIter: round.loopIter,
-          defaultTargetNodeId: d.defaultTargetNodeId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
-          // Only refresh the graph-derived snapshot; never touch the manual overlay.
-          set: {
-            defaultTargetNodeId: d.defaultTargetNodeId,
-            questionTitle: d.questionTitle,
-            updatedAt: now,
-          },
-        })
-        .run()
-    }
+  const roundAnswered = round.status === 'answered'
+  const questionSealed: Record<string, boolean> = {}
+  for (const q of questions) questionSealed[q.id] = roundAnswered
+  const desired = reconcileDesiredEntries({
+    kind: round.kind,
+    questions,
+    questionSealed,
+    // RFC-120 T9 (Codex H2): a directive='stop' round intentionally skips the
+    // designer rerun → no designer entry (else a deferred task parks forever on it).
+    directive: round.directive,
+    scopes: parseScopes(round.questionScopesJson),
+    graph: graphForRound(round),
   })
+  const now = Date.now()
+  for (const d of desired) {
+    tx.insert(taskQuestions)
+      .values({
+        id: ulid(),
+        taskId: round.taskId,
+        originNodeRunId: round.intermediaryNodeRunId,
+        questionId: d.questionId,
+        questionTitle: d.questionTitle,
+        sourceKind: d.sourceKind,
+        roleKind: d.roleKind,
+        iteration: round.iteration,
+        loopIter: round.loopIter,
+        defaultTargetNodeId: d.defaultTargetNodeId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
+        // Only refresh the graph-derived snapshot; never touch the manual overlay.
+        set: {
+          defaultTargetNodeId: d.defaultTargetNodeId,
+          questionTitle: d.questionTitle,
+          updatedAt: now,
+        },
+      })
+      .run()
+  }
+}
+
+/** One clarify_round → upsert its desired handler entries (idempotent; preserves
+ *  override / confirmation / staged / sealed / audit on existing rows). Thin wrapper that
+ *  runs {@link reconcileRoundEntriesTx} in its own atomic transaction. */
+export function reconcileTaskQuestionsForRound(db: DbClient, round: ClarifyRoundRow): void {
+  // RFC-126: terminal/aborted rounds produce NO board entries — skip before opening a tx.
+  if (round.status === 'canceled' || round.status === 'abandoned') return
+  dbTxSync(db, (tx) => reconcileRoundEntriesTx(tx, round))
+}
+
+/** RFC-128 P2-2 — the question ids of a clarify round (located by its origin node-run id)
+ *  that have been per-question sealed (any entry carries `sealed_at`). The quick-channel
+ *  whole-round submit passes this as `lockedIds` to {@link mergeSealedAnswers} so a
+ *  finalize never OVERWRITES an already-sealed answer (the control channel locked it).
+ *  Empty for a round with no prior per-question seal → the quick channel stays byte-for-
+ *  byte unchanged (golden-lock). */
+export async function loadSealedQuestionIds(
+  db: DbClient,
+  originNodeRunId: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ questionId: taskQuestions.questionId, sealedAt: taskQuestions.sealedAt })
+    .from(taskQuestions)
+    .where(eq(taskQuestions.originNodeRunId, originNodeRunId))
+  const out = new Set<string>()
+  for (const r of rows) if (r.sealedAt !== null) out.add(r.questionId)
+  return out
 }
 
 /** The entry's authoritative handler run id = the RFC-070 consumption stamp (set

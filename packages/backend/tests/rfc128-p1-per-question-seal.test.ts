@@ -17,7 +17,7 @@ import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifyRounds, clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
-import { createCrossClarifySession } from '../src/services/crossClarify'
+import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { listTaskQuestions } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -253,39 +253,73 @@ describe('RFC-128 P1 — AC-3 轮 answered 仅全 seal 才翻', () => {
 })
 
 // ---------------------------------------------------------------------------
-// AC-2 — reconcile 逐题门控 (cross): seal Q1(designer) 出 Q1 designer 条目，Q2 不出
+// AC-2 — reconcile 门控 (cross), RFC-128 P2-4 option (a): P1 只在「整轮全 seal」才出
+// designer 条目（与旧 roundAnswered 逐字一致）；partial seal 不留半可用 designer row。
+// 逐题 designer 条目 + 逐题下发是 P3。
 // ---------------------------------------------------------------------------
 
-describe('RFC-128 P1 — AC-2 reconcile 逐题门控 (cross)', () => {
-  test('seal Q1 designer-scope → Q1 designer 条目出现，Q2 未 seal 无 designer 条目', async () => {
+describe('RFC-128 P1 — AC-2 reconcile 门控: 整轮全 seal 才出 designer (P2-4a)', () => {
+  test('partial seal Q1(designer scope) → 仍无任何 designer 条目（只 questioner，不留半可用 row）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
 
-    await sealRoundQuestions({
+    const res = await sealRoundQuestions({
       db,
       originNodeRunId,
       answers: [makeAns('q1')],
-      scopes: { q1: 'designer' }, // scope 在答该题时定
+      scopes: { q1: 'designer' }, // scope 在答该题时定（已 merge 进 round）
     })
+    expect(res.roundFullySealed).toBe(false)
 
     const dtos = await listTaskQuestions(db, taskId)
     const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
-    // 两条 questioner 恒有 + 仅 q1 出 designer（q1 已 seal + designer scope）。
-    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:questioner'])
-    expect(sig).not.toContain('q2:designer')
+    // partial → 只有 questioner 条目，绝不出 designer（P2-4a：避免半可用 row）。
+    expect(sig).toEqual(['q1:questioner', 'q2:questioner'])
+    expect(sig.some((s) => s.endsWith(':designer'))).toBe(false)
   })
 
-  test('seal Q1 questioner-scope → 仍只有 questioner 条目（无 designer）', async () => {
+  test('全题 seal（designer scope）→ 轮 answered → 两题 designer 条目都出现（= 旧整轮行为）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q1')],
+      scopes: { q1: 'designer' },
+    })
+    const res2 = await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q2')],
+      scopes: { q2: 'designer' },
+    })
+    expect(res2.roundFullySealed).toBe(true)
+
+    const dtos = await listTaskQuestions(db, taskId)
+    const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
+    // 全 seal → 轮 answered → designer 条目出现（两题都 designer scope）。
+    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:designer', 'q2:questioner'])
+  })
+
+  test('全题 seal 但 scope 混合 → 仅 designer-scope 题出 designer 条目', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
     await sealRoundQuestions({
       db,
       originNodeRunId,
       answers: [makeAns('q1')],
-      scopes: { q1: 'questioner' },
+      scopes: { q1: 'designer' },
+    })
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q2')],
+      scopes: { q2: 'questioner' },
     })
     const dtos = await listTaskQuestions(db, taskId)
-    expect(dtos.every((d) => d.roleKind !== 'designer')).toBe(true)
+    const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
+    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:questioner'])
   })
 })
 
@@ -367,5 +401,135 @@ describe('RFC-128 P1 — 黄金锁: 一次性 seal 全题 == 旧整轮 submit', 
     )
     expect(rerunsA).toHaveLength(1)
     expect(rerunsB).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P2-1 — seal 原子性: overlapping seals 不丢更新, 不留「全 sealed 但轮仍 awaiting」
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P1 — P2-1 seal 原子性 (no lost-update / no torn state)', () => {
+  test('Promise.all 两题并发 seal 同一 round → 两题答案都在 answers_json，轮 answered', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+
+    // Fire both seals "concurrently". With the dbTxSync (sync-body) wrapping, each runs to
+    // completion atomically — the SECOND observes the first's committed answers_json, so
+    // neither answer is lost (pre-P2-1 the two interleaved read-merge-writes lost one).
+    await Promise.all([
+      sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1', 0)] }),
+      sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q2', 1)] }),
+    ])
+
+    const [round] = await roundOf(db, taskId)
+    const answers = JSON.parse(round?.answersJson ?? '[]') as ClarifyAnswer[]
+    expect(answers.map((a) => a.questionId).sort()).toEqual(['q1', 'q2']) // no lost-update
+    // Torn-state invariant: all sealed ⟺ round answered (never "all sealed but awaiting").
+    expect(round?.status).toBe('answered')
+  })
+
+  test('seal 失败（terminal round）整体回滚——answers_json 不被部分写入', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+    // Force the round terminal so the in-tx guard throws AFTER nothing has committed.
+    await db
+      .update(clarifyRounds)
+      .set({ status: 'canceled' })
+      .where(eq(clarifyRounds.taskId, taskId))
+    await expect(
+      sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1')] }),
+    ).rejects.toThrow('cannot seal')
+    const [round] = await roundOf(db, taskId)
+    expect(round?.answersJson ?? null).toBeNull() // nothing written
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P2-2 — 整轮 submit 不覆盖已 sealed 答案（locked），未 sealed 正常写；黄金锁不破
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P1 — P2-2 quick-channel 不覆盖已 sealed (self)', () => {
+  test('control 通道先 seal q1，再走整轮 submit（post q1 改值 + q2）→ q1 保留锁定值，q2 写入', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+
+    // Control channel seals q1 with index 0 (round stays awaiting_human).
+    await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1', 0)] })
+
+    // Quick channel finalize posts ALL questions, trying to CHANGE q1 → index 1.
+    await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId: originNodeRunId,
+      answers: [makeAns('q1', 1), makeAns('q2', 1)],
+    })
+
+    const [round] = await roundOf(db, taskId)
+    const answers = JSON.parse(round?.answersJson ?? '[]') as ClarifyAnswer[]
+    // q1 KEEPS its locked (sealed) value 0, NOT the posted 1; q2 takes the posted 1.
+    expect(answers.find((a) => a.questionId === 'q1')?.selectedOptionIndices).toEqual([0])
+    expect(answers.find((a) => a.questionId === 'q2')?.selectedOptionIndices).toEqual([1])
+    expect(round?.status).toBe('answered') // finalize still flips the whole round
+  })
+
+  test('黄金锁: 无任何预先 seal 时，整轮 submit 逐字不变（lockedIds 空）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+    await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId: originNodeRunId,
+      answers: [makeAns('q1', 1), makeAns('q2', 0)],
+    })
+    const [round] = await roundOf(db, taskId)
+    const answers = JSON.parse(round?.answersJson ?? '[]') as ClarifyAnswer[]
+    expect(answers.find((a) => a.questionId === 'q1')?.selectedOptionIndices).toEqual([1])
+    expect(answers.find((a) => a.questionId === 'q2')?.selectedOptionIndices).toEqual([0])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P2-3 — cross scopes merge: sparse questionScopes 不丢早先 seal 的 scope
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)', () => {
+  test('先 seal q1=questioner scope；整轮 submit 只带 q2 scope → q1 scope 保留 questioner', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
+
+    // Control channel seals q1 with questioner scope (round stays awaiting_human).
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q1')],
+      scopes: { q1: 'questioner' },
+    })
+
+    // Quick channel finalize sends a SPARSE questionScopes (only q2) — q1 omitted.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: originNodeRunId,
+      answers: [makeAns('q1'), makeAns('q2')],
+      directive: 'continue',
+      questionScopes: { q2: 'designer' }, // q1 omitted → must NOT lose its stored scope
+    })
+
+    const [round] = await roundOf(db, taskId)
+    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
+    expect(scopes.q1).toBe('questioner') // P2-3: preserved (not defaulted to designer)
+    expect(scopes.q2).toBe('designer')
+  })
+
+  test('黄金锁: 无 stored scope 时，整轮 submit 的 scopes 行为不变', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: originNodeRunId,
+      answers: [makeAns('q1'), makeAns('q2')],
+      directive: 'continue',
+      questionScopes: { q1: 'designer', q2: 'questioner' },
+    })
+    const [round] = await roundOf(db, taskId)
+    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
+    expect(scopes).toEqual({ q1: 'designer', q2: 'questioner' })
   })
 })
