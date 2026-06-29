@@ -53,7 +53,7 @@ import {
   estimateShardTotal,
   findBoundaryEdgesToInner,
 } from '@/services/fanout'
-import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 import type { DbClient } from '@/db/client'
 import {
