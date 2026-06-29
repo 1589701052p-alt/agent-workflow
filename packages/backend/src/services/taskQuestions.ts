@@ -166,7 +166,7 @@ export function reconcileTaskQuestionsForRound(db: DbClient, round: ClarifyRound
  *  when the handler finished done+output, Codex F4). NULL while in flight / never
  *  dispatched. We do NOT guess a run from cause+node+iteration (Codex impl gate F1)
  *  — an in-flight answered round surfaces as `dispatchedInFlight` instead. */
-function resolveTriggerForEntry(
+export function resolveTriggerForEntry(
   round: ClarifyRoundRow,
   roleKind: TaskQuestionRow['roleKind'],
 ): string | null {
@@ -718,7 +718,9 @@ export async function confirmTaskQuestion(
     .where(and(eq(taskQuestions.id, entryId), eq(taskQuestions.confirmation, 'open')))
 }
 
-/** Re-target (改派) a designer entry's handler to a workflow agent node (Codex F5). */
+/** Re-target (改派) an entry's handler to a workflow agent node. RFC-127 T4: ANY role
+ *  (self/questioner via 借壳顶替, designer/manual via the original swap) is reassignable;
+ *  the only constraint is the target must be a workflow agent node (Codex F5). */
 export async function reassignTaskQuestion(
   db: DbClient,
   entryId: string,
@@ -727,10 +729,10 @@ export async function reassignTaskQuestion(
 ): Promise<void> {
   const entry = await loadEntry(db, entryId)
   const agentNodeIds = await agentNodeIdsForTask(db, entry.taskId)
-  if (!canReassign({ roleKind: entry.roleKind }, targetNodeId, agentNodeIds)) {
+  if (!canReassign(targetNodeId, agentNodeIds)) {
     throw new ValidationError(
       'task-question-reassign-invalid',
-      `cannot reassign '${entry.roleKind}' entry to '${targetNodeId}' (designer-only + must be an agent node)`,
+      `cannot reassign '${entry.roleKind}' entry to '${targetNodeId}' (target must be a workflow agent node)`,
     )
   }
   // Codex impl gate F3: don't re-target a terminal entry — the work is closed and

@@ -352,7 +352,10 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     expect(after.effectiveTargetNodeId).toBe('fixer')
   })
 
-  test('reassign: rejects questioner entry and non-agent target', async () => {
+  // RFC-127 T4: questioner (and self) entries are NOW re-targetable — borrow-the-shell lets
+  // the questioner node continue under agent X. Only a NON-agent target is still rejected.
+  // (Reverses the RFC-120 "questioner not re-targetable / 阻塞-产出型" assertion that lived here.)
+  test('reassign: ANY role to an agent node succeeds; non-agent target still rejected', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRound(db, taskId, {
@@ -368,10 +371,14 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     const list = await listTaskQuestions(db, taskId)
     const questioner = list.find((e) => e.roleKind === 'questioner')!
     const designer = list.find((e) => e.roleKind === 'designer')!
-    // questioner is not re-targetable (阻塞-产出型)
-    await expect(reassignTaskQuestion(db, questioner.id, 'fixer', ACTOR)).rejects.toThrow()
-    // 'c1' is a clarify node, not an agent node
+    // questioner → agent node 'fixer' now SUCCEEDS (借壳顶替).
+    await reassignTaskQuestion(db, questioner.id, 'fixer', ACTOR)
+    const afterQ = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'questioner')!
+    expect(afterQ.overrideTargetNodeId).toBe('fixer')
+    expect(afterQ.effectiveTargetNodeId).toBe('fixer')
+    // 'c1' is a clarify node, not an agent node → still rejected for any role.
     await expect(reassignTaskQuestion(db, designer.id, 'c1', ACTOR)).rejects.toThrow()
+    await expect(reassignTaskQuestion(db, questioner.id, 'c1', ACTOR)).rejects.toThrow()
   })
 
   test('stage / unstage toggles the 待下发 phase', async () => {

@@ -34,13 +34,14 @@ import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
-import { nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
 import { evaluateDesignerRerunReadiness } from '@/services/crossClarify'
 import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
 import {
   assertTaskAcceptsQuestions,
+  resolveTriggerForEntry,
   taskNodeHasRun,
   TERMINAL_TASK_STATUSES,
 } from '@/services/taskQuestions'
@@ -79,6 +80,8 @@ export interface DispatchTaskQuestionsResult {
 }
 
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
+type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
+type NodeRunRow = typeof nodeRuns.$inferSelect
 
 const EMPTY_RESULT: DispatchTaskQuestionsResult = { reruns: [], dispatchedEntryIds: [] }
 
@@ -625,13 +628,40 @@ async function runIdsWithOutput(db: DbClient, runIds: string[]): Promise<Set<str
   return new Set(rows.map((r) => r.nodeRunId))
 }
 
+/** RFC-127 借壳: a borrowed override entry is "home" on `nodeId` when its run is minted
+ *  there (home = default ?? override) and the override genuinely names a DIFFERENT node
+ *  whose agent is borrowed. Shared by the designer + self/questioner resolvers. */
+function isBorrowHomeFor(e: TaskQuestionRow, nodeId: string): boolean {
+  const home = homeTarget(e)
+  return home === nodeId && e.overrideTargetNodeId !== null && e.overrideTargetNodeId !== home
+}
+
+/** RFC-127 借壳: resolve a node's agentName from the frozen workflow snapshot (the SAME
+ *  source canReassign validated against). null = unresolvable / non-agent node. */
+function resolveNodeAgentName(def: WorkflowDefinition, nodeId: string): string | null {
+  return (
+    ((def.nodes ?? []).find((n) => n.id === nodeId) as { agentName?: string } | undefined)
+      ?.agentName ?? null
+  )
+}
+
 /**
- * RFC-127 borrow authority for scheduler dispatch. The durable source is the
- * node's still-open dispatched task_question, not the freshest node_run audit
- * column:
- *   - queued / failed / outputless lineage => keep borrowing for retry/revival;
- *   - done+output lineage => consumed, drop borrow for unrelated future reruns;
- *   - non-frontier cascade mint => resolve this home node's own queued question.
+ * RFC-127 borrow authority for scheduler dispatch.
+ *
+ * Two ledgers feed the SAME scheduler borrow point (scheduler.runOneNode), because the
+ * two reassign flows consume on different signals:
+ *   - **designer** (deferred dispatch): the durable source is the node's still-open
+ *     dispatched task_question (dispatched_at + trigger_run_id consumption) — queued /
+ *     failed / outputless => keep borrowing for retry/revival; done+output => consumed,
+ *     drop borrow; non-frontier cascade mint => resolve this home node's own queued one.
+ *   - **self / questioner** (immediate clarify-round continuation): the entry never
+ *     touches dispatched_at; consumption rides the round's RFC-070 stamp (round-based,
+ *     resolveImmediateBorrowForNode). The home node's continuation rerun (clarify-answer
+ *     / cross-clarify-questioner-rerun) borrows X while answered-but-unconsumed; once it
+ *     lands done+output the round's consumed_by_..._run_id is set → borrow drops.
+ *
+ * self/questioner takes precedence (a continuation rerun's node is at most one role's
+ * home in practice); if it resolves nothing we fall through to the designer ledger.
  */
 export async function resolveBorrowForNode(
   db: DbClient,
@@ -640,6 +670,10 @@ export async function resolveBorrowForNode(
   iteration: number,
   workflowDef: WorkflowDefinition,
 ): Promise<string | null> {
+  const immediate = await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
+  if (immediate !== null) return immediate
+
+  // --- designer (deferred dispatch ledger) — unchanged shipped path ---
   const entries = await db
     .select()
     .from(taskQuestions)
@@ -652,10 +686,7 @@ export async function resolveBorrowForNode(
         isNotNull(taskQuestions.overrideTargetNodeId),
       ),
     )
-  const candidates = entries.filter((e) => {
-    const home = homeTarget(e)
-    return home === nodeId && e.overrideTargetNodeId !== null && e.overrideTargetNodeId !== home
-  })
+  const candidates = entries.filter((e) => isBorrowHomeFor(e, nodeId))
   if (candidates.length === 0) return null
 
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
@@ -679,13 +710,87 @@ export async function resolveBorrowForNode(
     .sort((a, b) => a.id.localeCompare(b.id))
     .find((e) => !isDispatchedEntryConsumed(e, runs, lineageViews))
   if (open?.overrideTargetNodeId === undefined || open.overrideTargetNodeId === null) return null
-  return (
-    (
-      (workflowDef.nodes ?? []).find((n) => n.id === open.overrideTargetNodeId) as
-        | { agentName?: string }
-        | undefined
-    )?.agentName ?? null
+  return resolveNodeAgentName(workflowDef, open.overrideTargetNodeId)
+}
+
+/**
+ * RFC-127 借壳 (self / questioner immediate path). These reruns are minted the instant the
+ * human answers (clarify.ts mintNodeRun 'clarify-answer' on the asking node P; crossClarify
+ * mintQuestionerRerun 'cross-clarify-questioner-rerun' on the questioner) and NEVER touch
+ * dispatched_at / trigger_run_id. So unlike the designer ledger, consumption is ROUND-based:
+ * the entry's clarify round + its role's RFC-070 consumption stamp (resolveTriggerForEntry —
+ * self ⇒ consumed_by_consumer_run_id, questioner ⇒ consumed_by_questioner_run_id). The home
+ * node borrows X while the round is answered-but-unconsumed, and stops once the continuation
+ * rerun lands done+output (the stamp is set ⇒ an unrelated future rerun runs the home's own
+ * agent — the golden-lock). Returns the borrowed agentName, or null.
+ */
+async function resolveImmediateBorrowForNode(
+  db: DbClient,
+  taskId: string,
+  nodeId: string,
+  iteration: number,
+  workflowDef: WorkflowDefinition,
+): Promise<string | null> {
+  const entries = await db
+    .select()
+    .from(taskQuestions)
+    .where(
+      and(
+        eq(taskQuestions.taskId, taskId),
+        eq(taskQuestions.loopIter, iteration),
+        inArray(taskQuestions.roleKind, ['self', 'questioner']),
+        isNotNull(taskQuestions.overrideTargetNodeId),
+      ),
+    )
+  // home = default ?? override (self: the asking node P; questioner: the questioner node).
+  const candidates = entries.filter((e) => isBorrowHomeFor(e, nodeId))
+  if (candidates.length === 0) return null
+
+  const rounds = await db
+    .select()
+    .from(clarifyRounds)
+    .where(
+      and(
+        eq(clarifyRounds.taskId, taskId),
+        inArray(
+          clarifyRounds.intermediaryNodeRunId,
+          candidates.map((e) => e.originNodeRunId),
+        ),
+      ),
+    )
+  const roundByOrigin = new Map(rounds.map((r) => [r.intermediaryNodeRunId, r]))
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const outputRunIds = await runIdsWithOutput(
+    db,
+    runs.map((r) => r.id),
   )
+  const open = candidates
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .find((e) => {
+      const round = roundByOrigin.get(e.originNodeRunId)
+      if (round === undefined) return false // round vanished (task edited) → not borrowable
+      return !isRoundEntryConsumed(e, round, runs, outputRunIds)
+    })
+  if (open?.overrideTargetNodeId === undefined || open.overrideTargetNodeId === null) return null
+  return resolveNodeAgentName(workflowDef, open.overrideTargetNodeId)
+}
+
+/** RFC-127 借壳: is a self/questioner clarify-round entry CONSUMED? = its role's RFC-070
+ *  consumption stamp (resolveTriggerForEntry) points at a done+output run — the SAME oracle
+ *  the read-side (resolveEntryHandler) uses. Stamp NULL (continuation rerun queued/running/
+ *  failed) or anchor GC'd → NOT consumed (keep borrowing for the retry/revival). */
+function isRoundEntryConsumed(
+  entry: Pick<TaskQuestionRow, 'roleKind'>,
+  round: ClarifyRoundRow,
+  runs: ReadonlyArray<NodeRunRow>,
+  outputRunIds: ReadonlySet<string>,
+): boolean {
+  const triggerRunId = resolveTriggerForEntry(round, entry.roleKind)
+  if (triggerRunId === null) return false
+  const row = runs.find((r) => r.id === triggerRunId)
+  if (row === undefined) return false
+  return row.status === 'done' && outputRunIds.has(row.id)
 }
 
 /**
@@ -791,13 +896,7 @@ async function buildFrontierMintPlan(
   // RFC-127 借壳: resolve the borrowed node's agentName from the frozen snapshot (the SAME
   // source canReassign validated against). null = no borrow → the home runs its own agent.
   const agentOverrideName =
-    borrowOverrideNodeId === null
-      ? null
-      : ((
-          (definition.nodes ?? []).find((n) => n.id === borrowOverrideNodeId) as
-            | { agentName?: string }
-            | undefined
-        )?.agentName ?? null)
+    borrowOverrideNodeId === null ? null : resolveNodeAgentName(definition, borrowOverrideNodeId)
   const values = buildMintNodeRunValues({
     id: preId,
     taskId,

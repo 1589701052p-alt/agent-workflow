@@ -15,8 +15,10 @@
 //     承接 run 由 service 的 `resolveHandlerRun` 按**精确 lineage**取（Codex F1，
 //     非裸 freshest≥anchor）后传入——本函数只认「已解析的承接 run」。
 //
-//   * canReassign — 改派合法性。仅 designer（修订型）可改派，且目标须是工作流里
-//     kind=agent 的节点（Codex F5——io/review/clarify/wrapper 无 prompt/产出契约）。
+//   * canReassign — 改派合法性。RFC-127 T4 起**任意角色**（self/questioner/designer）
+//     皆可改派——self/questioner 通过「借壳顶替」让原节点续跑换用目标 agent X，不再
+//     deadlock（放开 RFC-120 的 designer-only 限制）。目标仍须是工作流里 kind=agent 的
+//     节点（Codex F5——io/review/clarify/wrapper 无 prompt/产出契约）。
 //
 // 设计与决策见 design/RFC-120-task-question-list/{proposal,design}.md。
 
@@ -174,13 +176,12 @@ export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuesti
   return input.isStaged ? 'staged' : 'pending'
 }
 
-/** 改派合法性：仅 designer 条目、且目标是工作流 agent 节点（Codex F5）。 */
-export function canReassign(
-  entry: { roleKind: TaskQuestionRoleKind },
-  targetNodeId: string,
-  agentNodeIds: ReadonlySet<string>,
-): boolean {
-  return entry.roleKind === 'designer' && agentNodeIds.has(targetNodeId)
+/** 改派合法性（RFC-127 T4）：**任意角色**条目皆可改派（self/questioner 走借壳顶替，
+ *  designer/manual 仍走原换壳路径），唯一约束是目标须是工作流里的 agent 节点（Codex F5
+ *  ——io/review/clarify/wrapper 无 prompt/产出契约，借壳无从顶替）。RFC-120 的 designer-only
+ *  限制（self/questioner 改派必 deadlock）已被借壳机制解除。 */
+export function canReassign(targetNodeId: string, agentNodeIds: ReadonlySet<string>): boolean {
+  return agentNodeIds.has(targetNodeId)
 }
 
 /** RFC-120 T7（override 重跑核心）：把一轮里**设计者域**问题按「有效承接节点」分组——
