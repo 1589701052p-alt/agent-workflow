@@ -179,6 +179,28 @@ describe('TaskQuestionList board', () => {
     )
   })
 
+  // RFC-120 回归锁：「改派(指定处理 agent)」是 *下发前* 的动作 —— 下拉只在「待指派」
+  // (pending) 的 designer 卡出现；staged/processing/已处理待确认/完成 一律只读显示目标，
+  // 不再泄漏改派下拉。后端 reassignTaskQuestion 同样以 `dispatched_at IS NULL` 拒绝已下发
+  // 改派(services/taskQuestions.ts:767/777)，前端把入口收敛到 pending 与之对齐。锁定修复：
+  // 改派下拉曾泄漏到 awaiting_confirm —— deferred 点了必 409、非 deferred 改了 override 也
+  // 不重跑，都达不到目的。Select 的 trigger 是 role="combobox"(components/Select.tsx:167)。
+  test('改派下拉只在 pending designer 卡；staged/已下发/终态 designer 卡只读', async () => {
+    await wrap([
+      entry({ id: 'p', phase: 'pending', roleKind: 'designer' }),
+      entry({ id: 'st', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'pr', phase: 'processing', roleKind: 'designer' }),
+      entry({ id: 'ac', phase: 'awaiting_confirm', roleKind: 'designer' }),
+      entry({ id: 'dn', phase: 'done', roleKind: 'designer' }),
+    ])
+    // pending：改派下拉(combobox)在场。
+    expect(within(screen.getByTestId('tq-card-p')).queryByRole('combobox')).toBeTruthy()
+    // staged + 已下发(processing/awaiting_confirm) + 终态(done)：只读，无改派下拉。
+    for (const id of ['st', 'pr', 'ac', 'dn']) {
+      expect(within(screen.getByTestId(`tq-card-${id}`)).queryByRole('combobox')).toBeNull()
+    }
+  })
+
   test('empty list renders the empty state', async () => {
     await wrap([])
     expect(screen.queryByTestId('task-questions-board')).toBeNull()

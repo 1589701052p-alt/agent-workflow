@@ -333,8 +333,11 @@ export function TaskQuestionList({
                 <span className="task-questions__count">{col.length}</span>
               </div>
               {col.map((e) => {
-                // RFC-120 Codex impl gate F3: only re-targetable while non-terminal.
-                const reassignable = e.roleKind === 'designer' && e.phase !== 'done'
+                // RFC-120: 改派下拉仅在「待指派」(pending)——它是「下发前指定处理 agent」
+                // 的动作。staged(待下发)起前端即视为已敲定 handler、转只读；已下发的
+                // processing/awaiting_confirm 后端 reassignTaskQuestion 也以
+                // `dispatched_at IS NULL` 拒改派(下发后换 handler 是 reopen 的职责)。
+                const reassignable = e.roleKind === 'designer' && e.phase === 'pending'
                 const hasAnswerLink = e.originNodeRunId !== null
                 const hasCopy = deferred && e.phase === 'pending'
                 const hasConfirm = e.phase === 'awaiting_confirm'
