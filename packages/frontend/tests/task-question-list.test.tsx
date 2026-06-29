@@ -228,10 +228,13 @@ describe('TaskQuestionList board', () => {
       entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'pending' }),
       entry({ id: 'a2', sourceNodeId: 'nodeA', phase: 'processing' }),
       entry({ id: 'b1', sourceNodeId: 'nodeB', phase: 'pending' }),
+      // RFC-128: a fully-done source STILL gets a chip (the filter lists ALL source nodes).
+      entry({ id: 'c1', sourceNodeId: 'nodeC', phase: 'done', roleKind: 'designer' }),
     ])
-    // per-node count chips (non-terminal): nodeA=2, nodeB=1
+    // RFC-128: per-node count chips count ALL phases (incl. done): nodeA=2, nodeB=1, nodeC=1.
     expect(screen.getByTestId('tq-node-filter-nodeA').textContent).toContain('2')
     expect(screen.getByTestId('tq-node-filter-nodeB').textContent).toContain('1')
+    expect(screen.getByTestId('tq-node-filter-nodeC').textContent).toContain('1')
     // all three cards visible initially
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
     expect(screen.getByTestId('tq-card-b1')).toBeTruthy()

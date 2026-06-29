@@ -24,3 +24,13 @@ describe('RFC-128 question tab badge (source-level lock)', () => {
     expect(SRC).toContain("e.phase === 'pending' || e.phase === 'staged'")
   })
 })
+
+describe('RFC-128 canvas node badge (source-level lock)', () => {
+  // The canvas per-node badge (questionCounts) counts ONLY 'processing' — the questions a
+  // node is actively running. Pre-dispatch (待指派/待下发) live in the pool; 已处理待确认/
+  // 完成 no longer belong to the node. Distinct from the tab badge (pending+staged) above.
+  test('canvas node badge counts ONLY processing', () => {
+    expect(SRC).toMatch(/const questionCounts = useMemo/)
+    expect(SRC).toContain("e.sourceNodeId !== null && e.phase === 'processing'")
+  })
+})

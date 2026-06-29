@@ -676,9 +676,11 @@ function TaskStatusCanvas({
   const questionCounts = useMemo<Record<string, number>>(() => {
     const out: Record<string, number> = {}
     for (const e of questions.data ?? []) {
-      // "Needs human attention" = non-terminal (mirrors the board filter chips). A manual
-      // question (sourceNodeId null, RFC-120 §15) has no graph source node → no canvas badge.
-      if (e.sourceNodeId !== null && e.phase !== 'done') {
+      // RFC-128 (用户 2026-06-30): the canvas node badge counts ONLY 'processing' — the
+      // questions this node is actively running. Pre-dispatch (待指派/待下发) live in the
+      // question POOL, not on a node; 已处理待确认/完成 no longer belong to the node. A
+      // manual question (sourceNodeId null) has no graph source node → no canvas badge.
+      if (e.sourceNodeId !== null && e.phase === 'processing') {
         out[e.sourceNodeId] = (out[e.sourceNodeId] ?? 0) + 1
       }
     }

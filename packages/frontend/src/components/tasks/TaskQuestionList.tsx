@@ -249,11 +249,15 @@ export function TaskQuestionList({
       ? (nodeOptions.find((n) => n.id === nodeId)?.label ?? nodeId)
       : t('taskQuestions.noTarget')
 
-  // Per source-node count of questions still needing attention (non-terminal). Manual
-  // questions (sourceNodeId null) have no graph source node → they get no node chip.
+  // RFC-128 (用户 2026-06-30): the source-node filter lists EVERY source node that has
+  // questions (ANY phase) so the board can be filtered by any of them — including nodes
+  // whose questions are all done (previously only nodes with non-terminal questions got a
+  // chip, so a fully-confirmed source vanished from the filter). The chip count is that
+  // source's total card count (matches the board it filters to). Manual questions
+  // (sourceNodeId null) have no graph source node → no chip.
   const counts = new Map<string, number>()
   for (const e of entries) {
-    if (e.sourceNodeId !== null && e.phase !== 'done') {
+    if (e.sourceNodeId !== null) {
       counts.set(e.sourceNodeId, (counts.get(e.sourceNodeId) ?? 0) + 1)
     }
   }
