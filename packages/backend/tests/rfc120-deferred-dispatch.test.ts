@@ -485,6 +485,12 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
 // ---------------------------------------------------------------------------
 // D — dispatchTaskQuestions (mint / stamp / release + CAS idempotency).
 // ---------------------------------------------------------------------------
+// RFC-128 P0 net (behavior #3): 整轮 seal 现状，P1 逐题改造勿破。本 describe + 下方
+// 「dispatch correctness」是 §18 deferred designer「部分下发」现状的权威锁——dispatch
+// 戳 dispatched_at + mint frontier rerun + 释放 park gate、`dispatched_at IS NULL`
+// CAS 防重（双次 dispatch 不双 mint）。RFC-128 把 designer 域逐题下发铺到全角色时，这些
+// 整轮 answered 之后才下发的不变量不可放松（P1 仅把「整轮 answered 后」的前置改为「该题
+// 已 sealed 后」，CAS / frontier mint / 一节点一条 rerun 的语义须逐字保留）。
 describe('RFC-120 T9 — dispatchTaskQuestions', () => {
   async function seedDeferredAnswered(db: DbClient) {
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })

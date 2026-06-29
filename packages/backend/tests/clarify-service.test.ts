@@ -251,6 +251,11 @@ describe('sealAnswersServerSide', () => {
   })
 })
 
+// RFC-128 P0 net (behavior #1): 整轮 seal 现状，P1 逐题改造勿破。本 describe 锁住
+// self clarify 整轮续跑的形态（rerun 存在 / retryIndex=0 / clarify done / shard
+// passthrough）。补强锁——「恰好一条 cause='clarify-answer' 续跑」「整轮一次 seal（多题
+// 一起进 answers）」「sealAnswersServerSide 空数组返回 [] 不抛错」——见
+// rfc128-p0-whole-round-seal-net.test.ts #1（P5 self 逐题重跑会把整轮一条变多条 → 先红）。
 describe('submitClarifyAnswers', () => {
   test('seals answers, marks session answered, mints a rerun with clarifyIteration+1', async () => {
     const db = createInMemoryDb(MIGRATIONS)

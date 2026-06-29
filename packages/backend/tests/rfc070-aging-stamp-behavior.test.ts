@@ -546,6 +546,12 @@ describe('RFC-070 B5 — cross-questioner cascade respects consumed_by_questione
 // B6/B7 — markClarifyRoundsConsumedBy helper semantics.
 // ---------------------------------------------------------------------------
 
+// RFC-128 P0 net (behavior #5): 整轮 seal 现状，P1 逐题改造勿破。本 describe 锁住
+// 「整轮消费戳」的写入（self→consumer 列 / cross-designer→consumer 列 / cross-questioner
+// →questioner 列），done+output 才 stamp 的 gate 由 rfc070-aging-stamp-grep-guards.test.ts
+// 「outputsPersistedCount > 0」锁。把这些戳翻译成「该 entry 是否已处理」的整轮门控预言
+// （resolveTriggerForEntry：round 非 answered → 无 trigger）补锁见
+// rfc128-p0-whole-round-seal-net.test.ts #5。
 describe('RFC-070 B6/B7 — markClarifyRoundsConsumedBy stamps every consumer kind', () => {
   test('self path: stamps clarify_rounds (kind=self) and clarify_sessions for matching agent', async () => {
     const db = createInMemoryDb(MIGRATIONS)

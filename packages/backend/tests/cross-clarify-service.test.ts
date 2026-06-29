@@ -349,6 +349,9 @@ describe('RFC-056 submitCrossClarifyAnswers — directive="continue" path', () =
   })
 })
 
+// RFC-128 P0 net: 整轮 seal 现状，P1 逐题改造勿破。本 describe 锁住 stop 路径整轮
+// 续跑（mint 一条 questioner node_run + designer 不续跑）；cause 字段与「恰好一条」的
+// 补强锁见 rfc128-p0-whole-round-seal-net.test.ts #2。
 describe('RFC-056 submitCrossClarifyAnswers — directive="stop" (reject)', () => {
   test('mints fresh questioner node_run + broadcasts cross-clarify.rejected; designer NOT rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
@@ -782,6 +785,10 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
   })
 })
 
+// RFC-128 P0 net: 整轮 seal 现状，P1 逐题改造勿破。这是 cross 「designer 承接链」的
+// 现状锁——整轮答案经此整批注入 designer 的 External Feedback。P1 designer 逐题下发后，
+// 整轮注入须被逐题注入逐字替代（而非丢失答案）；端到端「questioner 答→designer 收」的
+// 串联锁见 rfc128-p0-whole-round-seal-net.test.ts #2。
 describe('RFC-056 buildExternalFeedbackContext', () => {
   test('returns block + iteration + sourcesCsv for the latest directive=continue session per source within loop_iter', async () => {
     const db = createInMemoryDb(MIGRATIONS)
@@ -877,6 +884,10 @@ describe('RFC-056 buildExternalFeedbackContext', () => {
 // FAILED task is RESUMED the designer rerun never sees the human's already-given
 // answer — it's silently dropped. Desired behavior (user): resume must preserve it
 // (questions should stay in place, not become "closed").
+//
+// RFC-128 P0 net (behavior #4): 整轮 seal 现状，P1 逐题改造勿破。这是 RFC-126
+// 「failed→resume 答过的反问存活」的现成复现，per-question seal 改造后整轮 answered 不变量
+// 仍须成立（轮只在「全题 seal」时翻 answered，partial 纯派生）——此锁不可放松。
 describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-clarify feedback', () => {
   test('answered cross-clarify feedback survives a fail → CR-1 → resume cycle', async () => {
     const db = createInMemoryDb(MIGRATIONS)
