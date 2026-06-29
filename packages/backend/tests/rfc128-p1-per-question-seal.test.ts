@@ -518,6 +518,34 @@ describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)',
     expect(scopes.q2).toBe('designer')
   })
 
+  // P2-3b (Codex re-gate): a LOCKED question's scope is sealed — a stale whole-round tab that
+  // posts a DIFFERENT scope for it must NOT change the stored scope (mirrors answer lockedIds).
+  test('先 seal q1=questioner；整轮 submit 改 q1=designer → q1 scope 仍锁定 questioner（不被改）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q1')],
+      scopes: { q1: 'questioner' },
+    })
+
+    // Stale tab finalize tries to FLIP q1 back to designer — must be ignored (q1 is locked).
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId: originNodeRunId,
+      answers: [makeAns('q1'), makeAns('q2')],
+      directive: 'continue',
+      questionScopes: { q1: 'designer', q2: 'designer' },
+    })
+
+    const [round] = await roundOf(db, taskId)
+    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
+    expect(scopes.q1).toBe('questioner') // P2-3b: locked scope NOT re-routed to designer
+    expect(scopes.q2).toBe('designer')
+  })
+
   test('黄金锁: 无 stored scope 时，整轮 submit 的 scopes 行为不变', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])

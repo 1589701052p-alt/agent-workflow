@@ -444,8 +444,15 @@ export async function submitCrossClarifyAnswers(
   // omits an earlier-sealed questioner-scope question must NOT drop its scope (which would
   // wrongly fall back to the 'designer' default and mis-route feedback). No stored scopes
   // + no request scopes ⇒ null (golden-lock); first whole-round submit ⇒ just this request.
+  // RFC-128 P2-3b (Codex re-gate): a LOCKED (already-sealed) question's SCOPE is sealed too —
+  // keep its STORED scope and ignore any incoming scope for it (mirrors the answer `lockedIds`),
+  // so a stale whole-round tab can't re-route a sealed questioner-scope answer back to designer
+  // even though its answer value is protected.
   const existingScopes = parseQuestionScopesJson(row.questionScopesJson)
-  const mergedScopes = { ...(existingScopes ?? {}), ...(validatedScopes ?? {}) }
+  const mergedScopes: Record<string, ClarifyQuestionScope> = { ...(existingScopes ?? {}) }
+  for (const [qid, scope] of Object.entries(validatedScopes ?? {})) {
+    if (!lockedIds.has(qid)) mergedScopes[qid] = scope
+  }
   // Normalize to null when empty (matches the old `?? null` convention; `{}` and `null`
   // resolve identically in resolveQuestionScope → golden-lock for the no-prior-scope case).
   // Used for BOTH persistence and this submit's designer-split routing so a prior-sealed
