@@ -2536,6 +2536,17 @@ code {
   color: #fff;
 }
 
+/* The armed (二次确认) state paints white text on the danger fill. Without an
+   explicit hover rule, `.btn:hover` (specificity 0,2,0) outranks `.btn--armed`
+   (0,1,0) and reverts the background to var(--bg) — near-white in the light
+   theme — while the text stays #fff, i.e. white-on-near-white, unreadable. And
+   the cursor is necessarily over the button the moment it arms (you just clicked
+   it), so every confirm hit this. Mirror `.btn--primary:hover`: darken the
+   danger fill on hover so the white label stays legible. */
+.btn--armed:hover {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
