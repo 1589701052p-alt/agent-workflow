@@ -7355,6 +7355,9 @@ mark.comment-anchor[data-active='true'] {
 .clarify-question__title {
   flex: 1;
   min-width: 0;
+  /* 问题标题长内容（无空格长串/长 token）换行，避免溢出反问卡片（与同级选项标签一致） */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .clarify-question__options {
