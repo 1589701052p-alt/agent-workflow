@@ -33,13 +33,21 @@ import { and, eq, inArray, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
-import { clarifyRounds, clarifySessions, crossClarifySessions, taskQuestions } from '@/db/schema'
+import {
+  clarifyRounds,
+  clarifySessions,
+  crossClarifySessions,
+  nodeRuns,
+  taskQuestions,
+} from '@/db/schema'
 import { parseAnswersArray, sealAnswersServerSide } from '@/services/clarify'
 import { reconcileRoundEntriesTx } from '@/services/taskQuestions'
+import { setNodeClarifyDirective } from '@/services/taskClarifyDirective'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import {
   mergeSealedAnswers,
   type ClarifyAnswer,
+  type ClarifyDirective,
   type ClarifyQuestion,
   type ClarifyQuestionScope,
 } from '@agent-workflow/shared'
@@ -60,6 +68,16 @@ export interface SealRoundQuestionsArgs {
   /** Audit-only setter id (RFC-099 — NEVER enters an agent prompt). Stamped on the
    *  sealed entries' sealed_by and, when the round flips, on the round's answered_by. */
   sealedBy?: string
+  /** RFC-128 P2 (Codex P2-2) — round-level directive ('continue' | 'stop'), threaded from
+   *  the answer body so the control channel matches the quick path's directive semantics:
+   *  it is persisted to clarify_rounds.directive (+ the legacy session) and FEEDS the
+   *  reconcile designer gate (a 'stop' round produces NO designer entries). When the round
+   *  fully seals with 'stop' the canvas directive (RFC-123 nodeStopOverride) is also written
+   *  (post-tx, mirroring submitClarifyAnswers/submitCrossClarifyAnswers). When omitted the
+   *  round's existing directive is preserved, defaulting to 'continue' — NB this default is
+   *  also what the §18 designer park requires (loadUndispatchedDesignerTargets filters
+   *  directive='continue'), so a full continue-seal correctly parks until board dispatch. */
+  directive?: ClarifyDirective
   now?: () => number
 }
 
@@ -99,7 +117,7 @@ export async function sealRoundQuestions(
   args: SealRoundQuestionsArgs,
 ): Promise<SealRoundQuestionsResult> {
   const ts = (args.now ?? Date.now)()
-  return dbTxSync(args.db, (tx): SealRoundQuestionsResult => {
+  const txResult = dbTxSync(args.db, (tx) => {
     // Re-read the round INSIDE the tx so a concurrent seal's committed answers/status are
     // observed (TOCTOU-free).
     const round = tx
@@ -180,13 +198,24 @@ export async function sealRoundQuestions(
     const newSealed = new Set<string>([...alreadySealed, ...sealingSet])
     const fullySealed = questions.every((q) => newSealed.has(q.id))
 
-    // Write clarify_rounds (the SoT): merged answers + merged scopes; flip status only
-    // when fully sealed. Keep status 'awaiting_human' on a partial seal (NEVER a new DB
+    // RFC-128 P2 (Codex P2-2) — round-level directive. Provided wins; else keep the round's
+    // existing value; else default 'continue'. Persisted below (round + legacy session) AND
+    // fed to the reconcile designer gate. The 'continue' default is REQUIRED for the §18
+    // designer park: loadUndispatchedDesignerTargets filters clarify_rounds.directive =
+    // 'continue', so a NULL directive would leave a fully-sealed designer round un-parked →
+    // (with the node-run closed below) the task would advance past it instead of waiting for
+    // board dispatch. A 'stop' round produces NO designer entries (reconcileDesiredEntries).
+    const effectiveDirective: ClarifyDirective =
+      args.directive ?? (round.directive as ClarifyDirective | null) ?? 'continue'
+
+    // Write clarify_rounds (the SoT): merged answers + merged scopes + directive; flip status
+    // only when fully sealed. Keep status 'awaiting_human' on a partial seal (NEVER a new DB
     // 'partial' status — RFC-128 §2 / RFC-126).
     tx.update(clarifyRounds)
       .set({
         answersJson: mergedJson,
         questionScopesJson: scopesJson,
+        directive: effectiveDirective,
         ...(fullySealed
           ? {
               status: 'answered' as const,
@@ -200,11 +229,12 @@ export async function sealRoundQuestions(
 
     // Dual-write the legacy session table (RFC-058 keeps both in lockstep on the
     // overlapping columns) by the SHARED row id. crossClarifySessions has no answered_by
-    // column (matches submitCrossClarifyAnswers), so we mirror answers + scopes + status +
-    // answeredAt — the fields the dual-write-consistency nets assert.
+    // column (matches submitCrossClarifyAnswers), so we mirror answers + scopes + directive +
+    // status + answeredAt — the fields the dual-write-consistency nets assert.
     const legacySet = {
       answersJson: mergedJson,
       questionScopesJson: scopesJson,
+      directive: effectiveDirective,
       ...(fullySealed ? { status: 'answered' as const, answeredAt: ts } : {}),
     }
     if (round.kind === 'self') {
@@ -216,12 +246,34 @@ export async function sealRoundQuestions(
         .run()
     }
 
-    // (3) Reconcile against the EFFECTIVE round (status reflects the flip above). P2-4(a):
-    // designer entries appear only once the round is fully sealed (= answered); a partial
-    // seal creates only questioner/self entries. Done on the SAME tx (dbTxSync can't nest).
+    // RFC-128 P2 (Codex P1) — on FULL seal, close the intermediary clarify/cross-clarify
+    // node_run (awaiting_human → done) ATOMICALLY with the round flip (same dbTxSync).
+    // Without this the answered round's clarify node_run stays awaiting_human and
+    // deriveFrontier buckets it into awaitingHuman FOREVER: loadOpenClarify keys off the
+    // SESSION status (already flipped to answered here), but the node_run's own
+    // awaiting_human status is an INDEPENDENT park signal (scheduler.ts deriveFrontier) — so
+    // the deferred round parks permanently, unresolvable even by a later board dispatch of
+    // the staged designer questions. Mirrors the quick path's resume-clarify transition
+    // (clarify.ts/crossClarify.ts). DEFER semantics are kept: NO rerun is minted and NO
+    // resumeTask runs — the designer reruns fire later via board dispatch (P3 借壳), held
+    // meanwhile by the §18 designer park (directive='continue' written above). The CAS on
+    // status='awaiting_human' makes it a safe no-op if the node already left that state.
+    // rfc053-allow-direct-status-write -- atomic clarify-node close on full seal (mirrors resume-clarify)
+    if (fullySealed) {
+      tx.update(nodeRuns)
+        .set({ status: 'done', finishedAt: ts })
+        .where(and(eq(nodeRuns.id, args.originNodeRunId), eq(nodeRuns.status, 'awaiting_human')))
+        .run()
+    }
+
+    // (3) Reconcile against the EFFECTIVE round (status + directive reflect the writes
+    // above). P2-4(a): designer entries appear only once the round is fully sealed (=
+    // answered) AND directive!=='stop'; a partial seal (or a stop round) creates only
+    // questioner/self entries. Done on the SAME tx (dbTxSync can't nest).
     reconcileRoundEntriesTx(tx, {
       ...round,
       status: fullySealed ? 'answered' : round.status,
+      directive: effectiveDirective,
       answersJson: mergedJson,
       questionScopesJson: scopesJson,
       answeredAt: fullySealed ? ts : round.answeredAt,
@@ -241,6 +293,34 @@ export async function sealRoundQuestions(
       )
       .run()
 
-    return { sealedQuestionIds: [...sealingSet], roundFullySealed: fullySealed }
+    return {
+      sealedQuestionIds: [...sealingSet],
+      roundFullySealed: fullySealed,
+      // Post-tx side effect inputs (RFC-128 P2 Codex P2-2): mirror the quick path's
+      // stop → canvas directive write when the round FINALIZES with 'stop'.
+      stopFinalized: fullySealed && effectiveDirective === 'stop',
+      taskId: round.taskId,
+      askingNodeId: round.askingNodeId,
+    }
   })
+
+  // RFC-128 P2 (Codex P2-2) — mirror submitClarifyAnswers/submitCrossClarifyAnswers: a 'stop'
+  // answer also writes the per-(task, asking-node) clarify directive (RFC-123 canvas toggle /
+  // nodeStopOverride) so the toggle reflects the choice durably. Done AFTER the tx
+  // (setNodeClarifyDirective is async + writes a different table); the round's own directive
+  // is already persisted in-tx. askingNodeId is the source agent (self) or questioner (cross)
+  // — the same node the quick paths target. Still NO rerun / NO resume (defer semantics).
+  if (txResult.stopFinalized && txResult.askingNodeId) {
+    await setNodeClarifyDirective(
+      args.db,
+      txResult.taskId,
+      txResult.askingNodeId,
+      'stop',
+      args.sealedBy ?? 'local',
+    )
+  }
+  return {
+    sealedQuestionIds: txResult.sealedQuestionIds,
+    roundFullySealed: txResult.roundFullySealed,
+  }
 }

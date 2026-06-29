@@ -229,28 +229,40 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
     const actor = actorOf(c)
     const role = await ensureClarifyMember(deps, nodeRunId, actor)
 
-    // RFC-128 P2 (T5) — optional questionIds subset cap: when supplied, restrict this
-    // submission to answers whose questionId is in the list (the centralized pane / the
-    // /clarify coordination declare exactly which questions they seal, so a stale tab can
-    // never re-touch a sibling sealed elsewhere). Omitted ⇒ all answers (golden lock: the
-    // filtered array is the SAME reference, so the quick channel below is byte-for-byte).
-    const subsetIds = parsed.data.questionIds
-    const answers =
-      subsetIds !== undefined
-        ? parsed.data.answers.filter((a) => subsetIds.includes(a.questionId))
-        : parsed.data.answers
+    // RFC-128 P2 (Codex P2-1) — `questionIds` (a subset cap) is ONLY meaningful for the
+    // defer/control channel. On the quick channel it would silently drop questions while
+    // submitClarifyAnswers/submitCrossClarifyAnswers still finalize the WHOLE round (status
+    // answered + rerun mint), permanently stranding the dropped questions. Reject the combo
+    // instead of filtering-then-falling-through to the quick path.
+    if (parsed.data.questionIds !== undefined && parsed.data.defer !== true) {
+      throw new ValidationError(
+        'clarify-question-ids-requires-defer',
+        'questionIds is only honored with defer=true (the control channel); a quick-channel submit answers the whole round',
+      )
+    }
 
     // RFC-128 P2 (T6) — defer routing. defer=true → CONTROL channel: seal the answered
     // subset (sealRoundQuestions, P1) WITHOUT minting a rerun or resuming the task; the
     // sealed question(s) enter 待指派 for the centralized-answer pane / batch dispatch. The
     // seal primitive is kind-agnostic (reads round.kind internally + dual-writes the legacy
     // session), so no self/cross branch is needed here. defer=false (the default, and the
-    // value when omitted) falls through to the unchanged quick channel below.
+    // value when omitted) falls through to the unchanged quick channel below — which keeps
+    // using `parsed.data.answers` verbatim (golden lock).
     if (parsed.data.defer) {
+      // Subset cap (T5): seal only answers whose questionId is in `questionIds` (when set).
+      const subsetIds = parsed.data.questionIds
+      const sealAnswers =
+        subsetIds !== undefined
+          ? parsed.data.answers.filter((a) => subsetIds.includes(a.questionId))
+          : parsed.data.answers
       const sealResult = await sealRoundQuestions({
         db: deps.db,
         originNodeRunId: nodeRunId,
-        answers,
+        answers: sealAnswers,
+        // RFC-128 P2 (Codex P2-2): thread the round directive so the control channel matches
+        // quick-path stop semantics (no designer entries + directive persisted; 'continue'
+        // also satisfies the §18 designer park). Schema defaults it to 'continue'.
+        directive: parsed.data.directive,
         // Per-question scope is chosen when a (cross) question is answered; harmless for
         // self rounds (reconcile never derives a designer entry from scope there). Mirror
         // the quick channel — forward questionScopes only when the client sent it.
@@ -280,7 +292,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       const ccResult = await submitCrossClarifyAnswers({
         db: deps.db,
         crossClarifyNodeRunId: nodeRunId,
-        answers,
+        answers: parsed.data.answers,
         directive: parsed.data.directive,
         answeredBy: actor.user.id,
         submittedByRole: role,
@@ -318,7 +330,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
     const result = await submitClarifyAnswers({
       db: deps.db,
       clarifyNodeRunId: nodeRunId,
-      answers,
+      answers: parsed.data.answers,
       directive: parsed.data.directive,
       answeredBy: actor.user.id,
       submittedByRole: role,

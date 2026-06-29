@@ -12,6 +12,15 @@
 //                      unstage 始终允许（仅 stage 方向受门）。
 //   鉴权             → 非成员打端点 → 403 not-task-member（ensureClarifyMember）。
 //
+// Codex 实现 gate 复审（commit b3d2c7e）抓出的 3 个补丁，在此回归：
+//   P1   full defer seal → 关闭中介 clarify/cross-clarify node_run（awaiting_human→done），
+//        否则 deriveFrontier 永久 park 该 deferred round（看板 dispatch 也解不开）；partial
+//        seal 不动 node_run（对照锁）。full cross-designer seal 后任务仍由 §18 designer park
+//        把持、可被 dispatchTaskQuestions 续跑。
+//   P2-1 questionIds 配 defer!=true → 422（别静默 filter 后走 quick path 把整轮 finalize）。
+//   P2-2 defer=true 透传 directive：cross full seal + stop → directive 落库（round+session）
+//        且不产 designer 条目（reconcile 跳过）。
+//
 // 黄金锁：不传 defer/questionIds 的整轮提交与今天逐字一致（仍走 submitClarifyAnswers + resume）。
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -22,12 +31,14 @@ import type { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createApp } from '../src/server'
 import { createSession } from '../src/auth/sessionStore'
 import { createUser } from '../src/services/users'
 import { createClarifySession } from '../src/services/clarify'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
+import { loadUndispatchedDesignerTargets } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyAnswer, ClarifyQuestion } from '@agent-workflow/shared'
 
@@ -112,11 +123,29 @@ const CROSS_DEF = {
     { id: 'questioner', kind: 'agent-single', agentName: 'questioner' },
     { id: 'cross1', kind: 'clarify-cross-agent' },
   ],
-  edges: [],
+  // Wire questioner → cross1 → designer with the RFC-056/059 ports so the designer-dispatch
+  // readiness check (findCrossClarifyNodesPointingToDesigner) sees cross1 feeding designer.
+  edges: [
+    {
+      id: 'e_q_cc',
+      source: { nodeId: 'questioner', portName: '__clarify__' },
+      target: { nodeId: 'cross1', portName: 'questions' },
+    },
+    {
+      id: 'e_cc_d',
+      source: { nodeId: 'cross1', portName: 'to_designer' },
+      target: { nodeId: 'designer', portName: '__external_feedback__' },
+    },
+  ],
   outputs: [],
 }
 
-async function seedTaskRow(db: DbClient, ownerUserId: string, def: object): Promise<string> {
+async function seedTaskRow(
+  db: DbClient,
+  ownerUserId: string,
+  def: object,
+  opts: { deferred?: boolean } = {},
+): Promise<string> {
   const taskId = `task_${ulid()}`
   const workflowId = `wf_${taskId}`
   await db.insert(workflows).values({
@@ -138,6 +167,7 @@ async function seedTaskRow(db: DbClient, ownerUserId: string, def: object): Prom
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,
     status: 'awaiting_human',
+    deferredQuestionDispatch: opts.deferred === true,
     inputs: '{}',
     startedAt: Date.now(),
   })
@@ -180,8 +210,9 @@ async function seedCrossRound(
   db: DbClient,
   ownerUserId: string,
   questions: ClarifyQuestion[],
+  opts: { deferred?: boolean } = {},
 ): Promise<{ taskId: string; nodeRunId: string }> {
-  const taskId = await seedTaskRow(db, ownerUserId, CROSS_DEF)
+  const taskId = await seedTaskRow(db, ownerUserId, CROSS_DEF, opts)
   const questionerRunId = ulid()
   await db.insert(nodeRuns).values([
     { id: questionerRunId, taskId, nodeId: 'questioner', status: 'done', iteration: 0 },
@@ -215,6 +246,11 @@ interface ListedQuestion {
   roleKind: string
   phase: string
   sealed: boolean
+}
+
+async function nodeRunStatus(db: DbClient, id: string): Promise<string | undefined> {
+  const [r] = await db.select({ status: nodeRuns.status }).from(nodeRuns).where(eq(nodeRuns.id, id))
+  return r?.status
 }
 
 async function listQuestions(app: Hono, token: string, taskId: string): Promise<ListedQuestion[]> {
@@ -473,5 +509,158 @@ describe('RFC-128 P2 — 端点鉴权 403 (ensureClarifyMember)', () => {
       body: JSON.stringify({ defer: true, answers: [makeAns('q1')] }),
     })
     expect(res.status).toBe(200)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Codex P1 — full defer seal 关闭中介 node_run（解永久 park）；partial 不动（对照锁）；
+// cross-designer 全 seal 后任务由 §18 designer park 把持 + 可被 dispatch 续跑。
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P2 — Codex P1: full defer seal 关闭中介 node_run', () => {
+  test('full defer seal → 中介 clarify node_run awaiting_human→done（仍不 mint 续跑）', async () => {
+    const h = await buildHarness()
+    const { taskId, nodeRunId } = await seedSelfRound(h.db, h.alice.id, [makeQ('q1')])
+    expect(await nodeRunStatus(h.db, nodeRunId)).toBe('awaiting_human')
+
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ defer: true, answers: [makeAns('q1')] }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
+    // P1: the answered round's clarify node_run is CLOSED — else deriveFrontier parks it
+    // (awaiting_human bucket) forever. Still no rerun (defer semantics preserved).
+    expect(await nodeRunStatus(h.db, nodeRunId)).toBe('done')
+    expect(await clarifyAnswerReruns(h.db, taskId)).toBe(0)
+  })
+
+  test('partial defer seal → 中介 node_run 仍 awaiting_human（对照锁：只 full seal 才关）', async () => {
+    const h = await buildHarness()
+    const { nodeRunId } = await seedSelfRound(h.db, h.alice.id, [makeQ('q1'), makeQ('q2')])
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ defer: true, answers: [makeAns('q1')] }), // q2 未 seal → partial
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(false)
+    expect(await nodeRunStatus(h.db, nodeRunId)).toBe('awaiting_human') // 不动
+  })
+
+  test('full cross-designer defer seal（deferred task）：cross node_run done + 任务由 §18 designer park 把持 + 可 dispatch 续跑', async () => {
+    const h = await buildHarness()
+    const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
+      deferred: true,
+    })
+
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({
+        defer: true,
+        answers: [makeAns('q1')],
+        questionScopes: { q1: 'designer' },
+        // directive omitted → 'continue' (the §18 park requires directive='continue')
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
+
+    // P1 + P2-2: cross-clarify node closed; round directive persisted as 'continue'.
+    expect(await nodeRunStatus(h.db, nodeRunId)).toBe('done')
+    expect((await roundOf(h.db, taskId))[0]?.directive).toBe('continue')
+
+    // The designer entry exists and the §18 park HOLDS the deferred task (proves the task is
+    // NOT permanently parked on the clarify node, and NOT prematurely advanced either).
+    const list = await listQuestions(h.app, h.alice.token, taskId)
+    const designer = list.find((q) => q.roleKind === 'designer')
+    expect(designer).toBeDefined()
+    expect(designer!.phase).toBe('pending')
+    const parked = await loadUndispatchedDesignerTargets(h.db, taskId)
+    expect(parked.has('designer')).toBe(true)
+
+    // It is DISPATCHABLE: a board dispatch mints the designer rerun (releases the park) —
+    // the exact path the permanent-park bug (finding P1) used to deadlock.
+    const result = await dispatchTaskQuestions(h.db, taskId, [designer!.id], {
+      userId: h.alice.id,
+      role: 'owner',
+    })
+    expect(result.reruns.length).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Codex P2-1 — questionIds 须配 defer（否则 422，不静默 filter 后走 quick path）
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P2 — Codex P2-1: questionIds 须配 defer', () => {
+  test('questionIds + defer 缺省 → 422 clarify-question-ids-requires-defer（不 finalize、不 mint）', async () => {
+    const h = await buildHarness()
+    const { taskId, nodeRunId } = await seedSelfRound(h.db, h.alice.id, [makeQ('q1'), makeQ('q2')])
+
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ questionIds: ['q1'], answers: [makeAns('q1'), makeAns('q2')] }),
+    })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe(
+      'clarify-question-ids-requires-defer',
+    )
+    // Rejected BEFORE the quick path → round untouched, nothing finalized/minted (the bug:
+    // it would have finalized the whole round persisting only q1, stranding q2).
+    expect((await roundOf(h.db, taskId))[0]?.status).toBe('awaiting_human')
+    expect(await clarifyAnswerReruns(h.db, taskId)).toBe(0)
+  })
+
+  test('questionIds + defer=false 显式 → 同样 422', async () => {
+    const h = await buildHarness()
+    const { nodeRunId } = await seedSelfRound(h.db, h.alice.id, [makeQ('q1'), makeQ('q2')])
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ defer: false, questionIds: ['q1'], answers: [makeAns('q1')] }),
+    })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe(
+      'clarify-question-ids-requires-defer',
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Codex P2-2 — defer 透传 directive：cross full seal + stop → directive 落库 + 无 designer 条目
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P2 — Codex P2-2: defer 透传 directive (stop)', () => {
+  test('cross full seal + directive=stop → round/legacy session directive=stop + 无 designer 条目（只 questioner）', async () => {
+    const h = await buildHarness()
+    const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
+      deferred: true,
+    })
+
+    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({
+        defer: true,
+        directive: 'stop',
+        answers: [makeAns('q1')],
+        questionScopes: { q1: 'designer' }, // designer scope, but stop ⇒ NO designer entry
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
+
+    // directive persisted on BOTH the round and the dual-written legacy session.
+    const [round] = await roundOf(h.db, taskId)
+    expect(round?.directive).toBe('stop')
+    const [legacy] = await h.db
+      .select()
+      .from(crossClarifySessions)
+      .where(eq(crossClarifySessions.id, round!.id))
+    expect(legacy?.directive).toBe('stop')
+
+    // stop ⇒ reconcile produces NO designer entry (only the questioner). Without threading the
+    // directive the round would default to 'continue' and emit a dispatchable designer entry.
+    const list = await listQuestions(h.app, h.alice.token, taskId)
+    expect(list.some((q) => q.roleKind === 'designer')).toBe(false)
+    expect(list.some((q) => q.roleKind === 'questioner')).toBe(true)
   })
 })
