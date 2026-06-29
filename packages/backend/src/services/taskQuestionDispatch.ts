@@ -654,14 +654,20 @@ function resolveNodeAgentName(def: WorkflowDefinition, nodeId: string): string |
  *     dispatched task_question (dispatched_at + trigger_run_id consumption) — queued /
  *     failed / outputless => keep borrowing for retry/revival; done+output => consumed,
  *     drop borrow; non-frontier cascade mint => resolve this home node's own queued one.
+ *     Keyed on task_questions.loop_iter (= round.loop_iter, the real wrapper-loop index for
+ *     cross rounds).
  *   - **self / questioner** (immediate clarify-round continuation): the entry never
  *     touches dispatched_at; consumption rides the round's RFC-070 stamp (round-based,
- *     resolveImmediateBorrowForNode). The home node's continuation rerun (clarify-answer
- *     / cross-clarify-questioner-rerun) borrows X while answered-but-unconsumed; once it
- *     lands done+output the round's consumed_by_..._run_id is set → borrow drops.
+ *     resolveImmediateBorrowForNode). Keyed on the round's ASKING run iteration (self rows
+ *     project loop_iter=0, so loop_iter can't gate the wrapper loop — P2-3).
  *
- * self/questioner takes precedence (a continuation rerun's node is at most one role's
- * home in practice); if it resolves nothing we fall through to the designer ledger.
+ * The scheduler resolves the agent BEFORE the pending row's rerun cause is known (and a
+ * retry/revival loses the original clarify cause), so it cannot tell a clarify-answer /
+ * questioner rerun (immediate ledger) from a cross-clarify-answer designer dispatch (designer
+ * ledger). The two ledgers must therefore NOT both claim the same home at the same iteration —
+ * if they do, the borrowed agent is ambiguous and we reject (P2-2). Throws ConflictError on an
+ * unresolvable borrow (multi-borrow within a home — P2-1; or dual-ledger overlap — P2-2); the
+ * scheduler converts it to a node-level failure.
  */
 export async function resolveBorrowForNode(
   db: DbClient,
@@ -671,9 +677,31 @@ export async function resolveBorrowForNode(
   workflowDef: WorkflowDefinition,
 ): Promise<string | null> {
   const immediate = await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
-  if (immediate !== null) return immediate
+  const designer = await resolveDesignerBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
+  // P2-2: an open self/questioner reassignment AND an open dispatched designer reassignment on
+  // the SAME home at the SAME iteration is ambiguous — the scheduler can't tell which ledger the
+  // current rerun belongs to. Reject rather than silently letting one ledger win.
+  if (immediate !== null && designer !== null) {
+    throw new ConflictError(
+      'task-question-borrow-ledger-conflict',
+      `node '${nodeId}' (iter ${iteration}) has BOTH an open self/questioner reassignment and an open dispatched designer reassignment; the borrowed agent is ambiguous — resolve one before the node reruns.`,
+    )
+  }
+  return immediate ?? designer
+}
 
-  // --- designer (deferred dispatch ledger) — unchanged shipped path ---
+/**
+ * RFC-127 designer borrow (deferred dispatch ledger) — the shipped path, unchanged except for
+ * extraction. Consumption is dispatched_at + trigger_run_id (isDispatchedEntryConsumed); keyed on
+ * task_questions.loop_iter (= round.loop_iter, the real wrapper-loop index for cross rounds).
+ */
+async function resolveDesignerBorrowForNode(
+  db: DbClient,
+  taskId: string,
+  nodeId: string,
+  iteration: number,
+  workflowDef: WorkflowDefinition,
+): Promise<string | null> {
   const entries = await db
     .select()
     .from(taskQuestions)
@@ -723,6 +751,17 @@ export async function resolveBorrowForNode(
  * node borrows X while the round is answered-but-unconsumed, and stops once the continuation
  * rerun lands done+output (the stamp is set ⇒ an unrelated future rerun runs the home's own
  * agent — the golden-lock). Returns the borrowed agentName, or null.
+ *
+ * P2-3 (loop iteration): self clarify rounds project loop_iter=0 (taskQuestions.ts — "node_runs
+ * .iteration IS the loop index; loop_iter projected 0"), so the persisted task_question loop_iter
+ * can't gate a wrapper-loop iteration ≥ 1. We match the round's ASKING run iteration (the
+ * P/questioner run that emitted the envelope, whose node_runs.iteration IS the loop index) to the
+ * scheduler iteration instead.
+ *
+ * P2-1 (single-borrow gate): one continuation rerun re-runs the home node ONCE, so it borrows at
+ * most ONE agent. The OPEN (unconsumed) home entries must agree on a single decision — a round
+ * reassigned to two agents, or a mix of "borrow X" + "run self", is rejected (ConflictError), not
+ * silently first-picked. (Mirrors the designer dispatch per-home single-borrow gate.)
  */
 async function resolveImmediateBorrowForNode(
   db: DbClient,
@@ -731,20 +770,23 @@ async function resolveImmediateBorrowForNode(
   iteration: number,
   workflowDef: WorkflowDefinition,
 ): Promise<string | null> {
+  // ALL self/questioner entries — include no-override ("run self") rows so a "borrow X + run
+  // self" mix within one home is DETECTED (P2-1), not silently first-picked. No loop_iter filter
+  // here (self rows project 0); iteration is matched via the round's asking run below (P2-3).
   const entries = await db
     .select()
     .from(taskQuestions)
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
-        eq(taskQuestions.loopIter, iteration),
         inArray(taskQuestions.roleKind, ['self', 'questioner']),
-        isNotNull(taskQuestions.overrideTargetNodeId),
       ),
     )
   // home = default ?? override (self: the asking node P; questioner: the questioner node).
-  const candidates = entries.filter((e) => isBorrowHomeFor(e, nodeId))
-  if (candidates.length === 0) return null
+  const homeEntries = entries.filter((e) => homeTarget(e) === nodeId)
+  if (homeEntries.length === 0) return null
+  // Golden-lock fast path: no real borrow on this home → no rounds/runs read needed.
+  if (!homeEntries.some((e) => isBorrowHomeFor(e, nodeId))) return null
 
   const rounds = await db
     .select()
@@ -754,26 +796,48 @@ async function resolveImmediateBorrowForNode(
         eq(clarifyRounds.taskId, taskId),
         inArray(
           clarifyRounds.intermediaryNodeRunId,
-          candidates.map((e) => e.originNodeRunId),
+          homeEntries.map((e) => e.originNodeRunId),
         ),
       ),
     )
   const roundByOrigin = new Map(rounds.map((r) => [r.intermediaryNodeRunId, r]))
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const runById = new Map(runs.map((r) => [r.id, r]))
   const outputRunIds = await runIdsWithOutput(
     db,
     runs.map((r) => r.id),
   )
-  const open = candidates
-    .slice()
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .find((e) => {
-      const round = roundByOrigin.get(e.originNodeRunId)
-      if (round === undefined) return false // round vanished (task edited) → not borrowable
-      return !isRoundEntryConsumed(e, round, runs, outputRunIds)
-    })
-  if (open?.overrideTargetNodeId === undefined || open.overrideTargetNodeId === null) return null
-  return resolveNodeAgentName(workflowDef, open.overrideTargetNodeId)
+
+  // OPEN (unconsumed) home entries at THIS loop iteration, matched via the asking run (P2-3).
+  const open = homeEntries.filter((e) => {
+    const round = roundByOrigin.get(e.originNodeRunId)
+    if (round === undefined) return false // round vanished (task edited) → not borrowable
+    const askingRun = runById.get(round.askingNodeRunId)
+    if (askingRun === undefined || askingRun.iteration !== iteration) return false
+    return !isRoundEntryConsumed(e, round, runs, outputRunIds)
+  })
+  if (open.length === 0) return null
+
+  // P2-1 single-borrow gate: each open entry's decision is its borrow node (or null = run self).
+  // >1 distinct (incl. {X, self}) ⇒ ambiguous for the single continuation rerun ⇒ reject.
+  const borrows = new Set(
+    open.map((e) => (isBorrowHomeFor(e, nodeId) ? e.overrideTargetNodeId : null)),
+  )
+  if (borrows.size > 1) {
+    throw new ConflictError(
+      'task-question-home-multi-borrow',
+      `node '${nodeId}' (iter ${iteration}) has self/questioner questions reassigned to conflicting handlers (${[
+        ...borrows,
+      ]
+        .map((b) => b ?? '(self)')
+        .join(
+          ', ',
+        )}) in one continuation; a single rerun runs one agent — align them to one handler.`,
+    )
+  }
+  const borrowNode = [...borrows][0] ?? null
+  if (borrowNode === null) return null
+  return resolveNodeAgentName(workflowDef, borrowNode)
 }
 
 /** RFC-127 借壳: is a self/questioner clarify-round entry CONSUMED? = its role's RFC-070

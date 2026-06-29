@@ -146,6 +146,7 @@ import {
   type WrapperProgress,
 } from '@/services/wrapperProgress'
 import { emitTaskStatus, getTask } from '@/services/task'
+import { ConflictError } from '@/util/errors'
 import { createLogger, type Logger } from '@/util/log'
 // RFC-060 PR-E: splitDiff* imports removed — they were used only by the
 // agent-multi fan-out path (now deleted). wrapper-fanout consumes a `list<T>`
@@ -1779,7 +1780,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // column remains audit, but task_questions distinguishes retry/revival of the
   // same unconsumed question from an unrelated future stale rerun after the
   // question was consumed, and lets non-frontier cascade mints borrow too.
-  const overrideName = await resolveBorrowForNode(db, taskId, node.id, iteration, definition)
+  // RFC-127 P2-1/P2-2: an UNRESOLVABLE borrow (a self/questioner round reassigned to >1 agent,
+  // or a self/q + designer dual-ledger overlap on this home) throws ConflictError. resolveBorrow
+  // runs BEFORE this fn's try block, so catch it here and surface a node-level failure (don't let
+  // it reject the scope tick — runTask would fail the WHOLE task).
+  let overrideName: string | null
+  try {
+    overrideName = await resolveBorrowForNode(db, taskId, node.id, iteration, definition)
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      return { kind: 'failed', summary: err.message, message: err.code }
+    }
+    throw err
+  }
   let agent = nodeAgent
   let isBorrowed = false
   if (overrideName !== null && overrideName !== '') {

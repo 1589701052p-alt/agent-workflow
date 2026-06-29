@@ -161,7 +161,7 @@ async function seedRun(
   db: DbClient,
   taskId: string,
   nodeId: string,
-  opts: { status?: 'done' | 'pending' | 'failed'; withOutput?: boolean } = {},
+  opts: { status?: 'done' | 'pending' | 'failed'; withOutput?: boolean; iteration?: number } = {},
 ): Promise<string> {
   const id = ulid()
   await db.insert(nodeRuns).values({
@@ -170,13 +170,115 @@ async function seedRun(
     nodeId,
     status: opts.status ?? 'done',
     retryIndex: 0,
-    iteration: 0,
+    iteration: opts.iteration ?? 0,
     startedAt: Date.now(),
   })
   if (opts.withOutput) {
     await db.insert(nodeRunOutputs).values({ nodeRunId: id, portName: 'result', content: 'x' })
   }
   return id
+}
+
+/** Seed an answered self clarify round + N self task_questions (one per question), with a
+ *  per-question override. The ASKING run is seeded at `askingIteration` (self rounds project
+ *  loop_iter=0, so the asking run's iteration is the only carrier of the wrapper-loop index —
+ *  P2-3). Returns the round's intermediary (origin) run id. */
+async function seedSelfRoundMulti(
+  db: DbClient,
+  taskId: string,
+  opts: {
+    questions: Array<{ qid: string; override: string | null }>
+    askingIteration?: number
+    consumedRunId?: string | null
+  },
+): Promise<string> {
+  const it = opts.askingIteration ?? 0
+  const askingRunId = await seedRun(db, taskId, P, { iteration: it })
+  const intRunId = await seedRun(db, taskId, CL, { iteration: it })
+  await db.insert(clarifyRounds).values({
+    id: ulid(),
+    taskId,
+    kind: 'self',
+    askingNodeId: P,
+    askingNodeRunId: askingRunId,
+    intermediaryNodeId: CL,
+    intermediaryNodeRunId: intRunId,
+    targetConsumerNodeId: null,
+    loopIter: 0, // self ALWAYS projects loop_iter 0 (taskQuestions.ts) — the bug surface for P2-3
+    iteration: 0,
+    questionsJson: JSON.stringify(opts.questions.map((q) => mkQ(q.qid, 't'))),
+    answersJson: JSON.stringify(opts.questions.map((q) => ans(q.qid))),
+    status: 'answered',
+    createdAt: Date.now(),
+    consumedByConsumerRunId: opts.consumedRunId ?? null,
+  })
+  for (const q of opts.questions) {
+    await db.insert(taskQuestions).values({
+      id: ulid(),
+      taskId,
+      originNodeRunId: intRunId,
+      questionId: q.qid,
+      questionTitle: 't',
+      sourceKind: 'self',
+      roleKind: 'self',
+      iteration: 0,
+      loopIter: 0,
+      defaultTargetNodeId: P,
+      overrideTargetNodeId: q.override,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  }
+  return intRunId
+}
+
+/** Seed an OPEN dispatched designer override entry whose graph-designer home is `designerNode`
+ *  (deferred ledger): a cross round → `designerNode`, reassigned to `override`, dispatched
+ *  (dispatched_at set) and unbound (trigger_run_id NULL ⇒ unconsumed). Used for the dual-ledger
+ *  conflict (P2-2) — pass designerNode=P to put BOTH ledgers on the same home. */
+async function seedDispatchedDesignerEntry(
+  db: DbClient,
+  taskId: string,
+  designerNode: string,
+  override: string,
+): Promise<void> {
+  const askingRunId = await seedRun(db, taskId, Q)
+  const intRunId = await seedRun(db, taskId, CC)
+  await db.insert(clarifyRounds).values({
+    id: ulid(),
+    taskId,
+    kind: 'cross',
+    askingNodeId: Q,
+    askingNodeRunId: askingRunId,
+    intermediaryNodeId: CC,
+    intermediaryNodeRunId: intRunId,
+    targetConsumerNodeId: designerNode,
+    loopIter: 0,
+    iteration: 0,
+    questionsJson: JSON.stringify([mkQ('dq', 't')]),
+    answersJson: JSON.stringify([ans('dq')]),
+    directive: 'continue',
+    status: 'answered',
+    createdAt: Date.now(),
+  })
+  await db.insert(taskQuestions).values({
+    id: ulid(),
+    taskId,
+    originNodeRunId: intRunId,
+    questionId: 'dq',
+    questionTitle: 't',
+    sourceKind: 'cross',
+    roleKind: 'designer',
+    iteration: 0,
+    loopIter: 0,
+    defaultTargetNodeId: designerNode,
+    overrideTargetNodeId: override,
+    dispatchedAt: Date.now(),
+    dispatchedBy: 'u1',
+    // trigger_run_id NULL ⇒ dispatched-but-unbound ⇒ open/unconsumed.
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
 }
 
 /** Seed an answered self clarify round + its reconciled self task_question (default=P). */
@@ -338,6 +440,119 @@ describe('RFC-127 resolveBorrowForNode — self/questioner (round-based)', () =>
     // override === default (P) ⇒ borrowAgentNode is null ⇒ no borrow (runs P's own agent).
     await seedSelfEntry(db, 't9', { override: P })
     expect(await resolveBorrowForNode(db, 't9', P, 0, liveDef())).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Codex impl-gate P2 regressions (3 边角正确性 bugs in resolveImmediateBorrowForNode).
+// ---------------------------------------------------------------------------
+describe('RFC-127 borrow — Codex P2 regressions', () => {
+  // P2-3: self clarify rounds project loop_iter=0, but the scheduler resolves the borrow with
+  // node_runs.iteration (the loop index). A `loop_iter == iteration` filter therefore MISSES a
+  // reassigned self entry at wrapper-loop iteration ≥ 1 → the home agent ran instead of borrow X.
+  // The fix matches the round's ASKING run iteration; this locks it stays fixed.
+  test('P2-3: reassigned self at loop iteration ≥ 1 still borrows (loop_iter=0 projection)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-3')
+    // asking run at iteration 1; the self round loop_iter is HARDCODED 0 (the bug surface).
+    await seedSelfRoundMulti(db, 'p2-3', {
+      questions: [{ qid: 'q1', override: X }],
+      askingIteration: 1,
+    })
+    // The OLD `loop_iter == iteration` filter resolved null here (0 != 1) → home agent. Now: X.
+    expect(await resolveBorrowForNode(db, 'p2-3', P, 1, liveDef())).toBe(X_AGENT)
+    // And it does NOT leak into an unrelated iteration (no round there).
+    expect(await resolveBorrowForNode(db, 'p2-3', P, 2, liveDef())).toBeNull()
+  })
+
+  test('P2-3: loop-iter≥1 golden-lock — no override at iter 1 → null', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-3b')
+    await seedSelfRoundMulti(db, 'p2-3b', {
+      questions: [{ qid: 'q1', override: null }],
+      askingIteration: 1,
+    })
+    expect(await resolveBorrowForNode(db, 'p2-3b', P, 1, liveDef())).toBeNull()
+  })
+
+  // P2-1: one self/questioner continuation rerun re-runs the home ONCE → it borrows ONE agent.
+  // A round whose questions are reassigned to two different agents (or a mix of borrow + self) is
+  // ambiguous; the old code `.find()`-picked the first silently. Now it must REJECT.
+  test('P2-1: a self round reassigned to TWO agents → rejected (not silently first-picked)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-1a')
+    await seedSelfRoundMulti(db, 'p2-1a', {
+      questions: [
+        { qid: 'q1', override: X },
+        { qid: 'q2', override: D }, // a DIFFERENT agent node
+      ],
+    })
+    await expect(resolveBorrowForNode(db, 'p2-1a', P, 0, liveDef())).rejects.toThrow(
+      /multi-borrow|conflicting/i,
+    )
+  })
+
+  test('P2-1: a self round with a borrow + a run-self mix → rejected', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-1b')
+    await seedSelfRoundMulti(db, 'p2-1b', {
+      questions: [
+        { qid: 'q1', override: X }, // borrow X
+        { qid: 'q2', override: null }, // run self
+      ],
+    })
+    await expect(resolveBorrowForNode(db, 'p2-1b', P, 0, liveDef())).rejects.toThrow(
+      /multi-borrow|conflicting/i,
+    )
+  })
+
+  test('P2-1: a round uniformly reassigned to ONE agent (both questions → X) still resolves to X', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-1c')
+    await seedSelfRoundMulti(db, 'p2-1c', {
+      questions: [
+        { qid: 'q1', override: X },
+        { qid: 'q2', override: X },
+      ],
+    })
+    expect(await resolveBorrowForNode(db, 'p2-1c', P, 0, liveDef())).toBe(X_AGENT)
+  })
+
+  // P2-2: the same home with BOTH an open self/questioner reassignment AND an open dispatched
+  // designer reassignment is ambiguous (the scheduler can't tell which ledger the rerun belongs
+  // to). Must REJECT rather than let the immediate ledger silently win.
+  test('P2-2: same home with self ledger + designer ledger both open → rejected', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-2', { deferred: true })
+    // self reassignment on P (immediate ledger) ...
+    await seedSelfRoundMulti(db, 'p2-2', { questions: [{ qid: 'q1', override: X }] })
+    // ... AND a dispatched designer reassignment whose graph designer is ALSO P (designer ledger).
+    await seedDispatchedDesignerEntry(db, 'p2-2', P, D)
+    await expect(resolveBorrowForNode(db, 'p2-2', P, 0, liveDef())).rejects.toThrow(
+      /ambiguous|both an open/i,
+    )
+  })
+
+  test('P2-2: designer ledger ALONE on a node (no self override) still resolves (no false conflict)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'p2-2b', { deferred: true })
+    // Designer ledger on P, plus a self round on P with NO override (golden-lock immediate=null).
+    await seedSelfRoundMulti(db, 'p2-2b', { questions: [{ qid: 'q1', override: null }] })
+    await seedDispatchedDesignerEntry(db, 'p2-2b', P, D)
+    expect(await resolveBorrowForNode(db, 'p2-2b', P, 0, liveDef())).toBe(D_AGENT)
+  })
+})
+
+// Source-level lock: the scheduler converts a borrow ConflictError into a NODE-level failure
+// (resolveBorrowForNode runs before runOneNode's try block, so an unguarded throw would reject
+// the whole scope tick → runTask fails the entire task).
+describe('RFC-127 borrow conflict — scheduler node-level failure (source lock)', () => {
+  test('runOneNode catches ConflictError from resolveBorrowForNode → kind:failed', () => {
+    const src = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
+      'utf8',
+    )
+    expect(src).toMatch(/catch[\s\S]{0,200}ConflictError[\s\S]{0,80}kind: 'failed'/)
   })
 })
 
