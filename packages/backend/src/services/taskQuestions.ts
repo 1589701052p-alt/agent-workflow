@@ -525,7 +525,10 @@ export async function loadUndispatchedDesignerTargets(
   const hasUndispatched = new Set<string>()
   const hasInFlight = new Set<string>()
   for (const e of entries) {
-    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
+    // RFC-127 借壳: park the HOME node (where the borrowed run is minted), not the override
+    // — else the home/default designer completes before the borrowed rerun, releasing its
+    // downstream prematurely.
+    const target = e.defaultTargetNodeId ?? e.overrideTargetNodeId
     if (target === null || target === '') continue
     if (e.dispatchedAt === null) {
       hasUndispatched.add(target)

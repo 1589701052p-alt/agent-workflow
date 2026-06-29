@@ -1379,11 +1379,15 @@ async function buildNodeQueueExternalFeedback(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
         isNotNull(taskQuestions.dispatchedAt),
+        // RFC-127 借壳: select by HOME node (default designer; manual falls back to override),
+        // not by override — the borrowed run is minted ON the home node, so the home's per-node
+        // queue must pick up this entry + bind its trigger_run_id to the home's rerun. Reading
+        // by override would miss it → answer not injected, trigger_run_id unbound, stuck.
         or(
-          eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
+          eq(taskQuestions.defaultTargetNodeId, handlerNodeId),
           and(
-            isNull(taskQuestions.overrideTargetNodeId),
-            eq(taskQuestions.defaultTargetNodeId, handlerNodeId),
+            isNull(taskQuestions.defaultTargetNodeId),
+            eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
           ),
         ),
       ),

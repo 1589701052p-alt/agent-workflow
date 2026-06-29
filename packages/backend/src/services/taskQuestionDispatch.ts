@@ -117,6 +117,24 @@ function effectiveTarget(e: TaskQuestionRow): string | null {
   return e.overrideTargetNodeId ?? e.defaultTargetNodeId
 }
 
+// RFC-127 借壳: the "home" node a borrowed designer rerun is MINTED on (run.node_id).
+// A clarify-designer keeps the GRAPH designer (default) — an override only swaps the
+// brain, not the run's node; manual (no default) falls back to its override (its own
+// node). This翻转s the old `override ?? default` so override no longer moves the home.
+function homeTarget(e: TaskQuestionRow): string | null {
+  return e.defaultTargetNodeId ?? e.overrideTargetNodeId
+}
+
+// RFC-127 借壳: the node whose AGENT is borrowed (caller resolves its agentName), or
+// null when the home node runs its OWN agent (no override, or manual where the
+// override IS the home).
+function borrowAgentNode(e: TaskQuestionRow): string | null {
+  const home = homeTarget(e)
+  return e.overrideTargetNodeId !== null && e.overrideTargetNodeId !== home
+    ? e.overrideTargetNodeId
+    : null
+}
+
 /** Cross-clarify / RFC-023 CHANNEL edges (injected via prompt context, not consumed as
  *  dataflow inputs) — mirrors the scheduler's buildScopeUpstreams filter, so the frontier
  *  is computed on the SAME dataflow DAG that drives RFC-074 provenance freshness (the
@@ -260,13 +278,30 @@ export async function dispatchTaskQuestions(
   // 3. Group the requested entries by effective handler → the AFFECTED handler-node set.
   const byTarget = new Map<string, TaskQuestionRow[]>()
   for (const e of requested) {
-    const t = effectiveTarget(e)
+    // RFC-127 借壳: group by HOME node (the run's node_id = default designer), not the
+    // override — the borrowed agent rides on the home node's rerun.
+    const t = homeTarget(e)
     if (t === null) continue
     const list = byTarget.get(t)
     if (list) list.push(e)
     else byTarget.set(t, [e])
   }
   if (byTarget.size === 0) return EMPTY_RESULT
+
+  // 4a. RFC-127 借壳 per-home single-borrow gate: a home node mints ONE borrowed rerun,
+  //     which can run only ONE agent. Reject if a home group names >1 borrow agent (incl.
+  //     {X, null} = some borrowed + some self) — e.g. two rounds both onto graph designer D
+  //     but reassigned to X1/X2. The per-origin gate (above) only guards WITHIN a round;
+  //     this guards ACROSS rounds onto the same home. Dispatch them separately / align them.
+  for (const [home, group] of byTarget) {
+    const borrows = new Set(group.map(borrowAgentNode))
+    if (borrows.size > 1) {
+      throw new ConflictError(
+        'task-question-home-multi-borrow',
+        `node '${home}' would mint one borrowed rerun but its dispatched questions name multiple agents (${[...borrows].map((b) => b ?? '(self)').join(', ')}); a single rerun runs one agent — dispatch them separately or align their handler.`,
+      )
+    }
+  }
 
   // 4. The UPSTREAM FRONTIER of the affected set (the only nodes we mint).
   const definition = parseDefinition(taskRow.snapshot)
@@ -316,7 +351,17 @@ export async function dispatchTaskQuestions(
   // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
   //    tx body is purely synchronous (atomic with the dispatched_at stamp).
   const mintPlans = await Promise.all(
-    [...frontier].map(async (nodeId) => buildFrontierMintPlan(db, taskId, nodeId)),
+    // RFC-127 借壳: pass the home group's borrow agent (the per-home gate above ensures
+    // the group names exactly one) + the parsed definition (to resolve its agentName).
+    [...frontier].map(async (nodeId) =>
+      buildFrontierMintPlan(
+        db,
+        taskId,
+        nodeId,
+        borrowAgentNode(byTarget.get(nodeId)![0]!),
+        definition,
+      ),
+    ),
   )
 
   // 7. ONE dbTxSync: CAS-stamp dispatched_at on the requested entries + insert the frontier
@@ -449,7 +494,7 @@ export async function dispatchTaskQuestions(
   const reruns: DispatchedRerun[] = mintPlans.map((p) => ({
     targetNodeId: p.nodeId,
     nodeRunId: p.preId,
-    entryIds: requested.filter((e) => effectiveTarget(e) === p.nodeId).map((e) => e.id),
+    entryIds: requested.filter((e) => homeTarget(e) === p.nodeId).map((e) => e.id),
   }))
   log.info('task questions dispatched', {
     taskId,
@@ -501,7 +546,8 @@ function findOpenDispatchTarget(
     parentNodeRunId: r.parentNodeRunId,
   }))
   for (const e of inputs.entries) {
-    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
+    // RFC-127 借壳: in-flight is tracked on the HOME node (where the run is minted).
+    const target = e.defaultTargetNodeId ?? e.overrideTargetNodeId
     if (target === null || target === '' || !affected.has(target)) continue
     if (!isDispatchedEntryConsumed(e, inputs.runs, lineageViews)) {
       return target
@@ -659,6 +705,9 @@ async function buildFrontierMintPlan(
   db: DbClient,
   taskId: string,
   targetNodeId: string,
+  // RFC-127 借壳: the node whose agent X is borrowed (null = home runs its own agent).
+  borrowOverrideNodeId: string | null,
+  definition: WorkflowDefinition,
 ): Promise<FrontierMintPlan> {
   const targetRuns = await db
     .select()
@@ -676,6 +725,16 @@ async function buildFrontierMintPlan(
   )
   const retryIndex = topLevel.length === 0 ? 0 : Math.max(...topLevel.map((r) => r.retryIndex)) + 1
   const preId = ulid()
+  // RFC-127 借壳: resolve the borrowed node's agentName from the frozen snapshot (the SAME
+  // source canReassign validated against). null = no borrow → the home runs its own agent.
+  const agentOverrideName =
+    borrowOverrideNodeId === null
+      ? null
+      : ((
+          (definition.nodes ?? []).find((n) => n.id === borrowOverrideNodeId) as
+            | { agentName?: string }
+            | undefined
+        )?.agentName ?? null)
   const values = buildMintNodeRunValues({
     id: preId,
     taskId,
@@ -685,7 +744,7 @@ async function buildFrontierMintPlan(
     retryIndex,
     iteration: last.iteration,
     inheritFrom: last,
-    overrides: { startedAt: null },
+    overrides: { startedAt: null, agentOverrideName },
   })
   return { nodeId: targetNodeId, preId, iteration: last.iteration, values }
 }
