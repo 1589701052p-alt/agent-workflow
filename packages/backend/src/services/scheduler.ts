@@ -122,6 +122,7 @@ import {
 } from '@/services/dispatchFrontier'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
 import {
+  CLARIFY_FORBIDDEN_PREFIX,
   CLARIFY_REQUIRED_PREFIX,
   ENVELOPE_PORT_MALFORMED_PREFIX,
   parsePortValidationFailuresJson,
@@ -671,6 +672,14 @@ export function decideEnvelopeFollowup(prev: PreviousAttemptShape): EnvelopeFoll
   // wording). Hard-fails after retries — no output escape hatch.
   if (m.startsWith(CLARIFY_REQUIRED_PREFIX)) {
     return { followup: true, reason: 'clarify-required', failures: [] }
+  }
+  // RFC-123 follow-up: `clarify-forbidden` — an EXPLICITLY-stopped node emitted a
+  // `<workflow-clarify>` despite STOP CLARIFYING. Re-demand `<workflow-output>`: the
+  // follow-up renderer coerces the reason to 'envelope-missing' while hasClarify=false
+  // (the stopped node) → output-oriented wording. Hard-fails after retries (enforces
+  // the stop; a disobedient agent never re-opens a clarify session).
+  if (m.startsWith(CLARIFY_FORBIDDEN_PREFIX)) {
+    return { followup: true, reason: 'envelope-missing', failures: [] }
   }
   // The agent emitted a `<workflow-output>` envelope but a `<port>` was opened
   // without a parseable `</port>` close (corrupted / truncated close tag — e.g.
@@ -2511,6 +2520,13 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           reviewActive: reviewContext !== undefined,
           isClarifyRerun,
         })
+        // RFC-123 follow-up (user「强制停止」): is the node EXPLICITLY stopped — canvas
+        // toggle='stop' (nodeStopOverride) OR a latest answered 'stop' directive — as
+        // opposed to merely review-rerun ask-back suppression? Threaded to the runner so
+        // a disobedient <workflow-clarify> is REJECTED (no session) under an explicit
+        // stop, while review reruns (reviewActive && !isClarifyRerun) keep emitting clarify.
+        const clarifyStopped =
+          hasClarifyChannel && (nodeStopOverride || clarifyContext?.directive === 'stop')
         // RFC-122 (H2 fix): inject the standalone STOP CLARIFYING trailer when the
         // STOP toggle is set AND the clarifyContext does not already carry it
         // (ctx.directive !== 'stop'). Covers a first run / pre-clarify error-retry
@@ -2706,6 +2722,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
               }
             : {}),
           hasClarifyChannel: effectiveHasClarifyChannel,
+          ...(clarifyStopped ? { clarifyStopped: true as const } : {}),
           // RFC-122: inject STOP CLARIFYING on a first-run / pre-clarify retry
           // override (when no answersBlock carries it). Omitted otherwise.
           ...(clarifyStopNotice ? { clarifyStopNotice: true as const } : {}),

@@ -42,6 +42,7 @@ import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns } from '@/db/schema'
 import { createLogger, type Logger } from '@/util/log'
 import {
+  CLARIFY_FORBIDDEN_PREFIX,
   CLARIFY_REQUIRED_PREFIX,
   detectEnvelopeKind,
   ENVELOPE_PORT_MALFORMED_PREFIX,
@@ -196,6 +197,15 @@ export interface RunNodeOptions {
    * pre-RFC-023.
    */
   hasClarifyChannel?: boolean
+  /**
+   * RFC-123 follow-up: the node is EXPLICITLY stopped (canvas toggle='stop' OR a
+   * latest answered 'stop' directive), as opposed to merely review-rerun ask-back
+   * suppression. When true, a disobedient `<workflow-clarify>` is REJECTED (no
+   * clarify session is created) — symmetric to the `hasClarifyChannel` output
+   * rejection. The scheduler computes it; absent ⇒ unchanged (review reruns keep
+   * emitting clarify).
+   */
+  clarifyStopped?: boolean
   /**
    * RFC-056: when this agent's `__clarify__` source port is wired to a
    * `clarify-cross-agent` node (rather than the RFC-023 self-clarify node),
@@ -1278,6 +1288,18 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
           : kind === 'both'
             ? `${CLARIFY_REQUIRED_PREFIX}-both-present: node is in mandatory ask-back mode; emit only <workflow-clarify>, no <workflow-output>`
             : `${CLARIFY_REQUIRED_PREFIX}-missing: node is in mandatory ask-back mode; reply must be a <workflow-clarify> envelope`
+    } else if (opts.clarifyStopped === true && kind === 'clarify') {
+      // RFC-123 follow-up (user「强制停止」): the node is EXPLICITLY stopped (canvas
+      // toggle='stop' OR a latest answered 'stop' directive — NOT review-rerun ask-back
+      // suppression) so it was told STOP CLARIFYING. The agent disobeyed and emitted a
+      // <workflow-clarify> anyway. REJECT it — symmetric to the clarify-required output
+      // rejection above — so a stopped node can NEVER re-open a clarify session despite
+      // agent disobedience. No clarifyResult is set (no session); decideEnvelopeFollowup
+      // matches this prefix → same-session follow-up re-demands <workflow-output> (the
+      // renderer coerces the reason to 'envelope-missing' while hasClarify=false). Hard
+      // fails after retries (the stop is enforced; the agent must produce output).
+      status = 'failed'
+      errorMessage = `${CLARIFY_FORBIDDEN_PREFIX}: node is in STOP CLARIFYING mode; emit <workflow-output>, not <workflow-clarify>`
     } else if (kind === 'both') {
       status = 'failed'
       errorMessage =

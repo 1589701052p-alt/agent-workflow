@@ -114,3 +114,13 @@
 - **P2-① 答题后画布不刷新**：答题侧 stop 写了 directive，但 `useTaskSync` 只在 `node.status` 失效 `task-clarify-directives`、不在 `clarify.answered` / `cross-clarify.answered` → 已挂载画布的另一 tab 要等 rerun 的 node.status 才反映。**fold = 改 C**：答题事件也失效该 key。
 - **P2-② stale `continue` 误重启用**：B1/B2 把**任何** `continue` toggle 行当作重启用，但升级前 RFC-122 canvas API 会留 `continue` 行、而答 stop（改动前）不写该表 → 「旧 continue 行 + 后来的 stop」被误判重启用。**fold = recency 闸**：`continue` 覆盖仅在其 `updatedAt` ≥ 它要覆盖的 stop 时间戳时生效（B1 比对该轮 `answeredAt`，B2 比对 `latestPersistentStopAt`）；`stop` toggle 仍无条件生效（RFC-122 durable）。golden-lock：无 toggle 行逐字不变；going-forward 答 stop 总把 toggle 写成 stop，故仅升级窗口存量数据需此闸。
 - 两轮 fold 后 Codex impl-gate **CLEAN（No discrete issues）**。门禁全绿：typecheck×3 / 全量 backend **4389 pass 0 fail** / 前端 vitest **2863 pass** / format / 单二进制 smoke。
+
+## 后续 follow-up：强制停止（clarify-forbidden，2026-06-29 用户「强制停止」拍板）
+
+用户报：一个被停过的节点「又被跨节点反问了，但开关没切回继续反问」。根因 = stop 模式只拦 output、不拦 clarify——一个**显式停止**的节点（toggle='stop' 或最新已答 'stop' directive），其 agent 不听 STOP CLARIFYING、仍发 `<workflow-clarify>` 时，runner 的 `else if (kind === 'clarify')` **照单全收、建出会话**（`createCrossClarifySession`）→ 节点"又被反问"而开关仍正确显示停止。这个缺口本就存在（RFC-122 的 stop 是 prompt 级软指令）；RFC-123 让 toggle 真实持久化后才显形。用户拍板**强制停止**（对称于「stop 模式拒 output」）。
+
+- **新常量** `CLARIFY_FORBIDDEN_PREFIX`（`envelope.ts`，叶子模块）。
+- **scheduler**：算 `clarifyStopped = hasClarifyChannel && (nodeStopOverride || clarifyContext?.directive === 'stop')`（**仅显式停止**，排除 review 重跑的 `reviewActive && !isClarifyRerun` ask-back 抑制）→ 透传给 runNode。`decideEnvelopeFollowup` 加 `CLARIFY_FORBIDDEN_PREFIX` → `reason:'envelope-missing'`（renderer 在 `!hasClarify` 时渲染 output 协议 → 重新要 output）。
+- **runner**：`opts.clarifyStopped === true && kind === 'clarify'` → status='failed' + `clarify-forbidden` 错误、**不设 clarifyResult**（不建会话）；同会话 followup 重新要 output，重试耗尽则硬失败（停止被强制；agent 必须出 output）。
+- **scope**：只拦显式停止；review 重跑（非显式停止）仍可发 clarify（golden-lock）。S3/S6 组合场景更新为「reject/iterate 后手点 toggle 回 continue 才再 clarify」=用户「toggle 回反问」模型。
+- 测试 `rfc123-stop-enforcement.test.ts`(6)：decideEnvelopeFollowup + runNode 真实强制（stopped+发clarify→拒；非stopped→仍收）+ 源码守卫。Codex impl-gate **CLEAN**。

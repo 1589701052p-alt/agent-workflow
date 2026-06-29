@@ -804,6 +804,12 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       expectedReviewIteration: 0,
       rejectReason: 'redo',
     })
+    // RFC-123: the round-0 'stop' answer wrote the durable node directive (toggle=stop),
+    // and the RFC-123 follow-up now ENFORCES it — a stopped designer that emits clarify is
+    // rejected (clarify-forbidden). To let the designer clarify again on the reject rerun,
+    // re-enable the way the user would on the canvas: flip the asking node's toggle back to
+    // 'continue' once the agent is re-triggered.
+    await setNodeClarifyDirective(c.db, task.id, 'designer', 'continue', 'local')
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify

@@ -235,6 +235,19 @@ export type DetectedEnvelopeKind = 'output' | 'clarify' | 'both' | 'none'
 export const CLARIFY_REQUIRED_PREFIX = 'clarify-required'
 
 /**
+ * RFC-123 follow-up: error-message prefix the runner stamps when a node is
+ * EXPLICITLY stopped (canvas toggle='stop' OR latest answered 'stop' directive —
+ * NOT review-rerun ask-back suppression) yet the agent disobeyed STOP CLARIFYING
+ * and emitted a `<workflow-clarify>` envelope. Symmetric to CLARIFY_REQUIRED_PREFIX:
+ * the framework REJECTS the clarify (no clarify session is created), and
+ * `decideEnvelopeFollowup` drives a same-session follow-up that re-demands
+ * `<workflow-output>` (the renderer coerces the reason to 'envelope-missing' while
+ * hasClarify=false). Enforces the user's stop against a disobedient agent. Leaf
+ * module so producer (runner) + matcher (scheduler) share one literal.
+ */
+export const CLARIFY_FORBIDDEN_PREFIX = 'clarify-forbidden'
+
+/**
  * Error-message prefix the runner stamps when the agent DID emit a
  * `<workflow-output>` envelope but one or more `<port name="...">` tags were
  * opened without a parseable structural close (`</port>` missing, truncated, or
