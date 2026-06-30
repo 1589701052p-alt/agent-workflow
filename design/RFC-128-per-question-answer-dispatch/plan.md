@@ -71,10 +71,18 @@
 - 测：§5.2 五项自检各红→绿；park 源逐题分类（undispatched / in-flight / consumed）+ partial 轮（awaiting_human）下 self/q 被 park（不靠轮 answered）+ 读侧排除不漏注 sealed-未-dispatch 轮；三坑回归；double-injection（读侧排除 + scheduler XOR 双锁）；**五契约（三 + 第二轮 R2-2/R2-3 闭环）**——(a) unsealed self/q entryIds → reject；(b) deferred self/questioner/designer mint cause 各对 + `rfc098-rerun-cause-gates` 真值表不破 + 同 home 混 cause 拒；(c) 整轮 cross round（questioner+designer 异 home）一批下发成功 / designer 多 handler 仍拒 / self/q home==designer home 触串行化；**(d) in-flight gate 扩域（R2-2）**：同 home 先 self/q dispatched〔rerun 未 done+output〕→ 后 designer 同 home 第二批 → `assertNoInFlightDispatch` reject、done+output 后放行；**(e) route auto-split（R2-3）**：同 home self/q+designer 全 staged 一次「批量下发」→ 下发 self/q 半 + designer 半留 staged + response 含延后分组（不 reject、无全量死循环），第一批 done+output 后再下发成功；混入 unsealed → 仍 readiness 整批 reject（precondition 优先）；**(e2) auto-split aging 防饿死（R3-2）**：同 home 老 designer（staged 早）+ 新 self/q（staged 晚）一次「批量下发」→ 下发**老 designer**、新 self/q 留 staged（aging 胜过 self/q-first 默认）——反复涌入 self/q 不能无限延后老 designer；三账本冲突矩阵（deferred-selfQ×designer 同 home 拒〔不论 agent〕；immediate×designer 仍拒）；**黄金锁**（deferred 全 seal 批量下发 = 旧整轮逐字：注入〔**含 R2-4 条件：full-round 同批 builder 走 legacy byte-compatible〔无 sibling/status 块〕逐字回落、partial 才加块**〕/ mint〔含 cause 对齐〕/ 消费 / 级联四面对齐）；非 deferred 零改字节级。
 - **单独 Codex 对抗 gate**（落码前对 §5.2.4 五项满足表 + §5.2.11/12/13 五契约〔含 R2-2 in-flight gate 扩域 / R2-3 route auto-split〕 + R2-4 黄金锁注入条件 + R2-1 rollback playbook 跑一次，第三轮须 CLEAN）；若复现 RFC-125 级致命问题 → 回退**整个 P5-BC**、与用户重新权衡（P1–P4 + P5-0/A 不受影响；**回退前按 `design.md §5.2.9` rollback playbook 处理 live state——R2-1**）。
 
-#### RFC-128-P5-D（快通道 seal + autodispatch）
+#### RFC-128-P5-D（快通道 seal + autodispatch）✅ DONE（impl-gate CLEAN，RFC-128 P0-P5 全交付）
 
 - **P5-D-T1**：deferred 任务的 self/q「快通道」——seal 即自动 dispatch（`defer` 决定自动 vs 手动触发 dispatch，**不引入第二路径**，§5.2.7 P5b 单路径裁决）；手动控制通道（集中回答面，P4）仍走显式 dispatch。
 - 测：AC-9 全过；快通道 seal→自动续跑；与手动通道互不混路（per-round 单路径）；RFC-125 单路径不变量。
+- **实现**（route-level 重路由，submit\* 字节级不动 → 黄金锁 + §5.2.14/15 锁网全绿）：
+  - 新增 `services/clarifyAutoDispatch.ts` `autoDispatchClarifyRound`：`sealRoundQuestions`（整轮 finalize，缺答补空、P5-0 guard deferred 已 lift）→ `dispatchTaskQuestions`（只下发 self/q 条目；designer 仍走 §18 manual board，避开 multi-source 快通道 4xx）。两者**顺序各取/放锁 B、绝不嵌套** → 非重入。
+  - `routes/clarify.ts` defer=false 分支：deferred→autodispatch、非 deferred→submit\*；+ resumeTask + ifMatchIteration 乐观锁 + answered WS 广播（两 no-op-safe helper、成功/错误两路径都发、不依赖快照 kind）。
+  - **新增 all-role deferred park**（`loadUndispatchedParkTargets`，scheduler 改用替代 per-role 并集）：designer + self/q 一次 partition、跨角色在飞感知 → 修同 home（designer undispatched + self/q 在飞）死锁。
+  - self isolated 续跑**保留 RFC-098 B1 worktree 回滚**：A⊃B 包 {同 home 开放账本〔dispatched + immediate〕preflight → rollback}、B 在 dispatch 前释放（不 clobber、不重入）。
+  - 不可恢复 dispatch 冲突 rethrow（白名单只吞 in-flight / target-changed）+ post-seal 幂等延后（dispatchDeferredReason）。
+- **Codex impl-gate 11 轮 fold → round-11 APPROVE/SHIP（无 material findings）**：整轮 finalize 防部分下发 / 不劫持控制通道轮 / locked-scope 不被覆盖 / 同 home all-role park 死锁 / self 回滚保留 / 回滚 preflight（dispatched+immediate 账本）/ 回滚 preflight↔rollback 锁 B 原子 / post-seal 冲突幂等延后 / answered 广播不丢且不依赖快照 kind。
+- 门禁：typecheck×3 / 全量 backend **4589 pass 0 fail** / 前端 vitest **404 files** / lint 0 warn / format / 单二进制 smoke。新增 `rfc128-p5-d-autodispatch.test.ts`(33)。
 
 ## PR 拆分
 
