@@ -31,10 +31,7 @@ import {
   markClarifyRoundsConsumedBy,
 } from '../src/services/clarifyRounds'
 import { dispatchTaskQuestions, resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
-import {
-  listTaskQuestions,
-  loadUndispatchedSelfQuestionerTargets,
-} from '../src/services/taskQuestions'
+import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -1043,13 +1040,16 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
 // only later at resolveBorrowForNode (which fires after the double-mint already happened).
 // ===========================================================================
 describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', () => {
-  test('real immediate run-self continuation blocks a same-home designer dispatch → no stamp, no node_run insert', async () => {
+  test('real immediate run-self continuation blocks a same-home designer dispatch WITHOUT any reconcile → no stamp, no node_run insert', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
     // REAL immediate run-self continuation on home D (quick channel): D self-clarifies, the human
-    // answers WITHOUT defer → submitClarifyAnswers mints a clarify-answer continuation (pending) +
-    // the self entry is reconciled (sealed_at NULL = immediate ledger), run-self (no reassign).
+    // answers WITHOUT defer → submitClarifyAnswers writes clarify_rounds (answered) + mints a
+    // clarify-answer continuation (pending), run-self. CRUCIALLY this test NEVER calls
+    // listTaskQuestions (no lazy reconcile of the self task_question) — proving the dispatch gate
+    // reads the TRUTH SOURCE (clarify_rounds + the pending continuation), not the lazy task_question
+    // projection. (The earlier version reconciled first, hiding the Codex round-4 bypass.)
     const dRun = await seedRun(db, taskId, D, { status: 'awaiting_human', iteration: 0 })
     const { clarifyNodeRunId } = await createClarifySession({
       db,
@@ -1061,7 +1061,6 @@ describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', (
       iterationIndex: 0,
       questions: [mkQ('sq', 't')],
     })
-    await listTaskQuestions(db, taskId) // reconcile the self entry (sealed_at NULL)
     await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('sq')] }) // mint continuation
     // A sealed, UNDISPATCHED designer entry whose HOME is the SAME node D (cross-round coincidence).
     const cross = await seedAnsweredRound(db, taskId, {

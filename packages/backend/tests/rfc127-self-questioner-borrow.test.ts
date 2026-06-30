@@ -179,6 +179,33 @@ async function seedRun(
   return id
 }
 
+/** RFC-128 P5-BC (Codex impl-gate round 4): seed the PENDING continuation node_run a quick-channel
+ *  answer mints (cause 'clarify-answer' for self / 'cross-clarify-questioner-rerun' for questioner)
+ *  on the asking node at the round's iteration. The truth-source immediate-ledger oracle
+ *  (openImmediateRounds) keys "open" on this pending continuation (NOT the lazy task_question), so
+ *  an answered-unconsumed self/questioner round is only an OPEN immediate ledger when its
+ *  continuation is in flight — exactly the production state submitClarifyAnswers creates. */
+async function seedPendingContinuation(
+  db: DbClient,
+  taskId: string,
+  nodeId: string,
+  cause: 'clarify-answer' | 'cross-clarify-questioner-rerun',
+  iteration: number,
+): Promise<string> {
+  const id = ulid()
+  await db.insert(nodeRuns).values({
+    id,
+    taskId,
+    nodeId,
+    status: 'pending',
+    rerunCause: cause,
+    retryIndex: 0,
+    iteration,
+    startedAt: null,
+  })
+  return id
+}
+
 /** Seed an answered self clarify round + N self task_questions (one per question), with a
  *  per-question override. The ASKING run is seeded at `askingIteration` (self rounds project
  *  loop_iter=0, so the asking run's iteration is the only carrier of the wrapper-loop index —
@@ -228,6 +255,10 @@ async function seedSelfRoundMulti(
       createdAt: Date.now(),
       updatedAt: Date.now(),
     })
+  }
+  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
+  if ((opts.consumedRunId ?? null) === null) {
+    await seedPendingContinuation(db, taskId, P, 'clarify-answer', it)
   }
   return intRunId
 }
@@ -285,7 +316,7 @@ async function seedDispatchedDesignerEntry(
 async function seedSelfEntry(
   db: DbClient,
   taskId: string,
-  opts: { override: string | null; consumedRunId?: string | null },
+  opts: { override: string | null; consumedRunId?: string | null; skipAutoContinuation?: boolean },
 ): Promise<string> {
   const askingRunId = await seedRun(db, taskId, P)
   const intRunId = await seedRun(db, taskId, CL)
@@ -322,6 +353,10 @@ async function seedSelfEntry(
     createdAt: Date.now(),
     updatedAt: Date.now(),
   })
+  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
+  if ((opts.consumedRunId ?? null) === null && !opts.skipAutoContinuation) {
+    await seedPendingContinuation(db, taskId, P, 'clarify-answer', 0)
+  }
   return entryId
 }
 
@@ -367,6 +402,10 @@ async function seedQuestionerEntry(
     createdAt: Date.now(),
     updatedAt: Date.now(),
   })
+  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
+  if ((opts.consumedRunId ?? null) === null) {
+    await seedPendingContinuation(db, taskId, Q, 'cross-clarify-questioner-rerun', 0)
+  }
   return entryId
 }
 
@@ -418,11 +457,25 @@ describe('RFC-127 resolveBorrowForNode — self/questioner (round-based)', () =>
     expect(await resolveBorrowForNode(db, 't6', Q, 0, liveDef())).toBeNull()
   })
 
-  test('defensive: stamp points at a done run WITHOUT output → still unconsumed (keeps borrowing)', async () => {
+  test('defensive: a continuation that finished done but emitted NO output → still open (keeps borrowing)', async () => {
+    // RFC-128 P5-BC (Codex impl-gate round 4) — truth source: a continuation that finished 'done'
+    // but produced NO output is NOT consumed (markClarifyRoundsConsumedBy only stamps on done+
+    // output), so it is still an OPEN immediate ledger (revivable) → keeps borrowing. (Was: "stamp
+    // points at a done run WITHOUT output" — the old isRoundEntryConsumed stamp model; the oracle
+    // now keys on the continuation node_run's done+output status, not the round stamp.)
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 't7')
-    const noOut = await seedRun(db, 't7', P, { status: 'done', withOutput: false })
-    await seedSelfEntry(db, 't7', { override: X, consumedRunId: noOut })
+    await seedSelfEntry(db, 't7', { override: X, skipAutoContinuation: true })
+    await db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId: 't7',
+      nodeId: P,
+      status: 'done',
+      rerunCause: 'clarify-answer',
+      retryIndex: 0,
+      iteration: 0,
+      startedAt: Date.now(),
+    }) // done, NO output → not done+output → open
     expect(await resolveBorrowForNode(db, 't7', P, 0, liveDef())).toBe(X_AGENT)
   })
 

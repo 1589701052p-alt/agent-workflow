@@ -41,7 +41,6 @@ import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
 import {
   assertTaskAcceptsQuestions,
-  resolveTriggerForEntry,
   taskNodeHasRun,
   TERMINAL_TASK_STATUSES,
 } from '@/services/taskQuestions'
@@ -628,29 +627,19 @@ export async function dispatchTaskQuestions(
         if (blocker !== null) throw new NodeDispatchInFlight(blocker)
       }
       // (b) Codex impl-gate (§5.2.3④ run-self): re-run the OPEN IMMEDIATE self/questioner ledger
-      //     gate in-tx — a quick-channel continuation (sealed_at NULL, non-dispatched) committed
-      //     between the precheck and here must still block the stamp/mint (no double-mint).
-      const txImmediate = tx
+      //     gate in-tx — a quick-channel continuation (clarify_rounds answered + pending continuation
+      //     run) committed between the precheck and here must still block the stamp/mint (no
+      //     double-mint). Reads the TRUTH SOURCE (clarify_rounds), NOT the lazy task_questions.
+      const txRounds = tx
         .select()
-        .from(taskQuestions)
-        .where(
-          and(
-            eq(taskQuestions.taskId, taskId),
-            inArray(taskQuestions.roleKind, ['self', 'questioner']),
-            isNull(taskQuestions.sealedAt),
-          ),
-        )
+        .from(clarifyRounds)
+        .where(and(eq(clarifyRounds.taskId, taskId), eq(clarifyRounds.status, 'answered')))
         .all()
-      if (txImmediate.length > 0) {
-        const txRounds = tx
-          .select()
-          .from(clarifyRounds)
-          .where(eq(clarifyRounds.taskId, taskId))
-          .all()
+      if (txRounds.length > 0) {
         const immBlocker = findOpenImmediateLedgerHome(
           affected,
           txRuns,
-          buildImmediateLedgerContext(txImmediate, txRounds, txRuns, txOutputIds),
+          buildImmediateLedgerContext(txRounds, txRuns, txOutputIds),
         )
         if (immBlocker !== null) throw new NodeDispatchInFlight(immBlocker)
       }
@@ -825,53 +814,78 @@ async function assertNoInFlightDispatch(
 // with an open immediate continuation could still ACCEPT a same-home designer dispatch → stamp +
 // mint a SECOND pending rerun (double-mint). resolveBorrowForNode would reject it later, but only
 // AFTER the irreversible stamp/mint. This oracle lets the dispatch precheck + in-tx recheck count
-// the immediate ledger BEFORE the stamp/mint, sharing the SAME open-detection
-// (`openImmediateHomeEntries`) that resolveImmediateBorrowForNode uses.
+// the immediate ledger BEFORE the stamp/mint, sharing the SAME open-detection (`openImmediateRounds`)
+// that resolveImmediateBorrowForNode uses.
+//
+// Codex impl-gate (round 4, §5.2.3④ — lazy-reconcile bypass): the oracle reads the TRUTH SOURCE
+// (clarify_rounds + the pending continuation node_run), NOT the lazily-projected task_questions. A
+// quick-channel answer (submitClarifyAnswers) writes clarify_rounds (answered) + mints a pending
+// continuation node_run BEFORE any board read reconciles the task_question — so a task_questions-based
+// gate would MISS it on the direct/API/race path and still accept a same-home designer dispatch
+// (double-mint). Distinguishing a quick-channel continuation (OPEN — has a pending continuation run)
+// from a control-channel sealed-but-parked round (NOT open — no continuation minted) is done by the
+// PRESENCE of the pending continuation run, so the oracle never touches task_questions. This aligns
+// with the scheduler: it runs that same pending continuation node_run + resolves its agent via
+// resolveBorrowForNode — both key on the pending continuation (loadOpenClarify parks awaiting_human;
+// after answer the continuation is a normal pending run).
 interface ImmediateLedgerContext {
-  /** self/questioner entries with `sealed_at` NULL (quick-channel, non-dispatched). */
-  entries: ReadonlyArray<TaskQuestionRow>
-  /** clarify_rounds keyed by intermediaryNodeRunId (= task_questions.originNodeRunId). */
-  roundByOrigin: ReadonlyMap<string, ClarifyRoundRow>
-  /** task node_runs keyed by id. */
+  /** answered clarify_rounds of the task (the immediate-ledger truth source). */
+  rounds: ReadonlyArray<ClarifyRoundRow>
+  /** task node_runs keyed by id (asking-run iteration lookup — P2-3). */
   runById: ReadonlyMap<string, NodeRunRow>
-  /** task node_runs (for the consumed-stamp lineage lookup). */
+  /** task node_runs (the pending continuation scan). */
   runs: ReadonlyArray<NodeRunRow>
-  /** node_run ids that captured ≥1 <workflow-output> row. */
+  /** node_run ids that captured ≥1 <workflow-output> row (consumed = done+output). */
   outputRunIds: ReadonlySet<string>
 }
 
 function buildImmediateLedgerContext(
-  entries: ReadonlyArray<TaskQuestionRow>,
   rounds: ReadonlyArray<ClarifyRoundRow>,
   runs: ReadonlyArray<NodeRunRow>,
   outputRunIds: ReadonlySet<string>,
 ): ImmediateLedgerContext {
   return {
-    entries,
-    roundByOrigin: new Map(rounds.map((r) => [r.intermediaryNodeRunId, r])),
+    rounds,
     runById: new Map(runs.map((r) => [r.id, r])),
     runs,
     outputRunIds,
   }
 }
 
-/** Pure (shared oracle) — the OPEN immediate self/questioner home entries for (nodeId, iteration):
- *  a quick-channel (sealed_at NULL, non-dispatched) self/q entry whose round is answered, whose
- *  ASKING run is at this iteration (P2-3), and which is NOT yet consumed (RFC-070 stamp). Used by
- *  BOTH resolveImmediateBorrowForNode (scheduler borrow) AND the dispatch-time gate, so the two
- *  agree on what "open immediate ledger" means. */
-function openImmediateHomeEntries(
+/** Pure (shared truth-source oracle) — the OPEN immediate self/questioner clarify rounds whose HOME
+ *  (the asking node) is `nodeId` at `iteration`: a self (askingNodeId==home) or questioner (cross,
+ *  askingNodeId==home) round that is answered, unconsumed (the role's RFC-070 stamp NULL), with its
+ *  ASKING run at `iteration` (P2-3), AND with a PENDING (not done+output) continuation node_run on
+ *  the home at `iteration` carrying the role's cause. The pending-continuation requirement is what
+ *  distinguishes a quick-channel continuation (OPEN) from a control-channel sealed-but-parked round
+ *  (no continuation minted → NOT open) — using the node_run truth source, never task_questions, so
+ *  the lazy task_question projection can't hide an open immediate ledger. */
+function openImmediateRounds(
   nodeId: string,
   iteration: number,
   ctx: ImmediateLedgerContext,
-): TaskQuestionRow[] {
-  return ctx.entries.filter((e) => {
-    if (homeTarget(e) !== nodeId) return false
-    const round = ctx.roundByOrigin.get(e.originNodeRunId)
-    if (round === undefined) return false // round vanished (task edited) → not borrowable
+): ClarifyRoundRow[] {
+  return ctx.rounds.filter((round) => {
+    const isSelf = round.kind === 'self' && round.askingNodeId === nodeId
+    const isQuestioner = round.kind === 'cross' && round.askingNodeId === nodeId
+    if (!isSelf && !isQuestioner) return false
+    if (round.status !== 'answered') return false
     const askingRun = ctx.runById.get(round.askingNodeRunId)
     if (askingRun === undefined || askingRun.iteration !== iteration) return false
-    return !isRoundEntryConsumed(e, round, ctx.runs, ctx.outputRunIds)
+    // RFC-070 consumed → the continuation already ran done+output → closed.
+    const consumed = isSelf ? round.consumedByConsumerRunId : round.consumedByQuestionerRunId
+    if (consumed !== null) return false
+    // A PENDING (not done+output) continuation run on the home at this iteration with the role's
+    // cause = a quick-channel continuation is in flight (control channel mints none → not open).
+    const cause: CauseClass = isSelf ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
+    return ctx.runs.some(
+      (r) =>
+        r.nodeId === nodeId &&
+        r.iteration === iteration &&
+        r.parentNodeRunId === null &&
+        r.rerunCause === cause &&
+        !(r.status === 'done' && ctx.outputRunIds.has(r.id)),
+    )
   })
 }
 
@@ -890,41 +904,34 @@ function findOpenImmediateLedgerHome(
         runs.filter((r) => r.nodeId === home),
         { topLevelOnly: false },
       )?.iteration ?? 0
-    if (openImmediateHomeEntries(home, iter, ctx).length > 0) return home
+    if (openImmediateRounds(home, iter, ctx).length > 0) return home
   }
   return null
 }
 
 /**
- * Async dispatch precheck (Codex impl-gate run-self fix): reject the dispatch BEFORE any stamp/mint
- * when ANY affected home already has an OPEN immediate self/questioner continuation (quick-channel
+ * Async dispatch precheck (Codex impl-gate, §5.2.3④): reject the dispatch BEFORE any stamp/mint when
+ * ANY affected home already has an OPEN immediate self/questioner continuation (a quick-channel
  * answer's rerun pending). Minting a dispatch rerun there would create a SECOND pending rerun on the
- * same (home, iteration) → double-mint. Extends the in-flight gate beyond `dispatched_at` rows to
- * the immediate (sealed_at NULL, non-dispatched) ledger — the SAME oracle resolveBorrowForNode uses.
+ * same (home, iteration) → double-mint. Reads the TRUTH SOURCE (clarify_rounds + pending continuation
+ * node_run), so it is NOT bypassed by an un-reconciled task_question.
  */
 async function assertNoOpenImmediateLedger(
   db: DbClient,
   taskId: string,
   affected: ReadonlySet<string>,
 ): Promise<void> {
-  const entries = await db
+  const rounds = await db
     .select()
-    .from(taskQuestions)
-    .where(
-      and(
-        eq(taskQuestions.taskId, taskId),
-        inArray(taskQuestions.roleKind, ['self', 'questioner']),
-        isNull(taskQuestions.sealedAt),
-      ),
-    )
-  if (entries.length === 0) return
-  const rounds = await db.select().from(clarifyRounds).where(eq(clarifyRounds.taskId, taskId))
+    .from(clarifyRounds)
+    .where(and(eq(clarifyRounds.taskId, taskId), eq(clarifyRounds.status, 'answered')))
+  if (rounds.length === 0) return
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
   const outputRunIds = await runIdsWithOutput(
     db,
     runs.map((r) => r.id),
   )
-  const ctx = buildImmediateLedgerContext(entries, rounds, runs, outputRunIds)
+  const ctx = buildImmediateLedgerContext(rounds, runs, outputRunIds)
   const blocker = findOpenImmediateLedgerHome(affected, runs, ctx)
   if (blocker !== null) {
     throw new ConflictError(
@@ -1028,24 +1035,12 @@ export async function resolveBorrowForNode(
         .limit(1)
     )[0] !== undefined
   if (!hasDispatched) {
-    return (
-      await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef, {
-        detectOpen: false,
-      })
-    ).borrowAgentName
+    return (await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef))
+      .borrowAgentName
   }
 
   // Dispatched entries exist → FULL open-detection on all three ledgers (counting OPEN RUN-SELF).
-  const immediate = await resolveImmediateBorrowForNode(
-    db,
-    taskId,
-    nodeId,
-    iteration,
-    workflowDef,
-    {
-      detectOpen: true,
-    },
-  )
+  const immediate = await resolveImmediateBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
   const designer = await resolveDesignerBorrowForNode(db, taskId, nodeId, iteration, workflowDef)
   // RFC-128 P5-BC (clean-path ④ / §5.2.12 F3): the THIRD ledger — control-channel DISPATCHED
   // self/questioner reruns (deferred per-question dispatch; dispatched_at + trigger_run_id
@@ -1274,19 +1269,32 @@ async function resolveImmediateBorrowForNode(
   nodeId: string,
   iteration: number,
   workflowDef: WorkflowDefinition,
-  // RFC-128 P5-BC (Codex impl-gate run-self fix): when `detectOpen` is true the resolver must do
-  // the read even for a no-borrow home, so an OPEN RUN-SELF immediate ledger is counted by the
-  // multi-ledger reject. When false (the no-dispatched-entries hot path, where nothing can
-  // conflict) it keeps the golden-lock fast path (no read for a no-borrow home).
-  opts: { detectOpen: boolean },
 ): Promise<LedgerResolution> {
-  // ALL self/questioner entries — include no-override ("run self") rows so a "borrow X + run
-  // self" mix within one home is DETECTED (P2-1), not silently first-picked. No loop_iter filter
-  // here (self rows project 0); iteration is matched via the round's asking run below (P2-3).
-  // RFC-128 P5-BC: EXCLUDE control-channel per-question entries (`sealed_at` set) — those ride
-  // the DEFERRED self/questioner ledger (resolveDeferredSelfQuestionerBorrowForNode, dispatched_at
-  // consumption), not the quick-channel round-based immediate ledger. `sealed_at` NULL ⟺ a
-  // quick-channel continuation (the only thing this ledger owns) → byte-for-byte golden-lock.
+  // RFC-128 P5-BC (Codex impl-gate round 4): OPEN detection via the TRUTH-SOURCE oracle
+  // (openImmediateRounds — clarify_rounds answered-unconsumed + a PENDING continuation node_run),
+  // NOT the lazily-projected task_questions. This is the SAME oracle the dispatch-time gate uses, so
+  // the two never diverge, and an un-reconciled quick-channel continuation is still seen as OPEN.
+  const rounds = await db
+    .select()
+    .from(clarifyRounds)
+    .where(and(eq(clarifyRounds.taskId, taskId), eq(clarifyRounds.status, 'answered')))
+  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+  const outputRunIds = await runIdsWithOutput(
+    db,
+    runs.map((r) => r.id),
+  )
+  const openRounds = openImmediateRounds(
+    nodeId,
+    iteration,
+    buildImmediateLedgerContext(rounds, runs, outputRunIds),
+  )
+  if (openRounds.length === 0) return CLOSED_LEDGER
+
+  // Ledger is OPEN. Resolve the BORROW from the open rounds' self/questioner task_question
+  // overrides (lazy-ok: a reassign REQUIRES an entry, so NO entry for an open round = no reassign =
+  // run self). EXCLUDE control-channel entries (`sealed_at` set — those ride the deferred ledger).
+  // P2-1 single-borrow gate: the open rounds' decisions must agree on ONE agent (incl. {X, self}).
+  const openOrigins = openRounds.map((r) => r.intermediaryNodeRunId)
   const entries = await db
     .select()
     .from(taskQuestions)
@@ -1295,48 +1303,23 @@ async function resolveImmediateBorrowForNode(
         eq(taskQuestions.taskId, taskId),
         inArray(taskQuestions.roleKind, ['self', 'questioner']),
         isNull(taskQuestions.sealedAt),
+        inArray(taskQuestions.originNodeRunId, openOrigins),
       ),
     )
-  // home = default ?? override (self: the asking node P; questioner: the questioner node).
   const homeEntries = entries.filter((e) => homeTarget(e) === nodeId)
-  if (homeEntries.length === 0) return CLOSED_LEDGER
-  // Golden-lock fast path (only when open-detection isn't needed): no real borrow on this home →
-  // no rounds/runs read. With `detectOpen` we MUST read to count an open run-self ledger.
-  if (!opts.detectOpen && !homeEntries.some((e) => isBorrowHomeFor(e, nodeId))) return CLOSED_LEDGER
-
-  const rounds = await db
-    .select()
-    .from(clarifyRounds)
-    .where(
-      and(
-        eq(clarifyRounds.taskId, taskId),
-        inArray(
-          clarifyRounds.intermediaryNodeRunId,
-          homeEntries.map((e) => e.originNodeRunId),
-        ),
-      ),
+  const borrows = new Set<string | null>()
+  for (const round of openRounds) {
+    const roundEntries = homeEntries.filter(
+      (e) => e.originNodeRunId === round.intermediaryNodeRunId,
     )
-  const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-  const outputRunIds = await runIdsWithOutput(
-    db,
-    runs.map((r) => r.id),
-  )
-
-  // OPEN (unconsumed) home entries at THIS loop iteration, via the SHARED oracle the dispatch-time
-  // gate uses (openImmediateHomeEntries) — so resolveBorrowForNode and the dispatch precheck agree
-  // on what "open immediate ledger" means.
-  const open = openImmediateHomeEntries(
-    nodeId,
-    iteration,
-    buildImmediateLedgerContext(homeEntries, rounds, runs, outputRunIds),
-  )
-  if (open.length === 0) return CLOSED_LEDGER
-
-  // P2-1 single-borrow gate: each open entry's decision is its borrow node (or null = run self).
-  // >1 distinct (incl. {X, self}) ⇒ ambiguous for the single continuation rerun ⇒ reject.
-  const borrows = new Set(
-    open.map((e) => (isBorrowHomeFor(e, nodeId) ? e.overrideTargetNodeId : null)),
-  )
+    if (roundEntries.length === 0) {
+      borrows.add(null) // not reconciled / not reassigned → run self
+    } else {
+      for (const e of roundEntries) {
+        borrows.add(isBorrowHomeFor(e, nodeId) ? e.overrideTargetNodeId : null)
+      }
+    }
+  }
   if (borrows.size > 1) {
     throw new ConflictError(
       'task-question-home-multi-borrow',
@@ -1349,30 +1332,13 @@ async function resolveImmediateBorrowForNode(
         )}) in one continuation; a single rerun runs one agent — align them to one handler.`,
     )
   }
-  // Ledger is OPEN (≥1 unconsumed home entry). Borrow = the single named agent, or null (run
-  // self) — an OPEN RUN-SELF ledger the multi-ledger reject must still count.
+  // Ledger is OPEN. Borrow = the single named agent, or null (run self) — an OPEN RUN-SELF ledger
+  // the multi-ledger reject must still count.
   const borrowNode = [...borrows][0] ?? null
   return {
     open: true,
     borrowAgentName: borrowNode === null ? null : resolveNodeAgentName(workflowDef, borrowNode),
   }
-}
-
-/** RFC-127 借壳: is a self/questioner clarify-round entry CONSUMED? = its role's RFC-070
- *  consumption stamp (resolveTriggerForEntry) points at a done+output run — the SAME oracle
- *  the read-side (resolveEntryHandler) uses. Stamp NULL (continuation rerun queued/running/
- *  failed) or anchor GC'd → NOT consumed (keep borrowing for the retry/revival). */
-function isRoundEntryConsumed(
-  entry: Pick<TaskQuestionRow, 'roleKind'>,
-  round: ClarifyRoundRow,
-  runs: ReadonlyArray<NodeRunRow>,
-  outputRunIds: ReadonlySet<string>,
-): boolean {
-  const triggerRunId = resolveTriggerForEntry(round, entry.roleKind)
-  if (triggerRunId === null) return false
-  const row = runs.find((r) => r.id === triggerRunId)
-  if (row === undefined) return false
-  return row.status === 'done' && outputRunIds.has(row.id)
 }
 
 /**

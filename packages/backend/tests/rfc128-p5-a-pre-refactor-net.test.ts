@@ -372,6 +372,17 @@ describe('RFC-128 P5-A #3 — resolveBorrowForNode 两账本冲突 code 锁', ()
       createdAt: Date.now(),
       updatedAt: Date.now(),
     })
+    // RFC-128 P5-BC (Codex impl-gate round 4): the OPEN immediate ledger is keyed on a PENDING
+    // continuation node_run (truth source), so seed the clarify-answer continuation on P.
+    await db.insert(nodeRuns).values({
+      id: ulid(),
+      taskId,
+      nodeId: P,
+      status: 'pending',
+      rerunCause: 'clarify-answer',
+      retryIndex: 0,
+      iteration: 0,
+    })
   }
 
   /** Designer ledger: a dispatched designer entry whose graph home is P, reassigned to D. */
