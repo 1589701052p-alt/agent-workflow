@@ -93,9 +93,13 @@ import {
   tasks,
 } from '@/db/schema'
 import { parseAnswersArray, sealAnswersServerSide } from '@/services/clarify'
-import { roundHasDispatchedSelfQuestioner } from '@/services/clarifyRerunLedger'
+import {
+  hasOpenDispatchedEntryOnHome,
+  roundHasDispatchedSelfQuestioner,
+} from '@/services/clarifyRerunLedger'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
-import { mintNodeRun } from '@/services/nodeRunMint'
+import { getTaskQuestionWriteSem } from '@/services/taskWriteLocks'
+import { buildMintNodeRunValues, mintNodeRun } from '@/services/nodeRunMint'
 import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
@@ -527,105 +531,213 @@ export async function submitCrossClarifyAnswers(
     args.directive === 'stop' ||
     extractDesignerScopedSubset(questions, sealedAnswers, effectiveScopes).questions.length === 0
 
-  // RFC-128 P5-BC §5.2.14 — atomic {claim → recheck → (conditional) reconcile+consume → flip}. The
-  // cross flip stays committed here so peers + the questioner park read this session resolved
-  // (unchanged peer-aggregation invariant, comment above). The questioner cascade / designer logic
-  // stay async AFTER the tx — peer-aggregation + multi-source designer readiness are async multi-row
-  // reads that cannot go in a sync tx, and they DON'T need to: the session CAS (finding 1) + the
-  // in-tx consume (finding 2/3) + the confirmation-gated dispatch (finding B) together close the
-  // double-submit AND the dispatch double-mint without putting the async mint in the tx.
-  dbTxSync(args.db, (tx) => {
-    // finding 1 (concurrent double-submit): atomically claim the session. The loser sees the
-    // winner's committed 'answered' → reject (no second flip, no second cascade).
-    const claim = tx
-      .select({ status: crossClarifySessions.status })
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, row.id))
-      .limit(1)
-      .all()
-    if (claim[0]?.status !== 'awaiting_human') {
-      throw new ConflictError(
-        'cross-clarify-already-answered',
-        `cross_clarify_session ${row.id} was answered concurrently (lost the submit claim)`,
+  // RFC-128 P5-BC §5.2.14 finding 2 (final gate) — the questioner cascade rerun mint must be IN the
+  // tx. Leaving it async AFTER the tx left a window: between the flip+consume commit and the cascade
+  // mint, confirmation='confirmed' only blocks dispatching the SAME entries, while the immediate-
+  // ledger gate cannot see a not-yet-existing pending cross-clarify-questioner-rerun → a concurrent
+  // dispatch of ANOTHER staged entry to the same questioner home mints first, then the cascade mints
+  // → two pending reruns on one home. Fix: compute the cascade rerun VALUES now (async read of the
+  // questioner run) + INSERT them inside the tx, so the pending rerun commits atomically with the
+  // flip and is immediately visible to any concurrent dispatch's in-flight / immediate-ledger gate.
+  // (mintQuestionerRerun = read lastRun + buildMintNodeRunValues + insert; the async read is hoisted
+  // out, the sync insert goes in the tx — same row, same cause.) Only the SYNC part is in the tx; the
+  // multi-source designer readiness / designer rerun stay async after (peer-aggregation, finding 3).
+  let questionerCascadeRerunId: string | null = null
+  let questionerRerunValues: ReturnType<typeof buildMintNodeRunValues> | null = null
+  // (home node + iteration of the questioner rerun — typed-number, for the in-tx reciprocal check).
+  let questionerHome: { nodeId: string; iteration: number } | null = null
+  if (cascadesQuestioner) {
+    const lastRun = (
+      await args.db
+        .select()
+        .from(nodeRuns)
+        .where(eq(nodeRuns.id, row.sourceQuestionerNodeRunId))
+        .limit(1)
+    )[0]
+    if (lastRun === undefined) {
+      throw new NotFoundError(
+        'cross-clarify-questioner-run-not-found',
+        `questioner node_run ${row.sourceQuestionerNodeRunId} not found`,
       )
     }
-    // finding 2 (atomic dispatch-mode recheck): a round with ANY dispatched questioner entry is
-    // permanently excluded from the questioner whole-round render path → quick-finalize would drop
-    // its answers + double-mint. Reject (the early async guard catches the common case; this closes
-    // the concurrent window).
-    const dispatched = tx
-      .select({ id: taskQuestions.id })
-      .from(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, args.crossClarifyNodeRunId),
-          eq(taskQuestions.roleKind, 'questioner'),
-          isNotNull(taskQuestions.dispatchedAt),
-        ),
-      )
-      .limit(1)
-      .all()
-    if (dispatched.length > 0) {
-      throw new ConflictError(
-        'clarify-quick-finalize-round-dispatched',
-        `cannot quick-finalize cross-clarify round ${args.crossClarifyNodeRunId}: a concurrent control-channel dispatch claimed it. Finish via the control channel.`,
-      )
-    }
-    // finding 2 step 2 + finding 3: when this submit cascades the questioner, MATERIALIZE (idempotent)
-    // + CONFIRM the round's open-undispatched QUESTIONER entries — they are superseded by the
-    // cascade. reconcile covers the virgin case (no rows yet → a later lazy reconcile would otherwise
-    // create OPEN dispatchable rows); the confirm covers the control-seal case. DESIGNER entries are
-    // NOT confirmed (the designer/deferred path owns them). Only runs in the cascade branches, so the
-    // designer path's RFC-059 questioner handling is untouched.
-    if (cascadesQuestioner && roundRow !== undefined) {
-      reconcileRoundEntriesTx(tx, {
-        ...roundRow,
-        status: 'answered',
-        answersJson,
-        directive: args.directive,
-        questionScopesJson,
-      })
-      tx.update(taskQuestions)
-        .set({
-          confirmation: 'confirmed',
-          confirmedBy: answeredBy,
-          confirmedByRole: args.submittedByRole ?? null,
-          confirmedAt: answeredAt,
-          updatedAt: answeredAt,
-        })
+    questionerHome = { nodeId: lastRun.nodeId, iteration: lastRun.iteration }
+    questionerRerunValues = buildMintNodeRunValues({
+      taskId: row.taskId,
+      nodeId: lastRun.nodeId,
+      status: 'pending',
+      cause: 'cross-clarify-questioner-rerun',
+      iteration: lastRun.iteration,
+      inheritFrom: lastRun,
+      overrides: { startedAt: null },
+    })
+  }
+
+  // RFC-128 P5-BC §5.2.14 — atomic {claim → recheck → (cascade) reconcile+consume+questioner-mint →
+  // flip}. The cross flip stays committed here so peers + the questioner park read this session
+  // resolved (unchanged peer-aggregation invariant, comment above). The questioner cascade MINT is in
+  // the tx (finding 2); only the async designer/deferred/multi-source readiness stay AFTER the tx
+  // (they cannot + need not go in a sync tx). session CAS (finding 1) + in-tx consume+mint (finding
+  // 2/3) + confirmation-gated dispatch (finding B) close the double-submit AND dispatch double-mint.
+  //
+  // §5.2.14 final-gate (user-authorized): hold the per-task QUESTION-WRITE lock (B) across this tx so
+  // the cross submit serializes against dispatchTaskQuestions symmetrically with the self path. B
+  // only (cross submit has NO worktree rollback → no worktree write lock A needed). Lock order:
+  // cross-submit takes B alone (no nesting) → no B→A → deadlock-free; B is short (sync tx).
+  await getTaskQuestionWriteSem(row.taskId).run(async () => {
+    dbTxSync(args.db, (tx) => {
+      // finding 1 (concurrent double-submit): atomically claim the session. The loser sees the
+      // winner's committed 'answered' → reject (no second flip, no second cascade).
+      const claim = tx
+        .select({ status: crossClarifySessions.status })
+        .from(crossClarifySessions)
+        .where(eq(crossClarifySessions.id, row.id))
+        .limit(1)
+        .all()
+      if (claim[0]?.status !== 'awaiting_human') {
+        throw new ConflictError(
+          'cross-clarify-already-answered',
+          `cross_clarify_session ${row.id} was answered concurrently (lost the submit claim)`,
+        )
+      }
+      // finding 2 (atomic dispatch-mode recheck): a round with ANY dispatched questioner entry is
+      // permanently excluded from the questioner whole-round render path → quick-finalize would drop
+      // its answers + double-mint. Reject (the early async guard catches the common case; this closes
+      // the concurrent window).
+      const dispatched = tx
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
         .where(
           and(
             eq(taskQuestions.originNodeRunId, args.crossClarifyNodeRunId),
             eq(taskQuestions.roleKind, 'questioner'),
-            isNull(taskQuestions.dispatchedAt),
-            eq(taskQuestions.confirmation, 'open'),
+            isNotNull(taskQuestions.dispatchedAt),
           ),
         )
+        .limit(1)
+        .all()
+      if (dispatched.length > 0) {
+        throw new ConflictError(
+          'clarify-quick-finalize-round-dispatched',
+          `cannot quick-finalize cross-clarify round ${args.crossClarifyNodeRunId}: a concurrent control-channel dispatch claimed it. Finish via the control channel.`,
+        )
+      }
+      // finding 2 step 2 + finding 3: when this submit cascades the questioner, MATERIALIZE (idempotent)
+      // + CONFIRM the round's open-undispatched QUESTIONER entries — they are superseded by the
+      // cascade. reconcile covers the virgin case (no rows yet → a later lazy reconcile would otherwise
+      // create OPEN dispatchable rows); the confirm covers the control-seal case. DESIGNER entries are
+      // NOT confirmed (the designer/deferred path owns them). Only runs in the cascade branches, so the
+      // designer path's RFC-059 questioner handling is untouched.
+      if (cascadesQuestioner) {
+        if (questionerRerunValues !== null && questionerHome !== null) {
+          // reciprocal in-flight check (PRECISE, ALL-ROLE per 3rd-gate finding P2): a concurrent
+          // deferred dispatch of ANOTHER round's entry reassigned (RFC-127 借壳) to THIS questioner home
+          // may have committed a pending rerun just before this tx. Keyed on an OPEN (unconsumed)
+          // DISPATCHED entry of ANY deferred role (self/questioner/designer) whose home == this home —
+          // a node carries at most ONE open ledger, so a designer (cross-clarify-answer) open rerun on
+          // the same node also blocks (mirrors assertNoInFlightDispatch). NOT "any pending rerun" (a
+          // prior quick continuation has no dispatched entry → no false reject). taskId-scoped.
+          const dispatchedHome = tx
+            .select({
+              triggerRunId: taskQuestions.triggerRunId,
+              defaultTargetNodeId: taskQuestions.defaultTargetNodeId,
+              overrideTargetNodeId: taskQuestions.overrideTargetNodeId,
+            })
+            .from(taskQuestions)
+            .where(
+              and(
+                eq(taskQuestions.taskId, row.taskId),
+                inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
+                isNotNull(taskQuestions.dispatchedAt),
+              ),
+            )
+            .all()
+          if (dispatchedHome.length > 0) {
+            const txRuns = tx.select().from(nodeRuns).where(eq(nodeRuns.taskId, row.taskId)).all()
+            const txOutputIds = new Set(
+              tx
+                .select({ id: nodeRunOutputs.nodeRunId })
+                .from(nodeRunOutputs)
+                .where(
+                  inArray(
+                    nodeRunOutputs.nodeRunId,
+                    txRuns.map((r) => r.id),
+                  ),
+                )
+                .all()
+                .map((r) => r.id),
+            )
+            if (
+              hasOpenDispatchedEntryOnHome(
+                questionerHome.nodeId,
+                dispatchedHome,
+                txRuns,
+                txOutputIds,
+              )
+            ) {
+              throw new ConflictError(
+                'cross-clarify-questioner-rerun-in-flight',
+                `questioner home '${questionerHome.nodeId}' already has an OPEN dispatched rerun ledger (a concurrent dispatch won) — not double-minting`,
+              )
+            }
+          }
+          // finding 2: MINT the questioner cascade rerun IN the tx (committed atomically with the flip →
+          // immediately visible to a concurrent dispatch's immediate-ledger / in-flight gate → no
+          // post-tx double-mint window). The post-tx stop / continue-fast branch reuses this id.
+          // rfc098-allow-direct-node-run-insert: values from the mint factory.
+          tx.insert(nodeRuns).values(questionerRerunValues).run()
+          questionerCascadeRerunId = questionerRerunValues.id
+        }
+        if (roundRow !== undefined) {
+          reconcileRoundEntriesTx(tx, {
+            ...roundRow,
+            status: 'answered',
+            answersJson,
+            directive: args.directive,
+            questionScopesJson,
+          })
+          tx.update(taskQuestions)
+            .set({
+              confirmation: 'confirmed',
+              confirmedBy: answeredBy,
+              confirmedByRole: args.submittedByRole ?? null,
+              confirmedAt: answeredAt,
+              updatedAt: answeredAt,
+            })
+            .where(
+              and(
+                eq(taskQuestions.originNodeRunId, args.crossClarifyNodeRunId),
+                eq(taskQuestions.roleKind, 'questioner'),
+                isNull(taskQuestions.dispatchedAt),
+                eq(taskQuestions.confirmation, 'open'),
+              ),
+            )
+            .run()
+        }
+      }
+      // flip cross_clarify_session → answered.
+      tx.update(crossClarifySessions)
+        .set({
+          answersJson,
+          status: 'answered',
+          directive: args.directive,
+          answeredAt,
+          questionScopesJson,
+        })
+        .where(eq(crossClarifySessions.id, row.id))
         .run()
-    }
-    // flip cross_clarify_session → answered.
-    tx.update(crossClarifySessions)
-      .set({
-        answersJson,
-        status: 'answered',
-        directive: args.directive,
-        answeredAt,
-        questionScopesJson,
-      })
-      .where(eq(crossClarifySessions.id, row.id))
-      .run()
-    // RFC-058 T12 dual-write — mirror to clarify_rounds (+ RFC-059 scopes + RFC-099 attribution).
-    tx.update(clarifyRounds)
-      .set({
-        answersJson,
-        status: 'answered',
-        directive: args.directive,
-        answeredAt,
-        questionScopesJson,
-        ...attributionSet,
-      })
-      .where(eq(clarifyRounds.id, row.id))
-      .run()
+      // RFC-058 T12 dual-write — mirror to clarify_rounds (+ RFC-059 scopes + RFC-099 attribution).
+      tx.update(clarifyRounds)
+        .set({
+          answersJson,
+          status: 'answered',
+          directive: args.directive,
+          answeredAt,
+          questionScopesJson,
+          ...attributionSet,
+        })
+        .where(eq(clarifyRounds.id, row.id))
+        .run()
+    })
   })
 
   // RFC-053: resume-clarify enforces awaiting_human → done. Cross-clarify shares the same transition
@@ -660,18 +772,17 @@ export async function submitCrossClarifyAnswers(
       'stop',
       answeredBy,
     )
-    const outcome = await triggerQuestionerStopRerun({
-      db: args.db,
-      taskId: row.taskId,
-      questionerNodeRunId: row.sourceQuestionerNodeRunId,
-    })
+    // §5.2.14 finding 2: the questioner rerun was already minted IN the tx above (atomic, no double-
+    // mint window). The STOP behaviour (STOP CLARIFYING anchor) rides the persisted directive='stop'
+    // at render time — the mint itself is identical, so we reuse the tx-minted id.
+    const questionerNodeRunId = questionerCascadeRerunId!
     broadcastCrossClarifyAnswered(row.taskId, sessionAfter)
-    broadcastCrossClarifyRejected(row.taskId, sessionAfter, outcome.questionerNodeRunId)
+    broadcastCrossClarifyRejected(row.taskId, sessionAfter, questionerNodeRunId)
     return {
       session: sessionAfter,
       outcome: {
         kind: 'questioner-stop-triggered',
-        questionerNodeRunId: outcome.questionerNodeRunId,
+        questionerNodeRunId,
       },
     }
   }
@@ -685,17 +796,14 @@ export async function submitCrossClarifyAnswers(
   // questioner cascade now means the user doesn't wait for peers.
   const designerSplit = extractDesignerScopedSubset(questions, sealedAnswers, effectiveScopes)
   if (designerSplit.questions.length === 0) {
-    const outcome = await triggerQuestionerContinueRerun({
-      db: args.db,
-      taskId: row.taskId,
-      questionerNodeRunId: row.sourceQuestionerNodeRunId,
-    })
+    // §5.2.14 finding 2: questioner rerun already minted IN the tx above (atomic). Reuse the id.
+    const questionerNodeRunId = questionerCascadeRerunId!
     broadcastCrossClarifyAnswered(row.taskId, sessionAfter)
     return {
       session: sessionAfter,
       outcome: {
         kind: 'questioner-continue-triggered',
-        questionerNodeRunId: outcome.questionerNodeRunId,
+        questionerNodeRunId,
       },
     }
   }

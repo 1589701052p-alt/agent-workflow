@@ -36,6 +36,7 @@ import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
+import { getTaskQuestionWriteSem } from '@/services/taskWriteLocks'
 import {
   buildImmediateLedgerContext,
   type CauseClass,
@@ -557,161 +558,173 @@ export async function dispatchTaskQuestions(
   const now = Date.now()
   let committed = false
   try {
-    dbTxSync(db, (tx) => {
-      // (Codex re-gate H2): the terminal pre-check (assertTaskAcceptsQuestions, above) is a
-      // TOCTOU window — the scheduler can trySetTaskStatus(done/canceled) between it and this
-      // tx. Re-read tasks.status INSIDE the tx and roll back the WHOLE tx (no stamp, no mint)
-      // if the task went terminal, so nothing is minted onto a finished task. Reuses the SAME
-      // terminal set as the pre-check (no drift).
-      const curTask = tx
-        .select({ status: tasks.status })
-        .from(tasks)
-        .where(eq(tasks.id, taskId))
-        .all()[0]
-      if (curTask === undefined || TERMINAL_TASK_STATUSES.has(curTask.status)) {
-        throw new ConflictError(
-          'task-terminal',
-          `task ${taskId} became ${curTask?.status ?? 'missing'} before dispatch committed; nothing stamped or minted`,
-        )
-      }
-      const stillNull = tx
-        .select({
-          id: taskQuestions.id,
-          override: taskQuestions.overrideTargetNodeId,
-          def: taskQuestions.defaultTargetNodeId,
-          origin: taskQuestions.originNodeRunId,
-        })
-        .from(taskQuestions)
-        // RFC-128 P5-BC §5.2.14 (Codex impl-gate finding B): the CAS re-checks `confirmation='open'`
-        // too, NOT just `dispatched_at IS NULL`. A quick whole-round finalize that committed between
-        // the async `requested` read and this tx CONSUMES (confirms) the round's sealed-undispatched
-        // self/q entries; once its continuation is done+output the open-ledger recheck no longer
-        // blocks, so without this predicate a now-confirmed entry would still pass the CAS (its
-        // `dispatched_at` is still NULL) and get stamped/minted → duplicate rerun. A confirmed entry
-        // now shrinks `stillNull` → ConcurrentClaim → whole-tx rollback (nothing stamped/minted).
-        .where(
-          and(
-            inArray(taskQuestions.id, dispatchIds),
-            isNull(taskQuestions.dispatchedAt),
-            eq(taskQuestions.confirmation, 'open'),
-          ),
-        )
-        .all()
-      if (stillNull.length !== dispatchIds.length) throw new ConcurrentClaim()
-      // Re-verify the planned snapshot is unchanged (atomic with the stamp+mint). A concurrent
-      // reassign/reconcile that moved any entry's effective target (or origin) → retryable
-      // rollback; the caller re-plans against the new target and retries (nothing stamped/minted).
-      for (const c of stillNull) {
-        const planned = plannedByEntry.get(c.id)
-        const curTarget = c.override ?? c.def
-        if (planned === undefined || curTarget !== planned.target || c.origin !== planned.origin) {
-          throw new TargetChanged(c.id)
+    // RFC-128 §5.2.14 final-gate (user-authorized): hold the per-task QUESTION-WRITE lock (B) across
+    // the stamp+mint tx so a clarify/cross-clarify SUBMIT's {precheck→rollback→tx} cannot interleave
+    // with this dispatch — closing the submit-side stale-precheck/rollback-clobber + double-mint
+    // window. B only (dispatch never touches the worktree / never runs an agent → no worktree write
+    // lock A needed). Lock order: dispatch takes B alone; the submit takes A ≻ B; no B→A here → no
+    // deadlock, and B is short (this tx is fast). See taskWriteLocks.ts.
+    await getTaskQuestionWriteSem(taskId).run(async () => {
+      dbTxSync(db, (tx) => {
+        // (Codex re-gate H2): the terminal pre-check (assertTaskAcceptsQuestions, above) is a
+        // TOCTOU window — the scheduler can trySetTaskStatus(done/canceled) between it and this
+        // tx. Re-read tasks.status INSIDE the tx and roll back the WHOLE tx (no stamp, no mint)
+        // if the task went terminal, so nothing is minted onto a finished task. Reuses the SAME
+        // terminal set as the pre-check (no drift).
+        const curTask = tx
+          .select({ status: tasks.status })
+          .from(tasks)
+          .where(eq(tasks.id, taskId))
+          .all()[0]
+        if (curTask === undefined || TERMINAL_TASK_STATUSES.has(curTask.status)) {
+          throw new ConflictError(
+            'task-terminal',
+            `task ${taskId} became ${curTask?.status ?? 'missing'} before dispatch committed; nothing stamped or minted`,
+          )
         }
-      }
-      // In-tx in-flight recheck (synchronous concurrency net, SAME oracles as the async prechecks)
-      // — re-run BOTH ledger gates inside the tx so a concurrent dispatch / quick-channel answer
-      // committed between the prechecks and here can't slip a double-mint past. Fetch the task's
-      // runs + output ids ONCE for both.
-      const txRuns = tx.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId)).all()
-      const txOutputIds: ReadonlySet<string> =
-        txRuns.length === 0
-          ? new Set<string>()
-          : new Set(
-              tx
-                .select({ nodeRunId: nodeRunOutputs.nodeRunId })
-                .from(nodeRunOutputs)
-                .where(
-                  inArray(
-                    nodeRunOutputs.nodeRunId,
-                    txRuns.map((r) => r.id),
-                  ),
-                )
-                .all()
-                .map((r) => r.nodeRunId),
-            )
-      // (a) RFC-128 P5-BC (R2-2, §5.2.12 contract 3): the in-flight recheck spans ANY deferred role
-      //     (self/questioner/designer) DISPATCHED entry — the cross-batch serialization half.
-      const txDispatched = tx
-        .select()
-        .from(taskQuestions)
-        .where(
-          and(
-            eq(taskQuestions.taskId, taskId),
-            inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
-            isNotNull(taskQuestions.dispatchedAt),
-          ),
-        )
-        .all()
-      if (txDispatched.length > 0) {
-        const blocker = findOpenDispatchTarget(affected, {
-          entries: txDispatched,
-          runs: txRuns,
-          outputRunIds: txOutputIds,
-        })
-        if (blocker !== null) throw new NodeDispatchInFlight(blocker)
-      }
-      // (b) Codex impl-gate (§5.2.3④ run-self): re-run the OPEN IMMEDIATE (quick-channel)
-      //     self/questioner ledger gate in-tx — a quick-channel continuation committed between the
-      //     precheck and here must still block the stamp/mint (no double-mint). Reads the TRUTH
-      //     SOURCE (clarify_rounds awaiting_human+answered — incl. the mint-first window — + the
-      //     pending continuation node_run), EXCLUDING control-channel rounds (sealed/dispatched
-      //     self/q entries → deferred ledger). NOT the lazy task_question projection for the
-      //     positive quick detection.
-      const txRounds = tx
-        .select()
-        .from(clarifyRounds)
-        .where(
-          and(
-            eq(clarifyRounds.taskId, taskId),
-            inArray(clarifyRounds.status, ['awaiting_human', 'answered']),
-          ),
-        )
-        .all()
-      if (txRounds.length > 0) {
-        const txDeferredDispatchedOrigins = new Set(
-          tx
-            .select({ origin: taskQuestions.originNodeRunId })
-            .from(taskQuestions)
-            .where(
-              and(
-                eq(taskQuestions.taskId, taskId),
-                inArray(taskQuestions.roleKind, ['self', 'questioner']),
-                isNotNull(taskQuestions.dispatchedAt),
-              ),
-            )
-            .all()
-            .map((r) => r.origin),
-        )
-        const immBlocker = findOpenImmediateLedgerHome(
-          affected,
-          txRuns,
-          buildImmediateLedgerContext(txRounds, txRuns, txOutputIds, txDeferredDispatchedOrigins),
-        )
-        if (immBlocker !== null) throw new NodeDispatchInFlight(immBlocker)
-      }
-      tx.update(taskQuestions)
-        .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
-        // §5.2.14 finding B: confirmation='open' mirrors the CAS guard — never stamp a SUPERSEDED
-        // (quick-finalize-confirmed) entry (the CAS above already threw ConcurrentClaim if any
-        // dispatchId got confirmed; this keeps the write itself self-consistent).
-        .where(
-          and(
-            inArray(taskQuestions.id, dispatchIds),
-            isNull(taskQuestions.dispatchedAt),
-            eq(taskQuestions.confirmation, 'open'),
-          ),
-        )
-        .run()
-      for (const p of mintPlans) {
-        // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
-        // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
-        // factory mintNodeRun uses, so zero hand-copied inheritance / cause drift; (2) the
-        // insert MUST be synchronous to commit atomically with the dispatched_at stamp
-        // (an async mintNodeRun would yield + commit early, defeating the atomicity).
-        // rfc098-allow-direct-node-run-insert
-        tx.insert(nodeRuns).values(p.values).run()
-      }
-      committed = true
+        const stillNull = tx
+          .select({
+            id: taskQuestions.id,
+            override: taskQuestions.overrideTargetNodeId,
+            def: taskQuestions.defaultTargetNodeId,
+            origin: taskQuestions.originNodeRunId,
+          })
+          .from(taskQuestions)
+          // RFC-128 P5-BC §5.2.14 (Codex impl-gate finding B): the CAS re-checks `confirmation='open'`
+          // too, NOT just `dispatched_at IS NULL`. A quick whole-round finalize that committed between
+          // the async `requested` read and this tx CONSUMES (confirms) the round's sealed-undispatched
+          // self/q entries; once its continuation is done+output the open-ledger recheck no longer
+          // blocks, so without this predicate a now-confirmed entry would still pass the CAS (its
+          // `dispatched_at` is still NULL) and get stamped/minted → duplicate rerun. A confirmed entry
+          // now shrinks `stillNull` → ConcurrentClaim → whole-tx rollback (nothing stamped/minted).
+          .where(
+            and(
+              inArray(taskQuestions.id, dispatchIds),
+              isNull(taskQuestions.dispatchedAt),
+              eq(taskQuestions.confirmation, 'open'),
+            ),
+          )
+          .all()
+        if (stillNull.length !== dispatchIds.length) throw new ConcurrentClaim()
+        // Re-verify the planned snapshot is unchanged (atomic with the stamp+mint). A concurrent
+        // reassign/reconcile that moved any entry's effective target (or origin) → retryable
+        // rollback; the caller re-plans against the new target and retries (nothing stamped/minted).
+        for (const c of stillNull) {
+          const planned = plannedByEntry.get(c.id)
+          const curTarget = c.override ?? c.def
+          if (
+            planned === undefined ||
+            curTarget !== planned.target ||
+            c.origin !== planned.origin
+          ) {
+            throw new TargetChanged(c.id)
+          }
+        }
+        // In-tx in-flight recheck (synchronous concurrency net, SAME oracles as the async prechecks)
+        // — re-run BOTH ledger gates inside the tx so a concurrent dispatch / quick-channel answer
+        // committed between the prechecks and here can't slip a double-mint past. Fetch the task's
+        // runs + output ids ONCE for both.
+        const txRuns = tx.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId)).all()
+        const txOutputIds: ReadonlySet<string> =
+          txRuns.length === 0
+            ? new Set<string>()
+            : new Set(
+                tx
+                  .select({ nodeRunId: nodeRunOutputs.nodeRunId })
+                  .from(nodeRunOutputs)
+                  .where(
+                    inArray(
+                      nodeRunOutputs.nodeRunId,
+                      txRuns.map((r) => r.id),
+                    ),
+                  )
+                  .all()
+                  .map((r) => r.nodeRunId),
+              )
+        // (a) RFC-128 P5-BC (R2-2, §5.2.12 contract 3): the in-flight recheck spans ANY deferred role
+        //     (self/questioner/designer) DISPATCHED entry — the cross-batch serialization half.
+        const txDispatched = tx
+          .select()
+          .from(taskQuestions)
+          .where(
+            and(
+              eq(taskQuestions.taskId, taskId),
+              inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
+              isNotNull(taskQuestions.dispatchedAt),
+            ),
+          )
+          .all()
+        if (txDispatched.length > 0) {
+          const blocker = findOpenDispatchTarget(affected, {
+            entries: txDispatched,
+            runs: txRuns,
+            outputRunIds: txOutputIds,
+          })
+          if (blocker !== null) throw new NodeDispatchInFlight(blocker)
+        }
+        // (b) Codex impl-gate (§5.2.3④ run-self): re-run the OPEN IMMEDIATE (quick-channel)
+        //     self/questioner ledger gate in-tx — a quick-channel continuation committed between the
+        //     precheck and here must still block the stamp/mint (no double-mint). Reads the TRUTH
+        //     SOURCE (clarify_rounds awaiting_human+answered — incl. the mint-first window — + the
+        //     pending continuation node_run), EXCLUDING control-channel rounds (sealed/dispatched
+        //     self/q entries → deferred ledger). NOT the lazy task_question projection for the
+        //     positive quick detection.
+        const txRounds = tx
+          .select()
+          .from(clarifyRounds)
+          .where(
+            and(
+              eq(clarifyRounds.taskId, taskId),
+              inArray(clarifyRounds.status, ['awaiting_human', 'answered']),
+            ),
+          )
+          .all()
+        if (txRounds.length > 0) {
+          const txDeferredDispatchedOrigins = new Set(
+            tx
+              .select({ origin: taskQuestions.originNodeRunId })
+              .from(taskQuestions)
+              .where(
+                and(
+                  eq(taskQuestions.taskId, taskId),
+                  inArray(taskQuestions.roleKind, ['self', 'questioner']),
+                  isNotNull(taskQuestions.dispatchedAt),
+                ),
+              )
+              .all()
+              .map((r) => r.origin),
+          )
+          const immBlocker = findOpenImmediateLedgerHome(
+            affected,
+            txRuns,
+            buildImmediateLedgerContext(txRounds, txRuns, txOutputIds, txDeferredDispatchedOrigins),
+          )
+          if (immBlocker !== null) throw new NodeDispatchInFlight(immBlocker)
+        }
+        tx.update(taskQuestions)
+          .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
+          // §5.2.14 finding B: confirmation='open' mirrors the CAS guard — never stamp a SUPERSEDED
+          // (quick-finalize-confirmed) entry (the CAS above already threw ConcurrentClaim if any
+          // dispatchId got confirmed; this keeps the write itself self-consistent).
+          .where(
+            and(
+              inArray(taskQuestions.id, dispatchIds),
+              isNull(taskQuestions.dispatchedAt),
+              eq(taskQuestions.confirmation, 'open'),
+            ),
+          )
+          .run()
+        for (const p of mintPlans) {
+          // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
+          // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
+          // factory mintNodeRun uses, so zero hand-copied inheritance / cause drift; (2) the
+          // insert MUST be synchronous to commit atomically with the dispatched_at stamp
+          // (an async mintNodeRun would yield + commit early, defeating the atomicity).
+          // rfc098-allow-direct-node-run-insert
+          tx.insert(nodeRuns).values(p.values).run()
+        }
+        committed = true
+      })
     })
   } catch (e) {
     if (e instanceof ConcurrentClaim) return EMPTY_RESULT

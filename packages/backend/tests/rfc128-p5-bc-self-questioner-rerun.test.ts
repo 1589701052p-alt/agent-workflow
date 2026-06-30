@@ -39,6 +39,7 @@ import {
 } from '../src/services/taskQuestions'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
+import { getTaskQuestionWriteSem, getTaskWriteSem } from '../src/services/taskWriteLocks'
 import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -1483,21 +1484,35 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
   // thread + dbTxSync sync body), hard to exercise behaviorally. Bottom-line guard: submitClarifyAnswers
   // mints + flips inside a dbTxSync (NOT separate awaits). If a refactor reverts this to an async mint
   // the race reopens — this text assertion goes red. (CLAUDE.md source-level fallback pattern.)
-  test('step 3 — submitClarifyAnswers mints inside a dbTxSync (race-close source lock)', () => {
+  test('step 3 — submitClarifyAnswers lock/mint source order (race-close + conditional A≻B)', () => {
     const src = readFileSync(resolve(import.meta.dir, '../src/services/clarify.ts'), 'utf8')
     const fn = src.slice(src.indexOf('export async function submitClarifyAnswers'))
-    // mint + flips inside the dbTxSync (NOT separate awaits) — closes the dispatch double-mint race.
+    // (a) mint + flips inside the dbTxSync — closes the dispatch double-mint race (rerun committed
+    // atomically with the session/round flips).
     expect(fn.includes('dbTxSync(db, (tx) =>')).toBe(true)
-    expect(fn.includes('tx.insert(nodeRuns).values(rerunValues)')).toBe(true)
-    // finding 1: the session-status CAS claim lives INSIDE the tx (between dbTxSync open and the
-    // mint) — closes the concurrent double-submit double-mint. The claim reselects clarify_sessions
-    // and rejects 'clarify-already-answered' if another submit won.
-    const txBody = fn.slice(fn.indexOf('dbTxSync(db, (tx) =>'))
-    const claimIdx = txBody.indexOf('.from(clarifySessions)')
-    const mintIdx = txBody.indexOf('tx.insert(nodeRuns).values(rerunValues)')
-    expect(claimIdx).toBeGreaterThan(0)
-    expect(claimIdx).toBeLessThan(mintIdx) // claim BEFORE the mint
-    expect(txBody.includes('clarify-already-answered')).toBe(true)
+    const mintIdx = fn.indexOf('tx.insert(nodeRuns).values(rerunValues)')
+    expect(mintIdx).toBeGreaterThan(fn.indexOf('dbTxSync(db, (tx) =>')) // mint inside the tx
+    // (b) the per-task QUESTION-WRITE lock B wraps the critical section: claim + reciprocal precheck
+    // live under it, BEFORE the rollback.
+    const bLockIdx = fn.indexOf('getTaskQuestionWriteSem(taskRow.id).run')
+    const claimIdx = fn.indexOf('lost the submit claim before rollback')
+    const reciprocalIdx = fn.indexOf('hasOpenDispatchedEntryOnHome(')
+    const rollbackIdx = fn.indexOf('rollbackNodeRunWorktrees(')
+    expect(bLockIdx).toBeGreaterThan(0)
+    expect(claimIdx).toBeGreaterThan(bLockIdx) // claim under the B lock
+    expect(claimIdx).toBeLessThan(rollbackIdx) // claim BEFORE the rollback
+    expect(reciprocalIdx).toBeGreaterThan(bLockIdx) // reciprocal precheck under B
+    expect(reciprocalIdx).toBeLessThan(rollbackIdx) // reciprocal precheck BEFORE the rollback
+    // (c) §5.2.14 review-11/12 conditional A ≻ B: the long worktree lock A is taken OUTER + ONLY when
+    // a rollback runs (so the A-wait never holds B → no dispatch stall behind an agent run); the
+    // no-rollback path takes B only (no A). Lock the exact branch.
+    expect(
+      fn.includes('if (needsRollback) await getTaskWriteSem(taskRow.id).run(runUnderQuestionLock)'),
+    ).toBe(true)
+    expect(fn.includes('else await runUnderQuestionLock()')).toBe(true)
+    // the rollback runs UNDER A (no inner getTaskWriteSem around it — A is the outer wrapper).
+    const rollbackBlock = fn.slice(rollbackIdx - 200, rollbackIdx)
+    expect(rollbackBlock.includes('getTaskWriteSem')).toBe(false)
   })
 
   // finding 1 (regression ①): two CONCURRENT submitClarifyAnswers on the same awaiting_human session
@@ -1528,6 +1543,139 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
     expect(rejected.length).toBe(1)
     expect(rejected[0]!.reason).toBeInstanceOf(ConflictError)
     // Exactly ONE clarify-answer rerun on P — no double mint.
+    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === P && r.rerunCause === 'clarify-answer',
+    )
+    expect(reruns.length).toBe(1)
+  })
+
+  // 2nd-gate finding 2 (reciprocal in-flight check, PRECISE): an OPEN (unconsumed) DISPATCHED self
+  // entry whose home == this home (a concurrent dispatch that won) blocks the quick-finalize mint.
+  // Keyed on a DISPATCHED entry — NOT "any pending rerun" — so a prior round's quick continuation
+  // (no dispatched entry) does NOT false-reject (that was the broad-check regression).
+  test('finding 2 (reciprocal) — an OPEN dispatched self entry on the home blocks the quick-finalize mint', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't')],
+    })
+    // A separate (other-round) self entry, DISPATCHED with home P, whose rerun is in-flight (pending,
+    // unconsumed) — the concurrent dispatch that already won the race for home P.
+    const other = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: P,
+      questions: [mkQ('qx', 't')],
+    })
+    const dispatchedRerun = await seedRun(db, taskId, P, {
+      status: 'pending',
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: other.intermediaryNodeRunId,
+      questionId: 'qx',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: dispatchedRerun,
+    })
+    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
+    let caught: unknown
+    try {
+      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-rerun-in-flight')
+    // No SECOND rerun minted — the tx rolled back (the existing in-flight dispatched rerun stands).
+    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
+      runsBefore,
+    )
+  })
+
+  // 2nd-gate finding 2 — the precise check does NOT false-reject a prior round's quick continuation
+  // (a pending clarify-answer rerun on the home with NO dispatched entry): the legitimate sequential
+  // multi-round flow proceeds. (This is the regression the broad "any pending rerun" check caused.)
+  test('finding 2 (reciprocal) — a prior pending clarify-answer rerun WITHOUT a dispatched entry does NOT block', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't')],
+    })
+    // A pending clarify-answer rerun on (P, 0) from a prior quick continuation — NO dispatched entry.
+    await seedRun(db, taskId, P, { status: 'pending', iteration: 0, rerunCause: 'clarify-answer' })
+    // Must NOT throw the reciprocal conflict (no dispatched entry on the home).
+    const { rerunNodeRunId } = await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId,
+      answers: [ans('q1')],
+    })
+    expect(rerunNodeRunId).toBeTruthy()
+  })
+
+  // §5.2.14 final-gate (question-write lock) regression ②: the lock is per-task (taskId) + a SEPARATE
+  // registry from the long-held worktree write lock — different tasks never block each other, and the
+  // short question-write lock is never the long worktree sem.
+  test('question-write lock — per-task + distinct from the worktree write sem', () => {
+    expect(getTaskQuestionWriteSem('task-A')).toBe(getTaskQuestionWriteSem('task-A')) // same task ⇒ same
+    expect(getTaskQuestionWriteSem('task-A')).not.toBe(getTaskQuestionWriteSem('task-B')) // per-task
+    expect(getTaskQuestionWriteSem('task-A')).not.toBe(getTaskWriteSem('task-A')) // distinct registry
+  })
+
+  // §5.2.14 final-gate regression ①: a CONCURRENT dispatch + quick-finalize targeting the SAME home
+  // serialize via the question-write lock → exactly ONE clarify-answer rerun (no double-mint, no
+  // stale-precheck rollback clobber). Whoever wins the lock commits; the loser observes the committed
+  // state and rejects/no-ops. Outcome-deterministic regardless of which wins.
+  test('question-write lock — concurrent dispatch + quick-finalize on the same home → exactly one rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
+    })
+    // q1 control-sealed-undispatched → dispatchable; the round is still awaiting (quick-finalizable).
+    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
+    const q1 = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
+    ).find((e) => e.questionId === 'q1' && e.roleKind === 'self')
+    expect(q1).toBeDefined()
+    // Fire both concurrently — the question-write lock serializes them.
+    await Promise.allSettled([
+      dispatchTaskQuestions(db, taskId, [q1!.id], actor),
+      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] }),
+    ])
+    // Exactly ONE clarify-answer rerun on P — no double mint under concurrency.
     const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
       (r) => r.nodeId === P && r.rerunCause === 'clarify-answer',
     )

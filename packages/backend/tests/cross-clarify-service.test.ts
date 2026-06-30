@@ -1056,4 +1056,75 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
     )
     expect(reruns.length).toBe(1)
   })
+
+  // 2nd-gate finding 2 (reciprocal in-flight check): a concurrent deferred dispatch of another staged
+  // entry to the same questioner home already committed a pending cross-clarify-questioner-rerun
+  // BEFORE this cascade's tx. The dispatch-mode recheck only sees THIS round's entries, so the
+  // reciprocal in-tx in-flight check blocks the cascade mint → no double questioner rerun.
+  test('finding 2 (reciprocal) — an OPEN dispatched questioner entry on the home blocks the cascade mint', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db, { deferred: true })
+    const qRunId = await seedQuestionerRun(db, taskId)
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
+      db,
+      taskId,
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: qRunId,
+      targetDesignerNodeId: 'designer',
+      loopIter: 0,
+      questions: [makeQ('q1', 't')],
+    })
+    // The concurrent dispatch that won: a pending cross-clarify-questioner-rerun on the questioner
+    // home + a DISPATCHED questioner task_question whose home (default) is 'questioner', bound to it
+    // (in-flight / unconsumed).
+    const dispatchedRerunId = `nr_qrr_${Math.random().toString(36).slice(2, 8)}`
+    await db.insert(nodeRuns).values({
+      id: dispatchedRerunId,
+      taskId,
+      nodeId: 'questioner',
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+      rerunCause: 'cross-clarify-questioner-rerun',
+    })
+    await db.insert(taskQuestions).values({
+      id: `tq_${Math.random().toString(36).slice(2, 8)}`,
+      taskId,
+      originNodeRunId: `other_round_${Math.random().toString(36).slice(2, 8)}`,
+      questionId: 'qx',
+      questionTitle: 'qx',
+      sourceKind: 'cross',
+      roleKind: 'questioner',
+      iteration: 0,
+      loopIter: 0,
+      defaultTargetNodeId: 'questioner',
+      sealedAt: Date.now(),
+      dispatchedAt: Date.now(),
+      dispatchedBy: 'u1',
+      triggerRunId: dispatchedRerunId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
+    let caught: unknown
+    try {
+      await submitCrossClarifyAnswers({
+        db,
+        crossClarifyNodeRunId,
+        answers: [makeAns('q1')],
+        directive: 'continue',
+        questionScopes: { q1: 'questioner' },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe(
+      'cross-clarify-questioner-rerun-in-flight',
+    )
+    // No SECOND questioner rerun minted (tx rolled back; the existing in-flight rerun stands).
+    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
+      runsBefore,
+    )
+  })
 })

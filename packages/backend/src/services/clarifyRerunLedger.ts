@@ -209,6 +209,55 @@ export function isDispatchedEntryConsumed(
   return hr !== null && hr.status === 'done' && hr.hasOutput
 }
 
+/** The resolveHandlerRun lineage projection (the SAME shape findOpenDispatchTarget passes) so
+ *  "consumed" is defined identically wherever isDispatchedEntryConsumed runs. */
+function toLineageViews(
+  runs: ReadonlyArray<NodeRunRow>,
+  outputRunIds: ReadonlySet<string>,
+): RunLineageView[] {
+  return runs.map((r) => ({
+    id: r.id,
+    nodeId: r.nodeId,
+    iteration: r.iteration,
+    loopIter: 0,
+    rerunCause: r.rerunCause,
+    status: r.status,
+    startedAt: r.startedAt,
+    hasOutput: outputRunIds.has(r.id),
+    parentNodeRunId: r.parentNodeRunId,
+  }))
+}
+
+/** RFC-128 P5-BC §5.2.14 (reciprocal in-flight check, PRECISE). Pure/sync — is there an OPEN
+ *  (unconsumed) DISPATCHED entry of ANY deferred role (self/questioner/designer) whose HOME
+ *  (`default ?? override`, per findOpenDispatchTarget) is `homeNodeId`? This is the dispatch-side
+ *  mirror the submit-side mint needs: a concurrent deferred dispatch of ANOTHER round's entry
+ *  reassigned (RFC-127 借壳) to the cascade's home stamps it + mints a pending rerun on that home;
+ *  without this the cascade mints a SECOND open ledger on the same (home, iteration).
+ *
+ *  ALL-ROLE (3rd-gate finding P2): a node carries at most ONE open rerun ledger — a self/questioner
+ *  quick-finalize must NOT mint a `clarify-answer`/`cross-clarify-questioner-rerun` next to an EXISTING
+ *  open dispatched DESIGNER (`cross-clarify-answer`) rerun on the same home, or the scheduler later
+ *  sees multiple open ledgers for one node (mirrors assertNoInFlightDispatch, which spans any deferred
+ *  role). Keyed on a DISPATCHED entry (NOT "any pending rerun"): a prior round's quick continuation
+ *  has no dispatched entry → the legitimate sequential multi-round flow is not falsely rejected.
+ *  Consumed dispatched entries (rerun done+output) are not a live conflict. */
+export function hasOpenDispatchedEntryOnHome(
+  homeNodeId: string,
+  dispatchedEntries: ReadonlyArray<
+    Pick<TaskQuestionRow, 'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId'>
+  >,
+  runs: ReadonlyArray<NodeRunRow>,
+  outputRunIds: ReadonlySet<string>,
+): boolean {
+  const onHome = dispatchedEntries.filter(
+    (e) => (e.defaultTargetNodeId ?? e.overrideTargetNodeId) === homeNodeId,
+  )
+  if (onHome.length === 0) return false
+  const lineageViews = toLineageViews(runs, outputRunIds)
+  return onHome.some((e) => !isDispatchedEntryConsumed(e, runs, lineageViews))
+}
+
 /** RFC-128 P5-BC §5.2.14 mixed-path step 1 — submit-side dispatch-mode guard. Does `originNodeRunId`
  *  (a clarify / cross-clarify round's intermediary run) carry ANY DISPATCHED self/questioner entry
  *  (`dispatched_at` set), in-flight OR already consumed?

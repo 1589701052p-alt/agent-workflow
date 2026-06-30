@@ -289,37 +289,37 @@ describe('cross-clarify submit write-ordering (deliberate non-deferral)', () => 
     return src.slice(start, after === -1 ? undefined : after)
   }
 
-  test('the session → answered flip precedes the rerun triggers (inverse of self-clarify)', () => {
+  test('the questioner cascade mint is atomic with the flip (in-tx); the async designer trigger follows (peer aggregation)', () => {
     const body = submitBody()
-    // The cross_clarify_sessions update flips status → answered.
+    // The cross_clarify_sessions update flips status → answered (inside the dbTxSync).
     const answeredFlipIdx = body.indexOf("status: 'answered'")
-    // The rerun is minted only AFTER the flip (deliberate, for peer aggregation).
-    const triggerIdxs = [
-      body.indexOf('triggerQuestionerStopRerun('),
-      body.indexOf('triggerQuestionerContinueRerun('),
-      body.indexOf('triggerDesignerRerun('),
-    ].filter((i) => i > 0)
+    // RFC-128 §5.2.14 finding 2: the questioner cascade rerun is minted INSIDE the same dbTxSync as
+    // the flip (atomic — closes the post-tx double-mint window), via the mint-factory values. It is
+    // NO LONGER an async triggerQuestioner*Rerun call after the flip.
+    const questionerMintIdx = body.indexOf('tx.insert(nodeRuns).values(questionerRerunValues)')
+    expect(body.indexOf('triggerQuestionerStopRerun(')).toBe(-1)
+    expect(body.indexOf('triggerQuestionerContinueRerun(')).toBe(-1)
+    // The DESIGNER rerun stays an async trigger AFTER the flip (multi-source peer aggregation needs
+    // this session committed-answered so a peer's readiness sees it).
+    const designerTriggerIdx = body.indexOf('triggerDesignerRerun(')
     expect(answeredFlipIdx).toBeGreaterThan(0)
-    expect(triggerIdxs.length).toBeGreaterThan(0)
-    for (const t of triggerIdxs) {
-      expect(answeredFlipIdx).toBeLessThan(t)
-    }
+    expect(questionerMintIdx).toBeGreaterThan(0)
+    expect(designerTriggerIdx).toBeGreaterThan(0)
+    // questioner mint co-located with the flip (same tx); designer trigger AFTER the flip.
+    expect(answeredFlipIdx).toBeLessThan(designerTriggerIdx)
+    expect(questionerMintIdx).toBeLessThan(designerTriggerIdx)
   })
 
-  test('the clarify_rounds mirror update is co-located with the legacy update (both before any rerun)', () => {
+  test('the clarify_rounds mirror update is co-located with the legacy update (both before the designer trigger)', () => {
     const body = submitBody()
     const legacyUpdateIdx = body.indexOf('.update(crossClarifySessions)')
     const mirrorUpdateIdx = body.indexOf('.update(clarifyRounds)')
-    const firstTrigger = Math.min(
-      ...[
-        body.indexOf('triggerQuestionerStopRerun('),
-        body.indexOf('triggerQuestionerContinueRerun('),
-        body.indexOf('triggerDesignerRerun('),
-      ].filter((i) => i > 0),
-    )
+    // The only async rerun trigger left in submit is the designer (questioner is minted in-tx).
+    const firstTrigger = body.indexOf('triggerDesignerRerun(')
     expect(legacyUpdateIdx).toBeGreaterThan(0)
     expect(mirrorUpdateIdx).toBeGreaterThan(legacyUpdateIdx)
-    // The mirror must not drift below a rerun trigger — keep the dual-write atomic.
+    expect(firstTrigger).toBeGreaterThan(0)
+    // The mirror must not drift below the designer trigger — keep the dual-write atomic.
     expect(mirrorUpdateIdx).toBeLessThan(firstTrigger)
   })
 

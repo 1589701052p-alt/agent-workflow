@@ -33,6 +33,40 @@ export function getTaskWriteSem(taskId: string): Semaphore {
   return sem
 }
 
+// RFC-128 P5-BC §5.2.14 (final-gate, user-authorized) — the per-task QUESTION-WRITE lock.
+//
+// A SECOND, SHORT-LIVED per-task mutex, DISTINCT from getTaskWriteSem above. It serializes the
+// task's clarify-answer / cross-clarify-answer SUBMIT critical sections against dispatchTaskQuestions
+// so a deferred dispatch can never commit (stamp + mint a pending rerun) in the window between a
+// submit's stale dispatch-mode precheck and its destructive worktree rollback (which would clobber
+// the dispatched rerun) — nor double-mint a same-home rerun. EVERY holder does only fast DB ops (+ a
+// bounded git reset for the self rollback) and NEVER runs an opencode agent, so the lock is held
+// briefly and never blocks behind a multi-minute agent run.
+//
+// Why NOT reuse getTaskWriteSem: that lock is held by scheduler writer nodes for the ENTIRE agent
+// run (scheduler.ts:1962 → :2872). Making dispatch acquire it would hang the "下发" HTTP request
+// behind a running writer. The question-write lock is its own registry so dispatch never waits on an
+// agent run.
+//
+// LOCK ORDER (deadlock-free): the ONLY nesting is in submitClarifyAnswers, which holds the long
+// worktree sem (A = getTaskWriteSem, for the rollback's writer-protection, RFC-098 B1) OUTER and the
+// question-write lock (B = this) INNER → order A ≻ B. Every other holder takes exactly ONE: dispatch
+// + submitCrossClarifyAnswers take B only; scheduler writer nodes take A only. No path acquires A
+// while holding B, so there is no A→B / B→A cycle. A is acquired BEFORE B in the submit, so B is
+// never held while waiting for A → a B-waiter (dispatch) never blocks behind A's (agent-run) wait.
+const questionWriteLocks = new Map<string, Semaphore>()
+
+/** RFC-128 §5.2.14 — the per-task short-lived question-write lock (see module doc; lock order A ≻ B,
+ *  separate registry from getTaskWriteSem). */
+export function getTaskQuestionWriteSem(taskId: string): Semaphore {
+  let sem = questionWriteLocks.get(taskId)
+  if (sem === undefined) {
+    sem = new Semaphore(1)
+    questionWriteLocks.set(taskId, sem)
+  }
+  return sem
+}
+
 /**
  * Drop the registry entry when idle. ONLY runTask's finally may call this
  * (adversarial-review revision #1): if an HTTP rollback still holds/queues
@@ -41,9 +75,16 @@ export function getTaskWriteSem(taskId: string): Semaphore {
  */
 export function gcTaskWriteSem(taskId: string): void {
   const sem = locks.get(taskId)
-  if (sem === undefined) return
-  if (sem.available === sem.capacity && sem.queueLength === 0) {
+  if (sem !== undefined && sem.available === sem.capacity && sem.queueLength === 0) {
     locks.delete(taskId)
+  }
+  // RFC-128 §5.2.14 (3rd-gate finding P3): reclaim the question-write lock too, same idle guard +
+  // self-healing semantics (if an HTTP submit/dispatch still holds/queues it, the entry survives and
+  // is reused by the next getOrCreate — never split-brain). Without this the questionWriteLocks map
+  // would grow without bound in a long-lived daemon (one idle Semaphore per distinct task id).
+  const qSem = questionWriteLocks.get(taskId)
+  if (qSem !== undefined && qSem.available === qSem.capacity && qSem.queueLength === 0) {
+    questionWriteLocks.delete(taskId)
   }
 }
 
