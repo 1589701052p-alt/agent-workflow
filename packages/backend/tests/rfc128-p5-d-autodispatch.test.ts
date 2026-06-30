@@ -661,6 +661,53 @@ describe('RFC-128 P5-D designer-scope + P5-0 guard relationship', () => {
     expect(res.dispatch.reruns.every((r) => r.targetNodeId === Q)).toBe(true)
   })
 
+  // Codex re-review (high) — a stale quick submit must NOT overwrite an already-sealed (control
+  // channel) question's SCOPE. sealRoundQuestions merges every provided scope key (it does not filter
+  // locked questions), so autodispatch must forward scope ONLY for the not-yet-locked questions
+  // (mirroring submitCrossClarifyAnswers). Otherwise: control-seal q1 designer → stale quick finalize
+  // carrying q1:'questioner' would flip q1 → questioner and DELETE q1's staged designer entry.
+  test('locked-scope guard — control-seal q1 as designer, then quick-finalize carrying q1:questioner → q1 stays designer, its designer entry preserved', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [
+      mkQ('q1', 't'),
+      mkQ('q2', 't'),
+    ])
+    // Control channel: partially seal q1 as DESIGNER (round stays awaiting_human).
+    const partial = await sealRoundQuestions({
+      db,
+      originNodeRunId: crossNodeRunId,
+      answers: [ans('q1')],
+      scopes: { q1: 'designer' },
+      rejectSelfQuestionerFullSeal: true,
+    })
+    expect(partial.roundFullySealed).toBe(false)
+    const q1DesignerBefore = (await entriesByOrigin(db, crossNodeRunId)).find(
+      (e) => e.roleKind === 'designer' && e.questionId === 'q1',
+    )
+    expect(q1DesignerBefore).toBeDefined() // q1 designer entry staged
+
+    // Stale quick finalize that tries to FLIP q1 → questioner (conflicting locked scope) + seals q2.
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      scopes: { q1: 'questioner', q2: 'designer' },
+      actor,
+    })
+    // q1's stored scope is STILL designer (the locked scope was not overwritten).
+    const round = (await roundByOrigin(db, crossNodeRunId))[0]
+    const storedScopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
+    expect(storedScopes.q1).toBe('designer')
+    // q1's designer entry is PRESERVED (not deleted by a hijacked questioner re-scope) + still parked.
+    const q1DesignerAfter = (await entriesByOrigin(db, crossNodeRunId)).find(
+      (e) => e.roleKind === 'designer' && e.questionId === 'q1',
+    )
+    expect(q1DesignerAfter).toBeDefined()
+    expect(q1DesignerAfter?.dispatchedAt).toBeNull()
+  })
+
   test('P5-0 guard relationship — the guard is LIFTED on a deferred task (autodispatch full-seals a self round); it STILL fires on the NON-deferred control channel', async () => {
     // Deferred: full self seal ALLOWED (autodispatch is the release path).
     const dbDef = createInMemoryDb(MIGRATIONS)

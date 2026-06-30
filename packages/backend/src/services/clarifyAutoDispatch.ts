@@ -207,6 +207,17 @@ export async function autoDispatchClarifyRound(
           customText: '',
         },
     )
+  // Codex impl-gate (high): forward scope ONLY for the not-yet-locked questions sealed by THIS call.
+  // sealRoundQuestions merges EVERY provided scope key (it does not itself filter locked questions), so
+  // passing the whole quick-submit scope map would let a stale defer=false submit OVERWRITE an
+  // already-sealed (control-channel) question's scope — e.g. control-seal q1 as 'designer', then a
+  // stale quick finalize carrying q1:'questioner' would flip q1 → questioner, deleting q1's staged
+  // designer entry (reconcile drops the designer row). Mirror the immediate path
+  // (submitCrossClarifyAnswers, which skips lockedIds when merging scopes): drop locked-question scopes.
+  const unlockedScopes =
+    args.scopes !== undefined
+      ? Object.fromEntries(Object.entries(args.scopes).filter(([qid]) => !lockedIds.has(qid)))
+      : undefined
   const sealResult = await sealRoundQuestions({
     db,
     originNodeRunId,
@@ -216,7 +227,9 @@ export async function autoDispatchClarifyRound(
     // direct misuse on a non-deferred task (already rejected above) stays consistent with the route.
     rejectSelfQuestionerFullSeal: true,
     ...(args.directive !== undefined ? { directive: args.directive } : {}),
-    ...(args.scopes !== undefined ? { scopes: args.scopes } : {}),
+    ...(unlockedScopes !== undefined && Object.keys(unlockedScopes).length > 0
+      ? { scopes: unlockedScopes }
+      : {}),
     sealedBy: args.actor.userId,
     ...(args.now !== undefined ? { now: args.now } : {}),
   })
