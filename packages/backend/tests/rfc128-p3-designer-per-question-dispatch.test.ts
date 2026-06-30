@@ -120,7 +120,7 @@ function ans(qid: string, note = ''): ClarifyAnswer {
  *  [Q1, Q2]. Returns the task + the cross node-run id (= origin/intermediary). */
 async function seedDeferredCrossTask(
   db: DbClient,
-  opts: { otherHasRun?: boolean } = {},
+  opts: { otherHasRun?: boolean; questions?: ClarifyQuestion[] } = {},
 ): Promise<{ taskId: string; originNodeRunId: string }> {
   const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
   const def = liveDef()
@@ -184,7 +184,7 @@ async function seedDeferredCrossTask(
     sourceQuestionerNodeRunId: questionerRunId,
     targetDesignerNodeId: DESIGNER,
     loopIter: 0,
-    questions: [mkQ('q1', Q1_TITLE), mkQ('q2', Q2_TITLE)],
+    questions: opts.questions ?? [mkQ('q1', Q1_TITLE), mkQ('q2', Q2_TITLE)],
   })
   return { taskId, originNodeRunId: crossClarifyNodeRunId }
 }
@@ -568,5 +568,45 @@ describe('RFC-128 P3 — Codex P2 修复 (reconcile per-question 边角)', () =>
     const q1After = (await designerEntries(db, taskId)).find((e) => e.id === q1Designer.id)
     expect(q1After).toBeDefined() // 已下发 → 不被 stop cleanup 回收（约束①）
     expect(q1After?.dispatchedAt).not.toBeNull()
+  })
+
+  test('P2 re-gate: PARTIAL stop seal（q3 仍 open）不清理 designer 行 → q1 designer 仍在且保住 staged+override（directive 未 finalize）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    // 3 题 round：partial stop（seal q2）后 q3 仍 open → 轮仍 awaiting_human、directive 未 persist。
+    const { taskId, originNodeRunId } = await seedDeferredCrossTask(db, {
+      questions: [mkQ('q1', Q1_TITLE), mkQ('q2', Q2_TITLE), mkQ('q3', 'Q3-distinctive-title')],
+    })
+
+    // partial seal q1(continue 默认, designer) → q1 designer 行；stage + 改派 OTHER（人工覆盖层）。
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q1', Q1_NOTE)],
+      scopes: { q1: 'designer' },
+    })
+    const q1Designer = (await designerEntries(db, taskId)).find((e) => e.questionId === 'q1')!
+    await stageTaskQuestion(db, q1Designer.id, true, actor)
+    await reassignTaskQuestion(db, q1Designer.id, OTHER, actor) // override 覆盖层
+
+    // partial seal q2 携 directive='stop'（q3 仍 open）→ 轮不翻、directive NOT persist。
+    const res = await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q2')],
+      scopes: { q2: 'designer' },
+      directive: 'stop',
+    })
+    expect(res.roundFullySealed).toBe(false)
+    expect((await roundStatus(db, originNodeRunId))[0]?.status).toBe('awaiting_human')
+
+    // 核心断言：q1 designer 行未被误删，且 staged + override 覆盖层完整（修复前会被 cleanup 删→
+    // lazy 重建成 unstaged/无 override，丢覆盖层）。
+    const list = await listTaskQuestions(db, taskId)
+    const q1AfterDto = list.find((d) => d.questionId === 'q1' && d.roleKind === 'designer')
+    expect(q1AfterDto).toBeDefined()
+    expect(q1AfterDto?.phase).toBe('staged') // 覆盖层 staged 保留
+    expect(q1AfterDto?.overrideTargetNodeId).toBe(OTHER) // 覆盖层 override 保留
+    // 行 id 不变（是保留、不是删-重建）。
+    expect(q1AfterDto?.id).toBe(q1Designer.id)
   })
 })

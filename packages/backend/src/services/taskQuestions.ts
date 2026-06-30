@@ -237,21 +237,35 @@ export function reconcileRoundEntriesTx(
   // (3) idempotent — a continue round's designer questions ARE in `desired`, so notInArray
   // matches none → nothing deleted (golden lock); (4) RFC-126 safe — an answered CONTINUE round
   // keeps its designer rows (still desired); only a stop round's UNDISPATCHED designer rows go.
-  const desiredDesignerIds = desired
-    .filter((d) => d.roleKind === 'designer')
-    .map((d) => d.questionId)
-  tx.delete(taskQuestions)
-    .where(
-      and(
-        eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId),
-        eq(taskQuestions.roleKind, 'designer'),
-        isNull(taskQuestions.dispatchedAt),
-        ...(desiredDesignerIds.length > 0
-          ? [notInArray(taskQuestions.questionId, desiredDesignerIds)]
-          : []),
-      ),
-    )
-    .run()
+  //
+  // (5) Codex P2 re-gate — run ONLY when the round is FINALIZED (`roundAnswered`). The directive
+  // is a FINALIZE-only decision: a PARTIAL defer-seal does NOT persist `directive` (clarifySeal
+  // gates `directiveSet` on fullySealed), yet it DOES feed reconcile the TRANSIENT in-memory
+  // directive. So a partial seal carrying `directive:'stop'` (e.g. seal q2=stop while q1 is
+  // sealed+staged and q3 is still open) makes `desired` drop designer rows even though the
+  // round's persisted directive is still null/continue. Without this gate the cleanup would
+  // delete q1's UNDISPATCHED designer row — losing its human overlay (staged / override) — and
+  // the lazy path (reading the persisted null→continue directive) would recreate it un-staged.
+  // A designer row may only be cleaned once the round actually answers with stop, so partial
+  // rounds (round still awaiting_human) skip cleanup entirely; their designer rows + overlays
+  // are preserved until the directive is finalized.
+  if (roundAnswered) {
+    const desiredDesignerIds = desired
+      .filter((d) => d.roleKind === 'designer')
+      .map((d) => d.questionId)
+    tx.delete(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId),
+          eq(taskQuestions.roleKind, 'designer'),
+          isNull(taskQuestions.dispatchedAt),
+          ...(desiredDesignerIds.length > 0
+            ? [notInArray(taskQuestions.questionId, desiredDesignerIds)]
+            : []),
+        ),
+      )
+      .run()
+  }
 }
 
 /** One clarify_round → upsert its desired handler entries (idempotent; preserves
