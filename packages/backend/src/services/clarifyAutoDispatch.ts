@@ -48,7 +48,12 @@ import {
 import { loadSealedQuestionIds } from '@/services/taskQuestions'
 import { ConflictError, NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
-import type { ClarifyAnswer, ClarifyDirective, ClarifyQuestionScope } from '@agent-workflow/shared'
+import type {
+  ClarifyAnswer,
+  ClarifyDirective,
+  ClarifyQuestion,
+  ClarifyQuestionScope,
+} from '@agent-workflow/shared'
 
 const log = createLogger('clarify-auto-dispatch')
 
@@ -56,6 +61,16 @@ const EMPTY_DISPATCH: DispatchTaskQuestionsResult = {
   reruns: [],
   dispatchedEntryIds: [],
   deferred: [],
+}
+
+/** The question ids of a round from its questions_json (defensive parse; [] on malformed). */
+function parseQuestionIds(questionsJson: string): string[] {
+  try {
+    const v = JSON.parse(questionsJson)
+    return Array.isArray(v) ? (v as ClarifyQuestion[]).map((q) => q.id) : []
+  } catch {
+    return []
+  }
 }
 
 export interface AutoDispatchClarifyRoundArgs {
@@ -72,6 +87,11 @@ export interface AutoDispatchClarifyRoundArgs {
   directive?: ClarifyDirective
   /** Per-question scope (cross rounds only); merged by the seal. */
   scopes?: Record<string, ClarifyQuestionScope>
+  /** RFC-023 optimistic lock — the round iteration the client believes it is answering. When set
+   *  and != the round's current iteration, reject (clarify-iteration-mismatch), mirroring the
+   *  immediate path (submitClarifyAnswers / submitCrossClarifyAnswers); the /clarify page always
+   *  sends it. */
+  ifMatchIteration?: number
   /** Audit-only actor; NEVER enters a prompt (RFC-099). */
   actor: { userId: string; role: 'owner' | 'user' | 'admin' }
   now?: () => number
@@ -100,13 +120,15 @@ export async function autoDispatchClarifyRound(
 ): Promise<AutoDispatchClarifyRoundResult> {
   const { db, originNodeRunId } = args
 
-  // 1. Locate the round (kind + task). The route already gated membership; this is the data read.
+  // 1. Locate the round (kind + task + questions). The route already gated membership.
   const round = (
     await db
       .select({
         kind: clarifyRounds.kind,
         taskId: clarifyRounds.taskId,
         status: clarifyRounds.status,
+        iteration: clarifyRounds.iteration,
+        questionsJson: clarifyRounds.questionsJson,
       })
       .from(clarifyRounds)
       .where(eq(clarifyRounds.intermediaryNodeRunId, originNodeRunId))
@@ -116,6 +138,32 @@ export async function autoDispatchClarifyRound(
     throw new NotFoundError(
       'clarify-round-not-found',
       `no clarify_round for origin node_run ${originNodeRunId}`,
+    )
+  }
+
+  // 1a. The quick channel is a WHOLE-ROUND FINALIZE on a round still AWAITING an answer. Reject an
+  //     already-finalized round (status != awaiting_human), mirroring the immediate path's
+  //     double-submit rejection (submitClarifyAnswers' `clarify-already-answered`) AND closing the
+  //     Codex impl-gate hole: a round FULLY sealed via the CONTROL channel (answered, its entries
+  //     STAGED for explicit manual board dispatch) must NOT be hijacked into an auto-dispatch by a
+  //     stale defer=false submit (all answers locked → no new seal → it would otherwise fall straight
+  //     to dispatch). A control-channel round is dispatched ONLY via the explicit board endpoint. A
+  //     PARTIAL control seal leaves the round awaiting_human, so the legitimate mixed flow (control
+  //     seal q1 → quick-finalize the rest) still passes. Terminal rounds (canceled/abandoned) reject
+  //     here too (sealRoundQuestions would also reject them).
+  if (round.status !== 'awaiting_human') {
+    throw new ConflictError(
+      'clarify-already-answered',
+      `clarify round ${originNodeRunId} is '${round.status}', not awaiting_human; it was already finalized (a control-channel full seal is dispatched via the board, not the quick channel)`,
+    )
+  }
+
+  // 1b. RFC-023 optimistic lock — reject a stale answer (mirrors submitClarifyAnswers /
+  //     submitCrossClarifyAnswers; the /clarify page always sends ifMatchIteration = round.iteration).
+  if (args.ifMatchIteration !== undefined && args.ifMatchIteration !== round.iteration) {
+    throw new ConflictError(
+      'clarify-iteration-mismatch',
+      `If-Match iteration ${args.ifMatchIteration} does not match server iteration ${round.iteration}`,
     )
   }
 
@@ -136,32 +184,51 @@ export async function autoDispatchClarifyRound(
     )
   }
 
-  // 3. Seal the round (control channel). A quick whole-round finalize seals every question; an
-  //    earlier control-channel partial seal already locked some questions (sealed_at set), and
-  //    sealRoundQuestions rejects re-sealing a locked question — so seal only the not-yet-sealed
-  //    subset (the locked answers are preserved by their existing sealed_at). If EVERYTHING is
-  //    already sealed (all locked), skip the seal and go straight to dispatch. sealRoundQuestions
-  //    takes lock B internally; this is OUTSIDE any B (no nesting).
+  // 3. Seal the round (control channel) as a WHOLE-ROUND FINALIZE. The quick channel finalizes the
+  //    ENTIRE round (the immediate path flips the whole round answered even when some answers are
+  //    blank — "User did not answer this question."); the deferred path must match (golden-lock) AND
+  //    must never dispatch a PARTIALLY sealed round (Codex impl-gate: a stale/malformed subset submit
+  //    would otherwise seal+dispatch q1 while q2 stays parked → partial rerun + a second continuation
+  //    for one round). So seal EVERY not-yet-locked question — the posted answer when present, else a
+  //    blank answer (matching what the /clarify page itself pads). Already-locked questions (an earlier
+  //    control-channel partial seal) keep their sealed answer (sealRoundQuestions rejects re-seal). The
+  //    round is awaiting_human (guard 1a), so ≥1 question is unsealed ⇒ this is always a non-empty FULL
+  //    seal. sealRoundQuestions takes lock B internally; this is OUTSIDE any B (no nesting).
   const lockedIds = await loadSealedQuestionIds(db, originNodeRunId)
-  const sealAnswers = args.answers.filter((a) => !lockedIds.has(a.questionId))
-  let sealedQuestionIds: string[] = []
-  let roundFullySealed = round.status === 'answered'
-  if (sealAnswers.length > 0) {
-    const sealResult = await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: sealAnswers,
-      // RFC-128 P5-0 stranding guard, NARROWED by P5-BC (§5.2.1): the guard is LIFTED on a deferred
-      // task (the self/questioner park + dispatch path below IS the release path). Opt in anyway so a
-      // direct misuse on a non-deferred task (already rejected above) stays consistent with the route.
-      rejectSelfQuestionerFullSeal: true,
-      ...(args.directive !== undefined ? { directive: args.directive } : {}),
-      ...(args.scopes !== undefined ? { scopes: args.scopes } : {}),
-      sealedBy: args.actor.userId,
-      ...(args.now !== undefined ? { now: args.now } : {}),
-    })
-    sealedQuestionIds = sealResult.sealedQuestionIds
-    roundFullySealed = sealResult.roundFullySealed
+  const providedById = new Map(args.answers.map((a) => [a.questionId, a]))
+  const sealAnswers: ClarifyAnswer[] = parseQuestionIds(round.questionsJson)
+    .filter((qid) => !lockedIds.has(qid))
+    .map(
+      (qid) =>
+        providedById.get(qid) ?? {
+          questionId: qid,
+          selectedOptionIndices: [],
+          selectedOptionLabels: [],
+          customText: '',
+        },
+    )
+  const sealResult = await sealRoundQuestions({
+    db,
+    originNodeRunId,
+    answers: sealAnswers,
+    // RFC-128 P5-0 stranding guard, NARROWED by P5-BC (§5.2.1): the guard is LIFTED on a deferred
+    // task (the self/questioner park + dispatch path below IS the release path). Opt in anyway so a
+    // direct misuse on a non-deferred task (already rejected above) stays consistent with the route.
+    rejectSelfQuestionerFullSeal: true,
+    ...(args.directive !== undefined ? { directive: args.directive } : {}),
+    ...(args.scopes !== undefined ? { scopes: args.scopes } : {}),
+    sealedBy: args.actor.userId,
+    ...(args.now !== undefined ? { now: args.now } : {}),
+  })
+  const sealedQuestionIds = sealResult.sealedQuestionIds
+  // Whole-round finalize: sealing every not-yet-locked question always completes the round. Guard
+  // defensively — never auto-dispatch a round this op did not fully seal (no partial dispatch).
+  const roundFullySealed = sealResult.roundFullySealed
+  if (!roundFullySealed) {
+    throw new ConflictError(
+      'clarify-quick-finalize-incomplete',
+      `clarify round ${originNodeRunId} was not fully sealed by this quick-channel finalize; refusing to auto-dispatch a partially sealed round`,
+    )
   }
 
   // 4. Collect the round's SELF/QUESTIONER entries to auto-dispatch (sealed, not yet dispatched,

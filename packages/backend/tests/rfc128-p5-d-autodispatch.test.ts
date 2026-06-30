@@ -213,6 +213,9 @@ async function seedSealableCrossRound(
 function runRow(db: DbClient, id: string) {
   return db.select().from(nodeRuns).where(eq(nodeRuns.id, id))
 }
+function entryRow(db: DbClient, id: string) {
+  return db.select().from(taskQuestions).where(eq(taskQuestions.id, id))
+}
 function roundByOrigin(db: DbClient, originNodeRunId: string) {
   return db
     .select()
@@ -429,6 +432,112 @@ describe('RFC-128 P5-D golden-lock (deferred full-seal autodispatch == legacy wh
     expect((caught as ConflictError).code).toBe('task-not-deferred-dispatch')
     // Nothing sealed / dispatched (round untouched).
     expect((await roundByOrigin(db, clarifyNodeRunId))[0]?.status).toBe('awaiting_human')
+  })
+
+  test('optimistic lock — a STALE ifMatchIteration rejects (clarify-iteration-mismatch), nothing sealed (parity with the immediate path)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [mkQ('q1', 't')])
+    let caught: unknown
+    try {
+      await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        ifMatchIteration: 99, // round.iteration is 0
+        actor,
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('clarify-iteration-mismatch')
+    expect((await roundByOrigin(db, clarifyNodeRunId))[0]?.status).toBe('awaiting_human') // untouched
+    // The matching iteration succeeds.
+    const ok = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      ifMatchIteration: 0,
+      actor,
+    })
+    expect(ok.roundFullySealed).toBe(true)
+  })
+
+  // Codex impl-gate (high) — whole-round finalize: a PARTIAL quick submit must NOT seal+dispatch a
+  // subset and leave siblings parted; it pads the unanswered questions (matching the immediate path +
+  // the /clarify page) so the round is FULLY sealed and the whole round dispatches in one batch.
+  test('partial defer=false answers (only q1 of q1+q2) → padded to a FULL seal, both self entries dispatched (no partial dispatch)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [
+      mkQ('q1', 't'),
+      mkQ('q2', 't'),
+    ])
+    // Only q1 supplied (a stale / malformed quick submit).
+    const res = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
+    // The round is FULLY sealed (q2 padded blank) — never left partial + dispatched.
+    expect(res.roundFullySealed).toBe(true)
+    expect((await roundByOrigin(db, clarifyNodeRunId))[0]?.status).toBe('answered')
+    const selfEntries = (await entriesByOrigin(db, clarifyNodeRunId)).filter(
+      (e) => e.roleKind === 'self',
+    )
+    expect(selfEntries).toHaveLength(2)
+    expect(selfEntries.every((e) => e.sealedAt !== null && e.dispatchedAt !== null)).toBe(true)
+    // One rerun (both self entries, same home P, same cause).
+    expect(res.dispatch.reruns).toHaveLength(1)
+  })
+
+  // Codex impl-gate (high) — a round FULLY sealed via the CONTROL channel (staged for explicit manual
+  // board dispatch) must NOT be hijacked into an auto-dispatch by a stale defer=false submit.
+  test('a control-channel fully-sealed round → a stale quick submit is REJECTED (clarify-already-answered), entries NOT auto-dispatched', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [mkQ('q1', 't')])
+    // Control channel: FULLY seal the round (defer=true equivalent), leaving it staged for MANUAL
+    // dispatch (no autodispatch).
+    const sealed = await sealRoundQuestions({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      rejectSelfQuestionerFullSeal: true,
+    })
+    expect(sealed.roundFullySealed).toBe(true)
+    const selfEntryBefore = (await entriesByOrigin(db, clarifyNodeRunId)).find(
+      (e) => e.roleKind === 'self',
+    )!
+    expect(selfEntryBefore.sealedAt).not.toBeNull()
+    expect(selfEntryBefore.dispatchedAt).toBeNull() // staged for manual board dispatch
+
+    // A stale quick submit must NOT hijack it into an autodispatch.
+    let caught: unknown
+    try {
+      await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('clarify-already-answered')
+    // The control-channel entry stays UNDISPATCHED (awaiting explicit board dispatch).
+    expect((await entryRow(db, selfEntryBefore.id))[0]?.dispatchedAt).toBeNull()
+    expect(
+      (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+        (r) => r.rerunCause === 'clarify-answer',
+      ),
+    ).toHaveLength(0)
   })
 })
 

@@ -313,6 +313,8 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         answers: parsed.data.answers,
         directive: parsed.data.directive,
         ...(parsed.data.questionScopes !== undefined ? { scopes: parsed.data.questionScopes } : {}),
+        // RFC-023 optimistic lock — same If-Match the immediate path honors (the /clarify page sends it).
+        ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
         actor: { userId: actor.user.id, role },
       })
       // Release the gate so the freshly-minted self/questioner reruns dispatch — mirroring the
