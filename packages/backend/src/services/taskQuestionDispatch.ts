@@ -30,12 +30,20 @@
 // exclusion / dispatch-time trigger_run_id binding are GONE — the per-node queue model
 // (buildExternalFeedbackContext / markClarifyRoundsConsumedBy) replaces them.
 
-import { and, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
 import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
+import {
+  buildImmediateLedgerContext,
+  type CauseClass,
+  fetchDeferredDispatchedOrigins,
+  findOpenImmediateLedgerHome,
+  isDispatchedEntryConsumed,
+  openImmediateRounds,
+} from '@/services/clarifyRerunLedger'
 import { evaluateDesignerRerunReadiness } from '@/services/crossClarify'
 import { pickFreshestRun } from '@/services/freshness'
 import { buildMintNodeRunValues } from '@/services/nodeRunMint'
@@ -47,7 +55,6 @@ import {
 import { ConflictError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import {
-  resolveHandlerRun,
   type RunLineageView,
   type WorkflowDefinition,
   type WorkflowEdge,
@@ -85,8 +92,6 @@ export interface DispatchTaskQuestionsResult {
 }
 
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
-type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
-type NodeRunRow = typeof nodeRuns.$inferSelect
 
 const EMPTY_RESULT: DispatchTaskQuestionsResult = {
   reruns: [],
@@ -151,7 +156,7 @@ function borrowAgentNode(e: TaskQuestionRow): string | null {
 //承接 role. A node_run carries ONE rerun_cause; entries of different classes on the same home are
 // SEPARATE reruns (serialized, never collapsed). self/questioner causes are isClarifyRerun=TRUE
 // (inline resume + directive gating); designer's cross-clarify-answer is FALSE (update mode).
-type CauseClass = 'clarify-answer' | 'cross-clarify-questioner-rerun' | 'cross-clarify-answer'
+// CauseClass + the immediate-ledger oracle now live in @/services/clarifyRerunLedger (shared).
 function causeClassForEntry(e: TaskQuestionRow): CauseClass {
   if (e.roleKind === 'self') return 'clarify-answer'
   if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'
@@ -308,6 +313,12 @@ export async function dispatchTaskQuestions(
         inArray(taskQuestions.id, entryIds),
         eq(taskQuestions.taskId, taskId),
         isNull(taskQuestions.dispatchedAt),
+        // RFC-128 P5-BC §5.2.14 step 2 — skip SUPERSEDED entries. A quick whole-round finalize marks
+        // its round's sealed-undispatched self/q entries `confirmation='confirmed'` (their answer is
+        // already in the whole-round continuation); re-dispatching one would double-execute. Normal
+        // entries are 'open' at dispatch time (confirmTaskQuestion only runs post-handler), so this
+        // is golden-lock for every non-superseded dispatch.
+        eq(taskQuestions.confirmation, 'open'),
       ),
     )
   if (requested.length === 0) return EMPTY_RESULT
@@ -571,7 +582,20 @@ export async function dispatchTaskQuestions(
           origin: taskQuestions.originNodeRunId,
         })
         .from(taskQuestions)
-        .where(and(inArray(taskQuestions.id, dispatchIds), isNull(taskQuestions.dispatchedAt)))
+        // RFC-128 P5-BC §5.2.14 (Codex impl-gate finding B): the CAS re-checks `confirmation='open'`
+        // too, NOT just `dispatched_at IS NULL`. A quick whole-round finalize that committed between
+        // the async `requested` read and this tx CONSUMES (confirms) the round's sealed-undispatched
+        // self/q entries; once its continuation is done+output the open-ledger recheck no longer
+        // blocks, so without this predicate a now-confirmed entry would still pass the CAS (its
+        // `dispatched_at` is still NULL) and get stamped/minted → duplicate rerun. A confirmed entry
+        // now shrinks `stillNull` → ConcurrentClaim → whole-tx rollback (nothing stamped/minted).
+        .where(
+          and(
+            inArray(taskQuestions.id, dispatchIds),
+            isNull(taskQuestions.dispatchedAt),
+            eq(taskQuestions.confirmation, 'open'),
+          ),
+        )
         .all()
       if (stillNull.length !== dispatchIds.length) throw new ConcurrentClaim()
       // Re-verify the planned snapshot is unchanged (atomic with the stamp+mint). A concurrent
@@ -644,7 +668,7 @@ export async function dispatchTaskQuestions(
         )
         .all()
       if (txRounds.length > 0) {
-        const txControlChannelOrigins = new Set(
+        const txDeferredDispatchedOrigins = new Set(
           tx
             .select({ origin: taskQuestions.originNodeRunId })
             .from(taskQuestions)
@@ -652,7 +676,7 @@ export async function dispatchTaskQuestions(
               and(
                 eq(taskQuestions.taskId, taskId),
                 inArray(taskQuestions.roleKind, ['self', 'questioner']),
-                or(isNotNull(taskQuestions.sealedAt), isNotNull(taskQuestions.dispatchedAt)),
+                isNotNull(taskQuestions.dispatchedAt),
               ),
             )
             .all()
@@ -661,13 +685,22 @@ export async function dispatchTaskQuestions(
         const immBlocker = findOpenImmediateLedgerHome(
           affected,
           txRuns,
-          buildImmediateLedgerContext(txRounds, txRuns, txOutputIds, txControlChannelOrigins),
+          buildImmediateLedgerContext(txRounds, txRuns, txOutputIds, txDeferredDispatchedOrigins),
         )
         if (immBlocker !== null) throw new NodeDispatchInFlight(immBlocker)
       }
       tx.update(taskQuestions)
         .set({ dispatchedAt: now, dispatchedBy: actor.userId, updatedAt: now })
-        .where(and(inArray(taskQuestions.id, dispatchIds), isNull(taskQuestions.dispatchedAt)))
+        // §5.2.14 finding B: confirmation='open' mirrors the CAS guard — never stamp a SUPERSEDED
+        // (quick-finalize-confirmed) entry (the CAS above already threw ConcurrentClaim if any
+        // dispatchId got confirmed; this keeps the write itself self-consistent).
+        .where(
+          and(
+            inArray(taskQuestions.id, dispatchIds),
+            isNull(taskQuestions.dispatchedAt),
+            eq(taskQuestions.confirmation, 'open'),
+          ),
+        )
         .run()
       for (const p of mintPlans) {
         // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
@@ -764,28 +797,6 @@ function findOpenDispatchTarget(
   return null
 }
 
-/** Is a dispatched designer entry CONSUMED? = its handler run, resolved through the same
- *  resolveHandlerRun lineage the read-side uses, is done WITH output (hasOutput is already
- *  folded into `lineageViews`). Queued (trigger NULL), running, failed, or GC'd anchor →
- *  NOT consumed (still open). */
-function isDispatchedEntryConsumed(
-  entry: Pick<TaskQuestionRow, 'triggerRunId'>,
-  runs: OpenDispatchInputs['runs'],
-  lineageViews: RunLineageView[],
-): boolean {
-  if (entry.triggerRunId === null) return false // queued (not yet bound) → open
-  const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
-  if (anchorRow === undefined) return false // anchor GC'd → treat as open (conservative)
-  const hr = resolveHandlerRun({
-    effectiveTargetNodeId: anchorRow.nodeId,
-    iteration: anchorRow.iteration,
-    loopIter: 0,
-    triggerRunId: entry.triggerRunId,
-    runs: lineageViews,
-  })
-  return hr !== null && hr.status === 'done' && hr.hasOutput
-}
-
 /**
  * Async pre-check: reject the dispatch when ANY affected target node already has an OPEN
  * (unconsumed) dispatched designer question — covers a pending/running rerun AND a FAILED /
@@ -828,144 +839,6 @@ async function assertNoInFlightDispatch(
   }
 }
 
-// RFC-128 P5-BC (Codex impl-gate, §5.2.3④) — the OPEN IMMEDIATE self/questioner ledger oracle.
-//
-// The dispatch-time in-flight gate (assertNoInFlightDispatch) only sees `dispatched_at IS NOT NULL`
-// entries — it MISSES the immediate ledger (a quick-channel self/questioner continuation:
-// `sealed_at` NULL, NOT dispatched, an answered-unconsumed round whose rerun is pending). So a home
-// with an open immediate continuation could still ACCEPT a same-home designer dispatch → stamp +
-// mint a SECOND pending rerun (double-mint). resolveBorrowForNode would reject it later, but only
-// AFTER the irreversible stamp/mint. This oracle lets the dispatch precheck + in-tx recheck count
-// the immediate ledger BEFORE the stamp/mint, sharing the SAME open-detection (`openImmediateRounds`)
-// that resolveImmediateBorrowForNode uses.
-//
-// Codex impl-gate (round 4, §5.2.3④ — lazy-reconcile bypass): the oracle reads the TRUTH SOURCE
-// (clarify_rounds + the pending continuation node_run), NOT the lazily-projected task_questions. A
-// quick-channel answer (submitClarifyAnswers) writes clarify_rounds (answered) + mints a pending
-// continuation node_run BEFORE any board read reconciles the task_question — so a task_questions-based
-// gate would MISS it on the direct/API/race path and still accept a same-home designer dispatch
-// (double-mint). Distinguishing a quick-channel continuation (OPEN — has a pending continuation run)
-// from a control-channel sealed-but-parked round (NOT open — no continuation minted) is done by the
-// PRESENCE of the pending continuation run, so the oracle never touches task_questions. This aligns
-// with the scheduler: it runs that same pending continuation node_run + resolves its agent via
-// resolveBorrowForNode — both key on the pending continuation (loadOpenClarify parks awaiting_human;
-// after answer the continuation is a normal pending run).
-interface ImmediateLedgerContext {
-  /** clarify_rounds of the task (awaiting_human + answered — the immediate-ledger truth source).
-   *  NB awaiting_human is included on purpose (Codex round-5 finding 2): submitClarifyAnswers mints
-   *  the continuation BEFORE flipping the round 'answered', so the mint-first window has an awaiting
-   *  round with a pending continuation. */
-  rounds: ReadonlyArray<ClarifyRoundRow>
-  /** task node_runs keyed by id (asking-run iteration lookup — P2-3). */
-  runById: ReadonlyMap<string, NodeRunRow>
-  /** task node_runs (the pending continuation scan). */
-  runs: ReadonlyArray<NodeRunRow>
-  /** node_run ids that captured ≥1 <workflow-output> row (consumed = done+output). */
-  outputRunIds: ReadonlySet<string>
-  /** origin node-run ids of rounds that are CONTROL-channel (have a sealed/dispatched self/q
-   *  task_question). Those belong to the DEFERRED self/questioner ledger, NOT the immediate
-   *  (quick-channel) one — excluded here so a legitimate control-channel dispatched rerun is not
-   *  double-counted (Codex round-5 finding 1). Control-channel entries are ALWAYS reconciled
-   *  (sealRoundQuestions stamps sealed_at), so their absence reliably means quick-channel — the
-   *  quick (positive) detection still never depends on the lazy task_question projection. */
-  controlChannelOrigins: ReadonlySet<string>
-}
-
-function buildImmediateLedgerContext(
-  rounds: ReadonlyArray<ClarifyRoundRow>,
-  runs: ReadonlyArray<NodeRunRow>,
-  outputRunIds: ReadonlySet<string>,
-  controlChannelOrigins: ReadonlySet<string>,
-): ImmediateLedgerContext {
-  return {
-    rounds,
-    runById: new Map(runs.map((r) => [r.id, r])),
-    runs,
-    outputRunIds,
-    controlChannelOrigins,
-  }
-}
-
-/** Pure (shared truth-source oracle) — the OPEN immediate (QUICK-channel) self/questioner clarify
- *  rounds whose HOME (the asking node) is `nodeId` at `iteration`. A round qualifies iff: it is a
- *  self/questioner round on the home with its ASKING run at `iteration` (P2-3); it is NOT terminal;
- *  it is NOT a control-channel round (no sealed/dispatched self/q entry — finding 1, so control-
- *  channel dispatched reruns stay in the DEFERRED ledger); its RFC-070 role stamp is unconsumed;
- *  AND a PENDING (not done+output) continuation node_run for the role's cause exists on the home at
- *  `iteration`. The pending continuation is the quick-channel "in flight" signal, recognised even in
- *  the MINT-FIRST window before the round flips 'answered' (finding 2) — hence no status==='answered'
- *  requirement. Uses node_runs + the reliable control-channel exclusion, so the lazy task_question
- *  projection never hides an open quick-channel ledger. */
-function openImmediateRounds(
-  nodeId: string,
-  iteration: number,
-  ctx: ImmediateLedgerContext,
-): ClarifyRoundRow[] {
-  return ctx.rounds.filter((round) => {
-    const isSelf = round.kind === 'self' && round.askingNodeId === nodeId
-    const isQuestioner = round.kind === 'cross' && round.askingNodeId === nodeId
-    if (!isSelf && !isQuestioner) return false
-    if (round.status === 'canceled' || round.status === 'abandoned') return false // terminal
-    const askingRun = ctx.runById.get(round.askingNodeRunId)
-    if (askingRun === undefined || askingRun.iteration !== iteration) return false
-    // Finding 1 — exclude CONTROL-channel rounds (they ride the deferred self/questioner ledger).
-    if (ctx.controlChannelOrigins.has(round.intermediaryNodeRunId)) return false
-    // RFC-070 consumed → the quick continuation already ran done+output → closed.
-    const consumed = isSelf ? round.consumedByConsumerRunId : round.consumedByQuestionerRunId
-    if (consumed !== null) return false
-    // Finding 2 — a PENDING (not done+output) continuation run on the home at this iteration with
-    // the role's cause = a QUICK-channel continuation in flight, INCLUDING the mint-first window
-    // (continuation minted, round not yet flipped 'answered'). Control channel mints none for an
-    // un-dispatched round, and its dispatched reruns were excluded above.
-    const cause: CauseClass = isSelf ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
-    return ctx.runs.some(
-      (r) =>
-        r.nodeId === nodeId &&
-        r.iteration === iteration &&
-        r.parentNodeRunId === null &&
-        r.rerunCause === cause &&
-        !(r.status === 'done' && ctx.outputRunIds.has(r.id)),
-    )
-  })
-}
-
-/** Origin node-run ids of rounds that are CONTROL-channel (≥1 self/questioner task_question with
- *  sealed_at OR dispatched_at set). The immediate-ledger oracle excludes these (they belong to the
- *  deferred self/questioner ledger). Async; the in-tx recheck builds the same set synchronously. */
-async function fetchControlChannelOrigins(db: DbClient, taskId: string): Promise<Set<string>> {
-  const rows = await db
-    .select({ origin: taskQuestions.originNodeRunId })
-    .from(taskQuestions)
-    .where(
-      and(
-        eq(taskQuestions.taskId, taskId),
-        inArray(taskQuestions.roleKind, ['self', 'questioner']),
-        or(isNotNull(taskQuestions.sealedAt), isNotNull(taskQuestions.dispatchedAt)),
-      ),
-    )
-  return new Set(rows.map((r) => r.origin))
-}
-
-/** The FIRST affected home with an OPEN immediate self/questioner ledger, or null. Keyed per home
- *  on its dispatch iteration = the freshest run iteration (where the dispatch rerun will be minted
- *  — buildFrontierMintPlan's `last.iteration`), so it matches what resolveBorrowForNode sees when
- *  the home reruns. */
-function findOpenImmediateLedgerHome(
-  affected: ReadonlySet<string>,
-  runs: ReadonlyArray<NodeRunRow>,
-  ctx: ImmediateLedgerContext,
-): string | null {
-  for (const home of affected) {
-    const iter =
-      pickFreshestRun(
-        runs.filter((r) => r.nodeId === home),
-        { topLevelOnly: false },
-      )?.iteration ?? 0
-    if (openImmediateRounds(home, iter, ctx).length > 0) return home
-  }
-  return null
-}
-
 /**
  * Async dispatch precheck (Codex impl-gate, §5.2.3④): reject the dispatch BEFORE any stamp/mint when
  * ANY affected home already has an OPEN immediate self/questioner continuation (a quick-channel
@@ -995,8 +868,8 @@ async function assertNoOpenImmediateLedger(
     db,
     runs.map((r) => r.id),
   )
-  const controlChannelOrigins = await fetchControlChannelOrigins(db, taskId)
-  const ctx = buildImmediateLedgerContext(rounds, runs, outputRunIds, controlChannelOrigins)
+  const deferredDispatchedOrigins = await fetchDeferredDispatchedOrigins(db, taskId)
+  const ctx = buildImmediateLedgerContext(rounds, runs, outputRunIds, deferredDispatchedOrigins)
   const blocker = findOpenImmediateLedgerHome(affected, runs, ctx)
   if (blocker !== null) {
     throw new ConflictError(
@@ -1355,11 +1228,11 @@ async function resolveImmediateBorrowForNode(
     db,
     runs.map((r) => r.id),
   )
-  const controlChannelOrigins = await fetchControlChannelOrigins(db, taskId)
+  const deferredDispatchedOrigins = await fetchDeferredDispatchedOrigins(db, taskId)
   const openRounds = openImmediateRounds(
     nodeId,
     iteration,
-    buildImmediateLedgerContext(rounds, runs, outputRunIds, controlChannelOrigins),
+    buildImmediateLedgerContext(rounds, runs, outputRunIds, deferredDispatchedOrigins),
   )
   if (openRounds.length === 0) return CLOSED_LEDGER
 

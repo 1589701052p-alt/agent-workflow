@@ -8,10 +8,16 @@
 //   event loop for ~100s of ms right there — observes "clarify done, rerun
 //   absent". A dispatch frontier derived from node_runs at that instant judges
 //   the agent's prior done row still freshest ⇒ scope allSettled ⇒ FALSE
-//   COMPLETION, silently dropping the rerun. (Wrapping the two writes in
-//   db.transaction does NOT help: bun:sqlite's transaction is synchronous, so an
-//   async body COMMITs at its first real `await`, leaving post-await writes
-//   outside the tx — verified empirically.)
+//   COMPLETION, silently dropping the rerun. (A naive `db.transaction(async …)`
+//   does NOT help: bun:sqlite's transaction is synchronous, so an async body
+//   COMMITs at its first real `await`, leaving post-await writes outside the tx.)
+//
+//   RFC-128 P5-BC §5.2.14: phases (1) mint + (2) flip session/round now run in ONE
+//   SYNCHRONOUS dbTxSync (the sanctioned sync-body tx), so they are truly atomic —
+//   the torn window is closed outright AND the submit is mutually atomic with
+//   dispatchTaskQuestions's dbTxSync (the mixed-path double-mint race). Phase (3)
+//   close-clarify stays an async await AFTER the tx (node_run status transitions
+//   must go through the lifecycle CAS), with the rerun already committed.
 //
 //   Fix: mint the rerun BEFORE flipping clarify→done. The rerun row's fields all
 //   come from sourceRunRow (incl. its ORIGINAL preSnapshot, independent of the
@@ -176,11 +182,14 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
       resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
       'utf8',
     )
-    // The rerun mint: RFC-098 WP-10 moved the raw insert into the mint
-    // factory — the lexical anchor is now the mintNodeRun call that returns
-    // rerunNodeRunId (same T0 position in submitClarifyAnswers).
-    const rerunInsertIdx = src.indexOf('const rerunNodeRunId = await mintNodeRun(')
-    // The clarify→done flip: transitionNodeRunStatus with the resume-clarify event.
+    // RFC-128 P5-BC §5.2.14: phases (1)+(2) [mint → flip session → flip round] now run in ONE
+    // synchronous dbTxSync (instead of separate ordered awaits), so the rerun mint anchor is the
+    // in-tx `tx.insert(nodeRuns).values(rerunValues)` — same T0 position (BEFORE the in-tx session
+    // flip), and the atomic tx removes the torn window entirely while ALSO serializing against
+    // dispatchTaskQuestions's dbTxSync (the mixed-path double-mint race). The clarify→done close
+    // still runs AFTER the tx, so the lexical ordering invariants below still hold.
+    const rerunInsertIdx = src.indexOf('tx.insert(nodeRuns).values(rerunValues)')
+    // The clarify→done flip: transitionNodeRunStatus with the resume-clarify event (after the tx).
     const flipIdx = src.indexOf("kind: 'resume-clarify'")
     // RFC-076 T0-extend: the clarify_session → answered flip. submitClarifyAnswers
     // is the only place a `status: 'answered'` literal appears before the

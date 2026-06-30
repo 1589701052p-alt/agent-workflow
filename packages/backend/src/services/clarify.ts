@@ -34,7 +34,7 @@
 //     This module assumes the envelope it receives is already validated as
 //     clarify-only.
 
-import { and, asc, count, desc, eq, isNull } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import {
   CLARIFY_INPUT_PORT_NAME,
@@ -60,10 +60,12 @@ import {
   resolveClarifySessionMode,
 } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, clarifySessions, nodeRuns, tasks } from '@/db/schema'
+import { clarifyRounds, clarifySessions, nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import { dbTxSync } from '@/db/txSync'
+import { roundHasDispatchedSelfQuestioner } from '@/services/clarifyRerunLedger'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { transitionNodeRunStatus } from '@/services/lifecycle'
-import { mintNodeRun } from '@/services/nodeRunMint'
+import { buildMintNodeRunValues, mintNodeRun } from '@/services/nodeRunMint'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
@@ -368,6 +370,21 @@ export async function submitClarifyAnswers(
       `If-Match iteration ${ifMatchIteration} does not match server iteration ${sessionRow.iterationIndex}`,
     )
   }
+  // RFC-128 P5-BC §5.2.14 mixed-path step 1 — submit-side dispatch-mode guard (EARLY fail-fast,
+  // before any side effect). Once a round has ANY dispatched self/questioner entry it is PERMANENTLY
+  // excluded from the whole-round render path (selectAnsweredRoundsForConsumer →
+  // roundsWithDispatchedEntries), so a quick whole-round finalize would mint a continuation that
+  // renders NOTHING for it → the un-dispatched answers are DROPPED (data-loss) and a second rerun
+  // double-mints. Reject ANY dispatched (in-flight OR consumed) — the user finishes such a round via
+  // the control channel. The race-tight recheck is repeated SYNCHRONOUSLY inside the dbTxSync below
+  // (atomic with the mint); this early check just avoids the rollback/mint work on the common
+  // sequential path. No dispatched entry ⇒ no-op (golden-lock: non-deferred tasks never dispatch).
+  if (await roundHasDispatchedSelfQuestioner(db, clarifyNodeRunId)) {
+    throw new ConflictError(
+      'clarify-quick-finalize-round-dispatched',
+      `cannot quick-finalize clarify round ${clarifyNodeRunId}: it has a dispatched self/questioner entry (the round is in control-channel dispatch mode). Finish the remaining questions via the control channel (seal + dispatch), not the quick whole-round finalize.`,
+    )
+  }
 
   const questions = JSON.parse(sessionRow.questionsJson) as ClarifyQuestion[]
   const sealedSubset = sealAnswersServerSide(questions, args.answers)
@@ -408,11 +425,19 @@ export async function submitClarifyAnswers(
   // flip the clarify node LAST; every intermediate state keeps the agent
   // protected by one or the other (the old order flipped the session — and, pre
   // PR-0, the clarify node — before the rerun, opening the gap across the
-  // rollbackToSnapshot git-subprocess yield below). db.transaction does NOT help:
-  // bun:sqlite's transaction is synchronous, so an async body COMMITs at its
-  // first real `await` — verified. The rerun's fields come entirely from
-  // `sourceRunRow` (incl. its ORIGINAL preSnapshot, independent of the rollback),
-  // so the reorder is data-safe.
+  // rollbackToSnapshot git-subprocess yield below). The rerun's fields come
+  // entirely from `sourceRunRow` (incl. its ORIGINAL preSnapshot, independent of
+  // the rollback), so the reorder is data-safe.
+  //
+  // RFC-128 P5-BC §5.2.14 — phases (1)+(2) [mint → flip session → flip round] now run in ONE
+  // synchronous dbTxSync (below) instead of separate ordered awaits. A naive `db.transaction(async
+  // …)` would NOT help (bun:sqlite commits at the first real `await`), but dbTxSync enforces a
+  // SYNCHRONOUS body, so the mint+flips are atomic — strengthening the invariant (no visible window
+  // at all) AND making the submit mutually atomic with dispatchTaskQuestions's dbTxSync (closes the
+  // mixed-path double-mint race). Phase (3) [close clarify node] stays an async await AFTER the tx
+  // (node_run status transitions must go through the lifecycle CAS — s14 forbids direct writes), and
+  // since the rerun is already committed, the close still satisfies "never (clarify done ∧ rerun
+  // absent)".
 
   const taskRow = (await db.select().from(tasks).where(eq(tasks.id, sessionRow.taskId)).limit(1))[0]
   if (taskRow === undefined) {
@@ -476,18 +501,28 @@ export async function submitClarifyAnswers(
     }
   }
 
-  // (1) Mint the source-agent rerun FIRST (T0 / T0-extend ordering).
-  // retryIndex resets to 0 on clarify rerun — clarify_iteration is the
-  // counter that grows; treating clarify as a fresh attempt keeps the
-  // retry budget intact for genuine process failures.
-  // RFC-074 PR-C: no clarifyIteration bump. This fresh insert is the latest
-  // id, so isFresherNodeRun (pure id-order) picks it over the prior done row
-  // automatically; the clarify generation is derived from prior-done id-order
-  // at dispatch time.
-  // RFC-098 WP-10: cause='clarify-answer' is what flips the scheduler's
-  // gate-2 (isClarifyRerun) for this row — inline session resume + latest
-  // directive application key off it instead of the old retryIndex proxy.
-  const rerunNodeRunId = await mintNodeRun(db, {
+  // RFC-128 P5-BC §5.2.14 mixed-path step 3 — RFC-076 critical section, now ATOMIC. The original
+  // sequence (mint rerun → flip session → flip clarify_round → close clarify node) was several
+  // SEPARATE awaits; a concurrent dispatchTaskQuestions (its own synchronous dbTxSync) could commit
+  // its stamp+mint in the window between this submit's dispatch-mode precheck and its mint → a
+  // SECOND rerun on the same home (double-mint, Codex finding 2). bun:sqlite is single-threaded and
+  // dbTxSync runs a SYNCHRONOUS body that never yields, so wrapping {dispatch-mode recheck → mint →
+  // consume → flip session → flip round} in ONE dbTxSync makes it mutually atomic with dispatch's
+  // dbTxSync: a dispatch either committed BEFORE (this recheck sees it → reject) or commits AFTER
+  // (its own in-tx immediate-ledger recheck sees this minted continuation → reject). The clarify
+  // node CLOSE stays AFTER the tx (RFC-076's LAST step) because a node_run status transition must go
+  // through transitionNodeRunStatus (async lifecycle CAS; direct status writes are s14-forbidden);
+  // "close after" preserves the invariant — the rerun is committed (in-tx) before the clarify node
+  // is `done`, so no reader observes done-without-rerun. RFC-076 ordering UNCHANGED (mint →
+  // session/round write → close); only the first two phases collapse from async-ordered into one
+  // synchronous atomic tx.
+
+  // (1) Mint VALUES first (T0). buildMintNodeRunValues is the SAME factory mintNodeRun uses (zero
+  // cause/inheritance drift); the insert runs INSIDE the tx (synchronous, atomic with the flips).
+  // retryIndex resets to 0; cause='clarify-answer' flips the scheduler's gate-2 (isClarifyRerun).
+  // RFC-074 PR-C: no clarifyIteration bump — this fresh insert is the latest id, so isFresherNodeRun
+  // picks it over the prior done row automatically.
+  const rerunValues = buildMintNodeRunValues({
     taskId: sessionRow.taskId,
     nodeId: sourceRunRow.nodeId,
     status: 'pending',
@@ -496,26 +531,11 @@ export async function submitClarifyAnswers(
     inheritFrom: sourceRunRow,
     overrides: { startedAt: null },
   })
+  const rerunNodeRunId = rerunValues.id
 
-  // (2) Flip the session → answered SECOND — only now that the rerun exists, so
-  // no concurrent frontier read observes "session answered ∧ rerun absent" and
-  // false-completes the asking agent (T0-extend).
-  await db
-    .update(clarifySessions)
-    .set({
-      answersJson,
-      status: 'answered',
-      answeredAt,
-      answeredBy,
-      directive,
-    })
-    .where(eq(clarifySessions.id, sessionRow.id))
-
-  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds so
-  // the unified service (services/clarifyRounds.ts) sees the latest Q&A
-  // history. Idempotent: row exists from createClarifySession's dual-write.
-  // RFC-099: when the route supplied the submitter's role, the same write
-  // freezes per-question attribution + clears the draft (D8).
+  // RFC-058 T12 dual-write attribution — computed BEFORE the tx (async read), applied in the tx.
+  // RFC-099: when the route supplied the submitter's role, this freezes per-question attribution +
+  // clears the draft (D8).
   const attributionSet =
     args.submittedByRole !== undefined
       ? await buildFrozenAttributionSet(db, sessionRow.id, sealedAnswers, {
@@ -523,17 +543,82 @@ export async function submitClarifyAnswers(
           role: args.submittedByRole,
         })
       : {}
-  await db
-    .update(clarifyRounds)
-    .set({
-      answersJson,
-      status: 'answered',
-      answeredAt,
-      answeredBy,
-      directive,
-      ...attributionSet,
-    })
-    .where(eq(clarifyRounds.id, sessionRow.id))
+
+  dbTxSync(db, (tx) => {
+    // §5.2.14 step 1 (atomic, finding 2 race): re-check the round is NOT in control-channel dispatch
+    // mode. A dispatch that committed since the early precheck is caught here BEFORE the mint; one
+    // that commits later is caught by dispatch's own in-tx immediate-ledger recheck → no double-mint.
+    const dispatched = tx
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, clarifyNodeRunId),
+          inArray(taskQuestions.roleKind, ['self', 'questioner']),
+          isNotNull(taskQuestions.dispatchedAt),
+        ),
+      )
+      .limit(1)
+      .all()
+    if (dispatched.length > 0) {
+      throw new ConflictError(
+        'clarify-quick-finalize-round-dispatched',
+        `cannot quick-finalize clarify round ${clarifyNodeRunId}: a concurrent control-channel dispatch claimed it. Finish the remaining questions via the control channel.`,
+      )
+    }
+    // (1) Mint the rerun FIRST (T0). rfc098-allow-direct-node-run-insert: values come from the mint
+    // factory, and the insert MUST be synchronous to commit atomically with the flips below (an
+    // async mintNodeRun would yield + commit early, reopening the race).
+    tx.insert(nodeRuns).values(rerunValues).run()
+    // §5.2.14 step 2 (consume): the quick whole-round answer SUPERSEDES the ENTIRE round — every
+    // question is now answered (in the whole-round answersJson, rendered by the minted continuation).
+    // So confirm ALL of the round's OPEN, UNDISPATCHED self/questioner entries — NOT just the sealed
+    // ones (Codex impl-gate finding A): a partial control-seal already reconciled a row for EVERY
+    // question (reconcileDesiredEntries iterates all questions), so a sibling answered only via this
+    // quick finalize (q2, sealed_at NULL) would otherwise stay `open` on an answered round and remain
+    // dispatchable → a duplicate clarify-answer rerun for an already-rendered answer. (Any DISPATCHED
+    // self/q entry is impossible here — the dispatch-mode recheck above already rejected the round.)
+    // Mark them `confirmation='confirmed'` so the §18 park source (excludes confirmed) no longer
+    // parks the home AND dispatch (also confirmation='open'-gated) cannot re-mint them. confirmed_by
+    // is audit-only (RFC-099, never a prompt). 0 rows for a round with no self/q entries (golden-lock
+    // — a virgin quick finalize that was never read/sealed has no task_questions yet).
+    tx.update(taskQuestions)
+      .set({
+        confirmation: 'confirmed',
+        confirmedBy: answeredBy,
+        confirmedByRole: args.submittedByRole ?? null,
+        confirmedAt: answeredAt,
+        updatedAt: answeredAt,
+      })
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, clarifyNodeRunId),
+          inArray(taskQuestions.roleKind, ['self', 'questioner']),
+          isNull(taskQuestions.dispatchedAt),
+          eq(taskQuestions.confirmation, 'open'),
+        ),
+      )
+      .run()
+    // (2) Flip the session → answered SECOND — only now that the rerun exists, so no concurrent
+    // frontier read observes "session answered ∧ rerun absent" (T0-extend).
+    tx.update(clarifySessions)
+      .set({ answersJson, status: 'answered', answeredAt, answeredBy, directive })
+      .where(eq(clarifySessions.id, sessionRow.id))
+      .run()
+    // RFC-058 T12 dual-write — mirror the answered state + frozen attribution to clarify_rounds
+    // (idempotent: row exists from createClarifySession's dual-write).
+    tx.update(clarifyRounds)
+      .set({
+        answersJson,
+        status: 'answered',
+        answeredAt,
+        answeredBy,
+        directive,
+        ...attributionSet,
+      })
+      .where(eq(clarifyRounds.id, sessionRow.id))
+      .run()
+  })
 
   // RFC-123: a 'stop' answer writes the per-(task, asking-node) clarify directive
   // (the canvas "继续/停止反问" toggle's single source of truth) so the toggle

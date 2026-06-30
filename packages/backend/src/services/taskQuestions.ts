@@ -814,6 +814,12 @@ export async function loadUndispatchedSelfQuestionerTargets(
     db,
     runs.map((r) => r.id),
   )
+  // RFC-128 P5-BC §5.2.14 mixed-path step 2 (park-starve fix): a home that was sealed-undispatched
+  // (q1, control channel) but whose round got QUICK-finalized no longer parks here — the quick
+  // finalize CONSUMES (marks `confirmation='confirmed'`) the round's sealed-undispatched self/q
+  // entries (submitClarifyAnswers, atomic in its dbTxSync), and this query already excludes
+  // `confirmation='confirmed'`. So the superseded q1 drops out of the park set automatically (no
+  // starvation, no re-park duplicate) — no separate un-park pass needed.
   return partitionUndispatchedParkTargets(entries, runs, outputRunIds)
 }
 

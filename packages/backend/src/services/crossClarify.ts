@@ -92,6 +92,7 @@ import {
   tasks,
 } from '@/db/schema'
 import { parseAnswersArray, sealAnswersServerSide } from '@/services/clarify'
+import { roundHasDispatchedSelfQuestioner } from '@/services/clarifyRerunLedger'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import { mintNodeRun } from '@/services/nodeRunMint'
 import { pickFreshestRun } from '@/services/freshness'
@@ -415,6 +416,27 @@ export async function submitCrossClarifyAnswers(
     throw new ValidationError(
       'cross-clarify-directive-invalid',
       `directive must be 'continue' or 'stop', got '${args.directive}'`,
+    )
+  }
+  // RFC-128 P5-BC §5.2.14 mixed-path step 1 (questioner submit-side dispatch-mode guard). Once this
+  // cross round has ANY dispatched questioner entry it is PERMANENTLY excluded from the questioner
+  // whole-round render path (selectAnsweredRoundsForConsumer → roundsWithDispatchedEntries), so a
+  // quick whole-round finalize would mint a continuation that renders NOTHING for it → the
+  // un-dispatched answers are DROPPED + a second rerun double-mints. Reject ANY dispatched (in-flight
+  // OR consumed) — finish via the control channel. No dispatched questioner entry ⇒ no-op
+  // (golden-lock for non-deferred tasks).
+  //
+  // NOTE (§5.2.14 scope): steps 2 (consume superseded sealed-undispatched) + 3 (collapse the mint
+  // into a synchronous dbTxSync to also close the concurrent double-mint race) are applied to the
+  // SELF path (submitClarifyAnswers) this round; the QUESTIONER path's atomic conversion is a
+  // deferred follow-up (submitCrossClarifyAnswers's critical section also threads the designer +
+  // deferred branches and warrants its own focused pass + adversarial gate). Until then this guard
+  // closes the SEQUENTIAL questioner data-loss; the concurrent race window remains for the
+  // questioner path only.
+  if (await roundHasDispatchedSelfQuestioner(args.db, args.crossClarifyNodeRunId)) {
+    throw new ConflictError(
+      'clarify-quick-finalize-round-dispatched',
+      `cannot quick-finalize cross-clarify round ${args.crossClarifyNodeRunId}: it has a dispatched questioner entry (the round is in control-channel dispatch mode). Finish the remaining questions via the control channel (seal + dispatch).`,
     )
   }
 

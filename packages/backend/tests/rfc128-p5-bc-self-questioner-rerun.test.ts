@@ -18,6 +18,7 @@ import { monotonicFactory } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import {
   clarifyRounds,
+  clarifySessions,
   crossClarifySessions,
   nodeRuns,
   nodeRunOutputs,
@@ -25,6 +26,7 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
+import { readFileSync } from 'node:fs'
 import {
   buildClarifyNodeQueueContext,
   buildPromptContext,
@@ -33,6 +35,7 @@ import {
 import { dispatchTaskQuestions, resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
 import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -1169,6 +1172,292 @@ describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', (
     expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
       runsBefore,
     )
+  })
+
+  test('Codex round-6 finding: MIXED round (control-seal q1 + quick-finalize q2) — the quick continuation still blocks a same-home designer dispatch', async () => {
+    // The REAL mixed path (clarify.ts loadSealedQuestionIds/mergeSealedAnswers): control-seal q1
+    // (defer), then quick-finalize the whole round — submitClarifyAnswers preserves q1's locked
+    // answer + mints a QUICK continuation for the round. q1 is control-sealed-but-UNDISPATCHED. The
+    // earlier (round-5) origin-level SEALED exclusion wrongly treated the whole round as deferred →
+    // the quick continuation was invisible → a same-home designer dispatch double-minted. The
+    // round-6 fix excludes only DISPATCHED rounds, so the quick continuation stays in the immediate
+    // ledger and the dispatch is rejected.
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    await seedRun(db, taskId, D, { status: 'done', iteration: 0 })
+    // D self-clarifies q1+q2.
+    const dRun = await seedRun(db, taskId, D, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: D,
+      sourceAgentNodeRunId: dRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
+    })
+    // Control-channel seal q1 (partial) — q1's task_question is sealed_at SET, dispatched_at NULL.
+    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
+    // Quick-channel finalize the whole round → preserves q1's locked answer + mints a QUICK
+    // continuation (no dispatch). NO listTaskQuestions reconcile.
+    await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+    })
+    // A sealed, UNDISPATCHED designer entry whose HOME is the SAME node D.
+    const cross = await seedAnsweredRound(db, taskId, {
+      kind: 'cross',
+      askingNodeId: Q,
+      questions: [mkQ('dq', 't')],
+    })
+    const desEid = await insertEntry(db, taskId, {
+      originNodeRunId: cross.intermediaryNodeRunId,
+      questionId: 'dq',
+      roleKind: 'designer',
+      defaultTargetNodeId: D,
+      sealed: true,
+    })
+    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
+    let caught: unknown
+    try {
+      await dispatchTaskQuestions(db, taskId, [desEid], actor)
+    } catch (e) {
+      caught = e
+    }
+    // The quick continuation (q2) is visible despite q1 being control-sealed → reject, no double-mint.
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('task-question-node-dispatch-in-flight')
+    expect((await entryRow(db, desEid))[0]?.dispatchedAt).toBeNull()
+    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
+      runsBefore,
+    )
+  })
+})
+
+// ===========================================================================
+// §5.2.14 mixed-path write-flow refactor (RFC-076 否决区) — control-channel partial seal/dispatch
+// interleaved with a quick whole-round finalize. Locks the 3-step coherent fix:
+//   step 1 — quick-finalize REJECTs any round in control-channel dispatch mode (ANY dispatched
+//            self/q entry, in-flight OR consumed) → no data-loss (read-side永久排除 the round);
+//   step 2 — a quick-finalize CONSUMEs (confirmation='confirmed') the round's sealed-undispatched
+//            self/q entries → no park starvation, no re-park, not re-dispatchable;
+//   step 3 — the submit mint+flips run in ONE synchronous dbTxSync (atomic vs dispatch's dbTxSync),
+//            RFC-076 mint→write→close ordering preserved (close after the tx).
+// ===========================================================================
+describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
+  // step 1 (real control path, in-flight): seal q1 + DISPATCH it (mints an in-flight control rerun),
+  // then quick-finalize the whole round → reject, NO second rerun (no double-mint).
+  test('step 1 — control-dispatched q1 (in-flight) → quick-finalize rejected, no double-mint', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
+    })
+    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
+    const q1 = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
+    ).find((e) => e.questionId === 'q1' && e.roleKind === 'self')
+    expect(q1).toBeDefined()
+    await dispatchTaskQuestions(db, taskId, [q1!.id], actor)
+
+    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
+    let caught: unknown
+    try {
+      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-round-dispatched')
+    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
+      runsBefore,
+    )
+  })
+
+  // step 1 (finding 1 data-loss): a CONSUMED dispatched q1 (done+output) must STILL reject. The round
+  // is PERMANENTLY excluded from the whole-round render path (roundsWithDispatchedEntries keys on
+  // dispatched_at, never cleared), so a quick continuation would drop q2's answer. The guard keys on
+  // ANY dispatched (NOT !consumed) — this is the flip of the earlier (wrong) "consumed unblocks" test.
+  test('step 1 — CONSUMED dispatched q1 (done+output) → quick-finalize STILL rejected (no data-loss)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
+    })
+    const consumedRerun = await seedRun(db, taskId, P, {
+      status: 'done',
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+      hasOutput: true,
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: clarifyNodeRunId,
+      questionId: 'q1',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: consumedRerun,
+    })
+    let caught: unknown
+    try {
+      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-round-dispatched')
+  })
+
+  // step 2 (consume — fixes park starvation + duplicate): seal q1 (UNDISPATCHED) parks P; a quick
+  // whole-round finalize then SUPERSEDES q1 (marks it confirmed) → P no longer parks, q1 is not
+  // re-dispatchable, and the continuation is minted.
+  test('step 2 — quick-finalize consumes sealed-undispatched q1 → not parked, not re-dispatchable', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
+    })
+    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
+    // Sealed-undispatched q1 parks P (the pre-finalize state).
+    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(true)
+
+    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
+
+    const after = await db
+      .select()
+      .from(taskQuestions)
+      .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
+    const q1After = after.find((e) => e.questionId === 'q1' && e.roleKind === 'self')
+    const q2After = after.find((e) => e.questionId === 'q2' && e.roleKind === 'self')
+    // BOTH the sealed q1 AND the quick-answered (unsealed) sibling q2 are superseded → confirmed
+    // (Codex finding A: partial seal reconciled a row for EVERY question; the whole-round finalize
+    // answers them all, so the consume confirms the whole round — not just the sealed subset).
+    expect(q1After?.confirmation).toBe('confirmed')
+    expect(q2After).toBeDefined()
+    expect(q2After?.confirmation).toBe('confirmed')
+    // P no longer parks (the superseded entries dropped out of the park source).
+    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(false)
+    // Neither q1 nor q2 is re-dispatchable (dispatch skips confirmed) → empty dispatch.
+    const redispatch = await dispatchTaskQuestions(db, taskId, [q1After!.id, q2After!.id], actor)
+    expect(redispatch.dispatchedEntryIds.length).toBe(0)
+    // The quick continuation WAS minted (a pending clarify-answer rerun on P).
+    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === P && r.rerunCause === 'clarify-answer' && r.status === 'pending',
+    )
+    expect(reruns.length).toBe(1)
+  })
+
+  // step 2 golden-lock: a plain quick-finalize (NO prior control-channel seal) is unchanged — nothing
+  // is marked confirmed, the continuation mints normally.
+  test('step 2 — plain quick-finalize (no prior seal) leaves no confirmed entries (golden-lock)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't')],
+    })
+    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
+    const entries = await db
+      .select()
+      .from(taskQuestions)
+      .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
+    expect(entries.filter((e) => e.confirmation === 'confirmed').length).toBe(0)
+  })
+
+  // step 3 (RFC-076 ordering preserved): after a quick-finalize the atomic tx leaves the rerun minted
+  // (pending) + the session answered, and the clarify node is closed (done) AFTER — i.e. never
+  // done-without-rerun. Locks the mint→write→close invariant across the async→sync-tx rewrite.
+  test('step 3 — RFC-076: after quick-finalize, rerun(pending) + session(answered) + clarify(done)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't')],
+    })
+    const { rerunNodeRunId } = await submitClarifyAnswers({
+      db,
+      clarifyNodeRunId,
+      answers: [ans('q1')],
+    })
+    // mint present (pending, clarify-answer, on the asking node).
+    const rerun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunNodeRunId)))[0]
+    expect(rerun?.status).toBe('pending')
+    expect(rerun?.rerunCause).toBe('clarify-answer')
+    expect(rerun?.nodeId).toBe(P)
+    // session answered.
+    const sess = (
+      await db
+        .select()
+        .from(clarifySessions)
+        .where(eq(clarifySessions.clarifyNodeRunId, clarifyNodeRunId))
+    )[0]
+    expect(sess?.status).toBe('answered')
+    // clarify node closed (done) — the LAST step, after the rerun is committed.
+    const clarifyRun = (
+      await db.select().from(nodeRuns).where(eq(nodeRuns.id, clarifyNodeRunId))
+    )[0]
+    expect(clarifyRun?.status).toBe('done')
+  })
+
+  // step 3 (source-level atomicity lock): the double-mint race close is structural (bun:sqlite single
+  // thread + dbTxSync sync body), hard to exercise behaviorally. Bottom-line guard: submitClarifyAnswers
+  // mints + flips inside a dbTxSync (NOT separate awaits). If a refactor reverts this to an async mint
+  // the race reopens — this text assertion goes red. (CLAUDE.md source-level fallback pattern.)
+  test('step 3 — submitClarifyAnswers mints inside a dbTxSync (race-close source lock)', () => {
+    const src = readFileSync(resolve(import.meta.dir, '../src/services/clarify.ts'), 'utf8')
+    const fn = src.slice(src.indexOf('export async function submitClarifyAnswers'))
+    expect(fn.includes('dbTxSync(db, (tx) =>')).toBe(true)
+    expect(fn.includes('tx.insert(nodeRuns).values(rerunValues)')).toBe(true)
   })
 })
 
