@@ -186,7 +186,7 @@ describe('/clarify coordination grey-out (RFC-128 T10)', () => {
     expect(q2Radios.some((r) => !(r as HTMLInputElement).disabled)).toBe(true)
   })
 
-  test('submit excludes the sealed question (capped via questionIds)', async () => {
+  test('submit excludes the sealed question + sends NO questionIds on the quick channel (Codex P1-1)', async () => {
     const capture: { body?: Record<string, unknown> } = {}
     mockApi(
       twoQuestionSelfRound(),
@@ -200,9 +200,28 @@ describe('/clarify coordination grey-out (RFC-128 T10)', () => {
     await waitFor(() => screen.getByTestId('clarify-locked-note-q1'))
     fireEvent.click(screen.getByTestId('clarify-submit-continue'))
     await waitFor(() => expect(capture.body).toBeDefined())
-    expect(capture.body!.questionIds).toEqual(['q2'])
+    // P1-1: the quick channel (defer unset) must NOT send questionIds — the backend gates that
+    // combo ('clarify-question-ids-requires-defer'). The locked q1 is just excluded from
+    // `answers`; the backend re-merges its already-sealed answer (lockedIds) → whole round.
+    expect(capture.body!.questionIds).toBeUndefined()
+    expect(capture.body!.defer).toBeUndefined()
     const answers = capture.body!.answers as Array<{ questionId: string }>
     expect(answers.map((a) => a.questionId)).toEqual(['q2'])
+  })
+
+  test('a sibling round sealing the same questionId does NOT lock this round (Codex P2-1)', async () => {
+    // This round (nr_clarify) has q1 UNSEALED. A DIFFERENT round (nr_other) has its OWN q1
+    // sealed. The board returns task-wide entries; q1 here must stay editable (round-local).
+    mockApi(twoQuestionSelfRound(), [
+      wire({ id: 'e-other', questionId: 'q1', sealed: true, originNodeRunId: 'nr_other' }),
+      wire({ id: 'e1', questionId: 'q1', sealed: false, originNodeRunId: 'nr_clarify' }),
+      wire({ id: 'e2', questionId: 'q2', sealed: false, originNodeRunId: 'nr_clarify' }),
+    ])
+    renderRoute()
+    await waitFor(() => screen.getByTestId('clarify-question-q1'))
+    expect(screen.queryByTestId('clarify-locked-note-q1')).toBeNull()
+    const q1Radios = within(screen.getByTestId('clarify-question-q1')).getAllByRole('radio')
+    expect(q1Radios.some((r) => !(r as HTMLInputElement).disabled)).toBe(true)
   })
 
   test('every question locked → submit buttons disabled', async () => {

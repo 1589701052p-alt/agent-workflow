@@ -23,7 +23,10 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
 import { Select } from '@/components/Select'
 import { StatusChip } from '@/components/StatusChip'
-import { CentralizedAnswerDialog } from '@/components/clarify/CentralizedAnswerDialog'
+import {
+  CentralizedAnswerDialog,
+  groupUnsealedQuestions,
+} from '@/components/clarify/CentralizedAnswerDialog'
 import { QuestionAuthorForm } from '@/components/tasks/QuestionAuthorForm'
 
 export type TaskQuestionPhase = 'pending' | 'staged' | 'processing' | 'awaiting_confirm' | 'done'
@@ -332,11 +335,12 @@ export function TaskQuestionList({
               </button>
             </div>
           )}
-          {/* RFC-128 P4 §10.1 — entry to the centralized answer pane. Shown only when the
-              task has ≥1 UNSEALED clarify question (`!sealed` + has a clarify round); the
-              control channel (defer=true → 待指派 → dispatch) is deferred-gated, so the
-              button follows the same `deferred` gate as the manual-question tools. */}
-          {deferred && entries.some((e) => !e.sealed && e.originNodeRunId !== null) && (
+          {/* RFC-128 P4 §10.1 — entry to the centralized answer pane. Shown only when the pane
+              would have work, i.e. ≥1 answerable (unsealed, designer-mainline) question — the
+              SAME oracle the pane uses (Codex P1-2), so button-shown ⟺ pane-non-empty. The
+              control channel (defer=true → 待指派 → dispatch) is deferred-gated, so the button
+              follows the same `deferred` gate as the manual-question tools. */}
+          {deferred && groupUnsealedQuestions(entries).length > 0 && (
             <button
               type="button"
               className="btn btn--sm btn--primary"

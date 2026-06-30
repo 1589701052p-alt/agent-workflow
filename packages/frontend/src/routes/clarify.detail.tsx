@@ -97,6 +97,11 @@ export function ClarifyDetailPage() {
     const locked = new Set<string>()
     if (!Array.isArray(data)) return locked
     for (const e of data) {
+      // RFC-128 P4 (Codex P2-1): clarify question ids are agent-provided + round-local, so a
+      // sibling round can reuse the same id. Only THIS round's entries (originNodeRunId ==
+      // this clarify node-run id) may lock a question here — otherwise sealing q1 in another
+      // round would wrongly grey out this round's q1.
+      if (e.originNodeRunId !== nodeRunId) continue
       // sealed (answered here or via the pane) OR already dispatched (processing /
       // awaiting_confirm / done). dispatched ⇒ sealed, but OR both to match design §6
       // ("已 seal / 已下发的题") and stay robust to any backend skew.
@@ -110,7 +115,7 @@ export function ClarifyDetailPage() {
       }
     }
     return locked
-  }, [taskQuestionsQuery.data])
+  }, [taskQuestionsQuery.data, nodeRunId])
 
   // Subscribe to the host task's WS channel for clarify.* events so
   // sibling tabs picking up the same session see a real-time re-fetch
@@ -447,8 +452,13 @@ export function ClarifyDetailPage() {
     mutationFn: async (directive) => {
       const s = session.data
       if (s === undefined) throw new Error('no session loaded')
-      // RFC-128 P4 (T10): exclude any question already sealed/dispatched via another
-      // channel (the centralized pane / board) so this submit never re-seals it.
+      // RFC-128 P4 (T10): exclude any question already sealed/dispatched via another channel
+      // (the centralized pane / board) so this quick-channel submit never re-seals it. We do
+      // NOT send `questionIds` here: that subset cap is gated to defer=true on the backend
+      // (clarify.ts: 'clarify-question-ids-requires-defer'), and it's unnecessary — the quick
+      // channel re-merges the already-sealed (locked) answers via loadSealedQuestionIds +
+      // mergeSealedAnswers(lockedIds), so sending only the unlocked answers still finalizes the
+      // WHOLE round (answered). Excluding locked from `arr` just avoids re-seal attempts.
       const arr = s.questions
         .filter((q) => !lockedQuestionIds.has(q.id))
         .map(
@@ -465,15 +475,10 @@ export function ClarifyDetailPage() {
         ifMatchIteration: s.iteration,
         directive,
       }
-      // RFC-128: cap the seal to the still-open subset when ≥1 question is locked
-      // (the backend seals only `questionIds`). Omitted when nothing is locked ⇒
-      // byte-for-byte the pre-RFC-128 whole-round submit (golden lock).
-      if (lockedQuestionIds.size > 0) {
-        body.questionIds = arr.map((a) => a.questionId)
-      }
-      // RFC-059: only send questionScopes on cross-clarify (self-clarify
-      // submit ignores the field; sending it would be wasted bytes + tempt
-      // future readers into thinking self-clarify has scope semantics).
+      // RFC-059: only send questionScopes on cross-clarify (self-clarify submit ignores the
+      // field). When some questions are locked, restrict the scope map to the unlocked subset
+      // (the backend keeps a locked question's stored scope); no locked ⇒ send the full map
+      // (byte-for-byte the pre-RFC-128 whole-round submit, golden lock).
       if (s.kind === 'cross') {
         body.questionScopes =
           lockedQuestionIds.size > 0
@@ -857,7 +862,11 @@ export function ClarifyDetailPage() {
               {/* RFC-120 D12: per-question handler echo + picker. Self-filters to
                   designer-domain questions (renders null otherwise) and reads the
                   same override SoT the board edits. */}
-              <ClarifyQuestionHandler taskId={s.taskId} questionId={q.id} />
+              <ClarifyQuestionHandler
+                taskId={s.taskId}
+                questionId={q.id}
+                originNodeRunId={s.intermediaryNodeRunId}
+              />
               {/* RFC-128 P4 (T10): coordination notice for an already-handled question. */}
               {locked && (
                 <p className="muted" data-testid={`clarify-locked-note-${q.id}`}>

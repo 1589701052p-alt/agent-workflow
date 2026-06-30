@@ -19,9 +19,18 @@ import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 export interface ClarifyQuestionHandlerProps {
   taskId: string
   questionId: string
+  /** RFC-128 P4 (Codex P2-2): restrict the designer-entry match to THIS round. Clarify
+   *  question ids are agent-provided + round-local, so two rounds can reuse the same id;
+   *  without this the handler could show/mutate a SIBLING round's designer entry. Optional
+   *  for back-compat — omitted ⇒ match by (questionId, designer) across the task (legacy). */
+  originNodeRunId?: string
 }
 
-export function ClarifyQuestionHandler({ taskId, questionId }: ClarifyQuestionHandlerProps) {
+export function ClarifyQuestionHandler({
+  taskId,
+  questionId,
+  originNodeRunId,
+}: ClarifyQuestionHandlerProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const entries = useQuery<TaskQuestionEntry[]>({
@@ -42,7 +51,12 @@ export function ClarifyQuestionHandler({ taskId, questionId }: ClarifyQuestionHa
   // Defensive against any response shape (e.g. a test fetch-mock that doesn't
   // serve this endpoint) — never throw inside the (fragile) clarify page.
   const entry = Array.isArray(entries.data)
-    ? entries.data.find((e) => e.questionId === questionId && e.roleKind === 'designer')
+    ? entries.data.find(
+        (e) =>
+          e.questionId === questionId &&
+          e.roleKind === 'designer' &&
+          (originNodeRunId === undefined || e.originNodeRunId === originNodeRunId),
+      )
     : undefined
   if (!entry) return null
 

@@ -45,13 +45,17 @@ const SNAPSHOT = {
   outputs: [],
 }
 
-function wrap(entries: unknown, snapshot: unknown, questionId = 'q1') {
+function wrap(entries: unknown, snapshot: unknown, questionId = 'q1', originNodeRunId?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   qc.setQueryData(['task-questions', 'task-1'], entries)
   qc.setQueryData(['tasks', 'task-1', 'snapshot'], { workflowSnapshot: snapshot })
   return render(
     <QueryClientProvider client={qc}>
-      <ClarifyQuestionHandler taskId="task-1" questionId={questionId} />
+      <ClarifyQuestionHandler
+        taskId="task-1"
+        questionId={questionId}
+        {...(originNodeRunId !== undefined ? { originNodeRunId } : {})}
+      />
     </QueryClientProvider>,
   )
 }
@@ -84,5 +88,19 @@ describe('ClarifyQuestionHandler', () => {
     // a fetch-mock that serves the wrong shape must not crash the clarify page.
     wrap({ notAnArray: true }, SNAPSHOT)
     expect(screen.queryByTestId('clarify-handler-q1')).toBeNull()
+  })
+
+  // RFC-128 P4 (Codex P2-2): clarify question ids are round-local, so the handler must scope
+  // its designer-entry match to the given originNodeRunId — otherwise it would show/mutate a
+  // sibling round's designer entry that reused the same questionId.
+  test('originNodeRunId scopes the match: a sibling round entry is NOT matched', () => {
+    // designerEntry default originNodeRunId is 'origin-1'; scope the handler to a different round.
+    wrap([designerEntry()], SNAPSHOT, 'q1', 'other-origin')
+    expect(screen.queryByTestId('clarify-handler-q1')).toBeNull()
+  })
+
+  test('originNodeRunId scopes the match: this round entry IS matched', () => {
+    wrap([designerEntry({ originNodeRunId: 'origin-1' })], SNAPSHOT, 'q1', 'origin-1')
+    expect(screen.getByTestId('clarify-handler-q1')).toBeTruthy()
   })
 })

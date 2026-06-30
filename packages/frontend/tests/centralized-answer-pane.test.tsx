@@ -1,14 +1,17 @@
 // RFC-128 P4 (T9) — centralized answer pane.
 //
 // Locks:
-//   1. groupUnsealedQuestions oracle — only UNSEALED + clarify-backed questions,
-//      grouped by originNodeRunId in stable order, deduped (NOT answerSummary-based).
+//   1. groupUnsealedQuestions oracle — only UNSEALED + clarify-backed + DESIGNER-mainline
+//      (cross) questions, grouped by originNodeRunId in stable order, deduped. Self-clarify
+//      is excluded (Codex P1-2: defer-sealing self/questioner work would strand it pre-P5).
 //   2. isAnswerFilled oracle.
-//   3. The dialog flattens every task's unsealed questions (grouped by round) into
-//      QuestionForm blocks; the SINGLE submit button seals each round's filled subset
-//      via POST /api/clarify/:id/answers with defer:true + a questionIds cap.
+//   3. The dialog flattens the task's answerable questions (grouped by round) into
+//      QuestionForm blocks; the SINGLE submit button seals each round's filled subset via
+//      POST /api/clarify/:id/answers with defer:true + questionIds cap + designer scope.
 //   4. Submit is disabled until ≥1 answer is filled.
-//   5. No unsealed questions → empty state.
+//   5. No answerable questions → empty state.
+//   6. Designer mainline — NO scope picker is rendered (Codex P1-2); cross questions always
+//      seal to the designer scope. Self-clarify rounds don't enter the pane.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -39,14 +42,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+// Default = an unsealed CROSS (designer-mainline) question — what the pane handles.
 const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   id: 'e0',
   questionId: 'q1',
   questionTitle: 'Pick a strategy?',
   originNodeRunId: 'nr_a',
-  sourceKind: 'self',
-  roleKind: 'self',
-  sourceNodeId: 'designer',
+  sourceKind: 'cross',
+  roleKind: 'questioner',
+  sourceNodeId: 'questioner',
   defaultTargetNodeId: 'designer',
   overrideTargetNodeId: null,
   effectiveTargetNodeId: 'designer',
@@ -62,13 +66,13 @@ function round(over: Partial<ClarifyRound> & { intermediaryNodeRunId: string }):
   return {
     id: `rnd_${over.intermediaryNodeRunId}`,
     taskId: 'task-1',
-    kind: 'self',
-    askingNodeId: 'designer',
+    kind: 'cross',
+    askingNodeId: 'questioner',
     askingNodeRunId: 'nr_src',
     askingShardKey: null,
     intermediaryNodeId: 'c1',
     intermediaryNodeTitle: null,
-    targetConsumerNodeId: null,
+    targetConsumerNodeId: 'designer',
     loopIter: 0,
     iteration: 0,
     questions: [
@@ -114,7 +118,7 @@ function renderDialog(entries: TaskQuestionEntry[], rounds: ClarifyRound[]) {
 }
 
 describe('groupUnsealedQuestions (oracle)', () => {
-  test('keeps only unsealed clarify-backed questions, grouped by round in stable order', () => {
+  test('keeps only unsealed + cross-backed questions, grouped by round in stable order', () => {
     const groups = groupUnsealedQuestions([
       entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
       entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_b' }),
@@ -123,6 +127,14 @@ describe('groupUnsealedQuestions (oracle)', () => {
       entry({ id: 'd', questionId: 'q4', originNodeRunId: 'nr_a', sealed: true }),
       // manual (no clarify round) → excluded
       entry({ id: 'e', questionId: 'q5', originNodeRunId: null, sourceKind: 'manual' }),
+      // self-clarify → excluded (Codex P1-2: not designer-dispatchable until P5)
+      entry({
+        id: 'f',
+        questionId: 'q6',
+        originNodeRunId: 'nr_self',
+        sourceKind: 'self',
+        roleKind: 'self',
+      }),
     ])
     expect(groups).toEqual([
       { originNodeRunId: 'nr_a', questionIds: ['q1', 'q3'] },
@@ -155,7 +167,7 @@ describe('isAnswerFilled (oracle)', () => {
 })
 
 describe('CentralizedAnswerDialog', () => {
-  test('no unsealed questions → empty state, submit disabled', async () => {
+  test('no answerable questions → empty state, submit disabled', async () => {
     renderDialog([entry({ id: 'a', sealed: true })], [])
     await waitFor(() => expect(screen.getByTestId('empty-state')).toBeTruthy())
     expect((screen.getByTestId('centralized-answer-submit') as HTMLButtonElement).disabled).toBe(
@@ -163,7 +175,26 @@ describe('CentralizedAnswerDialog', () => {
     )
   })
 
-  test('flattens 2 rounds, single submit seals each round subset with defer:true + questionIds cap', async () => {
+  test('self-clarify rounds are excluded from the pane (Codex P1-2)', async () => {
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_x' }),
+        entry({
+          id: 'b',
+          questionId: 'qs',
+          originNodeRunId: 'nr_self',
+          sourceKind: 'self',
+          roleKind: 'self',
+        }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_x' })],
+    )
+    await waitFor(() => screen.getByTestId('centralized-round-nr_x'))
+    // The self-clarify round never renders a block (it routes via /clarify quick channel).
+    expect(screen.queryByTestId('centralized-round-nr_self')).toBeNull()
+  })
+
+  test('flattens 2 rounds, single submit seals each round subset (defer + questionIds + designer scope)', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
@@ -190,7 +221,6 @@ describe('CentralizedAnswerDialog', () => {
         }),
       ],
     )
-    // Both rounds rendered as blocks with their question.
     await waitFor(() => screen.getByTestId('clarify-question-q1'))
     await waitFor(() => screen.getByTestId('clarify-question-q2'))
     expect(screen.getByTestId('centralized-round-nr_a')).toBeTruthy()
@@ -215,34 +245,28 @@ describe('CentralizedAnswerDialog', () => {
       defer: true,
       directive: 'continue',
       questionIds: ['q1'],
+      questionScopes: { q1: 'designer' },
     })
     expect(calls['/api/clarify/nr_b/answers']).toMatchObject({
       defer: true,
       directive: 'continue',
       questionIds: ['q2'],
+      questionScopes: { q2: 'designer' },
     })
     // Only filled answers are submitted (subset cap matches answers).
     expect((calls['/api/clarify/nr_a/answers'] as { answers: unknown[] }).answers).toHaveLength(1)
   })
 
-  test('cross round sends questionScopes for the filled subset', async () => {
+  test('designer mainline — no scope picker is rendered; cross questions seal as designer', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
-      [
-        entry({
-          id: 'a',
-          questionId: 'q1',
-          originNodeRunId: 'nr_x',
-          sourceKind: 'cross',
-          roleKind: 'questioner',
-        }),
-      ],
-      [round({ intermediaryNodeRunId: 'nr_x', kind: 'cross', targetConsumerNodeId: 'designer' })],
+      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_x' })],
+      [round({ intermediaryNodeRunId: 'nr_x' })],
     )
     await waitFor(() => screen.getByTestId('clarify-question-q1'))
-    // cross rounds render the scope segmented control (reuses .segmented).
-    expect(screen.getByTestId('centralized-scope-q1')).toBeTruthy()
+    // Codex P1-2: the pane offers no scope choice (no questioner routing here).
+    expect(screen.queryByTestId('centralized-scope-q1')).toBeNull()
     fireEvent.click(within(screen.getByTestId('clarify-question-q1')).getAllByRole('radio')[0]!)
     const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
     await waitFor(() => expect(submit.disabled).toBe(false))

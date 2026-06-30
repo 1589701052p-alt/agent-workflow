@@ -376,14 +376,14 @@ async function wrapDeferred(entries: TaskQuestionEntry[]) {
     qc.setQueryData(['clarify', 'detail', e.originNodeRunId], {
       id: `rnd_${e.originNodeRunId}`,
       taskId: 'task-1',
-      kind: 'self',
-      askingNodeId: 'designer',
+      kind: 'cross',
+      askingNodeId: 'questioner',
       askingNodeRunId: 'nr_src',
       askingShardKey: null,
       intermediaryNodeId: 'c1',
       intermediaryNodeRunId: e.originNodeRunId,
       intermediaryNodeTitle: null,
-      targetConsumerNodeId: null,
+      targetConsumerNodeId: 'designer',
       loopIter: 0,
       iteration: 0,
       questions: [],
@@ -427,24 +427,56 @@ async function wrapDeferred(entries: TaskQuestionEntry[]) {
 }
 
 describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
-  test('deferred + an unsealed pending question → entry button shows and opens the pane', async () => {
+  test('deferred + an unsealed CROSS pending question → entry button shows and opens the pane', async () => {
     setBaseUrl('http://daemon.test')
     setToken('tok')
     await wrapDeferred([
-      entry({ id: 'e1', phase: 'pending', sealed: false, originNodeRunId: 'nr_a' }),
+      entry({
+        id: 'e1',
+        phase: 'pending',
+        sealed: false,
+        originNodeRunId: 'nr_a',
+        sourceKind: 'cross',
+        roleKind: 'questioner',
+      }),
     ])
     fireEvent.click(screen.getByTestId('tq-open-answer-pane'))
     await waitFor(() => expect(screen.getByTestId('centralized-answer-dialog')).toBeTruthy())
   })
 
   test('deferred but every question sealed → no entry button', async () => {
-    await wrapDeferred([entry({ id: 'e1', phase: 'awaiting_confirm', sealed: true })])
+    await wrapDeferred([
+      entry({ id: 'e1', phase: 'awaiting_confirm', sealed: true, sourceKind: 'cross' }),
+    ])
+    expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
+  })
+
+  test('deferred but only self-clarify unsealed → no entry button (Codex P1-2, pane is designer-mainline)', async () => {
+    await wrapDeferred([
+      entry({
+        id: 'e1',
+        phase: 'pending',
+        sealed: false,
+        originNodeRunId: 'nr_self',
+        sourceKind: 'self',
+        roleKind: 'self',
+      }),
+    ])
     expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
   })
 
   test('non-deferred task with an unsealed pending question → no entry button', async () => {
     // `wrap` renders WITHOUT the deferred prop (default false).
-    await wrap([entry({ id: 'e1', phase: 'pending', sealed: false, originNodeRunId: 'nr_a' })])
+    await wrap([
+      entry({
+        id: 'e1',
+        phase: 'pending',
+        sealed: false,
+        originNodeRunId: 'nr_a',
+        sourceKind: 'cross',
+        roleKind: 'questioner',
+      }),
+    ])
     expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
   })
 })

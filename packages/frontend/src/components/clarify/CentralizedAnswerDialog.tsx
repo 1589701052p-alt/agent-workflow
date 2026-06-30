@@ -45,14 +45,26 @@ export interface CentralizedAnswerGroup {
 
 /** Pure oracle (unit-tested): the task's UNSEALED clarify questions grouped by their
  *  originating clarify round (originNodeRunId), in stable first-appearance order.
- *  Manual questions (originNodeRunId null) and already-sealed questions are excluded —
- *  `sealed` is the per-question DTO field, NOT `answerSummary !== null` (F3). */
+ *
+ *  RFC-128 P4 (Codex P1-2) — the pane is the **designer mainline**. It only surfaces
+ *  CROSS-clarify questions, because its control channel (defer=true) seals into 待指派 +
+ *  the board's batch-dispatch (P3) consumes ONLY designer entries (taskQuestionDispatch
+ *  filters roleKind='designer'). A self-clarify or questioner-routed question sealed with
+ *  defer=true would be STRANDED (no designer entry to dispatch) until P5's self/questioner
+ *  per-question rerun lands. So self-clarify rounds are excluded here — they (and any
+ *  questioner routing) go through the /clarify quick channel (defer=false, immediate rerun).
+ *
+ *  Excluded: already-sealed questions (`sealed` per-question DTO field, NOT
+ *  `answerSummary !== null` — F3), manual questions (originNodeRunId null), and
+ *  self-clarify questions (sourceKind !== 'cross'). */
 export function groupUnsealedQuestions(entries: TaskQuestionEntry[]): CentralizedAnswerGroup[] {
   const order: string[] = []
   const byRound = new Map<string, string[]>()
   for (const e of entries) {
     if (e.sealed) continue
     if (e.originNodeRunId === null) continue
+    // Designer mainline only — see the doc comment (Codex P1-2).
+    if (e.sourceKind !== 'cross') continue
     let qids = byRound.get(e.originNodeRunId)
     if (qids === undefined) {
       qids = []
@@ -235,9 +247,11 @@ interface RoundAnswerBlockProps {
   onSubmissionChange: (originNodeRunId: string, sub: RoundSubmission | null) => void
 }
 
-/** One clarify round's answer block. Owns its local answer/scope state + draft
- *  autosave (the SAME server draft endpoint the /clarify page uses, so drafts are
- *  shared across both entry points) and reports its filled subset up. */
+/** One clarify round's answer block. Owns its local answer state + draft autosave (the
+ *  SAME server draft endpoint the /clarify page uses, so drafts are shared across both
+ *  entry points) and reports its filled subset up. The pane is the designer mainline, so
+ *  there is no scope picker — cross questions are always sealed to the designer scope
+ *  (Codex P1-2); questioner routing happens on /clarify. */
 function RoundAnswerBlock({
   taskId,
   originNodeRunId,
@@ -261,7 +275,6 @@ function RoundAnswerBlock({
   )
 
   const [answers, setAnswers] = useState<Record<string, ClarifyAnswer>>({})
-  const [scopes, setScopes] = useState<Record<string, ClarifyQuestionScope>>({})
   const [seeded, setSeeded] = useState(false)
   // Mirrors the last server-acknowledged draft per question, so the autosave only PUTs
   // the questions that actually changed (RFC-099 per-question last-write-wins).
@@ -274,7 +287,6 @@ function RoundAnswerBlock({
   useEffect(() => {
     if (round === undefined || seeded) return
     const fresh: Record<string, ClarifyAnswer> = {}
-    const sc: Record<string, ClarifyQuestionScope> = {}
     for (const q of visibleQuestions) {
       fresh[q.id] = {
         questionId: q.id,
@@ -282,14 +294,10 @@ function RoundAnswerBlock({
         selectedOptionLabels: [],
         customText: '',
       }
-      if (round.kind === 'cross') {
-        sc[q.id] = round.questionScopes?.[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
-      }
     }
     const finalize = () => {
       serverDraftRef.current = { ...fresh }
       setAnswers(fresh)
-      if (round.kind === 'cross') setScopes(sc)
       setSeeded(true)
     }
     const serverDrafts = round.draftAnswers ?? null
@@ -392,13 +400,16 @@ function RoundAnswerBlock({
       answers: filled,
       questionIds,
     }
+    // Designer mainline: always seal cross questions to the designer scope so reconcile
+    // emits a dispatchable designer entry (Codex P1-2). Explicit so it overrides any
+    // questioner scope a prior /clarify draft may have stored on the round.
     if (round.kind === 'cross') {
       const qs: Record<string, ClarifyQuestionScope> = {}
-      for (const qid of questionIds) qs[qid] = scopes[qid] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
+      for (const qid of questionIds) qs[qid] = CLARIFY_QUESTION_SCOPE_DEFAULT
       sub.questionScopes = qs
     }
     onSubmissionChange(originNodeRunId, sub)
-  }, [answers, scopes, seeded, round, visibleQuestions, originNodeRunId, onSubmissionChange])
+  }, [answers, seeded, round, visibleQuestions, originNodeRunId, onSubmissionChange])
 
   // Drop this round's contribution when it unmounts (left `groups`).
   useEffect(
@@ -424,44 +435,17 @@ function RoundAnswerBlock({
         visibleQuestions.map((q, idx) => {
           const a = answers[q.id]
           if (a === undefined) return null
-          const scope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
           return (
             <div key={q.id} className="clarify-question-wrapper" data-question-wrapper-id={q.id}>
-              {/* designer-domain reassign picker — self-degrades to null until the
-                  question is sealed + has a designer entry (post-seal, on the board). */}
-              <ClarifyQuestionHandler taskId={taskId} questionId={q.id} />
-              {isCross && (
-                <div className="clarify-question-scope" data-testid={`centralized-scope-${q.id}`}>
-                  <span className="muted">{t('crossClarify.questionScope.label')}:</span>
-                  <div
-                    className="segmented"
-                    role="radiogroup"
-                    aria-label={t('crossClarify.questionScope.label')}
-                  >
-                    {(['designer', 'questioner'] as const).map((mode) => {
-                      const active = scope === mode
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          className={
-                            'segmented__option' + (active ? ' segmented__option--active' : '')
-                          }
-                          disabled={disabled}
-                          data-testid={`centralized-scope-${q.id}-${mode}`}
-                          onClick={() => setScopes((prev) => ({ ...prev, [q.id]: mode }))}
-                        >
-                          {mode === 'designer'
-                            ? t('crossClarify.questionScope.designer')
-                            : t('crossClarify.questionScope.questioner')}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
+              {/* designer-domain reassign picker — scoped to THIS round (Codex P2-2) so it
+                  never matches a sibling round's designer entry that reused the same id;
+                  self-degrades to null until the question is sealed (post-seal, on the board). */}
+              <ClarifyQuestionHandler
+                taskId={taskId}
+                questionId={q.id}
+                originNodeRunId={originNodeRunId}
+              />
+              {/* No scope picker — the pane is the designer mainline (Codex P1-2). */}
               <QuestionForm
                 question={q}
                 value={a}
