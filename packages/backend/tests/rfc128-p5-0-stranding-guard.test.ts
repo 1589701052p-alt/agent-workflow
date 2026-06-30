@@ -31,6 +31,7 @@ import { clarifyRounds, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createClarifySession } from '../src/services/clarify'
 import { createCrossClarifySession } from '../src/services/crossClarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
+import { listTaskQuestions } from '../src/services/taskQuestions'
 import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -315,10 +316,12 @@ describe('RFC-128 P5-0 — partial seal 仍允许（self/questioner）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// DESIGNER 域 full seal 完全不受影响（P0-P4 designer 主线照常）
+// DESIGNER 域 full seal：ONLY cross + CONTINUE + all-designer-scope 照常（P0-P4 designer
+// 主线）。cross + STOP 即便全 designer-scope 也被拒（Codex PR-1 P1：stop 分支恒发反问者续跑，
+// 不论 scope）——见本块末两个对照 test。
 // ---------------------------------------------------------------------------
 
-describe('RFC-128 P5-0 — designer full seal 照常（不受 guard 影响）', () => {
+describe('RFC-128 P5-0 — designer continue full seal 照常 (stop 反例)', () => {
   test('CROSS 轮全题 seal — 全 designer-scope（+ flag）→ 照常：roundFullySealed=true、轮 answered、node_run 关', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
@@ -350,7 +353,39 @@ describe('RFC-128 P5-0 — designer full seal 照常（不受 guard 影响）', 
     expect((await roundOf(db, taskId))[0]?.status).toBe('answered')
   })
 
-  test('directive 不参与判定：CROSS 全 designer-scope full seal + stop → 照常允许（按 scope，非 directive）', async () => {
+  test('对照（Codex PR-1 P1）：CROSS 全 designer-scope full seal + directive=stop（+ flag）→ 409，NOT 照常', async () => {
+    // directive DOES participate for stop: submitCrossClarifyAnswers's stop branch
+    // (crossClarify.ts:534-560) ALWAYS mints a cross-clarify-questioner-rerun BEFORE the scope
+    // split — so even an all-designer-scope cross-stop full seal needs a questioner stop rerun
+    // the control channel cannot provide → strand. The guard must reject it (scope-only would
+    // wrongly let it through; Codex PR-1 caught this).
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1')])
+
+    let error: unknown
+    try {
+      await sealRoundQuestions({
+        db,
+        originNodeRunId,
+        answers: [makeAns('q1')],
+        scopes: { q1: 'designer' },
+        directive: 'stop',
+        rejectSelfQuestionerFullSeal: true,
+      })
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(ConflictError)
+    expect((error as ConflictError).code).toBe(GUARD_CODE)
+    // Atomic rollback: round NOT flipped, directive NOT persisted, node_run NOT closed.
+    expect((await roundOf(db, taskId))[0]?.status).toBe('awaiting_human')
+    expect((await roundOf(db, taskId))[0]?.directive ?? null).toBeNull()
+    expect((await nodeRunStatusOf(db, originNodeRunId))[0]?.status).toBe('awaiting_human')
+  })
+
+  test('raw 原语（flag 关）CROSS designer-scope full seal + stop → 照旧成功 + directive=stop 持久化（Codex P2-2 现状, 不破)', async () => {
+    // The raw primitive still threads directive on full seal (RFC-128 P2 Codex P2-2) — the guard
+    // is opt-in, so the route guarding cross-stop does NOT change this storage-layer behavior.
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1')])
 
@@ -360,10 +395,15 @@ describe('RFC-128 P5-0 — designer full seal 照常（不受 guard 影响）', 
       answers: [makeAns('q1')],
       scopes: { q1: 'designer' },
       directive: 'stop',
-      rejectSelfQuestionerFullSeal: true,
+      // no flag → raw primitive
     })
     expect(result.roundFullySealed).toBe(true)
     expect((await roundOf(db, taskId))[0]?.directive).toBe('stop')
+    // stop ⇒ reconcile produces NO designer entry, only the questioner (the "no designer entry on
+    // stop" lock the route test used to hold, now anchored on the raw primitive — Codex P2-2).
+    const dtos = await listTaskQuestions(db, taskId)
+    expect(dtos.some((d) => d.roleKind === 'designer')).toBe(false)
+    expect(dtos.some((d) => d.roleKind === 'questioner')).toBe(true)
   })
 })
 

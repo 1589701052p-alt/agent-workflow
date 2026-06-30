@@ -209,36 +209,6 @@ export async function sealRoundQuestions(
     const newSealed = new Set<string>([...alreadySealed, ...sealingSet])
     const fullySealed = questions.every((q) => newSealed.has(q.id))
 
-    // RFC-128 P5-0 (hotfix stranding guard) — reject a full seal that would strand a
-    // self/questioner continuation. The control channel (defer / direct seal) mints NO rerun;
-    // on a FULL seal it closes the intermediary node_run (below) and the round flips 'answered',
-    // releasing the asking-run park (loadOpenClarify only parks awaiting_human sessions). For a
-    // DESIGNER-scope cross round that is fine — the §18 designer park (loadUndispatchedDesigner-
-    // Targets) holds the deferred task until a board dispatch mints the borrowed designer rerun
-    // (P3, shipped). But a SELF round, or a CROSS round with ANY questioner-scope question, needs
-    // a self/questioner continuation rerun (the quick channel mints clarify-answer / cross-
-    // clarify-questioner-rerun) and there is NO self/questioner undispatched-park source yet —
-    // so dispatchTaskQuestions (designer-only) never picks it up and the task advances past the
-    // asking node, stranding the continuation (data/progress lost). Per-question self/questioner
-    // rerun + park is RFC-128 P5-B/C; until then opted-in callers (the API route) REJECT it.
-    // PARTIAL seals are always allowed (the round stays awaiting_human, so the OPEN session keeps
-    // the asking run parked — no strand). Decision is by round KIND + per-question SCOPE (NOT the
-    // directive), the same self/questioner vs designer split reconcileDesiredEntries uses; thrown
-    // BEFORE any write so the tx rolls back cleanly (nothing sealed / closed / reconciled).
-    if (args.rejectSelfQuestionerFullSeal === true && fullySealed) {
-      const needsSelfQuestionerContinuation =
-        round.kind === 'self' ||
-        questions.some((q) => resolveQuestionScope(mergedScopes, q.id) === 'questioner')
-      if (needsSelfQuestionerContinuation) {
-        throw new ConflictError(
-          'clarify-selfq-full-seal-unsupported-pre-p5',
-          `cannot fully seal this ${
-            round.kind === 'self' ? 'self-clarify' : 'questioner-scope cross-clarify'
-          } round through the control channel: it needs a self/questioner continuation rerun, which per-question dispatch does not yet support (RFC-128 P5-C). Answer it through the quick channel (POST without defer) instead, or seal only a partial subset.`,
-        )
-      }
-    }
-
     // RFC-128 P2 (Codex P2-2) — round-level directive. Provided wins; else keep the round's
     // existing value; else default 'continue'. Fed (in-memory) to the reconcile designer gate
     // and persisted to clarify_rounds + the legacy session ONLY on a FULL seal (see directive
@@ -249,6 +219,52 @@ export async function sealRoundQuestions(
     // 'stop' round produces NO designer entries (reconcileDesiredEntries).
     const effectiveDirective: ClarifyDirective =
       args.directive ?? (round.directive as ClarifyDirective | null) ?? 'continue'
+
+    // RFC-128 P5-0 (hotfix stranding guard) — reject a control-channel FULL seal that would
+    // strand a self/questioner CONTINUATION rerun the quick channel WOULD mint but the control
+    // channel does not (and there is no self/questioner undispatched-park source yet). On a full
+    // seal this primitive closes the intermediary node_run (below) + flips the round 'answered',
+    // releasing the asking-run park (loadOpenClarify only parks awaiting_human sessions). The
+    // three stranding inputs — each mints a rerun in the quick path that gets NO park/dispatch
+    // release here, so the task advances past the asking node and loses the continuation:
+    //   • SELF round              → submitClarifyAnswers ALWAYS mints a 'clarify-answer' rerun.
+    //   • CROSS + directive='stop' → submitCrossClarifyAnswers's stop branch ALWAYS mints a
+    //                               'cross-clarify-questioner-rerun' (triggerQuestionerStopRerun,
+    //                               crossClarify.ts:534-560) BEFORE any scope split — so a stop
+    //                               round strands REGARDLESS of scope, INCLUDING all-designer
+    //                               (Codex PR-1 P1; the P0-net stop test mints it on default
+    //                               designer scope). This is why the decision needs the directive,
+    //                               not scope alone.
+    //   • CROSS + continue + any questioner-scope → the all-questioner-scope fast path mints a
+    //                               'cross-clarify-questioner-rerun' (triggerQuestionerContinue-
+    //                               Rerun, crossClarify.ts:570); a MIXED round is rejected too
+    //                               (conservative — its questioner-scope answers are P5-C work;
+    //                               the UI never produces a mixed full seal — §10/P4).
+    // DESIGNER-only cross + continue is the ONLY full seal allowed: it mints NO questioner rerun
+    // (triggerDesignerRerun does not cascade the questioner, crossClarify.ts:945) and the §18
+    // designer park (loadUndispatchedDesignerTargets) holds the deferred task until a board
+    // dispatch mints the borrowed designer rerun (P3, shipped). Per-question self/questioner
+    // rerun + park is RFC-128 P5-B/C; until then opted-in callers (the API route) REJECT it.
+    // PARTIAL seals are always allowed (the round stays awaiting_human → the OPEN session keeps
+    // the asking run parked → no strand). Thrown BEFORE any write so the tx rolls back cleanly.
+    if (args.rejectSelfQuestionerFullSeal === true && fullySealed) {
+      const isSelf = round.kind === 'self'
+      const isCrossStop = round.kind === 'cross' && effectiveDirective === 'stop'
+      const hasQuestionerScope =
+        round.kind === 'cross' &&
+        questions.some((q) => resolveQuestionScope(mergedScopes, q.id) === 'questioner')
+      if (isSelf || isCrossStop || hasQuestionerScope) {
+        const detail = isSelf
+          ? 'self-clarify'
+          : isCrossStop
+            ? 'cross-clarify with directive=stop'
+            : 'cross-clarify with a questioner-scope question'
+        throw new ConflictError(
+          'clarify-selfq-full-seal-unsupported-pre-p5',
+          `cannot fully seal this clarify round through the control channel (${detail}): a full seal needs a self/questioner continuation rerun (a self continuation, or a questioner stop/continue rerun) that per-question dispatch does not yet support (RFC-128 P5-C). Answer it through the quick channel (POST without defer) instead, or seal only a partial subset.`,
+        )
+      }
+    }
 
     // RFC-128 P2 (Codex P2-2 follow-up) — persist the directive ONLY when the round fully
     // seals; a PARTIAL seal writes it to NEITHER table:

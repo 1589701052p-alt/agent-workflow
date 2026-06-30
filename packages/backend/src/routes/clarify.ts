@@ -260,11 +260,13 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         originNodeRunId: nodeRunId,
         answers: sealAnswers,
         // RFC-128 P5-0 (hotfix stranding guard): the API route is the user-facing control
-        // channel, so it opts into the self/questioner full-seal guard. A FULL seal of a self
-        // round (or a cross round with any questioner-scope question) is rejected 409
-        // (clarify-selfq-full-seal-unsupported-pre-p5) — it would close the asking node_run +
-        // mint no continuation rerun + have no self/q park source → strand. PARTIAL seals and
-        // DESIGNER-only cross full seals (the §18-parked P3 mainline) pass through unchanged.
+        // channel, so it opts into the self/questioner full-seal guard. A FULL seal is rejected
+        // 409 (clarify-selfq-full-seal-unsupported-pre-p5) when it needs a self/questioner
+        // continuation rerun the control channel cannot mint + has no park source → strand:
+        // a SELF round, a CROSS round with directive='stop' (the quick path's stop branch always
+        // mints a questioner rerun, regardless of scope — Codex PR-1 P1), or a CROSS continue
+        // round with any questioner-scope question. PARTIAL seals and DESIGNER-only cross
+        // CONTINUE full seals (the §18-parked P3 mainline) pass through unchanged.
         rejectSelfQuestionerFullSeal: true,
         // RFC-128 P2 (Codex P2-2): thread the round directive so the control channel matches
         // quick-path stop semantics (no designer entries + directive persisted; 'continue'
