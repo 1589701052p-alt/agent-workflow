@@ -7603,6 +7603,20 @@ mark.comment-anchor[data-active='true'] {
   gap: 8px;
 }
 
+/* RFC-128 P4 (T10) — a question already sealed/dispatched via the centralized answer
+   pane / board is greyed out + read-only on the /clarify page (its inputs are also
+   disabled). The dim affordance signals "已处理" so the reviewer skips it. */
+.clarify-question-wrapper--locked {
+  opacity: 0.6;
+}
+
+/* RFC-128 P4 (T9) — centralized answer pane: vertical stack of per-round answer cards. */
+.centralized-answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .clarify-question-scope {
   display: flex;
   flex-wrap: wrap;

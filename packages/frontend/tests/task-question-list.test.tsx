@@ -11,15 +11,19 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { useRef, useState } from 'react'
 import { api, ApiError } from '@/api/client'
 import { TaskQuestionList, type TaskQuestionEntry } from '../src/components/tasks/TaskQuestionList'
+import { setBaseUrl, setToken } from '../src/stores/auth'
+import '../src/i18n'
 
 afterEach(() => {
+  // cleanup() unmounts React trees (incl. portal Dialogs) before the next test —
+  // a manual `document.body.innerHTML = ''` fights React's portal removal (removeChild).
+  cleanup()
   vi.restoreAllMocks()
-  document.body.innerHTML = ''
 })
 
 const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
@@ -36,6 +40,7 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   phase: 'pending',
   confirmation: 'open',
   staged: false,
+  sealed: false,
   answerSummary: null,
   ...over,
 })
@@ -353,5 +358,93 @@ describe('TaskQuestionList focusSourceNode (D13 canvas-badge jump)', () => {
     fireEvent.click(screen.getByTestId('push-nodeA'))
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
     expect(screen.queryByTestId('tq-card-b1')).toBeNull()
+  })
+})
+
+// RFC-128 P4 (T9) — centralized answer pane entry button. Shown only on a deferred
+// task that has ≥1 UNSEALED clarify question (the control channel is deferred-gated,
+// like the manual-question tools). Clicking opens the pane (a portal Dialog).
+async function wrapDeferred(entries: TaskQuestionEntry[]) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  qc.setQueryData(['task-questions', 'task-1'], entries)
+  // Seed the snapshot + each round so opening the pane needs no network.
+  qc.setQueryData(['tasks', 'task-1', 'snapshot'], { workflowSnapshot: { nodes: [] } })
+  for (const e of entries) {
+    if (e.originNodeRunId === null) continue
+    qc.setQueryData(['clarify', 'detail', e.originNodeRunId], {
+      id: `rnd_${e.originNodeRunId}`,
+      taskId: 'task-1',
+      kind: 'self',
+      askingNodeId: 'designer',
+      askingNodeRunId: 'nr_src',
+      askingShardKey: null,
+      intermediaryNodeId: 'c1',
+      intermediaryNodeRunId: e.originNodeRunId,
+      intermediaryNodeTitle: null,
+      targetConsumerNodeId: null,
+      loopIter: 0,
+      iteration: 0,
+      questions: [],
+      status: 'awaiting_human',
+      directive: null,
+      sessionMode: null,
+      designerRunTriggeredAt: null,
+      abandonedAt: null,
+      questionScopes: null,
+      createdAt: 0,
+      answeredAt: null,
+      answeredBy: null,
+      draftAnswers: null,
+    })
+  }
+  const rootRoute = createRootRoute({ component: () => <Outlet /> })
+  const index = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => (
+      <QueryClientProvider client={qc}>
+        <TaskQuestionList
+          taskId="task-1"
+          nodeOptions={[{ id: 'designer', label: 'designer' }]}
+          deferred
+        />
+      </QueryClientProvider>
+    ),
+  })
+  const clarify = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/clarify/$nodeRunId',
+    component: () => null,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([index, clarify]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  await router.load()
+  return render(<RouterProvider router={router as never} />)
+}
+
+describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
+  test('deferred + an unsealed pending question → entry button shows and opens the pane', async () => {
+    setBaseUrl('http://daemon.test')
+    setToken('tok')
+    await wrapDeferred([
+      entry({ id: 'e1', phase: 'pending', sealed: false, originNodeRunId: 'nr_a' }),
+    ])
+    fireEvent.click(screen.getByTestId('tq-open-answer-pane'))
+    await waitFor(() => expect(screen.getByTestId('centralized-answer-dialog')).toBeTruthy())
+  })
+
+  test('deferred but every question sealed → no entry button', async () => {
+    await wrapDeferred([entry({ id: 'e1', phase: 'awaiting_confirm', sealed: true })])
+    expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
+  })
+
+  test('non-deferred task with an unsealed pending question → no entry button', async () => {
+    // `wrap` renders WITHOUT the deferred prop (default false).
+    await wrap([entry({ id: 'e1', phase: 'pending', sealed: false, originNodeRunId: 'nr_a' })])
+    expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
   })
 })

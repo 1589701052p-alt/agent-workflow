@@ -29,10 +29,12 @@ import type {
   SubmitClarifyAnswersResponse,
 } from '@agent-workflow/shared'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
-import { api } from '@/api/client'
+import { api, type ApiError } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
+import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
+import { answersEqual, isAnswerFilled } from '@/lib/clarify/answers'
 import { useActor } from '@/hooks/useActor'
 import { useUserLookup } from '@/hooks/useUserLookup'
 import { Dialog } from '@/components/Dialog'
@@ -40,14 +42,6 @@ import { useClarifyWs } from '@/hooks/useClarifyWs'
 import { deleteClarifyDraft, getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
 import { goToTaskDetail } from '@/lib/nav/taskNav'
 import { Route as RootRoute } from './__root'
-
-/** RFC-099 — user-state equality for drafts (labels are server-refilled, ignored). */
-function answersEqual(a: ClarifyAnswer, b: ClarifyAnswer): boolean {
-  const ai = [...a.selectedOptionIndices].sort((x, y) => x - y)
-  const bi = [...b.selectedOptionIndices].sort((x, y) => x - y)
-  if (ai.length !== bi.length || ai.some((v, i) => v !== bi[i])) return false
-  return a.customText === b.customText
-}
 
 /** RFC-058: REST returns a single ClarifyRound shape with `kind` discriminator. */
 type ClarifyDetailEntry = ClarifyRound
@@ -83,6 +77,40 @@ export function ClarifyDetailPage() {
     enabled: typeof session.data?.taskId === 'string',
     refetchOnWindowFocus: false,
   })
+
+  // RFC-128 P4 (T10) — coordination grey-out. Read the task's per-question seal /
+  // dispatch state so this page can render any question already sealed/dispatched via
+  // the centralized answer pane or the board as read-only AND exclude it from submit —
+  // never re-sealing / re-dispatching a sibling another channel already handled
+  // (dispatched_at IS NULL CAS is the backend backstop; this is the UX layer).
+  // Defensive: retry:false + non-array guard ⇒ a non-member / unmocked response yields
+  // an empty locked set ⇒ byte-for-byte the pre-RFC-128 page (golden lock).
+  const taskQuestionsQuery = useQuery<TaskQuestionEntry[], ApiError>({
+    queryKey: ['task-questions', session.data?.taskId],
+    queryFn: ({ signal }) =>
+      api.get(`/api/tasks/${session.data?.taskId}/questions`, undefined, signal),
+    enabled: typeof session.data?.taskId === 'string',
+    retry: false,
+  })
+  const lockedQuestionIds = useMemo(() => {
+    const data = taskQuestionsQuery.data
+    const locked = new Set<string>()
+    if (!Array.isArray(data)) return locked
+    for (const e of data) {
+      // sealed (answered here or via the pane) OR already dispatched (processing /
+      // awaiting_confirm / done). dispatched ⇒ sealed, but OR both to match design §6
+      // ("已 seal / 已下发的题") and stay robust to any backend skew.
+      if (
+        e.sealed ||
+        e.phase === 'processing' ||
+        e.phase === 'awaiting_confirm' ||
+        e.phase === 'done'
+      ) {
+        locked.add(e.questionId)
+      }
+    }
+    return locked
+  }, [taskQuestionsQuery.data])
 
   // Subscribe to the host task's WS channel for clarify.* events so
   // sibling tabs picking up the same session see a real-time re-fetch
@@ -419,25 +447,43 @@ export function ClarifyDetailPage() {
     mutationFn: async (directive) => {
       const s = session.data
       if (s === undefined) throw new Error('no session loaded')
-      const arr = s.questions.map(
-        (q) =>
-          answers[q.id] ?? {
-            questionId: q.id,
-            selectedOptionIndices: [],
-            selectedOptionLabels: [],
-            customText: '',
-          },
-      )
+      // RFC-128 P4 (T10): exclude any question already sealed/dispatched via another
+      // channel (the centralized pane / board) so this submit never re-seals it.
+      const arr = s.questions
+        .filter((q) => !lockedQuestionIds.has(q.id))
+        .map(
+          (q) =>
+            answers[q.id] ?? {
+              questionId: q.id,
+              selectedOptionIndices: [],
+              selectedOptionLabels: [],
+              customText: '',
+            },
+        )
       const body: SubmitClarifyAnswers = {
         answers: arr,
         ifMatchIteration: s.iteration,
         directive,
       }
+      // RFC-128: cap the seal to the still-open subset when ≥1 question is locked
+      // (the backend seals only `questionIds`). Omitted when nothing is locked ⇒
+      // byte-for-byte the pre-RFC-128 whole-round submit (golden lock).
+      if (lockedQuestionIds.size > 0) {
+        body.questionIds = arr.map((a) => a.questionId)
+      }
       // RFC-059: only send questionScopes on cross-clarify (self-clarify
       // submit ignores the field; sending it would be wasted bytes + tempt
       // future readers into thinking self-clarify has scope semantics).
       if (s.kind === 'cross') {
-        body.questionScopes = scopes
+        body.questionScopes =
+          lockedQuestionIds.size > 0
+            ? Object.fromEntries(
+                arr.map((a) => [
+                  a.questionId,
+                  scopes[a.questionId] ?? CLARIFY_QUESTION_SCOPE_DEFAULT,
+                ]),
+              )
+            : scopes
       }
       const resp = await api.post<SubmitClarifyAnswersResponse>(
         `/api/clarify/${s.intermediaryNodeRunId}/answers`,
@@ -517,8 +563,7 @@ export function ClarifyDetailPage() {
   // (RFC-051) so the reset-on-nodeRunId effect can reach it.
 
   function isAnswerEmpty(a: ClarifyAnswer | undefined): boolean {
-    if (a === undefined) return true
-    return a.selectedOptionIndices.length === 0 && a.customText.length === 0
+    return !isAnswerFilled(a)
   }
 
   const advanceFromQuestion = (currentId: string) => {
@@ -608,6 +653,9 @@ export function ClarifyDetailPage() {
   if (s === undefined) return null
 
   const readonly = s.status !== 'awaiting_human'
+  // RFC-128 P4 (T10): every question already sealed/dispatched elsewhere → nothing left
+  // to submit here. Disable the submit buttons (the form is all read-only anyway).
+  const allLocked = s.questions.length > 0 && s.questions.every((q) => lockedQuestionIds.has(q.id))
   // RFC-058: ClarifyRound unified — intermediary == clarify / clarify-cross
   // node, asking == source agent / questioner, iteration == round counter.
   const nodeId = s.intermediaryNodeId
@@ -794,12 +842,28 @@ export function ClarifyDetailPage() {
           const a = answers[q.id]
           if (a === undefined) return null
           const scope: ClarifyQuestionScope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
+          // RFC-128 P4 (T10): this question was already sealed/dispatched via another
+          // channel (the centralized pane / board) → read-only here + excluded from submit.
+          const locked = lockedQuestionIds.has(q.id)
           return (
-            <div key={q.id} className="clarify-question-wrapper" data-question-wrapper-id={q.id}>
+            <div
+              key={q.id}
+              className={
+                'clarify-question-wrapper' + (locked ? ' clarify-question-wrapper--locked' : '')
+              }
+              data-question-wrapper-id={q.id}
+              data-locked={locked ? 'true' : undefined}
+            >
               {/* RFC-120 D12: per-question handler echo + picker. Self-filters to
                   designer-domain questions (renders null otherwise) and reads the
                   same override SoT the board edits. */}
               <ClarifyQuestionHandler taskId={s.taskId} questionId={q.id} />
+              {/* RFC-128 P4 (T10): coordination notice for an already-handled question. */}
+              {locked && (
+                <p className="muted" data-testid={`clarify-locked-note-${q.id}`}>
+                  {t('clarify.detail.lockedNote')}
+                </p>
+              )}
               {/* RFC-059: per-question scope picker. Only rendered for
                   cross-clarify nodes (self-clarify has no scope split).
                   In awaiting_human → editable Segmented; in sealed states
@@ -837,7 +901,7 @@ export function ClarifyDetailPage() {
                               'segmented__option' + (active ? ' segmented__option--active' : '')
                             }
                             data-testid={`clarify-scope-${q.id}-${mode}`}
-                            disabled={submitMut.isPending}
+                            disabled={submitMut.isPending || locked}
                             title={t(
                               mode === 'designer'
                                 ? 'crossClarify.questionScope.designerTooltip'
@@ -872,7 +936,7 @@ export function ClarifyDetailPage() {
                 question={q}
                 value={a}
                 index={idx + 1}
-                disabled={readonly || submitMut.isPending}
+                disabled={readonly || submitMut.isPending || locked}
                 onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
                 onAdvance={() => advanceFromQuestion(q.id)}
               />
@@ -939,7 +1003,7 @@ export function ClarifyDetailPage() {
             ref={submitContinueRef}
             type="button"
             className="btn btn--primary"
-            disabled={readonly || submitMut.isPending || requiredMissing}
+            disabled={readonly || submitMut.isPending || requiredMissing || allLocked}
             onClick={() => submitMut.mutate('continue')}
             data-testid="clarify-submit-continue"
             data-directive="continue"
@@ -955,7 +1019,7 @@ export function ClarifyDetailPage() {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={readonly || submitMut.isPending || requiredMissing}
+            disabled={readonly || submitMut.isPending || requiredMissing || allLocked}
             onClick={() => setStopModalOpen(true)}
             data-testid="clarify-submit-stop"
             data-directive="stop"

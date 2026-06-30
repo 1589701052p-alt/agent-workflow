@@ -2117,6 +2117,8 @@ export const enUS: Resources = {
       answeredAt: 'Answered · {{time}}',
       askedAt: 'Asked at {{time}}',
       keyboardHint: 'Shortcuts: digits 1–N pick an option · Enter jumps to next / submits',
+      lockedNote:
+        'Already handled in the centralized answer pane — read-only here and excluded from submit.',
     },
     question: {
       single: { customLabel: 'Other (custom)' },
@@ -2724,6 +2726,13 @@ export const enUS: Resources = {
     addQuestion: '+ New question',
     copy: 'Copy',
     manualSource: 'Manual',
+    answerPaneButton: 'Process pending questions',
+    answerPaneTitle: 'Answer pending questions',
+    answerPaneEmpty: 'No pending questions to answer.',
+    answerPaneHint:
+      'Answer all pending questions here; on submit they enter "To assign", then pick a handler agent on the board and dispatch.',
+    answerPaneSubmit: 'Submit answers',
+    answerPaneSubmitCount: 'Submit answers ({{count}})',
     author: {
       newTitle: 'New question',
       copyTitle: 'Copy question',

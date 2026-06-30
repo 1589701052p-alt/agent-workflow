@@ -1992,6 +1992,7 @@ export interface Resources {
       answeredAt: string
       askedAt: string
       keyboardHint: string
+      lockedNote: string
     }
     question: {
       single: { customLabel: string }
@@ -2469,6 +2470,12 @@ export interface Resources {
     addQuestion: string
     copy: string
     manualSource: string
+    answerPaneButton: string
+    answerPaneTitle: string
+    answerPaneEmpty: string
+    answerPaneHint: string
+    answerPaneSubmit: string
+    answerPaneSubmitCount: string
     author: {
       newTitle: string
       copyTitle: string
@@ -4529,6 +4536,7 @@ export const zhCN: Resources = {
       answeredAt: '已回答 · {{time}}',
       askedAt: '提问于 {{time}}',
       keyboardHint: '快捷键：数字键 1–N 选择选项 · Enter 跳下一题 / 提交',
+      lockedNote: '该问题已在「集中回答」处理，此处只读、提交时不再重复下发。',
     },
     question: {
       single: { customLabel: '其他（自定义）' },
@@ -5117,6 +5125,12 @@ export const zhCN: Resources = {
     addQuestion: '+ 新增问题',
     copy: '复制',
     manualSource: '手动',
+    answerPaneButton: '处理待指派问题',
+    answerPaneTitle: '集中回答待指派问题',
+    answerPaneEmpty: '没有待回答的问题。',
+    answerPaneHint: '在此回答所有待指派问题；提交后进入「待指派」，再到看板选择处理 agent 并下发。',
+    answerPaneSubmit: '提交答案',
+    answerPaneSubmitCount: '提交答案（{{count}}）',
     author: {
       newTitle: '新增问题',
       copyTitle: '复制问题',

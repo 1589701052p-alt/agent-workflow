@@ -23,6 +23,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
 import { Select } from '@/components/Select'
 import { StatusChip } from '@/components/StatusChip'
+import { CentralizedAnswerDialog } from '@/components/clarify/CentralizedAnswerDialog'
 import { QuestionAuthorForm } from '@/components/tasks/QuestionAuthorForm'
 
 export type TaskQuestionPhase = 'pending' | 'staged' | 'processing' | 'awaiting_confirm' | 'done'
@@ -45,6 +46,12 @@ export interface TaskQuestionEntry {
   phase: TaskQuestionPhase
   confirmation: 'open' | 'confirmed'
   staged: boolean
+  /** RFC-128 §10 — this (question × role) entry's answer is sealed/locked (per-question
+   *  `sealed_at != null` OR the whole round answered). Drives the centralized-answer pane
+   *  (which UNSEALED questions still need answering) and the /clarify grey-out. MUST be
+   *  used over `answerSummary !== null` — a partial round leaves answerSummary unreliable
+   *  (Codex design gate F3). */
+  sealed: boolean
   answerSummary: string | null
 }
 
@@ -141,6 +148,10 @@ export function TaskQuestionList({
   // a {title,body} = 复制 (prefilled from a 待指派 card → Save creates a NEW manual row).
   const [authorOpen, setAuthorOpen] = useState(false)
   const [authorInitial, setAuthorInitial] = useState<{ title: string; body: string } | null>(null)
+  // RFC-128 P4 (T9) — centralized answer pane (control channel). Opens a single page
+  // that flattens every UNSEALED 待指派 question of the task (grouped by clarify round)
+  // and seals them all with ONE submit button (defer=true → 待指派, no rerun).
+  const [answerPaneOpen, setAnswerPaneOpen] = useState(false)
   const openNewQuestion = () => {
     setAuthorInitial(null)
     setAuthorOpen(true)
@@ -321,6 +332,20 @@ export function TaskQuestionList({
               </button>
             </div>
           )}
+          {/* RFC-128 P4 §10.1 — entry to the centralized answer pane. Shown only when the
+              task has ≥1 UNSEALED clarify question (`!sealed` + has a clarify round); the
+              control channel (defer=true → 待指派 → dispatch) is deferred-gated, so the
+              button follows the same `deferred` gate as the manual-question tools. */}
+          {deferred && entries.some((e) => !e.sealed && e.originNodeRunId !== null) && (
+            <button
+              type="button"
+              className="btn btn--sm btn--primary"
+              onClick={() => setAnswerPaneOpen(true)}
+              data-testid="tq-open-answer-pane"
+            >
+              {t('taskQuestions.answerPaneButton')}
+            </button>
+          )}
           {addBtn}
         </div>
       </div>
@@ -461,6 +486,12 @@ export function TaskQuestionList({
         })}
       </div>
       {authorForm}
+      {/* RFC-128 P4 (T9) — centralized answer pane (no-op chrome while closed). */}
+      <CentralizedAnswerDialog
+        taskId={taskId}
+        open={answerPaneOpen}
+        onClose={() => setAnswerPaneOpen(false)}
+      />
     </div>
   )
 }
