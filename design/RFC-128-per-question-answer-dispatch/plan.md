@@ -38,33 +38,34 @@
 
 ### RFC-128-P5（self/questioner 逐题重跑，**深度重构**；最高风险，单独 Codex gate）
 
-> 用户 2026-06-30 拍板**深度重构**（非最小补丁）。方案详见 `design.md §5.2`（5.2.0 勘误 / 5.2.3 四项 clean-path / 5.2.4 五项满足表 + ④裁决 / 5.2.5 double-injection / 5.2.6 黄金锁 / 5.2.7 P5b 单路径）。分 **P5-0~P5-D** 五子阶段：**P5-0 可独立合**；每阶段独立验收 + 回退点；P5-C 失败可单独回退而 P1–P4 + P5-0/A/B 留存。**无新列 / migration**（复用 `trigger_run_id` / `dispatched_at` / `sealed_at` / `agent_override_name`；journal 维持 68）。
+> 用户 2026-06-30 拍板**深度重构**（非最小补丁）。方案详见 `design.md §5.2`（5.2.0 勘误 / 5.2.3 四项 clean-path / 5.2.4 五项满足表 + ④裁决 / 5.2.5 double-injection / 5.2.6 黄金锁 / 5.2.7 P5b 单路径 / **5.2.11 readiness gate / 5.2.12 rerun-cause 契约 / 5.2.13 mixed-role grouping**）。**Codex 对抗设计 gate（2026-06-30）4 findings 已 fold**：F1〔high〕→ P5-B+P5-C 合并为 **P5-BC**（一个 rollback 单元，park 与 dispatch release path 不可分拆回退）；F2〔high〕→ P5-BC 内新增 **readiness gate**（unsealed self/q → reject）；F3〔high〕→ **rerun-cause 契约 + collapse 推翻**（早稿「同 agent 放行 collapse」作废）；F4〔medium〕→ **mixed-role grouping**（per-origin designer-scoped）。分 **P5-0 / P5-A / P5-BC / P5-D** 四子阶段：**P5-0 可独立合**；每阶段独立验收 + 回退点；**P5-BC 失败可单独回退而 P1–P4 + P5-0/A 留存**。**无新列 / migration**（复用 `trigger_run_id` / `dispatched_at` / `sealed_at` / `agent_override_name` / `rerun_cause`；journal 维持 68）。
 
-#### RFC-128-P5-0（stranding hotfix，先行、可独立合）
+#### RFC-128-P5-0（stranding **硬拒** seal-without-path，先行、可独立合）
 
-- **P5-0-T1**：堵 `design.md §5.2.1` latent bug——deferred 任务 self/q 全题 seal 当前会**越过提问节点静默推进 + rerun 永不触发**（park 源 `loadUndispatchedDesignerTargets` / `dispatchTaskQuestions` 皆 designer-only）。落 guard：deferred + 存在 sealed-无-path 的 self/q 条目时**不静默推进**——park 提问节点或显式拒 seal-without-path，把 strand 变可观测（park / error）。
-- 测：deferred self/q 全题 seal 不再越过提问节点（红→绿）；非 deferred 零影响（黄金锁）。
-- **可独立合**（不依赖后续 clean-path），先消线上隐患。
+- **P5-0-T1**：堵 `design.md §5.2.1` latent bug——deferred 任务 self/q 全题 seal 当前会**越过提问节点静默推进 + rerun 永不触发**（park 源 `loadUndispatchedDesignerTargets` / `dispatchTaskQuestions` 皆 designer-only）。**取「显式拒 seal-without-path」而非 park**（Codex 设计 gate F1）：dispatch 放开在 P5-BC 才到位，P5-0 此刻若 park 会无 release path → 永久 park（与 F1 同根）；故 P5-0 **硬拒**「无 dispatch path 时 full-seal self/q」（4xx 可观测 error），保证 **P5-BC 落地前绝无 stranded full-sealed self/q**。park 留到 P5-BC（与 dispatch release path 同单元）。
+- 测：deferred self/q 在无 path 时 full-seal → reject（红→绿）；非 deferred 零影响（黄金锁）。
+- **可独立合**（不依赖后续 clean-path），先消线上隐患 + 作 P5-BC 兜底。
 
 #### RFC-128-P5-A（锁网，无生产改动）
 
 - **P5-A-T1**：补 self/questioner **整轮**续跑全链路回归网作动刀基线——live 路径 `buildPromptContext`（`clarifyRounds.ts:355`）←`scheduler:2417/2442`、整轮消费戳 `markClarifyRoundsConsumedBy`（`clarifyRounds.ts:97`）←`runner:1551`、`resolveImmediateBorrowForNode`（`taskQuestionDispatch.ts:774`）即时账本。**先有网再动刀**（[hotspot-fortify-refactor]）。
 - 测：整轮 self 单 rerun / questioner cascade / immediate borrow 全绿（动刀前快照）。
 
-#### RFC-128-P5-B（park 源 + 读侧相位，纯后端 golden-lock）
+#### RFC-128-P5-BC（park 源 + 读侧相位 + dispatch 放开 + 注入 + 消费 + 借壳，**核心**，**一个 rollback 单元**，单独 Codex gate）
 
-- **P5-B-T1**：新增 `loadUndispatchedSelfQuestionerTargets`（镜像 `loadUndispatchedDesignerTargets`（`taskQuestions.ts:598`），**按 `sealed_at`、不 join 轮 status**）；union 进 `scheduler:811-812` 的 `deferredHandlerNodeIds`；自门控 deferred flag（clean-path ③）。
-- **P5-B-T2**：`selectAnsweredRoundsForConsumer`（`clarifyRounds.ts:226`）self / cross-questioner 分支加 per-round 排除子句（`NOT EXISTS` dispatched 逐题条目，**判据 `dispatched_at`**）——double-injection 读侧半（§5.2.5）。
-- 测：park 源逐题分类（undispatched / in-flight / consumed）；partial 轮（awaiting_human）下 self/q 题被 park（不靠轮 answered）；读侧排除不漏注 sealed-未-dispatch 轮；非 deferred 零改（golden-lock）。
+> **Codex 设计 gate F1 合并**：早稿 P5-B（park 源）与 P5-C（dispatch 放开）拆两个回退点 → 若 P5-B 留、P5-C 回退，deferred self/q **永久 park / 永久 awaiting_human**（park 无 release path）。**合并为 P5-BC，不可分别回退**：每个 parked state 在**同一**单元里有 dispatch release path。
 
-#### RFC-128-P5-C（dispatch + 注入 + 消费 + 借壳，**核心**，单独 Codex gate）
-
-- **P5-C-T1（dispatch 放开）**：`dispatchTaskQuestions`（`taskQuestionDispatch.ts:198`）去 designer-only（`:240` / `:258`），放开 deferred self/q 批量下发（per-origin 单 target 等校验保留）（clean-path ④ 配套）。
-- **P5-C-T2（per-question 注入）**：新增 `buildClarifyNodeQueueContext`（镜像 `buildNodeQueueExternalFeedback`（`crossClarify.ts:1412`），**渲染走 `ClarifyPromptContext` 形态** + 兄弟题状态标注块、零归属）；scheduler 对 deferred self/q 节点在整轮 `buildPromptContext` 与逐题 builder 间**二选一 suppress**（double-injection scheduler 半）（clean-path ①）。
-- **P5-C-T3（per-entry 消费戳）**：续跑逐条目绑 `trigger_run_id`；`markClarifyRoundsConsumedBy`（`clarifyRounds.ts:97`）deferred suppress（不整轮 stamp）；读侧 `resolveEntryHandler` 对 deferred self/q 走 `resolveDispatchedEntryHandler`（`taskQuestions.ts:334`，原节点框 lineage）（clean-path ②）。
-- **P5-C-T4（三账本借壳）**：新增 `resolveDeferredSelfQuestionerBorrowForNode`（镜像 `resolveDesignerBorrowForNode`（`taskQuestionDispatch.ts:706`））；接进 `resolveBorrowForNode`（`:672`）；**冲突规则**——deferred-selfQ vs deferred-designer 同 home **同 agent 放行 / 异 agent 拒**（一条 rerun 两 context 槽；区别于 immediate×designer 的一律拒 `:692-697`）（clean-path ④）。
-- 测：§5.2 五项自检各红→绿；三坑回归；double-injection（读侧排除 + scheduler XOR 双锁）；三账本冲突矩阵（deferred-selfQ×designer 同 agent 放行 / 异 agent 拒；immediate×designer 仍一律拒）；**黄金锁**（deferred 全 seal 批量下发 = 旧整轮逐字：注入 / mint / 消费 / 级联四面对齐）。
-- **单独 Codex 对抗 gate**（落码前对 §5.2.4 五项满足表跑一次）；若复现 RFC-125 级致命问题 → 回退 P5-C、与用户重新权衡（P1–P4 + P5-0/A/B 不受影响）。
+- **P5-BC-T1（park 源，原 P5-B-T1）**：新增 `loadUndispatchedSelfQuestionerTargets`（镜像 `loadUndispatchedDesignerTargets`（`taskQuestions.ts:598`），**按 `sealed_at`、不 join 轮 status**）；union 进 `scheduler:811-812` 的 `deferredHandlerNodeIds`；自门控 deferred flag（clean-path ③）。**回退耦合**：与 dispatch 放开（T4）同单元落、绝不单独先合。
+- **P5-BC-T2（读侧相位，原 P5-B-T2）**：`selectAnsweredRoundsForConsumer`（`clarifyRounds.ts:226`）self / cross-questioner 分支加 per-round 排除子句（`NOT EXISTS` dispatched 逐题条目，**判据 `dispatched_at`**）——double-injection 读侧半（§5.2.5）。
+- **P5-BC-T3（per-question 注入，原 P5-C-T2）**：新增 `buildClarifyNodeQueueContext`（镜像 `buildNodeQueueExternalFeedback`（`crossClarify.ts:1412`），**渲染走 `ClarifyPromptContext` 形态** + 兄弟题状态标注块、零归属）；scheduler 对 deferred self/q 节点在整轮 `buildPromptContext` 与逐题 builder 间**二选一 suppress**（double-injection scheduler 半）（clean-path ①）。
+- **P5-BC-T4（dispatch 放开 + 三契约，原 P5-C-T1 + F2/F3/F4 新增）**：`dispatchTaskQuestions`（`taskQuestionDispatch.ts:198`）去 designer-only（`:240` / `:258`），放开 deferred self/q 批量下发；**带三契约**：
+  - **(a) readiness gate（F2，§5.2.11）**：dispatch 前校每条 clarify-derived 条目 `sealed_at != null`（或所属轮 answered）否则**整批 reject**——self/q 条目无条件建（`shared/task-questions.ts:99-117`），不校验会让未 seal 条目被下发+绑（答案不存在）→ 空 rerun + 误抑整轮。判据用 `sealed_at` 不用 `answerSummary`（partial 不可靠）。
+  - **(b) rerun-cause 契约（F3，§5.2.12）**：`buildFrontierMintPlan`（`:946-984`）的 cause 从硬编码 `cross-clarify-answer` 改**按角色派生**（self→`clarify-answer`、questioner→`cross-clarify-questioner-rerun`、designer→`cross-clarify-answer`）；一个 home 本批须 cause 同质，混 cause → reject。
+  - **(c) mixed-role grouping（F4，§5.2.13）**：per-origin 单 target 校验（`:269-279`）**保持 designer-scoped**（勿 broaden 到 self/q）；self/q 另设 per-home single-borrow 校验（镜像 immediate P2-1 `:829-845`）；questioner+designer 同 origin 异 home → 允许一批下发。
+- **P5-BC-T5（per-entry 消费戳，原 P5-C-T3）**：续跑逐条目绑 `trigger_run_id`；`markClarifyRoundsConsumedBy`（`clarifyRounds.ts:97`）deferred suppress（不整轮 stamp）；读侧 `resolveEntryHandler` 对 deferred self/q 走 `resolveDispatchedEntryHandler`（`taskQuestions.ts:334`，原节点框 lineage）（clean-path ②）。
+- **P5-BC-T6（三账本借壳 + collapse 拒，原 P5-C-T4，F3 推翻 collapse）**：新增 `resolveDeferredSelfQuestionerBorrowForNode`（镜像 `resolveDesignerBorrowForNode`（`taskQuestionDispatch.ts:706`））；接进 `resolveBorrowForNode`（`:672`）；**冲突规则（F3 推翻早稿 collapse）**——deferred-selfQ vs deferred-designer 同 home **一律拒（不 collapse、不论同异 agent）**，与既有 immediate×designer 拒（`:692-697`）同规则（cause 单值且互斥，§5.2.12），由 single-cause gate（T4-b）+ `assertNoInFlightDispatch`（`:342-352`）串行化。**早稿「同 agent 放行 collapse 一条 rerun」作废。**
+- 测：§5.2 五项自检各红→绿；park 源逐题分类（undispatched / in-flight / consumed）+ partial 轮（awaiting_human）下 self/q 被 park（不靠轮 answered）+ 读侧排除不漏注 sealed-未-dispatch 轮；三坑回归；double-injection（读侧排除 + scheduler XOR 双锁）；**三契约**——(a) unsealed self/q entryIds → reject；(b) deferred self/questioner/designer mint cause 各对 + `rfc098-rerun-cause-gates` 真值表不破 + 同 home 混 cause 拒；(c) 整轮 cross round（questioner+designer 异 home）一批下发成功 / designer 多 handler 仍拒 / self/q home==designer home 触串行化；三账本冲突矩阵（deferred-selfQ×designer 同 home 拒〔不论 agent〕；immediate×designer 仍拒）；**黄金锁**（deferred 全 seal 批量下发 = 旧整轮逐字：注入 / mint〔含 cause 对齐〕/ 消费 / 级联四面对齐）；非 deferred 零改字节级。
+- **单独 Codex 对抗 gate**（落码前对 §5.2.4 五项满足表 + §5.2.11/12/13 三契约跑一次）；若复现 RFC-125 级致命问题 → 回退**整个 P5-BC**、与用户重新权衡（P1–P4 + P5-0/A 不受影响）。
 
 #### RFC-128-P5-D（快通道 seal + autodispatch）
 
@@ -77,12 +78,11 @@
 - **PR-B**：P1（落库地基）。
 - **PR-C**：P2+P3（端点+gate+designer 逐题下发）。
 - **PR-D**：P4（两入口 UI）。
-- **PR-E**：P5（self/questioner 逐题重跑，深度重构）→ **拆 4 子 PR**（每子 PR 独立验收 + 回退点；P5-PR3 失败可单独回退而 P1–P4 + P5-PR1/2 留存）：
-  - **P5-PR1**（= PR-1）= **P5-0 + P5-A**（stranding hotfix + 锁网；P5-0 部分亦可更早单独合）。
-  - **P5-PR2**（= PR-2）= **P5-B**（park 源 + 读侧相位）。
-  - **P5-PR3**（= PR-3）= **P5-C**（dispatch + 注入 + 消费 + 借壳，**核心**，单独 Codex gate）。
-  - **P5-PR4**（= PR-4）= **P5-D**（快通道 seal + autodispatch）。
+- **PR-E**：P5（self/questioner 逐题重跑，深度重构）→ **拆 3 子 PR**（Codex 设计 gate F1 后 B+C 合并；每子 PR 独立验收 + 回退点；**P5-PR2 = P5-BC 失败可单独回退而 P1–P4 + P5-PR1 留存**）：
+  - **P5-PR1**（= PR-1）= **P5-0 + P5-A**（stranding 硬拒 + 锁网；P5-0 部分亦可更早单独合）。
+  - **P5-PR2**（= PR-2）= **P5-BC**（park 源 + 读侧相位 + dispatch 放开 + readiness gate + rerun-cause 契约 + mixed-role grouping + 注入 + 消费 + 借壳，**核心**，**一个不可分拆的 rollback 单元**，单独 Codex gate）。
+  - **P5-PR3**（= PR-3）= **P5-D**（快通道 seal + autodispatch）。
 
 ## 验收清单
 
-proposal `AC-1`~`AC-13` 全绿；门槛 typecheck+test+format:check + CI；**Codex 双 gate**（设计 gate 落码前对全 RFC 跑一次、**P5-C 实现前单独**再跑一次对抗审 `design.md §5.2.4` 五项满足表）；push 后查 CI。每 P5 子阶段以**黄金锁**（非 deferred 零改字节级 / deferred 全 seal 批量下发 = 旧整轮逐字）为回归基准。**若 P5-C Codex gate 复现 RFC-125 级致命问题 → 回退 P5-C、与用户重新权衡，P1–P4 designer 主线 + P5-0/A/B 不受影响**。
+proposal `AC-1`~`AC-13` 全绿；门槛 typecheck+test+format:check + CI；**Codex 双 gate**（设计 gate 落码前对全 RFC 跑一次、**P5-BC 实现前单独**再跑一次对抗审 `design.md §5.2.4` 五项满足表 + §5.2.11/12/13 三契约）；push 后查 CI。每 P5 子阶段以**黄金锁**（非 deferred 零改字节级 / deferred 全 seal 批量下发 = 旧整轮逐字，含 cause 对齐）为回归基准。**若 P5-BC Codex gate 复现 RFC-125 级致命问题 → 回退整个 P5-BC、与用户重新权衡，P1–P4 designer 主线 + P5-0/A 不受影响**。
