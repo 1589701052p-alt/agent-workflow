@@ -17,7 +17,7 @@
 //
 // See design/RFC-120-task-question-list §2.3 / §4 / §11.
 
-import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNull, ne, notInArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -157,13 +157,28 @@ export function reconcileRoundEntriesTx(
   // entry carries `sealed_at` OR it is in this call's in-flight seal subset.
   const roundAnswered = round.status === 'answered'
   const sealedIds = new Set<string>(opts.additionalSealedQuestionIds ?? [])
+  // RFC-128 P3 (Codex P2-1): the per-question `sealed_at` timestamp of each ALREADY-sealed
+  // question (from its existing questioner/self/designer row). When this reconcile is the FIRST
+  // to create a question's designer row while that question is already sealed — the lazy path on
+  // pre-P3 (P2-4a) partial-seal data, where the designer row never existed — the new row must
+  // carry `sealed_at` too, because listTaskQuestions / stageTaskQuestion judge a partial-round
+  // entry's seal state by the row's OWN `sealed_at` (a NULL would render the sealed question as
+  // unsealed → unstageable). In-flight seals (additionalSealedQuestionIds) are NOT here yet
+  // (their stamp runs in sealRoundQuestions step 4, after this reconcile) → their new rows stay
+  // NULL and step 4 stamps them (golden lock for the seal path).
+  const sealedAtByQuestion = new Map<string, number>()
   if (!roundAnswered) {
     const existing = tx
       .select({ questionId: taskQuestions.questionId, sealedAt: taskQuestions.sealedAt })
       .from(taskQuestions)
       .where(eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId))
       .all()
-    for (const e of existing) if (e.sealedAt !== null) sealedIds.add(e.questionId)
+    for (const e of existing) {
+      if (e.sealedAt !== null) {
+        sealedIds.add(e.questionId)
+        sealedAtByQuestion.set(e.questionId, e.sealedAt)
+      }
+    }
   }
   const questionSealed: Record<string, boolean> = {}
   for (const q of questions) questionSealed[q.id] = roundAnswered || sealedIds.has(q.id)
@@ -191,6 +206,11 @@ export function reconcileRoundEntriesTx(
         iteration: round.iteration,
         loopIter: round.loopIter,
         defaultTargetNodeId: d.defaultTargetNodeId,
+        // Codex P2-1: a NEW row for an ALREADY-sealed question inherits that question's
+        // `sealed_at` so a lazily-created designer row is consistently sealed (see above). Rows
+        // for in-flight / unsealed questions stay NULL. onConflictDoUpdate below never touches
+        // `sealed_at`, so an existing row's seal stamp is preserved.
+        sealedAt: sealedAtByQuestion.get(d.questionId) ?? null,
         createdAt: now,
         updatedAt: now,
       })
@@ -205,6 +225,33 @@ export function reconcileRoundEntriesTx(
       })
       .run()
   }
+
+  // RFC-128 P3 (Codex P2-2) — reconcile UNDISPATCHED designer rows DOWN to `desired` (reconcile
+  // is otherwise append-only). The only way `desired` drops a designer question it previously
+  // emitted is a 'stop' FINALIZE (reconcileDesiredEntries suppresses ALL designer rows for a
+  // stop round) or the question being removed from the round. A stale designer row from an
+  // earlier continue partial-seal would otherwise stay visible + dispatchable on a now-stopped
+  // round and mint a designer rerun the stop forbids. Constraints (Codex P2-2): (1) ONLY
+  // role='designer' rows — questioner/self are unconditional, never cleaned; (2) ONLY
+  // dispatched_at IS NULL — an already-dispatched rerun is a fait accompli, not recalled here;
+  // (3) idempotent — a continue round's designer questions ARE in `desired`, so notInArray
+  // matches none → nothing deleted (golden lock); (4) RFC-126 safe — an answered CONTINUE round
+  // keeps its designer rows (still desired); only a stop round's UNDISPATCHED designer rows go.
+  const desiredDesignerIds = desired
+    .filter((d) => d.roleKind === 'designer')
+    .map((d) => d.questionId)
+  tx.delete(taskQuestions)
+    .where(
+      and(
+        eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId),
+        eq(taskQuestions.roleKind, 'designer'),
+        isNull(taskQuestions.dispatchedAt),
+        ...(desiredDesignerIds.length > 0
+          ? [notInArray(taskQuestions.questionId, desiredDesignerIds)]
+          : []),
+      ),
+    )
+    .run()
 }
 
 /** One clarify_round → upsert its desired handler entries (idempotent; preserves

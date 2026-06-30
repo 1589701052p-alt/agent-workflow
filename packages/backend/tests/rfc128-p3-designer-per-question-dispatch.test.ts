@@ -35,6 +35,7 @@ import {
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import {
   listTaskQuestions,
+  loadUndispatchedDesignerTargets,
   reassignTaskQuestion,
   stageTaskQuestion,
 } from '../src/services/taskQuestions'
@@ -420,5 +421,152 @@ describe('RFC-128 P3 — designer 逐题下发 (AC-8)', () => {
       threw = e
     }
     expect((threw as { code?: string }).code).toBe('task-question-not-sealed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Codex impl-gate P2 修复 — reconcile per-question 边角：
+//   P2-1 lazy 建 designer 行须带 sealed_at（同题已 sealed 时）→ 可 stage/注入；
+//   P2-2 stop 收尾清理「desired 不含、existing 有」的未下发 designer 行（append-only 漏洞）。
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P3 — Codex P2 修复 (reconcile per-question 边角)', () => {
+  test('P2-1: 同题先 sealed、designer 行后建（模拟 P2-4a 存量数据 rolling upgrade）→ lazy 建出的 designer 条目 sealed=true 且可 stage', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedDeferredCrossTask(db)
+
+    // P3 partial seal Q1(designer) — 正常会建 Q1 designer 行（带 sealed_at）+ questioner 行。
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q1', Q1_NOTE)],
+      scopes: { q1: 'designer' },
+    })
+    // 模拟 P2-4a 存量：当年 partial seal 不建 designer 行 → 删掉它，只留已 sealed 的 questioner 行。
+    // （rolling upgrade 到 P3 后，lazy reconcile 才第一次为这个已 sealed 的题创建 designer 行。）
+    await db
+      .delete(taskQuestions)
+      .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
+    const q1QuestionerRow = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.questionId, 'q1')))
+    )[0]
+    expect(q1QuestionerRow?.roleKind).toBe('questioner')
+    expect(q1QuestionerRow?.sealedAt).not.toBeNull() // 该题已 sealed（questioner 行带戳）
+
+    // lazy reconcile 重建 Q1 designer 行 —— 必须继承该题的 sealed_at（P2-1 修复）。修复前：新行
+    // sealed_at=NULL → 在 partial 轮（awaiting_human）下 DTO sealed=false、无法 stage（即便答案已锁）。
+    const list = await listTaskQuestions(db, taskId)
+    const q1Designer = list.find((d) => d.questionId === 'q1' && d.roleKind === 'designer')!
+    expect(q1Designer).toBeDefined()
+    expect(q1Designer.sealed).toBe(true)
+    expect(q1Designer.phase).toBe('pending')
+    // 行自身 sealed_at 落库（stage gate / 注入都靠它）。
+    const designerRow = (
+      await db.select().from(taskQuestions).where(eq(taskQuestions.id, q1Designer.id))
+    )[0]
+    expect(designerRow?.sealedAt).not.toBeNull()
+
+    // 可 stage（待下发 gate 用行自身 sealed_at）。
+    await stageTaskQuestion(db, q1Designer.id, true, actor)
+    expect((await listTaskQuestions(db, taskId)).find((d) => d.id === q1Designer.id)?.phase).toBe(
+      'staged',
+    )
+  })
+
+  test('P2-2: partial continue 建 Q1 designer 后以 stop 收尾 → Q1 designer 条目被清、列表无 designer、不可下发；questioner 条目不动', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedDeferredCrossTask(db)
+
+    // partial seal Q1(continue 默认, designer scope) → P3 立即建 Q1 designer 条目（未下发）。
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q1', Q1_NOTE)],
+      scopes: { q1: 'designer' },
+    })
+    const q1DesignerBefore = (await designerEntries(db, taskId)).find((e) => e.questionId === 'q1')!
+    expect(q1DesignerBefore).toBeDefined()
+    expect(q1DesignerBefore.dispatchedAt).toBeNull()
+
+    // 以 directive='stop' 收尾该轮（seal 剩余 Q2 → 全 seal + stop）。stop 轮不应产 designer rerun。
+    const res2 = await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q2')],
+      scopes: { q2: 'designer' },
+      directive: 'stop',
+    })
+    expect(res2.roundFullySealed).toBe(true)
+
+    // 清理：append-only 漏洞被堵 → 列表无任何 designer 条目（含此前 partial 建的 Q1）。
+    const list = await listTaskQuestions(db, taskId)
+    expect(list.some((d) => d.roleKind === 'designer')).toBe(false)
+    // questioner/self 条目绝不被清（约束②）。
+    expect(
+      list
+        .filter((d) => d.roleKind === 'questioner')
+        .map((d) => d.questionId)
+        .sort(),
+    ).toEqual(['q1', 'q2'])
+
+    // 此前的 Q1 designer 条目已删 → 不可下发（防 stop 后残留行 mint designer rerun）。
+    const result = await dispatchTaskQuestions(db, taskId, [q1DesignerBefore.id], actor)
+    expect(result.reruns.length).toBe(0)
+    expect(result.dispatchedEntryIds.length).toBe(0)
+    // §18 park 也不把持（stop 轮 directive!=continue + 无 designer 条目）。
+    const parked = await loadUndispatchedDesignerTargets(db, taskId)
+    expect(parked.has(DESIGNER)).toBe(false)
+  })
+
+  test('P2-2 幂等: continue partial 轮多次 lazy reconcile 不误删 Q1 designer 条目（continue desired 含它）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedDeferredCrossTask(db)
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q1', Q1_NOTE)],
+      scopes: { q1: 'designer' },
+    })
+    // 多次 lazy reconcile（每次都跑 cleanup）→ Q1 designer 条目恒在（continue 轮 desired 含它）。
+    for (let i = 0; i < 3; i++) {
+      const list = await listTaskQuestions(db, taskId)
+      expect(list.some((d) => d.questionId === 'q1' && d.roleKind === 'designer')).toBe(true)
+    }
+    // 未被误删 → 仍可下发。
+    const q1Designer = (await designerEntries(db, taskId)).find((e) => e.questionId === 'q1')!
+    const result = await dispatchTaskQuestions(db, taskId, [q1Designer.id], actor)
+    expect(result.reruns.length).toBe(1)
+  })
+
+  test('P2-2 不误伤已下发: stop 收尾不清理 ALREADY-dispatched designer 条目（约束①——既成事实）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedDeferredCrossTask(db)
+    // partial seal Q1(continue, designer) → dispatch（mint rerun）→ Q1 designer 条目已 dispatched。
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q1', Q1_NOTE)],
+      scopes: { q1: 'designer' },
+    })
+    const q1Designer = (await designerEntries(db, taskId)).find((e) => e.questionId === 'q1')!
+    await dispatchTaskQuestions(db, taskId, [q1Designer.id], actor)
+    expect(
+      (await designerEntries(db, taskId)).find((e) => e.id === q1Designer.id)?.dispatchedAt,
+    ).not.toBeNull()
+
+    // 后续以 stop 收尾（seal Q2 stop）→ 清理只动 UNDISPATCHED designer 行，已下发的 Q1 保留。
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [ans('q2')],
+      scopes: { q2: 'designer' },
+      directive: 'stop',
+    })
+    const q1After = (await designerEntries(db, taskId)).find((e) => e.id === q1Designer.id)
+    expect(q1After).toBeDefined() // 已下发 → 不被 stop cleanup 回收（约束①）
+    expect(q1After?.dispatchedAt).not.toBeNull()
   })
 })
