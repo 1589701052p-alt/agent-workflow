@@ -322,20 +322,28 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       // it may RETHROW a non-recoverable dispatch conflict — round-7: without broadcasting on the error
       // path the committed answer would be hidden behind a failed response with no invalidation. A
       // 'stop' cross round also fires the rejected event (parity with submitCrossClarifyAnswers).
-      // Best-effort — a broadcast failure must not affect the answer/error outcome. Routes by node kind
-      // (consistent on both paths); the wrong-kind helper finds no row → no-op.
-      const isCrossAuto = nodeKind === 'clarify-cross-agent'
+      // Best-effort — a broadcast failure must not affect the answer/error outcome. Codex round-8: do
+      // NOT route by the snapshot-derived nodeKind (a malformed/missing snapshot would mis-route a
+      // SEALED cross round to the self helper → no-op → the answered cross round stays hidden behind an
+      // error with no invalidation). Instead call BOTH no-op-safe helpers: each loads ITS OWN session
+      // table (clarify_sessions vs cross_clarify_sessions) and fires ONLY if that row exists AND is
+      // answered, so exactly the right one broadcasts regardless of the snapshot. The stop rejected
+      // event only attaches to the cross helper (the self helper ignores it).
       const emitAutoAnswered = async (rerunId: string): Promise<void> => {
         try {
-          if (isCrossAuto) {
-            await broadcastCrossClarifyAnsweredForRound(deps.db, nodeRunId, {
-              ...(parsed.data.directive === 'stop' ? { rejectedQuestionerNodeRunId: rerunId } : {}),
-            })
-          } else {
-            await broadcastSelfClarifyAnsweredForRound(deps.db, nodeRunId, rerunId)
-          }
+          await broadcastSelfClarifyAnsweredForRound(deps.db, nodeRunId, rerunId)
         } catch (err) {
-          log.warn('clarify autodispatch answered-broadcast threw', {
+          log.warn('clarify autodispatch self answered-broadcast threw', {
+            taskId: nrRow?.taskId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+        try {
+          await broadcastCrossClarifyAnsweredForRound(deps.db, nodeRunId, {
+            ...(parsed.data.directive === 'stop' ? { rejectedQuestionerNodeRunId: rerunId } : {}),
+          })
+        } catch (err) {
+          log.warn('clarify autodispatch cross answered-broadcast threw', {
             taskId: nrRow?.taskId,
             error: err instanceof Error ? err.message : String(err),
           })

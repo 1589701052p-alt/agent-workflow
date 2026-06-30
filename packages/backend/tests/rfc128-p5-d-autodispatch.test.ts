@@ -1181,3 +1181,66 @@ describe('RFC-128 P5-D non-recoverable dispatch conflict NOT swallowed (Codex ro
     expect(throwIdx).toBeGreaterThan(catchIdx) // rethrow AFTER the emit
   })
 })
+
+// ===========================================================================
+// Codex round-8 — self isolated rollback 不在「同 home 在飞续跑」时 clobber worktree
+// ===========================================================================
+describe('RFC-128 P5-D self rollback pre-flight (Codex round-8 finding 1 — no clobber)', () => {
+  test('a same-home IN-FLIGHT rerun → autodispatch DEFERS without rolling back the worktree (the in-flight rerun owns it)', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'aw-rfc128-p5d-noclobber-'))
+    try {
+      await runGit(repo, ['init', '-q', '-b', 'main'])
+      await runGit(repo, ['config', 'user.email', 't@e.com'])
+      await runGit(repo, ['config', 'user.name', 'T'])
+      writeFileSync(join(repo, 'data.txt'), 'HEAD\n')
+      await runGit(repo, ['add', '.'])
+      await runGit(repo, ['commit', '-q', '-m', 'init'])
+      writeFileSync(join(repo, 'data.txt'), 'ASK-TIME\n')
+      const snap = await gitStashSnapshot(repo) // non-empty pre_snapshot (would roll back if not deferred)
+
+      const db = createInMemoryDb(MIGRATIONS)
+      const taskId = `t_${ulid()}`
+      await seedTask(db, taskId)
+      await db.update(tasks).set({ worktreePath: repo }).where(eq(tasks.id, taskId))
+      // A prior IN-FLIGHT dispatched self entry on home P (dispatched, trigger NULL = unconsumed) —
+      // it OWNS the worktree; an unconditional rollback would rewrite the tree under its (pending) rerun.
+      const priorOrigin = await seedRun(db, taskId, CL, { status: 'done' })
+      await insertEntry(db, taskId, {
+        originNodeRunId: priorOrigin,
+        questionId: 'prior',
+        roleKind: 'self',
+        defaultTargetNodeId: P,
+        sealed: true,
+        dispatchedAt: Date.now(),
+        triggerRunId: null,
+      })
+      // New self round on the SAME home P, with a pre_snapshot (would trigger the rollback path).
+      const { clarifyNodeRunId, askingRunId } = await seedSealableSelfRound(db, taskId, [
+        mkQ('q1', 't'),
+      ])
+      await db.update(nodeRuns).set({ preSnapshot: snap }).where(eq(nodeRuns.id, askingRunId))
+      // Dirty the worktree — it must SURVIVE (the rollback is skipped because we defer).
+      writeFileSync(join(repo, 'data.txt'), 'DIRTY\n')
+
+      const res = await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      })
+
+      // Deferred (same-home in-flight) — NO rollback ran (the worktree is NOT clobbered).
+      expect(res.dispatchDeferredReason).toBe('task-question-node-dispatch-in-flight')
+      expect(res.dispatch.reruns).toHaveLength(0)
+      expect(readFileSync(join(repo, 'data.txt'), 'utf8')).toBe('DIRTY\n') // worktree untouched
+      // The answer is still sealed (round answered) + the new entry parked for a later board dispatch.
+      expect((await roundByOrigin(db, clarifyNodeRunId))[0]?.status).toBe('answered')
+      const selfEntry = (await entriesByOrigin(db, clarifyNodeRunId)).find(
+        (e) => e.roleKind === 'self' && e.questionId === 'q1',
+      )
+      expect(selfEntry?.dispatchedAt).toBeNull()
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+})
