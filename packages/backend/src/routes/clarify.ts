@@ -24,8 +24,15 @@ import { actorOf, type Actor } from '@/auth/actor'
 import { loadConfig } from '@/config'
 import { clarifyRounds, nodeRuns, tasks as tasksTable } from '@/db/schema'
 import type { AppDeps } from '@/server'
-import { countPendingClarifications, submitClarifyAnswers } from '@/services/clarify'
-import { submitCrossClarifyAnswers } from '@/services/crossClarify'
+import {
+  broadcastSelfClarifyAnsweredForRound,
+  countPendingClarifications,
+  submitClarifyAnswers,
+} from '@/services/clarify'
+import {
+  broadcastCrossClarifyAnsweredForRound,
+  submitCrossClarifyAnswers,
+} from '@/services/crossClarify'
 import { sealRoundQuestions } from '@/services/clarifySeal'
 import { autoDispatchClarifyRound } from '@/services/clarifyAutoDispatch'
 import {
@@ -317,6 +324,30 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
         actor: { userId: actor.user.id, role },
       })
+      // RFC-128 P5-D (Codex round-6): re-emit the legacy answered WS event(s) the deferred quick
+      // branch otherwise skips, so OTHER clients (a mounted board / a collaborator) invalidate clarify
+      // list/detail/pending-count + node-runs + the directive toggle (the submitting client already
+      // navigates + invalidates). Fires even when dispatch was deferred (the round IS answered);
+      // rerunNodeRunId is the dispatched rerun or '' when deferred. A 'stop' cross round also fires
+      // the rejected event (parity with submitCrossClarifyAnswers). Best-effort — a broadcast failure
+      // must not fail the answer.
+      const firstRerunId = auto.dispatch.reruns[0]?.nodeRunId ?? ''
+      try {
+        if (auto.kind === 'self') {
+          await broadcastSelfClarifyAnsweredForRound(deps.db, nodeRunId, firstRerunId)
+        } else {
+          await broadcastCrossClarifyAnsweredForRound(deps.db, nodeRunId, {
+            ...(parsed.data.directive === 'stop'
+              ? { rejectedQuestionerNodeRunId: firstRerunId }
+              : {}),
+          })
+        }
+      } catch (err) {
+        log.warn('clarify autodispatch answered-broadcast threw', {
+          taskId: auto.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
       // Release the gate so the freshly-minted self/questioner reruns dispatch — mirroring the
       // manual dispatch route + the legacy quick path. Best-effort: a `running` deferred task'
       // live loop picks up the pending reruns (task-not-resumable logged at info, not surfaced).

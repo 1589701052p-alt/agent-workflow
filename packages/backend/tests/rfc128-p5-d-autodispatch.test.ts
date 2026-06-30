@@ -30,7 +30,12 @@ import {
   workflows,
 } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import {
+  broadcastSelfClarifyAnsweredForRound,
+  createClarifySession,
+  submitClarifyAnswers,
+} from '../src/services/clarify'
+import { broadcastCrossClarifyAnsweredForRound } from '../src/services/crossClarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import {
@@ -42,7 +47,7 @@ import { buildClarifyNodeQueueContext, buildPromptContext } from '../src/service
 import { getNodeClarifyDirectiveRow } from '../src/services/taskClarifyDirective'
 import { getTaskQuestionWriteSem } from '../src/services/taskWriteLocks'
 import { ConflictError } from '../src/util/errors'
-import { resetBroadcastersForTests } from '../src/ws/broadcaster'
+import { resetBroadcastersForTests, taskBroadcaster, TASK_CHANNEL } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 const ulid = monotonicFactory()
@@ -1065,5 +1070,95 @@ describe('RFC-128 P5-D post-seal dispatch conflict → deferred to manual (idemp
     })
     expect(res.dispatchDeferredReason).toBeUndefined()
     expect(res.dispatch.reruns).toHaveLength(1)
+  })
+})
+
+// ===========================================================================
+// Codex round-6 — answered WS broadcast 不丢 + 不可恢复 dispatch 冲突不被吞
+// ===========================================================================
+describe('RFC-128 P5-D answered WS broadcast (Codex round-6 finding 1)', () => {
+  test('self autodispatch → broadcastSelfClarifyAnsweredForRound emits clarify.answered (other clients invalidate)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [mkQ('q1', 't')])
+    const res = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
+    const received: Array<{ type: string }> = []
+    taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m as { type: string }))
+    await broadcastSelfClarifyAnsweredForRound(
+      db,
+      clarifyNodeRunId,
+      res.dispatch.reruns[0]?.nodeRunId ?? '',
+    )
+    expect(received.find((m) => m.type === 'clarify.answered')).toBeDefined()
+  })
+
+  test('cross autodispatch → broadcastCrossClarifyAnsweredForRound emits cross-clarify.answered; stop also emits rejected', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [mkQ('q1', 't')])
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossNodeRunId,
+      answers: [ans('q1')],
+      directive: 'stop',
+      actor,
+    })
+    const received: Array<{ type: string }> = []
+    taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m as { type: string }))
+    await broadcastCrossClarifyAnsweredForRound(db, crossNodeRunId, {
+      rejectedQuestionerNodeRunId: '',
+    })
+    expect(received.find((m) => m.type === 'cross-clarify.answered')).toBeDefined()
+    expect(received.find((m) => m.type === 'cross-clarify.rejected')).toBeDefined()
+  })
+
+  test('broadcast helper is a NO-OP for a still-awaiting (un-answered) round', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [mkQ('q1', 't')])
+    // NOT answered (no autodispatch / seal).
+    const received: Array<{ type: string }> = []
+    taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m as { type: string }))
+    await broadcastSelfClarifyAnsweredForRound(db, clarifyNodeRunId, '')
+    expect(received.find((m) => m.type === 'clarify.answered')).toBeUndefined()
+  })
+
+  test('source — the route autodispatch branch emits the answered broadcast for both self and cross', () => {
+    const src = readFileSync(resolve(import.meta.dir, '../src/routes/clarify.ts'), 'utf8')
+    expect(src).toContain('broadcastSelfClarifyAnsweredForRound(deps.db, nodeRunId')
+    expect(src).toContain('broadcastCrossClarifyAnsweredForRound(deps.db, nodeRunId')
+  })
+})
+
+describe('RFC-128 P5-D non-recoverable dispatch conflict NOT swallowed (Codex round-6 finding 2)', () => {
+  test('a NON-recoverable dispatch conflict (unparseable snapshot) is RETHROWN, not masked as a deferred success', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [mkQ('q1', 't')])
+    // Corrupt the snapshot AFTER seeding (worktreePath stays '' so the rollback path is skipped and
+    // only dispatchTaskQuestions' parseDefinition hits it → task-question-snapshot-unparseable).
+    await db.update(tasks).set({ workflowSnapshot: 'not json{' }).where(eq(tasks.id, taskId))
+    let caught: unknown
+    try {
+      await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('task-question-snapshot-unparseable') // rethrown, NOT swallowed
   })
 })

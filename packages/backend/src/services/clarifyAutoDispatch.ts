@@ -67,6 +67,16 @@ const EMPTY_DISPATCH: DispatchTaskQuestionsResult = {
   deferred: [],
 }
 
+/** Codex round-6 — the dispatchTaskQuestions ConflictError codes the autodispatch may swallow as a
+ *  success-with-`dispatchDeferredReason` (the answer is sealed + parked; a LATER board 批量下发 CAN
+ *  mint the rerun). Everything ELSE (terminal task / unparseable snapshot / unsafe frontier /
+ *  not-deferred / designer multi-target/borrow) is NON-recoverable — the board would reject it too —
+ *  so it is RETHROWN rather than promising a rerun that can never mint. */
+const RECOVERABLE_DISPATCH_CONFLICTS: ReadonlySet<string> = new Set([
+  'task-question-node-dispatch-in-flight', // releases when the in-flight rerun reaches done+output
+  'task-question-target-changed', // a concurrent reassign — re-plan against the new target
+])
+
 /** The question ids of a round from its questions_json (defensive parse; [] on malformed). */
 function parseQuestionIds(questionsJson: string): string[] {
   try {
@@ -327,24 +337,31 @@ export async function autoDispatchClarifyRound(
   //    A is OUTER, dispatch's B is INNER → lock order A ≻ B, no B held while taking A → deadlock-free.
   //    A no-op when there are no dispatchable self/questioner entries.
   //
-  //    Codex round-5 — the seal above ALREADY committed (round answered + clarify node closed). If
-  //    dispatchTaskQuestions then hits a CONFLICT gate (e.g. a same-home in-flight rerun, a never-run
-  //    frontier, a concurrent target change), do NOT surface a FAILED response for the saved answer:
-  //    the entries are sealed-undispatched + parked (loadUndispatchedParkTargets) and recoverable via
-  //    the board's 批量下发, so DEFER the auto-dispatch (return success + dispatchDeferredReason) — the
-  //    quick API stays idempotent-safe. Only dispatch ConflictErrors are caught; other errors throw.
+  //    Codex round-5/6 — the seal above ALREADY committed (round answered + clarify node closed). If
+  //    dispatchTaskQuestions then hits a RECOVERABLE conflict gate, do NOT surface a FAILED response
+  //    for the saved answer: the entries are sealed-undispatched + parked (loadUndispatchedParkTargets)
+  //    and a LATER board 批量下发 CAN mint the rerun, so DEFER the auto-dispatch (return success +
+  //    dispatchDeferredReason) — the quick API stays idempotent-safe. Only RECOVERABLE codes are
+  //    swallowed: a same-home in-flight rerun (releases when it reaches done+output) + a concurrent
+  //    target change (re-plan against the new target). NON-recoverable conflicts (terminal task,
+  //    unparseable snapshot, never-run/unsafe frontier, not-deferred, designer multi-target/borrow)
+  //    are RETHROWN — the board can't recover them either, so masking them as success would promise a
+  //    rerun that can never mint (Codex round-6). Non-ConflictErrors always throw.
   let dispatchDeferredReason: string | undefined
   const tryDispatch = async (): Promise<DispatchTaskQuestionsResult> => {
     try {
       return await dispatchTaskQuestions(db, round.taskId, entryIds, args.actor)
     } catch (err) {
-      if (err instanceof ConflictError) {
+      if (err instanceof ConflictError && RECOVERABLE_DISPATCH_CONFLICTS.has(err.code)) {
         dispatchDeferredReason = err.code
-        log.warn('autodispatch deferred to manual board dispatch (post-seal dispatch conflict)', {
-          taskId: round.taskId,
-          originNodeRunId,
-          reason: err.code,
-        })
+        log.warn(
+          'autodispatch deferred to manual board dispatch (recoverable post-seal conflict)',
+          {
+            taskId: round.taskId,
+            originNodeRunId,
+            reason: err.code,
+          },
+        )
         return EMPTY_DISPATCH
       }
       throw err

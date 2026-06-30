@@ -2246,6 +2246,35 @@ function broadcastCrossClarifyRejected(
   })
 }
 
+/**
+ * RFC-128 P5-D — re-emit the legacy `cross-clarify.answered` (+ `cross-clarify.rejected` for a stop
+ * round) WS event(s) for a (now-answered) CROSS round so OTHER clients invalidate clarify
+ * list/detail/pending-count + node-runs after a DEFERRED quick answer (autoDispatchClarifyRound
+ * reuses the legacy quick path's notification, which it otherwise bypasses). No-op unless the
+ * session exists AND is answered. Pass `rejectedQuestionerNodeRunId` (the dispatched questioner
+ * rerun, or '' when deferred) ONLY for a stop round to also fire the rejected event.
+ */
+export async function broadcastCrossClarifyAnsweredForRound(
+  db: DbClient,
+  crossClarifyNodeRunId: string,
+  opts: { rejectedQuestionerNodeRunId?: string } = {},
+): Promise<void> {
+  const row = (
+    await db
+      .select()
+      .from(crossClarifySessions)
+      .where(eq(crossClarifySessions.crossClarifyNodeRunId, crossClarifyNodeRunId))
+      .orderBy(desc(crossClarifySessions.createdAt))
+      .limit(1)
+  )[0]
+  if (row === undefined || row.status !== 'answered') return
+  const session = rowToSession(row)
+  broadcastCrossClarifyAnswered(row.taskId, session)
+  if (opts.rejectedQuestionerNodeRunId !== undefined) {
+    broadcastCrossClarifyRejected(row.taskId, session, opts.rejectedQuestionerNodeRunId)
+  }
+}
+
 function broadcastDesignerRerunBatched(
   taskId: string,
   designerNodeRunId: string,

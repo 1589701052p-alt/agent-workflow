@@ -1395,6 +1395,30 @@ function broadcastClarifyAnswered(
   })
 }
 
+/**
+ * RFC-128 P5-D — re-emit the legacy `clarify.answered` WS event for a (now-answered) SELF round so
+ * OTHER clients invalidate clarify list/detail/pending-count + node-runs after a DEFERRED quick
+ * answer (autoDispatchClarifyRound reuses the legacy quick path's notification, which it otherwise
+ * bypasses). No-op unless the session exists AND is answered. `rerunNodeRunId` is the dispatched
+ * self rerun (or '' when the auto-dispatch was deferred to manual — the invalidation still fires).
+ */
+export async function broadcastSelfClarifyAnsweredForRound(
+  db: DbClient,
+  clarifyNodeRunId: string,
+  rerunNodeRunId: string,
+): Promise<void> {
+  const row = (
+    await db
+      .select()
+      .from(clarifySessions)
+      .where(eq(clarifySessions.clarifyNodeRunId, clarifyNodeRunId))
+      .orderBy(desc(clarifySessions.createdAt))
+      .limit(1)
+  )[0]
+  if (row === undefined || row.status !== 'answered') return
+  broadcastClarifyAnswered(row.taskId, rowToSession(row), rerunNodeRunId)
+}
+
 function rowToSession(row: typeof clarifySessions.$inferSelect): ClarifySession {
   const questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
   const out: ClarifySession = {
