@@ -39,20 +39,24 @@
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, taskQuestions, tasks } from '@/db/schema'
+import { clarifyRounds, nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import { resolveClarifyNodeFromTaskSnapshot } from '@/services/clarify'
 import { sealRoundQuestions } from '@/services/clarifySeal'
+import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import {
   dispatchTaskQuestions,
   type DispatchTaskQuestionsResult,
 } from '@/services/taskQuestionDispatch'
 import { loadSealedQuestionIds } from '@/services/taskQuestions'
+import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { ConflictError, NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
-import type {
-  ClarifyAnswer,
-  ClarifyDirective,
-  ClarifyQuestion,
-  ClarifyQuestionScope,
+import {
+  resolveClarifySessionMode,
+  type ClarifyAnswer,
+  type ClarifyDirective,
+  type ClarifyQuestion,
+  type ClarifyQuestionScope,
 } from '@agent-workflow/shared'
 
 const log = createLogger('clarify-auto-dispatch')
@@ -71,6 +75,26 @@ function parseQuestionIds(questionsJson: string): string[] {
   } catch {
     return []
   }
+}
+
+/** RFC-098 B1 (Codex round-4) — the asking agent's run row WHEN a self-clarify isolated rerun is due
+ *  a worktree rollback (the SAME predicate submitClarifyAnswers uses: NOT inline session mode AND a
+ *  pre_snapshot exists), else null. Caller has already gated kind==='self' + a non-empty worktree. */
+async function resolveSelfRollbackRun(
+  db: DbClient,
+  askingNodeRunId: string,
+  intermediaryNodeId: string,
+  workflowSnapshot: string,
+): Promise<typeof nodeRuns.$inferSelect | null> {
+  const askingRun = (
+    await db.select().from(nodeRuns).where(eq(nodeRuns.id, askingNodeRunId)).limit(1)
+  )[0]
+  if (askingRun === undefined) return null
+  const clarifyNode = resolveClarifyNodeFromTaskSnapshot(workflowSnapshot, intermediaryNodeId)
+  const sessionMode = clarifyNode ? resolveClarifySessionMode(clarifyNode) : 'isolated'
+  if (sessionMode === 'inline') return null
+  if (askingRun.preSnapshot === null && askingRun.preSnapshotReposJson === null) return null
+  return askingRun
 }
 
 export interface AutoDispatchClarifyRoundArgs {
@@ -120,7 +144,8 @@ export async function autoDispatchClarifyRound(
 ): Promise<AutoDispatchClarifyRoundResult> {
   const { db, originNodeRunId } = args
 
-  // 1. Locate the round (kind + task + questions). The route already gated membership.
+  // 1. Locate the round (kind + task + questions + asking run + clarify node). The route already
+  //    gated membership. askingNodeRunId + intermediaryNodeId feed the self-clarify rollback below.
   const round = (
     await db
       .select({
@@ -129,6 +154,8 @@ export async function autoDispatchClarifyRound(
         status: clarifyRounds.status,
         iteration: clarifyRounds.iteration,
         questionsJson: clarifyRounds.questionsJson,
+        askingNodeRunId: clarifyRounds.askingNodeRunId,
+        intermediaryNodeId: clarifyRounds.intermediaryNodeId,
       })
       .from(clarifyRounds)
       .where(eq(clarifyRounds.intermediaryNodeRunId, originNodeRunId))
@@ -172,7 +199,11 @@ export async function autoDispatchClarifyRound(
   //    this guards a direct service caller (and matches dispatchTaskQuestions' own deferred gate).
   const taskRow = (
     await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
+      .select({
+        deferred: tasks.deferredQuestionDispatch,
+        worktreePath: tasks.worktreePath,
+        workflowSnapshot: tasks.workflowSnapshot,
+      })
       .from(tasks)
       .where(eq(tasks.id, round.taskId))
       .limit(1)
@@ -261,19 +292,69 @@ export async function autoDispatchClarifyRound(
       ),
     )
 
-  // 5. AUTO-dispatch — the SAME dispatchTaskQuestions the board's manual 批量下发 calls (single path).
-  //    It takes lock B internally (NOT nested inside the seal's B — sequential, no reentry). When the
-  //    round produced no dispatchable self/questioner entry (e.g. a designer-only cross round whose
-  //    questioner entries were already dispatched) this is a no-op.
-  const dispatch =
-    entries.length > 0
-      ? await dispatchTaskQuestions(
+  const entryIds = entries.map((e) => e.id)
+
+  // 5. RFC-098 B1 worktree rollback for SELF-clarify ISOLATED reruns (Codex round-4 [high]). The
+  //    legacy quick path (submitClarifyAnswers) resets the worktree to the asking run's pre_snapshot
+  //    before the self continuation, so an isolated rerun starts from the clean pre-question tree
+  //    (RFC-023 forbids clarify-time writes, so usually a no-op, but B1 errs safe). The deferred quick
+  //    channel preserves this for the self path; dispatchTaskQuestions never rolls back. CROSS
+  //    (questioner) reruns do NOT roll back — submitCrossClarifyAnswers has no rollback — so this is
+  //    self-only. resolveSelfRollbackRun returns the asking run iff a rollback is due (self + isolated
+  //    + a snapshot + a worktree), else null.
+  const selfRollbackRun =
+    round.kind === 'self' && entryIds.length > 0 && taskRow.worktreePath !== ''
+      ? await resolveSelfRollbackRun(
           db,
-          round.taskId,
-          entries.map((e) => e.id),
-          args.actor,
+          round.askingNodeRunId,
+          round.intermediaryNodeId,
+          taskRow.workflowSnapshot,
         )
-      : EMPTY_DISPATCH
+      : null
+
+  // 6. AUTO-dispatch — the SAME dispatchTaskQuestions the board's manual 批量下发 calls (single path).
+  //    dispatchTaskQuestions takes lock B internally; NOT nested inside the seal's B (sealRoundQuestions
+  //    already released it) → sequential, no reentry. When a self isolated rollback is due, run it
+  //    FIRST under the worktree write lock A (serialized vs in-flight writer nodes, RFC-098 B1) and
+  //    BEFORE the dispatch mints the pending rerun (the rerun must not exist when the tree resets);
+  //    A is OUTER, dispatch's B is INNER → lock order A ≻ B, no B held while taking A → deadlock-free.
+  //    A no-op when there are no dispatchable self/questioner entries.
+  let dispatch: DispatchTaskQuestionsResult
+  if (entryIds.length === 0) {
+    dispatch = EMPTY_DISPATCH
+  } else if (selfRollbackRun !== null) {
+    dispatch = await getTaskWriteSem(round.taskId).run(async () => {
+      // Skip the destructive rollback if a concurrent dispatch already claimed any of these entries
+      // (it owns the worktree state; the dispatch below CAS-skips them anyway) — mirrors the
+      // submit-side pre-rollback guard so a stale rollback can't clobber a concurrent rerun.
+      const claimed = await db
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
+        .where(and(inArray(taskQuestions.id, entryIds), isNotNull(taskQuestions.dispatchedAt)))
+      if (claimed.length === 0) {
+        const target = await loadRollbackTarget(db, round.taskId)
+        if (target !== null) {
+          try {
+            await rollbackNodeRunWorktrees(
+              target,
+              selfRollbackRun,
+              { resetOnEmptySnapshot: false },
+              log,
+            )
+          } catch (err) {
+            log.warn('autodispatch self rollback failed', {
+              nodeRunId: selfRollbackRun.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+      }
+      // Dispatch under A (B inner — A ≻ B, no reentry; sealRoundQuestions' B already released).
+      return dispatchTaskQuestions(db, round.taskId, entryIds, args.actor)
+    })
+  } else {
+    dispatch = await dispatchTaskQuestions(db, round.taskId, entryIds, args.actor)
+  }
 
   log.info('clarify round auto-dispatched (quick channel, deferred)', {
     taskId: round.taskId,

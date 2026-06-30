@@ -14,10 +14,12 @@
 // control channel).
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { resolve } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { eq } from 'drizzle-orm'
 import { monotonicFactory } from 'ulid'
+import { gitStashSnapshot, runGit } from '../src/util/git'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import {
   clarifyRounds,
@@ -814,16 +816,19 @@ describe('RFC-128 P5-D lock-B non-reentry', () => {
     expect(sem.queueLength).toBe(0)
   })
 
-  test('source — autoDispatchClarifyRound calls sealRoundQuestions then dispatchTaskQuestions SEQUENTIALLY, NOT wrapped in its own getTaskQuestionWriteSem (no nested lock B)', () => {
+  test('source — autoDispatchClarifyRound never takes the question-write lock B (getTaskQuestionWriteSem); each callee takes B itself → no B-in-B nesting. It MAY take the worktree lock A (getTaskWriteSem) for the self rollback (A ≻ B)', () => {
     const src = readFileSync(
       resolve(import.meta.dir, '../src/services/clarifyAutoDispatch.ts'),
       'utf8',
     )
-    // The orchestrator must NOT import (hence cannot acquire) the question-write lock — each callee
-    // (sealRoundQuestions / dispatchTaskQuestions) takes + releases it independently, so they run
-    // SEQUENTIALLY, never nesting B inside B (the non-reentrant Semaphore(1) would deadlock).
-    expect(src).not.toContain("'@/services/taskWriteLocks'")
-    expect(src).not.toContain('getTaskQuestionWriteSem(') // no call form anywhere in the module body
+    // The orchestrator must NOT acquire lock B itself — sealRoundQuestions / dispatchTaskQuestions each
+    // take + release B independently, so they run SEQUENTIALLY, never nesting B inside B (the
+    // non-reentrant Semaphore(1) would deadlock). The call form `getTaskQuestionWriteSem(` never
+    // appears (the doc comment references the bare name to explain WHY, which is fine).
+    expect(src).not.toContain('getTaskQuestionWriteSem(') // never CALLS lock B
+    // It MAY take the worktree write lock A (getTaskWriteSem) for the RFC-098 B1 self rollback — A is
+    // OUTER, dispatchTaskQuestions' B is INNER (A ≻ B), and B is never held while taking A.
+    expect(src).toContain('getTaskWriteSem(round.taskId).run')
     // It calls both primitives (sequential).
     expect(src).toContain('sealRoundQuestions(')
     expect(src).toContain('dispatchTaskQuestions(')
@@ -913,5 +918,94 @@ describe('RFC-128 P5-D all-role deferred park (same-home deadlock fix)', () => {
   test('source — scheduler uses loadUndispatchedParkTargets (all-role), not the per-role union', () => {
     const src = readFileSync(resolve(import.meta.dir, '../src/services/scheduler.ts'), 'utf8')
     expect(src).toContain('loadUndispatchedParkTargets(db, taskId)')
+  })
+})
+
+// ===========================================================================
+// RFC-098 B1 自清-isolated 回滚（Codex round-4）— self 快通道 autodispatch 回滚 worktree
+// ===========================================================================
+describe('RFC-128 P5-D self-clarify isolated rollback (RFC-098 B1, Codex round-4)', () => {
+  test('self isolated autodispatch rolls the worktree back to the asking run pre_snapshot BEFORE dispatch; the continuation starts from the clean tree', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'aw-rfc128-p5d-rollback-'))
+    try {
+      await runGit(repo, ['init', '-q', '-b', 'main'])
+      await runGit(repo, ['config', 'user.email', 't@e.com'])
+      await runGit(repo, ['config', 'user.name', 'T'])
+      writeFileSync(join(repo, 'data.txt'), 'HEAD\n')
+      await runGit(repo, ['add', '.'])
+      await runGit(repo, ['commit', '-q', '-m', 'init'])
+      // Ask-time worktree state (a non-HEAD working change so the stash snapshot is NON-empty —
+      // an empty snapshot would be a resume-mode no-op). This is the pre_snapshot the rerun restores.
+      writeFileSync(join(repo, 'data.txt'), 'ASK-TIME\n')
+      const snap = await gitStashSnapshot(repo)
+
+      const db = createInMemoryDb(MIGRATIONS)
+      const taskId = `t_${ulid()}`
+      await seedTask(db, taskId)
+      await db.update(tasks).set({ worktreePath: repo }).where(eq(tasks.id, taskId))
+      const { clarifyNodeRunId, askingRunId } = await seedSealableSelfRound(db, taskId, [
+        mkQ('q1', 't'),
+      ])
+      await db.update(nodeRuns).set({ preSnapshot: snap }).where(eq(nodeRuns.id, askingRunId))
+
+      // Dirty the worktree AFTER the snapshot (edits the isolated rerun must NOT inherit).
+      writeFileSync(join(repo, 'data.txt'), 'DIRTY\n')
+      writeFileSync(join(repo, 'stray.txt'), 'stray\n')
+
+      const res = await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      })
+
+      // The worktree was rolled back to the ask-time pre_snapshot (RFC-098 B1, like
+      // submitClarifyAnswers): the post-snapshot dirty edits + strays are gone.
+      expect(readFileSync(join(repo, 'data.txt'), 'utf8')).toBe('ASK-TIME\n')
+      expect(existsSync(join(repo, 'stray.txt'))).toBe(false)
+      // And the self continuation was still dispatched (clarify-answer).
+      expect(res.dispatch.reruns).toHaveLength(1)
+      expect((await runRow(db, res.dispatch.reruns[0]!.nodeRunId))[0]?.rerunCause).toBe(
+        'clarify-answer',
+      )
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test('CROSS (questioner) autodispatch does NOT roll back the worktree (mirrors submitCrossClarifyAnswers — no rollback)', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'aw-rfc128-p5d-noroll-'))
+    try {
+      await runGit(repo, ['init', '-q', '-b', 'main'])
+      await runGit(repo, ['config', 'user.email', 't@e.com'])
+      await runGit(repo, ['config', 'user.name', 'T'])
+      writeFileSync(join(repo, 'data.txt'), 'CLEAN\n')
+      await runGit(repo, ['add', '.'])
+      await runGit(repo, ['commit', '-q', '-m', 'init'])
+      const snap = await gitStashSnapshot(repo)
+
+      const db = createInMemoryDb(MIGRATIONS)
+      const taskId = `t_${ulid()}`
+      await seedTask(db, taskId)
+      await db.update(tasks).set({ worktreePath: repo }).where(eq(tasks.id, taskId))
+      const { crossNodeRunId, questionerRunId } = await seedSealableCrossRound(db, taskId, [
+        mkQ('q1', 't'),
+      ])
+      await db.update(nodeRuns).set({ preSnapshot: snap }).where(eq(nodeRuns.id, questionerRunId))
+
+      writeFileSync(join(repo, 'data.txt'), 'DIRTY\n')
+
+      await autoDispatchClarifyRound({
+        db,
+        originNodeRunId: crossNodeRunId,
+        answers: [ans('q1')],
+        scopes: { q1: 'questioner' },
+        actor,
+      })
+      // The worktree is UNCHANGED (cross/questioner path never rolls back).
+      expect(readFileSync(join(repo, 'data.txt'), 'utf8')).toBe('DIRTY\n')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 })
