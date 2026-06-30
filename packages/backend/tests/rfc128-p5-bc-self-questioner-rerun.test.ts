@@ -33,7 +33,10 @@ import {
   markClarifyRoundsConsumedBy,
 } from '../src/services/clarifyRounds'
 import { dispatchTaskQuestions, resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
-import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
+import {
+  loadUndispatchedSelfQuestionerTargets,
+  reconcileTaskQuestionsForRound,
+} from '../src/services/taskQuestions'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { ConflictError } from '../src/util/errors'
@@ -1381,9 +1384,12 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
     expect(reruns.length).toBe(1)
   })
 
-  // step 2 golden-lock: a plain quick-finalize (NO prior control-channel seal) is unchanged — nothing
-  // is marked confirmed, the continuation mints normally.
-  test('step 2 — plain quick-finalize (no prior seal) leaves no confirmed entries (golden-lock)', async () => {
+  // step 3 / finding 3 (lazy-reconcile 复活 防回归, regression ③): a VIRGIN quick-finalize (question
+  // list never opened, no control seal — 0 task_questions at submit) must NOT let a LATER lazy
+  // reconcile create OPEN, dispatchable self entries on the now-answered round. The in-tx reconcile
+  // materializes + confirms them at submit; a subsequent lazy reconcile is idempotent (preserves
+  // confirmed) → the entries stay non-dispatchable, so the round cannot be re-minted.
+  test('finding 3 — virgin quick-finalize: in-tx reconcile confirms entries, lazy reconcile cannot revive them', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -1396,14 +1402,38 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
       sourceShardKey: null,
       clarifyNodeId: CL,
       iterationIndex: 0,
-      questions: [mkQ('q1', 't')],
+      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
     })
-    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
-    const entries = await db
+    // Virgin: no listTaskQuestions / no seal before the quick finalize.
+    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
+    const afterSubmit = await db
       .select()
       .from(taskQuestions)
       .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
-    expect(entries.filter((e) => e.confirmation === 'confirmed').length).toBe(0)
+    // In-tx reconcile created BOTH self entries and the consume confirmed them.
+    expect(afterSubmit.length).toBe(2)
+    expect(afterSubmit.every((e) => e.roleKind === 'self' && e.confirmation === 'confirmed')).toBe(
+      true,
+    )
+    // The later LAZY reconcile (listTaskQuestions path) must NOT reset them to open.
+    const roundRows = await db
+      .select()
+      .from(clarifyRounds)
+      .where(eq(clarifyRounds.intermediaryNodeRunId, clarifyNodeRunId))
+    reconcileTaskQuestionsForRound(db, roundRows[0]!)
+    const afterReconcile = await db
+      .select()
+      .from(taskQuestions)
+      .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
+    expect(afterReconcile.every((e) => e.confirmation === 'confirmed')).toBe(true)
+    // Not re-dispatchable (dispatch skips confirmed) → no duplicate mint.
+    const redispatch = await dispatchTaskQuestions(
+      db,
+      taskId,
+      afterReconcile.map((e) => e.id),
+      actor,
+    )
+    expect(redispatch.dispatchedEntryIds.length).toBe(0)
   })
 
   // step 3 (RFC-076 ordering preserved): after a quick-finalize the atomic tx leaves the rerun minted
@@ -1456,8 +1486,52 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
   test('step 3 — submitClarifyAnswers mints inside a dbTxSync (race-close source lock)', () => {
     const src = readFileSync(resolve(import.meta.dir, '../src/services/clarify.ts'), 'utf8')
     const fn = src.slice(src.indexOf('export async function submitClarifyAnswers'))
+    // mint + flips inside the dbTxSync (NOT separate awaits) — closes the dispatch double-mint race.
     expect(fn.includes('dbTxSync(db, (tx) =>')).toBe(true)
     expect(fn.includes('tx.insert(nodeRuns).values(rerunValues)')).toBe(true)
+    // finding 1: the session-status CAS claim lives INSIDE the tx (between dbTxSync open and the
+    // mint) — closes the concurrent double-submit double-mint. The claim reselects clarify_sessions
+    // and rejects 'clarify-already-answered' if another submit won.
+    const txBody = fn.slice(fn.indexOf('dbTxSync(db, (tx) =>'))
+    const claimIdx = txBody.indexOf('.from(clarifySessions)')
+    const mintIdx = txBody.indexOf('tx.insert(nodeRuns).values(rerunValues)')
+    expect(claimIdx).toBeGreaterThan(0)
+    expect(claimIdx).toBeLessThan(mintIdx) // claim BEFORE the mint
+    expect(txBody.includes('clarify-already-answered')).toBe(true)
+  })
+
+  // finding 1 (regression ①): two CONCURRENT submitClarifyAnswers on the same awaiting_human session
+  // (both pass the pre-tx read) must mint EXACTLY ONE clarify-answer rerun — the in-tx session CAS
+  // makes the loser reject. (Outcome-deterministic regardless of await interleaving: one resolves,
+  // one rejects, one rerun.)
+  test('finding 1 — concurrent double-submit mints exactly ONE clarify-answer rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
+    const { clarifyNodeRunId } = await createClarifySession({
+      db,
+      taskId,
+      sourceAgentNodeId: P,
+      sourceAgentNodeRunId: pRun,
+      sourceShardKey: null,
+      clarifyNodeId: CL,
+      iterationIndex: 0,
+      questions: [mkQ('q1', 't')],
+    })
+    const results = await Promise.allSettled([
+      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] }),
+      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] }),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+    const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
+    expect(rejected.length).toBe(1)
+    expect(rejected[0]!.reason).toBeInstanceOf(ConflictError)
+    // Exactly ONE clarify-answer rerun on P — no double mint.
+    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === P && r.rerunCause === 'clarify-answer',
+    )
+    expect(reruns.length).toBe(1)
   })
 })
 

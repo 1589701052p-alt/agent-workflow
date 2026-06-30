@@ -32,7 +32,9 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { crossClarifySessions, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
+import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import {
   buildExternalFeedbackContext,
   createCrossClarifySession,
@@ -58,6 +60,7 @@ interface SeedOptions {
   definition?: WorkflowDefinition
   worktreePath?: string
   status?: 'running' | 'failed' | 'done'
+  deferred?: boolean
 }
 
 function makeQ(id: string, title: string): ClarifyQuestion {
@@ -142,6 +145,7 @@ async function seedTask(db: DbClient, opts: SeedOptions = {}): Promise<{ taskId:
     status: opts.status ?? 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
+    deferredQuestionDispatch: opts.deferred ?? false,
   })
   return { taskId }
 }
@@ -948,5 +952,108 @@ describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-cla
     // RFC-126 fix: the round stays 'answered', so the feedback is preserved on resume.
     expect(after).toBeDefined()
     expect(after?.block).toContain('Why Redis?')
+  })
+})
+
+// ===========================================================================
+// RFC-128 P5-BC §5.2.14 — questioner mixed-path write-flow (findings 1+2+3 for the cross/questioner
+// submit). Mirrors the self path: the cross submit's flip runs in a dbTxSync with a session CAS +
+// dispatch-mode recheck + (when the questioner is cascaded) reconcile+consume of the round's
+// QUESTIONER entries; the async questioner cascade / designer logic stay after the tx.
+// ===========================================================================
+describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
+  const actor = { userId: 'u1', role: 'owner' as const }
+
+  // finding 2 + finding 3 (regression ②): a quick whole-round finalize that CASCADES the questioner
+  // (all-questioner-scope fast path) consumes the round's questioner entries — they are superseded by
+  // the cascade. Materialized + confirmed in-tx → home not parked, entries not re-dispatchable, and
+  // exactly ONE questioner rerun (no park starvation, no duplicate). Virgin case (no prior seal):
+  // the in-tx reconcile creates the questioner entries so a later lazy reconcile can't revive them.
+  test('finding 2/3 — quick-finalize cascading the questioner consumes its entries (not parked, not re-dispatchable, single rerun)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db, { deferred: true })
+    const qRunId = await seedQuestionerRun(db, taskId)
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
+      db,
+      taskId,
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: qRunId,
+      targetDesignerNodeId: 'designer',
+      loopIter: 0,
+      questions: [makeQ('q1', 't'), makeQ('q2', 't')],
+    })
+    // All-questioner-scope → RFC-059 fast path → the questioner is cascaded → its entries superseded.
+    await submitCrossClarifyAnswers({
+      db,
+      crossClarifyNodeRunId,
+      answers: [makeAns('q1'), makeAns('q2')],
+      directive: 'continue',
+      questionScopes: { q1: 'questioner', q2: 'questioner' },
+    })
+    // The round's questioner entries were materialized + confirmed (superseded).
+    const qEntries = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(eq(taskQuestions.originNodeRunId, crossClarifyNodeRunId))
+    ).filter((e) => e.roleKind === 'questioner')
+    expect(qEntries.length).toBeGreaterThan(0)
+    expect(qEntries.every((e) => e.confirmation === 'confirmed')).toBe(true)
+    // The questioner home is NOT parked (the superseded entries dropped out of the park source).
+    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has('questioner')).toBe(false)
+    // Not re-dispatchable (dispatch skips confirmed) → no duplicate.
+    const redispatch = await dispatchTaskQuestions(
+      db,
+      taskId,
+      qEntries.map((e) => e.id),
+      actor,
+    )
+    expect(redispatch.dispatchedEntryIds.length).toBe(0)
+    // Exactly ONE questioner cascade rerun (no double mint).
+    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === 'questioner' && r.rerunCause === 'cross-clarify-questioner-rerun',
+    )
+    expect(reruns.length).toBe(1)
+  })
+
+  // finding 1 (regression ① for cross): two CONCURRENT submitCrossClarifyAnswers on the same
+  // awaiting_human session mint EXACTLY ONE questioner rerun — the in-tx session CAS rejects the loser.
+  test('finding 1 — concurrent cross double-submit mints exactly ONE questioner rerun', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId } = await seedTask(db, { deferred: true })
+    const qRunId = await seedQuestionerRun(db, taskId)
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
+      db,
+      taskId,
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: qRunId,
+      targetDesignerNodeId: 'designer',
+      loopIter: 0,
+      questions: [makeQ('q1', 't')],
+    })
+    const results = await Promise.allSettled([
+      submitCrossClarifyAnswers({
+        db,
+        crossClarifyNodeRunId,
+        answers: [makeAns('q1')],
+        directive: 'continue',
+        questionScopes: { q1: 'questioner' },
+      }),
+      submitCrossClarifyAnswers({
+        db,
+        crossClarifyNodeRunId,
+        answers: [makeAns('q1')],
+        directive: 'continue',
+        questionScopes: { q1: 'questioner' },
+      }),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+    expect(results.filter((r) => r.status === 'rejected').length).toBe(1)
+    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.nodeId === 'questioner' && r.rerunCause === 'cross-clarify-questioner-rerun',
+    )
+    expect(reruns.length).toBe(1)
   })
 })

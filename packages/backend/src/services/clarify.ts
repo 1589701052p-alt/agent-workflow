@@ -71,7 +71,7 @@ import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRol
 import { getTaskWriteSem } from '@/services/taskWriteLocks'
 import { createLogger } from '@/util/log'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
-import { loadSealedQuestionIds } from '@/services/taskQuestions'
+import { loadSealedQuestionIds, reconcileRoundEntriesTx } from '@/services/taskQuestions'
 import { setNodeClarifyDirective } from '@/services/taskClarifyDirective'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -544,7 +544,33 @@ export async function submitClarifyAnswers(
         })
       : {}
 
+  // RFC-058 dual-write: the clarify_round row mirrors this session (id == session id). Loaded for
+  // the §5.2.14 finding-3 in-tx reconcile (materialize the round's self entries so a later lazy
+  // reconcile can't recreate them OPEN + dispatchable on this superseded round).
+  const roundRow = (
+    await db.select().from(clarifyRounds).where(eq(clarifyRounds.id, sessionRow.id)).limit(1)
+  )[0]
+
   dbTxSync(db, (tx) => {
+    // §5.2.14 finding 1 (double-submit double-mint): atomically CLAIM the session inside the tx. Two
+    // concurrent submits both pass the pre-tx awaiting_human / If-Match read, then serialize into
+    // their (synchronous) txs; without this re-check the second still mints a SECOND rerun + rewrites
+    // the answered session/round (the later async close failing is too late — the rerun is already
+    // persisted). The first tx commits status='answered'; the second's reselect here sees 'answered'
+    // → reject (nothing minted). bun:sqlite single-thread + dbTxSync sync body ⇒ the two txs cannot
+    // interleave, so the loser always observes the winner's committed flip.
+    const claim = tx
+      .select({ status: clarifySessions.status })
+      .from(clarifySessions)
+      .where(eq(clarifySessions.id, sessionRow.id))
+      .limit(1)
+      .all()
+    if (claim[0]?.status !== 'awaiting_human') {
+      throw new ConflictError(
+        'clarify-already-answered',
+        `clarify_session ${sessionRow.id} was answered concurrently (lost the submit claim)`,
+      )
+    }
     // §5.2.14 step 1 (atomic, finding 2 race): re-check the round is NOT in control-channel dispatch
     // mode. A dispatch that committed since the early precheck is caught here BEFORE the mint; one
     // that commits later is caught by dispatch's own in-tx immediate-ledger recheck → no double-mint.
@@ -570,6 +596,18 @@ export async function submitClarifyAnswers(
     // factory, and the insert MUST be synchronous to commit atomically with the flips below (an
     // async mintNodeRun would yield + commit early, reopening the race).
     tx.insert(nodeRuns).values(rerunValues).run()
+    // §5.2.14 finding 3 (lazy-reconcile 复活): MATERIALIZE the round's self entries in-tx BEFORE the
+    // consume. A virgin quick-finalize (question list never opened, no control seal) has 0
+    // task_questions, so a consume of "existing rows" would confirm nothing; later listTaskQuestions
+    // lazily reconciles OPEN self entries on this answered round → stage/dispatchable → re-mint an
+    // already-answered round. reconcileRoundEntriesTx is idempotent and its onConflictDoUpdate never
+    // touches `confirmation`, so (a) it creates the missing rows now and (b) the later lazy reconcile
+    // preserves the `confirmed` stamp the consume sets below. Self rounds have NO designer entries,
+    // so the answered-round designer cleanup inside reconcile is a no-op here. roundRow should always
+    // exist (createClarifySession dual-writes it); guard defensively.
+    if (roundRow !== undefined) {
+      reconcileRoundEntriesTx(tx, { ...roundRow, status: 'answered', answersJson, directive })
+    }
     // §5.2.14 step 2 (consume): the quick whole-round answer SUPERSEDES the ENTIRE round — every
     // question is now answered (in the whole-round answersJson, rendered by the minted continuation).
     // So confirm ALL of the round's OPEN, UNDISPATCHED self/questioner entries — NOT just the sealed

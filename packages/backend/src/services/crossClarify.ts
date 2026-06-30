@@ -83,6 +83,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
+import { dbTxSync } from '@/db/txSync'
 import {
   clarifyRounds,
   crossClarifySessions,
@@ -99,7 +100,11 @@ import { pickFreshestRun } from '@/services/freshness'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
-import { loadSealedQuestionIds, reconcileTaskQuestionsForRound } from '@/services/taskQuestions'
+import {
+  loadSealedQuestionIds,
+  reconcileRoundEntriesTx,
+  reconcileTaskQuestionsForRound,
+} from '@/services/taskQuestions'
 import {
   getNodeClarifyDirectiveRow,
   setNodeClarifyDirective,
@@ -497,21 +502,7 @@ export async function submitCrossClarifyAnswers(
   // the questioner's clarify-emit output goes stale and re-dispatches (RFC-074
   // provenance). Net effect under the race is a wasted re-run, never a wrong
   // final state — so we keep peer-aggregation correctness and accept it.
-  await args.db
-    .update(crossClarifySessions)
-    .set({
-      answersJson,
-      status: 'answered',
-      directive: args.directive,
-      answeredAt,
-      questionScopesJson,
-    })
-    .where(eq(crossClarifySessions.id, row.id))
-
-  // RFC-058 T12 dual-write — mirror the answered state to clarify_rounds,
-  // including the RFC-059 questionScopesJson payload. RFC-099: with the
-  // submitter's role supplied, the same write records answeredBy + freezes
-  // per-question attribution and clears the draft (D8).
+  // RFC-058 T12 dual-write attribution — computed BEFORE the tx (async read), applied in the tx.
   const attributionSet =
     args.submittedByRole !== undefined
       ? {
@@ -522,20 +513,124 @@ export async function submitCrossClarifyAnswers(
           })),
         }
       : {}
-  await args.db
-    .update(clarifyRounds)
-    .set({
-      answersJson,
-      status: 'answered',
-      directive: args.directive,
-      answeredAt,
-      questionScopesJson,
-      ...attributionSet,
-    })
-    .where(eq(clarifyRounds.id, row.id))
+  // RFC-058 dual-write: the clarify_round row mirrors this cross session (id == session id). Loaded
+  // for the §5.2.14 finding-3 in-tx reconcile of the QUESTIONER entries.
+  const roundRow = (
+    await args.db.select().from(clarifyRounds).where(eq(clarifyRounds.id, row.id)).limit(1)
+  )[0]
+  // §5.2.14 finding 2: this submit CASCADES the questioner (→ its entries are superseded) iff it is
+  // a 'stop' finalize OR the RFC-059 all-questioner-scope fast path (0 designer-scoped questions).
+  // When a designer-scoped subset exists the questioner is NOT cascaded here (the designer rerun /
+  // deferred dispatch owns the round), so its entries must NOT be consumed — leave them to the
+  // designer/deferred path (RFC-059 unchanged).
+  const cascadesQuestioner =
+    args.directive === 'stop' ||
+    extractDesignerScopedSubset(questions, sealedAnswers, effectiveScopes).questions.length === 0
 
-  // RFC-053: resume-clarify enforces awaiting_human → done. Cross-clarify
-  // shares the same transition shape so we reuse the event kind.
+  // RFC-128 P5-BC §5.2.14 — atomic {claim → recheck → (conditional) reconcile+consume → flip}. The
+  // cross flip stays committed here so peers + the questioner park read this session resolved
+  // (unchanged peer-aggregation invariant, comment above). The questioner cascade / designer logic
+  // stay async AFTER the tx — peer-aggregation + multi-source designer readiness are async multi-row
+  // reads that cannot go in a sync tx, and they DON'T need to: the session CAS (finding 1) + the
+  // in-tx consume (finding 2/3) + the confirmation-gated dispatch (finding B) together close the
+  // double-submit AND the dispatch double-mint without putting the async mint in the tx.
+  dbTxSync(args.db, (tx) => {
+    // finding 1 (concurrent double-submit): atomically claim the session. The loser sees the
+    // winner's committed 'answered' → reject (no second flip, no second cascade).
+    const claim = tx
+      .select({ status: crossClarifySessions.status })
+      .from(crossClarifySessions)
+      .where(eq(crossClarifySessions.id, row.id))
+      .limit(1)
+      .all()
+    if (claim[0]?.status !== 'awaiting_human') {
+      throw new ConflictError(
+        'cross-clarify-already-answered',
+        `cross_clarify_session ${row.id} was answered concurrently (lost the submit claim)`,
+      )
+    }
+    // finding 2 (atomic dispatch-mode recheck): a round with ANY dispatched questioner entry is
+    // permanently excluded from the questioner whole-round render path → quick-finalize would drop
+    // its answers + double-mint. Reject (the early async guard catches the common case; this closes
+    // the concurrent window).
+    const dispatched = tx
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, args.crossClarifyNodeRunId),
+          eq(taskQuestions.roleKind, 'questioner'),
+          isNotNull(taskQuestions.dispatchedAt),
+        ),
+      )
+      .limit(1)
+      .all()
+    if (dispatched.length > 0) {
+      throw new ConflictError(
+        'clarify-quick-finalize-round-dispatched',
+        `cannot quick-finalize cross-clarify round ${args.crossClarifyNodeRunId}: a concurrent control-channel dispatch claimed it. Finish via the control channel.`,
+      )
+    }
+    // finding 2 step 2 + finding 3: when this submit cascades the questioner, MATERIALIZE (idempotent)
+    // + CONFIRM the round's open-undispatched QUESTIONER entries — they are superseded by the
+    // cascade. reconcile covers the virgin case (no rows yet → a later lazy reconcile would otherwise
+    // create OPEN dispatchable rows); the confirm covers the control-seal case. DESIGNER entries are
+    // NOT confirmed (the designer/deferred path owns them). Only runs in the cascade branches, so the
+    // designer path's RFC-059 questioner handling is untouched.
+    if (cascadesQuestioner && roundRow !== undefined) {
+      reconcileRoundEntriesTx(tx, {
+        ...roundRow,
+        status: 'answered',
+        answersJson,
+        directive: args.directive,
+        questionScopesJson,
+      })
+      tx.update(taskQuestions)
+        .set({
+          confirmation: 'confirmed',
+          confirmedBy: answeredBy,
+          confirmedByRole: args.submittedByRole ?? null,
+          confirmedAt: answeredAt,
+          updatedAt: answeredAt,
+        })
+        .where(
+          and(
+            eq(taskQuestions.originNodeRunId, args.crossClarifyNodeRunId),
+            eq(taskQuestions.roleKind, 'questioner'),
+            isNull(taskQuestions.dispatchedAt),
+            eq(taskQuestions.confirmation, 'open'),
+          ),
+        )
+        .run()
+    }
+    // flip cross_clarify_session → answered.
+    tx.update(crossClarifySessions)
+      .set({
+        answersJson,
+        status: 'answered',
+        directive: args.directive,
+        answeredAt,
+        questionScopesJson,
+      })
+      .where(eq(crossClarifySessions.id, row.id))
+      .run()
+    // RFC-058 T12 dual-write — mirror to clarify_rounds (+ RFC-059 scopes + RFC-099 attribution).
+    tx.update(clarifyRounds)
+      .set({
+        answersJson,
+        status: 'answered',
+        directive: args.directive,
+        answeredAt,
+        questionScopesJson,
+        ...attributionSet,
+      })
+      .where(eq(clarifyRounds.id, row.id))
+      .run()
+  })
+
+  // RFC-053: resume-clarify enforces awaiting_human → done. Cross-clarify shares the same transition
+  // shape so we reuse the event kind. Stays AFTER the tx (lifecycle CAS, s14 forbids direct writes);
+  // the flip is already committed so the cross node is never `done` with the session still awaiting.
   await transitionNodeRunStatus({
     db: args.db,
     nodeRunId: args.crossClarifyNodeRunId,
