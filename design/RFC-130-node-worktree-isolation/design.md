@@ -98,11 +98,11 @@ export async function snapshotFullState(
 - **路径必须在主 worktree 之外**（D14，Codex 设计 gate P1）：`{appHome}/iso/{taskId}/{nodeRunId}`（单仓）；多仓 `.../iso/{taskId}/{nodeRunId}/{worktreeDirName}`。**绝不放在主 worktree 目录树内**——否则后续兄弟节点 / wrapper 的 `snapshotFullState(主树)` 里 `git add -A` 会把 `iso/...`（一个带 gitlink 的嵌入 worktree）当 untracked embedded repo 暂存进快照树 → 临时隔离树泄漏进产物 / 合并树。放主 repo 之外则 `git add -A` 根本看不到它。写 `iso_worktree_path`。
 - **隔离树 HEAD = 任务原始 base HEAD，累积改动作为「未提交工作区状态」铺上**（D23，Codex 三轮 P2「下游 diff 语义」）：**不能**直接 `worktree add <iso> <snapshot-commit>`——那会让上游 A 已合并的改动变成隔离树的**已提交 HEAD**，下游 B 的 `git status`/`git diff HEAD` 对 A 的改动**变干净**，而现状共享树里上游改动是**未提交、可见**的（inspect-diff 型 workflow / prompt 会丢上下文）。改为：
   ```
-  git worktree add --detach <iso> <base-snapshot-commit>  // 工作区/HEAD = 累积快照（净 checkout：
-                                                          //   含上游删除，无陈旧残留——Codex 四轮 P2）
-  git -C <iso> reset --soft <task-base-HEAD>              // 仅移 HEAD→原始基线，index/工作区不动
+  git worktree add --detach <iso> <base-snapshot-commit>  // 工作区/index/HEAD = 累积快照
+                                                          //   （净 checkout：含上游删除，无陈旧残留）
+  git -C <iso> reset --mixed <task-base-HEAD>            // HEAD+index→原始基线，工作区不动（=快照）
   ```
-  `worktree add <快照commit>` 是**净 checkout**（工作区精确等于快照树，上游删除的文件不会残留）；`reset --soft <base>` 只把 HEAD 挪回原始基线、保留 index/工作区。于是隔离树 = 「HEAD 原始基线 + 累积改动（staged/未提交）」，与主树结构一致；`git diff HEAD` 显示累积改动（含 former-untracked 新增、上游删除），下游 agent 照旧从 diff 看到上游产物。**AC-3b diff-可见性 + 上游删除回归锁**（对比早期 `read-tree`+`checkout-index` 写法不删工作区已删文件 → 弃用）。
+  `worktree add <快照commit>` 是**净 checkout**（工作区精确等于快照树，上游删除的文件不残留）；`reset --mixed <base>`（**非 `--soft`**，Codex 五轮 P2）把 HEAD **与 index** 挪回原始基线、**保留工作区=快照**。于是隔离树 = 「HEAD/index=原始基线 + 工作区=累积快照」，与主树**逐字同构**：**纯 `git diff`**（工作区 vs index=base）= 累积改动**未暂存**、former-untracked = **untracked**、上游删除 = 未暂存删除——**与现状共享树的 `git diff`/`git status` 完全一致**（下游 agent 无论跑 `git diff` 还是 `git diff HEAD` 都看到上游产物）。若用 `--soft` 则改动全 staged、纯 `git diff` 空 → 回归，故用 `--mixed`。**AC-3b diff-可见性 + 上游删除回归锁**。
 - **submodule 初始化（D20，Codex 设计 gate P2）**：`worktree add` **不填充 submodule 工作区**。既有 `createWorktree` 在 add 后跑 `syncSubmodules`（git.ts:396-404，按配置 mode/jobs）；隔离树**必须同样跑**——否则 agent 读/改 submodule 文件会看到空 checkout、产出与主树不一致的树。`createIsolatedWorktree` 内在 add 后调 `syncSubmodules`（或对 `hasSubmodules` 任务显式门控）。合并回收对 submodule gitlink 的处理随 `merge-tree` 语义（gitlink 作为特殊 blob 三路合并）。
 - **submodule 脏编辑 = v1 已知限制（D22，Codex 三轮 P2）**：agent **在 submodule 工作区内改文件但不在 submodule 里提交**时，超级项目的 `snapshotFullState`（`git add -A`）**只记录 submodule gitlink、丢弃这些脏文件** → 它们不进 `iso_node_tree` / merge-back → 用户改动丢失。**这是隔离模型对既有共享树行为的回归**（共享树里 submodule 脏文件会持久）。v1 处理：**检测并门控**——对 `hasSubmodules` 任务，若隔离终态快照发现 submodule 工作区有未提交脏改动，**该 node fail-loud（`submodule-dirty-unsupported`）而非静默丢**；**递归 submodule 隔离/合并（每个 submodule 作独立隔离子树三路合并）列为后续 RFC**。proposal 非目标登记。
 - pin：**base 与 node 快照用两个不同 ref**（D26，Codex 四轮 P2）——`iso_base_snapshot` → `refs/agent-workflow/iso/{taskId}/{nodeRunId}/base`；`iso_node_tree`（§5.1 成功时）→ `.../{nodeRunId}/node`。**两 ref 都留到该 run `merge_state='merged'` 后才删**（pending-merge replay 同时需要 base 与 node，§10.2）；若共用一个 ref，成功路径 pin/清 node 时会覆盖/删掉 base → replay 缺料退化重跑。照 `snapshotRefName` 惯例（git.ts:818）。
@@ -146,16 +146,20 @@ merged, conflicts = git merge-tree --write-tree --merge-base=<base> <ours(canon_
 ### 5.3 materialize（把合并树落地为主树未提交改动）
 
 ```
-git -C 主树 read-tree <merged>          // 更新 index 到合并树
-git -C 主树 checkout-index -f -a         // 写工作区文件
-git -C 主树 rm -- <被 merged 删除但工作区残留的路径>   // 精确删，见下（checkout-index 不删）
+# ① 先算删除/类型变更集（Codex 五轮 P1）——checkout-index 不删、且 file↔dir 替换会失败
+removed = git diff --name-status <canon_current_tree> <merged>  过滤 D（删除）+ T（类型变更 file↔dir）
+for p in removed:  rm -rf <主树>/p        // 先从文件系统 unlink（含 foo→foo/bar 的旧 foo）
+# ② 再落合并树
+git -C 主树 read-tree <merged>            // index → 合并树
+git -C 主树 checkout-index -f -a           // 写工作区文件（旧路径已 unlink，file↔dir 不冲突）
+git -C 主树 reset --mixed <task-base-HEAD> // index 回基线，工作区=合并树（保「未暂存」语义，同 §4.2）
 git -C 主树 submodule update --init <gitlink 变化的 submodule>   // D20/D22：刷 submodule 工作区
 ```
 
 - 主树 HEAD 不动 → `git diff HEAD`（= `gitDiffSnapshot` 从 base commit，git.ts:543）仍显示全部累积改动，含新增（former-untracked）。I-2 保持。
 - **删除处理**：合并树里被删的文件需从工作区移除；用合并树与主树现态的 diff 精确 `rm`，不裸 `clean -fd`（避免误删无关 untracked）。
 - **submodule gitlink 刷新（Codex 四轮 P2）**：合并树若含变化的 submodule gitlink（agent 在 submodule 内**已提交**、超级项目 gitlink 更新），read-tree/checkout-index 只更新超级项目 index/tree、**不 checkout submodule 目录到新 commit** → canonical submodule 工作区停旧 commit、后续 `snapshotFullState` 的 `git add -A` 会记回旧 gitlink 丢更新。故 materialize 后对 gitlink 变化的 submodule 跑 `submodule update`（D20/D22 配套）。
-- former-untracked → 经 read-tree 变**已暂存**：仍属「未提交」（I-2 成立）；`gitDiffSnapshot`（比对 base commit ↔ 工作区）与 auto commit&push（`git add -A`）都不受影响。决策 D8 记此**良性偏移**。
+- former-untracked：经 read-tree+checkout 后再 `reset --mixed <task-base-HEAD>` → index 回基线 → 这些文件回到 **untracked**（与现状共享树一致，无 staged 偏移）；`gitDiffSnapshot`（比对 base commit ↔ 工作区，含 untracked 合成）与 auto commit&push（`git add -A`）都照旧。决策 D8 简化：`--mixed` 后**无偏移**。
 
 ### 5.4 干净快路径 & 空 delta
 
@@ -191,10 +195,17 @@ merge-tree 出冲突 conflicts[]：
         cmt = git commit-tree <merged> -p <base> -m aw-conflict   // pin 防 gc
      再 git worktree add --detach <resolve-iso> <cmt>            // 解冲突工作区（带冲突标记）
   ② runNode(合并 agent, cwd=<resolve-iso>, 绕 globalSem〔§7 防死锁〕)
-  ③ 成功判定 = resolve-iso 工作区无残留冲突标记（grep '^<<<<<<< ' / '^>>>>>>> ' / '^=======$'）
-       且进程正常收尾
+       // prompt 注入 conflicts[] manifest（路径 + 冲突类型 + 双方内容/意图）——无文本标记的
+       // modify-delete/binary/submodule 冲突，agent 只看工作区文件察觉不到，须由 manifest 告知
+  ③ 成功判定 = **以 merge-tree 的 conflicts[] manifest 为准**（Codex 五轮 P1，非仅 grep 标记）：
+       manifest 覆盖 content / modify-delete / rename-delete / binary / submodule 五类，
+       后四类**不留 `<<<<<<<` 文本标记**——仅 grep 会漏判、静默丢冲突。判定：
+         (a) content 类 manifest 路径：无残留文本标记（grep '^<<<<<<< '/'^=======$'/'^>>>>>>> '）
+         (b) 每个 manifest 路径都被 agent **做出确定裁决**（modify-delete → 文件存/删二选一；
+             binary/submodule → 择一侧）——用「对 resolved_tree 重跑 merge 校验 / 逐路径状态检查」坐实
+         (c) 进程正常收尾
   ④ 判定通过 → resolved_tree = snapshotFullState(resolve-iso) → materialize(主树, resolved_tree)
-     判定失败（残留标记 / 进程失败耗尽重试）→ §6.3
+     判定失败（任一 manifest 路径未决 / 残留标记 / 进程失败耗尽重试）→ §6.3
   ⑤ 弃 resolve-iso
 ```
 
@@ -237,20 +248,25 @@ merge-tree 出冲突 conflicts[]：
 
 ## 8. wrapper 交互（AC-10/11/12）
 
-### 8.1 wrapper-git
+### 8.1 wrapper-git —— wrapper 自身即嵌套隔离边界（D29，Codex 五轮 P2）
 
-- pre/post 快照仍取**主树**（`runGitWrapperNode`，scheduler.ts:4588/4675，在 writeSem.run 内），`git_diff` = post−pre。
-- 内部节点各自隔离 + 合并回主树；wrapper 内所有内部节点完成后（`runScope` await 全部），所有合并回收已落主树 → post 快照含内部改动**全集** → `git_diff` 与串行等价（I-4/AC-10）。
-- pre 必须在任一内部节点段①快照之前取（内部节点 base ⊇ wrapper pre）；post 在全部合并回收后取。二者都在 writeSem 上，与内部合并回收互斥 → 一致。
+**问题**：若 wrapper 的 pre/post 直接取**任务主树**，而同一父 scope 里有**无关兄弟写节点**并行——兄弟 merge-back 若落在 wrapper 的 pre 与 post 之间，`git_diff` 会**混入兄弟文件**（AC-10 破）。现状靠 writeSem 全局串行不会发生；新模型兄弟并行则会。
+
+**修 = wrapper 私有 canonical（隔离分层）**：隔离不止 node 级，**wrapper 本身也隔离**——
+- wrapper 进入时从**任务主树当前态**快照出一个 **wrapper 私有 worktree**（`wrapper-canonical`，`{appHome}/iso/{taskId}/{wrapperRunId}`，主 repo 外）。
+- 内部节点的隔离 base / 合并回收目标从「任务主树」改为 **wrapper-canonical**（内部节点隔离 FROM wrapper-canonical、merge-back INTO wrapper-canonical）。
+- `git_diff` = wrapper-canonical **post − 其进入快照**（在 wrapper-canonical 上取，**与任务主树的兄弟 merge-back 完全隔离**）→ 与串行等价（I-4/AC-10）。
+- wrapper 全部内部节点完成后，**wrapper 的总 delta 作为一个单元 merge-back 进任务主树**（如同 wrapper 是一个隔离 node：三路合并、冲突走 §6）。
+- **隔离分层**：`任务主树 → wrapper-canonical → node-iso`，每层从父层隔离、向父层合并。wrapper 嵌套（git-in-loop 等）= 分层再加一级，天然递归一致。
 
 ### 8.2 wrapper-loop
 
-- 每迭代进入内部 scope，内部节点隔离 + 合并进主树；跨迭代状态经主树文件（v1 无跨迭代反馈端口，proposal 模型不变）。
-- `git in loop`（git 在 loop 内）= 每迭代取一次 pre/post，末迭代 diff 为输出；`loop in git` = loop 外 git 取一次 pre、全循环后 post = 全循环总 diff。隔离不改这两个取点，只把内部写从「串行落主树」换成「并行落隔离树→串行合并回主树」，净累积一致（AC-11）。
+- loop wrapper 同样有 **wrapper 私有 canonical**（§8.1 D29）：每迭代内部节点隔离 FROM / merge-back INTO 该 loop-canonical；跨迭代状态经 loop-canonical 文件累积（v1 无跨迭代反馈端口，proposal 模型不变）。全循环完成后 loop 总 delta merge-back 进父层。
+- `git in loop`（git 在 loop 内）= 每迭代 git-canonical（loop-canonical 之下再一层）取 pre/post，末迭代 diff 为输出；`loop in git` = git-canonical 在 loop 外、全循环后 post = 全循环总 diff。隔离分层不改这两个逻辑取点，只把「串行落主树」换成「并行落 node-iso → 串行合并回 wrapper-canonical」，净累积一致（AC-11）。
 
 ### 8.3 wrapper-fanout（最高风险子案）
 
-- 可写 shard（`dispatchFanoutShard`，scheduler.ts:4056）各自隔离树并行跑（受 `subprocessSem`）；合并回主树串行（writeSem）。不同 shard 通常改不同文件（per-file/per-dir 分片）→ 合并干净；同文件重叠 → 走 §6。
+- fanout 亦是 wrapper → 有 **wrapper 私有 canonical**（§8.1 D29）；可写 shard（`dispatchFanoutShard`，scheduler.ts:4056）各自隔离树并行跑（受 `subprocessSem`）、合并回 **fanout-canonical** 串行（writeSem）；全 shard + aggregator 完成后 fanout 总 delta merge-back 进父层。不同 shard 通常改不同文件（per-file/per-dir 分片）→ 合并干净；同文件重叠 → 走 §6。
 - **value-hash replay**（RFC-098 B3，scheduler.ts:3906）：replay 的 shard 不 spawn、不建隔离树、不合并回收——其上次改动已在主树（上次 run 的合并回收落过）。replay 复用旧 node_run，天然跳过段①③。
 - **shard rerun（value 变）**：新 run 隔离 base = 主树现态（含**本 shard 上次**已落改动）；合并回收 delta = 新态 vs base。**风险**：上次 shard 改动仍在主树、rerun 又叠新改动 = 语义应「替换本 shard 贡献」而非叠加。v1 处理：rerun 前对**本 shard 上次改动**做定向撤销（读上次 run 的 delta 反向 apply）后再建隔离 base——**此子案单独硬化 + 测试锁**（plan T-fanout）。决策 D9 标为最高风险、最后交付、加 shard-rerun 等价性回归测试。
 - aggregator（scheduler.ts:4347）同单节点：隔离 + 合并。
@@ -377,7 +393,9 @@ merge-tree 出冲突 conflicts[]：
 - **D25**（Codex 设计 gate 三轮 P2）`runGit` 加可选 `{ env }`（merge 在 `nonInteractiveGitEnv()` 上）以支持 `GIT_INDEX_FILE` 临时 index；`snapshotFullState` 依赖它。
 - **D26**（Codex 设计 gate 四轮 P2）base 与 node 快照 pin **两个不同 ref**（`.../{nodeRunId}/base`、`.../node`），都留到 `merged` 后才删——pending-merge replay 同需二者，共用一 ref 会互相覆盖致 GC 缺料。
 - **D27**（Codex 设计 gate 四轮 P2）合并 agent 失败的 conflict-human **不把冲突标记落主树**：保留解决 worktree、主树维持本节点合并前状态，兄弟 merge-back 对干净主树进行；resume 时对主树现态重算 merge-tree(base, canon_now, resolved)。
-- **D28**（Codex 设计 gate 四轮 P2）隔离树创建用 `worktree add <base-snapshot-commit>`（净 checkout 含上游删除）+ `reset --soft <base-HEAD>`，取代 `read-tree`+`checkout-index`（后者不删工作区已删文件）；materialize 后对变化 gitlink 跑 `submodule update`。
+- **D28**（Codex 设计 gate 四/五轮 P2）隔离树创建用 `worktree add <base-snapshot-commit>`（净 checkout 含上游删除）+ **`reset --mixed <base-HEAD>`**（非 `--soft`——`--mixed` 让改动**未暂存**，纯 `git diff`/`git status` 与现状共享树逐字一致）；materialize **先算删除集 unlink 再 read-tree+checkout**（`checkout-index` 不删、file↔dir 替换会失败）+ 对变化 gitlink 跑 `submodule update`。
+- **D29**（Codex 设计 gate 五轮 P2）**wrapper 自身即嵌套隔离边界**：git/loop/fanout wrapper 各有 **wrapper 私有 canonical**（内部节点隔离/合并 FROM/INTO 它、wrapper diff 取自它、wrapper 总 delta 作单元 merge-back 进父层）→ 兄弟 merge-back 触任务主树、不污染 wrapper diff（AC-10）。隔离分层 `任务主树→wrapper-canonical→node-iso`，递归一致。
+- **D30**（Codex 设计 gate 五轮 P1）合并成功判定**以 merge-tree `conflicts[]` manifest 为准**（覆盖 content/modify-delete/rename-delete/binary/submodule 五类），非仅 grep 文本标记（后四类无标记）；合并 agent prompt 注入 manifest。
 
 ## 17. 性能与后续
 

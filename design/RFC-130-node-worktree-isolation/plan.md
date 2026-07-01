@@ -51,7 +51,7 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
 - **RFC-130-T4**：`services/mergeAgent.ts`（`buildMergeAgent`，仿 commitPush.ts:29；无 readonly）+ config `mergeAgentRuntime`/`mergeAgentModel`（config.ts，仿 commitPushRuntime）+ `RunTaskOptions` 线程 + CLI bootstrap（cli/start.ts）。
 - **RFC-130-T5**：冲突流程（scheduler 段③冲突分支替换占位）
   - `commitTree(merged, base)` wrap 成 commit → 建 resolve 隔离树（Codex 二轮 P2-2）→ `runNode(合并 agent, 绕 globalSem)` → `residualConflictMarkers` 判定 → 成功 materialize resolved（+ submodule 刷新）/ **失败 = 保留 resolve-iso、主树不落冲突标记、node conflict-human/awaiting_human（D27，兄弟 merge-back 对干净主树）**。
-  - awaiting_human：冲突节点 `park-human` + 任务 `running→awaiting_human`；`merge_state='conflict-human'` + materialize 带标记树到主树。
+  - awaiting_human：冲突节点 `park-human` + 任务 `running→awaiting_human`；`merge_state='conflict-human'` + `iso_worktree_path` 指向保留的 `resolve-iso`（**主树保持干净、不落冲突标记**，D27——人工在 resolve-iso 里解）。
   - 合并 agent 子 run（`parentNodeRunId` + `cause='merge-resolve'` + keyed `merge:`，仿 commit-push child）。
   - 锁序注释写进 `taskWriteLocks.ts`（§7.2：合并 agent 绕 globalSem 防死锁）。
 - **RFC-130-T6**：resume 处理 `conflict-human`（`resumeKick` 首 tick：`resolve-iso` 无残留标记 → 取 resolved 快照对**主树现态**重算 `merge-tree(base, canon_now, resolved)` → 干净 materialize + merged + done + 放行下游 / 又冲突再 §6 / 仍有标记再 awaiting_human，D27）。**测试**：conflict-human 期间兄弟 merge-back 对干净主树成功（不撞冲突残渣）；人工解完 resume 对推进后的主树重合并。
@@ -69,7 +69,7 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
 
 ## PR-D —— wrapper 覆盖（git / loop / fanout）
 
-- **RFC-130-T11**：wrapper-git 内部节点走隔离（pre/post 仍主树，diff 等价，AC-10）。
+- **RFC-130-T11**：wrapper 私有 canonical（D29）——git/loop/fanout wrapper 各从父层快照出 `wrapper-canonical`（主 repo 外），内部节点隔离/合并 FROM/INTO 它、wrapper diff 取自它（**兄弟 merge-back 不污染**）、wrapper 总 delta 作单元 merge-back 进父层。wrapper-git 的 pre/post 在 wrapper-canonical 上取（diff 等价，AC-10）。**测试**：git wrapper + 无关兄弟写节点并行 → `git_diff` 不含兄弟文件。
 - **RFC-130-T12**：wrapper-loop（git-in-loop / loop-in-git / loop-in-loop）内部节点隔离 + 合并；每迭代/全循环 diff 语义锁（AC-11）。
 - **RFC-130-T13**：wrapper-fanout shard（`dispatchFanoutShard` :4056）+ aggregator（:4347）隔离 + 合并；value-hash replay 跳段①③。
 - **RFC-130-T14（最高风险，末位）**：shard-rerun 等价性——rerun 前定向撤销本 shard 上次 delta 再建隔离 base（§8.3 D9）；专项回归锁「rerun 不叠加本 shard 旧改动」。
