@@ -43,6 +43,25 @@ export function nonInteractiveGitEnv(): Record<string, string | undefined> {
 }
 
 /**
+ * RFC-130: a FIXED author/committer identity for the platform's INTERNAL git commits
+ * — the iso full-state snapshots (`snapshotFullState`) and the merge-resolution /
+ * shard-replacement trees (`commitTree`). These are implementation-detail objects, so
+ * they must NEVER depend on the ambient git config: a task worktree cloned from a URL
+ * inherits no `user.name`/`user.email`, and some CI runners (notably GitHub's ubuntu
+ * image) also have no global identity AND cannot auto-detect one (no resolvable
+ * user@host email) — so a bare `git commit-tree` there fails with "committer identity
+ * unknown", which surfaced as `iso-setup-failed` on ubuntu-only. Injecting this env
+ * makes those internal commits succeed regardless of the host/worktree git config.
+ * (User-facing commits — RFC auto commit&push — keep using the task's own identity.)
+ */
+export const AW_INTERNAL_GIT_IDENTITY: Record<string, string> = {
+  GIT_AUTHOR_NAME: 'agent-workflow',
+  GIT_AUTHOR_EMAIL: 'agent-workflow@localhost',
+  GIT_COMMITTER_NAME: 'agent-workflow',
+  GIT_COMMITTER_EMAIL: 'agent-workflow@localhost',
+}
+
+/**
  * Run `git -C <cwd> <...args>` and capture stdout/stderr. Never throws.
  *
  * RFC-130 (D25): optional `opts.env` is MERGED OVER `nonInteractiveGitEnv()` so
@@ -1065,14 +1084,13 @@ export async function snapshotFullState(
       throw new DomainError('iso-snapshot-failed', `write-tree: ${writeTree.stderr.trim()}`, 500)
     }
     const tree = writeTree.stdout.trim()
-    const commit = await runGit(worktreePath, [
-      'commit-tree',
-      tree,
-      '-p',
-      'HEAD',
-      '-m',
-      'aw-iso-snapshot',
-    ])
+    const commit = await runGit(
+      worktreePath,
+      ['commit-tree', tree, '-p', 'HEAD', '-m', 'aw-iso-snapshot'],
+      // RFC-130: internal snapshot commit must not depend on ambient git identity
+      // (a URL-cloned worktree has none; some CI runners can't auto-detect one).
+      { env: AW_INTERNAL_GIT_IDENTITY },
+    )
     if (commit.exitCode !== 0) {
       throw new DomainError('iso-snapshot-failed', `commit-tree: ${commit.stderr.trim()}`, 500)
     }
@@ -1217,7 +1235,11 @@ export async function commitTree(
   parentCommit: string,
   message: string,
 ): Promise<string> {
-  const r = await runGit(repoPath, ['commit-tree', treeOid, '-p', parentCommit, '-m', message])
+  const r = await runGit(repoPath, ['commit-tree', treeOid, '-p', parentCommit, '-m', message], {
+    // RFC-130: internal merge-resolution / shard-replacement commit — fixed identity
+    // (independent of the worktree/host git config, same rationale as snapshotFullState).
+    env: AW_INTERNAL_GIT_IDENTITY,
+  })
   if (r.exitCode !== 0) {
     throw new DomainError('commit-tree-failed', `git commit-tree: ${r.stderr.trim()}`, 500)
   }
