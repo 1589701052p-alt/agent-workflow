@@ -479,3 +479,108 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     await waitFor(() => expect(document.activeElement).toBe(submit))
   })
 })
+
+// Codex impl-gate #2 (2026-07-01): the deferred submit-focus flag was too GLOBAL — once armed (empty
+// last-question Enter), ANY later filledTotal change flushed it and stole focus to submit, even when
+// the change came from editing a DIFFERENT question. These lock the scoping/cancel: a pending focus is
+// superseded by navigating to / editing a non-last question, and reset on close.
+describe('CentralizedAnswerDialog — pending submit-focus scoping / cancel', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  test('stale #1: empty last-question Enter → then answer an EARLIER question (digit) → focus stays on the advance target, NOT stolen to submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const q2 = screen.getByTestId('clarify-question-q2')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    // Empty LAST question → Enter arms a pending submit focus (button still disabled).
+    q2.focus()
+    fireEvent.keyDown(q2, { key: 'Enter' })
+    expect(submit.disabled).toBe(true)
+
+    // Reviewer goes BACK and answers an earlier question via digit → advances to q2 (its next).
+    q1.focus()
+    fireEvent.keyDown(q1, { key: '1' })
+    // filledTotal is now >0 (submit enabled) but the stale pending was superseded → focus is on q2,
+    // NOT stolen to submit.
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    expect(document.activeElement).toBe(q2)
+    expect(document.activeElement).not.toBe(submit)
+  })
+
+  test('stale #2: empty last-question Enter → then fill an EARLIER question via custom-text → focus NOT stolen to submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const q2 = screen.getByTestId('clarify-question-q2')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    q2.focus()
+    fireEvent.keyDown(q2, { key: 'Enter' }) // empty last → pending submit focus armed
+
+    // Fill an EARLIER question via the custom-text path (Other row + type a char).
+    fireEvent.click(within(q1).getByTestId('clarify-custom-radio'))
+    fireEvent.change(within(q1).getByTestId('clarify-custom-textarea'), { target: { value: 'x' } })
+
+    // The earlier edit superseded the pending focus → submit enables but is NOT auto-focused.
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    expect(document.activeElement).not.toBe(submit)
+  })
+
+  test('stale #3: close + reopen with an armed pending focus → no stale steal after reopen', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    qc.setQueryData(
+      ['task-questions', 'task-1'],
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+    )
+    qc.setQueryData(
+      ['clarify', 'detail', 'nr_a'],
+      round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] }),
+    )
+    const ui = (open: boolean) => (
+      <QueryClientProvider client={qc}>
+        <CentralizedAnswerDialog taskId="task-1" open={open} onClose={() => {}} />
+      </QueryClientProvider>
+    )
+    const view = render(ui(true))
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+
+    // Arm pending on the empty last question, then close (should reset the flag) + reopen.
+    const q2 = screen.getByTestId('clarify-question-q2')
+    q2.focus()
+    fireEvent.keyDown(q2, { key: 'Enter' })
+    view.rerender(ui(false))
+    view.rerender(ui(true))
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    // Fill the LAST question by MOUSE (does not re-arm pending). If close reset the flag, this must
+    // NOT auto-steal focus to submit (the pre-fix bug carried the stale flag across reopen).
+    fireEvent.click(within(screen.getByTestId('clarify-question-q2')).getAllByRole('radio')[0]!)
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    expect(document.activeElement).not.toBe(submit)
+  })
+})

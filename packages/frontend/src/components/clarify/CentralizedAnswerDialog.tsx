@@ -210,7 +210,10 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
       if (idx === -1) return
       const nextKey = keys[idx + 1]
       if (nextKey !== undefined) {
-        // Same-round next OR the first question of the next round — one flat order.
+        // Same-round next OR the first question of the next round — one flat order. Navigating to
+        // ANOTHER question SUPERSEDES a pending last-question submit focus (the reviewer moved back
+        // to answer an earlier question) — cancel it so the flush effect can't later steal focus.
+        pendingSubmitFocusRef.current = false
         questionRefs.current.get(nextKey)?.focus()
       } else {
         // Last question of the last round → move focus onto the single submit button so a follow-up
@@ -220,11 +223,31 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
     },
     [groups, focusSubmitButton],
   )
-  // Flush a deferred submit-button focus once the button enables (filledTotal 0→N after the last
-  // question's answer commits). No-op unless a last-question advance set the pending flag.
+  // Editing a NON-last question also SUPERSEDES a pending last-question submit focus (the reviewer
+  // went back to fill an earlier question — its answer commits + bumps filledTotal, which would
+  // otherwise flush the stale pending focus onto submit, stealing it from where the reviewer is).
+  // Editing the LAST question does NOT cancel — that's the "empty last → Enter → fill it → focus
+  // submit" flush. Called from every QuestionForm's onChange (cheap: short-circuits when no pending).
+  const notifyQuestionEdited = useCallback(
+    (originNodeRunId: string, questionId: string) => {
+      if (!pendingSubmitFocusRef.current) return
+      const keys = flattenCentralizedNavKeys(groups, roundOrderRef.current)
+      const lastKey = keys[keys.length - 1]
+      if (`${originNodeRunId}:${questionId}` !== lastKey) pendingSubmitFocusRef.current = false
+    },
+    [groups],
+  )
+  // Flush a deferred submit-button focus once the button enables (filledTotal 0→N after the LAST
+  // question's answer commits). No-op unless a last-question advance set the pending flag AND it
+  // wasn't superseded (advanceFromQuestion / notifyQuestionEdited above) by moving to / editing
+  // another question in the meantime.
   useEffect(() => {
     if (pendingSubmitFocusRef.current) focusSubmitButton()
   }, [filledTotal, focusSubmitButton])
+  // Clear any pending submit focus when the dialog closes so a reopen never inherits a stale flag.
+  useEffect(() => {
+    if (!open) pendingSubmitFocusRef.current = false
+  }, [open])
 
   const submitMut = useMutation<void, Error, void>({
     mutationFn: async () => {
@@ -293,6 +316,7 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
             registerQuestionRef={registerQuestionRef}
             reportRoundOrder={reportRoundOrder}
             onAdvance={advanceFromQuestion}
+            onQuestionEdited={notifyQuestionEdited}
           />
         ))}
         {submitMut.error !== null && submitMut.error !== undefined && (
@@ -349,6 +373,9 @@ interface RoundAnswerBlockProps {
   /** Advance keyboard focus from (round, question) to the next question in the flattened global
    *  order (or the submit button at the very end). */
   onAdvance: (originNodeRunId: string, questionId: string) => void
+  /** Notify the dialog that a question's answer changed, so it can cancel a stale pending
+   *  last-question submit focus when a NON-last question is edited. */
+  onQuestionEdited: (originNodeRunId: string, questionId: string) => void
 }
 
 /** One clarify round's answer block. Owns its local answer state + draft autosave (the
@@ -366,6 +393,7 @@ function RoundAnswerBlock({
   registerQuestionRef,
   reportRoundOrder,
   onAdvance,
+  onQuestionEdited,
 }: RoundAnswerBlockProps) {
   const { t } = useTranslation()
   const roundQuery = useQuery<ClarifyRound, ApiError>({
@@ -604,7 +632,12 @@ function RoundAnswerBlock({
                 value={a}
                 index={idx + 1}
                 disabled={disabled}
-                onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
+                onChange={(next) => {
+                  // Cancel a stale pending submit focus if this is a NON-last question (no-op for
+                  // the last question → the fill-then-flush happy path is preserved).
+                  onQuestionEdited(originNodeRunId, q.id)
+                  setAnswers((prev) => ({ ...prev, [q.id]: next }))
+                }}
                 onAdvance={() => onAdvance(originNodeRunId, q.id)}
               />
             </div>
