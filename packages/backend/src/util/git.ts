@@ -7,6 +7,8 @@
 import type { GitRef } from '@agent-workflow/shared'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { rm, stat, unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Logger } from '@/util/log'
@@ -40,15 +42,27 @@ export function nonInteractiveGitEnv(): Record<string, string | undefined> {
   }
 }
 
-/** Run `git -C <cwd> <...args>` and capture stdout/stderr. Never throws. */
-export async function runGit(cwd: string, args: string[]): Promise<GitRunResult> {
+/**
+ * Run `git -C <cwd> <...args>` and capture stdout/stderr. Never throws.
+ *
+ * RFC-130 (D25): optional `opts.env` is MERGED OVER `nonInteractiveGitEnv()` so
+ * callers can inject per-spawn vars (e.g. `GIT_INDEX_FILE` for a temp index in
+ * `snapshotFullState`) without clobbering the non-interactive ssh/https guards.
+ * A key whose value is `undefined` unsets that var for this spawn.
+ */
+export async function runGit(
+  cwd: string,
+  args: string[],
+  opts?: { env?: Record<string, string | undefined> },
+): Promise<GitRunResult> {
   const proc = Bun.spawn({
     cmd: ['git', '-C', cwd, ...args],
     // Explicit env passthrough — Bun.spawn under `bun test` does not pick up
     // post-startup process.env mutations otherwise, which makes per-test env
     // injection (e.g. GIT_CONFIG_GLOBAL) unreliable. In production this is a
     // no-op since process.env is fixed at daemon start.
-    env: nonInteractiveGitEnv(),
+    env:
+      opts?.env === undefined ? nonInteractiveGitEnv() : { ...nonInteractiveGitEnv(), ...opts.env },
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
@@ -967,5 +981,292 @@ export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void>
       `git worktree remove failed: ${r.stderr.trim()}`,
       500,
     )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RFC-130 — per-node isolated worktree + serial merge-back primitives.
+//
+// Model (design.md §2): every node run gets its own isolated worktree branched
+// from a full snapshot of the canonical worktree; runs opencode in parallel;
+// on success its delta is 3-way merged back into the canonical worktree under
+// the task write lock. These are the low-level git primitives (T1); the
+// scheduler wiring (T3) lives in services/scheduler.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Monotonic counter for unique temp index paths (Date.now-free for determinism). */
+let isoTmpIndexCounter = 0
+
+/**
+ * RFC-130 pin-ref name for an isolated run's base / node snapshot (D26: base and
+ * node use DISTINCT refs so the success path pinning `node` never clobbers `base`,
+ * both survive for pending-merge replay until the run is merged).
+ */
+export function isoRefName(taskId: string, nodeRunId: string, kind: 'base' | 'node'): string {
+  return `refs/agent-workflow/iso/${taskId}/${nodeRunId}/${kind}`
+}
+
+/** All RFC-130 iso refs for a task (GC / cleanup glob root). */
+export function isoRefGlob(taskId: string): string {
+  return `refs/agent-workflow/iso/${taskId}`
+}
+
+/**
+ * RFC-130 D2/D25: snapshot a worktree's FULL current state (HEAD + all tracked
+ * modifications + ALL untracked files) as a commit object, WITHOUT touching the
+ * worktree, the real index, or HEAD. Uses a throwaway temp index via
+ * `GIT_INDEX_FILE`. Optionally pins the commit with `update-ref` so gc cannot
+ * prune it during a long-running agent.
+ *
+ * Unlike `gitStashSnapshot` (`git stash create`, which OMITS untracked files),
+ * this includes untracked — required both for the isolation base (the agent must
+ * see the full canonical state incl. untracked upstream outputs) and for the node
+ * snapshot (a node's new files are untracked in its iso worktree).
+ */
+export async function snapshotFullState(
+  worktreePath: string,
+  opts?: { pinRef?: string; log?: Logger },
+): Promise<string> {
+  const tmpIndex = join(tmpdir(), `aw-iso-index-${process.pid}-${isoTmpIndexCounter++}`)
+  const env = { GIT_INDEX_FILE: tmpIndex }
+  try {
+    const seed = await runGit(worktreePath, ['read-tree', 'HEAD'], { env })
+    if (seed.exitCode !== 0) {
+      throw new DomainError('iso-snapshot-failed', `read-tree HEAD: ${seed.stderr.trim()}`, 500)
+    }
+    const add = await runGit(worktreePath, ['add', '-A'], { env })
+    if (add.exitCode !== 0) {
+      throw new DomainError('iso-snapshot-failed', `add -A: ${add.stderr.trim()}`, 500)
+    }
+    const writeTree = await runGit(worktreePath, ['write-tree'], { env })
+    if (writeTree.exitCode !== 0) {
+      throw new DomainError('iso-snapshot-failed', `write-tree: ${writeTree.stderr.trim()}`, 500)
+    }
+    const tree = writeTree.stdout.trim()
+    const commit = await runGit(worktreePath, [
+      'commit-tree',
+      tree,
+      '-p',
+      'HEAD',
+      '-m',
+      'aw-iso-snapshot',
+    ])
+    if (commit.exitCode !== 0) {
+      throw new DomainError('iso-snapshot-failed', `commit-tree: ${commit.stderr.trim()}`, 500)
+    }
+    const sha = commit.stdout.trim()
+    if (opts?.pinRef !== undefined) {
+      const pin = await runGit(worktreePath, ['update-ref', opts.pinRef, sha])
+      if (pin.exitCode !== 0) {
+        opts.log?.warn('iso snapshot ref pin failed (snapshot stays gc-exposed)', {
+          pinRef: opts.pinRef,
+          sha,
+          error: pin.stderr.trim(),
+        })
+      }
+    }
+    return sha
+  } finally {
+    await unlink(tmpIndex).catch(() => {
+      /* best-effort: temp index may not exist if read-tree failed */
+    })
+  }
+}
+
+export interface CreateIsolatedWorktreeOptions {
+  repoPath: string
+  /** Absolute path OUTSIDE the canonical worktree (D14). */
+  isoPath: string
+  /** Full-state snapshot commit of the canonical worktree at dispatch. */
+  baseSnapshotCommit: string
+  /** The canonical worktree's HEAD commit (task base) — iso HEAD resets here. */
+  taskBaseHead: string
+  submoduleMode?: 'auto' | 'always' | 'never'
+  submoduleJobs?: number
+}
+
+/**
+ * RFC-130 D23/D28: create an isolated worktree whose WORKING TREE equals the
+ * full-state snapshot but whose HEAD/index are the task base — so the accumulated
+ * upstream changes appear as UNSTAGED modifications (plain `git diff` / `status`
+ * behave exactly like today's shared worktree, preserving inspect-diff agents).
+ *
+ *   git worktree add --detach <iso> <baseSnapshotCommit>  // net checkout (incl deletions)
+ *   git reset --mixed <taskBaseHead>                       // HEAD+index→base, worktree stays
+ *
+ * `--mixed` (NOT `--soft`): soft would leave everything staged so plain `git diff`
+ * shows nothing. Then submodules are synced (D20) so submodule working dirs match.
+ */
+export async function createIsolatedWorktree(opts: CreateIsolatedWorktreeOptions): Promise<void> {
+  const add = await runGit(opts.repoPath, [
+    'worktree',
+    'add',
+    '--detach',
+    opts.isoPath,
+    opts.baseSnapshotCommit,
+  ])
+  if (add.exitCode !== 0) {
+    throw new DomainError(
+      'iso-worktree-add-failed',
+      `git worktree add (iso): ${add.stderr.trim()}`,
+      500,
+    )
+  }
+  const reset = await runGit(opts.isoPath, ['reset', '--mixed', opts.taskBaseHead])
+  if (reset.exitCode !== 0) {
+    throw new DomainError(
+      'iso-worktree-reset-failed',
+      `git reset --mixed (iso): ${reset.stderr.trim()}`,
+      500,
+    )
+  }
+  // D20: worktree add does not populate submodule working dirs — sync like createWorktree.
+  const { syncSubmodules } = await import('@/services/gitSubmodule')
+  const { resolveSubmoduleParams } = await import('@/services/gitRepoCache')
+  const effective = resolveSubmoduleParams(opts.submoduleMode, opts.submoduleJobs)
+  await syncSubmodules(opts.isoPath, { mode: effective.mode, jobs: effective.jobs })
+}
+
+export interface MergeTreeResult {
+  /** Merged tree OID (present even when conflicts is non-empty). */
+  mergedTree: string
+  /** Conflicted paths reported by merge-tree (empty ⟹ clean auto-merge). */
+  conflicts: string[]
+}
+
+/**
+ * RFC-130 D3: in-memory 3-way merge via `git merge-tree --write-tree` (git ≥ 2.38,
+ * D7). Produces a merged tree OID + conflicted-path list WITHOUT touching any
+ * worktree. base = the node's isolation snapshot; ours = canonical NOW; theirs =
+ * the node's final iso snapshot. Empty `conflicts` ⟹ clean → materialize directly.
+ */
+export async function mergeTreeInMemory(
+  repoPath: string,
+  opts: { base: string; ours: string; theirs: string },
+): Promise<MergeTreeResult> {
+  const r = await runGit(repoPath, [
+    'merge-tree',
+    '--write-tree',
+    '--name-only',
+    `--merge-base=${opts.base}`,
+    opts.ours,
+    opts.theirs,
+  ])
+  // exit 0 = clean, 1 = conflicts (tree still emitted on line 1), >1 = error.
+  if (r.exitCode > 1) {
+    throw new DomainError('merge-tree-failed', `git merge-tree: ${r.stderr.trim()}`, 500)
+  }
+  const lines = r.stdout.split('\n')
+  const mergedTree = (lines[0] ?? '').trim()
+  if (mergedTree === '') {
+    throw new DomainError('merge-tree-failed', 'git merge-tree produced no tree oid', 500)
+  }
+  // With --name-only the lines after the tree oid are the conflicted file names.
+  const conflicts = lines
+    .slice(1)
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+  return { mergedTree, conflicts }
+}
+
+/** RFC-130 P2-2: wrap a tree OID in a commit so `git worktree add` (which needs a
+ *  commit-ish) can seed a resolver worktree from it. */
+export async function commitTree(
+  repoPath: string,
+  treeOid: string,
+  parentCommit: string,
+  message: string,
+): Promise<string> {
+  const r = await runGit(repoPath, ['commit-tree', treeOid, '-p', parentCommit, '-m', message])
+  if (r.exitCode !== 0) {
+    throw new DomainError('commit-tree-failed', `git commit-tree: ${r.stderr.trim()}`, 500)
+  }
+  return r.stdout.trim()
+}
+
+/** RFC-130 D30: pure oracle — does the text contain a residual git conflict marker?
+ *  (Content conflicts only; modify-delete/binary/submodule leave NO markers, so
+ *  this is a fast pre-check, NOT the authoritative resolution check.) */
+export function residualConflictMarkers(text: string): boolean {
+  return /^(<{7}|={7}|>{7})(\s|$)/m.test(text)
+}
+
+/**
+ * RFC-130 §5.3 / D28: make the canonical worktree's working tree equal `mergedTree`
+ * while keeping HEAD at `taskBaseHead`, leaving the delta UNSTAGED (I-2 "uncommitted
+ * = product"). Robustly handles deletions and file↔dir replacements (Codex gate
+ * 五/六轮): remove D/T paths AND any worktree path blocking an added file BEFORE
+ * checkout, then refresh submodule working dirs for changed gitlinks (D20/D22).
+ */
+export async function materializeTree(
+  worktreePath: string,
+  opts: {
+    mergedTree: string
+    canonCurrentTree: string
+    taskBaseHead: string
+    submoduleMode?: 'auto' | 'always' | 'never'
+    submoduleJobs?: number
+  },
+): Promise<void> {
+  // ① removals (deleted + type-changed) — checkout-index never deletes.
+  const removed = await gitDiffNames(worktreePath, opts.canonCurrentTree, opts.mergedTree, 'DT')
+  for (const p of removed) {
+    await rm(join(worktreePath, p), { recursive: true, force: true })
+  }
+  // ② added paths: remove any worktree DIR blocking a new file (dir→file replace).
+  const added = await gitDiffNames(worktreePath, opts.canonCurrentTree, opts.mergedTree, 'A')
+  for (const p of added) {
+    const abs = join(worktreePath, p)
+    const st = await stat(abs).catch(() => null)
+    if (st?.isDirectory() === true) {
+      await rm(abs, { recursive: true, force: true })
+    }
+  }
+  // ③ write the merged tree into index + worktree.
+  const readTree = await runGit(worktreePath, ['read-tree', opts.mergedTree])
+  if (readTree.exitCode !== 0) {
+    throw new DomainError('materialize-failed', `read-tree: ${readTree.stderr.trim()}`, 500)
+  }
+  const checkout = await runGit(worktreePath, ['checkout-index', '-f', '-a'])
+  if (checkout.exitCode !== 0) {
+    throw new DomainError('materialize-failed', `checkout-index: ${checkout.stderr.trim()}`, 500)
+  }
+  // ④ index → base so the delta is UNSTAGED (worktree unchanged = merged tree).
+  const reset = await runGit(worktreePath, ['reset', '--mixed', opts.taskBaseHead])
+  if (reset.exitCode !== 0) {
+    throw new DomainError('materialize-failed', `reset --mixed: ${reset.stderr.trim()}`, 500)
+  }
+  // ⑤ refresh submodule working dirs for any changed gitlink (D20/D22).
+  const { syncSubmodules } = await import('@/services/gitSubmodule')
+  const { resolveSubmoduleParams } = await import('@/services/gitRepoCache')
+  const effective = resolveSubmoduleParams(opts.submoduleMode, opts.submoduleJobs)
+  await syncSubmodules(worktreePath, { mode: effective.mode, jobs: effective.jobs })
+}
+
+/** `git diff --name-only --diff-filter=<filter> <from> <to>` (RFC-130 materialize helper). */
+async function gitDiffNames(
+  worktreePath: string,
+  from: string,
+  to: string,
+  filter: string,
+): Promise<string[]> {
+  const r = await runGit(worktreePath, ['diff', '--name-only', `--diff-filter=${filter}`, from, to])
+  if (r.exitCode !== 0) {
+    throw new DomainError('materialize-failed', `diff --name-only: ${r.stderr.trim()}`, 500)
+  }
+  return r.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+}
+
+/** RFC-130: delete both iso pin refs (base + node) for a completed run. */
+export async function deleteIsoRefs(
+  repoPath: string,
+  taskId: string,
+  nodeRunId: string,
+): Promise<void> {
+  for (const kind of ['base', 'node'] as const) {
+    await runGit(repoPath, ['update-ref', '-d', isoRefName(taskId, nodeRunId, kind)])
   }
 }

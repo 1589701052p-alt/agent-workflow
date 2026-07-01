@@ -21,6 +21,12 @@ export interface GitCapabilities {
   supportsSubmoduleJobs: boolean
   /** ≥ 2.5 — required for stable worktree + submodule interaction. */
   supportsRecurseInWorktree: boolean
+  /**
+   * RFC-130 D7: ≥ 2.38 — required for `git merge-tree --write-tree`, the in-memory
+   * 3-way merge that RFC-130's serial merge-back depends on. Below this the daemon
+   * refuses isolated execution (fail-loud, not silent corruption).
+   */
+  supportsMergeTreeWriteTree: boolean
 }
 
 let cached: GitCapabilities | null = null
@@ -51,6 +57,7 @@ export function capabilitiesFromVersion(v: GitSemver | null): GitCapabilities {
     version: v,
     supportsSubmoduleJobs: gitVersionAtLeast(v, 2, 13),
     supportsRecurseInWorktree: gitVersionAtLeast(v, 2, 5),
+    supportsMergeTreeWriteTree: gitVersionAtLeast(v, 2, 38),
   }
 }
 

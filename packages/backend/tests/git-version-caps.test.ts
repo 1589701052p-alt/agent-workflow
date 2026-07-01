@@ -32,10 +32,20 @@ describe('parseGitVersion', () => {
 })
 
 describe('gitVersionAtLeast / capabilities', () => {
-  test('null version → both caps false', () => {
+  test('null version → all caps false', () => {
     const caps = capabilitiesFromVersion(null)
     expect(caps.supportsSubmoduleJobs).toBe(false)
     expect(caps.supportsRecurseInWorktree).toBe(false)
+    expect(caps.supportsMergeTreeWriteTree).toBe(false) // RFC-130 D7
+  })
+
+  test('RFC-130 merge-tree --write-tree gate: 2.37 false, 2.38 true', () => {
+    expect(
+      capabilitiesFromVersion(parseGitVersion('git version 2.37.9')).supportsMergeTreeWriteTree,
+    ).toBe(false)
+    expect(
+      capabilitiesFromVersion(parseGitVersion('git version 2.38.0')).supportsMergeTreeWriteTree,
+    ).toBe(true)
   })
 
   test('2.4 → recurse false, jobs false', () => {
@@ -56,10 +66,11 @@ describe('gitVersionAtLeast / capabilities', () => {
     expect(caps.supportsRecurseInWorktree).toBe(true)
   })
 
-  test('2.39 (modern) → both true', () => {
+  test('2.39 (modern) → all true', () => {
     const caps = capabilitiesFromVersion(parseGitVersion('git version 2.39.3'))
     expect(caps.supportsSubmoduleJobs).toBe(true)
     expect(caps.supportsRecurseInWorktree).toBe(true)
+    expect(caps.supportsMergeTreeWriteTree).toBe(true) // RFC-130 D7
   })
 
   test('gitVersionAtLeast comparison edge cases', () => {
