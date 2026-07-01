@@ -33,8 +33,10 @@ import { describe, expect, test } from 'bun:test'
 import type { clarifyRounds, nodeRuns } from '../src/db/schema'
 import {
   buildImmediateLedgerContext,
+  isDispatchedEntryConsumed,
   openImmediateRounds,
 } from '../src/services/clarifyRerunLedger'
+import type { RunLineageView } from '@agent-workflow/shared'
 
 type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
@@ -67,6 +69,23 @@ function mkRun(over: Partial<NodeRunRow>): NodeRunRow {
     status: 'done',
     ...over,
   } as NodeRunRow
+}
+
+// A RunLineageView for the dispatched-ledger handler-run lineage (resolveHandlerRun projects this;
+// hasOutput lives HERE, not on the NodeRunRow). Defaults to a done-no-output clarify continuation.
+function mkLineage(over: Partial<RunLineageView>): RunLineageView {
+  return {
+    id: 'h1',
+    nodeId: P,
+    iteration: 0,
+    loopIter: 0,
+    rerunCause: 'clarify-answer',
+    status: 'done',
+    hasOutput: false,
+    startedAt: 1,
+    parentNodeRunId: null,
+    ...over,
+  }
 }
 
 describe('openImmediateRounds — multi-round self-clarify deadlock (RFC-128 P5-BC)', () => {
@@ -211,5 +230,52 @@ describe('openImmediateRounds — multi-round self-clarify deadlock (RFC-128 P5-
     )
     expect(openImmediateRounds(P, 0, ctx, 'in-flight').map((r) => r.id)).toEqual(['round2'])
     expect(openImmediateRounds(P, 0, ctx, 'revivable').map((r) => r.id)).toEqual(['round2'])
+  })
+})
+
+describe('isDispatchedEntryConsumed — dispatched-ledger multi-round deadlock (RFC-128 P5-BC)', () => {
+  // The DISPATCHED-ledger half of the SAME done-no-output bug (found on the SAME live task
+  // 01KWDKBS...). round 1 is control-channel DISPATCHED; its handler run finishes `done` but writes
+  // NO <workflow-output> (it asked round 2). assertNoInFlightDispatch → findOpenDispatchTarget →
+  // isDispatchedEntryConsumed judged that handler "not consumed" (old `done && hasOutput`) → the home
+  // stayed in-flight → round 2 dispatch permanently blocked. This is the gate that ACTUALLY fired for
+  // the deferred task (assertNoInFlightDispatch runs BEFORE assertNoOpenImmediateLedger), so the
+  // openImmediateRounds fix alone did not unblock it — isDispatchedEntryConsumed needed the same split.
+  const entry = { triggerRunId: 'h1' }
+  const runs = [
+    mkRun({ id: 'h1', nodeId: P, iteration: 0, rerunCause: 'clarify-answer', status: 'done' }),
+  ]
+
+  test('done-no-output handler: in-flight = CONSUMED (gate releases → deadlock fix); revivable = OPEN (keeps borrowing)', () => {
+    const lineage = [mkLineage({ id: 'h1', status: 'done', hasOutput: false })]
+    // in-flight (dispatch gate / mint guard / park): a done handler terminated → consumed → releases.
+    expect(isDispatchedEntryConsumed(entry, runs, lineage, 'in-flight')).toBe(true)
+    // revivable (RFC-127 borrow): no output → NOT consumed → keeps borrowing.
+    expect(isDispatchedEntryConsumed(entry, runs, lineage, 'revivable')).toBe(false)
+  })
+
+  test('done+output handler: CONSUMED in both modes (unchanged)', () => {
+    const lineage = [mkLineage({ id: 'h1', status: 'done', hasOutput: true })]
+    expect(isDispatchedEntryConsumed(entry, runs, lineage, 'in-flight')).toBe(true)
+    expect(isDispatchedEntryConsumed(entry, runs, lineage, 'revivable')).toBe(true)
+  })
+
+  test('FAILED handler: NOT consumed in EITHER mode (revivable via retry/resume — gate stays blocked)', () => {
+    const failedRuns = [
+      mkRun({ id: 'h1', nodeId: P, iteration: 0, rerunCause: 'clarify-answer', status: 'failed' }),
+    ]
+    const lineage = [mkLineage({ id: 'h1', status: 'failed', hasOutput: false })]
+    expect(isDispatchedEntryConsumed(entry, failedRuns, lineage, 'in-flight')).toBe(false)
+    expect(isDispatchedEntryConsumed(entry, failedRuns, lineage, 'revivable')).toBe(false)
+  })
+
+  test('queued (triggerRunId null) / GC-d anchor: NOT consumed (open) — unchanged', () => {
+    const lineage = [mkLineage({ id: 'h1' })]
+    expect(isDispatchedEntryConsumed({ triggerRunId: null }, runs, lineage, 'in-flight')).toBe(
+      false,
+    )
+    expect(isDispatchedEntryConsumed({ triggerRunId: 'gone' }, runs, lineage, 'in-flight')).toBe(
+      false,
+    )
   })
 })

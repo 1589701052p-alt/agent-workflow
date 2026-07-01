@@ -698,7 +698,8 @@ interface ParkTargetEntry {
 /** Shared HOME-node park classification (RFC-120 §18 Codex H1; RFC-128 P5-BC reuse). A home
  *  node parks iff it has ≥1 UNDISPATCHED entry (`dispatched_at` NULL) AND NO IN-FLIGHT one.
  *  A dispatched entry is in-flight UNTIL consumed (its handler run, via the SAME
- *  resolveHandlerRun lineage the read-side uses, reaches done+output); once consumed a
+ *  resolveHandlerRun lineage the read-side uses, reaches `done` — incl. done-no-output, a clarify-ask
+ *  follow-up round; 2026-07-01 deadlock fix, mirrors isDispatchedEntryConsumed 'in-flight'); once consumed a
  *  still-undispatched sibling re-parks the node so a later dispatch isn't stranded. Parking
  *  a node with an in-flight dispatched entry would STRAND its already-minted rerun
  *  (deriveFrontier keeps a parked node out of `ready`), so such a node is NOT parked — it
@@ -734,7 +735,7 @@ function partitionUndispatchedParkTargets(
       hasUndispatched.add(target)
       continue
     }
-    // Dispatched → in-flight UNTIL consumed (handler run done+output, via lineage).
+    // Dispatched → in-flight UNTIL consumed (handler run done, via lineage — see park-note).
     if (e.triggerRunId === null) {
       hasInFlight.add(target) // queued (frontier rerun pending; not yet bound)
       continue
@@ -751,7 +752,13 @@ function partitionUndispatchedParkTargets(
       triggerRunId: e.triggerRunId,
       runs: lineageViews,
     })
-    const consumed = hr !== null && hr.status === 'done' && hr.hasOutput
+    // in-flight consume bar (RFC-128 2026-07-01 deadlock fix — mirrors isDispatchedEntryConsumed
+    // 'in-flight'): a done handler, INCLUDING done-no-output (a clarify-ask follow-up round;
+    // runner.ts:1321 — done PERMANENTLY without a <workflow-output> port), has terminated → NOT
+    // in-flight → the node may park (it is not running a rerun, so parking strands nothing). Only
+    // NON-done (pending/running/failed) keeps it in-flight. Keying on done+output here would strand
+    // the node in-flight forever across a multi-round clarify chain (its handler is done-no-output).
+    const consumed = hr !== null && hr.status === 'done'
     if (!consumed) hasInFlight.add(target)
   }
   const out = new Set<string>()

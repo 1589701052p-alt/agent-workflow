@@ -225,14 +225,26 @@ export function findOpenImmediateLedgerHome(
   return null
 }
 
-/** Is a dispatched designer entry CONSUMED? = its handler run, resolved through the same
- *  resolveHandlerRun lineage the read-side uses, is done WITH output (hasOutput is already
- *  folded into `lineageViews`). Queued (trigger NULL), running, failed, or GC'd anchor →
- *  NOT consumed (still open). */
+/** Is a dispatched entry CONSUMED? = its handler run (resolved through the same resolveHandlerRun
+ *  lineage the read-side uses) has reached the terminal-success bar for `mode`. Queued (trigger
+ *  NULL), running, GC'd anchor, and every NON-done terminal (failed/canceled/interrupted) →
+ *  NOT consumed (still open — revivable via retry/resume) in EITHER mode.
+ *
+ *  `mode` diverges ONLY on a done-NO-output handler (the SAME split as openImmediateRounds —
+ *  2026-07-01 deadlock fix): a clarify handler that ASKS a follow-up round exits `done` with NO
+ *  <workflow-output> port (runner.ts:1321), and that state is PERMANENT (a clarify-ask never
+ *  becomes done+output).
+ *   - 'in-flight' (dispatch gate / mint guard / park): done = consumed. A done handler has
+ *     terminated and cannot double-mint, so it must NOT keep the home blocked — else a multi-round
+ *     clarify chain DEAD-LOCKS (its round-N handler is done-no-output forever, and the gate's
+ *     "dispatch after done+output" can never be satisfied → the next round can never dispatch).
+ *   - 'revivable' (RFC-127 borrow oracle): done && hasOutput = consumed. A done-no-output handler
+ *     has produced nothing → keeps borrowing the same handler (RFC-127 consumed→null tests). */
 export function isDispatchedEntryConsumed(
   entry: Pick<TaskQuestionRow, 'triggerRunId'>,
   runs: ReadonlyArray<NodeRunRow>,
   lineageViews: RunLineageView[],
+  mode: LedgerOpenMode,
 ): boolean {
   if (entry.triggerRunId === null) return false // queued (not yet bound) → open
   const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
@@ -244,7 +256,8 @@ export function isDispatchedEntryConsumed(
     triggerRunId: entry.triggerRunId,
     runs: lineageViews,
   })
-  return hr !== null && hr.status === 'done' && hr.hasOutput
+  if (hr === null || hr.status !== 'done') return false
+  return mode === 'in-flight' ? true : hr.hasOutput
 }
 
 /** The resolveHandlerRun lineage projection (the SAME shape findOpenDispatchTarget passes) so
@@ -279,7 +292,11 @@ function toLineageViews(
  *  sees multiple open ledgers for one node (mirrors assertNoInFlightDispatch, which spans any deferred
  *  role). Keyed on a DISPATCHED entry (NOT "any pending rerun"): a prior round's quick continuation
  *  has no dispatched entry → the legitimate sequential multi-round flow is not falsely rejected.
- *  Consumed dispatched entries (rerun done+output) are not a live conflict. */
+ *  Consumed dispatched entries are not a live conflict — this is a MINT GUARD, so it uses the
+ *  'in-flight' consume bar: a done handler (incl. done-no-output — it asked a follow-up round) has
+ *  terminated and cannot double-mint, so it must NOT block the next round's mint (else deadlock).
+ *  The data-loss guard for a dispatched round is roundHasDispatchedSelfQuestioner (keys dispatched_at,
+ *  incl. consumed), which runs BEFORE this check — so releasing done-no-output here is safe. */
 export function hasOpenDispatchedEntryOnHome(
   homeNodeId: string,
   dispatchedEntries: ReadonlyArray<
@@ -293,7 +310,7 @@ export function hasOpenDispatchedEntryOnHome(
   )
   if (onHome.length === 0) return false
   const lineageViews = toLineageViews(runs, outputRunIds)
-  return onHome.some((e) => !isDispatchedEntryConsumed(e, runs, lineageViews))
+  return onHome.some((e) => !isDispatchedEntryConsumed(e, runs, lineageViews, 'in-flight'))
 }
 
 /** RFC-128 P5-BC §5.2.14 mixed-path step 1 — submit-side dispatch-mode guard. Does `originNodeRunId`

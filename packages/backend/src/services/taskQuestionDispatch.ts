@@ -803,7 +803,7 @@ function findOpenDispatchTarget(
     // RFC-127 借壳: in-flight is tracked on the HOME node (where the run is minted).
     const target = e.defaultTargetNodeId ?? e.overrideTargetNodeId
     if (target === null || target === '' || !affected.has(target)) continue
-    if (!isDispatchedEntryConsumed(e, inputs.runs, lineageViews)) {
+    if (!isDispatchedEntryConsumed(e, inputs.runs, lineageViews, 'in-flight')) {
       return target
     }
   }
@@ -1098,7 +1098,7 @@ async function resolveDeferredSelfQuestionerBorrowForNode(
     if (round === undefined) return false
     const askingRun = runById.get(round.askingNodeRunId)
     if (askingRun === undefined || askingRun.iteration !== iteration) return false
-    return !isDispatchedEntryConsumed(e, runs, lineageViews)
+    return !isDispatchedEntryConsumed(e, runs, lineageViews, 'revivable')
   })
   if (open.length === 0) return CLOSED_LEDGER
 
@@ -1179,7 +1179,7 @@ async function resolveDesignerBorrowForNode(
   const openCandidates = candidates
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
-    .filter((e) => !isDispatchedEntryConsumed(e, runs, lineageViews))
+    .filter((e) => !isDispatchedEntryConsumed(e, runs, lineageViews, 'revivable'))
   if (openCandidates.length === 0) return CLOSED_LEDGER
   // The dispatch per-home single-borrow gate (dispatchTaskQuestions step 4a) ensures the open
   // designer entries on a home agree on ONE handler (one rerun runs one agent). Pick the borrowed
