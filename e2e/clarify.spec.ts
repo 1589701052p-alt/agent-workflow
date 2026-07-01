@@ -376,17 +376,44 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
       },
     )
     expectOk(submitRes, 'POST clarify answers')
+    // RFC-132 PR-B/PR-C: submitting answers now flows through the unified
+    // autoDispatchClarifyRound path (seal → dispatch), so the response is the
+    // `autodispatch` envelope — NOT the legacy { session, rerunNodeRunId }.
+    // (routes/clarify.ts returns { ok, kind:'autodispatch', roundFullySealed,
+    // sealedQuestionIds, reruns, ... }.)
     const submit = (await submitRes.json()) as {
       ok: boolean
-      session: { status: string; answers: Array<{ selectedOptionLabels: string[] }> }
-      rerunNodeRunId: string
+      kind: string
+      roundFullySealed: boolean
+      sealedQuestionIds: string[]
+      reruns: Array<{ nodeRunId: string }>
     }
     expect(submit.ok).toBe(true)
-    expect(submit.session.status).toBe('answered')
+    expect(submit.kind).toBe('autodispatch')
+    // Both questions were answered in one shot → the round fully seals.
+    expect(submit.roundFullySealed).toBe(true)
+    expect([...submit.sealedQuestionIds].sort()).toEqual(['q-db', 'q-lang'])
+    // A rerun of the asking agent is minted + dispatched (step 6 below proves it
+    // actually reran by polling for the pending review).
+    expect(Array.isArray(submit.reruns)).toBe(true)
+
     // Server-side sealing turns indices back into labels — this defends against
-    // malicious clients sending arbitrary label strings.
-    expect(submit.session.answers[0]?.selectedOptionLabels).toEqual(['Postgres'])
-    expect(submit.rerunNodeRunId.length).toBeGreaterThan(0)
+    // malicious clients sending arbitrary label strings. The autodispatch
+    // envelope no longer echoes the sealed answers, so re-read the round detail
+    // to assert the label backfill (and the answered status) still hold.
+    const sealedRes = await fetch(
+      `${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}`,
+      { headers: { Authorization: `Bearer ${daemon.token}` } },
+    )
+    expectOk(sealedRes, 'GET clarify detail after submit')
+    const sealed = (await sealedRes.json()) as {
+      status: string
+      answers?: Array<{ questionId: string; selectedOptionLabels: string[] }>
+    }
+    expect(sealed.status).toBe('answered')
+    expect(sealed.answers?.find((a) => a.questionId === 'q-db')?.selectedOptionLabels).toEqual([
+      'Postgres',
+    ])
 
     // 6. The task transitions out of awaiting_human; designer reruns, then the
     // review node lands awaiting_review.
