@@ -583,4 +583,53 @@ describe('CentralizedAnswerDialog — pending submit-focus scoping / cancel', ()
     await waitFor(() => expect(submit.disabled).toBe(false))
     expect(document.activeElement).not.toBe(submit)
   })
+
+  test('stale #4 (data refetch): pending armed → task-questions data adds a round (LAST key moves) while open → no stale steal', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    qc.setQueryData(
+      ['task-questions', 'task-1'],
+      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
+    )
+    qc.setQueryData(
+      ['clarify', 'detail', 'nr_a'],
+      round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1')] }),
+    )
+    qc.setQueryData(
+      ['clarify', 'detail', 'nr_b'],
+      round({ intermediaryNodeRunId: 'nr_b', questions: [singleQ('q2')] }),
+    )
+    render(
+      <QueryClientProvider client={qc}>
+        <CentralizedAnswerDialog taskId="task-1" open onClose={() => {}} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q1'))
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    // Arm pending on the empty last question q1 (it is currently the ONLY/last question → key nr_a:q1).
+    const q1 = screen.getByTestId('clarify-question-q1')
+    q1.focus()
+    fireEvent.keyDown(q1, { key: 'Enter' })
+
+    // Data refetch UNDER the open dialog: a NEW round (nr_b/q2) arrives → the flattened last key is
+    // now nr_b:q2, so the armed key (nr_a:q1) no longer matches → superseded (fresh RoundAnswerBlock
+    // seeds q2). Uses a new round to avoid the once-seeded round's added-question limitation.
+    qc.setQueryData(
+      ['task-questions', 'task-1'],
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_b' }),
+      ],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+
+    // Fill the NEW last question q2 by MOUSE (notifyQuestionEdited would NOT cancel for the last
+    // question, so this isolates the data-refetch supersede). The stale key (nr_a:q1) must NOT steal.
+    fireEvent.click(within(screen.getByTestId('clarify-question-q2')).getAllByRole('radio')[0]!)
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    expect(document.activeElement).not.toBe(submit)
+  })
 })

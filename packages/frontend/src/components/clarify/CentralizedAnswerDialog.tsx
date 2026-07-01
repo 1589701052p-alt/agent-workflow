@@ -178,24 +178,33 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
   // child effect (ref only ⇒ no re-render / loop); stale rounds are ignored (advance iterates
   // `groups`).
   const roundOrderRef = useRef<Map<string, string[]>>(new Map())
-  // After the LAST question we move focus to the submit button (so a follow-up Enter submits). But
-  // a single-choice DIGIT key runs onChange→onAdvance in ONE keydown, so at advance time the just-
+  // After the LAST question we move focus to the submit button (so a follow-up Enter submits). But a
+  // single-choice DIGIT key runs onChange→onAdvance in ONE keydown, so at advance time the just-
   // picked answer has NOT committed yet → `filledTotal` is stale → the submit button may still be
   // `disabled` (a disabled <button> silently ignores .focus()). So: focus it now IF already enabled,
-  // else set this pending flag and let the effect below flush the focus once the answer commits and
-  // the button enables. Ref (not state) ⇒ no extra render; the flush effect re-checks on filledTotal
-  // change (the disabled→enabled trigger). Regression: digit-pick the ONLY/last question (its answer
-  // is the first filled) still lands focus on submit.
-  const pendingSubmitFocusRef = useRef(false)
-  const focusSubmitButton = useCallback(() => {
-    const btn = submitBtnRef.current
-    if (btn !== null && !btn.disabled) {
-      btn.focus()
-      pendingSubmitFocusRef.current = false
-    } else {
-      pendingSubmitFocusRef.current = true
-    }
-  }, [])
+  // else DEFER via a pending SCOPE KEY and let the flush effect focus once the button enables.
+  //
+  // The pending is a SCOPE KEY { taskId, lastKey } (NOT a bare boolean): `lastKey` = the flattened
+  // last-question key `${origin}:${qid}` at arm time. The flush focuses submit ONLY when this key
+  // still matches the CURRENT { taskId, flattened lastKey } — so a data refetch that changes the
+  // visible question set (new last question), a task switch, navigating to another question, or
+  // editing a non-last question all leave the key non-matching (or clear it) → no stale steal. This
+  // is the root-cause fix for "armed pending survives a question-set change and later focuses submit".
+  const pendingSubmitFocusKeyRef = useRef<{ taskId: string; lastKey: string } | null>(null)
+  // arm=true only when a LAST-question advance is the caller (it passes the last key). focusSubmit
+  // focuses now if enabled (+ clears the key), else stores the scope key for the flush effect.
+  const focusSubmitButton = useCallback(
+    (armKey: string) => {
+      const btn = submitBtnRef.current
+      if (btn !== null && !btn.disabled) {
+        btn.focus()
+        pendingSubmitFocusKeyRef.current = null
+      } else {
+        pendingSubmitFocusKeyRef.current = { taskId, lastKey: armKey }
+      }
+    },
+    [taskId],
+  )
   const registerQuestionRef = useCallback((key: string, handle: QuestionFormHandle | null) => {
     if (handle === null) questionRefs.current.delete(key)
     else questionRefs.current.set(key, handle)
@@ -212,41 +221,54 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
       if (nextKey !== undefined) {
         // Same-round next OR the first question of the next round — one flat order. Navigating to
         // ANOTHER question SUPERSEDES a pending last-question submit focus (the reviewer moved back
-        // to answer an earlier question) — cancel it so the flush effect can't later steal focus.
-        pendingSubmitFocusRef.current = false
+        // to answer an earlier question) — cancel it so the flush can't later steal focus.
+        pendingSubmitFocusKeyRef.current = null
         questionRefs.current.get(nextKey)?.focus()
       } else {
-        // Last question of the last round → move focus onto the single submit button so a follow-up
-        // Enter submits (mirrors clarify.detail.tsx's submitContinueRef). Deferred if still disabled.
-        focusSubmitButton()
+        // Current question IS the flattened last one → focus (or arm) the submit button with its key.
+        focusSubmitButton(`${originNodeRunId}:${questionId}`)
       }
     },
     [groups, focusSubmitButton],
   )
   // Editing a NON-last question also SUPERSEDES a pending last-question submit focus (the reviewer
   // went back to fill an earlier question — its answer commits + bumps filledTotal, which would
-  // otherwise flush the stale pending focus onto submit, stealing it from where the reviewer is).
-  // Editing the LAST question does NOT cancel — that's the "empty last → Enter → fill it → focus
-  // submit" flush. Called from every QuestionForm's onChange (cheap: short-circuits when no pending).
+  // otherwise flush the stale focus onto submit; and this case does NOT change lastKey, so the
+  // key-match alone can't catch it). Editing the LAST question does NOT cancel — that's the "empty
+  // last → Enter → fill it → focus submit" flush. Called from every QuestionForm's onChange.
   const notifyQuestionEdited = useCallback(
     (originNodeRunId: string, questionId: string) => {
-      if (!pendingSubmitFocusRef.current) return
+      if (pendingSubmitFocusKeyRef.current === null) return
       const keys = flattenCentralizedNavKeys(groups, roundOrderRef.current)
-      const lastKey = keys[keys.length - 1]
-      if (`${originNodeRunId}:${questionId}` !== lastKey) pendingSubmitFocusRef.current = false
+      const currentLastKey = keys[keys.length - 1]
+      if (`${originNodeRunId}:${questionId}` !== currentLastKey)
+        pendingSubmitFocusKeyRef.current = null
     },
     [groups],
   )
-  // Flush a deferred submit-button focus once the button enables (filledTotal 0→N after the LAST
-  // question's answer commits). No-op unless a last-question advance set the pending flag AND it
-  // wasn't superseded (advanceFromQuestion / notifyQuestionEdited above) by moving to / editing
-  // another question in the meantime.
+  // Flush a deferred submit-button focus once the button enables — but ONLY if the pending scope key
+  // still matches the current { taskId, flattened lastKey }. A mismatch (task switched, or a data
+  // refetch changed the visible question set's last question) SUPERSEDES + clears it (no stale steal).
+  // Runs on filledTotal (enable trigger), taskId, and groups (question-set change) so the supersede
+  // is caught proactively as well as at flush time.
   useEffect(() => {
-    if (pendingSubmitFocusRef.current) focusSubmitButton()
-  }, [filledTotal, focusSubmitButton])
-  // Clear any pending submit focus when the dialog closes so a reopen never inherits a stale flag.
+    const pending = pendingSubmitFocusKeyRef.current
+    if (pending === null) return
+    const keys = flattenCentralizedNavKeys(groups, roundOrderRef.current)
+    const currentLastKey = keys[keys.length - 1]
+    if (pending.taskId !== taskId || pending.lastKey !== currentLastKey) {
+      pendingSubmitFocusKeyRef.current = null
+      return
+    }
+    const btn = submitBtnRef.current
+    if (btn !== null && !btn.disabled) {
+      btn.focus()
+      pendingSubmitFocusKeyRef.current = null
+    }
+  }, [filledTotal, taskId, groups])
+  // Clear any pending submit focus when the dialog closes so a reopen never inherits a stale key.
   useEffect(() => {
-    if (!open) pendingSubmitFocusRef.current = false
+    if (!open) pendingSubmitFocusKeyRef.current = null
   }, [open])
 
   const submitMut = useMutation<void, Error, void>({
