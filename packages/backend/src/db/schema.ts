@@ -760,6 +760,31 @@ export const nodeRuns = sqliteTable(
      */
     preSnapshotReposJson: text('pre_snapshot_repos_json'),
     /**
+     * RFC-130: per-node isolated-worktree bookkeeping (design.md §3.2). All NULL
+     * on legacy / non-isolated rows (golden-lock: the scheduler's frontier gates
+     * only look at these when `merge_state` is non-NULL).
+     *
+     * - iso_worktree_path: absolute path of THIS run's isolated worktree (OUTSIDE
+     *   the canonical repo, D14). Cleared after a successful merge-back + discard.
+     * - iso_base_snapshot / iso_base_snapshot_repos_json: the dispatch-time full
+     *   snapshot sha (single / multi-repo) the iso worktree branched from — the
+     *   3-way merge base + the pin that survives until merged.
+     * - iso_node_tree / iso_node_tree_repos_json: the run-success full snapshot sha
+     *   (single / multi-repo) of the iso final state — pinned so a crash between
+     *   agent-success and merge-back can REPLAY the merge without re-running the
+     *   agent (D15). Distinct pin ref from base (D26).
+     * - merge_state: NULL (not reached / non-isolated) | 'pending-merge' (agent ok,
+     *   outputs+node_tree persisted, NOT yet merged — status stays non-done, D15) |
+     *   'merged' | 'conflict-resolving' | 'conflict-human'. Downstream readiness +
+     *   resume replay gate on this.
+     */
+    isoWorktreePath: text('iso_worktree_path'),
+    isoBaseSnapshot: text('iso_base_snapshot'),
+    isoBaseSnapshotReposJson: text('iso_base_snapshot_repos_json'),
+    isoNodeTree: text('iso_node_tree'),
+    isoNodeTreeReposJson: text('iso_node_tree_repos_json'),
+    mergeState: text('merge_state'),
+    /**
      * RFC-074: provenance map `{ upstreamNodeId: nodeRunId }` — exactly which
      * upstream node_run this row consumed at its content read-point. NULL on
      * pre-RFC-074 rows and input/no-upstream nodes (treated as fresh). Drives
