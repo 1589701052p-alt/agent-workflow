@@ -140,11 +140,9 @@ export function TaskQuestionList({
       api.post(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
     onSuccess: invalidate,
   })
-  // RFC-120 §18 — 批量下发 (batch-dispatch) of staged (待下发) designer questions.
-  // Selection is LOCAL (a Set of entry ids); only staged cards are selectable
-  // (the backend dispatch operates on dispatched_at IS NULL designer rows). Cleared
-  // on a successful dispatch.
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  // RFC-128 §11.1 — 批量下发 (batch-dispatch) of staged (待下发) questions. 语义「进待下发=
+  // 已确定，批量下发=全下」：一键下发当前视图(尊重 source filter)的**全部** staged 条目——不再
+  // 逐卡勾选子集（删了 per-card checkbox + 局部 selection state）。后端请求体不变(仍接 entryIds)。
   const [dispatchError, setDispatchError] = useState<unknown>(null)
   // RFC-120 §15 — manual question author form. `authorInitial` null = 新增 (empty form);
   // a {title,body} = 复制 (prefilled from a 待指派 card → Save creates a NEW manual row).
@@ -162,18 +160,10 @@ export function TaskQuestionList({
     setAuthorInitial({ title: e.questionTitle, body: e.answerSummary ?? '' })
     setAuthorOpen(true)
   }
-  const toggleSelected = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
   const dispatchM = useMutation({
     mutationFn: (entryIds: string[]) =>
       api.post(`/api/tasks/${taskId}/questions/dispatch`, { entryIds }),
     onSuccess: () => {
-      setSelected(new Set())
       setDispatchError(null)
       invalidate()
       // Dispatch flips entries into 处理中 and resumes the task → refresh the task +
@@ -276,11 +266,11 @@ export function TaskQuestionList({
   }
   const shown = sourceFilter ? entries.filter((e) => e.sourceNodeId === sourceFilter) : entries
 
-  // RFC-120 §18 — only staged (待下发) cards are dispatch candidates. The board
-  // action bar renders ONLY when ≥1 staged card is visible (golden-lock: no staged
-  // cards ⇒ no batch-dispatch bar); the button enables once ≥1 of them is selected.
+  // RFC-128 §11.1 — only staged (待下发) cards are dispatch candidates. The board action
+  // bar renders ONLY when ≥1 staged card is visible in the CURRENT view (golden-lock: no
+  // staged cards ⇒ no batch-dispatch bar). 「批量下发」= 下发这批 stagedShown 的**全部** id
+  // （尊重 source filter；无 filter 时=全部 staged），不再逐卡勾选。
   const stagedShown = shown.filter((e) => e.phase === 'staged')
-  const stagedSelectedIds = stagedShown.filter((e) => selected.has(e.id)).map((e) => e.id)
 
   return (
     <div className="task-questions-wrap">
@@ -313,24 +303,22 @@ export function TaskQuestionList({
           ))}
         </div>
         <div className="task-questions__actions">
-          {/* RFC-120 §18 — batch-dispatch. Only present when ≥1 staged card is visible
-              (golden-lock: no staged ⇒ no bar); enables once ≥1 is selected. */}
+          {/* RFC-128 §11.1 — batch-dispatch. Only present when ≥1 staged card is visible
+              (golden-lock: no staged ⇒ no bar). 语义「进待下发=已确定，批量下发=全下」：一键
+              下发当前视图(尊重 source filter)的全部 staged 条目——无逐卡勾选。 */}
           {stagedShown.length > 0 && (
             <div className="task-questions__batch" data-testid="tq-batch-dispatch-bar">
               <button
                 type="button"
                 className="btn btn--sm btn--primary"
                 data-testid="tq-batch-dispatch"
-                disabled={stagedSelectedIds.length === 0 || dispatchM.isPending}
+                disabled={dispatchM.isPending}
                 onClick={() => {
-                  if (stagedSelectedIds.length === 0) return
                   setDispatchError(null)
-                  dispatchM.mutate(stagedSelectedIds)
+                  dispatchM.mutate(stagedShown.map((e) => e.id))
                 }}
               >
-                {stagedSelectedIds.length > 0
-                  ? t('taskQuestions.batchDispatchCount', { count: stagedSelectedIds.length })
-                  : t('taskQuestions.batchDispatch')}
+                {t('taskQuestions.batchDispatchCount', { count: stagedShown.length })}
               </button>
             </div>
           )}
@@ -380,22 +368,6 @@ export function TaskQuestionList({
                     key={e.id}
                     data-testid={`tq-card-${e.id}`}
                     interactive
-                    highlighted={phase === 'staged' && selected.has(e.id)}
-                    header={
-                      // RFC-120 §18 — staged cards are batch-dispatch selectable.
-                      phase === 'staged' ? (
-                        <label className="task-questions__select">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(e.id)}
-                            onChange={() => toggleSelected(e.id)}
-                            aria-label={t('taskQuestions.selectForDispatch')}
-                            data-testid={`tq-select-${e.id}`}
-                          />
-                          <span>{t('taskQuestions.selectForDispatch')}</span>
-                        </label>
-                      ) : undefined
-                    }
                     footer={
                       hasActions ? (
                         <>
