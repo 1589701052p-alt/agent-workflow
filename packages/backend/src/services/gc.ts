@@ -8,7 +8,8 @@
 // only the worktree directory on disk is removed.
 
 import { inArray } from 'drizzle-orm'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Config } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { tasks } from '@/db/schema'
@@ -108,19 +109,84 @@ async function isMerged(
 }
 
 /**
+ * RFC-130 PR-E — GC orphan iso worktrees. A node run normally `discardNodeIso`s its
+ * iso worktree on completion, but a crash between create + discard, a kept
+ * conflict-human resolve-iso, or a daemon restart can leave `{appHome}/iso/{taskId}/*`
+ * behind. For every TERMINAL task (and any iso dir with no task row — a deleted task),
+ * ALL its iso worktrees are orphans (no active node run), so we remove the container
+ * dir and prune the now-dangling `git worktree` registrations from the task's repo.
+ * ACTIVE tasks are skipped (their iso worktrees may be in flight). Best-effort — a
+ * removal failure is logged and retried next tick.
+ */
+export async function runIsoWorktreeGc(
+  db: DbClient,
+  appHome: string,
+): Promise<{ scanned: number; removed: string[] }> {
+  const isoRoot = join(appHome, 'iso')
+  if (!existsSync(isoRoot)) return { scanned: 0, removed: [] }
+  const taskDirs = readdirSync(isoRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+  if (taskDirs.length === 0) return { scanned: 0, removed: [] }
+  const rows = await db
+    .select({
+      id: tasks.id,
+      status: tasks.status,
+      repoPath: tasks.repoPath,
+      worktreePath: tasks.worktreePath,
+    })
+    .from(tasks)
+    .where(inArray(tasks.id, taskDirs))
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const removed: string[] = []
+  for (const taskId of taskDirs) {
+    const t = byId.get(taskId)
+    // Skip a task that still has a row and is NOT terminal — its iso may be in flight.
+    if (
+      t !== undefined &&
+      !TERMINAL_STATUSES.includes(t.status as (typeof TERMINAL_STATUSES)[number])
+    ) {
+      continue
+    }
+    const containerRoot = join(isoRoot, taskId)
+    try {
+      rmSync(containerRoot, { recursive: true, force: true })
+      // Prune the now-dangling worktree registrations from the task's repo/worktree.
+      if (t !== undefined) {
+        for (const wt of [t.worktreePath, t.repoPath]) {
+          if (wt !== '' && existsSync(wt)) {
+            await runGit(wt, ['worktree', 'prune']).catch(() => {})
+          }
+        }
+      }
+      removed.push(taskId)
+    } catch (err) {
+      log.warn('iso worktree GC failed', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return { scanned: taskDirs.length, removed }
+}
+
+/**
  * Start an hourly worktree-GC ticker. The supplied `loadConfig` is invoked
- * each tick so config changes take effect without daemon restart.
+ * each tick so config changes take effect without daemon restart. `appHome` (when
+ * given) also GCs orphan iso worktrees (RFC-130 PR-E) each tick.
  */
 export function startWorktreeGc(
   db: DbClient,
   loadConfig: () => Pick<Config, 'worktreeAutoGc'>,
   intervalMs: number = HOUR_MS,
+  appHome?: string,
 ): { stop: () => void } {
   let running = false
   const handle = setInterval(() => {
     if (running) return
     running = true
     runWorktreeGc(db, loadConfig())
+      .then(() => (appHome !== undefined ? runIsoWorktreeGc(db, appHome) : undefined))
       .catch((err: unknown) => {
         log.error('runWorktreeGc failed', {
           error: err instanceof Error ? err.message : String(err),

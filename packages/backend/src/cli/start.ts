@@ -296,7 +296,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // 8. Background tickers (P-4-04 limits + P-4-09 worktree GC + P-5-01 events archival
   //    + RFC-033 batch-import retention GC).
   const limitsTicker = startLimitsTicker(db)
-  const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config))
+  const gcTicker = startWorktreeGc(db, () => loadConfig(Paths.config), undefined, Paths.root)
   const archiveTicker = startEventsArchiver(db, () => loadConfig(Paths.config), Paths.logsDir)
   const batchImportCfg = loadConfig(Paths.config)
   const batchImportGcTicker = startBatchImportGc(
