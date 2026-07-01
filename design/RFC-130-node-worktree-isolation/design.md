@@ -146,9 +146,13 @@ merged, conflicts = git merge-tree --write-tree --merge-base=<base> <ours(canon_
 ### 5.3 materialize（把合并树落地为主树未提交改动）
 
 ```
-# ① 先算删除/类型变更集（Codex 五轮 P1）——checkout-index 不删、且 file↔dir 替换会失败
-removed = git diff --name-status <canon_current_tree> <merged>  过滤 D（删除）+ T（类型变更 file↔dir）
-for p in removed:  rm -rf <主树>/p        // 先从文件系统 unlink（含 foo→foo/bar 的旧 foo）
+# ① 先算删除/类型变更集 + 阻挡路径（Codex 五轮 P1 + 六轮 P2）——checkout-index 不删、且
+#    file↔dir 双向替换会失败（foo 文件→foo/bar：旧 foo 挡；foo/ 目录→foo 文件：删 foo/bar 后
+#    残留空 foo/ 挡）
+removed = git diff --name-status <canon_current_tree> <merged> 的 D（删除）+ T（类型变更）
+for p in removed:  rm -rf <主树>/p                        // 删旧路径（含 foo→foo/bar 的旧 foo 文件）
+for a in <merged 新增/改动路径>:                          // 再清任何挡在新增路径上的旧文件/目录
+    若 <主树>/a 的某祖先是文件、或 a 处是目录而 merged 要文件：rm -rf 该阻挡路径（含删后空目录）
 # ② 再落合并树
 git -C 主树 read-tree <merged>            // index → 合并树
 git -C 主树 checkout-index -f -a           // 写工作区文件（旧路径已 unlink，file↔dir 不冲突）
@@ -217,7 +221,7 @@ merge-tree 出冲突 conflicts[]：
 合并 agent 也解不了：
 - **主树保持干净、冲突留在解决 worktree**（D27，Codex 四轮 P2）：**不把冲突标记 materialize 进主树**——否则同 scope 仍在跑的兄弟节点 drain 时其 merge-back 会拿**含冲突标记的 canon_tree** 去合并（对着冲突残渣合并）。改为：**保留那棵解决 worktree**（`resolve-iso`，不弃）、`merge_state='conflict-human'` + `iso_worktree_path` 指向它；主树维持**本节点合并前**的状态（本节点的 delta 未落主树），兄弟节点照常对**干净主树** merge-back。
 - 冲突节点 run → `park-human`（`nextNodeRunStatus` pending/running→`awaiting_human`，shared/lifecycle.ts:124）；任务 `trySetTaskStatus(running→awaiting_human)`（scheduler.ts:526）。awaiting_human 详情给出 `resolve-iso` 路径，**人工在该解决 worktree 里解冲突**（非主树——主树此刻不含本节点冲突）。
-- **resume**（`resumeTask`→`resumeKick`，task.ts:1232）：人工已解（`resolve-iso` 无残留标记）→ 取 resolved 快照，对**主树现态**（可能已被兄弟推进）**重新 `merge-tree(base, canon_now, resolved)`** → 干净则 materialize + `merged` + done + 放行下游；又冲突（canon 又变）→ 再 §6 一轮。仍有标记 → 再 awaiting_human。检测在 resume scheduler 首 tick（读 `conflict-human` 节点 → grep `resolve-iso` 残留标记）。
+- **resume**（`resumeTask`→`resumeKick`，task.ts:1232）：人工已解（**按 §6.2③ 同款 conflicts[] manifest 逐路径判定**，非仅 grep 文本标记——modify-delete/binary/submodule 无标记，Codex 六轮 P2）→ 取 resolved 快照，对**主树现态**（可能已被兄弟推进）**重新 `merge-tree(base, canon_now, resolved)`** → 干净则 materialize + `merged` + done + 放行下游；又冲突（canon 又变）→ 再 §6 一轮。任一 manifest 路径未决 → 再 awaiting_human。检测在 resume scheduler 首 tick（读 `conflict-human` 节点 → manifest 判定 `resolve-iso`）。
 - **框架自检、不依赖 agent 自报**：成功/失败判定一律由框架 grep 残留标记决定（合并 agent 只管产出，不发 clarify）。决策 D6。
 
 ## 7. writeSem 语义改写 + 锁序
@@ -310,7 +314,7 @@ merge-tree 出冲突 conflicts[]：
 **修（D18，含三轮 P1 收口）**：commit-push **提交一棵冻结快照树**，让 message 的输入 diff 与被提交的树**同源**，且并发 merge-back 不被卷进本次提交：
 1. **短锁冻结**：持 writeSem 一次，`frozen = snapshotFullState(主树)`（一棵树 sha）+ 取 `diff(HEAD, frozen)` 供 message。释放锁。
 2. **锁外生成 message**：opencode 用该 diff 生成消息（慢、无锁）。
-3. **短锁提交冻结树**：持 writeSem 一次，`new = git commit-tree <frozen^{tree}> -p HEAD -m <msg>` + `git update-ref HEAD <new>`；然后把 index/工作区对齐 HEAD（`reset --soft`/刷新），使「已提交部分」不再算未提交改动。释放锁。
+3. **短锁提交冻结树**：持 writeSem 一次，`new = git commit-tree <frozen^{tree}> -p HEAD -m <msg>` + `git update-ref HEAD <new>`；然后 **`git reset --mixed HEAD`**（Codex 六轮 P2——**非 `--soft`**：`--soft` 不动 index，已提交部分仍留在 index/工作区、会被下轮 commit-push 再拾取）把 index 对齐到新 HEAD、**保留工作区里兄弟落地的改动**（它们相对新 HEAD 仍是未提交、留下轮收）。释放锁。
 - **关键**：提交的是 **step 1 冻结的那棵树**（= message 描述的树），**不是** commit 时刻 `git add -A` 的实时树 → step 1↔3 之间落地的兄弟 merge-back **不进本 commit**（它们留作未提交改动、下一轮 commit-push 收），既不混入错 message、也不清空兄弟 diff。push（网络、慢）在 HEAD 更新后、锁外做。
 - `commitPushRunner.ts:182-199/238-252` 的「add→释放→gen→commit」重构为「冻结取 diff→释放→gen→commit-tree 冻结树」。**AC-23 据此锁**。
 
