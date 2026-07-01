@@ -8,18 +8,23 @@
 
 ## 1. 数据模型
 
-### 1.1 新列 `doc_versions.selection_stale`（migration 0069）
+### 1.1 新列 `doc_versions.selection_stale` + `round_generation`（migration 0069）
 
 ```sql
--- 0069_rfc129_review_selection_stale.sql
+-- 0069_rfc129_review_selection_stale.sql —— 两条 ADD COLUMN，中间加真 breakpoint 行。
 ALTER TABLE `doc_versions` ADD COLUMN `selection_stale` integer;
+-- (breakpoint marker line here)
+ALTER TABLE `doc_versions` ADD COLUMN `round_generation` integer;
 ```
 
-- **单条 statement**（纯 ADD COLUMN，无 table-rebuild、无需 `--> statement-breakpoint`）。
-- **nullable、无 DB default**：单文档行、既有历史行、`unselected` 行全部保持 NULL。
-- **语义**：`1` = 该多文档成员的 `selection` 是**从上一轮继承**而来，且**当前正文与「上次人工裁决时的正文」不一致**
-  （= 内容变了、这条裁决可能过时、建议重看）。`0` / `NULL` = 未继承 / 内容未变 / 从未裁决 / 单文档。
-- 值域是应用层约定（0/1），与 RFC-079 三列一样**不加 DB CHECK**。
+- **两条 ADD COLUMN**（纯增列、无 table-rebuild；两条 statement → 中间需 breakpoint 行，注释里绝不写 marker 字面，
+  否则 drizzle splitter 会从注释切开——本实现踩过一次、已改）。
+- **`selection_stale`**：`1` = 该多文档成员的 `selection` 是**从紧邻上一轮继承**而来，且**当前正文与「上次人工裁决时
+  的正文」不一致**（内容变了、裁决可能过时、建议重看）。`0` / `NULL` = 未继承 / 内容未变 / 从未裁决 / 单文档。
+- **`round_generation`（Codex 实现 gate P2）**：**每-mint 代际戳**——`dispatchReviewNode` mint 循环前 `Date.now()` 捕获
+  一次，同一轮所有成员共享、跨 mint 严格递增。它是继承取「紧邻上一轮」的**轮键**：`loadPriorRoundMembers` 取
+  `max(round_generation)` 那**一整代**（见 §3）。NULL 于单文档 / 历史行。**纯内部字段，不进 DocVersion DTO / prompt**。
+- 两列均 **nullable、无 DB default**；值域应用层约定，与 RFC-079 三列一样**不加 DB CHECK**。
 
 drizzle（`schema.ts`，`docVersions` 表，紧随 `itemPath` :898 之后）：
 
@@ -146,12 +151,14 @@ export function inheritSelection(
 
 ```ts
 // —— 新增：加载「紧邻上一轮」多文档成员（本 review 节点、同 workflow iteration、item_index 非空）。
-//        跨 node_run（覆盖 US-2 新 run）；锚定到 max(reviewIteration) 那一整轮再匹配（见下 loadPriorRoundMembers）。
+//        跨 node_run（覆盖 US-2 新 run）；锚定到 max(round_generation) 那一整代再匹配（见下 loadPriorRoundMembers）。
 //        注意：不按 reviewNodeRunId 排除——iterate/reject/refresh 的上一轮就在这个复用 run 上（Codex P1）。
 const priorMembers = await loadPriorRoundMembers(db, appHome, {
   taskId, reviewNodeId: node.id, iteration,
 })
 const lookup = buildPriorSelectionLookup(priorMembers)
+// 本代际戳，同一轮所有成员共享、跨 mint 递增（Codex 实现 gate P2）。
+const roundGeneration = Date.now()
 
 for (let i = 0; i < itemCount; i++) {
   // …（沿用现有 body / itemPath 读取，:612-628 不动）…
@@ -166,37 +173,37 @@ for (let i = 0; i < itemCount; i++) {
     itemIndex: i,
     selection: inh.selection,        // 原 'unselected' → 继承值
     selectionStale: inh.stale,       // 新增
+    roundGeneration,                 // 新增（每-mint 代际戳）
   })
   docs.push(dv)
 }
 ```
 
-`loadPriorRoundMembers`（新私有 helper，`review.ts`）—— **返回「紧邻上一轮」那一整轮的成员**
-（Codex 设计 gate P1 + P2a 修）：
+`loadPriorRoundMembers`（新私有 helper，`review.ts`）—— **返回「紧邻上一轮」那一整代的成员**
+（Codex 设计 gate P1 + 实现 gate P2 修）：
 
 ```ts
-// 1. 取本 review 节点、同 workflow iteration 内、所有多文档成员行（item_index 非空），跨 node_run
-//    （join node_runs 过滤 iteration）。**不按 reviewNodeRunId 排除**——iterate/reject/refresh 的上一轮
-//    就在这个复用 run 上（decision = iterated/rejected/superseded），排除它 → prior 空 → 主路径不继承（P1）。
-// 2. R* = 这些行里的 max(reviewIteration)。当前轮的行此刻尚未 mint（mint 循环仅在无 pending doc_version 时
-//    进入，:603），故现存行必全部属于更早的轮 → 其 max 即「紧邻上一轮」的 reviewIteration。
-// 3. 上一轮成员 = reviewIteration == R* 的行；同一 R* 若有多代（refresh 同轮 supersede 后再生），
-//    每个匹配键（item_path 唯一优先、否则 item_index）取最新一行（id / createdAt DESC）。读其 bodyPath 正文。
+// 1. 取本 review 节点、同 workflow iteration 内、所有多文档成员行（item_index 非空 & round_generation 非空），
+//    跨 node_run（join node_runs 过滤 iteration）。**不按 reviewNodeRunId 排除**——iterate/reject/refresh 的
+//    上一轮就在这个复用 run 上（decision = iterated/rejected/superseded），排除它 → prior 空 → 主路径不继承（P1）。
+// 2. 上一代 = max(round_generation) 的那批行。当前轮的行此刻尚未 mint（mint 循环仅在无 pending doc_version 时
+//    进入，:603），故现存行的 max round_generation 恒 = 紧邻上一代。一代内 item_index 天然唯一（mint 各建一次），
+//    防御性按 id 去重。读其 bodyPath 正文。
 async function loadPriorRoundMembers(db, appHome, args): Promise<PriorRoundMember[]>
 ```
 
 - **scope = 同 workflow iteration**：`doc_versions` 无 `iteration` 列 → join `node_runs`（`reviewNodeRunId →
   node_runs.iteration`）过滤 `iteration = 当前 iteration`。保证 loop 每趟独立（AC-10）。
-- **跨 node_run、不排除当前 run（Codex P1）**：iterate / reject / refresh **复用同一 review `node_run`——上一轮
-  成员就在这个 run 上**（`decision` = iterated/rejected/superseded），**绝不能按 `reviewNodeRunId` 排除**（否则
-  主路径 prior 恒空、`selection` 全被重置 unselected、AC-1/AC-7 失败）；US-2 重开 mint 新 run（上一轮成员在旧
-  run）。用 `docVersions.reviewNodeId`（表已有该列）+ iteration 过滤同时覆盖两种。
-- **锚定「紧邻上一轮」整组，而非「每键 max versionIndex」（Codex P2a）**：`reviewIteration` 是轮键——
-  iterate/reject mint 时 run 已 bump 到 N、上一轮行是 N-1；refresh/US-2 不 bump、上一轮行与当前 mint 同为 N（当前
-  行此刻未生成）→ **现存 max(reviewIteration) 恒 = 上一轮**。先锁这一轮的整组、再在组内做 path/index 匹配：
-  某文档若不在上一轮（例：a.md 在 R1 有、R2 无、R3 又出现）→ **不复活更早轮的选择、按新文档 unselected**。
-  （弃用「每键 max versionIndex」：`versionIndex` 按 item_index 递增、item 增删/改序时会串不同文档，且跨 US-2
-  新 run 会重置、不可跨轮比较。）
+- **跨 node_run、不排除当前 run（Codex 设计 gate P1）**：iterate / reject / refresh **复用同一 review `node_run`——
+  上一轮成员就在这个 run 上**（`decision` = iterated/rejected/superseded），**绝不能按 `reviewNodeRunId` 排除**
+  （否则主路径 prior 恒空、`selection` 全被重置 unselected、AC-1/AC-7 失败）；US-2 重开 mint 新 run（上一轮成员在
+  旧 run）。用 `docVersions.reviewNodeId`（表已有该列）+ iteration 过滤同时覆盖两种。
+- **取整代 = max(round_generation)，而非「每键 max versionIndex / reviewIteration」（Codex 实现 gate P2）**：
+  refresh/US-2 会在**同一 `reviewIteration`** 留下两代（gen1 supersede + gen2 pending），若「每 item_index 取最新」
+  会**跨代混选**——gen1 有 c、gen2 丢了 c、后续轮又加回 c 时，gen1 的孤儿 c 因 gen2 无 idx2 而存活、被误继承。
+  用**每-mint 代际戳 `round_generation`**（一代共享、跨 mint 递增）取 `max(round_generation)` **整代**，结构上杜绝
+  跨代混选：两代可共享 `reviewIteration`、但绝不共享 `round_generation`。`round_generation` NULL 的历史行跳过
+  （升级窗口不继承，保守）。
 - **`selectionStale` 读取/归一**（Codex 确认 gate P2）：列 `{ mode: 'boolean' }` → `row.selectionStale` 为
   `boolean | null`（legacy / 单文档 / unselected / 刚人工裁决行为 NULL）。构造 `PriorRoundMember.selectionStale`
   （oracle 输入、`boolean`）用 **`row.selectionStale ?? false`**（NULL = 未 stale）；`DocVersionSchema` 公开字段
@@ -324,8 +331,9 @@ stale: m.selectionStale === true,
 - iterate 重开（**Codex P1 回归锁**）：**复用同一 review run** 时新一轮各篇 `selection` == 上一轮匹配篇
   （含 unselected）——坐死「同 run 上一轮不被排除、prior 非空」；改过正文的篇 `selection_stale` = true（存 1）。
 - reject 重开：同上（覆盖回退重生路径）。
-- **紧邻上一轮而非更早轮（Codex P2a 回归锁）**：`a.md` R1 accepted、R2 缺席、R3 又出现 → R3 的 a.md **不继承
-  R1**、按新文档 `unselected`（锚 `max(reviewIteration)` 整组、不用每键 max versionIndex）。
+- **紧邻上一代、不复活旧代（Codex 实现 gate P2 回归锁）**：同 review run 同 `reviewIteration` 手工播两代——
+  gen1 `[a,b,c]`（round_generation 小、a=accepted）、gen2 `[a,b]`（大、a=not_accepted，丢 c）；新一轮加回 c →
+  a/b 继承 **gen2**（非 gen1）、c **`unselected`**（gen1 的 c 不复活）。
 - US-2 新 run：跨 node_run 继承（by reviewNodeId + iteration）。
 - 人工重标清 stale：`setDocumentSelection` 后该行 `selection_stale` = false（存 0）。
 - **单文档 golden**：单文档 iterate/approve 后 `selection_stale` 恒 NULL、行为逐字不变。
@@ -367,4 +375,5 @@ stale: m.selectionStale === true,
 | **D6** | 继承 scope = **同 workflow iteration**（join node_runs.iteration） | proposal 非目标「不跨 loop 趟」（AC-10）|
 | **D7** | 全部跨轮语义抽 `reviewMultiDoc.ts` 纯 oracle | CLAUDE.md「首选可断言面」；RFC-079 已在此放同类纯 helper |
 | **D8** | 单列 `selection_stale`，drizzle `integer(..., { mode: 'boolean' })` **nullable**（`boolean \| null`），不加索引、不加 CHECK；SQL 层裸 `integer`（存 0/1/NULL）| 本仓 15+ 布尔列惯例（Codex 设计 gate P2b 纠正原 plain int + 布尔写入不过类型）；数据量小 |
-| **D9** | `loadPriorRoundMembers` = **紧邻上一轮整组**（`max(reviewIteration)` 锁轮 + 组内 path/index 匹配），**不排除同 run**、不用「每键 max versionIndex」| Codex 设计 gate P1（同 run 上一轮被排除 → 主路径不继承）+ P2a（每键 max 会从更早轮复活选择 / 跨 US-2 run versionIndex 重置）|
+| **D9** | `loadPriorRoundMembers` = **紧邻上一轮整组**（组内 path/index 匹配），**不排除同 run** | Codex 设计 gate P1（同 run 上一轮被排除 → 主路径不继承）|
+| **D10** | 轮键改用**每-mint 代际戳 `round_generation`**（`max(round_generation)` 取整代），弃「max(reviewIteration)」/「每键 max version」；加第 2 列进 migration 0069 | Codex 实现 gate P2：refresh/US-2 同 `reviewIteration` 留两代时「每 item_index 取最新」会**跨代混选**（丢弃后重加的文档复活旧代选择）；`round_generation` 一代共享、跨 mint 递增，结构上杜绝混选 |

@@ -622,6 +622,10 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
           iteration,
         }),
       )
+      // RFC-129: one generation stamp shared by every member minted in THIS round
+      // (strictly increases across mints) — the round key loadPriorRoundMembers
+      // reads next time to isolate the immediately-previous generation as a whole.
+      const roundGeneration = Date.now()
       const itemCount = itemsInline ? inlineBodies.length : itemPaths.length
       for (let i = 0; i < itemCount; i++) {
         let body: string
@@ -663,6 +667,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
           itemIndex: i,
           selection: inh.selection,
           selectionStale: inh.stale,
+          roundGeneration,
         })
         docs.push(dv)
       }
@@ -749,6 +754,12 @@ export interface CreateDocVersionArgs {
    * undefined → column NULL). See loadPriorRoundMembers / inheritSelection.
    */
   selectionStale?: boolean
+  /**
+   * RFC-129: per-mint generation stamp (see schema.ts / loadPriorRoundMembers).
+   * The dispatchReviewNode mint loop captures Date.now() once and passes the same
+   * value to every item's create; undefined on single-document rows → column NULL.
+   */
+  roundGeneration?: number
 }
 
 async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion> {
@@ -816,6 +827,8 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
     selection,
     itemPath,
     selectionStale,
+    // RFC-129: internal generation stamp (not surfaced on the DocVersion DTO).
+    roundGeneration: args.roundGeneration ?? null,
     decidedAt: null,
     decidedBy: null,
     createdAt: now,
@@ -848,18 +861,20 @@ async function createDocVersion(args: CreateDocVersionArgs): Promise<DocVersion>
 
 /**
  * RFC-129: load the IMMEDIATELY-PREVIOUS multi-document review round's members
- * for a review node (design §3 / D9). Spans node_runs (covers US-2's fresh run)
- * but is scoped to one workflow `iteration` so loop passes stay independent.
+ * for a review node (design §3). Spans node_runs (covers US-2's fresh run) but is
+ * scoped to one workflow `iteration` so loop passes stay independent.
  *
- * The prior round is identified by `max(reviewIteration)` among the existing
- * multi-doc rows: at the mint injection point the current round's rows do not
- * exist yet, so the highest reviewIteration present is always the immediately-
- * previous round — N-1 for iterate/reject (run bumped to N), or N for
- * refresh/US-2 (not bumped; current rows not yet minted). Within that round each
- * item_index resolves to its newest row (ulid id order — refresh can leave two
- * generations at the same reviewIteration). Deliberately NOT "max versionIndex
- * per key": that would resurrect an older round for a re-added document, and
- * versionIndex is not comparable across US-2's fresh runs.
+ * The prior generation is the rows with the MAX `round_generation` (a per-mint
+ * stamp shared by every member of one round, strictly increasing across mints).
+ * At the mint injection point the current round's rows do not exist yet, so the
+ * highest round_generation present is always the immediately-previous round.
+ * Taking a whole generation — rather than newest-row-per-item_index — is what
+ * keeps a refresh/US-2 that dropped then later re-added a document from
+ * resurrecting an older generation's selection (Codex impl-gate P2 / AC-11):
+ * two generations can share a review_iteration, but never a round_generation.
+ * Rows with a NULL round_generation (pre-RFC-129 upgrade-window data) are
+ * skipped — they simply do not inherit, the same conservative stance as
+ * elsewhere.
  */
 async function loadPriorRoundMembers(
   db: DbClient,
@@ -890,21 +905,21 @@ async function loadPriorRoundMembers(
           inArray(docVersions.reviewNodeRunId, runIds),
         ),
       )
-  ).filter((r) => r.itemIndex !== null)
+  ).filter((r) => r.itemIndex !== null && r.roundGeneration !== null)
   if (rows.length === 0) return []
-  // R* = the immediately-previous round = the highest reviewIteration present.
-  const maxIter = Math.max(...rows.map((r) => r.reviewIteration))
-  // Newest row per item_index within that round (ulid id = creation order, so a
-  // lexicographically greater id is newer — covers refresh's two generations).
-  const newestByIndex = new Map<number, (typeof rows)[number]>()
+  // The immediately-previous generation = rows carrying the max round_generation.
+  const maxGen = Math.max(...rows.map((r) => r.roundGeneration as number))
+  // A mint creates each item_index exactly once, so within one generation
+  // item_index is unique; dedup by newest id defensively (belt-and-suspenders).
+  const byIndex = new Map<number, (typeof rows)[number]>()
   for (const r of rows) {
-    if (r.reviewIteration !== maxIter) continue
+    if (r.roundGeneration !== maxGen) continue
     const idx = r.itemIndex as number
-    const cur = newestByIndex.get(idx)
-    if (cur === undefined || r.id > cur.id) newestByIndex.set(idx, r)
+    const cur = byIndex.get(idx)
+    if (cur === undefined || r.id > cur.id) byIndex.set(idx, r)
   }
   const members: PriorRoundMember[] = []
-  for (const r of newestByIndex.values()) {
+  for (const r of byIndex.values()) {
     let body = ''
     try {
       body = readFileSync(join(appHome, r.bodyPath), 'utf8')

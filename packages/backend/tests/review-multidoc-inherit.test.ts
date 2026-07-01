@@ -375,4 +375,73 @@ describe('RFC-129 — cross-round selection inheritance', () => {
     expect(iter1.every((d) => d.selection === 'unselected')).toBe(true)
     expect(iter1.every((d) => d.selectionStale === false)).toBe(true)
   })
+
+  test('a re-added document does NOT resurrect an older generation (Codex impl-gate P2)', async () => {
+    const ctx = await seed('list<path<md>>')
+    // Simulate a refresh that left TWO generations on the SAME review run at the
+    // SAME reviewIteration: gen1 [a,b,c] (older, round_generation 1000), gen2
+    // [a,b] (newer, 2000, dropped c). A newest-per-item_index merge would keep
+    // gen1's orphan c and let a re-added c inherit it — the P2 bug.
+    const revRun = ulid()
+    await db.insert(nodeRuns).values({
+      id: revRun,
+      taskId: ctx.taskId,
+      nodeId: 'rev_1',
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+      reviewIteration: 0,
+      startedAt: Date.now(),
+    })
+    const seedDoc = async (
+      gen: number,
+      itemIndex: number,
+      itemPath: string,
+      selection: 'accepted' | 'not_accepted',
+      decision: 'superseded' | 'iterated',
+    ): Promise<void> => {
+      const bodyPath = `runs/g${gen}-i${itemIndex}.md`
+      mkdirSync(dirname(join(appHome, bodyPath)), { recursive: true })
+      writeFileSync(join(appHome, bodyPath), `body g${gen} ${itemPath}`, 'utf8')
+      await db.insert(docVersions).values({
+        id: ulid(),
+        taskId: ctx.taskId,
+        reviewNodeId: 'rev_1',
+        reviewNodeRunId: revRun,
+        sourceNodeId: 'src',
+        sourcePortName: 'cases',
+        versionIndex: gen,
+        reviewIteration: 0,
+        bodyPath,
+        commentsJson: '[]',
+        decision,
+        itemIndex,
+        selection,
+        itemPath,
+        selectionStale: false,
+        roundGeneration: gen === 1 ? 1000 : 2000,
+      })
+    }
+    // gen1 (older): a=accepted, b=not_accepted, c=accepted.
+    await seedDoc(1, 0, 'cases/a.md', 'accepted', 'superseded')
+    await seedDoc(1, 1, 'cases/b.md', 'not_accepted', 'superseded')
+    await seedDoc(1, 2, 'cases/c.md', 'accepted', 'superseded')
+    // gen2 (newer, immediately-previous): a=not_accepted, b=accepted. c DROPPED.
+    await seedDoc(2, 0, 'cases/a.md', 'not_accepted', 'iterated')
+    await seedDoc(2, 1, 'cases/b.md', 'accepted', 'iterated')
+
+    // Fresh upstream re-adds c → new round [a,b,c].
+    await completeSrc(ctx.taskId, ulid(), PATHS, round0Body)
+    await dispatch(ctx)
+
+    const gen3 = (await docsFor(ctx.taskId))
+      .filter((d) => d.decision === 'pending')
+      .sort((a, b) => a.itemIndex! - b.itemIndex!)
+    expect(gen3.length).toBe(3)
+    // a,b inherit gen2 (the immediately-previous generation), NOT gen1.
+    expect(gen3[0]!.selection).toBe('not_accepted') // gen2 a, not gen1's accepted
+    expect(gen3[1]!.selection).toBe('accepted') // gen2 b
+    // c was absent from gen2 → treated as new → unselected (gen1's accepted NOT resurrected).
+    expect(gen3[2]!.selection).toBe('unselected')
+  })
 })

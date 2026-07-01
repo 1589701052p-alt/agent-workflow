@@ -904,6 +904,13 @@ export const docVersions = sqliteTable(
     // unselected / freshly human-judged rows. Drives the "已变更" badge only —
     // never gates approve, never enters an agent prompt.
     selectionStale: integer('selection_stale', { mode: 'boolean' }),
+    // RFC-129: per-mint monotonic generation stamp (Date.now() captured once per
+    // dispatchReviewNode mint loop; every member of one round shares it, strictly
+    // increasing across mints). The round key inheritance uses — loadPriorRoundMembers
+    // takes the members with the MAX round_generation as one coherent generation,
+    // so a refresh/US-2 leaving two generations at the same review_iteration can
+    // never mix rows across generations. NULL on single-document / legacy rows.
+    roundGeneration: integer('round_generation'),
     createdAt: integer('created_at')
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
