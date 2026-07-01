@@ -150,6 +150,20 @@ describe('groupUnsealedQuestions (oracle)', () => {
     ])
     expect(groups).toEqual([{ originNodeRunId: 'nr_a', questionIds: ['q1'] }])
   })
+
+  // RFC-128 P4/P5 (用户 2026-07-01) — the pool tightens to 待指派 (pending) only. An unsealed but
+  // non-pending entry (staged/processing/awaiting_confirm/done) is EXCLUDED: the control channel
+  // (defer → 待指派 → board dispatch) only applies BEFORE dispatch. Locks the new phase gate.
+  test('只纳 pending 待指派：非 pending 的未 seal 条目被排除', () => {
+    const groups = groupUnsealedQuestions([
+      entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a', phase: 'pending' }),
+      entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_b', phase: 'staged' }),
+      entry({ id: 'c', questionId: 'q3', originNodeRunId: 'nr_c', phase: 'processing' }),
+      entry({ id: 'd', questionId: 'q4', originNodeRunId: 'nr_d', phase: 'awaiting_confirm' }),
+      entry({ id: 'e', questionId: 'q5', originNodeRunId: 'nr_e', phase: 'done' }),
+    ])
+    expect(groups).toEqual([{ originNodeRunId: 'nr_a', questionIds: ['q1'] }])
+  })
 })
 
 describe('isAnswerFilled (oracle)', () => {

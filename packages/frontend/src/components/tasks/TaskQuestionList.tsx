@@ -12,7 +12,6 @@
 // the existing auto-dispatch flow.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
@@ -372,11 +371,10 @@ export function TaskQuestionList({
                 // reassignTaskQuestion 以 `dispatched_at IS NULL` + 非终态拒改派（下发后换
                 // handler 是 reopen 的职责），前端把入口收敛到未下发态与之对齐。
                 const reassignable = e.phase === 'pending' || e.phase === 'staged'
-                const hasAnswerLink = e.originNodeRunId !== null
                 const hasCopy = deferred && e.phase === 'pending'
                 const hasConfirm = e.phase === 'awaiting_confirm'
                 const hasStage = e.phase === 'pending' || e.phase === 'staged'
-                const hasActions = hasAnswerLink || hasCopy || hasConfirm || hasStage
+                const hasActions = hasCopy || hasConfirm || hasStage
                 return (
                   <Card
                     key={e.id}
@@ -401,23 +399,11 @@ export function TaskQuestionList({
                     footer={
                       hasActions ? (
                         <>
-                          {/* Path to ANSWER each clarify question — links to its
-                              clarify/cross page (answer if unanswered, view if answered).
-                              A manual question (originNodeRunId null) has none → omit (§15). */}
-                          {e.originNodeRunId !== null && (
-                            <Link
-                              to="/clarify/$nodeRunId"
-                              params={{ nodeRunId: e.originNodeRunId }}
-                              className={
-                                'btn btn--sm' + (e.answerSummary ? ' btn--ghost' : ' btn--primary')
-                              }
-                              data-testid={`tq-answer-${e.id}`}
-                            >
-                              {e.answerSummary
-                                ? t('taskQuestions.viewClarify')
-                                : t('taskQuestions.answer')}
-                            </Link>
-                          )}
+                          {/* RFC-128 P4/P5 (用户 2026-07-01): the per-card "去回答/查看" Link to
+                              /clarify/$nodeRunId is REMOVED — the centralized answer pane is the
+                              single answer entry now, and answered content is shown via the card's
+                              answerSummary below. originNodeRunId stays on the DTO (the pane groups
+                              unsealed questions by it). */}
                           {/* §15 — 复制 a 待指派 card → author form prefilled (deferred-only). */}
                           {hasCopy && (
                             <button

@@ -187,13 +187,14 @@ describe('TaskQuestionList — manual question entry points (§15)', () => {
   test('H2: a NON-deferred task hides BOTH the "+ 新增问题" toolbar and per-card "复制"', async () => {
     // deferred=false → manual entry points are hidden (a manual question could never be
     // dispatched on a non-deferred task; the create route rejects it too). Golden-lock:
-    // the rest of the board (cards, stage, clarify link) is unchanged.
+    // the rest of the board (cards, stage) is unchanged. (RFC-128 P4/P5: the per-card /clarify
+    // answer Link was removed globally, so it's now asserted ABSENT rather than present.)
     await wrapBoard([entry({ id: 'e1', phase: 'pending' })], false)
     expect(screen.queryByTestId('tq-add-question')).toBeNull()
     expect(screen.queryByTestId('tq-copy-e1')).toBeNull()
-    // board + the clarify card itself still render exactly as today.
+    // board + the card itself still render exactly as today.
     expect(screen.getByTestId('tq-card-e1')).toBeTruthy()
-    expect(screen.getByTestId('tq-answer-e1')).toBeTruthy()
+    expect(screen.queryByTestId('tq-answer-e1')).toBeNull()
   })
 
   test('H2: a non-deferred EMPTY board shows no "+ 新增问题" (today, unchanged)', async () => {
@@ -229,10 +230,11 @@ describe('TaskQuestionList — manual question entry points (§15)', () => {
       entry({ id: 'e1', phase: 'pending' }),
       entry({ id: 'e2', phase: 'awaiting_confirm' }),
     ])
-    // board + both cards still render; the clarify answer link is still present.
+    // board + both cards still render. (RFC-128 P4/P5: the per-card /clarify answer Link was
+    // removed globally — it's no longer present on any card.)
     expect(screen.getByTestId('task-questions-board')).toBeTruthy()
     expect(screen.getByTestId('tq-card-e1')).toBeTruthy()
-    expect(screen.getByTestId('tq-answer-e1')).toBeTruthy()
+    expect(screen.queryByTestId('tq-answer-e1')).toBeNull()
     // the author form stays closed until "+ 新增问题" is clicked (no behavioral change).
     expect(screen.queryByTestId('question-author-form')).toBeNull()
   })

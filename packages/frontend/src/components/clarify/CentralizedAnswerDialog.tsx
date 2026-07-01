@@ -1,8 +1,8 @@
 // RFC-128 P4 (T9) — centralized answer pane.
 //
-// A single page (full-width Dialog) that flattens EVERY unsealed 待指派 clarify
-// question of a task, grouped by its originating clarify round, and seals them all
-// with ONE submit button. Per user (2026-06-30): "页面和反问界面功能一致、只是只有
+// A single page (full-width Dialog) that flattens EVERY unsealed question that is still
+// in the 待指派 ('pending') phase of a task, grouped by its originating clarify round, and
+// seals them all with ONE submit button. Per user (2026-06-30): "页面和反问界面功能一致、只是只有
 // 一个提交按钮" — so it reuses the /clarify primitives wholesale (QuestionForm /
 // ClarifyQuestionHandler / the .segmented scope control / Card / Dialog / EmptyState
 // / ErrorBanner / LoadingState) and only collapses the per-round submit into one.
@@ -12,7 +12,9 @@
 // seals those questions into 待指派 WITHOUT minting a rerun. The board then picks an
 // agent + dispatches. Which questions remain to answer is read from the per-question
 // `sealed` DTO field (NOT answerSummary — Codex design gate F3: a partial round leaves
-// answerSummary unreliable). An unsealed question is necessarily in the 'pending' phase.
+// answerSummary unreliable). RFC-128 P4/P5 (用户 2026-07-01): the pool is now EXPLICITLY
+// gated to the 待指派 ('pending') phase — this replaces the earlier "unsealed ⟹ pending"
+// assumption the code never actually enforced (an unsealed-but-dispatched entry could leak).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -53,15 +55,21 @@ export interface CentralizedAnswerGroup {
  *  Cross questions get a per-question scope picker (designer ↔ questioner) below.
  *
  *  Excluded: already-sealed questions (`sealed` per-question DTO field, NOT
- *  `answerSummary !== null` — F3) and manual questions (originNodeRunId null — the
- *  instruction IS the content, nothing to answer). Dedup is by (round, questionId): a cross
- *  round's questioner + designer entries share a questionId → one render. */
+ *  `answerSummary !== null` — F3), manual questions (originNodeRunId null — the instruction
+ *  IS the content, nothing to answer), and — RFC-128 P4/P5 (用户 2026-07-01) — any entry past
+ *  the 待指派 ('pending') phase: the defer→待指派→dispatch control channel only applies before
+ *  dispatch, so a staged/processing/awaiting_confirm/done entry is out. Dedup is by (round,
+ *  questionId): a cross round's questioner + designer entries share a questionId → one render. */
 export function groupUnsealedQuestions(entries: TaskQuestionEntry[]): CentralizedAnswerGroup[] {
   const order: string[] = []
   const byRound = new Map<string, string[]>()
   for (const e of entries) {
     if (e.sealed) continue
     if (e.originNodeRunId === null) continue
+    // RFC-128 P4/P5 (用户 2026-07-01): pool is gated to the 待指派 ('pending') phase. The
+    // control channel (defer → 待指派 → board dispatch) only applies BEFORE dispatch, so an
+    // unsealed-but-past-pending entry (staged/processing/awaiting_confirm/done) is excluded.
+    if (e.phase !== 'pending') continue
     let qids = byRound.get(e.originNodeRunId)
     if (qids === undefined) {
       qids = []

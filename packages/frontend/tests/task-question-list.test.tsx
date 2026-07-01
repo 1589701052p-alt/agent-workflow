@@ -45,8 +45,9 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   ...over,
 })
 
-// The board renders a <Link to="/clarify/$nodeRunId"> per card, so it needs a
-// router context with that route registered (TaskOutputPanel test pattern).
+// RFC-128 P4/P5: the board no longer renders a per-card <Link> (the /clarify jump entry was
+// removed). The harness still mounts a router context (with the /clarify route registered) for
+// stability — TanStack tolerates an unused router and the focus-jump harness reuses this shape.
 async function wrap(entries: TaskQuestionEntry[]) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -215,10 +216,25 @@ describe('TaskQuestionList board', () => {
     expect(screen.queryByTestId('task-questions-board')).toBeNull()
   })
 
-  test('每张卡片给出回答路径 → 链到该问题的 /clarify/$nodeRunId 反问页', async () => {
-    await wrap([entry({ id: 'e1', phase: 'pending', originNodeRunId: 'run-xyz' })])
-    const link = within(screen.getByTestId('tq-card-e1')).getByTestId('tq-answer-e1')
-    expect(link.getAttribute('href')).toBe('/clarify/run-xyz')
+  // RFC-128 P4/P5 (用户 2026-07-01) — the per-card "去回答/查看" Link to /clarify/$nodeRunId is
+  // REMOVED (全删：回答 + 查看都删). The centralized answer pane is the single answer entry now;
+  // answered content shows via the card's answerSummary. Regression lock for the deletion (reverses
+  // the old "每张卡片给出回答路径 → 链到 /clarify 反问页" assertion).
+  test('每张卡片不再有跳按轮次反问页的入口（tq-answer Link 全删）', async () => {
+    await wrap([
+      entry({ id: 'e1', phase: 'pending', originNodeRunId: 'run-xyz' }),
+      entry({
+        id: 'e2',
+        phase: 'awaiting_confirm',
+        originNodeRunId: 'run-abc',
+        answerSummary: 'my answer',
+      }),
+    ])
+    // Neither an unanswered (pending) nor an answered (awaiting_confirm) card exposes the Link.
+    expect(screen.queryByTestId('tq-answer-e1')).toBeNull()
+    expect(screen.queryByTestId('tq-answer-e2')).toBeNull()
+    // No anchor to any /clarify round page remains anywhere on the board.
+    expect(document.querySelector('a[href^="/clarify/"]')).toBeNull()
   })
 
   test('已答卡片：答案紧贴问题、排在节点信息(meta)之前（用户反馈布局）', async () => {
@@ -480,6 +496,64 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
         originNodeRunId: 'nr_a',
         sourceKind: 'cross',
         roleKind: 'questioner',
+      }),
+    ])
+    expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
+  })
+
+  // RFC-128 P4/P5 — deleting the per-card answer Link must NOT touch the other card actions:
+  // 改派 Select (combobox) / tq-stage / tq-copy (deferred) / confirm all remain.
+  test('删 tq-answer 后其它卡片操作仍在：改派 Select / tq-stage / tq-copy / confirm', async () => {
+    setBaseUrl('http://daemon.test')
+    setToken('tok')
+    await wrapDeferred([
+      entry({
+        id: 'p1',
+        phase: 'pending',
+        originNodeRunId: 'nr_p',
+        sourceKind: 'cross',
+        roleKind: 'designer',
+      }),
+      entry({
+        id: 'c1',
+        phase: 'awaiting_confirm',
+        originNodeRunId: 'nr_c',
+        sourceKind: 'cross',
+        roleKind: 'designer',
+      }),
+    ])
+    const p1 = screen.getByTestId('tq-card-p1')
+    // pending card keeps reassign Select (combobox) + stage + copy — but exposes NO answer Link.
+    expect(within(p1).queryByRole('combobox')).toBeTruthy()
+    expect(within(p1).getByTestId('tq-stage-p1')).toBeTruthy()
+    expect(within(p1).getByTestId('tq-copy-p1')).toBeTruthy()
+    expect(within(p1).queryByTestId('tq-answer-p1')).toBeNull()
+    // awaiting_confirm card keeps its confirm control; still no answer Link.
+    const c1 = screen.getByTestId('tq-card-c1')
+    expect(within(c1).getAllByRole('button').length).toBeGreaterThan(0)
+    expect(within(c1).queryByTestId('tq-answer-c1')).toBeNull()
+  })
+
+  // RFC-128 P4/P5 (用户 2026-07-01) — the pane + its entry button tighten to 待指派 (pending)
+  // only. An unsealed but already-dispatched (processing) / confirmed (done) question no longer
+  // feeds the pane, so with NO pending question the entry button hides (even while deferred).
+  test('deferred + 未 seal 但只有 processing/done（无 pending）→ 无统一入口按钮', async () => {
+    await wrapDeferred([
+      entry({
+        id: 'e1',
+        phase: 'processing',
+        sealed: false,
+        originNodeRunId: 'nr_p',
+        sourceKind: 'cross',
+        roleKind: 'designer',
+      }),
+      entry({
+        id: 'e2',
+        phase: 'done',
+        sealed: false,
+        originNodeRunId: 'nr_d',
+        sourceKind: 'cross',
+        roleKind: 'designer',
       }),
     ])
     expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
