@@ -676,6 +676,155 @@ describe('RFC-128 P5-BC per-question injection (golden-lock R2-4 + RFC-099)', ()
     expect(ctx?.answersBlock).not.toContain('u1')
   })
 
+  test('AGING (self inject layer): home done+output ages its queue → entry excluded from a later rerun', async () => {
+    // RFC-131 §2 — the self-domain injection-layer counterpart of rfc120 §18 (designer domain).
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const self = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: P,
+      questions: [mkQ('q1', 'AGED-Q')],
+    })
+    // The承接 rerun produced done+output → the entry (trigger=prodRerun) is aged.
+    const prodRerun = await seedRun(db, taskId, P, {
+      status: 'done',
+      iteration: 0,
+      hasOutput: true,
+      rerunCause: 'clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: self.intermediaryNodeRunId,
+      questionId: 'q1',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: prodRerun,
+    })
+    // A later rerun (id > prodRerun) sees the sole entry aged → nothing to inject.
+    const laterRerun = await seedRun(db, taskId, P, {
+      status: 'running',
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+    })
+    const ctx = await buildClarifyNodeQueueContext({
+      db,
+      definition: liveDef(),
+      taskId,
+      consumerKind: 'self',
+      consumerNodeId: P,
+      dispatchedRunId: laterRerun,
+      targetIteration: 0,
+    })
+    expect(ctx).toBeUndefined()
+  })
+
+  test('ROUND N+1 (self inject layer): a new round bound AFTER a done+output is NOT aged by it (trigger id 序锚)', async () => {
+    // The failure this locks: laden "target ever produced output" would falsely age round-2 entries
+    // dispatched after round-1's output. The id-order anchor (r.id >= trigger) prevents it.
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const r1 = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: P,
+      iteration: 0,
+      questions: [mkQ('r1q', 'ROUND1-AGED')],
+    })
+    const prodRerun = await seedRun(db, taskId, P, {
+      status: 'done',
+      iteration: 0,
+      hasOutput: true,
+      rerunCause: 'clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: r1.intermediaryNodeRunId,
+      questionId: 'r1q',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: prodRerun,
+    })
+    const r2 = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: P,
+      iteration: 1,
+      questions: [mkQ('r2q', 'ROUND2-FRESH')],
+    })
+    // Round 2's承接 rerun is minted AFTER the output → its id > prodRerun.
+    const curRerun = await seedRun(db, taskId, P, {
+      status: 'running',
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: r2.intermediaryNodeRunId,
+      questionId: 'r2q',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: curRerun,
+    })
+    const ctx = await buildClarifyNodeQueueContext({
+      db,
+      definition: liveDef(),
+      taskId,
+      consumerKind: 'self',
+      consumerNodeId: P,
+      dispatchedRunId: curRerun,
+      targetIteration: 1,
+    })
+    // Round 1 aged (trigger=prodRerun, done+output, id >= trigger).
+    expect(ctx?.questionsBlock ?? '').not.toContain('ROUND1-AGED')
+    // Round 2 NOT aged: prodRerun's id < curRerun (its trigger) → the prior output doesn't touch it.
+    expect(ctx?.questionsBlock).toContain('ROUND2-FRESH')
+  })
+
+  test('FAILED (self inject layer): a failed home run does NOT age the queue → entry re-injected on revive', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const self = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: P,
+      questions: [mkQ('q1', 'FAILED-Q')],
+    })
+    // failed even WITH a stray output is NOT done → not aged (revivable).
+    const failedRerun = await seedRun(db, taskId, P, {
+      status: 'failed',
+      iteration: 0,
+      hasOutput: true,
+      rerunCause: 'clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: self.intermediaryNodeRunId,
+      questionId: 'q1',
+      roleKind: 'self',
+      defaultTargetNodeId: P,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: failedRerun,
+    })
+    const reviveRerun = await seedRun(db, taskId, P, {
+      status: 'running',
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+    })
+    const ctx = await buildClarifyNodeQueueContext({
+      db,
+      definition: liveDef(),
+      taskId,
+      consumerKind: 'self',
+      consumerNodeId: P,
+      dispatchedRunId: reviveRerun,
+      targetIteration: 0,
+    })
+    expect(ctx?.questionsBlock).toContain('FAILED-Q')
+  })
+
   test('binds trigger_run_id on the rendered entries (per-entry consume marker)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
