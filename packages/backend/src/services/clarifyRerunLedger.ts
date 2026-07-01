@@ -347,3 +347,41 @@ export async function roundHasDispatchedSelfQuestioner(
     .limit(1)
   return rows.length > 0
 }
+
+/** RFC-131 — 派生式（时序）老化判据（取代 isQueueEntryRenderableForRun 的 window 消费 +
+ *  isDispatchedEntryConsumed 的 in-flight/revivable mode 分裂）。一个 target 队列里、`sinceMs`（问题
+ *  `dispatched_at`）时下发的问题是否「已被 target 产出老化」= 该 (target, iteration) 有一个 TOP-LEVEL
+ *  run 处于 `done` + 捕获 ≥1 <workflow-output>（正常输出走完），**且它在该问题下发之后开跑**
+ *  （`startedAt >= sinceMs`）。
+ *
+ *  为什么带时序锚 `sinceMs`（而非笼统「node 有过 done+output」）：一个 node 产出后可以再开新一轮反问
+ *  （round N+1）——那批新问题在上次产出**之后**下发，绝不能被上次产出老化。时序锚保证「只有在问题
+ *  下发之后才产出的 run」才老化它，round N+1 由它自己的产出老化。
+ *
+ *  三态（RFC-131 §2 核心正确性）：
+ *   - `done` + output 且 `startedAt >= sinceMs`（该问题下发后正常产出）→ TRUE：老化、定型、不再注入。
+ *   - `done` 无 output（问了下一轮反问；runner.ts:1321 对 <workflow-clarify> 保持 done、不写 port）→
+ *     FALSE：不老化，答案留队列、下一次 rerun 继续注入（修多轮丢历史轮 + 天然避免下发死锁）。
+ *   - failed / canceled / interrupted / pending / running / awaiting_* → FALSE：未产出（revivable / 在飞）。
+ *   - 产出早于本问题下发（`startedAt < sinceMs`）→ FALSE：那是上一轮的旧产出、与本问题无关。
+ *
+ *  派生式（读时按 run 状态 + startedAt 算、不落库）：单一事实源、崩溃 replay 一致、零 schema
+ *  migration、幂等。fanout 子 run（parentNodeRunId 非 null）不作数——只看 top-level 产出。 */
+export function isTargetNodeConsumed(
+  targetNodeId: string,
+  iteration: number,
+  sinceMs: number,
+  runs: ReadonlyArray<NodeRunRow>,
+  outputRunIds: ReadonlySet<string>,
+): boolean {
+  return runs.some(
+    (r) =>
+      r.nodeId === targetNodeId &&
+      r.iteration === iteration &&
+      r.parentNodeRunId === null &&
+      r.status === 'done' &&
+      outputRunIds.has(r.id) &&
+      r.startedAt !== null &&
+      r.startedAt >= sinceMs,
+  )
+}
