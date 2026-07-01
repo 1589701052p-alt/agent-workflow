@@ -22,11 +22,13 @@
 - 测试：in-flight 串行 / park / readiness / 死锁天然避免（done-无-output）。
 - 依赖：T1、T2。
 
-### T4 — 改派下游（RFC-127 收编）
-- 确认 run.node_id=origin / agent=target / 下游=origin（design §4 D3）；`buildBorrowedAgent` + `resolveBorrowForNode`（target agent 解析给 spawn）保留。
-- 三账本借壳冲突判定收敛为 in-flight 串行。
-- 测试：改派 target → 进目标队列、下游归 origin；self/questioner 不可改派；designer 可改派；借壳 spawn 不破。
-- 依赖：T3。
+### T4 — 改派下游（**去借壳大改**，用户 2026-07-01 拍板；design §4 D3 勘误）
+- 改派问题的 rerun 在 **target 节点** mint（非 origin 借壳）；产出 / 下游归 target 自己。
+- 注入器改派后 `consumerNodeId` 用 target（投影后的目标节点）。
+- **退役** `buildBorrowedAgent` / `resolveBorrowForNode`（慎删：多人树，先与协作者调和，绝不单方覆盖）。
+- #7 勘误：self/questioner **可**改派（都可，与现状 `canReassign` 一致）——初稿「不可改派」被用户模型推翻。
+- 测试：改派 target → 进目标队列、target 消费、下游归 target；`rfc127-*-borrow` 改语义或删。
+- 依赖：T3 + **协作者 RFC-130 scheduler 稳定**（撞 `scheduler.ts`，等其 CI 绿再动）。
 
 ### T5 — 迁移/派生验证 + 集成 e2e
 - 派生零 migration：升级窗口在飞任务不丢历史轮（历史 target 已产出 → 派生老化；未产出 → 注入）。
@@ -77,3 +79,19 @@ T1 ─→ T2 ─→ T3 ─→ T4
 - **借壳 spawn 破坏**：`buildBorrowedAgent`/spawn 路径保留、rfc127 borrow 测试锁。
 - **热点调度器（PR-2）**：Codex adversarial impl gate 每轮 + 分批小步。
 - **迁移窗口丢数据**：派生无持久态、回退即回旧逻辑；e2e 覆盖在飞任务。
+
+## 交付进度（2026-07-01）
+
+**已交付**（本地全量 4635 pass + typecheck 我方文件干净 + 单二进制 smoke 绿；CI 待协作者 RFC-130 解除污染）：
+- T1 判据 `isTargetNodeConsumed`（trigger_run_id + ULID id 序锚，防 round N+1 误老化）——`ee1a810` + `37907eb`；单测 `rfc131-target-consumed.test.ts`（13）。
+- T2 注入接入：self/questioner（`buildClarifyNodeQueueContext`，`dba77ab`）+ designer（`buildNodeQueueExternalFeedback`，`37907eb`）换派生老化。
+- T3 部分：gate/park 保持 per-entry in-flight（`1fb1646` 死锁 fix；design §7 语义分层勘误——注入=老化 / 调度=in-flight，**不收敛**，否则 park 死锁）。
+- T6 回归锁：`rfc120-deferred-dispatch`（T9/§18 修）+ `rfc128-p5-bc`（多轮 + 注入层 老化/round N+1/failed 三新测试，`1f63919`）。
+- design 勘误 `44059e5` + §4 去借壳（本次）；单二进制 smoke 绿。
+
+**剩余（依赖协作者 RFC-130 scheduler 稳定后做，用户已拍板方向）**：
+- T4 去借壳大改：改派 rerun 在 target mint、退役 `buildBorrowedAgent`/`resolveBorrowForNode`、注入 `consumerNodeId` 用 target。撞 `scheduler.ts`。
+- T5 scheduler e2e：新建 `scheduler-clarify-multiround-aging.test.ts`（runTask 端到端多轮 deferred self-clarify 复现 `01KWDKBS`）。
+- 注入层补充：cross-questioner 多轮、review reject + 老化组合。
+
+**阻塞**：协作者 RFC-130 破共享门禁（`rfc130-crash-replay.test.ts` typecheck 缺 edge id + `rfc130-node-isolation.test.ts` prettier）——用户拍板**等协作者修**，我不擅改。CI 绿 + T4/T5 待其解除后继续。

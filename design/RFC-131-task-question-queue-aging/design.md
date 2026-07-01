@@ -84,24 +84,27 @@ function isTargetNodeConsumed(
 
 **golden-lock**：non-deferred / 单轮全量下发 → 与旧 `buildPromptContext` **逐字不变**（历史轮为空时退化为单轮渲染）。
 
-## 4. 改派后的下游接线（RFC-127 收编）——设计决策 D3
+## 4. 改派后的下游接线——设计决策 D3（**去借壳**，用户 2026-07-01 拍板，推翻初稿「保留 RFC-127 借壳」）
 
-**保留 RFC-127 借壳的产出语义**，只把消费账本简化：
+**问题挂任务级公共队列、target 节点自己的 run 消费、无借壳**（用户原话：借壳「还会引入问题」——origin 完成早于借壳 rerun → 下游过早释放 + 三账本借壳冲突）：
 
-- **run.node_id = origin**（产出归属 + 下游拓扑不变）；
-- **agent = target 的 agent**（借壳执行者的脑子 body/model/runtime；`buildBorrowedAgent` 保留）；
-- **下游 = origin 节点的输出端口**（改派只改「谁干活」，不改「工作流拓扑/谁的下游」）。
+- **改派 = 改 target**（`overrideTargetNodeId`）→ 问题按 target 投影进目标节点的队列；
+- **target 节点跑自己的 run 时**注入它 target 队列里的问题（注入器 `consumerNodeId = 投影后的 target`）；
+- **产出 + 下游 = target 节点自己的**（不再 `run.node_id=origin` 借壳、不再「origin 决定下游」）；
+- **下线 RFC-127 借壳**：`buildBorrowedAgent` / `resolveBorrowForNode` 退役（改派不在 origin mint 借壳 run，target 用自己的 agent 跑）。
 
-即「改派 = 改 target（执行者）」，但 **origin 决定下游**——designer 问题改派给 X 处理，产出仍走原 designer 的下游，不断链。
+| role | 可改派？ | 改派语义 |
+|------|---------|---------|
+| self / questioner | ✅（用户：「改派就是指定这个问题的目标队列」，不分 role） | 改 target → 问题进目标节点队列、目标节点消费 |
+| designer | ✅ | 同上 |
+| manual | ✅ | 指定 target |
 
-| role | origin | target（default） | 可改派？ |
-|------|--------|-------------------|---------|
-| self | 提问 agent 节点 | = origin | 否（自问自答） |
-| questioner | questioner 节点 | = origin | 否 |
-| designer | designer 节点 | = origin（可 override） | ✅ 改 override |
-| manual | 手动问题 origin | 指定 target | ✅ |
+**#7 勘误**：初稿表格「self/questioner 不可改派」被用户模型推翻——公共队列下任何问题都能改 target；现状 `canReassign`（`taskQuestions.ts:1047`）已允许，与此一致。
 
-**简化点**：RFC-127 的三账本（immediate / designer / deferred-self-questioner）借壳冲突判定，收敛为「同 (target, iteration) 一条在飞 rerun」的串行化（§7 in-flight）+ 派生老化。`resolveBorrowForNode` 仍用于把 target 的 agent 解析出来给 scheduler spawn（借壳 spawn 路径不变）。
+**影响面（大改，实现依赖协作者 RFC-130 scheduler 稳定后进行）**：
+- scheduler：改派问题的 rerun 在 **target 节点** mint（非 origin 借壳）；
+- 注入器：改派后 `consumerNodeId` 用 target；
+- 退役 `buildBorrowedAgent` / `resolveBorrowForNode` + `rfc127-*-borrow` 测试改语义或删（**慎删**：多人树，先与协作者调和，绝不单方覆盖）。
 
 ## 5. non-deferred 双路径（保留）
 
