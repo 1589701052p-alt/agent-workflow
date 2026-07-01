@@ -21,7 +21,7 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
 - **RFC-130-T1**：git 原语（`util/git.ts`）
   - **`runGit` 加可选 `{ env }`**（merge 在 `nonInteractiveGitEnv()` 上，D25）——`snapshotFullState` 的 `GIT_INDEX_FILE` 前置依赖。
   - `snapshotFullState(worktree, {pinRef})`（临时 index：read-tree HEAD + add -A + write-tree + commit-tree + update-ref）。含 untracked；`add -A` 加 exclude 兜底忽略 `iso/`（D14 双保险）。
-  - `createIsolatedWorktree(repoPath, isoPath, taskBaseHEAD, baseSnapshotTree)`：`worktree add --detach <iso> <taskBaseHEAD>` + `read-tree <baseSnapshotTree>` + `checkout-index -fa`（**HEAD=原始基线、累积改动未提交**，D23——保下游 `git diff HEAD` 语义）+ **add 后 `syncSubmodules`**〔D20，git.ts:396-404〕；isoPath = `{appHome}/iso/{taskId}/{nodeRunId}`，**主 repo 之外**（D14）。
+  - `createIsolatedWorktree(repoPath, isoPath, baseSnapshotCommit, taskBaseHEAD)`：`worktree add --detach <iso> <baseSnapshotCommit>`（净 checkout、含上游删除，D28）+ `reset --soft <taskBaseHEAD>`（HEAD 回基线、累积改动 staged/未提交，D23——保下游 `git diff HEAD`）+ **add 后 `syncSubmodules`**〔D20，git.ts:396-404〕；isoPath = `{appHome}/iso/{taskId}/{nodeRunId}`，**主 repo 之外**（D14）；base/node 快照 pin **两个不同 ref** `.../base`、`.../node`（D26）。
   - **submodule 脏编辑门控**（D22）：隔离终态快照检测 submodule 工作区未提交脏改动 → node fail-loud `submodule-dirty-unsupported`（不静默丢）。
   - `mergeTreeInMemory(worktree, base, ours, theirs) → {mergedTreeOid, conflicts[]}`（`git merge-tree --write-tree --merge-base`）。
   - `commitTree(worktree, treeOid, parent) → commitSha`（冲突树 worktree add 前 wrap，Codex P2-2）。
@@ -50,11 +50,11 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
 
 - **RFC-130-T4**：`services/mergeAgent.ts`（`buildMergeAgent`，仿 commitPush.ts:29；无 readonly）+ config `mergeAgentRuntime`/`mergeAgentModel`（config.ts，仿 commitPushRuntime）+ `RunTaskOptions` 线程 + CLI bootstrap（cli/start.ts）。
 - **RFC-130-T5**：冲突流程（scheduler 段③冲突分支替换占位）
-  - `commitTree(merged, base)` wrap 成 commit → 建 resolve 隔离树（Codex P2-2）→ `runNode(合并 agent, 绕 globalSem)` → `residualConflictMarkers` 判定 → 成功 materialize resolved / 失败 §6.3。
+  - `commitTree(merged, base)` wrap 成 commit → 建 resolve 隔离树（Codex 二轮 P2-2）→ `runNode(合并 agent, 绕 globalSem)` → `residualConflictMarkers` 判定 → 成功 materialize resolved（+ submodule 刷新）/ **失败 = 保留 resolve-iso、主树不落冲突标记、node conflict-human/awaiting_human（D27，兄弟 merge-back 对干净主树）**。
   - awaiting_human：冲突节点 `park-human` + 任务 `running→awaiting_human`；`merge_state='conflict-human'` + materialize 带标记树到主树。
   - 合并 agent 子 run（`parentNodeRunId` + `cause='merge-resolve'` + keyed `merge:`，仿 commit-push child）。
   - 锁序注释写进 `taskWriteLocks.ts`（§7.2：合并 agent 绕 globalSem 防死锁）。
-- **RFC-130-T6**：resume 处理 `conflict-human`（`resumeKick` 首 tick：主树无残留标记 → 合并点续跑标 done；仍有 → 再 awaiting_human）。
+- **RFC-130-T6**：resume 处理 `conflict-human`（`resumeKick` 首 tick：`resolve-iso` 无残留标记 → 取 resolved 快照对**主树现态**重算 `merge-tree(base, canon_now, resolved)` → 干净 materialize + merged + done + 放行下游 / 又冲突再 §6 / 仍有标记再 awaiting_human，D27）。**测试**：conflict-human 期间兄弟 merge-back 对干净主树成功（不撞冲突残渣）；人工解完 resume 对推进后的主树重合并。
 - **测试**：同行冲突 mock 合并 agent 成功/失败两路（AC-7/8）；死锁不发生（globalSem 占满时合并 agent 仍能跑）；resume 人工解完续跑；合并 agent 运行时取 config（AC-9）。
 
 ## PR-C —— readonly 彻底删除（**落地顺序：PR-D 之后**，Codex 二轮 P1-3）
