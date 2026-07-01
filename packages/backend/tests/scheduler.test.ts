@@ -455,7 +455,6 @@ describe('runTask: linear DAG (M1)', () => {
       edges: [],
     }
     const { taskId } = await seedWorkflowAndTask(h, def)
-    const t0 = Date.now()
     await withEnv(
       {
         MOCK_OPENCODE_DELAY_MS: '1500',
@@ -470,16 +469,26 @@ describe('runTask: linear DAG (M1)', () => {
           maxConcurrentNodes: 2,
         }),
     )
-    const elapsed = Date.now() - t0
-    // Two 1500ms nodes in PARALLEL finish near 1500ms + per-node iso overhead
-    // (RFC-130: §段① snapshot + `git worktree add` and §段③ merge-back serialize
-    // briefly on writeSem, ≈300ms/node here). SERIAL execution would be ≥3000ms +
-    // overhead. A large delay makes the ~1500ms parallel savings dominate the git
-    // overhead so the < 2700ms bound robustly catches a serialization regression
-    // (parallel ≈ 2100ms, serial ≈ 3600ms) even under CI variance.
-    expect(elapsed).toBeLessThan(2700)
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')
+    // Parallelism is asserted STRUCTURALLY via execution-window OVERLAP, NOT a
+    // total-elapsed bound. The old `elapsed < 2700ms` check was a timing flake: two
+    // 1500ms nodes each run in their OWN iso worktree, and RFC-130 per-node iso
+    // overhead (snapshot + `git worktree add` + merge-back) varies under CI load —
+    // macOS CI hit 2950ms (still far below the ~3600ms serial floor, i.e. they DID
+    // run in parallel) yet tripped the tight bound. Overlap is variance-proof: if the
+    // two same-level writer nodes ran serially (one writeSem for the whole run),
+    // r2.startedAt would be ≥ r1.finishedAt and the windows would not overlap.
+    const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    const r1 = runs.find((r) => r.nodeId === 'r1')
+    const r2 = runs.find((r) => r.nodeId === 'r2')
+    expect(r1?.startedAt ?? 0).toBeGreaterThan(0)
+    expect(r2?.startedAt ?? 0).toBeGreaterThan(0)
+    expect(r1?.finishedAt ?? 0).toBeGreaterThan(0)
+    expect(r2?.finishedAt ?? 0).toBeGreaterThan(0)
+    const overlapStart = Math.max(r1!.startedAt!, r2!.startedAt!)
+    const overlapEnd = Math.min(r1!.finishedAt!, r2!.finishedAt!)
+    expect(overlapEnd).toBeGreaterThan(overlapStart) // windows overlap → ran in parallel
   })
 
   test('node with retries=2 fails twice then succeeds', async () => {
