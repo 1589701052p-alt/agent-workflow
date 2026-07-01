@@ -30,7 +30,7 @@
 
 import { describe, expect, test } from 'bun:test'
 
-import { clarifyRounds, nodeRuns } from '../src/db/schema'
+import type { clarifyRounds, nodeRuns } from '../src/db/schema'
 import {
   buildImmediateLedgerContext,
   openImmediateRounds,
