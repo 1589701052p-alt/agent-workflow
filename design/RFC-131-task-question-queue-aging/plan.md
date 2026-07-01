@@ -100,15 +100,16 @@ T1 ─→ T2 ─→ T3 ─→ T4
 - 全量 **4639 pass 0 fail、零回归**；typecheck 绿；协作者 PR-C 已于 `4fdffa5` 落定（committed 删 readonly），本地 typecheck 干净。
 - **行为变更（已知限制）**：改派到 never-run frontier 节点被拒（`task-question-unsafe-dispatch-target`）——去借壳固有（run 铸在 target 本身、无 prior run 可继承；借壳时代能铸在有 run 的 origin 故可放行）。属用户拍板去借壳范围。
 
-## ✅ RFC-131 全 6 task（T1–T6）功能完成
+## ✅ RFC-131 全 6 task（T1–T6）功能完成 + 验收4 bug 修
 
-T1 判据 + T2 self/designer 注入 + T3 gate/park in-flight + T4 去借壳(dispatch-only) + T5 scheduler e2e + T6 回归锁 + 注入层测试全集，全量 **4658 pass 0 fail**、typecheck 绿、单二进制 smoke 绿、backend CI（Lint+Typecheck+Test）绿（`256b39c6` backend job success,success）。用户核心痛点（多轮反问丢历史 + 老化 + 改派进 target）全部解决。
+T1 判据 + T2 self/designer 注入 + T3 gate/park in-flight + T4 去借壳(dispatch-only) + T5 scheduler e2e + T6 回归锁 + 注入层测试全集 + **验收4 组合 e2e（含 review-reject 老化 bug 修 `31f105e`）**，全量 **4665 pass 0 fail**、typecheck 绿、单二进制 smoke 绿。用户核心痛点（多轮反问丢历史 + 老化 + 改派进 target）全部解决。
 
-## ⚠️ RFC-131 遗留（2026-07-01 回顾诚实记录，功能已达、非阻塞）
+**验收4 组合 e2e 揪出并修的真 bug（2026-07-01 回顾补测）**：review reject 把 done+output run supersede 成 `canceled`（保留 output），`isTargetNodeConsumed` 原仅认 `status==='done'` → 老化落空 → reject 重做重注已答 clarify（违反 design §74 + 用户拍板「review 打回也消费」）。此前 review 误判「rfc120 §18 afterA 已覆盖」是错的（afterA 是 plain rerun/done 保留，reject 是 canceled）。修：判据兼认 review-superseded 的 canceled+output run（`superseded-by-review-` 前缀，对齐 prior-output 的 `freshestPriorRunWithOutput`）；`failed`/非-review canceled 仍不老化（保 T1 revivable 锁）。底层模块 inline marker 常量 + source-text parity 锁。
 
-1. **design §3「统一 `buildClarifyQueueContext`」重构未做（技术债）**：design §3 要求收编两注入器成一个，实际保留 `buildClarifyNodeQueueContext`（self/questioner，clarifyRounds.ts）+ `buildNodeQueueExternalFeedback`（designer，crossClarify.ts）各换派生老化 filter——**功能等价、行为正确、都已换派生老化**，但 DRY 收编未做（`buildClarifyQueueContext` 在 src 零命中）。属高风险纯重构（golden-lock non-deferred + 3 函数收编含 buildPromptContext per-question 半），按 CLAUDE.md「重构走 RFC」宜作**独立重构 RFC**，不在 RFC-131 T4 收尾硬塞（无 Codex 兜底时更险）。
-2. **Codex impl gate 未跑**：broker.sock 缺（早先 pkill 误杀未恢复）。T4（最高风险段）+ PR-1/2/4 未经 Codex adversarial impl gate，仅本地全量 4658 + typecheck + smoke + gate 155 pass 兜底。broker 恢复（`/codex:setup`）后应补审 T4。
-3. **验收 4 端到端组合测试边际**：核心「老化不重注」由 rfc120 §18 afterA 覆盖、prior-output 由 rerun-prior-output 单测覆盖，但「designer done+output → review reject → 新 rerun 既带 prior-output 又靠老化不重注」的端到端组合无专门测（两半已各自单测）。
+## ⚠️ RFC-131 遗留（功能已达、非阻塞；2 项）
+
+1. **design §3「统一 `buildClarifyQueueContext`」重构未做（技术债，用户拍板独立 RFC）**：design §3 要求收编两注入器成一个，实际保留 `buildClarifyNodeQueueContext`（self/questioner）+ `buildNodeQueueExternalFeedback`（designer）各换派生老化 filter——**功能等价、行为正确**，但 DRY 收编未做（`buildClarifyQueueContext` 零命中）。高风险纯重构（golden-lock non-deferred + 3 函数收编含 buildPromptContext per-question 半），用户 2026-07-01 拍板作**独立重构 RFC**（CLAUDE.md「重构走 RFC」）。
+2. **Codex impl gate 未跑**：broker.sock 缺（早先 pkill 误杀未恢复）。T4（最高风险段）+ PR-1/2/4 + 验收4 bug 修均未经 Codex adversarial impl gate，仅本地全量 4665 + typecheck + smoke + gate 兜底。broker 恢复（`/codex:setup`）后应补审。
 
 ## 共享 CI 红（非本 RFC）
 
