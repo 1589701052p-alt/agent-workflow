@@ -433,4 +433,49 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     expect((within(q1).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
     expect(document.activeElement).toBe(q2)
   })
+
+  // Codex impl-gate medium (2026-07-01): a single-choice DIGIT runs onChange→onAdvance in ONE
+  // keydown, so at advance time the submit button is STILL disabled (filledTotal not yet re-rendered).
+  // A synchronous focus() on a disabled <button> is ignored → the "last question → submit" hop
+  // silently failed when the last question was the FIRST/only filled answer. The deferred-focus
+  // effect must flush the focus once the button enables. These lock the one-question + answer-last
+  // paths the earlier tests missed (they pre-filled another question, so submit was already enabled).
+  test('ONE-question dialog: digit key picks the answer AND focus lands on the (now-enabled) submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q1'))
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+    expect(submit.disabled).toBe(true) // nothing filled yet → disabled
+
+    q1.focus()
+    fireEvent.keyDown(q1, { key: '1' }) // picks (first filled answer) + advances past the last question
+    expect((within(q1).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
+    // The submit button enables (filledTotal 0→1) and the deferred focus flushes to it.
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    await waitFor(() => expect(document.activeElement).toBe(submit))
+  })
+
+  test('answer-LAST: digit-pick the last question first (its answer is the first filled) → focus lands on submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+    const q2 = screen.getByTestId('clarify-question-q2')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    q2.focus() // start on the LAST question with nothing filled → submit disabled
+    fireEvent.keyDown(q2, { key: '1' }) // first filled answer IS the last question
+    expect((within(q2).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    await waitFor(() => expect(document.activeElement).toBe(submit))
+  })
 })

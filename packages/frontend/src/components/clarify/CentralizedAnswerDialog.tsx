@@ -178,6 +178,24 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
   // child effect (ref only ⇒ no re-render / loop); stale rounds are ignored (advance iterates
   // `groups`).
   const roundOrderRef = useRef<Map<string, string[]>>(new Map())
+  // After the LAST question we move focus to the submit button (so a follow-up Enter submits). But
+  // a single-choice DIGIT key runs onChange→onAdvance in ONE keydown, so at advance time the just-
+  // picked answer has NOT committed yet → `filledTotal` is stale → the submit button may still be
+  // `disabled` (a disabled <button> silently ignores .focus()). So: focus it now IF already enabled,
+  // else set this pending flag and let the effect below flush the focus once the answer commits and
+  // the button enables. Ref (not state) ⇒ no extra render; the flush effect re-checks on filledTotal
+  // change (the disabled→enabled trigger). Regression: digit-pick the ONLY/last question (its answer
+  // is the first filled) still lands focus on submit.
+  const pendingSubmitFocusRef = useRef(false)
+  const focusSubmitButton = useCallback(() => {
+    const btn = submitBtnRef.current
+    if (btn !== null && !btn.disabled) {
+      btn.focus()
+      pendingSubmitFocusRef.current = false
+    } else {
+      pendingSubmitFocusRef.current = true
+    }
+  }, [])
   const registerQuestionRef = useCallback((key: string, handle: QuestionFormHandle | null) => {
     if (handle === null) questionRefs.current.delete(key)
     else questionRefs.current.set(key, handle)
@@ -195,13 +213,18 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
         // Same-round next OR the first question of the next round — one flat order.
         questionRefs.current.get(nextKey)?.focus()
       } else {
-        // Last question of the last round → move focus onto the single submit button so a
-        // follow-up Enter submits (mirrors clarify.detail.tsx's submitContinueRef).
-        submitBtnRef.current?.focus()
+        // Last question of the last round → move focus onto the single submit button so a follow-up
+        // Enter submits (mirrors clarify.detail.tsx's submitContinueRef). Deferred if still disabled.
+        focusSubmitButton()
       }
     },
-    [groups],
+    [groups, focusSubmitButton],
   )
+  // Flush a deferred submit-button focus once the button enables (filledTotal 0→N after the last
+  // question's answer commits). No-op unless a last-question advance set the pending flag.
+  useEffect(() => {
+    if (pendingSubmitFocusRef.current) focusSubmitButton()
+  }, [filledTotal, focusSubmitButton])
 
   const submitMut = useMutation<void, Error, void>({
     mutationFn: async () => {
