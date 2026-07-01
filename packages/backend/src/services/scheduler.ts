@@ -152,14 +152,7 @@ import { createLogger, type Logger } from '@/util/log'
 // RFC-060 PR-E: splitDiff* imports removed — they were used only by the
 // agent-multi fan-out path (now deleted). wrapper-fanout consumes a `list<T>`
 // shardSource instead of slicing a string diff.
-import {
-  gitBlobHashes,
-  gitChangedFiles,
-  gitStashSnapshot,
-  runGit,
-  snapshotRefName,
-} from '@/util/git'
-import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
+import { gitBlobHashes, gitChangedFiles, runGit } from '@/util/git'
 import {
   createNodeIso,
   discardNodeIso,
@@ -4585,7 +4578,7 @@ async function dispatchFanoutAggregator(
       }),
     )
     if (!aggIso.passthrough) await persistIsoBase(db, aggRunId, task.repoCount, aggIso)
-  } catch (err) {
+  } catch {
     releaseSub()
     releaseGlobal()
     return {
