@@ -103,7 +103,9 @@
 - **AC-19**：node run 的 `status='done'` 只在改动**已合并回主树后**才置——下游节点**绝不**在上游 delta 落主树前被派发（段②③ 之间崩溃 → 上游停在 `pending-merge`、非 done、resume 从 pinned `iso_node_tree` replay 合并、不重跑 agent）。
 - **AC-20**：隔离 / 解冲突 worktree 落在**主 repo 之外**；任意兄弟节点 / wrapper 的 `snapshotFullState(主树)` 的 `git add -A` **不会**把隔离目录 / gitlink 暂存进快照树或合并树（无临时 worktree 泄漏进产物）。
 - **AC-21**：隔离运行下，prompt 里所有承载文件系统路径的令牌（含 `{{__repo_path__}}`）都指向**隔离树**；agent 不会被告知去编辑非隔离路径。
-- **AC-22**：同会话 follow-up 重试（RFC-042/049）**保留同一隔离树**（续跑 session 文件系统与其记忆一致）；仅 fresh-session 重试弃隔离树重快照。
+- **AC-22**：同会话续跑（RFC-042/049 follow-up **及 clarify 内联续跑**）**保留同一隔离树**（续跑 session 文件系统与其记忆一致）；节点跨 clarify 轮复用同一隔离树、只在最终产出那次 merge-back、done 才弃；仅 fresh-session 重试弃树重快照。
+- **AC-23**：开启 auto commit&push + 兄弟隔离节点并发时——commit-push 的「暂存→本地提交」原子（兄弟 merge-back 无法插入其间）；提交不混入兄弟改动、后完成节点 diff 不被清空。
+- **AC-24**：含 submodule 的仓——隔离树的 submodule 工作区被初始化（与主树一致）；agent 读/改 submodule 文件正常、产出树与主树语义一致。
 
 **回归**
 - **AC-17**：线性工作流（无并行分支）行为不变——单个可写节点仍隔离 + 合并，但因无并发，合并总是干净应用（主树未动过），最终产物逐字等价于今天。
