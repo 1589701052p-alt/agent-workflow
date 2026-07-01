@@ -40,6 +40,10 @@ playwright-report/
 # Note: bun.lock (text) IS committed for reproducible installs;
 # only the legacy binary lockfile is ignored.
 bun.lockb
+# `bun build --compile` leaves ~120MB temp binaries named `.<hash>-<seq>.bun-build`
+# in the repo root; they must never be committed (100MB remote limits).
+.*.bun-build
+*.bun-build
 
 # local app data should never be committed; only here as defense-in-depth
 .agent-workflow/
