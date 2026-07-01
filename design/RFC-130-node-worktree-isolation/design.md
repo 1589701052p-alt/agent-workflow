@@ -90,13 +90,21 @@ export async function snapshotFullState(
 }
 ```
 
+> **前置：`runGit` 需支持 env 覆盖**（Codex 三轮 P2）：现 `runGit(cwd, args)` 恒注入 `nonInteractiveGitEnv()`、不接受额外 env，上面的 `GIT_INDEX_FILE` 写法**当前签名实现不了**（省略则误触真 index、照抄则不 typecheck）。T1 先给 `runGit` 加可选 `{ env }`（merge 在 `nonInteractiveGitEnv()` 之上），再实现 `snapshotFullState`。
 > 与既有 `gitStashSnapshot` 并存（后者仍服务 RFC-092/098 主树回滚，语义不变、零改动）。
 
 ### 4.2 创建隔离树
 
 - **路径必须在主 worktree 之外**（D14，Codex 设计 gate P1）：`{appHome}/iso/{taskId}/{nodeRunId}`（单仓）；多仓 `.../iso/{taskId}/{nodeRunId}/{worktreeDirName}`。**绝不放在主 worktree 目录树内**——否则后续兄弟节点 / wrapper 的 `snapshotFullState(主树)` 里 `git add -A` 会把 `iso/...`（一个带 gitlink 的嵌入 worktree）当 untracked embedded repo 暂存进快照树 → 临时隔离树泄漏进产物 / 合并树。放主 repo 之外则 `git add -A` 根本看不到它。写 `iso_worktree_path`。
-- 命令：`git worktree add --detach <iso-path> <base-sha>`（复用 `createWorktree` 的 `overrideWorktreePath` 分支思路，git.ts:332；base 是全量快照 commit，detach）。base 的 former-untracked 文件在隔离树里表现为**已跟踪**（无碍：agent 不关心；diff/合并按 tree 算）。
+- **隔离树 HEAD = 任务原始 base HEAD，累积改动作为「未提交工作区状态」铺上**（D23，Codex 三轮 P2「下游 diff 语义」）：**不能**直接 `worktree add <iso> <snapshot-commit>`——那会让上游 A 已合并的改动变成隔离树的**已提交 HEAD**，下游 B 的 `git status`/`git diff HEAD` 对 A 的改动**变干净**，而现状共享树里上游改动是**未提交、可见**的（inspect-diff 型 workflow / prompt 会丢上下文）。改为：
+  ```
+  git worktree add --detach <iso> <task-base-HEAD>      // HEAD=原始基线 commit（干净）
+  git --work-tree=<iso> read-tree <base-snapshot-tree>  // index←累积快照
+  git -C <iso> checkout-index -f -a                      // 工作区←累积快照（未提交）
+  ```
+  于是隔离树 = 「HEAD 原始基线 + 累积改动未提交」，与主树结构一致；`git diff HEAD` 在隔离树里显示累积改动（含 former-untracked），下游 agent 照旧从 diff 看到上游产物。**AC 新增 diff-可见性回归锁**。
 - **submodule 初始化（D20，Codex 设计 gate P2）**：`worktree add` **不填充 submodule 工作区**。既有 `createWorktree` 在 add 后跑 `syncSubmodules`（git.ts:396-404，按配置 mode/jobs）；隔离树**必须同样跑**——否则 agent 读/改 submodule 文件会看到空 checkout、产出与主树不一致的树。`createIsolatedWorktree` 内在 add 后调 `syncSubmodules`（或对 `hasSubmodules` 任务显式门控）。合并回收对 submodule gitlink 的处理随 `merge-tree` 语义（gitlink 作为特殊 blob 三路合并）。
+- **submodule 脏编辑 = v1 已知限制（D22，Codex 三轮 P2）**：agent **在 submodule 工作区内改文件但不在 submodule 里提交**时，超级项目的 `snapshotFullState`（`git add -A`）**只记录 submodule gitlink、丢弃这些脏文件** → 它们不进 `iso_node_tree` / merge-back → 用户改动丢失。**这是隔离模型对既有共享树行为的回归**（共享树里 submodule 脏文件会持久）。v1 处理：**检测并门控**——对 `hasSubmodules` 任务，若隔离终态快照发现 submodule 工作区有未提交脏改动，**该 node fail-loud（`submodule-dirty-unsupported`）而非静默丢**；**递归 submodule 隔离/合并（每个 submodule 作独立隔离子树三路合并）列为后续 RFC**。proposal 非目标登记。
 - pin：`iso_base_snapshot` 同时 `update-ref refs/agent-workflow/iso/{taskId}/{nodeRunId}`，防 base commit 被 gc（照 `snapshotRefName` 惯例，git.ts:818）。
 - **兜底防护**：`snapshotFullState` 内 `git add -A` 追加 `-c core.excludesFile` / `.git/info/exclude` 排除 `iso/`（即便未来误置内），并在 `add -A` 前 `git config --worktree` 忽略 nested gitlink。D14 双保险。
 
@@ -281,7 +289,12 @@ merge-tree 出冲突 conflicts[]：
 
 **新问题**：`commitPushRunner.ts:182-199,238-252` 现在在 `git add -A`/取 cached diff **之后、`git commit` 之前就释放 writeSem**（为的是不在多分钟的 commit-message 生成期间持锁）。今天这是安全的（只有它写主树）；RFC-130 后**兄弟节点的 merge-back 也抢同一把 writeSem**，会在这个缝里改主树 index/worktree → 该 commit 混入兄弟改动（挂错合成行 / 错消息），或让后完成的节点 diff 变空。
 
-**修（D18）**：把 commit-push 的**「暂存 → 本地 commit / HEAD 更新」收进单个 writeSem 临界**（不再在 add 后释放）。**消息生成挪到暂存之前**：先（可无锁 / 短锁取 diff）跑 opencode 生成 message，**再**在一个 writeSem 持有窗口内原子做 `git add -A` + `git commit`。push（网络、慢）在 commit 落定后、锁外做。这样 merge-back 无法插进「暂存↔提交」之间。`commitPushRunner.ts` 的锁边界据此调整（暂存+commit 同锁），message 生成前置。
+**修（D18，含三轮 P1 收口）**：commit-push **提交一棵冻结快照树**，让 message 的输入 diff 与被提交的树**同源**，且并发 merge-back 不被卷进本次提交：
+1. **短锁冻结**：持 writeSem 一次，`frozen = snapshotFullState(主树)`（一棵树 sha）+ 取 `diff(HEAD, frozen)` 供 message。释放锁。
+2. **锁外生成 message**：opencode 用该 diff 生成消息（慢、无锁）。
+3. **短锁提交冻结树**：持 writeSem 一次，`new = git commit-tree <frozen^{tree}> -p HEAD -m <msg>` + `git update-ref HEAD <new>`；然后把 index/工作区对齐 HEAD（`reset --soft`/刷新），使「已提交部分」不再算未提交改动。释放锁。
+- **关键**：提交的是 **step 1 冻结的那棵树**（= message 描述的树），**不是** commit 时刻 `git add -A` 的实时树 → step 1↔3 之间落地的兄弟 merge-back **不进本 commit**（它们留作未提交改动、下一轮 commit-push 收），既不混入错 message、也不清空兄弟 diff。push（网络、慢）在 HEAD 更新后、锁外做。
+- `commitPushRunner.ts:182-199/238-252` 的「add→释放→gen→commit」重构为「冻结取 diff→释放→gen→commit-tree 冻结树」。**AC-23 据此锁**。
 
 `buildCommitAgent`（commitPush.ts:29）去 `readonly:true` 字段（随 §3.1 schema 删列）。
 
@@ -356,6 +369,10 @@ merge-tree 出冲突 conflicts[]：
 - **D18**（Codex 设计 gate 二轮 P1）auto commit&push 把「暂存→本地 commit」收进**单个 writeSem 临界**（不再 add 后释放）、message 生成前置，防兄弟 merge-back 插进「暂存↔提交」缝。
 - **D19**（Codex 设计 gate 二轮 P1）隔离树保留**扩展到 clarify 内联续跑**（`inlineMode`/`effectiveResumeSessionId`）：逻辑节点跨 clarify 轮复用同一隔离树，**只在最终产出那次 merge-back**、done 才弃；awaiting_human 中途不 merge。
 - **D20**（Codex 设计 gate 二轮 P2）`createIsolatedWorktree` add 后跑 `syncSubmodules`（git.ts:396-404），隔离树 submodule 与主树一致；否则 agent 读/改 submodule 见空 checkout。
+- **D22**（Codex 设计 gate 三轮 P2）submodule **工作区脏编辑（未在 submodule 内提交）= v1 已知限制**：超级项目 `git add -A` 只记 gitlink、丢脏文件；v1 **检测到即 fail-loud（`submodule-dirty-unsupported`）不静默丢**；递归 submodule 隔离/合并列后续 RFC。
+- **D23**（Codex 设计 gate 三轮 P2）隔离树 **HEAD = 任务原始 base HEAD、累积改动作未提交工作区状态铺上**（而非把快照当已提交 HEAD）→ 保住下游 agent `git diff HEAD` 能看到上游未提交产物（对齐现状共享树语义）。
+- **D24**（Codex 设计 gate 三轮 P1）commit-push **提交冻结快照树**（`commit-tree`）而非提交时 `git add -A`：message 输入 diff 与被提交树同源、并发 merge-back 不卷入本次提交。
+- **D25**（Codex 设计 gate 三轮 P2）`runGit` 加可选 `{ env }`（merge 在 `nonInteractiveGitEnv()` 上）以支持 `GIT_INDEX_FILE` 临时 index；`snapshotFullState` 依赖它。
 
 ## 17. 性能与后续
 

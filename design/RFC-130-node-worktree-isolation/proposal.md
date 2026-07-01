@@ -59,6 +59,7 @@
 - **不做「冲突合并策略选择」（ours/theirs/union）**：冲突一律走合并 agent → awaiting_human，不给静默丢改动的策略选项（用户已否决 §AskUserQuestion）。
 - **不改 auto commit&push 的提交/推送语义**（RFC-075）：它仍在主 worktree 上直接跑（§design 特殊路径），只是不再带 `readonly` 标。
 - **不做「按 permission 证明不写盘就免隔离」的性能优化**：v1 一律隔离（正确性优先）；此优化列为后续（§design §性能）。
+- **不支持 submodule 工作区脏编辑**（Codex 设计 gate 三轮）：agent 在 submodule 内改文件但不在 submodule 里提交时，超级项目 `git add -A` 只记 gitlink → 隔离/合并会丢这些脏文件。v1 **检测到即 fail-loud**（`submodule-dirty-unsupported`），不静默丢；**递归 submodule 隔离/合并留后续 RFC**。（submodule 内已提交的改动照常随 gitlink 走。）
 
 ## 4. 用户故事
 
@@ -77,6 +78,7 @@
 - **AC-1**：两个相互无依赖的可写节点，在同一前沿被派发后**并发运行 opencode**（各自独立 worktree），二者的运行时间窗**重叠**（不再被写锁串行）。并发上限 = `globalSem`。
 - **AC-2**：每个 node run 的 opencode cwd = 一个**独立目录**，起点内容 = 派发时刻主 worktree 的 HEAD + 未提交改动（含 untracked）。一个节点在自己 worktree 的写入**不出现**在同前沿另一节点的 worktree。
 - **AC-3**：有依赖的节点（B 依赖 A）——B 的隔离起点包含 A 的改动（因 B 在 A 合并回主树后才派发）。
+- **AC-3b**：下游 agent 在其隔离树 cwd 里 `git diff HEAD` / `git status` **仍能看到上游未提交产物**（隔离树 HEAD = 任务原始基线、累积改动作未提交铺上，非当作已提交 HEAD）——与现状共享树 inspect-diff 语义一致。
 
 **合并回主树**
 - **AC-4**：节点成功 → 其改动被合并回主 worktree，落地为**未提交**工作区改动；`git diff HEAD` 含该节点改动。不新增历史提交。

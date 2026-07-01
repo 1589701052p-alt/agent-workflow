@@ -14,13 +14,15 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
 
 ---
 
-## PR-A —— 隔离核心 + 顶层单节点隔离/干净合并回收
+## PR-A —— 隔离核心 + agent-single 节点隔离/干净合并回收
 
-**目标**：顶层 DAG 的每个 node run 隔离运行 + 干净合并回主树；写锁退化为短临界；`globalSem` 成真并行上限。冲突暂走「占位 awaiting_human」（PR-B 补合并 agent）。
+**目标**：**所有经 `runOneNode` 派发的 agent-single 节点**（顶层 **及 wrapper-git/loop 内部**——它们共用同一 `runOneNode` + scheduler.ts:1960 锁，Codex 三轮 P2）隔离运行 + 干净合并回主树；写锁退化为短临界；`globalSem` 成真并行上限。冲突暂走「占位 awaiting_human」（PR-B 补合并 agent）。**wrapper-git/loop 的 pre/post 快照仍在主树、语义不变（§8.1/8.2）——PR-A 改 `runOneNode` 天然覆盖其内部 agent-single；fanout（独立 `dispatchFanoutShard`/aggregator 路径 4061/4351）+ wrapper diff 等价验证 + fanout rerun 归 PR-D。**
 
 - **RFC-130-T1**：git 原语（`util/git.ts`）
+  - **`runGit` 加可选 `{ env }`**（merge 在 `nonInteractiveGitEnv()` 上，D25）——`snapshotFullState` 的 `GIT_INDEX_FILE` 前置依赖。
   - `snapshotFullState(worktree, {pinRef})`（临时 index：read-tree HEAD + add -A + write-tree + commit-tree + update-ref）。含 untracked；`add -A` 加 exclude 兜底忽略 `iso/`（D14 双保险）。
-  - `createIsolatedWorktree(repoPath, isoPath, baseSha)`（`worktree add --detach` + **add 后 `syncSubmodules`**〔D20，git.ts:396-404〕）；isoPath = `{appHome}/iso/{taskId}/{nodeRunId}`，**主 repo 之外**（D14）。
+  - `createIsolatedWorktree(repoPath, isoPath, taskBaseHEAD, baseSnapshotTree)`：`worktree add --detach <iso> <taskBaseHEAD>` + `read-tree <baseSnapshotTree>` + `checkout-index -fa`（**HEAD=原始基线、累积改动未提交**，D23——保下游 `git diff HEAD` 语义）+ **add 后 `syncSubmodules`**〔D20，git.ts:396-404〕；isoPath = `{appHome}/iso/{taskId}/{nodeRunId}`，**主 repo 之外**（D14）。
+  - **submodule 脏编辑门控**（D22）：隔离终态快照检测 submodule 工作区未提交脏改动 → node fail-loud `submodule-dirty-unsupported`（不静默丢）。
   - `mergeTreeInMemory(worktree, base, ours, theirs) → {mergedTreeOid, conflicts[]}`（`git merge-tree --write-tree --merge-base`）。
   - `commitTree(worktree, treeOid, parent) → commitSha`（冲突树 worktree add 前 wrap，Codex P2-2）。
   - `materializeTree(worktree, mergedTreeOid)`（read-tree + checkout-index -fa + 定向删）。
@@ -41,7 +43,7 @@ PR-A 隔离核心（顶层干净路径）── PR-B 冲突/合并 agent/awaitin
   - **测试**：两并发写节点改不同文件 → 主树并集 + 运行时间窗重叠断言（AC-1/2/5）；有依赖节点 base 含上游改动（AC-3）；失败节点零污染（AC-6）；**done 只在 merged 后（AC-19）——mock 段②③ 间「崩溃」断言下游未派发**；follow-up 保留隔离树（AC-22）；线性工作流最终产物逐字等价（AC-17）；源码锁「runNode 不再被单一 writeSem 罩全程」。
 - **RFC-130-T3b（D16 路径令牌审计）**：编码前逐令牌核对 `renderUserPrompt`（`shared/prompt.ts`）/ `templateMeta` 所有承载路径的字段（`__repo_path__`、repos[].repoPath/worktreePath、文件端口绝对路径），隔离运行下全指隔离树；**测试**：prompt 渲染断言 `{{__repo_path__}}` = 隔离树路径（AC-21）。
 - **RFC-130-T3c（D19 隔离树跨 clarify 内联续跑保留）**：节点发 `<workflow-clarify>` → awaiting_human **不 merge-back、不弃隔离树**；答完内联续跑（`scheduler.ts:2687-2727` `inlineMode`/`effectiveResumeSessionId`）复用同一隔离树；只在最终产出那次 merge-back、done 才弃。**测试**：写文件→clarify→答→内联续跑，续跑 cwd = 同一隔离树、看得到中途所写文件；最终产出才落主树（AC-22 扩展）。
-- **RFC-130-T3d（D18 auto commit&push 写锁窗口）**：`commitPushRunner.ts`（:182-199/238-252）把「暂存→本地 commit」收进单个 writeSem 临界（不再 add 后释放）、message 生成前置、push 锁外。**测试**：commit-push 暂存与提交之间无兄弟 merge-back 可插入（mock 并发 merge-back 断言 commit 不含兄弟改动 / 后节点 diff 不空）。
+- **RFC-130-T3d（D18/D24 auto commit&push 提交冻结树）**：`commitPushRunner.ts`（:182-199/238-252）重构为「短锁 `frozen=snapshotFullState(主树)` + 取 diff → 释放 → 锁外 gen message → 短锁 `commit-tree <frozen^{tree}> -p HEAD` + `update-ref HEAD` + 对齐 index → 释放 → 锁外 push」。**提交的是冻结树、非提交时 `add -A` 的实时树**（Codex 三轮 P1）。**测试**：mock 并发 merge-back 在 gen 期间落地 → 本 commit 不含兄弟改动、message 与提交树同源、后节点 diff 不空（AC-23）。
 - **验收**：顶层无冲突并行工作流跑通、并行度受 `globalSem`；门禁全绿。
 
 ## PR-B —— 冲突 → 合并 agent → awaiting_human
