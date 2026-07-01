@@ -174,4 +174,42 @@ describe('openImmediateRounds — multi-round self-clarify deadlock (RFC-128 P5-
     expect(openImmediateRounds(P, 0, ctx, 'revivable').map((r) => r.id)).toEqual(['round2'])
     expect(openImmediateRounds(P, 0, ctx, 'in-flight')).toEqual([])
   })
+
+  test('Codex impl-gate: a FAILED continuation keeps the gate blocked (revivable → no double-mint)', () => {
+    // Codex caught: keying the gate on `!isTerminalNodeRunStatus` would release a FAILED continuation
+    // (terminal) from the dispatch gate while the borrow side still treats it as open (revivable —
+    // retry/resume re-runs it) → dispatch would mint a SECOND same-home rerun while the old ledger is
+    // still borrow-open → irreversible multi-ledger conflict. So the gate keys on `status !== 'done'`,
+    // NOT on terminal: a failed/canceled/interrupted continuation stays blocked, exactly like
+    // revivable. Only `done` (succeeded, never re-run) is released — which is the done-no-output
+    // deadlock case above. Here a done asking run + a FAILED continuation ⇒ still OPEN for BOTH modes.
+    const askDone = mkRun({
+      id: 'ask',
+      nodeId: P,
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+      status: 'done',
+    })
+    const failedRerun = mkRun({
+      id: 'fr',
+      nodeId: P,
+      iteration: 0,
+      rerunCause: 'clarify-answer',
+      status: 'failed',
+    })
+    const round2 = mkRound({
+      id: 'round2',
+      askingNodeRunId: 'ask',
+      intermediaryNodeRunId: 'i2',
+      status: 'answered',
+    })
+    const ctx = buildImmediateLedgerContext(
+      [round2],
+      [askDone, failedRerun],
+      new Set<string>(),
+      new Set<string>(),
+    )
+    expect(openImmediateRounds(P, 0, ctx, 'in-flight').map((r) => r.id)).toEqual(['round2'])
+    expect(openImmediateRounds(P, 0, ctx, 'revivable').map((r) => r.id)).toEqual(['round2'])
+  })
 })

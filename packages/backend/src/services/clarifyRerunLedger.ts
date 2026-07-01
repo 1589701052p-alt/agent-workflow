@@ -17,11 +17,7 @@ import type { DbClient } from '@/db/client'
 import { taskQuestions } from '@/db/schema'
 import type { clarifyRounds, nodeRuns } from '@/db/schema'
 import { pickFreshestRun } from '@/services/freshness'
-import {
-  isTerminalNodeRunStatus,
-  resolveHandlerRun,
-  type RunLineageView,
-} from '@agent-workflow/shared'
+import { resolveHandlerRun, type RunLineageView } from '@agent-workflow/shared'
 
 type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
@@ -111,10 +107,14 @@ export function buildImmediateLedgerContext(
  *     consumed only when it finished done WITH output (markClarifyRoundsConsumedBy). A done-no-output
  *     continuation is NOT consumed → revivable → keeps borrowing the same handler (locked by the
  *     RFC-127 "done but emitted NO output → still open (keeps borrowing)" test).
- *   - 'in-flight' (DISPATCH GATE — findOpenImmediateLedgerHome): open = NOT terminal. A done
- *     continuation (incl. done-no-output — it ASKED a follow-up round; runner.ts:1321 keeps status=
- *     done with no <workflow-output> port) has STOPPED and cannot double-mint, so it must NOT block a
- *     fresh per-question dispatch (2026-07-01 deadlock fix). */
+ *   - 'in-flight' (DISPATCH GATE — findOpenImmediateLedgerHome): open = status !== 'done'. ONLY a
+ *     `done` continuation is gate-closed — done (incl. done-no-output: it ASKED a follow-up round;
+ *     runner.ts:1321 keeps status=done with no <workflow-output> port) SUCCEEDED and will not be
+ *     re-run, so it cannot double-mint and must NOT block a fresh per-question dispatch (2026-07-01
+ *     deadlock fix). A FAILED/canceled/interrupted continuation is NOT gate-closed: it is revivable
+ *     (retry/resume re-runs it) and the borrow side still treats it as open, so releasing it would let
+ *     dispatch mint a second same-home rerun → an irreversible multi-ledger conflict (Codex impl-gate).
+ *     So in-flight diverges from revivable ONLY on done-no-output. */
 export type LedgerOpenMode = 'revivable' | 'in-flight'
 
 /** Pure (shared truth-source oracle) — the OPEN immediate (QUICK-channel) self/questioner clarify
@@ -161,8 +161,14 @@ export function openImmediateRounds(
     // port). That done run is the PRIOR round's already-finished continuation; the scan is by
     // (nodeId, iteration, cause) and cannot tell it from the NEXT round's not-yet-minted continuation,
     // so counting it as in-flight wedged the next round's dispatch permanently (blocked by an already-
-    // done run → the user's answers could never leave the board). The gate keys on non-terminal: a
-    // terminal run (done/failed/canceled/…) has stopped and cannot double-mint.
+    // done run → the user's answers could never leave the board).
+    //
+    // The gate keys on `status !== 'done'` — NOT `!isTerminalNodeRunStatus` (Codex impl-gate): a
+    // FAILED/canceled/interrupted continuation is revivable (retry/resume re-runs it) and the borrow
+    // side keeps it open, so gate-releasing it would let dispatch mint a SECOND same-home rerun while
+    // the old ledger is still borrow-open → an irreversible multi-ledger conflict. Only `done`
+    // (succeeded, never re-run) is safe to release; that also uniquely covers the done-no-output
+    // deadlock while leaving every non-done status blocked exactly like revivable.
     const cause: CauseClass = isSelf ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
     return ctx.runs.some(
       (r) =>
@@ -171,7 +177,7 @@ export function openImmediateRounds(
         r.parentNodeRunId === null &&
         r.rerunCause === cause &&
         (mode === 'in-flight'
-          ? !isTerminalNodeRunStatus(r.status)
+          ? r.status !== 'done'
           : !(r.status === 'done' && ctx.outputRunIds.has(r.id))),
     )
   })
