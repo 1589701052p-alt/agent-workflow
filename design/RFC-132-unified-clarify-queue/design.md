@@ -23,7 +23,13 @@
 - `tasks.deferred_question_dispatch` flag（所有任务走统一模型；迁移期见 §10）。
 - `cross_clarify_sessions` 的注入职责（designer 走 `task_questions`，legacy 表保留供审计/回填，不再是注入源）。
 
-**迁移量级**：派生老化不需新列；废弃列**保留在 schema**（stop writing，避免 migration 破坏在飞任务），标注 deprecated，后续 RFC 清列。
+**删列（用户 2026-07-01 拍板 forward-only）**：废弃列**本 RFC 删除**，不保留：
+- `clarify_rounds.consumed_by_consumer_run_id` / `consumed_by_questioner_run_id`（RFC-070 戳）
+- `clarify_rounds.directive`（per-round，归节点反问状态）
+- `tasks.deferred_question_dispatch`（flag）
+- （`clarify_rounds.round_generation` 若确认仅 clarify 轮次用则删；若 RFC-129 review 多文档代际复用则**保留**——T9 前 grep 确认归属）
+
+drop-column migration（手写多语句需 `--> statement-breakpoint` 分隔 [reference_migration_statement_breakpoint]；新 migration bump `upgrade-rolling.test.ts` journal-count [reference_migration_bumps_journal_count_test]）。`cross_clarify_sessions` 注入职责移除但**表保留**（RFC-058 审计 / 其他 reader）。**forward-only**：删列不可回退（见 §9），排在最后 PR、删前全量确认无 reader。
 
 ## 2. 统一注入器 `buildClarifyQueueContext`（核心契约）
 
@@ -131,7 +137,7 @@ const clarifyContext = agentHasClarifyChannel(definition, node.id)
 - **consumed_by 戳 → 派生**：升级后不再读戳。历史已戳 round → 其 target run 若 done+output，派生判据同样判老化（等价）；未戳但 done+output → 也老化（派生更宽松、正确）。无回填。
 - **non-deferred 在飞任务**：升级后走统一模型。已答未下发的 round → 迁移期一次性「自动下发」（补 `dispatched_at`）或 lazy（下次运行时 selection 容忍无 dispatched 的 legacy round，见 plan T6 迁移垫片）。
 - **deferredQuestionDispatch flag**：停读（视所有任务为统一模型）；列保留避免 migration。
-- **回退安全**：派生无持久态；若回退，戳列仍在（未删）、flag 仍在——回退到旧代码即恢复双路径。**故 schema 列本 RFC 不删**（后续清列 RFC）。
+- **forward-only（用户拍板删列）**：废弃列本 RFC 删除、不保留。删列**不可回退**——故 drop-column migration 排在**最后一个 PR**（所有 reader 移除〔T4/T7/T8〕+ 在飞任务迁移完成后），删前全量确认无 reader（`rg` 列名空 + typecheck + 全量 test）。中间 PR 保持列存在（渐进停写），最后一 PR 一次性 drop。派生老化本身无持久态（不落库）——故删列**之前**的所有行为可回退；仅「drop-column migration」这一步单向，回退只能回到该 migration 之前的 commit。
 
 ## 10. 失败模式
 

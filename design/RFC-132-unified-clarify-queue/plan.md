@@ -59,6 +59,13 @@
 - 迁移回归：在飞任务升级不丢答案。
 - 依赖：T1-T8。
 
+### T10 — drop-column migration（forward-only，最后 PR，用户拍板删列）
+- 删 `clarify_rounds.consumed_by_consumer_run_id` / `consumed_by_questioner_run_id` / `directive` + `tasks.deferred_question_dispatch`（`round_generation` 归属 T9 前 `rg` 确认：仅 clarify 轮次用则删、RFC-129 review 代际复用则保留）。
+- 手写 drop-column migration 需 `--> statement-breakpoint` 分隔 [reference_migration_statement_breakpoint]；新 migration bump `upgrade-rolling.test.ts` journal-count [reference_migration_bumps_journal_count_test]。
+- **删前门禁**：`rg` 各列名全仓空（无 reader）+ typecheck + 全量 test 绿。
+- **forward-only**：不可回退（design §9）——删列前行为已可回退（派生无持久态），此步单向。
+- 依赖：T4/T7/T8（所有 reader 移除）+ T9（回归绿）。
+
 ## PR 拆分建议
 
 | PR | 内容 | 风险 |
@@ -68,7 +75,8 @@
 | PR-3 | T4 + T7（戳废弃 + directive 收敛） | 🟡 中 |
 | PR-4 | T5（designer 渲染合并 + 模板审） | 🟡 中（agent prompt 结构变） |
 | PR-5 | T6（自动下发 + 迁移垫片） | 🔴 高（quick-channel 合一 + 在飞迁移） |
-| PR-6 | T8 + T9（死代码/flag 清理 + golden 网） | 🟡 中 |
+| PR-6 | T8 + T9（死代码/flag 停写 + golden 网） | 🟡 中 |
+| PR-7 | T10（drop-column migration，forward-only 删列） | 🟡 中（不可回退，删前确认无 reader） |
 
 每 PR 独立门禁（typecheck + test + format + 单二进制 smoke + Codex impl gate）+ CI 绿。**PR-2/PR-5 强制 Codex adversarial gate**（热点 + 迁移）。
 
@@ -89,6 +97,7 @@ T2 ─┴→ T3 ─┬→ T4 ─→ (T7)
 - [ ] 单一平铺渲染块；无 `### Round N`/历史轮/sibling scope；designer 无独立 External Feedback
 - [ ] 节点反问状态唯一（下发时设）；无 per-round directive
 - [ ] deferredQuestionDispatch flag 停读；quick-channel 收敛为自动下发（UX 等价）
+- [ ] 废弃列删除（`consumed_by_*` / `clarify_rounds.directive` / `deferred_question_dispatch`）+ upgrade-rolling journal bump（forward-only、删前确认无 reader）
 - [ ] 行为保持：多轮丢历史修复 / 老化 / review-reject 老化 / prior-output / 借壳改派
 - [ ] 迁移：在飞 deferred + non-deferred 任务不丢答案、不错误重问
 - [ ] 死代码清理（cross-designer 分支 + buildQuestionerCrossClarifyContext）
@@ -101,5 +110,5 @@ T2 ─┴→ T3 ─┬→ T4 ─→ (T7)
 - **designer prompt 结构变（PR-4）**：前置审 agent 模板/inventory 对 `## External Feedback` 的依赖；有依赖先改模板。
 - **quick-channel 合一 + 在飞迁移（PR-5）**：迁移垫片 + 自动下发复用 dispatch in-flight gate；e2e 覆盖非 deferred 自问自答等价。
 - **golden 行为变更**：平铺是**有意变更**（proposal 验收 #7）——删旧整轮锁、立平铺新锁，PR 说明清「哪些是有意变更、哪些必须等价」。
-- **回退**：schema 废弃列不删（consumed_by / directive / flag 保留），回退到旧代码即恢复双路径；本 RFC 不含删列（后续清列 RFC）。
+- **forward-only 删列（用户拍板）**：废弃列本 RFC 删除（T10 / PR-7 最后一 PR）。删前全量确认无 reader（`rg` 列名空 + typecheck + test）；删列不可回退——回退只能到 drop-column migration 之前。派生老化无持久态、删列前所有行为可回退,仅 drop-column 这一步单向。删列 migration 需 `--> statement-breakpoint` + bump upgrade-rolling journal-count。
 - **Codex gate 缺**：broker.sock 挂时以本地全量 + golden + 派生锁兜底，broker 恢复补审 PR-2/PR-5。

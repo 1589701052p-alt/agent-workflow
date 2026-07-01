@@ -47,13 +47,13 @@
 ## 验收标准
 
 1. **单一注入器**：`buildClarifyQueueContext` 一个函数覆盖 self/questioner/designer；`buildClarifyNodeQueueContext` / `buildNodeQueueExternalFeedback` / `buildPromptContext` / `buildExternalFeedbackContext` 的 clarify 注入职责全部收敛（源码不再有平行 fork）。
-2. **单一老化判据**：全部走派生式 `isTargetNodeConsumed`；`consumed_by_*` 戳（RFC-070 `markClarifyRoundsConsumedBy` + 相关列）废弃。
+2. **单一老化判据**：全部走派生式 `isTargetNodeConsumed`；`consumed_by_*` 戳（RFC-070 `markClarifyRoundsConsumedBy` + 相关列）**删除**（forward-only，用户拍板，见 design §9 / plan T10）。
 3. **单一渲染块**：designer 不再单独 `## External Feedback`；所有问题用同一平铺块。
 4. **平铺无轮次**：渲染无 `### Round N` / 历史轮 / sibling scope；`clarify_rounds.directive`、`round_generation` 等轮次态废弃或降级。
-5. **单一路径**：`deferredQuestionDispatch` flag 废弃（所有任务走统一模型）；quick-channel 即时注入收敛为「答完自动下发」。
+5. **单一路径**：`deferredQuestionDispatch` flag **删列**（所有任务走统一模型）；quick-channel 即时注入收敛为「答完自动下发」。
 6. **节点反问状态**：`continue/stop` 由「下发」设置到 `task_node_clarify_directives`；无 per-round directive。
 7. **行为等价**（除有意变更）：多轮丢历史、老化、review-reject 老化、prior-output、借壳改派——RFC-119/127/131 的行为在新模型下**逐一保持**（有回归测试佐证）。**有意变更**仅两处：① prompt 中反问块从「轮次分组」变为「平铺清单」；② 非 deferred 答完从「即时注入」变为「自动下发后注入」（对用户等价）。
-8. **迁移**：升级窗口的在飞任务（deferred + non-deferred）平滑迁移到统一模型，不丢已答问题、不错误重问。
+8. **迁移**：升级窗口的在飞任务（deferred + non-deferred）平滑迁移到统一模型，不丢已答问题、不错误重问；废弃列 **forward-only 删除**（drop-column migration 排最后 PR、删前确认无 reader、不可回退）。
 9. **门槛**：typecheck×3 + 全量 backend test + format + 单二进制 smoke + CI 全绿；Codex adversarial gate（broker 恢复后）。
 
 ## 与既有 RFC 的关系
