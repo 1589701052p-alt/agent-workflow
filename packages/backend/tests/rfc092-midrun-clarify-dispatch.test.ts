@@ -30,9 +30,14 @@ import { monotonicFactory } from 'ulid'
 const ulid = monotonicFactory() // 同毫秒插入仍保 id 单调（pure-id freshness）
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { agents, clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { submitClarifyAnswers } from '../src/services/clarify'
+// RFC-132 (PR-C): answer via the real PR-B path (autoDispatchClarifyRound = seal + auto-dispatch +
+// mint the 承接 rerun) so the unified flat injector has a DISPATCHED entry to inject; the legacy
+// immediate mint (submitClarifyAnswers) created none.
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
@@ -331,13 +336,14 @@ describe('RFC-092 S-1 端到端 — mid-run clarify 答题由活调度循环自�
       expect(midTask.status).toBe('running')
 
       // 真实入口提交答案（内部自带 RFC-058 clarify_rounds 双表镜像 + rerun 铸行）。
-      const res = await submitClarifyAnswers({
+      const res = await autoDispatchClarifyRound({
         db: h.db,
-        clarifyNodeRunId: session.clarifyNodeRunId,
+        originNodeRunId: session.clarifyNodeRunId,
         answers: [CLARIFY_ANSWER],
         directive: 'stop', // RFC-100: finalize round → the rerun's <workflow-output> is accepted
+        actor,
       })
-      rerunNodeRunId = res.rerunNodeRunId
+      rerunNodeRunId = res.dispatch.reruns[0]!.nodeRunId
 
       // 提交瞬间 rerun 行是 pending、slow 仍在跑——确认答案确实落在窗口内。
       const rerunRow = (

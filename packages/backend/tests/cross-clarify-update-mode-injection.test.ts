@@ -562,40 +562,23 @@ describe('RFC-056 §6 update mode — injection survives retry_index bump (patch
   })
 })
 
-describe('RFC-056 patch 2026-05-23 — scheduler source guard against `retryIndex === 0` resurrection', () => {
-  // Source-code-text regression guard. The fix removed
-  // `currentRunRow.retryIndex === 0` from BOTH gate conditions in
-  // scheduler.ts (designer update-mode at the `isCrossClarifyTriggeredRerun`
-  // assignment + questioner cross-clarify Q&A at the
-  // `isQuestionerCrossClarifyRerun` assignment). If a future refactor adds
-  // it back the runtime symptom is silent — the rendered prompt simply
-  // drops the §6 sections. We grep the source so silent re-introduction
-  // becomes a hard CI fail.
-  test('isCrossClarifyTriggeredRerun gate has no retry_index check (RFC-074: keys on derived generation)', () => {
+describe('RFC-132 PR-C — clarify injection has no per-role gate to resurrect a `retryIndex === 0` check', () => {
+  // The 2026-05-22 fix removed `currentRunRow.retryIndex === 0` from the designer update-mode +
+  // questioner cross-clarify injection gates. RFC-132 (PR-C) removed those gates ENTIRELY: clarify
+  // injection is now the single unified buildClarifyQueueContext (derived aging via
+  // isTargetNodeConsumed — never a retryIndex proxy), so the silent §6-drop regression is
+  // structurally impossible. Lock that the per-role gates stay gone + the flat injector owns injection.
+  test('the designer/questioner per-role injection gates are gone (RFC-132 PR-C)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // RFC-074 PR-C: the gate keys on the derived `clarifyGeneration` (count of
-    // prior-done generations by id-order), NOT the retired clarifyIteration
-    // counter. Patch-2026-05-23's "no retry_index sub-gate" intent stays —
-    // adding it back would drop the §6 sections under in-attempt RFC-042 retries.
-    const m = src.match(/const isCrossClarifyTriggeredRerun =[^;\n]+/)
-    expect(m, 'must find the isCrossClarifyTriggeredRerun assignment').not.toBeNull()
-    const gateText = m![0]
-    expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
-    expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
-    expect(gateText).toContain('hasExternalFeedbackChannel')
-    expect(gateText).toContain('clarifyGeneration')
+    expect(src).not.toContain('isCrossClarifyTriggeredRerun')
+    expect(src).not.toContain('isQuestionerCrossClarifyRerun')
   })
 
-  test('isQuestionerCrossClarifyRerun gate keys on clarifyMode, not retry_index or a counter (RFC-074)', () => {
+  test('the unified flat injector owns clarify injection (RFC-132 PR-C)', () => {
     const src = readFileSync(SCHEDULER_SOURCE_PATH, 'utf8')
-    // RFC-074 PR-C: the questioner gate is `clarifyMode === 'cross'` — the cci
-    // proxy was removed (PR-B regression fix); aging is the RFC-070 stamp.
-    const m = src.match(/const isQuestionerCrossClarifyRerun =[^;\n]+/)
-    expect(m, 'must find the isQuestionerCrossClarifyRerun assignment').not.toBeNull()
-    const gateText = m![0]
-    expect(gateText).not.toMatch(/retryIndex\s*===\s*0/)
-    expect(gateText).not.toMatch(/retry_index\s*===\s*0/)
-    expect(gateText).toContain("clarifyMode === 'cross'")
-    expect(gateText).not.toMatch(/clarifyIteration|clarifyGeneration/)
+    expect(src).toContain('await buildClarifyQueueContext(')
+    // No round-grouped injector call site remains in the scheduler.
+    expect(src).not.toContain('await buildPromptContext(')
+    expect(src).not.toContain('await buildExternalFeedbackContext(')
   })
 })

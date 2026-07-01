@@ -41,11 +41,53 @@ import {
   clarifyRounds,
   clarifySessions,
   nodeRuns,
+  taskQuestions,
   tasks,
   workflows,
 } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
+import { setNodeClarifyDirective } from '../src/services/taskClarifyDirective'
 import { runGit } from '../src/util/git'
+
+// RFC-132 (PR-C): the unified flat injector (buildClarifyQueueContext) reads DISPATCHED
+// task_questions — not clarify_rounds directly. These tests synthesize an answered round
+// out-of-band (mirrorClarifyAnswered), so seed the dispatched+sealed self entries the real
+// dispatch path would create: originNodeRunId = the round's intermediary run; triggerRunId = the
+// 承接 rerun (derived aging keys off it — a still-running / interrupted rerun is un-aged, so the
+// Q&A injects). A 'stop' round ALSO needs the per-node clarify state written (the flat context
+// carries no directive — the scheduler reads nodeStopOverride), so callers pair this with
+// setNodeClarifyDirective(...,'stop').
+async function seedDispatchedSelfQuestions(
+  db: DbClient,
+  taskId: string,
+  originNodeRunId: string,
+  questionIds: string[],
+  targetNodeId: string,
+  triggerRunId: string | null,
+): Promise<void> {
+  for (const qid of questionIds) {
+    await db.insert(taskQuestions).values({
+      id: ulid(),
+      taskId,
+      originNodeRunId,
+      questionId: qid,
+      questionTitle: qid,
+      sourceKind: 'self',
+      roleKind: 'self',
+      iteration: 0,
+      loopIter: 0,
+      defaultTargetNodeId: targetNodeId,
+      overrideTargetNodeId: null,
+      sealedAt: Date.now(),
+      sealedBy: 'u1',
+      dispatchedAt: Date.now(),
+      dispatchedBy: 'u1',
+      triggerRunId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  }
+}
 
 // RFC-058 T13: scheduler now reads clarify state via `clarify_rounds`
 // (unified self+cross table). These tests directly UPDATE the legacy
@@ -413,6 +455,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
+    // RFC-132 (PR-C): dispatch the answered round to the rerun + record the 'stop' node state.
+    await seedDispatchedSelfQuestions(h.db, taskId, sessRow.clarifyNodeRunId, ['qdb'], 'd', rerunId)
+    await setNodeClarifyDirective(h.db, taskId, 'd', 'stop', 'u1')
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'with pg' }) }, () =>
@@ -426,6 +471,7 @@ describe('scheduler RFC-023 clarify dispatch', () => {
 
     const rerunRow = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunId)))[0]!
     expect(rerunRow.status).toBe('done')
+    // RFC-132 (PR-C): the flat `## Clarify Q&A` block carries the answer as an equal peer.
     expect(rerunRow.promptText ?? '').toContain('Clarify Q&A')
     expect(rerunRow.promptText ?? '').toContain('Postgres')
   })
@@ -540,6 +586,11 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
+    // RFC-132 (PR-C): dispatch to the fresh rerun (triggerRunId=rerunId, minted AFTER the stale
+    // retry=6 done row, so derived aging keys off the fresher id — the stale row can't age it out)
+    // + record the 'stop' node state so the finalize round is released.
+    await seedDispatchedSelfQuestions(h.db, taskId, sessRow.clarifyNodeRunId, ['qdb'], 'd', rerunId)
+    await setNodeClarifyDirective(h.db, taskId, 'd', 'stop', 'u1')
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'with pg' }) }, () =>
@@ -659,6 +710,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
+    // RFC-132 (PR-C): dispatch the answered 'continue' round to this rerun (bound now; the fresh
+    // revival attempt re-binds + re-injects since an interrupted rerun never produced output).
+    await seedDispatchedSelfQuestions(h.db, taskId, sessRow.clarifyNodeRunId, ['qdb'], 'd', rerunId)
 
     // Step 3: simulate the daemon restart sweep — the rerun row never got a
     // chance to run; orphans.ts flips pending/running rows to 'interrupted'.
@@ -775,6 +829,10 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       iteration: 0,
       rerunCause: 'clarify-answer',
     })
+    // RFC-132 (PR-C): dispatch the answered 'stop' round + record the 'stop' node state so the
+    // revived finalize round stays RELEASED (nodeStopOverride → effectiveHasClarifyChannel=false).
+    await seedDispatchedSelfQuestions(h.db, taskId, sessRow.clarifyNodeRunId, ['qdb'], 'd', rerunId)
+    await setNodeClarifyDirective(h.db, taskId, 'd', 'stop', 'u1')
 
     // Step 3: simulate the daemon restart sweep → the rerun row is interrupted.
     await h.db
@@ -891,6 +949,17 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
+    // RFC-132 (PR-C): dispatch round 1's answer to the round-2-asking rerun (ci1Id). It stays un-aged
+    // (ci1 only ever emits <workflow-clarify>, never output), so it accumulates into every later
+    // rerun's flat block — 01KWDKBS: round 1 must not vanish.
+    await seedDispatchedSelfQuestions(
+      h.db,
+      taskId,
+      round1Sess.clarifyNodeRunId,
+      ['qdb'],
+      'd',
+      ci1Id,
+    )
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
     const ROUND2_BODY = JSON.stringify({
       questions: [
@@ -958,6 +1027,16 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       iteration: 0,
       finishedAt: Date.now(),
     })
+    // RFC-132 (PR-C): dispatch round 2's answer to the ci=2 rerun (interrupted → un-aged), so the
+    // revival's flat block carries BOTH rounds.
+    await seedDispatchedSelfQuestions(
+      h.db,
+      taskId,
+      round2Sess.clarifyNodeRunId,
+      ['qenv'],
+      'd',
+      ci2Id,
+    )
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
 
     // Re-enter scheduler. Fresh row must inherit ci=2 and prompt must carry
@@ -980,8 +1059,12 @@ describe('scheduler RFC-023 clarify dispatch', () => {
     expect(fresh.id).not.toBe(ci2Id)
     expect(fresh.status).toBe('done')
     const prompt = fresh.promptText ?? ''
-    expect(prompt).toContain('Round 1')
-    expect(prompt).toContain('Round 2')
+    // RFC-132 (PR-C): both rounds render as EQUAL peers in the single flat `## Clarify Q&A` block —
+    // no `### Round N` grouping. Both answers still accumulate (derived aging keeps both un-aged).
+    expect(prompt).toContain('## Clarify Q&A')
+    expect(prompt).not.toContain('### Round')
+    expect(prompt).toContain('Which database?')
+    expect(prompt).toContain('Which environment first?')
     expect(prompt).toContain('Postgres')
     expect(prompt).toContain('Staging')
   })

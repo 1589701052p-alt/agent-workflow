@@ -481,13 +481,16 @@ describe('RFC-123 D: 源码 wiring 守卫', () => {
     'utf8',
   )
 
-  test('scheduler：directiveOverride 泛化为 nodeDirective + recency directiveOverrideAt（非 stop 字面量）', () => {
+  test('scheduler：directive 收敛为 per-node clarify 状态（nodeDirective 喂 oracle，非 per-round override）', () => {
     const norm = (s: string) => s.replace(/\s+/g, ' ')
+    // RFC-132 (PR-C §7): 站定 directive = per-node clarify 状态。scheduler 读 nodeDirective 并喂进
+    // resolveEffectiveClarifyChannel；'continue' toggle 因 nodeStopOverride 翻 false 而重开通道。
+    // per-round 注入器 override plumbing（directiveOverride/directiveOverrideAt/applyLatestDirective）
+    // 随平铺注入器一起删除。
     expect(schedulerSrc).toContain('const nodeDirective = nodeDirectiveRow?.directive')
-    expect(norm(schedulerSrc)).toContain('directiveOverride: nodeDirective')
-    expect(norm(schedulerSrc)).toContain('directiveOverrideAt: nodeDirectiveRow?.updatedAt')
-    // 旧的 'stop' 字面量注入不得复活（否则重启用断）。
-    expect(schedulerSrc).not.toContain("directiveOverride: 'stop' as const")
+    expect(norm(schedulerSrc)).toContain('contextDirective: nodeDirective')
+    expect(schedulerSrc).not.toContain('directiveOverride')
+    expect(schedulerSrc).not.toContain('applyLatestDirective')
   })
 
   test('scheduler + crossClarify：cross 短路经 resolveCrossNodeStopped（B2 recency 闸）', () => {

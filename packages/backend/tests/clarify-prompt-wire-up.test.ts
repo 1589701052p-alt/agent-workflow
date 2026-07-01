@@ -30,16 +30,15 @@ const BACKEND_SRC = join(__dirname, '..', 'src', 'services')
 const SHARED_SRC = join(__dirname, '..', '..', 'shared', 'src')
 
 describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
-  test('scheduler.ts wires buildPromptContext on both agent paths', () => {
+  test('scheduler.ts wires the unified buildClarifyQueueContext injector (RFC-132 PR-C)', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
-    expect(src).toContain('buildPromptContext')
-    // RFC-058 T13: three call sites — agent-single self, agent-single
-    // cross-questioner, agent-multi shard fanout (each replaces the legacy
-    // buildClarifyPromptContext / buildQuestionerCrossClarifyContext call).
-    const occurrences = src.match(/buildPromptContext\(/g) ?? []
-    expect(occurrences.length).toBeGreaterThanOrEqual(2)
-    expect(src).toContain("consumerKind: 'self'")
-    expect(src).toContain("consumerKind: 'cross-questioner'")
+    // RFC-132 (PR-C): one flat injector replaces the former self/questioner + designer split.
+    // selectAgentQueue queries every role in one shot, so there is no per-role consumerKind SELECT
+    // fork and no round-grouped buildPromptContext call in the scheduler anymore.
+    expect(src).toContain('await buildClarifyQueueContext(')
+    expect(src).not.toContain('await buildPromptContext(')
+    expect(src).not.toContain("consumerKind: 'self'")
+    expect(src).not.toContain("consumerKind: 'cross-questioner'")
   })
 
   test('scheduler.ts wires findClarifyNodeForAgent + agentHasClarifyChannel', () => {
@@ -93,19 +92,16 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
   // (the user explicitly asked for it not to appear), so this grep guard is
   // the cheapest way to lock the contract without spinning up a full
   // scheduler integration test.
-  test('scheduler.ts gates hasClarifyChannel on clarifyContext.directive !== "stop"', () => {
+  test('scheduler.ts gates effectiveHasClarifyChannel on the per-node clarify state (RFC-132 PR-C)', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
-    // RFC-122 relocated the inline boolean into the pure
-    // `resolveEffectiveClarifyChannel` oracle (clarifyRounds.ts). The scheduler
-    // still feeds it the prompt context's directive — assert the wiring here AND
-    // the gate itself in the oracle, so a refactor that drops either goes red.
-    expect(src).toContain('contextDirective: clarifyContext?.directive')
+    // RFC-132 (PR-C §7): the standing continue/stop directive is the per-node clarify state — the
+    // scheduler feeds `nodeDirective` into resolveEffectiveClarifyChannel (the flat context carries
+    // no directive). Assert the wiring here AND the gate itself in the oracle.
+    expect(src).toContain('contextDirective: nodeDirective')
+    expect(src).not.toContain('clarifyContext?.directive')
     const oracleSrc = readFileSync(join(BACKEND_SRC, 'clarifyRounds.ts'), 'utf8')
     expect(oracleSrc).toContain("args.contextDirective !== 'stop'")
     const occurrences = src.match(/effectiveHasClarifyChannel/g) ?? []
-    // RFC-060 PR-E removed the agent-multi fan-out call site (was one of the
-    // two declarations + passes). The agent-single path still owns one
-    // declaration + one pass into runNode → expect ≥ 2 mentions.
     expect(occurrences.length).toBeGreaterThanOrEqual(2)
   })
 
@@ -118,12 +114,13 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
   // ask-back). Only a review-iterate rerun (reviewContext set) strips the
   // directive while addressing fresh reviewer comments. See
   // clarify-stop-directive-scoped-to-clarify-rerun.test.ts.
-  test('scheduler.ts wires the shared applyLatestDirective local on the agent-single clarify context call', () => {
+  test('scheduler.ts reads the standing directive from the per-node clarify state (RFC-132 PR-C)', () => {
     const src = readFileSync(join(BACKEND_SRC, 'scheduler.ts'), 'utf8')
-    expect(src).toContain(
-      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
-    )
-    expect(src).toContain('applyLatestDirective,')
+    // RFC-132 (PR-C §7): the per-round directive plumbing (applyLatestDirective) is gone; the
+    // directive is nodeDirective (getNodeClarifyDirectiveRow) + nodeStopOverride.
+    expect(src).not.toContain('applyLatestDirective')
+    expect(src).toContain('const nodeDirective = nodeDirectiveRow?.directive')
+    expect(src).toContain('const nodeStopOverride = nodeDirective === ')
   })
 
   // RFC-058 T13 + T17 was a grep guard on the single `computeHistoryCutoff`

@@ -323,18 +323,19 @@ describe('RFC-058 baseline T5 — cross-clarify questioner dispatch path', () =>
 // (scheduler.ts no longer threads historyCutoff).
 
 describe('RFC-058 baseline T5 — scheduler dispatch gate grep guards', () => {
-  test('source grep: scheduler routes through buildPromptContext consumerKind dispatch when cci>0', async () => {
+  test('source grep: scheduler routes clarify injection through the unified buildClarifyQueueContext (RFC-132 PR-C)', async () => {
     const fs = await import('node:fs/promises')
     const txt = await fs.readFile(
       resolve(import.meta.dir, '..', '..', '..', 'packages/backend/src/services/scheduler.ts'),
       'utf8',
     )
-    // RFC-058 T13: legacy buildQuestionerCrossClarifyContext call site replaced
-    // by unified `buildPromptContext({ consumerKind: 'cross-questioner', ... })`.
-    expect(txt).toContain('buildPromptContext')
-    expect(txt).toContain("consumerKind: 'cross-questioner'")
-    expect(txt).toContain('isQuestionerCrossClarifyRerun')
-    expect(txt).toContain('hasExternalFeedbackChannel')
+    // RFC-132 (PR-C): the per-role buildPromptContext consumerKind dispatch (+ the questioner SELECT
+    // fork) is replaced by the single flat injector — selectAgentQueue queries self/questioner/designer
+    // in one shot.
+    expect(txt).toContain('await buildClarifyQueueContext(')
+    expect(txt).not.toContain('await buildPromptContext(')
+    expect(txt).not.toContain("consumerKind: 'cross-questioner'")
+    expect(txt).not.toContain('isQuestionerCrossClarifyRerun')
     // RFC-070: `historyCutoffClarifyIteration` deleted; row-state aging
     // replaces iteration cutoff.
     expect(txt).not.toContain('historyCutoffClarifyIteration')

@@ -197,14 +197,15 @@ function roundById(db: DbClient, roundId: string) {
 // self/q 整轮注入」——会改这两个 consumerKind 的调度器接线（源码文本锁）以及整轮渲染（行为锁）。
 // ===========================================================================
 
-describe('RFC-128 P5-A #1 — 非 deferred self/q 整轮注入: 调度器源码文本锁', () => {
-  test('scheduler.ts 用 buildPromptContext + consumerKind self / cross-questioner 整轮注入 self/q', () => {
+describe('RFC-128 P5-A #1 → RFC-132 PR-C — self/q 注入收敛为统一平铺注入器: 调度器源码文本锁', () => {
+  test('scheduler.ts 用 buildClarifyQueueContext 统一注入 self/q/designer（整轮 buildPromptContext + consumerKind 接线已删）', () => {
     const src = readFileSync(SCHEDULER_SRC, 'utf8')
-    // 非 deferred self/q clarify 注入 = 整轮 builder。P5-B 拆 per-question / 加 suppress gate
-    // 会改这三处接线之一，本锁先红。
-    expect(src).toContain('buildPromptContext')
-    expect(src).toContain("consumerKind: 'self'")
-    expect(src).toContain("consumerKind: 'cross-questioner'")
+    // RFC-132 (PR-C):整轮 buildPromptContext + per-role consumerKind 调度器接线被单一平铺注入器
+    // buildClarifyQueueContext 取代(selectAgentQueue 一次查全 self/questioner/designer)。
+    expect(src).toContain('await buildClarifyQueueContext(')
+    expect(src).not.toContain('await buildPromptContext(')
+    expect(src).not.toContain("consumerKind: 'self'")
+    expect(src).not.toContain("consumerKind: 'cross-questioner'")
   })
 })
 

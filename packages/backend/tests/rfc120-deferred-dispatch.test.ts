@@ -1294,11 +1294,14 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     expect(graph?.runScoped).toBeUndefined()
   })
 
-  test('M1: scheduler suppresses the generic priorOutputUpdate for a run-scoped context (source lock)', () => {
+  test('M1: scheduler suppresses the generic priorOutputUpdate for a run-scoped override handoff (source lock)', () => {
     // The giant runOneNode prompt assembly can't be unit-run (it spawns opencode);
     // lock the suppression at the source so a refactor that drops it goes red.
+    // RFC-132 (PR-C): the run-scoped designer signal is now `suppressPriorOutput` on the unified flat
+    // queue (a pure-override handoff), which gates the RFC-119 prior-output update (RFC-120 §18).
     const src = readFileSync(join(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
-    expect(src).toContain('crossClarifyContext?.runScoped !== true')
+    expect(src).toContain('clarifyQueue?.suppressPriorOutput === true')
+    expect(src).toContain('!suppressPriorOutput')
   })
 
   test('H2: full HTTP path — deferred submit parks, POST .../questions/dispatch stamps + mints + releases the gate', async () => {
@@ -2636,8 +2639,12 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
     expect(out).toContain('## External Feedback')
   })
 
-  test('source lock: the scheduler gates the cross-clarify priorOutputBlock on graphOwned for deferred contexts', () => {
+  test('source lock: the scheduler gates prior-output on the flat queue suppressPriorOutput for override handoffs (RFC-132 PR-C)', () => {
     const src = readFileSync(join(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
-    expect(src).toContain('crossClarifyContext?.graphOwned === true')
+    // RFC-132 (PR-C): the cross-clarify-specific graphOwned attach gate is replaced by the flat
+    // queue's suppressPriorOutput — a pure-override designer handoff (no graph-owned entry) suppresses
+    // the RFC-119 prior-output "update your draft" directive; a graph designer keeps it (RFC-120 §18).
+    expect(src).not.toContain('crossClarifyContext?.graphOwned')
+    expect(src).toContain('suppressPriorOutput')
   })
 })

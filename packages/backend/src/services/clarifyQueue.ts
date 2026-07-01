@@ -22,7 +22,13 @@ import type { DbClient } from '@/db/client'
 import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions } from '@/db/schema'
 import { isTargetNodeConsumed } from '@/services/clarifyRerunLedger'
 import { createLogger } from '@/util/log'
-import type { ClarifyAnswer, ClarifyQuestion, FlatClarifyEntry } from '@agent-workflow/shared'
+import {
+  renderFlatClarifyQueue,
+  type ClarifyAnswer,
+  type ClarifyQuestion,
+  type FlatClarifyEntry,
+  type WorkflowDefinition,
+} from '@agent-workflow/shared'
 
 const log = createLogger('clarify-queue')
 
@@ -45,6 +51,14 @@ export interface AgentQueueEntry {
   dispatchedAt: number | null
   roleKind: 'self' | 'questioner' | 'designer'
   sourceKind: 'self' | 'cross' | 'manual'
+  /** default_target_node_id — the RFC-120 §18 graphOwned gate: default==consumer ⟹ this node
+   *  OWNS the graph round (not a pure-override handoff). Drives buildClarifyQueueContext's
+   *  suppressPriorOutput (an override target processes the reassigned question, it does NOT rewrite
+   *  its own old artifact). */
+  defaultTargetNodeId: string | null
+  /** origin clarify round's node_run id (a §15 manual entry carries a synthetic origin) — surfaced
+   *  as buildClarifyQueueContext's audit-only sourceRunIds. */
+  originNodeRunId: string
   /** Render payload for renderFlatClarifyQueue: a resolved Q&A or a manual instruction. */
   render: FlatClarifyEntry
 }
@@ -180,6 +194,8 @@ export async function selectAgentQueue(args: SelectAgentQueueArgs): Promise<Agen
       dispatchedAt: e.dispatchedAt,
       roleKind: e.roleKind,
       sourceKind: e.sourceKind,
+      defaultTargetNodeId: e.defaultTargetNodeId,
+      originNodeRunId: e.originNodeRunId,
       render,
     })
   }
@@ -222,6 +238,86 @@ export async function bindTriggerRun(
     .set({ triggerRunId: dispatchedRunId, updatedAt: Date.now() })
     .where(inArray(taskQuestions.id, ids))
   return ids
+}
+
+// ---------------------------------------------------------------------------
+// buildClarifyQueueContext (RFC-132 PR-C / T3) — the SINGLE unified injector.
+//
+// Collapses the scheduler's two deferred injectors (clarifyRounds.buildClarifyNodeQueueContext
+// for self / questioner + crossClarify.buildExternalFeedbackContext for the designer) into ONE
+// call: select the node's whole agent queue (all roles, one query — design §2 "consumerKind 消失"),
+// bind it to this rerun (承接 marker), and render the single flat `## Clarify Q&A` block (§5). A
+// designer's questions land in the SAME block as self / questioner (§5 ②b render merge — no
+// separate `## External Feedback`). Returns undefined when the node has nothing to inject.
+// ---------------------------------------------------------------------------
+
+export interface ClarifyQueueContext {
+  /** The single flat `## Clarify Q&A` block (design §5) — inject verbatim via
+   *  `ClarifyPromptContext.flatBlock`. */
+  block: string
+  /** The distinct origin clarify-round runs whose Q&A this block draws from (audit only — not read
+   *  by any behavior gate). */
+  sourceRunIds: string[]
+  /**
+   * RFC-120 §18 preserved: true iff the queue is a pure-override DESIGNER handoff — it holds ≥1
+   * designer-role entry AND NONE of them is graph-owned by this node (no designer entry whose
+   * default target == consumerNodeId). The scheduler then suppresses the RFC-119 prior-output
+   * "update your draft" directive: an override target must PROCESS the reassigned question, not
+   * rewrite its own old artifact. A graph designer (its own round) keeps prior output; a
+   * self/questioner-only queue is never suppressed (matches the pre-PR-C runScoped gate, which was
+   * only set by the designer per-node-queue injector).
+   */
+  suppressPriorOutput: boolean
+}
+
+export interface BuildClarifyQueueContextArgs {
+  db: DbClient
+  /** Reserved (design §2 contract) — selection needs no definition; kept for forward-compat. */
+  definition: WorkflowDefinition
+  taskId: string
+  /** The running agent node. */
+  consumerNodeId: string
+  /** This rerun's OWN node_run id — bound as the entries' trigger_run_id (承接 marker) + frames the
+   *  derived-aging lineage window. */
+  dispatchedRunId: string
+  /** Wrapper loopIter (design §2 — workflow loop, NOT a clarify round). Reserved; the flat queue is
+   *  round-agnostic. */
+  iteration: number
+}
+
+/**
+ * The unified deferred clarify injector (design §2). Three steps:
+ *   1. selectAgentQueue — the node's DISPATCHED, (sealed OR manual), UN-AGED task_questions across
+ *      ALL roles in one query (self / questioner / designer / manual), derived-aged by the sole
+ *      RFC-131 oracle. Empty ⇒ undefined.
+ *   2. bindTriggerRun — stamp the picked entries' trigger_run_id to this rerun (承接 marker).
+ *   3. renderFlatClarifyQueue — one flat `## Clarify Q&A` block, every question an equal peer (no
+ *      rounds / scope / directive trailer / attribution — §5).
+ */
+export async function buildClarifyQueueContext(
+  args: BuildClarifyQueueContextArgs,
+): Promise<ClarifyQueueContext | undefined> {
+  const { db, taskId, consumerNodeId, dispatchedRunId } = args
+  const entries = await selectAgentQueue({ db, taskId, consumerNodeId, dispatchedRunId })
+  if (entries.length === 0) return undefined
+  const block = renderFlatClarifyQueue(entries.map((e) => e.render))
+  if (block === undefined) return undefined // defensive: every entry rendered empty
+  // 承接标记 — bind AFTER a renderable block is confirmed (mirrors the legacy injectors, which bind
+  // only when they produce a context).
+  await bindTriggerRun(
+    db,
+    entries.map((e) => e.id),
+    dispatchedRunId,
+  )
+  const hasDesigner = entries.some((e) => e.roleKind === 'designer')
+  const graphOwnedDesigner = entries.some(
+    (e) => e.roleKind === 'designer' && e.defaultTargetNodeId === consumerNodeId,
+  )
+  return {
+    block,
+    sourceRunIds: [...new Set(entries.map((e) => e.originNodeRunId))],
+    suppressPriorOutput: hasDesigner && !graphOwnedDesigner,
+  }
 }
 
 /** node_run ids (within `runIds`) that captured ≥1 `<workflow-output>` row. */

@@ -25,10 +25,54 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { agents, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import {
+  agents,
+  crossClarifySessions,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+
+// RFC-132 (PR-C): the unified flat injector (buildClarifyQueueContext) reads DISPATCHED
+// task_questions. createCrossClarifySession seeds only the clarify round (no task_questions), and the
+// legacy submitCrossClarifyAnswers immediate mint never dispatches — so seed the dispatched+sealed
+// cross entry the deferred path would create (originNodeRunId = the cross round's intermediary run;
+// the answer resolves from that round's answers_json). triggerRunId = the 承接 rerun, or null to let
+// the injector bind it on the lazily-minted rerun.
+async function seedDispatchedCrossEntry(
+  db: DbClient,
+  taskId: string,
+  originNodeRunId: string,
+  questionId: string,
+  roleKind: 'questioner' | 'designer',
+  targetNodeId: string,
+  triggerRunId: string | null,
+): Promise<void> {
+  await db.insert(taskQuestions).values({
+    id: ulid(),
+    taskId,
+    originNodeRunId,
+    questionId,
+    questionTitle: questionId,
+    sourceKind: 'cross',
+    roleKind,
+    iteration: 0,
+    loopIter: 0,
+    defaultTargetNodeId: targetNodeId,
+    overrideTargetNodeId: null,
+    sealedAt: Date.now(),
+    sealedBy: 'u1',
+    dispatchedAt: Date.now(),
+    dispatchedBy: 'u1',
+    triggerRunId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+}
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -518,6 +562,17 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     expect(ret.outcome.kind).toBe('designer-rerun-triggered')
     if (ret.outcome.kind !== 'designer-rerun-triggered') return
     const designerRunId = ret.outcome.designerNodeRunId
+    // RFC-132 (PR-C): dispatch the designer's cross Q&A to its rerun so the unified flat injector
+    // picks it up (the legacy immediate mint left no dispatched entry).
+    await seedDispatchedCrossEntry(
+      h.db,
+      taskId,
+      session.crossClarifyNodeRunId,
+      'q1',
+      'designer',
+      'designer',
+      designerRunId,
+    )
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'plan v2' }) }, () =>
       runTask({
@@ -531,8 +586,11 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     const designerRow = (
       await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, designerRunId))
     )[0]
-    expect(designerRow?.promptText ?? '').toContain('## External Feedback')
-    expect(designerRow?.promptText ?? '').toContain("### From 'questioner' (round 0)")
+    // RFC-132 (PR-C): the designer's cross Q&A rides the SINGLE flat `## Clarify Q&A` block (§5 ②b) —
+    // no separate `## External Feedback` / `### From '...'` section.
+    expect(designerRow?.promptText ?? '').toContain('## Clarify Q&A')
+    expect(designerRow?.promptText ?? '').not.toContain('## External Feedback')
+    expect(designerRow?.promptText ?? '').toContain('Why?')
   })
 
   // RFC-074 PR-C regression lock — bad case from production task
@@ -617,6 +675,17 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
       directive: 'continue',
     })
     expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+    // RFC-132 (PR-C): dispatch the QUESTIONER's own cross Q&A (unbound → the lazily-minted downstream
+    // questioner rerun binds + injects it). Un-aged: the questioner node has no done+output run yet.
+    await seedDispatchedCrossEntry(
+      h.db,
+      taskId,
+      session.crossClarifyNodeRunId,
+      'q1',
+      'questioner',
+      'questioner',
+      null,
+    )
 
     // Designer reruns (cci bumped) → questioner goes provenance-stale → it is
     // re-dispatched at the inherited cci=0 (no cascade bump) → prompt is built.

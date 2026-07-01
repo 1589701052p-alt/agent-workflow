@@ -87,34 +87,17 @@ describe('RFC-064 C3 — cross-clarify counter absent from live source code', ()
 // guard that locked the 3-layer sort key would now fail vacuously; the
 // `rfc070-aging-stamp-grep-guards.test.ts` C-group locks the new contract.
 
-describe('RFC-064 C9 — applyLatestDirective gate merged into one shared local', () => {
-  test('scheduler.ts has at least 2 applyLatestDirective occurrences (self + cross-questioner branches)', () => {
+describe('RFC-064 C9 / RFC-132 PR-C — applyLatestDirective plumbing removed (directive = per-node state)', () => {
+  test('scheduler.ts no longer carries the per-round applyLatestDirective local', () => {
     const src = readFileSync(
       resolve(REPO_ROOT, 'packages/backend/src/services/scheduler.ts'),
       'utf8',
     )
-    const matches = src.match(/applyLatestDirective/g) ?? []
-    // One `const applyLatestDirective = ...` definition + the two branch
-    // usages → ≥ 3 in code; the floor we lock is the two branch usages.
-    expect(matches.length).toBeGreaterThanOrEqual(2)
-  })
-
-  test('scheduler.ts shares one applyLatestDirective local across BOTH branches (no literal split)', () => {
-    const src = readFileSync(
-      resolve(REPO_ROOT, 'packages/backend/src/services/scheduler.ts'),
-      'utf8',
-    )
-    // RFC-100 (Codex review #2 fix): the shared gate is now
-    // `isClarifyRerun || reviewContext === undefined` (a process-retry / revival
-    // of a clarify round is NOT review-driven, so it keeps its directive — a
-    // 'stop' finalize round stays released across retries). Both branches MUST
-    // consume the ONE shared local; if a future refactor reverts one branch to
-    // a literal, this guard catches the silent split.
-    expect(src).toContain(
-      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
-    )
-    const matches = src.match(/\bapplyLatestDirective,/g) ?? []
-    expect(matches.length).toBeGreaterThanOrEqual(2)
+    // RFC-132 (PR-C §7): the round-grouped injectors + their per-round directive plumbing are gone.
+    // The standing continue/stop directive is now the per-node clarify state (nodeDirective /
+    // nodeStopOverride), so there is no shared applyLatestDirective local anymore.
+    expect(src).not.toContain('applyLatestDirective')
+    expect(src).toContain('const nodeStopOverride = nodeDirective === ')
   })
 })
 

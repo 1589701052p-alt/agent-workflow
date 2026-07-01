@@ -30,10 +30,16 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { submitClarifyAnswers } from '../src/services/clarify'
+// RFC-132 (PR-C): the unified flat injector reads DISPATCHED task_questions, so these tests answer
+// via the real PR-B path (autoDispatchClarifyRound = seal + auto-dispatch + mint the 承接 rerun +
+// write the node clarify state) instead of the legacy immediate mint (submitClarifyAnswers), which
+// created no dispatched entry.
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 import { reenterScheduler } from './reenter-scheduler'
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
@@ -243,9 +249,9 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
     )[0]
     expect(sessionRow).toBeDefined()
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: h.db,
-      clarifyNodeRunId: sessionRow!.clarifyNodeRunId,
+      originNodeRunId: sessionRow!.clarifyNodeRunId,
       directive: 'stop', // RFC-100: finalize round → <workflow-output> accepted
       answers: [
         {
@@ -255,6 +261,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
           customText: '',
         },
       ],
+      actor,
     })
 
     // Round 1: agent runs again. Inline mode → spawn argv contains
@@ -298,8 +305,11 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
     const allRuns = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
     const rerun = allRuns.filter((r) => r.nodeId === 'd').sort((a, b) => (a.id > b.id ? -1 : 1))[0]
     expect(rerun).toBeDefined()
-    expect(rerun?.promptText ?? '').toContain('User Answers (Current Round)')
+    // RFC-132 (PR-C): the flat `## Clarify Q&A` block replaces the round-grouped
+    // "User Answers (Current Round)" / "Prior Rounds (Questions)" inline sections.
+    expect(rerun?.promptText ?? '').toContain('## Clarify Q&A')
     expect(rerun?.promptText ?? '').not.toContain('Prior Rounds (Questions)')
+    expect(rerun?.promptText ?? '').not.toContain('User Answers (Current Round)')
     expect(rerun?.promptText ?? '').toContain('User directive: STOP CLARIFYING')
     expect(rerun?.promptText ?? '').toContain(
       'You MUST end your reply with a `<workflow-output>` block',
@@ -339,9 +349,9 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
     const sessionRow = (
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
     )[0]
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: h.db,
-      clarifyNodeRunId: sessionRow!.clarifyNodeRunId,
+      originNodeRunId: sessionRow!.clarifyNodeRunId,
       directive: 'stop', // RFC-100: finalize round → <workflow-output> accepted
       answers: [
         {
@@ -351,6 +361,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
           customText: '',
         },
       ],
+      actor,
     })
 
     // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
@@ -374,10 +385,12 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       expect(line.argv).not.toContain('--session')
     }
 
-    // Rerun's prompt carries the legacy multi-round dump section names.
+    // RFC-132 (PR-C): isolated rerun also renders the flat `## Clarify Q&A` block (round-grouped
+    // "Prior Rounds (Answers)" / "User Answers (Current Round)" sections are gone).
     const runs = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
     const rerun = runs.filter((r) => r.nodeId === 'd').sort((a, b) => (a.id > b.id ? -1 : 1))[0]
-    expect(rerun?.promptText ?? '').toContain('Prior Rounds (Answers)')
+    expect(rerun?.promptText ?? '').toContain('## Clarify Q&A')
+    expect(rerun?.promptText ?? '').not.toContain('Prior Rounds (Answers)')
     expect(rerun?.promptText ?? '').not.toContain('User Answers (Current Round)')
   })
 
@@ -405,9 +418,9 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
     )[0]
     expect(sessionRow).toBeDefined()
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: h.db,
-      clarifyNodeRunId: sessionRow!.clarifyNodeRunId,
+      originNodeRunId: sessionRow!.clarifyNodeRunId,
       directive: 'stop', // RFC-100: finalize round → <workflow-output> accepted
       answers: [
         {
@@ -417,6 +430,7 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
           customText: '',
         },
       ],
+      actor,
     })
 
     // RFC-097: runTask's entry CAS only claims pending tasks — reset first.
@@ -449,7 +463,8 @@ describe('RFC-026 scheduler clarify inline-mode', () => {
       .where(eq(nodeRunEvents.nodeRunId, rerun.id))
     const fallback = events.find((e) => e.payload.includes('[rfc026/inline-fallback]'))
     expect(fallback?.payload).toContain('missing-session-id')
-    // Rerun prompt is the isolated shape (since we fell back) — multi-round dump section names appear.
-    expect(rerun.promptText ?? '').toContain('Prior Rounds (Answers)')
+    // RFC-132 (PR-C): fell back to isolated → flat `## Clarify Q&A` block (no round-grouped dump).
+    expect(rerun.promptText ?? '').toContain('## Clarify Q&A')
+    expect(rerun.promptText ?? '').not.toContain('Prior Rounds (Answers)')
   })
 })

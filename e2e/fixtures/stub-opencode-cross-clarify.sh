@@ -9,9 +9,11 @@
 #     emit <workflow-clarify> with a single question to the user.
 #   *** task pauses awaiting_human; user POSTs answers ***
 #   Round 3 — designer.second invocation (cross-clarify rerun):
-#     prompt should now contain `## External Feedback` (auto-appended by
-#     the runner from the user's submitted answers). Stub logs the
-#     received prompt to $CROSS_CLARIFY_PROMPT_LOG so the spec can grep.
+#     prompt should now contain the flat `## Clarify Q&A` block (RFC-132 PR-C:
+#     the runner injects the user's submitted Q&A as a single flat block; the
+#     designer's cross-clarify Q&A rides it rather than a separate `## External
+#     Feedback` section). Stub logs the received prompt to
+#     $CROSS_CLARIFY_PROMPT_LOG so the spec can grep.
 #   Round 4 — questioner.second invocation (post designer rerun):
 #     emit <workflow-output> "all good, no more questions".
 #   Round 5 — final aggregation / output writing — no more agent spawns.
@@ -22,7 +24,7 @@
 #   CROSS_CLARIFY_PROMPT_LOG   absolute file path; if set, stub appends the
 #                              decoded prompt body (positional arg to `run`)
 #                              before each emit so the spec can assert that
-#                              round 3 contains "## External Feedback".
+#                              round 3 contains "## Clarify Q&A".
 
 set -eu
 

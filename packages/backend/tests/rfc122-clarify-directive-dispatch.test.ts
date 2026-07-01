@@ -475,13 +475,14 @@ describe('RFC-122 store round-trip + scheduler wiring lock', () => {
     // Dispatch read (parallel to hasPersistentStop) gated on hasClarifyChannel.
     expect(src).toContain('getNodeClarifyDirectiveRow(db, taskId, node.id)')
     expect(src).toContain('const nodeStopOverride =')
-    // Three threads: effective-channel oracle, buildPromptContext override, runNode notice.
+    // RFC-132 (PR-C): TWO threads now — the effective-channel oracle + the runNode stop notice. The
+    // per-round injector override thread is gone (the flat context carries no directive; the node
+    // clarify state is the single source — design §7). A 'continue' toggle re-opens ask-back because
+    // nodeStopOverride flips false in the oracle.
     expect(src).toContain('resolveEffectiveClarifyChannel({')
     expect(src).toContain('nodeStopOverride,')
-    // RFC-123 generalized the threaded override from the 'stop' literal to the full
-    // node directive, so an explicit 'continue' toggle re-enables ask-back (re-enable
-    // direction). nodeStopOverride stays the boolean for the oracle / notice.
-    expect(src).toContain('directiveOverride: nodeDirective')
+    expect(src).toContain('contextDirective: nodeDirective')
+    expect(src).not.toContain('directiveOverride')
     expect(src).toContain('shouldInjectStopNotice({')
   })
 

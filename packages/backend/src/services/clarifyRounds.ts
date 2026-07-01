@@ -887,8 +887,12 @@ export function shouldInjectStopNotice(args: {
  * RFC-023 design §5.6 wrapper-loop remaining counter — copied from
  * services/clarify.ts so this module stays self-contained. Returns '' when
  * the consumer is not inside an enclosing loop with a maxIterations cap.
+ *
+ * Exported for RFC-132 PR-C: the scheduler assembles the flat ClarifyPromptContext
+ * (which no longer flows through buildClarifyNodeQueueContext) and reuses this to
+ * populate the `{{__clarify_remaining__}}` token.
  */
-function computeRemaining(
+export function computeRemaining(
   definition: WorkflowDefinition,
   consumerNodeId: string,
   targetIteration: number,

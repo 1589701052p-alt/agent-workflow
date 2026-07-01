@@ -245,41 +245,20 @@ describe("cross-questioner 'stop' directive scoped to the cci-driven rerun only"
 })
 
 describe('scheduler wiring: cross-questioner buildPromptContext must pass applyLatestDirective gated on retryIndex', () => {
-  test('scheduler.ts cross-questioner branch sets applyLatestDirective gated on retryIndex (literal OR via isClarifyRerun)', () => {
-    // Source-text guard: catches a future refactor that drops the gate
-    // back to the default (true). The same kind of guard the codebase
-    // uses elsewhere for behaviors that span runtime + render layers
-    // (see e.g. canvas-edge-changes.test.ts).
-    //
-    // RFC-064 PR-B will merge the cross-questioner + self branches'
-    // applyLatestDirective gate into a shared `isClarifyRerun` variable
-    // (semantically equivalent under unified clarifyIteration; single-point
-    // change structurally eliminates the "missed-mirror gate" class of bug
-    // that 747dcae fixed). RFC-100 Codex review #2 then lifted the gate
-    // EXPRESSION out of both branches into one shared local —
-    // `const applyLatestDirective = isClarifyRerun || reviewContext === undefined`
-    // — so each branch now passes it by object shorthand (`applyLatestDirective,`).
-    // We assert the branch consumes the shared local AND the local carries the
-    // gate expression; a future refactor that inlines a literal back into one
-    // branch (re-splitting the gate) still trips this.
+  test('scheduler.ts cross-questioner clarify injection reads the per-node clarify state, not a per-round applyLatestDirective (RFC-132 PR-C)', () => {
+    // Source-text guard: catches a future refactor that re-introduces the per-round directive gate.
+    // RFC-132 (PR-C §7): the cross-questioner path no longer has its own SELECT branch nor an
+    // applyLatestDirective gate — the unified flat injector (buildClarifyQueueContext) queries every
+    // role in one shot, and the standing continue/stop directive is the per-node clarify state
+    // (nodeStopOverride, from getNodeClarifyDirectiveRow). The cci-rerun stop-scoping is preserved
+    // via nodeStopOverride flowing into resolveEffectiveClarifyChannel + shouldInjectStopNotice.
     const source = readFileSync(
       resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
       'utf8',
     )
-    // The shared gate local must exist (carries the isClarifyRerun gate).
-    expect(source).toContain(
-      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
-    )
-    // Locate the cross-questioner branch by its consumerKind literal.
-    const idx = source.indexOf("consumerKind: 'cross-questioner'")
-    expect(idx).toBeGreaterThan(-1)
-    // The branch's buildPromptContext call ends at the next closing `})`
-    // followed by `: await buildPromptContext` (the self branch). Slice
-    // the cross-questioner call body and assert it consumes the shared local.
-    const tail = source.slice(idx)
-    const selfBranchIdx = tail.indexOf(': await buildPromptContext({')
-    expect(selfBranchIdx).toBeGreaterThan(-1)
-    const crossBranchBody = tail.slice(0, selfBranchIdx)
-    expect(crossBranchBody).toContain('applyLatestDirective,')
+    expect(source).not.toContain('applyLatestDirective')
+    expect(source).not.toContain("consumerKind: 'cross-questioner'")
+    expect(source).toContain('await buildClarifyQueueContext(')
+    expect(source).toContain('const nodeStopOverride = nodeDirective === ')
   })
 })

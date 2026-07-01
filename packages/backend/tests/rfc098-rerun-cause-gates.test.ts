@@ -109,27 +109,30 @@ describe('RFC-098 WP-10 — scheduler gate wiring', () => {
     expect(SCHEDULER_SRC).not.toContain('(currentRunRow?.retryIndex ?? 0) === 0')
   })
 
-  test('gate-3 (update-mode) deliberately stays generation-derived — no cause switch', () => {
-    expect(SCHEDULER_SRC).toContain(
-      'const isCrossClarifyTriggeredRerun = hasExternalFeedbackChannel && clarifyGeneration > 0',
-    )
+  // RFC-132 (PR-C) superseded gate-3/4/5. The round-grouped injectors + their per-round
+  // directive plumbing are gone: one flat injector (buildClarifyQueueContext) selects every role in
+  // one query, the designer's working draft rides the generalized RFC-119 prior-output path, and the
+  // standing directive is the per-node clarify state. These lock that the superseded scaffolding is
+  // GONE and the flat wiring is in place.
+  test('gate-3 (update-mode working draft) → generalized RFC-119 prior-output path (RFC-132 PR-C)', () => {
+    // The cross-clarify-specific update-mode gate is gone; a designer surfaces its draft via the same
+    // freshestPriorRunWithOutput path every rerun uses, gated by suppressPriorOutput (RFC-120 §18).
+    expect(SCHEDULER_SRC).not.toContain('isCrossClarifyTriggeredRerun')
+    expect(SCHEDULER_SRC).toContain('freshestPriorRunWithOutput')
+    expect(SCHEDULER_SRC).toContain('!suppressPriorOutput')
   })
 
-  test('gate-4 (questioner context) stays a topology self-gate', () => {
-    expect(SCHEDULER_SRC).toContain("const isQuestionerCrossClarifyRerun = clarifyMode === 'cross'")
+  test('gate-4 (clarify injection) → one unified query, no per-role SELECT fork (RFC-132 PR-C)', () => {
+    // "consumerKind 消失": buildClarifyQueueContext selects self/questioner/designer together.
+    expect(SCHEDULER_SRC).not.toContain('isQuestionerCrossClarifyRerun')
+    expect(SCHEDULER_SRC).toContain('await buildClarifyQueueContext(')
   })
 
-  test('gate-5 (stop scoping) follows gate-2 OR not-review-driven, in BOTH prompt-context branches', () => {
-    // RFC-100 (Codex review #2 fix): gate-5 no longer STRICTLY follows gate-2.
-    // A process-retry / revival of a clarify round (NOT review-driven) must keep
-    // its directive so a 'stop' finalize round stays released across retries —
-    // hence `isClarifyRerun || reviewContext === undefined`.
-    expect(SCHEDULER_SRC).toContain(
-      'const applyLatestDirective = isClarifyRerun || reviewContext === undefined',
-    )
-    // Both prompt-context branches consume the shared local (object shorthand).
-    const matches = SCHEDULER_SRC.match(/\bapplyLatestDirective,/g) ?? []
-    expect(matches.length).toBeGreaterThanOrEqual(2)
+  test('gate-5 (stop scoping) → per-node clarify state, no per-round applyLatestDirective (RFC-132 PR-C)', () => {
+    // The standing continue/stop directive is the per-node clarify state (design §7); the flat context
+    // carries none, so the per-round directive-override plumbing (applyLatestDirective) is gone.
+    expect(SCHEDULER_SRC).not.toContain('applyLatestDirective')
+    expect(SCHEDULER_SRC).toContain('const nodeStopOverride = nodeDirective === ')
   })
 })
 

@@ -29,7 +29,6 @@ import {
   FANOUT_DONE_PORT_NAME,
   WorkflowDefinitionSchema,
   agentHasClarifyChannel,
-  agentHasExternalFeedbackChannel,
   buildPriorOutputBlock,
   deriveWrapperFanoutOutputs,
   findClarifyNodeForAgent,
@@ -72,17 +71,16 @@ import { collectMcpNamesFromClosure, loadMcpsByNames } from '@/services/mcpClosu
 import { collectPluginNamesFromClosure, loadPluginsByNames } from '@/services/pluginClosure'
 import { createClarifySession, findClarifyNode } from '@/services/clarify'
 import {
-  buildExternalFeedbackContext,
   createCrossClarifySession,
   hasPersistentStop,
   resolveCrossNodeStopped,
 } from '@/services/crossClarify'
 import {
-  buildClarifyNodeQueueContext,
-  buildPromptContext,
+  computeRemaining,
   resolveEffectiveClarifyChannel,
   shouldInjectStopNotice,
 } from '@/services/clarifyRounds'
+import { buildClarifyQueueContext } from '@/services/clarifyQueue'
 import { getNodeClarifyDirectiveRow } from '@/services/taskClarifyDirective'
 import {
   decideResumeSessionId,
@@ -2212,13 +2210,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // runner to disable the 5-question cap on the envelope parser.
   const clarifyMode: 'self' | 'cross' =
     findCrossClarifyNodeForQuestioner(definition, node.id) !== undefined ? 'cross' : 'self'
-  // RFC-056 + RFC-064: designer agents may receive External Feedback from
-  // one or more cross-clarify nodes via the system port __external_feedback__.
-  // When the current rerun has clarifyIteration > 0 (RFC-064 unified counter
-  // covers cross-clarify rounds too) AND a cross-clarify round answered
-  // since the last designer done row, the scheduler builds a prompt context
-  // that the renderer auto-appends as ## External Feedback.
-  const hasExternalFeedbackChannel = agentHasExternalFeedbackChannel(definition, node.id)
+  // RFC-132 (PR-C): the designer's External Feedback is no longer a separate context — its questions
+  // ride the unified flat clarify queue (buildClarifyQueueContext), which selects by effective target
+  // regardless of the `__external_feedback__` topology, so the scheduler needs no external-feedback
+  // topology gate here anymore.
 
   // Pick up an existing pending node_run at this iteration; otherwise create
   // a fresh run with retry_index = max-existing-in-iter + 1 (or 0).
@@ -2621,236 +2616,70 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           })
         }
 
-        // RFC-056 §6 update mode (2026-05-22 amendment): when this rerun was
-        // triggered by a cross-clarify submit, fetch the designer's latest done
-        // node_run for this (taskId, nodeId, iteration) so we can inject its
-        // output verbatim as `## Prior Output (to update or regenerate)` and the agent
-        // reads the working draft instead of regenerating from scratch.
-        //
-        // RFC-074 PR-C: the gate keys on the DERIVED clarify generation
-        // (`clarifyGeneration > 0` — there is a prior completed generation),
-        // never on retry_index and never on the retired clarifyIteration
-        // counter. The freshest prior generation (priorDoneGenerations[max id])
-        // is the working draft; an in-attempt RFC-042 retry shares the same
-        // generation so it sees the same draft. The topology gate
-        // `hasExternalFeedbackChannel` filters out nodes with no incoming
-        // cross-clarify edge.
-        //
-        // RFC-098 WP-10 (对抗检视修订 #11): this gate deliberately does NOT
-        // switch on rerun_cause — it is a retry-AGNOSTIC lineage signal. An
-        // in-attempt RFC-042 process retry (cause='process-retry') must see
-        // the same working draft as the designer rerun it retries, so the
-        // generation-derived form stays (rfc098-rerun-cause-gates.test.ts
-        // pins this shape).
-        const isCrossClarifyTriggeredRerun = hasExternalFeedbackChannel && clarifyGeneration > 0
-        let priorDoneDesigner: typeof nodeRuns.$inferSelect | undefined
-        if (isCrossClarifyTriggeredRerun) {
-          // RFC-074 PR-C: the working draft for this clarify-driven rerun is
-          // the freshest prior generation's done row (id < current) — exactly
-          // the set already computed above. RFC-096: shared picker (the rows
-          // are already done-only + top-level; the filters are belt-and-braces).
-          priorDoneDesigner = pickFreshestRun(priorDoneGenerations, {
-            topLevelOnly: true,
-            statusIn: ['done'],
-          })
-        }
+        // RFC-132 (PR-C): the designer's §6 update-mode prior output is no longer fetched here (the
+        // cross-clarify-specific designer working-draft fetch + its dedicated prior-output block are
+        // gone). A designer responding to feedback now surfaces its working draft through the SAME
+        // generalized RFC-119 prior-output path every other rerun uses (`freshestPriorRunWithOutput`
+        // below), gated by `suppressPriorOutput` so a pure-override handoff still processes the
+        // reassigned question instead of rewriting its own artifact (RFC-120 §18).
 
-        // RFC-070: aging is row-state ("`consumed_by_..._run_id IS NULL`")
-        // applied inside each read path (`buildPromptContext` /
-        // `buildExternalFeedbackContext` / the legacy
-        // `buildClarifyPromptContext` self path). The scheduler no longer
-        // computes an iteration cutoff number — every previous mismatch
-        // between unified `clarifyIteration` and `cross_clarify_sessions`'
-        // local iteration counter is eliminated structurally.
+        // RFC-132 (PR-C): the standing continue/stop directive is read SOLELY from the per-(task,
+        // asking-node) clarify state (design §7) — the per-round directive concept is gone. The flat
+        // injector (buildClarifyQueueContext) carries no directive; the scheduler drives
+        // effectiveHasClarifyChannel / clarifyStopped / clarifyStopNotice from nodeDirective /
+        // nodeStopOverride below. So the former per-role SELECT fork + the per-round directive-override
+        // plumbing (which only fed the round-grouped injectors) are gone — selectAgentQueue queries
+        // every role in one shot.
         //
-        // RFC-056 §5.4 §6.4: when the about-to-run node is a cross-clarify
-        // questioner, pull the questioner's own Q&A from kind='cross' rows via
-        // the cross-questioner consumer branch. Otherwise (self path) read
-        // kind='self'. Both branches share the `applyLatestDirective:
-        // isClarifyRerun` gate RFC-064 §5.5 unified.
-        //
-        // RFC-074: dropped the `&& currentClarifyIteration > 0` sub-condition.
-        // It used to detect "post-cross-clarify-resolve rerun" via the cci
-        // bump, but PR-B removed the cascade that bumped a DOWNSTREAM
-        // questioner's cci — so a downstream questioner re-runs at cci=0 and the
-        // gate misfired, dropping its Q&A and looping it. buildPromptContext
-        // now self-gates for cross-questioner via the RFC-070 consumed-by stamp
-        // (returns undefined when there is no unconsumed answered round), so the
-        // cci proxy is no longer needed.
-        const isQuestionerCrossClarifyRerun = clarifyMode === 'cross'
-        // RFC-100 (Codex review #2 fix): the latest answered directive applies to
-        // this run when it CONTINUES the clarify round — a clarify-answer rerun
-        // (isClarifyRerun) OR a process-retry / revival of the same round (which
-        // are NOT review-driven, i.e. reviewContext === undefined). It is stripped
-        // ONLY for review reject/iterate reruns (reviewContext set), which address
-        // NEW reviewer comments and must not inherit a stale directive. Without the
-        // `reviewContext === undefined` arm, a process-retry / revival of a 'stop'
-        // (finalize) round dropped the directive → re-forced mandatory ask-back →
-        // rejected the agent's <workflow-output> even though the user clicked Stop.
-        const applyLatestDirective = isClarifyRerun || reviewContext === undefined
-        // RFC-122 (H1 fix): per-(task, asking-node) clarify-directive override,
-        // read AT DISPATCH (parallel to RFC-056 hasPersistentStop) INSIDE the
-        // retry loop so EVERY attempt's freshly-minted process-retry row reads the
-        // LATEST toggle — a flip while attempt N runs is honored by attempt N+1's
-        // prompt (the read used to be cached once before the loop, dragging a
-        // stale directive across attempts). Gated on hasClarifyChannel, which
-        // covers self-clarify AND cross-questioner (both wire the same `__clarify__`
-        // source port); every other node skips the read ⇒ false. No row ⇒
-        // undefined ⇒ false ⇒ byte-for-byte unchanged behavior (golden-lock).
-        // RFC-123 (B1): read the FULL directive (not just === 'stop') so an explicit
-        // 'continue' toggle can OVERRIDE a stale answered 'stop' round (re-enable) —
-        // passing directiveOverride:'continue' below makes buildPromptContext rebuild
-        // the ask-back trailer + resolveEffectiveClarifyChannel re-open the channel.
-        // nodeStopOverride keeps its boolean meaning (=== 'stop') for
-        // resolveEffectiveClarifyChannel / shouldInjectStopNotice. No row ⇒ undefined
-        // ⇒ no override passed ⇒ byte-for-byte unchanged (golden-lock).
+        // RFC-122 (H1 fix): read the node directive AT DISPATCH (parallel to RFC-056 hasPersistentStop)
+        // INSIDE the retry loop so EVERY attempt's freshly-minted process-retry row reads the LATEST
+        // toggle (a flip while attempt N runs is honored by attempt N+1). Gated on hasClarifyChannel
+        // (self-clarify AND cross-questioner both wire the same `__clarify__` source port); every
+        // other node skips the read ⇒ undefined ⇒ nodeStopOverride=false.
+        // RFC-123 (B1): read the FULL directive (not just === 'stop') so an explicit 'continue' toggle
+        // can re-open a stopped channel (nodeStopOverride flips false → resolveEffectiveClarifyChannel
+        // re-opens). No row ⇒ undefined ⇒ byte-for-byte unchanged.
         const nodeDirectiveRow = hasClarifyChannel
           ? await getNodeClarifyDirectiveRow(db, taskId, node.id)
           : undefined
         const nodeDirective = nodeDirectiveRow?.directive
         const nodeStopOverride = nodeDirective === 'stop'
-        // RFC-132 PR-B (universal deferred model, §6/§3): ALL tasks inject PER-QUESTION via the
-        // deferred injector buildClarifyNodeQueueContext (authoritative — binds the dispatched
-        // queue to this rerun). The whole-round buildPromptContext is now ONLY a MIGRATION NET
-        // (§9): it self-excludes any round with a dispatched self/questioner entry (read-side
-        // roundsWithDispatchedEntries), so it fires ONLY for a legacy in-flight round answered
-        // before this upgrade (no dispatched entry) — never re-injecting a per-question-dispatched
-        // (aged) round. Steady state (every new round dispatched) ⇒ buildClarifyNodeQueueContext
-        // always resolves ⇒ the fallback is never reached. The `deferredQuestionDispatch` flag is
-        // no longer read (design §1 废弃; dropped in the final PR).
-        const clarifyContext = !hasClarifyChannel
-          ? undefined
-          : ((await buildClarifyNodeQueueContext({
-              db,
-              definition,
-              taskId,
-              consumerKind: isQuestionerCrossClarifyRerun ? 'cross-questioner' : 'self',
-              consumerNodeId: node.id,
-              dispatchedRunId: nodeRunId,
-              targetIteration: clarifyGeneration,
-              ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-              applyLatestDirective,
-              ...(nodeDirective !== undefined
-                ? {
-                    directiveOverride: nodeDirective,
-                    directiveOverrideAt: nodeDirectiveRow?.updatedAt,
-                  }
-                : {}),
-            })) ??
-            (isQuestionerCrossClarifyRerun
-              ? await buildPromptContext({
-                  db,
-                  definition,
-                  taskId,
-                  consumerKind: 'cross-questioner',
-                  consumerNodeId: node.id,
-                  targetIteration: clarifyGeneration,
-                  loopIter: iteration,
-                  // RFC-056 A16: inline-mode questioner rerun renders only the
-                  // latest round + tags ctx.mode='inline'; the resumed opencode
-                  // session already holds prior rounds + the mandatory ask-back
-                  // block, so renderUserPrompt emits the short inline reminder
-                  // (continue) / the output protocol block (stop) instead.
-                  ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-                  applyLatestDirective,
-                  // RFC-122: on-canvas STOP toggle wins over the answered round's
-                  // own directive so a prior "keep clarifying" answer's trailer is
-                  // rebuilt to STOP CLARIFYING (cross-questioner path).
-                  ...(nodeDirective !== undefined
-                    ? {
-                        directiveOverride: nodeDirective,
-                        directiveOverrideAt: nodeDirectiveRow?.updatedAt,
-                      }
-                    : {}),
-                })
-              : await buildPromptContext({
-                  db,
-                  definition,
-                  taskId,
-                  consumerKind: 'self',
-                  consumerNodeId: node.id,
-                  targetIteration: clarifyGeneration,
-                  shardKey: currentShardKey,
-                  ...(resumeDecision.inlineMode ? { sessionMode: 'inline' as const } : {}),
-                  applyLatestDirective,
-                  // RFC-122: on-canvas STOP toggle wins over the answered round's
-                  // own directive (self-clarify path).
-                  ...(nodeDirective !== undefined
-                    ? {
-                        directiveOverride: nodeDirective,
-                        directiveOverrideAt: nodeDirectiveRow?.updatedAt,
-                      }
-                    : {}),
-                })))
-        // RFC-056: build the External Feedback context + (if update-mode)
-        // the prior output block. RFC-070: aging applied inside
-        // `buildExternalFeedbackContext` via `consumed_by_consumer_run_id
-        // IS NULL`.
-        // RFC-132 PR-B (universal deferred model, §6/§3): ALL tasks take the per-node-queue
-        // designer branch (pass this rerun's own node_run id) — buildExternalFeedbackContext
-        // delegates to buildNodeQueueExternalFeedback, binding + injecting THIS node's
-        // dispatched-unconsumed designer queue (a graph designer OR an override target both carry
-        // the human answer; a non-handler cascade re-run gets undefined). The graph
-        // `__external_feedback__` path is now ONLY a MIGRATION NET (§9): it fires when the
-        // per-node queue is empty AND this node wires an external-feedback edge — i.e. a legacy
-        // designer session answered before this upgrade (no dispatched designer entry). Steady
-        // state (every designer round dispatched) ⇒ the per-node queue resolves ⇒ the graph
-        // fallback is never reached. `deferredQuestionDispatch` is no longer read.
-        const perNodeCrossClarify = await buildExternalFeedbackContext({
+        // RFC-132 (PR-C): the SINGLE unified deferred injector. selectAgentQueue pulls this node's
+        // whole agent queue — self / questioner / designer / manual — in ONE query (design §2
+        // "consumerKind 消失"), binds it to this rerun (承接 marker), and renders one flat
+        // `## Clarify Q&A` block (§5). It replaces the former split self/questioner + designer
+        // injectors: a designer's questions now ride the SAME block (§5 ②b), so there is no separate
+        // designer External-Feedback context / `## External Feedback` section. Called for EVERY agent
+        // node — an override / borrow target can hold a
+        // reassigned question yet wire no clarify channel of its own (this mirrors the pre-PR-C
+        // UNCONDITIONAL per-node-queue designer call). An empty queue ⇒ undefined ⇒ no injection.
+        const clarifyQueue = await buildClarifyQueueContext({
           db,
-          taskId,
-          designerNodeId: node.id,
-          loopIter: iteration,
-          designerGeneration: clarifyGeneration,
           definition,
+          taskId,
+          consumerNodeId: node.id,
           dispatchedRunId: nodeRunId,
+          iteration,
         })
-        const graphCrossClarify =
-          perNodeCrossClarify === undefined && hasExternalFeedbackChannel
-            ? await buildExternalFeedbackContext({
-                db,
-                taskId,
-                designerNodeId: node.id,
-                loopIter: iteration,
-                designerGeneration: clarifyGeneration,
-                definition,
-              })
-            : undefined
-        const crossClarifyContext = perNodeCrossClarify ?? graphCrossClarify
-        // Compose the prior-output block from the latest done designer's
-        // captured port outputs. The agent's declared outputs[] determines
-        // the order so the block is deterministic across reruns. Empty
-        // outputs are dropped by buildPriorOutputBlock itself.
-        //
-        // RFC-120 §18 (ship-gate): `isCrossClarifyTriggeredRerun` is TOPOLOGY-gated
-        // (hasExternalFeedbackChannel) — NOT an ownership signal. For a DEFERRED
-        // per-node-queue context, attach the prior-output block ONLY when the queue
-        // includes GRAPH-owned work for this node (crossClarifyContext.graphOwned). A
-        // pure-override target that merely happens to have its own __external_feedback__
-        // edge + prior output must PROCESS the reassigned question, not rewrite its own
-        // old artifact. RFC-132 PR-B: the per-node-queue path gates on graphOwned; the legacy
-        // graph MIGRATION fallback (graphCrossClarify) always allows prior output (matches the
-        // pre-upgrade non-deferred behavior for a legacy designer session).
-        const allowPriorOutput =
-          crossClarifyContext?.graphOwned === true || graphCrossClarify !== undefined
-        if (
-          isCrossClarifyTriggeredRerun &&
-          priorDoneDesigner !== undefined &&
-          crossClarifyContext !== undefined &&
-          allowPriorOutput
-        ) {
-          // RFC-119 D3: shared composer (block byte-identical to the prior
-          // inline read+order+build; only the heading/directive constants are
-          // unified — see prompt.ts).
-          const priorOutputBlock = await composePriorOutputBlock(
-            db,
-            priorDoneDesigner.id,
-            agent.outputs ?? [],
-          )
-          if (priorOutputBlock.length > 0) {
-            crossClarifyContext.priorOutputBlock = priorOutputBlock
-          }
-        }
+        // RFC-120 §18 preserved: a pure-override DESIGNER handoff suppresses the RFC-119 prior-output
+        // "update your draft" directive below — the override target PROCESSES the reassigned question,
+        // it does not rewrite its own old artifact. A graph designer / self / questioner queue keeps
+        // prior output (suppressPriorOutput=false, matching the pre-PR-C graphOwned/runScoped gate).
+        const suppressPriorOutput = clarifyQueue?.suppressPriorOutput === true
+        const clarifyContext =
+          clarifyQueue === undefined
+            ? undefined
+            : {
+                // renderUserPrompt emits this verbatim + skips the legacy round-grouped sections.
+                flatBlock: clarifyQueue.block,
+                iteration: String(clarifyGeneration),
+                remaining: computeRemaining(definition, node.id, clarifyGeneration),
+                // Inline session resume still suppresses input re-injection + swaps the trailing
+                // reminder; the flat block itself is round-agnostic (RFC-131 aging keeps it small).
+                ...(resumeDecision.inlineMode
+                  ? { mode: 'inline' as const, currentRoundOnly: true }
+                  : {}),
+              }
         // effectiveHasClarifyChannel is the "mandatory ask-back is ACTIVE" signal
         // threaded to the runner + renderUserPrompt (RFC-100). It is TRUE only
         // when the agent is in a genuine clarify round and must ask back:
@@ -2881,30 +2710,30 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // (golden-lock).
         const effectiveHasClarifyChannel = resolveEffectiveClarifyChannel({
           hasClarifyChannel,
-          contextDirective: clarifyContext?.directive,
+          // RFC-132 (PR-C): the standing directive is the node clarify state (design §7); the flat
+          // context carries none. nodeStopOverride already covers `=== 'stop'`, so this is redundant
+          // with it but kept explicit for the oracle's contract (golden-lock).
+          contextDirective: nodeDirective,
           nodeStopOverride,
           reviewActive: reviewContext !== undefined,
           isClarifyRerun,
         })
-        // RFC-123 follow-up (user「强制停止」): is the node EXPLICITLY stopped — canvas
-        // toggle='stop' (nodeStopOverride) OR a latest answered 'stop' directive — as
-        // opposed to merely review-rerun ask-back suppression? Threaded to the runner so
-        // a disobedient <workflow-clarify> is REJECTED (no session) under an explicit
-        // stop, while review reruns (reviewActive && !isClarifyRerun) keep emitting clarify.
-        const clarifyStopped =
-          hasClarifyChannel && (nodeStopOverride || clarifyContext?.directive === 'stop')
-        // RFC-122 (H2 fix): inject the standalone STOP CLARIFYING trailer when the
-        // STOP toggle is set AND the clarifyContext does not already carry it
-        // (ctx.directive !== 'stop'). Covers a first run / pre-clarify error-retry
-        // (clarifyContext undefined) AND a review reject/iterate rerun that still
-        // carries prior clarify Q&A but withheld the trailer because
-        // applyLatestDirective=false. The old `=== undefined` test dropped the STOP
-        // text in that second case — suppressing ask-back without telling the agent
-        // why. Exactly-once: a context that DOES carry the STOP trailer
-        // (directiveOverride applied) returns false here.
+        // RFC-123 follow-up (user「强制停止」): is the node EXPLICITLY stopped? RFC-132 (PR-C): a
+        // 'stop' answer already writes the per-node clarify state (clarifySeal.setNodeClarifyDirective),
+        // so the node directive IS the single source — `nodeStopOverride` alone captures both the canvas
+        // toggle AND a latest answered 'stop'. Threaded to the runner so a disobedient
+        // <workflow-clarify> is REJECTED (no session) under an explicit stop, while review reruns
+        // (reviewActive && !isClarifyRerun) keep emitting clarify.
+        const clarifyStopped = hasClarifyChannel && nodeStopOverride
+        // RFC-122 (H2 fix), RFC-132 (PR-C): inject the standalone STOP CLARIFYING trailer whenever the
+        // node is stopped. The flat block NEVER carries a per-question directive trailer (§5), so —
+        // unlike the round-grouped path — the trailer's ONLY source is this notice. `contextDirective:
+        // undefined` makes shouldInjectStopNotice return `nodeStopOverride` (the block can never
+        // already carry it), so a stopped node always gets exactly one STOP trailer (first run /
+        // review-rerun / answered-stop alike).
         const clarifyStopNotice = shouldInjectStopNotice({
           nodeStopOverride,
-          contextDirective: clarifyContext?.directive,
+          contextDirective: undefined,
         })
         // RFC-122 (same-session follow-up fix): a same-session envelope follow-up
         // (renderEnvelopeFollowupPrompt) re-anchors on "the format previously
@@ -2919,38 +2748,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         const clarifyModeFlip =
           followupDecision.followup && priorAttemptClarifyActive !== effectiveHasClarifyChannel
         priorAttemptClarifyActive = effectiveHasClarifyChannel
-        // RFC-119: generalized prior-output for a NON-cross-clarify rerun. When
-        // this node has an earlier captured output at the SAME (iteration,
-        // shardKey) — review reject/iterate (supersede→canceled), manual retry,
-        // cascade, resume, self-clarify — surface it so the agent updates/regens
-        // rather than starting blind. Skipped when:
-        //   - cross-clarify ACTUALLY rendered its own prior-output block above
-        //     (no double inject),
-        //   - this is an inline session resume (the resumed session already holds
-        //     the prior output),
-        //   - mandatory ask-back is active (a clarify-only round must ask back, not
-        //     produce output — "update your output" would contradict it).
-        // Codex impl gate P2: gate on the REAL ownership signal
-        // (crossClarifyContext.priorOutputBlock was set), NOT the generation-only
-        // `isCrossClarifyTriggeredRerun` — a cross-clarify designer rerun for a
-        // NON-cross reason (review/manual/cascade) has clarifyGeneration>0 yet
-        // crossClarifyContext===undefined, so the old proxy wrongly skipped it and
-        // dropped the prior output entirely. Mirrors prompt.ts's render-level gate.
-        // D10: on a review-ITERATE, RFC-014's `## Sibling Outputs` already carries
-        // the sibling ports; restrict to the iterate-target port so the two don't
-        // duplicate. review-reject / non-review reruns → all ports (onlyPorts undef).
-        const crossClarifyOwnsPriorOutput =
-          crossClarifyContext?.priorOutputBlock !== undefined &&
-          crossClarifyContext.priorOutputBlock.length > 0
+        // RFC-119 / RFC-132 (PR-C): generalized prior-output for ANY rerun — review reject/iterate
+        // (supersede→canceled), manual retry, cascade, resume, self-clarify, AND now the cross-clarify
+        // designer (whose dedicated cross-clarify prior-output path was removed — a designer
+        // responding to feedback surfaces its working draft through THIS single path). Skipped
+        // when:
+        //   - this is a pure-override DESIGNER handoff (suppressPriorOutput — RFC-120 §18: process the
+        //     reassigned question, don't rewrite your own artifact),
+        //   - inline session resume (the resumed session already holds the prior output),
+        //   - mandatory ask-back is active (a clarify-only round must ask back, not produce output —
+        //     "update your output" would contradict it).
+        // D10: on a review-ITERATE, RFC-014's `## Sibling Outputs` already carries the sibling ports;
+        // restrict to the iterate-target port so the two don't duplicate. review-reject / non-review
+        // reruns → all ports (onlyPorts undef).
         let priorOutputUpdate: { block: string } | undefined
         if (
           currentRunRow !== undefined &&
-          !crossClarifyOwnsPriorOutput &&
-          // RFC-120 T9 (Codex M1): a run-scoped override target is handed a NEW
-          // question via External Feedback, not asked to revise its OWN prior
-          // draft — suppress the generic Update Directive even when it has prior
-          // outputs of its own.
-          crossClarifyContext?.runScoped !== true &&
+          !suppressPriorOutput &&
           !resumeDecision.inlineMode &&
           !effectiveHasClarifyChannel
         ) {
@@ -3016,9 +2830,15 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
             : isBorrowed
               ? undefined
               : resumeDecision.resumeSessionId
+        // RFC-132 (PR-C): the follow-up strong-bias trailer (renderEnvelopeFollowupPrompt) fires on
+        // clarifyDirective==='continue'. When effectiveHasClarifyChannel is true the node IS in
+        // ask-back ("keep clarifying") mode, so the directive is 'continue' by construction. Gate on a
+        // non-empty flat queue (clarifyContext defined) to preserve the legacy "no trailer on a
+        // first-ever run with no answered round" behavior (the per-round directive was undefined
+        // there).
         const followupClarifyDirective =
-          followupDecision.followup && effectiveHasClarifyChannel
-            ? clarifyContext?.directive
+          followupDecision.followup && effectiveHasClarifyChannel && clarifyContext !== undefined
+            ? ('continue' as const)
             : undefined
         // RFC-111 D15: read the runtime frozen onto this node_run, or freeze it
         // now (agent.runtime ?? config.defaultRuntime) on the first dispatch.
@@ -3077,8 +2897,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
           ...(reviewContext !== undefined ? { reviewContext } : {}),
+          // RFC-132 (PR-C): a single flat clarifyContext (self/questioner/designer merged, §5). No
+          // separate designer External-Feedback context — the designer's Q&A rides
+          // clarifyContext.flatBlock.
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
-          ...(crossClarifyContext !== undefined ? { crossClarifyContext } : {}),
           ...(priorOutputUpdate !== undefined ? { priorOutputUpdate } : {}),
           ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
           ...(effectiveResumeSessionId !== undefined

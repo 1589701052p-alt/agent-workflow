@@ -212,8 +212,12 @@ describe('RFC-123 D: stop-enforcement wiring guards', () => {
   const norm = (s: string) => s.replace(/\s+/g, ' ')
 
   test('scheduler computes clarifyStopped from EXPLICIT stop only + threads it', () => {
+    // RFC-132 (PR-C §7): a 'stop' answer writes the per-node clarify state (setNodeClarifyDirective),
+    // so nodeStopOverride ALONE captures both the canvas toggle AND a latest answered 'stop' — the
+    // former `|| clarifyContext?.directive === 'stop'` disjunct is gone (the flat context carries no
+    // directive).
     expect(norm(schedulerSrc)).toContain(
-      "const clarifyStopped = hasClarifyChannel && (nodeStopOverride || clarifyContext?.directive === 'stop')",
+      'const clarifyStopped = hasClarifyChannel && nodeStopOverride',
     )
     expect(norm(schedulerSrc)).toContain('clarifyStopped ? { clarifyStopped: true as const } : {}')
     // followup mapping: clarify-forbidden → re-demand output.

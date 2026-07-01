@@ -73,6 +73,18 @@ export interface ReviewPromptContext {
  * RFC-005 review context.
  */
 export interface ClarifyPromptContext {
+  /**
+   * RFC-132 (PR-C): the single flat `## Clarify Q&A` block (built by
+   * `renderFlatClarifyQueue` via `buildClarifyQueueContext`). When SET,
+   * `renderUserPrompt` emits it VERBATIM and SKIPS the legacy round-grouped
+   * `questionsBlock` / `answersBlock` auto-append sections (and, since the
+   * scheduler no longer passes a `crossClarifyContext` in the flat path, the
+   * designer's Q&A rides this same block — §5 ②b). ADDITIVE: when UNSET, the
+   * renderer's behavior is byte-for-byte the legacy round-grouped path (the
+   * frontend preview + prompt-injection tests stay green). The block already
+   * carries its own `## Clarify Q&A` heading, so it is appended raw.
+   */
+  flatBlock?: string
   /** Markdown listing of the last-round questions. */
   questionsBlock?: string
   /** Markdown listing of user answers (incl. deterministic synthesis line per question). */
@@ -492,7 +504,14 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // it to the prior wording. (Authors who explicitly reference
   // `{{__clarify_questions__}}` still get substitution above — that path is
   // a deliberate template choice.)
-  if (cc !== undefined) {
+  if (cc?.flatBlock !== undefined && cc.flatBlock.trim().length > 0) {
+    // RFC-132 (PR-C): the unified flat `## Clarify Q&A` block supersedes the
+    // round-grouped questions/answers sections below (self / questioner /
+    // designer all render as equal peers inside it — §5). Emit it verbatim (it
+    // owns its own heading) and SKIP the legacy sections. The block is
+    // round-agnostic, so inline mode needs no separate "current round" title.
+    sections += `\n\n${cc.flatBlock}`
+  } else if (cc !== undefined) {
     if (
       !inlineMode &&
       cc.questionsBlock !== undefined &&
@@ -755,7 +774,7 @@ Hard rules — violation is treated as a malformed reply and the node will fail 
 - Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
 - Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
 - Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.
-- Once the user submits answers, you will receive every prior round's Q&A in the next prompt under "## Clarify Q&A — Prior Rounds (Answers)" — each round is wrapped in a "### Round N" header with a deterministic synthesis line per question. Treat earlier rounds as already-resolved decisions; only the latest round carries the user's standing continue/stop directive.`
+- Once the user submits answers, you will receive every question answered so far in the next prompt under "## Clarify Q&A" — a single flat list where each question is an equal peer with the user's answer (a deterministic synthesis line). Treat every listed answer as an already-resolved decision.`
 }
 
 /**

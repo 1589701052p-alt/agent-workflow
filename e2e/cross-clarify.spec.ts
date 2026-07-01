@@ -16,8 +16,10 @@
 // LOCKS (in addition to status transitions):
 //   * GET /api/clarify returns a cross-tagged entry while awaiting_human.
 //   * Designer round 3's prompt (captured via CROSS_CLARIFY_PROMPT_LOG)
-//     contains `## External Feedback` — proves the framework injected
-//     the user's submitted Q&A into the rerun prompt.
+//     contains the flat `## Clarify Q&A` block — proves the framework injected
+//     the user's submitted Q&A into the rerun prompt. RFC-132 (PR-C): the
+//     designer's cross-clarify Q&A rides the single flat block, not a separate
+//     `## External Feedback` section.
 //   * clarifyIteration on designer's second node_run is bumped (>0) — under
 //     RFC-064 the previously-separate cross_clarify_iteration column was
 //     folded into clarify_iteration via the §3.2 max+1 mint algorithm.
@@ -299,7 +301,12 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     const taskId = ((await launchRes.json()) as { id: string }).id
 
     // 2. Task pauses awaiting_human after questioner.first emits cross-clarify.
-    const awaiting = await pollTaskStatus(daemon, taskId, (t) => t.status === 'awaiting_human', 30_000)
+    const awaiting = await pollTaskStatus(
+      daemon,
+      taskId,
+      (t) => t.status === 'awaiting_human',
+      30_000,
+    )
     expect(awaiting.status).toBe('awaiting_human')
 
     // 3. /api/clarify list surfaces a cross-tagged entry.
@@ -367,12 +374,16 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     const final = await pollTaskStatus(daemon, taskId, (t) => t.status === 'done', 30_000)
     expect(final.status).toBe('done')
 
-    // 6. Designer round 2 prompt contains `## External Feedback` —
-    //    proves the framework injected the user's Q&A into the rerun.
+    // 6. Designer round 2 prompt contains the flat `## Clarify Q&A` block —
+    //    proves the framework injected the user's Q&A into the rerun. RFC-132 (PR-C): the designer's
+    //    cross-clarify Q&A now rides the SINGLE flat block (§5 ②b), not a separate `## External
+    //    Feedback` section.
     const log = readFileSync(promptLog, 'utf-8')
-    const designerRound2 = log.match(/=== designer round 2 ===([\s\S]*?)=== END designer round 2 ===/)
+    const designerRound2 = log.match(
+      /=== designer round 2 ===([\s\S]*?)=== END designer round 2 ===/,
+    )
     expect(designerRound2, 'designer round 2 prompt was logged').not.toBeNull()
-    expect(designerRound2![1]).toContain('## External Feedback')
+    expect(designerRound2![1]).toContain('## Clarify Q&A')
 
     // 7. Designer reran after the cross-clarify submit. RFC-074 PR-C: the
     //    retired clarifyIteration counter is gone — the rerun is identified by

@@ -26,19 +26,23 @@ describe('RFC-119 — scheduler source guards', () => {
   })
 
   test('generalized priorOutputUpdate computation keeps all three skip gates', () => {
-    // Isolate the block from the ownership-signal declaration to the dispatch site.
-    const start = SCHEDULER_SRC.indexOf('const crossClarifyOwnsPriorOutput')
+    // RFC-132 (PR-C): the cross-clarify-specific prior-output block (crossClarifyContext.
+    // priorOutputBlock) was removed — a designer responding to feedback now surfaces its working
+    // draft through THIS single generalized path. The three skip gates are now: a pure-override
+    // DESIGNER handoff (suppressPriorOutput — RFC-120 §18: process the reassigned question, don't
+    // rewrite your own artifact), inline session resume, and mandatory ask-back. Isolate the block
+    // from the priorOutputUpdate declaration to the dispatch site.
+    const start = SCHEDULER_SRC.indexOf('let priorOutputUpdate:')
     expect(start).toBeGreaterThan(-1)
-    const region = SCHEDULER_SRC.slice(start, start + 1600)
-    // Codex impl gate P2: the cross-clarify skip MUST key on actual prior-output
-    // ownership (crossClarifyContext.priorOutputBlock), NOT the generation-only
-    // isCrossClarifyTriggeredRerun proxy.
-    expect(region).toContain('crossClarifyContext?.priorOutputBlock')
-    expect(region).toContain('!crossClarifyOwnsPriorOutput')
-    expect(region).not.toContain('!isCrossClarifyTriggeredRerun')
+    const region = SCHEDULER_SRC.slice(start, start + 900)
+    expect(region).toContain('!suppressPriorOutput')
     expect(region).toContain('!resumeDecision.inlineMode')
     expect(region).toContain('!effectiveHasClarifyChannel')
     expect(region).toContain('freshestPriorRunWithOutput')
+    // The generation-only isCrossClarifyTriggeredRerun proxy stays GONE (Codex impl gate P2), and
+    // the removed cross-clarify ownership signal must not linger either.
+    expect(region).not.toContain('!isCrossClarifyTriggeredRerun')
+    expect(region).not.toContain('crossClarifyOwnsPriorOutput')
   })
 
   test('priorDoneGenerationsForRun stays done-only (must NOT be widened)', () => {

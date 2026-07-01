@@ -479,71 +479,12 @@ describe('RFC-128 P5-BC read-side exclusion (§5.2.5 double-injection)', () => {
 // 自检 ③ + 黄金锁注入条件 (R2-4) — buildClarifyNodeQueueContext full-round byte-for-byte / partial sibling block
 // ===========================================================================
 describe('RFC-128 P5-BC per-question injection (golden-lock R2-4 + RFC-099)', () => {
-  test('FULL-round (all dispatched) == legacy whole-round buildPromptContext byte-for-byte (no sibling block)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const self = await seedAnsweredRound(db, taskId, {
-      kind: 'self',
-      askingNodeId: P,
-      questions: [mkQ('q1', 'FIRST'), mkQ('q2', 'SECOND')],
-    })
-    const rerun = await seedRun(db, taskId, P, {
-      status: 'running',
-      iteration: 0,
-      rerunCause: 'clarify-answer',
-    })
-    // BOTH questions dispatched in one batch → full-round.
-    await insertEntry(db, taskId, {
-      originNodeRunId: self.intermediaryNodeRunId,
-      questionId: 'q1',
-      roleKind: 'self',
-      defaultTargetNodeId: P,
-      sealed: true,
-      dispatchedAt: Date.now(),
-    })
-    await insertEntry(db, taskId, {
-      originNodeRunId: self.intermediaryNodeRunId,
-      questionId: 'q2',
-      roleKind: 'self',
-      defaultTargetNodeId: P,
-      sealed: true,
-      dispatchedAt: Date.now(),
-    })
-    // Reference: what the whole-round path renders for the SAME round (computed BEFORE the dispatched
-    // exclusion would apply — undispatch the entries via a clean DB to get the legacy baseline).
-    const refDb = createInMemoryDb(MIGRATIONS)
-    await seedTask(refDb, taskId)
-    await seedAnsweredRound(refDb, taskId, {
-      kind: 'self',
-      askingNodeId: P,
-      questions: [mkQ('q1', 'FIRST'), mkQ('q2', 'SECOND')],
-    })
-    const ref = await buildPromptContext({
-      db: refDb,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: P,
-      targetIteration: 1,
-      shardKey: null,
-    })
-
-    const ctx = await buildClarifyNodeQueueContext({
-      db,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: P,
-      dispatchedRunId: rerun,
-      targetIteration: 1,
-    })
-    expect(ctx).toBeDefined()
-    expect(ctx?.questionsBlock).toBe(ref?.questionsBlock)
-    expect(ctx?.answersBlock).toBe(ref?.answersBlock)
-    expect(ctx?.directive).toBe(ref?.directive)
-    expect(ctx?.answersBlock).not.toContain('Scope of this run') // no sibling block on full-round
-  })
+  // RFC-132 (PR-C / design §8): the FULL-round byte-for-byte lock (buildClarifyNodeQueueContext ==
+  // legacy whole-round buildPromptContext) was DELETED — the round-grouped rendering it locked is
+  // superseded by the single flat `## Clarify Q&A` block. The flat render golden now lives in
+  // rfc132-flat-render.test.ts (renderFlatClarifyQueue), and the scheduler-integration flat assertions
+  // live in scheduler-clarify-dispatch / -multiround-aging / -inline. The PARTIAL (sibling scope) +
+  // MULTI-ROUND cases below still exercise the (dead-until-PR-E) buildClarifyNodeQueueContext directly.
 
   test('PARTIAL (q1 dispatched, q2 not) → only q1 + sibling scope block listing q2; zero attribution', async () => {
     const db = createInMemoryDb(MIGRATIONS)
