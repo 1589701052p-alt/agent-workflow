@@ -109,19 +109,21 @@ describe('S-13 freshest-run comparator forks — source-text guards (all forks c
     expect(SCHEDULER_SRC.includes('export function isFresherNodeRun')).toBe(false)
   })
 
-  test('G2 S-2 read side FIXED (RFC-092): the retry rollback goes through shared rollbackNodeRunWorktrees with the in-process lastFreshSnapshot; the per-repo map read lives in nodeRollback.ts', () => {
-    // The scheduler retry path calls the shared multi-repo-aware rollback…
-    expect(SCHEDULER_SRC.includes('await rollbackNodeRunWorktrees(')).toBe(true)
-    // …passing the snapshot of the most recent FRESH-SESSION attempt held in
-    // memory (a followup attempt's snapshot-less row can no longer shadow the
-    // real baseline — S-2b).
-    expect(SCHEDULER_SRC.includes('lastFreshSnapshot')).toBe(true)
-    // The shared authority consumes the per-repo map — the read side S-2
-    // lacked — and carries the empty-sha reset switch.
+  test('RFC-130 SUPERSEDES S-2 read side: the scheduler retry DISCARDS the failed iso and re-branches (no canonical rollback); nodeRollback.ts stays as resume-path defense-in-depth', () => {
+    // RFC-130: the fresh-session retry never wrote the canonical worktree (the
+    // failed attempt ran in its own iso), so there is nothing to roll back — the
+    // scheduler discards the failed iso and re-branches a fresh one. The old
+    // `await rollbackNodeRunWorktrees(...)` + in-process `lastFreshSnapshot` retry
+    // machinery is GONE from the scheduler.
+    expect(SCHEDULER_SRC.includes('discardNodeIso(')).toBe(true)
+    expect(SCHEDULER_SRC.includes('createNodeIso(')).toBe(true)
+    expect(SCHEDULER_SRC.includes('lastFreshSnapshot')).toBe(false)
+    // The shared rollback authority is RETAINED for the RESUME path (D10
+    // defense-in-depth) — it still consumes the per-repo map + empty-sha reset
+    // switch, and never picks rows by retryIndex.
     const rollbackSrc = readFileSync(join(SRC_ROOT, 'services', 'nodeRollback.ts'), 'utf-8')
     expect(rollbackSrc.includes('preSnapshotReposJson')).toBe(true)
     expect(rollbackSrc.includes('resetOnEmptySnapshot')).toBe(true)
-    // And the shared module itself never picks rows by retryIndex.
     expect(countOccurrences(rollbackSrc, FORK_MARKER)).toBe(0)
   })
 

@@ -294,24 +294,24 @@ describe('S-2b followup-chain retry rollback restores the last FRESH baseline (R
       .from(nodeRunEvents)
       .where(eq(nodeRunEvents.nodeRunId, runs[1]!.id))
     expect(followupEvents.some((e) => e.payload.includes('[rfc042/envelope-followup]'))).toBe(true)
-    expect(runs[0]?.preSnapshot).not.toBeNull()
-    expect(runs[0]?.preSnapshot).not.toBe('')
-    expect(runs[1]?.preSnapshot).toBeNull() // the snapshot-less shadow row
-    expect(runs[2]?.preSnapshot).not.toBeNull()
+    // RFC-130: the iso model no longer writes pre-snapshot columns — every attempt
+    // ran in an iso and the canonical worktree was never touched. All NULL.
+    expect(runs[0]?.preSnapshot).toBeNull()
+    expect(runs[1]?.preSnapshot).toBeNull()
+    expect(runs[2]?.preSnapshot).toBeNull()
 
-    // ── Followup attempt inherited the worktree AS-IS (no rollback before a
-    // same-session followup): attempt 0's half-product and tracked overwrite
-    // were both still on disk.
+    // ── Followup attempt inherited the SAME iso AS-IS (RFC-130 D17: a same-session
+    // followup keeps its iso worktree): attempt 0's half-product and tracked
+    // overwrite were both still on disk in the reused iso.
     const atFollowup = JSON.parse(readFileSync(manifestFollowup, 'utf-8')) as Manifest
     expect(atFollowup.half0).toBe(true)
     expect(atFollowup.half1).toBe(false)
     expect(atFollowup.src).toBe('half-modified-by-attempt0\n')
 
-    // ── HEADLINE (S-2b): the fresh retry (attempt 2) started on baseline X.
-    // The rollback target was attempt 0's fresh snapshot — NOT the followup
-    // row's empty one — so the pre-task dirty modification is restored and
-    // both attempts' half-products are cleaned away. (Pre-fix, src would read
-    // 'base\n': reset+clean to HEAD, X destroyed.)
+    // ── HEADLINE (RFC-130): the fresh retry (attempt 2) started on a FRESH iso
+    // re-branched from the canonical worktree — which still carries the pre-task
+    // dirty baseline X (the failed attempts lived in the discarded iso0, so
+    // canonical was never modified). Both attempts' half-products are absent.
     const atFresh = JSON.parse(readFileSync(manifestFresh, 'utf-8')) as Manifest
     expect(atFresh.half0).toBe(false)
     expect(atFresh.half1).toBe(false)

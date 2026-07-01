@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import {
   createIsolatedWorktree,
   deleteIsoRefs,
+  isGitWorkTree,
   isoRefName,
   materializeTree,
   mergeTreeInMemory,
@@ -44,7 +45,17 @@ export interface IsoRepo {
 export interface IsoHandle {
   taskId: string
   nodeRunId: string
+  /** `{appHome}/iso/{taskId}/{nodeRunId}` — the GC/resume cleanup root (D14). */
+  containerPath: string
   repos: IsoRepo[]
+  /**
+   * True when the canonical worktree is NOT a git repo, so isolation was skipped
+   * and the node runs directly in the canonical worktree (no snapshot / merge-back
+   * / discard). Real task worktrees are always `git worktree add`ed, so this only
+   * triggers in mock harnesses that stub the worktree — it keeps those tests
+   * running the pre-RFC-130 in-place path (merge_state stays NULL → golden-lock).
+   */
+  passthrough: boolean
 }
 
 /** A canonical repo as the scheduler knows it (subset of state.repos[]). */
@@ -91,6 +102,30 @@ export async function createNodeIso(opts: {
   submoduleJobs?: number
   log?: Logger
 }): Promise<IsoHandle> {
+  // Passthrough fallback: if the canonical worktree isn't a git repo (only ever
+  // true in mock test harnesses), skip isolation and run in place — the node's
+  // writes go straight to the canonical worktree as they did pre-RFC-130.
+  const primary = opts.canonRepos[0]
+  if (primary === undefined || !(await isGitWorkTree(primary.worktreePath))) {
+    opts.log?.warn('canonical worktree is not a git repo — skipping isolation (passthrough)', {
+      worktreePath: primary?.worktreePath ?? '(none)',
+    })
+    return {
+      taskId: opts.taskId,
+      nodeRunId: opts.nodeRunId,
+      containerPath: isoWorktreePathFor(opts.appHome, opts.taskId, opts.nodeRunId, ''),
+      passthrough: true,
+      repos: opts.canonRepos.map((r) => ({
+        repoPath: r.repoPath,
+        canonWorktreePath: r.worktreePath,
+        isoWorktreePath: r.worktreePath, // run in place
+        worktreeDirName: r.worktreeDirName,
+        baseBranch: r.baseBranch,
+        baseSnapshot: '',
+        taskBaseHead: '',
+      })),
+    }
+  }
   const repos: IsoRepo[] = []
   for (const r of opts.canonRepos) {
     const isoWorktreePath = isoWorktreePathFor(
@@ -104,8 +139,14 @@ export async function createNodeIso(opts: {
       pinRef: isoRefName(opts.taskId, opts.nodeRunId, 'base'),
       log: opts.log,
     })
+    // Run `git worktree add` from the CANONICAL worktree, not the source repo:
+    // the base-snapshot commit was just created in the canonical worktree's
+    // (shared) ODB, and `git worktree` ops work from any worktree of the set.
+    // A real task worktree is a linked worktree of repoPath (shared ODB), so this
+    // is equivalent there — but it also works when a test wires them as separate
+    // repos (the snapshot lives only in the canonical worktree's ODB).
     await createIsolatedWorktree({
-      repoPath: r.repoPath,
+      repoPath: r.worktreePath,
       isoPath: isoWorktreePath,
       baseSnapshotCommit: baseSnapshot,
       taskBaseHead,
@@ -122,7 +163,45 @@ export async function createNodeIso(opts: {
       taskBaseHead,
     })
   }
-  return { taskId: opts.taskId, nodeRunId: opts.nodeRunId, repos }
+  return {
+    taskId: opts.taskId,
+    nodeRunId: opts.nodeRunId,
+    containerPath: isoWorktreePathFor(opts.appHome, opts.taskId, opts.nodeRunId, ''),
+    passthrough: false,
+    repos,
+  }
+}
+
+/** Reconstruct an IsoHandle from persisted columns (resume / GC replay — D15). */
+export function rebuildIsoHandle(opts: {
+  appHome: string
+  taskId: string
+  nodeRunId: string
+  canonRepos: CanonRepo[]
+  baseSnapshots: Record<string, string>
+  taskBaseHeads: Record<string, string>
+}): IsoHandle {
+  const repos: IsoRepo[] = opts.canonRepos.map((r) => ({
+    repoPath: r.repoPath,
+    canonWorktreePath: r.worktreePath,
+    isoWorktreePath: isoWorktreePathFor(
+      opts.appHome,
+      opts.taskId,
+      opts.nodeRunId,
+      r.worktreeDirName,
+    ),
+    worktreeDirName: r.worktreeDirName,
+    baseBranch: r.baseBranch,
+    baseSnapshot: opts.baseSnapshots[r.worktreeDirName] ?? '',
+    taskBaseHead: opts.taskBaseHeads[r.worktreeDirName] ?? '',
+  }))
+  return {
+    taskId: opts.taskId,
+    nodeRunId: opts.nodeRunId,
+    containerPath: isoWorktreePathFor(opts.appHome, opts.taskId, opts.nodeRunId, ''),
+    passthrough: false,
+    repos,
+  }
 }
 
 /**
@@ -134,6 +213,7 @@ export async function snapshotNodeIsoFinal(
   handle: IsoHandle,
   log?: Logger,
 ): Promise<Record<string, string>> {
+  if (handle.passthrough) return {}
   const out: Record<string, string> = {}
   for (const r of handle.repos) {
     out[r.worktreeDirName] = await snapshotFullState(r.isoWorktreePath, {
@@ -165,12 +245,13 @@ export async function mergeBackNodeIso(
   nodeTrees: Record<string, string>,
   log?: Logger,
 ): Promise<MergeBackResult> {
+  if (handle.passthrough) return { clean: true, conflicts: [] }
   const conflicts: MergeBackResult['conflicts'] = []
   for (const r of handle.repos) {
     const theirs = nodeTrees[r.worktreeDirName]
     if (theirs === undefined) continue
     const ours = await snapshotFullState(r.canonWorktreePath, { log })
-    const merge = await mergeTreeInMemory(r.repoPath, {
+    const merge = await mergeTreeInMemory(r.canonWorktreePath, {
       base: r.baseSnapshot,
       ours,
       theirs,
@@ -179,7 +260,7 @@ export async function mergeBackNodeIso(
       conflicts.push({ worktreeDirName: r.worktreeDirName, paths: merge.conflicts })
       continue
     }
-    const canonCurrentTree = await treeOf(r.repoPath, ours)
+    const canonCurrentTree = await treeOf(r.canonWorktreePath, ours)
     await materializeTree(r.canonWorktreePath, {
       mergedTree: merge.mergedTree,
       canonCurrentTree,
@@ -191,15 +272,20 @@ export async function mergeBackNodeIso(
 
 /** Remove all iso worktrees + delete the base/node pin refs for a run (best-effort). */
 export async function discardNodeIso(handle: IsoHandle, log?: Logger): Promise<void> {
+  if (handle.passthrough) return // in-place run — the canonical worktree is NOT ours to remove
   for (const r of handle.repos) {
     try {
-      await removeWorktree({ repoPath: r.repoPath, worktreePath: r.isoWorktreePath, force: true })
+      await removeWorktree({
+        repoPath: r.canonWorktreePath,
+        worktreePath: r.isoWorktreePath,
+        force: true,
+      })
     } catch (err) {
       log?.warn('iso worktree remove failed (leaving for GC)', {
         isoWorktreePath: r.isoWorktreePath,
         error: err instanceof Error ? err.message : String(err),
       })
     }
-    await deleteIsoRefs(r.repoPath, handle.taskId, handle.nodeRunId)
+    await deleteIsoRefs(r.canonWorktreePath, handle.taskId, handle.nodeRunId)
   }
 }

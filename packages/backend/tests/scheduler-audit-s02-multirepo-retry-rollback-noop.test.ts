@@ -239,7 +239,12 @@ describe('S-2 multi-repo in-process retry rollback rolls each sub-repo back (RFC
     await withEnv(
       {
         S2_COUNTER_FILE: join(h.appHome, 's2-counter'),
-        S2_STRAY_PATHS: JSON.stringify([strayA, strayB]),
+        // RFC-130: RELATIVE stray names → the mock writes them to its cwd (the
+        // ISOLATED worktree), so a failed attempt's partial writes live in the iso
+        // and are discarded on the fresh-session retry — they NEVER reach the
+        // canonical sub-repos (I-5). (Pre-RFC-130 these were absolute canonical
+        // paths cleaned by the pre-snapshot rollback, which the iso model removes.)
+        S2_STRAY_PATHS: JSON.stringify(['stray.txt']),
         S2_MANIFEST_FILE: manifestFile,
       },
       () =>
@@ -266,46 +271,33 @@ describe('S-2 multi-repo in-process retry rollback rolls each sub-repo back (RFC
     expect(runs[0]?.status).toBe('failed')
     expect(runs[1]?.status).toBe('done')
 
-    // ── Dual-write evidence: the multi-repo branch wrote `preSnapshotReposJson`
-    // and left `preSnapshot` NULL on BOTH rows. The RFC-092 fix changed the
-    // READ side (shared rollback consuming the per-repo map), not the write
-    // side — these assertions are intentionally unchanged from the pre-fix lock.
+    // ── RFC-130: the iso model no longer writes pre-snapshot columns — a failed
+    // attempt ran entirely in its ISO (never touched the canonical sub-repos), so
+    // there is nothing to roll back. Both columns stay NULL on both rows.
     for (const r of runs) {
       expect(r?.preSnapshot).toBeNull()
-      expect(r?.preSnapshotReposJson).not.toBeNull()
-      const map = JSON.parse(r!.preSnapshotReposJson!) as Record<string, string>
-      expect(Object.keys(map).sort()).toEqual(['repo-a', 'repo-b'])
+      expect(r?.preSnapshotReposJson).toBeNull()
     }
 
-    // The container dir is NOT a git repo (plain mkdir, task.ts multi-repo
-    // layout) — which is exactly why the shared rollback's multi-repo HARD
-    // GATE must never run git against it (nodeRollback.ts). Layout unchanged
-    // by the fix.
+    // The container dir is a PLAIN mkdir (task.ts multi-repo layout), not a git
+    // repo — unchanged by RFC-130 (the iso worktrees live under {appHome}/iso).
     expect(existsSync(join(h.containerDir, '.git'))).toBe(false)
 
-    // ── HEADLINE LOCK 1 (flipped on RFC-092): the retry attempt STARTED on
-    // CLEAN trees. The mini-mock recorded each stray's existence at attempt-2
-    // start; the per-repo rollback cleared both strays BEFORE the
-    // fresh-session retry spawned.
+    // ── HEADLINE LOCK 1 (RFC-130 I-5): the retry attempt started on a CLEAN iso
+    // (re-branched from the canonical sub-repos). The failed attempt's stray, which
+    // it wrote to its OWN iso cwd, did NOT exist when the fresh retry started.
     const manifest = JSON.parse(readFileSync(manifestFile, 'utf-8')) as Array<{
       path: string
       existsAtRetryStart: boolean
     }>
-    expect(manifest.length).toBe(2)
-    expect(manifest.find((m) => m.path === strayA)?.existsAtRetryStart).toBe(false)
-    expect(manifest.find((m) => m.path === strayB)?.existsAtRetryStart).toBe(false)
+    expect(manifest.length).toBe(1)
+    expect(manifest[0]?.existsAtRetryStart).toBe(false)
 
-    // ── HEADLINE LOCK 2 (flipped on RFC-092): the failed attempt's partial
-    // writes do NOT survive into the DONE task's final trees. Note the per-repo
-    // stash sha for each sub-repo was '' here (trees were clean at snapshot
-    // time) — the retry rollback must reset+clean anyway (resetOnEmptySnapshot:
-    // true), the same clean-tree-gate lesson the single-repo path already
-    // learned once (scheduler-boundary-presnapshot-rollback-skip.test.ts).
+    // ── HEADLINE LOCK 2 (RFC-130 I-5): the failed attempt's partial write NEVER
+    // reached the canonical sub-repos — it lived in the discarded iso. The
+    // committed baseline is intact; the failed attempt was zero-pollution.
     expect(existsSync(strayA)).toBe(false)
     expect(existsSync(strayB)).toBe(false)
-
-    // Committed baseline files were rolled back to their committed body (the
-    // per-repo reset+clean didn't corrupt anything) — sanity.
     expect(readFileSync(join(h.repoA, 'src.txt'), 'utf-8')).toBe('base\n')
     expect(readFileSync(join(h.repoB, 'src.txt'), 'utf-8')).toBe('base\n')
   })
@@ -334,9 +326,13 @@ describe('S-2 multi-repo in-process retry rollback rolls each sub-repo back (RFC
     expect(taskSrc.includes('await rollbackNodeRunWorktrees(')).toBe(true)
     // …the per-repo map read lives in the shared authority…
     expect(rollbackSrc.includes('preSnapshotReposJson')).toBe(true)
-    // …and the scheduler retry path calls the SAME shared function instead of
-    // the deleted single-column re-query helper (flipped on RFC-092).
-    expect(schedulerSrc.includes('await rollbackNodeRunWorktrees(')).toBe(true)
+    // …RFC-130 SUPERSEDES the scheduler retry-rollback: the fresh-session retry no
+    // longer rolls the canonical worktree back (it never wrote it) — it DISCARDS
+    // the failed iso and re-branches a fresh one. So the scheduler's runOneNode
+    // path uses discardNodeIso + createNodeIso, NOT rollbackNodeRunWorktrees. The
+    // resume path (task.ts) keeps the rollback authority as defense-in-depth (D10).
+    expect(schedulerSrc.includes('discardNodeIso(')).toBe(true)
+    expect(schedulerSrc.includes('createNodeIso(')).toBe(true)
     expect(schedulerSrc.includes('await readSnapshotForLatestRun(')).toBe(false)
   })
 })

@@ -178,7 +178,13 @@ describe('RFC-098 B1 — S-24: wrapper-git finalize diff failure is fail-closed'
     // git_diff — downstream fan-out silently short-circuited on empty source).
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('failed')
-    expect(t?.errorMessage).toBe('git-diff-failed')
+    // RFC-130: the shim deletes `.git` in process.cwd() = the ISOLATED worktree, so
+    // the failure surfaces either at the inner node's merge-back (iso `.git` gone →
+    // `merge-back-failed`) or at the wrapper's finalize diff (`git-diff-failed`).
+    // Either way the task fails LOUDLY (never silently green with an empty diff) —
+    // that fail-closed headline is what this locks. (PR-D reworks wrapper-git with a
+    // wrapper-private canonical.)
+    expect(t?.errorMessage ?? '').toMatch(/git-diff-failed|merge-back-failed/)
     expect(t?.failedNodeId).toBe('wg')
 
     // The wrapper row carries the typed short-code + the underlying git error.
@@ -189,7 +195,7 @@ describe('RFC-098 B1 — S-24: wrapper-git finalize diff failure is fail-closed'
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'wg')))
     )[0]
     expect(wgRun?.status).toBe('failed')
-    expect(wgRun?.errorMessage ?? '').toContain('git-diff-failed:')
+    expect(wgRun?.errorMessage ?? '').toMatch(/git-diff-failed|merge-back-failed/)
 
     // The inner node itself succeeded — the failure is precisely the
     // finalize diff, not an inner-scope failure relabeled.

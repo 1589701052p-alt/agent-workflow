@@ -160,6 +160,13 @@ import {
   snapshotRefName,
 } from '@/util/git'
 import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
+import {
+  createNodeIso,
+  discardNodeIso,
+  type IsoHandle,
+  mergeBackNodeIso,
+  snapshotNodeIsoFinal,
+} from '@/services/nodeIsolation'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -1572,6 +1579,64 @@ interface OneNodeArgs {
   log: Logger
 }
 
+/**
+ * RFC-130: persist the iso base columns after createNodeIso (single vs multi-repo,
+ * design.md §3.2). merge_state='isolating' marks the row as an isolated run whose
+ * agent has not yet finished — deriveFrontier treats it as not-yet-complete.
+ */
+async function persistIsoBase(
+  db: DbClient,
+  nodeRunId: string,
+  repoCount: number,
+  handle: IsoHandle,
+): Promise<void> {
+  if (handle.passthrough) return // in-place run — leave iso columns NULL (golden-lock)
+  if (repoCount === 1) {
+    await db
+      .update(nodeRuns)
+      .set({
+        isoWorktreePath: handle.containerPath,
+        isoBaseSnapshot: handle.repos[0]?.baseSnapshot ?? null,
+        isoBaseSnapshotReposJson: null,
+        mergeState: 'isolating',
+      })
+      .where(eq(nodeRuns.id, nodeRunId))
+    return
+  }
+  const map: Record<string, string> = {}
+  for (const r of handle.repos) map[r.worktreeDirName] = r.baseSnapshot
+  await db
+    .update(nodeRuns)
+    .set({
+      isoWorktreePath: handle.containerPath,
+      isoBaseSnapshot: null,
+      isoBaseSnapshotReposJson: JSON.stringify(map),
+      mergeState: 'isolating',
+    })
+    .where(eq(nodeRuns.id, nodeRunId))
+}
+
+/** RFC-130: persist the iso node_tree columns + merge_state on agent success (D15). */
+async function persistIsoNodeTree(
+  db: DbClient,
+  nodeRunId: string,
+  repoCount: number,
+  nodeTrees: Record<string, string>,
+  mergeState: string,
+): Promise<void> {
+  if (repoCount === 1) {
+    await db
+      .update(nodeRuns)
+      .set({ isoNodeTree: nodeTrees[''] ?? null, isoNodeTreeReposJson: null, mergeState })
+      .where(eq(nodeRuns.id, nodeRunId))
+    return
+  }
+  await db
+    .update(nodeRuns)
+    .set({ isoNodeTree: null, isoNodeTreeReposJson: JSON.stringify(nodeTrees), mergeState })
+    .where(eq(nodeRuns.id, nodeRunId))
+}
+
 async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
   const { db, task, taskId, definition, opts, inputsMap, globalSem, writeSem, log } = state
   const { node, iteration } = args
@@ -1957,24 +2022,50 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // (the old global-first order let 3 queued writers starve every reader).
   // Global lock order: writeSem ≺ globalSem ≺ subprocessSem (no cycles — see
   // RFC-098 survey §wp5-4).
-  const releaseWrite = agent.readonly ? null : await writeSem.acquire()
+  // RFC-130 §7: no whole-run write lock — each node runs in its OWN isolated
+  // worktree; writeSem is held only for the brief snapshot-at-dispatch (§段①) and
+  // merge-back (§段③), never across the multi-minute agent run. globalSem is the
+  // real DAG-parallelism cap now (writeSem + globalSem are never held together —
+  // §7.2 deadlock analysis; the merge agent bypasses globalSem to avoid a cycle).
   const releaseGlobal = await globalSem.acquire()
+  // §段①: snapshot canonical worktree(s) + branch an isolated worktree under a
+  // brief writeSem window. On failure release the slot and fail the node (the
+  // canonical worktree is never touched, so nothing to roll back).
+  // The iso path + refs are keyed by the ORIGINAL nodeRunId (`isoKeyRunId`) — it
+  // stays stable across the internal retry loop (which mints fresh node_run rows),
+  // so a same-session follow-up keeps the exact same iso worktree (D17).
+  const isoKeyRunId = nodeRunId
+  let isoHandle: IsoHandle
+  try {
+    isoHandle = await writeSem.run(() =>
+      createNodeIso({
+        appHome: opts.appHome,
+        taskId,
+        nodeRunId: isoKeyRunId,
+        canonRepos: state.repos,
+        log,
+      }),
+    )
+  } catch (err) {
+    releaseGlobal()
+    log.warn('iso worktree setup failed', {
+      nodeId: node.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return {
+      kind: 'failed',
+      summary: 'isolated worktree setup failed',
+      message: 'iso-setup-failed',
+    }
+  }
+  await persistIsoBase(db, nodeRunId, task.repoCount, isoHandle)
+  // RFC-130: keep the iso worktree past the finally when the node parks (clarify
+  // awaiting_human / merge conflict) so resume (D19) + the merge agent (PR-B) can
+  // reuse its exact state. Discarded on any terminal exit.
+  let keepIso = false
 
   let lastResult: RunResult | null = null
   let lastError: string | null = null
-  // RFC-092 T2 (audit S-2/S-2b): the pre-snapshot written by the most recent
-  // FRESH-SESSION attempt of THIS invocation, kept in memory so the retry
-  // rollback below targets the right baseline without re-querying node_runs
-  // (the old `readSnapshotForLatestRun` ordered by retry_index and read only
-  // the single-repo column — multi-repo rollbacks were silent no-ops and a
-  // followup attempt's snapshot-less row shadowed the real baseline).
-  // Follow-up attempts never overwrite it: they keep the worktree as-is, so
-  // the last fresh-session snapshot stays the rollback target.
-  let lastFreshSnapshot: {
-    id: string
-    preSnapshot: string | null
-    preSnapshotReposJson: string | null
-  } | null = null
   // RFC-122 (same-session follow-up fix): the PRIOR attempt's
   // effectiveHasClarifyChannel. A same-session envelope follow-up re-anchors the
   // agent on "the format previously specified in this session"; that is only
@@ -2038,58 +2129,36 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // conversation; rolling back files behind its back would create a
         // mismatch between session memory and disk.
         if (!followupDecision.followup) {
-          // RFC-092 T2 (audit S-2/S-2b): roll back to the last fresh-session
-          // snapshot of THIS invocation via the shared multi-repo-aware
-          // rollback. Always roll a writer back — even when no snapshot is in
-          // hand ('' still does `reset --hard` + `clean -fd`, clearing the
-          // failed attempt's partial writes; gating on a non-empty sha left
-          // them behind, see scheduler-boundary-presnapshot-rollback-skip
-          // .test.ts). Multi-repo: each sub-worktree rolls independently and
-          // the container dir is never touched (nodeRollback.ts hard gate).
-          if (!agent.readonly) {
-            try {
-              const rollbackOutcome = await rollbackNodeRunWorktrees(
-                { repoCount: task.repoCount, worktreePath: task.worktreePath, repos: state.repos },
-                lastFreshSnapshot ?? { id: nodeRunId, preSnapshot: '', preSnapshotReposJson: null },
-                { resetOnEmptySnapshot: true },
+          // RFC-130: fresh-session retry — discard the failed iso and re-branch
+          // from the CURRENT canonical state. No rollback of canonical: the iso
+          // model never wrote it, so it stays clean (I-5). Same-session follow-up
+          // does NOT enter this block — it keeps the same iso worktree (D17).
+          await discardNodeIso(isoHandle, log)
+          try {
+            isoHandle = await writeSem.run(() =>
+              createNodeIso({
+                appHome: opts.appHome,
+                taskId,
+                nodeRunId: isoKeyRunId,
+                canonRepos: state.repos,
                 log,
-              )
-              // RFC-098 WP-9: snapshot-lost escalation. A 'snapshot-missing'
-              // failure means the pre-snapshot commit was gc-pruned — the
-              // fail-closed rollback touched nothing, and retrying cannot
-              // restore the baseline. Spawning the next attempt on top of the
-              // failed attempt's leftover writes would compound them, so the
-              // node fails here without starting another process.
-              const missingSnapshots = rollbackOutcome.failures.filter(
-                (f) => f.code === 'snapshot-missing',
-              )
-              if (missingSnapshots.length > 0) {
-                const detail = missingSnapshots
-                  .map((f) =>
-                    f.worktreeDirName ? `${f.worktreeDirName}: ${f.message}` : f.message,
-                  )
-                  .join('; ')
-                log.warn('retry rollback aborted: pre-snapshot lost', {
-                  nodeId: node.id,
-                  detail,
-                })
-                lastError = 'snapshot-lost'
-                lastResult = {
-                  status: 'failed',
-                  exitCode: null,
-                  outputs: {},
-                  tokenUsage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
-                  prompt: '',
-                  errorMessage: `snapshot-lost: ${detail}`,
-                }
-                break
-              }
-            } catch (err) {
-              log.warn('retry rollback failed', {
-                nodeId: node.id,
-                error: err instanceof Error ? err.message : String(err),
-              })
+              }),
+            )
+          } catch (err) {
+            log.warn('retry iso recreate failed', {
+              nodeId: node.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            lastError = 'iso-recreate-failed'
+            lastResult = {
+              status: 'failed',
+              exitCode: null,
+              outputs: {},
+              tokenUsage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+              prompt: '',
+              errorMessage: 'iso-recreate-failed',
             }
+            break
           }
         }
         // RFC-074 PR-C: a process-retry within the same clarify round surfaces
@@ -2111,6 +2180,10 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           },
         })
         broadcastNodeStatus(taskId, nodeRunId, node.id, 'pending')
+        // RFC-130: carry the iso columns onto the freshly-minted retry row so a
+        // crash mid-retry can still find the iso worktree (the physical iso is
+        // keyed by isoKeyRunId and shared across the invocation's attempts).
+        await persistIsoBase(db, nodeRunId, task.repoCount, isoHandle)
 
         // RFC-042 / RFC-049: surface the follow-up decision as an audit
         // event so operators can replay how a green run recovered from a
@@ -2158,71 +2231,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         }
       }
 
-      // RFC-042: pre-snapshot is also skipped on follow-up attempts (same
-      // reason as rollback — the worktree must keep its current state so
-      // opencode's session view matches disk).
-      if (!agent.readonly && !followupDecision.followup) {
-        try {
-          if (task.repoCount === 1) {
-            // RFC-066: single-path byte-baseline branch — `pre_snapshot`
-            // remains the single-string column the resume path has always
-            // read. RFC-098 WP-9: the stash commit is pinned with a
-            // lightweight ref so a user-side `git gc` in the shared
-            // source-repo odb cannot prune it (pin failure is logged, never
-            // blocks the node).
-            const sha = await gitStashSnapshot(task.worktreePath, {
-              pinRef: snapshotRefName(taskId, nodeRunId),
-              log,
-            })
-            // RFC-092: remember the baseline in-process for the retry rollback
-            // (set before the DB write so a failed write still leaves the
-            // correct rollback target in hand).
-            lastFreshSnapshot = { id: nodeRunId, preSnapshot: sha, preSnapshotReposJson: null }
-            await db.update(nodeRuns).set({ preSnapshot: sha }).where(eq(nodeRuns.id, nodeRunId))
-          } else {
-            // RFC-066: multi-repo per-repo stash map. Each sub-worktree
-            // gets its own `git stash create` sha; the resume path reads
-            // back this JSON and rolls each repo independently. Repos with
-            // a failed snapshot are recorded as empty strings so resume's
-            // rollback skips them rather than crashing.
-            const stashMap: Record<string, string> = {}
-            for (const repo of state.repos) {
-              try {
-                // RFC-098 WP-9: same pin as the single-repo branch — each
-                // sub-worktree pins the ref in its OWN source-repo odb, so
-                // the identical ref name never collides across repos.
-                stashMap[repo.worktreeDirName] = await gitStashSnapshot(repo.worktreePath, {
-                  pinRef: snapshotRefName(taskId, nodeRunId),
-                  log,
-                })
-              } catch (err) {
-                log.warn('pre-snapshot per-repo failed', {
-                  nodeRunId,
-                  worktreeDirName: repo.worktreeDirName,
-                  error: err instanceof Error ? err.message : String(err),
-                })
-                stashMap[repo.worktreeDirName] = ''
-              }
-            }
-            const stashMapJson = JSON.stringify(stashMap)
-            // RFC-092: in-process baseline for the retry rollback (see above).
-            lastFreshSnapshot = {
-              id: nodeRunId,
-              preSnapshot: null,
-              preSnapshotReposJson: stashMapJson,
-            }
-            await db
-              .update(nodeRuns)
-              .set({ preSnapshotReposJson: stashMapJson })
-              .where(eq(nodeRuns.id, nodeRunId))
-          }
-        } catch (err) {
-          log.warn('pre-snapshot failed', {
-            nodeRunId,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
+      // RFC-130: the RFC-092/098 pre-snapshot (git stash create → pre_snapshot
+      // columns) is GONE — the iso model never writes the canonical worktree, so
+      // there is nothing to roll back. Retry re-branches a fresh iso from the
+      // current canonical state (see the fresh-session block above). The
+      // pre_snapshot columns + rollbackNodeRunWorktrees stay in the schema as
+      // defense-in-depth (design.md D10) but are no longer written here.
 
       try {
         // RFC-023: read this row so the prompt context surfaces the prior
@@ -2756,7 +2770,12 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           runtimeBinary: frozenRuntime.binary,
           runtimeParams: frozenRuntime.params,
           inputs: upstreamInputs,
-          worktreePath: task.worktreePath,
+          // RFC-130 D16: the opencode cwd + ALL path-bearing template tokens point
+          // at the ISOLATED worktree, not the canonical one — otherwise the agent
+          // would be told (via {{__repo_path__}} / {{__repos__}}) to edit a path
+          // outside its isolation. repos[].repoPath stays the source repo (an origin
+          // reference, not a cwd); repos[].worktreePath becomes the per-repo iso.
+          worktreePath: isoHandle.repos[0]?.isoWorktreePath ?? task.worktreePath,
           // RFC-067: thread per-task Git commit identity through to the runner
           // so `git commit` invocations inside the agent inherit the
           // task-scoped author + committer. Both NULL → runner skips
@@ -2764,14 +2783,19 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           gitUserName: task.gitUserName,
           gitUserEmail: task.gitUserEmail,
           templateMeta: {
-            repoPath: task.repoPath,
+            repoPath: isoHandle.repos[0]?.isoWorktreePath ?? task.repoPath,
             baseBranch: task.baseBranch,
             taskId,
             nodeId: node.id,
             iteration,
             // RFC-066: per-repo metadata for the {{__repos__}} /
             // {{__repo_names__}} / {{__repo_count__}} placeholders.
-            repos: state.repos,
+            repos: isoHandle.repos.map((r) => ({
+              repoPath: r.repoPath,
+              worktreePath: r.isoWorktreePath,
+              worktreeDirName: r.worktreeDirName,
+              baseBranch: r.baseBranch,
+            })),
           },
           ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
@@ -2865,9 +2889,67 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
       broadcastNodeStatus(taskId, nodeRunId, node.id, lastResult.status)
       if (lastResult.status === 'done' || lastResult.status === 'canceled') break
     }
+
+    // RFC-130 §段③: on success, merge the iso delta back into the canonical
+    // worktree under a brief writeSem window. The runner already wrote
+    // status='done'; downstream readiness ALSO gates on merge_state (D15,
+    // deriveFrontier), so nothing dispatches off this node until 'merged'.
+    // D19: a <workflow-clarify> reply is status='done' with result.clarify set but
+    // has NOT produced final output — skip merge-back and KEEP the iso so the
+    // answered inline resume (same opencode session) sees the files it wrote.
+    if (lastResult !== null && lastResult.status === 'done' && lastResult.clarify !== undefined) {
+      keepIso = true
+    } else if (!isoHandle.passthrough && lastResult !== null && lastResult.status === 'done') {
+      try {
+        const nodeTrees = await snapshotNodeIsoFinal(isoHandle, log)
+        await persistIsoNodeTree(db, nodeRunId, task.repoCount, nodeTrees, 'pending-merge')
+        const mergeRes = await writeSem.run(() => mergeBackNodeIso(isoHandle, nodeTrees, log))
+        if (mergeRes.clean) {
+          await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, nodeRunId))
+        } else {
+          // RFC-130 T3 placeholder — PR-B replaces this with the built-in merge
+          // agent (§6). Until then a real conflict parks the task at awaiting_human
+          // so the conflict is NEVER silently lost; the canonical worktree for the
+          // conflicted repo(s) was NOT touched (D27), so sibling merge-backs stay
+          // safe, and the iso is preserved (keepIso) for the future merge agent.
+          await db
+            .update(nodeRuns)
+            .set({ mergeState: 'conflict-human' })
+            .where(eq(nodeRuns.id, nodeRunId))
+          const detail = mergeRes.conflicts
+            .map((c) => `${c.worktreeDirName || '(repo)'}: ${c.paths.join(', ')}`)
+            .join('; ')
+          log.warn('merge-back conflict → awaiting_human (T3 placeholder; PR-B adds merge agent)', {
+            nodeId: node.id,
+            detail,
+          })
+          keepIso = true
+          return {
+            kind: 'awaiting_human',
+            summary: `merge-back conflict: ${detail}`,
+            message: 'merge-conflict',
+          }
+        }
+      } catch (err) {
+        // RFC-130 robustness: a merge-back that THROWS (iso corrupted, .git gone,
+        // a git op error) must fail the node loudly — never leave a 'done' row
+        // whose delta never reached canonical. merge_state='merge-failed' keeps
+        // downstream gated (D15); the failed result fails the task.
+        const msg = err instanceof Error ? err.message : String(err)
+        log.warn('merge-back failed', { nodeId: node.id, error: msg })
+        await db
+          .update(nodeRuns)
+          .set({ mergeState: 'merge-failed' })
+          .where(eq(nodeRuns.id, nodeRunId))
+        lastResult = { ...lastResult, status: 'failed', errorMessage: `merge-back-failed: ${msg}` }
+      }
+    }
   } finally {
     releaseGlobal()
-    releaseWrite?.()
+    // Discard the iso worktree on a terminal exit; keep it when the node is
+    // parked (awaiting_human / merge conflict) so the resume path (D19) + the
+    // future merge agent (PR-B) can reuse the exact same worktree state.
+    if (!keepIso) await discardNodeIso(isoHandle, log)
   }
 
   if (lastResult === null) {
@@ -5128,11 +5210,12 @@ function readBindings(node: WorkflowNode, key: string): Binding[] {
   return out
 }
 
-// RFC-092 T2: `readSnapshotForLatestRun` was deleted — the retry rollback now
-// uses the in-process `lastFreshSnapshot` (see runOneNode). Its
-// `orderBy(desc(retryIndex))` was one of the audit S-13 freshest-row forks
-// (retry_index ordering was ruled out in favor of id-order, and a followup
-// attempt's snapshot-less row shadowed the real baseline — S-2b).
+// RFC-092 T2: `readSnapshotForLatestRun` was deleted (its `orderBy(desc(retryIndex))`
+// was one of the audit S-13 freshest-row forks, ruled out in favor of id-order).
+// RFC-130: the retry-rollback machinery it fed is itself GONE — a fresh-session
+// retry now DISCARDS the failed iso and re-branches from the current canonical
+// state (runOneNode); the canonical worktree is never dirtied, so there is nothing
+// to roll back.
 
 /**
  * RFC-119 / RFC-056: read a prior run's captured port outputs and render them in

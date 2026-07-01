@@ -25,10 +25,19 @@ interface Harness {
   cleanup: () => void
 }
 
-function buildHarness(): Harness {
+async function buildHarness(): Promise<Harness> {
   const appHome = mkdtempSync(join(tmpdir(), 'aw-sched-'))
   const worktreePath = join(appHome, 'wt')
   mkdirSync(worktreePath, { recursive: true })
+  // RFC-130: the task worktree must be a real git repo — the scheduler now runs
+  // each node in an isolated worktree branched from a snapshot of the canonical
+  // one (createNodeIso needs `git worktree add` + a HEAD to snapshot from).
+  await runGit(worktreePath, ['init', '-q', '-b', 'main'])
+  await runGit(worktreePath, ['config', 'user.email', 't@t.test'])
+  await runGit(worktreePath, ['config', 'user.name', 't'])
+  writeFileSync(join(worktreePath, '.seed'), 'seed\n')
+  await runGit(worktreePath, ['add', '.'])
+  await runGit(worktreePath, ['commit', '-q', '-m', 'init'])
   const db = createInMemoryDb(MIGRATIONS)
   return {
     db,
@@ -108,8 +117,8 @@ function withEnv<T>(env: Record<string, string>, body: () => Promise<T>): Promis
 
 describe('runTask: linear DAG (M1)', () => {
   let h: Harness
-  beforeEach(() => {
-    h = buildHarness()
+  beforeEach(async () => {
+    h = await buildHarness()
   })
   afterEach(() => h.cleanup())
 
@@ -450,7 +459,7 @@ describe('runTask: linear DAG (M1)', () => {
     const t0 = Date.now()
     await withEnv(
       {
-        MOCK_OPENCODE_DELAY_MS: '300',
+        MOCK_OPENCODE_DELAY_MS: '1500',
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'ok' }),
       },
       () =>
@@ -463,9 +472,13 @@ describe('runTask: linear DAG (M1)', () => {
         }),
     )
     const elapsed = Date.now() - t0
-    // Two 300ms read-only nodes running in parallel should finish closer to
-    // 300ms than 600ms. Give the runtime + Bun.spawn some slack.
-    expect(elapsed).toBeLessThan(550)
+    // Two 1500ms nodes in PARALLEL finish near 1500ms + per-node iso overhead
+    // (RFC-130: §段① snapshot + `git worktree add` and §段③ merge-back serialize
+    // briefly on writeSem, ≈300ms/node here). SERIAL execution would be ≥3000ms +
+    // overhead. A large delay makes the ~1500ms parallel savings dominate the git
+    // overhead so the < 2700ms bound robustly catches a serialization regression
+    // (parallel ≈ 2100ms, serial ≈ 3600ms) even under CI variance.
+    expect(elapsed).toBeLessThan(2700)
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')
   })
@@ -674,8 +687,8 @@ process.exit(0)
 
 describe('runTask: loop wrapper (M4 P-4-01 / P-4-03)', () => {
   let h: Harness
-  beforeEach(() => {
-    h = buildHarness()
+  beforeEach(async () => {
+    h = await buildHarness()
   })
   afterEach(() => h.cleanup())
 

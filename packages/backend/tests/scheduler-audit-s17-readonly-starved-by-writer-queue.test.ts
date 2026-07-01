@@ -1,6 +1,12 @@
 // RFC-098 B1 REGRESSION LOCK — design/scheduler-audit-2026-06-10.md S-17 (WP-5)
 // （此文件由修复前的 CURRENT-BEHAVIOR LOCK 按原头注 FLIP 指引翻转而来。）
 //
+// ⚠️ RFC-130 SUPERSEDES this whole model: per-node isolated worktrees remove the
+// writeSem-serializes-writers mechanism entirely — writers now run in PARALLEL up
+// to globalSem, so the assertions below were re-flipped to lock parallelism (the
+// long pre-RFC-130 rationale that follows is preserved as history). See the
+// assertion block at the bottom for the current RFC-130 lock.
+//
 // 修复前的缺陷行为：runOneNode 固定【先 globalSem 后 writeSem】，当就绪写节点数
 // ≥ maxConcurrentNodes 时，排队中的写者每人占住一个 global 槽（它们在 writeSem
 // 上睡觉但不释放 global），readonly 节点拿不到任何 global 槽，被整体饿死到首个
@@ -223,26 +229,35 @@ describe('S-17 — queued writers no longer hold global slots; readonly runs par
       expect(endOf(a)).toBeDefined()
     }
 
-    // Supporting invariant (already locked by scheduler.test.ts:622 via wall
-    // clock): the three writers serialize on writeSem — their subprocess
-    // lifetimes are pairwise non-overlapping.
+    // RFC-130 SUPERSEDES the RFC-098 B1 writeSem-serializes-writers model: each
+    // node now runs in its OWN isolated worktree, so there is NO writer/reader
+    // distinction and NO write-lock serialization of the agent runs — every node
+    // runs in parallel up to globalSem (maxConcurrentNodes). The pre-RFC-130
+    // "writers pairwise disjoint" starvation lock is therefore INVERTED here.
     const writers = ['w1', 'w2', 'w3']
-    for (const a of writers) {
-      for (const b of writers) {
-        if (a >= b) continue
-        const disjoint = endOf(a)!.t <= startOf(b)!.t || endOf(b)!.t <= startOf(a)!.t
-        expect(disjoint).toBe(true)
-      }
-    }
+    const overlaps = (a: string, b: string): boolean =>
+      startOf(a)!.t < endOf(b)!.t && startOf(b)!.t < endOf(a)!.t
 
-    // HEADLINE LOCK (flipped on RFC-098 B1): writers acquire writeSem BEFORE
-    // a global slot, so queued writers don't hold slots — the readonly
-    // auditor (ready since tick one, zero-delay, no write lock needed) is
-    // spawned WHILE the first writer is still running, i.e. it truly runs in
-    // parallel: auditor.start < min(writer ends) with ~WRITER_DELAY_MS of
-    // structural margin. (Pre-fix this was >= — the starvation defect.)
-    const earliestWriterEnd = Math.min(...writers.map((w) => endOf(w)!.t))
-    const auditorStart = startOf('auditor')!.t
-    expect(auditorStart).toBeLessThan(earliestWriterEnd)
+    // HEADLINE LOCK (RFC-130): writers run in PARALLEL — at least one pair of
+    // writers has overlapping subprocess lifetimes (the exact opposite of the
+    // pre-RFC-130 disjoint lock; pre-fix they serialized on writeSem).
+    const anyWriterOverlap = writers.some((a) => writers.some((b) => a < b && overlaps(a, b)))
+    expect(anyWriterOverlap).toBe(true)
+
+    // globalSem cap still holds: with maxConcurrentNodes=2, at most 2 node runs
+    // overlap at any instant (sweep the start/end events).
+    const events = ['w1', 'w2', 'w3', 'auditor']
+      .flatMap((a) => [
+        { t: startOf(a)!.t, d: 1 },
+        { t: endOf(a)!.t, d: -1 },
+      ])
+      .sort((x, y) => x.t - y.t || x.d - y.d)
+    let live = 0
+    let maxLive = 0
+    for (const e of events) {
+      live += e.d
+      maxLive = Math.max(maxLive, live)
+    }
+    expect(maxLive).toBeLessThanOrEqual(2)
   }, 20_000)
 })
