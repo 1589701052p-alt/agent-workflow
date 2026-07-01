@@ -100,8 +100,18 @@ T1 ─→ T2 ─→ T3 ─→ T4
 - 全量 **4639 pass 0 fail、零回归**；typecheck 绿；协作者 PR-C 已于 `4fdffa5` 落定（committed 删 readonly），本地 typecheck 干净。
 - **行为变更（已知限制）**：改派到 never-run frontier 节点被拒（`task-question-unsafe-dispatch-target`）——去借壳固有（run 铸在 target 本身、无 prior run 可继承；借壳时代能铸在有 run 的 origin 故可放行）。属用户拍板去借壳范围。
 
-## ✅ RFC-131 全 6 task（T1–T6）完成
+## ✅ RFC-131 全 6 task（T1–T6）功能完成
 
-T1 判据 + T2 self/designer 注入 + T3 gate/park in-flight + T4 去借壳(dispatch-only) + T5 scheduler e2e + T6 回归锁 + 注入层测试全集，全量 4639 pass 0 fail、typecheck 绿、单二进制 smoke 绿。
+T1 判据 + T2 self/designer 注入 + T3 gate/park in-flight + T4 去借壳(dispatch-only) + T5 scheduler e2e + T6 回归锁 + 注入层测试全集，全量 **4658 pass 0 fail**、typecheck 绿、单二进制 smoke 绿、backend CI（Lint+Typecheck+Test）绿（`256b39c6` backend job success,success）。用户核心痛点（多轮反问丢历史 + 老化 + 改派进 target）全部解决。
+
+## ⚠️ RFC-131 遗留（2026-07-01 回顾诚实记录，功能已达、非阻塞）
+
+1. **design §3「统一 `buildClarifyQueueContext`」重构未做（技术债）**：design §3 要求收编两注入器成一个，实际保留 `buildClarifyNodeQueueContext`（self/questioner，clarifyRounds.ts）+ `buildNodeQueueExternalFeedback`（designer，crossClarify.ts）各换派生老化 filter——**功能等价、行为正确、都已换派生老化**，但 DRY 收编未做（`buildClarifyQueueContext` 在 src 零命中）。属高风险纯重构（golden-lock non-deferred + 3 函数收编含 buildPromptContext per-question 半），按 CLAUDE.md「重构走 RFC」宜作**独立重构 RFC**，不在 RFC-131 T4 收尾硬塞（无 Codex 兜底时更险）。
+2. **Codex impl gate 未跑**：broker.sock 缺（早先 pkill 误杀未恢复）。T4（最高风险段）+ PR-1/2/4 未经 Codex adversarial impl gate，仅本地全量 4658 + typecheck + smoke + gate 155 pass 兜底。broker 恢复（`/codex:setup`）后应补审 T4。
+3. **验收 4 端到端组合测试边际**：核心「老化不重注」由 rfc120 §18 afterA 覆盖、prior-output 由 rerun-prior-output 单测覆盖，但「designer done+output → review reject → 新 rerun 既带 prior-output 又靠老化不重注」的端到端组合无专门测（两半已各自单测）。
+
+## 共享 CI 红（非本 RFC）
+
+`CI` run 因 **Playwright visual regression** 红——协作者 RFC-130 PR-C 删 readonly 改了前端 AgentForm，screenshot 基线需更新（协作者前端职责）。backend Lint+Typecheck+Test（本 RFC 所在）绿。
 
 **CI 状态**：前序 unused-import blocker 协作者自己修了（`8025194`+`c4b8c24`）；PR-C（删 readonly）`4fdffa5` 落定。剩协作者 RFC-130 `scheduler.test.ts:681`「two write agents serialize」（s17 并行 writeSem 后 timing 系统性 < 450）+ PR-B writeSem/nodeIsolation working-tree 改动，非本 RFC。
