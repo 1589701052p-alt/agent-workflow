@@ -825,6 +825,107 @@ describe('RFC-128 P5-BC per-question injection (golden-lock R2-4 + RFC-099)', ()
     expect(ctx?.questionsBlock).toContain('FAILED-Q')
   })
 
+  test('CROSS-QUESTIONER MULTI-ROUND: round-2 rerun injects round-1 (questioner domain, done-no-output not aged)', async () => {
+    // The questioner-domain mirror of the self MULTI-ROUND lock above (RFC-131: same isTargetNodeConsumed
+    // predicate, consumerKind='cross-questioner' / roleKind='questioner').
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const r1 = await seedAnsweredRound(db, taskId, {
+      kind: 'cross',
+      askingNodeId: Q,
+      iteration: 0,
+      questions: [mkQ('cq1', 'CROSS-ROUND1')],
+    })
+    // The questioner node Q's own rerun consumes the answers → target = Q. prevRerun done-no-output.
+    const prevRerun = await seedRun(db, taskId, Q, {
+      status: 'done',
+      iteration: 0,
+      rerunCause: 'cross-clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: r1.intermediaryNodeRunId,
+      questionId: 'cq1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: Q,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: prevRerun,
+    })
+    const r2 = await seedAnsweredRound(db, taskId, {
+      kind: 'cross',
+      askingNodeId: Q,
+      iteration: 1,
+      questions: [mkQ('cq2', 'CROSS-ROUND2')],
+    })
+    const curRerun = await seedRun(db, taskId, Q, {
+      status: 'running',
+      iteration: 0,
+      rerunCause: 'cross-clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: r2.intermediaryNodeRunId,
+      questionId: 'cq2',
+      roleKind: 'questioner',
+      defaultTargetNodeId: Q,
+      sealed: true,
+      dispatchedAt: Date.now(),
+    })
+    const ctx = await buildClarifyNodeQueueContext({
+      db,
+      definition: liveDef(),
+      taskId,
+      consumerKind: 'cross-questioner',
+      consumerNodeId: Q,
+      dispatchedRunId: curRerun,
+      targetIteration: 1,
+    })
+    // prevRerun done-no-output → round 1 NOT aged → both rounds accumulate.
+    expect(ctx?.questionsBlock).toContain('CROSS-ROUND1')
+    expect(ctx?.questionsBlock).toContain('CROSS-ROUND2')
+  })
+
+  test('CROSS-QUESTIONER AGING: questioner done+output ages its queue → later rerun excludes it', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const r1 = await seedAnsweredRound(db, taskId, {
+      kind: 'cross',
+      askingNodeId: Q,
+      questions: [mkQ('cq1', 'CROSS-AGED')],
+    })
+    const prodRerun = await seedRun(db, taskId, Q, {
+      status: 'done',
+      iteration: 0,
+      hasOutput: true,
+      rerunCause: 'cross-clarify-answer',
+    })
+    await insertEntry(db, taskId, {
+      originNodeRunId: r1.intermediaryNodeRunId,
+      questionId: 'cq1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: Q,
+      sealed: true,
+      dispatchedAt: Date.now(),
+      triggerRunId: prodRerun,
+    })
+    const laterRerun = await seedRun(db, taskId, Q, {
+      status: 'running',
+      iteration: 0,
+      rerunCause: 'cross-clarify-answer',
+    })
+    const ctx = await buildClarifyNodeQueueContext({
+      db,
+      definition: liveDef(),
+      taskId,
+      consumerKind: 'cross-questioner',
+      consumerNodeId: Q,
+      dispatchedRunId: laterRerun,
+      targetIteration: 0,
+    })
+    expect(ctx).toBeUndefined()
+  })
+
   test('binds trigger_run_id on the rendered entries (per-entry consume marker)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
