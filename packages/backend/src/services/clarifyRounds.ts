@@ -32,9 +32,9 @@ import {
   taskQuestions,
   tasks,
 } from '@/db/schema'
+import { isTargetNodeConsumed } from '@/services/clarifyRerunLedger'
 import {
   buildClarifyPromptBlock,
-  NEW_CLARIFY_TRIGGER_CAUSES,
   renderClarifyQuestionsBlock,
   type ClarifyAnswer,
   type ClarifyAnswerAttributions,
@@ -655,8 +655,21 @@ export async function buildClarifyNodeQueueContext(
     args.db,
     sameNode.map((r) => r.id),
   )
-  const entries = candidates.filter((e) =>
-    isQueueEntryRenderableForRun(e.triggerRunId, args.dispatchedRunId, sameNode, outputRunIds),
+  // RFC-131 — 注入判据从 per-entry window（isQueueEntryRenderableForRun）改为「target 派生老化」：一个
+  // sealed 条目注入 iff 它的 target（= 本 home 节点）在该条目下发（dispatched_at）之后尚未产出
+  // （!isTargetNodeConsumed）。好处：① 纯重跑（review-iterate、无新 dispatch）也注入所有未老化条目——
+  // 旧 window 判据在此时 entries 空 early-return、漏纯重跑；② 产出后（done+output）统一老化、不再重注入
+  // （review 重做靠 RFC-119 prior-output）；③ 多轮天然累积（round 1 未老化时随 round 2 一起注入）。
+  const entries = candidates.filter(
+    (e) =>
+      e.sealedAt !== null &&
+      !isTargetNodeConsumed(
+        args.consumerNodeId,
+        rRow?.iteration ?? 0,
+        e.dispatchedAt ?? 0,
+        sameNode,
+        outputRunIds,
+      ),
   )
   if (entries.length === 0) return undefined
 
@@ -700,40 +713,13 @@ export async function buildClarifyNodeQueueContext(
   if (rounds.length === 0) return undefined
   rounds.sort((a, b) => a.iteration - b.iteration)
 
-  // RFC-128 P5 deadlock follow-up (2026-07-01, live task 01KWDKBS): the per-question node-queue path
-  // above only collects the rounds of THIS rerun's dispatched-UNCONSUMED entries — a PRIOR round's
-  // entries were consumed by an earlier rerun and dropped by isQueueEntryRenderableForRun, so a
-  // multi-round chain rendered ONLY the latest round. But each dispatch runs in a FRESH opencode
-  // session (no inline carry), so the agent must still receive EVERY prior answered round as read-only
-  // history context, or it loses earlier rounds' decisions (shared/prompt.ts contract "every prior
-  // round's Q&A ... treat earlier rounds as already-resolved decisions"; round 1's "API / UI wireframe
-  // / pseudocode" requirement was lost). Load all answered rounds on this home DIRECTLY — NOT via
-  // selectAnsweredRoundsForConsumer, which drops rounds with dispatched entries (exactly the ones we
-  // need here). Exclude the current dispatched rounds (rendered below with per-question scope); the
-  // history rounds render FULL + read-only.
-  const currentOrigins = new Set(rounds.map((r) => r.intermediaryNodeRunId))
-  const historyRounds = (
-    await args.db
-      .select()
-      .from(clarifyRounds)
-      .where(
-        and(
-          eq(clarifyRounds.taskId, args.taskId),
-          eq(clarifyRounds.kind, roleKind === 'self' ? 'self' : 'cross'),
-          eq(clarifyRounds.askingNodeId, args.consumerNodeId),
-          eq(clarifyRounds.status, 'answered'),
-        ),
-      )
-  )
-    .filter((r) => !currentOrigins.has(r.intermediaryNodeRunId))
-    .filter((r) => r.answersJson !== null)
-
+  // RFC-131 — `rounds` (from the aging-filtered entries) already holds EVERY un-aged answered round on
+  // this home (no per-run window drops a prior round), so the separate RFC-128 history-round query is
+  // gone. The LAST round (highest iteration) is the CURRENT one (per-question scope + standing
+  // directive); earlier rounds render as read-only history. inline sessions carry prior rounds in the
+  // resumed transcript → only the latest round is rendered.
   const inlineMode = args.sessionMode === 'inline'
-  // inline sessions carry prior rounds in the resumed transcript → only the latest round is rendered
-  // (unchanged). A fresh-session dispatch (non-inline) prepends the history rounds so nothing is lost.
-  const renderRounds = inlineMode
-    ? rounds.slice(-1)
-    : [...historyRounds, ...rounds].sort((a, b) => a.iteration - b.iteration)
+  const renderRounds = inlineMode ? rounds.slice(-1) : rounds
   const applyLatestDirective = args.applyLatestDirective ?? true
 
   const questionParts: string[] = []
@@ -755,10 +741,10 @@ export async function buildClarifyNodeQueueContext(
     }
     const roundLabel = `### Round ${round.iteration + 1}`
     const answerById = new Map(allAnswers.map((a) => [a.questionId, a]))
-    // HISTORY round (a prior answered round NOT in this dispatch): render FULL + read-only — every
-    // question with its resolved answer, NO sibling scope, NO directive (only the current round
+    // HISTORY round = any but the LAST (highest-iteration) round: render FULL + read-only — every
+    // question with its resolved answer, NO sibling scope, NO directive (only the current/last round
     // carries the standing continue/stop). Zero attribution (RFC-099 — sourced from clarify_rounds).
-    if (!currentOrigins.has(round.intermediaryNodeRunId)) {
+    if (i < renderRounds.length - 1) {
       const histAnswers = allQuestions
         .map((q) => answerById.get(q.id))
         .filter((a): a is ClarifyAnswer => a !== undefined)
@@ -829,47 +815,6 @@ function renderSiblingScopeBlock(
     for (const q of siblings) lines.push(`  - ${q.title}`)
   }
   return lines.join('\n')
-}
-
-/**
- * RFC-128 P5-BC — pure mirror of crossClarify.renderableForRun (RFC-120 §18 Codex H2): should
- * a dispatched per-question entry bound to `triggerRunId` render for run `currentRunId`?
- * `sameNode` = every node_run on the home node at the current run's iteration (the
- * process-retry / clarify-rerun chain). Renders iff: triggerRunId IS NULL (unbound → first
- * render picks + binds), OR triggerRunId is in `sameNode` AND `currentRunId` is inside
- * triggerRunId's lineage window [triggerRunId, next-clarify-rerun) AND that window has NO
- * consumed (done+output) top-level run. Replicated here (not imported) to avoid a
- * clarifyRounds↔crossClarify module cycle; both frame the SAME NEW_CLARIFY_TRIGGER_CAUSES window.
- */
-function isQueueEntryRenderableForRun(
-  triggerRunId: string | null,
-  currentRunId: string,
-  sameNode: ReadonlyArray<typeof nodeRuns.$inferSelect>,
-  outputRunIds: ReadonlySet<string>,
-): boolean {
-  if (triggerRunId === null) return true
-  const anchor = sameNode.find((r) => r.id === triggerRunId)
-  if (anchor === undefined) return false // bound to a run in another frame / GC'd → not ours
-  const triggerCauses = new Set<string>(NEW_CLARIFY_TRIGGER_CAUSES)
-  let upperBound: string | null = null
-  for (const r of sameNode) {
-    if (r.id > triggerRunId && r.rerunCause !== null && triggerCauses.has(r.rerunCause)) {
-      if (upperBound === null || r.id < upperBound) upperBound = r.id
-    }
-  }
-  const inWindow = (id: string): boolean =>
-    id >= triggerRunId && (upperBound === null || id < upperBound)
-  if (!inWindow(currentRunId)) return false
-  for (const r of sameNode) {
-    if (
-      r.parentNodeRunId === null &&
-      inWindow(r.id) &&
-      r.status === 'done' &&
-      outputRunIds.has(r.id)
-    )
-      return false
-  }
-  return true
 }
 
 /** node_run ids (within `runIds`) that captured ≥1 `<workflow-output>` row. */
