@@ -17,7 +17,11 @@ import type { DbClient } from '@/db/client'
 import { taskQuestions } from '@/db/schema'
 import type { clarifyRounds, nodeRuns } from '@/db/schema'
 import { pickFreshestRun } from '@/services/freshness'
-import { resolveHandlerRun, type RunLineageView } from '@agent-workflow/shared'
+import {
+  isTerminalNodeRunStatus,
+  resolveHandlerRun,
+  type RunLineageView,
+} from '@agent-workflow/shared'
 
 type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
@@ -64,7 +68,9 @@ export interface ImmediateLedgerContext {
   runById: ReadonlyMap<string, NodeRunRow>
   /** task node_runs (the pending continuation scan). */
   runs: ReadonlyArray<NodeRunRow>
-  /** node_run ids that captured ≥1 <workflow-output> row (consumed = done+output). */
+  /** node_run ids that captured ≥1 <workflow-output> row (consumed = done+output). Read by
+   *  openImmediateRounds in 'revivable' (borrow) mode — a done-no-output continuation is NOT consumed
+   *  so it keeps borrowing; the 'in-flight' (dispatch-gate) mode ignores it (keys on non-terminal). */
   outputRunIds: ReadonlySet<string>
   /** origin node-run ids of rounds whose self/questioner rerun is OWNED BY THE DEFERRED LEDGER —
    *  i.e. the round has a DISPATCHED self/q task_question (`dispatched_at` set). Such a round's
@@ -99,20 +105,34 @@ export function buildImmediateLedgerContext(
   }
 }
 
+/** RFC-128 P5-BC — the two OPEN semantics the shared oracle serves. They agree on everything EXCEPT
+ *  a done-NO-output continuation:
+ *   - 'revivable' (BORROW — resolveImmediateBorrowForNode): open = NOT consumed. A continuation is
+ *     consumed only when it finished done WITH output (markClarifyRoundsConsumedBy). A done-no-output
+ *     continuation is NOT consumed → revivable → keeps borrowing the same handler (locked by the
+ *     RFC-127 "done but emitted NO output → still open (keeps borrowing)" test).
+ *   - 'in-flight' (DISPATCH GATE — findOpenImmediateLedgerHome): open = NOT terminal. A done
+ *     continuation (incl. done-no-output — it ASKED a follow-up round; runner.ts:1321 keeps status=
+ *     done with no <workflow-output> port) has STOPPED and cannot double-mint, so it must NOT block a
+ *     fresh per-question dispatch (2026-07-01 deadlock fix). */
+export type LedgerOpenMode = 'revivable' | 'in-flight'
+
 /** Pure (shared truth-source oracle) — the OPEN immediate (QUICK-channel) self/questioner clarify
  *  rounds whose HOME (the asking node) is `nodeId` at `iteration`. A round qualifies iff: it is a
- *  self/questioner round on the home with its ASKING run at `iteration` (P2-3); it is NOT terminal;
- *  it is NOT owned by the DEFERRED ledger (no DISPATCHED self/q entry — finding 1+6, so a control
- *  dispatch stays deferred while a mixed round's quick continuation stays immediate); its RFC-070
- *  role stamp is unconsumed; AND a PENDING (not done+output) continuation node_run for the role's
- *  cause exists on the home at `iteration`. The pending continuation is the quick-channel "in flight"
- *  signal, recognised even in the MINT-FIRST window before the round flips 'answered' (finding 2) —
- *  hence no status==='answered' requirement. Uses node_runs + the dispatched-only deferred exclusion,
- *  so the lazy task_question projection never hides an open quick-channel ledger. */
+ *  self/questioner round on the home with its ASKING run at `iteration` (P2-3); it is NOT a
+ *  canceled/abandoned round; it is NOT owned by the DEFERRED ledger (no DISPATCHED self/q entry —
+ *  finding 1+6, so a control dispatch stays deferred while a mixed round's quick continuation stays
+ *  immediate); its RFC-070 role stamp is unconsumed; AND a continuation node_run for the role's cause
+ *  exists on the home at `iteration` that is OPEN per `mode` (see LedgerOpenMode). The continuation is
+ *  the quick-channel signal, recognised even in the MINT-FIRST window before the round flips
+ *  'answered' (finding 2) — hence no status==='answered' requirement. Uses node_runs + the
+ *  dispatched-only deferred exclusion, so the lazy task_question projection never hides an open
+ *  quick-channel ledger. */
 export function openImmediateRounds(
   nodeId: string,
   iteration: number,
   ctx: ImmediateLedgerContext,
+  mode: LedgerOpenMode,
 ): ClarifyRoundRow[] {
   return ctx.rounds.filter((round) => {
     const isSelf = round.kind === 'self' && round.askingNodeId === nodeId
@@ -128,11 +148,21 @@ export function openImmediateRounds(
     // RFC-070 consumed → the quick continuation already ran done+output → closed.
     const consumed = isSelf ? round.consumedByConsumerRunId : round.consumedByQuestionerRunId
     if (consumed !== null) return false
-    // Finding 2 — a PENDING (not done+output) continuation run on the home at this iteration with
-    // the role's cause = a QUICK-channel continuation in flight, INCLUDING the mint-first window
-    // (continuation minted, round not yet flipped 'answered'). A non-dispatched round mints a quick
-    // continuation only via the quick channel; the deferred ledger's dispatched reruns were
-    // excluded above.
+    // Finding 2 — a continuation run on the home at this iteration with the role's cause, OPEN per
+    // `mode`, INCLUDING the mint-first window (continuation minted, round not yet flipped 'answered').
+    // A non-dispatched round mints a quick continuation only via the quick channel; the deferred
+    // ledger's dispatched reruns were excluded above.
+    //
+    // The two modes diverge ONLY on a done-NO-output continuation. 'revivable' (borrow) counts it as
+    // open (NOT consumed → keeps borrowing). 'in-flight' (dispatch gate) does NOT — deadlock fix
+    // (2026-07-01, live task 01KWDKBS9K22KB6HH4KNR3XMX6 — see clarify-rerun-ledger-deadlock.test.ts):
+    // a self/questioner continuation that ASKS a follow-up round exits `done` WITH NO OUTPUT
+    // (runner.ts:1321 — a valid <workflow-clarify> keeps status=done, writes no <workflow-output>
+    // port). That done run is the PRIOR round's already-finished continuation; the scan is by
+    // (nodeId, iteration, cause) and cannot tell it from the NEXT round's not-yet-minted continuation,
+    // so counting it as in-flight wedged the next round's dispatch permanently (blocked by an already-
+    // done run → the user's answers could never leave the board). The gate keys on non-terminal: a
+    // terminal run (done/failed/canceled/…) has stopped and cannot double-mint.
     const cause: CauseClass = isSelf ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
     return ctx.runs.some(
       (r) =>
@@ -140,7 +170,9 @@ export function openImmediateRounds(
         r.iteration === iteration &&
         r.parentNodeRunId === null &&
         r.rerunCause === cause &&
-        !(r.status === 'done' && ctx.outputRunIds.has(r.id)),
+        (mode === 'in-flight'
+          ? !isTerminalNodeRunStatus(r.status)
+          : !(r.status === 'done' && ctx.outputRunIds.has(r.id))),
     )
   })
 }
@@ -182,7 +214,7 @@ export function findOpenImmediateLedgerHome(
         runs.filter((r) => r.nodeId === home),
         { topLevelOnly: false },
       )?.iteration ?? 0
-    if (openImmediateRounds(home, iter, ctx).length > 0) return home
+    if (openImmediateRounds(home, iter, ctx, 'in-flight').length > 0) return home
   }
   return null
 }

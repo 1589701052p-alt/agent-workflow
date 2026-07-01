@@ -1246,6 +1246,7 @@ async function resolveImmediateBorrowForNode(
     nodeId,
     iteration,
     buildImmediateLedgerContext(rounds, runs, outputRunIds, deferredDispatchedOrigins),
+    'revivable',
   )
   if (openRounds.length === 0) return CLOSED_LEDGER
 
