@@ -4229,7 +4229,13 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   let shardIso: IsoHandle
   try {
     shardIso = await state.writeSem.run(() =>
-      createNodeIso({ appHome: opts.appHome, taskId, nodeRunId: shardRunId, canonRepos: state.repos, log }),
+      createNodeIso({
+        appHome: opts.appHome,
+        taskId,
+        nodeRunId: shardRunId,
+        canonRepos: state.repos,
+        log,
+      }),
     )
     if (!shardIso.passthrough) await persistIsoBase(db, shardRunId, task.repoCount, shardIso)
   } catch (err) {
@@ -4323,7 +4329,12 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
           const detail = mergeRes.conflicts
             .map((c) => `${c.worktreeDirName || '(repo)'}: ${c.paths.join(', ')}`)
             .join('; ')
-          return { kind: 'failed', shardKey, outputs: {}, message: `merge-back-conflict: ${detail}` }
+          return {
+            kind: 'failed',
+            shardKey,
+            outputs: {},
+            message: `merge-back-conflict: ${detail}`,
+          }
         }
         await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, shardRunId))
       } catch (err) {
@@ -4565,7 +4576,13 @@ async function dispatchFanoutAggregator(
   let aggIso: IsoHandle
   try {
     aggIso = await state.writeSem.run(() =>
-      createNodeIso({ appHome: opts.appHome, taskId, nodeRunId: aggRunId, canonRepos: state.repos, log }),
+      createNodeIso({
+        appHome: opts.appHome,
+        taskId,
+        nodeRunId: aggRunId,
+        canonRepos: state.repos,
+        log,
+      }),
     )
     if (!aggIso.passthrough) await persistIsoBase(db, aggRunId, task.repoCount, aggIso)
   } catch (err) {
@@ -4647,14 +4664,30 @@ async function dispatchFanoutAggregator(
         await persistIsoNodeTree(db, aggRunId, task.repoCount, nodeTrees, 'pending-merge')
         const mergeRes = await state.writeSem.run(() => mergeBackNodeIso(aggIso, nodeTrees, log))
         if (!mergeRes.clean) {
-          await db.update(nodeRuns).set({ mergeState: 'conflict-human' }).where(eq(nodeRuns.id, aggRunId))
-          return { kind: 'failed', summary: 'aggregator merge conflict', message: 'merge-back-conflict', outputs: {} }
+          await db
+            .update(nodeRuns)
+            .set({ mergeState: 'conflict-human' })
+            .where(eq(nodeRuns.id, aggRunId))
+          return {
+            kind: 'failed',
+            summary: 'aggregator merge conflict',
+            message: 'merge-back-conflict',
+            outputs: {},
+          }
         }
         await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, aggRunId))
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        await db.update(nodeRuns).set({ mergeState: 'merge-failed' }).where(eq(nodeRuns.id, aggRunId))
-        return { kind: 'failed', summary: 'aggregator merge failed', message: `merge-back-failed: ${msg}`, outputs: {} }
+        await db
+          .update(nodeRuns)
+          .set({ mergeState: 'merge-failed' })
+          .where(eq(nodeRuns.id, aggRunId))
+        return {
+          kind: 'failed',
+          summary: 'aggregator merge failed',
+          message: `merge-back-failed: ${msg}`,
+          outputs: {},
+        }
       }
     }
     // Aggregator's outputs are already persisted by runner.ts (nodeRunOutputs

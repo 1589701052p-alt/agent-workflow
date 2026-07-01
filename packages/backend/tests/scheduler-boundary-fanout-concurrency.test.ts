@@ -230,9 +230,9 @@ describe('regression: wrapper-fanout shard dispatch MUST honor concurrency caps 
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')
     // All three shard runs completed done (each in its own iso, merged back).
-    const shardRuns = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
-      (r) => r.shardKey !== null && r.status === 'done',
-    )
+    const shardRuns = (
+      await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    ).filter((r) => r.shardKey !== null && r.status === 'done')
     expect(shardRuns.length).toBeGreaterThanOrEqual(3)
   }, 30_000)
 })
