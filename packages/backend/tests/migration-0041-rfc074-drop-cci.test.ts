@@ -127,7 +127,9 @@ describe('RFC-074 migration 0041 — DROP clarify_iteration preserves row data',
       //     the same HEAD migrate) add SEVEN back onto node_runs — 0043
       //     shard_value_hash + 0044 rerun_cause + 0051 spawn_binary_path (RFC-108 T9)
       //     + 0054 runtime (RFC-111) + 0055 runtime_binary (RFC-112)
-      //     + 0056 runtime_params_json (RFC-113) + 0067 agent_override_name (RFC-127).
+      //     + 0056 runtime_params_json (RFC-113) + 0067 agent_override_name (RFC-127)
+      //     + 0071 iso_worktree_path/iso_base_snapshot(+_repos_json)/iso_node_tree(+_repos_json)/
+      //       merge_state (RFC-130, 6 cols).
       const cols = (up.query('PRAGMA table_info(node_runs)').all() as Array<{ name: string }>).map(
         (c) => c.name,
       )
@@ -140,7 +142,14 @@ describe('RFC-074 migration 0041 — DROP clarify_iteration preserves row data',
       expect(cols).toContain('runtime_binary')
       expect(cols).toContain('runtime_params_json')
       expect(cols).toContain('agent_override_name')
-      expect(cols.length).toBe(cols0040.length - 1 + 7)
+      // RFC-130 (0071): 6 per-node isolated-worktree bookkeeping columns.
+      expect(cols).toContain('iso_worktree_path')
+      expect(cols).toContain('iso_base_snapshot')
+      expect(cols).toContain('iso_base_snapshot_repos_json')
+      expect(cols).toContain('iso_node_tree')
+      expect(cols).toContain('iso_node_tree_repos_json')
+      expect(cols).toContain('merge_state')
+      expect(cols.length).toBe(cols0040.length - 1 + 7 + 6)
 
       // 4b. row count unchanged.
       const n = (up.query('SELECT count(*) AS n FROM node_runs').get() as { n: number }).n
