@@ -20,6 +20,7 @@ import type { ClarifyRound } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import {
   CentralizedAnswerDialog,
+  flattenCentralizedNavKeys,
   groupUnsealedQuestions,
 } from '@/components/clarify/CentralizedAnswerDialog'
 import { isAnswerFilled } from '@/lib/clarify/answers'
@@ -101,6 +102,20 @@ function round(over: Partial<ClarifyRound> & { intermediaryNodeRunId: string }):
   }
 }
 
+/** A single-choice question with two options (digit '1' picks option 0). */
+function singleQ(id: string, title = `Q ${id}`): ClarifyRound['questions'][number] {
+  return {
+    id,
+    title,
+    kind: 'single',
+    recommended: false,
+    options: [
+      { label: 'A', description: '', recommended: false, recommendationReason: '' },
+      { label: 'B', description: '', recommended: false, recommendationReason: '' },
+    ],
+  }
+}
+
 function renderDialog(entries: TaskQuestionEntry[], rounds: ClarifyRound[]) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -163,6 +178,34 @@ describe('groupUnsealedQuestions (oracle)', () => {
       entry({ id: 'e', questionId: 'q5', originNodeRunId: 'nr_e', phase: 'done' }),
     ])
     expect(groups).toEqual([{ originNodeRunId: 'nr_a', questionIds: ['q1'] }])
+  })
+})
+
+// RFC-128 (用户 2026-07-01) — cross-round keyboard-nav order oracle. Locks: flatten in group
+// (round) order; within a round follow the REPORTED render order; fall back to group.questionIds
+// when a round hasn't reported yet.
+describe('flattenCentralizedNavKeys (oracle)', () => {
+  test('flattens rounds in group order + questions in reported render order (across boundaries)', () => {
+    const groups = [
+      { originNodeRunId: 'nr_a', questionIds: ['q1', 'q2'] },
+      { originNodeRunId: 'nr_b', questionIds: ['q3'] },
+    ]
+    const reported = new Map<string, string[]>([
+      ['nr_a', ['q1', 'q2']],
+      ['nr_b', ['q3']],
+    ])
+    expect(flattenCentralizedNavKeys(groups, reported)).toEqual(['nr_a:q1', 'nr_a:q2', 'nr_b:q3'])
+  })
+
+  test('reported render order OVERRIDES group storage order; unreported round falls back to group', () => {
+    const groups = [{ originNodeRunId: 'nr_a', questionIds: ['q1', 'q2'] }]
+    // Reported order is reversed vs storage → nav follows what the reviewer sees.
+    expect(flattenCentralizedNavKeys(groups, new Map([['nr_a', ['q2', 'q1']]]))).toEqual([
+      'nr_a:q2',
+      'nr_a:q1',
+    ])
+    // A just-mounted round that hasn't reported yet stays navigable via group.questionIds.
+    expect(flattenCentralizedNavKeys(groups, new Map())).toEqual(['nr_a:q1', 'nr_a:q2'])
   })
 })
 
@@ -318,5 +361,76 @@ describe('CentralizedAnswerDialog', () => {
       questionIds: ['q1'],
       questionScopes: { q1: 'questioner' },
     })
+  })
+})
+
+// RFC-128 (用户 2026-07-01) — cross-round keyboard navigation. Regression: the pane's QuestionForm
+// previously got NO `ref` + NO `onAdvance`, so the digit/Enter hotkeys (which call onAdvance) were a
+// silent no-op. This wires a GLOBAL ref Map + advanceFromQuestion so Enter / a single-choice digit
+// key advances focus to the next question — including across round boundaries — and to the submit
+// button after the last question.
+describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
+  // jsdom doesn't implement Element.prototype.scrollIntoView; QuestionForm's focus() handle calls
+  // it, so patch it (per the QuestionForm focus test) — otherwise focus() throws.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  test('Enter advances focus to the next question — same round AND across the round boundary; last → submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+        entry({ id: 'c', questionId: 'q3', originNodeRunId: 'nr_b' }),
+      ],
+      [
+        round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] }),
+        round({ intermediaryNodeRunId: 'nr_b', questions: [singleQ('q3')] }),
+      ],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q1'))
+    await waitFor(() => screen.getByTestId('clarify-question-q3'))
+
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const q2 = screen.getByTestId('clarify-question-q2')
+    const q3 = screen.getByTestId('clarify-question-q3')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    // Fill one answer so the submit button is ENABLED — a disabled <button> cannot receive focus,
+    // so the "last question → submit" hop only lands on an enabled button (nothing to submit ⇒
+    // nothing to focus, which is fine).
+    fireEvent.click(within(q1).getAllByRole('radio')[0]!)
+    await waitFor(() => expect(submit.disabled).toBe(false))
+
+    q1.focus()
+    fireEvent.keyDown(q1, { key: 'Enter' })
+    expect(document.activeElement).toBe(q2) // same-round advance (nr_a: q1 → q2)
+
+    fireEvent.keyDown(q2, { key: 'Enter' })
+    expect(document.activeElement).toBe(q3) // cross-round advance (nr_a → nr_b)
+
+    fireEvent.keyDown(q3, { key: 'Enter' })
+    expect(document.activeElement).toBe(submit) // last question → submit button
+  })
+
+  test('single-choice digit key picks the option AND advances to the next question', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q1'))
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const q2 = screen.getByTestId('clarify-question-q2')
+
+    q1.focus()
+    // Digit '1' picks option 0 of the single-choice question AND advances (QuestionForm contract).
+    fireEvent.keyDown(q1, { key: '1' })
+    expect((within(q1).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
+    expect(document.activeElement).toBe(q2)
   })
 })

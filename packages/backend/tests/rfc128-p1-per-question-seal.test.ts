@@ -563,3 +563,79 @@ describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)',
     expect(scopes).toEqual({ q1: 'designer', q2: 'questioner' })
   })
 })
+
+// ---------------------------------------------------------------------------
+// RFC-128 (用户 2026-07-01) — autoStage 参数：控制通道 seal 即进「待下发/staged」。
+//
+// 集中回答提交(seal)后，问题应自动进「待下发」，好让看板「批量下发全下」(dispatchTaskQuestions
+// = ALL staged) 直接拾取，而不是落「待指派」(pending) 还要人工「移入待下发」。autoStage 只在同一
+// seal tx 内对「本次 sealed 条目」补一条 set staged_at（IS NULL 才写、幂等），staged_by 镜像
+// sealed_by（RFC-099 审计位，绝不进 prompt）。
+//   黄金锁：不传 autoStage（autoDispatch / 原语默认）→ staged_at 不写，逐字不变。
+// ---------------------------------------------------------------------------
+
+describe('RFC-128 P1 — autoStage 参数 (seal→待下发/staged)', () => {
+  test('autoStage:true → 本次 sealed 条目 staged_at 落、deriveQuestionPhase=staged（只碰已 seal 题）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1')], autoStage: true })
+
+    const list = await listTaskQuestions(db, taskId)
+    const q1 = list.find((d) => d.questionId === 'q1')!
+    const q2 = list.find((d) => d.questionId === 'q2')!
+    // q1 sealed + auto-staged → 待下发（staged）。
+    expect(q1.sealed).toBe(true)
+    expect(q1.staged).toBe(true)
+    expect(q1.phase).toBe('staged')
+    // q2 未 seal → 不在本次 sealingSet → autoStage 不碰它 → 待指派（pending）。
+    expect(q2.sealed).toBe(false)
+    expect(q2.staged).toBe(false)
+    expect(q2.phase).toBe('pending')
+  })
+
+  test('黄金锁：缺省(不传 autoStage) → staged_at 不写、phase=pending（autoDispatch / 原语逐字不变）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1')] })
+
+    const q1 = (await listTaskQuestions(db, taskId)).find((d) => d.questionId === 'q1')!
+    expect(q1.sealed).toBe(true)
+    expect(q1.staged).toBe(false)
+    expect(q1.phase).toBe('pending')
+  })
+
+  test('per-call 隔离：seal q1(autoStage) 后再 seal q2(不传 autoStage) → q1 仍 staged、q2 pending（后一次不 un-stage 前一次）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1')], autoStage: true })
+    // Second seal opts OUT of autoStage; it also fully seals the round (both questions sealed).
+    await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q2')] })
+
+    const list = await listTaskQuestions(db, taskId)
+    expect(list.find((d) => d.questionId === 'q1')!.staged).toBe(true) // preserved from call 1
+    expect(list.find((d) => d.questionId === 'q2')!.staged).toBe(false) // call 2 did not stage it
+  })
+
+  test('cross designer partial seal + autoStage → questioner + designer 两角色条目都 staged', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
+
+    await sealRoundQuestions({
+      db,
+      originNodeRunId,
+      answers: [makeAns('q1')],
+      scopes: { q1: 'designer' },
+      autoStage: true,
+    })
+
+    const list = await listTaskQuestions(db, taskId)
+    const q1Entries = list.filter((d) => d.questionId === 'q1')
+    // A designer-scope cross question has BOTH a questioner entry (always) + a designer entry
+    // (sealed designer-scope). autoStage mirrors the sealed_at stamp → both role entries staged.
+    expect(q1Entries.map((d) => d.roleKind).sort()).toEqual(['designer', 'questioner'])
+    for (const e of q1Entries) expect(e.staged).toBe(true)
+  })
+})

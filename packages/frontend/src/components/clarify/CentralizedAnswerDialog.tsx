@@ -32,7 +32,7 @@ import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
-import { QuestionForm } from '@/components/clarify/QuestionForm'
+import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { answersEqual, isAnswerFilled } from '@/lib/clarify/answers'
@@ -82,6 +82,30 @@ export function groupUnsealedQuestions(entries: TaskQuestionEntry[]): Centralize
     originNodeRunId,
     questionIds: byRound.get(originNodeRunId)!,
   }))
+}
+
+/** RFC-128 (用户 2026-07-01) — keyboard-nav order oracle (unit-tested). Flattens EVERY round's
+ *  questions into a single global navigation order of `${originNodeRunId}:${questionId}` keys,
+ *  preserving round order (`groups`) and, WITHIN a round, that round's VISIBLE render order
+ *  (reported by each RoundAnswerBlock — round.questions order filtered to the unsealed subset).
+ *
+ *  Why a reported per-round order instead of `groups[].questionIds`: the render order is the
+ *  round's questionsJson order (RoundAnswerBlock filters round.questions), whereas a group's
+ *  questionIds is task_questions storage order (listTaskQuestions has no ORDER BY) — the two can
+ *  diverge. Keyboard "advance to next" must follow what the reviewer SEES, so we key off the
+ *  reported render order; `groups[].questionIds` is the fallback until a round has reported (its
+ *  first render), which keeps a just-mounted round navigable. */
+export function flattenCentralizedNavKeys(
+  groups: readonly CentralizedAnswerGroup[],
+  roundVisibleOrder: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const keys: string[] = []
+  for (const g of groups) {
+    const reported = roundVisibleOrder.get(g.originNodeRunId)
+    const qids = reported !== undefined && reported.length > 0 ? reported : g.questionIds
+    for (const qid of qids) keys.push(`${g.originNodeRunId}:${qid}`)
+  }
+  return keys
 }
 
 /** One round's pending submission, reported up to the dialog by its RoundAnswerBlock. */
@@ -138,6 +162,45 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
   const filledTotal = useMemo(
     () => groups.reduce((n, g) => n + (submissions[g.originNodeRunId]?.questionIds.length ?? 0), 0),
     [groups, submissions],
+  )
+
+  // RFC-128 (用户 2026-07-01) — cross-round keyboard navigation. The reference (/clarify page,
+  // clarify.detail.tsx) drives QuestionForm digit/Enter hotkeys by passing each form a `ref`
+  // (into a per-question Map) + an `onAdvance` that focuses the NEXT question. This pane omitted
+  // both, so onAdvance was undefined → the hotkeys were a silent no-op. Here we rebuild the SAME
+  // mechanism but GLOBAL: one Map spanning EVERY round's questions (keyed `${origin}:${qid}`),
+  // navigating the flattened order across round boundaries, and focusing the submit button after
+  // the very last question. QuestionForm itself is unchanged.
+  const questionRefs = useRef<Map<string, QuestionFormHandle | null>>(new Map())
+  const submitBtnRef = useRef<HTMLButtonElement | null>(null)
+  // Each RoundAnswerBlock reports its VISIBLE question order (round.questions filtered), so the
+  // flat nav order matches what the reviewer sees (see flattenCentralizedNavKeys). Written from a
+  // child effect (ref only ⇒ no re-render / loop); stale rounds are ignored (advance iterates
+  // `groups`).
+  const roundOrderRef = useRef<Map<string, string[]>>(new Map())
+  const registerQuestionRef = useCallback((key: string, handle: QuestionFormHandle | null) => {
+    if (handle === null) questionRefs.current.delete(key)
+    else questionRefs.current.set(key, handle)
+  }, [])
+  const reportRoundOrder = useCallback((originNodeRunId: string, questionIds: string[]) => {
+    roundOrderRef.current.set(originNodeRunId, questionIds)
+  }, [])
+  const advanceFromQuestion = useCallback(
+    (originNodeRunId: string, questionId: string) => {
+      const keys = flattenCentralizedNavKeys(groups, roundOrderRef.current)
+      const idx = keys.indexOf(`${originNodeRunId}:${questionId}`)
+      if (idx === -1) return
+      const nextKey = keys[idx + 1]
+      if (nextKey !== undefined) {
+        // Same-round next OR the first question of the next round — one flat order.
+        questionRefs.current.get(nextKey)?.focus()
+      } else {
+        // Last question of the last round → move focus onto the single submit button so a
+        // follow-up Enter submits (mirrors clarify.detail.tsx's submitContinueRef).
+        submitBtnRef.current?.focus()
+      }
+    },
+    [groups],
   )
 
   const submitMut = useMutation<void, Error, void>({
@@ -204,6 +267,9 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
             unsealedQuestionIds={g.questionIds}
             disabled={submitMut.isPending}
             onSubmissionChange={onSubmissionChange}
+            registerQuestionRef={registerQuestionRef}
+            reportRoundOrder={reportRoundOrder}
+            onAdvance={advanceFromQuestion}
           />
         ))}
         {submitMut.error !== null && submitMut.error !== undefined && (
@@ -226,6 +292,7 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
             {t('common.cancel')}
           </button>
           <button
+            ref={submitBtnRef}
             type="button"
             className="btn btn--primary"
             disabled={filledTotal === 0 || submitMut.isPending}
@@ -250,6 +317,15 @@ interface RoundAnswerBlockProps {
   unsealedQuestionIds: string[]
   disabled: boolean
   onSubmissionChange: (originNodeRunId: string, sub: RoundSubmission | null) => void
+  /** RFC-128 (用户 2026-07-01) cross-round keyboard nav — register/unregister this round's
+   *  QuestionForm imperative handles into the dialog's global Map (key `${origin}:${qid}`). */
+  registerQuestionRef: (key: string, handle: QuestionFormHandle | null) => void
+  /** Report this round's VISIBLE question order up so the dialog's flat nav order matches the
+   *  reviewer's render order (see flattenCentralizedNavKeys). */
+  reportRoundOrder: (originNodeRunId: string, questionIds: string[]) => void
+  /** Advance keyboard focus from (round, question) to the next question in the flattened global
+   *  order (or the submit button at the very end). */
+  onAdvance: (originNodeRunId: string, questionId: string) => void
 }
 
 /** One clarify round's answer block. Owns its local answer state + draft autosave (the
@@ -264,6 +340,9 @@ function RoundAnswerBlock({
   unsealedQuestionIds,
   disabled,
   onSubmissionChange,
+  registerQuestionRef,
+  reportRoundOrder,
+  onAdvance,
 }: RoundAnswerBlockProps) {
   const { t } = useTranslation()
   const roundQuery = useQuery<ClarifyRound, ApiError>({
@@ -279,6 +358,15 @@ function RoundAnswerBlock({
     () => (round?.questions ?? []).filter((q) => unsealedSet.has(q.id)),
     [round?.questions, unsealedSet],
   )
+
+  // Report this round's visible render order up for the dialog's cross-round nav order. Ref-only
+  // write in the parent (no state) ⇒ no re-render / loop. Runs whenever the visible set changes.
+  useEffect(() => {
+    reportRoundOrder(
+      originNodeRunId,
+      visibleQuestions.map((q) => q.id),
+    )
+  }, [originNodeRunId, visibleQuestions, reportRoundOrder])
 
   const [answers, setAnswers] = useState<Record<string, ClarifyAnswer>>({})
   // RFC-128 P5-BC: per-question scope for a CROSS round (designer ↔ questioner). Defaults to
@@ -488,11 +576,13 @@ function RoundAnswerBlock({
                 </div>
               )}
               <QuestionForm
+                ref={(h) => registerQuestionRef(`${originNodeRunId}:${q.id}`, h)}
                 question={q}
                 value={a}
                 index={idx + 1}
                 disabled={disabled}
                 onChange={(next) => setAnswers((prev) => ({ ...prev, [q.id]: next }))}
+                onAdvance={() => onAdvance(originNodeRunId, q.id)}
               />
             </div>
           )

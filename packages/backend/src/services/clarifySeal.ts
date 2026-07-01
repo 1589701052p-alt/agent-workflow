@@ -93,6 +93,18 @@ export interface SealRoundQuestionsArgs {
    *  designer park holds it). Decision is by round KIND + per-question SCOPE — never the directive
    *  alone — mirroring reconcileDesiredEntries. */
   rejectSelfQuestionerFullSeal?: boolean
+  /** RFC-128 (用户 2026-07-01) — AUTO-STAGE: when true, stamp `staged_at` on THIS call's sealed
+   *  entries INSIDE the seal tx, so a sealed question lands directly in 待下发 (staged) — ready for
+   *  the board's "批量下发全下" (dispatchTaskQuestions = ALL staged) — instead of 待指派 (pending,
+   *  which needs a manual 移入待下发). Opted in ONLY by the centralized-answer control channel
+   *  (routes/clarify.ts defer=true branch). NOT passed by autoDispatchClarifyRound (P5-D dispatches
+   *  immediately — staging is unnecessary and could perturb its flow) nor the raw primitive, so a
+   *  non-autoStage seal is BYTE-FOR-BYTE unchanged (golden-lock). Same target set + IS-NULL
+   *  idempotency as the `sealed_at` stamp (step 4); `staged_by` mirrors `sealed_by` (RFC-099
+   *  audit-only setter id — NEVER enters an agent prompt). Does NOT affect the park sources
+   *  (loadUndispatched{Designer,SelfQuestioner}Targets key on round status / sealed_at, not
+   *  staged_at) → RFC-076 定序 / P5 park behaviour unchanged. */
+  autoStage?: boolean
   now?: () => number
 }
 
@@ -401,6 +413,28 @@ export async function sealRoundQuestions(
           ),
         )
         .run()
+
+      // (4b) RFC-128 (用户 2026-07-01) — AUTO-STAGE: opt-in (centralized-answer control channel).
+      // Stamp `staged_at` on THIS call's sealed entries in the SAME tx so a sealed question lands
+      // directly in 待下发 (staged) — pickup-ready for the board's "批量下发全下" — instead of 待指派
+      // (pending, which needs a manual 移入待下发). Target set + IS-NULL idempotency MIRROR (4)'s
+      // sealed_at stamp (every role entry of the freshly-sealed questions; a question in sealingSet
+      // was NOT sealed before this call, so it could not have been staged before — the IS-NULL guard
+      // just makes the write idempotent). staged_by mirrors sealed_by (RFC-099 audit-only). NOT set
+      // when autoStage is falsy → golden-lock: autoDispatch / raw-primitive seals are byte-for-byte
+      // unchanged, and the park sources are unaffected (they key on round status / sealed_at).
+      if (args.autoStage === true) {
+        tx.update(taskQuestions)
+          .set({ stagedAt: ts, stagedBy: args.sealedBy ?? null, updatedAt: ts })
+          .where(
+            and(
+              eq(taskQuestions.originNodeRunId, args.originNodeRunId),
+              inArray(taskQuestions.questionId, [...sealingSet]),
+              isNull(taskQuestions.stagedAt),
+            ),
+          )
+          .run()
+      }
 
       return {
         sealedQuestionIds: [...sealingSet],

@@ -275,6 +275,11 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         // continuation). PARTIAL seals and DESIGNER-only cross CONTINUE full seals (the §18-parked
         // P3 mainline) pass through unchanged.
         rejectSelfQuestionerFullSeal: true,
+        // RFC-128 (用户 2026-07-01) — AUTO-STAGE: the centralized-answer control channel seals a
+        // question straight into 待下发 (staged) so the board's "批量下发全下" (dispatchTaskQuestions
+        // = ALL staged) can pick it up, instead of leaving it in 待指派 (pending) needing a manual
+        // 移入待下发. Only THIS branch opts in; autoDispatchClarifyRound (P5-D) never passes it.
+        autoStage: true,
         // RFC-128 P2 (Codex P2-2): thread the round directive so the control channel matches
         // quick-path stop semantics (no designer entries + directive persisted; 'continue'
         // also satisfies the §18 designer park). Schema defaults it to 'continue'.

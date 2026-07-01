@@ -306,6 +306,10 @@ describe('RFC-128 P5-D — quick-channel seal + autodispatch (fast-path → auto
     expect(selfEntry).toBeDefined()
     expect(selfEntry?.sealedAt).not.toBeNull()
     expect(selfEntry?.dispatchedAt).not.toBeNull()
+    // RFC-128 (用户 2026-07-01) golden-lock: autoDispatchClarifyRound seals WITHOUT autoStage — the
+    // entry is dispatched directly, never routed through 待下发. staged_at stays NULL (only the
+    // centralized-answer control channel opts into autoStage).
+    expect(selfEntry?.stagedAt).toBeNull()
 
     // A clarify-answer rerun was minted on P (the golden-lock immediate-path cause).
     expect(res.dispatch.reruns).toHaveLength(1)
