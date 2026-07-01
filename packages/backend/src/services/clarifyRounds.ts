@@ -612,8 +612,9 @@ export async function buildClarifyNodeQueueContext(
   args: BuildClarifyNodeQueueContextArgs,
 ): Promise<ClarifyPromptContext | undefined> {
   const roleKind = args.consumerKind === 'self' ? 'self' : 'questioner'
-  // 1. Dispatched self/questioner entries whose HOME (default ?? override) is this node. RFC-127
-  //    借壳: select by HOME (the borrowed run is minted on the home node), not the override.
+  // 1. Dispatched self/questioner entries whose EFFECTIVE TARGET (override ?? default) is this node.
+  //    RFC-131 T4 去借壳: select by the target the rerun is minted on (a reassign moves the run to the
+  //    target node), not the origin home — reading by the origin home would miss a reassigned entry.
   const candidates = await args.db
     .select()
     .from(taskQuestions)
@@ -623,10 +624,10 @@ export async function buildClarifyNodeQueueContext(
         eq(taskQuestions.roleKind, roleKind),
         isNotNull(taskQuestions.dispatchedAt),
         or(
-          eq(taskQuestions.defaultTargetNodeId, args.consumerNodeId),
+          eq(taskQuestions.overrideTargetNodeId, args.consumerNodeId),
           and(
-            isNull(taskQuestions.defaultTargetNodeId),
-            eq(taskQuestions.overrideTargetNodeId, args.consumerNodeId),
+            isNull(taskQuestions.overrideTargetNodeId),
+            eq(taskQuestions.defaultTargetNodeId, args.consumerNodeId),
           ),
         ),
       ),

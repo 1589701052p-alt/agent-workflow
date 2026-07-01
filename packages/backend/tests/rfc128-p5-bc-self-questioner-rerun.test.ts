@@ -1260,11 +1260,15 @@ describe('RFC-128 P5-BC dispatch contracts', () => {
 // 自检 ④ + collapse 推翻 (§5.2.12) — three-ledger borrow conflict
 // ===========================================================================
 describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
-  test('deferred-selfQ × designer same home → reject (task-question-borrow-ledger-conflict)', async () => {
+  test('deferred-selfQ × designer SAME TARGET → reject (task-question-borrow-ledger-conflict)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
-    // A dispatched self entry on home P reassigned to X (deferred-selfQ ledger).
+    // RFC-131 T4 去借壳: the ledger is keyed on the EFFECTIVE TARGET, not the origin home. Put both a
+    // dispatched self entry AND a dispatched designer entry on the SAME target X (each reassigned to X,
+    // run-self there). Two open ledgers on ONE node are separate pending reruns with mutually-exclusive
+    // causes → duplicate execution → reject. (Pre-131 both homed on P via borrow; de-borrow moves each
+    // to its target, so the conflict is now resolved by keying the SAME node.)
     const self = await seedAnsweredRound(db, taskId, {
       kind: 'self',
       askingNodeId: P,
@@ -1279,7 +1283,6 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
       sealed: true,
       dispatchedAt: Date.now(),
     })
-    // A dispatched designer entry whose HOME is also P, reassigned to D (designer ledger).
     const cross = await seedAnsweredRound(db, taskId, {
       kind: 'cross',
       askingNodeId: Q,
@@ -1290,13 +1293,13 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
       questionId: 'dq',
       roleKind: 'designer',
       defaultTargetNodeId: P,
-      overrideTargetNodeId: D,
+      overrideTargetNodeId: X,
       sealed: true,
       dispatchedAt: Date.now(),
     })
     let caught: unknown
     try {
-      await resolveBorrowForNode(db, taskId, P, 0, liveDef())
+      await resolveBorrowForNode(db, taskId, X, 0, liveDef())
     } catch (e) {
       caught = e
     }
@@ -1304,7 +1307,7 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
     expect((caught as ConflictError).code).toBe('task-question-borrow-ledger-conflict')
   })
 
-  test('deferred-selfQ alone → resolves borrow agent (no conflict)', async () => {
+  test('deferred-selfQ alone → resolves run-self on target (no borrow, no conflict)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -1322,18 +1325,22 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
       sealed: true,
       dispatchedAt: Date.now(),
     })
-    expect(await resolveBorrowForNode(db, taskId, P, 0, liveDef())).toBe('borrow-x')
+    // RFC-131 T4 去借壳: the reassigned self entry's rerun is minted ON the target X, which runs its
+    // OWN agent — resolveBorrowForNode(X) is null (no borrow), NOT 'borrow-x' on the origin P.
+    expect(await resolveBorrowForNode(db, taskId, X, 0, liveDef())).toBeNull()
   })
 
-  test('deferred-selfQ RUN-SELF (no override) + same-home designer borrow → reject (run-self counts, Codex impl-gate)', async () => {
+  test('deferred-selfQ RUN-SELF (no override) + same-target designer RUN-SELF → reject (run-self counts, Codex impl-gate)', async () => {
     // Codex impl-gate run-self fix (§5.2.3④): a DISPATCHED self entry with NO override (run-self —
-    // reruns the home's OWN agent) is still an OPEN ledger. On the same home D as an open designer
-    // borrow, the two are separate pending reruns (clarify-answer vs cross-clarify-answer) →
+    // reruns the node's OWN agent) is still an OPEN ledger. On the same target D as an open designer
+    // ledger, the two are separate pending reruns (clarify-answer vs cross-clarify-answer) →
     // duplicate execution → reject. The earlier code's null-for-run-self made this escape.
+    // RFC-131 T4 去借壳: the designer entry is now ALSO run-self on D (no borrow); two open ledgers on
+    // the SAME target D still conflict — the reject counts OPEN ledgers, not non-null borrow agents.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
-    // Dispatched self entry on home D, NO override (run-self), sealed → deferred-selfQ run-self ledger.
+    // Dispatched self entry on target D, NO override (run-self), sealed → deferred-selfQ run-self ledger.
     const self = await seedAnsweredRound(db, taskId, {
       kind: 'self',
       askingNodeId: D,
@@ -1348,7 +1355,7 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
       sealed: true,
       dispatchedAt: Date.now(),
     })
-    // Dispatched designer entry on the SAME home D, borrow X → designer borrow ledger.
+    // Dispatched designer entry on the SAME target D, run-self (no override) → designer run-self ledger.
     const cross = await seedAnsweredRound(db, taskId, {
       kind: 'cross',
       askingNodeId: Q,
@@ -1359,7 +1366,7 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
       questionId: 'dq',
       roleKind: 'designer',
       defaultTargetNodeId: D,
-      overrideTargetNodeId: X,
+      overrideTargetNodeId: null, // run-self (de-borrow)
       sealed: true,
       dispatchedAt: Date.now(),
     })

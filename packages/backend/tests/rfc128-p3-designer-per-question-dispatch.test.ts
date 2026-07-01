@@ -277,7 +277,7 @@ describe('RFC-128 P3 — designer 逐题下发 (AC-8)', () => {
     ).toBe(runId)
   })
 
-  test('借壳: partial Q1(designer) 改派 OTHER → dispatch mint HOME=designer + agent_override_name=OTHER；注入仍仅 Q1', async () => {
+  test('去借壳: partial Q1(designer) 改派 OTHER → dispatch mint TARGET=OTHER（own agent，无 agent_override）；注入仍仅 Q1', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedDeferredCrossTask(db, { otherHasRun: true })
 
@@ -291,32 +291,32 @@ describe('RFC-128 P3 — designer 逐题下发 (AC-8)', () => {
     expect(q1Designer.questionId).toBe('q1')
     expect(q1Designer.defaultTargetNodeId).toBe(DESIGNER)
 
-    // RFC-127 借壳: 改派 → OTHER（借它的 agent，run 仍 mint 在 home=designer）。
+    // RFC-131 T4 去借壳: 改派 → OTHER，run mint 在 effectiveTarget=OTHER（跑 OTHER 自己的 agent，无借壳）。
     await reassignTaskQuestion(db, q1Designer.id, OTHER, actor)
     const result = await dispatchTaskQuestions(db, taskId, [q1Designer.id], actor)
     expect(result.reruns.length).toBe(1)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER) // home, NOT the borrowed node
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER) // effective target, NOT the origin designer
     const minted = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, result.reruns[0]!.nodeRunId))
     )[0]
-    expect(minted?.nodeId).toBe(DESIGNER)
+    expect(minted?.nodeId).toBe(OTHER)
     expect(minted?.rerunCause).toBe('cross-clarify-answer')
-    expect(minted?.agentOverrideName).toBe(OTHER_AGENT) // 借壳：跑 OTHER 的 brain on designer 的 artifact
+    expect(minted?.agentOverrideName).toBeNull() // 去借壳：OTHER 跑自己的 brain（无 agent_override）
 
-    // 借壳节点 OTHER 自身不被 mint（仍只有 seeded done）。
-    const otherPending = (
+    // 原 designer 节点自身不被 mint（条目已移到 OTHER）。
+    const designerPending = (
       await db
         .select()
         .from(nodeRuns)
-        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, OTHER)))
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
     ).filter((r) => r.status === 'pending')
-    expect(otherPending.length).toBe(0)
+    expect(designerPending.length).toBe(0)
 
-    // HOME designer 的 per-node queue（按 home=default 选）注入仅 Q1。
+    // TARGET OTHER 的 per-node queue（按 effectiveTarget=OTHER 选）注入仅 Q1。
     const ctx = await buildExternalFeedbackContext({
       db,
       taskId,
-      designerNodeId: DESIGNER,
+      designerNodeId: OTHER,
       loopIter: 0,
       designerGeneration: 1,
       definition: liveDef(),

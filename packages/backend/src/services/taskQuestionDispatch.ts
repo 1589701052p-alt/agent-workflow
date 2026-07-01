@@ -143,16 +143,6 @@ function homeTarget(e: TaskQuestionRow): string | null {
   return e.defaultTargetNodeId ?? e.overrideTargetNodeId
 }
 
-// RFC-127 借壳: the node whose AGENT is borrowed (caller resolves its agentName), or
-// null when the home node runs its OWN agent (no override, or manual where the
-// override IS the home).
-function borrowAgentNode(e: TaskQuestionRow): string | null {
-  const home = homeTarget(e)
-  return e.overrideTargetNodeId !== null && e.overrideTargetNodeId !== home
-    ? e.overrideTargetNodeId
-    : null
-}
-
 // RFC-128 P5-BC (§5.2.12 F3) — the rerun-cause class an entry's dispatch mints, derived from its
 //承接 role. A node_run carries ONE rerun_cause; entries of different classes on the same home are
 // SEPARATE reruns (serialized, never collapsed). self/questioner causes are isClarifyRerun=TRUE
@@ -382,15 +372,17 @@ export async function dispatchTaskQuestions(
     }
   }
 
-  // 3. Group the requested entries by (HOME node, rerun-cause class). RFC-127 借壳: the HOME node
-  //    (run.node_id = default ?? override) is where the borrowed rerun is minted. RFC-128 P5-BC:
-  //    the cause class (self→clarify-answer / questioner→cross-clarify-questioner-rerun /
-  //    designer→cross-clarify-answer) discriminates which entries can share ONE rerun — a single
-  //    node_run carries ONE rerun_cause (§5.2.12 F3), so different causes on the same home are
+  // 3. Group the requested entries by (TARGET node, rerun-cause class). RFC-131 T4 去借壳: mint the
+  //    rerun on the EFFECTIVE TARGET (override ?? default) — a reassign MOVES the run to the target
+  //    node, which runs its OWN agent (no RFC-127 借壳). A non-reassigned entry (override NULL) has
+  //    effectiveTarget == default, so it still mints on the origin designer (golden-lock unchanged).
+  //    RFC-128 P5-BC: the cause class (self→clarify-answer / questioner→cross-clarify-questioner-rerun
+  //    / designer→cross-clarify-answer) discriminates which entries can share ONE rerun — a single
+  //    node_run carries ONE rerun_cause (§5.2.12 F3), so different causes on the same target are
   //    SEPARATE reruns that must serialize, never collapse.
   const byHomeCause = new Map<string, Map<CauseClass, TaskQuestionRow[]>>()
   for (const e of requested) {
-    const home = homeTarget(e)
+    const home = effectiveTarget(e)
     if (home === null) continue
     const cause = causeClassForEntry(e)
     const causes = byHomeCause.get(home) ?? new Map<CauseClass, TaskQuestionRow[]>()
@@ -401,22 +393,12 @@ export async function dispatchTaskQuestions(
   }
   if (byHomeCause.size === 0) return EMPTY_RESULT
 
-  // 4a. Per-(home, cause) single-borrow gate (precondition, fail-fast — RFC-127 P2-1 / §5.2.13):
-  //     a (home, cause) group mints ONE borrowed rerun, which runs ONE agent. Reject if it names
-  //     >1 agent (incl. {X, null} = some borrowed + some self). Scoped PER CAUSE so a home that
-  //     legitimately holds different causes (self + designer) is NOT a multi-borrow — that is the
-  //     auto-split case below, not a reject.
-  for (const [home, causes] of byHomeCause) {
-    for (const group of causes.values()) {
-      const borrows = new Set(group.map(borrowAgentNode))
-      if (borrows.size > 1) {
-        throw new ConflictError(
-          'task-question-home-multi-borrow',
-          `node '${home}' would mint one borrowed rerun but its dispatched questions name multiple agents (${[...borrows].map((b) => b ?? '(self)').join(', ')}); a single rerun runs one agent — dispatch them separately or align their handler.`,
-        )
-      }
-    }
-  }
+  // 4a. RFC-131 T4 去借壳: NO single-borrow gate. Pre-131 a (home, cause) group minted ONE borrowed
+  //     rerun that ran ONE agent, so a group naming >1 agent was rejected (task-question-home-multi-
+  //     borrow). De-borrow keys the group on the EFFECTIVE TARGET and mints on that node running its
+  //     OWN agent — every reassigned question goes to its own target (never sharing one rerun's
+  //     borrowed agent), so the gate is obsolete. A mixed native+reassigned group on one target all
+  //     rides that target's per-node queue (buildNodeQueueExternalFeedback) into its single rerun.
 
   // 4b. RFC-128 P5-BC route auto-split (R2-3, §5.2.13): a home with MIXED cause classes (e.g. a
   //     sealed self question + a sealed designer question both staged onto the same node) cannot
@@ -519,15 +501,15 @@ export async function dispatchTaskQuestions(
   // 6. Pre-compute each frontier mint's inherited values (async reads) BEFORE the tx so the
   //    tx body is purely synchronous (atomic with the dispatched_at stamp).
   const mintPlans = await Promise.all(
-    // RFC-127 借壳: pass the home group's borrow agent (the per-home gate above ensures the group
-    // names exactly one) + the parsed definition (to resolve its agentName). RFC-128 P5-BC: pass
-    // the home's ROLE-derived rerun cause (auto-split guarantees one cause per home this batch).
+    // RFC-131 T4 去借壳: NO borrow — the rerun is minted ON the effective target, which runs its OWN
+    // agent (pass null, never an agent_override_name). RFC-128 P5-BC: pass the target's ROLE-derived
+    // rerun cause (auto-split guarantees one cause per target this batch) + the parsed definition.
     [...frontier].map(async (nodeId) =>
       buildFrontierMintPlan(
         db,
         taskId,
         nodeId,
-        borrowAgentNode(byTarget.get(nodeId)![0]!),
+        null,
         causeClassForEntry(byTarget.get(nodeId)![0]!),
         definition,
       ),
@@ -747,7 +729,7 @@ export async function dispatchTaskQuestions(
   const reruns: DispatchedRerun[] = mintPlans.map((p) => ({
     targetNodeId: p.nodeId,
     nodeRunId: p.preId,
-    entryIds: dispatchEntries.filter((e) => homeTarget(e) === p.nodeId).map((e) => e.id),
+    entryIds: dispatchEntries.filter((e) => effectiveTarget(e) === p.nodeId).map((e) => e.id),
   }))
   log.info('task questions dispatched', {
     taskId,
@@ -800,8 +782,9 @@ function findOpenDispatchTarget(
     parentNodeRunId: r.parentNodeRunId,
   }))
   for (const e of inputs.entries) {
-    // RFC-127 借壳: in-flight is tracked on the HOME node (where the run is minted).
-    const target = e.defaultTargetNodeId ?? e.overrideTargetNodeId
+    // RFC-131 T4 去借壳: in-flight is tracked on the EFFECTIVE TARGET (override ?? default) — the
+    // node where the rerun is minted (a reassign moves the run to the target, not the origin home).
+    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
     if (target === null || target === '' || !affected.has(target)) continue
     if (!isDispatchedEntryConsumed(e, inputs.runs, lineageViews, 'in-flight')) {
       return target
@@ -1055,7 +1038,9 @@ async function resolveDeferredSelfQuestionerBorrowForNode(
         isNotNull(taskQuestions.dispatchedAt),
       ),
     )
-  const homeEntries = entries.filter((e) => homeTarget(e) === nodeId)
+  // RFC-131 T4 去借壳: match on the EFFECTIVE TARGET (override ?? default) — a reassigned entry's
+  // rerun is minted on the target node, so its ledger belongs to the target, not the origin home.
+  const homeEntries = entries.filter((e) => effectiveTarget(e) === nodeId)
   if (homeEntries.length === 0) return CLOSED_LEDGER
   // NB: NO "no borrow → return early" fast path — we must read to detect an OPEN RUN-SELF ledger
   // (the early fast path returned null for run-self → it went uncounted in the multi-ledger reject).
@@ -1155,9 +1140,10 @@ async function resolveDesignerBorrowForNode(
         isNotNull(taskQuestions.dispatchedAt),
       ),
     )
-  // HOME match (default ?? override == nodeId) — includes run-self designer dispatches (override
-  // NULL), so an open run-self designer ledger is counted.
-  const candidates = entries.filter((e) => homeTarget(e) === nodeId)
+  // RFC-131 T4 去借壳: EFFECTIVE TARGET match (override ?? default == nodeId) — includes run-self
+  // designer dispatches (override NULL), so an open run-self designer ledger is counted. A reassigned
+  // entry's ledger belongs to the target node (where its rerun is minted), not the origin home.
+  const candidates = entries.filter((e) => effectiveTarget(e) === nodeId)
   if (candidates.length === 0) return CLOSED_LEDGER
 
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))

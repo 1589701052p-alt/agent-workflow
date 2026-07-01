@@ -263,10 +263,11 @@ async function seedSelfRoundMulti(
   return intRunId
 }
 
-/** Seed an OPEN dispatched designer override entry whose graph-designer home is `designerNode`
- *  (deferred ledger): a cross round → `designerNode`, reassigned to `override`, dispatched
- *  (dispatched_at set) and unbound (trigger_run_id NULL ⇒ unconsumed). Used for the dual-ledger
- *  conflict (P2-2) — pass designerNode=P to put BOTH ledgers on the same home. */
+/** Seed an OPEN dispatched designer override entry: a cross round natively for `designerNode`,
+ *  reassigned to `override`, dispatched (dispatched_at set) and unbound (trigger_run_id NULL ⇒
+ *  unconsumed). RFC-131 T4 去借壳: the deferred designer ledger is keyed on the EFFECTIVE TARGET
+ *  (override ?? default), and a reassigned entry runs the target's OWN agent (no borrow). Used for
+ *  the dual-ledger conflict (P2-2) — pass override=P to co-locate BOTH ledgers on target P. */
 async function seedDispatchedDesignerEntry(
   db: DbClient,
   taskId: string,
@@ -571,31 +572,35 @@ describe('RFC-127 borrow — Codex P2 regressions', () => {
     expect(await resolveBorrowForNode(db, 'p2-1c', P, 0, liveDef())).toBe(X_AGENT)
   })
 
-  // P2-2: the same home with BOTH an open self/questioner reassignment AND an open dispatched
+  // P2-2: the same TARGET NODE with BOTH an open self/questioner reassignment AND an open dispatched
   // designer reassignment is ambiguous (the scheduler can't tell which ledger the rerun belongs
-  // to). Must REJECT rather than let the immediate ledger silently win.
-  test('P2-2: same home, self ledger + designer ledger (DIFFERENT agents) → rejected', async () => {
+  // to). Must REJECT rather than let the immediate ledger silently win. RFC-131 T4 去借壳: the deferred
+  // ledger is keyed on the effective target, so co-locate both ledgers on P (self reassigned to X but
+  // its immediate continuation stays on the asking node P; designer reassigned to P → run-self on P).
+  test('P2-2: same target node, immediate self ledger + designer ledger → rejected', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2', { deferred: true })
-    // self reassignment on P → X (immediate ledger) ...
+    // self reassignment on P → X (immediate ledger — the continuation is pending on the asking node P) ...
     await seedSelfRoundMulti(db, 'p2-2', { questions: [{ qid: 'q1', override: X }] })
-    // ... AND a dispatched designer reassignment on the SAME home P → D (designer ledger).
-    await seedDispatchedDesignerEntry(db, 'p2-2', P, D)
+    // ... AND a dispatched designer entry reassigned to the SAME node P (run-self on P; native-D round).
+    await seedDispatchedDesignerEntry(db, 'p2-2', D, P)
     await expect(resolveBorrowForNode(db, 'p2-2', P, 0, liveDef())).rejects.toThrow(
       /duplicate execution/i,
     )
   })
 
-  // Codex impl-gate round 2: even when both ledgers borrow the SAME agent, the overlap is a
-  // duplicate-EXECUTION hazard — they are two separate pending node_runs on the home (the
-  // designer in-flight gate doesn't see the immediate continuation), and runOneNode binds by
-  // node not by ledger, so the first run stamps both ledgers and the other runs stale. Reject
-  // regardless of agent match (round 1's same-agent fast path was unsafe).
-  test('P2-2: same home, both ledgers → SAME agent → STILL rejected (duplicate-execution hazard)', async () => {
+  // Codex impl-gate round 2: two open ledgers on one node are a duplicate-EXECUTION hazard — they
+  // are two separate pending node_runs on the node (the designer in-flight gate doesn't see the
+  // immediate continuation), and runOneNode binds by node not by ledger, so the first run stamps
+  // both ledgers and the other runs stale. Reject by counting OPEN ledgers. RFC-131 T4 去借壳: the
+  // designer ledger never borrows (run-self on its target), so the old "even SAME agent" nuance is
+  // moot — the reject is purely two-open-ledgers-on-one-node.
+  test('P2-2: same target node, two open ledgers → STILL rejected (duplicate-execution hazard)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2same', { deferred: true })
     await seedSelfRoundMulti(db, 'p2-2same', { questions: [{ qid: 'q1', override: X }] })
-    await seedDispatchedDesignerEntry(db, 'p2-2same', P, X)
+    // designer reassigned to the SAME node P (run-self on P) → two open ledgers on P → reject.
+    await seedDispatchedDesignerEntry(db, 'p2-2same', D, P)
     await expect(resolveBorrowForNode(db, 'p2-2same', P, 0, liveDef())).rejects.toThrow(
       /duplicate execution/i,
     )
@@ -603,31 +608,32 @@ describe('RFC-127 borrow — Codex P2 regressions', () => {
 
   // RFC-128 P5-BC (Codex impl-gate run-self fix, §5.2.3④): an OPEN RUN-SELF immediate ledger (a
   // self round answered-unconsumed with NO override → a pending self continuation that runs P's
-  // OWN agent) + an open designer borrow on the SAME home P are STILL two separate pending reruns
+  // OWN agent) + an open designer ledger on the SAME node P are STILL two separate pending reruns
   // with mutually-exclusive causes → duplicate execution → REJECT. The earlier code treated
-  // run-self as "not a ledger" (returned the designer's agent), which would mis-run the self
-  // continuation under the designer's borrowed agent. (Was: "designer ledger ALONE ... resolves";
-  // that asserted the latent bug. Normal designer dispatch — no self round on the home — is
-  // unaffected: the immediate ledger is then genuinely CLOSED, so the designer resolves alone.)
-  test('P2-2: open RUN-SELF immediate ledger + same-home designer borrow → rejected (run-self counts)', async () => {
+  // run-self as "not a ledger" (returned null), which let a run-self ledger escape the reject.
+  // RFC-131 T4 去借壳: the designer ledger is also run-self (no borrow); the reject counts OPEN
+  // ledgers, so run-self + run-self on the same node still rejects. Normal designer dispatch — no
+  // self round on the node — is unaffected: the immediate ledger is then genuinely CLOSED.
+  test('P2-2: open RUN-SELF immediate ledger + same-node designer ledger → rejected (run-self counts)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2b', { deferred: true })
     // Open run-self immediate ledger on P (answered self round, NO override) ...
     await seedSelfRoundMulti(db, 'p2-2b', { questions: [{ qid: 'q1', override: null }] })
-    // ... AND an open designer borrow on the SAME home P → two open ledgers → reject.
-    await seedDispatchedDesignerEntry(db, 'p2-2b', P, D)
+    // ... AND an open designer ledger on the SAME node P (reassigned to P → run-self) → two open ledgers → reject.
+    await seedDispatchedDesignerEntry(db, 'p2-2b', D, P)
     await expect(resolveBorrowForNode(db, 'p2-2b', P, 0, liveDef())).rejects.toThrow(
       /duplicate execution/i,
     )
   })
 
-  // Companion golden-lock: a designer borrow on a home with NO self round (immediate ledger
-  // genuinely CLOSED) resolves alone — the run-self fix does NOT over-reject normal dispatch.
-  test('P2-2: designer borrow on a home with NO self round → resolves alone (immediate closed)', async () => {
+  // Companion golden-lock: a designer ledger on a target with NO competing self round (immediate
+  // ledger genuinely CLOSED) resolves alone — the run-self fix does NOT over-reject normal dispatch.
+  // RFC-131 T4 去借壳: it resolves run-self (null) on its effective target X — no borrow.
+  test('P2-2: designer entry on a target with NO self round → resolves alone run-self (immediate closed)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     await seedTask(db, 'p2-2c', { deferred: true })
-    await seedDispatchedDesignerEntry(db, 'p2-2c', D, X) // designer home D, borrow X; no self on D
-    expect(await resolveBorrowForNode(db, 'p2-2c', D, 0, liveDef())).toBe(X_AGENT)
+    await seedDispatchedDesignerEntry(db, 'p2-2c', D, X) // native-D designer reassigned to X; no self on X
+    expect(await resolveBorrowForNode(db, 'p2-2c', X, 0, liveDef())).toBeNull()
   })
 })
 

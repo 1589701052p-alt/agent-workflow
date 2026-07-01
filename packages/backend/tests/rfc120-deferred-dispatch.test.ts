@@ -959,18 +959,17 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.status, 'pending')))
     expect(pending.length).toBe(0)
 
-    // RFC-127 借壳: after the reassign, default is STILL DESIGNER → home=DESIGNER; the override
-    // OTHER is only the borrowed agent. Re-run the dispatch (fresh plan) → succeeds, mints the
-    // HOME DESIGNER carrying OTHER's agentName as override (NOT a mint on OTHER). The race
-    // rollback mechanism (task-question-target-changed) is unchanged — only the mint home flipped.
+    // RFC-131 T4 去借壳: after the reassign, effectiveTarget=OTHER — the rerun is minted ON OTHER
+    // (which has a prior run seeded above), running its OWN agent (agentOverrideName null, no borrow).
+    // The race rollback mechanism (task-question-target-changed) is unchanged — only the mint target.
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     expect(result.reruns.length).toBe(1)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER)
     const minted = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, result.reruns[0]!.nodeRunId))
     )[0]
-    expect(minted?.nodeId).toBe(DESIGNER)
-    expect(minted?.agentOverrideName).toBe('other') // borrowed OTHER node's agentName
+    expect(minted?.nodeId).toBe(OTHER)
+    expect(minted?.agentOverrideName).toBeNull() // 去借壳: OTHER runs its OWN agent
   })
 
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
@@ -997,13 +996,13 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect(entry.triggerRunId).toBeNull()
   })
 
-  // Per-node-queue injection — override to a node WITH a prior run but NO
-  // __external_feedback__ edge SUCCEEDS; the override target is the frontier (it has no
-  // affected ancestor), and ITS rerun binds + injects the answer from its queue.
-  test('override to a run-but-no-edge node → BORROW: mint the HOME designer carrying that node’s agent; the home queue injection carries + binds the answer', async () => {
+  // Per-node-queue injection — RFC-131 T4 去借壳: reassign to a node WITH a prior run but NO
+  // __external_feedback__ edge SUCCEEDS; the target OTHER is the frontier (no affected ancestor),
+  // and ITS rerun (running OTHER's OWN agent) binds + injects the answer from its per-node queue.
+  test('reassign to a run-but-no-edge node → 去借壳: mint the TARGET itself (own agent); the target queue injection carries + binds the answer', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    // OTHER has a prior node_run + no feedback edge — a valid reassign/borrow target.
+    // OTHER has a prior node_run + no feedback edge — a valid reassign target.
     await db.insert(nodeRuns).values({
       id: ulid(),
       taskId,
@@ -1022,37 +1021,37 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const entries = await designerEntries(db, taskId)
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
 
-    // RFC-127 借壳: default is DESIGNER → home=DESIGNER; the override OTHER only lends its agent.
-    // Dispatch mints the HOME DESIGNER (NOT OTHER) carrying OTHER's agentName as override.
+    // RFC-131 T4 去借壳: effectiveTarget=OTHER → dispatch mints OTHER itself (NOT DESIGNER), running
+    // OTHER's OWN agent (no agent_override_name). OTHER is the frontier (it has a prior run).
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
     expect(result.reruns.length).toBe(1)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER) // frontier is the home, not the override
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER) // frontier is the effective target
     const runId = result.reruns[0]!.nodeRunId
 
-    // entry committed (dispatched_at) but NOT bound yet; the pending rerun is on DESIGNER and
-    // carries OTHER's agent (借壳); OTHER itself has NO pending run.
+    // entry committed (dispatched_at) but NOT bound yet; the pending rerun is on OTHER and runs its
+    // OWN agent (去借壳, agentOverrideName null); DESIGNER (the origin) has NO pending run.
     expect((await designerEntries(db, taskId))[0]?.dispatchedAt).not.toBeNull()
     expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBeNull()
-    const designerPending = (
+    const otherPending = (
       await db
         .select()
         .from(nodeRuns)
-        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, OTHER)))
     ).find((r) => r.id === runId && r.status === 'pending')
-    expect(designerPending).toBeDefined()
-    expect(designerPending?.agentOverrideName).toBe('other') // borrowed OTHER node's agentName
-    const otherRuns = await db
+    expect(otherPending).toBeDefined()
+    expect(otherPending?.agentOverrideName).toBeNull() // 去借壳: OTHER runs its own agent
+    const designerRuns = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, OTHER)))
-    expect(otherRuns.some((r) => r.status === 'pending')).toBe(false) // no mint on the borrowed node
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
+    expect(designerRuns.some((r) => r.status === 'pending')).toBe(false) // no mint on the origin
 
-    // The HOME DESIGNER's rerun binds + injects its per-node queue (keyed by home=default). The
-    // bind stamps trigger_run_id = this run.
+    // The TARGET OTHER's rerun binds + injects its per-node queue (keyed by effectiveTarget=OTHER).
+    // The bind stamps trigger_run_id = this run.
     const ctx = await buildExternalFeedbackContext({
       db,
       taskId,
-      designerNodeId: DESIGNER,
+      designerNodeId: OTHER,
       loopIter: 0,
       designerGeneration: 1,
       definition: liveDef(),
@@ -1064,7 +1063,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(runId) // bound at rerun
   })
 
-  test('never-run override target → BORROW succeeds (home DESIGNER has a run; the borrowed node need not have run)', async () => {
+  test('never-run reassign target → REJECTED (去借壳: the rerun mints ON the target, which has no prior run to inherit)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     // OTHER has NO prior node_run.
@@ -1075,27 +1074,26 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       directive: 'continue',
     })
     const entries = await designerEntries(db, taskId)
-    // reassign to a NEVER-RUN node — the clarify-designer override path is not run-gated.
+    // reassign to a NEVER-RUN node — canReassign accepts it, but dispatch is run-gated.
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
 
-    // RFC-127 借壳 (REVERSED from the pre-127 reject): home=DESIGNER (default) HAS a run, so the
-    // frontier mint is safe; OTHER is only the borrowed agent (never minted), so its never-run
-    // state is irrelevant. Dispatch SUCCEEDS — no `unsafe-dispatch-target`.
-    const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
-    expect(result.reruns.length).toBe(1)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
-    const minted = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, result.reruns[0]!.nodeRunId))
-    )[0]
-    expect(minted?.nodeId).toBe(DESIGNER)
-    expect(minted?.agentOverrideName).toBe('other') // borrowed (never-run) OTHER node's agentName
-    expect((await designerEntries(db, taskId))[0]?.dispatchedAt).not.toBeNull()
-    // the never-run borrowed node still has NO node_run (it was not minted).
-    const otherRuns = await db
+    // RFC-127 借壳 could mint on the origin DESIGNER (which HAS a run), so a never-run borrow target
+    // dispatched fine. RFC-131 T4 去借壳 REVERSES that: the rerun is minted ON the effective target
+    // OTHER — which never ran → no prior node_run to inherit → REJECTED (safe first-run minting for a
+    // never-run frontier target is the deferred F3 layer). Nothing stamped, nothing minted.
+    let threw: unknown = null
+    try {
+      await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
+    } catch (e) {
+      threw = e
+    }
+    expect((threw as { code?: string }).code).toBe('task-question-unsafe-dispatch-target')
+    expect((await designerEntries(db, taskId))[0]?.dispatchedAt).toBeNull() // nothing stamped
+    const pending = await db
       .select()
       .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, OTHER)))
-    expect(otherRuns.length).toBe(0)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.status, 'pending')))
+    expect(pending.length).toBe(0) // nothing minted
   })
 
   test('golden-lock: a NON-deferred task uses the GRAPH path (no dispatchedRunId) byte-for-byte', async () => {
@@ -1121,7 +1119,7 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     expect(graph?.runScoped).toBeUndefined() // graph path is NOT run-scoped
   })
 
-  test('per-node queue is authoritative for deferred: the HOME designer injects the borrowed question (mint D + agent_override); the borrowed node has no queue (NO C1 exclusion)', async () => {
+  test('per-node queue is authoritative for deferred (去借壳): the TARGET injects the reassigned question (mint on target, own agent); the origin designer has no queue', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
@@ -1142,26 +1140,14 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const entries = await designerEntries(db, taskId)
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
-    // RFC-127 借壳: home=DESIGNER (default) is the frontier — mint D borrowing OTHER's agent.
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
-    const homeRunId = result.reruns[0]!.nodeRunId
-    const homeRun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, homeRunId)))[0]
-    expect(homeRun?.agentOverrideName).toBe('other')
+    // RFC-131 T4 去借壳: effectiveTarget=OTHER is the frontier — mint OTHER running its OWN agent.
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER)
+    const targetRunId = result.reruns[0]!.nodeRunId
+    const targetRun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, targetRunId)))[0]
+    expect(targetRun?.agentOverrideName).toBeNull() // 去借壳: OTHER runs its own agent
 
-    // The BORROWED node OTHER is not a home (it is no entry's default, nor a manual override),
-    // so ITS per-node queue branch is empty — no double-handling. (Use a synthetic OTHER run id.)
-    const otherCtx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: OTHER,
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: liveDef(),
-      dispatchedRunId: 'nr_other_would_be_rerun',
-    })
-    expect(otherCtx).toBeUndefined()
-
-    // The HOME DESIGNER's queue carries the answer + binds it to D's rerun (queue keyed by home).
+    // The ORIGIN DESIGNER is no longer the effective target (the entry moved to OTHER), so ITS
+    // per-node queue branch is empty — no double-handling. (Use a synthetic DESIGNER run id.)
     const designerCtx = await buildExternalFeedbackContext({
       db,
       taskId,
@@ -1169,10 +1155,22 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       loopIter: 0,
       designerGeneration: 1,
       definition: liveDef(),
-      dispatchedRunId: homeRunId,
+      dispatchedRunId: 'nr_designer_would_be_rerun',
     })
-    expect(designerCtx?.block).toContain('A')
-    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(homeRunId)
+    expect(designerCtx).toBeUndefined()
+
+    // The TARGET OTHER's queue carries the answer + binds it to OTHER's rerun (queue keyed by target).
+    const otherCtx = await buildExternalFeedbackContext({
+      db,
+      taskId,
+      designerNodeId: OTHER,
+      loopIter: 0,
+      designerGeneration: 1,
+      definition: liveDef(),
+      dispatchedRunId: targetRunId,
+    })
+    expect(otherCtx?.block).toContain('A')
+    expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(targetRunId)
   })
 })
 
@@ -1268,14 +1266,14 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     })
     const entry = (await designerEntries(db, taskId))[0]!
     await reassignTaskQuestion(db, entry.id, OTHER, actor)
-    // RFC-127 借壳: the borrowed run is minted on the HOME DESIGNER, so the run-scoped context is
-    // read on DESIGNER (not OTHER) — still flagged runScoped (drives Update-Directive suppression).
+    // RFC-131 T4 去借壳: the rerun is minted ON the target OTHER, so the run-scoped context is read on
+    // OTHER — still flagged runScoped (drives Update-Directive suppression on the reassigned handoff).
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER)
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER)
     const ctx = await buildExternalFeedbackContext({
       db,
       taskId,
-      designerNodeId: DESIGNER,
+      designerNodeId: OTHER,
       loopIter: 0,
       designerGeneration: 1,
       definition: liveDef(),
@@ -2534,12 +2532,11 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
   }
 
-  test('graphOwned=TRUE for a borrowed-agent handoff (RFC-127 D3: default==home==D even when an override borrows another agent) — Prior Output preserved', async () => {
-    // RFC-127 D3 behavior change (REVERSED from the pre-127 graphOwned=false): a clarify-designer
-    // override no longer MOVES the home node — it只换 agent (借壳). The borrowed run is minted ON
-    // the graph designer DESIGNER (default==home==DESIGNER), so DESIGNER STILL owns its artifact →
-    // graphOwned=true → the scheduler keeps the RFC-119 Prior Output + Update Directive. (Pre-127
-    // the override moved the home to OTHER → graphOwned=false; that scenario is now impossible.)
+  test('graphOwned=FALSE for a reassigned handoff (RFC-131 T4 去借壳: the override MOVES the run to the target, which does not own the graph designer artifact) — no Prior Output update', async () => {
+    // RFC-131 T4 去借壳 (REVERSES RFC-127 D3, back to pre-127 graphOwned=false): a reassign MOVES the
+    // rerun to the target OTHER (running its OWN agent). OTHER does NOT own DESIGNER's artifact →
+    // graphOwned=false → the scheduler does NOT tell OTHER to update DESIGNER's old artifact; it
+    // PROCESSES the feedback. (Pre-127 the override moved the home → graphOwned=false; T4 restores that.)
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
@@ -2558,20 +2555,20 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       directive: 'continue',
     })
     const entry = (await designerEntries(db, taskId))[0]!
-    await reassignTaskQuestion(db, entry.id, OTHER, actor) // default DESIGNER, borrow OTHER's agent
+    await reassignTaskQuestion(db, entry.id, OTHER, actor) // default DESIGNER, reassigned to OTHER (run moves)
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
-    expect(result.reruns[0]?.targetNodeId).toBe(DESIGNER) // borrowed run minted ON the home DESIGNER
+    expect(result.reruns[0]?.targetNodeId).toBe(OTHER) // 去借壳: run minted ON the target OTHER
     const ctx = await buildExternalFeedbackContext({
       db,
       taskId,
-      designerNodeId: DESIGNER,
+      designerNodeId: OTHER,
       loopIter: 0,
       designerGeneration: 1,
       definition: liveDef(),
       dispatchedRunId: result.reruns[0]!.nodeRunId,
     })
-    expect(ctx?.block).toContain('A') // the borrowed Q&A is injected (External Feedback)
-    expect(ctx?.graphOwned).toBe(true) // default==home==DESIGNER → graph ownership preserved (D3)
+    expect(ctx?.block).toContain('A') // the reassigned Q&A is injected (External Feedback) on OTHER
+    expect(ctx?.graphOwned).toBe(false) // OTHER's default != OTHER → not graph-owned (去借壳)
   })
 
   test('graphOwned=true for a genuine graph-designer round (default target == this node) — RFC-119 update mode preserved', async () => {

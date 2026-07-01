@@ -704,9 +704,9 @@ interface ParkTargetEntry {
  *  a node with an in-flight dispatched entry would STRAND its already-minted rerun
  *  (deriveFrontier keeps a parked node out of `ready`), so such a node is NOT parked — it
  *  RUNS; the undispatched sibling stays staged for a later dispatch that reruns the node
- *  again. RFC-127 借壳: keys on the HOME node (default ?? override — where the borrowed run is
- *  minted), not the override target, else the home completes before the borrowed rerun and
- *  releases its downstream prematurely. */
+ *  again. RFC-131 T4 去借壳: keys on the EFFECTIVE TARGET (override ?? default — where the rerun is
+ *  minted; a reassign moves the run to the target node), not the origin home, else a reassigned
+ *  question would park its origin node while its rerun is in flight on the target. */
 function partitionUndispatchedParkTargets(
   entries: ReadonlyArray<ParkTargetEntry>,
   runs: ReadonlyArray<NodeRunRow>,
@@ -729,7 +729,7 @@ function partitionUndispatchedParkTargets(
   const hasUndispatched = new Set<string>()
   const hasInFlight = new Set<string>()
   for (const e of entries) {
-    const target = e.defaultTargetNodeId ?? e.overrideTargetNodeId
+    const target = e.overrideTargetNodeId ?? e.defaultTargetNodeId
     if (target === null || target === '') continue
     if (e.dispatchedAt === null) {
       hasUndispatched.add(target)

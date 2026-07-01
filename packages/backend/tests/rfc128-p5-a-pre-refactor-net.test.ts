@@ -37,7 +37,6 @@ import {
 import { buildPromptContext, markClarifyRoundsConsumedBy } from '../src/services/clarifyRounds'
 import { resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
 import { loadUndispatchedDesignerTargets } from '../src/services/taskQuestions'
-import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
@@ -341,15 +340,17 @@ describe('RFC-128 P5-A #2 — markClarifyRoundsConsumedBy 整轮戳 + 整轮 age
 })
 
 // ===========================================================================
-// #3 — resolveBorrowForNode 两账本冲突: error CODE 锁
+// #3 — resolveBorrowForNode 去借壳分离 (RFC-131 T4)
 //
-// 现状两账本（immediate self/q + designer deferred-dispatch）同一 home+iteration 都开 → reject
-// （它们是两条独立 pending node_run，会重复执行）。rfc127-self-questioner-borrow.test.ts P2-2
-// 按 message 锁了 reject；本锁补 CODE='task-question-borrow-ledger-conflict' + ConflictError。
-// P5-D 计划「三账本 borrow-conflict 重做」——会改这条 reject 逻辑/code，本锁先红。
+// RFC-131 T4 去借壳: 延迟账本（immediate self/q + designer deferred-dispatch）改按 EFFECTIVE
+// TARGET（override ?? default）归属。原「同一 home P 两账本都开 → reject」的场景在去借壳后自然
+// 分离——designer 条目按其 override 目标归到 D，不再落在 origin P 上，所以 resolveBorrowForNode(P)
+// 只剩 immediate 账本、单账本解析借壳 agent；designer 在其 target D 上 run-self（null，无借壳）。
+// 两账本真正落在同一 node 时仍 reject（code='task-question-borrow-ledger-conflict'），该守卫由
+// rfc128-p5-bc-self-questioner-rerun.test.ts three-ledger SAME TARGET 用例覆盖。
 // ===========================================================================
 
-describe('RFC-128 P5-A #3 — resolveBorrowForNode 两账本冲突 code 锁', () => {
+describe('RFC-128 P5-A #3 — resolveBorrowForNode 去借壳分离 (RFC-131 T4)', () => {
   /** Immediate ledger: an answered self round on home P reassigned to X (unconsumed). */
   async function seedImmediateBorrow(db: DbClient, taskId: string): Promise<void> {
     const { intermediaryNodeRunId } = await seedAnsweredRound(db, taskId, {
@@ -385,7 +386,8 @@ describe('RFC-128 P5-A #3 — resolveBorrowForNode 两账本冲突 code 锁', ()
     })
   }
 
-  /** Designer ledger: a dispatched designer entry whose graph home is P, reassigned to D. */
+  /** Designer ledger: a dispatched designer entry natively for P, reassigned to D. RFC-131 T4 去借壳:
+   *  its ledger is keyed on the effective target D (not the origin P), and it runs D's own agent. */
   async function seedDesignerBorrowOnHomeP(db: DbClient, taskId: string): Promise<void> {
     const { intermediaryNodeRunId } = await seedAnsweredRound(db, taskId, {
       kind: 'cross',
@@ -412,22 +414,18 @@ describe('RFC-128 P5-A #3 — resolveBorrowForNode 两账本冲突 code 锁', ()
     })
   }
 
-  test('同一 home+iteration 两账本都开 → ConflictError code=task-question-borrow-ledger-conflict', async () => {
+  test('去借壳: designer 移到其 target D → P 上不再撞 → immediate 单账本解析借壳 agent', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId, true)
     await seedImmediateBorrow(db, taskId)
     await seedDesignerBorrowOnHomeP(db, taskId)
 
-    let caught: unknown
-    try {
-      await resolveBorrowForNode(db, taskId, P, 0, liveDef())
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(ConflictError)
-    expect((caught as ConflictError).code).toBe('task-question-borrow-ledger-conflict')
-    expect((caught as ConflictError).status).toBe(409)
+    // RFC-131 T4 去借壳: the designer entry (default P, override D) is keyed on its effective target D,
+    // so P no longer holds two ledgers — resolveBorrowForNode(P) resolves the immediate ledger alone.
+    expect(await resolveBorrowForNode(db, taskId, P, 0, liveDef())).toBe('borrow-x')
+    // The designer ledger resolves run-self (null) on its target D — no borrow (去借壳).
+    expect(await resolveBorrowForNode(db, taskId, D, 0, liveDef())).toBeNull()
   })
 
   test('对照：只有 immediate 账本（无 designer dispatch）→ 不冲突，返回借壳 agent', async () => {

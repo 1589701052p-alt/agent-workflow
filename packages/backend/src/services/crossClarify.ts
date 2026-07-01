@@ -1674,15 +1674,15 @@ async function buildNodeQueueExternalFeedback(
         eq(taskQuestions.taskId, taskId),
         eq(taskQuestions.roleKind, 'designer'),
         isNotNull(taskQuestions.dispatchedAt),
-        // RFC-127 借壳: select by HOME node (default designer; manual falls back to override),
-        // not by override — the borrowed run is minted ON the home node, so the home's per-node
-        // queue must pick up this entry + bind its trigger_run_id to the home's rerun. Reading
-        // by override would miss it → answer not injected, trigger_run_id unbound, stuck.
+        // RFC-131 T4 去借壳: select by the EFFECTIVE TARGET (override ?? default; manual falls back to
+        // override) — the rerun is minted ON the target node (a reassign moves the run there), so the
+        // target's per-node queue must pick up this entry + bind its trigger_run_id to the target's
+        // rerun. Reading by the origin home would miss a reassigned entry → answer not injected, stuck.
         or(
-          eq(taskQuestions.defaultTargetNodeId, handlerNodeId),
+          eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
           and(
-            isNull(taskQuestions.defaultTargetNodeId),
-            eq(taskQuestions.overrideTargetNodeId, handlerNodeId),
+            isNull(taskQuestions.overrideTargetNodeId),
+            eq(taskQuestions.defaultTargetNodeId, handlerNodeId),
           ),
         ),
       ),

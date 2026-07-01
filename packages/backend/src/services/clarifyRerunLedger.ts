@@ -280,8 +280,8 @@ function toLineageViews(
 }
 
 /** RFC-128 P5-BC §5.2.14 (reciprocal in-flight check, PRECISE). Pure/sync — is there an OPEN
- *  (unconsumed) DISPATCHED entry of ANY deferred role (self/questioner/designer) whose HOME
- *  (`default ?? override`, per findOpenDispatchTarget) is `homeNodeId`? This is the dispatch-side
+ *  (unconsumed) DISPATCHED entry of ANY deferred role (self/questioner/designer) whose EFFECTIVE
+ *  TARGET (`override ?? default`, per findOpenDispatchTarget — RFC-131 T4 去借壳) is `homeNodeId`? This is the dispatch-side
  *  mirror the submit-side mint needs: a concurrent deferred dispatch of ANOTHER round's entry
  *  reassigned (RFC-127 借壳) to the cascade's home stamps it + mints a pending rerun on that home;
  *  without this the cascade mints a SECOND open ledger on the same (home, iteration).
@@ -306,7 +306,7 @@ export function hasOpenDispatchedEntryOnHome(
   outputRunIds: ReadonlySet<string>,
 ): boolean {
   const onHome = dispatchedEntries.filter(
-    (e) => (e.defaultTargetNodeId ?? e.overrideTargetNodeId) === homeNodeId,
+    (e) => (e.overrideTargetNodeId ?? e.defaultTargetNodeId) === homeNodeId,
   )
   if (onHome.length === 0) return false
   const lineageViews = toLineageViews(runs, outputRunIds)
