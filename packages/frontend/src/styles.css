@@ -11520,19 +11520,6 @@ mark.comment-anchor[data-active='true'] {
   color: var(--accent);
   font-weight: 600;
 }
-.task-questions__select {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-sm);
-  color: var(--muted);
-  cursor: pointer;
-}
-.task-questions__select > input[type='checkbox'] {
-  cursor: pointer;
-  margin: 0;
-  accent-color: var(--accent);
-}
 
 /* 问题页签卡片标题长内容换行，避免撑大 flex 列、顶出框（真实页面实测 84/96px 归零） */
 .task-questions .card__title {
