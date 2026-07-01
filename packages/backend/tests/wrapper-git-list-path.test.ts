@@ -93,7 +93,11 @@ describe('RFC-060 PR-E — scheduler finalize uses gitChangedFiles, not gitDiffS
   const src = readFileSync(SCHEDULER_PATH, 'utf-8')
 
   test('finalize block calls gitChangedFiles', () => {
-    expect(src).toContain('gitChangedFiles(task.worktreePath')
+    // RFC-130 T11 (D29): the finalize now diffs the wrapper-PRIVATE canonical
+    // (`wrapperCanonPath`, == task.worktreePath under passthrough) — isolated from
+    // sibling merge-backs into the task canonical (AC-10). Still gitChangedFiles,
+    // not gitDiffSnapshot (RFC-060 PR-E), which is what this guard locks.
+    expect(src).toContain('gitChangedFiles(wrapperCanonPath')
   })
 
   test('finalize block writes `paths.join("\\n")` as git_diff port content', () => {

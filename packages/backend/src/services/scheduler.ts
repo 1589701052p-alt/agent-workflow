@@ -3640,6 +3640,24 @@ async function runLoopWrapperNode(
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
   }
 
+  // RFC-130 T12 (D29): loop-PRIVATE canonical — the loop's inner iterations run in a
+  // loop-canonical (iso worktree of the loop), so cross-iteration state accumulates
+  // there ISOLATED from sibling merge-backs into the task canonical; the loop's total
+  // delta merges back as ONE unit when it exits (§8.2). Passthrough (non-git harness)
+  // → runs on the task canonical as before. Kept across a park; rebuilt on resume.
+  const wrapperIso = await createOrRebuildWrapperIso(state, wrapperRunId, existing)
+  const innerState: SchedulerState = wrapperIso.passthrough
+    ? state
+    : {
+        ...state,
+        repos: wrapperIso.repos.map((r) => ({
+          repoPath: r.repoPath,
+          worktreePath: r.isoWorktreePath,
+          worktreeDirName: r.worktreeDirName,
+          baseBranch: r.baseBranch,
+        })),
+      }
+
   const innerSet = new Set(inner)
   for (let i = startIter; i < maxIter; i++) {
     await persistWrapperProgress(db, wrapperRunId, {
@@ -3648,7 +3666,7 @@ async function runLoopWrapperNode(
       phase: 'inner-running',
     })
 
-    const subRes = await runScope(state, {
+    const subRes = await runScope(innerState, {
       scopeIds: innerSet,
       iteration: i,
       log: log.child(`loop:${node.id}`),
@@ -3709,6 +3727,27 @@ async function runLoopWrapperNode(
         await db
           .insert(nodeRunOutputs)
           .values({ nodeRunId: wrapperRunId, portName: b.name, content: v })
+      }
+      // RFC-130 T12: merge the loop's total (all-iterations) delta back into the
+      // task canonical as one unit when it exits.
+      if (!wrapperIso.passthrough) {
+        const mb = await mergeBackWrapperIso(state, wrapperIso, wrapperRunId, node, i, log)
+        if (mb.kind === 'awaiting_human') {
+          return {
+            kind: 'awaiting_human',
+            summary: `loop merge conflict: ${mb.detail}`,
+            message: 'merge-conflict',
+          }
+        }
+        if (mb.kind === 'merge-failed') {
+          await markWrapperTerminal(db, wrapperRunId, 'failed', `wrapper-merge-failed:${mb.msg}`)
+          broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
+          return {
+            kind: 'failed',
+            summary: `loop merge-back failed: ${mb.msg}`,
+            message: 'wrapper-merge-failed',
+          }
+        }
       }
       await markWrapperTerminal(db, wrapperRunId, 'done')
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
@@ -5030,6 +5069,120 @@ async function captureGitPreDirty(
   }
 }
 
+/**
+ * RFC-130 T11 — create (fresh mint) or rebuild (resume) the wrapper-canonical iso
+ * for a wrapper node. Fresh: snapshot the task canonical into an iso worktree keyed
+ * by the wrapper's run id + persist its base. Resume: rebuild the handle pointing at
+ * the SAME worktree (kept across a park — carrying the inner scope's accumulated
+ * changes — so it must NOT be recreated). A non-git task worktree (mock harness)
+ * yields a passthrough handle (the wrapper runs directly on the task canonical).
+ */
+async function createOrRebuildWrapperIso(
+  state: SchedulerState,
+  wrapperRunId: string,
+  existing: {
+    isoBaseSnapshot: string | null
+    isoBaseSnapshotReposJson: string | null
+  } | null,
+): Promise<IsoHandle> {
+  const { db, task, taskId } = state
+  if (existing !== null) {
+    const baseSnapshots: Record<string, string> = {}
+    if (task.repoCount === 1) {
+      if (existing.isoBaseSnapshot !== null) baseSnapshots[''] = existing.isoBaseSnapshot
+    } else {
+      Object.assign(baseSnapshots, parseIsoJsonMap(existing.isoBaseSnapshotReposJson))
+    }
+    if (Object.keys(baseSnapshots).length > 0) {
+      const taskBaseHeads: Record<string, string> = {}
+      for (const repo of state.repos) {
+        taskBaseHeads[repo.worktreeDirName] = (
+          await runGit(repo.worktreePath, ['rev-parse', 'HEAD'])
+        ).stdout.trim()
+      }
+      return rebuildIsoHandle({
+        appHome: state.opts.appHome,
+        taskId,
+        nodeRunId: wrapperRunId,
+        canonRepos: state.repos,
+        baseSnapshots,
+        taskBaseHeads,
+      })
+    }
+    // No persisted iso base (legacy / passthrough row) — fall through to create.
+  }
+  const handle = await createNodeIso({
+    appHome: state.opts.appHome,
+    taskId,
+    nodeRunId: wrapperRunId,
+    canonRepos: state.repos,
+    log: state.log,
+  })
+  if (!handle.passthrough) await persistIsoBase(db, wrapperRunId, task.repoCount, handle)
+  return handle
+}
+
+/**
+ * RFC-130 T11 — merge a completed wrapper's total delta (its wrapper-canonical)
+ * back into the parent (task) canonical as ONE unit, exactly like a node merge-back
+ * (§6). Clean → merge_state='merged' (D15 lets downstream consume) + iso discarded;
+ * conflict → merge agent, unresolved → the wrapper is parked conflict-human (iso
+ * kept) — the caller returns awaiting_human; a merge-back error → merge-failed, the
+ * caller fails the wrapper. Shared by the git + loop (+ fanout) wrappers so the
+ * merge-back semantics can't fork.
+ */
+async function mergeBackWrapperIso(
+  state: SchedulerState,
+  wrapperIso: IsoHandle,
+  wrapperRunId: string,
+  node: WorkflowNode,
+  iteration: number,
+  log: Logger,
+): Promise<
+  | { kind: 'merged' }
+  | { kind: 'awaiting_human'; detail: string }
+  | { kind: 'merge-failed'; msg: string }
+> {
+  const { db, task, taskId } = state
+  try {
+    const nodeTrees = await snapshotNodeIsoFinal(wrapperIso, log)
+    await persistIsoNodeTree(db, wrapperRunId, task.repoCount, nodeTrees, 'pending-merge')
+    const merge = await state.writeSem.run(async () => {
+      const mr = await mergeBackNodeIso(wrapperIso, nodeTrees, log)
+      if (mr.clean) return { kind: 'merged' as const }
+      const res = await resolveMergeConflicts(state, {
+        conflicts: mr.conflicts,
+        containerPath: wrapperIso.containerPath,
+        conflictNodeRunId: wrapperRunId,
+        nodeId: node.id,
+        iteration,
+      })
+      return res.allResolved
+        ? { kind: 'merged' as const }
+        : { kind: 'conflict-human' as const, detail: res.detail }
+    })
+    if (merge.kind !== 'merged') {
+      await db
+        .update(nodeRuns)
+        .set({ mergeState: 'conflict-human' })
+        .where(eq(nodeRuns.id, wrapperRunId))
+      await transitionNodeRunStatus({ db, nodeRunId: wrapperRunId, event: { kind: 'park-human' } })
+      broadcastNodeStatus(taskId, wrapperRunId, node.id, 'awaiting_human')
+      return { kind: 'awaiting_human', detail: merge.detail }
+    }
+    await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, wrapperRunId))
+    await discardNodeIso(wrapperIso, log)
+    return { kind: 'merged' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await db
+      .update(nodeRuns)
+      .set({ mergeState: 'merge-failed' })
+      .where(eq(nodeRuns.id, wrapperRunId))
+    return { kind: 'merge-failed', msg }
+  }
+}
+
 async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
   const { db, task, taskId, definition } = state
   const { node, iteration, log } = args
@@ -5044,29 +5197,24 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
 
   const existing = await findResumableWrapperRun(db, taskId, node.id, iteration)
   let wrapperRunId: string
-  let baseline: string
-  // RFC-098 B3 (audit S-4): the worktree's pre-existing dirty set, sampled at
-  // fresh mint only — finalize subtracts hash-equal members so git_diff
-  // carries ONLY paths this wrapper's inner scope produced/modified (fixes
-  // both sequential-wrapper pollution and git-in-loop cumulative diffs).
+  // RFC-098 B3 (audit S-4): the worktree's pre-existing dirty set, sampled at fresh
+  // mint only — finalize subtracts hash-equal members so git_diff carries ONLY paths
+  // this wrapper's inner scope produced/modified (fixes sequential-wrapper pollution
+  // AND git-in-loop cumulative diffs). RFC-130 T11: baseline/preDirty are captured on
+  // the WRAPPER-canonical (below), NOT the task canonical.
+  let baseline: string | undefined
   let preDirty: Record<string, string> = {}
   if (existing !== null) {
     const progress = decodeWrapperProgress(existing.wrapperProgressJson, (msg) => log.warn(msg))
     wrapperRunId = existing.id
     if (progress?.kind === 'git' && typeof progress.baseline === 'string') {
       baseline = progress.baseline
-      // S-4: resume reads the persisted pre-set; an old payload without the
-      // field degrades to the empty set (over-report). NEVER re-capture here —
-      // the inner scope's own writes are already in the worktree.
+      // S-4: resume reads the persisted pre-set; NEVER re-capture — the inner scope's
+      // own writes are already in the (wrapper-)worktree.
       preDirty = progress.preDirty ?? {}
-    } else {
-      // Malformed / missing — best-effort re-capture. Worse than persisted
-      // baseline but no worse than today's pre-RFC-040 init-only path.
-      // RFC-098 B1 (audit S-24): captured under the task write lock so the
-      // baseline never samples a sibling writer mid-write. The pre-set stays
-      // EMPTY on this path (S-4 malformed fallback — see captureGitPreDirty).
-      baseline = await state.writeSem.run(() => captureHead(task.worktreePath))
     }
+    // Malformed / missing payload → baseline stays undefined → captured below on the
+    // wrapper-canonical (pre-set stays empty, S-4 malformed fallback).
     if (existing.status !== 'running') {
       // RFC-053: wrapper enter-running — resumes from awaiting_* / pending.
       await setNodeRunStatus({
@@ -5088,8 +5236,7 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
     }
     // RFC-098 B3 (audit S-7, revision #6): resume does NOT overwrite the
-    // wrapper's consumedUpstreamRunsJson — fresh-mint-only, see
-    // computeWrapperConsumed's failure-mode ledger.
+    // wrapper's consumedUpstreamRunsJson — fresh-mint-only.
   } else {
     // RFC-098 B3 (audit S-7): external-upstream provenance at fresh mint
     // (mirrors the fanout wrapper, RFC-074 §8 D3) — an upstream rerun demotes
@@ -5108,25 +5255,60 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     // any reachable markWrapperTerminal (DB-first rule, lifecycle.ts).
     await transitionNodeRunStatus({ db, nodeRunId: wrapperRunId, event: { kind: 'mark-running' } })
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'running')
-    // RFC-098 B1 (audit S-24): baseline under the task write lock; B3 (S-4):
-    // the pre-existing dirty set is sampled in the SAME lock window so both
-    // describe one consistent worktree state.
+    // baseline/preDirty captured below on the wrapper-canonical (after it exists).
+  }
+
+  // RFC-130 T11 (D29): wrapper-PRIVATE canonical. The wrapper's inner scope runs in
+  // a `wrapper-canonical` — an iso worktree of the WRAPPER, branched from the task
+  // canonical — so a sibling writer's merge-back into the TASK canonical cannot
+  // pollute THIS wrapper's git_diff (AC-10). Inner nodes isolate FROM / merge-back
+  // INTO the wrapper-canonical (their createNodeIso reads `innerState.repos`); the
+  // wrapper's total delta merges back into the task canonical as ONE unit on done.
+  // On a NON-git worktree (mock harness) createNodeIso returns passthrough → the
+  // wrapper runs directly on the task canonical as pre-RFC-130 (diff + no merge-back).
+  const wrapperIso = await createOrRebuildWrapperIso(state, wrapperRunId, existing)
+  const wrapperCanonPath = wrapperIso.passthrough
+    ? task.worktreePath
+    : (wrapperIso.repos[0]?.isoWorktreePath ?? task.worktreePath)
+  const innerState: SchedulerState = wrapperIso.passthrough
+    ? state
+    : {
+        ...state,
+        repos: wrapperIso.repos.map((r) => ({
+          repoPath: r.repoPath,
+          worktreePath: r.isoWorktreePath,
+          worktreeDirName: r.worktreeDirName,
+          baseBranch: r.baseBranch,
+        })),
+      }
+
+  // RFC-130 T11 / §6.4: capture baseline (+ preDirty on fresh mint) on the WRAPPER-
+  // canonical, NOT the task canonical. Critical for a git wrapper NESTED IN A LOOP:
+  // the wrapper-canonical already carries the loop's prior-iteration writes as its
+  // dirty-at-entry set, so preDirty subtracts them and each iteration's git_diff
+  // stays that-round-only (per-iteration, §6.4/6.5) — diffing the task canonical
+  // (which the loop hasn't merged into yet) would leave preDirty empty and wrongly
+  // report the cumulative union. RFC-098 B1 (S-24): captured under the write lock.
+  if (baseline === undefined) {
+    const isFresh = existing === null
     const entry = await state.writeSem.run(async () => {
-      const base = await captureHead(task.worktreePath)
-      const pre = await captureGitPreDirty(task.worktreePath, base, log)
+      const base = await captureHead(wrapperCanonPath)
+      const pre = isFresh ? await captureGitPreDirty(wrapperCanonPath, base, log) : {}
       return { base, pre }
     })
     baseline = entry.base
     preDirty = entry.pre
-    await persistWrapperProgress(db, wrapperRunId, {
-      kind: 'git',
-      baseline,
-      preDirty,
-      phase: 'inner-running',
-    })
+    if (isFresh) {
+      await persistWrapperProgress(db, wrapperRunId, {
+        kind: 'git',
+        baseline,
+        preDirty,
+        phase: 'inner-running',
+      })
+    }
   }
 
-  const subRes = await runScope(state, {
+  const subRes = await runScope(innerState, {
     scopeIds: new Set(inner),
     iteration,
     log: log.child(`git:${node.id}`),
@@ -5199,10 +5381,12 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     // the previous generation's residue as preDirty (wrapper re-run performs
     // no worktree rollback) — recorded in design/RFC-098 §B3.
     paths = await state.writeSem.run(async () => {
-      const all = await gitChangedFiles(task.worktreePath, baseline || 'HEAD')
+      // RFC-130 T11: diff the WRAPPER-canonical (isolated from sibling merge-backs),
+      // not the task canonical — with passthrough this IS the task canonical.
+      const all = await gitChangedFiles(wrapperCanonPath, baseline || 'HEAD')
       const candidates = all.filter((p) => preDirty[p] !== undefined)
       if (candidates.length === 0) return all
-      const post = await gitBlobHashes(task.worktreePath, candidates)
+      const post = await gitBlobHashes(wrapperCanonPath, candidates)
       return all.filter((p) => preDirty[p] === undefined || post[p] !== preDirty[p])
     })
   } catch (err) {
@@ -5214,6 +5398,31 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   await db
     .insert(nodeRunOutputs)
     .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: paths.join('\n') })
+  // RFC-130 T11: merge the wrapper's total delta (its wrapper-canonical) back into
+  // the TASK canonical as ONE unit — the wrapper is isolated like a node. Clean →
+  // materialized + merge_state='merged' (D15 lets downstream consume the git_diff);
+  // conflict → merge agent (§6), unresolved → the wrapper parks conflict-human (iso
+  // kept for the human); a merge-back error fails the wrapper loudly. Passthrough
+  // wrappers already ran on the task canonical (nothing to merge, merge_state NULL).
+  if (!wrapperIso.passthrough) {
+    const mb = await mergeBackWrapperIso(state, wrapperIso, wrapperRunId, node, iteration, log)
+    if (mb.kind === 'awaiting_human') {
+      return {
+        kind: 'awaiting_human',
+        summary: `wrapper merge conflict: ${mb.detail}`,
+        message: 'merge-conflict',
+      }
+    }
+    if (mb.kind === 'merge-failed') {
+      await markWrapperTerminal(db, wrapperRunId, 'failed', `wrapper-merge-failed:${mb.msg}`)
+      broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
+      return {
+        kind: 'failed',
+        summary: `wrapper merge-back failed: ${mb.msg}`,
+        message: 'wrapper-merge-failed',
+      }
+    }
+  }
   await markWrapperTerminal(db, wrapperRunId, 'done')
   broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
   return { kind: 'ok', summary: '', message: '' }
