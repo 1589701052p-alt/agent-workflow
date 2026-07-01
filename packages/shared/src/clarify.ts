@@ -500,6 +500,98 @@ export function renderManualFeedbackSection(title: string | null, body: string |
   return lines.join('\n').trimEnd()
 }
 
+// =============================================================================
+// RFC-132 — unified FLAT clarify queue render (PR-1 / T1).
+//
+// The single, flat `## Clarify Q&A` block that supersedes BOTH the round-grouped
+// `buildClarifyPromptBlock` loop (self / questioner) AND the designer-only
+// `buildExternalFeedbackBlock`. Every answered question renders as an EQUAL peer:
+//   - NO `### Round N` grouping, NO history-vs-current-round split,
+//   - NO sibling scope block, NO per-question directive trailer,
+//   - ZERO attribution (RFC-099 — never render who asked / who answered).
+// self, questioner and designer entries are INDISTINGUISHABLE here (the flat
+// model's core invariant — the input type carries no role / round / owner field,
+// so a caller structurally cannot group or attribute). Only a manual instruction
+// (§15, no Q&A) differs in shape, rendered as a peer bullet of its body.
+//
+// PR-1 lands this UNWIRED next to the legacy renderers; PR-2 / PR-4 route the
+// injectors through it and delete the round-grouped / External-Feedback blocks.
+// =============================================================================
+
+/** The stable heading of the flat clarify queue block. Exported so the golden
+ *  test locks it and PR-2 callers reference one constant. */
+export const FLAT_CLARIFY_QUEUE_BLOCK_TITLE = '## Clarify Q&A' as const
+
+/** One rendered entry of the flat queue: a resolved clarify Q&A (self /
+ *  questioner / designer — all peers) OR a manual instruction (§15). The type
+ *  deliberately has NO role / round / owner field — the flat model cannot group
+ *  or attribute even if a caller tried. */
+export type FlatClarifyEntry =
+  | { question: ClarifyQuestion; answer: ClarifyAnswer | undefined }
+  | { manualTitle: string | null; manualBody: string | null }
+
+function isManualFlatEntry(
+  e: FlatClarifyEntry,
+): e is { manualTitle: string | null; manualBody: string | null } {
+  return !('question' in e)
+}
+
+/** Render one Q&A entry as a flat peer bullet (self/questioner/designer alike). */
+function renderFlatQaItem(question: ClarifyQuestion, answer: ClarifyAnswer | undefined): string {
+  const kindLabel = question.kind === 'single' ? 'single-choice' : 'multi-choice'
+  const optionLabels = question.options
+    .map((o) => (o.recommended ? `${o.label} [recommended]` : o.label))
+    .join(', ')
+  const answerText =
+    answer === undefined
+      ? 'User did not answer this question.'
+      : summariseClarifyAnswer(question, answer)
+  return [
+    `- Q: ${question.title}`,
+    `  Type: ${kindLabel} / Options: ${optionLabels}`,
+    `  Answer: ${answerText}`,
+  ].join('\n')
+}
+
+/** Render one manual instruction (§15) as a flat peer bullet. Title (if any) is
+ *  the bullet line; the body indents under it. Returns '' when both are empty. */
+function renderFlatManualItem(title: string | null, body: string | null): string {
+  const t = (title ?? '').trim()
+  const b = (body ?? '').trim()
+  if (t.length === 0 && b.length === 0) return ''
+  if (t.length === 0) {
+    return b
+      .split('\n')
+      .map((line, i) => (i === 0 ? `- ${line}` : `  ${line}`))
+      .join('\n')
+  }
+  if (b.length === 0) return `- ${t}`
+  const bodyLines = b
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n')
+  return `- ${t}\n${bodyLines}`
+}
+
+/**
+ * Render a list of already-answered clarify entries into the single flat
+ * `## Clarify Q&A` block. Entries render in the given order (the caller sorts by
+ * dispatched_at / id for a stable flat order); empty / all-empty input →
+ * `undefined` (no block to inject). See the section header for the invariants
+ * this locks (no rounds / scope / directive trailer / attribution).
+ */
+export function renderFlatClarifyQueue(entries: FlatClarifyEntry[]): string | undefined {
+  const items: string[] = []
+  for (const e of entries) {
+    const item = isManualFlatEntry(e)
+      ? renderFlatManualItem(e.manualTitle, e.manualBody)
+      : renderFlatQaItem(e.question, e.answer)
+    if (item.length > 0) items.push(item)
+  }
+  if (items.length === 0) return undefined
+  return [FLAT_CLARIFY_QUEUE_BLOCK_TITLE, '', ...items].join('\n')
+}
+
 // -----------------------------------------------------------------------------
 // RFC-059 per-question scope helpers
 //
