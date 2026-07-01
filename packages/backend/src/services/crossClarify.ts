@@ -62,7 +62,6 @@ import {
   countDesignerScopedAcrossSources,
   extractDesignerScopedSubset,
   mergeSealedAnswers,
-  NEW_CLARIFY_TRIGGER_CAUSES,
   findCrossClarifyNodesPointingToDesigner,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
@@ -95,6 +94,7 @@ import {
 import { parseAnswersArray, sealAnswersServerSide } from '@/services/clarify'
 import {
   hasOpenDispatchedEntryOnHome,
+  isTargetNodeConsumed,
   roundHasDispatchedSelfQuestioner,
 } from '@/services/clarifyRerunLedger'
 import { setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
@@ -1711,8 +1711,21 @@ async function buildNodeQueueExternalFeedback(
     sameNode.map((r) => r.id),
   )
 
-  const entries = candidates.filter((e) =>
-    renderableForRun(e.triggerRunId, dispatchedRunId, sameNode, outputRunIds),
+  // RFC-131 — designer 域注入判据同 self/questioner（PR-2）从 per-entry window（renderableForRun）改为
+  // target 派生老化（isTargetNodeConsumed）：一个 dispatched designer/manual 条目注入 iff 其 target
+  // （= 本 home 节点）在其承接 rerun（trigger_run_id）本身或其后尚未 done+output（未绑 trigger 的
+  // sinceRunId=null → 首次注入）。覆盖纯重跑 + 多轮 designer 累积（去 window 上界）+ 产出后老化。
+  // 不加 sealed 过滤：designer 由 stage gate 保证 dispatched⟹sealed，manual（§15）无 clarify 答案/seal
+  // 但同样应注入其 manual_body。
+  const entries = candidates.filter(
+    (e) =>
+      !isTargetNodeConsumed(
+        handlerNodeId,
+        rRow?.iteration ?? 0,
+        e.triggerRunId,
+        sameNode,
+        outputRunIds,
+      ),
   )
   if (entries.length === 0) return undefined
 
@@ -1814,51 +1827,6 @@ async function buildNodeQueueExternalFeedback(
   if (manualEntries.length > 0) csvParts.push('manual')
   const csv = csvParts.join(', ')
   return { block, iteration: String(generation), sourcesCsv: csv, runScoped: true, graphOwned }
-}
-
-/**
- * RFC-120 §18 (Codex H2) — should a dispatched designer question bound to `triggerRunId`
- * render for the current run `currentRunId`? `sameNode` is every node_run on the handler
- * node at the current run's iteration (the process-retry / clarify-rerun chain). A question
- * renders iff:
- *   - triggerRunId IS NULL (unbound → first render of this run picks + binds it); OR
- *   - triggerRunId is in `sameNode` AND the current run is inside triggerRunId's lineage
- *     WINDOW [triggerRunId, next-clarify-rerun-after-it) AND that window has NO consumed
- *     (done+output) run. This re-renders a question bound to a FAILED earlier attempt for
- *     its process-retry, but NOT a question already consumed (done+output), and NOT one
- *     bound to a SEPARATE later clarify dispatch (that dispatch is the window's upper bound).
- */
-function renderableForRun(
-  triggerRunId: string | null,
-  currentRunId: string,
-  sameNode: ReadonlyArray<typeof nodeRuns.$inferSelect>,
-  outputRunIds: ReadonlySet<string>,
-): boolean {
-  if (triggerRunId === null) return true
-  const anchor = sameNode.find((r) => r.id === triggerRunId)
-  if (anchor === undefined) return false // bound to a run in another frame / GC'd → not ours
-  const triggerCauses = new Set<string>(NEW_CLARIFY_TRIGGER_CAUSES)
-  // Upper bound = the next NEW-clarify rerun strictly after the anchor (a separate dispatch).
-  let upperBound: string | null = null
-  for (const r of sameNode) {
-    if (r.id > triggerRunId && r.rerunCause !== null && triggerCauses.has(r.rerunCause)) {
-      if (upperBound === null || r.id < upperBound) upperBound = r.id
-    }
-  }
-  const inWindow = (id: string): boolean =>
-    id >= triggerRunId && (upperBound === null || id < upperBound)
-  if (!inWindow(currentRunId)) return false // current run belongs to a later dispatch window
-  // Consumed iff any TOP-LEVEL run in the window already produced output.
-  for (const r of sameNode) {
-    if (
-      r.parentNodeRunId === null &&
-      inWindow(r.id) &&
-      r.status === 'done' &&
-      outputRunIds.has(r.id)
-    )
-      return false
-  }
-  return true
 }
 
 /** node_run ids (within `runIds`) that captured ≥1 `<workflow-output>` row. */

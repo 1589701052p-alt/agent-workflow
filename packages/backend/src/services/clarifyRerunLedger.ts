@@ -348,32 +348,36 @@ export async function roundHasDispatchedSelfQuestioner(
   return rows.length > 0
 }
 
-/** RFC-131 — 派生式（时序）老化判据（取代 isQueueEntryRenderableForRun 的 window 消费 +
- *  isDispatchedEntryConsumed 的 in-flight/revivable mode 分裂）。一个 target 队列里、`sinceMs`（问题
- *  `dispatched_at`）时下发的问题是否「已被 target 产出老化」= 该 (target, iteration) 有一个 TOP-LEVEL
- *  run 处于 `done` + 捕获 ≥1 <workflow-output>（正常输出走完），**且它在该问题下发之后开跑**
- *  （`startedAt >= sinceMs`）。
+/** RFC-131 — 派生式老化判据（取代 isQueueEntryRenderableForRun 的 window 消费 + isDispatchedEntryConsumed
+ *  的 in-flight/revivable mode 分裂）。一个 target 队列里、承接 rerun 为 `sinceRunId`（问题的
+ *  `trigger_run_id`）的问题是否「已被 target 产出老化」= 该 (target, iteration) 有一个 TOP-LEVEL run 处于
+ *  `done` + 捕获 ≥1 <workflow-output>（正常输出走完），**且其 id ≥ `sinceRunId`**（承接 rerun 本身或其后
+ *  的 rerun 产出——ULID 单调递增，id 序等价「问题被承接之后 target 产出了」）。
  *
- *  为什么带时序锚 `sinceMs`（而非笼统「node 有过 done+output」）：一个 node 产出后可以再开新一轮反问
- *  （round N+1）——那批新问题在上次产出**之后**下发，绝不能被上次产出老化。时序锚保证「只有在问题
- *  下发之后才产出的 run」才老化它，round N+1 由它自己的产出老化。
+ *  为什么用 trigger_run_id 的 id 序锚（而非 startedAt 时间锚、也非笼统「node 有过 done+output」）：
+ *   - 笼统会误伤 round N+1（node 产出后再开新一轮反问，那批新问题不能被上次产出老化）；
+ *   - startedAt 脆弱（mint 时为 null、runner spawn 才 set；时钟精度）；
+ *   - trigger_run_id 是问题注入时绑定的承接 rerun（buildClarify*Context 绑），ULID 单调 → id 序 robust。
+ *  关键：**不设 window 上界**——renderableForRun 的「下一 clarify rerun」上界会把 round 1 在 round 2 的
+ *  rerun 里排除（正是多轮丢历史根因）；这里只要承接 rerun 或其后 target 产出过，就老化。
  *
  *  三态（RFC-131 §2 核心正确性）：
- *   - `done` + output 且 `startedAt >= sinceMs`（该问题下发后正常产出）→ TRUE：老化、定型、不再注入。
+ *   - 承接 rerun（id ≥ sinceRunId）后 target `done`+output → TRUE：老化、定型、不再注入。
  *   - `done` 无 output（问了下一轮反问；runner.ts:1321 对 <workflow-clarify> 保持 done、不写 port）→
  *     FALSE：不老化，答案留队列、下一次 rerun 继续注入（修多轮丢历史轮 + 天然避免下发死锁）。
  *   - failed / canceled / interrupted / pending / running / awaiting_* → FALSE：未产出（revivable / 在飞）。
- *   - 产出早于本问题下发（`startedAt < sinceMs`）→ FALSE：那是上一轮的旧产出、与本问题无关。
+ *   - `sinceRunId === null`（问题尚未被任何 rerun 承接注入）→ FALSE：未处理、注入（首次绑定）。
  *
- *  派生式（读时按 run 状态 + startedAt 算、不落库）：单一事实源、崩溃 replay 一致、零 schema
- *  migration、幂等。fanout 子 run（parentNodeRunId 非 null）不作数——只看 top-level 产出。 */
+ *  派生式（读时按 run 状态 + id 序算、不落库）：单一事实源、崩溃 replay 一致、零 schema migration、
+ *  幂等。fanout 子 run（parentNodeRunId 非 null）不作数——只看 top-level 产出。 */
 export function isTargetNodeConsumed(
   targetNodeId: string,
   iteration: number,
-  sinceMs: number,
+  sinceRunId: string | null,
   runs: ReadonlyArray<NodeRunRow>,
   outputRunIds: ReadonlySet<string>,
 ): boolean {
+  if (sinceRunId === null) return false
   return runs.some(
     (r) =>
       r.nodeId === targetNodeId &&
@@ -381,7 +385,6 @@ export function isTargetNodeConsumed(
       r.parentNodeRunId === null &&
       r.status === 'done' &&
       outputRunIds.has(r.id) &&
-      r.startedAt !== null &&
-      r.startedAt >= sinceMs,
+      r.id >= sinceRunId,
   )
 }

@@ -1,11 +1,14 @@
-// RFC-131 T1 — isTargetNodeConsumed 派生式（时序）老化判据（design §2）。
+// RFC-131 T1 — isTargetNodeConsumed 派生式老化判据（design §2）。
 //
-// 核心正确性：一个 target 队列里、sinceMs（问题 dispatched_at）时下发的问题「已被产出老化」= 该
-// (target, iteration) 有 top-level run done + output + startedAt >= sinceMs。
+// 核心正确性：一个 target 队列里、承接 rerun 为 sinceRunId（问题 trigger_run_id）的问题「已被产出老化」
+// = 该 (target, iteration) 有 top-level run done + output + 其 id >= sinceRunId（ULID 单调 → 承接 rerun
+// 本身或其后产出）。
 //   - done-无-output（问下一轮反问）NOT consumed → 不老化、下轮 rerun 继续注入（修多轮丢历史轮 + 天然
 //     避免死锁）。
-//   - 时序锚：一个 node 产出后可以再开新一轮反问（round N+1），那批新问题在上次产出之后下发，不能被
-//     上次产出老化——只有「在问题下发之后才开跑的产出 run」才老化它。
+//   - id 序锚（取代脆弱的 startedAt 时间锚：mint 时 startedAt=null、runner spawn 才 set）：一个 node 产出
+//     后可以再开新一轮反问（round N+1），那批新问题的承接 rerun id 大于上次产出 run id，不能被上次产出
+//     老化——只有「id >= 问题承接 rerun」的产出才老化它。
+//   - sinceRunId===null（问题尚未被任何 rerun 承接注入）→ NOT consumed（首次注入）。
 
 import { describe, expect, test } from 'bun:test'
 
@@ -27,48 +30,54 @@ function mkRun(over: Partial<NodeRunRow>): NodeRunRow {
   } as NodeRunRow
 }
 
-describe('isTargetNodeConsumed — RFC-131 派生式（时序）老化', () => {
-  test('done + output（下发后产出）→ consumed（老化）', () => {
+describe('isTargetNodeConsumed — RFC-131 派生式老化', () => {
+  test('done + output（承接 rerun 后产出）→ consumed（老化）', () => {
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'done' })], new Set(['r1'])),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'done' })], new Set(['r1'])),
     ).toBe(true)
   })
 
   test('done 无 output（问下一轮反问）→ NOT consumed（不老化、下轮继续注入）', () => {
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'done' })], new Set<string>()),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'done' })], new Set<string>()),
     ).toBe(false)
   })
 
   test('failed → NOT consumed（revivable）', () => {
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'failed' })], new Set(['r1'])),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'failed' })], new Set(['r1'])),
     ).toBe(false)
   })
 
   test('pending / running → NOT consumed（在飞）', () => {
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'pending' })], new Set(['r1'])),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'pending' })], new Set(['r1'])),
     ).toBe(false)
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'running' })], new Set(['r1'])),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'running' })], new Set(['r1'])),
     ).toBe(false)
   })
 
   test('canceled → NOT consumed', () => {
     expect(
-      isTargetNodeConsumed(T, 0, 0, [mkRun({ id: 'r1', status: 'canceled' })], new Set(['r1'])),
+      isTargetNodeConsumed(T, 0, 'r0', [mkRun({ id: 'r1', status: 'canceled' })], new Set(['r1'])),
+    ).toBe(false)
+  })
+
+  test('sinceRunId===null（未绑承接 rerun）→ NOT consumed（首次注入）', () => {
+    expect(
+      isTargetNodeConsumed(T, 0, null, [mkRun({ id: 'r1', status: 'done' })], new Set(['r1'])),
     ).toBe(false)
   })
 
   test('no run → NOT consumed', () => {
-    expect(isTargetNodeConsumed(T, 0, 0, [], new Set<string>())).toBe(false)
+    expect(isTargetNodeConsumed(T, 0, 'r0', [], new Set<string>())).toBe(false)
   })
 
   test('iteration 隔离：done+output 在别的 iteration 不算', () => {
     const runs = [mkRun({ id: 'r1', status: 'done', iteration: 1 })]
-    expect(isTargetNodeConsumed(T, 0, 0, runs, new Set(['r1']))).toBe(false)
-    expect(isTargetNodeConsumed(T, 1, 0, runs, new Set(['r1']))).toBe(true)
+    expect(isTargetNodeConsumed(T, 0, 'r0', runs, new Set(['r1']))).toBe(false)
+    expect(isTargetNodeConsumed(T, 1, 'r0', runs, new Set(['r1']))).toBe(true)
   })
 
   test('node 隔离：别的 node done+output 不算', () => {
@@ -76,7 +85,7 @@ describe('isTargetNodeConsumed — RFC-131 派生式（时序）老化', () => {
       isTargetNodeConsumed(
         T,
         0,
-        0,
+        'r0',
         [mkRun({ id: 'r1', nodeId: 'other', status: 'done' })],
         new Set(['r1']),
       ),
@@ -88,7 +97,7 @@ describe('isTargetNodeConsumed — RFC-131 派生式（时序）老化', () => {
       isTargetNodeConsumed(
         T,
         0,
-        0,
+        'r0',
         [mkRun({ id: 'r1', status: 'done', parentNodeRunId: 'parent' })],
         new Set(['r1']),
       ),
@@ -97,14 +106,14 @@ describe('isTargetNodeConsumed — RFC-131 派生式（时序）老化', () => {
 
   test('混：一个 done-无-output + 一个 done+output → 老化（有产出即可）', () => {
     const runs = [mkRun({ id: 'r1', status: 'done' }), mkRun({ id: 'r2', status: 'done' })]
-    expect(isTargetNodeConsumed(T, 0, 0, runs, new Set(['r2']))).toBe(true)
+    expect(isTargetNodeConsumed(T, 0, 'r0', runs, new Set(['r2']))).toBe(true)
   })
 
-  test('时序：产出早于问题下发（startedAt < sinceMs）→ NOT consumed（round N+1 新问题不被旧产出老化）', () => {
-    const runs = [mkRun({ id: 'r1', status: 'done', startedAt: 500 })] // 旧产出 @500
-    // 新问题在 @1000 下发（旧产出之后）→ 旧产出不老化它。
-    expect(isTargetNodeConsumed(T, 0, 1000, runs, new Set(['r1']))).toBe(false)
-    // 老问题在 @400 下发（旧产出之前）→ 被该产出老化。
-    expect(isTargetNodeConsumed(T, 0, 400, runs, new Set(['r1']))).toBe(true)
+  test('id 序：产出 run id < 承接 rerun id → NOT consumed（round N+1 新问题不被旧产出老化）', () => {
+    const runs = [mkRun({ id: 'r1', status: 'done' })] // 旧产出 run r1（round N）
+    // round N+1 新问题的承接 rerun = r2（id > r1）→ 旧产出 r1 不老化它。
+    expect(isTargetNodeConsumed(T, 0, 'r2', runs, new Set(['r1']))).toBe(false)
+    // 老问题承接 rerun = r0（id < r1）→ 被 r1 产出老化。
+    expect(isTargetNodeConsumed(T, 0, 'r0', runs, new Set(['r1']))).toBe(true)
   })
 })

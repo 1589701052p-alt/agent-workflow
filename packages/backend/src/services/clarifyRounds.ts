@@ -656,17 +656,18 @@ export async function buildClarifyNodeQueueContext(
     sameNode.map((r) => r.id),
   )
   // RFC-131 — 注入判据从 per-entry window（isQueueEntryRenderableForRun）改为「target 派生老化」：一个
-  // sealed 条目注入 iff 它的 target（= 本 home 节点）在该条目下发（dispatched_at）之后尚未产出
-  // （!isTargetNodeConsumed）。好处：① 纯重跑（review-iterate、无新 dispatch）也注入所有未老化条目——
-  // 旧 window 判据在此时 entries 空 early-return、漏纯重跑；② 产出后（done+output）统一老化、不再重注入
-  // （review 重做靠 RFC-119 prior-output）；③ 多轮天然累积（round 1 未老化时随 round 2 一起注入）。
+  // sealed 条目注入 iff 它的 target（= 本 home 节点）在其承接 rerun（trigger_run_id）本身或其后尚未产出
+  // （!isTargetNodeConsumed；未绑 trigger 的条目 sinceRunId=null → 首次注入）。好处：① 纯重跑
+  // （review-iterate、无新 dispatch）也注入所有未老化条目——旧 window 判据在此时 entries 空 early-return、
+  // 漏纯重跑；② 产出后（done+output）统一老化、不再重注入（review 重做靠 RFC-119 prior-output）；③ 多轮
+  // 天然累积（round 1 的承接 rerun done-无-output 时不老化，随 round 2 一起注入——去 window 上界修丢历史）。
   const entries = candidates.filter(
     (e) =>
       e.sealedAt !== null &&
       !isTargetNodeConsumed(
         args.consumerNodeId,
         rRow?.iteration ?? 0,
-        e.dispatchedAt ?? 0,
+        e.triggerRunId,
         sameNode,
         outputRunIds,
       ),

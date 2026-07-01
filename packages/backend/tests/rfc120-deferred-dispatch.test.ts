@@ -2477,6 +2477,18 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
     })
 
     // A's NEXT rerun's queue no longer includes entryA (bound to the finished run).
+    // RFC-131: the derived-aging predicate reads the home node's runs at the NEXT rerun's
+    // iteration, so that rerun must be a real row (real reruns are always minted into the DB;
+    // the older window predicate tolerated a bare id because it keyed off entryA.trigger_run_id).
+    const afterRunId = ulid()
+    await db.insert(nodeRuns).values({
+      id: afterRunId,
+      taskId: seed.taskId,
+      nodeId: DESIGNER,
+      status: 'pending',
+      retryIndex: 0,
+      iteration: 0,
+    })
     const afterA = await buildExternalFeedbackContext({
       db,
       taskId: seed.taskId,
@@ -2484,7 +2496,7 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
       loopIter: 0,
       designerGeneration: 1,
       definition: seed.def,
-      dispatchedRunId: ulid(), // a brand-new DESIGNER run id
+      dispatchedRunId: afterRunId,
     })
     expect(afterA).toBeUndefined()
 
