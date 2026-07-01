@@ -4220,14 +4220,27 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   const promptTemplate = pickString(innerNode, 'promptTemplate') ?? undefined
   const nodeTimeoutMs = opts.defaultPerNodeTimeoutMs
 
-  // Concurrency: fan-out shards previously bypassed every cap. Acquire the
-  // global node slot + the fan-out subprocess slot (the previously-dead
-  // subprocessSem), plus the write slot for non-readonly shards so writers
-  // serialize on the shared worktree. See scheduler-boundary-fanout-concurrency.test.ts.
-  // RFC-098 B1 (audit S-17): write ≺ global ≺ subprocess (see single-node site).
-  const releaseWrite = innerAgent.readonly ? null : await state.writeSem.acquire()
+  // RFC-130: each fan-out shard runs in its OWN isolated worktree (no shared-worktree
+  // writeSem serialization — shards run truly in parallel up to global/subprocess
+  // caps and merge their deltas back one at a time). Shards usually touch DIFFERENT
+  // files (per-file / per-dir sharding), so merge-backs rarely conflict.
   const releaseGlobal = await state.globalSem.acquire()
   const releaseSub = await state.subprocessSem.acquire()
+  let shardIso: IsoHandle
+  try {
+    shardIso = await state.writeSem.run(() =>
+      createNodeIso({ appHome: opts.appHome, taskId, nodeRunId: shardRunId, canonRepos: state.repos, log }),
+    )
+    if (!shardIso.passthrough) await persistIsoBase(db, shardRunId, task.repoCount, shardIso)
+  } catch (err) {
+    releaseSub()
+    releaseGlobal()
+    log.warn('fanout shard iso setup failed', {
+      shardKey,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { kind: 'failed', shardKey, outputs: {}, message: 'iso-setup-failed' }
+  }
   try {
     // RFC-111 D15 (Codex impl-gate P2-1): freeze the runtime for the fanout shard
     // so a claude-selected agent-multi dispatches its shards on claude, not opencode.
@@ -4246,19 +4259,25 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       runtimeBinary: shardRuntime.binary,
       runtimeParams: shardRuntime.params,
       inputs,
-      worktreePath: task.worktreePath,
+      // RFC-130 D16: cwd + path tokens → the shard's isolated worktree.
+      worktreePath: shardIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout shard dispatch.
       gitUserName: task.gitUserName,
       gitUserEmail: task.gitUserEmail,
       templateMeta: {
-        repoPath: task.repoPath,
+        repoPath: shardIso.repos[0]?.isoWorktreePath ?? task.repoPath,
         baseBranch: task.baseBranch,
         taskId,
         nodeId: innerNode.id,
         iteration,
         ...(shard !== null ? { shardKey } : {}),
         // RFC-066: per-repo metadata for prompt placeholders.
-        repos: state.repos,
+        repos: shardIso.repos.map((r) => ({
+          repoPath: r.repoPath,
+          worktreePath: r.isoWorktreePath,
+          worktreeDirName: r.worktreeDirName,
+          baseBranch: r.baseBranch,
+        })),
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
@@ -4289,6 +4308,33 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
         message: result.errorMessage ?? `shard-${result.status}`,
       }
     }
+    // RFC-130 §段③: merge the shard's iso delta back into the canonical worktree.
+    if (!shardIso.passthrough) {
+      try {
+        const nodeTrees = await snapshotNodeIsoFinal(shardIso, log)
+        await persistIsoNodeTree(db, shardRunId, task.repoCount, nodeTrees, 'pending-merge')
+        const mergeRes = await state.writeSem.run(() => mergeBackNodeIso(shardIso, nodeTrees, log))
+        if (!mergeRes.clean) {
+          // T3 placeholder — PR-B resolves shard conflicts via the merge agent.
+          await db
+            .update(nodeRuns)
+            .set({ mergeState: 'conflict-human' })
+            .where(eq(nodeRuns.id, shardRunId))
+          const detail = mergeRes.conflicts
+            .map((c) => `${c.worktreeDirName || '(repo)'}: ${c.paths.join(', ')}`)
+            .join('; ')
+          return { kind: 'failed', shardKey, outputs: {}, message: `merge-back-conflict: ${detail}` }
+        }
+        await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, shardRunId))
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        await db
+          .update(nodeRuns)
+          .set({ mergeState: 'merge-failed' })
+          .where(eq(nodeRuns.id, shardRunId))
+        return { kind: 'failed', shardKey, outputs: {}, message: `merge-back-failed: ${msg}` }
+      }
+    }
     return { kind: 'ok', shardKey, outputs: result.outputs, message: '' }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -4297,7 +4343,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   } finally {
     releaseSub()
     releaseGlobal()
-    releaseWrite?.()
+    await discardNodeIso(shardIso, log)
   }
 }
 
@@ -4511,13 +4557,27 @@ async function dispatchFanoutAggregator(
     if (block.length > 0) aggPriorOutputUpdate = { block }
   }
 
-  // Concurrency: the aggregator is a real opencode subprocess too — count it
-  // against the global node + fan-out subprocess caps (and the write slot when
-  // it is non-readonly), like the shards above.
-  // RFC-098 B1 (audit S-17): write ≺ global ≺ subprocess.
-  const releaseWrite = aggAgent.readonly ? null : await state.writeSem.acquire()
+  // RFC-130: the aggregator runs in its OWN isolated worktree too (it can write —
+  // e.g. concatenate shard outputs into a file). Merge-back into canonical on
+  // success; no whole-run writeSem.
   const releaseGlobal = await state.globalSem.acquire()
   const releaseSub = await state.subprocessSem.acquire()
+  let aggIso: IsoHandle
+  try {
+    aggIso = await state.writeSem.run(() =>
+      createNodeIso({ appHome: opts.appHome, taskId, nodeRunId: aggRunId, canonRepos: state.repos, log }),
+    )
+    if (!aggIso.passthrough) await persistIsoBase(db, aggRunId, task.repoCount, aggIso)
+  } catch (err) {
+    releaseSub()
+    releaseGlobal()
+    return {
+      kind: 'failed',
+      summary: 'aggregator iso setup failed',
+      message: 'iso-setup-failed',
+      outputs: {},
+    }
+  }
   try {
     // RFC-111 D15 (Codex impl-gate P2-1): freeze the runtime for the aggregator.
     const aggRuntime = await resolveFrozenRuntime(
@@ -4535,18 +4595,23 @@ async function dispatchFanoutAggregator(
       runtimeBinary: aggRuntime.binary,
       runtimeParams: aggRuntime.params,
       inputs: aggInputs,
-      worktreePath: task.worktreePath,
+      worktreePath: aggIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.
       gitUserName: task.gitUserName,
       gitUserEmail: task.gitUserEmail,
       templateMeta: {
-        repoPath: task.repoPath,
+        repoPath: aggIso.repos[0]?.isoWorktreePath ?? task.repoPath,
         baseBranch: task.baseBranch,
         taskId,
         nodeId: aggNode.id,
         iteration,
         // RFC-066: per-repo metadata for prompt placeholders.
-        repos: state.repos,
+        repos: aggIso.repos.map((r) => ({
+          repoPath: r.repoPath,
+          worktreePath: r.isoWorktreePath,
+          worktreeDirName: r.worktreeDirName,
+          baseBranch: r.baseBranch,
+        })),
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
@@ -4575,6 +4640,23 @@ async function dispatchFanoutAggregator(
         outputs: {},
       }
     }
+    // RFC-130 §段③: merge the aggregator's iso delta back into canonical.
+    if (!aggIso.passthrough) {
+      try {
+        const nodeTrees = await snapshotNodeIsoFinal(aggIso, log)
+        await persistIsoNodeTree(db, aggRunId, task.repoCount, nodeTrees, 'pending-merge')
+        const mergeRes = await state.writeSem.run(() => mergeBackNodeIso(aggIso, nodeTrees, log))
+        if (!mergeRes.clean) {
+          await db.update(nodeRuns).set({ mergeState: 'conflict-human' }).where(eq(nodeRuns.id, aggRunId))
+          return { kind: 'failed', summary: 'aggregator merge conflict', message: 'merge-back-conflict', outputs: {} }
+        }
+        await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, aggRunId))
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        await db.update(nodeRuns).set({ mergeState: 'merge-failed' }).where(eq(nodeRuns.id, aggRunId))
+        return { kind: 'failed', summary: 'aggregator merge failed', message: `merge-back-failed: ${msg}`, outputs: {} }
+      }
+    }
     // Aggregator's outputs are already persisted by runner.ts (nodeRunOutputs
     // upsert at runner.ts §port-persist). The wrapper-row outlet copy is
     // handled by the caller (runFanoutWrapperNode after this returns).
@@ -4586,7 +4668,7 @@ async function dispatchFanoutAggregator(
   } finally {
     releaseSub()
     releaseGlobal()
-    releaseWrite?.()
+    await discardNodeIso(aggIso, log)
   }
 }
 

@@ -33,7 +33,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { agents, tasks, workflows } from '../src/db/schema'
+import { agents, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -197,14 +197,24 @@ describe('regression: wrapper-fanout shard dispatch MUST honor concurrency caps 
   // serialize through writeSem regardless of the global/subprocess caps —
   // exactly like two write agents at the same level. Today the fanout path
   // never acquires writeSem → they run concurrently (~400-700ms).
-  test('B: non-readonly (writer) shards serialize via writeSem even when caps allow parallelism', async () => {
+  test('B: RFC-130 — writer shards each run in their OWN iso worktree and merge back correctly (no shared-worktree corruption)', async () => {
+    // RFC-130 SUPERSEDES the RFC-098 B1 writeSem-serializes-writer-shards model:
+    // each shard runs in its OWN isolated worktree and merges its delta back one at
+    // a time. The multi-minute AGENT RUNS overlap (only the brief §段①③ snapshot +
+    // `git worktree add` + merge-back serialize on writeSem). We do NOT wall-clock
+    // this any more: with a mock "agent" that only sleeps, the per-shard iso git
+    // overhead (≈1s/shard, serialized) is the same order as the run, so wall-clock
+    // is not a clean parallelism signal (it IS for real minute-long agents — see
+    // scheduler.test.ts's top-level parallel lock). Instead we lock the RFC-130
+    // guarantee that matters here: three writer shards complete WITHOUT corrupting
+    // each other (no shared worktree), and the task finishes. The generous timeout
+    // still guards against a merge-back/writeSem deadlock regression.
     await seedAgent(h.db, 'worker', ['result'], false) // writer
     const def = fanoutDef()
     const taskId = await seedWorkflowAndTask(h, def, { docs: 'a.md\nb.md\nc.md' })
-    const t0 = Date.now()
     await withEnv(
       {
-        MOCK_OPENCODE_DELAY_MS: '400',
+        MOCK_OPENCODE_DELAY_MS: '200',
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ result: 'ok' }),
       },
       () =>
@@ -217,10 +227,12 @@ describe('regression: wrapper-fanout shard dispatch MUST honor concurrency caps 
           multiProcessSubprocessConcurrency: 4,
         }),
     )
-    const elapsed = Date.now() - t0
     const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
     expect(t?.status).toBe('done')
-    // Writers on one worktree must serialize: 3 x 400ms ≈ 1200ms+.
-    expect(elapsed).toBeGreaterThan(1000)
+    // All three shard runs completed done (each in its own iso, merged back).
+    const shardRuns = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.shardKey !== null && r.status === 'done',
+    )
+    expect(shardRuns.length).toBeGreaterThanOrEqual(3)
   }, 30_000)
 })

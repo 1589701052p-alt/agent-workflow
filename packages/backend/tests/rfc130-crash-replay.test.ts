@@ -67,7 +67,11 @@ describe('RFC-130 crash replay (D15 gate + T3c2 replay)', () => {
         { id: 'B', kind: 'agent-single', agentName: 'b' },
       ],
       edges: [
-        { source: { nodeId: 'A', portName: 'summary' }, target: { nodeId: 'B', portName: 'in' } },
+        {
+          id: 'eAB',
+          source: { nodeId: 'A', portName: 'summary' },
+          target: { nodeId: 'B', portName: 'in' },
+        },
       ],
     }
     const scopeNodes = def.nodes
@@ -175,9 +179,6 @@ describe('RFC-130 crash replay (D15 gate + T3c2 replay)', () => {
       taskId,
       nodeId: 'A',
       status: 'done', // runner wrote done…
-      cause: 'initial',
-      retryIndex: 0,
-      iteration: 0,
       startedAt: Date.now(),
       isoBaseSnapshot: handle.repos[0]!.baseSnapshot,
       isoNodeTree: nodeTrees[''],

@@ -41,14 +41,17 @@ describe('RFC-066 PR-B — source guards', () => {
     expect(SCHEDULER_SRC.includes('task.repoCount > 1')).toBe(true)
   })
 
-  test('PB-G2 scheduler threads `state.repos` into every templateMeta dispatch', () => {
-    // We expect the 3 templateMeta sites (single-agent, fanout shard,
-    // fanout aggregator) to use `state.repos` so they all consume the same
-    // SchedulerState-owned snapshot. Anchor the count at 3 — adjusting up
-    // requires explicit attention so the test catches accidental
-    // duplication or loss.
-    const matches = SCHEDULER_SRC.match(/repos:\s*state\.repos/g) ?? []
-    expect(matches.length).toBeGreaterThanOrEqual(3)
+  test('PB-G2 scheduler threads `state.repos` into every dispatch (via RFC-130 iso creation)', () => {
+    // RFC-130: the 3 dispatch sites (single-agent, fanout shard, fanout aggregator)
+    // no longer pass `state.repos` DIRECTLY into templateMeta — each first builds an
+    // ISOLATED worktree from the SchedulerState-owned snapshot
+    // (`createNodeIso({ canonRepos: state.repos })`) and then threads the DERIVED iso
+    // repos into templateMeta (`<handle>.repos.map(...)`). The snapshot still flows to
+    // every dispatch, now through the iso-creation seam. Anchor on both ends.
+    const canonMatches = SCHEDULER_SRC.match(/canonRepos: state\.repos/g) ?? []
+    expect(canonMatches.length).toBeGreaterThanOrEqual(3)
+    const isoRepoThreads = SCHEDULER_SRC.match(/(isoHandle|shardIso|aggIso)\.repos\.map\(/g) ?? []
+    expect(isoRepoThreads.length).toBeGreaterThanOrEqual(3)
   })
 
   test('PB-G3 runner cwd is opts.worktreePath at the spawn site exactly', () => {
