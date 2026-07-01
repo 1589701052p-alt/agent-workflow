@@ -365,11 +365,20 @@ export async function roundHasDispatchedSelfQuestioner(
  *   - 承接 rerun（id ≥ sinceRunId）后 target `done`+output → TRUE：老化、定型、不再注入。
  *   - `done` 无 output（问了下一轮反问；runner.ts:1321 对 <workflow-clarify> 保持 done、不写 port）→
  *     FALSE：不老化，答案留队列、下一次 rerun 继续注入（修多轮丢历史轮 + 天然避免下发死锁）。
- *   - failed / canceled / interrupted / pending / running / awaiting_* → FALSE：未产出（revivable / 在飞）。
+ *   - review reject/iterate supersede 后的 `canceled`+output（errorMessage 带 `superseded-by-review-` 前缀）→
+ *     TRUE：design §74「第一次 done+output 即永久老化」——reject 把产出 run 翻 canceled 但保留 output，老化
+ *     须存活，否则 reject 重做重注已答 clarify（验收4 bug）。RFC-119 prior-output 同样对 canceled 存活。
+ *   - failed / 非-review-superseded canceled / interrupted / pending / running / awaiting_* → FALSE：未产出（revivable / 在飞）。
  *   - `sinceRunId === null`（问题尚未被任何 rerun 承接注入）→ FALSE：未处理、注入（首次绑定）。
  *
  *  派生式（读时按 run 状态 + id 序算、不落库）：单一事实源、崩溃 replay 一致、零 schema migration、
  *  幂等。fanout 子 run（parentNodeRunId 非 null）不作数——只看 top-level 产出。 */
+// review reject/iterate supersede 把 done+output run 翻成 canceled 但保留 output（review.ts）。canonical
+// 定义在 dispatchFrontier.REVIEW_SUPERSEDE_MARKER_PREFIX / isReviewSupersededRow；本模块是底层（文件头注释：
+// 只 import schema/drizzle/freshness/shared），不 import dispatchFrontier（避免破底层原则 + 传递循环
+// dispatchFrontier→wrapperProgress）。用同值常量 + source-text 测试锁（review-supersede-marker-parity）防漂移。
+const REVIEW_SUPERSEDE_MARKER_PREFIX = 'superseded-by-review-'
+
 export function isTargetNodeConsumed(
   targetNodeId: string,
   iteration: number,
@@ -383,7 +392,12 @@ export function isTargetNodeConsumed(
       r.nodeId === targetNodeId &&
       r.iteration === iteration &&
       r.parentNodeRunId === null &&
-      r.status === 'done' &&
+      // done+output 或 review reject/iterate supersede 后的 canceled+output（design §74「第一次 done+output
+      // 即永久老化」：reject 把产出 run 翻 canceled 但保留 output，若不认它则 reject 重做会重注已答 clarify
+      // ——验收4 bug）。failed / 非-review canceled / interrupted / pending / running+output 仍不老化（revivable / 在飞）。
+      (r.status === 'done' ||
+        (r.status === 'canceled' &&
+          r.errorMessage?.startsWith(REVIEW_SUPERSEDE_MARKER_PREFIX) === true)) &&
       outputRunIds.has(r.id) &&
       r.id >= sinceRunId,
   )
