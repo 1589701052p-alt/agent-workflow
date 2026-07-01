@@ -31,24 +31,30 @@
 **新纯函数**（取代 `isQueueEntryRenderableForRun` window + `isDispatchedEntryConsumed` mode + `consumed_by_*` 戳）：
 
 ```ts
-/** 一个 target 节点在某 iteration 是否「已产出、可老化其队列」。
- *  = 该 (target, iteration) 有一个 top-level run 处于 done 且捕获了 ≥1 <workflow-output>。 */
+/** 一个 target 队列里、承接 rerun 为 sinceRunId（问题 trigger_run_id）的问题是否「已被产出老化」。
+ *  = 该 (target, iteration) 有一个 top-level run 处于 done + 捕获 ≥1 <workflow-output>，且其 id ≥
+ *  sinceRunId（ULID 单调 → 承接 rerun 本身或其后产出）。sinceRunId===null（未绑）→ false（首次注入）。 */
 function isTargetNodeConsumed(
   targetNodeId: string,
   iteration: number,
+  sinceRunId: string | null,
   runs: ReadonlyArray<NodeRunRow>,
   outputRunIds: ReadonlySet<string>,
 ): boolean {
+  if (sinceRunId === null) return false
   return runs.some(
     (r) =>
       r.nodeId === targetNodeId &&
       r.iteration === iteration &&
       r.parentNodeRunId === null &&
       r.status === 'done' &&
-      outputRunIds.has(r.id),
+      outputRunIds.has(r.id) &&
+      r.id >= sinceRunId,
   )
 }
 ```
+
+**时序锚 `sinceRunId`（实现中细化，design 初稿漏了 round N+1 陷阱）**：笼统「target 有过 done+output」会**误伤 round N+1**——一个 node 产出后可再开新一轮反问，那批新问题的承接 rerun id 大于上次产出 run id，绝不能被上次产出老化。锚用问题注入时绑定的**承接 rerun（`trigger_run_id`）+ ULID id 序**（`r.id >= sinceRunId`），而非 `startedAt` 时间锚（rerun mint 时 startedAt=null、runner spawn 才 set，脆弱）。多轮天然累积：round 1 的承接 rerun done-无-output 时不老化，随 round 2 一起注入（**去掉 renderableForRun 的 window 上界**——那个「下一 clarify rerun」上界正是多轮丢历史根因）。
 
 **三态规则（本 RFC 的关键正确性）**：
 
@@ -58,6 +64,7 @@ function isTargetNodeConsumed(
 | `done` **无** output（问了下一轮反问） | ❌ 不老化 | 答案留队列、下一次 rerun **继续注入**（修 round 1 丢失 + 天然避免死锁） |
 | `failed` / `canceled` / `interrupted` | ❌ 不老化 | revivable（retry/resume 重跑）、不放行、不误消费 |
 | `pending` / `running` / `awaiting_*` | ❌ 不老化 | 在飞 |
+| `done`+output 但 `id < sinceRunId`（round N+1 前的旧产出） | ❌ 不老化 | 新一轮问题由它自己的承接 rerun 产出老化，不被上一轮旧产出误老化 |
 
 **为什么派生（而非戳）**：
 - **单一事实源**：老化状态从 run 状态直接派生，不需要 runner 显式标一列、也不会因崩溃漏标而不一致（RFC-098 崩溃 replay 天然一致）。
@@ -113,9 +120,14 @@ function isTargetNodeConsumed(
 ## 7. 防护保留（不因简化放松）
 
 1. **readiness gate**（`dispatchTaskQuestions`）：问题 `sealed_at` 非空才能下发（不变）。
-2. **in-flight 串行化**：同 (target, iteration) 同时只一条在飞 rerun（防 double-mint）。按 target 派生：target 有 pending/running top-level rerun → 拦新 dispatch。取代 `assertNoInFlightDispatch` + `assertNoOpenImmediateLedger` 的 mode 判定，统一为「target 有未产出在飞 run」。
-3. **park**：未下发的 `sealed` 问题 → 钉住 origin 提问节点（frontier 不越过）；`partitionUndispatchedParkTargets` 改按 target 派生老化（target 未产出 = 在飞、不 park；已产出 + 有未下发 sealed = park 等下发）。
+2. **in-flight 串行化**：同 (target, iteration) 同时只一条在飞 rerun（防 double-mint）。**per-entry in-flight 语义**（`assertNoInFlightDispatch` / `openImmediateRounds` 与 `isDispatchedEntryConsumed` 的 `'in-flight'` mode）：一个 dispatched 条目的承接 handler run 处于非 `done`（`status !== 'done'`：pending/running）→ 在飞 → 拦新 dispatch；`done`（含 done-无-output）→ 已 terminate、不拦。**这里不用 `isTargetNodeConsumed`（老化）**——见 §7 末「语义分层勘误」。
+3. **park**：未下发的 `sealed` 问题 → 钉住 origin 提问节点（frontier 不越过）；`partitionUndispatchedParkTargets` 用 **per-entry in-flight**：某 home 节点有 undispatched sealed 且**无**在飞 dispatched（其 handler run 非 `done`）→ park 等下发；有在飞 dispatched（handler pending/running）→ 不 park（否则 strand 已 mint 的 rerun）。**这里也不能用 `isTargetNodeConsumed`**：若按「target 未产出=在飞不 park」字面实现，一个 done-无-output（问下轮反问、已 terminal、节点 idle）的 target 会被判「未产出→不 park」→ frontier 越过该 idle 节点 → 它的 undispatched sealed 问题**永远没机会下发到新 rerun**（死锁）。handler `done`（含 done-无-output）→ 释放 park。
 4. **question-write 锁**（`getTaskQuestionWriteSem`）：seal / dispatch / 老化读一致性保留。
+
+**语义分层勘误（实现中确立，design 初稿的「gate/park 收敛为 isTargetNodeConsumed」措辞过度）**：反问流水有两套正交判据，**不可混用**——
+- **注入判据**（哪些问题进 prompt）= `isTargetNodeConsumed`（target `done`+output 派生老化 + `trigger_run_id` id 序）。只用于 `buildClarifyNodeQueueContext` / `buildNodeQueueExternalFeedback`。
+- **调度判据**（在飞串行 / mint-guard / frontier park）= per-entry in-flight（承接 handler run `status !== 'done'`）。用于 gate / park。
+一个 done-无-output 的 clarify 中间态：注入判据「不老化、下轮继续注入」+ 调度判据「已 terminate、释放 gate/park 让下轮 dispatch」——**两者都要**，若统一到 `isTargetNodeConsumed` 则 park 会死锁。这正是前序 `1fb1646` 的 `LedgerOpenMode` 分层洞察，RFC-131 保留而非收敛掉它。
 
 ## 8. 失败模式
 
@@ -146,7 +158,7 @@ function isTargetNodeConsumed(
 
 | 前序 | 处理 |
 |------|------|
-| 死锁 fix（`isDispatchedEntryConsumed` in-flight/revivable mode，`openImmediateRounds` mode，commit `1fb1646`） | 被派生老化取代（done+output 唯一老化、done-无-output 不老化）；mode 分裂收敛为单一 `isTargetNodeConsumed`。旧函数在 non-deferred 旧路径保留或删。 |
+| 死锁 fix（`isDispatchedEntryConsumed` in-flight/revivable mode，`openImmediateRounds` mode，commit `1fb1646`） | **注入判据**换派生老化（`isTargetNodeConsumed` + trigger id 序）；**调度 mode 保留**——§7「语义分层勘误」：gate/park 的 in-flight/revivable mode 正交于「产出老化」（在飞串行 vs 该不该进 prompt），不收敛掉（若收敛 park 会死锁）。 |
 | history 补丁（`9b1c30e` `buildClarifyNodeQueueContext` 补历史轮） | 被 `buildClarifyQueueContext` 统一取代（更彻底：覆盖纯重跑、不依赖「有新 dispatch」）。 |
 | RFC-127 借壳三账本 | 收编为「target 队列 + in-flight 串行」；`buildBorrowedAgent` / spawn 路径保留（§4 D3）。 |
 
