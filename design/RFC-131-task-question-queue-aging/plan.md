@@ -94,10 +94,14 @@ T1 ─→ T2 ─→ T3 ─→ T4
 - 注入层测试全集完成（self×3 + cross-questioner×2 + designer〔rfc120 §18〕+ round N+1 + failed + 多轮 + 老化不重注〔§18 afterA〕+ golden-lock）。
 - design §4 去借壳设计（`6504cfd`）。
 
-**唯一剩 T4 去借壳的 spawn 层退役（用户 2026-07-01 拍板：等协作者 PR-C 落定后做）**：
-- 注入层去借壳**已随 T2/T4-designer 交付**（问题按 target 投影 + `isTargetNodeConsumed(target)` = 改派进 target 队列的核心已达）。
-- 剩 spawn 层：退役 `buildBorrowedAgent`（`agent.ts:39`）/`resolveBorrowForNode`（`taskQuestionDispatch.ts:966` 三账本）+ scheduler borrow spawn 调用。
-- **硬冲突铁证**：`buildBorrowedAgent` 处理借壳的 `readonly` 继承，而协作者 RFC-130 **PR-C 此刻正改同一函数**（working tree 未提交 diff `@@ -27,14 @@` buildBorrowedAgent 注释 + createAgent/updateAgent/rowToAgent 删 readonly）。T4 退役 buildBorrowedAgent = 同函数覆盖 → CLAUDE.md「同一函数冲突→停下问用户」；+ classifier 拦 `scheduler.ts`。
-- **用户拍板等 PR-C 落定**（AskUserQuestion 2026-07-01），PR-C commit 后我在稳定基线上做 T4（避免同函数 git 冲突 + 覆盖协作者未提交改动）。
+**T4 去借壳（dispatch-only 突破，2026-07-01 交付 —— 不必等 PR-C）**：
+- research agent 证明 dispatch-only 去借壳全在我域 5 文件可做、**不碰 `scheduler.ts`/`agent.ts`**：延迟派发路径 home 语义 `homeTarget`(default??override) → `effectiveTarget`(override??default)，改派 rerun 铸在 target 节点（run.node_id=target），scheduler 纯 node 驱动自然用 target agent、`resolveBorrowForNode(target)` 回落 null（`isBorrowHomeFor`(homeTarget≠target)=false）。`homeTarget`/`buildBorrowedAgent`/`resolveImmediateBorrowForNode` 函数体不动（即时快通道 golden-lock）。
+- 交付：`74d3ee0`（src 5〔taskQuestionDispatch/clarifyRerunLedger/clarifyRounds/crossClarify/taskQuestions〕mint origin→target + 删废弃 single-borrow gate 与 `borrowAgentNode`；注入/park 同步 `effectiveTarget`；去借壳 test 更新 rfc120/rfc127-self-q/p3/p5-a/p5-bc 155 pass）+ `badc6b1`（`rfc127-designer-borrow-dispatch` 改去借壳语义：保留 2 golden-lock + 改 2 去借壳 + 删 4 借壳特性，design §4「改语义或删」授权）。
+- 全量 **4639 pass 0 fail、零回归**；typecheck 绿；协作者 PR-C 已于 `4fdffa5` 落定（committed 删 readonly），本地 typecheck 干净。
+- **行为变更（已知限制）**：改派到 never-run frontier 节点被拒（`task-question-unsafe-dispatch-target`）——去借壳固有（run 铸在 target 本身、无 prior run 可继承；借壳时代能铸在有 run 的 origin 故可放行）。属用户拍板去借壳范围。
 
-**CI 状态**：前序 unused-import blocker 协作者自己修了（`8025194`+`c4b8c24`）。当前唯一红 = 协作者 RFC-130 `scheduler.test.ts:681`「two write agents serialize through write semaphore」（`expect(elapsed).toBeGreaterThan(450)`，s17 改并行 writeSem 后 timing 系统性 384/413ms < 450，非 flaky）——协作者改并行 writeSem 未同步此 serialize test，需协作者更新，非本 RFC。我方 RFC-131 committed typecheck 绿 + 运行时全 pass。
+## ✅ RFC-131 全 6 task（T1–T6）完成
+
+T1 判据 + T2 self/designer 注入 + T3 gate/park in-flight + T4 去借壳(dispatch-only) + T5 scheduler e2e + T6 回归锁 + 注入层测试全集，全量 4639 pass 0 fail、typecheck 绿、单二进制 smoke 绿。
+
+**CI 状态**：前序 unused-import blocker 协作者自己修了（`8025194`+`c4b8c24`）；PR-C（删 readonly）`4fdffa5` 落定。剩协作者 RFC-130 `scheduler.test.ts:681`「two write agents serialize」（s17 并行 writeSem 后 timing 系统性 < 450）+ PR-B writeSem/nodeIsolation working-tree 改动，非本 RFC。
