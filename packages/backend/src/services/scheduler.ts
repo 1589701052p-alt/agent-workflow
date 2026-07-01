@@ -1343,7 +1343,10 @@ export function deriveFrontier(
     if (
       r.status === 'done' &&
       isNodeRunFresh(r, freshestDone) &&
-      (r.mergeState === null || r.mergeState === 'merged')
+      // Normalize undefined (plain test rows) → null (real DB column) so only the
+      // in-flight iso merge states ('pending-merge' / 'isolating' / 'conflict-*' /
+      // 'merge-failed') are gated out; null/'merged' pass (legacy golden-lock).
+      ((r.mergeState ?? null) === null || r.mergeState === 'merged')
     ) {
       completed.add(nodeId)
     }
