@@ -99,13 +99,19 @@
 - **AC-15**：`agents.readonly` 列删除（migration）；`AgentSchema` 等无 `readonly` 字段；`AgentForm` 无只读开关；依赖树无只读 chip；claude-code 无 `--disallowed-tools` 门禁；`fieldReadonly*` i18n 删除。全仓 grep `readonly`（agent 域）无残留。
 - **AC-16**：既有 agent.md / 导入含 `readonly:` 键 → 降级路由进 `frontmatterExtra`（不丢、不报错），与 RFC-115 处理旧 `model:` 键同惯例。
 
+**崩溃安全与隔离位置（Codex 设计 gate 追加）**
+- **AC-19**：node run 的 `status='done'` 只在改动**已合并回主树后**才置——下游节点**绝不**在上游 delta 落主树前被派发（段②③ 之间崩溃 → 上游停在 `pending-merge`、非 done、resume 从 pinned `iso_node_tree` replay 合并、不重跑 agent）。
+- **AC-20**：隔离 / 解冲突 worktree 落在**主 repo 之外**；任意兄弟节点 / wrapper 的 `snapshotFullState(主树)` 的 `git add -A` **不会**把隔离目录 / gitlink 暂存进快照树或合并树（无临时 worktree 泄漏进产物）。
+- **AC-21**：隔离运行下，prompt 里所有承载文件系统路径的令牌（含 `{{__repo_path__}}`）都指向**隔离树**；agent 不会被告知去编辑非隔离路径。
+- **AC-22**：同会话 follow-up 重试（RFC-042/049）**保留同一隔离树**（续跑 session 文件系统与其记忆一致）；仅 fresh-session 重试弃隔离树重快照。
+
 **回归**
 - **AC-17**：线性工作流（无并行分支）行为不变——单个可写节点仍隔离 + 合并，但因无并发，合并总是干净应用（主树未动过），最终产物逐字等价于今天。
 - **AC-18**：`bun run typecheck && bun run test && bun run format:check` 全绿；单二进制 smoke + Playwright e2e 通过。
 
 ## 6. 影响面（详见 design.md / plan.md）
 
-- **数据**：删 `agents.readonly` 列（migration）；`node_runs` 加隔离 worktree 记账列（隔离 worktree 路径 / 隔离起点快照 sha / 合并状态），供 resume 与 GC。
+- **数据**：删 `agents.readonly` 列（migration）；`node_runs` 加隔离记账列（隔离 worktree 路径 / 隔离起点快照 sha / **隔离终态快照 sha（replay 合并用）** / 合并状态 `merge_state`），供 downstream 就绪门控、resume replay 与 GC。
 - **后端核心**：`scheduler.ts`（隔离派发 + 合并回收 + 冲突→合并 agent + 三处 `writeSem` 语义改写）、`util/git.ts`（隔离 worktree 创建 + 三路合并原语）、`services/nodeRollback.ts`（回滚改为「弃隔离 worktree」）、新 `services/mergeAgent.ts`（内置合并 agent，仿 commitPush）、`services/gc.ts`（隔离 worktree GC）、`services/recovery.ts`（resume 适配）、`runner.ts`（去 readonly + cwd 指隔离 worktree）、`runtime/claudeCode/spawn.ts`（去门禁）。
 - **配置**：新增合并 agent 运行时配置字段（仿 `commitPushRuntime`）。
 - **前端**：`AgentForm` 去只读开关、`DependencyTree*` 去 chip、i18n 清 key、设置页加合并 agent 运行时选择器。

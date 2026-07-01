@@ -24,22 +24,26 @@ DAG 并行已在（`scheduler.ts:711` 完成驱动 frontier），但可写节点
 ```
 ① 快照-派发（持 writeSem，毫秒级）
     base = snapshotFullState(主树)          // 含 untracked，pin 防 gc
-    git worktree add --detach <iso> base    // 隔离树
+    git worktree add --detach <iso> base    // 隔离树（在主 repo 之外，D14）
    释放 writeSem
 ② 运行（持 globalSem，分钟级；不持 writeSem）
     runNode(cwd = 隔离树)                     // opencode 并行跑
+    // 成功：落 node 输出（node_run_outputs）+ 快照 pin node_tree=snapshotFullState(隔离树)
+    //       + merge_state='pending-merge'。★status 仍不置 'done'（D15）
    释放 globalSem
 ③ 合并回收（持 writeSem，毫秒级；冲突时含合并 agent）
-    node_tree = snapshotFullState(隔离树)
     canon_tree = snapshotFullState(主树)     // 可能已被兄弟节点推进
     merged = merge-tree(base, canon_tree, node_tree)   // 内存三路合并
     if 干净:  materialize(主树, merged)
     else:     合并 agent 解（§6）→ materialize 或 awaiting_human
+    merge_state='merged'  →★此时才 status='done'（D15）
    释放 writeSem
-   弃隔离树（worktree remove + 删 pin ref）
+   弃隔离树（worktree remove + 删 pin ref；node_tree pin 保留供 replay 幂等）
 ```
 
 **关键**：writeSem 只罩 ①③ 两个**毫秒级**窗口，不再罩住 ② 的多分钟 agent 运行。于是并行度从「可写节点 1」提升到「受 `globalSem`（默认 4）约束的 DAG 并行」。合并回收在**同一把 writeSem 上串行** → 主树的读（快照 base / canon）与写（materialize）互斥，不会撕裂。
+
+**完成门控（D15，防崩溃窗口）**：node run 的 `status='done'` **只在 merge-back 落定后**才置——`deriveFrontier`/`areTransitiveUpstreamsCompleted`（`freshness.ts`）既有的「上游 done 才放行下游」判据因此天然正确：**下游永不在 delta 落主树前被派发**。② 与 ③ 之间崩溃 → 该 run 停在 `merge_state='pending-merge'`（status 未 done、输出+node_tree 已持久化）→ resume 从 pinned `node_tree` **replay merge-back（不重跑 agent）** 再置 done（§10.2）。
 
 **为什么并发正确**：兄弟节点各在自己隔离树写，物理隔离（AC-2）；合并回收串行且以内存三路合并计算，主树永不处于半合并态（§6 冲突也不落半成品，除 awaiting_human 兜底）。第一个完成的兄弟合并回收时主树 == 它的 base（未动过）→ 干净应用；后续兄弟的 base 落后于主树 → 真三路合并，重叠才冲突。
 
@@ -55,10 +59,12 @@ DAG 并行已在（`scheduler.ts:711` 完成驱动 frontier），但可写节点
 
 | 列 | 类型 | 用途 |
 |---|---|---|
-| `iso_worktree_path` | text nullable | 该 run 隔离树绝对路径；成功弃后置空。resume / GC 据此清孤立隔离树。 |
+| `iso_worktree_path` | text nullable | 该 run 隔离树绝对路径（**在主 repo 之外**，§4.2 D14）；成功弃后置空。resume / GC 据此清孤立隔离树。 |
 | `iso_base_snapshot` | text nullable | base-snapshot sha（单仓）。合并回收 base；也是重试/回滚的「弃隔离树后从主树重新分叉」不依赖项。 |
 | `iso_base_snapshot_repos_json` | text nullable | 多仓：`{worktreeDirName: sha}`。 |
-| `merge_state` | text nullable | `null`（未到合并）/`merged`/`conflict-resolving`/`conflict-human`。resume 幂等据此。 |
+| `iso_node_tree` | text nullable | **run 成功时**隔离终态全量快照 sha（pin 防 gc；单仓）。用于**崩溃后 replay merge-back**（无需重跑 agent，§5.1/§10.2 D15）。 |
+| `iso_node_tree_repos_json` | text nullable | 多仓：`{worktreeDirName: sha}`。 |
+| `merge_state` | text nullable | `null`（未到合并 / 非隔离旧行）/`pending-merge`（agent 成功、输出+node_tree 已落、**尚未合并**）/`merged`/`conflict-resolving`/`conflict-human`。**downstream 就绪门控 + resume 幂等据此**（§5.1 D15）。 |
 
 > 复用既有 `pre_snapshot`/`pre_snapshot_repos_json`？**不复用**——语义不同：`pre_snapshot` = 主树回滚点（`git stash create`，**不含 untracked**）；`iso_base_snapshot` = 隔离树起点（**含 untracked** 的全量快照）。混用会把「回滚主树」和「隔离起点」两个正交概念耦合（RFC-092/098 的回滚仍读 `pre_snapshot`，但新模型下**失败节点不再写主树**，故顶层回滚基本退化，见 §11）。
 
@@ -88,19 +94,27 @@ export async function snapshotFullState(
 
 ### 4.2 创建隔离树
 
-- 路径：`{任务 worktree 容器}/iso/{node-run-id}`（单仓）；多仓 `.../iso/{node-run-id}/{worktreeDirName}`。写 `iso_worktree_path`。
+- **路径必须在主 worktree 之外**（D14，Codex 设计 gate P1）：`{appHome}/iso/{taskId}/{nodeRunId}`（单仓）；多仓 `.../iso/{taskId}/{nodeRunId}/{worktreeDirName}`。**绝不放在主 worktree 目录树内**——否则后续兄弟节点 / wrapper 的 `snapshotFullState(主树)` 里 `git add -A` 会把 `iso/...`（一个带 gitlink 的嵌入 worktree）当 untracked embedded repo 暂存进快照树 → 临时隔离树泄漏进产物 / 合并树。放主 repo 之外则 `git add -A` 根本看不到它。写 `iso_worktree_path`。
 - 命令：`git worktree add --detach <iso-path> <base-sha>`（复用 `createWorktree` 的 `overrideWorktreePath` 分支思路，git.ts:332；base 是全量快照 commit，detach）。base 的 former-untracked 文件在隔离树里表现为**已跟踪**（无碍：agent 不关心；diff/合并按 tree 算）。
 - pin：`iso_base_snapshot` 同时 `update-ref refs/agent-workflow/iso/{taskId}/{nodeRunId}`，防 base commit 被 gc（照 `snapshotRefName` 惯例，git.ts:818）。
+- **兜底防护**：`snapshotFullState` 内 `git add -A` 追加 `-c core.excludesFile` / `.git/info/exclude` 排除 `iso/`（即便未来误置内），并在 `add -A` 前 `git config --worktree` 忽略 nested gitlink。D14 双保险。
 
-### 4.3 cwd 切换
+### 4.3 cwd 切换 + **全部路径承载令牌**改指隔离树（D16，Codex 设计 gate P1-3）
 
-`runNode` 的 `worktreePath`（`runner.ts:117`）与 `templateMeta.repos[].worktreePath`（:120-141）从主树改指**隔离树**。`{{__repo_path__}}` 等模板变量、agent 的 `git diff`、envelope 文件端口路径都自然落隔离树。
+opencode cwd 由 `runNode.worktreePath`（`runner.ts:117`）决定，改指隔离树即可让进程物理落隔离区。**但仅改 worktreePath 不够**——`renderUserPrompt` 里 `{{__repo_path__}}` 渲染自 `templateMeta.repoPath`（当前 dispatch 传 `task.repoPath` / 源 repo），若不改，agent 会被 prompt **明确告知去编辑一个非隔离路径** → 绕过隔离。故隔离运行时**所有承载文件系统路径的令牌/字段一并改指隔离树**：
+- `runNode.worktreePath` → 隔离树。
+- `templateMeta.repoPath` → 隔离树（单仓）；`templateMeta.repos[].worktreePath`（:120-141）→ 各仓隔离子树；`templateMeta.repos[].repoPath` 按语义（若表示 agent 工作路径则改指隔离，若表示源 repo 只读引用则保留——**编码前逐令牌核对 `renderUserPrompt` 语义**，见 plan T-token-audit）。
+- envelope **文件端口**产物路径（agent 写的文件在隔离树内，输出端口给的是隔离树相对/绝对路径）——合并回收后这些文件落主树；**下游读文件端口时按主树解析**（端口值是相对路径 + 下游自己的隔离树含合并后的文件，天然一致；绝对路径端口需在合并回收时重写，plan 标注）。
+- agent 自身的 `git diff` / git 操作：cwd=隔离树，自然正确。
 
 ## 5. 合并回收（merge-back）
 
-### 5.1 时机与锁
+### 5.1 时机、锁与完成门控（D15）
 
-node run 成功（`result.kind==='ok'`）后，在 `runOneNode` 内、**释放 globalSem 之后**、返回之前，持 writeSem 执行（§7 锁序）。
+- **成功即持久化、但不置 done**：node run agent 成功（`result.kind==='ok'`）时，在 §2 段② 末（释放 globalSem 前）落 `node_run_outputs` + 快照 pin `iso_node_tree` + `merge_state='pending-merge'`。**此刻 `status` 仍非 `'done'`**——把「run 完成」与「合并落定」解耦。
+- **合并回收在段③**：`runOneNode` 内、**释放 globalSem 之后**、返回之前，持 writeSem 执行（§7 锁序）。合并落定后 `merge_state='merged'` **并**在同一 writeSem 临界内把 `status` 从 running/中间态转 `'done'`（经 `lifecycle.ts` CAS，非直写）。
+- **downstream 就绪 = status='done'**：`areTransitiveUpstreamsCompleted`（`freshness.ts`）判据不变；因 `'done'` 只在 `'merged'` 后置，下游**永不**在 delta 落主树前派发（修 Codex P1-2 崩溃窗口）。**非隔离旧行**（`merge_state IS NULL`）行为逐字不变（golden-lock）。
+- **runNode 契约变更**：隔离运行下 runNode 成功**不再直接 finalize `status='done'`**（改由 runOneNode 段③ finalize）；`runNode.ts` 里置 done 的点加隔离分支（或返回「ran-ok-unmerged」让 runOneNode 收口）。这是本 RFC 对 runNode/runOneNode 契约的关键改动，测试锁。
 
 ### 5.2 三路合并机制
 
@@ -162,7 +176,9 @@ export function buildMergeAgent(): Agent {
 
 ```
 merge-tree 出冲突 conflicts[]：
-  ① git worktree add --detach <resolve-iso> <merged(带冲突标记的合并树)>   // 解冲突工作区
+  ① merged 是 tree OID，worktree add 要 commit-ish（Codex P2-2）→ 先
+        cmt = git commit-tree <merged> -p <base> -m aw-conflict   // pin 防 gc
+     再 git worktree add --detach <resolve-iso> <cmt>            // 解冲突工作区（带冲突标记）
   ② runNode(合并 agent, cwd=<resolve-iso>, 绕 globalSem〔§7 防死锁〕)
   ③ 成功判定 = resolve-iso 工作区无残留冲突标记（grep '^<<<<<<< ' / '^>>>>>>> ' / '^=======$'）
        且进程正常收尾
@@ -238,14 +254,16 @@ merge-tree 出冲突 conflicts[]：
 
 ### 10.1 失败零污染（I-5，比现状更干净）
 
-合并回收**只在成功后**发生 → 失败 / canceled 的 node run **从不写主树**。于是：
-- 顶层单节点重试：**弃失败隔离树**（`removeWorktree` + 删 pin ref）→ 段①从**当前主树**重新快照分叉新隔离树。**无需回滚主树**（主树没被污染）。RFC-092/098 的「rollback 主树到 pre_snapshot」在新模型下对**已隔离节点**退化为 no-op（主树本就干净）。
+合并回收**只在成功后**发生 → 失败 / canceled 的 node run **从不写主树**。于是重试分两种（对齐既有 RFC-042 `followupDecision.followup` 分叉，scheduler.ts:2040）：
+- **fresh-session 重试**（`!followup`）：**弃失败隔离树**（`removeWorktree` + 删 pin ref）→ 段①从**当前主树**重新快照分叉新隔离树。**无需回滚主树**（主树没被污染）。RFC-092/098 的「rollback 主树到 pre_snapshot」在新模型下对**已隔离节点**退化为 no-op（主树本就干净）。
+- **同会话 follow-up 重试**（`followup`，RFC-042 envelope / RFC-049 port-validation 修复；Codex 设计 gate P2-1）：**必须保留同一隔离树、不弃不重快照**——resume 的是**同一个 opencode session**，它记得自己刚写过的文件；弃树重快照会让续跑 session 看到与其对话记忆不符的文件系统 → 同会话修复回归。既有 `if (!followupDecision.followup) { rollback }`（scheduler.ts:2040）的语义在新模型下**平移**为「仅 fresh-session 弃隔离树」，follow-up 保留隔离树原样。决策 D17。
 - `pre_snapshot` 回滚路径（nodeRollback.ts、task.ts resume）**保留但基本空转**（防御：万一有非隔离写入路径）；`rollbackNodeRunWorktrees`（nodeRollback.ts:76）签名不改。决策 D10：保留回滚代码作纵深防御，不删。
 
 ### 10.2 resume（`resumeKick`，task.ts:1304）
 
 - 选重跑目标 `selectResumeRollbackTargets`（task.ts:443，最新 failed/interrupted）不变。
-- 新增：resume 首 tick 清理**孤立隔离树**（`iso_worktree_path` 非空但 run 非 running 的行 → `removeWorktree`）+ 处理 `merge_state='conflict-human'`（§6.3）。
+- **replay 未落合并（D15，Codex P1-2 收口）**：resume 首 tick 扫 `merge_state='pending-merge'` 且 status 非 done 的行（= 段②③ 之间崩溃）→ 从 pinned `iso_node_tree` **replay merge-back**（重算 `merge-tree(base, canon_now, node_tree)` → materialize / 合并 agent）→ 落 `merged` + `done`，**不重跑 agent**（输出已在 `node_run_outputs`）。node_tree pin ref 丢失（罕见）才回退重跑 agent。
+- 新增：resume 首 tick 清理**孤立隔离树**（`iso_worktree_path` 非空但 run 终态且 `merge_state IN (merged,null)` 的行 → `removeWorktree`；**pending-merge 的隔离树保留**待 replay）+ 处理 `merge_state='conflict-human'`（§6.3）。
 - preflight（RFC-108 T6，`worktreePreflight`）：新模型下 pre_snapshot 多为空，preflight 基本放行；隔离 base pin ref 若被 gc（罕见）→ 该 run 重跑从当前主树重新分叉，不 fail-closed（区别于 pre_snapshot 丢失的 `snapshot-lost` 升级：隔离 base 丢失不致命，因主树未依赖它回滚）。决策 D11。
 
 ### 10.3 daemon 重启（interrupted）
@@ -286,7 +304,7 @@ merge-tree 出冲突 conflicts[]：
 | base pin ref 被 gc（隔离运行超长 + 激进 gc） | 合并回收时 `gitCommitExists(base)` 假 → 回退：以主树现态为 base 直接应用隔离 delta（退化为二路，风险自担并告警）或 fail node（决策 D11 取告警+二路） |
 | merge-tree git<2.38 | daemon 启动即拒（§5.2 版本门） |
 | 合并 agent 输出仍带标记 | §6.3 awaiting_human |
-| materialize 中途崩溃 | 主树可能半写；resume 首 tick 检测 `merge_state='conflict-resolving'` 的 run → 重做合并回收（幂等：从 iso/主树重算 merge-tree） |
+| 段②③ 之间 / materialize 中途崩溃 | status 未 done（D15）；resume 首 tick 检测 `merge_state IN (pending-merge, conflict-resolving)` 的 run → 从 pinned `iso_node_tree` **replay merge-back**（幂等：重算 `merge-tree(base, canon_now, node_tree)` → materialize），不重跑 agent |
 | 多仓一仓合并 agent 失败 | 整任务 awaiting_human（保守；不做部分推进） |
 
 ## 15. 测试策略（每改动带测试，见 plan 验收清单）
@@ -320,6 +338,10 @@ merge-tree 出冲突 conflicts[]：
 - **D11** 隔离 base pin 丢失不致命（主树不依赖它回滚）：告警 + 退化二路应用；区别于 pre_snapshot 丢失的 `snapshot-lost` 升级。
 - **D12** 合并 agent 绕 `globalSem`（防 writeSem↔globalSem 死锁）。
 - **D13** readonly 彻底删（含 claude 软沙箱），旧 `readonly:` 键降级进 frontmatterExtra。
+- **D14**（Codex 设计 gate P1-1）隔离/解冲突 worktree **放主 repo 之外**（`{appHome}/iso/{taskId}/{nodeRunId}`），杜绝 `snapshotFullState` 的 `git add -A` 把嵌入 worktree gitlink 暂存进快照树；加 `.git/info/exclude` 兜底。
+- **D15**（Codex 设计 gate P1-2）**完成门控**：`status='done'` 只在 `merge_state='merged'` 后置；成功但未合并落 `pending-merge` + pin `iso_node_tree`；下游就绪沿用「done 才放行」→ 天然不在 delta 落主树前派发；崩溃 resume 从 node_tree replay merge-back 不重跑 agent。新增 `iso_node_tree` 列。
+- **D16**（Codex 设计 gate P1-3）隔离运行下**所有承载文件系统路径的模板令牌/字段**（含 `{{__repo_path__}}` 的源 `templateMeta.repoPath`）一并改指隔离树，不止 `worktreePath`；编码前逐令牌核对 `renderUserPrompt` 语义（plan T-token-audit）。
+- **D17**（Codex 设计 gate P2-1）**同会话 follow-up 重试保留隔离树**（RFC-042/049 续跑同 opencode session 记得已写文件）；仅 fresh-session 重试弃隔离树重快照。平移既有 `!followup` 分叉。
 
 ## 17. 性能与后续
 
