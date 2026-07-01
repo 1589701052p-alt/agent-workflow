@@ -367,8 +367,13 @@ describe('CentralizedAnswerDialog', () => {
 // RFC-128 (用户 2026-07-01) — cross-round keyboard navigation. Regression: the pane's QuestionForm
 // previously got NO `ref` + NO `onAdvance`, so the digit/Enter hotkeys (which call onAdvance) were a
 // silent no-op. This wires a GLOBAL ref Map + advanceFromQuestion so Enter / a single-choice digit
-// key advances focus to the next question — including across round boundaries — and to the submit
-// button after the last question.
+// key advances focus to the next question — including across round boundaries.
+//
+// 用户拍板 (2026-07-01): the "last question → auto-focus submit" convenience (and its whole
+// pending/flush deferred-focus machinery — the source of a 4-round focus-timing edge) is REMOVED.
+// Advancing off the LAST question is now a NO-OP: focus stays put, submit is NEVER auto-focused (the
+// reviewer clicks / Tabs to submit). These lock cross-round advance + the 末问 no-op in BOTH submit
+// states (already-enabled / just-enabled-this-keydown).
 describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
   // jsdom doesn't implement Element.prototype.scrollIntoView; QuestionForm's focus() handle calls
   // it, so patch it (per the QuestionForm focus test) — otherwise focus() throws.
@@ -376,7 +381,7 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     Element.prototype.scrollIntoView = vi.fn()
   })
 
-  test('Enter advances focus to the next question — same round AND across the round boundary; last → submit', async () => {
+  test('Enter advances focus across rounds; the LAST question is a NO-OP (submit NOT auto-focused)', async () => {
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
       [
@@ -397,9 +402,9 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     const q3 = screen.getByTestId('clarify-question-q3')
     const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
 
-    // Fill one answer so the submit button is ENABLED — a disabled <button> cannot receive focus,
-    // so the "last question → submit" hop only lands on an enabled button (nothing to submit ⇒
-    // nothing to focus, which is fine).
+    // Fill one answer so the submit button is ENABLED. This makes the last-question NO-OP assertion
+    // meaningful: submit COULD receive focus (it's enabled), yet advancing off the last question
+    // must NOT move focus onto it (用户拍板 2026-07-01 — no auto-focus submit).
     fireEvent.click(within(q1).getAllByRole('radio')[0]!)
     await waitFor(() => expect(submit.disabled).toBe(false))
 
@@ -410,8 +415,10 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     fireEvent.keyDown(q2, { key: 'Enter' })
     expect(document.activeElement).toBe(q3) // cross-round advance (nr_a → nr_b)
 
+    // LAST question → NO-OP: focus stays on q3, submit is NOT auto-focused (even though enabled).
     fireEvent.keyDown(q3, { key: 'Enter' })
-    expect(document.activeElement).toBe(submit) // last question → submit button
+    expect(document.activeElement).toBe(q3)
+    expect(document.activeElement).not.toBe(submit)
   })
 
   test('single-choice digit key picks the option AND advances to the next question', async () => {
@@ -434,13 +441,40 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     expect(document.activeElement).toBe(q2)
   })
 
-  // Codex impl-gate medium (2026-07-01): a single-choice DIGIT runs onChange→onAdvance in ONE
-  // keydown, so at advance time the submit button is STILL disabled (filledTotal not yet re-rendered).
-  // A synchronous focus() on a disabled <button> is ignored → the "last question → submit" hop
-  // silently failed when the last question was the FIRST/only filled answer. The deferred-focus
-  // effect must flush the focus once the button enables. These lock the one-question + answer-last
-  // paths the earlier tests missed (they pre-filled another question, so submit was already enabled).
-  test('ONE-question dialog: digit key picks the answer AND focus lands on the (now-enabled) submit', async () => {
+  // 用户拍板 (2026-07-01) — 末问 NO-OP with submit ALREADY enabled (synchronous path). A digit pick on
+  // an earlier question enables submit; a subsequent digit pick on the LAST question must NOT hop
+  // focus onto submit — it stays on the last question. Inverts the removed synchronous auto-focus.
+  test('digit key on the LAST question (submit already enabled) picks the option but does NOT focus submit', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+      ],
+      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
+    )
+    await waitFor(() => screen.getByTestId('clarify-question-q2'))
+    const q1 = screen.getByTestId('clarify-question-q1')
+    const q2 = screen.getByTestId('clarify-question-q2')
+    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
+
+    // Enable submit by filling q1 (mouse), so the last-question no-op is a meaningful assertion.
+    fireEvent.click(within(q1).getAllByRole('radio')[0]!)
+    await waitFor(() => expect(submit.disabled).toBe(false))
+
+    // Digit-pick the LAST question → it gets checked, but focus stays on q2 (NO-OP), not submit.
+    q2.focus()
+    fireEvent.keyDown(q2, { key: '1' })
+    expect((within(q2).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
+    expect(document.activeElement).toBe(q2)
+    expect(document.activeElement).not.toBe(submit)
+  })
+
+  // 用户拍板 (2026-07-01) — 末问 NO-OP on the DEFERRED path: a digit pick on the last (here: only)
+  // question is the FIRST filled answer, so submit is disabled at advance time and enables a tick
+  // later. The removed deferred-flush would have stolen focus to submit once it enabled — it must
+  // NOT any more (this WAS the exact 4-round focus-timing edge). Focus stays on the question.
+  test('ONE-question dialog: digit pick enables submit but focus does NOT flush to it (deferred path removed)', async () => {
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
       [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
@@ -454,182 +488,9 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
     q1.focus()
     fireEvent.keyDown(q1, { key: '1' }) // picks (first filled answer) + advances past the last question
     expect((within(q1).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
-    // The submit button enables (filledTotal 0→1) and the deferred focus flushes to it.
+    // The submit button enables (filledTotal 0→1) but NO deferred flush focuses it — focus stays put.
     await waitFor(() => expect(submit.disabled).toBe(false))
-    await waitFor(() => expect(document.activeElement).toBe(submit))
-  })
-
-  test('answer-LAST: digit-pick the last question first (its answer is the first filled) → focus lands on submit', async () => {
-    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
-    renderDialog(
-      [
-        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
-        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
-      ],
-      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
-    )
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-    const q2 = screen.getByTestId('clarify-question-q2')
-    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
-
-    q2.focus() // start on the LAST question with nothing filled → submit disabled
-    fireEvent.keyDown(q2, { key: '1' }) // first filled answer IS the last question
-    expect((within(q2).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true)
-    await waitFor(() => expect(submit.disabled).toBe(false))
-    await waitFor(() => expect(document.activeElement).toBe(submit))
-  })
-})
-
-// Codex impl-gate #2 (2026-07-01): the deferred submit-focus flag was too GLOBAL — once armed (empty
-// last-question Enter), ANY later filledTotal change flushed it and stole focus to submit, even when
-// the change came from editing a DIFFERENT question. These lock the scoping/cancel: a pending focus is
-// superseded by navigating to / editing a non-last question, and reset on close.
-describe('CentralizedAnswerDialog — pending submit-focus scoping / cancel', () => {
-  beforeEach(() => {
-    Element.prototype.scrollIntoView = vi.fn()
-  })
-
-  test('stale #1: empty last-question Enter → then answer an EARLIER question (digit) → focus stays on the advance target, NOT stolen to submit', async () => {
-    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
-    renderDialog(
-      [
-        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
-        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
-      ],
-      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
-    )
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-    const q1 = screen.getByTestId('clarify-question-q1')
-    const q2 = screen.getByTestId('clarify-question-q2')
-    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
-
-    // Empty LAST question → Enter arms a pending submit focus (button still disabled).
-    q2.focus()
-    fireEvent.keyDown(q2, { key: 'Enter' })
-    expect(submit.disabled).toBe(true)
-
-    // Reviewer goes BACK and answers an earlier question via digit → advances to q2 (its next).
-    q1.focus()
-    fireEvent.keyDown(q1, { key: '1' })
-    // filledTotal is now >0 (submit enabled) but the stale pending was superseded → focus is on q2,
-    // NOT stolen to submit.
-    await waitFor(() => expect(submit.disabled).toBe(false))
-    expect(document.activeElement).toBe(q2)
-    expect(document.activeElement).not.toBe(submit)
-  })
-
-  test('stale #2: empty last-question Enter → then fill an EARLIER question via custom-text → focus NOT stolen to submit', async () => {
-    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
-    renderDialog(
-      [
-        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
-        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
-      ],
-      [round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] })],
-    )
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-    const q1 = screen.getByTestId('clarify-question-q1')
-    const q2 = screen.getByTestId('clarify-question-q2')
-    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
-
-    q2.focus()
-    fireEvent.keyDown(q2, { key: 'Enter' }) // empty last → pending submit focus armed
-
-    // Fill an EARLIER question via the custom-text path (Other row + type a char).
-    fireEvent.click(within(q1).getByTestId('clarify-custom-radio'))
-    fireEvent.change(within(q1).getByTestId('clarify-custom-textarea'), { target: { value: 'x' } })
-
-    // The earlier edit superseded the pending focus → submit enables but is NOT auto-focused.
-    await waitFor(() => expect(submit.disabled).toBe(false))
-    expect(document.activeElement).not.toBe(submit)
-  })
-
-  test('stale #3: close + reopen with an armed pending focus → no stale steal after reopen', async () => {
-    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    })
-    qc.setQueryData(
-      ['task-questions', 'task-1'],
-      [
-        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
-        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
-      ],
-    )
-    qc.setQueryData(
-      ['clarify', 'detail', 'nr_a'],
-      round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] }),
-    )
-    const ui = (open: boolean) => (
-      <QueryClientProvider client={qc}>
-        <CentralizedAnswerDialog taskId="task-1" open={open} onClose={() => {}} />
-      </QueryClientProvider>
-    )
-    const view = render(ui(true))
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-
-    // Arm pending on the empty last question, then close (should reset the flag) + reopen.
-    const q2 = screen.getByTestId('clarify-question-q2')
-    q2.focus()
-    fireEvent.keyDown(q2, { key: 'Enter' })
-    view.rerender(ui(false))
-    view.rerender(ui(true))
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
-
-    // Fill the LAST question by MOUSE (does not re-arm pending). If close reset the flag, this must
-    // NOT auto-steal focus to submit (the pre-fix bug carried the stale flag across reopen).
-    fireEvent.click(within(screen.getByTestId('clarify-question-q2')).getAllByRole('radio')[0]!)
-    await waitFor(() => expect(submit.disabled).toBe(false))
-    expect(document.activeElement).not.toBe(submit)
-  })
-
-  test('stale #4 (data refetch): pending armed → task-questions data adds a round (LAST key moves) while open → no stale steal', async () => {
-    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    })
-    qc.setQueryData(
-      ['task-questions', 'task-1'],
-      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
-    )
-    qc.setQueryData(
-      ['clarify', 'detail', 'nr_a'],
-      round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1')] }),
-    )
-    qc.setQueryData(
-      ['clarify', 'detail', 'nr_b'],
-      round({ intermediaryNodeRunId: 'nr_b', questions: [singleQ('q2')] }),
-    )
-    render(
-      <QueryClientProvider client={qc}>
-        <CentralizedAnswerDialog taskId="task-1" open onClose={() => {}} />
-      </QueryClientProvider>,
-    )
-    await waitFor(() => screen.getByTestId('clarify-question-q1'))
-    const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
-
-    // Arm pending on the empty last question q1 (it is currently the ONLY/last question → key nr_a:q1).
-    const q1 = screen.getByTestId('clarify-question-q1')
-    q1.focus()
-    fireEvent.keyDown(q1, { key: 'Enter' })
-
-    // Data refetch UNDER the open dialog: a NEW round (nr_b/q2) arrives → the flattened last key is
-    // now nr_b:q2, so the armed key (nr_a:q1) no longer matches → superseded (fresh RoundAnswerBlock
-    // seeds q2). Uses a new round to avoid the once-seeded round's added-question limitation.
-    qc.setQueryData(
-      ['task-questions', 'task-1'],
-      [
-        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
-        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_b' }),
-      ],
-    )
-    await waitFor(() => screen.getByTestId('clarify-question-q2'))
-
-    // Fill the NEW last question q2 by MOUSE (notifyQuestionEdited would NOT cancel for the last
-    // question, so this isolates the data-refetch supersede). The stale key (nr_a:q1) must NOT steal.
-    fireEvent.click(within(screen.getByTestId('clarify-question-q2')).getAllByRole('radio')[0]!)
-    await waitFor(() => expect(submit.disabled).toBe(false))
+    expect(document.activeElement).toBe(q1)
     expect(document.activeElement).not.toBe(submit)
   })
 })
