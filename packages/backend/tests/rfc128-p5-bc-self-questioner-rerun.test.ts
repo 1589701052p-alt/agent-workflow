@@ -668,8 +668,8 @@ describe('RFC-128 P5-BC per-question injection (golden-lock R2-4 + RFC-099)', ()
     expect(ctx?.answersBlock).toContain('ROUND1-PLATFORM')
     expect(ctx?.answersBlock).toContain('ROUND2-LANG')
     // Chronological: Round 1 before Round 2.
-    const r1idx = ctx!.questionsBlock.indexOf('### Round 1')
-    const r2idx = ctx!.questionsBlock.indexOf('### Round 2')
+    const r1idx = (ctx?.questionsBlock ?? '').indexOf('### Round 1')
+    const r2idx = (ctx?.questionsBlock ?? '').indexOf('### Round 2')
     expect(r1idx).toBeGreaterThanOrEqual(0)
     expect(r2idx).toBeGreaterThan(r1idx)
     // Round 1 is read-only history — RFC-099: no attribution leak.
