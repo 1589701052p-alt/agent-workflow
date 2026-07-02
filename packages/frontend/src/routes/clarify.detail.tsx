@@ -27,6 +27,7 @@ import type {
   ClarifyRoundSummary,
   SubmitClarifyAnswers,
   SubmitClarifyAnswersResponse,
+  WorkflowDefinition,
 } from '@agent-workflow/shared'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
@@ -41,6 +42,7 @@ import { Dialog } from '@/components/Dialog'
 import { useClarifyWs } from '@/hooks/useClarifyWs'
 import { deleteClarifyDraft, getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
 import { goToTaskDetail } from '@/lib/nav/taskNav'
+import { resolveNodeNameFromSnapshot } from '@/lib/node-names'
 import { Route as RootRoute } from './__root'
 
 /** RFC-058: REST returns a single ClarifyRound shape with `kind` discriminator. */
@@ -70,13 +72,23 @@ export function ClarifyDetailPage() {
   // RFC-037: fetch the host task once we know the taskId so the header can
   // render the user-supplied task name as a breadcrumb. Cheap because tasks
   // detail is already React-Query-cached if the user came from /tasks.
-  const taskQuery = useQuery<{ name: string }>({
-    queryKey: ['tasks', session.data?.taskId, 'name-only'],
+  // 用户 2026-07-02: also carries the frozen workflowSnapshot so this page
+  // resolves node display names (提问节点 / 处理节点 / 中间节点) instead of raw
+  // ids. Same queryKey as ClarifyQuestionHandler (rendered per question below),
+  // so the two dedupe to ONE request.
+  const taskQuery = useQuery<{ name: string; workflowSnapshot?: WorkflowDefinition }>({
+    queryKey: ['tasks', session.data?.taskId, 'snapshot'],
     queryFn: ({ signal }) =>
-      api.get(`/api/tasks/${session.data?.taskId}`, undefined, signal) as Promise<{ name: string }>,
+      api.get(`/api/tasks/${session.data?.taskId}`, undefined, signal) as Promise<{
+        name: string
+        workflowSnapshot?: WorkflowDefinition
+      }>,
     enabled: typeof session.data?.taskId === 'string',
     refetchOnWindowFocus: false,
   })
+  // 节点名解析（title → agentName → id 回退）；快照未载/查无节点时回退原 id。
+  const workflowSnapshot = taskQuery.data?.workflowSnapshot
+  const nodeName = (id: string) => resolveNodeNameFromSnapshot(workflowSnapshot, id) ?? id
 
   // RFC-128 P4 (T10) — coordination grey-out. Read the task's per-question seal /
   // dispatch state so this page can render any question already sealed/dispatched via
@@ -670,7 +682,8 @@ export function ClarifyDetailPage() {
     s.intermediaryNodeTitle !== s.intermediaryNodeId
       ? s.intermediaryNodeTitle
       : null
-  const sourceName = s.askingNodeId
+  // 用户 2026-07-02: 提问节点显示节点名（快照解析，查无回退原 id）。
+  const sourceName = nodeName(s.askingNodeId)
   const iteration = s.iteration
   const shardKey = s.kind === 'cross' ? null : s.askingShardKey
   const truncationWarnings = s.kind === 'self' ? s.truncationWarnings : undefined
@@ -688,11 +701,12 @@ export function ClarifyDetailPage() {
             loaded), then the clarify node title (workflowSnapshot's
             `WorkflowNode.title`) with a fall-back to the clarify node id —
             same pattern as the review detail page so the two surfaces read
-            identically. RFC-056: cross-clarify doesn't expose nodeTitle, so
-            the label is just the cross-clarify nodeId. */}
+            identically. 用户 2026-07-02: cross-clarify (whose DTO carries no
+            intermediaryNodeTitle) now resolves via the frozen snapshot before
+            the id fallback. */}
         <h1>
           {(() => {
-            const nodeLabel = nodeTitle ?? nodeId
+            const nodeLabel = nodeTitle ?? nodeName(nodeId)
             const hasTaskName =
               typeof taskQuery.data?.name === 'string' && taskQuery.data.name.length > 0
             if (!hasTaskName) return nodeLabel
@@ -723,7 +737,7 @@ export function ClarifyDetailPage() {
             <>
               {' · '}
               <span data-testid="cross-clarify-target-designer">
-                {t('crossClarify.targetDesigner', { name: s.targetConsumerNodeId })}
+                {t('crossClarify.targetDesigner', { name: nodeName(s.targetConsumerNodeId) })}
               </span>
             </>
           )}
@@ -797,7 +811,9 @@ export function ClarifyDetailPage() {
                         className="link"
                         data-testid={`cross-clarify-multi-source-link-${p.intermediaryNodeId}`}
                       >
-                        {t('crossClarify.multiSourcePendingLinkLabel')}: {p.intermediaryNodeId}
+                        {/* 用户 2026-07-02: 显示节点名（testid 保持原 id 以稳定测试锚点）。 */}
+                        {t('crossClarify.multiSourcePendingLinkLabel')}:{' '}
+                        {nodeName(p.intermediaryNodeId)}
                       </Link>
                     </li>
                   ))}

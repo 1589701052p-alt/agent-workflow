@@ -101,7 +101,7 @@ function mkSession(overrides: LegacySessionOverrides = {}): ClarifyRound {
   }
 }
 
-function mockApi(session: ClarifyRound, peers: ClarifyRoundSummary[] = []) {
+function mockApi(session: ClarifyRound, peers: ClarifyRoundSummary[] = [], taskSnapshot?: unknown) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
     const s = typeof url === 'string' ? url : url.toString()
     if (s.includes(`/api/clarify/${session.intermediaryNodeRunId}`) && !s.endsWith('/answers')) {
@@ -115,6 +115,14 @@ function mockApi(session: ClarifyRound, peers: ClarifyRoundSummary[] = []) {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
+    }
+    // 2026-07-02: optional frozen workflowSnapshot on the task fetch — drives the
+    // page's node display-name resolution (节点名 vs 节点 id).
+    if (taskSnapshot !== undefined && s.includes(`/api/tasks/${session.taskId}`)) {
+      return new Response(
+        JSON.stringify({ name: 'fixture-task', workflowSnapshot: taskSnapshot }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
     }
     return new Response(JSON.stringify({}), {
       status: 200,
@@ -156,12 +164,26 @@ function renderRoute(initialPath = '/clarify/nr_clarify') {
 
 describe('/clarify/$nodeRunId detail (RFC-023 T23)', () => {
   test('context card includes asking agent + iteration, plus shard line when shardKey is set', async () => {
+    // 无快照 → 节点名解析回退原 id（'designer'）——本用例同时锁住回退路径。
     mockApi(mkSession({ sourceShardKey: 'shard-A', iterationIndex: 2 }))
     renderRoute()
     await waitFor(() => screen.getByTestId('clarify-context-card'))
     const card = screen.getByTestId('clarify-context-card')
     expect(card.textContent ?? '').toContain('designer')
     expect(screen.getByTestId('clarify-context-shard')).toBeTruthy()
+  })
+
+  // 2026-07-02 (用户拍板) — 上下文卡的提问节点显示节点名（任务快照 title → agentName → id
+  // 回退，lib/node-names 同一 oracle），不再裸渲染 askingNodeId。
+  test('context card 提问节点显示节点名（快照解析），不显示裸节点 ID', async () => {
+    mockApi(mkSession({ sourceAgentNodeId: 'node-a3' }), [], {
+      nodes: [{ id: 'node-a3', kind: 'agent-single', agentName: 'coder', title: '设计师' }],
+    })
+    renderRoute()
+    await waitFor(() => screen.getByTestId('clarify-context-card'))
+    const card = screen.getByTestId('clarify-context-card')
+    await waitFor(() => expect(card.textContent ?? '').toContain('设计师'))
+    expect(card.textContent ?? '').not.toContain('node-a3')
   })
 
   test('truncation warning renders only when session.truncationWarnings is populated', async () => {
