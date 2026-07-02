@@ -36,7 +36,6 @@ import { crossClarifySessions, nodeRuns, taskQuestions, tasks, workflows } from 
 import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import {
-  buildExternalFeedbackContext,
   createCrossClarifySession,
   dispatchCrossClarifyNode,
   evaluateDesignerRerunReadiness,
@@ -793,93 +792,6 @@ describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () =>
 // 现状锁——整轮答案经此整批注入 designer 的 External Feedback。P1 designer 逐题下发后，
 // 整轮注入须被逐题注入逐字替代（而非丢失答案）；端到端「questioner 答→designer 收」的
 // 串联锁见 rfc128-p0-whole-round-seal-net.test.ts #2。
-describe('RFC-056 buildExternalFeedbackContext', () => {
-  test('returns block + iteration + sourcesCsv for the latest directive=continue session per source within loop_iter', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def = defaultDef()
-    const { taskId } = await seedTask(db, { definition: def })
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 'Why Redis?')],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      directive: 'continue',
-    })
-
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: def,
-    })
-    expect(ctx).toBeDefined()
-    expect(ctx?.block).toContain("### From 'questioner' (round 0)")
-    expect(ctx?.block).toContain('#### Q1: Why Redis?')
-    expect(ctx?.iteration).toBe('1')
-    expect(ctx?.sourcesCsv).toBe('questioner')
-  })
-
-  test('returns undefined when designerClarifyIteration=0 (first run)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def = defaultDef()
-    const { taskId } = await seedTask(db, { definition: def })
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 0,
-      definition: def,
-    })
-    expect(ctx).toBeUndefined()
-  })
-
-  test('omits directive=stop sources from the External Feedback block', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def = defaultDef()
-    const { taskId } = await seedTask(db, { definition: def })
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 'q?')],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      directive: 'stop', // rejected → not part of External Feedback
-    })
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: def,
-    })
-    expect(ctx).toBeUndefined()
-  })
-})
 
 // RFC-125 follow-up — DATA-LOSS repro (RED until fixed). A failed task's CR-1
 // invariant abandons answered+continue+unconsumed cross rounds (lifecycleInvariants
@@ -918,20 +830,9 @@ describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-cla
       directive: 'continue',
     })
 
-    // Baseline: the answer DOES reach the designer's External Feedback.
-    const before = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: def,
-    })
-    expect(before).toBeDefined()
-    expect(before?.block).toContain('Why Redis?')
-
     // Task fails before the designer consumes the feedback. RFC-126: CR-1 is
-    // RETIRED → the lifecycle scan must NOT abandon the round; it stays 'answered'.
+    // RETIRED → the lifecycle scan must NOT abandon the round; it stays 'answered'
+    // so the human's answer is preserved (the deferred queue re-injects it on resume).
     await db.update(tasks).set({ status: 'failed' }).where(eq(tasks.id, taskId))
     await runLifecycleInvariants({ db })
     const sess = (
@@ -939,19 +840,13 @@ describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-cla
     )[0]
     expect(sess?.status).toBe('answered') // RFC-126: NOT abandoned anymore
 
-    // RESUME the task. The human's answer still reaches the designer rerun.
+    // RESUME the task. RFC-126 fix: the answered round survives — never abandoned —
+    // so its human answer stays available to the designer rerun.
     await db.update(tasks).set({ status: 'running' }).where(eq(tasks.id, taskId))
-    const after = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: def,
-    })
-    // RFC-126 fix: the round stays 'answered', so the feedback is preserved on resume.
-    expect(after).toBeDefined()
-    expect(after?.block).toContain('Why Redis?')
+    const afterResume = (
+      await db.select().from(crossClarifySessions).where(eq(crossClarifySessions.taskId, taskId))
+    )[0]
+    expect(afterResume?.status).toBe('answered')
   })
 })
 

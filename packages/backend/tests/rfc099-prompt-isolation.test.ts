@@ -13,13 +13,8 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ulid } from 'ulid'
-import { createInMemoryDb } from '../src/db/client'
-import { clarifyRounds, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { buildPromptContext } from '../src/services/clarifyRounds'
 import { renderCommentsForPrompt } from '../src/services/review'
-import type { ReviewComment, WorkflowDefinition } from '@agent-workflow/shared'
-
-const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+import type { ReviewComment } from '@agent-workflow/shared'
 
 const USER_ID = '01HUSERIDLEAKCANARY0000000'
 const DISPLAY_NAME = 'Leaky McLeakface'
@@ -49,102 +44,6 @@ describe('RFC-099 prompt isolation — runtime', () => {
     expect(rendered).not.toContain(USER_ID)
     expect(rendered).not.toContain('authorRole')
     expect(rendered).not.toContain(DISPLAY_NAME)
-  })
-
-  test('buildPromptContext blocks never contain submitter / per-question attribution', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `task_${ulid()}`
-    const def: WorkflowDefinition = {
-      $schema_version: 3,
-      inputs: [],
-      nodes: [],
-      edges: [],
-      outputs: [],
-    }
-    const workflowId = `wf_${taskId}`
-    await db
-      .insert(workflows)
-      .values({ id: workflowId, name: 'wf', description: '', definition: JSON.stringify(def) })
-    await db.insert(tasks).values({
-      name: 't',
-      id: taskId,
-      workflowId,
-      workflowSnapshot: JSON.stringify(def),
-      repoPath: '/tmp/never-read',
-      worktreePath: '',
-      baseBranch: 'main',
-      branch: `agent-workflow/${taskId}`,
-      status: 'running',
-      inputs: '{}',
-      startedAt: Date.now(),
-    })
-    const askingRunId = ulid()
-    const intermediaryRunId = ulid()
-    await db.insert(nodeRuns).values([
-      { id: askingRunId, taskId, nodeId: 'asking', status: 'done', retryIndex: 0, iteration: 0 },
-      {
-        id: intermediaryRunId,
-        taskId,
-        nodeId: 'c1',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-    ])
-    await db.insert(clarifyRounds).values({
-      id: ulid(),
-      taskId,
-      kind: 'self',
-      askingNodeId: 'asking',
-      askingNodeRunId: askingRunId,
-      intermediaryNodeId: 'c1',
-      intermediaryNodeRunId: intermediaryRunId,
-      iteration: 0,
-      questionsJson: JSON.stringify([
-        {
-          id: 'q1',
-          title: 'Which database?',
-          kind: 'single',
-          recommended: true,
-          options: [
-            { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
-          ],
-        },
-      ]),
-      answersJson: JSON.stringify([
-        {
-          questionId: 'q1',
-          selectedOptionIndices: [0],
-          selectedOptionLabels: ['Postgres'],
-          customText: '',
-        },
-      ]),
-      status: 'answered',
-      answeredAt: Date.now(),
-      answeredBy: USER_ID,
-      // RFC-099 attribution saturation — none of this may surface below.
-      submittedByRole: 'owner',
-      answerAttributionsJson: JSON.stringify({
-        q1: { userId: USER_ID, role: 'owner', updatedAt: Date.now() },
-      }),
-      createdAt: Date.now(),
-    })
-
-    const ctx = await buildPromptContext({
-      db,
-      definition: def,
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: 'asking',
-      targetIteration: 1,
-    })
-    expect(ctx).toBeDefined()
-    const everything = `${ctx!.questionsBlock}\n${ctx!.answersBlock}`
-    expect(everything).toContain('Postgres')
-    expect(everything).not.toContain(USER_ID)
-    expect(everything).not.toContain(DISPLAY_NAME)
-    expect(everything).not.toContain('submittedByRole')
-    expect(everything).not.toContain('answerAttributions')
   })
 })
 
@@ -196,16 +95,6 @@ describe('RFC-099 prompt isolation — source level', () => {
     const fn = sliceFunction(review, 'export function renderCommentsForPrompt(')
     expect(fn).not.toContain('author')
     expect(fn).not.toContain('decidedBy')
-  })
-
-  test('buildPromptContext body references no attribution column', () => {
-    const rounds = backendSrc('services/clarifyRounds.ts')
-    const fn = sliceFunction(rounds, 'export async function buildPromptContext(')
-    expect(fn).not.toContain('answeredBy')
-    expect(fn).not.toContain('submittedByRole')
-    expect(fn).not.toContain('answerAttributions')
-    expect(fn).not.toContain('draftAnswers')
-    expect(fn).not.toContain('displayName')
   })
 
   test('shared clarify prompt renderers reference no attribution identifiers', () => {

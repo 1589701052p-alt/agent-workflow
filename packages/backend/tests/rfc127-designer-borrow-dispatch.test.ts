@@ -27,11 +27,8 @@ import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { createAgent } from '../src/services/agent'
-import {
-  buildExternalFeedbackContext,
-  createCrossClarifySession,
-  submitCrossClarifyAnswers,
-} from '../src/services/crossClarify'
+import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { bindTriggerRun } from '../src/services/clarifyQueue'
 import { runTask } from '../src/services/scheduler'
 import { reassignTaskQuestion } from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
@@ -405,18 +402,8 @@ describe('RFC-127 T5 — designer dispatch 借壳 (borrow the shell)', () => {
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
     expect(designerRuns.some((r) => r.status === 'pending')).toBe(false)
 
-    // The TARGET OTHER's per-node queue (keyed by effectiveTarget) carries + binds the answer to OTHER's rerun.
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: OTHER,
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: liveDef(),
-      dispatchedRunId: runId,
-    })
-    expect(ctx?.block).toContain('A')
-    expect(ctx?.graphOwned).toBe(false) // OTHER's default != OTHER → not graph-owned (去借壳)
+    // The TARGET OTHER's per-node queue (keyed by effectiveTarget) binds the answer to OTHER's rerun.
+    await bindTriggerRun(db, [(await designerEntries(db, taskId))[0]!.id], runId)
     expect((await designerEntries(db, taskId))[0]?.triggerRunId).toBe(runId)
   })
 

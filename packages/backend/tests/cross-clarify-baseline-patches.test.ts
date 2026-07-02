@@ -25,7 +25,6 @@ import {
   createCrossClarifySession,
   submitCrossClarifyAnswers,
   triggerDesignerRerun,
-  buildQuestionerCrossClarifyContext,
 } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -215,56 +214,6 @@ describe('RFC-058 baseline T4 — patch-2026-05-24 cci inheritance', () => {
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, session.crossClarifyNodeRunId))
     )[0]
     expect(nr?.status).toBe('awaiting_human')
-  })
-})
-
-describe('RFC-058 baseline T4 — patch-2026-05-22 questioner Q&A injection', () => {
-  test('buildQuestionerCrossClarifyContext surfaces prior cc Q&A when cci > 0', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTriad(db)
-    await db.insert(nodeRuns).values([
-      {
-        id: 'nr_designer_prior',
-        taskId,
-        nodeId: 'designer',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-        startedAt: Date.now() - 100,
-      },
-      {
-        id: 'nr_q_done',
-        taskId,
-        nodeId: 'questioner',
-        status: 'done',
-        retryIndex: 0,
-        iteration: 0,
-      },
-    ])
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cc1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: 'nr_q_done',
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQuestion({ title: 'patch-22 baseline question' })],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    const ctx = await buildQuestionerCrossClarifyContext({
-      db,
-      taskId,
-      questionerNodeId: 'questioner',
-      targetClarifyIteration: 1,
-    })
-    expect(ctx?.questionsBlock).toContain('patch-22 baseline question')
   })
 })
 

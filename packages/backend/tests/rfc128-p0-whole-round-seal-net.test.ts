@@ -37,11 +37,7 @@ import {
   sealAnswersServerSide,
   submitClarifyAnswers,
 } from '../src/services/clarify'
-import {
-  buildExternalFeedbackContext,
-  createCrossClarifySession,
-  submitCrossClarifyAnswers,
-} from '../src/services/crossClarify'
+import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
 import { resolveTriggerForEntry } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -403,9 +399,8 @@ describe('RFC-128 P0 net — 整轮 seal 现状锁 #2: cross questioner cascade'
     expect(all.filter((r) => r.nodeId === 'designer' && r.status === 'pending')).toHaveLength(0)
   })
 
-  test('continue + designer-scoped：designer 整轮承接——一条 designer 续跑 + buildExternalFeedbackContext 注入整轮答案', async () => {
+  test('continue + designer-scoped：designer 整轮承接——一条 designer 续跑', async () => {
     const db = createInMemoryDb(MIGRATIONS)
-    const def = crossDef()
     const { taskId, questionerRunId } = await seedCrossTask(db)
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
@@ -429,20 +424,6 @@ describe('RFC-128 P0 net — 整轮 seal 现状锁 #2: cross questioner cascade'
     // 恰好一条 designer 续跑（整轮一次承接）。
     const all = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
     expect(all.filter((r) => r.nodeId === 'designer' && r.status === 'pending')).toHaveLength(1)
-
-    // designer 承接链：整轮答案进 External Feedback。P1 designer 逐题下发改造后此整轮注入
-    // 须被逐题注入逐字替代（而非丢失）——此锁固化「答案必达 designer」的现状。
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: def,
-    })
-    expect(ctx).toBeDefined()
-    expect(ctx?.block).toContain('Why Redis?')
-    expect(ctx?.sourcesCsv).toBe('questioner')
   })
 })
 

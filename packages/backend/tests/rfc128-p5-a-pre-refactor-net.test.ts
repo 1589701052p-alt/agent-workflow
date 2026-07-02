@@ -34,7 +34,6 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { buildPromptContext } from '../src/services/clarifyRounds'
 import { resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
 import { loadUndispatchedDesignerTargets } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -202,59 +201,6 @@ describe('RFC-128 P5-A #1 → RFC-132 PR-C — self/q 注入收敛为统一平�
     expect(src).not.toContain('await buildPromptContext(')
     expect(src).not.toContain("consumerKind: 'self'")
     expect(src).not.toContain("consumerKind: 'cross-questioner'")
-  })
-})
-
-describe('RFC-128 P5-A #1/#2 — buildPromptContext 整轮渲染全 Q&A (self / cross-questioner)', () => {
-  test('self: 一条多题 answered 轮 → questionsBlock/answersBlock 含轮内所有题（整轮注入，非逐题子集）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    await seedAnsweredRound(db, taskId, {
-      kind: 'self',
-      askingNodeId: P,
-      questions: [mkQ('q1', 'FIRST self question'), mkQ('q2', 'SECOND self question')],
-    })
-
-    const ctx = await buildPromptContext({
-      db,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: P,
-      targetIteration: 1,
-      shardKey: null,
-    })
-    expect(ctx).toBeDefined()
-    // Whole-round: BOTH questions of the single round are rendered (P5-B per-question injection
-    // would render only the dispatched subset — this lock catches that change).
-    expect(ctx?.questionsBlock).toContain('FIRST self question')
-    expect(ctx?.questionsBlock).toContain('SECOND self question')
-  })
-
-  test('cross-questioner: 一条多题 answered 轮 → 含轮内所有题（反问者整轮看全部，与 scope 无关）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    await seedAnsweredRound(db, taskId, {
-      kind: 'cross',
-      askingNodeId: Q,
-      loopIter: 0,
-      questions: [mkQ('q1', 'FIRST cross question'), mkQ('q2', 'SECOND cross question')],
-    })
-
-    const ctx = await buildPromptContext({
-      db,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'cross-questioner',
-      consumerNodeId: Q,
-      targetIteration: 1,
-      loopIter: 0,
-    })
-    expect(ctx).toBeDefined()
-    expect(ctx?.questionsBlock).toContain('FIRST cross question')
-    expect(ctx?.questionsBlock).toContain('SECOND cross question')
   })
 })
 

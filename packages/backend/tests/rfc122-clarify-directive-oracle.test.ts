@@ -15,11 +15,7 @@
 // Plus isClarifyAskingNode (the API + canvas display predicate).
 
 import { describe, expect, test } from 'bun:test'
-import { resolve } from 'node:path'
-import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, nodeRuns, tasks, workflows } from '../src/db/schema'
 import {
-  buildPromptContext,
   resolveEffectiveClarifyChannel,
   shouldInjectStopNotice,
 } from '../src/services/clarifyRounds'
@@ -27,15 +23,10 @@ import {
   isClarifyAskingNode,
   renderUserPrompt,
   type WorkflowDefinition,
-  type ClarifyQuestion,
-  type ClarifyAnswer,
 } from '@agent-workflow/shared'
-
-const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const MANDATORY = 'MANDATORY ASK-BACK (clarify) mode'
 const STOP_TRAILER = '### User directive: STOP CLARIFYING'
-const KEEP_TRAILER = '### User directive: KEEP CLARIFYING'
 const OUTPUT_PROTO = 'You MUST end your reply with a'
 
 function renderMinimal(extra: Partial<Parameters<typeof renderUserPrompt>[0]>): string {
@@ -140,136 +131,6 @@ describe('RFC-122 renderUserPrompt clarifyStopNotice', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. buildPromptContext directiveOverride — Case-B trailer rebuild (DB-backed)
-// ---------------------------------------------------------------------------
-const Q: ClarifyQuestion = {
-  id: 'q1',
-  title: 'Which DB?',
-  kind: 'single',
-  recommended: false,
-  options: [
-    { label: 'Postgres', description: '', recommended: true, recommendationReason: '' },
-    { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
-  ],
-}
-const A: ClarifyAnswer = {
-  questionId: 'q1',
-  selectedOptionIndices: [0],
-  selectedOptionLabels: ['Postgres'],
-  customText: '',
-}
-
-async function seedAnsweredRound(
-  db: DbClient,
-  taskId: string,
-  kind: 'self' | 'cross',
-  askingNodeId: string,
-  intermediaryNodeId: string,
-): Promise<void> {
-  await db.insert(workflows).values({
-    id: `wf-${taskId}`,
-    name: 'wf',
-    definition: '{}',
-    description: '',
-    version: 1,
-    schemaVersion: 3,
-  })
-  await db.insert(tasks).values({
-    id: taskId,
-    name: 't',
-    ownerUserId: '__system__',
-    workflowId: `wf-${taskId}`,
-    workflowSnapshot: '{}',
-    repoPath: '/r',
-    worktreePath: '',
-    baseBranch: 'main',
-    branch: 'b',
-    status: 'awaiting_human',
-    inputs: '{}',
-    startedAt: Date.now(),
-  })
-  await db
-    .insert(nodeRuns)
-    .values({ id: `${taskId}-ask`, taskId, nodeId: askingNodeId, status: 'done', iteration: 0 })
-  await db.insert(nodeRuns).values({
-    id: `${taskId}-int`,
-    taskId,
-    nodeId: intermediaryNodeId,
-    status: 'done',
-    iteration: 0,
-  })
-  await db.insert(clarifyRounds).values({
-    id: `${taskId}-r0`,
-    taskId,
-    kind,
-    askingNodeId,
-    askingNodeRunId: `${taskId}-ask`,
-    intermediaryNodeId,
-    intermediaryNodeRunId: `${taskId}-int`,
-    iteration: 0,
-    questionsJson: JSON.stringify([Q]),
-    answersJson: JSON.stringify([A]),
-    // The user clicked "keep clarifying" on the last answer — without the
-    // override the trailer below is KEEP CLARIFYING.
-    directive: 'continue',
-    status: 'answered',
-  })
-}
-
-describe('RFC-122 buildPromptContext directiveOverride (Case-B rebuild)', () => {
-  test('self: override="stop" rebuilds the answered round trailer to STOP CLARIFYING', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def: WorkflowDefinition = { $schema_version: 3, inputs: [], nodes: [], edges: [] }
-    await seedAnsweredRound(db, 't-self', 'self', 'designer', 'clar')
-
-    const base = await buildPromptContext({
-      db,
-      definition: def,
-      taskId: 't-self',
-      consumerKind: 'self',
-      consumerNodeId: 'designer',
-      targetIteration: 1,
-    })
-    expect(base?.directive).toBe('continue')
-    expect(base?.answersBlock ?? '').toContain(KEEP_TRAILER)
-    expect(base?.answersBlock ?? '').not.toContain(STOP_TRAILER)
-
-    const overridden = await buildPromptContext({
-      db,
-      definition: def,
-      taskId: 't-self',
-      consumerKind: 'self',
-      consumerNodeId: 'designer',
-      targetIteration: 1,
-      directiveOverride: 'stop',
-    })
-    expect(overridden?.directive).toBe('stop')
-    expect(overridden?.answersBlock ?? '').toContain(STOP_TRAILER)
-    expect(overridden?.answersBlock ?? '').not.toContain(KEEP_TRAILER)
-    // The Q&A synthesis itself is untouched — only the trailer flips.
-    expect(overridden?.answersBlock ?? '').toContain('Postgres')
-  })
-
-  test('cross-questioner: override="stop" rebuilds the trailer too', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def: WorkflowDefinition = { $schema_version: 3, inputs: [], nodes: [], edges: [] }
-    await seedAnsweredRound(db, 't-cross', 'cross', 'questioner', 'cc1')
-
-    const overridden = await buildPromptContext({
-      db,
-      definition: def,
-      taskId: 't-cross',
-      consumerKind: 'cross-questioner',
-      consumerNodeId: 'questioner',
-      targetIteration: 1,
-      directiveOverride: 'stop',
-    })
-    expect(overridden?.directive).toBe('stop')
-    expect(overridden?.answersBlock ?? '').toContain(STOP_TRAILER)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // 4. isClarifyAskingNode — API + canvas display predicate
 // ---------------------------------------------------------------------------
 describe('RFC-122 isClarifyAskingNode', () => {
@@ -312,12 +173,6 @@ describe('RFC-122 isClarifyAskingNode', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 5. H2 — STOP CLARIFYING injected EXACTLY ONCE, incl. a review rerun that
-//    carries prior clarify Q&A but withheld the trailer (applyLatestDirective=false).
-// ---------------------------------------------------------------------------
-const countStop = (s: string) => (s.match(/### User directive: STOP CLARIFYING/g) ?? []).length
-
 describe('RFC-122 H2 shouldInjectStopNotice', () => {
   test('truth table', () => {
     // Inject ⟺ override is stop AND the context does not already carry the trailer.
@@ -335,77 +190,5 @@ describe('RFC-122 H2 shouldInjectStopNotice', () => {
     expect(shouldInjectStopNotice({ nodeStopOverride: false, contextDirective: 'continue' })).toBe(
       false,
     )
-  })
-})
-
-describe('RFC-122 H2 — STOP CLARIFYING appears exactly once on a review rerun with prior Q&A', () => {
-  test('applyLatestDirective=false + override=stop ⇒ trailer via the notice (exactly once)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def: WorkflowDefinition = { $schema_version: 3, inputs: [], nodes: [], edges: [] }
-    await seedAnsweredRound(db, 't-rev', 'self', 'designer', 'clar')
-
-    // A review reject/iterate rerun: NOT a clarify-answer rerun, so the scheduler
-    // sets applyLatestDirective=false → buildPromptContext withholds the trailer
-    // even though directiveOverride='stop'. The context still carries the prior Q&A.
-    const ctx = await buildPromptContext({
-      db,
-      definition: def,
-      taskId: 't-rev',
-      consumerKind: 'self',
-      consumerNodeId: 'designer',
-      targetIteration: 1,
-      applyLatestDirective: false,
-      directiveOverride: 'stop',
-    })
-    expect(ctx).toBeDefined()
-    expect(ctx?.directive).not.toBe('stop') // trailer withheld → notice MUST fire
-    expect(countStop(ctx?.answersBlock ?? '')).toBe(0)
-
-    const notice = shouldInjectStopNotice({
-      nodeStopOverride: true,
-      contextDirective: ctx?.directive,
-    })
-    expect(notice).toBe(true)
-
-    const prompt = renderMinimal({
-      hasClarifyChannel: false, // ask-back suppressed by the override
-      ...(ctx !== undefined ? { clarifyContext: ctx } : {}),
-      clarifyStopNotice: notice,
-    })
-    expect(prompt).not.toContain(MANDATORY)
-    expect(prompt).toContain(OUTPUT_PROTO)
-    expect(countStop(prompt)).toBe(1) // EXACTLY once — the H2 regression
-  })
-
-  test('applyLatestDirective=true + override=stop ⇒ trailer via answersBlock (no double)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const def: WorkflowDefinition = { $schema_version: 3, inputs: [], nodes: [], edges: [] }
-    await seedAnsweredRound(db, 't-clr', 'self', 'designer', 'clar')
-
-    const ctx = await buildPromptContext({
-      db,
-      definition: def,
-      taskId: 't-clr',
-      consumerKind: 'self',
-      consumerNodeId: 'designer',
-      targetIteration: 1,
-      applyLatestDirective: true,
-      directiveOverride: 'stop',
-    })
-    expect(ctx?.directive).toBe('stop')
-    expect(countStop(ctx?.answersBlock ?? '')).toBe(1)
-
-    const notice = shouldInjectStopNotice({
-      nodeStopOverride: true,
-      contextDirective: ctx?.directive,
-    })
-    expect(notice).toBe(false) // answersBlock already carries it
-
-    const prompt = renderMinimal({
-      hasClarifyChannel: false,
-      ...(ctx !== undefined ? { clarifyContext: ctx } : {}),
-      clarifyStopNotice: notice,
-    })
-    expect(countStop(prompt)).toBe(1) // still exactly once — no double inject
   })
 })

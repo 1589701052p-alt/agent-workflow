@@ -30,7 +30,6 @@ import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
-import { buildPromptContext } from '../src/services/clarifyRounds'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -282,15 +281,13 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
     expect(designerRuns.length).toBe(1)
   })
 
-  test('4. mixed scopes → designer-rerun-triggered + questioner cascade reads FULL Q&A (A3b)', async () => {
-    // RFC-059 A3b: the questioner cascade rerun ALWAYS receives the full
-    // session Q&A regardless of scope distribution. The designer-side
-    // filter (External Feedback only contains designer-scoped questions)
-    // is covered in T4's test suite — here we only assert the questioner
-    // path is NOT scope-filtered (the path that goes through buildPrompt-
-    // Context with consumerKind='cross-questioner').
+  test('4. mixed scopes → designer-rerun-triggered + scope persisted (A3b)', async () => {
+    // RFC-059 A3b: a mixed-scope submit triggers the designer rerun and
+    // persists the per-question scopes. (The questioner-cascade "reads FULL
+    // Q&A regardless of scope" assertion rode the removed cross-questioner
+    // injector; the flat queue renderer's coverage lives in rfc132 tests.)
     const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, definition } = await seedTask(db)
+    const { taskId } = await seedTask(db)
     await seedDesigner(db, taskId)
     const ccRunId = await spawnSession(db, {
       taskId,
@@ -305,20 +302,6 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questionScopes: { q1: 'designer', q2: 'questioner' },
     })
     expect(result.outcome.kind).toBe('designer-rerun-triggered')
-    // Questioner cascade reads via buildPromptContext (cross-questioner).
-    // That path does NOT consult questionScopesJson — should return both
-    // q1 AND q2 in its assembled prompt.
-    const qCtx = await buildPromptContext({
-      db,
-      definition,
-      taskId,
-      consumerKind: 'cross-questioner',
-      consumerNodeId: 'questioner',
-      targetIteration: 1,
-    })
-    expect(qCtx).toBeDefined()
-    expect(qCtx!.questionsBlock).toContain('first')
-    expect(qCtx!.questionsBlock).toContain('second') // not filtered out!
     // Scope persistence sanity (already covered by #9 but doubled here so
     // a regression that strips scope from #9's specific shape would still
     // show up alongside the A3b check).

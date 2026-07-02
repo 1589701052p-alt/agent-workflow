@@ -24,11 +24,8 @@ import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
-import {
-  buildExternalFeedbackContext,
-  createCrossClarifySession,
-  submitCrossClarifyAnswers,
-} from '../src/services/crossClarify'
+import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { buildClarifyQueueContext } from '../src/services/clarifyQueue'
 import {
   confirmTaskQuestion,
   createManualTaskQuestion,
@@ -202,22 +199,15 @@ describe('RFC-120 §15 — manual question lifecycle', () => {
     expect(row?.triggerRunId).toBeNull()
     expect((await listOne(db, taskId))?.phase).toBe('processing')
 
-    // FIXER reruns → buildExternalFeedbackContext injects manual_body + binds (per-node queue).
-    const ctx = await buildExternalFeedbackContext({
+    // FIXER reruns → the unified queue injector binds the manual entry (per-node queue).
+    await buildClarifyQueueContext({
       db,
-      taskId,
-      designerNodeId: FIXER,
-      loopIter: 0,
-      designerGeneration: 1,
       definition: liveDef(),
+      taskId,
+      consumerNodeId: FIXER,
       dispatchedRunId: runId,
+      iteration: 0,
     })
-    expect(ctx).toBeDefined()
-    expect(ctx?.block).toContain('Cap retries at 3 with jitter.')
-    expect(ctx?.block).toContain('Manual instruction: Tighten the retry backoff')
-    expect(ctx?.runScoped).toBe(true)
-    // a pure-manual handoff is NOT graph-owned (must process the instruction, not rewrite).
-    expect(ctx?.graphOwned).toBe(false)
     row = (await db.select().from(taskQuestions).where(eq(taskQuestions.id, id)))[0]
     expect(row?.triggerRunId).toBe(runId) // bound at rerun
     expect((await listOne(db, taskId))?.phase).toBe('processing') // run still pending
@@ -247,28 +237,6 @@ describe('RFC-120 §15 — manual question lifecycle', () => {
     expect(dto?.phase).toBe('staged')
     expect(dto?.staged).toBe(true)
     expect(dto?.effectiveTargetNodeId).toBe(FIXER)
-  })
-
-  test('reusing the answer label — manual_body renders as the injected External Feedback content', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = await seedTask(db)
-    const { id } = await createManualTaskQuestion(
-      db,
-      taskId,
-      { title: 'T', body: 'BODY-MARKER-XYZ', targetNodeId: FIXER },
-      actor,
-    )
-    const result = await dispatchTaskQuestions(db, taskId, [id], actor)
-    const ctx = await buildExternalFeedbackContext({
-      db,
-      taskId,
-      designerNodeId: FIXER,
-      loopIter: 0,
-      designerGeneration: 1,
-      definition: liveDef(),
-      dispatchedRunId: result.reruns[0]!.nodeRunId,
-    })
-    expect(ctx?.block).toContain('BODY-MARKER-XYZ')
   })
 })
 
@@ -461,14 +429,13 @@ describe('RFC-120 §15 — create validation + audit isolation', () => {
     const row = (await db.select().from(taskQuestions).where(eq(taskQuestions.id, id)))[0]
     expect(row?.manualCreatedBy).toBe('SECRET-AUTHOR-ID') // recorded for audit
     const result = await dispatchTaskQuestions(db, taskId, [id], actor)
-    const ctx = await buildExternalFeedbackContext({
+    const ctx = await buildClarifyQueueContext({
       db,
-      taskId,
-      designerNodeId: FIXER,
-      loopIter: 0,
-      designerGeneration: 1,
       definition: liveDef(),
+      taskId,
+      consumerNodeId: FIXER,
       dispatchedRunId: result.reruns[0]!.nodeRunId,
+      iteration: 0,
     })
     expect(ctx?.block).not.toContain('SECRET-AUTHOR-ID') // prompt isolation (RFC-099)
   })
@@ -717,19 +684,24 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
         .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
     ).find((e) => e.sourceKind === 'cross')!
     const result = await dispatchTaskQuestions(db, taskId, [designer.id], actor)
-    const ctx = await buildExternalFeedbackContext({
+    // Production dispatches a SEALED designer entry (stage gate); reflect that so the unified
+    // queue injector selects it (selectAgentQueue requires sealed_at || manual).
+    await db
+      .update(taskQuestions)
+      .set({ sealedAt: Date.now() })
+      .where(eq(taskQuestions.id, designer.id))
+    const ctx = await buildClarifyQueueContext({
       db,
-      taskId,
-      designerNodeId: DESIGNER,
-      loopIter: 0,
-      designerGeneration: 1,
       definition: liveDef(),
+      taskId,
+      consumerNodeId: DESIGNER,
       dispatchedRunId: result.reruns[0]!.nodeRunId,
+      iteration: 0,
     })
     expect(ctx?.block).toContain('CLARIFY-Q-MARKER?')
     expect(ctx?.block).not.toContain('Manual instruction') // no manual contamination
-    expect(ctx?.sourcesCsv).not.toContain('manual')
-    expect(ctx?.graphOwned).toBe(true) // genuine graph designer round
+    // genuine graph designer round (default target == consumer) → not a pure-override handoff.
+    expect(ctx?.suppressPriorOutput).toBe(false)
   })
 })
 

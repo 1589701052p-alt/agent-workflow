@@ -110,12 +110,4 @@ describe('RFC-064 C4 — services exports', () => {
     expect(src).toContain('export async function submitClarifyAnswers')
     expect(src).toContain('export async function createClarifySession')
   })
-
-  test('services/crossClarify.ts exports buildExternalFeedbackContext (signature unchanged in design)', () => {
-    const src = readFileSync(
-      resolve(REPO_ROOT, 'packages/backend/src/services/crossClarify.ts'),
-      'utf8',
-    )
-    expect(src).toContain('export async function buildExternalFeedbackContext(')
-  })
 })

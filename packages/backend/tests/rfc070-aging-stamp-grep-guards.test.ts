@@ -90,25 +90,3 @@ describe('RFC-070 C-guard — schema declares consumed_by columns on all three t
     expect(questionerHits).toBeGreaterThanOrEqual(4)
   })
 })
-
-describe('RFC-070 C-guard — read paths apply IS NULL filter', () => {
-  test('clarifyRounds.ts SELECTs use isNull(...consumedBy...) predicate', () => {
-    const txt = readFileSync(join(BACKEND_SRC, 'services/clarifyRounds.ts'), 'utf8')
-    const isNullConsumerHits = txt.split('isNull(clarifyRounds.consumedByConsumerRunId)').length - 1
-    const isNullQuestionerHits =
-      txt.split('isNull(clarifyRounds.consumedByQuestionerRunId)').length - 1
-    expect(isNullConsumerHits).toBeGreaterThanOrEqual(2) // self + cross-designer SELECTs
-    expect(isNullQuestionerHits).toBeGreaterThanOrEqual(1) // cross-questioner SELECT
-  })
-
-  test('crossClarify.ts buildExternalFeedbackContext + buildQuestionerCrossClarifyContext use IS NULL', () => {
-    const txt = readFileSync(join(BACKEND_SRC, 'services/crossClarify.ts'), 'utf8')
-    expect(txt).toContain('isNull(crossClarifySessions.consumedByConsumerRunId)')
-    expect(txt).toContain('isNull(crossClarifySessions.consumedByQuestionerRunId)')
-  })
-
-  test('clarify.ts buildClarifyPromptContext uses IS NULL on clarify_sessions', () => {
-    const txt = readFileSync(join(BACKEND_SRC, 'services/clarify.ts'), 'utf8')
-    expect(txt).toContain('isNull(clarifySessions.consumedByConsumerRunId)')
-  })
-})

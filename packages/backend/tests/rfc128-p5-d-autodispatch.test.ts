@@ -43,7 +43,6 @@ import {
   loadUndispatchedParkTargets,
   loadUndispatchedSelfQuestionerTargets,
 } from '../src/services/taskQuestions'
-import { buildClarifyNodeQueueContext, buildPromptContext } from '../src/services/clarifyRounds'
 import { getNodeClarifyDirectiveRow } from '../src/services/taskClarifyDirective'
 import { getTaskQuestionWriteSem } from '../src/services/taskWriteLocks'
 import { ConflictError } from '../src/util/errors'
@@ -409,64 +408,6 @@ describe('RFC-128 P5-D golden-lock (deferred full-seal autodispatch == legacy wh
 
     expect(causeA).toBe('clarify-answer')
     expect(causeA).toBe(causeB) // four-fold alignment: same cause
-  })
-
-  test('full-round injection — the auto-dispatched self rerun renders byte-for-byte == legacy whole-round buildPromptContext (no sibling block, R2-4)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const { clarifyNodeRunId } = await seedSealableSelfRound(db, taskId, [
-      mkQ('q1', 'FIRST'),
-      mkQ('q2', 'SECOND'),
-    ])
-    const res = await autoDispatchClarifyRound({
-      db,
-      originNodeRunId: clarifyNodeRunId,
-      answers: [ans('q1'), ans('q2')],
-      actor,
-    })
-    const rerunId = res.dispatch.reruns[0]!.nodeRunId
-
-    // The per-question injection the scheduler will use for the auto-dispatched rerun.
-    const ctx = await buildClarifyNodeQueueContext({
-      db,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: P,
-      dispatchedRunId: rerunId,
-      targetIteration: 1,
-    })
-    expect(ctx).toBeDefined()
-    // Full-round (all questions dispatched in one batch) → NO sibling/scope block (golden-lock R2-4).
-    expect(ctx?.answersBlock).not.toContain('Scope of this run')
-    expect(ctx?.questionsBlock).toContain('FIRST')
-    expect(ctx?.questionsBlock).toContain('SECOND')
-
-    // Reference: the legacy whole-round path on an equivalent answered round (clean DB, not dispatched).
-    const refDb = createInMemoryDb(MIGRATIONS)
-    await seedTask(refDb, taskId)
-    const refRound = await seedSealableSelfRound(refDb, taskId, [
-      mkQ('q1', 'FIRST'),
-      mkQ('q2', 'SECOND'),
-    ])
-    await sealRoundQuestions({
-      db: refDb,
-      originNodeRunId: refRound.clarifyNodeRunId,
-      answers: [ans('q1'), ans('q2')],
-      // No dispatch → the whole-round path is the renderer (not excluded by roundsWithDispatchedEntries).
-    })
-    const ref = await buildPromptContext({
-      db: refDb,
-      definition: liveDef(),
-      taskId,
-      consumerKind: 'self',
-      consumerNodeId: P,
-      targetIteration: 1,
-      shardKey: null,
-    })
-    expect(ctx?.questionsBlock).toBe(ref?.questionsBlock)
-    expect(ctx?.answersBlock).toBe(ref?.answersBlock)
   })
 
   test('RFC-132 PR-B — autoDispatchClarifyRound works on ANY task (the deferred-flag gate is removed)', async () => {
