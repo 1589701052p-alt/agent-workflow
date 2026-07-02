@@ -354,20 +354,16 @@ describe('TaskQuestionList 待下发 gate (加入 hidden until answered)', () =>
   })
 })
 
-// RFC-133 — batch-dispatch of staged (待下发) questions with PER-CARD selection restored
-// (design/RFC-133-dispatch-queued-run-obligation §4; 显式推翻 RFC-128 §11.1「全下、无逐卡
-// 勾选」拍板，用户 2026-07-02). staged 卡带 checkbox（tq-select-*，默认全选 = 旧全下体验
-// golden）；「下发所选 (N)」只发所选；0 选禁用；勾选尊重节点 filter。
-describe('TaskQuestionList batch-dispatch (RFC-133 逐卡勾选)', () => {
-  test('默认全选：不动勾选直接点 → POST 全部 staged ids（旧全下体验 golden-lock）', async () => {
+// 用户 2026-07-02 拍板（推翻 RFC-133 §4 逐卡勾选、恢复 RFC-128 §11.1 语义）——「进待下发=
+// 已确定，批量下发=全下」：一键下发当前视图（尊重节点 filter）的**全部** staged 条目；
+// 卡片不再渲染任何选择控件（tq-select-* 全删）。
+describe('TaskQuestionList batch-dispatch（全下、无逐卡勾选）', () => {
+  test('点批量下发 → POST 全部 staged ids（无需任何勾选步骤）', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
     await wrap([
       entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
       entry({ id: 's2', phase: 'staged', roleKind: 'designer' }),
     ])
-    // RFC-133: staged 卡有勾选框且默认选中。
-    expect((screen.getByTestId('tq-select-s1') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByTestId('tq-select-s2') as HTMLInputElement).checked).toBe(true)
     const btn = screen.getByTestId('tq-batch-dispatch') as HTMLButtonElement
     expect(btn.disabled).toBe(false)
     fireEvent.click(btn)
@@ -378,59 +374,32 @@ describe('TaskQuestionList batch-dispatch (RFC-133 逐卡勾选)', () => {
     )
   })
 
-  test('取消勾选一条 → 只 POST 所选子集', async () => {
-    const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
-    await wrap([
-      entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 's2', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 's3', phase: 'staged', roleKind: 'designer' }),
-    ])
-    fireEvent.click(screen.getByTestId('tq-select-s2'))
-    expect((screen.getByTestId('tq-select-s2') as HTMLInputElement).checked).toBe(false)
-    fireEvent.click(screen.getByTestId('tq-batch-dispatch'))
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/dispatch', {
-        entryIds: ['s1', 's3'],
-      }),
-    )
-  })
-
-  test('全部取消勾选 → 按钮禁用（0 选不发）', async () => {
-    await wrap([entry({ id: 's1', phase: 'staged', roleKind: 'designer' })])
-    const btn = screen.getByTestId('tq-batch-dispatch') as HTMLButtonElement
-    expect(btn.disabled).toBe(false)
-    fireEvent.click(screen.getByTestId('tq-select-s1'))
-    expect(btn.disabled).toBe(true)
-  })
-
-  test('仅 staged 卡渲染勾选控件（其它相位不渲染）', async () => {
+  test('任何相位的卡片都不再渲染勾选控件（tq-select-* / checkbox 全删）', async () => {
     await wrap([
       entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
       entry({ id: 'p1', phase: 'pending' }),
       entry({ id: 'c1', phase: 'awaiting_confirm' }),
       entry({ id: 'd1', phase: 'done', roleKind: 'designer' }),
     ])
-    expect(screen.getByTestId('tq-select-s1')).toBeTruthy()
-    for (const id of ['p1', 'c1', 'd1']) {
+    for (const id of ['s1', 'p1', 'c1', 'd1']) {
       expect(within(screen.getByTestId(`tq-card-${id}`)).queryByRole('checkbox')).toBeNull()
       expect(screen.queryByTestId(`tq-select-${id}`)).toBeNull()
     }
   })
 
-  test('有节点 filter 时只发该 filter 视图中的所选 staged（勾选跟随视图）', async () => {
+  test('有节点 filter 时发该 filter 视图中的全部 staged（不含视图外的）', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
     await wrap([
       entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
       entry({ id: 'a2', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
       entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'staged', roleKind: 'designer' }),
     ])
-    // 过滤到 nodeA，再取消 a2 → 只发 a1（不含 b1，也不含被取消的 a2）。
+    // 过滤到 nodeA → 发 nodeA 视图的全部 staged（a1+a2），不含 b1。
     fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
-    fireEvent.click(screen.getByTestId('tq-select-a2'))
     fireEvent.click(screen.getByTestId('tq-batch-dispatch'))
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/dispatch', {
-        entryIds: ['a1'],
+        entryIds: ['a1', 'a2'],
       }),
     )
   })
