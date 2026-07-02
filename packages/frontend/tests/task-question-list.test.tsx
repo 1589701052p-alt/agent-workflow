@@ -84,8 +84,8 @@ async function wrap(entries: TaskQuestionEntry[]) {
 
 // RFC-120 D13 — harness for the canvas-badge focus signal. Holds {nodeId, key}
 // state (like tasks.detail) with buttons that mint a FRESH key each push, so we
-// can drive `focusSourceNode` and assert the board filters to that node — incl.
-// pushing the SAME node twice (a new key must still re-apply the filter).
+// can drive `focusTargetNode` and assert the board filters to that handler node
+// — incl. pushing the SAME node twice (a new key must still re-apply the filter).
 function FocusHarness() {
   const [focus, setFocus] = useState<{ nodeId: string; key: number } | null>(null)
   const keyRef = useRef(0)
@@ -107,7 +107,7 @@ function FocusHarness() {
           { id: 'nodeA', label: 'nodeA' },
           { id: 'nodeB', label: 'nodeB' },
         ]}
-        focusSourceNode={focus}
+        focusTargetNode={focus}
       />
     </>
   )
@@ -253,13 +253,15 @@ describe('TaskQuestionList board', () => {
     expect(answer!.compareDocumentPosition(meta!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  test('D13: source-node filter chips + click narrows the board to that node', async () => {
+  // 2026-07-02 badge-dimension fix (用户拍板, task …QMGP5): the node filter groups by the
+  // HANDLER node (effectiveTargetNodeId = override ?? default), NOT the asking source node.
+  test('D13: node filter chips group by HANDLER (effective target) + click narrows the board', async () => {
     await wrap([
-      entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'pending' }),
-      entry({ id: 'a2', sourceNodeId: 'nodeA', phase: 'processing' }),
-      entry({ id: 'b1', sourceNodeId: 'nodeB', phase: 'pending' }),
-      // RFC-128: a fully-done source STILL gets a chip (the filter lists ALL source nodes).
-      entry({ id: 'c1', sourceNodeId: 'nodeC', phase: 'done', roleKind: 'designer' }),
+      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
+      entry({ id: 'a2', effectiveTargetNodeId: 'nodeA', phase: 'processing' }),
+      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
+      // RFC-128: a fully-done node STILL gets a chip (the filter lists ALL handler nodes).
+      entry({ id: 'c1', effectiveTargetNodeId: 'nodeC', phase: 'done', roleKind: 'designer' }),
     ])
     // RFC-128: per-node count chips count ALL phases (incl. done): nodeA=2, nodeB=1, nodeC=1.
     expect(screen.getByTestId('tq-node-filter-nodeA').textContent).toContain('2')
@@ -272,6 +274,42 @@ describe('TaskQuestionList board', () => {
     fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
     expect(screen.queryByTestId('tq-card-b1')).toBeNull()
+  })
+
+  // Regression lock for the …QMGP5 case: a question ASKED by the designer but reassigned
+  // (override) to a downstream handler must count on the HANDLER's chip and land in the
+  // HANDLER's filter view — the asker's chip must not include it. A manual question
+  // (sourceNodeId null) gets a chip via its target instead of vanishing.
+  test('改派条目归到承接节点的 chip/视图（非提问节点）；manual 也有归属', async () => {
+    await wrap([
+      // asked by designer, handled by designer (normal self question)
+      entry({ id: 'd1', sourceNodeId: 'designer', effectiveTargetNodeId: 'designer' }),
+      // asked by designer, REASSIGNED to fixer → counts on fixer, not designer
+      entry({
+        id: 'r1',
+        sourceNodeId: 'designer',
+        overrideTargetNodeId: 'fixer',
+        effectiveTargetNodeId: 'fixer',
+        phase: 'processing',
+      }),
+      // manual question: no source node, targeted at fixer
+      entry({
+        id: 'm1',
+        sourceKind: 'manual',
+        roleKind: 'designer',
+        sourceNodeId: null,
+        originNodeRunId: null,
+        defaultTargetNodeId: 'fixer',
+        effectiveTargetNodeId: 'fixer',
+      }),
+    ])
+    expect(screen.getByTestId('tq-node-filter-designer').textContent).toContain('1')
+    expect(screen.getByTestId('tq-node-filter-fixer').textContent).toContain('2')
+    // fixer view = the reassigned + the manual entry; the designer-handled one is out
+    fireEvent.click(screen.getByTestId('tq-node-filter-fixer'))
+    expect(screen.getByTestId('tq-card-r1')).toBeTruthy()
+    expect(screen.getByTestId('tq-card-m1')).toBeTruthy()
+    expect(screen.queryByTestId('tq-card-d1')).toBeNull()
   })
 
   // RFC-124 source-lock — board action buttons are visually unified: every `.btn`
@@ -356,12 +394,12 @@ describe('TaskQuestionList batch-dispatch (RFC-128 §11.1)', () => {
     }
   })
 
-  test('有 source filter 时批量下发只发该 filter 视图的 staged（尊重当前视图）', async () => {
+  test('有节点 filter 时批量下发只发该 filter 视图的 staged（尊重当前视图）', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
     await wrap([
-      entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'a2', sourceNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'b1', sourceNodeId: 'nodeB', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'a2', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'staged', roleKind: 'designer' }),
     ])
     // 过滤到 nodeA → 批量下发只发 nodeA 视图的 staged（a1,a2），不含 b1。
     fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
@@ -394,11 +432,11 @@ describe('TaskQuestionList batch-dispatch (RFC-128 §11.1)', () => {
   })
 })
 
-describe('TaskQuestionList focusSourceNode (D13 canvas-badge jump)', () => {
-  test('a fresh focusSourceNode.key filters the board to that node — incl. the same node twice', async () => {
+describe('TaskQuestionList focusTargetNode (D13 canvas-badge jump)', () => {
+  test('a fresh focusTargetNode.key filters the board to that handler node — incl. the same node twice', async () => {
     await wrapFocus([
-      entry({ id: 'a1', sourceNodeId: 'nodeA', phase: 'pending' }),
-      entry({ id: 'b1', sourceNodeId: 'nodeB', phase: 'pending' }),
+      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
+      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
     ])
     // Initially unfiltered: both cards visible.
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()

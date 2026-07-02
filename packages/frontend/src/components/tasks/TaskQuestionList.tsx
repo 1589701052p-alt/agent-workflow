@@ -63,11 +63,14 @@ export interface TaskQuestionListProps {
   nodeOptions?: { id: string; label: string }[]
   /**
    * RFC-120 D13: a canvas question-badge click pushes `{ nodeId, key }` here to
-   * focus the board on that source node. A fresh `key` each click re-applies the
+   * focus the board on that node. A fresh `key` each click re-applies the
    * filter even for the SAME node (clicking the same badge twice). Undefined /
    * null ⇒ no effect, so existing callers are unaffected (golden-lock).
+   * 2026-07-02 badge-dimension fix: the focused node is the HANDLER (effective
+   * target = override ?? default), matching the badge counts — NOT the asking
+   * source node (a reassigned question must land on its handler's filter).
    */
-  focusSourceNode?: { nodeId: string; key: number } | null
+  focusTargetNode?: { nodeId: string; key: number } | null
   /**
    * RFC-120 §15 — the manual-question entry points ("+ 新增问题" + per-card "复制") are
    * shown ONLY for a deferred-dispatch task, because dispatch + injection of a manual
@@ -114,7 +117,7 @@ const DISPATCH_ERROR_KEYS: Record<string, string> = {
 export function TaskQuestionList({
   taskId,
   nodeOptions = [],
-  focusSourceNode = null,
+  focusTargetNode = null,
   deferred = false,
 }: TaskQuestionListProps) {
   const { t } = useTranslation()
@@ -141,7 +144,7 @@ export function TaskQuestionList({
     onSuccess: invalidate,
   })
   // RFC-128 §11.1 — 批量下发 (batch-dispatch) of staged (待下发) questions. 语义「进待下发=
-  // 已确定，批量下发=全下」：一键下发当前视图(尊重 source filter)的**全部** staged 条目——不再
+  // 已确定，批量下发=全下」：一键下发当前视图(尊重节点 filter)的**全部** staged 条目——不再
   // 逐卡勾选子集（删了 per-card checkbox + 局部 selection state）。后端请求体不变(仍接 entryIds)。
   const [dispatchError, setDispatchError] = useState<unknown>(null)
   // RFC-120 §15 — manual question author form. `authorInitial` null = 新增 (empty form);
@@ -189,16 +192,18 @@ export function TaskQuestionList({
       setDispatchError(err)
     },
   })
-  // RFC-120 D13: source-node filter (per-node pending counts → click to view
-  // that node's questions). Delivers the node-badge feature on the board surface.
-  const [sourceFilter, setSourceFilter] = useState<string | null>(null)
-  // RFC-120 D13: a canvas badge click focuses the board on a source node. Keyed
-  // off `focusSourceNode.key` (not nodeId) so clicking the SAME node twice still
+  // RFC-120 D13 (2026-07-02 badge-dimension fix): node filter keyed by the
+  // HANDLER node (effective target = override ?? default) — the node that will
+  // process the question — matching the canvas badge counts. Grouping by the
+  // asking source node put a reassigned question on the WRONG node's filter.
+  const [targetFilter, setTargetFilter] = useState<string | null>(null)
+  // RFC-120 D13: a canvas badge click focuses the board on a handler node. Keyed
+  // off `focusTargetNode.key` (not nodeId) so clicking the SAME node twice still
   // re-applies the filter — each click mints a fresh key in tasks.detail.
-  const focusKey = focusSourceNode?.key
-  const focusNodeId = focusSourceNode?.nodeId
+  const focusKey = focusTargetNode?.key
+  const focusNodeId = focusTargetNode?.nodeId
   useEffect(() => {
-    if (focusNodeId !== undefined) setSourceFilter(focusNodeId)
+    if (focusNodeId !== undefined) setTargetFilter(focusNodeId)
     // Fire on a NEW click (fresh key) only — depending on focusNodeId would
     // defeat the same-node-twice case (each click mints a fresh key in tasks.detail).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -252,38 +257,41 @@ export function TaskQuestionList({
       ? (nodeOptions.find((n) => n.id === nodeId)?.label ?? nodeId)
       : t('taskQuestions.noTarget')
 
-  // RFC-128 (用户 2026-06-30): the source-node filter lists EVERY source node that has
-  // questions (ANY phase) so the board can be filtered by any of them — including nodes
-  // whose questions are all done (previously only nodes with non-terminal questions got a
-  // chip, so a fully-confirmed source vanished from the filter). The chip count is that
-  // source's total card count (matches the board it filters to). Manual questions
-  // (sourceNodeId null) have no graph source node → no chip.
+  // RFC-128 (用户 2026-06-30): the node filter lists EVERY node that has questions (ANY
+  // phase) so the board can be filtered by any of them — including nodes whose questions
+  // are all done. The chip count is that node's total card count (matches the board it
+  // filters to). 2026-07-02 badge-dimension fix (用户拍板): chips group by the HANDLER
+  // node (effectiveTargetNodeId), not the asking source — a question reassigned to a
+  // downstream node counts on ITS chip, and a manual question (no source node) now has a
+  // chip via its target.
   const counts = new Map<string, number>()
   for (const e of entries) {
-    if (e.sourceNodeId !== null) {
-      counts.set(e.sourceNodeId, (counts.get(e.sourceNodeId) ?? 0) + 1)
+    if (e.effectiveTargetNodeId !== null) {
+      counts.set(e.effectiveTargetNodeId, (counts.get(e.effectiveTargetNodeId) ?? 0) + 1)
     }
   }
-  const shown = sourceFilter ? entries.filter((e) => e.sourceNodeId === sourceFilter) : entries
+  const shown = targetFilter
+    ? entries.filter((e) => e.effectiveTargetNodeId === targetFilter)
+    : entries
 
   // RFC-128 §11.1 — only staged (待下发) cards are dispatch candidates. The board action
   // bar renders ONLY when ≥1 staged card is visible in the CURRENT view (golden-lock: no
   // staged cards ⇒ no batch-dispatch bar). 「批量下发」= 下发这批 stagedShown 的**全部** id
-  // （尊重 source filter；无 filter 时=全部 staged），不再逐卡勾选。
+  // （尊重节点 filter；无 filter 时=全部 staged），不再逐卡勾选。
   const stagedShown = shown.filter((e) => e.phase === 'staged')
 
   return (
     <div className="task-questions-wrap">
-      {/* RFC-124 — single-row toolbar: source-node filter (left) + actions (right). */}
+      {/* RFC-124 — single-row toolbar: handler-node filter (left) + actions (right). */}
       <div className="task-questions__toolbar">
         <div className="task-questions__filter" data-testid="tq-node-filter">
           <button
             type="button"
             className={
               'task-questions__filter-chip' +
-              (sourceFilter === null ? ' task-questions__filter-chip--active' : '')
+              (targetFilter === null ? ' task-questions__filter-chip--active' : '')
             }
-            onClick={() => setSourceFilter(null)}
+            onClick={() => setTargetFilter(null)}
           >
             {t('taskQuestions.allNodes')} ({entries.length})
           </button>
@@ -293,9 +301,9 @@ export function TaskQuestionList({
               type="button"
               className={
                 'task-questions__filter-chip' +
-                (sourceFilter === nodeId ? ' task-questions__filter-chip--active' : '')
+                (targetFilter === nodeId ? ' task-questions__filter-chip--active' : '')
               }
-              onClick={() => setSourceFilter(nodeId)}
+              onClick={() => setTargetFilter(nodeId)}
               data-testid={`tq-node-filter-${nodeId}`}
             >
               {nodeId} ({n})
@@ -305,7 +313,7 @@ export function TaskQuestionList({
         <div className="task-questions__actions">
           {/* RFC-128 §11.1 — batch-dispatch. Only present when ≥1 staged card is visible
               (golden-lock: no staged ⇒ no bar). 语义「进待下发=已确定，批量下发=全下」：一键
-              下发当前视图(尊重 source filter)的全部 staged 条目——无逐卡勾选。 */}
+              下发当前视图(尊重节点 filter)的全部 staged 条目——无逐卡勾选。 */}
           {stagedShown.length > 0 && (
             <div className="task-questions__batch" data-testid="tq-batch-dispatch-bar">
               <button

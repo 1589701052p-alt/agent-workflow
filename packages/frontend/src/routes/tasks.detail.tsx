@@ -65,13 +65,15 @@ function TaskDetailPage() {
   // RFC-120 D13: a canvas question-badge click jumps here. The incrementing
   // `key` makes each click a fresh signal so clicking the SAME node twice still
   // re-applies the board filter (TaskQuestionList keys its effect off `.key`).
-  const [focusSourceNode, setFocusSourceNode] = useState<{ nodeId: string; key: number } | null>(
+  // 2026-07-02 badge-dimension fix: the focused node is the HANDLER (effective
+  // target), matching what the badge counts.
+  const [focusTargetNode, setFocusTargetNode] = useState<{ nodeId: string; key: number } | null>(
     null,
   )
   const focusKeyRef = useRef(0)
   const jumpToQuestions = useCallback((nodeId: string) => {
     focusKeyRef.current += 1
-    setFocusSourceNode({ nodeId, key: focusKeyRef.current })
+    setFocusTargetNode({ nodeId, key: focusKeyRef.current })
     setTab('task-questions')
   }, [])
   // RFC-083: structural-diff scope — 'task' or `node:${nodeRunId}`.
@@ -602,7 +604,7 @@ function TaskDetailPage() {
           <TaskQuestionList
             taskId={id}
             nodeOptions={agentNodeOptions}
-            focusSourceNode={focusSourceNode}
+            focusTargetNode={focusTargetNode}
             deferred={tk.deferredQuestionDispatch}
           />
         </div>
@@ -678,10 +680,14 @@ function TaskStatusCanvas({
     for (const e of questions.data ?? []) {
       // RFC-128 (用户 2026-06-30): the canvas node badge counts ONLY 'processing' — the
       // questions this node is actively running. Pre-dispatch (待指派/待下发) live in the
-      // question POOL, not on a node; 已处理待确认/完成 no longer belong to the node. A
-      // manual question (sourceNodeId null) has no graph source node → no canvas badge.
-      if (e.sourceNodeId !== null && e.phase === 'processing') {
-        out[e.sourceNodeId] = (out[e.sourceNodeId] ?? 0) + 1
+      // question POOL, not on a node; 已处理待确认/完成 no longer belong to the node.
+      // 2026-07-02 badge-dimension fix (用户拍板): group by the HANDLER node
+      // (effectiveTargetNodeId = override ?? default), NOT the asking source node —
+      // "actively running" is the handler's dimension. A question reassigned to a
+      // downstream node counts on THAT node's badge (task …QMGP5: 19/1, not 20/0); a
+      // manual question (no source node) now badges its target node too.
+      if (e.effectiveTargetNodeId !== null && e.phase === 'processing') {
+        out[e.effectiveTargetNodeId] = (out[e.effectiveTargetNodeId] ?? 0) + 1
       }
     }
     return out

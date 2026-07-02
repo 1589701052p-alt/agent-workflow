@@ -29,8 +29,16 @@ describe('RFC-128 canvas node badge (source-level lock)', () => {
   // The canvas per-node badge (questionCounts) counts ONLY 'processing' — the questions a
   // node is actively running. Pre-dispatch (待指派/待下发) live in the pool; 已处理待确认/
   // 完成 no longer belong to the node. Distinct from the tab badge (pending+staged) above.
-  test('canvas node badge counts ONLY processing', () => {
+  //
+  // 2026-07-02 badge-dimension fix (用户拍板, task …QMGP5): the badge groups by the
+  // HANDLER node (effectiveTargetNodeId = override ?? default), NOT the asking source —
+  // "actively running" is the handler's dimension. Grouping by sourceNodeId put a question
+  // reassigned to a downstream node on the ASKER's badge (20/0 instead of 19/1) and gave
+  // manual questions (no source node) no badge at all. This lock keeps the count basis on
+  // the handler dimension — a revert to sourceNodeId turns it red.
+  test('canvas node badge counts ONLY processing, grouped by the HANDLER (effective target)', () => {
     expect(SRC).toMatch(/const questionCounts = useMemo/)
-    expect(SRC).toContain("e.sourceNodeId !== null && e.phase === 'processing'")
+    expect(SRC).toContain("e.effectiveTargetNodeId !== null && e.phase === 'processing'")
+    expect(SRC).not.toContain("e.sourceNodeId !== null && e.phase === 'processing'")
   })
 })

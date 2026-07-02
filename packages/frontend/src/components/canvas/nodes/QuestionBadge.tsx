@@ -1,13 +1,17 @@
-// RFC-120 D13 — on-canvas per-node pending-question badge. Shared by the
-// "asking" node renderers (agent / clarify / cross-clarify) so the count pill
-// + click-to-jump behavior stays identical across all of them (one source of
-// truth, no per-node fork). Renders nothing when the count is 0 / undefined, so
-// a canvas with no counts is byte-for-byte unchanged (golden-lock).
+// RFC-120 D13 — on-canvas per-node pending-question badge. Shared by the agent /
+// clarify / cross-clarify node renderers so the count pill + click-to-jump
+// behavior stays identical across all of them (one source of truth, no per-node
+// fork). Renders nothing when the count is 0 / undefined, so a canvas with no
+// counts is byte-for-byte unchanged (golden-lock).
+//
+// The count is the number of questions this node is HANDLING (processing-phase
+// entries whose effective target = override ?? default is this node) — see
+// tasks.detail questionCounts (2026-07-02 badge-dimension fix).
 //
 // It is a real <button> (a11y: keyboard + screen-reader reachable) anchored
 // absolutely to the node's top-right corner. The onClick stops propagation so a
 // badge click does NOT also select the node behind it — clicking it jumps to the
-// task questions board filtered to this source node via data.onQuestionBadgeClick.
+// task questions board filtered to this handler node via data.onQuestionBadgeClick.
 
 import { useTranslation } from 'react-i18next'
 import type { CanvasNodeData } from './types'
