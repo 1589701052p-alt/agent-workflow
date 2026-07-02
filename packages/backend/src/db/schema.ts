@@ -1742,7 +1742,9 @@ export const taskQuestions = sqliteTable(
     questionId: text('question_id').notNull(), // round-local question id (manual: fresh ULID)
     questionTitle: text('question_title').notNull(), // snapshot (title is stable across reopen)
     sourceKind: text('source_kind', { enum: ['self', 'cross', 'manual'] }).notNull(),
-    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer'] }).notNull(),
+    // RFC-134: + 'echo' — 改派回执（只读知会，目标=提问节点，生来已下发、排队等自然重跑）。
+    // drizzle enum 纯类型层、无 CHECK 约束 → 扩宽零 migration（0060 DDL 佐证）。
+    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer', 'echo'] }).notNull(),
     // Round iteration / loop_iter snapshot — used by resolveHandlerRun to frame
     // the exact handler lineage (Codex F1).
     iteration: integer('iteration').notNull().default(0),

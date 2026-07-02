@@ -2467,6 +2467,7 @@ export interface Resources {
     addQuestion: string
     copy: string
     manualSource: string
+    roleEcho: string
     answerPaneButton: string
     answerPaneTitle: string
     answerPaneEmpty: string
@@ -5118,6 +5119,7 @@ export const zhCN: Resources = {
     addQuestion: '+ 新增问题',
     copy: '复制',
     manualSource: '手动',
+    roleEcho: '回执',
     answerPaneButton: '处理待指派问题',
     answerPaneTitle: '集中回答待指派问题',
     answerPaneEmpty: '没有待回答的问题。',

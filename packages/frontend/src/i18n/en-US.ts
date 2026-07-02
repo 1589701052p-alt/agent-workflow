@@ -2723,6 +2723,7 @@ export const enUS: Resources = {
     addQuestion: '+ New question',
     copy: 'Copy',
     manualSource: 'Manual',
+    roleEcho: 'Receipt',
     answerPaneButton: 'Process pending questions',
     answerPaneTitle: 'Answer pending questions',
     answerPaneEmpty: 'No pending questions to answer.',

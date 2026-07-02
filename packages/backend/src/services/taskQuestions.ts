@@ -51,7 +51,8 @@ export interface TaskQuestionDTO {
   questionId: string
   questionTitle: string
   sourceKind: 'self' | 'cross' | 'manual'
-  roleKind: 'self' | 'questioner' | 'designer'
+  /** RFC-134: + 'echo'（改派回执——只读知会卡）。 */
+  roleKind: 'self' | 'questioner' | 'designer' | 'echo'
   /** The node that ASKED the question (round.askingNodeId) — drives the node badge.
    *  NULL for a manual question (no source node; the board shows "手动"). */
   sourceNodeId: string | null
@@ -922,12 +923,17 @@ export async function confirmTaskQuestion(
   actor: TaskQuestionActor,
 ): Promise<void> {
   const entry = await loadEntry(db, entryId)
-  const phase = await deriveEntryPhase(db, entry)
-  if (phase !== 'awaiting_confirm') {
-    throw new ConflictError(
-      'task-question-not-awaiting-confirm',
-      `task question is '${phase}', not awaiting_confirm`,
-    )
+  // RFC-134 D3：回执（echo）是只读知会卡——**任意相位**可 confirm（人「已知悉」即收卡）；
+  // confirm 只收看板卡、不撤销投递（注入选取层不读 confirmation——投递撤销语义在任何条目上
+  // 都不存在，老化是唯一出队方式）。其余角色保持仅 awaiting_confirm 可确认（guard 不变）。
+  if (entry.roleKind !== 'echo') {
+    const phase = await deriveEntryPhase(db, entry)
+    if (phase !== 'awaiting_confirm') {
+      throw new ConflictError(
+        'task-question-not-awaiting-confirm',
+        `task question is '${phase}', not awaiting_confirm`,
+      )
+    }
   }
   await db
     .update(taskQuestions)
@@ -1053,13 +1059,36 @@ export async function stageTaskQuestion(
       `task question ${entryId} is not yet sealed; answer (seal) it before staging it for dispatch`,
     )
   }
+  if (staged) {
+    // RFC-134 D10（Codex R2-F4 + R3-F7）——已下发行不可 stage：dispatch 后条目已「提交执行」，
+    // stage 只会留下脏戳（生来已下发的 echo 回执同理）。守卫必须是**原子条件更新**（同列 CAS，
+    // 镜像 reassignTaskQuestion / dispatch 的 `dispatched_at IS NULL` 语义）而非先查后改——并发
+    // dispatch 可在检查与更新的间隙 stamp `dispatched_at`；0 行生效 → Conflict、无脏写。
+    let updated = false
+    dbTxSync(db, (tx) => {
+      const stillOpen = tx
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
+        .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
+        .all()
+      if (stillOpen.length === 0) return // dispatched concurrently (or born-dispatched echo) → reject below
+      tx.update(taskQuestions)
+        .set({ stagedAt: Date.now(), stagedBy: actor.userId, updatedAt: Date.now() })
+        .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
+        .run()
+      updated = true
+    })
+    if (!updated) {
+      throw new ConflictError(
+        'task-question-already-dispatched',
+        `cannot stage a dispatched question (dispatched_at is set) — it is already committed for execution`,
+      )
+    }
+    return
+  }
   await db
     .update(taskQuestions)
-    .set(
-      staged
-        ? { stagedAt: Date.now(), stagedBy: actor.userId, updatedAt: Date.now() }
-        : { stagedAt: null, stagedBy: null, updatedAt: Date.now() },
-    )
+    .set({ stagedAt: null, stagedBy: null, updatedAt: Date.now() })
     .where(eq(taskQuestions.id, entryId))
 }
 

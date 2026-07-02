@@ -57,7 +57,7 @@ function mkLineage(over: Partial<RunLineageView>): RunLineageView {
 
 type EntryPick = Pick<
   TaskQuestionRow,
-  'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind'
+  'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind' | 'sourceKind'
 >
 
 function queued(over: Partial<EntryPick> = {}): EntryPick {
@@ -66,6 +66,7 @@ function queued(over: Partial<EntryPick> = {}): EntryPick {
     defaultTargetNodeId: TARGET,
     overrideTargetNodeId: null,
     roleKind: 'self',
+    sourceKind: 'self',
     ...over,
   }
 }
@@ -168,9 +169,13 @@ describe('RFC-133 queued run-obligation matrix — isDispatchedEntryConsumed (in
 
 describe('RFC-133 causeClassForEntry — single shared definition', () => {
   test('role → cause class mapping', () => {
-    expect(causeClassForEntry({ roleKind: 'self' })).toBe('clarify-answer')
-    expect(causeClassForEntry({ roleKind: 'questioner' })).toBe('cross-clarify-questioner-rerun')
-    expect(causeClassForEntry({ roleKind: 'designer' })).toBe('cross-clarify-answer')
+    expect(causeClassForEntry({ roleKind: 'self', sourceKind: 'self' })).toBe('clarify-answer')
+    expect(causeClassForEntry({ roleKind: 'questioner', sourceKind: 'cross' })).toBe(
+      'cross-clarify-questioner-rerun',
+    )
+    expect(causeClassForEntry({ roleKind: 'designer', sourceKind: 'cross' })).toBe(
+      'cross-clarify-answer',
+    )
   })
 
   test('grep guard: taskQuestionDispatch has NO private causeClassForEntry definition left', async () => {

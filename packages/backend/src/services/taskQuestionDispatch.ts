@@ -30,7 +30,7 @@
 // exclusion / dispatch-time trigger_run_id binding are GONE — the per-node queue model
 // (buildExternalFeedbackContext / markClarifyRoundsConsumedBy) replaces them.
 
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
@@ -53,6 +53,10 @@ import {
 import { ConflictError, NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import {
+  echoSiblingKey,
+  planEchoEntries,
+  type EchoPlan,
+  type EchoSiblingSnapshot,
   type RunLineageView,
   type WorkflowDefinition,
   type WorkflowEdge,
@@ -528,6 +532,8 @@ export async function dispatchTaskQuestions(
   )
   const now = Date.now()
   let committed = false
+  // RFC-134: 本批物化的回执计划（tx 内赋值、commit 后 log 用）。
+  let echoPlans: EchoPlan[] = []
   try {
     // RFC-128 §5.2.14 final-gate (user-authorized): hold the per-task QUESTION-WRITE lock (B) across
     // the stamp+mint tx so a clarify/cross-clarify SUBMIT's {precheck→rollback→tx} cannot interleave
@@ -614,6 +620,8 @@ export async function dispatchTaskQuestions(
               )
         // (a) RFC-128 P5-BC (R2-2, §5.2.12 contract 3): the in-flight recheck spans ANY deferred role
         //     (self/questioner/designer) DISPATCHED entry — the cross-batch serialization half.
+        //     RFC-134 D4：白名单**有意**不含 'echo'——回执不 mint、无 rerun_cause，是 cause 序列化
+        //     的显式豁免项（queued 回执绝不 409 阻塞后续任何下发）。不得「顺手」扩入（源码文本锁）。
         const txDispatched = tx
           .select()
           .from(taskQuestions)
@@ -662,6 +670,92 @@ export async function dispatchTaskQuestions(
           // rfc098-allow-direct-node-run-insert
           tx.insert(nodeRuns).values(p.values).run()
         }
+        // RFC-134 §3.1 — seal 行戳归一化（Codex R5-F9）：本批 stamp 的 clarify 行若 sealed_at
+        // NULL（能过 assertRequestedEntriesSealed 只因源轮已 answered——契约 #17「已下发 ≠
+        // 可渲染」），同事务补行戳，凡下发必可被 selectAgentQueue 渲染（顺带修 pre-existing
+        // 「懒建行下发给承接方后永不注入」投递洞）。sealed_by 留 NULL =「answered 轮证据落戳」
+        // 的审计语义（非人工 seal）；manual 不补（无 seal 概念）；已 sealed 不改写（黄金锁）；
+        // 历史已下发行不追溯（forward-only）。
+        tx.update(taskQuestions)
+          .set({ sealedAt: now, updatedAt: now })
+          .where(
+            and(
+              inArray(taskQuestions.id, dispatchIds),
+              isNull(taskQuestions.sealedAt),
+              ne(taskQuestions.sourceKind, 'manual'),
+            ),
+          )
+          .run()
+        // RFC-134 §3.2-3.3 — 改派回执（asker echo）：对「有效承接 ≠ 提问节点」的 self/questioner
+        // 条目物化 roleKind='echo' 回执行——目标=提问节点、生来已下发、trigger NULL 排队，等提
+        // 问节点下次自然运行由统一注入器平铺注入（**不 mint**、不入 frontier/守卫——D1/D4 豁免，
+        // 见 design §4）。identity (origin, question, 'echo') 唯一索引 + onConflictDoNothing 保
+        // crash-retry 幂等。兄弟跳过判定（交付感知+可渲染性+stampedIds 单值化）在纯 oracle 内。
+        const batchOrigins = [...new Set(dispatchEntries.map((e) => e.originNodeRunId))]
+        const siblingRows =
+          batchOrigins.length === 0
+            ? []
+            : tx
+                .select({
+                  id: taskQuestions.id,
+                  originNodeRunId: taskQuestions.originNodeRunId,
+                  questionId: taskQuestions.questionId,
+                  defaultTargetNodeId: taskQuestions.defaultTargetNodeId,
+                  overrideTargetNodeId: taskQuestions.overrideTargetNodeId,
+                  dispatchedAt: taskQuestions.dispatchedAt,
+                  sealedAt: taskQuestions.sealedAt,
+                  sourceKind: taskQuestions.sourceKind,
+                })
+                .from(taskQuestions)
+                .where(
+                  and(
+                    eq(taskQuestions.taskId, taskId),
+                    inArray(taskQuestions.originNodeRunId, batchOrigins),
+                  ),
+                )
+                .all()
+        const siblingsByQuestion = new Map<string, EchoSiblingSnapshot[]>()
+        for (const s of siblingRows) {
+          const key = echoSiblingKey(s.originNodeRunId, s.questionId)
+          const list = siblingsByQuestion.get(key)
+          if (list) list.push(s)
+          else siblingsByQuestion.set(key, [s])
+        }
+        echoPlans = planEchoEntries({
+          batch: dispatchEntries,
+          siblingsByQuestion,
+          stampedIds: new Set(dispatchIds),
+          batchTimestamp: now,
+        })
+        for (const p of echoPlans) {
+          tx.insert(taskQuestions)
+            .values({
+              id: ulid(),
+              taskId,
+              originNodeRunId: p.originNodeRunId,
+              questionId: p.questionId,
+              questionTitle: p.questionTitle,
+              sourceKind: p.sourceKind,
+              roleKind: 'echo',
+              iteration: p.iteration,
+              loopIter: p.loopIter,
+              defaultTargetNodeId: p.targetNodeId,
+              overrideTargetNodeId: null,
+              dispatchedAt: now,
+              dispatchedBy: actor.userId,
+              sealedAt: p.sealedAt,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoNothing({
+              target: [
+                taskQuestions.originNodeRunId,
+                taskQuestions.questionId,
+                taskQuestions.roleKind,
+              ],
+            })
+            .run()
+        }
         committed = true
       })
     })
@@ -701,6 +795,15 @@ export async function dispatchTaskQuestions(
     affectedNodeCount: affected.size,
     frontierRerunCount: reruns.length,
   })
+  // RFC-134 §3.6 — 回执审计 log（提问节点零 mint，仅入队）。
+  for (const p of echoPlans) {
+    log.info('reassign echo queued for asking node', {
+      taskId,
+      askerNodeId: p.targetNodeId,
+      originNodeRunId: p.originNodeRunId,
+      questionId: p.questionId,
+    })
+  }
   return { reruns, dispatchedEntryIds: dispatchIds, deferred: deferredEntries }
 }
 
@@ -711,7 +814,7 @@ interface OpenDispatchInputs {
   entries: ReadonlyArray<
     Pick<
       TaskQuestionRow,
-      'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind'
+      'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind' | 'sourceKind'
     >
   >
   /** Every node_run of the task. */
@@ -806,6 +909,8 @@ async function assertNoInFlightDispatch(
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
+        // RFC-134 D4：白名单**有意**不含 'echo'（序列化豁免——queued 回执绝不阻塞下发）；
+        // 不得「顺手」扩入（源码文本锁）。
         inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
         isNotNull(taskQuestions.dispatchedAt),
       ),

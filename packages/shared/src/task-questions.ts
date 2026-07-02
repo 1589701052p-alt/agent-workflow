@@ -28,9 +28,12 @@ import type { ClarifyQuestion, ClarifyQuestionScope } from './schemas/clarify'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from './schemas/clarify'
 import type { NodeRunStatus } from './schemas/task'
 
-/** 承接角色：self=同节点反问的提问节点；questioner=跨节点反问者；designer=跨节点设计者。
- *  仅 designer 为「修订型」可改派；self/questioner 为「阻塞-产出型」恒自我续跑。 */
-export type TaskQuestionRoleKind = 'self' | 'questioner' | 'designer'
+/** 承接角色：self=同节点反问的提问节点；questioner=跨节点反问者；designer=跨节点设计者；
+ *  echo=改派回执（RFC-134）——目标恒为提问节点的只读知会条目，生来已下发、排队等提问节点
+ *  下次自然运行注入（不 mint、不进 cause 序列化守卫、不可改派/stage，confirm 任意相位可关）。
+ *  仅 designer 为「修订型」可改派；self/questioner 为「阻塞-产出型」恒自我续跑（RFC-127 后
+ *  亦可 move 改派，echo 即为其投递补偿）。 */
+export type TaskQuestionRoleKind = 'self' | 'questioner' | 'designer' | 'echo'
 
 /** Stored / DTO source kind. `self`/`cross` come from a clarify round (via reconcile);
  *  `manual` (RFC-120 §15) is a human-authored question inserted directly (no round). */
@@ -256,6 +259,125 @@ export interface ResolveHandlerInput {
   triggerRunId: string | null
   /** 候选 node_runs（service 传该任务相关 runs；本函数自行按节点+迭代过滤）。 */
   runs: RunLineageView[]
+}
+
+// ---------------------------------------------------------------------------
+// RFC-134 改派回执（asker echo）—— planEchoEntries 纯 oracle。
+//
+// 通用不变量：凡一条问题的有效承接节点 ≠ 提问节点，下发时同步把该题 Q&A 送进
+// 提问节点的队列（roleKind='echo' 回执条目，生来已下发、trigger NULL 排队、不 mint）。
+// 修 RFC-127/131/132 move 改派后提问节点丢答案 → 重问循环的缺口。
+// 判定式、兄弟跳过（交付感知 R3-F6 + 可渲染性 R4-F8 + stampedIds 单值化 R6-F11）、
+// batchTimestamp 显式入参（R7-F12）见 design/RFC-134-reassign-asker-echo/design.md §2.3。
+// ---------------------------------------------------------------------------
+
+/** 同 (originNodeRunId, questionId) 的兄弟条目快照（任意角色；判定时排除候选行自身）。 */
+export interface EchoSiblingSnapshot {
+  id: string
+  defaultTargetNodeId: string | null
+  overrideTargetNodeId: string | null
+  dispatchedAt: number | null
+  sealedAt: number | null
+  sourceKind: TaskQuestionSourceKind
+}
+
+/** 本批候选行（dispatch 已选中、即将/刚被 stamp 的 task_questions 行投影）。 */
+export interface EchoPlanInputRow {
+  id: string
+  roleKind: TaskQuestionRoleKind
+  sourceKind: TaskQuestionSourceKind
+  questionId: string
+  questionTitle: string
+  originNodeRunId: string
+  iteration: number
+  loopIter: number
+  defaultTargetNodeId: string | null
+  overrideTargetNodeId: string | null
+  sealedAt: number | null
+}
+
+/** 应插回执的身份 + 字段快照（taskId 由调用方补；dispatched_at/by 用本批 stamp 值）。 */
+export interface EchoPlan {
+  originNodeRunId: string
+  questionId: string
+  questionTitle: string
+  /** 恒为 self | cross（manual 无提问节点，规则不产出）。 */
+  sourceKind: TaskQuestionRoundSourceKind
+  /** 提问节点（= 源条目 defaultTargetNodeId，规则前置保证非空）。 */
+  targetNodeId: string
+  iteration: number
+  loopIter: number
+  /** 源 sealedAt ?? batchTimestamp —— 在纯函数内定值（R7-F12），保回执恒可渲染
+   *  （selectAgentQueue 只认行级 sealed_at，契约 #17）。 */
+  sealedAt: number
+}
+
+/** siblingsByQuestion 的 key——'\x1f'（Unit Separator）拼接，避免 id 内容碰撞。 */
+export function echoSiblingKey(originNodeRunId: string, questionId: string): string {
+  return `${originNodeRunId}\x1f${questionId}`
+}
+
+export interface PlanEchoEntriesInput {
+  batch: ReadonlyArray<EchoPlanInputRow>
+  /** 该任务同 (origin, question) 的全部条目快照（键 = {@link echoSiblingKey}）；
+   *  可含本批其他行；候选行自身由本函数按 id 排除。 */
+  siblingsByQuestion: ReadonlyMap<string, ReadonlyArray<EchoSiblingSnapshot>>
+  /** 本批 stamp 成功的 task_questions.id。同批交付判据（R3-F6）+ 可渲染性单值化
+   *  （R6-F11：本批行经 dispatch 的 seal 归一化必然 sealed，直接以此认定可渲染）。 */
+  stampedIds: ReadonlySet<string>
+  /** 本批 stamp 时间戳（调用方传入——纯 oracle 不取 Date.now，R7-F12）。 */
+  batchTimestamp: number
+}
+
+/**
+ * RFC-134：从本批下发条目推导应物化的回执条目集合（确定、幂等、纯）。
+ *
+ * 产出条件（全部满足）：
+ *   1. roleKind ∈ {self, questioner}（designer 由既有 questioner 条目天然满足不变量；
+ *      manual 无提问节点；echo 不自繁殖）；
+ *   2. override 非空且 ≠ default（有效承接 ≠ 提问节点；override==default 视同未改派——黄金锁）；
+ *   3. default（提问节点）非空（图解析不到则无处投递，调用方 log）；
+ *   4. 无「已交付指向提问节点」的兄弟：兄弟同时满足 ①effectiveTarget==提问节点
+ *      ②已下发 ∨ ∈ stampedIds ③可渲染（sealed_at 非空 ∨ manual ∨ ∈ stampedIds）。
+ *      未下发的兄弟只是承诺、不算交付（R3-F6）；历史已下发但 sealedAt NULL 的懒建行
+ *      永不入队渲染、同样不算交付（R4-F8）；本批行经 seal 归一化必可渲染（R6-F11）。
+ *
+ * 同批同 (origin, question) 只产一条（self 轮无 questioner 条目、cross 轮无 self 条目，
+ * reconcile 保证互斥；此处仍防御性去重）。
+ */
+export function planEchoEntries(input: PlanEchoEntriesInput): EchoPlan[] {
+  const out: EchoPlan[] = []
+  const planned = new Set<string>()
+  for (const row of input.batch) {
+    if (row.roleKind !== 'self' && row.roleKind !== 'questioner') continue
+    if (row.sourceKind === 'manual') continue // 防御：self/questioner 行按构造是 clarify 派生
+    const asker = row.defaultTargetNodeId
+    if (asker === null) continue
+    if (row.overrideTargetNodeId === null || row.overrideTargetNodeId === asker) continue
+    const key = echoSiblingKey(row.originNodeRunId, row.questionId)
+    if (planned.has(key)) continue
+    const siblings = input.siblingsByQuestion.get(key) ?? []
+    const delivered = siblings.some(
+      (s) =>
+        s.id !== row.id &&
+        (s.overrideTargetNodeId ?? s.defaultTargetNodeId) === asker &&
+        (s.dispatchedAt !== null || input.stampedIds.has(s.id)) &&
+        (s.sealedAt !== null || s.sourceKind === 'manual' || input.stampedIds.has(s.id)),
+    )
+    if (delivered) continue
+    planned.add(key)
+    out.push({
+      originNodeRunId: row.originNodeRunId,
+      questionId: row.questionId,
+      questionTitle: row.questionTitle,
+      sourceKind: row.sourceKind,
+      targetNodeId: asker,
+      iteration: row.iteration,
+      loopIter: row.loopIter,
+      sealedAt: row.sealedAt ?? input.batchTimestamp,
+    })
+  }
+  return out
 }
 
 /** RFC-120 Codex F1：按**精确 lineage**取本条目的承接 run（非裸 freshest≥anchor）。

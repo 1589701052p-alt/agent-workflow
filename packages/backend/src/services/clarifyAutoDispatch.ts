@@ -164,11 +164,15 @@ async function selfHomeHasOpenLedger(
       defaultTargetNodeId: taskQuestions.defaultTargetNodeId,
       overrideTargetNodeId: taskQuestions.overrideTargetNodeId,
       roleKind: taskQuestions.roleKind,
+      sourceKind: taskQuestions.sourceKind,
     })
     .from(taskQuestions)
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
+        // RFC-134 D4：白名单**有意**不含 'echo'——回执是 cause 序列化的显式豁免项（不 mint、
+        // 无 rerun_cause，queued 回执绝不阻塞任何后续下发）。不得「顺手」把 echo 加进来
+        //（源码文本锁：rfc134 测试断言本数组恒为三角色）。
         inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
         isNotNull(taskQuestions.dispatchedAt),
       ),

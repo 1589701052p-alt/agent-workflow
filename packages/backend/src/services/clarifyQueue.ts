@@ -27,6 +27,7 @@ import {
   type ClarifyAnswer,
   type ClarifyQuestion,
   type FlatClarifyEntry,
+  type TaskQuestionRoleKind,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
 
@@ -49,7 +50,10 @@ export interface AgentQueueEntry {
   id: string
   /** dispatched_at ordering anchor (the result is pre-sorted by dispatched_at then id). */
   dispatchedAt: number | null
-  roleKind: 'self' | 'questioner' | 'designer'
+  /** RFC-134 D9 — (originNodeRunId, questionId) 是渲染去重键（同题多行渲染一次、绑定全量）。 */
+  questionId: string
+  // 角色透传（含 RFC-134 echo）——本模块对角色**无特判**，选取/绑定/老化全角色同路径。
+  roleKind: TaskQuestionRoleKind
   sourceKind: 'self' | 'cross' | 'manual'
   /** default_target_node_id — the RFC-120 §18 graphOwned gate: default==consumer ⟹ this node
    *  OWNS the graph round (not a pure-override handoff). Drives buildClarifyQueueContext's
@@ -192,6 +196,7 @@ export async function selectAgentQueue(args: SelectAgentQueueArgs): Promise<Agen
     result.push({
       id: e.id,
       dispatchedAt: e.dispatchedAt,
+      questionId: e.questionId,
       roleKind: e.roleKind,
       sourceKind: e.sourceKind,
       defaultTargetNodeId: e.defaultTargetNodeId,
@@ -300,7 +305,19 @@ export async function buildClarifyQueueContext(
   const { db, taskId, consumerNodeId, dispatchedRunId } = args
   const entries = await selectAgentQueue({ db, taskId, consumerNodeId, dispatchedRunId })
   if (entries.length === 0) return undefined
-  const block = renderFlatClarifyQueue(entries.map((e) => e.render))
+  // RFC-134 D9 — 同题同目标渲染去重（角色无关）：同一 (origin round, question) 的多行有效指向
+  // 同一节点时（现状可构造：designer 条目被改派到 questioner 节点；RFC-134 新增：回执与后到的
+  // 兄弟同指提问节点），Q&A 内容逐字相同（同轮 answers_json 同 qid）——渲染一次（保 dispatched_at
+  // 最早序），绑定仍**全量**（下方 bindTriggerRun 传全部 id：每行独立老化/相位推进，看板不受影
+  // 响）。manual 条目 origin 是合成唯一 ULID，键天然唯一、永不被去重（黄金锁）。
+  const seenQuestion = new Set<string>()
+  const renderEntries = entries.filter((e) => {
+    const key = `${e.originNodeRunId}\x1f${e.questionId}`
+    if (seenQuestion.has(key)) return false
+    seenQuestion.add(key)
+    return true
+  })
+  const block = renderFlatClarifyQueue(renderEntries.map((e) => e.render))
   if (block === undefined) return undefined // defensive: every entry rendered empty
   // 承接标记 — bind AFTER a renderable block is confirmed (mirrors the legacy injectors, which bind
   // only when they produce a context).

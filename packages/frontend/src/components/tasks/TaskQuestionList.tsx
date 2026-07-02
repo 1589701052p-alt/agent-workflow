@@ -39,7 +39,9 @@ export interface TaskQuestionEntry {
    *  for a manual question (RFC-120 §15): it has no clarify round / answer page. */
   originNodeRunId: string | null
   sourceKind: 'self' | 'cross' | 'manual'
-  roleKind: 'self' | 'questioner' | 'designer'
+  /** RFC-134: + 'echo' — 改派回执（只读知会卡：目标=提问节点、生来已下发；无改派/stage，
+   *  confirm 任意相位可关，D3）。 */
+  roleKind: 'self' | 'questioner' | 'designer' | 'echo'
   /** The node that ASKED the question. NULL for a manual question (board shows "手动"). */
   sourceNodeId: string | null
   defaultTargetNodeId: string | null
@@ -384,9 +386,13 @@ export function TaskQuestionList({
                 // pending / 待下发 staged)：已下发的 processing/awaiting_confirm/done 后端
                 // reassignTaskQuestion 以 `dispatched_at IS NULL` + 非终态拒改派（下发后换
                 // handler 是 reopen 的职责），前端把入口收敛到未下发态与之对齐。
+                // RFC-134：echo 生来已下发 → 相位永不落 pending/staged，reassignable/hasStage
+                // 对它天然为 false（与后端 CAS/D10 守卫对齐，无需角色特判）。
                 const reassignable = e.phase === 'pending' || e.phase === 'staged'
                 const hasCopy = deferred && e.phase === 'pending'
-                const hasConfirm = e.phase === 'awaiting_confirm'
+                // RFC-134 D3：回执任意相位可 confirm（「已知悉」收卡；confirm 不撤销投递）。
+                const hasConfirm =
+                  e.phase === 'awaiting_confirm' || (e.roleKind === 'echo' && e.phase !== 'done')
                 // RFC-128 §11 (D5, 用户 2026-07-01) — 「加入待下发」only makes sense once the
                 // answer is sealed: the server stage gate rejects staging an unsealed entry
                 // (ConflictError 'task-question-not-sealed', services/taskQuestions.ts
@@ -457,7 +463,15 @@ export function TaskQuestionList({
                         <span>{t('taskQuestions.selectForDispatch')}</span>
                       </label>
                     )}
-                    <div className="card__title">{e.questionTitle}</div>
+                    <div className="card__title">
+                      {e.questionTitle}
+                      {/* RFC-134 — 回执标签：与承接卡区分（知会提问节点，非承接义务）。 */}
+                      {e.roleKind === 'echo' && (
+                        <StatusChip kind="neutral" data-testid={`tq-echo-chip-${e.id}`}>
+                          {t('taskQuestions.roleEcho')}
+                        </StatusChip>
+                      )}
+                    </div>
                     {/* RFC-120 lock: 答案紧贴问题、排在 meta 之前（节点信息不得插在问与答之间）。 */}
                     {e.answerSummary && (
                       <div className="task-questions__answer">{e.answerSummary}</div>

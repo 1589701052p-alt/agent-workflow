@@ -208,6 +208,19 @@ describe('RFC-120 /api/tasks/:id/questions routes', () => {
     ).json()) as Array<{ id: string }>
     const entryId = list[0]!.id
 
+    // RFC-134 D10（Codex R2-F4/R3-F7）：fixture 条目已 dispatched —— stage 一个已下发行
+    // 现在被服务端原子 CAS 拒（409），不再留下脏 staged 戳（此前这里的 200 正是被堵上的缺口）。
+    const stagedDispatched = await app.request(`/api/tasks/task-c/questions/${entryId}/stage`, {
+      method: 'POST',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({ staged: true }),
+    })
+    expect(stagedDispatched.status).toBe(409)
+    // 未下发行照常可 stage（正路径接线保留）：解除 fixture 的 dispatch 戳后再 stage。
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt: null, dispatchedBy: null, triggerRunId: null })
+      .where(eq(taskQuestions.id, entryId))
     const stageRes = await app.request(`/api/tasks/task-c/questions/${entryId}/stage`, {
       method: 'POST',
       headers: { ...AUTH, 'content-type': 'application/json' },

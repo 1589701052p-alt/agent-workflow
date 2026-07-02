@@ -25,9 +25,16 @@ export type CauseClass =
 
 /** RFC-133: single definition shared by the dispatch grouping/auto-split AND the queued-entry
  *  cause guard in isDispatchedEntryConsumed (moved here from taskQuestionDispatch's private copy). */
-export function causeClassForEntry(e: Pick<TaskQuestionRow, 'roleKind'>): CauseClass {
+export function causeClassForEntry(
+  e: Pick<TaskQuestionRow, 'roleKind' | 'sourceKind'>,
+): CauseClass {
   if (e.roleKind === 'self') return 'clarify-answer'
   if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'
+  // RFC-134 D4: 'echo' 是 cause 序列化的显式豁免项——守卫入口的三角色白名单已把它排除，
+  // 此映射**不作任何守卫判据**，仅为全函数性防御：按来源对齐提问节点的续跑类别。
+  if (e.roleKind === 'echo') {
+    return e.sourceKind === 'self' ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
+  }
   return 'cross-clarify-answer' // designer (incl. manual)
 }
 
@@ -79,7 +86,7 @@ export type LedgerOpenMode = 'revivable' | 'in-flight'
 export function isDispatchedEntryConsumed(
   entry: Pick<
     TaskQuestionRow,
-    'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind'
+    'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind' | 'sourceKind'
   >,
   runs: ReadonlyArray<NodeRunRow>,
   lineageViews: RunLineageView[],
@@ -179,7 +186,7 @@ export function hasOpenDispatchedEntryOnHome(
   dispatchedEntries: ReadonlyArray<
     Pick<
       TaskQuestionRow,
-      'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind'
+      'triggerRunId' | 'defaultTargetNodeId' | 'overrideTargetNodeId' | 'roleKind' | 'sourceKind'
     >
   >,
   runs: ReadonlyArray<NodeRunRow>,
