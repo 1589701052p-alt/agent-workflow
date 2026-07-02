@@ -4,6 +4,7 @@
 // selected the claude runtime; opencode-only installs are unaffected.
 
 import { createLogger } from '@/util/log'
+import type { ProbeOpts } from '@/util/opencode'
 
 const log = createLogger('claude-code')
 
@@ -27,26 +28,83 @@ export interface ClaudeProbe {
    * undefined.
    */
   apiKeySource?: string
+  /**
+   * RFC-135: true iff the `--version` process exited 0 — availability without
+   * version parsing/gating (mirrors util/opencode.ts `OpencodeProbe.ran`).
+   */
+  ran?: boolean
 }
 
 /** Spawn `<binary> --version`, parse the semver. Output form: `2.1.193 (Claude Code)`. */
-export async function probeClaudeCode(claudePath?: string): Promise<ClaudeProbe> {
+export async function probeClaudeCode(
+  claudePath?: string,
+  opts: ProbeOpts = {},
+): Promise<ClaudeProbe> {
   const binary = claudePath ?? 'claude'
+  const warn: typeof log.warn = opts.quiet === true ? () => {} : (msg, ctx) => log.warn(msg, ctx)
   let version: string | null = null
+  let ran = false
   try {
-    const proc = Bun.spawn({ cmd: [binary, '--version'], stdout: 'pipe', stderr: 'pipe' })
-    const [out, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    if (exitCode === 0) {
-      version = extractVersion(out)
-    } else {
-      log.warn('claude --version non-zero exit', { binary, exitCode })
+    // Detached process group on the timeout path so SIGKILL reaps the whole
+    // tree, not just a hung wrapper (see util/opencode.ts, same shape).
+    const proc = Bun.spawn({
+      cmd: [binary, '--version'],
+      stdout: 'pipe',
+      stderr: 'pipe',
+      ...(opts.timeoutMs !== undefined ? { detached: true } : {}),
+    })
+    let timedOut = false
+    const timer =
+      opts.timeoutMs !== undefined
+        ? setTimeout(() => {
+            timedOut = true
+            try {
+              process.kill(-proc.pid, 'SIGKILL')
+            } catch {
+              proc.kill('SIGKILL')
+            }
+          }, opts.timeoutMs)
+        : undefined
+    try {
+      // Exit wait decoupled from the stdout read, and the read itself bounded —
+      // a grandchild holding the pipe write end must not hang the probe after
+      // SIGKILL reaps the direct child (see util/opencode.ts, same shape).
+      const outPromise = new Response(proc.stdout).text().catch(() => '')
+      const exitCode = await proc.exited
+      if (timedOut) {
+        warn('claude --version timed out', { binary, timeoutMs: opts.timeoutMs })
+      } else if (exitCode === 0) {
+        ran = true
+        const out =
+          opts.timeoutMs !== undefined
+            ? await Promise.race([
+                outPromise,
+                new Promise<string>((res) => setTimeout(() => res(''), opts.timeoutMs)),
+              ])
+            : await outPromise
+        version = extractVersion(out)
+      } else {
+        warn('claude --version non-zero exit', { binary, exitCode })
+      }
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        // Unconditional group reap once the probe is over — a wrapper that
+        // forked then exited before the timer would otherwise leak its
+        // descendants (see util/opencode.ts, same shape).
+        try {
+          process.kill(-proc.pid, 'SIGKILL')
+        } catch {
+          /* group already gone */
+        }
+      }
     }
   } catch (err) {
-    log.warn('claude binary not executable', { binary, error: (err as Error).message })
+    warn('claude binary not executable', { binary, error: (err as Error).message })
   }
 
   if (version === null) {
-    return { binary, version, compatible: false }
+    return { binary, version, compatible: false, ran }
   }
   if (compareSemver(version, MIN_CLAUDE_CODE_VERSION) < 0) {
     return {
@@ -54,9 +112,10 @@ export async function probeClaudeCode(claudePath?: string): Promise<ClaudeProbe>
       version,
       compatible: false,
       incompatibleReason: `Claude Code ${version} is older than required minimum ${MIN_CLAUDE_CODE_VERSION}`,
+      ran,
     }
   }
-  return { binary, version, compatible: true }
+  return { binary, version, compatible: true, ran }
 }
 
 /** Extract first "X.Y.Z" from arbitrary output. */

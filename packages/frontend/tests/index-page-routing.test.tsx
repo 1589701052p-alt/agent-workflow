@@ -69,13 +69,21 @@ function wrap(node: React.ReactElement) {
 function mockTasksRuntimeEmpty(): void {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
     const s = typeof url === 'string' ? url : url.toString()
-    if (s.includes('/api/runtime/opencode')) {
+    // RFC-135: the hero reads the registry status endpoint (per-enabled-runtime
+    // rows, version-gate free) instead of the legacy /api/runtime/opencode.
+    if (s.includes('/api/runtimes/status')) {
       return new Response(
         JSON.stringify({
-          binary: '/usr/local/bin/opencode',
-          version: '0.13.2',
-          compatible: true,
-          minVersion: '0.12.0',
+          runtimes: [
+            {
+              name: 'opencode',
+              protocol: 'opencode',
+              binary: '/usr/local/bin/opencode',
+              ok: true,
+              version: '0.13.2',
+              isDefault: true,
+            },
+          ],
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )

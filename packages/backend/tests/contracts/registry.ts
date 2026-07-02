@@ -373,17 +373,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   },
 
   // ---- runtime ----
-  {
-    method: 'GET',
-    path: '/api/runtime/opencode',
-    happy: { schema: z.object({}).passthrough() },
-  },
-  // RFC-111: claude-code probe (soft).
-  {
-    method: 'GET',
-    path: '/api/runtime/claude',
-    happy: { schema: z.object({}).passthrough() },
-  },
+  // RFC-135: the legacy GET /api/runtime/opencode + /api/runtime/claude probes
+  // were removed with their last consumer (homepage → /api/runtimes/status).
   { method: 'GET', path: '/api/runtime/models' },
 
   // ---- runtime registry (RFC-112) ----
@@ -391,6 +382,12 @@ export const ENDPOINTS: EndpointSpec[] = [
     method: 'GET',
     path: '/api/runtimes',
     happy: { schema: z.object({}).passthrough() },
+  },
+  // RFC-135: per-enabled-runtime live status (homepage hero).
+  {
+    method: 'GET',
+    path: '/api/runtimes/status',
+    happy: { schema: z.object({ runtimes: z.array(z.object({}).passthrough()) }) },
   },
   { method: 'POST', path: '/api/runtimes/probe' },
   { method: 'POST', path: '/api/runtimes' },

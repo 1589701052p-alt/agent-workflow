@@ -36,15 +36,13 @@ describe('Phase C bundles', () => {
     setLanguage('en-US')
     expect(i18n.t('settingsForm.bindHost')).toBe('Bind host')
     expect(i18n.t('settingsForm.archiveGlobal')).toContain('global')
-    // tokenMask was removed with the Settings "Connection" tab; runtimeStatusBinary
-    // keeps this test's settingsForm interpolation coverage on a live key.
-    expect(i18n.t('settingsForm.runtimeStatusBinary', { path: '/opt/opencode' })).toBe(
-      'Binary: /opt/opencode',
-    )
+    // tokenMask was removed with the Settings "Connection" tab, and the
+    // runtimeStatus* keys with the legacy probe card (RFC-135) — settingsForm
+    // no longer carries any interpolated key, so this test keeps plain
+    // reachability here; interpolation stays covered by the nodeDrawer
+    // assertions above.
     setLanguage('zh-CN')
-    expect(i18n.t('settingsForm.runtimeStatusBinary', { path: '/opt/opencode' })).toBe(
-      '二进制：/opt/opencode',
-    )
+    expect(i18n.t('settingsForm.bindHost')).toBe('监听 host')
   })
 
   test('common section shared bits', () => {

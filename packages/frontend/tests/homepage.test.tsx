@@ -54,20 +54,51 @@ function mockEndpoints(opts: {
 }): void {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
     const s = typeof url === 'string' ? url : url.toString()
-    if (s.includes('/api/runtime/opencode')) {
+    // RFC-135: the hero reads the registry status endpoint (one entry per
+    // enabled runtime, version-gate free) instead of /api/runtime/opencode.
+    if (s.includes('/api/runtimes/status')) {
       if (opts.runtime === 'missing') {
+        // Missing DEFAULT runtime → fault; the non-default row stays ok.
         return json({
-          binary: '/usr/local/bin/opencode',
-          version: null,
-          compatible: false,
-          minVersion: '0.12.0',
+          runtimes: [
+            {
+              name: 'opencode',
+              protocol: 'opencode',
+              binary: '/usr/local/bin/opencode',
+              ok: false,
+              version: null,
+              isDefault: true,
+            },
+            {
+              name: 'claude-code',
+              protocol: 'claude-code',
+              binary: 'claude',
+              ok: true,
+              version: '2.1.193',
+              isDefault: false,
+            },
+          ],
         })
       }
       return json({
-        binary: '/usr/local/bin/opencode',
-        version: '0.13.2',
-        compatible: true,
-        minVersion: '0.12.0',
+        runtimes: [
+          {
+            name: 'opencode',
+            protocol: 'opencode',
+            binary: '/usr/local/bin/opencode',
+            ok: true,
+            version: '0.13.2',
+            isDefault: true,
+          },
+          {
+            name: 'claude-code',
+            protocol: 'claude-code',
+            binary: 'claude',
+            ok: true,
+            version: '2.1.193',
+            isDefault: false,
+          },
+        ],
       })
     }
     if (s.includes('/api/tasks')) {
@@ -224,22 +255,28 @@ describe('RFC-032 Homepage dashboard', () => {
     expect(screen.getByTestId('inbox-preview-clarify-sess_0')).toBeTruthy()
   })
 
-  test('runtime probe ready → renders the version in the greeting line', async () => {
+  test('runtime status ready → renders BOTH enabled runtimes with versions (RFC-135)', async () => {
     mockEndpoints({})
     wrap(<Homepage />)
     await waitFor(() => {
       expect(screen.getByTestId('homepage-runtime').textContent ?? '').toMatch(/0\.13\.2/)
     })
+    const text = screen.getByTestId('homepage-runtime').textContent ?? ''
+    expect(text).toContain('opencode')
+    expect(text).toContain('claude-code')
+    expect(text).toMatch(/2\.1\.193/)
   })
 
-  test('runtime probe missing → "opencode not found" hint shown', async () => {
+  test('default runtime missing → per-runtime "not found" while the other stays versioned', async () => {
     mockEndpoints({ runtime: 'missing' })
     wrap(<Homepage />)
     await waitFor(() => {
       expect(screen.getByTestId('homepage-runtime').textContent ?? '').toMatch(
-        /opencode not found|未找到 opencode/,
+        /opencode not found|opencode 未找到/,
       )
     })
+    // The healthy non-default runtime still renders its version alongside.
+    expect(screen.getByTestId('homepage-runtime').textContent ?? '').toMatch(/2\.1\.193/)
   })
 
   // Regression: the inbox section header link previously hard-coded `to:

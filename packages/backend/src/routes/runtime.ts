@@ -1,43 +1,19 @@
-// RFC-001 + RFC-111: live runtime probes + model lists for Settings → Runtime.
+// RFC-001 + RFC-111: model lists for Settings → Runtime.
 // Mounted under /api/* — token auth applied by server.ts.
+//
+// RFC-135: the two legacy single-runtime probes (GET /api/runtime/opencode +
+// /api/runtime/claude) were removed — the homepage hero (their last consumer)
+// now reads the registry-wide GET /api/runtimes/status in routes/runtimes.ts.
 
 import type { Hono } from 'hono'
 import { loadConfig } from '@/config'
 import type { AppDeps } from '@/server'
-import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { listOpencodeModels } from '@/util/opencode-models'
-import { MIN_CLAUDE_CODE_VERSION, probeClaudeCode } from '@/services/runtime/claudeCode/probe'
 import { listClaudeModels } from '@/services/runtime/claudeCode/models'
 import { resolveRuntimeByName } from '@/services/runtimeRegistry'
 import { redactSensitiveString } from '@/util/redact'
 
 export function mountRuntimeRoutes(app: Hono, deps: AppDeps): void {
-  app.get('/api/runtime/opencode', async (c) => {
-    const cfg = loadConfig(deps.configPath)
-    const probe = await probeOpencode(cfg.opencodePath)
-    return c.json({
-      binary: probe.binary,
-      version: probe.version,
-      compatible: probe.compatible,
-      incompatibleReason: probe.incompatibleReason,
-      minVersion: MIN_OPENCODE_VERSION,
-    })
-  })
-
-  // RFC-111: claude-code probe (soft — a missing/old claude only fails claude
-  // nodes; opencode-only installs are unaffected, D10).
-  app.get('/api/runtime/claude', async (c) => {
-    const cfg = loadConfig(deps.configPath)
-    const probe = await probeClaudeCode(cfg.claudeCodePath)
-    return c.json({
-      binary: probe.binary,
-      version: probe.version,
-      compatible: probe.compatible,
-      incompatibleReason: probe.incompatibleReason,
-      minVersion: MIN_CLAUDE_CODE_VERSION,
-    })
-  })
-
   app.get('/api/runtime/models', async (c) => {
     const cfg = loadConfig(deps.configPath)
     // RFC-114: `?runtime=<name>` lists models for THAT runtime's binary (a custom

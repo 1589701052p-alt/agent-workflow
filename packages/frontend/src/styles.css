@@ -1737,7 +1737,10 @@ code {
   flex: 0 0 auto;
 }
 
-.homepage__runtime-dot--ready {
+/* RFC-135: severity-named variants (ok/fault/soft/checking) — the old
+   reason-named set (ready/incompatible/missing) mapped colors to causes and
+   broke once "missing non-default" became a soft state, not a fault. */
+.homepage__runtime-dot--ok {
   background: #1e8e3e;
 }
 
@@ -1745,12 +1748,23 @@ code {
   background: #f5a623;
 }
 
-.homepage__runtime-dot--incompatible {
+.homepage__runtime-dot--soft {
   background: #9aa0a6;
 }
 
-.homepage__runtime-dot--missing {
+.homepage__runtime-dot--fault {
   background: #c5221f;
+}
+
+.homepage__runtime-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.homepage__runtime-sep {
+  margin: 0 2px;
+  color: var(--muted);
 }
 
 .homepage__start-task {

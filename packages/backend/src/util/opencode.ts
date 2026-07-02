@@ -21,6 +21,26 @@ const log = createLogger('opencode')
  */
 export const MIN_OPENCODE_VERSION = '1.14.0'
 
+/**
+ * RFC-135: optional knobs for the `--version` probes (opencode + claude-code).
+ * Omitting both fields is byte-identical to the historical behavior — the
+ * daemon startup probe and the legacy callers pass nothing.
+ */
+export interface ProbeOpts {
+  /**
+   * Kill the probe after this many ms. Uses SIGKILL (an ignorable SIGTERM
+   * followed by an unbounded `proc.exited` wait would re-hang the caller —
+   * RFC-135 D5); the result reads as a failed probe (`ran: false`).
+   */
+  timeoutMs?: number
+  /**
+   * Suppress per-probe warn logs. The polling status endpoint owns its own
+   * surfacing (the response/UI already shows the failure); without this an
+   * expectedly-missing optional runtime would warn every poll cycle.
+   */
+  quiet?: boolean
+}
+
 export interface OpencodeProbe {
   /** Resolved binary path (absolute when overridden, "opencode" when on PATH). */
   binary: string
@@ -37,33 +57,92 @@ export interface OpencodeProbe {
    * incompatible" rather than just "<= min".
    */
   incompatibleReason?: string
+  /**
+   * RFC-135: true iff the `--version` process exited 0 — availability without
+   * any version parsing/gating (a custom binary with an unparseable version
+   * string still counts as runnable). `version`/`compatible` stay as-is for
+   * the daemon startup gate, which is out of RFC-135's scope.
+   */
+  ran?: boolean
 }
 
 /**
  * Spawn `<binary> --version`, parse the semver prefix.
  * Returns null if the binary cannot be executed or output is unparseable.
  */
-export async function probeOpencode(opencodePath?: string): Promise<OpencodeProbe> {
+export async function probeOpencode(
+  opencodePath?: string,
+  opts: ProbeOpts = {},
+): Promise<OpencodeProbe> {
   const binary = opencodePath ?? 'opencode'
+  const warn: typeof log.warn = opts.quiet === true ? () => {} : (msg, ctx) => log.warn(msg, ctx)
   let version: string | null = null
+  let ran = false
   try {
+    // With a timeout the probe runs in its OWN process group (detached) so the
+    // timeout can SIGKILL the whole tree: killing only the direct child leaves
+    // a hung wrapper's grandchild alive and leaking once per poll (Codex impl
+    // gate). Without a timeout the historical flat spawn is kept byte-for-byte.
     const proc = Bun.spawn({
       cmd: [binary, '--version'],
       stdout: 'pipe',
       stderr: 'pipe',
+      ...(opts.timeoutMs !== undefined ? { detached: true } : {}),
     })
-    const [out, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    if (exitCode === 0) {
-      version = extractVersion(out)
-    } else {
-      log.warn('opencode --version non-zero exit', { binary, exitCode })
+    let timedOut = false
+    const timer =
+      opts.timeoutMs !== undefined
+        ? setTimeout(() => {
+            timedOut = true
+            try {
+              process.kill(-proc.pid, 'SIGKILL')
+            } catch {
+              proc.kill('SIGKILL')
+            }
+          }, opts.timeoutMs)
+        : undefined
+    try {
+      // Do NOT tie the exit wait to the stdout read: a grandchild process can
+      // inherit the pipe's write end and keep text() from ever seeing EOF even
+      // after SIGKILL reaps the direct child (a hung `sh`-wrapper fork does
+      // exactly this). Await the exit first; then bound the stdout read too.
+      const outPromise = new Response(proc.stdout).text().catch(() => '')
+      const exitCode = await proc.exited
+      if (timedOut) {
+        warn('opencode --version timed out', { binary, timeoutMs: opts.timeoutMs })
+      } else if (exitCode === 0) {
+        ran = true
+        const out =
+          opts.timeoutMs !== undefined
+            ? await Promise.race([
+                outPromise,
+                new Promise<string>((res) => setTimeout(() => res(''), opts.timeoutMs)),
+              ])
+            : await outPromise
+        version = extractVersion(out)
+      } else {
+        warn('opencode --version non-zero exit', { binary, exitCode })
+      }
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        // The probe is over — anything still alive in the detached group is a
+        // leaked descendant of a misbehaving wrapper (e.g. it forked then
+        // exited non-zero BEFORE the timer fired, so the timeout never reaped
+        // the group). Kill unconditionally; ESRCH on an empty group is fine.
+        try {
+          process.kill(-proc.pid, 'SIGKILL')
+        } catch {
+          /* group already gone */
+        }
+      }
     }
   } catch (err) {
-    log.warn('opencode binary not executable', { binary, error: (err as Error).message })
+    warn('opencode binary not executable', { binary, error: (err as Error).message })
   }
 
   if (version === null) {
-    return { binary, version, compatible: false }
+    return { binary, version, compatible: false, ran }
   }
   if (compareSemver(version, MIN_OPENCODE_VERSION) < 0) {
     return {
@@ -71,9 +150,10 @@ export async function probeOpencode(opencodePath?: string): Promise<OpencodeProb
       version,
       compatible: false,
       incompatibleReason: `opencode ${version} is older than required minimum ${MIN_OPENCODE_VERSION}`,
+      ran,
     }
   }
-  return { binary, version, compatible: true }
+  return { binary, version, compatible: true, ran }
 }
 
 /** Extract first "X.Y.Z" from arbitrary output. */

@@ -177,8 +177,8 @@ describe('regular-user session token — endpoints that are intentionally open',
     expect(res.status).toBe(200)
   })
 
-  test('GET /api/runtime/opencode (homepage runtime dot) → 200', async () => {
-    const res = await reqAs(h.app, h.userToken, '/api/runtime/opencode')
+  test('GET /api/runtimes/status (homepage runtime dots, RFC-135) → 200', async () => {
+    const res = await reqAs(h.app, h.userToken, '/api/runtimes/status')
     expect(res.status).toBe(200)
   })
 

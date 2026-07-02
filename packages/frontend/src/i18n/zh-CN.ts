@@ -62,10 +62,15 @@ export interface Resources {
     }
     startTask: string
     runtime: {
-      ready: string
       checking: string
-      missing: string
-      incompatible: string
+      noneEnabled: string
+      aggregate: string
+      aggregateWorst: string
+      item: {
+        ready: string
+        readyNoVersion: string
+        missing: string
+      }
     }
     section: {
       running: string
@@ -1867,20 +1872,6 @@ export interface Resources {
     bindHostHint: string
     bindPort: string
     bindPortHint: string
-    runtimeStatusTitle: string
-    runtimeStatusProbing: string
-    runtimeStatusOk: string
-    runtimeStatusIncompatible: string
-    runtimeStatusNotFound: string
-    runtimeStatusBinary: string
-    runtimeStatusReprobe: string
-    runtimeStatusMinVersion: string
-    runtimeStatusHint: string
-    /** RFC-111 — soft claude-code probe card copy (optional runtime). */
-    claudeRuntimeStatusTitle: string
-    claudeRuntimeStatusProbing: string
-    claudeRuntimeStatusNotFound: string
-    claudeRuntimeStatusHint: string
     modelLoadFailed: string
     modelLoading: string
     modelRefresh: string
@@ -2556,11 +2547,18 @@ export const zhCN: Resources = {
       evening: '晚上好',
     },
     startTask: '启动任务',
+    // RFC-135：多运行时状态行——逐运行时短文案；可用性不比较版本号，
+    // 版本串仅展示（readyNoVersion 兜自定义二进制解析不出版本的情形）。
     runtime: {
-      ready: 'opencode v{{version}} · 已就绪',
       checking: '检查中…',
-      missing: '未找到 opencode',
-      incompatible: 'opencode v{{version}} 低于最低门槛 v{{minVersion}}',
+      noneEnabled: '无已启用的运行时',
+      aggregate: '{{ok}}/{{total}} 个运行时已就绪',
+      aggregateWorst: '{{ok}}/{{total}} 个运行时已就绪 · {{name}} 异常',
+      item: {
+        ready: '{{name}} v{{version}}',
+        readyNoVersion: '{{name}} 可用',
+        missing: '{{name}} 未找到',
+      },
     },
     section: {
       running: '运行中',
@@ -4393,21 +4391,6 @@ export const zhCN: Resources = {
     bindHostHint: '需要重启。默认 127.0.0.1 使 daemon 仅本机可达。',
     bindPort: '监听 port',
     bindPortHint: '需要重启。0 让启动时自动挑空闲端口。',
-    runtimeStatusTitle: 'opencode 运行状态',
-    runtimeStatusProbing: '正在探测 opencode…',
-    runtimeStatusOk: '兼容 — {{version}}',
-    runtimeStatusIncompatible: '版本 {{version}} 低于最低要求 {{minVersion}}',
-    runtimeStatusNotFound: '未找到 opencode 二进制或无法执行',
-    runtimeStatusBinary: '二进制：{{path}}',
-    runtimeStatusReprobe: '重新探测',
-    runtimeStatusMinVersion: '最低 {{version}}',
-    runtimeStatusHint: '红色状态请检查 opencode 路径字段。',
-    claudeRuntimeStatusTitle: 'Claude Code 运行状态（可选）',
-    claudeRuntimeStatusProbing: '正在探测 Claude Code…',
-    claudeRuntimeStatusNotFound:
-      '未找到 Claude Code 二进制 — 仅当你运行 claude-code 代理时才需要安装。',
-    claudeRuntimeStatusHint:
-      'Claude Code 是可选的第二运行时 — opencode 仍是默认；即便它不可用也不影响 opencode。',
     modelLoadFailed: '模型列表加载失败 — 已降级为手动输入。',
     modelLoading: '加载模型列表…',
     modelRefresh: '刷新',
