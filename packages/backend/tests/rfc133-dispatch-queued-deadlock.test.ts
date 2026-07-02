@@ -18,19 +18,11 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { monotonicFactory } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import {
-  clarifyRounds,
-  crossClarifySessions,
-  nodeRunOutputs,
-  nodeRuns,
-  taskQuestions,
-  tasks,
-  workflows,
-} from '../src/db/schema'
+import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
 import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
