@@ -54,6 +54,7 @@ import {
   hasOpenDispatchedEntryOnHome,
 } from '@/services/clarifyRerunLedger'
 import { sealRoundQuestions } from '@/services/clarifySeal'
+import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
 import { validateQuestionScopes } from '@/services/crossClarify'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
@@ -407,6 +408,21 @@ export async function autoDispatchClarifyRound(
       'clarify-quick-finalize-incomplete',
       `clarify round ${originNodeRunId} was not fully sealed by this quick-channel finalize; refusing to auto-dispatch a partially sealed round`,
     )
+  }
+
+  // RFC-041 distill enqueue — 迁自 legacy submitClarifyAnswers(RFC-132 ②a 发现的生产缺口:
+  // PR-B 切统一路径后 clarify 答复不再入 distill 队列)。语义等价:仅 self 轮(legacy cross
+  // 从不 enqueue)、finalize 成功后、best-effort(队列坏不影响答复结果)。sourceEventId =
+  // round id(与 legacy session id 同值,RFC-058 dual-write)。放在 seal 确认成功后、dispatch
+  // 之前:即使后续 dispatch conflict rethrow,已答的轮同样值得蒸馏(seal 已 commit)。
+  if (round.kind === 'self') {
+    await enqueueDistillJob(db, {
+      sourceKind: 'clarify',
+      sourceEventId: round.id,
+      taskId: round.taskId,
+    }).catch(() => {
+      /* swallow — best-effort */
+    })
   }
 
   // 3b. RFC-099 (D8/D14/D17) attribution FREEZE — the quick channel is the "submit" the legacy

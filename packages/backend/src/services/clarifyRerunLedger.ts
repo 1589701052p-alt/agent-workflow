@@ -184,7 +184,9 @@ export function openImmediateRounds(
         r.parentNodeRunId === null &&
         r.rerunCause === cause &&
         (mode === 'in-flight'
-          ? r.status !== 'done'
+          ? // RFC-132 ②a 缺口②:review-superseded canceled 行已终结(不可 revival),不算 open
+            // ——否则 review-iterate 后 immediate gate 永久挡答复的 dispatch。
+            r.status !== 'done' && !isReviewSupersededCanceled(r)
           : !(r.status === 'done' && ctx.outputRunIds.has(r.id))),
     )
   })
@@ -280,21 +282,46 @@ export function isDispatchedEntryConsumed(
     if (target === null || target === '') return false // no target (data anomaly) → conservative
     if (mintCause !== undefined && causeClassForEntry(entry) !== mintCause) return false // (b)
     const hasRunObligation = runs.some(
-      (r) => r.nodeId === target && r.parentNodeRunId === null && r.status !== 'done',
+      (r) =>
+        r.nodeId === target &&
+        r.parentNodeRunId === null &&
+        r.status !== 'done' &&
+        // RFC-132 ②a 缺口②:review supersede 把 done handler 翻 canceled(marker),该行已终结、
+        // 不可 revival(RFC-095),不构成 run 义务——否则 review-iterate 后的下一次答复永久卡
+        // in-flight(与 isTargetNodeConsumed 的 supersede 例外同判据)。
+        !isReviewSupersededCanceled(r),
     )
     return !hasRunObligation // (a) no open run on the target → nothing in flight → consumed
   }
   const anchorRow = runs.find((r) => r.id === entry.triggerRunId)
   if (anchorRow === undefined) return false // anchor GC'd → treat as open (conservative)
+  // RFC-132 ②a 缺口②:lineage 投影把 review-superseded canceled 行视作 done——它是「完成过又被
+  // review 取代」的 handler(isTargetNodeConsumed :447 同判据),freshest 落在它上时该 entry 的
+  // 义务已了结(in-flight: consumed;revivable: 按 hasOutput),不再永久挡 dispatch。
+  const supersededIds = new Set(runs.filter((r) => isReviewSupersededCanceled(r)).map((r) => r.id))
+  const projected =
+    supersededIds.size === 0
+      ? lineageViews
+      : lineageViews.map((v) =>
+          supersededIds.has(v.id) ? { ...v, status: 'done' as NodeRunRow['status'] } : v,
+        )
   const hr = resolveHandlerRun({
     effectiveTargetNodeId: anchorRow.nodeId,
     iteration: anchorRow.iteration,
     loopIter: 0,
     triggerRunId: entry.triggerRunId,
-    runs: lineageViews,
+    runs: projected,
   })
   if (hr === null || hr.status !== 'done') return false
   return mode === 'in-flight' ? true : hr.hasOutput
+}
+
+/** RFC-132 ②a 缺口② — review supersede 例外的单一判据(与 isTargetNodeConsumed :447 /
+ *  dispatchFrontier.isReviewSupersededRow 同源):canceled + errorMessage 带 supersede marker。 */
+function isReviewSupersededCanceled(r: Pick<NodeRunRow, 'status' | 'errorMessage'>): boolean {
+  return (
+    r.status === 'canceled' && r.errorMessage?.startsWith(REVIEW_SUPERSEDE_MARKER_PREFIX) === true
+  )
 }
 
 /** The resolveHandlerRun lineage projection (the SAME shape findOpenDispatchTarget passes) so

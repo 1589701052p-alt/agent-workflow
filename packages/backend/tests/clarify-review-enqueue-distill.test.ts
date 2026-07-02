@@ -7,8 +7,15 @@ import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifySessions, memoryDistillJobs, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import {
+  clarifyRounds,
+  clarifySessions,
+  memoryDistillJobs,
+  nodeRuns,
+  tasks,
+  workflows,
+} from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -97,7 +104,25 @@ function seedFixture(db: DbClient): {
       clarifyNodeId: 'clarify-1',
       clarifyNodeRunId: clarifyRunId,
       iterationIndex: 0,
-      questionsJson: JSON.stringify([{ id: 'q1', kind: 'open', text: 'what?' }]),
+      questionsJson: JSON.stringify([{ id: 'q1', title: 'what?', kind: 'open' }]),
+      status: 'awaiting_human',
+    })
+    .run()
+  // RFC-132: the unified driver (autoDispatchClarifyRound) reads clarify_rounds — mirror the
+  // legacy session row (RFC-058 dual-write shape, same id).
+  db.insert(clarifyRounds)
+    .values({
+      id: sessionId,
+      taskId,
+      kind: 'self',
+      askingNodeId: 'agent-1',
+      askingNodeRunId: sourceRunId,
+      intermediaryNodeId: 'clarify-1',
+      intermediaryNodeRunId: clarifyRunId,
+      targetConsumerNodeId: null,
+      iteration: 0,
+      loopIter: 0,
+      questionsJson: JSON.stringify([{ id: 'q1', title: 'what?', kind: 'open' }]),
       status: 'awaiting_human',
     })
     .run()
@@ -110,18 +135,18 @@ function seedFixture(db: DbClient): {
   }
 }
 
-describe('submitClarifyAnswers enqueues a distill job', () => {
+describe('autoDispatchClarifyRound enqueues a distill job (RFC-132 缺口① 回归锁)', () => {
   let db: DbClient
   beforeEach(() => {
     db = createInMemoryDb(MIGRATIONS)
     resetBroadcastersForTests()
   })
 
-  test('after a successful submit, exactly one feedback-source-job row exists with the matching debounce key', async () => {
+  test('after a successful finalize, exactly one feedback-source-job row exists with the matching debounce key', async () => {
     const fx = seedFixture(db)
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: fx.clarifyNodeRunId,
+      originNodeRunId: fx.clarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -130,6 +155,9 @@ describe('submitClarifyAnswers enqueues a distill job', () => {
           customText: 'an answer',
         },
       ],
+      actor: { userId: 'u1', role: 'owner' },
+    }).catch(() => {
+      /* a post-seal dispatch conflict must not hide the enqueue assertion below */
     })
     const jobs = db.select().from(memoryDistillJobs).all()
     expect(jobs.length).toBe(1)
@@ -141,9 +169,9 @@ describe('submitClarifyAnswers enqueues a distill job', () => {
 
   test('clarify session row reflects the answered status (independent of the enqueue side-effect)', async () => {
     const fx = seedFixture(db)
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: fx.clarifyNodeRunId,
+      originNodeRunId: fx.clarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -152,6 +180,9 @@ describe('submitClarifyAnswers enqueues a distill job', () => {
           customText: 'an answer',
         },
       ],
+      actor: { userId: 'u1', role: 'owner' },
+    }).catch(() => {
+      /* seal commits before any post-seal dispatch conflict — the row assertions stand */
     })
     const row = db
       .select()

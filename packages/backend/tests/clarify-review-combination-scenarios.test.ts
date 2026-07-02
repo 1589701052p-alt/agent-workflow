@@ -1,9 +1,9 @@
 // EXPLORATORY combination-scenario probes (agent × review × clarify).
 //
 // Goal: drive end-to-end flows through the REAL scheduler (runTask) + REAL
-// decision handlers (submitClarifyAnswers / submitReviewDecision) and assert
-// the EXPECTED-CORRECT behavior. Any failing assertion = a current flow that
-// does not meet expectations.
+// decision handlers (autoDispatchClarifyRound / submitReviewDecision) and
+// assert the EXPECTED-CORRECT behavior. Any failing assertion = a current flow
+// that does not meet expectations.
 //
 // NOT an RFC implementation. These are probes to surface misbehaving flows
 // (notably the cci/cascade/review-freshness interplay). Scenarios annotated
@@ -28,9 +28,17 @@ import {
 } from '../src/db/schema'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
-import { submitClarifyAnswers } from '../src/services/clarify'
+// RFC-132 ②a 缺口② 回归锁: S3 + S6 drive answers through the unified autoDispatchClarifyRound.
+// They previously deadlocked on a genuine behavior gap — review iterate/reject SUPERSEDES the
+// designer's freshest run (done clarify-answer continuation → `canceled` superseded-by-review-*,
+// parked forever per RFC-095), and the unified dispatch's in-flight gates (isDispatchedEntryConsumed
+// run-obligation / lineage + openImmediateRounds 'in-flight') treated that canceled row as OPEN, so
+// the NEXT clarify answer's mint deferred forever (task-question-node-dispatch-in-flight). Fixed in
+// clarifyRerunLedger via the isReviewSupersededCanceled exception (same predicate as
+// isTargetNodeConsumed's aging-side supersede exception). If S3/S6 wedge again on
+// dispatch-in-flight, that exception regressed.
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { setNodeClarifyDirective } from '../src/services/taskClarifyDirective'
-import { submitCrossClarifyAnswers } from '../src/services/crossClarify'
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
@@ -47,6 +55,7 @@ import type {
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const SCENARIO_STUB = resolve(import.meta.dir, 'fixtures', 'scenario-opencode.ts')
+const actor = { userId: 'u1', role: 'owner' as const }
 
 type Step =
   | { output: Record<string, string> }
@@ -430,11 +439,12 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     )
     // RFC-100: the designer asks first (round 0); answer with stop → it outputs v1.
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -477,12 +487,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify #1
 
     // answer clarify #1 → designer reruns, asks clarify #2
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: continue — this answer leads to ANOTHER clarify round (#2), not output.
       directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -503,12 +514,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     expect(continueRerun?.promptText ?? '').not.toContain('You MUST end your reply with a')
 
     // answer clarify #2 → designer reruns, emits output v2 → review awaiting v2
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -594,12 +606,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -786,11 +799,12 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     )
     // RFC-100: the designer asks first (round 0); answer with stop → it outputs v1.
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -812,12 +826,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human') // designer asked clarify
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -912,12 +927,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1017,12 +1033,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     // builder now asks clarify
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1106,12 +1123,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1187,8 +1205,8 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
     const oldA = (await topLevel(c.db, task.id, 'agentA')).find((r) => r.status === 'done')!.id
     expect(consumedOf(doneB1[0]!).agentA).toBe(oldA) // B consumed the v1 A
 
-    // Trigger a fresh A generation: mint a pending A rerun (the shape
-    // submitClarifyAnswers mints) so the next runScope re-runs A → A_V2. With
+    // Trigger a fresh A generation: mint a pending A rerun (the answer-
+    // continuation shape) so the next runScope re-runs A → A_V2. With
     // Layer A gone, NOTHING pre-mints B/C — the per-batch demote must.
     await c.db.insert(nodeRuns).values({
       id: ulid(),
@@ -1300,23 +1318,25 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     // answer A's clarify
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
     // answer B's clarify
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1417,12 +1437,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       },
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1527,12 +1548,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     expect(await taskStatus(c.db, task.id)).toBe('awaiting_human')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
@@ -1674,11 +1696,12 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
         ),
       )
     expect(ccRows.length).toBe(1)
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      crossClarifyNodeRunId: ccRows[0]!.crossClarifyNodeRunId,
+      originNodeRunId: ccRows[0]!.crossClarifyNodeRunId,
       answers: [CLARIFY_ANSWER],
       directive: 'stop',
+      actor,
     })
     // Drive the scheduler to a fixed point: resume up to a few times, approving
     // any review that re-opens (legit: designer changed). Bounded loop.
@@ -1994,12 +2017,13 @@ describe('combination scenarios: agent × review × clarify (current code)', () 
       { db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd(), awaitScheduler: true },
     )
     // A asked clarify; B should already be awaiting_review.
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [CLARIFY_ANSWER],
       // RFC-100: stop = finalize round so the post-answer rerun's <workflow-output> is accepted.
       directive: 'stop',
+      actor,
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })
