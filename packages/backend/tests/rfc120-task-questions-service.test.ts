@@ -156,8 +156,14 @@ describe('RFC-120 T3 listTaskQuestions', () => {
           customText: '',
         },
       ]),
-      consumedByConsumerRunId: 'r-handler',
     })
+    // RFC-132: 相位派生自 entry 自身 dispatch 状态 — reconcile 建 entry 后 dispatch+bind 到
+    // done+output handler(取代旧 consumption-stamp seed)。
+    const [pre] = await listTaskQuestions(db, taskId)
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt: Date.now(), triggerRunId: 'r-handler' })
+      .where(eq(taskQuestions.id, pre!.id))
 
     const list = await listTaskQuestions(db, taskId)
     expect(list).toHaveLength(1)
@@ -299,8 +305,13 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
       intermediaryNodeRunId: 'c1-int',
       questionsJson: JSON.stringify([Q('q1')]),
       status: 'answered',
-      consumedByConsumerRunId: 'r-handler',
     })
+    // RFC-132: dispatch+bind 取代 consumption-stamp seed(相位读 entry 自身 dispatch 状态)。
+    const [pre] = await listTaskQuestions(db, taskId)
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt: Date.now(), triggerRunId: 'r-handler' })
+      .where(eq(taskQuestions.id, pre!.id))
     return taskId
   }
 
@@ -411,10 +422,10 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
 })
 
 describe('RFC-120 Codex impl-gate regressions (F1/F2/F3)', () => {
-  test('F1: answered round with no consumption stamp → processing (in-flight, not a guessed run)', async () => {
+  test('F1 (RFC-132): answered round, entry never dispatched → pending (板上待补 dispatch,不猜 run)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
-    // a LATER unrelated clarify-answer rerun on the same node must NOT be bound.
+    // a LATER unrelated clarify-answer rerun on the same node must NOT be bound/guessed.
     await seedRun(db, taskId, 'r-later', 'designer', {
       rerunCause: 'clarify-answer',
       status: 'running',
@@ -425,38 +436,18 @@ describe('RFC-120 Codex impl-gate regressions (F1/F2/F3)', () => {
       askingNodeId: 'designer',
       intermediaryNodeRunId: 'c1-int',
       questionsJson: JSON.stringify([Q('q1')]),
-      status: 'answered', // answered but consumedByConsumerRunId is NULL → in-flight
+      status: 'answered', // answered but never dispatched (legacy / data-lost round)
     })
+    // RFC-132 统一模型:相位一律派生自 entry 自身 dispatch 状态。answered-undispatched(迁移
+    // 垫片 skip 的数据损轮)→ pending(可经 board dispatch 补救),不再是旧 consumption-stamp
+    // 语义下的永久 processing;'r-later' 依然绝不被猜绑。
     const [entry] = await listTaskQuestions(db, taskId)
-    expect(entry!.phase).toBe('processing')
+    expect(entry!.phase).toBe('pending')
   })
 
-  test('F2: stamp points at a fanout CHILD handler run (parentNodeRunId set) → awaiting_confirm', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = await seedTask(db)
-    await seedRun(db, taskId, 'parent', 'designer', { rerunCause: 'clarify-answer' })
-    // child run (parentNodeRunId set) with output — the authoritative handler.
-    await db.insert(nodeRuns).values({
-      id: 'child',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      parentNodeRunId: 'parent',
-      iteration: 0,
-    })
-    await db.insert(nodeRunOutputs).values({ nodeRunId: 'child', portName: 'result', content: 'x' })
-    await seedRound(db, taskId, {
-      id: 'c2',
-      kind: 'self',
-      askingNodeId: 'designer',
-      intermediaryNodeRunId: 'c2-int',
-      questionsJson: JSON.stringify([Q('q1')]),
-      status: 'answered',
-      consumedByConsumerRunId: 'child', // stamp on the CHILD row
-    })
-    const [entry] = await listTaskQuestions(db, taskId)
-    expect(entry!.phase).toBe('awaiting_confirm')
-  })
+  // F2(旧「stamp 指 fanout CHILD run 也认」)随 consumption-stamp 一起删除(RFC-132):统一
+  // 模型下 trigger 恒由 dispatch/bind 绑到 top-level anchor(resolveHandlerRun lineage 只扫
+  // parentNodeRunId===null),fanout 的 awaiting_confirm 靠 parent 聚合输出(T3 已覆盖)。
 
   test('F3: reassign rejects a terminal (done) entry', async () => {
     const db = createInMemoryDb(MIGRATIONS)

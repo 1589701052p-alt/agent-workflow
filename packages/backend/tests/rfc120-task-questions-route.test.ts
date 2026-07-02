@@ -11,7 +11,16 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Hono } from 'hono'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { eq } from 'drizzle-orm'
+import {
+  clarifyRounds,
+  nodeRunOutputs,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
+import { listTaskQuestions } from '../src/services/taskQuestions'
 import { createApp } from '../src/server'
 
 const TOKEN = 'a'.repeat(64)
@@ -100,8 +109,13 @@ async function seedSelfAnswered(db: DbClient, taskId: string) {
       },
     ]),
     status: 'answered',
-    consumedByConsumerRunId: `${taskId}-h`,
   })
+  // RFC-132: dispatch+bind 取代 consumption-stamp seed(相位读 entry 自身 dispatch 状态)。
+  const [pre] = await listTaskQuestions(db, taskId)
+  await db
+    .update(taskQuestions)
+    .set({ dispatchedAt: Date.now(), triggerRunId: `${taskId}-h` })
+    .where(eq(taskQuestions.id, pre!.id))
 }
 
 describe('RFC-120 /api/tasks/:id/questions routes', () => {

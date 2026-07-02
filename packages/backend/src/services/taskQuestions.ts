@@ -296,31 +296,6 @@ export async function loadSealedQuestionIds(
   return out
 }
 
-/** The entry's authoritative handler run id = the RFC-070 consumption stamp (set
- *  when the handler finished done+output, Codex F4). NULL while in flight / never
- *  dispatched. We do NOT guess a run from cause+node+iteration (Codex impl gate F1)
- *  — an in-flight answered round surfaces as `dispatchedInFlight` instead. */
-export function resolveTriggerForEntry(
-  round: ClarifyRoundRow,
-  roleKind: TaskQuestionRow['roleKind'],
-): string | null {
-  if (round.status !== 'answered') return null // not dispatched
-  return roleKind === 'questioner' ? round.consumedByQuestionerRunId : round.consumedByConsumerRunId
-}
-
-/** Resolve one entry's phase inputs from the round + the task's runs. The handler
- *  run is looked up by the stamp id DIRECTLY (authoritative, includes fanout child
- *  rows — Codex impl gate F2); an answered round without a stamp is in-flight.
- *
- *  RFC-120 §18 (model A, corrected): for a DEFERRED task, a designer entry's OWN
- *  `dispatched_at` is the dispatch signal — NULL means NOT yet dispatched (the task
- *  is parked awaiting_human), so the row reads pending/staged, NOT processing. Once
- *  dispatched (`dispatched_at` set) but not yet bound to a run (`trigger_run_id`
- *  NULL), the handler is queued/rerunning → processing (dispatchedInFlight). Once
- *  bound (`trigger_run_id` set at the node's RERUN), resolve that run's lineage
- *  (processing → awaiting_confirm). For NON-deferred tasks (and questioner/self
- *  entries), the immediate flow never touches `dispatched_at`/`trigger_run_id`, so
- *  the consumption-stamp logic stays byte-for-byte (golden-lock). */
 /** Entry-level handler resolution from the entry's OWN dispatch state (dispatched_at +
  *  trigger_run_id + run lineage) — independent of any clarify round. Shared by deferred
  *  designer entries AND manual entries (RFC-120 §15): both ride the §18 per-node queue,
@@ -379,43 +354,13 @@ function resolveDispatchedEntryHandler(
   return { handlerRun, dispatchedInFlight: handlerRun === null }
 }
 
-function resolveEntryHandler(
-  round: ClarifyRoundRow,
-  entry: TaskQuestionRow,
-  runs: NodeRunRow[],
-  outputRunIds: Set<string>,
-  deferred: boolean,
-): { handlerRun: HandlerRunView | null; dispatchedInFlight: boolean } {
-  if (deferred && entry.roleKind === 'designer') {
-    return resolveDispatchedEntryHandler(entry, runs, outputRunIds)
-  }
-  // RFC-128 P5-BC (clean-path ②): a deferred self/questioner entry that went the CONTROL
-  // channel (per-question seal — `sealed_at` set) rides the §18 per-node queue exactly like a
-  // designer entry: its phase derives from its OWN dispatch state (dispatched_at + trigger_run_id
-  // + run lineage via resolveDispatchedEntryHandler), NOT the round consumption stamp. This
-  // covers all three states correctly — sealed-but-undispatched (dispatched_at NULL → pending/
-  // staged), dispatched-unbound (processing), dispatched-bound (lineage). A QUICK-channel
-  // self/questioner answer never seals per-question (`sealed_at` NULL), so it stays on the
-  // round-based path below (the immediate continuation rerun) — byte-for-byte golden-lock.
-  if (
-    deferred &&
-    (entry.roleKind === 'self' || entry.roleKind === 'questioner') &&
-    entry.sealedAt !== null
-  ) {
-    return resolveDispatchedEntryHandler(entry, runs, outputRunIds)
-  }
-  const triggerRunId = resolveTriggerForEntry(round, entry.roleKind)
-  const row = triggerRunId ? runs.find((r) => r.id === triggerRunId) : undefined
-  if (!row) return { handlerRun: null, dispatchedInFlight: round.status === 'answered' }
-  return {
-    handlerRun: {
-      status: row.status,
-      startedAt: row.startedAt,
-      hasOutput: outputRunIds.has(row.id),
-    },
-    dispatchedInFlight: false,
-  }
-}
+// RFC-132 PR-E:resolveEntryHandler/resolveTriggerForEntry(RFC-070 consumption-stamp 相位)
+// 已删——统一模型下每个 entry 的相位一律从它自己的 dispatch 状态派生
+// (resolveDispatchedEntryHandler:dispatched_at + trigger_run_id + run lineage)。新数据恒
+// sealed+dispatched(autoDispatchClarifyRound);遗留 immediate 数据由 boot 迁移垫片
+// (reconcileLegacyImmediateRounds)补 sealed+dispatched+trigger;垫片 skip 的数据损轮
+// (answered 无 continuation run)显示 pending——用户可经 board dispatch 补救(旧逻辑永久
+// processing 反而不可恢复)。
 
 /** Lazy-reconcile every round of a task and project each entry into a DTO with
  *  its derived phase. Optional filters: by source node (node badge / clarify page)
@@ -430,11 +375,6 @@ export async function listTaskQuestions(
 
   const entries = await db.select().from(taskQuestions).where(eq(taskQuestions.taskId, taskId))
   if (entries.length === 0) return []
-
-  // RFC-132 PR-D' 步骤1 (T8 flag 停读): 统一模型下所有任务走 deferred 语义——PR-B 让所有
-  // clarify 提交经 autoDispatchClarifyRound 打 dispatched_at，phase 信号恒读 entry 自身的
-  // trigger_run_id（resolveEntryHandler），不再分流 legacy 消费戳。
-  const deferred = true
 
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
   const outputRunIds = await runIdsWithOutput(
@@ -495,13 +435,7 @@ export async function listTaskQuestions(
     const round = roundByOrigin.get(e.originNodeRunId)
     if (!round) continue // round vanished (task edited); skip defensively
     const effectiveTargetNodeId = e.overrideTargetNodeId ?? e.defaultTargetNodeId
-    const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
-      round,
-      e,
-      runs,
-      outputRunIds,
-      deferred,
-    )
+    const { handlerRun, dispatchedInFlight } = resolveDispatchedEntryHandler(e, runs, outputRunIds)
     const phase = deriveQuestionPhase({
       roundStatus: round.status,
       confirmation: e.confirmation,
@@ -929,14 +863,11 @@ async function deriveEntryPhase(db: DbClient, entry: TaskQuestionRow): Promise<T
     db,
     runs.map((r) => r.id),
   )
-  // RFC-132 PR-D' 步骤1 (T8 flag 停读): resolveEntryHandler 恒 deferred——phase 读 entry
-  // 自身的 trigger_run_id（所有任务经 autoDispatchClarifyRound 打 dispatched_at）。
-  const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
-    round,
+  // RFC-132: phase 一律从 entry 自身 dispatch 状态派生(dispatched_at + trigger_run_id)。
+  const { handlerRun, dispatchedInFlight } = resolveDispatchedEntryHandler(
     entry,
     runs,
     outputRunIds,
-    true,
   )
   return deriveQuestionPhase({
     roundStatus: round.status,
