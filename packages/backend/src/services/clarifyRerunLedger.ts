@@ -387,41 +387,6 @@ export function hasOpenDispatchedEntryOnHome(
   )
 }
 
-/** RFC-128 P5-BC §5.2.14 mixed-path step 1 — submit-side dispatch-mode guard. Does `originNodeRunId`
- *  (a clarify / cross-clarify round's intermediary run) carry ANY DISPATCHED self/questioner entry
- *  (`dispatched_at` set), in-flight OR already consumed?
- *
- *  Codex impl-gate finding 1 (data-loss): the read-side PERMANENTLY excludes a round with any
- *  dispatched self/q entry from the whole-round render path (selectAnsweredRoundsForConsumer →
- *  roundsWithDispatchedEntries, keyed on `dispatched_at`, never cleared). So once a round has gone
- *  into control-channel dispatch mode, a quick whole-round finalize for it mints a continuation that
- *  can render NOTHING (the round is excluded from the whole-round path, and the un-dispatched
- *  questions have no per-question queue entry) → the remaining answers are DROPPED. Therefore the
- *  quick-finalize must reject for ANY dispatched self/q entry — NOT just an in-flight one (the old
- *  `isDispatchedEntryConsumed` refinement let a CONSUMED dispatch through → data-loss). The user
- *  finishes such a round via the control channel (seal + dispatch the remaining questions).
- *
- *  In clarify.ts the self-path recheck is done SYNCHRONOUSLY inside the submit's dbTxSync (atomic
- *  with the mint — §5.2.14 step 3); this async helper is the cross-clarify (questioner) submit's
- *  precondition guard. */
-export async function roundHasDispatchedSelfQuestioner(
-  db: DbClient,
-  originNodeRunId: string,
-): Promise<boolean> {
-  const rows = await db
-    .select({ id: taskQuestions.id })
-    .from(taskQuestions)
-    .where(
-      and(
-        eq(taskQuestions.originNodeRunId, originNodeRunId),
-        inArray(taskQuestions.roleKind, ['self', 'questioner']),
-        isNotNull(taskQuestions.dispatchedAt),
-      ),
-    )
-    .limit(1)
-  return rows.length > 0
-}
-
 /** RFC-131 — 派生式老化判据（取代 isQueueEntryRenderableForRun 的 window 消费 + isDispatchedEntryConsumed
  *  的 in-flight/revivable mode 分裂）。一个 target 队列里、承接 rerun 为 `sinceRunId`（问题的
  *  `trigger_run_id`）的问题是否「已被 target 产出老化」= 该 (target, iteration) 有一个 TOP-LEVEL run 处于

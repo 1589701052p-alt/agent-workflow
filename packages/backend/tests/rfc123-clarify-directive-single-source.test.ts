@@ -360,8 +360,8 @@ describe('RFC-123 D: 源码 wiring 守卫', () => {
     resolve(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'),
     'utf8',
   )
-  const clarifySrc = readFileSync(
-    resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
+  const sealSrc = readFileSync(
+    resolve(import.meta.dir, '..', 'src', 'services', 'clarifySeal.ts'),
     'utf8',
   )
   const crossSrc = readFileSync(
@@ -397,16 +397,14 @@ describe('RFC-123 D: 源码 wiring 守卫', () => {
     expect(crossSrc).not.toContain('function hasPersistentStop')
   })
 
-  test('clarify + crossClarify：答 stop 两写点存在（写 asking/questioner 节点 directive）', () => {
-    // prettier 可能把长调用换行，故对归一化空白后的参数串匹配（对换行健壮、仍精确）。
+  test('clarifySeal：答 stop 的唯一写点存在（stopFinalized → askingNodeId 节点 directive）', () => {
+    // RFC-132 ②b: legacy submit* 两写点随 immediate-mint 删除,统一 seal 原语
+    // (sealRoundQuestions) 是唯一「答 stop → 节点 directive」写点(self 的 asking = 自身、
+    // cross 的 asking = questioner——同一字段覆盖两 kind)。prettier 可能换行,归一化匹配。
     const norm = (s: string) => s.replace(/\s+/g, ' ')
-    expect(clarifySrc).toContain('setNodeClarifyDirective')
-    expect(norm(clarifySrc)).toContain(
-      "db, sessionRow.taskId, sessionRow.sourceAgentNodeId, 'stop', answeredBy",
-    )
-    expect(crossSrc).toContain('setNodeClarifyDirective')
-    expect(norm(crossSrc)).toContain(
-      "args.db, row.taskId, row.sourceQuestionerNodeId, 'stop', answeredBy",
+    expect(sealSrc).toContain('setNodeClarifyDirective')
+    expect(norm(sealSrc)).toContain(
+      "await setNodeClarifyDirective( args.db, txResult.taskId, txResult.askingNodeId, 'stop', args.sealedBy ?? 'local', )",
     )
   })
 })

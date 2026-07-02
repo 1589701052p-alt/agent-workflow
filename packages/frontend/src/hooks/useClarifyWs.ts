@@ -55,8 +55,7 @@ export function useClarifyWs({
       const isCrossClarify =
         msg.type === 'cross-clarify.created' ||
         msg.type === 'cross-clarify.answered' ||
-        msg.type === 'cross-clarify.rejected' ||
-        msg.type === 'cross-clarify.designer-rerun-batched'
+        msg.type === 'cross-clarify.rejected'
       if (!isSelfClarify && !isCrossClarify) return
       // Refetch the focused round detail if it's the one currently viewed.
       if (intermediaryNodeRunId !== null) {

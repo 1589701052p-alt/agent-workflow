@@ -141,28 +141,27 @@ describe('RFC-098 WP-10 — scheduler gate wiring', () => {
 // ---------------------------------------------------------------------------
 
 describe('RFC-098 WP-10 — producers mint the cause the gates consume', () => {
-  test("clarify.ts answer rerun mints cause: 'clarify-answer'", () => {
+  // RFC-132 ②b: the legacy immediate-mint producers (submitClarifyAnswers /
+  // triggerDesignerRerun / triggerQuestioner*) were deleted — the ONE producer is
+  // now dispatchTaskQuestions, whose per-entry cause comes from the single
+  // causeClassForEntry mapping (clarifyRerunLedger). Re-anchor the lock there.
+  test("causeClassForEntry maps self→'clarify-answer', questioner→'cross-clarify-questioner-rerun', designer→'cross-clarify-answer'", () => {
     const src = readFileSync(
-      resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
+      resolve(import.meta.dir, '..', 'src', 'services', 'clarifyRerunLedger.ts'),
       'utf8',
     )
-    expect(src).toContain("cause: 'clarify-answer'")
+    expect(src).toContain("if (e.roleKind === 'self') return 'clarify-answer'")
+    expect(src).toContain(
+      "if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'",
+    )
+    expect(src).toContain("return 'cross-clarify-answer' // designer (incl. manual)")
   })
 
-  test("crossClarify.ts designer rerun mints cause: 'cross-clarify-answer' and the questioner rerun 'cross-clarify-questioner-rerun'", () => {
+  test('dispatchTaskQuestions mints via causeClassForEntry (no hardcoded per-path cause forks)', () => {
     const src = readFileSync(
-      resolve(import.meta.dir, '..', 'src', 'services', 'crossClarify.ts'),
+      resolve(import.meta.dir, '..', 'src', 'services', 'taskQuestionDispatch.ts'),
       'utf8',
     )
-    expect(src).toContain("cause: 'cross-clarify-answer'")
-    expect(src).toContain("cause: 'cross-clarify-questioner-rerun'")
-    // T-d (对抗检视修订 #11 改裁): the gate no longer depends on the designer
-    // rerun's retryIndex — but the max+1 attempts-chain bump is KEPT (lineage
-    // monotonicity, pinned by cross-clarify-designer-retry-index.test.ts).
-    // The old proxy-hack comment teaching "deliberately ≥ 1 so isClarifyRerun
-    // stays FALSE" must not survive — it described gate coupling that no
-    // longer exists.
-    expect(src).toContain('newDesignerRetryIndex')
-    expect(src).not.toContain('must stay FALSE for a cross-clarify designer rerun')
+    expect(src).toContain('causeClassForEntry')
   })
 })

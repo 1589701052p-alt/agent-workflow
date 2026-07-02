@@ -172,8 +172,8 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
   //                                       waiting" banner from the response.
   //   - cross-clarify.rejected          → same; UI flips the cross-clarify form
   //                                       to read-only + tells user reject took effect.
-  //   - cross-clarify.designer-rerun-batched → task detail nodeRuns tab; the
-  //                                       new designer node_run is now pending.
+  // (cross-clarify.designer-rerun-batched removed by RFC-132 ②b — its only producer
+  //  was the deleted legacy immediate-mint path; invalidation rides cross-clarify.answered.)
   // -------------------------------------------------------------------------
   z.object({
     id: z.number().int(),
@@ -200,15 +200,6 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     sessionId: z.string(),
     /** Freshly minted questioner rerun row carrying STOP CLARIFYING. */
     questionerNodeRunId: z.string(),
-  }),
-  z.object({
-    id: z.number().int(),
-    type: z.literal('cross-clarify.designer-rerun-batched'),
-    /** Freshly minted designer rerun row at clarifyIteration + 1
-     *  (RFC-064 unified counter; event name + payload shape unchanged). */
-    designerNodeRunId: z.string(),
-    /** Cross-clarify source questioner NodeIds whose sessions fed this batch. */
-    sourceQuestionerNodeIds: z.array(z.string()).min(1),
   }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>
