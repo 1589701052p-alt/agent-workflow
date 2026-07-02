@@ -362,7 +362,7 @@ describe('RFC-128 P5-BC park source — loadUndispatchedSelfQuestionerTargets', 
     expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(false)
   })
 
-  test('non-deferred task → empty (golden-lock)', async () => {
+  test('RFC-132 步骤1: (旧)non-deferred task 现在也 park（flag 停读，golden-lock 作废）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId, false)
@@ -378,7 +378,9 @@ describe('RFC-128 P5-BC park source — loadUndispatchedSelfQuestionerTargets', 
       defaultTargetNodeId: P,
       sealed: true,
     })
-    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).size).toBe(0)
+    // RFC-132 步骤1 (T8 flag 停读): non-deferred 概念消失——sealed+undispatched entry 现在也
+    // park（与 deferred 一致），旧「non-deferred → empty」golden-lock 作废。
+    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(true)
   })
 })
 

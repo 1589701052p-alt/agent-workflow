@@ -558,27 +558,23 @@ describe('RFC-120 §15 — Codex impl-gate H1 (manual park gate)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// G — Codex impl-gate H2: manual creation rejected on a non-deferred task (it could never
-// be dispatched / injected → undispatchable orphan data).
+// G — RFC-132 步骤1 (T8 flag 停读): 统一模型下所有任务都是 deferred-dispatch，manual 恒可
+// 创建（旧 RFC-120 「non-deferred create rejected」门移除）。此测试锁定 non-deferred 也成功
+// 的新行为 —— 旧断言（reject task-not-deferred-dispatch）随 flag 停读作废。
 // ---------------------------------------------------------------------------
-describe('RFC-120 §15 — Codex impl-gate H2 (non-deferred create rejected)', () => {
-  test('create on a NON-deferred task → ConflictError task-not-deferred-dispatch; nothing inserted', async () => {
+describe('RFC-132 步骤1 (T8 flag 停读) — manual 恒可创建（旧 non-deferred 门移除）', () => {
+  test('create on a (旧)non-deferred task → 现在也成功（统一模型所有任务 deferred-dispatch）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db, { deferred: false })
-    let threw: unknown = null
-    try {
-      await createManualTaskQuestion(
-        db,
-        taskId,
-        { title: 't', body: 'b', targetNodeId: FIXER },
-        actor,
-      )
-    } catch (e) {
-      threw = e
-    }
-    expect((threw as { code?: string }).code).toBe('task-not-deferred-dispatch')
+    const { id } = await createManualTaskQuestion(
+      db,
+      taskId,
+      { title: 't', body: 'b', targetNodeId: FIXER },
+      actor,
+    )
+    expect(id).toBeTruthy()
     const rows = await db.select().from(taskQuestions).where(eq(taskQuestions.taskId, taskId))
-    expect(rows.length).toBe(0) // nothing inserted
+    expect(rows.length).toBe(1) // now inserted (flag 停读)
   })
 
   test('create on a deferred task → succeeds (control)', async () => {

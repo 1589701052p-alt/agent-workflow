@@ -431,16 +431,10 @@ export async function listTaskQuestions(
   const entries = await db.select().from(taskQuestions).where(eq(taskQuestions.taskId, taskId))
   if (entries.length === 0) return []
 
-  // RFC-120 T9 (Codex H2): the task's deferred flag picks the phase signal — the
-  // entry's own trigger_run_id (deferred) vs the round consumption stamp (legacy).
-  const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
-  )[0]
-  const deferred = taskRow?.deferred === true
+  // RFC-132 PR-D' 步骤1 (T8 flag 停读): 统一模型下所有任务走 deferred 语义——PR-B 让所有
+  // clarify 提交经 autoDispatchClarifyRound 打 dispatched_at，phase 信号恒读 entry 自身的
+  // trigger_run_id（resolveEntryHandler），不再分流 legacy 消费戳。
+  const deferred = true
 
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
   const outputRunIds = await runIdsWithOutput(
@@ -614,14 +608,7 @@ export async function loadUndispatchedDesignerTargets(
   db: DbClient,
   taskId: string,
 ): Promise<Set<string>> {
-  const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
-  )[0]
-  if (taskRow?.deferred !== true) return new Set()
+  // RFC-132 PR-D' 步骤1 (T8 flag 停读): 所有任务走 deferred park 语义（旧 flag 门移除）。
   const entries = await fetchDesignerParkEntries(db, taskId)
   if (entries.length === 0) return new Set()
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
@@ -799,14 +786,7 @@ export async function loadUndispatchedSelfQuestionerTargets(
   db: DbClient,
   taskId: string,
 ): Promise<Set<string>> {
-  const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
-  )[0]
-  if (taskRow?.deferred !== true) return new Set()
+  // RFC-132 PR-D' 步骤1 (T8 flag 停读): 所有任务走 deferred park 语义。
   const entries = await fetchSelfQuestionerParkEntries(db, taskId)
   if (entries.length === 0) return new Set()
   const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
@@ -873,14 +853,7 @@ export async function loadUndispatchedParkTargets(
   db: DbClient,
   taskId: string,
 ): Promise<Set<string>> {
-  const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
-  )[0]
-  if (taskRow?.deferred !== true) return new Set()
+  // RFC-132 PR-D' 步骤1 (T8 flag 停读): 所有任务走 deferred park 语义。
   const entries = [
     ...(await fetchDesignerParkEntries(db, taskId)),
     ...(await fetchSelfQuestionerParkEntries(db, taskId)),
@@ -956,21 +929,14 @@ async function deriveEntryPhase(db: DbClient, entry: TaskQuestionRow): Promise<T
     db,
     runs.map((r) => r.id),
   )
-  // RFC-120 T9 (Codex H2): deferred tasks read the dispatch signal off the entry's
-  // own trigger_run_id (see resolveEntryHandler); non-deferred stays byte-for-byte.
-  const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch })
-      .from(tasks)
-      .where(eq(tasks.id, entry.taskId))
-      .limit(1)
-  )[0]
+  // RFC-132 PR-D' 步骤1 (T8 flag 停读): resolveEntryHandler 恒 deferred——phase 读 entry
+  // 自身的 trigger_run_id（所有任务经 autoDispatchClarifyRound 打 dispatched_at）。
   const { handlerRun, dispatchedInFlight } = resolveEntryHandler(
     round,
     entry,
     runs,
     outputRunIds,
-    taskRow?.deferred === true,
+    true,
   )
   return deriveQuestionPhase({
     roundStatus: round.status,
@@ -1213,22 +1179,13 @@ export async function createManualTaskQuestion(
   input: CreateManualTaskQuestionInput,
   actor: TaskQuestionActor,
 ): Promise<{ id: string }> {
-  // RFC-120 §15 — load the gating facts together: deferred flag (H2) + task status (re-gate).
+  // RFC-120 §15 — task status (re-gate). RFC-132 PR-D' 步骤1 (T8 flag 停读): 统一模型下所有
+  // 任务都是 deferred-dispatch，manual 恒可创建（旧 deferred-only 门移除）。
   const taskRow = (
-    await db
-      .select({ deferred: tasks.deferredQuestionDispatch, status: tasks.status })
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1)
+    await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId)).limit(1)
   )[0]
-  // (Codex impl-gate H2): a manual question can ONLY ever be dispatched + injected on a
-  // deferred-dispatch task (dispatchTaskQuestions + buildNodeQueueExternalFeedback are
-  // deferred-gated). Creating one on a non-deferred task would be undispatchable orphan data.
-  if (taskRow?.deferred !== true) {
-    throw new ConflictError(
-      'task-not-deferred-dispatch',
-      `task ${taskId} is not a deferred-dispatch task; manual questions cannot be created (they could never be dispatched / injected)`,
-    )
+  if (taskRow === undefined) {
+    throw new ConflictError('task-not-found', `task ${taskId} not found`)
   }
   // (Codex re-gate): reject on a TERMINAL task (done/canceled) — it will never re-enter
   // scheduling, so the row could never park / dispatch (orphan). failed/interrupted/awaiting_*

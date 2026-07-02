@@ -474,9 +474,16 @@ describe('RFC-120 Codex impl-gate regressions (F1/F2/F3)', () => {
       questionsJson: JSON.stringify([Q('q1')]),
       questionScopesJson: JSON.stringify({ q1: 'designer' }),
       status: 'answered',
-      consumedByConsumerRunId: 'h',
     })
-    const designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
+    // RFC-132 步骤1 (T8 flag 停读): a designer entry's phase reads its OWN dispatched_at +
+    // trigger_run_id (§18 per-node queue), not the round consumed_by stamp. Dispatch + bind the
+    // designer entry to the done+output handler run 'h' so it reaches awaiting_confirm.
+    let designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt: Date.now(), triggerRunId: 'h' })
+      .where(eq(taskQuestions.id, designer.id))
+    designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
     expect(designer.phase).toBe('awaiting_confirm')
     await confirmTaskQuestion(db, designer.id, ACTOR)
     expect(

@@ -150,16 +150,8 @@ export function mountTaskQuestionRoutes(app: Hono, deps: AppDeps): void {
     const actor = actorOf(c)
     const task = await loadVisibleTask(deps, taskId, actor)
     const role = await requireTaskMember(deps.db, actor, task)
-    // RFC-120 T9 (Codex H1): batch-dispatch is ONLY for opted-in deferred tasks. On
-    // a legacy non-deferred task the immediate flow already minted the designer
-    // rerun; dispatching its lazily-reconciled (trigger_run_id NULL) entries would
-    // mint a DUPLICATE rerun. Reject — dispatchTaskQuestions enforces it defensively too.
-    if (task.deferredQuestionDispatch !== true) {
-      throw new ConflictError(
-        'task-not-deferred-dispatch',
-        `task ${taskId} is not a deferred-dispatch task; batch-dispatch does not apply (its designer rerun already fired immediately at submit)`,
-      )
-    }
+    // RFC-132 PR-D' 步骤1 (T8 flag 停读): 统一模型下所有任务都是 deferred-dispatch——
+    // batch-dispatch 恒适用（旧 deferred-only 门移除；dispatchTaskQuestions 仍防御性去重）。
     const body = (await c.req.json().catch(() => ({}))) as { entryIds?: unknown }
     const entryIds = Array.isArray(body.entryIds)
       ? body.entryIds.filter((x): x is string => typeof x === 'string')
