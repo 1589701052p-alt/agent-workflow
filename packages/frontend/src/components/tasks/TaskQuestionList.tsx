@@ -71,15 +71,6 @@ export interface TaskQuestionListProps {
    * source node (a reassigned question must land on its handler's filter).
    */
   focusTargetNode?: { nodeId: string; key: number } | null
-  /**
-   * RFC-120 §15 — the manual-question entry points ("+ 新增问题" + per-card "复制") are
-   * shown ONLY for a deferred-dispatch task, because dispatch + injection of a manual
-   * question are deferred-gated (a manual row on a non-deferred task is undispatchable
-   * orphan data; the create route rejects it too). Default false ⇒ a board rendered
-   * without this prop (or a non-deferred task) shows NO manual buttons (golden-lock:
-   * today's board, unchanged).
-   */
-  deferred?: boolean
 }
 
 const PHASE_ORDER: TaskQuestionPhase[] = [
@@ -121,8 +112,11 @@ export function TaskQuestionList({
   taskId,
   nodeOptions = [],
   focusTargetNode = null,
-  deferred = false,
 }: TaskQuestionListProps) {
+  // RFC-132 PR-F: the deferred_question_dispatch flag is gone — the unified model makes
+  // EVERY task deferred-dispatch, so the manual-question tools + control-channel buttons
+  // (previously gated on the per-task prop) are always available.
+  const deferred = true
   const { t } = useTranslation()
   const qc = useQueryClient()
   const key = ['task-questions', taskId]

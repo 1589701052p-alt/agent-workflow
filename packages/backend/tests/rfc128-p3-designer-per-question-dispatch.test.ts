@@ -141,7 +141,6 @@ async function seedDeferredCrossTask(
     status: 'awaiting_human',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: true,
   })
   await db.insert(nodeRuns).values({
     id: ulid(),

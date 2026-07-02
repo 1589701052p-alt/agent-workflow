@@ -184,7 +184,6 @@ describe('RFC-131 T5 — deferred self-clarify 多轮 scheduler e2e (派生老�
       status: 'pending',
       inputs: JSON.stringify({ req: 'build dashboard' }),
       startedAt: Date.now(),
-      deferredQuestionDispatch: true,
     })
 
     // ---- ROUND 1: P 问 ----

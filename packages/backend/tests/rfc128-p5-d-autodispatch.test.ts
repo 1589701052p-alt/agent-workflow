@@ -110,7 +110,7 @@ function ans(qid: string) {
   }
 }
 
-async function seedTask(db: DbClient, taskId: string, deferred = true): Promise<void> {
+async function seedTask(db: DbClient, taskId: string, _deferred = true): Promise<void> {
   const def = liveDef()
   await db.insert(workflows).values({
     id: `wf_${taskId}`,
@@ -132,7 +132,6 @@ async function seedTask(db: DbClient, taskId: string, deferred = true): Promise<
     status: 'running',
     inputs: '{}',
     startedAt: Date.now(),
-    deferredQuestionDispatch: deferred,
   })
 }
 
@@ -561,8 +560,6 @@ describe('RFC-128 P5-D single-path (auto + manual never double-dispatch; RFC-125
       answers: [ans('q1')],
       actor,
     })
-    const t = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.deferredQuestionDispatch).toBe(true) // unchanged
   })
 
   test('mixed — a control-channel partial seal (q1) then quick-channel autodispatch → seals q2, dispatches q1+q2 in ONE rerun, q1 not re-sealed / double-minted', async () => {

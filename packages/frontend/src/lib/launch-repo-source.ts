@@ -48,7 +48,6 @@ export interface LaunchCommonPayload {
    * the wire when true — without this the whitelist drops it and the backend
    * falls back to `?? false`, silently making UI launches non-deferred.
    */
-  deferredQuestionDispatch?: boolean
   /**
    * RFC-075 (workingBranch / autoCommitPush) + RFC-036 (collaboratorUserIds):
    * optional launch settings the launcher spreads onto `launchCommon`. Both body
@@ -73,7 +72,6 @@ function stampLaunchExtras(out: Record<string, unknown>, common: LaunchCommonPay
   if (common.autoCommitPush === true) out.autoCommitPush = true
   if (common.collaboratorUserIds !== undefined && common.collaboratorUserIds.length > 0)
     out.collaboratorUserIds = common.collaboratorUserIds
-  if (common.deferredQuestionDispatch === true) out.deferredQuestionDispatch = true
 }
 
 /**

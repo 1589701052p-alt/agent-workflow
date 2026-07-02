@@ -133,7 +133,6 @@ async function seedTask(
     status: 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: true,
   })
   // ULID ids (production-accurate freshness ordering): the seeded runs sort BEFORE later mints.
   await db.insert(nodeRuns).values({
@@ -314,7 +313,6 @@ async function insertRunnableTask(h: RunHarness, def: WorkflowDefinition, name: 
     status: 'pending',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: true,
   })
   return taskId
 }

@@ -149,7 +149,7 @@ async function seedTaskRow(
   db: DbClient,
   ownerUserId: string,
   def: object,
-  opts: { deferred?: boolean } = {},
+  _opts: { deferred?: boolean } = {},
 ): Promise<string> {
   const taskId = `task_${ulid()}`
   const workflowId = `wf_${taskId}`
@@ -172,7 +172,6 @@ async function seedTaskRow(
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,
     status: 'awaiting_human',
-    deferredQuestionDispatch: opts.deferred === true,
     inputs: '{}',
     startedAt: Date.now(),
   })

@@ -605,7 +605,6 @@ function TaskDetailPage() {
             taskId={id}
             nodeOptions={agentNodeOptions}
             focusTargetNode={focusTargetNode}
-            deferred={tk.deferredQuestionDispatch}
           />
         </div>
       </div>

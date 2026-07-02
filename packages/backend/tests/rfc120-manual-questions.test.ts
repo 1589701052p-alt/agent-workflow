@@ -94,7 +94,7 @@ function mkQ(id: string, title: string): ClarifyQuestion {
 
 /** Seed a deferred task + workflow snapshot + a prior `done` run on FIXER (so a frontier
  *  dispatch to it is not rejected as never-run). No clarify round needed for manual. */
-async function seedTask(db: DbClient, opts: { deferred?: boolean } = {}): Promise<string> {
+async function seedTask(db: DbClient, _opts: { deferred?: boolean } = {}): Promise<string> {
   const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
   const def = liveDef()
   await db.insert(workflows).values({
@@ -118,7 +118,6 @@ async function seedTask(db: DbClient, opts: { deferred?: boolean } = {}): Promis
     status: 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: opts.deferred ?? true,
   })
   // FIXER prior run (ULID id so freshness/lineage windows order before later mints).
   await db.insert(nodeRuns).values({

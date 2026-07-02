@@ -135,7 +135,6 @@ async function seedTask(db: DbClient, taskId: string): Promise<void> {
     status: 'awaiting_human',
     inputs: '{}',
     startedAt: Date.now(),
-    deferredQuestionDispatch: true,
   })
 }
 

@@ -214,7 +214,6 @@ async function seedDeferredTask(h: Harness): Promise<string> {
     inputs: JSON.stringify({ req: 'build dashboard' }),
     startedAt: Date.now(),
     // RFC-131 派生老化只走 deferred 路径（buildClarifyNodeQueueContext）。
-    deferredQuestionDispatch: true,
   })
   return taskId
 }

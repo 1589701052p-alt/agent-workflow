@@ -121,7 +121,7 @@ function ans(qid: string) {
   }
 }
 
-async function seedTask(db: DbClient, taskId: string, opts: { deferred?: boolean } = {}) {
+async function seedTask(db: DbClient, taskId: string, _opts: { deferred?: boolean } = {}) {
   await db.insert(workflows).values({
     id: `wf-${taskId}`,
     name: 'rfc127-sq',
@@ -142,7 +142,6 @@ async function seedTask(db: DbClient, taskId: string, opts: { deferred?: boolean
     status: 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: opts.deferred ?? false,
   })
 }
 

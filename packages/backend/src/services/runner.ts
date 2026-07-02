@@ -1536,7 +1536,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       tokTotal: tokenUsage.total,
     },
   })
-  // RFC-132 PR-D' 步骤2 (T4): consumed_by 消费戳废弃——派生老化 isTargetNodeConsumed
+  // RFC-132 PR-D 步骤2 (T4): RFC-070 消费戳废弃——派生老化 isTargetNodeConsumed
   // (clarifyRerunLedger) 已是唯一老化判据（读 run 状态，零持久戳）。此处不再落戳。
   // Runner-specific JSON fields not in NodeRunStatusUpdateExtra — write
   // them as a follow-up non-status update.

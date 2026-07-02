@@ -148,7 +148,6 @@ async function seedTask(
     status: 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: opts.deferred,
   })
   // ULID ids (production-accurate): node_run freshness — and resolveHandlerRun's
   // lineage window — is pure ULID id-order, so these seeded runs must sort BEFORE
@@ -243,7 +242,6 @@ async function seedTwoSource(
     status: 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: true,
   })
   await db
     .insert(nodeRuns)
@@ -1473,7 +1471,6 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       status: 'running',
       inputs: JSON.stringify({}),
       startedAt: Date.now(),
-      deferredQuestionDispatch: true,
     })
     for (const n of [D, E]) {
       await db
@@ -1605,7 +1602,6 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       status: 'running',
       inputs: JSON.stringify({}),
       startedAt: Date.now(),
-      deferredQuestionDispatch: true,
     })
     for (const n of [A, B]) {
       await db
@@ -1817,7 +1813,6 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       status: 'running',
       inputs: JSON.stringify({}),
       startedAt: Date.now(),
-      deferredQuestionDispatch: true,
     })
     for (const n of [D1, D2]) {
       await db
@@ -1988,7 +1983,6 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
       status: 'running',
       inputs: JSON.stringify({}),
       startedAt: Date.now(),
-      deferredQuestionDispatch: true,
     })
     const designerDoneId = ulid()
     await db.insert(nodeRuns).values({

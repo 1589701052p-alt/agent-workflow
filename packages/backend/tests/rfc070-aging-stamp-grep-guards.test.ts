@@ -74,19 +74,16 @@ describe('RFC-070 C-guard — counter-based aging path is gone in production cod
 // 取代）。counter-aging（下方 #1）+ schema 列（#3，PR-F drop-column 前保留）+ read-path（#4，
 // 步骤3 删死注入器时更新）仍锁。
 
-describe('RFC-070 C-guard — schema declares consumed_by columns on all three tables', () => {
-  test('schema.ts has consumedByConsumerRunId in clarify_sessions, cross_clarify_sessions, clarify_rounds', () => {
-    const txt = readFileSync(join(BACKEND_SRC, 'db/schema.ts'), 'utf8')
-    const consumerHits = txt.split('consumedByConsumerRunId').length - 1
-    // 3 column declarations + 3 index declarations = 6, plus any references
-    // within FK / type contexts. Lower bound 6.
-    expect(consumerHits).toBeGreaterThanOrEqual(6)
-  })
-
-  test('schema.ts has consumedByQuestionerRunId in cross_clarify_sessions + clarify_rounds (NOT clarify_sessions)', () => {
-    const txt = readFileSync(join(BACKEND_SRC, 'db/schema.ts'), 'utf8')
-    const questionerHits = txt.split('consumedByQuestionerRunId').length - 1
-    // 2 column declarations + 2 index declarations = 4, lower bound.
-    expect(questionerHits).toBeGreaterThanOrEqual(4)
+// RFC-132 PR-F: the consumed_by_* stamp columns were DROPPED (migration 0073) — derived
+// aging (isTargetNodeConsumed) is the ONE aging predicate. Invert the old declaration
+// guard into a no-revival lock: reintroducing a stamp column/reader is the regression
+// class this whole RFC closed.
+describe('RFC-132 PR-F — consumed_by stamps stay deleted (no-revival lock)', () => {
+  test('backend/src has ZERO consumedBy / consumed_by references', () => {
+    const files = walk(BACKEND_SRC)
+    const a = countMatches(files, 'consumedByConsumerRunId')
+    const b = countMatches(files, 'consumedByQuestionerRunId')
+    const c = countMatches(files, 'consumed_by_')
+    expect({ a: a.files, b: b.files, c: c.files }).toEqual({ a: [], b: [], c: [] })
   })
 })

@@ -14,7 +14,7 @@
 //   - `markClarifyRoundsConsumedBy` (RFC-070) is the post-done stamp helper:
 //     when a consumer agent finishes 'done' with at least one captured
 //     `<workflow-output>` row, every Q&A row this run consumed has its
-//     `consumed_by_..._run_id` column stamped with the run's id. The aging
+//     consumption-stamp column stamped with the run's id. The aging
 //     filter then becomes a plain `IS NULL` predicate on subsequent reads,
 //     eliminating the cross-iteration vs unified-clarifyIteration counter
 //     mismatch class of bugs (see RFC-070 proposal §1).

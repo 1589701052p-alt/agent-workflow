@@ -179,8 +179,6 @@ const CROSS_MIRROR: ReadonlyArray<
   ['sourceQuestionerNodeRunId', 'askingNodeRunId'],
   ['targetDesignerNodeId', 'targetConsumerNodeId'],
   ['questionScopesJson', 'questionScopesJson'],
-  ['consumedByConsumerRunId', 'consumedByConsumerRunId'],
-  ['consumedByQuestionerRunId', 'consumedByQuestionerRunId'],
 ]
 
 function mismatches(

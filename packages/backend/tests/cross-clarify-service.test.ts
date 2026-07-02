@@ -141,7 +141,6 @@ async function seedTask(db: DbClient, opts: SeedOptions = {}): Promise<{ taskId:
     status: opts.status ?? 'running',
     inputs: JSON.stringify({}),
     startedAt: Date.now(),
-    deferredQuestionDispatch: opts.deferred ?? false,
   })
   return { taskId }
 }

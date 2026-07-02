@@ -92,7 +92,7 @@ function ans(qid: string) {
   }
 }
 
-async function seedTask(db: DbClient, taskId: string, deferred = false): Promise<void> {
+async function seedTask(db: DbClient, taskId: string, _deferred = false): Promise<void> {
   const def = liveDef()
   await db.insert(workflows).values({
     id: `wf_${taskId}`,
@@ -114,7 +114,6 @@ async function seedTask(db: DbClient, taskId: string, deferred = false): Promise
     status: 'running',
     inputs: '{}',
     startedAt: Date.now(),
-    deferredQuestionDispatch: deferred,
   })
 }
 
@@ -149,8 +148,6 @@ async function seedAnsweredRound(
     askingNodeId: string
     questions: ClarifyQuestion[]
     loopIter?: number
-    consumedByConsumerRunId?: string | null
-    consumedByQuestionerRunId?: string | null
   },
 ): Promise<{ roundId: string; askingRunId: string; intermediaryNodeRunId: string }> {
   const askingRunId = await seedRun(db, taskId, opts.askingNodeId, {
@@ -176,8 +173,6 @@ async function seedAnsweredRound(
     directive: 'continue',
     status: 'answered',
     answeredAt: Date.now(),
-    consumedByConsumerRunId: opts.consumedByConsumerRunId ?? null,
-    consumedByQuestionerRunId: opts.consumedByQuestionerRunId ?? null,
   })
   return { roundId, askingRunId, intermediaryNodeRunId: intRunId }
 }

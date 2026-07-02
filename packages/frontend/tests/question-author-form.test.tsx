@@ -44,7 +44,7 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   ...over,
 })
 
-async function wrapBoard(entries: TaskQuestionEntry[], deferred = true) {
+async function wrapBoard(entries: TaskQuestionEntry[], _deferred = true) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
@@ -57,7 +57,6 @@ async function wrapBoard(entries: TaskQuestionEntry[], deferred = true) {
       <QueryClientProvider client={qc}>
         <TaskQuestionList
           taskId="task-1"
-          deferred={deferred}
           nodeOptions={[
             { id: 'designer', label: 'designer' },
             { id: 'fixer', label: 'fixer' },
@@ -184,22 +183,19 @@ describe('TaskQuestionList — manual question entry points (§15)', () => {
     expect((screen.getByTestId('question-author-body') as HTMLTextAreaElement).value).toBe('Orig A')
   })
 
-  test('H2: a NON-deferred task hides BOTH the "+ 新增问题" toolbar and per-card "复制"', async () => {
-    // deferred=false → manual entry points are hidden (a manual question could never be
-    // dispatched on a non-deferred task; the create route rejects it too). Golden-lock:
-    // the rest of the board (cards, stage) is unchanged. (RFC-128 P4/P5: the per-card /clarify
-    // answer Link was removed globally, so it's now asserted ABSENT rather than present.)
+  test('RFC-132 PR-F: manual entry points are ALWAYS shown (the deferred flag is gone)', async () => {
+    // The unified model makes every task deferred-dispatch — the old H2 "non-deferred
+    // hides manual buttons" gate died with the tasks.deferred_question_dispatch column.
     await wrapBoard([entry({ id: 'e1', phase: 'pending' })], false)
-    expect(screen.queryByTestId('tq-add-question')).toBeNull()
-    expect(screen.queryByTestId('tq-copy-e1')).toBeNull()
-    // board + the card itself still render exactly as today.
+    expect(screen.getByTestId('tq-add-question')).toBeTruthy()
+    expect(screen.getByTestId('tq-copy-e1')).toBeTruthy()
     expect(screen.getByTestId('tq-card-e1')).toBeTruthy()
     expect(screen.queryByTestId('tq-answer-e1')).toBeNull()
   })
 
-  test('H2: a non-deferred EMPTY board shows no "+ 新增问题" (today, unchanged)', async () => {
+  test('RFC-132 PR-F: an EMPTY board still shows "+ 新增问题" (first manual question)', async () => {
     await wrapBoard([], false)
-    expect(screen.queryByTestId('tq-add-question')).toBeNull()
+    expect(screen.getByTestId('tq-add-question')).toBeTruthy()
   })
 
   test('a manual card shows the "手动" source label + no clarify link', async () => {

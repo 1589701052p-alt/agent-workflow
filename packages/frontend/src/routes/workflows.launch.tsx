@@ -171,10 +171,6 @@ function LaunchPage() {
           : {}),
         ...(trimWorkingBranch !== '' ? { workingBranch: trimWorkingBranch } : {}),
         ...(autoCommitPush ? { autoCommitPush: true } : {}),
-        // RFC-125: all UI-launched tasks default to deferred question dispatch —
-        // designer-scoped clarify answers park in the task board for manual batch-
-        // dispatch (the launch-time on/off toggle was removed).
-        deferredQuestionDispatch: true,
       }
       // RFC-066: multi-repo (length > 1) → always JSON post via the v2 body
       // helper. Multi-repo + uploads is gated by T6's `canSubmit` predicate

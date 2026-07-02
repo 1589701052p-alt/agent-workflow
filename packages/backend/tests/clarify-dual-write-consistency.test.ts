@@ -146,7 +146,6 @@ const SELF_MIRROR: ReadonlyArray<
   ['sourceShardKey', 'askingShardKey'],
   ['clarifyNodeId', 'intermediaryNodeId'],
   ['clarifyNodeRunId', 'intermediaryNodeRunId'],
-  ['consumedByConsumerRunId', 'consumedByConsumerRunId'],
 ]
 
 function mismatches(

@@ -113,7 +113,7 @@ function ans(qid: string) {
   }
 }
 
-async function seedTask(db: DbClient, taskId: string, deferred = true): Promise<void> {
+async function seedTask(db: DbClient, taskId: string, _deferred = true): Promise<void> {
   const def = liveDef()
   await db.insert(workflows).values({
     id: `wf_${taskId}`,
@@ -135,7 +135,6 @@ async function seedTask(db: DbClient, taskId: string, deferred = true): Promise<
     status: 'running',
     inputs: '{}',
     startedAt: Date.now(),
-    deferredQuestionDispatch: deferred,
   })
 }
 

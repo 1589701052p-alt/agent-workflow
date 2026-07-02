@@ -547,11 +547,7 @@ async function wrapDeferred(entries: TaskQuestionEntry[]) {
     path: '/',
     component: () => (
       <QueryClientProvider client={qc}>
-        <TaskQuestionList
-          taskId="task-1"
-          nodeOptions={[{ id: 'designer', label: 'designer' }]}
-          deferred
-        />
+        <TaskQuestionList taskId="task-1" nodeOptions={[{ id: 'designer', label: 'designer' }]} />
       </QueryClientProvider>
     ),
   })
@@ -612,8 +608,9 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
     await waitFor(() => expect(screen.getByTestId('centralized-answer-dialog')).toBeTruthy())
   })
 
-  test('non-deferred task with an unsealed pending question → no entry button', async () => {
-    // `wrap` renders WITHOUT the deferred prop (default false).
+  test('RFC-132 PR-F: an unsealed pending question always shows the entry button (flag gone)', async () => {
+    // The unified model made every task deferred-dispatch — the centralized-answer entry
+    // (previously gated on the per-task deferred prop) is always available.
     await wrap([
       entry({
         id: 'e1',
@@ -624,7 +621,7 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
         roleKind: 'questioner',
       }),
     ])
-    expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
+    expect(screen.getByTestId('tq-open-answer-pane')).toBeTruthy()
   })
 
   // RFC-128 P4/P5 — deleting the per-card answer Link must NOT touch the other card actions:

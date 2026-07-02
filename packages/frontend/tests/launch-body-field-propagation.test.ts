@@ -24,14 +24,12 @@ const full: LaunchCommonPayload = {
   workingBranch: 'feat/x',
   autoCommitPush: true,
   collaboratorUserIds: ['u1', 'u2'],
-  deferredQuestionDispatch: true,
 }
 
 function expectExtras(body: Record<string, unknown>) {
   expect(body.workingBranch).toBe('feat/x')
   expect(body.autoCommitPush).toBe(true)
   expect(body.collaboratorUserIds).toEqual(['u1', 'u2'])
-  expect(body.deferredQuestionDispatch).toBe(true)
 }
 
 describe('launch body helpers stamp all launchCommon extras onto the wire', () => {
@@ -53,7 +51,6 @@ describe('launch body helpers stamp all launchCommon extras onto the wire', () =
     expect(b.workingBranch).toBeUndefined()
     expect(b.autoCommitPush).toBeUndefined()
     expect(b.collaboratorUserIds).toBeUndefined()
-    expect(b.deferredQuestionDispatch).toBeUndefined()
     // empty collaborator array is also omitted (mirrors launchCommon's length>0 spread)
     expect(
       buildLaunchBody(pathSource, {
