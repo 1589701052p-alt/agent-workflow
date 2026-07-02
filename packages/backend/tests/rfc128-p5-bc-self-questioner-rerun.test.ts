@@ -261,9 +261,6 @@ async function insertEntry(db: DbClient, taskId: string, e: EntrySeed): Promise<
   return id
 }
 
-function roundRow(db: DbClient, roundId: string) {
-  return db.select().from(clarifyRounds).where(eq(clarifyRounds.id, roundId))
-}
 function entryRow(db: DbClient, id: string) {
   return db.select().from(taskQuestions).where(eq(taskQuestions.id, id))
 }

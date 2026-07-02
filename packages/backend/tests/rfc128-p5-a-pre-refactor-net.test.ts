@@ -184,10 +184,6 @@ async function seedAnsweredRound(
   return { roundId, askingRunId, intermediaryNodeRunId: intRunId }
 }
 
-function roundById(db: DbClient, roundId: string) {
-  return db.select().from(clarifyRounds).where(eq(clarifyRounds.id, roundId))
-}
-
 // ===========================================================================
 // #1 — 非 deferred self/q 整轮注入：源码文本锁 + 行为锁（most critical）
 //

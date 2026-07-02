@@ -19,14 +19,12 @@
 //     eliminating the cross-iteration vs unified-clarifyIteration counter
 //     mismatch class of bugs (see RFC-070 proposal §1).
 
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
 import {
   clarifyRounds,
-  clarifySessions,
-  crossClarifySessions,
   nodeRunOutputs,
   nodeRuns,
   taskQuestions,
