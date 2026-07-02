@@ -155,20 +155,14 @@ export function TaskQuestionList({
       else next.add(id)
       return next
     })
-  // RFC-120 §15 — manual question author form. `authorInitial` null = 新增 (empty form);
-  // a {title,body} = 复制 (prefilled from a 待指派 card → Save creates a NEW manual row).
+  // RFC-120 §15 — manual question author form (新增-only; the per-card 复制 prefill
+  // was removed 2026-07-02, 用户拍板「去除复制待指派问题的功能」).
   const [authorOpen, setAuthorOpen] = useState(false)
-  const [authorInitial, setAuthorInitial] = useState<{ title: string; body: string } | null>(null)
   // RFC-128 P4 (T9) — centralized answer pane (control channel). Opens a single page
   // that flattens every UNSEALED 待指派 question of the task (grouped by clarify round)
   // and seals them all with ONE submit button (defer=true → 待指派, no rerun).
   const [answerPaneOpen, setAnswerPaneOpen] = useState(false)
   const openNewQuestion = () => {
-    setAuthorInitial(null)
-    setAuthorOpen(true)
-  }
-  const openCopyQuestion = (e: TaskQuestionEntry) => {
-    setAuthorInitial({ title: e.questionTitle, body: e.answerSummary ?? '' })
     setAuthorOpen(true)
   }
   const dispatchM = useMutation({
@@ -252,7 +246,6 @@ export function TaskQuestionList({
       onClose={() => setAuthorOpen(false)}
       taskId={taskId}
       nodeOptions={nodeOptions}
-      initial={authorInitial}
     />
   ) : null
 
@@ -326,7 +319,7 @@ export function TaskQuestionList({
               onClick={() => setTargetFilter(nodeId)}
               data-testid={`tq-node-filter-${nodeId}`}
             >
-              {nodeId} ({n})
+              {labelFor(nodeId)} ({n})
             </button>
           ))}
         </div>
@@ -389,7 +382,6 @@ export function TaskQuestionList({
                 // RFC-134：echo 生来已下发 → 相位永不落 pending/staged，reassignable/hasStage
                 // 对它天然为 false（与后端 CAS/D10 守卫对齐，无需角色特判）。
                 const reassignable = e.phase === 'pending' || e.phase === 'staged'
-                const hasCopy = deferred && e.phase === 'pending'
                 // RFC-134 D3：回执任意相位可 confirm（「已知悉」收卡；confirm 不撤销投递）。
                 const hasConfirm =
                   e.phase === 'awaiting_confirm' || (e.roleKind === 'echo' && e.phase !== 'done')
@@ -403,7 +395,7 @@ export function TaskQuestionList({
                 // unsealed entry). Keeps `hasStage` in agreement with that server gate.
                 const hasStage =
                   (e.phase === 'pending' || e.phase === 'staged') && (e.staged || e.sealed)
-                const hasActions = hasCopy || hasConfirm || hasStage
+                const hasActions = hasConfirm || hasStage
                 return (
                   <Card
                     key={e.id}
@@ -417,17 +409,8 @@ export function TaskQuestionList({
                               single answer entry now, and answered content is shown via the card's
                               answerSummary below. originNodeRunId stays on the DTO (the pane groups
                               unsealed questions by it). */}
-                          {/* §15 — 复制 a 待指派 card → author form prefilled (deferred-only). */}
-                          {hasCopy && (
-                            <button
-                              type="button"
-                              className="btn btn--sm btn--ghost"
-                              onClick={() => openCopyQuestion(e)}
-                              data-testid={`tq-copy-${e.id}`}
-                            >
-                              {t('taskQuestions.copy')}
-                            </button>
-                          )}
+                          {/* 2026-07-02 (用户拍板): the §15 per-card 复制 button is REMOVED —
+                              "+ 新增问题" is the only manual-question entry. */}
                           {hasConfirm && (
                             <ConfirmButton
                               label={t('taskQuestions.confirm')}
@@ -479,9 +462,12 @@ export function TaskQuestionList({
                     <div className="task-questions__meta">
                       <span className="task-questions__meta-pair">
                         <span className="task-questions__meta-k">{t('taskQuestions.source')}</span>
-                        {/* §15 — a manual question has no source node: show "手动". */}
+                        {/* §15 — a manual question has no source node: show "手动".
+                            用户 2026-07-02: 显示节点名（labelFor 经 nodeOptions 解析，查无回退原 id）。 */}
                         <span className="task-questions__meta-v">
-                          {e.sourceNodeId ?? t('taskQuestions.manualSource')}
+                          {e.sourceNodeId !== null
+                            ? labelFor(e.sourceNodeId)
+                            : t('taskQuestions.manualSource')}
                         </span>
                       </span>
                       <span className="task-questions__meta-flow" aria-hidden="true">

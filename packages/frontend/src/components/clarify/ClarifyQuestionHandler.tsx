@@ -15,6 +15,7 @@ import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { Select } from '@/components/Select'
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
+import { resolveNodeNameFromSnapshot } from '@/lib/node-names'
 
 export interface ClarifyQuestionHandlerProps {
   taskId: string
@@ -60,11 +61,13 @@ export function ClarifyQuestionHandler({
     : undefined
   if (!entry) return null
 
-  const snapNodes = task.data?.workflowSnapshot?.nodes
+  // 用户 2026-07-02: 处理节点显示节点名（title → agentName → id 回退），与看板/节点表同一 oracle。
+  const snapshot = task.data?.workflowSnapshot
+  const snapNodes = snapshot?.nodes
   const nodes: WorkflowNode[] = Array.isArray(snapNodes) ? snapNodes : []
   const agentNodes = nodes
     .filter((n) => n.kind.startsWith('agent'))
-    .map((n) => ({ value: n.id, label: n.id }))
+    .map((n) => ({ value: n.id, label: resolveNodeNameFromSnapshot(snapshot, n.id) ?? n.id }))
   const editable = entry.phase !== 'done' && agentNodes.length > 0
 
   return (
@@ -78,7 +81,12 @@ export function ClarifyQuestionHandler({
           onChange={(v) => reassign.mutate({ id: entry.id, targetNodeId: v })}
         />
       ) : (
-        <span>{entry.effectiveTargetNodeId ?? t('taskQuestions.noTarget')}</span>
+        <span>
+          {entry.effectiveTargetNodeId !== null
+            ? (resolveNodeNameFromSnapshot(snapshot, entry.effectiveTargetNodeId) ??
+              entry.effectiveTargetNodeId)
+            : t('taskQuestions.noTarget')}
+        </span>
       )}
     </div>
   )

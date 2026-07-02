@@ -48,7 +48,13 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
 // RFC-128 P4/P5: the board no longer renders a per-card <Link> (the /clarify jump entry was
 // removed). The harness still mounts a router context (with the /clarify route registered) for
 // stability — TanStack tolerates an unused router and the focus-jump harness reuses this shape.
-async function wrap(entries: TaskQuestionEntry[]) {
+async function wrap(
+  entries: TaskQuestionEntry[],
+  nodeOptions: { id: string; label: string }[] = [
+    { id: 'designer', label: 'designer' },
+    { id: 'fixer', label: 'fixer' },
+  ],
+) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
@@ -59,13 +65,7 @@ async function wrap(entries: TaskQuestionEntry[]) {
     path: '/',
     component: () => (
       <QueryClientProvider client={qc}>
-        <TaskQuestionList
-          taskId="task-1"
-          nodeOptions={[
-            { id: 'designer', label: 'designer' },
-            { id: 'fixer', label: 'fixer' },
-          ]}
-        />
+        <TaskQuestionList taskId="task-1" nodeOptions={nodeOptions} />
       </QueryClientProvider>
     ),
   })
@@ -159,8 +159,7 @@ describe('TaskQuestionList board', () => {
     // sealed:true — 「加入待下发」only shows once the answer is sealed (待下发 gate, below);
     // an unsealed pending card hides the button (the server would reject the stage anyway).
     await wrap([entry({ id: 'e1', phase: 'pending', staged: false, sealed: true })])
-    // A pending card now has both a "复制" and a stage button (RFC-120 §15), so target
-    // the stage button by its stable testid rather than the (ambiguous) sole role.
+    // Target the stage button by its stable testid rather than a role query.
     fireEvent.click(screen.getByTestId('tq-stage-e1'))
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/stage', { staged: true }),
@@ -625,8 +624,9 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
   })
 
   // RFC-128 P4/P5 — deleting the per-card answer Link must NOT touch the other card actions:
-  // 改派 Select (combobox) / tq-stage / tq-copy (deferred) / confirm all remain.
-  test('删 tq-answer 后其它卡片操作仍在：改派 Select / tq-stage / tq-copy / confirm', async () => {
+  // 改派 Select (combobox) / tq-stage / confirm all remain. (2026-07-02 用户拍板: the per-card
+  // 复制 button was itself removed, so it left this list — see the 复制-removal lock below.)
+  test('删 tq-answer 后其它卡片操作仍在：改派 Select / tq-stage / confirm', async () => {
     setBaseUrl('http://daemon.test')
     setToken('tok')
     await wrapDeferred([
@@ -649,10 +649,9 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
       }),
     ])
     const p1 = screen.getByTestId('tq-card-p1')
-    // pending card keeps reassign Select (combobox) + stage + copy — but exposes NO answer Link.
+    // pending card keeps reassign Select (combobox) + stage — but exposes NO answer Link.
     expect(within(p1).queryByRole('combobox')).toBeTruthy()
     expect(within(p1).getByTestId('tq-stage-p1')).toBeTruthy()
-    expect(within(p1).getByTestId('tq-copy-p1')).toBeTruthy()
     expect(within(p1).queryByTestId('tq-answer-p1')).toBeNull()
     // awaiting_confirm card keeps its confirm control; still no answer Link.
     const c1 = screen.getByTestId('tq-card-c1')
@@ -683,5 +682,108 @@ describe('TaskQuestionList centralized answer pane entry (RFC-128 T9)', () => {
       }),
     ])
     expect(screen.queryByTestId('tq-open-answer-pane')).toBeNull()
+  })
+})
+
+// 2026-07-02 (用户拍板) — 问题列表的来源节点 / 处理节点 / 节点 filter chip 显示节点名
+// （nodeOptions label，tasks.detail 经 resolveNodeNameFromSnapshot 解析），不再裸渲染节点 ID；
+// nodeOptions 查无此节点时回退原 id（快照缺节点的防御路径）。
+describe('TaskQuestionList 节点名显示（非节点 ID）', () => {
+  const NAMED_OPTIONS = [
+    { id: 'node-1', label: '设计师' },
+    { id: 'node-2', label: '修复者' },
+  ]
+
+  test('卡片 meta 的来源节点与处理节点显示节点名，不显示裸节点 ID', async () => {
+    await wrap(
+      [
+        // processing → 处理节点为只读文本（非改派下拉），走 labelFor 文本路径。
+        entry({
+          id: 'e1',
+          phase: 'processing',
+          sourceNodeId: 'node-1',
+          defaultTargetNodeId: 'node-2',
+          effectiveTargetNodeId: 'node-2',
+        }),
+      ],
+      NAMED_OPTIONS,
+    )
+    const meta = screen.getByTestId('tq-card-e1').querySelector('.task-questions__meta')
+    expect(meta?.textContent).toContain('设计师')
+    expect(meta?.textContent).toContain('修复者')
+    expect(meta?.textContent).not.toContain('node-1')
+    expect(meta?.textContent).not.toContain('node-2')
+  })
+
+  test('节点 filter chip 显示节点名（计数不变）', async () => {
+    await wrap(
+      [
+        entry({
+          id: 'e1',
+          phase: 'pending',
+          sourceNodeId: 'node-1',
+          effectiveTargetNodeId: 'node-2',
+        }),
+      ],
+      NAMED_OPTIONS,
+    )
+    const chip = screen.getByTestId('tq-node-filter-node-2')
+    expect(chip.textContent).toContain('修复者')
+    expect(chip.textContent).toContain('1')
+    expect(chip.textContent).not.toContain('node-2')
+  })
+
+  test('nodeOptions 查无此节点 → 回退显示原 id（防御路径）', async () => {
+    await wrap(
+      [
+        entry({
+          id: 'e1',
+          phase: 'processing',
+          sourceNodeId: 'ghost-src',
+          effectiveTargetNodeId: 'ghost-tgt',
+        }),
+      ],
+      NAMED_OPTIONS,
+    )
+    const meta = screen.getByTestId('tq-card-e1').querySelector('.task-questions__meta')
+    expect(meta?.textContent).toContain('ghost-src')
+    expect(meta?.textContent).toContain('ghost-tgt')
+  })
+
+  test('manual 问题（无来源节点）仍显示「手动」占位，不受节点名解析影响', async () => {
+    await wrap(
+      [
+        entry({
+          id: 'm1',
+          phase: 'processing',
+          sourceKind: 'manual',
+          roleKind: 'designer',
+          sourceNodeId: null,
+          originNodeRunId: null,
+          effectiveTargetNodeId: 'node-2',
+        }),
+      ],
+      NAMED_OPTIONS,
+    )
+    const meta = screen.getByTestId('tq-card-m1').querySelector('.task-questions__meta')
+    expect(meta?.textContent).toContain('修复者')
+    expect(meta?.textContent).not.toContain('node-2')
+  })
+})
+
+// 2026-07-02 (用户拍板) —「复制待指派问题」功能整体移除：待指派卡不再渲染 tq-copy-* 按钮，
+// 唯一的手动问题入口是工具栏的「+ 新增问题」（QuestionAuthorForm 的 initial 预填 prop 一并删除）。
+describe('TaskQuestionList 复制功能移除 (2026-07-02)', () => {
+  test('待指派卡片不再有复制按钮（tq-copy-* 全删）', async () => {
+    await wrap([
+      entry({ id: 'e1', phase: 'pending', sealed: true }),
+      entry({ id: 'e2', phase: 'pending', sealed: false }),
+      entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
+    ])
+    for (const id of ['e1', 'e2', 's1']) {
+      expect(screen.queryByTestId(`tq-copy-${id}`)).toBeNull()
+    }
+    // 「+ 新增问题」入口保留。
+    expect(screen.getByTestId('tq-add-question')).toBeTruthy()
   })
 })

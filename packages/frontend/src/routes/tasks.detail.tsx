@@ -36,6 +36,7 @@ import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
 import { Select } from '@/components/Select'
 import { WorktreeFilesPanel } from '@/components/WorktreeFilesPanel'
 import { classifyCanceled, displayNoderunStatusKey } from '@/lib/noderun-status'
+import { agentNodeOptionsFromSnapshot, resolveNodeNameFromSnapshot } from '@/lib/node-names'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
 import {
   availableTabs,
@@ -191,14 +192,13 @@ function TaskDetailPage() {
     task.data === undefined ? false : collectPorts(task.data.workflowSnapshot).length > 0
   const tabs = availableTabs({ hasOutputs })
   // RFC-120: agent nodes of the frozen snapshot — reassign candidates for the
-  // task question board (only agent nodes are valid handlers).
-  const agentNodeOptions = useMemo(() => {
-    const snap = task.data?.workflowSnapshot as WorkflowDefinition | undefined
-    if (!snap?.nodes) return []
-    return snap.nodes
-      .filter((n) => n.kind.startsWith('agent'))
-      .map((n) => ({ id: n.id, label: n.id }))
-  }, [task.data?.workflowSnapshot])
+  // task question board (only agent nodes are valid handlers). Labels resolve to
+  // the node's display name (title → agentName → id fallback, same oracle as the
+  // node-runs table) — the board must show 节点名，不是节点 ID (用户 2026-07-02).
+  const agentNodeOptions = useMemo(
+    () => agentNodeOptionsFromSnapshot(task.data?.workflowSnapshot),
+    [task.data?.workflowSnapshot],
+  )
   // If the user was on the outputs tab and hasOutputs flips false (mostly
   // defensive — the snapshot is frozen at task start), fall back to the
   // canvas. Always-mount strategy keeps panes in the DOM, but the tab
@@ -1138,48 +1138,6 @@ export function resolveNodeKindFromSnapshot(
  *
  * Exported for unit tests.
  */
-/**
- * Resolve a node's user-facing display name from the task's frozen workflow
- * snapshot. Mirrors the canvas `nodeTitle` priority so the node-runs table
- * shows the same label users see on the canvas:
- *   - explicit `title` (review / clarify / any node that set one)
- *   - `agentName` for agent-single / agent-multi
- *   - `inputKey` for input
- *   - otherwise null — caller falls back to nodeId
- *
- * Exported for unit tests.
- */
-export function resolveNodeNameFromSnapshot(
-  snapshot: unknown,
-  nodeId: string | null,
-): string | null {
-  if (nodeId === null) return null
-  if (typeof snapshot !== 'object' || snapshot === null) return null
-  const nodes = (snapshot as { nodes?: unknown }).nodes
-  if (!Array.isArray(nodes)) return null
-  for (const n of nodes) {
-    if (typeof n !== 'object' || n === null) continue
-    const node = n as {
-      id?: unknown
-      kind?: unknown
-      title?: unknown
-      agentName?: unknown
-      inputKey?: unknown
-    }
-    if (node.id !== nodeId) continue
-    if (typeof node.title === 'string' && node.title.length > 0) return node.title
-    if (node.kind === 'agent-single') {
-      // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
-      if (typeof node.agentName === 'string' && node.agentName.length > 0) return node.agentName
-    }
-    if (node.kind === 'input') {
-      if (typeof node.inputKey === 'string' && node.inputKey.length > 0) return node.inputKey
-    }
-    return null
-  }
-  return null
-}
-
 export function resolveAgentNameFromSnapshot(
   snapshot: unknown,
   nodeId: string | null,

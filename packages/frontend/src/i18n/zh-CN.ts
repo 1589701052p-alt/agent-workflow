@@ -2465,7 +2465,6 @@ export interface Resources {
     dispatchUnsafeTarget: string
     dispatchNotDeferred: string
     addQuestion: string
-    copy: string
     manualSource: string
     roleEcho: string
     answerPaneButton: string
@@ -2476,7 +2475,6 @@ export interface Resources {
     answerPaneSubmitCount: string
     author: {
       newTitle: string
-      copyTitle: string
       titleLabel: string
       titlePlaceholder: string
       bodyLabel: string
@@ -5117,7 +5115,6 @@ export const zhCN: Resources = {
     dispatchUnsafeTarget: '所选处理节点当前不可安全下发',
     dispatchNotDeferred: '该任务未开启延迟下发，手动问题无法下发执行',
     addQuestion: '+ 新增问题',
-    copy: '复制',
     manualSource: '手动',
     roleEcho: '回执',
     answerPaneButton: '处理待指派问题',
@@ -5128,7 +5125,6 @@ export const zhCN: Resources = {
     answerPaneSubmitCount: '提交答案（{{count}}）',
     author: {
       newTitle: '新增问题',
-      copyTitle: '复制问题',
       titleLabel: '标题',
       titlePlaceholder: '一句话描述这条问题/指令',
       bodyLabel: '指令',

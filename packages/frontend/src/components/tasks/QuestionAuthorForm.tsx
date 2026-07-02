@@ -1,12 +1,11 @@
-// RFC-120 §15 — author a MANUAL question (自主新增 / 复制).
+// RFC-120 §15 — author a MANUAL question (自主新增).
 //
 // A human writes a title + instruction and (optionally) assigns a handler agent node;
 // dispatching it later reruns that node with the instruction injected as External Feedback
-// (no human-answer step). This is the ONE form the board uses for both "+ 新增问题" (empty)
-// and a card's "复制" action (prefilled with that row's title/body — Save creates a NEW
-// manual row). Per CLAUDE.md UI consistency it composes the shared primitives only:
-// Dialog (chrome/footer) + Field/TextInput/TextArea (form) + Select (handler) — NO native
-// modal/select/input chrome.
+// (no human-answer step). The board's "+ 新增问题" is the only entry (the per-card 复制
+// prefill was removed 2026-07-02, 用户拍板). Per CLAUDE.md UI consistency it composes the
+// shared primitives only: Dialog (chrome/footer) + Field/TextInput/TextArea (form) +
+// Select (handler) — NO native modal/select/input chrome.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
@@ -24,8 +23,6 @@ export interface QuestionAuthorFormProps {
   taskId: string
   /** Agent node ids of the task's workflow (handler candidates), with labels. */
   nodeOptions: { id: string; label: string }[]
-  /** Prefill for the 复制 action (a card's title/body). Undefined ⇒ empty (新增). */
-  initial?: { title: string; body: string } | null
   /** Called after a successful create (the board invalidates its query separately). */
   onCreated?: (id: string) => void
 }
@@ -43,7 +40,6 @@ export function QuestionAuthorForm({
   onClose,
   taskId,
   nodeOptions,
-  initial = null,
   onCreated,
 }: QuestionAuthorFormProps) {
   const { t } = useTranslation()
@@ -52,14 +48,12 @@ export function QuestionAuthorForm({
   const [body, setBody] = useState('')
   const [targetNodeId, setTargetNodeId] = useState('')
 
-  // Reset the fields whenever the dialog (re)opens — empty for 新增, prefilled for 复制.
+  // Reset the fields to empty whenever the dialog (re)opens.
   useEffect(() => {
     if (!open) return
-    setTitle(initial?.title ?? '')
-    setBody(initial?.body ?? '')
+    setTitle('')
+    setBody('')
     setTargetNodeId('')
-    // initial is a fresh object per open from the board, so depend on `open` only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const create = useMutation<CreatedResponse, ApiError>({
@@ -89,7 +83,7 @@ export function QuestionAuthorForm({
         if (create.isPending) return
         onClose()
       }}
-      title={initial ? t('taskQuestions.author.copyTitle') : t('taskQuestions.author.newTitle')}
+      title={t('taskQuestions.author.newTitle')}
       size="md"
       data-testid="question-author-form"
       footer={

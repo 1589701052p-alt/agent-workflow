@@ -5,11 +5,10 @@
 
 import { describe, expect, test } from 'vitest'
 import type { NodeRun } from '@agent-workflow/shared'
-import {
-  resolveNodeIdFromRuns,
-  resolveNodeKindFromSnapshot,
-  resolveNodeNameFromSnapshot,
-} from '../src/routes/tasks.detail'
+import { resolveNodeIdFromRuns, resolveNodeKindFromSnapshot } from '../src/routes/tasks.detail'
+// 2026-07-02: moved to the shared lib so the task-question surfaces (board /
+// pickers / answer pane) resolve node names through the same oracle.
+import { agentNodeOptionsFromSnapshot, resolveNodeNameFromSnapshot } from '../src/lib/node-names'
 
 function makeRun(id: string, nodeId: string): NodeRun {
   return {
@@ -117,5 +116,34 @@ describe('resolveNodeNameFromSnapshot', () => {
     expect(resolveNodeNameFromSnapshot(snap, null)).toBeNull()
     expect(resolveNodeNameFromSnapshot(null, 'a1')).toBeNull()
     expect(resolveNodeNameFromSnapshot({ nodes: 'oops' }, 'a1')).toBeNull()
+  })
+})
+
+// 2026-07-02 (用户拍板「问题列表用节点名不用节点 ID」) — the board's nodeOptions labels
+// resolve through resolveNodeNameFromSnapshot (title → agentName) with an id fallback,
+// instead of the old `label: n.id`. Locks the wiring at the pure-function level.
+describe('agentNodeOptionsFromSnapshot', () => {
+  const snap = {
+    nodes: [
+      { id: 'a1', kind: 'agent-single', agentName: 'auditor' },
+      { id: 'a2', kind: 'agent-single', agentName: 'fixer', title: '并行修复' },
+      { id: 'a3', kind: 'agent-single' },
+      { id: 'in1', kind: 'input', inputKey: 'repo_path' },
+      { id: 'r1', kind: 'review', title: 'Gate' },
+    ],
+  }
+
+  test('only agent nodes become options; labels prefer title, then agentName, then id', () => {
+    expect(agentNodeOptionsFromSnapshot(snap)).toEqual([
+      { id: 'a1', label: 'auditor' },
+      { id: 'a2', label: '并行修复' },
+      { id: 'a3', label: 'a3' },
+    ])
+  })
+
+  test('malformed snapshot degrades to []', () => {
+    expect(agentNodeOptionsFromSnapshot(null)).toEqual([])
+    expect(agentNodeOptionsFromSnapshot('nope')).toEqual([])
+    expect(agentNodeOptionsFromSnapshot({ nodes: 'oops' })).toEqual([])
   })
 })

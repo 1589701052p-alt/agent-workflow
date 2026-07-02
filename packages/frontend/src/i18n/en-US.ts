@@ -2721,7 +2721,6 @@ export const enUS: Resources = {
     dispatchNotDeferred:
       'This task does not have deferred dispatch enabled; manual questions cannot be dispatched',
     addQuestion: '+ New question',
-    copy: 'Copy',
     manualSource: 'Manual',
     roleEcho: 'Receipt',
     answerPaneButton: 'Process pending questions',
@@ -2733,7 +2732,6 @@ export const enUS: Resources = {
     answerPaneSubmitCount: 'Submit answers ({{count}})',
     author: {
       newTitle: 'New question',
-      copyTitle: 'Copy question',
       titleLabel: 'Title',
       titlePlaceholder: 'One line describing this question / instruction',
       bodyLabel: 'Instruction',

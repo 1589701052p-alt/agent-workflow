@@ -1,7 +1,9 @@
-// RFC-120 §15 — manual question author form (自主新增 / 复制) + the board's "+ 新增问题"
-// and per-card "复制" wiring. Asserts on data-testid + roles (i18n-agnostic), and that the
-// shared primitives are used (Dialog/Field/TextInput/TextArea/Select — no native modal/select
-// chrome). golden-lock: no manual rows ⇒ the board's existing columns/cards are unchanged.
+// RFC-120 §15 — manual question author form (自主新增) + the board's "+ 新增问题" wiring.
+// (2026-07-02 用户拍板: the per-card "复制" action + the form's `initial` prefill prop were
+// REMOVED — the removal locks live below.) Asserts on data-testid + roles (i18n-agnostic),
+// and that the shared primitives are used (Dialog/Field/TextInput/TextArea/Select — no native
+// modal/select chrome). golden-lock: no manual rows ⇒ the board's existing columns/cards are
+// unchanged.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -90,7 +92,6 @@ function wrapForm(props: Partial<React.ComponentProps<typeof QuestionAuthorForm>
           { id: 'designer', label: 'designer' },
           { id: 'fixer', label: 'fixer' },
         ]}
-        initial={props.initial ?? null}
         onCreated={props.onCreated}
       />
     </QueryClientProvider>,
@@ -147,16 +148,6 @@ describe('QuestionAuthorForm', () => {
       }),
     )
   })
-
-  test('prefilled initial (复制) populates the fields', () => {
-    wrapForm({ initial: { title: 'Copied title', body: 'Copied body' } })
-    expect((screen.getByTestId('question-author-title') as HTMLInputElement).value).toBe(
-      'Copied title',
-    )
-    expect((screen.getByTestId('question-author-body') as HTMLTextAreaElement).value).toBe(
-      'Copied body',
-    )
-  })
 })
 
 describe('TaskQuestionList — manual question entry points (§15)', () => {
@@ -174,13 +165,16 @@ describe('TaskQuestionList — manual question entry points (§15)', () => {
     expect(screen.getByTestId('tq-add-question')).toBeTruthy()
   })
 
-  test('"复制" on a 待指派 card opens the form PREFILLED with that row title/body', async () => {
+  // 2026-07-02 (用户拍板) — the per-card 复制 action is REMOVED: no 待指派 card exposes a
+  // tq-copy-* button, and "+ 新增问题" always opens EMPTY (the form has no prefill path left).
+  test('复制功能移除：待指派卡无 tq-copy 按钮；新增表单恒为空', async () => {
     await wrapBoard([
       entry({ id: 'e1', phase: 'pending', questionTitle: 'Orig Q', answerSummary: 'Orig A' }),
     ])
-    fireEvent.click(screen.getByTestId('tq-copy-e1'))
-    expect((screen.getByTestId('question-author-title') as HTMLInputElement).value).toBe('Orig Q')
-    expect((screen.getByTestId('question-author-body') as HTMLTextAreaElement).value).toBe('Orig A')
+    expect(screen.queryByTestId('tq-copy-e1')).toBeNull()
+    fireEvent.click(screen.getByTestId('tq-add-question'))
+    expect((screen.getByTestId('question-author-title') as HTMLInputElement).value).toBe('')
+    expect((screen.getByTestId('question-author-body') as HTMLTextAreaElement).value).toBe('')
   })
 
   test('RFC-132 PR-F: manual entry points are ALWAYS shown (the deferred flag is gone)', async () => {
@@ -188,7 +182,6 @@ describe('TaskQuestionList — manual question entry points (§15)', () => {
     // hides manual buttons" gate died with the tasks.deferred_question_dispatch column.
     await wrapBoard([entry({ id: 'e1', phase: 'pending' })], false)
     expect(screen.getByTestId('tq-add-question')).toBeTruthy()
-    expect(screen.getByTestId('tq-copy-e1')).toBeTruthy()
     expect(screen.getByTestId('tq-card-e1')).toBeTruthy()
     expect(screen.queryByTestId('tq-answer-e1')).toBeNull()
   })

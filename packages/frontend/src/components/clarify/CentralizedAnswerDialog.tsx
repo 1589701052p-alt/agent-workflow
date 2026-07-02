@@ -24,6 +24,7 @@ import type {
   ClarifyQuestionScope,
   ClarifyRound,
   SubmitClarifyAnswers,
+  WorkflowDefinition,
 } from '@agent-workflow/shared'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
@@ -37,6 +38,7 @@ import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHand
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { answersEqual, isAnswerFilled } from '@/lib/clarify/answers'
 import { getClarifyDraft, setClarifyDraft } from '@/lib/clarify/draftStore'
+import { resolveNodeNameFromSnapshot } from '@/lib/node-names'
 
 const DRAFT_DEBOUNCE_MS = 500
 
@@ -351,6 +353,12 @@ function RoundAnswerBlock({
     queryFn: ({ signal }) => api.get(`/api/clarify/${originNodeRunId}`, undefined, signal),
     retry: false,
   })
+  // Frozen workflow snapshot — resolves the header's asking-node display name. Same
+  // queryKey as ClarifyQuestionHandler (below), so the two share one cache entry.
+  const task = useQuery<{ workflowSnapshot?: WorkflowDefinition }>({
+    queryKey: ['tasks', taskId, 'snapshot'],
+    queryFn: () => api.get<{ workflowSnapshot?: WorkflowDefinition }>(`/api/tasks/${taskId}`),
+  })
   const round = roundQuery.data
   const isCross = round?.kind === 'cross'
 
@@ -516,12 +524,19 @@ function RoundAnswerBlock({
     [originNodeRunId, onSubmissionChange],
   )
 
+  // 用户 2026-07-02: 分组头显示提问节点的节点名（title → agentName → id 回退）。快照查询与
+  // ClarifyQuestionHandler 共用同一 queryKey，React Query 去重为一次请求。
+  const askingNodeName =
+    round === undefined
+      ? null
+      : (resolveNodeNameFromSnapshot(task.data?.workflowSnapshot, round.askingNodeId) ??
+        round.askingNodeId)
   const header =
     round === undefined
       ? originNodeRunId
       : isCross
-        ? t('crossClarify.contextCard', { name: round.askingNodeId, n: round.iteration })
-        : t('clarify.detail.contextCard', { name: round.askingNodeId, n: round.iteration })
+        ? t('crossClarify.contextCard', { name: askingNodeName, n: round.iteration })
+        : t('clarify.detail.contextCard', { name: askingNodeName, n: round.iteration })
 
   return (
     <Card data-testid={`centralized-round-${originNodeRunId}`}>

@@ -116,12 +116,16 @@ function singleQ(id: string, title = `Q ${id}`): ClarifyRound['questions'][numbe
   }
 }
 
-function renderDialog(entries: TaskQuestionEntry[], rounds: ClarifyRound[]) {
+function renderDialog(
+  entries: TaskQuestionEntry[],
+  rounds: ClarifyRound[],
+  snapshot: unknown = { nodes: [] },
+) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
   qc.setQueryData(['task-questions', 'task-1'], entries)
-  qc.setQueryData(['tasks', 'task-1', 'snapshot'], { workflowSnapshot: { nodes: [] } })
+  qc.setQueryData(['tasks', 'task-1', 'snapshot'], { workflowSnapshot: snapshot })
   for (const r of rounds) {
     qc.setQueryData(['clarify', 'detail', r.intermediaryNodeRunId], r)
   }
@@ -273,6 +277,38 @@ describe('CentralizedAnswerDialog', () => {
     // A self round renders NO scope picker (the asking agent is its own consumer).
     await waitFor(() => screen.getByTestId('clarify-question-qs'))
     expect(screen.queryByTestId('centralized-scope-qs')).toBeNull()
+  })
+
+  // 2026-07-02 (用户拍板) — 分组头显示提问节点的节点名（snapshot title → agentName → id 回退，
+  // resolveNodeNameFromSnapshot），不再裸渲染 askingNodeId。id 取与任何 i18n 文案词都不撞的
+  // 'node-x9'（en-US 文案本身含 "questioner" 一词）。
+  test('分组头显示提问节点的节点名（snapshot 解析），不显示裸节点 ID', async () => {
+    renderDialog(
+      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
+      [round({ intermediaryNodeRunId: 'nr_a', askingNodeId: 'node-x9' })],
+      {
+        nodes: [{ id: 'node-x9', kind: 'agent-single', agentName: 'asker', title: '审查者' }],
+      },
+    )
+    await waitFor(() => screen.getByTestId('centralized-round-nr_a'))
+    const title = screen
+      .getByTestId('centralized-round-nr_a')
+      .querySelector('.card__title') as HTMLElement
+    expect(title.textContent).toContain('审查者')
+    expect(title.textContent).not.toContain('node-x9')
+  })
+
+  test('快照查无提问节点 → 分组头回退显示原节点 ID（防御路径）', async () => {
+    renderDialog(
+      [entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' })],
+      [round({ intermediaryNodeRunId: 'nr_a' })],
+      { nodes: [] },
+    )
+    await waitFor(() => screen.getByTestId('centralized-round-nr_a'))
+    const title = screen
+      .getByTestId('centralized-round-nr_a')
+      .querySelector('.card__title') as HTMLElement
+    expect(title.textContent).toContain('questioner')
   })
 
   test('flattens 2 rounds, single submit seals each round subset (defer + questionIds + designer scope)', async () => {

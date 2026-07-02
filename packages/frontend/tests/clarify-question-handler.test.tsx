@@ -103,4 +103,53 @@ describe('ClarifyQuestionHandler', () => {
     wrap([designerEntry({ originNodeRunId: 'origin-1' })], SNAPSHOT, 'q1', 'origin-1')
     expect(screen.getByTestId('clarify-handler-q1')).toBeTruthy()
   })
+
+  // 2026-07-02 (用户拍板) — 处理节点显示节点名（title → agentName → id 回退，
+  // resolveNodeNameFromSnapshot 同一 oracle），不再裸渲染节点 ID。
+  test('read-only 处理节点显示节点名（snapshot title），不显示裸节点 ID', () => {
+    const titled = {
+      ...SNAPSHOT,
+      nodes: [
+        { id: 'node-9', kind: 'agent-single', agentName: 'coder', title: '修复者' },
+        { id: 'fixer', kind: 'agent-single', agentName: 'fixer' },
+      ],
+    }
+    wrap(
+      [
+        designerEntry({
+          phase: 'done',
+          defaultTargetNodeId: 'node-9',
+          effectiveTargetNodeId: 'node-9',
+        }),
+      ],
+      titled,
+    )
+    const root = screen.getByTestId('clarify-handler-q1')
+    expect(root.textContent).toContain('修复者')
+    expect(root.textContent).not.toContain('node-9')
+  })
+
+  test('可编辑下拉的当前值显示节点名（Select label 经 snapshot 解析）', () => {
+    const titled = {
+      ...SNAPSHOT,
+      nodes: [
+        { id: 'node-9', kind: 'agent-single', agentName: 'coder', title: '修复者' },
+        { id: 'fixer', kind: 'agent-single', agentName: 'fixer' },
+      ],
+    }
+    wrap(
+      [
+        designerEntry({
+          phase: 'processing',
+          defaultTargetNodeId: 'node-9',
+          effectiveTargetNodeId: 'node-9',
+        }),
+      ],
+      titled,
+    )
+    const root = screen.getByTestId('clarify-handler-q1')
+    const trigger = within(root).getAllByRole('combobox')[0]
+    expect(trigger?.textContent).toContain('修复者')
+    expect(trigger?.textContent).not.toContain('node-9')
+  })
 })
