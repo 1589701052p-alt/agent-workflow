@@ -16,16 +16,17 @@ import { resolve } from 'node:path'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import {
+  broadcastSelfClarifyAnsweredForRound,
   createClarifySession,
   getClarifyDetail,
   listClarifySummaries,
-  submitClarifyAnswers,
 } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
+  broadcastCrossClarifyAnsweredForRound,
   createCrossClarifySession,
   getCrossClarifyDetail,
   listCrossClarifySummaries,
-  submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import { resetBroadcastersForTests, TASK_CHANNEL, taskBroadcaster } from '../src/ws/broadcaster'
 import type {
@@ -137,6 +138,9 @@ function makeAnswer(): ClarifyAnswer {
     customText: '',
   }
 }
+
+// RFC-099 audit-only actor for the unified answer driver (never enters a prompt).
+const actor = { userId: 'u1', role: 'owner' as const }
 
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
@@ -378,7 +382,7 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     expect(m.type).toBe('cross-clarify.created')
   })
 
-  test('cross-clarify.answered + designer-rerun-batched on successful continue submit', async () => {
+  test('cross-clarify.answered + designer rerun dispatched on successful continue submit', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, true)
     await db.insert(nodeRuns).values([
@@ -412,17 +416,23 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-    await submitCrossClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
       directive: 'continue',
       ifMatchIteration: 0,
+      actor,
     })
+    // Mirror the route (RFC-132): the unified driver broadcasts nothing itself; the
+    // route re-emits the answered event after the auto-dispatch.
+    await broadcastCrossClarifyAnsweredForRound(db, crossClarifyNodeRunId, {})
     const types = received.map((m) => m.type)
-    // RFC-058 baseline locks: continue submit fires .answered + .designer-rerun-batched
+    // RFC-058 baseline, RFC-132 update: continue submit fires .answered. The legacy
+    // .designer-rerun-batched event was emitted only by the deleted immediate-mint
+    // path; the designer continuation is now observable on the dispatch result.
     expect(types).toContain('cross-clarify.answered')
-    expect(types).toContain('cross-clarify.designer-rerun-batched')
+    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
   })
 
   test('cross-clarify.rejected on stop submit', async () => {
@@ -459,12 +469,20 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-    await submitCrossClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
       directive: 'stop',
       ifMatchIteration: 0,
+      actor,
+    })
+    // Mirror the route (RFC-132): a stop cross round also fires the rejected event,
+    // carrying the dispatched questioner rerun id.
+    const questionerRerunId =
+      res.dispatch.reruns.find((r) => r.targetNodeId === 'questioner')?.nodeRunId ?? ''
+    await broadcastCrossClarifyAnsweredForRound(db, crossClarifyNodeRunId, {
+      rejectedQuestionerNodeRunId: questionerRerunId,
     })
     const types = received.map((m) => m.type)
     expect(types).toContain('cross-clarify.answered')
@@ -494,13 +512,20 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-    await submitClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId,
+      originNodeRunId: clarifyNodeRunId,
       answers: [makeAnswer()],
       directive: 'continue',
       ifMatchIteration: 0,
+      actor,
     })
+    // Mirror the route (RFC-132): re-emit clarify.answered with the dispatched rerun id.
+    await broadcastSelfClarifyAnsweredForRound(
+      db,
+      clarifyNodeRunId,
+      res.dispatch.reruns[0]?.nodeRunId ?? '',
+    )
     const types = received.map((m) => m.type)
     expect(types).toContain('clarify.answered')
   })

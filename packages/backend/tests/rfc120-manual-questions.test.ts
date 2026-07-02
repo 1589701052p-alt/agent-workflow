@@ -24,7 +24,8 @@ import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { buildClarifyQueueContext } from '../src/services/clarifyQueue'
 import {
   confirmTaskQuestion,
@@ -664,9 +665,9 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
       loopIter: 0,
       questions: [mkQ('q1', 'CLARIFY-Q-MARKER?')],
     })
-    await submitCrossClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -676,26 +677,24 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
         },
       ],
       directive: 'continue',
+      actor,
     })
+    // The unified driver seals + AUTO-dispatches the designer entry (RFC-132 §6), so the queue
+    // injector (selectAgentQueue requires sealed_at || manual) selects it without manual stamping.
     const designer = (
       await db
         .select()
         .from(taskQuestions)
         .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
     ).find((e) => e.sourceKind === 'cross')!
-    const result = await dispatchTaskQuestions(db, taskId, [designer.id], actor)
-    // Production dispatches a SEALED designer entry (stage gate); reflect that so the unified
-    // queue injector selects it (selectAgentQueue requires sealed_at || manual).
-    await db
-      .update(taskQuestions)
-      .set({ sealedAt: Date.now() })
-      .where(eq(taskQuestions.id, designer.id))
+    expect(designer.sealedAt).not.toBeNull()
+    expect(designer.dispatchedAt).not.toBeNull()
     const ctx = await buildClarifyQueueContext({
       db,
       definition: liveDef(),
       taskId,
       consumerNodeId: DESIGNER,
-      dispatchedRunId: result.reruns[0]!.nodeRunId,
+      dispatchedRunId: res.dispatch.reruns.find((r) => r.targetNodeId === DESIGNER)!.nodeRunId,
       iteration: 0,
     })
     expect(ctx?.block).toContain('CLARIFY-Q-MARKER?')

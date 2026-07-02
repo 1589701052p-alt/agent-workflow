@@ -33,8 +33,8 @@
 //   still-latest pending row as blocked('pending-anchor-consumed') → the
 //   scope fails 'scheduler stalled' BEFORE any exit check runs. In production
 //   the row lands inside the settle→read window via an out-of-band rerun mint
-//   (cross-clarify triggerDesignerRerun), an interleaving a deterministic
-//   test cannot reproduce without runtime hooks.
+//   (the unified dispatch minting a cross-clarify designer rerun), an
+//   interleaving a deterministic test cannot reproduce without runtime hooks.
 //
 // Red-before-fix proof (assertion semantics, since the fix is already in the
 // working tree): the seeded pending id starts with 'nr_' — lowercase 'n'

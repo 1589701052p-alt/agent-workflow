@@ -387,10 +387,10 @@ describe('RFC-046 — loadInjectedSnapshotFromFirstAttempt', () => {
 
   // RFC-074 PR-C regression (T-C4a / design §6.4.1): the anchor must select the
   // generation START, not "the latest retry=0 row". A cross-clarify DESIGNER
-  // rerun is minted at retryIndex = max+1 (triggerDesignerRerun) — NOT 0 — so
-  // the retired retry=0 anchor resolved a designer rerun's followup to the PRIOR
-  // generation's snapshot. The boundary walk (generation starts after a `done`
-  // row) fixes it. This case is RED under the old anchor, GREEN under the new.
+  // rerun is minted at retryIndex = max+1 (the unified dispatch mint) — NOT 0 —
+  // so the retired retry=0 anchor resolved a designer rerun's followup to the
+  // PRIOR generation's snapshot. The boundary walk (generation starts after a
+  // `done` row) fixes it. RED under the old anchor, GREEN under the new.
   test('B-RFC074a: designer rerun (retry=max+1) followup anchors to its own generation, not the prior', async () => {
     const { taskId } = seedTask(db)
     // gen 0: first design, done at retry=0.

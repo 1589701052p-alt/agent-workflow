@@ -4,8 +4,9 @@
 // DOWNSTREAM cascade row (`cascadeDownstreamFromDesigner` uses
 // `Math.max(existing retry_index) + 1` so the new pending always beats any
 // prior done under `isFresherNodeRun`). But the same fix was NOT applied to
-// the DESIGNER's own new pending row in `triggerDesignerRerun` —
-// retry_index there was hardcoded to 0.
+// the DESIGNER's own new pending row in the legacy designer-rerun mint —
+// retry_index there was hardcoded to 0. (RFC-132: the unified dispatch mint,
+// buildFrontierMintPlan, uses the same max(existing top-level)+1 formula.)
 //
 // Live task `01KS86DPCSERV7S41GQA5Y81RN` (workflow 01KS7C0K5ZRJ29AZD7J13C42C2
 // "跨节点反问") hit this: designer ran many RFC-023 self-clarify rounds +
@@ -31,10 +32,13 @@ import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -194,13 +198,13 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       questions: [makeQ('q1')],
     })
 
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     const designerRows = await db
       .select()
@@ -236,11 +240,11 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
 
     const designerRows = await db
@@ -284,11 +288,11 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       loopIter: 1,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
 
     const designerRows = await db

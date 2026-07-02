@@ -1,15 +1,17 @@
 // RFC-128 P5-BC — self/questioner per-question rerun (深度重构核心；最高风险段)。
 //
 // This locks the P5-BC clean-path (design.md §5.2): the self/questioner MIRROR of the designer
-// per-question infrastructure. It covers the §5.2.4 five self-checks + the five dispatch contracts
+// per-question infrastructure. It covers the §5.2.4 self-checks + the five dispatch contracts
 // (§5.2.11 readiness gate / §5.2.12 rerun-cause + collapse 推翻 + in-flight gate 扩域 / §5.2.13
-// mixed-role grouping + auto-split) + the §5.2.5 double-injection root-out + the §5.2.6 golden lock
-// (full-round same-batch == legacy byte-for-byte; partial adds the sibling/scope block).
+// mixed-role grouping + auto-split) + the §5.2.5 double-injection root-out.
 //
-// Relationship to the P5-A net (rfc128-p5-a-pre-refactor-net.test.ts): P5-A pinned the PRE-refactor
-// whole-round behavior; this file is the POST-refactor lock. The P5-A locks that survive (the
-// parallel-function approach keeps buildPromptContext + loadUndispatchedDesignerTargets + the
-// immediate×designer ledger reject unchanged) stay green; this file adds the new per-question paths.
+// RFC-132 §8 update: the legacy immediate quick channel (whole-round submit) is DELETED — the
+// unified autoDispatchClarifyRound is the only quick path. The §5.2.6 whole-round byte-for-byte
+// golden locks and the quick-channel-only semantics locks (quick-finalize reject/consume, the
+// legacy submit-side source-order locks) were deleted with it; mixed-flow equivalents live in
+// rfc128-p5-d-autodispatch.test.ts. Immediate-LEDGER states (a pending continuation with no
+// dispatched entry) survive below as HAND-SEEDED pre-upgrade leftovers — the dispatch gate must
+// keep protecting them through the migration window.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -32,7 +34,8 @@ import {
   loadUndispatchedSelfQuestionerTargets,
   reconcileTaskQuestionsForRound,
 } from '../src/services/taskQuestions'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { getTaskQuestionWriteSem, getTaskWriteSem } from '../src/services/taskWriteLocks'
 import { ConflictError } from '../src/util/errors'
@@ -836,33 +839,29 @@ describe('RFC-128 P5-BC three-ledger borrow (collapse 推翻)', () => {
 
 // ===========================================================================
 // Codex impl-gate (§5.2.3④ run-self) — dispatch-time in-flight gate covers the OPEN IMMEDIATE
-// self/questioner ledger. PRODUCTION-TRANSITION test: a REAL quick-channel self continuation
-// (pending) must REJECT a same-home designer dispatch BEFORE the irreversible stamp/mint — NOT
-// only later at resolveBorrowForNode (which fires after the double-mint already happened).
+// self/questioner ledger. RFC-132: the legacy quick channel that MINTED these continuations is
+// deleted, so the states below are HAND-SEEDED pre-upgrade leftovers (round + pending continuation,
+// NO dispatched entry) — the gate must keep rejecting a same-home designer dispatch BEFORE the
+// irreversible stamp/mint through the migration window, NOT only later at resolveBorrowForNode
+// (which fires after the double-mint already happened).
 // ===========================================================================
 describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', () => {
-  test('real immediate run-self continuation blocks a same-home designer dispatch WITHOUT any reconcile → no stamp, no node_run insert', async () => {
+  test('leftover immediate run-self continuation blocks a same-home designer dispatch WITHOUT any reconcile → no stamp, no node_run insert', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
-    // REAL immediate run-self continuation on home D (quick channel): D self-clarifies, the human
-    // answers WITHOUT defer → submitClarifyAnswers writes clarify_rounds (answered) + mints a
-    // clarify-answer continuation (pending), run-self. CRUCIALLY this test NEVER calls
-    // listTaskQuestions (no lazy reconcile of the self task_question) — proving the dispatch gate
-    // reads the TRUTH SOURCE (clarify_rounds + the pending continuation), not the lazy task_question
-    // projection. (The earlier version reconciled first, hiding the Codex round-4 bypass.)
-    const dRun = await seedRun(db, taskId, D, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: D,
-      sourceAgentNodeRunId: dRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
+    // OPEN immediate run-self continuation on home D — the legacy quick channel's steady state
+    // (clarify_rounds answered + a pending clarify-answer rerun, NO dispatched entry), now only
+    // reachable as a pre-upgrade leftover. CRUCIALLY this test NEVER calls listTaskQuestions (no
+    // lazy reconcile of the self task_question) — proving the dispatch gate reads the TRUTH SOURCE
+    // (clarify_rounds + the pending continuation), not the lazy task_question projection. (The
+    // earlier version reconciled first, hiding the Codex round-4 bypass.)
+    await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: D,
       questions: [mkQ('sq', 't')],
     })
-    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('sq')] }) // mint continuation
+    await seedRun(db, taskId, D, { status: 'pending', iteration: 0, rerunCause: 'clarify-answer' })
     // A sealed, UNDISPATCHED designer entry whose HOME is the SAME node D (cross-round coincidence).
     const cross = await seedAnsweredRound(db, taskId, {
       kind: 'cross',
@@ -896,10 +895,10 @@ describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', (
   })
 
   test('Codex round-5 finding 2: MINT-FIRST window (continuation minted, round still awaiting) blocks a same-home designer dispatch', async () => {
-    // submitClarifyAnswers mints the continuation BEFORE flipping the round 'answered'. In that
-    // window a concurrent dispatch must STILL see the open immediate ledger (awaiting round + a
-    // pending continuation), or it double-mints. The oracle has no status==='answered' requirement,
-    // so it catches this state.
+    // The legacy quick channel minted the continuation BEFORE flipping the round 'answered'. A
+    // pre-upgrade crash in that window leaves an awaiting round + a pending continuation; a
+    // dispatch must STILL see the open immediate ledger, or it double-mints. The oracle has no
+    // status==='answered' requirement, so it catches this state.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -941,39 +940,32 @@ describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', (
     )
   })
 
-  test('Codex round-6 finding: MIXED round (control-seal q1 + quick-finalize q2) — the quick continuation still blocks a same-home designer dispatch', async () => {
-    // The REAL mixed path (clarify.ts loadSealedQuestionIds/mergeSealedAnswers): control-seal q1
-    // (defer), then quick-finalize the whole round — submitClarifyAnswers preserves q1's locked
-    // answer + mints a QUICK continuation for the round. q1 is control-sealed-but-UNDISPATCHED. The
-    // earlier (round-5) origin-level SEALED exclusion wrongly treated the whole round as deferred →
-    // the quick continuation was invisible → a same-home designer dispatch double-minted. The
-    // round-6 fix excludes only DISPATCHED rounds, so the quick continuation stays in the immediate
-    // ledger and the dispatch is rejected.
+  test('Codex round-6 finding: MIXED-round leftover (control-sealed q1 + quick continuation) — still blocks a same-home designer dispatch', async () => {
+    // Pre-upgrade MIXED-round leftover: q1 was control-sealed (sealed_at SET, dispatched_at NULL)
+    // and the round then quick-finalized (answered) + a QUICK continuation minted (pending, no
+    // dispatched entry). The earlier (round-5) origin-level SEALED exclusion wrongly treated the
+    // whole round as deferred → the quick continuation was invisible → a same-home designer
+    // dispatch double-minted. The round-6 fix excludes only DISPATCHED rounds, so a merely-SEALED
+    // round stays in the immediate ledger and the dispatch is rejected.
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
     await seedRun(db, taskId, D, { status: 'done', iteration: 0 })
-    // D self-clarifies q1+q2.
-    const dRun = await seedRun(db, taskId, D, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: D,
-      sourceAgentNodeRunId: dRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
+    // D self-clarified q1+q2; the round is answered with q1's entry sealed-but-UNDISPATCHED and the
+    // quick continuation pending (no dispatched entry anywhere on the round).
+    const mixed = await seedAnsweredRound(db, taskId, {
+      kind: 'self',
+      askingNodeId: D,
       questions: [mkQ('q1', 't'), mkQ('q2', 't')],
     })
-    // Control-channel seal q1 (partial) — q1's task_question is sealed_at SET, dispatched_at NULL.
-    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
-    // Quick-channel finalize the whole round → preserves q1's locked answer + mints a QUICK
-    // continuation (no dispatch). NO listTaskQuestions reconcile.
-    await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [ans('q1'), ans('q2')],
+    await insertEntry(db, taskId, {
+      originNodeRunId: mixed.intermediaryNodeRunId,
+      questionId: 'q1',
+      roleKind: 'self',
+      defaultTargetNodeId: D,
+      sealed: true,
     })
+    await seedRun(db, taskId, D, { status: 'pending', iteration: 0, rerunCause: 'clarify-answer' })
     // A sealed, UNDISPATCHED designer entry whose HOME is the SAME node D.
     const cross = await seedAnsweredRound(db, taskId, {
       kind: 'cross',
@@ -1005,155 +997,23 @@ describe('RFC-128 P5-BC dispatch-time immediate-ledger gate (no double-mint)', (
 })
 
 // ===========================================================================
-// §5.2.14 mixed-path write-flow refactor (RFC-076 否决区) — control-channel partial seal/dispatch
-// interleaved with a quick whole-round finalize. Locks the 3-step coherent fix:
-//   step 1 — quick-finalize REJECTs any round in control-channel dispatch mode (ANY dispatched
-//            self/q entry, in-flight OR consumed) → no data-loss (read-side永久排除 the round);
-//   step 2 — a quick-finalize CONSUMEs (confirmation='confirmed') the round's sealed-undispatched
-//            self/q entries → no park starvation, no re-park, not re-dispatchable;
-//   step 3 — the submit mint+flips run in ONE synchronous dbTxSync (atomic vs dispatch's dbTxSync),
-//            RFC-076 mint→write→close ordering preserved (close after the tx).
+// §5.2.14 mixed-path write-flow — control-channel partial seal/dispatch interleaved with the quick
+// whole-round finalize. RFC-132: the finalize IS autoDispatchClarifyRound (per-entry seal +
+// dispatch) — it handles a dispatched/mixed round by sealing the rest and PARKING on a same-home
+// conflict, so the legacy step-1 reject ('clarify-quick-finalize-round-dispatched'), the step-2
+// consume (confirmation='confirmed'), and the submit-side source-order locks died with the legacy
+// quick channel (the mixed-flow equivalents live in rfc128-p5-d-autodispatch.test.ts). What stays
+// locked here: virgin-finalize lazy-reconcile idempotency, the RFC-076 final-state observables,
+// the concurrent double-submit race, and the question-write lock (B) serialization contracts.
 // ===========================================================================
 describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
-  // step 1 (real control path, in-flight): seal q1 + DISPATCH it (mints an in-flight control rerun),
-  // then quick-finalize the whole round → reject, NO second rerun (no double-mint).
-  test('step 1 — control-dispatched q1 (in-flight) → quick-finalize rejected, no double-mint', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: pRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
-    })
-    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
-    const q1 = (
-      await db
-        .select()
-        .from(taskQuestions)
-        .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
-    ).find((e) => e.questionId === 'q1' && e.roleKind === 'self')
-    expect(q1).toBeDefined()
-    await dispatchTaskQuestions(db, taskId, [q1!.id], actor)
-
-    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
-    let caught: unknown
-    try {
-      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(ConflictError)
-    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-round-dispatched')
-    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
-      runsBefore,
-    )
-  })
-
-  // step 1 (finding 1 data-loss): a CONSUMED dispatched q1 (done+output) must STILL reject. The round
-  // is PERMANENTLY excluded from the whole-round render path (roundsWithDispatchedEntries keys on
-  // dispatched_at, never cleared), so a quick continuation would drop q2's answer. The guard keys on
-  // ANY dispatched (NOT !consumed) — this is the flip of the earlier (wrong) "consumed unblocks" test.
-  test('step 1 — CONSUMED dispatched q1 (done+output) → quick-finalize STILL rejected (no data-loss)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: pRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
-    })
-    const consumedRerun = await seedRun(db, taskId, P, {
-      status: 'done',
-      iteration: 0,
-      rerunCause: 'clarify-answer',
-      hasOutput: true,
-    })
-    await insertEntry(db, taskId, {
-      originNodeRunId: clarifyNodeRunId,
-      questionId: 'q1',
-      roleKind: 'self',
-      defaultTargetNodeId: P,
-      sealed: true,
-      dispatchedAt: Date.now(),
-      triggerRunId: consumedRerun,
-    })
-    let caught: unknown
-    try {
-      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(ConflictError)
-    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-round-dispatched')
-  })
-
-  // step 2 (consume — fixes park starvation + duplicate): seal q1 (UNDISPATCHED) parks P; a quick
-  // whole-round finalize then SUPERSEDES q1 (marks it confirmed) → P no longer parks, q1 is not
-  // re-dispatchable, and the continuation is minted.
-  test('step 2 — quick-finalize consumes sealed-undispatched q1 → not parked, not re-dispatchable', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: pRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't'), mkQ('q2', 't')],
-    })
-    await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
-    // Sealed-undispatched q1 parks P (the pre-finalize state).
-    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(true)
-
-    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
-
-    const after = await db
-      .select()
-      .from(taskQuestions)
-      .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
-    const q1After = after.find((e) => e.questionId === 'q1' && e.roleKind === 'self')
-    const q2After = after.find((e) => e.questionId === 'q2' && e.roleKind === 'self')
-    // BOTH the sealed q1 AND the quick-answered (unsealed) sibling q2 are superseded → confirmed
-    // (Codex finding A: partial seal reconciled a row for EVERY question; the whole-round finalize
-    // answers them all, so the consume confirms the whole round — not just the sealed subset).
-    expect(q1After?.confirmation).toBe('confirmed')
-    expect(q2After).toBeDefined()
-    expect(q2After?.confirmation).toBe('confirmed')
-    // P no longer parks (the superseded entries dropped out of the park source).
-    expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has(P)).toBe(false)
-    // Neither q1 nor q2 is re-dispatchable (dispatch skips confirmed) → empty dispatch.
-    const redispatch = await dispatchTaskQuestions(db, taskId, [q1After!.id, q2After!.id], actor)
-    expect(redispatch.dispatchedEntryIds.length).toBe(0)
-    // The quick continuation WAS minted (a pending clarify-answer rerun on P).
-    const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
-      (r) => r.nodeId === P && r.rerunCause === 'clarify-answer' && r.status === 'pending',
-    )
-    expect(reruns.length).toBe(1)
-  })
-
-  // step 3 / finding 3 (lazy-reconcile 复活 防回归, regression ③): a VIRGIN quick-finalize (question
-  // list never opened, no control seal — 0 task_questions at submit) must NOT let a LATER lazy
-  // reconcile create OPEN, dispatchable self entries on the now-answered round. The in-tx reconcile
-  // materializes + confirms them at submit; a subsequent lazy reconcile is idempotent (preserves
-  // confirmed) → the entries stay non-dispatchable, so the round cannot be re-minted.
-  test('finding 3 — virgin quick-finalize: in-tx reconcile confirms entries, lazy reconcile cannot revive them', async () => {
+  // finding 3 (lazy-reconcile 复活 防回归, regression ③): a VIRGIN quick-finalize (question list
+  // never opened, no control seal — 0 task_questions at submit) must NOT let a LATER lazy reconcile
+  // create OPEN, dispatchable self entries on the now-answered round. The unified finalize
+  // (autoDispatchClarifyRound) materializes + seals + DISPATCHES them; a subsequent lazy reconcile
+  // is idempotent (preserves the dispatch stamp) → the entries stay non-re-dispatchable, so the
+  // round cannot be re-minted.
+  test('finding 3 — virgin quick-finalize: entries sealed+dispatched, lazy reconcile cannot revive them', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -1169,17 +1029,24 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
       questions: [mkQ('q1', 't'), mkQ('q2', 't')],
     })
     // Virgin: no listTaskQuestions / no seal before the quick finalize.
-    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] })
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1'), ans('q2')],
+      actor,
+    })
     const afterSubmit = await db
       .select()
       .from(taskQuestions)
       .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
-    // In-tx reconcile created BOTH self entries and the consume confirmed them.
+    // The seal reconciled BOTH self entries and the auto-dispatch stamped them.
     expect(afterSubmit.length).toBe(2)
-    expect(afterSubmit.every((e) => e.roleKind === 'self' && e.confirmation === 'confirmed')).toBe(
-      true,
-    )
-    // The later LAZY reconcile (listTaskQuestions path) must NOT reset them to open.
+    expect(
+      afterSubmit.every(
+        (e) => e.roleKind === 'self' && e.sealedAt !== null && e.dispatchedAt !== null,
+      ),
+    ).toBe(true)
+    // The later LAZY reconcile (listTaskQuestions path) must NOT reset them to undispatched/open.
     const roundRows = await db
       .select()
       .from(clarifyRounds)
@@ -1189,8 +1056,8 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
       .select()
       .from(taskQuestions)
       .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
-    expect(afterReconcile.every((e) => e.confirmation === 'confirmed')).toBe(true)
-    // Not re-dispatchable (dispatch skips confirmed) → no duplicate mint.
+    expect(afterReconcile.every((e) => e.sealedAt !== null && e.dispatchedAt !== null)).toBe(true)
+    // Not re-dispatchable (dispatch CAS skips already-dispatched) → no duplicate mint.
     const redispatch = await dispatchTaskQuestions(
       db,
       taskId,
@@ -1200,10 +1067,12 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
     expect(redispatch.dispatchedEntryIds.length).toBe(0)
   })
 
-  // step 3 (RFC-076 ordering preserved): after a quick-finalize the atomic tx leaves the rerun minted
-  // (pending) + the session answered, and the clarify node is closed (done) AFTER — i.e. never
-  // done-without-rerun. Locks the mint→write→close invariant across the async→sync-tx rewrite.
-  test('step 3 — RFC-076: after quick-finalize, rerun(pending) + session(answered) + clarify(done)', async () => {
+  // RFC-076 final-state observables: after a quick-finalize the rerun is minted (pending) + the
+  // session answered (dual-write) + the clarify node closed (done). (The unified path runs
+  // seal-tx → dispatch-tx, so the ordering is close-then-mint with the sealed-undispatched PARK
+  // pinning the frontier in between — RFC-076 T0 equivalent protection; the final state is
+  // identical to the legacy mint→write→close.)
+  test('RFC-076: after quick-finalize, rerun(pending) + session(answered) + clarify(done)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -1218,11 +1087,13 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
       iterationIndex: 0,
       questions: [mkQ('q1', 't')],
     })
-    const { rerunNodeRunId } = await submitClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId,
+      originNodeRunId: clarifyNodeRunId,
       answers: [ans('q1')],
+      actor,
     })
+    const rerunNodeRunId = res.dispatch.reruns[0]!.nodeRunId
     // mint present (pending, clarify-answer, on the asking node).
     const rerun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunNodeRunId)))[0]
     expect(rerun?.status).toBe('pending')
@@ -1243,45 +1114,10 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
     expect(clarifyRun?.status).toBe('done')
   })
 
-  // step 3 (source-level atomicity lock): the double-mint race close is structural (bun:sqlite single
-  // thread + dbTxSync sync body), hard to exercise behaviorally. Bottom-line guard: submitClarifyAnswers
-  // mints + flips inside a dbTxSync (NOT separate awaits). If a refactor reverts this to an async mint
-  // the race reopens — this text assertion goes red. (CLAUDE.md source-level fallback pattern.)
-  test('step 3 — submitClarifyAnswers lock/mint source order (race-close + conditional A≻B)', () => {
-    const src = readFileSync(resolve(import.meta.dir, '../src/services/clarify.ts'), 'utf8')
-    const fn = src.slice(src.indexOf('export async function submitClarifyAnswers'))
-    // (a) mint + flips inside the dbTxSync — closes the dispatch double-mint race (rerun committed
-    // atomically with the session/round flips).
-    expect(fn.includes('dbTxSync(db, (tx) =>')).toBe(true)
-    const mintIdx = fn.indexOf('tx.insert(nodeRuns).values(rerunValues)')
-    expect(mintIdx).toBeGreaterThan(fn.indexOf('dbTxSync(db, (tx) =>')) // mint inside the tx
-    // (b) the per-task QUESTION-WRITE lock B wraps the critical section: claim + reciprocal precheck
-    // live under it, BEFORE the rollback.
-    const bLockIdx = fn.indexOf('getTaskQuestionWriteSem(taskRow.id).run')
-    const claimIdx = fn.indexOf('lost the submit claim before rollback')
-    const reciprocalIdx = fn.indexOf('hasOpenDispatchedEntryOnHome(')
-    const rollbackIdx = fn.indexOf('rollbackNodeRunWorktrees(')
-    expect(bLockIdx).toBeGreaterThan(0)
-    expect(claimIdx).toBeGreaterThan(bLockIdx) // claim under the B lock
-    expect(claimIdx).toBeLessThan(rollbackIdx) // claim BEFORE the rollback
-    expect(reciprocalIdx).toBeGreaterThan(bLockIdx) // reciprocal precheck under B
-    expect(reciprocalIdx).toBeLessThan(rollbackIdx) // reciprocal precheck BEFORE the rollback
-    // (c) §5.2.14 review-11/12 conditional A ≻ B: the long worktree lock A is taken OUTER + ONLY when
-    // a rollback runs (so the A-wait never holds B → no dispatch stall behind an agent run); the
-    // no-rollback path takes B only (no A). Lock the exact branch.
-    expect(
-      fn.includes('if (needsRollback) await getTaskWriteSem(taskRow.id).run(runUnderQuestionLock)'),
-    ).toBe(true)
-    expect(fn.includes('else await runUnderQuestionLock()')).toBe(true)
-    // the rollback runs UNDER A (no inner getTaskWriteSem around it — A is the outer wrapper).
-    const rollbackBlock = fn.slice(rollbackIdx - 200, rollbackIdx)
-    expect(rollbackBlock.includes('getTaskWriteSem')).toBe(false)
-  })
-
-  // finding 1 (regression ①): two CONCURRENT submitClarifyAnswers on the same awaiting_human session
-  // (both pass the pre-tx read) must mint EXACTLY ONE clarify-answer rerun — the in-tx session CAS
-  // makes the loser reject. (Outcome-deterministic regardless of await interleaving: one resolves,
-  // one rejects, one rerun.)
+  // finding 1 (regression ①): two CONCURRENT quick-finalizes on the same awaiting_human round
+  // (both pass the pre-seal read) must mint EXACTLY ONE clarify-answer rerun — the in-tx seal
+  // guards (re-seal reject / answered-round reject, all under lock B) make the loser reject.
+  // (Outcome-deterministic regardless of await interleaving: one resolves, one rejects, one rerun.)
   test('finding 1 — concurrent double-submit mints exactly ONE clarify-answer rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
@@ -1298,102 +1134,36 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
       questions: [mkQ('q1', 't')],
     })
     const results = await Promise.allSettled([
-      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] }),
-      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] }),
+      autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      }),
+      autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1')],
+        actor,
+      }),
     ])
     expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
     const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
     expect(rejected.length).toBe(1)
-    expect(rejected[0]!.reason).toBeInstanceOf(ConflictError)
+    // WHICH unified guard rejects the loser depends on the await interleaving: guard 1a
+    // (clarify-already-answered), the in-tx re-seal reject, or the empty-subset reject.
+    const loserCode = (rejected[0]!.reason as { code?: string }).code
+    expect(loserCode).toBeDefined()
+    expect([
+      'clarify-already-answered',
+      'clarify-question-already-sealed',
+      'clarify-seal-empty',
+    ]).toContain(loserCode!)
     // Exactly ONE clarify-answer rerun on P — no double mint.
     const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
       (r) => r.nodeId === P && r.rerunCause === 'clarify-answer',
     )
     expect(reruns.length).toBe(1)
-  })
-
-  // 2nd-gate finding 2 (reciprocal in-flight check, PRECISE): an OPEN (unconsumed) DISPATCHED self
-  // entry whose home == this home (a concurrent dispatch that won) blocks the quick-finalize mint.
-  // Keyed on a DISPATCHED entry — NOT "any pending rerun" — so a prior round's quick continuation
-  // (no dispatched entry) does NOT false-reject (that was the broad-check regression).
-  test('finding 2 (reciprocal) — an OPEN dispatched self entry on the home blocks the quick-finalize mint', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: pRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't')],
-    })
-    // A separate (other-round) self entry, DISPATCHED with home P, whose rerun is in-flight (pending,
-    // unconsumed) — the concurrent dispatch that already won the race for home P.
-    const other = await seedAnsweredRound(db, taskId, {
-      kind: 'self',
-      askingNodeId: P,
-      questions: [mkQ('qx', 't')],
-    })
-    const dispatchedRerun = await seedRun(db, taskId, P, {
-      status: 'pending',
-      iteration: 0,
-      rerunCause: 'clarify-answer',
-    })
-    await insertEntry(db, taskId, {
-      originNodeRunId: other.intermediaryNodeRunId,
-      questionId: 'qx',
-      roleKind: 'self',
-      defaultTargetNodeId: P,
-      sealed: true,
-      dispatchedAt: Date.now(),
-      triggerRunId: dispatchedRerun,
-    })
-    const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
-    let caught: unknown
-    try {
-      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(ConflictError)
-    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-rerun-in-flight')
-    // No SECOND rerun minted — the tx rolled back (the existing in-flight dispatched rerun stands).
-    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
-      runsBefore,
-    )
-  })
-
-  // 2nd-gate finding 2 — the precise check does NOT false-reject a prior round's quick continuation
-  // (a pending clarify-answer rerun on the home with NO dispatched entry): the legitimate sequential
-  // multi-round flow proceeds. (This is the regression the broad "any pending rerun" check caused.)
-  test('finding 2 (reciprocal) — a prior pending clarify-answer rerun WITHOUT a dispatched entry does NOT block', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const pRun = await seedRun(db, taskId, P, { status: 'awaiting_human', iteration: 0 })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: pRun,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't')],
-    })
-    // A pending clarify-answer rerun on (P, 0) from a prior quick continuation — NO dispatched entry.
-    await seedRun(db, taskId, P, { status: 'pending', iteration: 0, rerunCause: 'clarify-answer' })
-    // Must NOT throw the reciprocal conflict (no dispatched entry on the home).
-    const { rerunNodeRunId } = await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [ans('q1')],
-    })
-    expect(rerunNodeRunId).toBeTruthy()
   })
 
   // §5.2.14 final-gate (question-write lock) regression ②: the lock is per-task (taskId) + a SEPARATE
@@ -1433,10 +1203,16 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
         .where(eq(taskQuestions.originNodeRunId, clarifyNodeRunId))
     ).find((e) => e.questionId === 'q1' && e.roleKind === 'self')
     expect(q1).toBeDefined()
-    // Fire both concurrently — the question-write lock serializes them.
+    // Fire both concurrently — the question-write lock serializes them. Whichever wins B first,
+    // the loser CAS-skips the already-dispatched q1 / parks on the same-home in-flight conflict.
     await Promise.allSettled([
       dispatchTaskQuestions(db, taskId, [q1!.id], actor),
-      submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1'), ans('q2')] }),
+      autoDispatchClarifyRound({
+        db,
+        originNodeRunId: clarifyNodeRunId,
+        answers: [ans('q1'), ans('q2')],
+        actor,
+      }),
     ])
     // Exactly ONE clarify-answer rerun on P — no double mint under concurrency.
     const reruns = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
@@ -1449,10 +1225,10 @@ describe('RFC-128 P5-BC §5.2.14 mixed-path write-flow', () => {
 // ===========================================================================
 // §5.2.14 final-gate (2nd round) — critical-section boundary findings:
 //   ②(b) sealRoundQuestions must take lock B (was its own unlocked tx);
-//   ②(a) the answer MERGE (lockedIds) must run UNDER B, not from a pre-lock snapshot, else a
-//         concurrent seal committed after the pre-lock read is overwritten (locked-answer data loss);
-//   ①   the deferred-designer task_questions reconcile must be IN the cross flip tx (atomic), not a
-//        post-lock reconcileTaskQuestionsForRound (answered-but-row-less window vs dispatch/park).
+//   ②(a) locked-answer preservation: a committed control seal is never overwritten by a later
+//        whole-round finalize (the unified finalize filters lockedIds; the merge runs in the seal
+//        tx UNDER B). The legacy submit-side source-order locks (②(a) self/cross + ① deferred
+//        reconcile-in-flip-tx) were deleted with the legacy quick channel (RFC-132 §8).
 // ===========================================================================
 describe('RFC-128 §5.2.14 final-gate (2nd round) — seal/merge/deferred critical-section under lock B', () => {
   function fnBody(src: string, signature: string): string {
@@ -1472,39 +1248,6 @@ describe('RFC-128 §5.2.14 final-gate (2nd round) — seal/merge/deferred critic
     expect(fn.includes('getTaskQuestionWriteSem(')).toBe(true)
     expect(fn.includes('.run(runSealTx)')).toBe(true)
     expect(fn.includes('dbTxSync(args.db')).toBe(true)
-  })
-
-  // ②(a) self — the lockedIds read + the answer merge are INSIDE the B closure (after `.run(`), so a
-  // seal committed before B is observed and its locked answer is kept (not clobbered by a stale merge).
-  test('②(a) self — loadSealedQuestionIds + mergeSealedAnswers are INSIDE the B closure', () => {
-    const src = readFileSync(resolve(import.meta.dir, '../src/services/clarify.ts'), 'utf8')
-    const fn = fnBody(src, 'export async function submitClarifyAnswers')
-    const bLockIdx = fn.indexOf('getTaskQuestionWriteSem(taskRow.id).run')
-    expect(bLockIdx).toBeGreaterThan(0)
-    expect(fn.indexOf('loadSealedQuestionIds(')).toBeGreaterThan(bLockIdx)
-    expect(fn.indexOf('mergeSealedAnswers(')).toBeGreaterThan(bLockIdx)
-  })
-
-  // ②(a) cross — same: the merge runs under B (was computed from the pre-lock `row` snapshot).
-  test('②(a) cross — loadSealedQuestionIds + mergeSealedAnswers are INSIDE the B closure', () => {
-    const src = readFileSync(resolve(import.meta.dir, '../src/services/crossClarify.ts'), 'utf8')
-    const fn = fnBody(src, 'export async function submitCrossClarifyAnswers')
-    const bLockIdx = fn.indexOf('getTaskQuestionWriteSem(row.taskId).run')
-    expect(bLockIdx).toBeGreaterThan(0)
-    expect(fn.indexOf('loadSealedQuestionIds(')).toBeGreaterThan(bLockIdx)
-    expect(fn.indexOf('mergeSealedAnswers(')).toBeGreaterThan(bLockIdx)
-  })
-
-  // ① cross — the deferred-designer reconcile (reconcileRoundEntriesTx gated on isDeferredDesignerPath)
-  // is IN the flip tx, BEFORE the flip; the old post-lock reconcileTaskQuestionsForRound is GONE.
-  test('① cross — deferred designer reconcile is IN the flip tx; no post-lock reconcile', () => {
-    const src = readFileSync(resolve(import.meta.dir, '../src/services/crossClarify.ts'), 'utf8')
-    const fn = fnBody(src, 'export async function submitCrossClarifyAnswers')
-    const deferredIdx = fn.indexOf('isDeferredDesignerPath && roundRow')
-    const flipIdx = fn.indexOf('flip cross_clarify_session → answered')
-    expect(deferredIdx).toBeGreaterThan(0)
-    expect(flipIdx).toBeGreaterThan(deferredIdx) // reconcile BEFORE the flip (same dbTxSync)
-    expect(fn.includes('reconcileTaskQuestionsForRound(')).toBe(false) // no separate post-lock tx
   })
 
   // ②(a) behavioral — control-seal q1 = option A, then quick-finalize the WHOLE round posting a
@@ -1528,10 +1271,10 @@ describe('RFC-128 §5.2.14 final-gate (2nd round) — seal/merge/deferred critic
     })
     // control-seal q1 = option A.
     await sealRoundQuestions({ db, originNodeRunId: clarifyNodeRunId, answers: [ans('q1')] })
-    // quick-finalize, posting a DIFFERENT q1 (option B) + q2 (option A).
-    await submitClarifyAnswers({
+    // quick-finalize (unified autodispatch), posting a DIFFERENT q1 (option B) + q2 (option A).
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId,
+      originNodeRunId: clarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -1541,6 +1284,7 @@ describe('RFC-128 §5.2.14 final-gate (2nd round) — seal/merge/deferred critic
         },
         ans('q2'),
       ],
+      actor,
     })
     const sess = (
       await db

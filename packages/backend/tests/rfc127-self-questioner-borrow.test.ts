@@ -1,34 +1,26 @@
-// RFC-127 self/questioner 借壳顶替 — the immediate (clarify-round) borrow path.
+// RFC-127 self/questioner 借壳 → RFC-132 MOVE (去借壳).
 //
-// RFC-132 PR-B UPDATE: production self/questioner reruns now go through the DISPATCH path (universal
-// deferred model) → MOVE, not borrow (Part 0 below locks resolveBorrowForNode(target)=null). The
-// IMMEDIATE borrow tests (Part 1+) still pass — they exercise the immediate ledger, RETAINED as the
-// migration net for pre-upgrade in-flight continuations (submitClarifyAnswers is route-unreachable
-// but still callable). Both paths coexist here: dispatch=move (new), immediate=borrow (migration).
+// HISTORY: this file locked the IMMEDIATE (clarify-round) borrow path — the legacy quick channel
+// minted the continuation on the asking HOME node, and a reassigned entry made the home BORROW the
+// target's agent (resolveBorrowForNode → X.agentName, keyed on the round's RFC-070 consumption
+// stamp). RFC-132 unifies every task on the deferred per-question dispatch
+// (autoDispatchClarifyRound): a reassigned self/questioner answer now rides the DISPATCHED ledger,
+// whose semantics are RFC-131 T4 MOVE — the rerun is minted ON the override target running its OWN
+// agent, and resolveBorrowForNode resolves null everywhere on that path. Per RFC-132 design §6
+// («Part0 move 保留、Part1 borrow 删»), the immediate-ledger borrow tests (resolution / Codex-P2
+// multi-borrow + dual-ledger rejects / real-services + scheduler-e2e borrow) were DELETED with the
+// legacy immediate mint; designer move coverage lives in rfc127-designer-borrow-dispatch.test.ts.
 //
-// designer 借壳 rides the DEFERRED dispatch ledger (dispatched_at + trigger_run_id),
-// covered by rfc127-designer-borrow-dispatch.test.ts. self/questioner reruns are minted
-// the instant the human answers (clarify.ts 'clarify-answer' on the asking node P;
-// crossClarify mintQuestionerRerun 'cross-clarify-questioner-rerun' on the questioner)
-// and NEVER touch dispatched_at — so their borrow consumption is ROUND-based: the entry's
-// clarify round + its role's RFC-070 consumption stamp (self ⇒ consumed_by_consumer_run_id,
-// questioner ⇒ consumed_by_questioner_run_id). This file locks resolveBorrowForNode's
-// self/questioner branch:
-//   * override → returns the borrowed node's agentName (the home node's continuation rerun
-//     will run X — the scheduler→buildBorrowedAgent→spawn path is shared with designer and
-//     proven by rfc127-designer-borrow-dispatch.test.ts).
-//   * golden-lock: no override → null (home runs its own agent).
-//   * consumed: once the continuation rerun lands done+output (round stamp set) → null, so
-//     an unrelated future rerun on the same node does NOT keep borrowing.
-//   * real-services integration: createClarifySession/createCrossClarifySession → reconcile
-//     → reassign → submit (mints the continuation rerun) → resolveBorrowForNode returns X.
-//   * scheduler e2e: a reassigned self continuation rerun ACTUALLY spawns the borrowed agent.
+// What stays locked here:
+//   * dispatched self/questioner entry reassigned to X → resolveBorrowForNode(X)=null AND
+//     resolveBorrowForNode(home)=null — MOVE, no borrow, X runs its own agent.
+//   * golden: dispatched self entry with NO override → null (home runs itself).
+//   * scheduler converts a borrow ConflictError into a NODE-level failure (source lock) — the
+//     conflict surface stays guarded while resolveBorrowForNode remains in the tree.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { and, eq } from 'drizzle-orm'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { monotonicFactory } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
@@ -40,11 +32,6 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { createAgent } from '../src/services/agent'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
-import { runTask } from '../src/services/scheduler'
-import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
 import { resolveBorrowForNode } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -55,7 +42,6 @@ import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-w
 const ulid = monotonicFactory()
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
-const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
 
 // node ids + their agentNames in the frozen snapshot.
 const P = 'P' // self-asking agent
@@ -68,8 +54,6 @@ const P_AGENT = 'agent-p'
 const Q_AGENT = 'agent-q'
 const D_AGENT = 'agent-d'
 const X_AGENT = 'borrow-x'
-
-const actor = { userId: 'u1', role: 'owner' as const }
 
 function liveDef(): WorkflowDefinition {
   const nodes: WorkflowNode[] = [
@@ -184,188 +168,6 @@ async function seedRun(
   return id
 }
 
-/** RFC-128 P5-BC (Codex impl-gate round 4): seed the PENDING continuation node_run a quick-channel
- *  answer mints (cause 'clarify-answer' for self / 'cross-clarify-questioner-rerun' for questioner)
- *  on the asking node at the round's iteration. The truth-source immediate-ledger oracle
- *  (openImmediateRounds) keys "open" on this pending continuation (NOT the lazy task_question), so
- *  an answered-unconsumed self/questioner round is only an OPEN immediate ledger when its
- *  continuation is in flight — exactly the production state submitClarifyAnswers creates. */
-async function seedPendingContinuation(
-  db: DbClient,
-  taskId: string,
-  nodeId: string,
-  cause: 'clarify-answer' | 'cross-clarify-questioner-rerun',
-  iteration: number,
-): Promise<string> {
-  const id = ulid()
-  await db.insert(nodeRuns).values({
-    id,
-    taskId,
-    nodeId,
-    status: 'pending',
-    rerunCause: cause,
-    retryIndex: 0,
-    iteration,
-    startedAt: null,
-  })
-  return id
-}
-
-/** Seed an answered self clarify round + N self task_questions (one per question), with a
- *  per-question override. The ASKING run is seeded at `askingIteration` (self rounds project
- *  loop_iter=0, so the asking run's iteration is the only carrier of the wrapper-loop index —
- *  P2-3). Returns the round's intermediary (origin) run id. */
-async function seedSelfRoundMulti(
-  db: DbClient,
-  taskId: string,
-  opts: {
-    questions: Array<{ qid: string; override: string | null }>
-    askingIteration?: number
-    consumedRunId?: string | null
-  },
-): Promise<string> {
-  const it = opts.askingIteration ?? 0
-  const askingRunId = await seedRun(db, taskId, P, { iteration: it })
-  const intRunId = await seedRun(db, taskId, CL, { iteration: it })
-  await db.insert(clarifyRounds).values({
-    id: ulid(),
-    taskId,
-    kind: 'self',
-    askingNodeId: P,
-    askingNodeRunId: askingRunId,
-    intermediaryNodeId: CL,
-    intermediaryNodeRunId: intRunId,
-    targetConsumerNodeId: null,
-    loopIter: 0, // self ALWAYS projects loop_iter 0 (taskQuestions.ts) — the bug surface for P2-3
-    iteration: 0,
-    questionsJson: JSON.stringify(opts.questions.map((q) => mkQ(q.qid, 't'))),
-    answersJson: JSON.stringify(opts.questions.map((q) => ans(q.qid))),
-    status: 'answered',
-    createdAt: Date.now(),
-    consumedByConsumerRunId: opts.consumedRunId ?? null,
-  })
-  for (const q of opts.questions) {
-    await db.insert(taskQuestions).values({
-      id: ulid(),
-      taskId,
-      originNodeRunId: intRunId,
-      questionId: q.qid,
-      questionTitle: 't',
-      sourceKind: 'self',
-      roleKind: 'self',
-      iteration: 0,
-      loopIter: 0,
-      defaultTargetNodeId: P,
-      overrideTargetNodeId: q.override,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-  }
-  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
-  if ((opts.consumedRunId ?? null) === null) {
-    await seedPendingContinuation(db, taskId, P, 'clarify-answer', it)
-  }
-  return intRunId
-}
-
-/** Seed an OPEN dispatched designer override entry: a cross round natively for `designerNode`,
- *  reassigned to `override`, dispatched (dispatched_at set) and unbound (trigger_run_id NULL ⇒
- *  unconsumed). RFC-131 T4 去借壳: the deferred designer ledger is keyed on the EFFECTIVE TARGET
- *  (override ?? default), and a reassigned entry runs the target's OWN agent (no borrow). Used for
- *  the dual-ledger conflict (P2-2) — pass override=P to co-locate BOTH ledgers on target P. */
-async function seedDispatchedDesignerEntry(
-  db: DbClient,
-  taskId: string,
-  designerNode: string,
-  override: string,
-): Promise<void> {
-  const askingRunId = await seedRun(db, taskId, Q)
-  const intRunId = await seedRun(db, taskId, CC)
-  await db.insert(clarifyRounds).values({
-    id: ulid(),
-    taskId,
-    kind: 'cross',
-    askingNodeId: Q,
-    askingNodeRunId: askingRunId,
-    intermediaryNodeId: CC,
-    intermediaryNodeRunId: intRunId,
-    targetConsumerNodeId: designerNode,
-    loopIter: 0,
-    iteration: 0,
-    questionsJson: JSON.stringify([mkQ('dq', 't')]),
-    answersJson: JSON.stringify([ans('dq')]),
-    directive: 'continue',
-    status: 'answered',
-    createdAt: Date.now(),
-  })
-  await db.insert(taskQuestions).values({
-    id: ulid(),
-    taskId,
-    originNodeRunId: intRunId,
-    questionId: 'dq',
-    questionTitle: 't',
-    sourceKind: 'cross',
-    roleKind: 'designer',
-    iteration: 0,
-    loopIter: 0,
-    defaultTargetNodeId: designerNode,
-    overrideTargetNodeId: override,
-    dispatchedAt: Date.now(),
-    dispatchedBy: 'u1',
-    // trigger_run_id NULL ⇒ dispatched-but-unbound ⇒ open/unconsumed.
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  })
-}
-
-/** Seed an answered self clarify round + its reconciled self task_question (default=P). */
-async function seedSelfEntry(
-  db: DbClient,
-  taskId: string,
-  opts: { override: string | null; consumedRunId?: string | null; skipAutoContinuation?: boolean },
-): Promise<string> {
-  const askingRunId = await seedRun(db, taskId, P)
-  const intRunId = await seedRun(db, taskId, CL)
-  await db.insert(clarifyRounds).values({
-    id: ulid(),
-    taskId,
-    kind: 'self',
-    askingNodeId: P,
-    askingNodeRunId: askingRunId,
-    intermediaryNodeId: CL,
-    intermediaryNodeRunId: intRunId,
-    targetConsumerNodeId: null,
-    loopIter: 0,
-    iteration: 0,
-    questionsJson: JSON.stringify([mkQ('q1', 't')]),
-    answersJson: JSON.stringify([ans('q1')]),
-    status: 'answered',
-    createdAt: Date.now(),
-    consumedByConsumerRunId: opts.consumedRunId ?? null,
-  })
-  const entryId = ulid()
-  await db.insert(taskQuestions).values({
-    id: entryId,
-    taskId,
-    originNodeRunId: intRunId,
-    questionId: 'q1',
-    questionTitle: 't',
-    sourceKind: 'self',
-    roleKind: 'self',
-    iteration: 0,
-    loopIter: 0,
-    defaultTargetNodeId: P,
-    overrideTargetNodeId: opts.override,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  })
-  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
-  if ((opts.consumedRunId ?? null) === null && !opts.skipAutoContinuation) {
-    await seedPendingContinuation(db, taskId, P, 'clarify-answer', 0)
-  }
-  return entryId
-}
-
 /** RFC-132 PR-B — seed an OPEN DISPATCHED self/questioner entry (dispatched_at set, trigger_run_id
  *  NULL ⇒ unbound/unconsumed, NO immediate continuation), reassigned to `override`. This is the
  *  PRODUCTION shape after PR-B: the quick channel auto-dispatches through dispatchTaskQuestions, which
@@ -420,55 +222,6 @@ async function seedDispatchedSelfQEntry(
   return { home, intRunId }
 }
 
-/** Seed an answered cross round + its reconciled questioner task_question (default=Q). */
-async function seedQuestionerEntry(
-  db: DbClient,
-  taskId: string,
-  opts: { override: string | null; consumedRunId?: string | null },
-): Promise<string> {
-  const askingRunId = await seedRun(db, taskId, Q)
-  const intRunId = await seedRun(db, taskId, CC)
-  await db.insert(clarifyRounds).values({
-    id: ulid(),
-    taskId,
-    kind: 'cross',
-    askingNodeId: Q,
-    askingNodeRunId: askingRunId,
-    intermediaryNodeId: CC,
-    intermediaryNodeRunId: intRunId,
-    targetConsumerNodeId: D,
-    loopIter: 0,
-    iteration: 0,
-    questionsJson: JSON.stringify([mkQ('q1', 't')]),
-    answersJson: JSON.stringify([ans('q1')]),
-    directive: 'continue',
-    status: 'answered',
-    createdAt: Date.now(),
-    consumedByQuestionerRunId: opts.consumedRunId ?? null,
-  })
-  const entryId = ulid()
-  await db.insert(taskQuestions).values({
-    id: entryId,
-    taskId,
-    originNodeRunId: intRunId,
-    questionId: 'q1',
-    questionTitle: 't',
-    sourceKind: 'cross',
-    roleKind: 'questioner',
-    iteration: 0,
-    loopIter: 0,
-    defaultTargetNodeId: Q,
-    overrideTargetNodeId: opts.override,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  })
-  // Open immediate ledger (round not consumed) ⟺ a PENDING continuation in flight (truth source).
-  if ((opts.consumedRunId ?? null) === null) {
-    await seedPendingContinuation(db, taskId, Q, 'cross-clarify-questioner-rerun', 0)
-  }
-  return entryId
-}
-
 // ---------------------------------------------------------------------------
 // Part 0 (RFC-132 PR-B) — self/questioner via the DISPATCH path is MOVE, not borrow.
 //
@@ -476,9 +229,12 @@ async function seedQuestionerEntry(
 // (no legacy immediate mint), so a reassigned self/questioner entry's ledger is the DEFERRED
 // self/questioner ledger (dispatched_at + effectiveTarget), which is RFC-131 T4 去借壳: the rerun is
 // minted ON the target node running its OWN agent. resolveBorrowForNode therefore returns null for
-// BOTH the target (X runs itself) and the origin home (the run moved away). The immediate-borrow
-// tests in Part 1+ below still exercise the IMMEDIATE ledger — retained as the migration net for
-// pre-upgrade in-flight continuations (submitClarifyAnswers stays callable but route-unreachable).
+// BOTH the target (X runs itself) and the origin home (the run moved away). The immediate-ledger
+// borrow tests that used to follow were deleted with the legacy immediate mint (RFC-132 §6).
+
+beforeEach(() => resetBroadcastersForTests())
+afterAll(() => resetBroadcastersForTests())
+
 describe('RFC-132 PR-B — self/questioner via dispatch is MOVE (去借壳, not borrow)', () => {
   test('dispatched self entry reassigned to X → resolveBorrowForNode(X)=null (X runs its OWN agent)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
@@ -507,232 +263,6 @@ describe('RFC-132 PR-B — self/questioner via dispatch is MOVE (去借壳, not 
   })
 })
 
-// Part 1 — resolveBorrowForNode self/questioner resolution (direct seed).
-// ---------------------------------------------------------------------------
-describe('RFC-127 resolveBorrowForNode — self/questioner (round-based)', () => {
-  test('self override X → borrows X.agentName on the home node P', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't1')
-    await seedSelfEntry(db, 't1', { override: X })
-    expect(await resolveBorrowForNode(db, 't1', P, 0, liveDef())).toBe(X_AGENT)
-  })
-
-  test('questioner override X → borrows X.agentName on the home node Q', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't2')
-    await seedQuestionerEntry(db, 't2', { override: X })
-    expect(await resolveBorrowForNode(db, 't2', Q, 0, liveDef())).toBe(X_AGENT)
-  })
-
-  test('golden-lock: self with NO override → null (home runs its own agent)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't3')
-    await seedSelfEntry(db, 't3', { override: null })
-    expect(await resolveBorrowForNode(db, 't3', P, 0, liveDef())).toBeNull()
-  })
-
-  test('golden-lock: questioner with NO override → null', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't4')
-    await seedQuestionerEntry(db, 't4', { override: null })
-    expect(await resolveBorrowForNode(db, 't4', Q, 0, liveDef())).toBeNull()
-  })
-
-  test('consumed: self continuation rerun done+output (round stamped) → borrow drops to null', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't5')
-    const consumed = await seedRun(db, 't5', P, { status: 'done', withOutput: true })
-    await seedSelfEntry(db, 't5', { override: X, consumedRunId: consumed })
-    expect(await resolveBorrowForNode(db, 't5', P, 0, liveDef())).toBeNull()
-  })
-
-  test('consumed: questioner continuation rerun done+output → borrow drops to null', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't6')
-    const consumed = await seedRun(db, 't6', Q, { status: 'done', withOutput: true })
-    await seedQuestionerEntry(db, 't6', { override: X, consumedRunId: consumed })
-    expect(await resolveBorrowForNode(db, 't6', Q, 0, liveDef())).toBeNull()
-  })
-
-  test('defensive: a continuation that finished done but emitted NO output → still open (keeps borrowing)', async () => {
-    // RFC-128 P5-BC (Codex impl-gate round 4) — truth source: a continuation that finished 'done'
-    // but produced NO output is NOT consumed (markClarifyRoundsConsumedBy only stamps on done+
-    // output), so it is still an OPEN immediate ledger (revivable) → keeps borrowing. (Was: "stamp
-    // points at a done run WITHOUT output" — the old isRoundEntryConsumed stamp model; the oracle
-    // now keys on the continuation node_run's done+output status, not the round stamp.)
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't7')
-    await seedSelfEntry(db, 't7', { override: X, skipAutoContinuation: true })
-    await db.insert(nodeRuns).values({
-      id: ulid(),
-      taskId: 't7',
-      nodeId: P,
-      status: 'done',
-      rerunCause: 'clarify-answer',
-      retryIndex: 0,
-      iteration: 0,
-      startedAt: Date.now(),
-    }) // done, NO output → not done+output → open
-    expect(await resolveBorrowForNode(db, 't7', P, 0, liveDef())).toBe(X_AGENT)
-  })
-
-  test('isolation: a self override on P does NOT borrow when resolving a different node', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't8')
-    await seedSelfEntry(db, 't8', { override: X })
-    // Q has no entry → no borrow there even though P's entry exists.
-    expect(await resolveBorrowForNode(db, 't8', Q, 0, liveDef())).toBeNull()
-  })
-
-  test('isolation: a self override to the home itself (X===default) is not a borrow', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 't9')
-    // override === default (P) ⇒ borrowAgentNode is null ⇒ no borrow (runs P's own agent).
-    await seedSelfEntry(db, 't9', { override: P })
-    expect(await resolveBorrowForNode(db, 't9', P, 0, liveDef())).toBeNull()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Codex impl-gate P2 regressions (3 边角正确性 bugs in resolveImmediateBorrowForNode).
-// ---------------------------------------------------------------------------
-describe('RFC-127 borrow — Codex P2 regressions', () => {
-  // P2-3: self clarify rounds project loop_iter=0, but the scheduler resolves the borrow with
-  // node_runs.iteration (the loop index). A `loop_iter == iteration` filter therefore MISSES a
-  // reassigned self entry at wrapper-loop iteration ≥ 1 → the home agent ran instead of borrow X.
-  // The fix matches the round's ASKING run iteration; this locks it stays fixed.
-  test('P2-3: reassigned self at loop iteration ≥ 1 still borrows (loop_iter=0 projection)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-3')
-    // asking run at iteration 1; the self round loop_iter is HARDCODED 0 (the bug surface).
-    await seedSelfRoundMulti(db, 'p2-3', {
-      questions: [{ qid: 'q1', override: X }],
-      askingIteration: 1,
-    })
-    // The OLD `loop_iter == iteration` filter resolved null here (0 != 1) → home agent. Now: X.
-    expect(await resolveBorrowForNode(db, 'p2-3', P, 1, liveDef())).toBe(X_AGENT)
-    // And it does NOT leak into an unrelated iteration (no round there).
-    expect(await resolveBorrowForNode(db, 'p2-3', P, 2, liveDef())).toBeNull()
-  })
-
-  test('P2-3: loop-iter≥1 golden-lock — no override at iter 1 → null', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-3b')
-    await seedSelfRoundMulti(db, 'p2-3b', {
-      questions: [{ qid: 'q1', override: null }],
-      askingIteration: 1,
-    })
-    expect(await resolveBorrowForNode(db, 'p2-3b', P, 1, liveDef())).toBeNull()
-  })
-
-  // P2-1: one self/questioner continuation rerun re-runs the home ONCE → it borrows ONE agent.
-  // A round whose questions are reassigned to two different agents (or a mix of borrow + self) is
-  // ambiguous; the old code `.find()`-picked the first silently. Now it must REJECT.
-  test('P2-1: a self round reassigned to TWO agents → rejected (not silently first-picked)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-1a')
-    await seedSelfRoundMulti(db, 'p2-1a', {
-      questions: [
-        { qid: 'q1', override: X },
-        { qid: 'q2', override: D }, // a DIFFERENT agent node
-      ],
-    })
-    await expect(resolveBorrowForNode(db, 'p2-1a', P, 0, liveDef())).rejects.toThrow(
-      /multi-borrow|conflicting/i,
-    )
-  })
-
-  test('P2-1: a self round with a borrow + a run-self mix → rejected', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-1b')
-    await seedSelfRoundMulti(db, 'p2-1b', {
-      questions: [
-        { qid: 'q1', override: X }, // borrow X
-        { qid: 'q2', override: null }, // run self
-      ],
-    })
-    await expect(resolveBorrowForNode(db, 'p2-1b', P, 0, liveDef())).rejects.toThrow(
-      /multi-borrow|conflicting/i,
-    )
-  })
-
-  test('P2-1: a round uniformly reassigned to ONE agent (both questions → X) still resolves to X', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-1c')
-    await seedSelfRoundMulti(db, 'p2-1c', {
-      questions: [
-        { qid: 'q1', override: X },
-        { qid: 'q2', override: X },
-      ],
-    })
-    expect(await resolveBorrowForNode(db, 'p2-1c', P, 0, liveDef())).toBe(X_AGENT)
-  })
-
-  // P2-2: the same TARGET NODE with BOTH an open self/questioner reassignment AND an open dispatched
-  // designer reassignment is ambiguous (the scheduler can't tell which ledger the rerun belongs
-  // to). Must REJECT rather than let the immediate ledger silently win. RFC-131 T4 去借壳: the deferred
-  // ledger is keyed on the effective target, so co-locate both ledgers on P (self reassigned to X but
-  // its immediate continuation stays on the asking node P; designer reassigned to P → run-self on P).
-  test('P2-2: same target node, immediate self ledger + designer ledger → rejected', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-2', { deferred: true })
-    // self reassignment on P → X (immediate ledger — the continuation is pending on the asking node P) ...
-    await seedSelfRoundMulti(db, 'p2-2', { questions: [{ qid: 'q1', override: X }] })
-    // ... AND a dispatched designer entry reassigned to the SAME node P (run-self on P; native-D round).
-    await seedDispatchedDesignerEntry(db, 'p2-2', D, P)
-    await expect(resolveBorrowForNode(db, 'p2-2', P, 0, liveDef())).rejects.toThrow(
-      /duplicate execution/i,
-    )
-  })
-
-  // Codex impl-gate round 2: two open ledgers on one node are a duplicate-EXECUTION hazard — they
-  // are two separate pending node_runs on the node (the designer in-flight gate doesn't see the
-  // immediate continuation), and runOneNode binds by node not by ledger, so the first run stamps
-  // both ledgers and the other runs stale. Reject by counting OPEN ledgers. RFC-131 T4 去借壳: the
-  // designer ledger never borrows (run-self on its target), so the old "even SAME agent" nuance is
-  // moot — the reject is purely two-open-ledgers-on-one-node.
-  test('P2-2: same target node, two open ledgers → STILL rejected (duplicate-execution hazard)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-2same', { deferred: true })
-    await seedSelfRoundMulti(db, 'p2-2same', { questions: [{ qid: 'q1', override: X }] })
-    // designer reassigned to the SAME node P (run-self on P) → two open ledgers on P → reject.
-    await seedDispatchedDesignerEntry(db, 'p2-2same', D, P)
-    await expect(resolveBorrowForNode(db, 'p2-2same', P, 0, liveDef())).rejects.toThrow(
-      /duplicate execution/i,
-    )
-  })
-
-  // RFC-128 P5-BC (Codex impl-gate run-self fix, §5.2.3④): an OPEN RUN-SELF immediate ledger (a
-  // self round answered-unconsumed with NO override → a pending self continuation that runs P's
-  // OWN agent) + an open designer ledger on the SAME node P are STILL two separate pending reruns
-  // with mutually-exclusive causes → duplicate execution → REJECT. The earlier code treated
-  // run-self as "not a ledger" (returned null), which let a run-self ledger escape the reject.
-  // RFC-131 T4 去借壳: the designer ledger is also run-self (no borrow); the reject counts OPEN
-  // ledgers, so run-self + run-self on the same node still rejects. Normal designer dispatch — no
-  // self round on the node — is unaffected: the immediate ledger is then genuinely CLOSED.
-  test('P2-2: open RUN-SELF immediate ledger + same-node designer ledger → rejected (run-self counts)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-2b', { deferred: true })
-    // Open run-self immediate ledger on P (answered self round, NO override) ...
-    await seedSelfRoundMulti(db, 'p2-2b', { questions: [{ qid: 'q1', override: null }] })
-    // ... AND an open designer ledger on the SAME node P (reassigned to P → run-self) → two open ledgers → reject.
-    await seedDispatchedDesignerEntry(db, 'p2-2b', D, P)
-    await expect(resolveBorrowForNode(db, 'p2-2b', P, 0, liveDef())).rejects.toThrow(
-      /duplicate execution/i,
-    )
-  })
-
-  // Companion golden-lock: a designer ledger on a target with NO competing self round (immediate
-  // ledger genuinely CLOSED) resolves alone — the run-self fix does NOT over-reject normal dispatch.
-  // RFC-131 T4 去借壳: it resolves run-self (null) on its effective target X — no borrow.
-  test('P2-2: designer entry on a target with NO self round → resolves alone run-self (immediate closed)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'p2-2c', { deferred: true })
-    await seedDispatchedDesignerEntry(db, 'p2-2c', D, X) // native-D designer reassigned to X; no self on X
-    expect(await resolveBorrowForNode(db, 'p2-2c', X, 0, liveDef())).toBeNull()
-  })
-})
-
 // Source-level lock: the scheduler converts a borrow ConflictError into a NODE-level failure
 // (resolveBorrowForNode runs before runOneNode's try block, so an unguarded throw would reject
 // the whole scope tick → runTask fails the entire task).
@@ -743,234 +273,5 @@ describe('RFC-127 borrow conflict — scheduler node-level failure (source lock)
       'utf8',
     )
     expect(src).toMatch(/catch[\s\S]{0,200}ConflictError[\s\S]{0,80}kind: 'failed'/)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Part 2 — real-services integration: the actual immediate flow drives the borrow.
-// ---------------------------------------------------------------------------
-describe('RFC-127 self/questioner borrow — real-services integration', () => {
-  test('self: createSession → reconcile → reassign X → submit → resolveBorrowForNode(P)=X; consume → null', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'int-self')
-    const askingRunId = await seedRun(db, 'int-self', P)
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId: 'int-self',
-      sourceAgentNodeId: P,
-      sourceAgentNodeRunId: askingRunId,
-      sourceShardKey: null,
-      clarifyNodeId: CL,
-      iterationIndex: 0,
-      questions: [mkQ('q1', 't')],
-    })
-    const selfEntry = (await listTaskQuestions(db, 'int-self')).find((e) => e.roleKind === 'self')!
-    expect(selfEntry.defaultTargetNodeId).toBe(P)
-    await reassignTaskQuestion(db, selfEntry.id, X, actor) // any role now reassignable (T4)
-    await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
-
-    // The continuation rerun is minted (clarify-answer on P); the round is answered but
-    // not yet consumed → the borrow resolves to X.
-    expect(await resolveBorrowForNode(db, 'int-self', P, 0, liveDef())).toBe(X_AGENT)
-
-    // Drive the continuation rerun to done+output and stamp consumption (production path).
-    const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, 'int-self'))
-    const rerun = runs.find((r) => r.rerunCause === 'clarify-answer')!
-    await db.update(nodeRuns).set({ status: 'done' }).where(eq(nodeRuns.id, rerun.id))
-    await db
-      .insert(nodeRunOutputs)
-      .values({ nodeRunId: rerun.id, portName: 'result', content: 'r' })
-
-    // Consumed → an unrelated future rerun on P runs P's own agent (no stale borrow).
-    expect(await resolveBorrowForNode(db, 'int-self', P, 0, liveDef())).toBeNull()
-  })
-
-  test('questioner: createCrossSession → reconcile → reassign X → submit(questioner-scoped) → resolveBorrowForNode(Q)=X', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    await seedTask(db, 'int-q')
-    const qRunId = await seedRun(db, 'int-q', Q)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId: 'int-q',
-      crossClarifyNodeId: CC,
-      sourceQuestionerNodeId: Q,
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: D,
-      loopIter: 0,
-      questions: [mkQ('q1', 't')],
-    })
-    const qEntry = (await listTaskQuestions(db, 'int-q')).find((e) => e.roleKind === 'questioner')!
-    expect(qEntry.defaultTargetNodeId).toBe(Q)
-    await reassignTaskQuestion(db, qEntry.id, X, actor)
-    // questioner-scoped ⇒ the questioner continue rerun is minted (fast path).
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [ans('q1')],
-      directive: 'continue',
-      questionScopes: { q1: 'questioner' },
-    })
-    expect(await resolveBorrowForNode(db, 'int-q', Q, 0, liveDef())).toBe(X_AGENT)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Part 3 — scheduler e2e: the reassigned self continuation rerun ACTUALLY spawns X.
-// ---------------------------------------------------------------------------
-interface RunHarness {
-  db: DbClient
-  appHome: string
-  worktreePath: string
-  argvLog: string
-  cleanup: () => void
-}
-
-function buildRunHarness(): RunHarness {
-  const appHome = mkdtempSync(join(tmpdir(), 'aw-rfc127-sq-'))
-  const worktreePath = join(appHome, 'wt')
-  mkdirSync(worktreePath, { recursive: true })
-  const argvLog = join(appHome, 'argv.log')
-  writeFileSync(argvLog, '')
-  return {
-    db: createInMemoryDb(MIGRATIONS),
-    appHome,
-    worktreePath,
-    argvLog,
-    cleanup: () => rmSync(appHome, { recursive: true, force: true }),
-  }
-}
-
-function withEnv<T>(env: Record<string, string>, body: () => Promise<T>): Promise<T> {
-  const prev: Record<string, string | undefined> = {}
-  for (const k of Object.keys(env)) {
-    prev[k] = process.env[k]
-    process.env[k] = env[k]
-  }
-  return body().finally(() => {
-    for (const k of Object.keys(env)) {
-      const old = prev[k]
-      if (old === undefined) delete process.env[k]
-      else process.env[k] = old
-    }
-  })
-}
-
-function readSpawnedAgents(path: string): string[] {
-  return readFileSync(path, 'utf8')
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line).agent as string)
-}
-
-async function seedRunnableAgent(db: DbClient, name: string): Promise<void> {
-  await createAgent(db, {
-    name,
-    description: '',
-    outputs: ['result'],
-    outputKinds: { result: 'markdown' },
-    syncOutputsOnIterate: true,
-    permission: {},
-    skills: [],
-    dependsOn: [],
-    mcp: [],
-    plugins: [],
-    frontmatterExtra: {},
-    bodyMd: '',
-  })
-}
-
-async function insertRunnableTask(h: RunHarness, taskId: string): Promise<void> {
-  await h.db.insert(workflows).values({
-    id: `wf-${taskId}`,
-    name: 'rfc127-sq-e2e',
-    description: '',
-    definition: JSON.stringify(liveDef()),
-    version: 1,
-    schemaVersion: 4,
-  })
-  await h.db.insert(tasks).values({
-    id: taskId,
-    name: 'rfc127-sq-e2e',
-    workflowId: `wf-${taskId}`,
-    workflowSnapshot: JSON.stringify(liveDef()),
-    repoPath: '/tmp/aw-rfc127-sq/repo',
-    worktreePath: h.worktreePath,
-    baseBranch: 'main',
-    branch: `agent-workflow/${taskId}`,
-    status: 'pending',
-    inputs: JSON.stringify({}),
-    startedAt: Date.now(),
-    deferredQuestionDispatch: false,
-  })
-}
-
-async function runSchedulerOnce(h: RunHarness, taskId: string) {
-  await withEnv(
-    {
-      MOCK_OPENCODE_CAPTURE_ARGV_TO: h.argvLog,
-      MOCK_OPENCODE_OUTPUTS: JSON.stringify({ result: 'ok' }),
-    },
-    () =>
-      runTask({
-        taskId,
-        db: h.db,
-        appHome: h.appHome,
-        opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-        defaultNodeRetries: 0,
-      }),
-  )
-}
-
-beforeEach(() => resetBroadcastersForTests())
-afterAll(() => resetBroadcastersForTests())
-
-describe('RFC-127 self borrow — scheduler e2e (续跑实际跑 X)', () => {
-  test('a reassigned self continuation rerun spawns the borrowed agent X, not P', async () => {
-    const h = buildRunHarness()
-    try {
-      const taskId = 'e2e-self'
-      await insertRunnableTask(h, taskId)
-      await seedRunnableAgent(h.db, P_AGENT)
-      await seedRunnableAgent(h.db, X_AGENT)
-      const askingRunId = await seedRun(h.db, taskId, P)
-      const { clarifyNodeRunId } = await createClarifySession({
-        db: h.db,
-        taskId,
-        sourceAgentNodeId: P,
-        sourceAgentNodeRunId: askingRunId,
-        sourceShardKey: null,
-        clarifyNodeId: CL,
-        iterationIndex: 0,
-        questions: [mkQ('q1', 't')],
-      })
-      const selfEntry = (await listTaskQuestions(h.db, taskId)).find((e) => e.roleKind === 'self')!
-      await reassignTaskQuestion(h.db, selfEntry.id, X, actor)
-      // directive 'stop' lifts the self-clarify mandatory-ask-back so the borrowed rerun
-      // emits <workflow-output> and completes (the borrow itself is directive-independent).
-      await submitClarifyAnswers({
-        db: h.db,
-        clarifyNodeRunId,
-        answers: [ans('q1')],
-        directive: 'stop',
-      })
-      await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))
-
-      await runSchedulerOnce(h, taskId)
-
-      // The home node P's continuation rerun ran the BORROWED agent X (not P's own agent).
-      const spawned = readSpawnedAgents(h.argvLog)
-      expect(spawned).toContain(X_AGENT)
-      expect(spawned).not.toContain(P_AGENT)
-      // The run is on node P (借壳: node_id=P) and reached done with P's output port.
-      const pRuns = await h.db
-        .select()
-        .from(nodeRuns)
-        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, P)))
-      const rerun = pRuns.find((r) => r.rerunCause === 'clarify-answer')!
-      expect(rerun.status).toBe('done')
-    } finally {
-      h.cleanup()
-    }
   })
 })

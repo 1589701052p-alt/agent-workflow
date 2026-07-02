@@ -1,7 +1,7 @@
 // LOCKS: RFC-056 patch 2026-06-22 — the cross-clarify designer rerun must NOT
 // roll the worktree back to pre_snapshot.
 //
-// Before the patch, `triggerDesignerRerun` unconditionally called
+// Before the patch, the legacy designer-rerun mint unconditionally called
 // `rollbackNodeRunWorktrees(..., { resetOnEmptySnapshot: false })`, i.e.
 // `git reset --hard HEAD && git clean -fd && git stash apply <pre_snapshot>`
 // against the designer's worktree — erasing the designer's output AND any
@@ -9,6 +9,12 @@
 // cross-clarify `continue` is a *revise-with-feedback* continuation, not a
 // retry, so the worktree must be preserved (the prior draft is re-supplied via
 // the scheduler's `## Prior Output (to update or regenerate)` prompt block).
+//
+// RFC-132: the designer rerun is now minted by answering the awaiting cross
+// round via the unified quick channel (autoDispatchClarifyRound →
+// dispatchTaskQuestions frontier mint). The invariant is unchanged — the CROSS
+// path never rolls the worktree back (the only rollback in the unified path is
+// the SELF-clarify isolated-rerun branch, explicitly gated kind==='self').
 //
 // design/RFC-056-clarify-cross-agent/patch-2026-06-22-designer-rerun-no-rollback.md
 //
@@ -23,10 +29,14 @@ import { join, resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { triggerDesignerRerun } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { gitStashSnapshot, runGit } from '../src/util/git'
+import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 interface Repo {
   path: string
@@ -44,9 +54,56 @@ async function buildRepo(): Promise<Repo> {
   return { path, cleanup: () => rmSync(path, { recursive: true, force: true }) }
 }
 
-/** Seed a workflow + task + a single `done` designer node_run. The task's
- *  worktreePath points at the REAL repo and the designer carries a REAL stash
- *  sha — so a future reintroduction of the rollback (which loads the target via
+function makeQ(id: string): ClarifyQuestion {
+  return {
+    id,
+    title: `Question ${id}`,
+    kind: 'single',
+    recommended: false,
+    options: [
+      { label: 'A', description: '', recommended: false, recommendationReason: '' },
+      { label: 'B', description: '', recommended: false, recommendationReason: '' },
+    ],
+  }
+}
+
+function makeAns(qid: string): ClarifyAnswer {
+  return { questionId: qid, selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' }
+}
+
+function triadDef(): WorkflowDefinition {
+  return {
+    $schema_version: 4,
+    inputs: [],
+    nodes: [
+      { id: 'designer', kind: 'agent-single', agentName: 'designer' },
+      { id: 'questioner', kind: 'agent-single', agentName: 'questioner' },
+      { id: 'cross1', kind: 'clarify-cross-agent' },
+    ],
+    edges: [
+      {
+        id: 'e_q_cross',
+        source: { nodeId: 'questioner', portName: '__clarify__' },
+        target: { nodeId: 'cross1', portName: 'questions' },
+      },
+      {
+        id: 'e_cross_d',
+        source: { nodeId: 'cross1', portName: 'to_designer' },
+        target: { nodeId: 'designer', portName: '__external_feedback__' },
+      },
+      {
+        id: 'e_cross_q',
+        source: { nodeId: 'cross1', portName: 'to_questioner' },
+        target: { nodeId: 'questioner', portName: '__clarify_response__' },
+      },
+    ],
+    outputs: [],
+  }
+}
+
+/** Seed a workflow + task + a `done` designer node_run + a done questioner run. The task's
+ *  worktreePath points at the REAL repo and the designer carries a REAL stash sha — so a
+ *  future reintroduction of the rollback (which loads the target via
  *  `loadRollbackTarget(db, taskId)` → tasks.worktreePath) would actually fire
  *  and flip this test red. */
 async function seedTaskAndDesigner(
@@ -55,7 +112,7 @@ async function seedTaskAndDesigner(
   worktreePath: string,
   preSnapshot: string,
 ): Promise<void> {
-  const def = { $schema_version: 4, inputs: [], nodes: [], edges: [] }
+  const def = triadDef()
   await db.insert(workflows).values({
     id: `wf_${taskId}`,
     name: 'stub',
@@ -86,6 +143,14 @@ async function seedTaskAndDesigner(
     iteration: 0,
     preSnapshot,
   })
+  await db.insert(nodeRuns).values({
+    id: 'nr_questioner_done',
+    taskId,
+    nodeId: 'questioner',
+    status: 'done',
+    retryIndex: 0,
+    iteration: 0,
+  })
 }
 
 describe('RFC-056 patch 2026-06-22: cross-clarify designer rerun does not roll back the worktree', () => {
@@ -112,18 +177,30 @@ describe('RFC-056 patch 2026-06-22: cross-clarify designer rerun does not roll b
     const taskId = 'task_norollback'
     await seedTaskAndDesigner(db, taskId, repo.path, sha)
 
-    const out = await triggerDesignerRerun({
+    // Seed an awaiting cross round (designer-scoped by default) and answer it — the
+    // designer rerun comes out of the unified dispatch (res.dispatch.reruns).
+    const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
       taskId,
-      designerNodeId: 'designer',
-      sources: [],
+      crossClarifyNodeId: 'cross1',
+      sourceQuestionerNodeId: 'questioner',
+      sourceQuestionerNodeRunId: 'nr_questioner_done',
+      targetDesignerNodeId: 'designer',
       loopIter: 0,
-      now: () => 1,
+      questions: [makeQ('q1')],
+    })
+    const res = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossClarifyNodeRunId,
+      answers: [makeAns('q1')],
+      actor,
     })
 
-    // The rerun ran to completion: a fresh pending designer row was minted.
+    // The answer ran to completion: a fresh pending designer row was minted.
+    const designerRerun = res.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    expect(designerRerun).toBeDefined()
     const fresh = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, out.designerNodeRunId))
+      await db.select().from(nodeRuns).where(eq(nodeRuns.id, designerRerun!.nodeRunId))
     )[0]
     expect(fresh?.status).toBe('pending')
 
@@ -135,12 +212,22 @@ describe('RFC-056 patch 2026-06-22: cross-clarify designer rerun does not roll b
     expect(readFileSync(join(repo.path, 'design.md'), 'utf8')).toBe('designer v1\n')
   })
 
-  test('source guard: triggerDesignerRerun no longer references the rollback helpers', () => {
-    const src = readFileSync(
+  test('source guard: the cross-clarify service + the unified dispatch mint do not reference the rollback helpers', () => {
+    // crossClarify.ts (readiness / stop / session logic) must stay rollback-free …
+    const crossSrc = readFileSync(
       resolve(import.meta.dir, '..', 'src', 'services', 'crossClarify.ts'),
       'utf8',
     )
-    expect(src).not.toContain('rollbackNodeRunWorktrees')
-    expect(src).not.toContain('loadRollbackTarget')
+    expect(crossSrc).not.toContain('rollbackNodeRunWorktrees')
+    expect(crossSrc).not.toContain('loadRollbackTarget')
+    // … and so must the LIVE designer-rerun mint path (dispatchTaskQuestions). The only
+    // rollback in the answer flow is autoDispatchClarifyRound's SELF-clarify branch
+    // (gated kind==='self'), never the cross/designer dispatch.
+    const dispatchSrc = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'taskQuestionDispatch.ts'),
+      'utf8',
+    )
+    expect(dispatchSrc).not.toContain('rollbackNodeRunWorktrees')
+    expect(dispatchSrc).not.toContain('loadRollbackTarget')
   })
 })

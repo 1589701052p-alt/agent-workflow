@@ -1,22 +1,19 @@
 // RFC-058 PR-A baseline (T3): byte-level lock of RFC-056 cross-clarify service
-// path. Exercises createCrossClarifySession → submitCrossClarifyAnswers →
-// designer rerun readiness → questioner cascade, asserting iteration counter
-// rules, dispatch outcomes, External Feedback / Prior Output assembly, and
-// hasPersistentStop persistence semantics that PR-B refactor must preserve.
+// path. Exercises createCrossClarifySession → answering the round (RFC-132
+// unified quick channel) → designer rerun readiness, asserting iteration
+// counter rules and the node-level stop-directive persistence semantics that
+// refactors must preserve.
 //
 // Locks:
 //   - createCrossClarifySession iteration counter (same node × loopIter)
 //   - loop_iter isolation (different loopIter → independent iteration count)
-//   - submit continue single source → designer-rerun-triggered
-//   - submit continue multi-source → designer-waiting → designer-rerun-triggered
-//   - submit stop → questioner-stop-triggered + hasPersistentStop=true
-//   - reject persistence: hasPersistentStop survives across reruns
-//   - ifMatchIteration optimistic lock
-//   - designer-target-missing path
-//   - evaluateDesignerRerunReadiness returns sources in stable order
-//   - buildExternalFeedbackContext dictionary order + priorOutputBlock presence
-//   - buildQuestionerCrossClarifyContext returns full Q&A history (RFC-058
-//     baseline locks current behavior; PR-B introduces aging cutoff)
+//   - evaluateDesignerRerunReadiness ready/pending logic (the dispatch's
+//     multi-source readiness gate reuses it)
+//   - reject persistence: resolveCrossNodeStopped reads the node-level stop
+//     directive an answer-stop writes (RFC-132 T7)
+//
+// (The legacy quick-channel outcome contract itself was retired by RFC-132 —
+// answers now seal + auto-dispatch via autoDispatchClarifyRound.)
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -24,11 +21,11 @@ import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
   createCrossClarifySession,
   evaluateDesignerRerunReadiness,
   resolveCrossNodeStopped,
-  submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -39,6 +36,8 @@ import type {
 } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 async function seedCrossClarifyTask(
   db: DbClient,
@@ -290,183 +289,10 @@ describe('RFC-058 baseline T3 — createCrossClarifySession iteration counter', 
   })
 })
 
-describe('RFC-058 baseline T3 — submitCrossClarifyAnswers outcomes', () => {
-  async function seedSubmittable(
-    db: DbClient,
-    designerCciTarget: 'designer' | null = 'designer',
-    crossClarifyNodeIds: string[] = ['cc1'],
-    questionerNodeIds: string[] = ['questioner'],
-  ): Promise<{ taskId: string; crossClarifyNodeRunIds: string[] }> {
-    const { taskId } = await seedCrossClarifyTask(db, {
-      crossClarifyNodeIds,
-      questionerNodeIds,
-    })
-    // Always seed a designer prior done run — triggerDesignerRerun needs to
-    // look it up to inherit cci + spawn a new attempt.
-    await db.insert(nodeRuns).values({
-      id: 'nr_designer_prior',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      startedAt: Date.now() - 100,
-    })
-    const crossClarifyNodeRunIds: string[] = []
-    for (let i = 0; i < crossClarifyNodeIds.length; i++) {
-      const ccId = crossClarifyNodeIds[i]!
-      const qId = questionerNodeIds[Math.min(i, questionerNodeIds.length - 1)]!
-      const qRunId = `nr_${qId}_${i}`
-      const existing = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, qRunId))).length > 0
-      if (!existing) {
-        await db.insert(nodeRuns).values({
-          id: qRunId,
-          taskId,
-          nodeId: qId,
-          status: 'done',
-          retryIndex: 0,
-          iteration: 0,
-        })
-      }
-      const { crossClarifyNodeRunId } = await createCrossClarifySession({
-        db,
-        taskId,
-        crossClarifyNodeId: ccId,
-        sourceQuestionerNodeId: qId,
-        sourceQuestionerNodeRunId: qRunId,
-        targetDesignerNodeId: designerCciTarget,
-        loopIter: 0,
-        questions: [makeQuestion()],
-      })
-      crossClarifyNodeRunIds.push(crossClarifyNodeRunId)
-    }
-    return { taskId, crossClarifyNodeRunIds }
-  }
-
-  test('continue single source → designer-rerun-triggered + designer node_run minted', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, crossClarifyNodeRunIds } = await seedSubmittable(db)
-    const r = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    expect(r.session.status).toBe('answered')
-    expect(r.session.directive).toBe('continue')
-    expect(r.outcome.kind).toBe('designer-rerun-triggered')
-    if (r.outcome.kind === 'designer-rerun-triggered') {
-      const designerRun = (
-        await db.select().from(nodeRuns).where(eq(nodeRuns.id, r.outcome.designerNodeRunId))
-      )[0]
-      expect(designerRun?.nodeId).toBe('designer')
-      expect(r.outcome.sourceCount).toBe(1)
-    }
-    // designer_run_triggered_at stamped on session
-    const persisted = (
-      await db.select().from(crossClarifySessions).where(eq(crossClarifySessions.id, r.session.id))
-    )[0]
-    expect(persisted?.designerRunTriggeredAt).toBeTruthy()
-    void taskId
-  })
-
-  test('continue multi-source: first submit → designer-waiting, second → designer-rerun-triggered', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { crossClarifyNodeRunIds } = await seedSubmittable(
-      db,
-      'designer',
-      ['cc_a', 'cc_b'],
-      ['q_a', 'q_b'],
-    )
-    const r1 = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    expect(r1.outcome.kind).toBe('designer-waiting')
-    if (r1.outcome.kind === 'designer-waiting') {
-      expect(r1.outcome.pendingCrossClarifyNodeIds).toEqual(['cc_b'])
-    }
-    const r2 = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[1]!,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    expect(r2.outcome.kind).toBe('designer-rerun-triggered')
-    if (r2.outcome.kind === 'designer-rerun-triggered') {
-      expect(r2.outcome.sourceCount).toBe(2)
-    }
-  })
-
-  test('stop directive → questioner-stop-triggered + resolveCrossNodeStopped=true', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, crossClarifyNodeRunIds } = await seedSubmittable(db)
-    const r = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-      answers: [makeAnswer()],
-      directive: 'stop',
-      ifMatchIteration: 0,
-    })
-    expect(r.session.directive).toBe('stop')
-    expect(r.outcome.kind).toBe('questioner-stop-triggered')
-    const persistentStop = await resolveCrossNodeStopped(db, taskId, 'questioner')
-    expect(persistentStop).toBe(true)
-  })
-
-  test('ifMatchIteration mismatch → ConflictError cross-clarify-iteration-mismatch', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { crossClarifyNodeRunIds } = await seedSubmittable(db)
-    await expect(
-      submitCrossClarifyAnswers({
-        db,
-        crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-        answers: [makeAnswer()],
-        directive: 'continue',
-        ifMatchIteration: 42,
-      }),
-    ).rejects.toThrow(/cross-clarify-iteration-mismatch|server/)
-  })
-
-  test('designer-target-missing path: targetDesignerNodeId=null → designer-target-missing outcome', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { crossClarifyNodeRunIds } = await seedSubmittable(db, null)
-    const r = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    expect(r.outcome.kind).toBe('designer-target-missing')
-  })
-
-  test('idempotency: re-submitting answered session throws ConflictError', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { crossClarifyNodeRunIds } = await seedSubmittable(db)
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    await expect(
-      submitCrossClarifyAnswers({
-        db,
-        crossClarifyNodeRunId: crossClarifyNodeRunIds[0]!,
-        answers: [makeAnswer()],
-        directive: 'continue',
-        ifMatchIteration: 0,
-      }),
-    ).rejects.toThrow()
-  })
-})
+// (The legacy quick-channel 'outcomes' describe was DELETED by RFC-132 — it locked the
+// retired outcome contract itself. The unified equivalents live in
+// rfc128-p5-d-autodispatch.test.ts: iteration-mismatch → 'clarify-iteration-mismatch',
+// double-answer → 'clarify-already-answered', stop → questioner rerun + node directive.)
 
 describe('RFC-058 baseline T3 — evaluateDesignerRerunReadiness ready/pending logic', () => {
   test('after 1 of 2 submits: ready=false + pending lists unsubmitted cc', async () => {
@@ -508,18 +334,19 @@ describe('RFC-058 baseline T3 — evaluateDesignerRerunReadiness ready/pending l
         questions: [makeQuestion()],
       })
     }
-    // Submit only cc_alpha. cc_zeta still awaiting_human.
+    // Answer only cc_alpha (unified quick channel; the designer auto-dispatch parks on the
+    // not-ready sibling). cc_zeta still awaiting_human.
     const ccAlphaRunRows = await db
       .select()
       .from(crossClarifySessions)
       .where(eq(crossClarifySessions.crossClarifyNodeId, 'cc_alpha'))
     const cnrA = ccAlphaRunRows[0]!.crossClarifyNodeRunId
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: cnrA,
+      originNodeRunId: cnrA,
       answers: [makeAnswer()],
-      directive: 'continue',
       ifMatchIteration: 0,
+      actor,
     })
     const r = await evaluateDesignerRerunReadiness({
       db,
@@ -574,12 +401,15 @@ describe('RFC-058 baseline T3 — resolveCrossNodeStopped reject persistence', (
       loopIter: 0,
       questions: [makeQuestion()],
     })
-    await submitCrossClarifyAnswers({
+    // RFC-132: the stop answer (unified quick channel) writes the questioner's node-level
+    // directive; resolveCrossNodeStopped reads it (RFC-132 T7 single source).
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: cnrStop,
+      originNodeRunId: cnrStop,
       answers: [makeAnswer()],
       directive: 'stop',
       ifMatchIteration: 0,
+      actor,
     })
     expect(await resolveCrossNodeStopped(db, taskId, 'questioner_a')).toBe(true)
     expect(await resolveCrossNodeStopped(db, taskId, 'questioner_b')).toBe(false)

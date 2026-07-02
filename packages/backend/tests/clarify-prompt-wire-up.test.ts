@@ -108,7 +108,7 @@ describe('scheduler ↔ runner clarify prompt wire-up (RFC-023 T12)', () => {
   // The agent-single buildPromptContext call MUST pass the shared
   // `applyLatestDirective` local (= `isClarifyRerun || reviewContext === undefined`,
   // RFC-100 Codex review #2). The prior round's directive='stop' suppresses the
-  // IMMEDIATE clarify-rerun (the row submitClarifyAnswers minted at retryIndex=0)
+  // IMMEDIATE clarify-rerun (the continuation row the legacy quick channel minted)
   // AND any non-review-driven process-retry / revival of that same round (so a
   // 'stop' finalize stays released across retries instead of being re-forced into
   // ask-back). Only a review-iterate rerun (reviewContext set) strips the

@@ -1,20 +1,22 @@
 // RFC-074 (was RFC-056 patch 2026-05-22 "Layer A sibling cascade").
 //
-// HISTORY: RFC-056 made `triggerDesignerRerun` eagerly mint a fresh pending
+// HISTORY: RFC-056 made the designer-rerun mint eagerly insert a fresh pending
 // node_run for EVERY downstream node on a cross-clarify designer rerun, because
 // the scheduler's cci-based freshness couldn't propagate a rerun lazily and
 // downstream rows stayed `done` against stale upstream output.
 //
 // RFC-074 (PR-B, T-B8) REMOVES that eager cascade. Downstream propagation is now
-// lazy + provenance-driven: `triggerDesignerRerun` mints ONLY the designer's
-// own rerun row; the scheduler's per-batch `recomputeFreshnessAndDemote` demotes
-// a downstream node once the designer's rerun actually produces a fresher done
-// row (the node consumed the OLD designer run → stale → re-dispatched). The
-// eager pre-mint was exactly the speculative over-trigger the RFC eliminates.
+// lazy + provenance-driven: the answer mints ONLY the designer's own rerun row
+// (plus, since RFC-132, the questioner's unconditional continuation — which is a
+// clarify-channel rerun, NOT a downstream cascade); the scheduler's per-batch
+// `recomputeFreshnessAndDemote` demotes a downstream node once the designer's
+// rerun actually produces a fresher done row (the node consumed the OLD designer
+// run → stale → re-dispatched). The eager pre-mint was exactly the speculative
+// over-trigger the RFC eliminates.
 //
-// These tests therefore now LOCK THE ABSENCE of the cascade: after
-// `submitCrossClarifyAnswers` directive=continue, the designer gets a rerun row
-// but downstream nodes (rev1, questioner, …) keep their existing rows untouched.
+// These tests therefore now LOCK THE ABSENCE of the cascade: after answering the
+// round with directive=continue (unified quick channel), the designer gets a
+// rerun row but downstream nodes (rev1, …) keep their existing rows untouched.
 //
 //   in → designer → rev1 → questioner → rev2 → out
 //                                  ↘  cross_clarify (clarify-channel; SKIP)
@@ -28,10 +30,13 @@ import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -187,13 +192,13 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       questions: [makeQ('q1')],
     })
 
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     // Designer's new pending row carries clarifyIteration=1.
     const designerRows = await db
@@ -205,18 +210,28 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
     // RFC-074 PR-C: the designer rerun is a fresh pending insert (latest id wins).
     expect(designerFresh).toBeDefined()
 
-    // RFC-074 NO-CASCADE LOCK: rev1 + questioner are NOT pre-minted a pending
-    // row. Each keeps exactly its single done row from iteration 0; the
-    // scheduler will demote + re-dispatch them lazily once the designer rerun
-    // produces a fresher done row (provenance freshness, recomputeFreshnessAndDemote).
-    for (const nodeId of ['rev1', 'questioner']) {
-      const rows = await db
-        .select()
-        .from(nodeRuns)
-        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
-      expect(rows.length, `${nodeId} should NOT be pre-cascaded (single done row)`).toBe(1)
-      expect(rows[0]?.status).toBe('done')
-    }
+    // RFC-074 NO-CASCADE LOCK: rev1 is NOT pre-minted a pending row. It keeps
+    // exactly its single done row from iteration 0; the scheduler will demote +
+    // re-dispatch it lazily once the designer rerun produces a fresher done row
+    // (provenance freshness, recomputeFreshnessAndDemote).
+    const rev1Rows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev1')))
+    expect(rev1Rows.length, 'rev1 should NOT be pre-cascaded (single done row)').toBe(1)
+    expect(rev1Rows[0]?.status).toBe('done')
+
+    // RFC-132 (§6 delta 1): the questioner DOES get exactly one pending rerun — its
+    // unconditional clarify continuation (cause 'cross-clarify-questioner-rerun'),
+    // minted by the unified dispatch alongside the designer rerun. It is a
+    // clarify-channel rerun, NOT an eager downstream cascade.
+    const qRows = await db
+      .select()
+      .from(nodeRuns)
+      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
+    const qPending = qRows.filter((r) => r.status === 'pending')
+    expect(qPending.length, 'exactly one questioner continuation rerun').toBe(1)
+    expect(qPending[0]?.rerunCause).toBe('cross-clarify-questioner-rerun')
 
     // Nodes that NEVER ran (rev2, out) have no rows either way.
     for (const nodeId of ['rev2', 'out']) {
@@ -253,11 +268,11 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
     const rev1Count = (
       await db
@@ -266,8 +281,8 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
         .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'rev1')))
     ).length
     // RFC-074: no cascade row is minted on rev1 — it keeps its single done row.
-    // (The designer rerun row is the only thing submit mints; downstream
-    // re-runs are driven lazily by the scheduler's freshness recompute.)
+    // (The answer mints only the designer rerun + the questioner continuation;
+    // downstream re-runs are driven lazily by the scheduler's freshness recompute.)
     expect(rev1Count).toBe(1)
   })
 
@@ -287,17 +302,17 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
     // The cross-clarify node itself is reachable from designer ONLY via
     // a clarify-channel edge (to_designer → __external_feedback__), so
     // the BFS skips it. The cross-clarify node_run minted by
     // createCrossClarifySession is the only row, and it transitioned
-    // pending → awaiting_human → answered via submit.
+    // pending → awaiting_human → done via the answer's full seal.
     const crossRows = await db
       .select()
       .from(nodeRuns)
@@ -329,11 +344,11 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
     const rev1Rows = await db
       .select()

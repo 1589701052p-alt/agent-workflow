@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb } from '../src/db/client'
 import { agents, clarifySessions, tasks, workflows } from '../src/db/schema'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 import { reenterScheduler } from './reenter-scheduler'
@@ -169,9 +169,9 @@ describe('RFC-026 regression — isolated mode never resumes', () => {
       const sessionRow = (
         await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
       )[0]
-      await submitClarifyAnswers({
+      await autoDispatchClarifyRound({
         db: h.db,
-        clarifyNodeRunId: sessionRow!.clarifyNodeRunId,
+        originNodeRunId: sessionRow!.clarifyNodeRunId,
         directive: 'stop', // RFC-100: finalize round → <workflow-output> accepted
         answers: [
           {
@@ -181,6 +181,7 @@ describe('RFC-026 regression — isolated mode never resumes', () => {
             customText: '',
           },
         ],
+        actor: { userId: 'u1', role: 'owner' },
       })
       // RFC-097: runTask's entry CAS only claims pending tasks — reset first
       // (test stand-in for resumeTask).

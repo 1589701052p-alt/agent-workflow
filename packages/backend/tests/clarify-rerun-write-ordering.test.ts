@@ -1,45 +1,35 @@
-// RFC-076 PR-0 (T0) — clarify rerun write-ordering (torn-read safety).
+// RFC-076 PR-0 (T0) — clarify rerun continuation, torn-read safety (functional lock).
 //
 // WHY THIS FILE EXISTS (regression intent):
-//   submitClarifyAnswers writes TWO node_runs rows for one logical event:
-//   (1) the source-agent rerun `pending` insert, and (2) the clarify node_run
-//   flip awaiting_human→done. With the flip FIRST (the pre-PR-0 order) a reader
-//   landing between them — and the rollbackToSnapshot git-subprocess yields the
-//   event loop for ~100s of ms right there — observes "clarify done, rerun
-//   absent". A dispatch frontier derived from node_runs at that instant judges
-//   the agent's prior done row still freshest ⇒ scope allSettled ⇒ FALSE
-//   COMPLETION, silently dropping the rerun. (A naive `db.transaction(async …)`
-//   does NOT help: bun:sqlite's transaction is synchronous, so an async body
-//   COMMITs at its first real `await`, leaving post-await writes outside the tx.)
+//   Answering a self-clarify writes TWO node_runs facts for one logical event:
+//   the source-agent rerun `pending` mint and the clarify node_run flip
+//   awaiting_human→done. A reader landing between them must never observe
+//   "clarify done, rerun absent": a dispatch frontier derived from node_runs at
+//   that instant would judge the agent's prior done row still freshest ⇒ scope
+//   allSettled ⇒ FALSE COMPLETION, silently dropping the rerun.
 //
-//   RFC-128 P5-BC §5.2.14: phases (1) mint + (2) flip session/round now run in ONE
-//   SYNCHRONOUS dbTxSync (the sanctioned sync-body tx), so they are truly atomic —
-//   the torn window is closed outright AND the submit is mutually atomic with
-//   dispatchTaskQuestions's dbTxSync (the mixed-path double-mint race). Phase (3)
-//   close-clarify stays an async await AFTER the tx (node_run status transitions
-//   must go through the lifecycle CAS), with the rerun already committed.
-//
-//   Fix: mint the rerun BEFORE flipping clarify→done. The rerun row's fields all
-//   come from sourceRunRow (incl. its ORIGINAL preSnapshot, independent of the
-//   rollback), so the reorder is data-safe. The only intermediate state a reader
-//   can then observe is "clarify still awaiting + rerun present" — a safe,
-//   non-completing frontier.
-//
-//   Test 1 (functional): the reorder did not break the happy path — answering a
-//   self-clarify still produces exactly one pending rerun + a done clarify row.
-//   Test 2 (source-ordering guard): the rerun `insert(nodeRuns)` lexically
-//   precedes the `resume-clarify` transition in clarify.ts. If a refactor flips
-//   the order back, this goes red — the runtime torn window is invisible to a
-//   post-hoc state assertion, so the source guard is the load-bearing lock.
+//   History: the legacy quick-channel finalize closed this window by lexical
+//   write ordering (rerun insert BEFORE the session/round flip), and this file
+//   carried a source-ordering grep guard on that function's internals. RFC-132
+//   replaced the quick channel with the unified seal + auto-dispatch
+//   (autoDispatchClarifyRound): sealRoundQuestions commits the round answered
+//   with the entries SEALED-UNDISPATCHED — a state that PARKS the home node
+//   (never a completing frontier) until dispatchTaskQuestions mints the rerun.
+//   The T0 torn-window protection is therefore the park-pinning invariant,
+//   locked by rfc128-p5-0-stranding-guard.test.ts and the park tests in
+//   rfc128-p5-d-autodispatch.test.ts; the lexical source-ordering guard was
+//   superseded and removed with the dead function. The functional happy-path
+//   lock below stays: answering a self-clarify still yields exactly one pending
+//   rerun + a done clarify row.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -152,11 +142,12 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
       truncationWarnings: [],
     })
 
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: sess.clarifyNodeRunId,
+      originNodeRunId: sess.clarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
 
     // Clarify node row is done.
@@ -175,37 +166,5 @@ describe('RFC-076 PR-0 — clarify rerun write-ordering', () => {
     expect(pending[0]!.iteration).toBe(0)
     // The prior done row is left untouched as history.
     expect(agentRows.find((r) => r.id === agentRunId)?.status).toBe('done')
-  })
-
-  test('source-ordering guard: rerun insert precedes BOTH the session flip and the resume-clarify (done) transition', () => {
-    const src = readFileSync(
-      resolve(import.meta.dir, '..', 'src', 'services', 'clarify.ts'),
-      'utf8',
-    )
-    // RFC-128 P5-BC §5.2.14: phases (1)+(2) [mint → flip session → flip round] now run in ONE
-    // synchronous dbTxSync (instead of separate ordered awaits), so the rerun mint anchor is the
-    // in-tx `tx.insert(nodeRuns).values(rerunValues)` — same T0 position (BEFORE the in-tx session
-    // flip), and the atomic tx removes the torn window entirely while ALSO serializing against
-    // dispatchTaskQuestions's dbTxSync (the mixed-path double-mint race). The clarify→done close
-    // still runs AFTER the tx, so the lexical ordering invariants below still hold.
-    const rerunInsertIdx = src.indexOf('tx.insert(nodeRuns).values(rerunValues)')
-    // The clarify→done flip: transitionNodeRunStatus with the resume-clarify event (after the tx).
-    const flipIdx = src.indexOf("kind: 'resume-clarify'")
-    // RFC-076 T0-extend: the clarify_session → answered flip. submitClarifyAnswers
-    // is the only place a `status: 'answered'` literal appears before the
-    // sealedSession return, and after the reorder its first occurrence is the
-    // clarifySessions update — which must come AFTER the rerun mint.
-    const sessionFlipIdx = src.indexOf("status: 'answered'")
-    expect(rerunInsertIdx).toBeGreaterThan(0)
-    expect(flipIdx).toBeGreaterThan(0)
-    expect(sessionFlipIdx).toBeGreaterThan(0)
-    // T0 invariant: the rerun must be minted BEFORE clarify is flipped to done.
-    expect(rerunInsertIdx).toBeLessThan(flipIdx)
-    // T0-extend invariant: the rerun must be minted BEFORE the session is flipped
-    // to `answered` — else a concurrent runScope tick (race loop) observes
-    // "session answered ∧ rerun absent" and false-completes the asking agent,
-    // running its downstream on a clarify-only output (combination-scenarios S12
-    // is the end-to-end lock; this is the load-bearing torn-window source guard).
-    expect(rerunInsertIdx).toBeLessThan(sessionFlipIdx)
   })
 })

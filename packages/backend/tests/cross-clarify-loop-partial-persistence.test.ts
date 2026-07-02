@@ -37,16 +37,18 @@ import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
   createCrossClarifySession,
   dispatchCrossClarifyNode,
   evaluateDesignerRerunReadiness,
   resolveCrossNodeStopped,
-  submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -178,11 +180,12 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     // Persistence is keyed by (task, questioner node) — loop-iter agnostic.
     expect(await resolveCrossNodeStopped(db, taskId, 'questioner')).toBe(true)
@@ -204,11 +207,11 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
       questions: [makeQ('q1')],
     })
     // Iter 0 user submitted continue — designer reran already in iter 0.
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: iter0Session.crossClarifyNodeRunId,
+      originNodeRunId: iter0Session.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
 
     // Now the wrapper-loop steps to iter 1 — no iter-1 cross sessions yet.
@@ -242,11 +245,12 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     // Mint a fresh iter-1 pending cross-clarify node_run and dispatch.
     const iter1NodeRunId = `nr_cross1_iter1_${Math.random().toString(36).slice(2, 6)}`
@@ -296,11 +300,12 @@ describe('RFC-056 C5 — wrapper-loop partial persistence', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
 
     // The iter-0 row is still queryable; loop-iter and iteration counter

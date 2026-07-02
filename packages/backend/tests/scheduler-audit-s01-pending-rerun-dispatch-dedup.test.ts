@@ -63,8 +63,8 @@ function def(nodes: Array<{ id: string; kind: NodeKind }>): {
 const ups = (m: Record<string, string[]>): Map<string, string[]> => new Map(Object.entries(m))
 
 // 菱形 in → {asker, sib} → out。asker 第一跑 done 后发了 clarify；用户在 sib 还在跑时
-// 通过收件箱答题，submitClarifyAnswers 给 asker 铸 pending rerun（更晚 id，会话已关闭
-// 所以 askingRunIds 为空）。asker/sib 都已在本次 runScope 调用里派发过。
+// 通过收件箱答题，统一 dispatch（autoDispatchClarifyRound）给 asker 铸 pending rerun（更晚
+// id，会话已关闭所以 askingRunIds 为空）。asker/sib 都已在本次 runScope 调用里派发过。
 function diamondScenario() {
   const { definition, scopeNodes, scopeIds } = def([
     { id: 'in', kind: 'input' },
@@ -73,7 +73,7 @@ function diamondScenario() {
     { id: 'out', kind: 'output' },
   ])
   const askerDone = row('asker', 'done') // 第一跑（发问的那次）
-  const askerRerun = row('asker', 'pending') // submitClarifyAnswers 铸的 rerun（更晚 id ⇒ latest）
+  const askerRerun = row('asker', 'pending') // 统一 dispatch 铸的 rerun（更晚 id ⇒ latest）
   const rows = [row('in', 'done'), askerDone, askerRerun, row('sib', 'done')]
   const upstreams = ups({ asker: ['in'], sib: ['in'], out: ['asker', 'sib'] })
   return { definition, scopeNodes, scopeIds, rows, upstreams, askerRerun }

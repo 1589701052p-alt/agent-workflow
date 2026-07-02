@@ -107,7 +107,8 @@ describe('RFC-064 C4 — services exports', () => {
     // These exports are the public surface other modules call. PR-B kept
     // crossClarify.ts as a deferred-merge file (the helper functions live
     // there); when a follow-up moves them into clarify.ts, this list grows.
-    expect(src).toContain('export async function submitClarifyAnswers')
+    // (RFC-132 PR-E2: the legacy quick-channel submit export is no longer part
+    // of the locked surface — answers flow through services/clarifyAutoDispatch.)
     expect(src).toContain('export async function createClarifySession')
   })
 })

@@ -1,7 +1,7 @@
 // RFC-122 — integration: a self-clarify node with a 'stop' override dispatches
 // WITHOUT the mandatory ask-back protocol (and WITH the STOP CLARIFYING trailer),
-// driven through the REAL scheduler (runTask) + REAL submitClarifyAnswers, reading
-// the actual node_run.promptText the runner wrote.
+// driven through the REAL scheduler (runTask) + the REAL unified answer driver
+// (autoDispatchClarifyRound), reading the actual node_run.promptText the runner wrote.
 //
 //   - golden-lock: no override row ⇒ the designer's first dispatch carries the
 //     MANDATORY ASK-BACK preamble (today's behavior, byte-for-byte).
@@ -23,7 +23,7 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
 import {
@@ -242,11 +242,12 @@ describe('RFC-122 dispatch — stop override suppresses the ask-back protocol', 
     // The user toggles the canvas to "停止反问" while the node is parked, THEN
     // answers "keep clarifying" — the toggle must win.
     await setNodeClarifyDirective(c.db, task.id, 'designer', 'stop', 'u-tester')
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: c.db,
-      clarifyNodeRunId: await openClarifyRunId(c.db, task.id),
+      originNodeRunId: await openClarifyRunId(c.db, task.id),
       answers: [ANSWER],
       directive: 'continue',
+      actor: { userId: 'u-tester', role: 'owner' },
     })
     await reenterScheduler(c.db, task.id)
     await runTask({ taskId: task.id, db: c.db, appHome: c.appHome, opencodeCmd: opencodeCmd() })

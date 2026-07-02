@@ -38,13 +38,14 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+const actor = { userId: 'u1', role: 'owner' as const }
 
 // gate 慢 mock（生成式，plan/state/gate 路径烘焙进脚本——同
 // rfc092-midrun-clarify-dispatch.test.ts 的形态，零 process.env 串扰）。
@@ -489,11 +490,12 @@ describe('RFC-098 B3 — RFC-092 已知限制解除：wrapper 内 clarify mid-ru
 
       expect(await taskStatus(h.db, taskId)).toBe('running')
 
-      await submitClarifyAnswers({
+      await autoDispatchClarifyRound({
         db: h.db,
-        clarifyNodeRunId: session.clarifyNodeRunId,
+        originNodeRunId: session.clarifyNodeRunId,
         answers: [CLARIFY_ANSWER],
         directive: 'stop', // RFC-100: finalize round → wrapper-inner agent's <workflow-output> accepted
+        actor,
       })
     } finally {
       writeFileSync(h.gateFile, 'go\n')

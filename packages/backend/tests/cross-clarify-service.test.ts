@@ -1,29 +1,26 @@
-// RFC-056 PR-B T5 — lock the cross-clarify service contract.
+// RFC-056 PR-B T5 — lock the cross-clarify service contract (RFC-132: answers
+// drive the unified quick channel, autoDispatchClarifyRound).
 //
 // LOCKS:
 //   1. createCrossClarifySession round-trips a row, parks cross-clarify
 //      node_run at awaiting_human, broadcasts 'cross-clarify.created'.
-//   2. submitCrossClarifyAnswers + directive='continue':
-//        a) ifMatchIteration optimistic lock fires 409 on mismatch.
-//        b) idempotency: re-submit on answered row → 409.
-//        c) seals selectedOptionLabels server-side (RFC-023 defence reuse).
-//        d) directive='stop' branch mints fresh questioner node_run +
-//           broadcasts 'cross-clarify.rejected', does NOT mint designer rerun.
-//   3. evaluateDesignerRerunReadiness:
-//        a) single source resolved → ready, sources=[that one].
+//   2. evaluateDesignerRerunReadiness (the dispatch's multi-source gate
+//      reuses it):
+//        a) consumed batches don't re-feed; a fresh awaiting sibling parks.
 //        b) two siblings pointing at same designer, only one answered → not
 //           ready, pendingCrossClarifyNodeIds = [the other].
-//        c) one sibling rejected (directive='stop'), the other submitted →
-//           ready with sources containing only the submitted one.
-//   4. triggerDesignerRerun mints new designer node_run at
-//      cross_clarify_iteration+1, retry_index=0; preserves shard/parent
-//      passthrough; stamps designer_run_triggered_at on consumed sessions.
-//   5. dispatchCrossClarifyNode short-circuits to done when a prior
-//      directive='stop' session exists (persistent stop check is by
-//      cross_clarify_node_id alone, irrespective of loop_iter).
-//   6. buildExternalFeedbackContext renders only directive='continue'
-//      sessions for the same loop_iter; sorts sources by node id; omits
-//      stopped + abandoned siblings.
+//        c) one sibling rejected (directive='stop'), the other answered →
+//           the designer rerun fires carrying only the answered one's entry.
+//   3. dispatchCrossClarifyNode short-circuits to done on the questioner's
+//      node-level stop directive (RFC-132 T7 single source).
+//   4. RFC-125/126 failed→resume keeps answered cross feedback.
+//   5. RFC-128 §5.2.14 questioner write-flow invariants under the unified
+//      driver (single rerun on double answer; consumed entries not
+//      re-dispatchable; open dispatched questioner entry defers a second mint).
+//
+// (The retired legacy quick-channel contract itself — outcome kinds, immediate
+// mints — was deleted with RFC-132; the unified iteration-mismatch /
+// already-answered codes are locked by rfc128-p5-d-autodispatch.test.ts.)
 //
 // If any of these go red the runtime contract drifted — investigate before
 // relaxing.
@@ -35,13 +32,12 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { crossClarifySessions, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
   createCrossClarifySession,
   dispatchCrossClarifyNode,
   evaluateDesignerRerunReadiness,
   resolveCrossNodeStopped,
-  submitCrossClarifyAnswers,
-  triggerDesignerRerun,
 } from '../src/services/crossClarify'
 import { reconcileLegacyCrossPersistentStop } from '../src/services/clarifyMigration'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
@@ -262,143 +258,10 @@ describe('RFC-056 createCrossClarifySession', () => {
   })
 })
 
-describe('RFC-056 submitCrossClarifyAnswers — directive="continue" path', () => {
-  test('ifMatchIteration mismatch → 409 cross-clarify-iteration-mismatch', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 't')],
-    })
-
-    await expect(
-      submitCrossClarifyAnswers({
-        db,
-        crossClarifyNodeRunId,
-        answers: [makeAns('q1')],
-        directive: 'continue',
-        ifMatchIteration: 99,
-      }),
-    ).rejects.toMatchObject({ code: 'cross-clarify-iteration-mismatch' })
-  })
-
-  test('second submit on answered row → 409 cross-clarify-already-answered', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 't')],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      directive: 'continue',
-    })
-    await expect(
-      submitCrossClarifyAnswers({
-        db,
-        crossClarifyNodeRunId,
-        answers: [makeAns('q1')],
-        directive: 'continue',
-      }),
-    ).rejects.toMatchObject({ code: 'cross-clarify-already-answered' })
-  })
-
-  test('seals selectedOptionLabels server-side from question.options (anti-forgery)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 'Why?')],
-    })
-    const { session } = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [
-        {
-          questionId: 'q1',
-          selectedOptionIndices: [0],
-          selectedOptionLabels: ['BogusLabelClient'], // attempt forgery
-          customText: '',
-        },
-      ],
-      directive: 'continue',
-    })
-    expect(session.answers?.[0]?.selectedOptionLabels).toEqual(['A'])
-  })
-})
-
-// RFC-128 P0 net: 整轮 seal 现状，P1 逐题改造勿破。本 describe 锁住 stop 路径整轮
-// 续跑（mint 一条 questioner node_run + designer 不续跑）；cause 字段与「恰好一条」的
-// 补强锁见 rfc128-p0-whole-round-seal-net.test.ts #2。
-describe('RFC-056 submitCrossClarifyAnswers — directive="stop" (reject)', () => {
-  test('mints fresh questioner node_run + broadcasts cross-clarify.rejected; designer NOT rerun', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId)
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 'spurious?')],
-    })
-
-    const received: TaskWsMessage[] = []
-    taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-
-    const result = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      directive: 'stop',
-    })
-    expect(result.outcome.kind).toBe('questioner-stop-triggered')
-
-    const rejectedBroadcast = received.find((m) => m.type === 'cross-clarify.rejected')
-    expect(rejectedBroadcast).toBeDefined()
-    const batched = received.find((m) => m.type === 'cross-clarify.designer-rerun-batched')
-    expect(batched).toBeUndefined()
-
-    // A new questioner node_run with status='pending' must exist.
-    const qRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const pendingQuestioner = qRuns.find((r) => r.nodeId === 'questioner' && r.status === 'pending')
-    expect(pendingQuestioner).toBeDefined()
-
-    // No new designer node_run at cross_clarify_iteration=1 should exist.
-    const newDesigner = qRuns.find((r) => r.nodeId === 'designer' && r.status === 'pending')
-    expect(newDesigner).toBeUndefined()
-  })
-})
+// (The 'directive="continue" path' + 'directive="stop" (reject)' describes were DELETED by
+// RFC-132 — they locked the retired legacy quick-channel contract itself. The unified
+// equivalents — 'clarify-iteration-mismatch' / 'clarify-already-answered' + the stop
+// questioner rerun with its canvas directive — are locked by rfc128-p5-d-autodispatch.test.ts.)
 
 describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', () => {
   test('single source answered=continue → ready, sources includes it', async () => {
@@ -417,15 +280,15 @@ describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', 
       loopIter: 0,
       questions: [makeQ('q1', 't')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
 
-    // After submit, the latest session is consumed (designer_run_triggered_at
-    // stamped). Insert a SECOND awaiting session to verify the readiness scan
+    // After the answer, the round is consumed (its designer entries dispatched).
+    // Insert a SECOND awaiting session to verify the readiness scan
     // correctly handles the "fresh source after a prior consumed batch" case.
     const qRunId2 = await seedQuestionerRun(db, taskId)
     await createCrossClarifySession({
@@ -531,17 +394,24 @@ describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', 
       questions: [makeQ('q1', 'ux')],
     })
 
-    // Submit only crossUx; crossSec still awaiting.
-    const ret = await submitCrossClarifyAnswers({
+    // Answer only crossUx; crossSec still awaiting → the designer dispatch parks
+    // (no designer rerun) and the readiness scan lists crossSec pending.
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ux.crossClarifyNodeRunId,
+      originNodeRunId: ux.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
-    expect(ret.outcome.kind).toBe('designer-waiting')
-    if (ret.outcome.kind === 'designer-waiting') {
-      expect(ret.outcome.pendingCrossClarifyNodeIds).toEqual(['crossSec'])
-    }
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
+    const readiness = await evaluateDesignerRerunReadiness({
+      db,
+      taskId,
+      designerNodeId: 'designer',
+      definition: def,
+      loopIter: 0,
+    })
+    expect(readiness.ready).toBe(false)
+    expect(readiness.pendingCrossClarifyNodeIds).toEqual(['crossSec'])
   })
 
   test('one sibling reject + one submit → ready; sources includes only submit', async () => {
@@ -605,102 +475,35 @@ describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', 
       questions: [makeQ('q1', 'ux')],
     })
 
-    // Reject sec first (does NOT trigger designer).
-    await submitCrossClarifyAnswers({
+    // Reject sec first (does NOT trigger designer; a stop round produces no
+    // designer entries at all).
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sec.crossClarifyNodeRunId,
+      originNodeRunId: sec.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
-    // Now submit ux — only remaining sibling, sec is stopped (resolved
-    // without feeding). Readiness should pass with sources=[ux only].
-    const ret = await submitCrossClarifyAnswers({
+    // Now answer ux — only remaining sibling, sec is stopped (resolved without
+    // feeding). Readiness passes and the designer rerun mints carrying ONLY
+    // ux's designer entry (the legacy sources=[ux only] / sourceCount=1).
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ux.crossClarifyNodeRunId,
+      originNodeRunId: ux.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    if (ret.outcome.kind === 'designer-rerun-triggered') {
-      expect(ret.outcome.sourceCount).toBe(1)
-    }
+    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    expect(designerRerun).toBeDefined()
+    expect(designerRerun!.entryIds).toHaveLength(1)
   })
 })
 
-describe('RFC-056 triggerDesignerRerun', () => {
-  test('mints new designer node_run with cross_clarify_iteration+1, retry_index=max(existing)+1; stamps designer_run_triggered_at', async () => {
-    // Patch 2026-05-23: retry_index is now max(existing top-level rows at
-    // this iteration) + 1 (not hardcoded 0) so the scheduler's
-    // `isFresherNodeRun` ALWAYS picks the new pending row over any prior
-    // done row at the same clarifyIteration. With a single prior designer
-    // row at retry_index=0 the bump yields retry_index=1.
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId, { clarifyIteration: 0 })
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 'go')],
-    })
-    const ret = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      directive: 'continue',
-    })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    if (ret.outcome.kind !== 'designer-rerun-triggered') return
-
-    const newDesigner = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, ret.outcome.designerNodeRunId))
-    )[0]
-    expect(newDesigner?.retryIndex).toBe(1)
-    expect(newDesigner?.status).toBe('pending')
-
-    // The consumed session has designer_run_triggered_at set.
-    const row = (
-      await db
-        .select()
-        .from(crossClarifySessions)
-        .where(eq(crossClarifySessions.crossClarifyNodeRunId, crossClarifyNodeRunId))
-    )[0]
-    expect(row?.designerRunTriggeredAt).not.toBeNull()
-  })
-
-  test('preserves shard_key + parent_node_run_id passthrough on designer rerun', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_designer_with_shard',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      preSnapshot: 'snap',
-      parentNodeRunId: 'parent-x',
-      shardKey: 'shardA',
-    })
-    const out = await triggerDesignerRerun({
-      db,
-      taskId,
-      designerNodeId: 'designer',
-      sources: [],
-      loopIter: 0,
-    })
-    const fresh = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, out.designerNodeRunId))
-    )[0]
-    expect(fresh?.shardKey).toBe('shardA')
-    expect(fresh?.parentNodeRunId).toBe('parent-x')
-  })
-})
+// (The legacy designer-rerun-mint describe was DELETED by RFC-132 — it tested the retired
+// immediate mint itself. The unified dispatch mint's retry_index=max+1 formula is locked by
+// cross-clarify-designer-retry-index.test.ts; the dispatched_at consumed stamp by
+// cross-clarify-multi-source-wait.test.ts; inherit-passthrough by the shared
+// buildMintNodeRunValues coverage.)
 
 describe('RFC-056 dispatchCrossClarifyNode persistent-stop short-circuit', () => {
   test('cross-clarify node_run flips pending → done when a prior directive=stop session exists for the same node_id (any loop_iter)', async () => {
@@ -826,13 +629,13 @@ describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-cla
       loopIter: 0,
       questions: [makeQ('q1', 'Why Redis?')],
     })
-    // Human answers; directive=continue triggers the designer rerun, but it never
+    // Human answers; directive=continue dispatches the designer rerun, but it never
     // completes-with-output (the task fails) → the round stays answered+UNCONSUMED.
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
 
     // Task fails before the designer consumes the feedback. RFC-126: CR-1 is
@@ -856,20 +659,20 @@ describe('RFC-125 follow-up — failed→resume must NOT drop answered cross-cla
 })
 
 // ===========================================================================
-// RFC-128 P5-BC §5.2.14 — questioner mixed-path write-flow (findings 1+2+3 for the cross/questioner
-// submit). Mirrors the self path: the cross submit's flip runs in a dbTxSync with a session CAS +
-// dispatch-mode recheck + (when the questioner is cascaded) reconcile+consume of the round's
-// QUESTIONER entries; the async questioner cascade / designer logic stay after the tx.
+// RFC-128 P5-BC §5.2.14 — questioner write-flow invariants, under the RFC-132 unified driver
+// (autoDispatchClarifyRound: seal tx → per-question dispatch). The live invariants: a
+// whole-round finalize consumes the round's questioner entries (not parked, not
+// re-dispatchable, exactly one rerun); a concurrent double answer has ONE winner; an open
+// dispatched questioner entry on the home defers a second mint.
 // ===========================================================================
 describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
   const actor = { userId: 'u1', role: 'owner' as const }
 
-  // finding 2 + finding 3 (regression ②): a quick whole-round finalize that CASCADES the questioner
-  // (all-questioner-scope fast path) consumes the round's questioner entries — they are superseded by
-  // the cascade. Materialized + confirmed in-tx → home not parked, entries not re-dispatchable, and
-  // exactly ONE questioner rerun (no park starvation, no duplicate). Virgin case (no prior seal):
-  // the in-tx reconcile creates the questioner entries so a later lazy reconcile can't revive them.
-  test('finding 2/3 — quick-finalize cascading the questioner consumes its entries (not parked, not re-dispatchable, single rerun)', async () => {
+  // finding 2 + finding 3 (regression ②): a quick whole-round finalize that continues the
+  // questioner consumes the round's questioner entries — sealed + dispatched in the same call
+  // (dispatched_at is the unified consumed stamp) → home not parked, entries not
+  // re-dispatchable, and exactly ONE questioner rerun (no park starvation, no duplicate).
+  test('finding 2/3 — quick-finalize continuing the questioner consumes its entries (not parked, not re-dispatchable, single rerun)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, { deferred: true })
     const qRunId = await seedQuestionerRun(db, taskId)
@@ -883,15 +686,15 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       loopIter: 0,
       questions: [makeQ('q1', 't'), makeQ('q2', 't')],
     })
-    // All-questioner-scope → RFC-059 fast path → the questioner is cascaded → its entries superseded.
-    await submitCrossClarifyAnswers({
+    // All-questioner-scope → the questioner continuation mints; its entries are consumed.
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1'), makeAns('q2')],
-      directive: 'continue',
-      questionScopes: { q1: 'questioner', q2: 'questioner' },
+      scopes: { q1: 'questioner', q2: 'questioner' },
+      actor,
     })
-    // The round's questioner entries were materialized + confirmed (superseded).
+    // The round's questioner entries were materialized, sealed and DISPATCHED (consumed).
     const qEntries = (
       await db
         .select()
@@ -899,10 +702,11 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
         .where(eq(taskQuestions.originNodeRunId, crossClarifyNodeRunId))
     ).filter((e) => e.roleKind === 'questioner')
     expect(qEntries.length).toBeGreaterThan(0)
-    expect(qEntries.every((e) => e.confirmation === 'confirmed')).toBe(true)
-    // The questioner home is NOT parked (the superseded entries dropped out of the park source).
+    expect(qEntries.every((e) => e.sealedAt !== null)).toBe(true)
+    expect(qEntries.every((e) => e.dispatchedAt !== null)).toBe(true)
+    // The questioner home is NOT parked (the consumed entries dropped out of the park source).
     expect((await loadUndispatchedSelfQuestionerTargets(db, taskId)).has('questioner')).toBe(false)
-    // Not re-dispatchable (dispatch skips confirmed) → no duplicate.
+    // Not re-dispatchable (dispatch skips already-dispatched entries) → no duplicate.
     const redispatch = await dispatchTaskQuestions(
       db,
       taskId,
@@ -917,9 +721,10 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
     expect(reruns.length).toBe(1)
   })
 
-  // finding 1 (regression ① for cross): two CONCURRENT submitCrossClarifyAnswers on the same
-  // awaiting_human session mint EXACTLY ONE questioner rerun — the in-tx session CAS rejects the loser.
-  test('finding 1 — concurrent cross double-submit mints exactly ONE questioner rerun', async () => {
+  // finding 1 (regression ① for cross): two CONCURRENT answers on the same awaiting_human
+  // round mint EXACTLY ONE questioner rerun — the seal's per-question lock rejects the loser
+  // (ConflictError 'clarify-already-answered' / 'clarify-question-already-sealed').
+  test('finding 1 — concurrent cross double-answer mints exactly ONE questioner rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, { deferred: true })
     const qRunId = await seedQuestionerRun(db, taskId)
@@ -934,19 +739,19 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       questions: [makeQ('q1', 't')],
     })
     const results = await Promise.allSettled([
-      submitCrossClarifyAnswers({
+      autoDispatchClarifyRound({
         db,
-        crossClarifyNodeRunId,
+        originNodeRunId: crossClarifyNodeRunId,
         answers: [makeAns('q1')],
-        directive: 'continue',
-        questionScopes: { q1: 'questioner' },
+        scopes: { q1: 'questioner' },
+        actor,
       }),
-      submitCrossClarifyAnswers({
+      autoDispatchClarifyRound({
         db,
-        crossClarifyNodeRunId,
+        originNodeRunId: crossClarifyNodeRunId,
         answers: [makeAns('q1')],
-        directive: 'continue',
-        questionScopes: { q1: 'questioner' },
+        scopes: { q1: 'questioner' },
+        actor,
       }),
     ])
     expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
@@ -957,15 +762,17 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
     expect(reruns.length).toBe(1)
   })
 
-  // §5.2.14 final-gate (2nd round) finding 1 (regression ①): a deferred-DESIGNER continuation (a
-  // designer-scope question on a deferred task) MATERIALIZES the round's designer task_questions IN the
-  // same B-protected tx as the answered flip — so after the submit returns, the answered session AND
-  // the undispatched designer row are BOTH committed (atomic; a concurrent dispatch / scheduler park
-  // never sees the answered round row-less). Was a post-lock reconcile (separate tx) → non-atomic window.
-  test('finding 1 — deferred designer continuation materializes the designer entry atomically with the flip', async () => {
+  // §5.2.14 final-gate (2nd round) finding 1 (regression ①): a DESIGNER-scope continuation
+  // MATERIALIZES the round's designer task_questions in the seal tx together with the
+  // answered flip — after the answer returns, the answered session AND the designer row are
+  // BOTH committed. RFC-132 (§6 designer 切自动下发): with a single ready source the designer
+  // entry is then AUTO-dispatched in the same call (the legacy 'designer-deferred' park is
+  // reserved for a not-ready multi-source sibling set).
+  test('finding 1 — designer-scope continuation materializes the designer entry with the flip and auto-dispatches it', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, { deferred: true })
     const qRunId = await seedQuestionerRun(db, taskId)
+    await seedDesignerRun(db, taskId) // the designer rerun's prior run to inherit
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
       taskId,
@@ -976,17 +783,15 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       loopIter: 0,
       questions: [makeQ('q1', 't')],
     })
-    const res = await submitCrossClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
-      questionScopes: { q1: 'designer' },
+      scopes: { q1: 'designer' },
+      actor,
     })
-    // deferred designer outcome (NOT triggered immediately).
-    expect(res.outcome.kind).toBe('designer-deferred')
-    // the session is answered AND the designer task_question row exists (undispatched / staged) — both
-    // committed by the single flip tx.
+    // the session is answered AND the designer task_question row exists — both committed
+    // by the seal tx; the single-source designer batch then dispatched (rerun minted).
     const sess = (
       await db
         .select()
@@ -1001,14 +806,17 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
         .where(eq(taskQuestions.originNodeRunId, crossClarifyNodeRunId))
     ).filter((e) => e.roleKind === 'designer' && e.questionId === 'q1')
     expect(designerRows.length).toBe(1)
-    expect(designerRows[0]!.dispatchedAt).toBeNull() // deferred → staged, not dispatched
+    expect(designerRows[0]!.dispatchedAt).not.toBeNull()
+    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
   })
 
-  // 2nd-gate finding 2 (reciprocal in-flight check): a concurrent deferred dispatch of another staged
-  // entry to the same questioner home already committed a pending cross-clarify-questioner-rerun
-  // BEFORE this cascade's tx. The dispatch-mode recheck only sees THIS round's entries, so the
-  // reciprocal in-tx in-flight check blocks the cascade mint → no double questioner rerun.
-  test('finding 2 (reciprocal) — an OPEN dispatched questioner entry on the home blocks the cascade mint', async () => {
+  // 2nd-gate finding 2 (reciprocal in-flight check): a concurrent dispatch of another entry
+  // to the same questioner home already committed a pending cross-clarify-questioner-rerun
+  // BEFORE this answer. dispatchTaskQuestions' in-flight gate rejects the mint
+  // ('task-question-node-dispatch-in-flight'); the unified quick channel treats it as a
+  // RECOVERABLE park — the answer commits (round answered, entries sealed-undispatched),
+  // the call returns success with dispatchDeferredReason, and NO second rerun mints.
+  test('finding 2 (reciprocal) — an OPEN dispatched questioner entry on the home defers the mint (no double rerun)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, { deferred: true })
     const qRunId = await seedQuestionerRun(db, taskId)
@@ -1054,22 +862,24 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       updatedAt: Date.now(),
     })
     const runsBefore = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length
-    let caught: unknown
-    try {
-      await submitCrossClarifyAnswers({
-        db,
-        crossClarifyNodeRunId,
-        answers: [makeAns('q1')],
-        directive: 'continue',
-        questionScopes: { q1: 'questioner' },
-      })
-    } catch (e) {
-      caught = e
-    }
-    expect((caught as { code?: string } | undefined)?.code).toBe(
-      'cross-clarify-questioner-rerun-in-flight',
-    )
-    // No SECOND questioner rerun minted (tx rolled back; the existing in-flight rerun stands).
+    const res = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossClarifyNodeRunId,
+      answers: [makeAns('q1')],
+      scopes: { q1: 'questioner' },
+      actor,
+    })
+    // The answer is saved + parked; the mint was DEFERRED by the in-flight gate.
+    expect(res.dispatchDeferredReason).toBe('task-question-node-dispatch-in-flight')
+    expect(res.dispatch.reruns).toHaveLength(0)
+    const sess = (
+      await db
+        .select()
+        .from(crossClarifySessions)
+        .where(eq(crossClarifySessions.crossClarifyNodeRunId, crossClarifyNodeRunId))
+    )[0]
+    expect(sess?.status).toBe('answered')
+    // No SECOND questioner rerun minted (the existing in-flight rerun stands).
     expect((await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).length).toBe(
       runsBefore,
     )

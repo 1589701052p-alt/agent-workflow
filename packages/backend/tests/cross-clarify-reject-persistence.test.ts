@@ -29,15 +29,17 @@ import { eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
   createCrossClarifySession,
   dispatchCrossClarifyNode,
   resolveCrossNodeStopped,
-  submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -171,11 +173,12 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     expect(await resolveCrossNodeStopped(db, taskId, 'qA')).toBe(true)
     expect(await resolveCrossNodeStopped(db, taskId, 'qB')).toBe(false)
@@ -198,11 +201,12 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     // Sibling cross2 submits continue — unrelated.
     const b = await createCrossClarifySession({
@@ -215,11 +219,11 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: b.crossClarifyNodeRunId,
+      originNodeRunId: b.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
     expect(await resolveCrossNodeStopped(db, taskId, 'qA')).toBe(true)
   })
@@ -239,11 +243,12 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     // Simulate a parallel self-clarify session on the designer — unrelated.
     const designerSelfClarifyNrId = `nr_d_self_${Math.random().toString(36).slice(2, 6)}`
@@ -288,11 +293,12 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
     expect(await resolveCrossNodeStopped(db, taskId, 'qA')).toBe(true)
     expect(await resolveCrossNodeStopped(db, taskId, 'qB')).toBe(false)
@@ -313,11 +319,12 @@ describe('RFC-056 C4 — reject persistence cross-cascade', () => {
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: a.crossClarifyNodeRunId,
+      originNodeRunId: a.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor,
     })
 
     // Mint a fresh pending cross-clarify node_run and dispatch it; service

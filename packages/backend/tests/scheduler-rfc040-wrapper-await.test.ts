@@ -41,13 +41,14 @@ import {
   workflows,
 } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { decodeWrapperProgress } from '../src/services/wrapperProgress'
 import { runGit } from '../src/util/git'
 import { reenterScheduler } from './reenter-scheduler'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
+const actor = { userId: 'u1', role: 'owner' as const }
 
 interface Harness {
   db: DbClient
@@ -310,10 +311,10 @@ describe('RFC-040 wrapper-loop bubbles awaiting_human (clarify inside loop)', ()
     expect(sessionsBefore.length).toBe(1)
     const clarifyRunId = sessionsBefore[0]!.clarifyNodeRunId
 
-    // User answers clarify.
-    await submitClarifyAnswers({
+    // User answers clarify (unified driver: seal + auto-dispatch mints the rerun).
+    await autoDispatchClarifyRound({
       db: h.db,
-      clarifyNodeRunId: clarifyRunId,
+      originNodeRunId: clarifyRunId,
       directive: 'stop', // RFC-100: finalize round → wrapper-inner agent's <workflow-output> accepted
       answers: [
         {
@@ -323,7 +324,7 @@ describe('RFC-040 wrapper-loop bubbles awaiting_human (clarify inside loop)', ()
           customText: '',
         },
       ],
-      answeredBy: 'local',
+      actor,
     })
 
     // Second pass simulates resumeTask: scheduler re-enters and finds the
@@ -524,9 +525,9 @@ describe('RFC-040 wrapper-git bubbles awaiting_human (clarify inside git wrapper
       .where(eq(clarifySessions.taskId, taskId))
     expect(sessions.length).toBe(1)
 
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db: h.db,
-      clarifyNodeRunId: sessions[0]!.clarifyNodeRunId,
+      originNodeRunId: sessions[0]!.clarifyNodeRunId,
       directive: 'stop', // RFC-100: finalize round → wrapper-inner agent's <workflow-output> accepted
       answers: [
         {
@@ -536,7 +537,7 @@ describe('RFC-040 wrapper-git bubbles awaiting_human (clarify inside git wrapper
           customText: '',
         },
       ],
-      answeredBy: 'local',
+      actor,
     })
 
     // RFC-097: runTask's entry CAS only claims pending tasks — reset first

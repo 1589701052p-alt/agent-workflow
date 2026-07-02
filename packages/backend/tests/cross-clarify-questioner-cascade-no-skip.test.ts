@@ -14,7 +14,7 @@
 //         clarify-only one that CAUSED the session, not a row that consumed
 //         the answers.
 //
-//   §2.2  triggerDesignerRerun (crossClarify.ts:672) computed `newCci =
+//   §2.2  the legacy designer-rerun mint (crossClarify.ts:672) computed `newCci =
 //         lastDesigner.cci + 1`. With designer rows at cci=0 and questioner at
 //         cci=1 (the cascade-minted row from the FIRST session), the new
 //         iteration came out =1 — equal to the questioner's existing cci,
@@ -29,17 +29,20 @@
 //         iteration regresses and Layer B's freshness invariant can't detect
 //         the inversion (its guard only fires on `upstreamCci > myCci`).
 //
-// This file locks the three fixes:
+// This file locks the three fixes (RFC-132: driven via the unified quick
+// channel, autoDispatchClarifyRound):
 //
 //   - Behavioural Fix A + B (single shared scenario): the production graph,
-//     seeded to the exact stuck state. After `submitCrossClarifyAnswers`
-//     directive=continue, the designer's new pending row has cci=2 (Fix B)
-//     AND the questioner has a fresh pending row at retryIndex=max+1 (Fix A).
-//     Without either fix the test fails with the same review-source-port-
-//     missing precondition the production task tripped on.
+//     seeded to the exact stuck state. After answering the round with
+//     directive=continue, the designer gets a fresh pending row (Fix B) AND
+//     the questioner gets its continuation rerun (Fix A — under RFC-132 the
+//     questioner rerun is minted unconditionally by the unified dispatch, so
+//     the original "cascade must not skip the clarify-only row" hazard is
+//     structurally gone). Without either the test fails with the same
+//     review-source-port-missing precondition the production task tripped on.
 //
-//   - Behavioural Fix C (clarify.ts:406): submit a self-clarify answer for
-//     an agent already at cci=1 → the rerun mint must carry cci=1, not 0.
+//   - Behavioural Fix C: answer a self-clarify round for an agent already at
+//     cci=1 → exactly one fresh pending rerun is minted.
 //
 //   - Source-text guards Fix C (task.ts:690, review.ts:451 / :1335,
 //     clarify.ts:169 — and the two crossClarify cascade idempotency lines).
@@ -62,11 +65,14 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { createClarifySession } from '../src/services/clarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -322,13 +328,13 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     expect(sess.session.iteration).toBe(1)
 
     // User continues.
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('hwdacf')],
-      directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     // Fix B — designer rerun must jump to cci=2, NOT 1. With the pre-patch
     // `(lastDesigner.cci ?? 0) + 1` formula, lastDesigner picks designerV0
@@ -342,19 +348,21 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     // RFC-074 PR-C: the designer rerun is identified by being a fresh pending
     // insert (latest id), not by a clarifyIteration bump (counter retired).
 
-    // RFC-074 (T-B8): the eager cascade is gone, so the questioner is NOT
-    // pre-minted a fresh pending row. It keeps its clarify-only done row at
-    // cci=1; the scheduler re-dispatches it lazily once the designer rerun
-    // produces a fresher done row. The original §2.1 "don't skip a clarify-only
-    // row" hazard no longer exists (nothing cascades), and the underlying
-    // review-source-port-missing risk is now prevented at read time by
+    // RFC-132 (§6 delta 1): the questioner gets exactly ONE continuation rerun,
+    // minted unconditionally by the unified dispatch (cause
+    // 'cross-clarify-questioner-rerun') — the patch-25 "questioner must not be
+    // stranded" intent, now guaranteed structurally instead of via cascade
+    // no-skip logic. Rev-style downstream stays lazy (see
+    // cross-clarify-downstream-cascade.test.ts); the underlying
+    // review-source-port-missing risk is prevented at read time by
     // resolveUpstreamInputs' done-only freshest-row picker (B17).
     const qRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
-    const qFresh = qRows.find((r) => r.status === 'pending')
-    expect(qFresh, 'questioner is NOT eagerly cascaded a pending row').toBeUndefined()
+    const qFresh = qRows.filter((r) => r.status === 'pending')
+    expect(qFresh.length, 'exactly one questioner continuation rerun').toBe(1)
+    expect(qFresh[0]?.rerunCause).toBe('cross-clarify-questioner-rerun')
 
     // Prior questioner_v1 row is left untouched.
     const qPriorRow = qRows.find((r) => r.id === questionerV1)
@@ -365,7 +373,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
   // §2.3 — Fix C, clarify.ts:406 path (self-clarify rerun mint).
   // -----------------------------------------------------------------------
 
-  test('§2.3 — submitClarifyAnswers rerun mint preserves clarifyIteration', async () => {
+  test('§2.3 — answering a self-clarify round mints exactly one fresh rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const def = selfClarifyDef()
     const taskId = await seedTask(db, def)
@@ -392,11 +400,11 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       truncationWarnings: [],
     })
 
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: sess.clarifyNodeRunId,
+      originNodeRunId: sess.clarifyNodeRunId,
       answers: [makeAns('cx1')],
-      directive: 'continue',
+      actor,
     })
 
     const rerunRows = await db
@@ -419,7 +427,7 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
   // "already cascaded" when it's clarify-only.
   // -----------------------------------------------------------------------
 
-  test('§2.1 (RFC-074) — a clarify-only questioner is NOT eagerly cascaded; lazy freshness owns its re-run', async () => {
+  test('§2.1 (RFC-074/132) — a clarify-only questioner gets its continuation rerun; downstream stays lazy', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const def = liveDef()
     const taskId = await seedTask(db, def)
@@ -454,24 +462,27 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
       questions: [makeQ('q1')],
     })
 
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
 
     const qRows = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'questioner')))
-    const qFresh = qRows.find((r) => r.status === 'pending')
-    // RFC-074: no cascade row is minted. The clarify-only questioner keeps its
-    // single done row; downstream re-run is lazy (scheduler freshness), and the
-    // empty-output row can never be mistaken for the upstream content because
-    // resolveUpstreamInputs only reads DONE rows that actually emit the port.
-    expect(qFresh, 'questioner is NOT eagerly cascaded').toBeUndefined()
-    expect(qRows.length, 'questioner keeps its single clarify-only done row').toBe(1)
+    // RFC-074: no cascade row is minted; RFC-132 (§6 delta 1): the ONE pending row is
+    // the questioner's unconditional continuation rerun (clarify channel), never an
+    // eager downstream cascade. The clarify-only done row stays; downstream re-run is
+    // lazy (scheduler freshness), and the empty-output row can never be mistaken for
+    // the upstream content because resolveUpstreamInputs only reads DONE rows that
+    // actually emit the port.
+    const qFresh = qRows.filter((r) => r.status === 'pending')
+    expect(qFresh.length, 'exactly one questioner continuation rerun').toBe(1)
+    expect(qFresh[0]?.rerunCause).toBe('cross-clarify-questioner-rerun')
+    expect(qRows.length, 'clarify-only done row + the continuation rerun').toBe(2)
   })
 
   // -----------------------------------------------------------------------

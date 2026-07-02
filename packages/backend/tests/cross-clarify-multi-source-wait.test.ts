@@ -3,20 +3,21 @@
 // When N cross-clarify nodes point at the same designer (via manual
 // to_designer → designer.__external_feedback__ edge), the designer is
 // allowed to rerun only AFTER every sibling has produced a *resolution*
-// (directive='continue' submit OR directive='stop' reject). Partial
-// submits keep the designer parked.
+// (directive='continue' answer OR directive='stop' reject). Partial
+// answers keep the designer parked.
 //
-// LOCKS:
+// LOCKS (RFC-132 unified driver — autoDispatchClarifyRound):
 //   1. 3 sibling cross-clarify nodes all pointing at the same designer:
-//      submitting 1 of 3 → outcome 'designer-waiting' with the other 2
-//      pendingCrossClarifyNodeIds listed.
-//   2. Submitting 2 of 3 → still 'designer-waiting', last 1 listed.
-//   3. Submitting all 3 → outcome 'designer-rerun-triggered' with
-//      sourceCount=3.
-//   4. Designer node_runs do NOT gain a new (clarify_iteration+1)
-//      row until the final submit lands.
-//   5. Final designer rerun consumes ALL three sessions
-//      (designer_run_triggered_at non-null on each).
+//      answering 1 of 3 → its questioner rerun mints but the DESIGNER PARKS
+//      (no designer rerun in the dispatch result; readiness lists the other
+//      2 as pending).
+//   2. Answering 2 of 3 → designer still parked, last 1 pending.
+//   3. Answering all 3 → the LAST answer mints ONE designer rerun carrying
+//      all 3 siblings' designer entries.
+//   4. Designer node_runs do NOT gain a new pending row until the final
+//      answer lands.
+//   5. Final designer rerun consumes ALL three rounds (dispatched_at
+//      non-null on every designer entry — the unified consumed stamp).
 //
 // If any of these go red the multi-source aggregation contract drifted —
 // investigate before relaxing.
@@ -26,11 +27,17 @@ import { resolve } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import {
+  createCrossClarifySession,
+  evaluateDesignerRerunReadiness,
+} from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -213,53 +220,69 @@ afterAll(() => {
 })
 
 describe('RFC-056 C3 — multi-source wait', () => {
-  test('1/3 submitted → designer-waiting; pending lists the OTHER two', async () => {
-    const { db, sec } = await buildHarness()
-    const ret = await submitCrossClarifyAnswers({
+  test('1/3 answered → designer PARKS (no designer rerun); readiness lists the OTHER two pending', async () => {
+    const { db, taskId, sec } = await buildHarness()
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sec,
+      originNodeRunId: sec,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-waiting')
-    if (ret.outcome.kind === 'designer-waiting') {
-      expect(ret.outcome.pendingCrossClarifyNodeIds.sort()).toEqual(['crossPerf', 'crossUx'])
-    }
+    // RFC-132 (§6 delta 7): the first sibling's answer mints ITS questioner rerun; the
+    // designer dispatch swallows 'task-question-designer-not-ready' and PARKS — no
+    // designer rerun in the dispatch result.
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'qSec')).toBe(true)
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
+    const readiness = await evaluateDesignerRerunReadiness({
+      db,
+      taskId,
+      designerNodeId: 'designer',
+      definition: threeSiblingDef(),
+      loopIter: 0,
+    })
+    expect(readiness.ready).toBe(false)
+    expect(readiness.pendingCrossClarifyNodeIds.sort()).toEqual(['crossPerf', 'crossUx'])
   })
 
-  test('2/3 submitted → still designer-waiting; pending lists the LAST one', async () => {
-    const { db, sec, ux } = await buildHarness()
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: sec,
-      answers: [makeAns('q1')],
-      directive: 'continue',
-    })
-    const ret = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: ux,
-      answers: [makeAns('q1')],
-      directive: 'continue',
-    })
-    expect(ret.outcome.kind).toBe('designer-waiting')
-    if (ret.outcome.kind === 'designer-waiting') {
-      expect(ret.outcome.pendingCrossClarifyNodeIds).toEqual(['crossPerf'])
-    }
-  })
-
-  test('partial submit does NOT create a new designer node_run at higher clarify_iteration', async () => {
+  test('2/3 answered → designer still parked; readiness lists the LAST one pending', async () => {
     const { db, taskId, sec, ux } = await buildHarness()
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sec,
+      originNodeRunId: sec,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ux,
+      originNodeRunId: ux,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
+    })
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
+    const readiness = await evaluateDesignerRerunReadiness({
+      db,
+      taskId,
+      designerNodeId: 'designer',
+      definition: threeSiblingDef(),
+      loopIter: 0,
+    })
+    expect(readiness.ready).toBe(false)
+    expect(readiness.pendingCrossClarifyNodeIds).toEqual(['crossPerf'])
+  })
+
+  test('partial answer does NOT create a new pending designer node_run', async () => {
+    const { db, taskId, sec, ux } = await buildHarness()
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: sec,
+      answers: [makeAns('q1')],
+      actor,
+    })
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: ux,
+      answers: [makeAns('q1')],
+      actor,
     })
     const elevatedDesigner = await db
       .select()
@@ -269,51 +292,52 @@ describe('RFC-056 C3 — multi-source wait', () => {
     void taskId
   })
 
-  test('3/3 submitted → designer-rerun-triggered with sourceCount=3', async () => {
+  test('3/3 answered → the LAST answer mints the designer rerun aggregating all 3 sources', async () => {
     const { db, sec, ux, perf } = await buildHarness()
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sec,
+      originNodeRunId: sec,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ux,
+      originNodeRunId: ux,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: perf,
+      originNodeRunId: perf,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    if (ret.outcome.kind === 'designer-rerun-triggered') {
-      expect(ret.outcome.sourceCount).toBe(3)
-    }
+    // ONE designer rerun, carrying every sibling's designer entry (the legacy
+    // sourceCount=3 → the rerun's dispatched entry batch spans all 3 rounds).
+    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    expect(designerRerun).toBeDefined()
+    expect(designerRerun!.entryIds).toHaveLength(3)
   })
 
-  test('final submit creates exactly ONE elevated designer node_run + consumes ALL 3 sessions', async () => {
+  test('final answer creates exactly ONE elevated designer node_run + consumes ALL 3 rounds', async () => {
     const { db, taskId, sec, ux, perf } = await buildHarness()
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sec,
+      originNodeRunId: sec,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ux,
+      originNodeRunId: ux,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: perf,
+      originNodeRunId: perf,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
     const elevatedDesigner = await db
       .select()
@@ -321,13 +345,14 @@ describe('RFC-056 C3 — multi-source wait', () => {
       .where(and(eq(nodeRuns.nodeId, 'designer'), eq(nodeRuns.status, 'pending')))
     expect(elevatedDesigner.length).toBe(1)
 
-    const consumed = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.taskId, taskId))
-    expect(consumed.length).toBe(3)
-    for (const s of consumed) {
-      expect(s.designerRunTriggeredAt).not.toBeNull()
+    // RFC-132: "consumed" = dispatched_at stamped on every round's designer entry (the
+    // unified stamp; designerRunTriggeredAt is legacy bookkeeping, no longer written).
+    const designerEntries = (
+      await db.select().from(taskQuestions).where(eq(taskQuestions.taskId, taskId))
+    ).filter((e) => e.roleKind === 'designer')
+    expect(designerEntries.length).toBe(3)
+    for (const e of designerEntries) {
+      expect(e.dispatchedAt).not.toBeNull()
     }
   })
 })

@@ -130,8 +130,8 @@ async function seedCrossClarifySession(
 ): Promise<{ taskId: string; crossClarifyNodeRunId: string; sessionId: string }> {
   const { taskId } = await seedTask(db, opts.taskId ? { taskId: opts.taskId } : {})
   const questionerRunId = ulid()
-  // Seed prior designer + questioner node_runs so triggerDesignerRerun can
-  // find them when the test calls submit with directive='continue'.
+  // Seed prior designer + questioner node_runs so the answer's auto-dispatch has
+  // runs to inherit when the test submits with directive='continue'.
   await db.insert(nodeRuns).values({
     id: questionerRunId,
     taskId,
@@ -262,7 +262,7 @@ describe('POST /api/clarify/:nodeRunId/answers — cross-clarify directive branc
   // RFC-132 PR-B (universal deferred model): the quick channel now AUTO-DISPATCHES for EVERY task via
   // autoDispatchClarifyRound. A cross round's questioner entry always re-runs; a designer-scope
   // 'continue' round ALSO auto-dispatches the designer (RFC-132 §6, replacing the legacy immediate
-  // triggerDesignerRerun). The response is the autodispatch shape; the reruns are asserted via the
+  // designer mint). The response is the autodispatch shape; the reruns are asserted via the
   // minted node_runs.
   test('directive=continue (designer-scope default) auto-dispatches the designer rerun', async () => {
     const { db, app } = buildApp()

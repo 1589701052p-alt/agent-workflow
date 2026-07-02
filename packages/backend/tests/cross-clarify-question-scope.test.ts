@@ -1,23 +1,26 @@
-// RFC-059 — per-question scope service tests.
+// RFC-059 — per-question scope service tests (RFC-132: driven via the unified
+// quick channel, autoDispatchClarifyRound — scopes flow through seal → reconcile
+// → dispatch).
 //
 // Why these tests exist:
-//   Locks the new branches inside submitCrossClarifyAnswers:
-//     1. backward compat (no questionScopes) → unchanged
-//     2. explicit all-designer scopes → unchanged + JSON persisted
-//     3. all-questioner scopes → fast path 'questioner-continue-triggered'
-//     4. mixed scopes → designer rerun External Feedback is filtered;
-//        questioner cascade rerun is NOT filtered (proposal §C3 / A3b)
-//     5. multi-source single all-questioner peer → fast path on that peer
-//        while other peer is still awaiting
-//     6. multi-source aggregated designer-count = 0 → outcome
-//        'designer-skipped-all-questioner-scope'
+//   Locks the per-question scope semantics of answering a cross round:
+//     1. backward compat (no questionScopes) → designer-scope default, designer
+//        rerun dispatched
+//     2. explicit all-designer scopes → designer rerun + JSON persisted
+//     3. all-questioner scopes → questioner continuation only, NO designer
+//        entry / rerun
+//     4. mixed scopes → designer rerun dispatched + scope persisted (A3b)
+//     5. multi-source single all-questioner peer → that peer's questioner
+//        continuation mints while the other peer is still awaiting (designer
+//        untouched)
+//     6. multi-source aggregated designer-count = 0 → no designer rerun at all
 //     7. reject + mixed scope → directive='stop' wins, scope ignored at
 //        runtime but persisted for audit
 //     8. malformed questionScopes (unknown questionId / non-enum value)
 //        → ValidationError with code 'cross-clarify-question-scopes-malformed'
 //     9. dual-write parity: cross_clarify_sessions.questionScopesJson and
 //        clarify_rounds.questionScopesJson stay byte-equivalent across the
-//        submit (regression guard against single-table write drift).
+//        answer (regression guard against single-table write drift).
 //
 // These cases collectively also guard:
 //   - RFC-058 dual-write (any read site failing to mirror would fail #9)
@@ -28,8 +31,16 @@ import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import {
+  clarifyRounds,
+  crossClarifySessions,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -40,6 +51,23 @@ import type {
 } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
+
+/** The dual-written pair for an answered round, fetched by the shared row id
+ *  (clarify_rounds.id === cross_clarify_sessions.id) via the origin node_run. */
+async function fetchPairByOrigin(db: DbClient, ccRunId: string) {
+  const unified = (
+    await db.select().from(clarifyRounds).where(eq(clarifyRounds.intermediaryNodeRunId, ccRunId))
+  )[0]
+  const legacy = (
+    await db
+      .select()
+      .from(crossClarifySessions)
+      .where(eq(crossClarifySessions.crossClarifyNodeRunId, ccRunId))
+  )[0]
+  return { unified, legacy }
+}
 
 async function seedTask(
   db: DbClient,
@@ -193,7 +221,7 @@ async function spawnSession(
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
-describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
+describe('RFC-059 — answering a cross round / questionScopes (unified quick channel)', () => {
   test('1. no questionScopes → designer rerun + both tables NULL', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, definition } = await seedTask(db)
@@ -203,24 +231,17 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questionerRunId: 'nr_q_1',
       questions: [makeQ('q1', 'first'), makeQ('q2', 'second')],
     })
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2')],
-      directive: 'continue',
+      actor,
     })
-    expect(result.outcome.kind).toBe('designer-rerun-triggered')
-    expect(result.session.questionScopes).toBeNull()
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, result.session.id))
-    const unified = await db
-      .select()
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, result.session.id))
-    expect(legacy[0]?.questionScopesJson).toBeNull()
-    expect(unified[0]?.questionScopesJson).toBeNull()
+    // Default scope is designer → the designer rerun is dispatched.
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const { unified, legacy } = await fetchPairByOrigin(db, ccRunId)
+    expect(legacy?.questionScopesJson).toBeNull()
+    expect(unified?.questionScopesJson).toBeNull()
     expect(definition).toBeDefined()
   })
 
@@ -234,28 +255,20 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questions: [makeQ('q1', 'first'), makeQ('q2', 'second')],
     })
     const scopes: Record<string, ClarifyQuestionScope> = { q1: 'designer', q2: 'designer' }
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2')],
-      directive: 'continue',
-      questionScopes: scopes,
+      scopes,
+      actor,
     })
-    expect(result.outcome.kind).toBe('designer-rerun-triggered')
-    expect(result.session.questionScopes).toEqual(scopes)
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, result.session.id))
-    const unified = await db
-      .select()
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, result.session.id))
-    expect(legacy[0]?.questionScopesJson).toBe(JSON.stringify(scopes))
-    expect(unified[0]?.questionScopesJson).toBe(JSON.stringify(scopes))
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const { unified, legacy } = await fetchPairByOrigin(db, ccRunId)
+    expect(legacy?.questionScopesJson).toBe(JSON.stringify(scopes))
+    expect(unified?.questionScopesJson).toBe(JSON.stringify(scopes))
   })
 
-  test('3. all-questioner scopes → fast path questioner-continue-triggered, designer not rerun', async () => {
+  test('3. all-questioner scopes → questioner continuation only, designer not rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await seedDesigner(db, taskId)
@@ -265,24 +278,30 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questions: [makeQ('q1', 'first'), makeQ('q2', 'second')],
     })
     const scopes: Record<string, ClarifyQuestionScope> = { q1: 'questioner', q2: 'questioner' }
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2')],
-      directive: 'continue',
-      questionScopes: scopes,
+      scopes,
+      actor,
     })
-    expect(result.outcome.kind).toBe('questioner-continue-triggered')
-    if (result.outcome.kind === 'questioner-continue-triggered') {
-      expect(result.outcome.questionerNodeRunId).toBeTruthy()
-    }
+    // Only the questioner continuation mints; questioner-scope questions produce NO
+    // designer entries at all.
+    const questionerRerun = result.dispatch.reruns.find((r) => r.targetNodeId === 'questioner')
+    expect(questionerRerun?.nodeRunId).toBeTruthy()
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
+    const entries = await db
+      .select()
+      .from(taskQuestions)
+      .where(eq(taskQuestions.originNodeRunId, ccRunId))
+    expect(entries.some((e) => e.roleKind === 'designer')).toBe(false)
     // Designer must NOT have been rerun — only the original designer row exists.
     const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
     expect(designerRuns.length).toBe(1)
   })
 
-  test('4. mixed scopes → designer-rerun-triggered + scope persisted (A3b)', async () => {
-    // RFC-059 A3b: a mixed-scope submit triggers the designer rerun and
+  test('4. mixed scopes → designer rerun dispatched + scope persisted (A3b)', async () => {
+    // RFC-059 A3b: a mixed-scope answer dispatches the designer rerun and
     // persists the per-question scopes. (The questioner-cascade "reads FULL
     // Q&A regardless of scope" assertion rode the removed cross-questioner
     // injector; the flat queue renderer's coverage lives in rfc132 tests.)
@@ -294,25 +313,22 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questionerRunId: 'nr_q_1',
       questions: [makeQ('q1', 'first'), makeQ('q2', 'second')],
     })
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2')],
-      directive: 'continue',
-      questionScopes: { q1: 'designer', q2: 'questioner' },
+      scopes: { q1: 'designer', q2: 'questioner' },
+      actor,
     })
-    expect(result.outcome.kind).toBe('designer-rerun-triggered')
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
     // Scope persistence sanity (already covered by #9 but doubled here so
     // a regression that strips scope from #9's specific shape would still
     // show up alongside the A3b check).
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, result.session.id))
-    expect(legacy[0]?.questionScopesJson).toBe(JSON.stringify({ q1: 'designer', q2: 'questioner' }))
+    const { legacy } = await fetchPairByOrigin(db, ccRunId)
+    expect(legacy?.questionScopesJson).toBe(JSON.stringify({ q1: 'designer', q2: 'questioner' }))
   })
 
-  test('5. multi-source — peer A all-questioner fast path; peer B awaiting → A triggers cascade alone', async () => {
+  test('5. multi-source — peer A all-questioner continuation; peer B awaiting → designer untouched', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, {
       crossClarifyNodeIds: ['cc_a', 'cc_b'],
@@ -333,22 +349,23 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       ccNodeId: 'cc_b',
       questions: [makeQ('b1', 'b-first')],
     })
-    // Peer A submits all-questioner — fast path even though peer B is still
-    // awaiting (no readiness gate for the fast path).
-    const aResult = await submitCrossClarifyAnswers({
+    // Peer A answers all-questioner — its continuation mints even though peer B is
+    // still awaiting (the questioner continuation has no multi-source readiness gate).
+    const aResult = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: aRunId,
+      originNodeRunId: aRunId,
       answers: [makeA('a1')],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' },
+      scopes: { a1: 'questioner' },
+      actor,
     })
-    expect(aResult.outcome.kind).toBe('questioner-continue-triggered')
+    expect(aResult.dispatch.reruns.some((r) => r.targetNodeId === 'q_a')).toBe(true)
+    expect(aResult.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
     // Designer still has only its initial run — peer B hasn't decided yet.
     const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
     expect(designerRuns.length).toBe(1)
   })
 
-  test('6. multi-source aggregated designer-count = 0 → designer-skipped-all-questioner-scope', async () => {
+  test('6. multi-source aggregated designer-count = 0 → no designer rerun at all', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db, {
       crossClarifyNodeIds: ['cc_a', 'cc_b'],
@@ -369,33 +386,32 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       ccNodeId: 'cc_b',
       questions: [makeQ('b1', 'b-first')],
     })
-    // Peer A submits all-questioner — fast path.
-    await submitCrossClarifyAnswers({
+    // Peer A answers all-questioner — questioner continuation only.
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: aRunId,
+      originNodeRunId: aRunId,
       answers: [makeA('a1')],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' },
+      scopes: { a1: 'questioner' },
+      actor,
     })
-    // Peer B also submits all-questioner — fast path again on B itself,
-    // and the aggregated-count check (which the fast path bypasses) would
-    // also have returned skipped. We assert B's outcome is the fast-path
-    // variant; the aggregate-skipped variant only fires when a designer-
-    // scoped session goes through the readiness path with all peers
-    // resolved + total designer count 0 (covered below).
-    const bResult = await submitCrossClarifyAnswers({
+    // Peer B also answers all-questioner. With every question questioner-scoped,
+    // NO designer entry exists anywhere → nothing to dispatch to the designer even
+    // though all siblings are now resolved (the legacy 'designer-skipped-all-
+    // questioner-scope' outcome).
+    const bResult = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: bRunId,
+      originNodeRunId: bRunId,
       answers: [makeA('b1')],
-      directive: 'continue',
-      questionScopes: { b1: 'questioner' },
+      scopes: { b1: 'questioner' },
+      actor,
     })
-    expect(bResult.outcome.kind).toBe('questioner-continue-triggered')
+    expect(bResult.dispatch.reruns.some((r) => r.targetNodeId === 'q_b')).toBe(true)
+    expect(bResult.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
     const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
     expect(designerRuns.length).toBe(1)
   })
 
-  test('7. reject + mixed scope → questioner-stop-triggered; questionScopesJson persisted but ignored', async () => {
+  test('7. reject + mixed scope → questioner stop rerun; questionScopesJson persisted but ignored', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTask(db)
     await seedDesigner(db, taskId)
@@ -405,22 +421,22 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questions: [makeQ('q1', 'first'), makeQ('q2', 'second')],
     })
     const scopes: Record<string, ClarifyQuestionScope> = { q1: 'designer', q2: 'questioner' }
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2')],
       directive: 'stop',
-      questionScopes: scopes,
+      scopes,
+      actor,
     })
-    expect(result.outcome.kind).toBe('questioner-stop-triggered')
-    expect(result.session.directive).toBe('stop')
+    // stop → the questioner stop rerun mints; NO designer entries / rerun (scope
+    // ignored at runtime — a stop round suppresses the designer continuation).
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'questioner')).toBe(true)
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
     // Persisted for audit even though runtime ignores it on reject path.
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, result.session.id))
-    expect(legacy[0]?.questionScopesJson).toBe(JSON.stringify(scopes))
-    expect(legacy[0]?.directive).toBe('stop')
+    const { legacy } = await fetchPairByOrigin(db, ccRunId)
+    expect(legacy?.questionScopesJson).toBe(JSON.stringify(scopes))
+    expect(legacy?.directive).toBe('stop')
   })
 
   test('8. malformed questionScopes (unknown questionId) → cross-clarify-question-scopes-malformed 400', async () => {
@@ -433,12 +449,12 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questions: [makeQ('q1', 'first')],
     })
     await expect(
-      submitCrossClarifyAnswers({
+      autoDispatchClarifyRound({
         db,
-        crossClarifyNodeRunId: ccRunId,
+        originNodeRunId: ccRunId,
         answers: [makeA('q1')],
-        directive: 'continue',
-        questionScopes: { unknown_id: 'designer' },
+        scopes: { unknown_id: 'designer' },
+        actor,
       }),
     ).rejects.toMatchObject({
       code: 'cross-clarify-question-scopes-malformed',
@@ -455,12 +471,12 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       questions: [makeQ('q1', 'first')],
     })
     await expect(
-      submitCrossClarifyAnswers({
+      autoDispatchClarifyRound({
         db,
-        crossClarifyNodeRunId: ccRunId,
+        originNodeRunId: ccRunId,
         answers: [makeA('q1')],
-        directive: 'continue',
-        questionScopes: { q1: 'both' as unknown as ClarifyQuestionScope },
+        scopes: { q1: 'both' as unknown as ClarifyQuestionScope },
+        actor,
       }),
     ).rejects.toMatchObject({
       code: 'cross-clarify-question-scopes-malformed',
@@ -481,24 +497,17 @@ describe('RFC-059 — submitCrossClarifyAnswers / questionScopes', () => {
       q2: 'questioner',
       q3: 'designer',
     }
-    const result = await submitCrossClarifyAnswers({
+    const result = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: ccRunId,
+      originNodeRunId: ccRunId,
       answers: [makeA('q1'), makeA('q2'), makeA('q3')],
-      directive: 'continue',
-      questionScopes: scopes,
+      scopes,
+      actor,
     })
-    expect(result.outcome.kind).toBe('designer-rerun-triggered')
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, result.session.id))
-    const unified = await db
-      .select()
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, result.session.id))
-    expect(legacy[0]?.questionScopesJson).toBe(JSON.stringify(scopes))
-    expect(unified[0]?.questionScopesJson).toBe(JSON.stringify(scopes))
-    expect(legacy[0]?.questionScopesJson).toBe(unified[0]?.questionScopesJson)
+    expect(result.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const { unified, legacy } = await fetchPairByOrigin(db, ccRunId)
+    expect(legacy?.questionScopesJson).toBe(JSON.stringify(scopes))
+    expect(unified?.questionScopesJson).toBe(JSON.stringify(scopes))
+    expect(legacy?.questionScopesJson).toBe(unified?.questionScopesJson)
   })
 })

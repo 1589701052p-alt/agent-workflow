@@ -132,9 +132,9 @@ async function buildFixture(opts: {
     content: '# stale body — must NOT seed the new doc_version',
   })
 
-  // Clarify-driven rerun row: minted by submitClarifyAnswers at retryIndex=0,
-  // later than the stale row (larger id); this is the row whose output the
-  // current pending doc_version (v1) was created from.
+  // Clarify-driven rerun row: the clarify-answer continuation minted at
+  // retryIndex=0, later than the stale row (larger id); this is the row whose
+  // output the current pending doc_version (v1) was created from.
   const clarifyRunId = '01B_CLARIFY'
   await db.insert(nodeRuns).values({
     id: clarifyRunId,

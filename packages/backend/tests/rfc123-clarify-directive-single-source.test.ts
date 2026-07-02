@@ -32,12 +32,12 @@ import type {
 } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, taskNodeClarifyDirectives, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
   createCrossClarifySession,
   dispatchCrossClarifyNode,
   resolveCrossNodeStopped,
-  submitCrossClarifyAnswers,
 } from '../src/services/crossClarify'
 import {
   getNodeClarifyDirective,
@@ -170,12 +170,12 @@ async function seedSelfStopAnswered(
     iterationIndex: opts.iterationIndex ?? 0,
     questions: [makeQ()],
   })
-  await submitClarifyAnswers({
+  await autoDispatchClarifyRound({
     db,
-    clarifyNodeRunId,
+    originNodeRunId: clarifyNodeRunId,
     answers: [makeAns()],
     directive: opts.directive,
-    ...(opts.answeredBy !== undefined ? { answeredBy: opts.answeredBy } : {}),
+    actor: { userId: opts.answeredBy ?? 'u1', role: 'owner' },
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   })
 }
@@ -185,7 +185,7 @@ async function seedCrossStopAnswered(
   taskId: string,
   directive: 'stop' | 'continue',
 ): Promise<void> {
-  // designer run needed for the 'continue' path's designer rerun (triggerDesignerRerun).
+  // designer run needed for the 'continue' path's designer rerun (the auto-dispatch inherits it).
   await db.insert(nodeRuns).values({
     id: 'nr_designer',
     taskId,
@@ -213,11 +213,12 @@ async function seedCrossStopAnswered(
     loopIter: 0,
     questions: [makeQ()],
   })
-  await submitCrossClarifyAnswers({
+  await autoDispatchClarifyRound({
     db,
-    crossClarifyNodeRunId,
+    originNodeRunId: crossClarifyNodeRunId,
     answers: [makeAns()],
     directive,
+    actor: { userId: 'u1', role: 'owner' },
   })
 }
 

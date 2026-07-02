@@ -92,8 +92,8 @@ async function seedDispatchedSelfQuestions(
 // RFC-058 T13: scheduler now reads clarify state via `clarify_rounds`
 // (unified self+cross table). These tests directly UPDATE the legacy
 // `clarify_sessions` table to synthesize answered state without going through
-// submitClarifyAnswers. We mirror the update onto `clarify_rounds` so the new
-// read path observes the same state.
+// the answer channel (autoDispatchClarifyRound). We mirror the update onto
+// `clarify_rounds` so the new read path observes the same state.
 async function mirrorClarifyAnswered(
   db: DbClient,
   sessionId: string,
@@ -410,8 +410,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       }),
     )
 
-    // Step 2: synthesize an answer + a rerun row (this is what
-    // submitClarifyAnswers normally does — we exercise scheduler->runner here
+    // Step 2: synthesize an answer + a rerun row (this is what the unified
+    // answer dispatch normally does — we exercise scheduler->runner here
     // without invoking the REST path).
     const sessRow = (
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
@@ -451,8 +451,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
-      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      // RFC-098 WP-10: synthesized as the clarify-answer rerun the answer
+      // dispatch mints — incl. the rerun_cause column gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
     // RFC-132 (PR-C): dispatch the answered round to the rerun + record the 'stop' node state.
@@ -479,9 +479,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
   // Regression: prior to the isFresherNodeRun comparator, the latest-row
   // ordering put retryIndex first. When a user (a) had previously triggered
   // single-node retries that left a high retryIndex `done` row on the agent,
-  // and then (b) answered a fresh clarify session — submitClarifyAnswers
-  // mints the rerun row at (retryIndex=0, clarifyIteration+1) per RFC-023's
-  // "process-retry budget intact" rule. The old ordering let the stale
+  // and then (b) answered a fresh clarify session — the then-current immediate
+  // mint created the rerun row at (retryIndex=0, clarifyIteration+1) per
+  // RFC-023's "process-retry budget intact" rule. The old ordering let the stale
   // (retryIndex=N, clarifyIteration=0) done row beat the rerun, so the
   // scheduler marked the node completed, returned ok, marked the TASK done,
   // and the pending rerun was left to be swept to `interrupted` on daemon
@@ -543,7 +543,9 @@ describe('scheduler RFC-023 clarify dispatch', () => {
     })
 
     // Step 3: synthesize an answered clarify session + a rerun row at the
-    // tuple submitClarifyAnswers actually mints (retry=0, clarifyIter=1).
+    // tuple the then-current immediate mint produced (retry=0, clarifyIter=1
+    // — the production incident's exact shape; the comparator must beat it
+    // by pure id order regardless of retryIndex).
     const sessRow = (
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
     )[0]!
@@ -582,8 +584,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
-      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      // RFC-098 WP-10: synthesized as the clarify-answer rerun the answer
+      // dispatch mints — incl. the rerun_cause column gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
     // RFC-132 (PR-C): dispatch to the fresh rerun (triggerRunId=rerunId, minted AFTER the stale
@@ -660,8 +662,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       }),
     )
 
-    // Step 2: synthesize the answered session + the clarify-rerun row that
-    // submitClarifyAnswers normally mints (retry=0, clarifyIter=1).
+    // Step 2: synthesize the answered session + the clarify-rerun row the
+    // answer channel normally mints (synthesized here at retry=0).
     const sessRow = (
       await h.db.select().from(clarifySessions).where(eq(clarifySessions.taskId, taskId))
     )[0]!
@@ -706,8 +708,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
-      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      // RFC-098 WP-10: synthesized as the clarify-answer rerun the answer
+      // dispatch mints — incl. the rerun_cause column gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
     // RFC-132 (PR-C): dispatch the answered 'continue' round to this rerun (bound now; the fresh
@@ -945,8 +947,8 @@ describe('scheduler RFC-023 clarify dispatch', () => {
       status: 'pending',
       retryIndex: 0,
       iteration: 0,
-      // RFC-098 WP-10: synthesized at the tuple submitClarifyAnswers actually
-      // mints — incl. the rerun_cause column the scheduler's gate-2 now reads.
+      // RFC-098 WP-10: synthesized as the clarify-answer rerun the answer
+      // dispatch mints — incl. the rerun_cause column gate-2 now reads.
       rerunCause: 'clarify-answer',
     })
     // RFC-132 (PR-C): dispatch round 1's answer to the round-2-asking rerun (ci1Id). It stays un-aged

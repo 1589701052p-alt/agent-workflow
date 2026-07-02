@@ -19,10 +19,11 @@
 //      instance, splitting the mutex back into two: the exact S-9 pathology).
 //
 //   2. S-9 mutual exclusion (semi-integration) — with the task write lock
-//      HELD (simulating an in-flight writer node), submitClarifyAnswers does
-//      not complete and the worktree is NOT touched; after release, the
-//      rollback applies (file-trace order proves rollback happened after the
-//      writer released).
+//      HELD (simulating an in-flight writer node), the clarify answer
+//      (autoDispatchClarifyRound's self-rollback critical section) does not
+//      complete and the worktree is NOT touched; after release, the rollback
+//      applies (file-trace order proves rollback happened after the writer
+//      released).
 //
 //   3. ⑥-10 multi-repo wiring — a dual-repo task answering a clarify rolls
 //      back BOTH sub-repos via `preSnapshotReposJson` (red→green headline:
@@ -37,13 +38,15 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, taskRepos, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { gcTaskWriteSem, getTaskWriteSem, taskWriteLockCount } from '../src/services/taskWriteLocks'
 import { gitStashSnapshot, runGit } from '../src/util/git'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const SRC = (f: string) => resolve(import.meta.dir, '..', 'src', 'services', f)
+const actor = { userId: 'u1', role: 'owner' as const }
 
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
@@ -113,9 +116,11 @@ describe('RFC-098 B1 — taskWriteLocks registry identity & gc', () => {
     // reference (delete + recreate ⇒ two instances ⇒ mutex silently split).
     // crossClarify.ts dropped from this list per RFC-056 patch 2026-06-22: its
     // cross-clarify designer rerun no longer rolls back the worktree, so it no
-    // longer takes the task write lock at all. clarify.ts + review.ts still roll
-    // back under getTaskWriteSem and must never gc.
-    for (const f of ['clarify.ts', 'review.ts']) {
+    // longer takes the task write lock at all. RFC-132: the live self-clarify
+    // rollback critical section moved to clarifyAutoDispatch.ts (A OUTER ≻ B
+    // INNER); it + review.ts still roll back under getTaskWriteSem and must
+    // never gc.
+    for (const f of ['clarifyAutoDispatch.ts', 'review.ts']) {
       const src = readFileSync(SRC(f), 'utf-8')
       expect(src).toContain('getTaskWriteSem')
       expect(src.includes('gcTaskWriteSem')).toBe(false)
@@ -280,7 +285,7 @@ async function seedClarifyTask(
 // ---------------------------------------------------------------------------
 
 describe('RFC-098 B1 — S-9: clarify rollback serializes behind the task write lock', () => {
-  test('submitClarifyAnswers stays pending while the write lock is held (worktree untouched); rollback applies only after release', async () => {
+  test('answering the round stays pending while the write lock is held (worktree untouched); rollback applies only after release', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'aw-rfc098-s9-'))
     try {
       const repo = join(tmp, 'wt')
@@ -314,11 +319,12 @@ describe('RFC-098 B1 — S-9: clarify rollback serializes behind the task write 
       // the rejected branch is folded in so a pre-lock throw cannot become an
       // unhandled rejection during the sleep below).
       const probe: { outcome: { ok: true } | { err: unknown } | null } = { outcome: null }
-      const submitP = submitClarifyAnswers({
+      const submitP = autoDispatchClarifyRound({
         db,
-        clarifyNodeRunId: seeded.clarifyNodeRunId,
+        originNodeRunId: seeded.clarifyNodeRunId,
         answers: [makeAns('q1')],
         directive: 'continue',
+        actor,
       }).then(
         () => {
           probe.outcome = { ok: true }
@@ -409,11 +415,12 @@ describe('RFC-098 B1 — ⑥-10: clarify answer rolls back EVERY sub-repo of a m
         ],
       })
 
-      await submitClarifyAnswers({
+      await autoDispatchClarifyRound({
         db,
-        clarifyNodeRunId: seeded.clarifyNodeRunId,
+        originNodeRunId: seeded.clarifyNodeRunId,
         answers: [makeAns('q1')],
         directive: 'continue',
+        actor,
       })
 
       // HEADLINE (red→green on ⑥-10): BOTH sub-repos rolled back to their own

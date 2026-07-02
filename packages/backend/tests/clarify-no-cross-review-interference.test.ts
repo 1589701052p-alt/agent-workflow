@@ -3,21 +3,24 @@
 // clarify path MUST NOT touch the review's node_run state, doc_versions, or
 // review_comments. The two iteration counters (review_iteration vs.
 // clarify_iteration) are orthogonal and the review row must remain
-// untouched through both createClarifySession and submitClarifyAnswers.
+// untouched through both createClarifySession and the round's answer
+// (autoDispatchClarifyRound, the unified seal + dispatch driver).
 //
 // If this goes red:
-//   - check services/clarify.ts: any UPDATE / DELETE that touches the
-//     review tables OR a node_runs row that isn't the source agent / the
-//     clarify node itself is a regression.
-//   - check that submitClarifyAnswers' rerun-mint passthrough preserves
-//     reviewIteration on the new source-agent row (locked here too).
+//   - check services/clarify.ts / clarifySeal.ts / taskQuestionDispatch.ts:
+//     any UPDATE / DELETE that touches the review tables OR a node_runs row
+//     that isn't the source agent / the clarify node itself is a regression.
+//   - check that the answer-dispatch rerun mint (buildMintNodeRunValues
+//     inheritance) preserves reviewIteration on the new source-agent row
+//     (locked here too).
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { docVersions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import { ulid } from 'ulid'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -123,7 +126,7 @@ afterAll(() => {
 })
 
 describe('clarify activity does not perturb in-flight reviews', () => {
-  test('createClarifySession + submitClarifyAnswers leave review node_run + doc_version untouched, and preserve reviewIteration on the rerun', async () => {
+  test('createClarifySession + answering the round leave review node_run + doc_version untouched, and preserve reviewIteration on the rerun', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, reviewRunId, docVersionId, sourceRunId } = await seed(db)
 
@@ -153,9 +156,9 @@ describe('clarify activity does not perturb in-flight reviews', () => {
     expect(dvMid?.decision).toBe('pending')
     expect(dvMid?.reviewIteration).toBe(2)
 
-    const { rerunNodeRunId } = await submitClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId,
+      originNodeRunId: clarifyNodeRunId,
       answers: [
         {
           questionId: 'q-color',
@@ -164,7 +167,9 @@ describe('clarify activity does not perturb in-flight reviews', () => {
           customText: '',
         },
       ],
+      actor: { userId: 'u1', role: 'owner' },
     })
+    const rerunNodeRunId = res.dispatch.reruns[0]!.nodeRunId
 
     // After submit: review row + doc_version still unchanged. New rerun
     // node_run carries reviewIteration = 2 forward (no reset).

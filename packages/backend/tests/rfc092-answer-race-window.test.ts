@@ -2,15 +2,16 @@
 // 设计依据：design/RFC-092-scheduler-p0-stopgap/design.md §1.2b / §5-11；
 // 调研：design/scheduler-audit-2026-06-10.md S-1 / S-10。
 //
-// 为什么存在这条测试：submitClarifyAnswers 的写序是【先铸 rerun 行、后写答案并翻
-// session 为 answered】，且 bun:sqlite 下 db.transaction 无原子性。S-1 的
-// pending-anchor bypass（行 id 一次性豁免）会重新打开「rerun 已铸、答案未写」窗口
-// —— 若 sibling 恰在窗口内 settle 触发 tick，rerun 会无答案起跑。守卫：deriveFrontier
+// 为什么存在这条测试：旧快速通道的写序是【先铸 rerun 行、后写答案并翻 session 为
+// answered】，且 bun:sqlite 下 db.transaction 无原子性。S-1 的 pending-anchor
+// bypass（行 id 一次性豁免）会重新打开「rerun 已铸、答案未写」窗口 —— 若 sibling
+// 恰在窗口内 settle 触发 tick，rerun 会无答案起跑。守卫对任何来源的这种瞬态窗口
+// （统一 dispatch 铸行与 session 状态翻转间的任意交错）保持生效：deriveFrontier
 // 在内部由 askingRunIds × rows 推导 openAskingNodeIds（open session 的源 agent /
 // questioner 节点 id 集），pendingAnchorReleasable 要求节点 ∉ 该集合；session 翻
 // answered 后（loadOpenClarify 不再返回该 askingRunId）下一 tick 自然放行。
-// cross-clarify questioner 同口径（crossClarify.ts mintQuestionerRerun 的铸行同样
-// 先于 session 状态翻转，rerun 落在 questioner 节点自身）。
+// cross-clarify questioner 同口径（统一 dispatch 给 questioner 的铸行同样落在
+// questioner 节点自身）。
 //
 // 纯函数直测 deriveFrontier（已导出）；row()/def() 帮手复刻自 derive-frontier.test.ts
 // （file-local，不改既有文件）。
@@ -56,8 +57,8 @@ function def(nodes: Array<{ id: string; kind: NodeKind }>): {
 const ups = (m: Record<string, string[]>): Map<string, string[]> => new Map(Object.entries(m))
 
 describe('RFC-092 §1.2b — answer-race window（openAskingNodeIds 守卫）', () => {
-  // self-clarify 形态：asker 第一跑 done 后发问（asking 行）；submitClarifyAnswers
-  // 已铸 rerun（pending、更晚 id ⇒ latest）但答案还没写完 —— session 仍 open，
+  // self-clarify 形态：asker 第一跑 done 后发问（asking 行）；答复通道已铸 rerun
+  // （pending、更晚 id ⇒ latest）但答案还没写完 —— session 仍 open，
   // loadOpenClarify 仍返回 asking 行 id。asker 本次调用已派发过（mid-run）。
   function selfClarifyScenario() {
     const { definition, scopeNodes, scopeIds } = def([
@@ -129,9 +130,9 @@ describe('RFC-092 §1.2b — answer-race window（openAskingNodeIds 守卫）', 
     expect(f.allSettled).toBe(false)
   })
 
-  // cross-clarify questioner 同型：questioner 发问后 mintQuestionerRerun 给
-  // questioner 节点自身铸 pending rerun，铸行同样先于 cross_clarify_sessions 状态
-  // 翻转；窗口内 loadOpenClarify 返回 questioner asking 行 id + cross-clarify 节点 id。
+  // cross-clarify questioner 同型：questioner 发问后统一 dispatch 给 questioner
+  // 节点自身铸 pending rerun；窗口内（rerun 已铸、session 未翻 answered）
+  // loadOpenClarify 返回 questioner asking 行 id + cross-clarify 节点 id。
   function crossClarifyScenario() {
     const { definition, scopeNodes, scopeIds } = def([
       { id: 'in', kind: 'input' },
@@ -139,7 +140,7 @@ describe('RFC-092 §1.2b — answer-race window（openAskingNodeIds 守卫）', 
       { id: 'cc', kind: 'clarify-cross-agent' },
     ])
     const qAsking = row('q', 'done') // questioner 发问的那跑
-    const qRerun = row('q', 'pending') // mintQuestionerRerun 铸的 rerun（latest）
+    const qRerun = row('q', 'pending') // 统一 dispatch 铸的 questioner rerun（latest）
     const rows = [row('in', 'done'), qAsking, qRerun]
     const upstreams = ups({ q: ['in'], cc: ['q'] })
     const dispatched = new Set(['q'])

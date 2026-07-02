@@ -1,46 +1,49 @@
 // P0 fortification (hotspot audit, clarify cluster) — cross-clarify dual-write
-// consistency + the DELIBERATE-asymmetry ordering guard.
+// consistency oracle.
 //
 // WHY THIS FILE EXISTS (regression intent):
-//   Like self-clarify, crossClarify.ts dual-writes the legacy
+//   Like self-clarify, the cross-clarify write path dual-writes the legacy
 //   `cross_clarify_sessions` row AND a `clarify_rounds` (kind='cross') mirror
-//   keyed on the SAME id — at create (crossClarify.ts:243), at submit
-//   (crossClarify.ts:436), and again when the designer rerun is triggered, which
-//   stamps `designer_run_triggered_at` on BOTH tables (crossClarify.ts:584). The
-//   deferred T17 migration that drops the legacy table never shipped, so the two
-//   stores must stay in lockstep across all three mutation sites.
+//   keyed on the SAME id — at create (createCrossClarifySession) and at answer
+//   time (RFC-132: sealRoundQuestions mirrors answers/scopes/directive/status/
+//   answeredAt onto the legacy table on full seal). The deferred T17 migration
+//   that drops the legacy table never shipped, so the two stores must stay in
+//   lockstep across both mutation sites.
 //
 //   Every existing cross-clarify test reads only ONE table, so a write that
-//   updates one store but not its mirror passes the whole suite today. These two
+//   updates one store but not its mirror passes the whole suite today. These
 //   tests are the missing net for the planned RFC-058/064 store-collapse:
 //
-//   1. Consistency oracle — after create AND after submit (continue →
-//      designer-rerun-triggered, which exercises ALL three mirror sites), the
-//      cross_clarify_sessions row and its clarify_rounds mirror must agree on
-//      every shared column. Goes red the instant a refactor desyncs them.
+//   Consistency oracle — after create AND after the unified answer (continue →
+//   designer dispatched), the cross_clarify_sessions row and its clarify_rounds
+//   mirror must agree on every shared column. Goes red the instant a refactor
+//   desyncs them.
 //
-//   2. Ordering guard — UNLIKE submitClarifyAnswers (which mints the rerun
-//      BEFORE flipping the session → answered to avoid a torn "answered ∧ rerun
-//      absent" frontier read), submitCrossClarifyAnswers DELIBERATELY flips
-//      → answered FIRST, because the multi-source peer-aggregation readiness
-//      check requires this session to read as resolved before the reruns fire
-//      (crossClarify.ts:408-421). That asymmetry is load-bearing and is exactly
-//      what a naive "unify both submit paths into one sealClarifyRound" refactor
-//      could break by imposing self-clarify's rerun-first order. This guard locks
-//      the cross-clarify order (answered-flip BEFORE rerun triggers) + the
-//      rationale comment, so such a regression goes red here.
+//   (The former "write-ordering guard" describe grepped the retired legacy
+//   submit body's internals and was deleted with RFC-132 — the unified path has
+//   a single seal tx; the rerun mint happens strictly after it in
+//   autoDispatchClarifyRound → dispatchTaskQuestions.)
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import {
+  clarifyRounds,
+  crossClarifySessions,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+  workflows,
+} from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -122,7 +125,7 @@ async function seedTask(db: DbClient): Promise<string> {
     workflowId: wfId,
     workflowSnapshot: JSON.stringify(def),
     repoPath: '/tmp/aw-cross-dualwrite',
-    // Hermetic fixture — these are source-text ordering assertions; no git runs.
+    // Hermetic fixture — empty worktree path; no git runs.
     worktreePath: '',
     baseBranch: 'main',
     branch: `agent-workflow/${taskId}`,
@@ -231,7 +234,7 @@ describe('cross-clarify dual-write consistency (cross_clarify_sessions ↔ clari
     expect(mismatches(session!, round!)).toEqual({})
   })
 
-  test('submit (continue → designer-rerun-triggered): answered state + designer_run_triggered_at mirror to clarify_rounds', async () => {
+  test('answer (continue → designer dispatched): answered state mirrors to clarify_rounds with zero drift', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRun(db, taskId, 'in', {})
@@ -249,83 +252,40 @@ describe('cross-clarify dual-write consistency (cross_clarify_sessions ↔ clari
       questions: [makeQ('q1')],
     })
 
-    const ret = await submitCrossClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      directive: 'continue',
+      actor,
     })
-    // Confirm we exercised the path that stamps designer_run_triggered_at on
-    // both stores (the third mirror site), not just the submit update.
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
+    // Confirm we exercised the designer continuation. RFC-132: the unified path does
+    // NOT stamp designer_run_triggered_at (legacy bookkeeping) — the consumed marker
+    // is dispatched_at on the round's designer entries.
+    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const designerEntries = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(eq(taskQuestions.originNodeRunId, sess.crossClarifyNodeRunId))
+    ).filter((e) => e.roleKind === 'designer')
+    expect(designerEntries.length).toBeGreaterThan(0)
+    for (const e of designerEntries) expect(e.dispatchedAt).not.toBeNull()
 
     const { session, round } = await fetchPair(db, sess.session.id)
     expect(session!.status).toBe('answered')
     expect(session!.directive).toBe('continue')
     expect(session!.answersJson).not.toBeNull()
     expect(session!.answeredAt).not.toBeNull()
-    expect(session!.designerRunTriggeredAt).not.toBeNull()
-    // The crux: zero drift across the full shared-column set, after all three
-    // mirror sites (create + submit-answered + designer-rerun stamp) have fired.
+    // designerRunTriggeredAt stays NULL on BOTH stores under the unified path — the
+    // mirror parity below still covers the column pair.
+    expect(session!.designerRunTriggeredAt).toBeNull()
+    // The crux: zero drift across the full shared-column set, after both mirror
+    // sites (create + answer full seal) have fired.
     expect(mismatches(session!, round!)).toEqual({})
   })
 })
 
-// ---------------------------------------------------------------------------
-// Source-text ordering guard — locks the DELIBERATE cross-vs-self asymmetry.
-// ---------------------------------------------------------------------------
-describe('cross-clarify submit write-ordering (deliberate non-deferral)', () => {
-  // Slice out just the submitCrossClarifyAnswers body so index comparisons
-  // aren't confused by `status: 'answered'` in other functions (e.g.
-  // cleanupCrossClarifySessionsForTask).
-  function submitBody(): string {
-    const src = readFileSync(
-      resolve(import.meta.dir, '..', 'src', 'services', 'crossClarify.ts'),
-      'utf8',
-    )
-    const start = src.indexOf('export async function submitCrossClarifyAnswers')
-    expect(start).toBeGreaterThan(0)
-    const after = src.indexOf('\nexport async function ', start + 1)
-    return src.slice(start, after === -1 ? undefined : after)
-  }
-
-  test('the questioner cascade mint is atomic with the flip (in-tx); the async designer trigger follows (peer aggregation)', () => {
-    const body = submitBody()
-    // The cross_clarify_sessions update flips status → answered (inside the dbTxSync).
-    const answeredFlipIdx = body.indexOf("status: 'answered'")
-    // RFC-128 §5.2.14 finding 2: the questioner cascade rerun is minted INSIDE the same dbTxSync as
-    // the flip (atomic — closes the post-tx double-mint window), via the mint-factory values. It is
-    // NO LONGER an async triggerQuestioner*Rerun call after the flip.
-    const questionerMintIdx = body.indexOf('tx.insert(nodeRuns).values(questionerRerunValues)')
-    expect(body.indexOf('triggerQuestionerStopRerun(')).toBe(-1)
-    expect(body.indexOf('triggerQuestionerContinueRerun(')).toBe(-1)
-    // The DESIGNER rerun stays an async trigger AFTER the flip (multi-source peer aggregation needs
-    // this session committed-answered so a peer's readiness sees it).
-    const designerTriggerIdx = body.indexOf('triggerDesignerRerun(')
-    expect(answeredFlipIdx).toBeGreaterThan(0)
-    expect(questionerMintIdx).toBeGreaterThan(0)
-    expect(designerTriggerIdx).toBeGreaterThan(0)
-    // questioner mint co-located with the flip (same tx); designer trigger AFTER the flip.
-    expect(answeredFlipIdx).toBeLessThan(designerTriggerIdx)
-    expect(questionerMintIdx).toBeLessThan(designerTriggerIdx)
-  })
-
-  test('the clarify_rounds mirror update is co-located with the legacy update (both before the designer trigger)', () => {
-    const body = submitBody()
-    const legacyUpdateIdx = body.indexOf('.update(crossClarifySessions)')
-    const mirrorUpdateIdx = body.indexOf('.update(clarifyRounds)')
-    // The only async rerun trigger left in submit is the designer (questioner is minted in-tx).
-    const firstTrigger = body.indexOf('triggerDesignerRerun(')
-    expect(legacyUpdateIdx).toBeGreaterThan(0)
-    expect(mirrorUpdateIdx).toBeGreaterThan(legacyUpdateIdx)
-    expect(firstTrigger).toBeGreaterThan(0)
-    // The mirror must not drift below the designer trigger — keep the dual-write atomic.
-    expect(mirrorUpdateIdx).toBeLessThan(firstTrigger)
-  })
-
-  test('the deliberate non-deferral rationale comment is retained (forces re-justification on reorder)', () => {
-    const body = submitBody()
-    // Anchor on a stable phrase from the crossClarify.ts:408-421 rationale.
-    expect(body).toContain('CANNOT be deferred')
-  })
-})
+// (The former source-text "write-ordering guard" describe was deleted with RFC-132: it
+// grepped the retired legacy submit body's internals. The unified path's ordering is a
+// single seal tx (sealRoundQuestions) followed by the dispatch mint — locked behaviorally
+// by rfc128-p5-d-autodispatch.test.ts.)

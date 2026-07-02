@@ -1,22 +1,24 @@
 // RFC-120 T9 (model A) — deferred question dispatch backend foundation.
 //
 // Locks the four foundation behaviors (design §14 / §16 C1-H4 / §17):
-//   A. submit split — tasks.deferred_question_dispatch FALSE = byte-for-byte
-//      today's immediate dispatch (golden-lock: outcome 'designer-rerun-triggered');
-//      TRUE + ≥1 designer-scoped question → outcome 'designer-deferred', NO designer
-//      rerun minted, designer task_questions rows created undispatched (trigger_run_id
-//      NULL). questioner-only rounds unchanged regardless of the flag.
-//   B. PARK gate (pure deriveFrontier) — a deferred designer handler node is kept OUT
+//   A. answer outcomes — the CONTROL channel (sealRoundQuestions, the board's per-question
+//      seal) PARKS: round answered, designer task_questions rows created undispatched
+//      (trigger_run_id NULL), NO designer rerun until an explicit board dispatch. The
+//      unified QUICK channel (autoDispatchClarifyRound) auto-dispatches instead (RFC-132
+//      §6; locked in rfc128-p5-d + the PR-B test below). questioner-scope answers rerun
+//      the questioner via the same dispatch.
+//   B. PARK gate (pure deriveFrontier) — a parked designer handler node is kept OUT
 //      of `completed` (downstream blocked) and bubbled awaiting_human; empty deferred
 //      set = byte-for-byte today's frontier.
 //   C. T2 invariant + S2 stuck detector treat the park (task awaiting_human with no
-//      awaiting_human node_run / no open clarify_session) as VALID for a deferred task,
-//      and still fire for a non-deferred task (golden-lock control).
+//      awaiting_human node_run / no open clarify_session) as VALID, and still fire for a
+//      fully-dispatched task (control).
 //   D. dispatchTaskQuestions — mint one rerun per effective target, stamp trigger_run_id
 //      (releases the gate); CAS idempotency: a repeated dispatch never double-mints.
 //
-// The flag is the golden-lock boundary: every gate consumer is inert for a
-// non-deferred task (loadUndispatchedDesignerTargets self-gates on the flag).
+// RFC-132: the `deferredQuestionDispatch` flag is VESTIGIAL (every task is the unified
+// deferred model); the legacy immediate mint + the flag-based submit split are deleted.
+// The park fixtures below drive the CONTROL channel (seal), mirroring the board flow.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -37,7 +39,8 @@ import {
   tasks,
   workflows,
 } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { bindTriggerRun, buildClarifyQueueContext } from '../src/services/clarifyQueue'
 import {
   confirmTaskQuestion,
@@ -279,49 +282,26 @@ beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
 // ---------------------------------------------------------------------------
-// A — submit split.
+// A — answer outcomes (RFC-132: control-channel seal parks; quick channel dispatches).
 // ---------------------------------------------------------------------------
-describe('RFC-120 T9 — submit split (defer vs immediate)', () => {
-  test('golden-lock: flag FALSE designer-scoped answer → designer-rerun-triggered (immediate)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: false })
-    const ret = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId,
-      answers: [ans('q1')],
-      directive: 'continue',
-      // no questionScopes → all-designer (CLARIFY_QUESTION_SCOPE_DEFAULT)
-    })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    // a fresh designer rerun was minted immediately
-    const designerRuns = await db
-      .select()
-      .from(nodeRuns)
-      .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
-    expect(designerRuns.length).toBe(2) // draft + rerun
-    // no park: non-deferred task always resolves the gate empty
-    expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(0)
-  })
-
-  test('flag TRUE designer-scoped answer → designer-deferred + NO rerun + undispatched entry', async () => {
+describe('RFC-120 T9 — answer outcomes (control-channel park vs quick-channel dispatch)', () => {
+  test('control-channel seal (designer scope) → PARK: NO rerun + undispatched entry', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    const ret = await submitCrossClarifyAnswers({
+    const sealed = await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
+      // no scopes → all-designer (CLARIFY_QUESTION_SCOPE_DEFAULT)
     })
-    expect(ret.outcome.kind).toBe('designer-deferred')
-    if (ret.outcome.kind === 'designer-deferred') {
-      expect(ret.outcome.deferredQuestionCount).toBe(1)
-    }
+    expect(sealed.roundFullySealed).toBe(true)
     // the answer IS recorded (round answered) but NO designer rerun minted
     const designerRuns = await db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, DESIGNER)))
-    expect(designerRuns.length).toBe(1) // draft only — deferred
+    expect(designerRuns.length).toBe(1) // draft only — parked
     // the designer task_questions entry was created eagerly + undispatched
     const designerEntries = await db
       .select()
@@ -334,18 +314,20 @@ describe('RFC-120 T9 — submit split (defer vs immediate)', () => {
     expect([...(await loadUndispatchedDesignerTargets(db, taskId))]).toEqual([DESIGNER])
   })
 
-  test('flag TRUE questioner-only answer → questioner-continue (unchanged) + gate empty', async () => {
+  test('quick-channel questioner-only answer → questioner rerun via dispatch + gate empty', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
-      questionScopes: { q1: 'questioner' },
+      scopes: { q1: 'questioner' },
+      actor: { userId: 'u1', role: 'owner' },
     })
-    expect(ret.outcome.kind).toBe('questioner-continue-triggered')
-    // no designer entry → no park even though the task is flagged
+    // the questioner rerun is minted through the unified dispatch (not an immediate mint).
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === QUESTIONER)).toBe(true)
+    // no designer entry → no park
     expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(0)
   })
 })
@@ -433,9 +415,9 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
   test('T2: deferred task awaiting_human + undispatched designer → no T2 alert', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -445,27 +427,29 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
     expect(result.openAlerts.filter((a) => a.rule === 'T2')).toHaveLength(0)
   })
 
-  test('T2 control: non-deferred task awaiting_human + no awaiting_human run → T2 fires', async () => {
+  test('T2 control: fully-DISPATCHED task awaiting_human + no awaiting_human run → T2 fires', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: false })
-    await submitCrossClarifyAnswers({
+    // The unified quick channel dispatches everything (designer + questioner) → no park.
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
+      actor: { userId: 'u1', role: 'owner' },
     })
     await db.update(tasks).set({ status: 'awaiting_human' }).where(eq(tasks.id, taskId))
     const result = await runLifecycleInvariants({ db, scope: { taskId } })
-    // non-deferred → loadUndispatchedDesignerTargets is empty → T2 fires as before
+    // fully dispatched → loadUndispatchedDesignerTargets is empty → T2 fires as before
     expect(result.openAlerts.filter((a) => a.rule === 'T2')).toHaveLength(1)
   })
 
   test('S2: deferred task awaiting_human + undispatched designer → no S2 finding', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -491,9 +475,9 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
 describe('RFC-120 T9 — dispatchTaskQuestions', () => {
   async function seedDeferredAnswered(db: DbClient) {
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -574,9 +558,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -606,9 +590,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -643,9 +627,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -681,9 +665,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -711,9 +695,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -753,9 +737,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -787,9 +771,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       deferred: true,
       questions: [mkQ('q1', 'first?'), mkQ('q2', 'second?')],
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -850,9 +834,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -925,9 +909,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
   test('a stamped frontier rerun always resolves to an EXISTING node_run (no phantom / orphan)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -962,9 +946,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1005,9 +989,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     // OTHER has NO prior node_run.
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1046,9 +1030,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1110,9 +1094,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
@@ -1152,9 +1136,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1186,14 +1170,14 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       deferred: true,
       ownerUserId: '__system__',
     })
-    // designer-scoped submit → deferred (entry created, no rerun); simulate the park.
-    const submit = await submitCrossClarifyAnswers({
+    // designer-scoped control seal → parked (entry created, no rerun); simulate the park.
+    const sealed = await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
-    expect(submit.outcome.kind).toBe('designer-deferred')
+    expect(sealed.roundFullySealed).toBe(true)
     await db.update(tasks).set({ status: 'awaiting_human' }).where(eq(tasks.id, taskId))
     expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(1) // parked
 
@@ -1280,9 +1264,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('read-side phase: pending→staged pre-dispatch, processing (dispatched, queued) → awaiting_confirm after the run BINDS + finishes', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1322,9 +1306,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -1350,9 +1334,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('H1(final): a process-retry of the dispatched run resolves awaiting_confirm (not stuck on the failed anchor); confirm works', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1396,9 +1380,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('H2(re-gate): a fresh process-retry STILL carries the External Feedback (lineage select, not == run id)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -1518,15 +1502,15 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     const ccC = await openSession('q_c', 'cc_c', E, 'c1')
 
     // Answer cc_a (→ D default entry) and cc_c (→ E default entry). cc_b is NOT answered.
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccA,
+      originNodeRunId: ccA,
       answers: [ans('a1')],
       directive: 'continue',
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccC,
+      originNodeRunId: ccC,
       answers: [ans('c1')],
       directive: 'continue',
     })
@@ -1650,15 +1634,15 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     await openSession('q_b2', 'cc_b2', B, 'b2') // cc_b2 stays awaiting_human (unresolved)
 
     // Answer cc_a (→ A entry) and cc_b1 (→ B entry). cc_b2 is left unresolved.
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccA,
+      originNodeRunId: ccA,
       answers: [ans('a1')],
       directive: 'continue',
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccB1,
+      originNodeRunId: ccB1,
       answers: [ans('b1')],
       directive: 'continue',
     })
@@ -1695,9 +1679,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
           ),
         )
     )[0]!.crossClarifyNodeRunId
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccB2Run,
+      originNodeRunId: ccB2Run,
       answers: [ans('b2')],
       directive: 'continue',
     })
@@ -1711,9 +1695,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('H2(final): reassign is a CAS on dispatched_at — a concurrent dispatch makes it affect 0 rows → rejected', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -1740,14 +1724,14 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, ccA, ccB } = await seedTwoSource(db)
 
-    // Answer source A (designer-scoped) → deferred. B is still awaiting_human.
-    const subA = await submitCrossClarifyAnswers({
+    // Answer source A (designer-scoped, control seal) → parked. B is still awaiting_human.
+    const subA = await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccA,
+      originNodeRunId: ccA,
       answers: [ans('a1')],
       directive: 'continue',
     })
-    expect(subA.outcome.kind).toBe('designer-deferred')
+    expect(subA.roundFullySealed).toBe(true)
     const entryA = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccA)!
 
     // Dispatch A's designer entry → rejected: sibling B unresolved → partial rerun risk.
@@ -1761,9 +1745,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     expect((await designerEntries(db, taskId)).every((e) => e.triggerRunId === null)).toBe(true)
 
     // Answer source B → now all siblings resolved.
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccB,
+      originNodeRunId: ccB,
       answers: [ans('b1')],
       directive: 'continue',
     })
@@ -1859,15 +1843,15 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     }
     const ccA = await open('q_a', 'cc_a', D1, 'a1')
     const ccB = await open('q_b', 'cc_b', D2, 'b1')
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccA,
+      originNodeRunId: ccA,
       answers: [{ ...ans('a1'), selectedOptionLabels: ['AAA'] }],
       directive: 'continue',
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: ccB,
+      originNodeRunId: ccB,
       answers: [{ ...ans('b1'), selectedOptionLabels: ['BBB'] }],
       directive: 'continue',
     })
@@ -1887,14 +1871,17 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('H2(final): a directive=stop designer-scoped round never creates a deferred park', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    // A REJECT (directive='stop') round — intentionally skips the designer rerun.
-    const submit = await submitCrossClarifyAnswers({
+    // A REJECT (directive='stop') round — intentionally skips the designer rerun; the unified
+    // quick channel still reruns the QUESTIONER (stop) via dispatch.
+    const submit = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
-    expect(submit.outcome.kind).toBe('questioner-stop-triggered')
+    expect(submit.dispatch.reruns.some((r) => r.targetNodeId === QUESTIONER)).toBe(true)
+    expect(submit.dispatch.reruns.some((r) => r.targetNodeId === DESIGNER)).toBe(false)
 
     // Lazy reconcile (listTaskQuestions) must NOT mint a designer entry for a stop
     // round → no eternal park. (The questioner entry is still created.)
@@ -2050,15 +2037,15 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
    *  DESIGNER, entryB's home is DOWN. Returns the dispatch result + the two entries. */
   async function answerAndDispatch(db: DbClient) {
     const seed = await seedFrontierChain(db)
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: seed.ccA,
+      originNodeRunId: seed.ccA,
       answers: [{ ...ans('a1'), selectedOptionLabels: ['AAA'] }],
       directive: 'continue',
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId: seed.ccB,
+      originNodeRunId: seed.ccB,
       answers: [{ ...ans('b1'), selectedOptionLabels: ['BBB'] }],
       directive: 'continue',
     })
@@ -2260,9 +2247,9 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       iteration: 0,
       startedAt: Date.now() - 500,
     })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
@@ -2291,9 +2278,9 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
   test('graphOwned=true for a genuine graph-designer round (default target == this node) — RFC-119 update mode preserved', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })

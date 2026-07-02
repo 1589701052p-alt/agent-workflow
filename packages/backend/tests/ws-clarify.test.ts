@@ -5,8 +5,11 @@
 // channel, so this test pins the contract at the broadcaster boundary:
 //   - createClarifySession dispatches a `clarify.created` event whose
 //     payload includes sourceShardKey + iterationIndex + a compact summary.
-//   - submitClarifyAnswers dispatches a `clarify.answered` event whose
+//   - answering the round dispatches a `clarify.answered` event whose
 //     payload includes the rerunNodeRunId so subscribers can switch focus.
+//     RFC-132: the unified driver (autoDispatchClarifyRound) broadcasts
+//     nothing itself — the ROUTE re-emits the answered event via
+//     broadcastSelfClarifyAnsweredForRound; this test mirrors the route.
 //
 // If the WS endpoint regresses, the broader integration tests (and the
 // frontend's useClarifyWs hook tests landing in PR-C) catch that — here
@@ -17,7 +20,8 @@ import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { broadcastSelfClarifyAnsweredForRound, createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { resetBroadcastersForTests, TASK_CHANNEL, taskBroadcaster } from '../src/ws/broadcaster'
 import type { TaskWsMessage, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
@@ -117,7 +121,7 @@ describe('clarify.* events broadcast on TASK_CHANNEL (RFC-023 T14)', () => {
     expect(created.session.status).toBe('awaiting_human')
   })
 
-  test('submitClarifyAnswers dispatches clarify.answered with rerunNodeRunId so subscribers can refocus', async () => {
+  test('answering the round dispatches clarify.answered with rerunNodeRunId so subscribers can refocus', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, sourceRunId } = await seedTask(db)
     const { clarifyNodeRunId } = await createClarifySession({
@@ -134,9 +138,9 @@ describe('clarify.* events broadcast on TASK_CHANNEL (RFC-023 T14)', () => {
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
 
-    const { rerunNodeRunId } = await submitClarifyAnswers({
+    const res = await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId,
+      originNodeRunId: clarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -145,7 +149,12 @@ describe('clarify.* events broadcast on TASK_CHANNEL (RFC-023 T14)', () => {
           customText: '',
         },
       ],
+      actor: { userId: 'u1', role: 'owner' },
     })
+    expect(res.dispatch.reruns).toHaveLength(1)
+    const rerunNodeRunId = res.dispatch.reruns[0]!.nodeRunId
+    // Mirror the route (RFC-132): re-emit clarify.answered with the dispatched rerun id.
+    await broadcastSelfClarifyAnsweredForRound(db, clarifyNodeRunId, rerunNodeRunId)
     const answered = received.find((m) => m.type === 'clarify.answered')
     expect(answered).toBeDefined()
     if (answered?.type !== 'clarify.answered') throw new Error('type narrowing')

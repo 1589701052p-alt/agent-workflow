@@ -27,6 +27,7 @@ import type { DbClient } from '../src/db/client'
 import { createInMemoryDb } from '../src/db/client'
 import {
   agents as agentsTable,
+  clarifyRounds,
   clarifySessions,
   docVersions,
   nodeRunOutputs,
@@ -35,7 +36,7 @@ import {
   workflows,
 } from '../src/db/schema'
 import { dispatchReviewNode, submitReviewDecision } from '../src/services/review'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { retryNode } from '../src/services/task'
 import { reapOrphanRuns } from '../src/services/orphans'
 import { runGit } from '../src/util/git'
@@ -642,9 +643,11 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
   })
 
   describe('Section D: clarify resume', () => {
-    test('D1 submitClarifyAnswers closes session, sets clarify node_run to done, mints fresh asker row at ci+1', async () => {
+    test('D1 answering the clarify round closes session, sets clarify node_run to done, mints fresh asker rerun', async () => {
       // Setup: agent node_run awaiting_human + clarify node_run awaiting_human
-      // + clarify_session awaiting_human.
+      // + clarify_session awaiting_human (+ its clarify_rounds mirror). The
+      // 'doc' asker node must exist in the workflowSnapshot (buildHarness) —
+      // the answer dispatch resolves its agent/target from the snapshot.
       const agentRunId = ulid()
       await h.db.insert(nodeRuns).values({
         id: agentRunId,
@@ -656,10 +659,9 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
         startedAt: Date.now() - 100,
         opencodeSessionId: 'opencode-session-1',
       })
-      // Build a minimal clarify node config — the service queries by clarify
-      // node_run id, not the clarify node config, so we don't strictly need
-      // it in the workflow definition. But seed a clarify run row to be
-      // closed.
+      // The clarify node itself needs no workflow-definition entry — the
+      // service keys off the clarify node_run id / round row. Seed the clarify
+      // run row to be closed.
       const clarifyRunId = ulid()
       await h.db.insert(nodeRuns).values({
         id: clarifyRunId,
@@ -696,10 +698,27 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
         answersJson: '{}',
         createdAt: Date.now() - 30,
       })
+      // RFC-132: the unified driver reads clarify_rounds (not the legacy session
+      // table) — mirror the hand-inserted session row (same id, kind 'self').
+      await h.db.insert(clarifyRounds).values({
+        id: sessionId,
+        taskId: h.taskId,
+        kind: 'self',
+        askingNodeId: 'doc',
+        askingNodeRunId: agentRunId,
+        intermediaryNodeId: 'clarify_x',
+        intermediaryNodeRunId: clarifyRunId,
+        iteration: 0,
+        loopIter: 0,
+        status: 'awaiting_human',
+        questionsJson: JSON.stringify(questions),
+        answersJson: '[]',
+        createdAt: Date.now() - 30,
+      })
 
-      await submitClarifyAnswers({
+      await autoDispatchClarifyRound({
         db: h.db,
-        clarifyNodeRunId: clarifyRunId,
+        originNodeRunId: clarifyRunId,
         answers: [
           {
             questionId: 'q1',
@@ -708,6 +727,7 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
             customText: '',
           },
         ],
+        actor: { userId: 'u1', role: 'owner' },
       })
 
       // Clarify node_run → done.
@@ -722,14 +742,17 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
       )[0]!
       expect(sessAfter.status).toBe('answered')
 
-      // Fresh agent rerun minted at clarifyIteration=1, retryIndex=0.
+      // Fresh agent rerun minted by the answer dispatch. RFC-132: the dispatch
+      // mints at retryIndex = max(top-level retryIndex at the anchor iteration)
+      // + 1 — the seeded doc run sits at retryIndex 0, so the rerun lands at 1
+      // (the legacy immediate mint used retryIndex 0).
       const agentRows = await h.db
         .select()
         .from(nodeRuns)
         .where(and(eq(nodeRuns.taskId, h.taskId), eq(nodeRuns.nodeId, 'doc')))
       const fresh = agentRows.find((r) => r.status === 'pending')
       expect(fresh).toBeDefined()
-      expect(fresh!.retryIndex).toBe(0)
+      expect(fresh!.retryIndex).toBe(1)
       expect(fresh!.status).toBe('pending')
     })
   })

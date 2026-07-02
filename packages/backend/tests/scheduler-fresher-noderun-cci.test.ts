@@ -58,8 +58,8 @@ describe('RFC-064 — isFresherNodeRun ranks by unified clarifyIteration', () =>
     //   - pending (cli=0, cci=1, retry=0) — post-submit questioner rerun
     // RFC-064 unified shape:
     //   - done    (clarify=0, retry=1) — same role row
-    //   - pending (clarify=1, retry=0) — questioner rerun now bumps the
-    //                                    unified counter via mintQuestionerRerun.
+    //   - pending (clarify=1, retry=0) — the questioner rerun mint (today the
+    //                                    unified dispatch path) bumps the counter.
     // Pre-patch: comparator chose the done row (retry=1 > 0).
     // Post-RFC-064: clarify=1 > clarify=0 wins → pending row picked.
     const done = mkRow({

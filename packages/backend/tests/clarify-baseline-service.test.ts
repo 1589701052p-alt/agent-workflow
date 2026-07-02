@@ -1,19 +1,17 @@
 // RFC-058 PR-A baseline (T2): byte-level lock of RFC-023 self-clarify service
-// path. Exercises createClarifySession → submitClarifyAnswers →
-// buildClarifyPromptContext end-to-end, asserting the prompt strings, status
-// transitions, and node_run cci inheritance that PR-B refactor must preserve.
+// path. Exercises createClarifySession + the seal/cleanup helpers, asserting
+// the row projections and status transitions that PR-B refactor must preserve.
 //
 // Locks:
 //   - createClarifySession field projection (agent-single + agent-multi shard)
-//   - submitClarifyAnswers happy continue / stop directives + new run mint
-//   - ifMatchIteration optimistic lock (mismatch + match)
-//   - buildClarifyPromptContext multi-round Q&A rendering w/ `### Round N`
-//   - buildClarifyPromptContext inline mode collapse to last round
-//   - buildClarifyPromptContext shard-key isolation
-//   - buildClarifyPromptContext historyCutoffClarifyIteration GENERAL aging
-//   - applyLatestDirective=false suppresses trailer (review-iterate path)
-//   - cancel-on-task-close converts awaiting_human → canceled
 //   - sealAnswersServerSide rebuilds labels from question.options
+//   - cleanupSessionsForTask deletes the task's session rows
+//   - node_run_outputs presence as the GENERAL aging trigger (sanity probe)
+//
+// RFC-132: the former 'continue / stop / lock' describe exercised the legacy
+// quick-channel finalize itself (dead code deleted with RFC-132). Its unified
+// equivalents — seal + auto-dispatch continuation, optimistic-lock mismatch,
+// double-answer rejection — are locked by rfc128-p5-d-autodispatch.test.ts.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -25,7 +23,6 @@ import {
   cleanupSessionsForTask,
   createClarifySession,
   sealAnswersServerSide,
-  submitClarifyAnswers,
 } from '../src/services/clarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -180,152 +177,6 @@ describe('RFC-058 baseline T2 — createClarifySession / row shape', () => {
     const cnr = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, clarifyNodeRunId)))[0]
     expect(cnr?.shardKey).toBe('shard-A')
     expect(cnr?.parentNodeRunId).toBe('parent-multi')
-  })
-})
-
-describe('RFC-058 baseline T2 — submitClarifyAnswers continue / stop / lock', () => {
-  test('happy continue: status=answered, directive=continue, source run cci+1', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_source_2',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_source_2',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-    const r = await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer({ selectedOptionIndices: [0] })],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    expect(r.session.status).toBe('answered')
-    expect(r.session.directive).toBe('continue')
-    expect(r.rerunNodeRunId).toBeTruthy()
-    const next = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, r.rerunNodeRunId)))[0]
-    expect(next?.retryIndex).toBe(0)
-    expect(next?.nodeId).toBe('designer')
-  })
-
-  test('stop directive: session.directive=stop persisted; source rerun minted', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_source_3',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_source_3',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-    const r = await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer()],
-      directive: 'stop',
-      ifMatchIteration: 0,
-    })
-    expect(r.session.directive).toBe('stop')
-    expect(r.session.status).toBe('answered')
-  })
-
-  test('ifMatchIteration mismatch → ConflictError thrown (no state change)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_source_4',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { session, clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_source_4',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-    await expect(
-      submitClarifyAnswers({
-        db,
-        clarifyNodeRunId,
-        answers: [makeAnswer()],
-        directive: 'continue',
-        ifMatchIteration: 99,
-      }),
-    ).rejects.toThrow()
-    // Status unchanged
-    const fresh = (
-      await db.select().from(clarifySessions).where(eq(clarifySessions.id, session.id))
-    )[0]
-    expect(fresh?.status).toBe('awaiting_human')
-  })
-
-  test('idempotency: re-submitting an already-answered session throws ConflictError', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_source_5',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_source_5',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-    await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer()],
-      directive: 'continue',
-      ifMatchIteration: 0,
-    })
-    await expect(
-      submitClarifyAnswers({
-        db,
-        clarifyNodeRunId,
-        answers: [makeAnswer()],
-        directive: 'continue',
-        ifMatchIteration: 0,
-      }),
-    ).rejects.toThrow()
   })
 })
 

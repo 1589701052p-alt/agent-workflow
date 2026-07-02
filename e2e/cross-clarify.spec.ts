@@ -388,7 +388,8 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     // 7. Designer reran after the cross-clarify submit. RFC-074 PR-C: the
     //    retired clarifyIteration counter is gone — the rerun is identified by
     //    id-order, i.e. a SECOND done top-level designer node_run minted after
-    //    the original (the cross-clarify submit triggers triggerDesignerRerun).
+    //    the original (the cross-clarify answer auto-dispatches the designer
+    //    rerun via the unified dispatch, RFC-132).
     const runsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
     })

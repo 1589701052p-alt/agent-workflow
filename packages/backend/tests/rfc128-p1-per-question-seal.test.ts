@@ -8,16 +8,18 @@
 //   AC-3 全题 seal 才 answered（RFC-126 failed→resume 须保持 answered 的地基）。
 //   AC-2 reconcile 逐题门控：seal Q1(designer) → 出 Q1 designer 条目；Q2 未 seal 不出。
 //   DTO  sealed 字段 + answerSummary 独立于轮 status（partial 下已 seal 题仍显示答案，F3）。
-//   黄金锁：单题全答一次性 seal = 旧整轮 submit 在 answers_json 内容 + status 上逐字一致
-//          （差异只在新增的 sealed_at + 借壳/续跑 mint——控制通道不 mint，是有意的 defer）。
+//   快通道互操作：整轮 finalize（RFC-132 起 = autoDispatchClarifyRound）不覆盖已 seal 的答案 /
+//          不丢已 seal 的 scope（P2-2/P2-3）。旧「一次性 seal == legacy 整轮 submit 逐字一致」
+//          对比锁随 legacy immediate 路径一起删除（RFC-132 §8——有意行为变更，非回归）。
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifyRounds, clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { createClarifySession } from '../src/services/clarify'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { listTaskQuestions } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
@@ -29,6 +31,7 @@ import type {
 } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+const actor = { userId: 'u1', role: 'owner' as const }
 
 beforeEach(() => {
   resetBroadcastersForTests()
@@ -370,41 +373,10 @@ describe('RFC-128 P1 — DTO sealed 字段 + answerSummary 独立轮 status', ()
 })
 
 // ---------------------------------------------------------------------------
-// 黄金锁 — 单题全答一次性 seal = 旧整轮 submit 在 answers_json + status 上逐字一致
+// (RFC-132 §8: 旧「一次性 seal 全题 == legacy 整轮 submit」byte-for-byte 对比锁已随
+// legacy immediate 路径删除；seal 原语本身的「控制通道不 mint」语义由上面 AC 组 +
+// autoStage 黄金锁继续覆盖。)
 // ---------------------------------------------------------------------------
-
-describe('RFC-128 P1 — 黄金锁: 一次性 seal 全题 == 旧整轮 submit', () => {
-  test('answers_json 内容 + status 逐字一致；控制通道不 mint 续跑（defer 语义）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const questions = [makeQ('q1'), makeQ('q2')]
-    const answers = [makeAns('q1', 1), makeAns('q2', 0)]
-
-    // 旧整轮 quick channel。
-    const a = await seedSelfRound(db, questions)
-    await submitClarifyAnswers({ db, clarifyNodeRunId: a.originNodeRunId, answers })
-    const [roundA] = await roundOf(db, a.taskId)
-
-    // 新逐题 seal 全题一次。
-    const b = await seedSelfRound(db, questions)
-    await sealRoundQuestions({ db, originNodeRunId: b.originNodeRunId, answers })
-    const [roundB] = await roundOf(db, b.taskId)
-
-    // 内容 + status 逐字一致。
-    expect(roundB?.answersJson).toBe(roundA?.answersJson)
-    expect(roundA?.status).toBe('answered')
-    expect(roundB?.status).toBe('answered')
-
-    // quick channel 续跑 mint 一条；控制通道（seal 原语）不 mint（有意的 defer）。
-    const rerunsA = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, a.taskId))).filter(
-      (r) => r.rerunCause === 'clarify-answer',
-    )
-    const rerunsB = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, b.taskId))).filter(
-      (r) => r.rerunCause === 'clarify-answer',
-    )
-    expect(rerunsA).toHaveLength(1)
-    expect(rerunsB).toHaveLength(0)
-  })
-})
 
 // ---------------------------------------------------------------------------
 // P2-1 — seal 原子性: overlapping seals 不丢更新, 不留「全 sealed 但轮仍 awaiting」
@@ -458,11 +430,13 @@ describe('RFC-128 P1 — P2-2 quick-channel 不覆盖已 sealed (self)', () => {
     // Control channel seals q1 with index 0 (round stays awaiting_human).
     await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1', 0)] })
 
-    // Quick channel finalize posts ALL questions, trying to CHANGE q1 → index 1.
-    await submitClarifyAnswers({
+    // Quick channel finalize (autoDispatchClarifyRound) posts ALL questions, trying to CHANGE
+    // q1 → index 1.
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: originNodeRunId,
+      originNodeRunId,
       answers: [makeAns('q1', 1), makeAns('q2', 1)],
+      actor,
     })
 
     const [round] = await roundOf(db, taskId)
@@ -473,13 +447,14 @@ describe('RFC-128 P1 — P2-2 quick-channel 不覆盖已 sealed (self)', () => {
     expect(round?.status).toBe('answered') // finalize still flips the whole round
   })
 
-  test('黄金锁: 无任何预先 seal 时，整轮 submit 逐字不变（lockedIds 空）', async () => {
+  test('黄金锁: 无任何预先 seal 时，整轮 finalize 逐字不变（lockedIds 空）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedSelfRound(db, [makeQ('q1'), makeQ('q2')])
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: originNodeRunId,
+      originNodeRunId,
       answers: [makeAns('q1', 1), makeAns('q2', 0)],
+      actor,
     })
     const [round] = await roundOf(db, taskId)
     const answers = JSON.parse(round?.answersJson ?? '[]') as ClarifyAnswer[]
@@ -505,13 +480,14 @@ describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)',
       scopes: { q1: 'questioner' },
     })
 
-    // Quick channel finalize sends a SPARSE questionScopes (only q2) — q1 omitted.
-    await submitCrossClarifyAnswers({
+    // Quick channel finalize sends a SPARSE scopes map (only q2) — q1 omitted.
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: originNodeRunId,
+      originNodeRunId,
       answers: [makeAns('q1'), makeAns('q2')],
       directive: 'continue',
-      questionScopes: { q2: 'designer' }, // q1 omitted → must NOT lose its stored scope
+      scopes: { q2: 'designer' }, // q1 omitted → must NOT lose its stored scope
+      actor,
     })
 
     const [round] = await roundOf(db, taskId)
@@ -534,12 +510,13 @@ describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)',
     })
 
     // Stale tab finalize tries to FLIP q1 back to designer — must be ignored (q1 is locked).
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: originNodeRunId,
+      originNodeRunId,
       answers: [makeAns('q1'), makeAns('q2')],
       directive: 'continue',
-      questionScopes: { q1: 'designer', q2: 'designer' },
+      scopes: { q1: 'designer', q2: 'designer' },
+      actor,
     })
 
     const [round] = await roundOf(db, taskId)
@@ -548,15 +525,16 @@ describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)',
     expect(scopes.q2).toBe('designer')
   })
 
-  test('黄金锁: 无 stored scope 时，整轮 submit 的 scopes 行为不变', async () => {
+  test('黄金锁: 无 stored scope 时，整轮 finalize 的 scopes 行为不变', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-    await submitCrossClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: originNodeRunId,
+      originNodeRunId,
       answers: [makeAns('q1'), makeAns('q2')],
       directive: 'continue',
-      questionScopes: { q1: 'designer', q2: 'questioner' },
+      scopes: { q1: 'designer', q2: 'questioner' },
+      actor,
     })
     const [round] = await roundOf(db, taskId)
     const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>

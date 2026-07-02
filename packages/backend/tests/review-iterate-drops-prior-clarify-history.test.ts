@@ -43,7 +43,7 @@ import { createInMemoryDb } from '../src/db/client'
 import { nodeRuns } from '../src/db/schema'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
-import { submitClarifyAnswers } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { addReviewComment, submitReviewDecision } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
 import { startTask } from '../src/services/task'
@@ -217,11 +217,12 @@ async function buildHarness(): Promise<Harness> {
     .where(eq(clarifySessions.taskId, task.id))
   const clarifyNodeRunId = sessionRows[0]?.clarifyNodeRunId
   if (clarifyNodeRunId === undefined) throw new Error('clarify session not created on first run')
-  await submitClarifyAnswers({
+  await autoDispatchClarifyRound({
     db,
-    clarifyNodeRunId,
+    originNodeRunId: clarifyNodeRunId,
     answers: [CLARIFY_ANSWER],
     directive: 'stop', // finalize → the designer outputs v1
+    actor: { userId: 'u1', role: 'owner' },
   })
   await reenterScheduler(db, task.id)
   await runTask({ taskId: task.id, db, appHome, opencodeCmd: [stubOpencode] })

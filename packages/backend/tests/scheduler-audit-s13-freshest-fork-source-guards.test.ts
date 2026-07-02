@@ -16,9 +16,10 @@
 //              零成本规避 UNIQUE 撞车）。
 //     fork #6  lifecycleRepair/helpers.ts loadNodeRunsForNode ——
 //              RFC-096 直接删除（零调用点的死导出，git 史实证从未被调用）。
-//   同批消灭的还有 `desc(nodeRuns.startedAt)` 排序 fork（crossClarify.ts
-//   triggerDesignerRerun + scheduler.ts commit&push 归属挑行——NULL startedAt
-//   沉底 / mark-running 重写 startedAt 的两类排序漂移，见 design §2/§3.1）。
+//   同批消灭的还有 `desc(nodeRuns.startedAt)` 排序 fork（cross-clarify 设计者
+//   重跑挑行〔RFC-132 后由 taskQuestionDispatch.ts buildFrontierMintPlan 承接〕
+//   + scheduler.ts commit&push 归属挑行——NULL startedAt 沉底 / mark-running
+//   重写 startedAt 的两类排序漂移，见 design §2/§3.1）。
 //
 // 终态语义（本文件锁定的 ratchet）：freshest 选行只有一个权威——
 //   freshness.ts 的 pickFreshestRun / isFresherNodeRun（纯 id 序 + 显式谓词）。
@@ -188,9 +189,10 @@ describe('S-13 freshest-run comparator forks — source-text guards (all forks c
     // sorts LAST under DESC → the new row is unselectable) and mark-running
     // REWRITES startedAt (a resumed old row jumps to the front). Both former
     // sites are converged onto pickFreshestRun:
-    //   - crossClarify.ts triggerDesignerRerun → {topLevelOnly:false} (child
-    //     rows stay selectable ON PURPOSE: a designer inside a wrapper-fanout
-    //     reruns on shard child rows and must inherit shardKey/parentNodeRunId)
+    //   - the clarify-rerun mint anchor (RFC-132: taskQuestionDispatch.ts
+    //     buildFrontierMintPlan) → {topLevelOnly:false} (child rows stay
+    //     selectable ON PURPOSE: a designer inside a wrapper-fanout reruns on
+    //     shard child rows and must inherit shardKey/parentNodeRunId)
     //   - scheduler.ts maybeRunCommitPush attribution → {topLevelOnly:true}
     //     over a done-only SQL row set.
     // Empty whitelist (design §4 ①) — verified empty at flip time.
@@ -198,10 +200,8 @@ describe('S-13 freshest-run comparator forks — source-text guards (all forks c
     // Positive anchors for the two converged call sites (cheap drift probes;
     // behavior is locked by rfc096-designer-rerun-pick.test.ts and the
     // cross-clarify suite).
-    const crossClarifySrc = readFileSync(join(SRC_ROOT, 'services', 'crossClarify.ts'), 'utf-8')
-    expect(crossClarifySrc.includes('pickFreshestRun(designerRows, { topLevelOnly: false })')).toBe(
-      true,
-    )
+    const dispatchSrc = readFileSync(join(SRC_ROOT, 'services', 'taskQuestionDispatch.ts'), 'utf-8')
+    expect(dispatchSrc.includes('pickFreshestRun(targetRuns, { topLevelOnly: false })')).toBe(true)
     expect(SCHEDULER_SRC.includes('pickFreshestRun(parentRows, { topLevelOnly: true })')).toBe(true)
   })
 

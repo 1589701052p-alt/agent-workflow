@@ -121,8 +121,8 @@ describe('dispatchReviewNode upstream selection — clarify rerun must beat stal
     // (Intentionally NO node_run_outputs row for staleRunId — that's the
     // bug shape we're locking out.)
 
-    // Fresh row: clarify-driven rerun minted at retryIndex=0,
-    // clarifyIteration=1 (see submitClarifyAnswers + isFresherNodeRun in
+    // Fresh row: clarify-driven continuation rerun at retryIndex=0,
+    // clarifyIteration=1 (the clarify-answer rerun mint + isFresherNodeRun in
     // packages/backend/src/services/scheduler.ts). Emitted docpath.
     const clarifyRunId = '01B_CLARIFY'
     await db.insert(nodeRuns).values({

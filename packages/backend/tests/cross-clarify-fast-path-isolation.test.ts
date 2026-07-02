@@ -1,42 +1,32 @@
-// RFC-059 C4 — multi-source fast-path isolation.
+// RFC-059 C4 (slimmed by RFC-132) — a questioner-scope sibling resolution must not
+// block (or feed) the designer.
 //
-// When peer A's session is all-questioner-scoped and goes through the
-// fast path (`triggerQuestionerContinueRerun`), peer B (still
-// awaiting_human) MUST NOT have its state disturbed:
+// The original file locked the RFC-059 "fast path" (the retired legacy immediate
+// questioner mint). RFC-132 unified all answers onto autoDispatchClarifyRound —
+// per-round seal isolation, the questioner-scope "no designer entry" rule, scope-JSON
+// dual-write parity and the questioner continuation mint are now locked by
+// cross-clarify-multi-source-wait.test.ts, cross-clarify-question-scope.test.ts and
+// rfc128-p5-d-autodispatch.test.ts. The ONE invariant not covered there survives here:
 //
-//   1. Peer B's session row remains status='awaiting_human' /
-//      directive=NULL — the fast path on A does NOT side-effect into B's
-//      row.
-//   2. Peer A's row IS stamped status='answered' / directive='continue'.
-//   3. designer_run_triggered_at is NULL on BOTH rows — the fast path on
-//      A does NOT trigger a designer rerun; B has nothing to stamp.
-//   4. When B later submits (with designer-scoped questions), the
-//      readiness scan sees peer A as resolved (status='answered',
-//      directive='continue') and the aggregate uses ONLY peer A's
-//      designer-scoped count (which is zero) + B's count. The designer
-//      rerun fires iff the aggregate > 0; otherwise outcome is
-//      'designer-skipped-all-questioner-scope'.
-//
-// These guards lock the contract that the fast path is a "local
-// shortcut" on A — it must not leak into peer state or pollute the
-// later readiness check.
+//   Peer A resolves its round with ALL-QUESTIONER scope (continue). Peer B (same
+//   designer) then answers with designer-scoped questions. The designer readiness
+//   must treat A as RESOLVED (answered, nothing to feed) — B's answer alone fires
+//   exactly one designer rerun; A contributes no designer entry to the batch.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
-import type {
-  ClarifyQuestion,
-  ClarifyQuestionScope,
-  WorkflowDefinition,
-  WorkflowNode,
-} from '@agent-workflow/shared'
+import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
+
+const actor = { userId: 'u1', role: 'owner' as const }
 
 async function seedTwoSource(db: DbClient): Promise<{ taskId: string; def: WorkflowDefinition }> {
   const taskId = `task_${Math.random().toString(36).slice(2, 8)}`
@@ -157,83 +147,8 @@ async function spawnSession(
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
-describe('RFC-059 C4 — fast-path isolation', () => {
-  test('peer A fast path → peer B row untouched (status / directive / designerRunTriggeredAt)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'a-first')],
-    })
-    await spawnSession(db, taskId, {
-      questionerNodeId: 'q_b',
-      questionerRunId: 'nr_q_b',
-      ccNodeId: 'cc_b',
-      questions: [mkQ('b1', 'b-first')],
-    })
-    // Peer A submits all-questioner.
-    const aResult = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' },
-    })
-    expect(aResult.outcome.kind).toBe('questioner-continue-triggered')
-
-    // Peer A row: answered + continue + designerRunTriggeredAt still NULL.
-    const aSessions = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.crossClarifyNodeId, 'cc_a'))
-    expect(aSessions[0]?.status).toBe('answered')
-    expect(aSessions[0]?.directive).toBe('continue')
-    expect(aSessions[0]?.designerRunTriggeredAt).toBeNull()
-
-    // Peer B row: untouched (still awaiting / NULL).
-    const bSessions = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.crossClarifyNodeId, 'cc_b'))
-    expect(bSessions[0]?.status).toBe('awaiting_human')
-    expect(bSessions[0]?.directive).toBeNull()
-    expect(bSessions[0]?.designerRunTriggeredAt).toBeNull()
-    expect(bSessions[0]?.answeredAt).toBeNull()
-  })
-
-  test('peer A fast path → designer NOT rerun (no extra node_runs for "designer")', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'a-first')],
-    })
-    await spawnSession(db, taskId, {
-      questionerNodeId: 'q_b',
-      questionerRunId: 'nr_q_b',
-      ccNodeId: 'cc_b',
-      questions: [mkQ('b1', 'b-first')],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' },
-    })
-    const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
-    expect(designerRuns.length).toBe(1)
-  })
-
-  test('peer A fast path + B submits all-designer → designer rerun fires with B-only sources', async () => {
+describe('RFC-059 C4 — questioner-scope sibling resolution unblocks the designer', () => {
+  test('peer A all-questioner + B all-designer → the designer rerun fires from B alone', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId } = await seedTwoSource(db)
     const aRunId = await spawnSession(db, taskId, {
@@ -248,185 +163,41 @@ describe('RFC-059 C4 — fast-path isolation', () => {
       ccNodeId: 'cc_b',
       questions: [mkQ('b1', 'b-first')],
     })
-    await submitCrossClarifyAnswers({
+    // Peer A answers all-questioner: its questioner continuation mints; NO designer
+    // entry is created for A (questioner scope) and the designer must NOT rerun yet.
+    const aResult = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: aRunId,
+      originNodeRunId: aRunId,
       answers: [
         { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
       ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' },
+      scopes: { a1: 'questioner' },
+      actor,
     })
-    const bResult = await submitCrossClarifyAnswers({
+    expect(aResult.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(false)
+    const aEntries = await db
+      .select()
+      .from(taskQuestions)
+      .where(eq(taskQuestions.originNodeRunId, aRunId))
+    expect(aEntries.some((e) => e.roleKind === 'designer')).toBe(false)
+    expect((await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))).length).toBe(1)
+
+    // Peer B answers all-designer: A reads as RESOLVED (answered) in the readiness
+    // scan, so B's answer alone dispatches the designer — exactly one rerun, carrying
+    // only B's designer entry (A never produced one).
+    const bResult = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId: bRunId,
+      originNodeRunId: bRunId,
       answers: [
         { questionId: 'b1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
       ],
-      directive: 'continue',
-      questionScopes: { b1: 'designer' },
+      scopes: { b1: 'designer' },
+      actor,
     })
-    expect(bResult.outcome.kind).toBe('designer-rerun-triggered')
-    if (bResult.outcome.kind === 'designer-rerun-triggered') {
-      // sourceCount reflects readiness.sources.length BEFORE the designer-
-      // side scope filter is applied — peer A counts as a resolved source
-      // (status='answered', directive='continue', not yet consumed), and
-      // peer B is too. So sourceCount=2 here. The designer-side filter
-      // later drops A from the External Feedback render (a1=questioner →
-      // subset.questions.length=0 → source skipped) — that's covered by
-      // cross-clarify-question-scope-prompt.test.ts.
-      expect(bResult.outcome.sourceCount).toBe(2)
-    }
+    const designerRerun = bResult.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    expect(designerRerun).toBeDefined()
+    expect(designerRerun!.entryIds).toHaveLength(1)
     const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
     expect(designerRuns.length).toBe(2) // initial done + new rerun
-  })
-
-  test('peer A fast path + B submits all-questioner → outcome questioner-continue (both fast path)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'a-first')],
-    })
-    const bRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_b',
-      questionerRunId: 'nr_q_b',
-      ccNodeId: 'cc_b',
-      questions: [mkQ('b1', 'b-first')],
-    })
-    await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' } as Record<string, ClarifyQuestionScope>,
-    })
-    const bResult = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: bRunId,
-      answers: [
-        { questionId: 'b1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { b1: 'questioner' } as Record<string, ClarifyQuestionScope>,
-    })
-    expect(bResult.outcome.kind).toBe('questioner-continue-triggered')
-    const designerRuns = await db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'designer'))
-    expect(designerRuns.length).toBe(1)
-  })
-
-  // RFC-056 / RFC-059 regression — locks the bug from task
-  // 01KSESDVXQVRQX1FXG6N432C52 (2026-05-25):
-  //
-  //   With all questions scoped to the questioner and the user clicking
-  //   "Submit and keep clarifying", `triggerQuestionerContinueRerun`
-  //   minted a new questioner node_run that INHERITED the prior cci
-  //   instead of bumping it. The scheduler's `isQuestionerCrossClarifyRerun`
-  //   gate (`scheduler.ts:1425`: `cci > 0`) then fell through to
-  //   `consumerKind='self'`, which finds zero self-clarify rounds for the
-  //   cross-questioner, so `clarifyContext = undefined`. The questioner
-  //   reran with NO record of having asked the user anything — re-emitted
-  //   the same <workflow-clarify> envelope, the user got the same
-  //   questions again. The reject path had the symmetric bug, masked at
-  //   runtime by `hasPersistentStop` short-circuiting before a new
-  //   session is created.
-  //
-  // Why this is a SCHEDULER-PATH guard, not a buildPromptContext one:
-  // `cross-clarify-question-scope-prompt.test.ts` already covered the
-  // pure-function `buildPromptContext({ targetIteration: 1 })` branch
-  // and passed, hiding the gap that the cci=0 row never gets routed
-  // through that branch in production. This test asserts the persisted
-  // row directly so any future refactor that drops the bump (or moves
-  // it to a wrapper that the helper bypasses) fails here even if the
-  // unit-level prompt tests stay green.
-  test('fast path (all-questioner continue) bumps the new questioner cci above existing peers', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'a-first')],
-    })
-    const aResult = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' } as Record<string, ClarifyQuestionScope>,
-    })
-    expect(aResult.outcome.kind).toBe('questioner-continue-triggered')
-    if (aResult.outcome.kind !== 'questioner-continue-triggered') return
-    const newRunRow = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, aResult.outcome.questionerNodeRunId))
-    )[0]
-    expect(newRunRow?.status).toBe('pending')
-    // The cross-clarify session itself was created at iteration=0 + the
-    // node_run for the cross-clarify node landed at cci=0. The new
-    // questioner row must land STRICTLY above every participant — so
-    // cci >= 1, matching the maxParticipantCci + 1 algorithm shared
-    // with triggerDesignerRerun.
-  })
-
-  test('reject path (questioner-stop-triggered) also bumps the new questioner cci', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'spurious?')],
-    })
-    const aResult = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'stop',
-    })
-    expect(aResult.outcome.kind).toBe('questioner-stop-triggered')
-    if (aResult.outcome.kind !== 'questioner-stop-triggered') return
-    // RFC-074 PR-C: the questioner stop-rerun is a fresh pending insert (no cci).
-    const newRunRow = (
-      await db.select().from(nodeRuns).where(eq(nodeRuns.id, aResult.outcome.questionerNodeRunId))
-    )[0]
-    expect(newRunRow?.status).toBe('pending')
-  })
-
-  test('peer A fast path: clarify_rounds row carries questionScopesJson same as cross_clarify_sessions', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTwoSource(db)
-    const aRunId = await spawnSession(db, taskId, {
-      questionerNodeId: 'q_a',
-      questionerRunId: 'nr_q_a',
-      ccNodeId: 'cc_a',
-      questions: [mkQ('a1', 'a-first')],
-    })
-    const aResult = await submitCrossClarifyAnswers({
-      db,
-      crossClarifyNodeRunId: aRunId,
-      answers: [
-        { questionId: 'a1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      directive: 'continue',
-      questionScopes: { a1: 'questioner' } as Record<string, ClarifyQuestionScope>,
-    })
-    const legacy = await db
-      .select()
-      .from(crossClarifySessions)
-      .where(eq(crossClarifySessions.id, aResult.session.id))
-    const unified = await db
-      .select()
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, aResult.session.id))
-    expect(legacy[0]?.questionScopesJson).toBe(unified[0]?.questionScopesJson)
-    expect(legacy[0]?.questionScopesJson).toBe(JSON.stringify({ a1: 'questioner' }))
   })
 })

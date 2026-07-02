@@ -3,39 +3,28 @@
 // Covers, in order:
 //   1. createClarifySession round-trips a session row, marks the clarify
 //      node_run awaiting_human, and broadcasts clarify.created.
-//   2. submitClarifyAnswers seals selectedOptionLabels server-side from
-//      question.options (defends against client-supplied label forgery).
-//   3. submitClarifyAnswers enforces the ifMatchIteration optimistic lock
-//      with a ConflictError (REST translates to 412).
-//   4. submitClarifyAnswers refuses to act on a session that is already
-//      answered (idempotency guard) — ConflictError.
-//   5. submitClarifyAnswers mints a fresh source-agent node_run with
-//      clarifyIteration + 1 and retry_index = 0, preserving shardKey +
-//      parent_node_run_id for agent-multi shards.
-//   6. submitClarifyAnswers calls rollbackToSnapshot when the source agent
-//      had a preSnapshot. (We patch the git util via the worktree path
-//      being empty to keep the test hermetic; we assert the rerun row
-//      exists with preSnapshot mirrored.)
-//   7. buildClarifyPromptContext returns every prior answered session
-//      for (agentNodeId, shardKey) only when targetIteration > 0; absent
-//      otherwise. Multi-round runs see ALL earlier rounds (not just the
-//      latest) so prior Q&A is never dropped from the rerun prompt.
-//   8. buildClarifyPromptContext respects shardKey scoping: an agent-single
-//      rerun (shardKey=null) does NOT see an agent-multi shard's session.
+//   2. createClarifySession passes through sourceShardKey + parentNodeRunId
+//      for agent-multi shard children.
+//   3. sealAnswersServerSide seals selectedOptionLabels server-side from
+//      question.options (defends against client-supplied label forgery) and
+//      drops out-of-range indices / unknown question ids silently.
+//
+// RFC-132: the former answer-submit describe (whole-round finalize, optimistic
+// lock, double-answer rejection, rerun mint + shard passthrough) exercised the
+// legacy quick-channel finalize itself — deleted with that dead code. The
+// unified equivalents (seal + auto-dispatch continuation, incl. the
+// dispatch-layer inheritance of shard/parent fields) are locked by
+// rfc128-p5-d-autodispatch.test.ts.
 //
 // Together with clarify-no-cross-review-interference (separate file), this
-// gives PR-B its full 9-case unit lock.
+// keeps the create/seal unit lock.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import {
-  createClarifySession,
-  sealAnswersServerSide,
-  submitClarifyAnswers,
-} from '../src/services/clarify'
+import { createClarifySession, sealAnswersServerSide } from '../src/services/clarify'
 import { resetBroadcastersForTests, taskBroadcaster, TASK_CHANNEL } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -247,166 +236,5 @@ describe('sealAnswersServerSide', () => {
     expect(sealed.length).toBe(1)
     expect(sealed[0]?.selectedOptionIndices).toEqual([0])
     expect(sealed[0]?.selectedOptionLabels).toEqual(['Postgres'])
-  })
-})
-
-// RFC-128 P0 net (behavior #1): 整轮 seal 现状，P1 逐题改造勿破。本 describe 锁住
-// self clarify 整轮续跑的形态（rerun 存在 / retryIndex=0 / clarify done / shard
-// passthrough）。补强锁——「恰好一条 cause='clarify-answer' 续跑」「整轮一次 seal（多题
-// 一起进 answers）」「sealAnswersServerSide 空数组返回 [] 不抛错」——见
-// rfc128-p0-whole-round-seal-net.test.ts #1（P5 self 逐题重跑会把整轮一条变多条 → 先红）。
-describe('submitClarifyAnswers', () => {
-  test('seals answers, marks session answered, mints a rerun with clarifyIteration+1', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    const sourceRunId = 'nr_src_submit'
-    await db.insert(nodeRuns).values({
-      id: sourceRunId,
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 2,
-      iteration: 0,
-      reviewIteration: 1,
-      preSnapshot: '',
-    })
-
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: sourceRunId,
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-
-    const received: TaskWsMessage[] = []
-    taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-
-    const { session, rerunNodeRunId } = await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer({ selectedOptionIndices: [2] })],
-    })
-
-    expect(session.status).toBe('answered')
-    expect(session.answers?.[0]?.selectedOptionLabels).toEqual(['SQLite'])
-
-    const rerun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunNodeRunId)))[0]
-    expect(rerun?.nodeId).toBe('designer')
-    expect(rerun?.status).toBe('pending')
-    expect(rerun?.retryIndex).toBe(0)
-    expect(rerun?.reviewIteration).toBe(1) // passthrough
-
-    // clarify node_run should be done now.
-    const clRun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, clarifyNodeRunId)))[0]
-    expect(clRun?.status).toBe('done')
-
-    expect(received.find((m) => m.type === 'clarify.answered')).toBeDefined()
-  })
-
-  test('rejects mismatched ifMatchIteration with ConflictError', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_optimistic_src',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_optimistic_src',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 3,
-      questions: [makeQuestion()],
-    })
-
-    await expect(
-      submitClarifyAnswers({
-        db,
-        clarifyNodeRunId,
-        answers: [makeAnswer()],
-        ifMatchIteration: 99,
-      }),
-    ).rejects.toMatchObject({ code: 'clarify-iteration-mismatch' })
-  })
-
-  test('refuses to act on an already-answered session (ConflictError)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_dup_src',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_dup_src',
-      sourceShardKey: null,
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-    })
-    await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer()],
-    })
-    await expect(
-      submitClarifyAnswers({
-        db,
-        clarifyNodeRunId,
-        answers: [makeAnswer()],
-      }),
-    ).rejects.toMatchObject({ code: 'clarify-already-answered' })
-  })
-
-  test('preserves shardKey + parentNodeRunId on the rerun row for agent-multi shards', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db)
-    await db.insert(nodeRuns).values({
-      id: 'nr_shard_submit',
-      taskId,
-      nodeId: 'designer',
-      status: 'done',
-      retryIndex: 0,
-      iteration: 0,
-      shardKey: 'shard-B',
-      parentNodeRunId: 'parent-multi',
-    })
-    const { clarifyNodeRunId } = await createClarifySession({
-      db,
-      taskId,
-      sourceAgentNodeId: 'designer',
-      sourceAgentNodeRunId: 'nr_shard_submit',
-      sourceShardKey: 'shard-B',
-      clarifyNodeId: 'clarify1',
-      iterationIndex: 0,
-      questions: [makeQuestion()],
-      parentNodeRunId: 'parent-multi',
-    })
-
-    const { rerunNodeRunId } = await submitClarifyAnswers({
-      db,
-      clarifyNodeRunId,
-      answers: [makeAnswer()],
-    })
-
-    const rerun = (await db.select().from(nodeRuns).where(eq(nodeRuns.id, rerunNodeRunId)))[0]
-    expect(rerun?.shardKey).toBe('shard-B')
-    expect(rerun?.parentNodeRunId).toBe('parent-multi')
   })
 })

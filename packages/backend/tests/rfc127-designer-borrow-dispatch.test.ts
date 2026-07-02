@@ -27,7 +27,8 @@ import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { createAgent } from '../src/services/agent'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { bindTriggerRun } from '../src/services/clarifyQueue'
 import { runTask } from '../src/services/scheduler'
 import { reassignTaskQuestion } from '../src/services/taskQuestions'
@@ -373,9 +374,11 @@ describe('RFC-127 T5 — designer dispatch 借壳 (borrow the shell)', () => {
   test('去借壳 mint: clarify-designer override X → mint node_id=X + agent_override_name NULL (X runs its OWN agent, NOT a mint on D)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { otherHasRun: true })
-    await submitCrossClarifyAnswers({
+    // Control-channel full seal (board flow): the designer entry is sealed + left UNDISPATCHED for
+    // the manual reassign/dispatch below (the quick channel would auto-dispatch it, RFC-132 §6).
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -410,9 +413,9 @@ describe('RFC-127 T5 — designer dispatch 借壳 (borrow the shell)', () => {
   test('golden-lock: a clarify-designer with NO override → mint D + agent_override_name NULL (byte-for-byte the baseline)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { otherHasRun: false })
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -432,9 +435,9 @@ describe('RFC-127 T5 — designer dispatch 借壳 (borrow the shell)', () => {
   test('never-run reassign target → REJECTED (去借壳: the rerun mints ON the target X, which never ran → no prior run to inherit)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { otherHasRun: false }) // OTHER never ran
-    await submitCrossClarifyAnswers({
+    await sealRoundQuestions({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
     })
@@ -483,9 +486,9 @@ describe('RFC-127 T5 — designer dispatch 借壳 (borrow the shell)', () => {
           questions: [mkQ('q1', 'designer-scoped?')],
         })
       ).crossClarifyNodeRunId
-      await submitCrossClarifyAnswers({
+      await sealRoundQuestions({
         db: h.db,
-        crossClarifyNodeRunId: cc,
+        originNodeRunId: cc,
         answers: [ans('q1')],
         directive: 'continue',
       })

@@ -25,57 +25,20 @@ import { join, resolve } from 'node:path'
 import { ulid } from 'ulid'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import {
-  agents,
-  crossClarifySessions,
-  nodeRuns,
-  taskQuestions,
-  tasks,
-  workflows,
-} from '../src/db/schema'
+import { agents, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { createCrossClarifySession } from '../src/services/crossClarify'
 
-// RFC-132 (PR-C): the unified flat injector (buildClarifyQueueContext) reads DISPATCHED
-// task_questions. createCrossClarifySession seeds only the clarify round (no task_questions), and the
-// legacy submitCrossClarifyAnswers immediate mint never dispatches — so seed the dispatched+sealed
-// cross entry the deferred path would create (originNodeRunId = the cross round's intermediary run;
-// the answer resolves from that round's answers_json). triggerRunId = the 承接 rerun, or null to let
-// the injector bind it on the lazily-minted rerun.
-async function seedDispatchedCrossEntry(
-  db: DbClient,
-  taskId: string,
-  originNodeRunId: string,
-  questionId: string,
-  roleKind: 'questioner' | 'designer',
-  targetNodeId: string,
-  triggerRunId: string | null,
-): Promise<void> {
-  await db.insert(taskQuestions).values({
-    id: ulid(),
-    taskId,
-    originNodeRunId,
-    questionId,
-    questionTitle: questionId,
-    sourceKind: 'cross',
-    roleKind,
-    iteration: 0,
-    loopIter: 0,
-    defaultTargetNodeId: targetNodeId,
-    overrideTargetNodeId: null,
-    sealedAt: Date.now(),
-    sealedBy: 'u1',
-    dispatchedAt: Date.now(),
-    dispatchedBy: 'u1',
-    triggerRunId,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  })
-}
+// RFC-132 (PR-C/PR-B): the unified flat injector (buildClarifyQueueContext) reads DISPATCHED
+// task_questions. Answers below go through the REAL unified driver (autoDispatchClarifyRound =
+// seal + auto-dispatch), which creates + dispatches the questioner AND designer entries itself and
+// mints the 承接 rerun(s) — no hand-seeded dispatched entries needed.
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
+const actor = { userId: 'u1', role: 'owner' as const }
 
 interface Harness {
   db: DbClient
@@ -442,15 +405,17 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     const sessionId = sessionRows[0]!.id
     const crossNodeRunId = sessionRows[0]!.crossClarifyNodeRunId
 
-    // Reject. submitCrossClarifyAnswers writes directive='stop' + cascades
-    // the questioner. We don't run scheduler again, just verify state.
-    await submitCrossClarifyAnswers({
+    // Reject. A 'stop' answer (unified driver) seals directive='stop' (dual-written to the legacy
+    // session), mints the questioner stop-rerun via dispatch, and persists the node-level STOP
+    // directive. We don't run scheduler again, just verify state.
+    await autoDispatchClarifyRound({
       db: h.db,
-      crossClarifyNodeRunId: crossNodeRunId,
+      originNodeRunId: crossNodeRunId,
       answers: [
         { questionId: 'q1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
       ],
       directive: 'stop',
+      actor,
     })
     const updated = (
       await h.db.select().from(crossClarifySessions).where(eq(crossClarifySessions.id, sessionId))
@@ -511,7 +476,8 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     const { taskId } = await seedWorkflowAndTask(h, def, { req: 'go' })
 
     // Seed the prior questioner + designer runs BEFORE the cross-clarify
-    // submit so triggerDesignerRerun has a designer row to roll back.
+    // answer so the unified dispatch has prior rows to inherit (a never-run
+    // frontier target is rejected — assertSafeFrontierTarget).
     const qRunId = ulid()
     await h.db.insert(nodeRuns).values({
       id: qRunId,
@@ -551,28 +517,23 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
         },
       ],
     })
-    const ret = await submitCrossClarifyAnswers({
+    // RFC-132 PR-B: the unified driver seals + auto-dispatches BOTH the questioner and designer
+    // entries and mints both reruns (§6 delta 1 — the questioner now ALWAYS reruns on a cross
+    // answer). The 'questioner' node is intentionally absent from this def's nodes, so its minted
+    // pending rerun is an out-of-scope orphan the scheduler never runs (same proven-safe ghost-row
+    // shape as rfc096-port-read-done-only) — the test's subject is the DESIGNER rerun prompt.
+    const ret = await autoDispatchClarifyRound({
       db: h.db,
-      crossClarifyNodeRunId: session.crossClarifyNodeRunId,
+      originNodeRunId: session.crossClarifyNodeRunId,
       answers: [
         { questionId: 'q1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
       ],
       directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    if (ret.outcome.kind !== 'designer-rerun-triggered') return
-    const designerRunId = ret.outcome.designerNodeRunId
-    // RFC-132 (PR-C): dispatch the designer's cross Q&A to its rerun so the unified flat injector
-    // picks it up (the legacy immediate mint left no dispatched entry).
-    await seedDispatchedCrossEntry(
-      h.db,
-      taskId,
-      session.crossClarifyNodeRunId,
-      'q1',
-      'designer',
-      'designer',
-      designerRunId,
-    )
+    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    expect(designerRerun).toBeDefined()
+    const designerRunId = designerRerun!.nodeRunId
 
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'plan v2' }) }, () =>
       runTask({
@@ -661,9 +622,13 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
         },
       ],
     })
-    const ret = await submitCrossClarifyAnswers({
+    // RFC-132 PR-B (§6 delta 1): the unified driver seals + dispatches the QUESTIONER entry AND the
+    // designer entry, minting BOTH reruns — the questioner rerun is now eager (a pending row) rather
+    // than the old lazy freshness demote, but the behavioral lock is unchanged: whichever fresh
+    // questioner run results, its prompt must carry the prior cross Q&A so it does not re-ask.
+    const ret = await autoDispatchClarifyRound({
       db: h.db,
-      crossClarifyNodeRunId: session.crossClarifyNodeRunId,
+      originNodeRunId: session.crossClarifyNodeRunId,
       answers: [
         {
           questionId: 'q1',
@@ -673,22 +638,11 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
         },
       ],
       directive: 'continue',
+      actor,
     })
-    expect(ret.outcome.kind).toBe('designer-rerun-triggered')
-    // RFC-132 (PR-C): dispatch the QUESTIONER's own cross Q&A (unbound → the lazily-minted downstream
-    // questioner rerun binds + injects it). Un-aged: the questioner node has no done+output run yet.
-    await seedDispatchedCrossEntry(
-      h.db,
-      taskId,
-      session.crossClarifyNodeRunId,
-      'q1',
-      'questioner',
-      'questioner',
-      null,
-    )
+    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
-    // Designer reruns (cci bumped) → questioner goes provenance-stale → it is
-    // re-dispatched at the inherited cci=0 (no cascade bump) → prompt is built.
+    // Designer reruns (fresh output) → the questioner rerun consumes it → prompt is built.
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'plan v2' }) }, () =>
       runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', MOCK_OPENCODE] }),
     )
@@ -819,14 +773,16 @@ describe('RFC-056 A16 — cross-clarify questioner inline session resume', () =>
     )[0]!
     expect(sess.status).toBe('awaiting_human')
 
-    // Answer with stop → questioner stop-rerun (cross-clarify-questioner-rerun).
-    await submitCrossClarifyAnswers({
+    // Answer with stop → questioner stop-rerun (cross-clarify-questioner-rerun) via the unified
+    // dispatch (stop suppresses designer entries; only the questioner rerun mints).
+    await autoDispatchClarifyRound({
       db: h.db,
-      crossClarifyNodeRunId: sess.crossClarifyNodeRunId,
+      originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [
         { questionId: 'q1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
       ],
       directive: 'stop',
+      actor,
     })
     // RFC-097: runTask's entry CAS only claims pending tasks (test stand-in for resumeTask).
     await h.db.update(tasks).set({ status: 'pending' }).where(eq(tasks.id, taskId))

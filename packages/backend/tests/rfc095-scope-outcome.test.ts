@@ -428,8 +428,9 @@ describe('RFC-095 — blocked diagnostic branches beyond the single-row universe
   })
 
   test('pending rerun while its asking clarify session is still open → blocked(open-clarify-window)', () => {
-    // submitClarifyAnswers mints the rerun BEFORE flipping the session; the
-    // pending row must NOT release inside that window (RFC-092 / audit S-1).
+    // The legacy quick channel minted the rerun BEFORE flipping the session;
+    // the guard stays generic: a pending row must NOT release while its asking
+    // clarify session is still open (RFC-092 / audit S-1).
     const { definition, scopeNodes, scopeIds } = def([{ id: 'n', kind: 'agent-single' }])
     const asking = row('n', 'done')
     const rerun = row('n', 'pending') // later id → latest

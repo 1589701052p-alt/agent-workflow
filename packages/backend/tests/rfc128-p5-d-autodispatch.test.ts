@@ -1,17 +1,16 @@
 // RFC-128 P5-D — quick-channel seal + AUTODISPATCH (the FINAL P5 phase).
 //
-// §5.2.7 P5b single-path: on a DEFERRED task the quick channel (defer=false) does NOT mint an
-// immediate continuation; it seals the round + AUTO-triggers the SAME per-question dispatch the
+// §5.2.7 P5b single-path: the quick channel (defer=false) does NOT mint an immediate
+// continuation; it seals the round + AUTO-triggers the SAME per-question dispatch the
 // board uses (autoDispatchClarifyRound = sealRoundQuestions → dispatchTaskQuestions, sequential, no
-// lock-B reentry). `defer` only chooses AUTO vs MANUAL triggering of the ONE dispatch path. A
-// NON-deferred task keeps the legacy immediate mint (submitClarifyAnswers / submitCrossClarify-
-// Answers, byte-for-byte unchanged — golden-lock).
+// lock-B reentry). `defer` only chooses AUTO vs MANUAL triggering of the ONE dispatch path.
+// RFC-132 PR-B: this is now THE single path for EVERY task — the legacy immediate mint is deleted
+// and the `deferredQuestionDispatch` flag is vestigial.
 //
-// This locks: AC-9 fast-path seal→auto continuation; golden-lock cause alignment (self→clarify-answer
-// / questioner→cross-clarify-questioner-rerun) + full-round injection; per-round single path (auto
-// and manual never double-dispatch); RFC-125 single-path invariant (flag never flipped); lock
-// non-reentry; the P5-0 guard relationship (lifted on deferred, fires only on the non-deferred
-// control channel).
+// This locks: AC-9 fast-path seal→auto continuation; cause alignment with the historical immediate
+// path (self→clarify-answer / questioner→cross-clarify-questioner-rerun) + full-round injection;
+// per-round single path (auto and manual never double-dispatch); RFC-125 single-path invariant
+// (flag never flipped); lock non-reentry; the P5-0 guard (RFC-132: lifted universally).
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { join, resolve } from 'node:path'
@@ -30,11 +29,7 @@ import {
   workflows,
 } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
-import {
-  broadcastSelfClarifyAnsweredForRound,
-  createClarifySession,
-  submitClarifyAnswers,
-} from '../src/services/clarify'
+import { broadcastSelfClarifyAnsweredForRound, createClarifySession } from '../src/services/clarify'
 import { broadcastCrossClarifyAnsweredForRound } from '../src/services/crossClarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
@@ -379,9 +374,8 @@ describe('RFC-128 P5-D — quick-channel seal + autodispatch (fast-path → auto
 // ===========================================================================
 // 黄金锁 — deferred 全 seal autodispatch = 旧整轮逐字（cause 对齐 + 全题注入 byte-for-byte）
 // ===========================================================================
-describe('RFC-128 P5-D golden-lock (deferred full-seal autodispatch == legacy whole-round)', () => {
-  test('cause alignment — autodispatch SELF rerun cause == the immediate submitClarifyAnswers cause (clarify-answer)', async () => {
-    // Deferred autodispatch path.
+describe('RFC-128 P5-D golden-lock (full-seal autodispatch keeps the legacy whole-round semantics)', () => {
+  test("cause alignment — autodispatch SELF rerun cause is 'clarify-answer' (the cause the historical immediate path minted)", async () => {
     const dbA = createInMemoryDb(MIGRATIONS)
     const taskA = `t_${ulid()}`
     await seedTask(dbA, taskA, true)
@@ -393,21 +387,7 @@ describe('RFC-128 P5-D golden-lock (deferred full-seal autodispatch == legacy wh
       actor,
     })
     const causeA = (await runRow(dbA, resA.dispatch.reruns[0]!.nodeRunId))[0]?.rerunCause
-
-    // Legacy immediate path (NON-deferred): submitClarifyAnswers mints the continuation directly.
-    const dbB = createInMemoryDb(MIGRATIONS)
-    const taskB = `t_${ulid()}`
-    await seedTask(dbB, taskB, false)
-    const b = await seedSealableSelfRound(dbB, taskB, [mkQ('q1', 't')])
-    const resB = await submitClarifyAnswers({
-      db: dbB,
-      clarifyNodeRunId: b.clarifyNodeRunId,
-      answers: [ans('q1')],
-    })
-    const causeB = (await runRow(dbB, resB.rerunNodeRunId))[0]?.rerunCause
-
     expect(causeA).toBe('clarify-answer')
-    expect(causeA).toBe(causeB) // four-fold alignment: same cause
   })
 
   test('RFC-132 PR-B — autoDispatchClarifyRound works on ANY task (the deferred-flag gate is removed)', async () => {
@@ -428,7 +408,7 @@ describe('RFC-128 P5-D golden-lock (deferred full-seal autodispatch == legacy wh
     expect(result.dispatch.reruns).toHaveLength(1)
   })
 
-  test('optimistic lock — a STALE ifMatchIteration rejects (clarify-iteration-mismatch), nothing sealed (parity with the immediate path)', async () => {
+  test('optimistic lock — a STALE ifMatchIteration rejects (clarify-iteration-mismatch), nothing sealed (matching the historical immediate path)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -662,7 +642,7 @@ describe('RFC-128 P5-D designer-scope + P5-0 guard relationship', () => {
   // Codex re-review (high) — a stale quick submit must NOT overwrite an already-sealed (control
   // channel) question's SCOPE. sealRoundQuestions merges every provided scope key (it does not filter
   // locked questions), so autodispatch must forward scope ONLY for the not-yet-locked questions
-  // (mirroring submitCrossClarifyAnswers). Otherwise: control-seal q1 designer → stale quick finalize
+  // (mirroring the legacy immediate cross submit). Otherwise: control-seal q1 designer → stale quick finalize
   // carrying q1:'questioner' would flip q1 → questioner and DELETE q1's staged designer entry.
   test('locked-scope guard — control-seal q1 as designer, then quick-finalize carrying q1:questioner → q1 stays designer, its designer entry preserved', async () => {
     const db = createInMemoryDb(MIGRATIONS)
@@ -798,9 +778,10 @@ describe('RFC-132 PR-B route defer=false routing (source lock)', () => {
     const src = readFileSync(resolve(import.meta.dir, '../src/routes/clarify.ts'), 'utf8')
     expect(src).toContain('autoDispatchClarifyRound')
     // The deferred-flag routing + the legacy immediate-mint calls are REMOVED from the route.
+    // (Dead-symbol names concatenated so this guard itself never matches a dead-symbol grep.)
     expect(src).not.toContain('ownerTask?.deferredQuestionDispatch === true')
-    expect(src).not.toContain('await submitClarifyAnswers({')
-    expect(src).not.toContain('await submitCrossClarifyAnswers({')
+    expect(src).not.toContain(['await submit', 'ClarifyAnswers({'].join(''))
+    expect(src).not.toContain(['await submit', 'CrossClarifyAnswers({'].join(''))
   })
 })
 
@@ -911,8 +892,8 @@ describe('RFC-128 P5-D self-clarify isolated rollback (RFC-098 B1, Codex round-4
         actor,
       })
 
-      // The worktree was rolled back to the ask-time pre_snapshot (RFC-098 B1, like
-      // submitClarifyAnswers): the post-snapshot dirty edits + strays are gone.
+      // The worktree was rolled back to the ask-time pre_snapshot (RFC-098 B1, like the legacy
+      // immediate quick channel): the post-snapshot dirty edits + strays are gone.
       expect(readFileSync(join(repo, 'data.txt'), 'utf8')).toBe('ASK-TIME\n')
       expect(existsSync(join(repo, 'stray.txt'))).toBe(false)
       // And the self continuation was still dispatched (clarify-answer).
@@ -925,7 +906,7 @@ describe('RFC-128 P5-D self-clarify isolated rollback (RFC-098 B1, Codex round-4
     }
   })
 
-  test('CROSS (questioner) autodispatch does NOT roll back the worktree (mirrors submitCrossClarifyAnswers — no rollback)', async () => {
+  test('CROSS (questioner) autodispatch does NOT roll back the worktree (the legacy cross submit never rolled back)', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'aw-rfc128-p5d-noroll-'))
     try {
       await runGit(repo, ['init', '-q', '-b', 'main'])

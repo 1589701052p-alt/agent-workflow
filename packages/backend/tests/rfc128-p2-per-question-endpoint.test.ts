@@ -22,7 +22,8 @@
 //   P2-2 defer=true 透传 directive：cross full seal + stop → directive 落库（round+session）
 //        且不产 designer 条目（reconcile 跳过）。
 //
-// 黄金锁：不传 defer/questionIds 的整轮提交与今天逐字一致（仍走 submitClarifyAnswers + resume）。
+// 黄金锁：不传 defer/questionIds 的整轮提交语义不变——轮 answered + 恰好一条 clarify-answer 续跑
+// （RFC-132 后由统一 autoDispatchClarifyRound 驱动 + resume；legacy immediate mint 已删）。
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'

@@ -1,21 +1,31 @@
 // P0 fortification (hotspot audit, clarify cluster) — dual-write consistency.
 //
 // WHY THIS FILE EXISTS (regression intent):
-//   RFC-058/064's "unification" stopped at a stage-1 dual-write: clarify.ts
-//   writes BOTH the legacy `clarify_sessions` row (still authoritative for
-//   reads) AND a mirror `clarify_rounds` row keyed on the SAME id
-//   (clarify.ts:213 create + clarify.ts:481 submit). The deferred T17 migration
-//   that drops the legacy table never shipped, so the two stores must stay in
-//   lockstep on every write.
+//   RFC-058/064's "unification" stopped at a stage-1 dual-write: the live
+//   clarify write paths update BOTH the legacy `clarify_sessions` row AND the
+//   `clarify_rounds` row keyed on the SAME id (createClarifySession at create;
+//   the unified answer path autoDispatchClarifyRound → sealRoundQuestions at
+//   answer time, RFC-132). The deferred T17 migration that drops the legacy
+//   table never shipped, so the two stores must stay in lockstep on every
+//   write.
 //
 //   The audit found this is the single highest-risk SILENT-breakage surface for
 //   the planned store-collapse refactor: EVERY existing clarify test reads only
 //   ONE of the two tables, so a write that updates `clarify_sessions` but not
 //   its `clarify_rounds` mirror (or vice-versa) passes the entire suite today.
 //   This oracle is the missing net — it asserts the overlapping columns agree
-//   after createClarifySession AND after submitClarifyAnswers, so any future
+//   after createClarifySession AND after the unified answer path, so any future
 //   change that desyncs the mirror (or collapses to one table incorrectly) goes
 //   red here instead of surfacing as a runtime frontier/freshness bug.
+//
+//   DELIBERATE ASYMMETRY (RFC-132): `answeredBy` is written to clarify_rounds
+//   ONLY (clarifySeal.ts stamps it on the round; the legacy mirror set omits
+//   it). That is safe because every read DTO (getClarifyRoundDetail /
+//   listClarifyRoundSummaries) reads clarify_rounds — the legacy column has no
+//   live reader. The column pair is therefore asserted explicitly (round
+//   stamped, legacy NULL) instead of via the parity oracle; if the legacy
+//   column ever grows a reader again, restore it to SELF_MIRROR and write it
+//   in the seal.
 //
 //   Scope: self-clarify (kind='self'). The cross-clarify equivalent lives in
 //   cross-clarify-dual-write-consistency.test.ts.
@@ -26,7 +36,8 @@ import { eq } from 'drizzle-orm'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifyRounds, clarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
+import { createClarifySession } from '../src/services/clarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -124,7 +135,9 @@ const SELF_MIRROR: ReadonlyArray<
   ['answersJson', 'answersJson'],
   ['directive', 'directive'],
   ['answeredAt', 'answeredAt'],
-  ['answeredBy', 'answeredBy'],
+  // ['answeredBy', 'answeredBy'] — deliberately OUT of the parity oracle: the
+  // unified seal stamps it on clarify_rounds only (see the header note); the
+  // pair is asserted explicitly in the answer test below.
   ['truncationWarningsJson', 'truncationWarningsJson'],
   ['createdAt', 'createdAt'],
   ['iterationIndex', 'iteration'],
@@ -200,7 +213,7 @@ describe('clarify self dual-write consistency (clarify_sessions ↔ clarify_roun
     expect(mismatches(session!, round!)).toEqual({})
   })
 
-  test('submitClarifyAnswers: answered state (status/answers/directive/answeredAt/By) mirrors to clarify_rounds', async () => {
+  test('unified answer path: answered state (status/answers/directive/answeredAt) mirrors to the legacy row', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db, selfClarifyDef())
 
@@ -229,11 +242,12 @@ describe('clarify self dual-write consistency (clarify_sessions ↔ clarify_roun
       truncationWarnings: [],
     })
 
-    await submitClarifyAnswers({
+    await autoDispatchClarifyRound({
       db,
-      clarifyNodeRunId: sess.clarifyNodeRunId,
+      originNodeRunId: sess.clarifyNodeRunId,
       answers: [makeAns('q1')],
       directive: 'stop',
+      actor: { userId: 'u1', role: 'owner' },
     })
 
     const { session, round } = await fetchPair(db, sess.session.id)
@@ -244,5 +258,11 @@ describe('clarify self dual-write consistency (clarify_sessions ↔ clarify_roun
     expect(session!.answeredAt).not.toBeNull()
     // ...and the mirror agrees on it AND every other shared column (no drift).
     expect(mismatches(session!, round!)).toEqual({})
+    // Deliberate answeredBy asymmetry (header note): the unified seal stamps
+    // the read-path store (clarify_rounds) with the actor; the legacy mirror
+    // column stays NULL (no live reader). If either side flips, the T17
+    // store-collapse plan must be revisited before "fixing" this.
+    expect(round!.answeredBy).toBe('u1')
+    expect(session!.answeredBy).toBeNull()
   })
 })

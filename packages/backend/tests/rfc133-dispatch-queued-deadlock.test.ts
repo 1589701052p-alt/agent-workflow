@@ -13,8 +13,10 @@
 //   4. run obligation (pending rerun on the target) → still 409 (double-mint guard), details
 //      carry the blocking run id + status.
 //   5-7. quick-channel mint guards (clarify self / cross questioner) share the same oracle:
-//      a queued SAME-cause entry on a no-obligation home no longer wedges the submit; an
-//      alien-cause (designer) queued entry still rejects.
+//      a queued SAME-cause entry on a no-obligation home no longer wedges the quick answer; an
+//      alien-cause (designer) queued entry still blocks the mint (the unified quick channel
+//      seals the answer and PARKS the dispatch — dispatchDeferredReason — instead of the
+//      legacy pre-seal reject).
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -24,8 +26,9 @@ import { monotonicFactory } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
-import { createClarifySession, submitClarifyAnswers } from '../src/services/clarify'
-import { createCrossClarifySession, submitCrossClarifyAnswers } from '../src/services/crossClarify'
+import { createClarifySession } from '../src/services/clarify'
+import { createCrossClarifySession } from '../src/services/crossClarify'
+import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { ConflictError } from '../src/util/errors'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -392,16 +395,22 @@ describe('RFC-133 quick-channel mint guards — same-cause queued entry no longe
       defaultTargetNodeId: ASKER,
       dispatchedAt: Date.now() - 1000,
     })
-    const ret = await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
+    const ret = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
     expect(ret).toBeDefined()
-    // The clarify-answer continuation WAS minted on the home.
+    // The clarify-answer continuation WAS minted on the home (not parked).
+    expect(ret.dispatchDeferredReason).toBeUndefined()
     const conts = (await taskRuns(db, taskId)).filter(
       (r) => r.nodeId === ASKER && r.rerunCause === 'clarify-answer',
     )
     expect(conts.length).toBe(1)
   })
 
-  test('clarify self quick-finalize: queued ALIEN-cause (designer) entry on the home still rejects', async () => {
+  test('clarify self quick-finalize: queued ALIEN-cause (designer) entry on the home still blocks the mint (parked, no rerun)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -425,14 +434,17 @@ describe('RFC-133 quick-channel mint guards — same-cause queued entry no longe
       dispatchedAt: Date.now() - 1000,
     })
     const runsBefore = (await taskRuns(db, taskId)).length
-    let caught: unknown
-    try {
-      await submitClarifyAnswers({ db, clarifyNodeRunId, answers: [ans('q1')] })
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(ConflictError)
-    expect((caught as ConflictError).code).toBe('clarify-quick-finalize-rerun-in-flight')
+    // RFC-132 unified quick channel: the alien-cause gate fires AFTER the seal committed, so the
+    // answer is saved + the dispatch PARKS (dispatchDeferredReason) instead of the legacy pre-seal
+    // ConflictError — the mint is still blocked: no rerun, no new node_run.
+    const ret = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: clarifyNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
+    expect(ret.dispatchDeferredReason).toBe('task-question-node-dispatch-in-flight')
+    expect(ret.dispatch.reruns).toHaveLength(0)
     expect((await taskRuns(db, taskId)).length).toBe(runsBefore)
   })
 
@@ -463,12 +475,13 @@ describe('RFC-133 quick-channel mint guards — same-cause queued entry no longe
       dispatchedAt: Date.now() - 1000,
     })
     // questioner-scoped answer + continue → mints the questioner cascade rerun on DOWN.
-    const ret = await submitCrossClarifyAnswers({
+    const ret = await autoDispatchClarifyRound({
       db,
-      crossClarifyNodeRunId,
+      originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
-      questionScopes: { q1: 'questioner' },
+      scopes: { q1: 'questioner' },
+      actor,
     })
     expect(ret).toBeDefined()
     const qReruns = (await taskRuns(db, taskId)).filter(

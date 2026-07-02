@@ -32,8 +32,8 @@ import {
 } from '../src/db/schema'
 // RFC-132 (PR-C): the unified flat injector reads DISPATCHED task_questions, so these tests answer
 // via the real PR-B path (autoDispatchClarifyRound = seal + auto-dispatch + mint the 承接 rerun +
-// write the node clarify state) instead of the legacy immediate mint (submitClarifyAnswers), which
-// created no dispatched entry.
+// write the node clarify state) instead of the legacy immediate mint, which created no dispatched
+// entry.
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
