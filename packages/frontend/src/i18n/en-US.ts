@@ -2708,8 +2708,7 @@ export const enUS: Resources = {
     viewClarify: 'View clarify',
     nodeBadgeAria: '{{count}} pending questions on this node',
     batchDispatch: 'Batch dispatch',
-    batchDispatchCount: 'Dispatch selected ({{count}})',
-    selectForDispatch: 'Select',
+    batchDispatchCount: 'Dispatch all ({{count}})',
     dispatchTargetChanged: 'Target changed, please retry',
     dispatchInFlight: 'That node is re-running; wait for it to finish before dispatching',
     dispatchInFlightNode:

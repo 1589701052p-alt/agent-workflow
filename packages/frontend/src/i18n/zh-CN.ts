@@ -2456,7 +2456,6 @@ export interface Resources {
     nodeBadgeAria: string
     batchDispatch: string
     batchDispatchCount: string
-    selectForDispatch: string
     dispatchTargetChanged: string
     dispatchInFlight: string
     dispatchInFlightNode: string
@@ -5104,8 +5103,7 @@ export const zhCN: Resources = {
     viewClarify: '查看反问',
     nodeBadgeAria: '该节点 {{count}} 个待处理问题',
     batchDispatch: '批量下发',
-    batchDispatchCount: '下发所选（{{count}}）',
-    selectForDispatch: '选择',
+    batchDispatchCount: '全部下发（{{count}}）',
     dispatchTargetChanged: '目标已变，请重试',
     dispatchInFlight: '该节点正在重跑，请等其完成后再下发',
     dispatchInFlightNode:
