@@ -11,9 +11,10 @@
 - `reassignTaskQuestion` 新分支（紧邻 RFC-138 分支）：cross questioner 行 + 目标 ==
   `round.targetConsumerNodeId` ⇒ `collapseQuestionerEntryToDesigner`。
 - 塌缩 tx：CAS(dispatched_at NULL) → 两表 scope 翻转 lockstep → 删 questioner 行 →
-  designer 行 insert-if-missing + seal 归一化 + staged_at 继承 → echo 行物化（幂等键）。
+  designer 行 insert-if-missing + seal 归一化 + staged_at 继承 + **既存行 override 归一化清
+  空（Codex P2）** → echo 行物化（幂等键）。
 - `ReassignTaskQuestionAction` 增 `'collapsed-to-designer'`；路由响应透传。
-- 测试：design §5.1-5.5（含 golden-lock + 409 + QMGP5 形态 9 条全发）。
+- 测试：design §5.1-5.5（含 2b override 归一化 + golden-lock + 409 + QMGP5 形态 9 条全发）。
 - 依赖：无。
 
 ### RFC-140-T2 deferred 登记 + tick 自动补发（W2）
@@ -21,11 +22,14 @@
 - migration：`task_questions` ADD COLUMN `auto_dispatch_deferred_at INTEGER`；**bump
   `upgrade-rolling.test.ts` journal 计数断言**（标题 + 断言 + 注释）。
 - `dispatchTaskQuestions`：stamp tx 内对 deferredEntries 盖列。
-- scheduler runTask tick 顶（deriveFrontier 前）：读登记集 → 非空则
-  `dispatchTaskQuestions(db, taskId, deferredIds, SYSTEM_ACTOR)`，ConflictError → debug log
-  + continue（幂等重试）。抽出可测入口（如 `autoDispatchDeferredQuestions(db, taskId)`），
-  tick 内调用。
-- 测试：design §5.6-5.10 + §5.13（migration journal）。
+- `stageTaskQuestion` unstage 分支：级联 UPDATE 同语句清 `auto_dispatch_deferred_at`
+  （Codex P1）。
+- scheduler runTask tick 顶（deriveFrontier 前）：读登记集（登记 + 未下发 + **staged 兜底条
+  件**）→ 非空则 `dispatchTaskQuestions(db, taskId, deferredIds, SYSTEM_ACTOR)`；
+  `DEFERRED_RETRYABLE_CONFLICTS`（export 复用 `DESIGNER_DEFERRABLE_CONFLICTS`，Codex P2）内
+  → debug + 下 tick 重试；白名单外 Conflict → 清登记 + WARN 回手动轨道。抽出可测入口（如
+  `autoDispatchDeferredQuestions(db, taskId)`），tick 内调用。
+- 测试：design §5.6-5.10（含 7b 撤回防护、8b 不可恢复码清登记）+ §5.13（migration journal）。
 - 依赖：无（与 T1 并行；验收 1 的端到端 case 需要 T1）。
 
 ### RFC-140-T3 前端知会（W3）
@@ -50,9 +54,11 @@
 ## 验收清单
 
 - [ ] q1 形态改派 → `collapsed-to-designer`，批量下发 `deferredEntryCount=0` 一次全发
-- [ ] 塌缩 golden-lock（第三节点 override 不变）+ 409 边界 + designer 行补建 + echo 物化
+- [ ] 塌缩 golden-lock（第三节点 override 不变）+ 409 边界 + designer 行补建 + 既存行
+      override 归一化 + echo 物化
 - [ ] 真异类混批：deferred 盖列 → 续跑 done 后 tick 自动补发（`__system__`），嵌套 defer 收敛
-- [ ] stage 未点发不被自动下发
-- [ ] daemon 重启后补发不丢；409 自愈
+- [ ] stage 未点发不被自动下发；unstage 撤回后不被自动下发（re-stage 不复活登记）
+- [ ] daemon 重启后补发不丢；可恢复 409 自愈；不可恢复 Conflict 清登记 + WARN 不空转
 - [ ] 看板 deferred 徽标 + 塌缩知会 + i18n
 - [ ] migration journal 计数 bump；三门禁 + binary smoke + CI 绿
+- [ ] 收口时向用户提请：RFC-138 方向幸存 questioner 行旧 override 同型洞是否另立修复
