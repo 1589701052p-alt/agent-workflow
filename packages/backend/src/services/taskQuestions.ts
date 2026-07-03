@@ -21,9 +21,17 @@ import { and, eq, inArray, isNotNull, isNull, ne, notInArray } from 'drizzle-orm
 import { ulid } from 'ulid'
 
 import type { DbClient } from '@/db/client'
-import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
+import {
+  clarifyRounds,
+  crossClarifySessions,
+  nodeRunOutputs,
+  nodeRuns,
+  taskQuestions,
+  tasks,
+} from '@/db/schema'
 import { dbTxSync, type DbTxSync } from '@/db/txSync'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
+import { createLogger } from '@/util/log'
 import {
   canReassign,
   deriveQuestionPhase,
@@ -41,6 +49,8 @@ import {
 type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
+
+const log = createLogger('task-questions')
 
 export interface TaskQuestionDTO {
   id: string
@@ -947,6 +957,11 @@ export async function confirmTaskQuestion(
     .where(and(eq(taskQuestions.id, entryId), eq(taskQuestions.confirmation, 'open')))
 }
 
+/** RFC-138 — what a reassign actually did: 'override' = the regular re-target write;
+ *  'collapsed-to-questioner' = a cross designer entry re-targeted to its round's ASKING
+ *  node degenerated into scope='questioner' (entry deleted, scope flipped — see below). */
+export type ReassignTaskQuestionAction = 'override' | 'collapsed-to-questioner'
+
 /** Re-target (改派) an entry's handler to a workflow agent node. RFC-127 T4: ANY role
  *  (self/questioner via 借壳顶替, designer/manual via the original swap) is reassignable;
  *  the only constraint is the target must be a workflow agent node (Codex F5). */
@@ -955,7 +970,7 @@ export async function reassignTaskQuestion(
   entryId: string,
   targetNodeId: string,
   actor: TaskQuestionActor,
-): Promise<void> {
+): Promise<ReassignTaskQuestionAction> {
   const entry = await loadEntry(db, entryId)
   const agentNodeIds = await agentNodeIdsForTask(db, entry.taskId)
   if (!canReassign(targetNodeId, agentNodeIds)) {
@@ -983,6 +998,26 @@ export async function reassignTaskQuestion(
       'manual-question-target-never-run',
       `cannot assign a manual question to '${targetNodeId}': it has no prior node_run (a manual question reruns its handler, so the handler must have run at least once)`,
     )
+  }
+  // RFC-138 — collapse 分支：cross 轮 designer 行改派到**该轮提问节点**时，写 override 会双跑
+  // ——questioner 行恒 mint 续跑（cause 'cross-clarify-questioner-rerun'）+ 本行再 mint 修订
+  // rerun（cause 'cross-clarify-answer'），两 cause 互斥（auto-split + in-flight 门 + 双账本
+  // 守卫）强制串行成两条 rerun、同一 Q&A 处理两遍。RFC-134 只定义了「承接≠提问节点→echo
+  // 补投」的半边不变量；承接==提问节点的去重合并在此补上：语义等价于「把该题 scope 事后改为
+  // questioner」——两表 question_scopes_json 翻转 + 删本行，该题只剩 questioner 行（本就指向
+  // 提问节点）→ 天然一条续跑、单份投递，并顺带脱离 dispatch 的整轮单目标 409。round 缺失 /
+  // kind≠cross / 目标≠提问节点 ⇒ 回落常规 override 路径（golden-lock 逐字不变）。
+  if (entry.sourceKind === 'cross' && entry.roleKind === 'designer') {
+    const round = (
+      await db
+        .select()
+        .from(clarifyRounds)
+        .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
+        .limit(1)
+    )[0]
+    if (round !== undefined && round.kind === 'cross' && targetNodeId === round.askingNodeId) {
+      return collapseDesignerEntryToQuestioner(db, entry, round, actor)
+    }
   }
   // RFC-120 §18 (model A, corrected): once dispatched (`dispatched_at` set), the
   // entry is committed for execution — the upstream-frontier rerun was minted and the
@@ -1018,6 +1053,118 @@ export async function reassignTaskQuestion(
       `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
     )
   }
+  return 'override'
+}
+
+/** RFC-138 — the collapse tx: flip the question's scope to 'questioner' on BOTH scope
+ *  tables（clarify_rounds 是 reconcile 的 SoT；cross_clarify_sessions 按 RFC-058 lockstep
+ *  双写，镜像 sealRoundQuestions 的纪律）并删除该题仍未下发的 designer 行。CAS 在
+ *  dispatched_at 同列上（与 override 路径同语义——并发 dispatch 赢者恒胜 → 409）；round 行
+ *  在 tx 内重读后 merge（绝不用 tx 外快照，防并发 seal 的 merge 写丢键）。questioner 行
+ *  零改动——它本就指向提问节点，collapse 后成为该题唯一承接。不产生 override 审计戳
+ *  （行已删除，不在残留行上伪造）；可见性走审计 log + 路由响应 action 字段（D4）。 */
+function collapseDesignerEntryToQuestioner(
+  db: DbClient,
+  entry: TaskQuestionRow,
+  round: ClarifyRoundRow,
+  actor: TaskQuestionActor,
+): ReassignTaskQuestionAction {
+  let collapsed = false
+  dbTxSync(db, (tx) => {
+    const stillOpen = tx
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
+      .all()
+    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
+    const cur = tx
+      .select({ questionScopesJson: clarifyRounds.questionScopesJson })
+      .from(clarifyRounds)
+      .where(eq(clarifyRounds.id, round.id))
+      .all()[0]
+    const merged = { ...parseScopes(cur?.questionScopesJson ?? null) }
+    merged[entry.questionId] = 'questioner'
+    const scopesJson = JSON.stringify(merged)
+    tx.update(clarifyRounds)
+      .set({ questionScopesJson: scopesJson })
+      .where(eq(clarifyRounds.id, round.id))
+      .run()
+    // RFC-058 dual-write — the cross round's legacy session row shares the SAME id.
+    tx.update(crossClarifySessions)
+      .set({ questionScopesJson: scopesJson })
+      .where(eq(crossClarifySessions.id, round.id))
+      .run()
+    tx.delete(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          eq(taskQuestions.roleKind, 'designer'),
+          isNull(taskQuestions.dispatchedAt),
+        ),
+      )
+      .run()
+    // Codex impl-gate P2（两轮）— 幸存 questioner 行必须「存在且可被 park/渲染」，collapse
+    // 事务内自足保证，不依赖事后 reconcile：
+    //   (a) insert-if-missing：异常形态下（懒建/损坏数据只物化了 designer 行）questioner 行
+    //       缺席——事后 listTaskQuestions 会按 answered 轮补建但 sealed_at=NULL，照样被 park
+    //       源滤掉。此处按 reconcile 同形补建（唯一索引 origin+question+role 上
+    //       onConflictDoNothing，常规路径已有行 ⇒ 零写）。
+    //   (b) seal 行戳归一化（镜像 RFC-134 §3.1）：legacy answered 轮懒建行无逐行 sealed_at，
+    //       而 self/questioner park 源 (fetchSelfQuestionerParkEntries) 以 `sealed_at IS NOT
+    //       NULL` 过滤——designer 行（原 park 锚点）删除后，未补戳的 questioner 行会被滤掉
+    //       → 调度不再驻留、该题续跑永不 mint（投递丢失）。继承被删行的戳，无则取 now；
+    //       sealed_by 保持 NULL（「answered 轮证据落戳」审计语义，非人工 seal）；已有戳不改写。
+    const now = Date.now()
+    const survivorSealedAt = entry.sealedAt ?? now
+    tx.insert(taskQuestions)
+      .values({
+        id: ulid(),
+        taskId: entry.taskId,
+        originNodeRunId: entry.originNodeRunId,
+        questionId: entry.questionId,
+        questionTitle: entry.questionTitle,
+        sourceKind: 'cross',
+        roleKind: 'questioner',
+        iteration: entry.iteration,
+        loopIter: entry.loopIter,
+        defaultTargetNodeId: round.askingNodeId,
+        sealedAt: survivorSealedAt,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing({
+        target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
+      })
+      .run()
+    tx.update(taskQuestions)
+      .set({ sealedAt: survivorSealedAt, updatedAt: now })
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          eq(taskQuestions.roleKind, 'questioner'),
+          isNull(taskQuestions.sealedAt),
+        ),
+      )
+      .run()
+    collapsed = true
+  })
+  if (!collapsed) {
+    throw new ConflictError(
+      'task-question-already-dispatched',
+      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
+    )
+  }
+  log.info('designer entry collapsed to questioner scope', {
+    taskId: entry.taskId,
+    entryId: entry.id,
+    originNodeRunId: entry.originNodeRunId,
+    questionId: entry.questionId,
+    askingNodeId: round.askingNodeId,
+    actorUserId: actor.userId,
+  })
+  return 'collapsed-to-questioner'
 }
 
 /** RFC-128 §11 (D5) — is this entry's answer sealed? The SAME predicate the DTO's

@@ -2690,6 +2690,8 @@ export const enUS: Resources = {
     target: 'Handler',
     noTarget: 'Unassigned',
     reassign: 'Reassign handler',
+    collapsedToQuestioner:
+      'This question is now handled by the asking node (questioner); no separate designer pass will run.',
     confirm: 'Confirm',
     stage: 'Stage',
     unstage: 'Unstage',

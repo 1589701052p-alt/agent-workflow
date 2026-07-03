@@ -129,8 +129,14 @@ export function mountTaskQuestionRoutes(app: Hono, deps: AppDeps): void {
     if (!targetNodeId) {
       throw new ValidationError('target-node-required', 'targetNodeId is required')
     }
-    await reassignTaskQuestion(deps.db, entryId, targetNodeId, { userId: actor.user.id, role })
-    return c.json({ ok: true })
+    // RFC-138: `action` tells the client what actually happened — 'override' (regular
+    // re-target) vs 'collapsed-to-questioner' (cross designer entry re-targeted to its
+    // round's asking node ⇒ scope flipped, entry deleted). Additive, back-compatible.
+    const action = await reassignTaskQuestion(deps.db, entryId, targetNodeId, {
+      userId: actor.user.id,
+      role,
+    })
+    return c.json({ ok: true, action })
   })
 
   app.post('/api/tasks/:id/questions/:entryId/stage', async (c) => {

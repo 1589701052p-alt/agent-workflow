@@ -61,11 +61,20 @@ collapse 条件（全部满足）：
    新建对象。同值写 `clarify_rounds` 与 `cross_clarify_sessions` 两表（lockstep；self 轮
    不可达此分支，无需 `clarify_sessions` 侧）。
 3. **删行**：`DELETE FROM task_questions WHERE origin_node_run_id=:origin AND
-   question_id=:qid AND role_kind='designer' AND dispatched_at IS NULL`。按 (origin, qid,
+question_id=:qid AND role_kind='designer' AND dispatched_at IS NULL`。按 (origin, qid,
    role) 删而非按 id——同题理论上只有一条 designer 行（唯一索引 origin+question+role），
    谓词带上 dispatched_at 只为与 CAS 同语义兜底。
-4. 审计：`log.info('designer entry collapsed to questioner scope', {taskId, entryId,
-   originNodeRunId, questionId, actorUserId})`（D4——不在 questioner 行上伪造改派戳）。
+4. **幸存 questioner 行自足保证**（Codex 实现门 P2，两轮）：collapse 事务内保证「幸存行
+   存在且可被 park/渲染」，不依赖事后 reconcile。(a) insert-if-missing：异常形态（懒建/
+   损坏数据只物化了 designer 行）下按 reconcile 同形补建 questioner 行（唯一索引
+   origin+question+role 上 `onConflictDoNothing`，常规路径零写）；(b) seal 行戳归一化：给
+   sealed_at NULL 的 questioner 行补 `entry.sealedAt ?? now`（`sealed_by` 保持 NULL——
+   「answered 轮证据落戳」审计语义，镜像 RFC-134 §3.1）。原因：self/questioner park 源
+   （`fetchSelfQuestionerParkEntries`）以 `sealed_at IS NOT NULL` 过滤——designer 行（原
+   park 锚点）删除后，缺席/未补戳的 questioner 行会被滤掉 → 调度不再驻留、该题续跑永不
+   mint（投递丢失）。已有戳不改写（`IS NULL` 谓词）。
+5. 审计：`log.info('designer entry collapsed to questioner scope', {taskId, entryId,
+originNodeRunId, questionId, actorUserId})`（D4——不在 questioner 行上伪造改派戳）。
 
 ### 2.3 路由
 
@@ -96,6 +105,10 @@ collapse 条件（全部满足）：
   防御性不可达。
 - **questioner 行已被 move 改派到 X**：collapse 照做；该题由 X 承接 + echo 补投提问节点
   （RFC-134 既有），仍单份投递（D5，不特判）。
+- **questioner 行已下发（quick 路径常态）**：collapse 照做、零新增 mint（proposal D6，
+  Codex 实现门 P1 裁决为有意语义）——续跑已带该题答案跑过/正在跑，补 mint 即复活双跑；
+  终态与 scope=questioner 从始选定同形；questioner 卡照常 awaiting_confirm→确认闭环。
+  失败中的续跑（dispatched 未消费）沿用既有 revival 机制，collapse 不改变其状态。
 - **崩溃恢复**：单 tx 原子——要么全成（翻转 + 删行），要么全无；无中间态。
 
 ## 4. 数据与兼容

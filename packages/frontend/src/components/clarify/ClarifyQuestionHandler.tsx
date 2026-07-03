@@ -9,6 +9,7 @@
 // existing clarify tests don't mock /api/tasks/:id/questions, so this renders
 // nothing there.
 
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
@@ -16,6 +17,13 @@ import { api } from '@/api/client'
 import { Select } from '@/components/Select'
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { resolveNodeNameFromSnapshot } from '@/lib/node-names'
+
+/** RFC-138 reassign 响应：collapse（改派给提问节点 ⇒ 退化为反问者 scope、designer 条目
+ *  消失）需要区别于常规 override 给出反馈——条目没了，控件会自行消失，留一行知会文案。 */
+interface ReassignResponse {
+  ok: boolean
+  action?: 'override' | 'collapsed-to-questioner'
+}
 
 export interface ClarifyQuestionHandlerProps {
   taskId: string
@@ -42,10 +50,18 @@ export function ClarifyQuestionHandler({
     queryKey: ['tasks', taskId, 'snapshot'],
     queryFn: () => api.get<{ workflowSnapshot?: WorkflowDefinition }>(`/api/tasks/${taskId}`),
   })
+  // RFC-138: collapse 后条目被删除，invalidate 会让本控件对不上 entry 而消失——用本地
+  // 状态把知会文案留在原位（不新造 chrome，复用 .muted）。
+  const [collapsed, setCollapsed] = useState(false)
   const reassign = useMutation({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
-      api.post(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-questions', taskId] }),
+      api.post<ReassignResponse>(`/api/tasks/${taskId}/questions/${v.id}/reassign`, {
+        targetNodeId: v.targetNodeId,
+      }),
+    onSuccess: (data) => {
+      if (data?.action === 'collapsed-to-questioner') setCollapsed(true)
+      void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
+    },
   })
 
   // Only designer-domain (修订型) questions have a re-targetable handler.
@@ -59,7 +75,17 @@ export function ClarifyQuestionHandler({
           (originNodeRunId === undefined || e.originNodeRunId === originNodeRunId),
       )
     : undefined
-  if (!entry) return null
+  if (!entry) {
+    // RFC-138: 刚被本控件 collapse 掉的条目——留一行知会，替代凭空消失。
+    if (collapsed) {
+      return (
+        <div className="clarify-handler muted" data-testid={`clarify-handler-${questionId}`}>
+          {t('taskQuestions.collapsedToQuestioner')}
+        </div>
+      )
+    }
+    return null
+  }
 
   // 用户 2026-07-02: 处理节点显示节点名（title → agentName → id 回退），与看板/节点表同一 oracle。
   const snapshot = task.data?.workflowSnapshot

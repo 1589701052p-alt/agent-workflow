@@ -137,10 +137,19 @@ export function TaskQuestionList({
       api.post(`/api/tasks/${taskId}/questions/${v.id}/stage`, { staged: v.staged }),
     onSuccess: invalidate,
   })
+  // RFC-138: collapse（改派给提问节点 ⇒ 该题退化为反问者 scope、designer 卡随之消失）
+  // 留一行知会文案——卡片凭空消失会被误读成丢数据。常规 override 改派则清掉。
+  const [collapseNotice, setCollapseNotice] = useState(false)
   const reassignM = useMutation({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
-      api.post(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
-    onSuccess: invalidate,
+      api.post<{ ok: boolean; action?: 'override' | 'collapsed-to-questioner' }>(
+        `/api/tasks/${taskId}/questions/${v.id}/reassign`,
+        { targetNodeId: v.targetNodeId },
+      ),
+    onSuccess: (data) => {
+      setCollapseNotice(data?.action === 'collapsed-to-questioner')
+      invalidate()
+    },
   })
   // 用户 2026-07-02 拍板（推翻 RFC-133 §4 逐卡勾选、恢复 RFC-128 §11.1 语义）：
   // 「进待下发=已确定，批量下发=全下」——一键下发当前视图（尊重节点 filter）的**全部**
@@ -246,6 +255,11 @@ export function TaskQuestionList({
             <div className="task-questions__actions">{addBtn}</div>
           </div>
         )}
+        {collapseNotice && (
+          <p className="muted" data-testid="tq-collapse-notice">
+            {t('taskQuestions.collapsedToQuestioner')}
+          </p>
+        )}
         <EmptyState title={t('taskQuestions.empty')} />
         {authorForm}
       </div>
@@ -350,6 +364,11 @@ export function TaskQuestionList({
         </div>
       </div>
       {dispatchError !== null && <ErrorBanner error={dispatchError} />}
+      {collapseNotice && (
+        <p className="muted" data-testid="tq-collapse-notice">
+          {t('taskQuestions.collapsedToQuestioner')}
+        </p>
+      )}
       <div className="task-questions" data-testid="task-questions-board">
         {PHASE_ORDER.map((phase) => {
           const col = shown.filter((e) => e.phase === phase)

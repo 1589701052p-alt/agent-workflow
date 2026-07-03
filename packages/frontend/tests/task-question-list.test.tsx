@@ -166,6 +166,57 @@ describe('TaskQuestionList board', () => {
     )
   })
 
+  // RFC-138 — 看板改派给提问节点 ⇒ 后端 collapse（designer 卡删除）。响应 action 驱动一行
+  // 知会文案（tq-collapse-notice），否则卡片凭空消失会被误读成丢数据。
+  test('RFC-138: reassign to the asking node → collapse notice shows after success', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ ok: true, action: 'collapsed-to-questioner' } as never)
+    // invalidate 后 refetch：collapse 只删 designer 行，该题的 questioner 卡仍在（真实形态）。
+    const get = vi.spyOn(api, 'get').mockResolvedValue([
+      entry({
+        id: 'e2',
+        phase: 'pending',
+        sourceKind: 'cross',
+        roleKind: 'questioner',
+        sourceNodeId: 'asker',
+        defaultTargetNodeId: 'asker',
+        effectiveTargetNodeId: 'asker',
+      }),
+    ] as never)
+    await wrap(
+      [
+        entry({
+          id: 'e1',
+          phase: 'pending',
+          sourceKind: 'cross',
+          roleKind: 'designer',
+          sourceNodeId: 'asker',
+          defaultTargetNodeId: 'designer',
+          effectiveTargetNodeId: 'designer',
+        }),
+      ],
+      [
+        { id: 'asker', label: 'asker' },
+        { id: 'designer', label: 'designer' },
+      ],
+    )
+    const card = screen.getByTestId('tq-card-e1')
+    fireEvent.click(within(card).getAllByRole('combobox')[0]!)
+    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('asker'),
+    )
+    expect(opt).toBeDefined()
+    fireEvent.mouseDown(opt!)
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/reassign', {
+        targetNodeId: 'asker',
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('tq-collapse-notice')).toBeTruthy())
+    void get
+  })
+
   test('awaiting_confirm card shows a confirm control; designer card shows a reassign select', async () => {
     await wrap([
       entry({ id: 'e2', phase: 'awaiting_confirm' }),

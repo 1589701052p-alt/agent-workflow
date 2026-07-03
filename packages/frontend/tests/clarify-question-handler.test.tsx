@@ -4,7 +4,7 @@
 // break the fragile clarify page).
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api } from '@/api/client'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
@@ -127,6 +127,41 @@ describe('ClarifyQuestionHandler', () => {
     const root = screen.getByTestId('clarify-handler-q1')
     expect(root.textContent).toContain('修复者')
     expect(root.textContent).not.toContain('node-9')
+  })
+
+  // RFC-138 — 改派给提问节点 ⇒ collapse（designer 条目退化为反问者 scope、行删除）。
+  // 条目消失后控件不能凭空蒸发：留一行知会文案（.muted），且 POST 目标是提问节点。
+  test('RFC-138: 改派到提问节点 → POST 后条目消失时渲染 collapse 知会文案', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ ok: true, action: 'collapsed-to-questioner' } as never)
+    // 刷新后（invalidate → refetch）designer 条目已被删除。
+    const get = vi.spyOn(api, 'get').mockResolvedValue([] as never)
+    const withAsker = {
+      ...SNAPSHOT,
+      nodes: [...SNAPSHOT.nodes, { id: 'auditor', kind: 'agent-single', agentName: 'auditor' }],
+    }
+    wrap([designerEntry({ phase: 'pending' })], withAsker)
+    const root = screen.getByTestId('clarify-handler-q1')
+    fireEvent.click(within(root).getAllByRole('combobox')[0]!)
+    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('auditor'),
+    )
+    expect(opt).toBeDefined()
+    fireEvent.mouseDown(opt!)
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/reassign', {
+        targetNodeId: 'auditor',
+      }),
+    )
+    // 条目没了 → 不再渲染下拉，改渲染知会行（保住 testid 锚点）。
+    await waitFor(() => {
+      const el = screen.getByTestId('clarify-handler-q1')
+      expect(el.className).toContain('muted')
+      expect(within(el).queryAllByRole('combobox').length).toBe(0)
+      expect((el.textContent ?? '').length).toBeGreaterThan(0)
+    })
+    void get
   })
 
   test('可编辑下拉的当前值显示节点名（Select label 经 snapshot 解析）', () => {
