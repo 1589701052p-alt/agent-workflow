@@ -11,10 +11,11 @@
 - `reassignTaskQuestion` 新分支（紧邻 RFC-138 分支）：cross questioner 行 + 目标 ==
   `round.targetConsumerNodeId` ⇒ `collapseQuestionerEntryToDesigner`。
 - 塌缩 tx：CAS(dispatched_at NULL) → 两表 scope 翻转 lockstep → 删 questioner 行 →
-  designer 行 insert-if-missing + seal 归一化 + staged_at 继承 + **既存行 override 归一化清
-  空（Codex P2）** → echo 行物化（幂等键）。
+  designer 行 insert-if-missing + seal 归一化 + staged_at 继承 + **幸存行三分支**（未下发 →
+  CAS 清 override + 审计戳；已下发 effective==设计节点 → 零改动；已下发 effective==第三节点
+  → 409 拒塌缩，Codex P2 两轮）→ echo 行物化（幂等键）。
 - `ReassignTaskQuestionAction` 增 `'collapsed-to-designer'`；路由响应透传。
-- 测试：design §5.1-5.5（含 2b override 归一化 + golden-lock + 409 + QMGP5 形态 9 条全发）。
+- 测试：design §5.1-5.5（含 2b 三分支 + golden-lock + 409 + QMGP5 形态 9 条全发）。
 - 依赖：无。
 
 ### RFC-140-T2 deferred 登记 + tick 自动补发（W2）
@@ -22,14 +23,16 @@
 - migration：`task_questions` ADD COLUMN `auto_dispatch_deferred_at INTEGER`；**bump
   `upgrade-rolling.test.ts` journal 计数断言**（标题 + 断言 + 注释）。
 - `dispatchTaskQuestions`：stamp tx 内对 deferredEntries 盖列。
-- `stageTaskQuestion` unstage 分支：级联 UPDATE 同语句清 `auto_dispatch_deferred_at`
-  （Codex P1）。
+- `stageTaskQuestion`：stage **与** unstage 分支同语句清 `auto_dispatch_deferred_at`（登记
+  生命周期不变量），全函数纳入 per-task question-write lock (B)（与 dispatch 串行，消除晚盖
+  登记竞态——Codex P1 + 二轮 P2）。
 - scheduler runTask tick 顶（deriveFrontier 前）：读登记集（登记 + 未下发 + **staged 兜底条
-  件**）→ 非空则 `dispatchTaskQuestions(db, taskId, deferredIds, SYSTEM_ACTOR)`；
-  `DEFERRED_RETRYABLE_CONFLICTS`（export 复用 `DESIGNER_DEFERRABLE_CONFLICTS`，Codex P2）内
-  → debug + 下 tick 重试；白名单外 Conflict → 清登记 + WARN 回手动轨道。抽出可测入口（如
+  件**）→ **按 effective target 逐 home** 调 `dispatchTaskQuestions(db, taskId, ids,
+  SYSTEM_ACTOR)`（故障隔离，Codex 二轮 P2）；`DEFERRED_RETRYABLE_CONFLICTS`（export 复用
+  `DESIGNER_DEFERRABLE_CONFLICTS`，不 fork）内 → debug + 下 tick 重试；白名单外 Conflict →
+  仅清该 home 登记 + WARN 回手动轨道。抽出可测入口（如
   `autoDispatchDeferredQuestions(db, taskId)`），tick 内调用。
-- 测试：design §5.6-5.10（含 7b 撤回防护、8b 不可恢复码清登记）+ §5.13（migration journal）。
+- 测试：design §5.6-5.10（含 7b 撤回/竞态防护、8b 逐 home 隔离）+ §5.13（migration journal）。
 - 依赖：无（与 T1 并行；验收 1 的端到端 case 需要 T1）。
 
 ### RFC-140-T3 前端知会（W3）

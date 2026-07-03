@@ -53,11 +53,18 @@ round.targetConsumerNodeId`（非 null）。任一不满足 ⇒ 回落常规 ove
    RFC-138 Codex P2 fold：原 scope=questioner 时 reconcile 从未建 designer 行；懒建行无
    `sealed_at` 会被 park/渲染源滤掉）。`staged_at` 继承被删 questioner 行的值（若有）——用户
    的暂存意图随题转移，塌缩后无需重新 stage。
-   **既存行的 override 归一化**（Codex 设计门 P2）：若该题 designer 行已存在且曾被改派到第三
-   节点（`override_target_node_id` 非 null），insert-if-missing 保留既有行会让它继续指向旧目
-   标，违背用户刚表达的「这题给设计节点」——塌缩 tx 内对幸存行 `SET override_target_node_id =
-   NULL`（effective 回落 default = `targetConsumerNodeId`）+ 盖 `last_reassigned_by/at` 审计
-   戳。注：**RFC-138 方向存在同型洞**（其塌缩不清幸存 questioner 行的旧 override，已复核
+   **既存行的 override 归一化**（Codex 设计门 P2，二轮收紧）：若该题 designer 行已存在且曾被
+   改派到第三节点（`override_target_node_id` 非 null），insert-if-missing 保留既有行会让它继
+   续指向旧目标，违背用户刚表达的「这题给设计节点」。归一化必须尊重 post-dispatch 不可改目标
+   的既有守卫（reassign 的 `task-question-already-dispatched` 边界）：
+   - 幸存行 **未下发** → tx 内 `SET override_target_node_id = NULL`（CAS `dispatched_at IS
+     NULL`）+ 盖 `last_reassigned_by/at` 审计戳，effective 回落 `targetConsumerNodeId`；
+   - 幸存行 **已下发且 effective == targetConsumerNodeId**（无 override / override==设计节
+     点）→ 塌缩照做、幸存行零改动（该题修订已在正确轨道，镜像 RFC-138 D6 零新增 mint）；
+   - 幸存行 **已下发且 effective ≠ targetConsumerNodeId**（旧第三节点 override 已提交执行）
+     → **409 `task-question-already-dispatched`**（拒绝整个塌缩）：意图「给设计节点」无法在
+     不碰已提交工作的前提下满足，指引用户走 reopen（post-dispatch 重定向的既有职责边界）。
+   注：**RFC-138 方向存在同型洞**（其塌缩不清幸存 questioner 行的旧 override，已复核
    `collapseDesignerEntryToQuestioner` 确认）——不在本 RFC scope，落档记录、收口时提请是否另
    行修复。
 5. **echo 知会（与 RFC-138 的关键不对称）**：为提问节点物化 echo 行（insert
@@ -90,13 +97,20 @@ round.targetConsumerNodeId`（非 null）。任一不满足 ⇒ 回落常规 ove
 - **盖**：`dispatchTaskQuestions` 的 stamp tx 内（:512-761），对 `deferredEntries` 的行
   `SET auto_dispatch_deferred_at = now`——与 dispatch 批的 `dispatched_at` stamp 同 tx 原子。
   语义 = **用户已对该条目表达过下发意图，仅因 cause 序列化被排队**。
-- **清（撤回，Codex 设计门 P1）**：`stageTaskQuestion` 的 unstage 分支（taskQuestions.ts:1236
-  按题级联 UPDATE）同一语句里 `SET auto_dispatch_deferred_at = NULL`——用户把卡片拖出「待下
-  发」= 撤回意图，登记随之消灭；re-stage 只恢复 `staged_at`，**必须重新点批量下发**才会再入
-  队（否则 re-stage 即自动发 = 越权复发）。
+- **清（撤回，Codex 设计门 P1 + 二轮竞态收紧）**：登记的生命周期不变量 = **登记只能由「点批
+  量下发被 auto-split defer」产生，任何 stage 状态变更都消灭它**：
+  - `stageTaskQuestion` 的 **unstage 分支**（taskQuestions.ts:1236 按题级联 UPDATE）同一语句
+    清 `auto_dispatch_deferred_at`——拖出待下发 = 撤回意图；
+  - **stage 方向**（:1216 单行 CAS UPDATE）同样清列——re-stage 回到的是「暂存」态，登记不随
+    之复活，**必须重新点批量下发**；
+  - `stageTaskQuestion` 全函数纳入 per-task **question-write lock (B)**（dispatch 的
+    stamp+mint tx 已持有同一把锁，:538）——串行化「dispatch 读 staged → 用户 unstage/re-stage
+    → dispatch tx 盖登记」的交错（Codex 二轮 P2：无锁时晚盖的登记会在 re-stage 后被选择器命
+    中 → 未重新点发即自动发）。stage 是轻写，锁开销可忽略。
 - **读**：待补发集合 = `auto_dispatch_deferred_at IS NOT NULL AND dispatched_at IS NULL AND
-  staged_at IS NOT NULL`（staged 条件为兜底双保险——防未知的 staged 清除路径遗留孤儿登记）。
-  dispatched_at 盖上后登记自然失效（不清列——保留「曾被 defer」审计痕迹，零额外写）。
+  staged_at IS NOT NULL`（staged 条件为兜底双保险——防历史/未知路径遗留孤儿登记，孤儿只作审
+  计残留、永不触发）。dispatched_at 盖上后登记自然失效（不清列——保留「曾被 defer」审计痕
+  迹，零额外写）。
 - **为什么不派生**：staged 未 dispatched 无法区分「用户点过下发被 defer」与「stage 后还在斟
   酌」——自动发后者是越权（proposal 非目标 5）。为什么不内存登记：daemon 重启即丢，违背验收 5。
 
@@ -105,20 +119,26 @@ round.targetConsumerNodeId`（非 null）。任一不满足 ⇒ 回落常规 ove
 每轮 tick 在 deriveFrontier **之前**：
 
 ```
-const deferredIds = SELECT id FROM task_questions
+const deferred = SELECT id, effectiveTarget FROM task_questions
   WHERE task_id = ? AND auto_dispatch_deferred_at IS NOT NULL
     AND dispatched_at IS NULL AND staged_at IS NOT NULL
-if (deferredIds.length > 0) {
-  try { await dispatchTaskQuestions(db, taskId, deferredIds, SYSTEM_ACTOR) }
+for (const [home, ids] of groupBy(deferred, effectiveTarget)) {   // 逐 home 隔离（Codex 二轮 P2）
+  try { await dispatchTaskQuestions(db, taskId, ids, SYSTEM_ACTOR) }
   catch (e) {
     if (e instanceof ConflictError && DEFERRED_RETRYABLE_CONFLICTS.has(e.code)) {
-      log.debug(...)               // 可恢复：下一 tick 幂等重试，登记保留
+      log.debug(...)               // 可恢复：下一 tick 幂等重试，该 home 登记保留
     } else if (e instanceof ConflictError) {
-      clearDeferredMarker(deferredIds); log.warn(...)  // 不可恢复：清登记，回手动轨道
+      clearDeferredMarker(ids); log.warn(...)  // 不可恢复：仅清该 home 的登记，回手动轨道
     } else throw
   }
 }
 ```
+
+**逐 home 故障隔离**（Codex 二轮 P2）：`dispatchTaskQuestions` 是整批失败语义（任一行非法 →
+全批 Conflict）——单次全量调用会让一个 home 的不可恢复态（如某 origin multi-target）连坐清掉
+其他 home 本可自动发的登记，破坏一次点击保证。按 effective target 分组逐 home 调用：语义与
+一次全量等价（跨 home 本就各自 mint；同 home 内多 cause 仍由 auto-split 处理、嵌套 defer 留
+登记），失败清列精确到 home。
 
 - **执行体 = 完整复用 `dispatchTaskQuestions`**：seal/readiness 检查、auto-split（三类 cause
   嵌套 defer 自动逐批收敛——本批又 defer 的行保持登记）、in-flight 门、mint、echo、审计 log
@@ -165,9 +185,9 @@ deferred 条目本就在 `loadUndispatchedParkTargets` 的 park 集里（sealed-
 | H. migration 破坏滚动升级 | 单列 ADD COLUMN（可空、无 backfill）；`--> statement-breakpoint` 不需要（单语句）；**必须 bump `upgrade-rolling.test.ts` journal 计数断言**（reference_migration_bumps_journal_count_test） | 流程项 |
 | I. 塌缩与并发 dispatch 竞争 | CAS 在 `dispatched_at` 同列（镜像 RFC-138）：dispatch 赢 → 塌缩 409；塌缩赢 → dispatch 的 `TargetChanged` 快照校验兜底 | 复用既有防线 |
 | J. `__system__` 下发的归属审计 | `dispatched_by='__system__'` 已有先例（QMGP5 历史行）；RFC-099 prompt-isolation 不受影响（归属列绝不进 prompt） | 无新面 |
-| K. unstage 撤回后仍被自动发（Codex P1） | unstage 按题级联清登记列（主防线）+ 选择器叠加 `staged_at IS NOT NULL`（兜底）；re-stage 不复活登记（须重新点发） | 已防（验收 4b） |
-| L. 不可恢复 Conflict 永久空转（Codex P2） | `DEFERRED_RETRYABLE_CONFLICTS` 白名单（复用 `DESIGNER_DEFERRABLE_CONFLICTS`，不 fork）；白名单外清登记 + WARN 回手动轨道 | 已防（验收 6b） |
-| M. 幸存 designer 行带旧第三节点 override（Codex P2） | 塌缩 tx 内 override 归一化（清 override + 审计戳）→ effective 回落设计节点 | 已防（验收 2）；RFC-138 方向同型洞落档提请 |
+| K. unstage 撤回后仍被自动发（Codex P1 + 二轮竞态） | 登记生命周期不变量：stage **与** unstage 都清登记列 + `stageTaskQuestion` 纳入 question-write lock (B) 与 dispatch 串行 + 选择器 staged 兜底（孤儿登记永不触发） | 已防（验收 4b） |
+| L. 不可恢复 Conflict 空转 / 连坐清列（Codex P2 两轮） | `DEFERRED_RETRYABLE_CONFLICTS` 白名单（复用 `DESIGNER_DEFERRABLE_CONFLICTS`，不 fork）+ **逐 home 隔离**：失败只清该 home 登记，其他 home 照常自动发 | 已防（验收 6b） |
+| M. 幸存 designer 行带旧第三节点 override（Codex P2 两轮） | 三分支：未下发 → CAS 清 override + 审计戳；已下发且 effective==设计节点 → 零改动（D6 对称）；已下发且 effective≠设计节点 → 409 拒塌缩指引 reopen（post-dispatch 不可改目标守卫不破） | 已防（验收 2）；RFC-138 方向同型洞落档提请 |
 
 ## 5. 测试策略（随改动落地）
 
@@ -178,8 +198,9 @@ deferred 条目本就在 `loadUndispatchedParkTargets` 的 park 集里（sealed-
    questioner 行删除、两表 scope=designer lockstep、echo 行物化（dispatched、幂等键）；
 2. 该题原 scope=questioner（无 designer 行）→ insert-if-missing 补建 + seal 归一化 +
    staged_at 继承；
-2b. 该题 designer 行已存在且带第三节点 override → 塌缩后 override 清空（effective 回落设计
-   节点）+ `last_reassigned_by/at` 更新（Codex P2 回归）；
+2b. 幸存 designer 行三分支（Codex P2 两轮回归）：未下发带旧 override → 清 override + 审计
+   戳；已下发且 effective==设计节点 → 塌缩成功且幸存行零改动；已下发且 effective==第三节点
+   → 409 拒塌缩、questioner 行保留；
 3. golden-lock：改派到第三节点 → `action='override'`、行保留、无 echo 新增、无 scope 翻转；
    self 轮 questioner？（不存在——self 轮无 questioner 行，防御断言触发条件不命中）；
 4. questioner 行已 dispatched → 409 `task-question-already-dispatched`、零写入；
@@ -191,11 +212,13 @@ deferred 条目本就在 `loadUndispatchedParkTargets` 的 park 集里（sealed-
    模拟第一条续跑 done → 触发 tick（或直接调抽出的 `autoDispatchDeferred` 纯入口）→ 第二批
    dispatched（`dispatched_by='__system__'`）、mint 修订 rerun；
 7. 越权防护：同任务另一条 staged 未点发（登记列空）→ tick 不动它；
-7b. 撤回防护（Codex P1）：deferred 条目被 unstage → 登记列清空 → tick 不再发；re-stage 后仍
-   不自动发（须重新点批量下发）；
+7b. 撤回防护（Codex P1 + 二轮竞态）：deferred 条目被 unstage → 登记列清空 → tick 不再发；
+   re-stage 后仍不自动发（stage 方向也清列，须重新点批量下发）；stage/unstage 持锁串行断言
+   （源级或行为级）；
 8. 409 自愈：第二批目标仍有 running rerun → tick 静默、登记保留 → run done 后下一 tick 成功；
-8b. 不可恢复码（Codex P2）：构造白名单外 Conflict（如整题未 seal）→ 登记列被清 + WARN、条目
-   留 staged、tick 不再重试；
+8b. 不可恢复码 + 逐 home 隔离（Codex P2 两轮）：两 home 各有 deferred 登记，home A 构造白名
+   单外 Conflict（如 origin multi-target）→ 仅 A 的登记被清 + WARN；home B 照常自动
+   dispatched；
 9. 三类 cause 嵌套：第一轮 defer 两类 → 第二轮再 defer 一类 → 两轮 tick 后全部 dispatched
    （收敛断言）；
 10. 重启韧性：登记列落库后重建 scheduler 状态（新 runTask 入口）→ tick 照常补发。
