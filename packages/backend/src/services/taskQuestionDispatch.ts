@@ -274,6 +274,39 @@ export async function dispatchTaskQuestions(
   )
 }
 
+/** RFC-140 W2 (Codex impl-gate P1) — the auto-redispatch entry: SELECT the auto-split-deferred
+ *  set (marker + undispatched + still staged) and dispatch it in ONE lock-B holding. The tick's
+ *  select and the dispatch MUST share the lock: a pre-selected id list handed to the public
+ *  dispatchTaskQuestions would race a concurrent unstage — the withdrawn entry's marker/staged
+ *  are cleared, but dispatch filters on neither, so the stale id would still dispatch withdrawn
+ *  work. Returns EMPTY_RESULT when nothing is queued. */
+export async function dispatchDeferredTaskQuestions(
+  db: DbClient,
+  taskId: string,
+  actor: DispatchTaskQuestionsActor,
+): Promise<DispatchTaskQuestionsResult> {
+  return await getTaskQuestionWriteSem(taskId).run(async () => {
+    const deferred = await db
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.taskId, taskId),
+          isNotNull(taskQuestions.autoDispatchDeferredAt),
+          isNull(taskQuestions.dispatchedAt),
+          isNotNull(taskQuestions.stagedAt),
+        ),
+      )
+    if (deferred.length === 0) return EMPTY_RESULT
+    return dispatchTaskQuestionsLocked(
+      db,
+      taskId,
+      deferred.map((d) => d.id),
+      actor,
+    )
+  })
+}
+
 async function dispatchTaskQuestionsLocked(
   db: DbClient,
   taskId: string,

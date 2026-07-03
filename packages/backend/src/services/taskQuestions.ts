@@ -1294,7 +1294,16 @@ function collapseQuestionerEntryToDesigner(
       )
       .run()
     const now = Date.now()
-    const survivorSealedAt = entry.sealedAt ?? now
+    // Seal inheritance MUST NOT fabricate answer evidence (Codex impl-gate P1): a questioner row
+    // exists BEFORE its answer is submitted (unlike RFC-138's designer rows, which reconcile only
+    // post-seal), so an unconditional `?? now` would stamp an UNANSWERED question as sealed — the
+    // stage gate / dispatch would then inject an entry with no answers_json content, and the real
+    // answer's seal would hit the already-sealed path. Only an ANSWERED round justifies the
+    // RFC-138-style backfill (the answer provably exists); otherwise inherit verbatim (possibly
+    // NULL — the real seal later stamps ALL of the question's rows: sealRoundQuestions step (4)
+    // keys (origin, questionId) + IS NULL with NO role filter, so the survivor + echo get their
+    // stamps then).
+    const survivorSealedAt = round.status === 'answered' ? (entry.sealedAt ?? now) : entry.sealedAt
     if (existingDesigner === undefined) {
       // insert-if-missing (scope was 'questioner' → reconcile never built a designer row);
       // staged_at inherited so the user's staging intent survives the flip.
@@ -1332,7 +1341,9 @@ function collapseQuestionerEntryToDesigner(
                 lastReassignedAt: now,
               }
             : {}),
-          ...(existingDesigner.sealedAt === null ? { sealedAt: survivorSealedAt } : {}),
+          ...(existingDesigner.sealedAt === null && survivorSealedAt !== null
+            ? { sealedAt: survivorSealedAt }
+            : {}),
           ...(existingDesigner.stagedAt === null && entry.stagedAt !== null
             ? { stagedAt: entry.stagedAt, stagedBy: entry.stagedBy }
             : {}),

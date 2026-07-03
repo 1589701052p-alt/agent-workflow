@@ -54,6 +54,7 @@ import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
 import { validateQuestionScopes } from '@/services/crossClarify'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import {
+  dispatchDeferredTaskQuestions,
   dispatchTaskQuestions,
   type DispatchTaskQuestionsResult,
 } from '@/services/taskQuestionDispatch'
@@ -712,49 +713,59 @@ export async function autoDispatchClarifyRound(
  *  the runTask tick top (scheduler.ts), pre-deriveFrontier, so a freshly-released home (its
  *  in-flight rerun just completed) redispatches on the very tick that completion triggers. */
 export async function autoDispatchDeferredQuestions(db: DbClient, taskId: string): Promise<void> {
-  const deferred = await db
-    .select({ id: taskQuestions.id })
-    .from(taskQuestions)
-    .where(
-      and(
-        eq(taskQuestions.taskId, taskId),
-        isNotNull(taskQuestions.autoDispatchDeferredAt),
-        isNull(taskQuestions.dispatchedAt),
-        isNotNull(taskQuestions.stagedAt),
-      ),
-    )
-  if (deferred.length === 0) return
-  const ids = deferred.map((d) => d.id)
-  try {
-    const res = await dispatchTaskQuestions(db, taskId, ids, SYSTEM_DISPATCH_ACTOR)
-    log.info('auto-redispatched deferred task questions', {
-      taskId,
-      requestedCount: ids.length,
-      dispatchedEntryCount: res.dispatchedEntryIds.length,
-      stillDeferredCount: res.deferred.length,
-      rerunCount: res.reruns.length,
-    })
-  } catch (err) {
-    if (err instanceof ConflictError && DESIGNER_DEFERRABLE_CONFLICTS.has(err.code)) {
-      log.debug('deferred auto-redispatch retryable — waiting for the next tick', {
-        taskId,
-        reason: err.code,
-        entryCount: ids.length,
-      })
+  // Codex impl-gate P2: 'task-question-target-changed' resolves by RE-PLANNING, not by waiting —
+  // and this tick may be the LAST one (the scope can go quiescent right after), which would
+  // strand the marker until a manual dispatch. Retry the re-plan immediately, bounded (the
+  // conflict needs a concurrent reassign per attempt; 3 attempts is already adversarial).
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // Selection happens INSIDE the dispatch's lock-B holding (Codex impl-gate P1 — a
+      // pre-selected id list would race a concurrent unstage: dispatch filters on neither the
+      // marker nor staged, so a withdrawn entry's stale id would still dispatch).
+      const res = await dispatchDeferredTaskQuestions(db, taskId, SYSTEM_DISPATCH_ACTOR)
+      if (res.dispatchedEntryIds.length > 0 || res.reruns.length > 0) {
+        log.info('auto-redispatched deferred task questions', {
+          taskId,
+          dispatchedEntryCount: res.dispatchedEntryIds.length,
+          stillDeferredCount: res.deferred.length,
+          rerunCount: res.reruns.length,
+        })
+      }
       return
+    } catch (err) {
+      if (err instanceof ConflictError && err.code === 'task-question-target-changed') {
+        if (attempt < 2) continue // immediate bounded re-plan (see above)
+        log.debug('deferred auto-redispatch target kept changing — waiting for the next tick', {
+          taskId,
+        })
+        return
+      }
+      if (err instanceof ConflictError && DESIGNER_DEFERRABLE_CONFLICTS.has(err.code)) {
+        log.debug('deferred auto-redispatch retryable — waiting for the next tick', {
+          taskId,
+          reason: err.code,
+        })
+        return
+      }
+      if (err instanceof ConflictError) {
+        await db
+          .update(taskQuestions)
+          .set({ autoDispatchDeferredAt: null, updatedAt: Date.now() })
+          .where(
+            and(
+              eq(taskQuestions.taskId, taskId),
+              isNotNull(taskQuestions.autoDispatchDeferredAt),
+              isNull(taskQuestions.dispatchedAt),
+            ),
+          )
+        log.warn(
+          'deferred auto-redispatch hit a NON-recoverable conflict — markers cleared, back to the manual board track',
+          { taskId, reason: err.code },
+        )
+        return
+      }
+      throw err
     }
-    if (err instanceof ConflictError) {
-      await db
-        .update(taskQuestions)
-        .set({ autoDispatchDeferredAt: null, updatedAt: Date.now() })
-        .where(and(inArray(taskQuestions.id, ids), isNull(taskQuestions.dispatchedAt)))
-      log.warn(
-        'deferred auto-redispatch hit a NON-recoverable conflict — markers cleared, back to the manual board track',
-        { taskId, reason: err.code, entryCount: ids.length },
-      )
-      return
-    }
-    throw err
   }
 }
 

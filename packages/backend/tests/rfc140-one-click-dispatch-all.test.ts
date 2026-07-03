@@ -462,6 +462,33 @@ describe('RFC-140 W1 collapse 边界', () => {
     expect((await scopesOf(db, roundId)).round).toBeNull()
   })
 
+  test('未答轮塌缩不伪造 seal：幸存 designer 行与 echo 的 sealed_at 保持 NULL（Codex 实现门 P1）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    // an UNANSWERED round (awaiting_human, no answers yet) — the questioner row exists pre-answer.
+    const { origin, roundId } = await seedCrossRound(db, taskId, [mkQ('q1')])
+    await db
+      .update(clarifyRounds)
+      .set({ status: 'awaiting_human', answersJson: null, answeredAt: null })
+      .where(eq(clarifyRounds.id, roundId))
+    const qEid = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: ASKER,
+      sealed: false, // not answered yet
+    })
+    expect(await reassignTaskQuestion(db, qEid, DESIGNER, actor)).toBe('collapsed-to-designer')
+    const rows = await allEntries(db, taskId)
+    const designer = rows.find((r) => r.roleKind === 'designer')!
+    const echo = rows.find((r) => r.roleKind === 'echo')!
+    // No fabricated answer evidence: the real seal later stamps the whole question's rows
+    // (sealRoundQuestions keys (origin, questionId) + IS NULL with no role filter).
+    expect(designer.sealedAt).toBeNull()
+    expect(echo.sealedAt).toBeNull()
+  })
+
   test('questioner 行已 dispatched → 409（塌缩分支前 CAS）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
@@ -683,13 +710,26 @@ describe('RFC-140 W2 deferred 登记 + 自动补发', () => {
     }
   })
 
-  test('源级锁：autoDispatchDeferredQuestions 一次全量调用（禁逐 home 拆分，保 frontier 全局计算）', async () => {
-    const src = await Bun.file(
+  test('源级锁：补发经 dispatchDeferredTaskQuestions（选择在锁 B 内）且一次全量（禁逐 home 拆分）', async () => {
+    // Codex impl-gate P1: the tick entry must NOT pre-select ids outside the lock — selection +
+    // dispatch share ONE lock-B holding (dispatchDeferredTaskQuestions), else a concurrent
+    // unstage between the select and the dispatch would still dispatch the withdrawn entry.
+    const auto = await Bun.file(
       new URL('../src/services/clarifyAutoDispatch.ts', import.meta.url).pathname,
     ).text()
-    const fnBody = src.slice(src.indexOf('export async function autoDispatchDeferredQuestions'))
-    const calls = fnBody.split('dispatchTaskQuestions(').length - 1
-    expect(calls).toBe(1) // ONE full-set call — per-home splitting breaks the upstream frontier
+    const fnBody = auto.slice(auto.indexOf('export async function autoDispatchDeferredQuestions'))
+    expect(fnBody.split('dispatchDeferredTaskQuestions(').length - 1).toBe(1)
+    expect(fnBody).not.toContain('.select(') // no pre-lock selection in the tick entry
+    // ONE full-set dispatch — per-home splitting breaks the upstream frontier (design-gate R3 P1).
+    const dispatch = await Bun.file(
+      new URL('../src/services/taskQuestionDispatch.ts', import.meta.url).pathname,
+    ).text()
+    const deferredFn = dispatch.slice(
+      dispatch.indexOf('export async function dispatchDeferredTaskQuestions'),
+      dispatch.indexOf('async function dispatchTaskQuestionsLocked'),
+    )
+    expect(deferredFn).toContain('getTaskQuestionWriteSem(taskId).run')
+    expect(deferredFn.split('dispatchTaskQuestionsLocked(').length - 1).toBe(1)
   })
 
   test('stage/unstage 与 dispatch 串行（锁 B）：dispatch 锁获取点在读条目之前（源级文本锁）', async () => {
