@@ -62,8 +62,13 @@ agent anymore — its remaining job is the multi-ledger duplicate-execution REJE
    `task-question-borrow-ledger-conflict`，任务正常续跑。deferred self/questioner 台账的对称
    形态（self 承接 run 以再问一轮收场 + 后续 designer dispatch）一并修复——两本台账共用同一
    判定函数，一处改动。
-2. 双台账守卫对**真冲突**（两本台账各欠一条未执行的 rerun，如双 queued）的 reject 逐字保留。
-3. failed / canceled / interrupted 承接 run 的「未消费 → open」语义逐字保留（revival/retry
+2. **post-bind 续命**（Codex 设计门 P1）：放行后的续跑起跑时会把两本台账的条目**全量重绑**到
+   自己（`buildClarifyQueueContext` → `bindTriggerRun`）；该续跑若再 failed / interrupted，
+   两本台账同指一条承接链——这是**同一条 rerun 的复活**，不是重复执行，revival / 手动重试不得
+   再被守卫杀掉（同锚合流豁免）。
+3. 双台账守卫对**真冲突**（两本台账各欠一条**互不相干**的未执行 rerun：双 queued、或异链
+   bound）的 reject 逐字保留。
+4. failed / canceled / interrupted 承接 run 的「未消费 → open」语义逐字保留（revival/retry
    还欠着这条 rerun，台账必须开着）。
 
 ## 非目标
@@ -88,16 +93,19 @@ agent anymore — its remaining job is the multi-ledger duplicate-execution REJE
 
 ## 验收标准
 
-1. **QMGP5 形态回归测试**（新）：designer 条目 dispatched、trigger 指向 done-no-output 承接
-   run；新 self 条目 dispatched（queued）+ pending `clarify-answer` rerun →
+1. **QMGP5 pre-bind 回归测试**（新）：designer 条目 dispatched、trigger 指向 done-no-output
+   承接 run；新 self 条目 dispatched（queued）+ pending `clarify-answer` rerun →
    `resolveBorrowForNode` 不抛、返回 null。
-2. **真冲突保留**：既有双台账 reject 测试（`rfc128-p5-bc-self-questioner-rerun.test.ts` 三例，
-   全部 queued × queued）保持绿、不修改。
-3. **revival 语义保留**：trigger 指向 failed / interrupted / pending / running 承接 run 的台账
+2. **post-bind 回归测试**（新，Codex 设计门 P1）：两本台账条目 bound 到同一 failed（及
+   interrupted 变体）承接 run + 同窗口 revival pending run → 不抛、返回 null（同锚合流）。
+3. **真冲突保留**：既有双台账 reject 测试（`rfc128-p5-bc-self-questioner-rerun.test.ts` 三例，
+   全部 queued × queued）保持绿、不修改；异链 bound（{X} vs {Y}，X≠Y 都非 done）新增兜底断言
+   仍抛。
+4. **revival 语义保留**：trigger 指向 failed / interrupted / pending / running 承接 run 的台账
    仍判 open（纯函数级断言）。
-4. **既有测试锁按新语义翻转**：`rfc133-queued-run-obligation.test.ts` case 8 中
+5. **既有测试锁按新语义翻转**：`rfc133-queued-run-obligation.test.ts` case 8 中
    `bound + done-no-output + 'revivable' → false` 的断言翻转为 `true`，注释同步改写（该行锁的
    是借壳时代语义）。
-5. `bun run typecheck && bun run test && bun run format:check` 全绿；push 后 CI 绿。
-6. 本机手动验证：修复部署后重试 QMGP5 的 `agent_m7p3n1` 节点，任务继续执行（第 9 轮答案 +
+6. `bun run typecheck && bun run test && bun run format:check` 全绿；push 后 CI 绿。
+7. 本机手动验证：修复部署后重试 QMGP5 的 `agent_m7p3n1` 节点，任务继续执行（第 9 轮答案 +
    cross designer Q&A 均注入 retry 12 的 prompt）。
