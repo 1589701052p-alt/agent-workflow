@@ -103,12 +103,16 @@ round.targetConsumerNodeId`（非 null）。任一不满足 ⇒ 回落常规 ove
     清 `auto_dispatch_deferred_at`——拖出待下发 = 撤回意图；
   - **stage 方向**（:1216 单行 CAS UPDATE）同样清列——re-stage 回到的是「暂存」态，登记不随
     之复活，**必须重新点批量下发**；
-  - **盖登记用观测值 CAS**（Codex 三轮 P2——stage 纳锁方案被推翻：dispatch 的
-    requested/deferred 计算发生在锁 B **之前**，锁不住 pre-lock 窗口）：stamp tx 内对
-    deferredEntries 盖列的 UPDATE 带条件 `staged_at = :observedStagedAt`（pre-lock 读取的
-    值）。窗口内发生过 unstage（staged 变 NULL）或 unstage+re-stage（staged_at 时间戳变化）
-    → CAS 失防 → 不盖登记 → 条目留在纯暂存态（正确：用户的最后动作是 stage 而非点发）。CAS
-    失防的条目不影响本批 dispatch 主体（登记只关乎后续自动补发）。
+  - **dispatch 锁范围前移 + stage 纳锁**（Codex 三/四轮收敛：三轮指出 stage 纳锁关不住
+    dispatch 的 pre-lock 计算窗口；四轮否决了 `staged_at` 毫秒时间戳观测值 CAS——同毫秒
+    unstage+re-stage 会撞回同值、CAS 误通过。正解是**消掉窗口本身**）：
+    `dispatchTaskQuestions` 的 question-write lock (B) 获取点从 stamp tx（:538）**前移到函数
+    开头**（读条目/byHomeCause/frontier/mintPlans 预计算全部入锁——锁是 async 信号量，tx 纯
+    同步性不受影响；dispatch 是人级低频操作，锁持有多几十 ms 无碍）；`stageTaskQuestion`
+    全函数纳同一把锁。「读 staged → 算 deferred → stamp 登记」与 stage/unstage 完全串行，
+    竞态窗口不存在，无需任何 token/nonce/新列。附带纪律：调用方不得在锁 B 内调用
+    `dispatchTaskQuestions`（现状已满足——信号量不可重入，锁前移不新增重入面；函数头注释锁
+    定该约束）。
 - **读**：待补发集合 = `auto_dispatch_deferred_at IS NOT NULL AND dispatched_at IS NULL AND
   staged_at IS NOT NULL`（staged 条件为兜底双保险——防历史/未知路径遗留孤儿登记，孤儿只作审
   计残留、永不触发）。dispatched_at 盖上后登记自然失效（不清列——保留「曾被 defer」审计痕
@@ -193,7 +197,7 @@ deferred 条目本就在 `loadUndispatchedParkTargets` 的 park 集里（sealed-
 | H. migration 破坏滚动升级 | 单列 ADD COLUMN（可空、无 backfill）；`--> statement-breakpoint` 不需要（单语句）；**必须 bump `upgrade-rolling.test.ts` journal 计数断言**（reference_migration_bumps_journal_count_test） | 流程项 |
 | I. 塌缩与并发 dispatch 竞争 | CAS 在 `dispatched_at` 同列（镜像 RFC-138）：dispatch 赢 → 塌缩 409；塌缩赢 → dispatch 的 `TargetChanged` 快照校验兜底 | 复用既有防线 |
 | J. `__system__` 下发的归属审计 | `dispatched_by='__system__'` 已有先例（QMGP5 历史行）；RFC-099 prompt-isolation 不受影响（归属列绝不进 prompt） | 无新面 |
-| K. unstage 撤回后仍被自动发（Codex P1 + 二/三轮竞态） | 登记生命周期不变量：stage **与** unstage 都清登记列 + **盖登记观测值 CAS**（stamp tx 内 `staged_at = :observed`，锁不住的 pre-lock 窗口由 CAS 自足关闭）+ 选择器 staged 兜底（孤儿登记永不触发） | 已防（验收 4b） |
+| K. unstage 撤回后仍被自动发（Codex P1 + 二/三/四轮竞态收敛） | 登记生命周期不变量：stage **与** unstage 都清登记列 + **dispatch 锁 B 前移到读-算之前、stage 纳同锁**（窗口消除，无 token 依赖——毫秒时间戳 CAS 被四轮否决）+ 选择器 staged 兜底（孤儿登记永不触发） | 已防（验收 4b） |
 | L. 不可恢复 Conflict 空转（Codex P2）/ 逐 home 拆分破坏 frontier（Codex 三轮 P1） | `DEFERRED_RETRYABLE_CONFLICTS` 白名单（复用 `DESIGNER_DEFERRABLE_CONFLICTS`，不 fork）；**一次全量调用保 frontier 全局计算**；不可恢复 → 全清回手动轨道（「宁可回手动、不可错 frontier」裁决，WARN 列明） | 已防（验收 6b） |
 | M. 幸存 designer 行带旧第三节点 override（Codex P2 两轮） | 三分支：未下发 → CAS 清 override + 审计戳；已下发且 effective==设计节点 → 零改动（D6 对称）；已下发且 effective≠设计节点 → 409 拒塌缩指引 reopen（post-dispatch 不可改目标守卫不破） | 已防（验收 2）；RFC-138 方向同型洞落档提请 |
 
@@ -220,9 +224,10 @@ deferred 条目本就在 `loadUndispatchedParkTargets` 的 park 集里（sealed-
    模拟第一条续跑 done → 触发 tick（或直接调抽出的 `autoDispatchDeferred` 纯入口）→ 第二批
    dispatched（`dispatched_by='__system__'`）、mint 修订 rerun；
 7. 越权防护：同任务另一条 staged 未点发（登记列空）→ tick 不动它；
-7b. 撤回防护（Codex P1 + 二/三轮竞态）：deferred 条目被 unstage → 登记列清空 → tick 不再
-   发；re-stage 后仍不自动发（stage 方向也清列 + 盖登记观测值 CAS：模拟 pre-lock 窗口内
-   unstage+re-stage → stamp 后登记为空，须重新点批量下发）；
+7b. 撤回防护（Codex P1 + 二/三/四轮竞态收敛）：deferred 条目被 unstage → 登记列清空 → tick
+   不再发；re-stage 后仍不自动发（stage 方向也清列，须重新点批量下发）；并发串行化断言：
+   dispatch 持锁期间发起的 unstage 等待锁、完成后登记必为空（行为级）+ 锁获取点在读条目之前
+   （源级文本锁）；
 8. 409 自愈：第二批目标仍有 running rerun → tick 静默、登记保留 → run done 后下一 tick 成功；
 8b. 不可恢复码（Codex P2 + 三轮 P1）：构造白名单外 Conflict → 全部登记被清 + WARN、条目留
    staged、tick 不再重试；**frontier 保全**：deferred 集含上下游两 home → 一次全量补发只

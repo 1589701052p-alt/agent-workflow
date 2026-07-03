@@ -24,9 +24,10 @@
   `upgrade-rolling.test.ts` journal 计数断言**（标题 + 断言 + 注释）。
 - `dispatchTaskQuestions`：stamp tx 内对 deferredEntries 盖列。
 - `stageTaskQuestion`：stage **与** unstage 分支同语句清 `auto_dispatch_deferred_at`（登记
-  生命周期不变量）。`dispatchTaskQuestions` stamp tx 内**盖登记用观测值 CAS**
-  （`staged_at = :observed`，关闭 pre-lock 计算窗口的 unstage/re-stage 竞态——Codex P1 +
-  三轮 P2，stage 纳锁方案被推翻）。
+  生命周期不变量），全函数纳入 question-write lock (B)。`dispatchTaskQuestions` **锁 B 获
+  取点前移到函数开头**（读-算-stamp 全程锁内，与 stage/unstage 串行——Codex P1 + 三/四轮收
+  敛：pre-lock 窗口消除，毫秒时间戳 CAS 方案被四轮否决；函数头注释锁定「调用方不得持锁 B
+  调用」纪律）。
 - scheduler runTask tick 顶（deriveFrontier 前）：读登记集（登记 + 未下发 + **staged 兜底条
   件**）→ **一次全量**调 `dispatchTaskQuestions(db, taskId, deferredIds, SYSTEM_ACTOR)`
   （frontier 全局计算，禁止逐 home 拆分——Codex 三轮 P1）；`DEFERRED_RETRYABLE_CONFLICTS`
