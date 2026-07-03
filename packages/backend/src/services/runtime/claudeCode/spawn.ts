@@ -6,8 +6,9 @@
 //          [--disallowed-tools "<writes>"] [--resume <id>]
 //   • prompt delivered via STDIN (D12 — avoids argv E2BIG; ≤10MB cap, V9)
 //   • env: PWD=worktree, CLAUDE_CONFIG_DIR=<attemptDir>/.claude (transcript +
-//     skills isolation, D16), auth inherited from process.env (ANTHROPIC_API_KEY
-//     / OAuth token / etc.), RFC-067 git identity.
+//     skills isolation, D16), IS_SANDBOX=1 (claude's root/sudo gate rejects
+//     bypassPermissions under uid 0 without it), auth inherited from process.env
+//     (ANTHROPIC_API_KEY / OAuth token / etc.), RFC-067 git identity.
 //
 // PR-B scope = persona (system prompt) + model + readonly tool-gate + stdin
 // prompt + stream-json. Skills / MCP / dependsOn subagents / subscription
@@ -101,6 +102,12 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
     // (Subscription auth bridge + skills land in PR-C; API-key auth flows via the
     // inherited env and is orthogonal to this dir.)
     CLAUDE_CONFIG_DIR: configDir,
+    // Root daemon: claude hard-exits ("--dangerously-skip-permissions cannot be
+    // used with root/sudo privileges") on bypassPermissions when getuid()===0
+    // unless IS_SANDBOX === '1' — exact-string check in the CLI's root gate.
+    // Every spawn here is headless bypassPermissions inside a managed worktree,
+    // so always assert the flag; it must also win over an inherited IS_SANDBOX=0.
+    IS_SANDBOX: '1',
   }
   const gitName = typeof ctx.gitUserName === 'string' ? ctx.gitUserName : ''
   const gitEmail = typeof ctx.gitUserEmail === 'string' ? ctx.gitUserEmail : ''

@@ -72,6 +72,18 @@ describe('opencodeDriver.buildSpawn (RFC-117 system agent)', () => {
     expect(plan.cmd[0]).toBe('/opt/my-oc')
     expect(plan.cmd.slice(1, 3)).toEqual(['run', 'USER PROMPT'])
   })
+
+  // IS_SANDBOX is a claude-code-only root-gate escape hatch; opencode has no
+  // root guard (verified in its source), so its env must stay uninjected.
+  test('does NOT inject IS_SANDBOX (root gate is claude-code-specific)', () => {
+    const prev = process.env.IS_SANDBOX
+    delete process.env.IS_SANDBOX
+    try {
+      expect(opencodeDriver.buildSpawn(BASE).env.IS_SANDBOX).toBeUndefined()
+    } finally {
+      if (prev !== undefined) process.env.IS_SANDBOX = prev
+    }
+  })
 })
 
 describe('claudeCodeDriver.buildSpawn (RFC-117 system agent)', () => {
@@ -128,6 +140,24 @@ describe('claudeCodeDriver.buildSpawn (RFC-117 system agent)', () => {
     withTmp((dir) => {
       const plan = claudeCodeDriver.buildSpawn({ ...BASE, runDir: dir, model: null })
       expect(plan.cmd).not.toContain('--model')
+    })
+  })
+
+  // Regression lock: claude ≥2.x exits 1 ("--dangerously-skip-permissions cannot
+  // be used with root/sudo privileges") on bypassPermissions when getuid()===0
+  // and env.IS_SANDBOX !== '1' (exact-string check). Root daemons could not run
+  // ANY claude-code node/smoke/distiller spawn without this injection — and it
+  // must override an inherited IS_SANDBOX value, not just fill an absent one.
+  test('env: IS_SANDBOX=1 injected and wins over inherited value (root bypassPermissions gate)', () => {
+    withTmp((dir) => {
+      const prev = process.env.IS_SANDBOX
+      process.env.IS_SANDBOX = '0'
+      try {
+        expect(claudeCodeDriver.buildSpawn({ ...BASE, runDir: dir }).env.IS_SANDBOX).toBe('1')
+      } finally {
+        if (prev === undefined) delete process.env.IS_SANDBOX
+        else process.env.IS_SANDBOX = prev
+      }
     })
   })
 })
