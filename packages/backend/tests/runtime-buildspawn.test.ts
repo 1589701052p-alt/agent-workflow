@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { opencodeDriver } from '@/services/runtime/opencode/driver'
 import { claudeCodeDriver } from '@/services/runtime/claudeCode/driver'
+import { claudeSandboxEnv } from '@/services/runtime/claudeCode/spawn'
 import type { SystemAgentSpawnContext } from '@/services/runtime/types'
 
 const BASE: SystemAgentSpawnContext = {
@@ -146,18 +147,41 @@ describe('claudeCodeDriver.buildSpawn (RFC-117 system agent)', () => {
   // Regression lock: claude ≥2.x exits 1 ("--dangerously-skip-permissions cannot
   // be used with root/sudo privileges") on bypassPermissions when getuid()===0
   // and env.IS_SANDBOX !== '1' (exact-string check). Root daemons could not run
-  // ANY claude-code node/smoke/distiller spawn without this injection — and it
-  // must override an inherited IS_SANDBOX value, not just fill an absent one.
-  test('env: IS_SANDBOX=1 injected and wins over inherited value (root bypassPermissions gate)', () => {
+  // ANY claude-code node/smoke/distiller spawn without injecting the flag; the
+  // uid gate keeps non-root env pristine (Codex P1: never spoof where the gate
+  // wouldn't fire). CI is never uid 0, so the root branch is pinned via the
+  // pure-function oracle and the spread-order source assert below.
+  test('claudeSandboxEnv: IS_SANDBOX=1 iff uid 0 (root bypassPermissions gate)', () => {
+    expect(claudeSandboxEnv(0)).toEqual({ IS_SANDBOX: '1' })
+    expect(claudeSandboxEnv(501)).toEqual({})
+    expect(claudeSandboxEnv(undefined)).toEqual({})
+  })
+
+  test('env: IS_SANDBOX follows the uid gate, no unconditional spoof', () => {
     withTmp((dir) => {
       const prev = process.env.IS_SANDBOX
-      process.env.IS_SANDBOX = '0'
+      delete process.env.IS_SANDBOX
       try {
-        expect(claudeCodeDriver.buildSpawn({ ...BASE, runDir: dir }).env.IS_SANDBOX).toBe('1')
+        const got = claudeCodeDriver.buildSpawn({ ...BASE, runDir: dir }).env.IS_SANDBOX
+        if (process.getuid?.() === 0) expect(got).toBe('1')
+        else expect(got).toBeUndefined()
       } finally {
-        if (prev === undefined) delete process.env.IS_SANDBOX
-        else process.env.IS_SANDBOX = prev
+        if (prev !== undefined) process.env.IS_SANDBOX = prev
       }
     })
+  })
+
+  // Source-level bottom line for the branch CI cannot execute (uid 0): the
+  // helper must be spread AFTER the static env keys, so a root daemon's
+  // injected '1' overrides an inherited IS_SANDBOX=0 instead of losing to it.
+  test('source: claudeSandboxEnv spread after CLAUDE_CONFIG_DIR (override precedence)', () => {
+    const src = readFileSync(
+      join(import.meta.dir, '../src/services/runtime/claudeCode/spawn.ts'),
+      'utf-8',
+    )
+    const anchor = src.indexOf('CLAUDE_CONFIG_DIR: configDir')
+    const spread = src.indexOf('...claudeSandboxEnv(process.getuid?.())')
+    expect(anchor).toBeGreaterThan(-1)
+    expect(spread).toBeGreaterThan(anchor)
   })
 })
