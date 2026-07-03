@@ -4,8 +4,10 @@
 // in the 待指派 ('pending') phase of a task, grouped by its originating clarify round, and
 // seals them all with ONE submit button. Per user (2026-06-30): "页面和反问界面功能一致、只是只有
 // 一个提交按钮" — so it reuses the /clarify primitives wholesale (QuestionForm /
-// ClarifyQuestionHandler / the .segmented scope control / Card / Dialog / EmptyState
-// / ErrorBanner / LoadingState) and only collapses the per-round submit into one.
+// ClarifyQuestionHandler / Card / Dialog / EmptyState / ErrorBanner / LoadingState) and
+// only collapses the per-round submit into one. RFC-137 (用户 2026-07-03): the pane answers
+// self and cross rounds UNIFORMLY — the per-question designer↔questioner scope picker lives
+// only on the /clarify detail page; the pane never sends questionScopes.
 //
 // Channel = control (defer=true): each round's filled subset is POSTed to
 // `/api/clarify/:nodeRunId/answers` with `defer:true` + a `questionIds` cap, which
@@ -21,12 +23,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type {
   ClarifyAnswer,
-  ClarifyQuestionScope,
   ClarifyRound,
   SubmitClarifyAnswers,
   WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { Card } from '@/components/Card'
 import { Dialog } from '@/components/Dialog'
@@ -138,7 +138,6 @@ export function flattenCentralizedNavKeys(
 interface RoundSubmission {
   roundId: string
   iteration: number
-  kind: ClarifyRound['kind']
   /** Filled answers only (a question with no pick / text is left for later). */
   answers: ClarifyAnswer[]
   /** questionIds of `answers` — the subset cap sent to the backend. */
@@ -147,8 +146,6 @@ interface RoundSubmission {
    *  pane prefilled from a committed answer (the user SAW and edited it). The server only
    *  overwrites a sealed question when it is declared here. */
   resubmitQuestionIds: string[]
-  /** cross only — per-question scope for the filled questions. */
-  questionScopes?: Record<string, ClarifyQuestionScope>
 }
 
 export interface CentralizedAnswerDialogProps {
@@ -259,9 +256,8 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
           if (sub.resubmitQuestionIds.length > 0) {
             body.resubmitQuestionIds = sub.resubmitQuestionIds
           }
-          if (sub.kind === 'cross' && sub.questionScopes !== undefined) {
-            body.questionScopes = sub.questionScopes
-          }
+          // RFC-137: no questionScopes — the server resolves every fresh cross question to
+          // the default 'designer' scope (handler entry targets the designer node).
           await api.post(`/api/clarify/${originNodeRunId}/answers`, body)
         }),
       )
@@ -372,10 +368,11 @@ interface RoundAnswerBlockProps {
 
 /** One clarify round's answer block. Owns its local answer state + draft autosave (the
  *  SAME server draft endpoint the /clarify page uses, so drafts are shared across both
- *  entry points) and reports its filled subset up. RFC-128 P5-BC: a CROSS round renders a
- *  per-question scope picker (designer ↔ questioner) — both routes now defer-dispatch via the
- *  board (designer via §18, questioner via the P5-BC self/questioner park). A SELF round has
- *  no scope (the asking agent is its own consumer). */
+ *  entry points) and reports its filled subset up. RFC-137: a CROSS round answers uniformly
+ *  with a SELF round — no per-question scope UI here. Scopes are never sent; the server
+ *  resolves every fresh cross question to the default 'designer' scope, so the handler
+ *  entry's target defaults to the designer node (route-level scope control lives only on
+ *  the /clarify detail page). RFC-136 re-answers keep their committed scope server-side (D6). */
 function RoundAnswerBlock({
   taskId,
   originNodeRunId,
@@ -419,10 +416,6 @@ function RoundAnswerBlock({
   }, [originNodeRunId, visibleQuestions, reportRoundOrder])
 
   const [answers, setAnswers] = useState<Record<string, ClarifyAnswer>>({})
-  // RFC-128 P5-BC: per-question scope for a CROSS round (designer ↔ questioner). Defaults to
-  // designer (CLARIFY_QUESTION_SCOPE_DEFAULT) — the user toggles to route a question to the
-  // questioner. Empty / unused for a self round.
-  const [scopes, setScopes] = useState<Record<string, ClarifyQuestionScope>>({})
   const [seeded, setSeeded] = useState(false)
   // Mirrors the last server-acknowledged draft per question, so the autosave only PUTs
   // the questions that actually changed (RFC-099 per-question last-write-wins).
@@ -569,37 +562,14 @@ function RoundAnswerBlock({
     const sub: RoundSubmission = {
       roundId: round.id,
       iteration: round.iteration,
-      kind: round.kind,
       answers: filled,
       questionIds,
       // RFC-136 — declare which of the filled ids are re-answers (prefilled from the
       // committed answer); the server only overwrites declared ids.
       resubmitQuestionIds: questionIds.filter((qid) => resubmitSet.has(qid)),
     }
-    // RFC-128 P5-BC: send the per-question scope the user chose (default designer). A
-    // designer-scope question → §18 designer dispatch; a questioner-scope question → P5-BC
-    // self/questioner park + dispatch. Self rounds carry no scope. RFC-136 (D6): a RE-answer
-    // keeps its committed scope — none is sent for resubmit ids (the server ignores them as a
-    // second layer of defense).
-    if (round.kind === 'cross') {
-      const qs: Record<string, ClarifyQuestionScope> = {}
-      for (const qid of questionIds) {
-        if (resubmitSet.has(qid)) continue
-        qs[qid] = scopes[qid] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
-      }
-      if (Object.keys(qs).length > 0) sub.questionScopes = qs
-    }
     onSubmissionChange(originNodeRunId, sub)
-  }, [
-    answers,
-    scopes,
-    seeded,
-    round,
-    visibleQuestions,
-    resubmitSet,
-    originNodeRunId,
-    onSubmissionChange,
-  ])
+  }, [answers, seeded, round, visibleQuestions, resubmitSet, originNodeRunId, onSubmissionChange])
 
   // Drop this round's contribution when it unmounts (left `groups`).
   useEffect(
@@ -649,48 +619,9 @@ function RoundAnswerBlock({
                   {t('taskQuestions.answerPaneResubmitHint')}
                 </p>
               )}
-              {/* RFC-128 P5-BC: per-question scope picker for a CROSS round (designer ↔
-                  questioner). Mirrors the /clarify .segmented control; reuses its i18n. A self
-                  round renders none (the asking agent is its own consumer). RFC-136 (D6): a
-                  RE-answer keeps its committed scope — read-only text instead of the picker
-                  (a scope flip would grow/drop reconcile entries on a mere answer edit). */}
-              {isCross && isResubmit && (
-                <p className="muted" data-testid={`centralized-scope-readonly-${q.id}`}>
-                  {t('crossClarify.questionScope.label')}:{' '}
-                  {(round.questionScopes?.[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT) === 'designer'
-                    ? t('crossClarify.questionScope.designer')
-                    : t('crossClarify.questionScope.questioner')}
-                </p>
-              )}
-              {isCross && !isResubmit && (
-                <div
-                  className="segmented"
-                  role="radiogroup"
-                  aria-label={t('crossClarify.questionScope.label')}
-                  data-testid={`centralized-scope-${q.id}`}
-                >
-                  {(['designer', 'questioner'] as const).map((mode) => {
-                    const active = (scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT) === mode
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        className={
-                          'segmented__option' + (active ? ' segmented__option--active' : '')
-                        }
-                        disabled={disabled}
-                        onClick={() => setScopes((prev) => ({ ...prev, [q.id]: mode }))}
-                      >
-                        {mode === 'designer'
-                          ? t('crossClarify.questionScope.designer')
-                          : t('crossClarify.questionScope.questioner')}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+              {/* RFC-137: no per-question scope UI — self and cross questions answer
+                  identically here. Scope control (designer ↔ questioner) lives only on the
+                  /clarify detail page; unsent scopes resolve to the 'designer' default. */}
               <QuestionForm
                 ref={(h) => registerQuestionRef(`${originNodeRunId}:${q.id}`, h)}
                 question={q}

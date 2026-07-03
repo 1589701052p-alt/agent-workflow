@@ -8,11 +8,15 @@
 //   2. isAnswerFilled oracle.
 //   3. The dialog flattens the task's answerable questions (grouped by round) into
 //      QuestionForm blocks; the SINGLE submit button seals each round's filled subset via
-//      POST /api/clarify/:id/answers with defer:true + questionIds cap + designer scope.
+//      POST /api/clarify/:id/answers with defer:true + questionIds cap.
 //   4. Submit is disabled until ≥1 answer is filled.
 //   5. No answerable questions → empty state.
-//   6. Designer mainline — NO scope picker is rendered (Codex P1-2); cross questions always
-//      seal to the designer scope. Self-clarify rounds don't enter the pane.
+//   6. RFC-137 (用户 2026-07-03) — the pane answers self and cross rounds UNIFORMLY: NO
+//      per-question scope UI is rendered for ANY round (fresh or re-answer) and submit
+//      bodies never carry questionScopes; the server resolves unsent scopes to the
+//      'designer' default, so a cross answer's handler entry targets the designer node.
+//      Scope control lives only on the /clarify detail page (cross-clarify-scope-control
+//      tests). These locks guard against the picker being reintroduced here.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -320,9 +324,10 @@ describe('CentralizedAnswerDialog', () => {
     await waitFor(() => screen.getByTestId('centralized-round-nr_x'))
     // RFC-128 P5-BC: the self-clarify round NOW renders a block (it parks + board-dispatches).
     await waitFor(() => screen.getByTestId('centralized-round-nr_self'))
-    // A self round renders NO scope picker (the asking agent is its own consumer).
+    // RFC-137: NO round renders scope UI — self and cross answer identically here.
     await waitFor(() => screen.getByTestId('clarify-question-qs'))
     expect(screen.queryByTestId('centralized-scope-qs')).toBeNull()
+    expect(screen.queryByTestId('centralized-scope-q1')).toBeNull()
   })
 
   // 2026-07-02 (用户拍板) — 分组头显示提问节点的节点名（snapshot title → agentName → id 回退，
@@ -359,8 +364,9 @@ describe('CentralizedAnswerDialog', () => {
 })
 
 // RFC-136（用户 2026-07-02 拍板）— 已答（sealed）待指派题纳入面板为重答：预填**已提交答案**
-// （忽略遗留草稿，D5）、显示「重新提交将覆盖」提示、cross 重答题 scope 只读（D6）、提交体
-// questionIds 含重答题而 questionScopes 只含 fresh 题。
+// （忽略遗留草稿，D5）、显示「重新提交将覆盖」提示、提交体 questionIds 含重答题。
+// RFC-137：面板不再渲染任何 scope UI（重答只读行也删）、提交体恒不含 questionScopes——
+// D6「reseal 保持原 scope」由服务端锁定（question_scopes_json 原值），与前端无关。
 describe('CentralizedAnswerDialog — RFC-136 重答', () => {
   test('reseal 题预填已提交答案（忽略 server draft）+ 显示重答提示', async () => {
     renderDialog(
@@ -392,7 +398,7 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
     expect((radios[0] as HTMLInputElement).checked).toBe(false)
   })
 
-  test('cross 重答题 scope 只读（无 segmented 切换）；fresh 题仍有切换', async () => {
+  test('RFC-137：cross 重答题与 fresh 题均无任何 scope UI（含已提交 questioner scope 的轮）', async () => {
     renderDialog(
       [
         entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a', sealed: true }),
@@ -410,20 +416,23 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
               customText: '',
             },
           ],
+          // 即便轮上已有持久化 scope（历史 questioner 题），面板也不再展示它——D6 的
+          // 锁定语义完全在服务端；详情页 sealed 只读 chips 是它唯一的展示面。
           questionScopes: { q1: 'questioner' },
         }),
       ],
     )
     await waitFor(() => screen.getByTestId('clarify-question-q1'))
-    // 重答题：只读 scope 文本在场、segmented 不渲染。
-    expect(screen.getByTestId('centralized-scope-readonly-q1')).toBeTruthy()
+    // 重答题：无只读 scope 行、无 segmented；重答提示保留。
+    expect(screen.queryByTestId('centralized-scope-readonly-q1')).toBeNull()
     expect(screen.queryByTestId('centralized-scope-q1')).toBeNull()
-    // fresh 题：segmented 正常渲染。
-    expect(screen.getByTestId('centralized-scope-q2')).toBeTruthy()
+    expect(screen.getByTestId('centralized-resubmit-hint-q1')).toBeTruthy()
+    // fresh 题：同样无任何 scope UI。
+    expect(screen.queryByTestId('centralized-scope-q2')).toBeNull()
     expect(screen.queryByTestId('centralized-scope-readonly-q2')).toBeNull()
   })
 
-  test('提交体：fresh+reseal 混合 → questionIds 含两者、questionScopes 只含 fresh', async () => {
+  test('提交体：fresh+reseal 混合 → questionIds 含两者、恒不含 questionScopes（RFC-137）', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
@@ -466,8 +475,9 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
     expect([...body.questionIds].sort()).toEqual(['q1', 'q2'])
     // D7（Codex 实现门 P2）：重答按题显式声明——服务端只对声明的题放行覆盖。
     expect(body.resubmitQuestionIds).toEqual(['q1'])
-    // D6：重答题不发 scope；fresh 题发默认 designer。
-    expect(body.questionScopes).toEqual({ q2: 'designer' })
+    // RFC-137：面板恒不发 questionScopes（键都不出现）——fresh 题由服务端解析为默认
+    // designer（处理节点默认=设计节点），reseal 题服务端锁定原 scope（D6）。
+    expect('questionScopes' in body).toBe(false)
     expect(body.answers.find((a) => a.questionId === 'q1')?.selectedOptionIndices).toEqual([1])
   })
 
@@ -495,7 +505,7 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
 })
 
 describe('CentralizedAnswerDialog — submit 流程', () => {
-  test('flattens 2 rounds, single submit seals each round subset (defer + questionIds + designer scope)', async () => {
+  test('flattens 2 rounds, single submit seals each round subset (defer + questionIds, no questionScopes)', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
@@ -546,19 +556,22 @@ describe('CentralizedAnswerDialog — submit 流程', () => {
       defer: true,
       directive: 'continue',
       questionIds: ['q1'],
-      questionScopes: { q1: 'designer' },
     })
     expect(calls['/api/clarify/nr_b/answers']).toMatchObject({
       defer: true,
       directive: 'continue',
       questionIds: ['q2'],
-      questionScopes: { q2: 'designer' },
     })
+    // RFC-137: neither cross-round body carries questionScopes (server defaults to designer).
+    expect('questionScopes' in (calls['/api/clarify/nr_a/answers'] as object)).toBe(false)
+    expect('questionScopes' in (calls['/api/clarify/nr_b/answers'] as object)).toBe(false)
     // Only filled answers are submitted (subset cap matches answers).
     expect((calls['/api/clarify/nr_a/answers'] as { answers: unknown[] }).answers).toHaveLength(1)
   })
 
-  test('cross round renders the scope picker; default seals designer, toggling routes to questioner (RFC-128 P5-BC)', async () => {
+  // RFC-137 回归锁：把 RFC-128 P5-BC 的选择器重新引入面板（或恢复发送 questionScopes）
+  // 会让本 case 变红。scope 交互的正向覆盖在详情页测试（cross-clarify-scope-control）。
+  test('RFC-137: cross round renders NO scope picker; submit body carries NO questionScopes', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
@@ -566,21 +579,19 @@ describe('CentralizedAnswerDialog — submit 流程', () => {
       [round({ intermediaryNodeRunId: 'nr_x' })],
     )
     await waitFor(() => screen.getByTestId('clarify-question-q1'))
-    // RFC-128 P5-BC: a cross round NOW offers a per-question scope picker (designer ↔ questioner).
-    const scope = screen.getByTestId('centralized-scope-q1')
-    expect(scope).toBeTruthy()
-    // Toggle to the questioner scope (the 2nd radio), then fill the answer.
-    fireEvent.click(within(scope).getAllByRole('radio')[1]!)
+    // No per-question scope UI for a cross fresh question.
+    expect(screen.queryByTestId('centralized-scope-q1')).toBeNull()
+    expect(screen.queryByTestId('centralized-scope-readonly-q1')).toBeNull()
     fireEvent.click(within(screen.getByTestId('clarify-question-q1')).getAllByRole('radio')[0]!)
     const submit = screen.getByTestId('centralized-answer-submit') as HTMLButtonElement
     await waitFor(() => expect(submit.disabled).toBe(false))
     fireEvent.click(submit)
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
-    expect(post.mock.calls[0]![1]).toMatchObject({
-      defer: true,
-      questionIds: ['q1'],
-      questionScopes: { q1: 'questioner' },
-    })
+    const body = post.mock.calls[0]![1] as Record<string, unknown>
+    expect(body).toMatchObject({ defer: true, questionIds: ['q1'] })
+    // Unsent scopes resolve server-side to the 'designer' default → the handler entry
+    // targets the designer node (处理节点默认=设计节点).
+    expect('questionScopes' in body).toBe(false)
   })
 })
 
