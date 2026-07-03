@@ -1112,14 +1112,22 @@ function collapseDesignerEntryToQuestioner(
 ): ReassignTaskQuestionAction {
   let collapsed = false
   dbTxSync(db, (tx) => {
-    const stillOpen = tx
-      .select({ id: taskQuestions.id })
+    // Re-read the entry INSIDE the tx (Codex impl-gate round-2 P2): a sealRoundQuestions commit
+    // between the caller's loadEntry and this tx stamps the questioner row's sealed_at — deciding
+    // the survivor/echo seal from the STALE pre-tx snapshot would delete that freshly-sealed row
+    // and leave the new rows unsealed forever (no later seal call comes; selectAgentQueue filters
+    // unsealed rows → the echo receipt would never inject). The tx read sees every committed seal.
+    const curEntry = tx
+      .select({ id: taskQuestions.id, sealedAt: taskQuestions.sealedAt })
       .from(taskQuestions)
       .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
-      .all()
-    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
+      .all()[0]
+    if (curEntry === undefined) return // dispatched concurrently (or already) → no write
     const cur = tx
-      .select({ questionScopesJson: clarifyRounds.questionScopesJson })
+      .select({
+        questionScopesJson: clarifyRounds.questionScopesJson,
+        status: clarifyRounds.status,
+      })
       .from(clarifyRounds)
       .where(eq(clarifyRounds.id, round.id))
       .all()[0]
@@ -1238,12 +1246,17 @@ function collapseQuestionerEntryToDesigner(
   let collapsed = false
   let dispatchedElsewhere: string | null = null
   dbTxSync(db, (tx) => {
-    const stillOpen = tx
-      .select({ id: taskQuestions.id })
+    // Re-read the entry INSIDE the tx (Codex impl-gate round-2 P2): a sealRoundQuestions commit
+    // between the caller's loadEntry and this tx stamps the questioner row's sealed_at — deciding
+    // the survivor/echo seal from the STALE pre-tx snapshot would delete that freshly-sealed row
+    // and leave the new rows unsealed forever (no later seal call comes; selectAgentQueue filters
+    // unsealed rows → the echo receipt would never inject). The tx read sees every committed seal.
+    const curEntry = tx
+      .select({ id: taskQuestions.id, sealedAt: taskQuestions.sealedAt })
       .from(taskQuestions)
       .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
-      .all()
-    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
+      .all()[0]
+    if (curEntry === undefined) return // dispatched concurrently (or already) → no write
     // Survivor three-branch: read the question's existing designer row FIRST — a dispatched
     // survivor pointing away from the designer aborts the whole collapse (no partial write).
     const existingDesigner = tx
@@ -1267,7 +1280,10 @@ function collapseQuestionerEntryToDesigner(
       // dispatched AND already on the designer → collapse proceeds, survivor untouched (D6 mirror).
     }
     const cur = tx
-      .select({ questionScopesJson: clarifyRounds.questionScopesJson })
+      .select({
+        questionScopesJson: clarifyRounds.questionScopesJson,
+        status: clarifyRounds.status,
+      })
       .from(clarifyRounds)
       .where(eq(clarifyRounds.id, round.id))
       .all()[0]
@@ -1303,7 +1319,8 @@ function collapseQuestionerEntryToDesigner(
     // NULL — the real seal later stamps ALL of the question's rows: sealRoundQuestions step (4)
     // keys (origin, questionId) + IS NULL with NO role filter, so the survivor + echo get their
     // stamps then).
-    const survivorSealedAt = round.status === 'answered' ? (entry.sealedAt ?? now) : entry.sealedAt
+    const survivorSealedAt =
+      cur?.status === 'answered' ? (curEntry.sealedAt ?? now) : curEntry.sealedAt
     if (existingDesigner === undefined) {
       // insert-if-missing (scope was 'questioner' → reconcile never built a designer row);
       // staged_at inherited so the user's staging intent survives the flip.

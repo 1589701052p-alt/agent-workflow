@@ -284,6 +284,13 @@ export async function dispatchDeferredTaskQuestions(
   db: DbClient,
   taskId: string,
   actor: DispatchTaskQuestionsActor,
+  opts?: {
+    /** Codex impl-gate round-2 P2 — when the dispatch fails with a ConflictError whose code
+     *  this predicate accepts, clear the markers of THIS attempt's selected ids INSIDE the same
+     *  lock-B holding (then rethrow). Clearing after the lock is released races a queued user
+     *  dispatch that stamps FRESH markers — a task-wide post-hoc clear would wipe those too. */
+    clearMarkersOn?: (conflictCode: string) => boolean
+  },
 ): Promise<DispatchTaskQuestionsResult> {
   return await getTaskQuestionWriteSem(taskId).run(async () => {
     const deferred = await db
@@ -298,12 +305,22 @@ export async function dispatchDeferredTaskQuestions(
         ),
       )
     if (deferred.length === 0) return EMPTY_RESULT
-    return dispatchTaskQuestionsLocked(
-      db,
-      taskId,
-      deferred.map((d) => d.id),
-      actor,
-    )
+    const ids = deferred.map((d) => d.id)
+    try {
+      return await dispatchTaskQuestionsLocked(db, taskId, ids, actor)
+    } catch (err) {
+      if (
+        err instanceof ConflictError &&
+        opts?.clearMarkersOn !== undefined &&
+        opts.clearMarkersOn(err.code)
+      ) {
+        await db
+          .update(taskQuestions)
+          .set({ autoDispatchDeferredAt: null, updatedAt: Date.now() })
+          .where(and(inArray(taskQuestions.id, ids), isNull(taskQuestions.dispatchedAt)))
+      }
+      throw err
+    }
   })
 }
 

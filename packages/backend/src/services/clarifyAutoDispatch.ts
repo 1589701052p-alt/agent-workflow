@@ -722,7 +722,11 @@ export async function autoDispatchDeferredQuestions(db: DbClient, taskId: string
       // Selection happens INSIDE the dispatch's lock-B holding (Codex impl-gate P1 — a
       // pre-selected id list would race a concurrent unstage: dispatch filters on neither the
       // marker nor staged, so a withdrawn entry's stale id would still dispatch).
-      const res = await dispatchDeferredTaskQuestions(db, taskId, SYSTEM_DISPATCH_ACTOR)
+      const res = await dispatchDeferredTaskQuestions(db, taskId, SYSTEM_DISPATCH_ACTOR, {
+        // Non-recoverable → clear THIS attempt's markers inside the dispatch's own lock holding
+        // (post-hoc task-wide clearing would race a queued user dispatch's fresh markers).
+        clearMarkersOn: (code) => !DESIGNER_DEFERRABLE_CONFLICTS.has(code),
+      })
       if (res.dispatchedEntryIds.length > 0 || res.reruns.length > 0) {
         log.info('auto-redispatched deferred task questions', {
           taskId,
@@ -748,16 +752,7 @@ export async function autoDispatchDeferredQuestions(db: DbClient, taskId: string
         return
       }
       if (err instanceof ConflictError) {
-        await db
-          .update(taskQuestions)
-          .set({ autoDispatchDeferredAt: null, updatedAt: Date.now() })
-          .where(
-            and(
-              eq(taskQuestions.taskId, taskId),
-              isNotNull(taskQuestions.autoDispatchDeferredAt),
-              isNull(taskQuestions.dispatchedAt),
-            ),
-          )
+        // Markers already cleared inside the dispatch's lock holding (clearMarkersOn above).
         log.warn(
           'deferred auto-redispatch hit a NON-recoverable conflict — markers cleared, back to the manual board track',
           { taskId, reason: err.code },
