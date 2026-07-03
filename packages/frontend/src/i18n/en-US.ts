@@ -2692,6 +2692,9 @@ export const enUS: Resources = {
     reassign: 'Reassign handler',
     collapsedToQuestioner:
       'This question is now handled by the asking node (questioner); no separate designer pass will run.',
+    collapsedToDesigner:
+      'This question is now handled by the designer node only; the asking node receives an echo receipt instead of a separate rerun.',
+    autoDispatchQueued: 'Auto-dispatch queued',
     confirm: 'Confirm',
     stage: 'Stage',
     unstage: 'Unstage',

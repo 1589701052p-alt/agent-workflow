@@ -41,6 +41,7 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   phase: 'pending',
   confirmation: 'open',
   staged: false,
+  autoDispatchDeferred: false,
   sealed: false,
   answerSummary: null,
   ...over,

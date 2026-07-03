@@ -40,6 +40,7 @@ const entry = (over: Partial<TaskQuestionEntry>): TaskQuestionEntry => ({
   phase: 'pending',
   confirmation: 'open',
   staged: false,
+  autoDispatchDeferred: false,
   sealed: false,
   answerSummary: null,
   ...over,
@@ -215,6 +216,59 @@ describe('TaskQuestionList board', () => {
     )
     await waitFor(() => expect(screen.getByTestId('tq-collapse-notice')).toBeTruthy())
     void get
+  })
+
+  // RFC-140 W1 — 对称塌缩：questioner 卡改派到该轮设计节点 ⇒ 后端 collapsed-to-designer
+  // （questioner 卡删除、echo 回执补给提问节点）。方向化知会文案区别于 RFC-138。
+  test('RFC-140: reassign the questioner card to the designer → directional collapse notice', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ ok: true, action: 'collapsed-to-designer' } as never)
+    const get = vi.spyOn(api, 'get').mockResolvedValue([] as never)
+    await wrap(
+      [
+        entry({
+          id: 'e1',
+          phase: 'pending',
+          sourceKind: 'cross',
+          roleKind: 'questioner',
+          sourceNodeId: 'asker',
+          defaultTargetNodeId: 'asker',
+          effectiveTargetNodeId: 'asker',
+        }),
+      ],
+      [
+        { id: 'asker', label: 'asker' },
+        { id: 'designer', label: 'designer' },
+      ],
+    )
+    const card = screen.getByTestId('tq-card-e1')
+    fireEvent.click(within(card).getAllByRole('combobox')[0]!)
+    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('designer'),
+    )
+    expect(opt).toBeDefined()
+    fireEvent.mouseDown(opt!)
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/reassign', {
+        targetNodeId: 'designer',
+      }),
+    )
+    const notice = await waitFor(() => screen.getByTestId('tq-collapse-notice'))
+    // Directional copy (test env renders en-US): the RFC-140 designer-collapse text, NOT the
+    // RFC-138 questioner-collapse one.
+    expect(notice.textContent).toContain('designer node only')
+    void get
+  })
+
+  // RFC-140 W2 — auto-split defer 徽标：已点过批量下发、等续跑结束后自动补发的 staged 卡。
+  test('RFC-140: an auto-dispatch-deferred staged card shows the queued badge', async () => {
+    await wrap([
+      entry({ id: 'e1', phase: 'staged', staged: true, autoDispatchDeferred: true, sealed: true }),
+      entry({ id: 'e2', phase: 'staged', staged: true, sealed: true }),
+    ])
+    expect(screen.getByTestId('tq-auto-dispatch-chip-e1')).toBeTruthy()
+    expect(screen.queryByTestId('tq-auto-dispatch-chip-e2')).toBeNull()
   })
 
   test('awaiting_confirm card shows a confirm control; designer card shows a reassign select', async () => {

@@ -1772,6 +1772,13 @@ export const taskQuestions = sqliteTable(
     // split in deriveQuestionPhase; task gate parks while any entry is pending/staged.
     stagedAt: integer('staged_at'),
     stagedBy: text('staged_by'),
+    // RFC-140 W2 (migration 0074) — auto-serial redispatch marker. Set (in the dispatch stamp
+    // tx) on entries the RFC-128 auto-split DEFERRED out of a user-clicked batch dispatch: the
+    // user HAS expressed dispatch intent; only cause serialization queued it. The scheduler tick
+    // auto-dispatches rows with (marker set + dispatched_at NULL + staged_at NOT NULL). Cleared
+    // by BOTH stage directions (stage/unstage — any staging change kills the intent; a re-stage
+    // must re-click batch dispatch). Kept after dispatch as audit (dispatched_at makes it inert).
+    autoDispatchDeferredAt: integer('auto_dispatch_deferred_at'),
     // RFC-128 §7 (落库方案 C; migration 0068) — per-question seal marker. The clarify
     // round's `answers_json` stays the answer-content SoT (per-question merge-write);
     // THIS column records that one (question × role) entry's answer is sealed/locked

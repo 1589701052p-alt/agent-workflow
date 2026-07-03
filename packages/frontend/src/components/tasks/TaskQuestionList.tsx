@@ -50,6 +50,9 @@ export interface TaskQuestionEntry {
   phase: TaskQuestionPhase
   confirmation: 'open' | 'confirmed'
   staged: boolean
+  /** RFC-140 W2 — auto-split-deferred out of a clicked batch dispatch; the scheduler will
+   *  auto-redispatch it once its home's in-flight rerun finishes (staged badge). */
+  autoDispatchDeferred: boolean
   /** RFC-128 §10 — this (question × role) entry's answer is sealed/locked (per-question
    *  `sealed_at != null` OR the whole round answered). Drives the centralized-answer pane
    *  (which UNSEALED questions still need answering) and the /clarify grey-out. MUST be
@@ -137,17 +140,24 @@ export function TaskQuestionList({
       api.post(`/api/tasks/${taskId}/questions/${v.id}/stage`, { staged: v.staged }),
     onSuccess: invalidate,
   })
-  // RFC-138: collapse（改派给提问节点 ⇒ 该题退化为反问者 scope、designer 卡随之消失）
-  // 留一行知会文案——卡片凭空消失会被误读成丢数据。常规 override 改派则清掉。
-  const [collapseNotice, setCollapseNotice] = useState(false)
+  // RFC-138 + RFC-140: collapse（改派给提问节点 ⇒ 退化为反问者 scope、designer 卡消失；
+  // 改派给设计节点 ⇒ 退化为设计者 scope、questioner 卡消失 + echo 回执补给提问节点）
+  // 留一行方向化知会文案——卡片凭空消失会被误读成丢数据。常规 override 改派则清掉。
+  const [collapseNotice, setCollapseNotice] = useState<'questioner' | 'designer' | null>(null)
   const reassignM = useMutation({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
-      api.post<{ ok: boolean; action?: 'override' | 'collapsed-to-questioner' }>(
-        `/api/tasks/${taskId}/questions/${v.id}/reassign`,
-        { targetNodeId: v.targetNodeId },
-      ),
+      api.post<{
+        ok: boolean
+        action?: 'override' | 'collapsed-to-questioner' | 'collapsed-to-designer'
+      }>(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
     onSuccess: (data) => {
-      setCollapseNotice(data?.action === 'collapsed-to-questioner')
+      setCollapseNotice(
+        data?.action === 'collapsed-to-questioner'
+          ? 'questioner'
+          : data?.action === 'collapsed-to-designer'
+            ? 'designer'
+            : null,
+      )
       invalidate()
     },
   })
@@ -255,9 +265,13 @@ export function TaskQuestionList({
             <div className="task-questions__actions">{addBtn}</div>
           </div>
         )}
-        {collapseNotice && (
+        {collapseNotice !== null && (
           <p className="muted" data-testid="tq-collapse-notice">
-            {t('taskQuestions.collapsedToQuestioner')}
+            {t(
+              collapseNotice === 'questioner'
+                ? 'taskQuestions.collapsedToQuestioner'
+                : 'taskQuestions.collapsedToDesigner',
+            )}
           </p>
         )}
         <EmptyState title={t('taskQuestions.empty')} />
@@ -364,9 +378,13 @@ export function TaskQuestionList({
         </div>
       </div>
       {dispatchError !== null && <ErrorBanner error={dispatchError} />}
-      {collapseNotice && (
+      {collapseNotice !== null && (
         <p className="muted" data-testid="tq-collapse-notice">
-          {t('taskQuestions.collapsedToQuestioner')}
+          {t(
+            collapseNotice === 'questioner'
+              ? 'taskQuestions.collapsedToQuestioner'
+              : 'taskQuestions.collapsedToDesigner',
+          )}
         </p>
       )}
       <div className="task-questions" data-testid="task-questions-board">
@@ -447,6 +465,13 @@ export function TaskQuestionList({
                       {e.roleKind === 'echo' && (
                         <StatusChip kind="neutral" data-testid={`tq-echo-chip-${e.id}`}>
                           {t('taskQuestions.roleEcho')}
+                        </StatusChip>
+                      )}
+                      {/* RFC-140 W2 — auto-split defer 徽标：已点过批量下发、等 home 当前续跑
+                          结束后由系统自动补发（无需人工回来重点）。 */}
+                      {e.autoDispatchDeferred && (
+                        <StatusChip kind="info" data-testid={`tq-auto-dispatch-chip-${e.id}`}>
+                          {t('taskQuestions.autoDispatchQueued')}
                         </StatusChip>
                       )}
                     </div>

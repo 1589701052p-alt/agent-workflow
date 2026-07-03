@@ -91,8 +91,11 @@ const RECOVERABLE_DISPATCH_CONFLICTS: ReadonlySet<string> = new Set([
  *  as a PARK (the designer entries stay sealed-undispatched until a later sibling answer / board
  *  dispatch mints the rerun). Adds 'task-question-designer-not-ready' (multi-source readiness — sibling
  *  cross-clarify rounds still awaiting an answer) to the shared recoverable set; everything else
- *  (multi-target / unsafe frontier / terminal task) is RETHROWN. */
-const DESIGNER_DEFERRABLE_CONFLICTS: ReadonlySet<string> = new Set([
+ *  (multi-target / unsafe frontier / terminal task) is RETHROWN.
+ *  RFC-140 W2: exported — the scheduler-tick auto-redispatch of auto-split-deferred entries uses the
+ *  SAME retryable set (one definition, no fork): whitelisted → keep the marker, retry next tick;
+ *  anything else → clear the marker + WARN (back to the manual board track, never silent-spin). */
+export const DESIGNER_DEFERRABLE_CONFLICTS: ReadonlySet<string> = new Set([
   ...RECOVERABLE_DISPATCH_CONFLICTS,
   'task-question-designer-not-ready', // sibling cross-clarify round(s) still awaiting an answer
 ])
@@ -683,3 +686,78 @@ export async function autoDispatchClarifyRound(
     ...(dispatchDeferredReason !== undefined ? { dispatchDeferredReason } : {}),
   }
 }
+
+/** RFC-140 W2 — the scheduler-tick auto-redispatch of auto-split-DEFERRED task questions.
+ *
+ *  Selection: entries whose `auto_dispatch_deferred_at` is set (the user clicked batch dispatch;
+ *  only the RFC-128 §5.2.13 cause auto-split queued them) AND still undispatched AND still staged
+ *  (belt-and-braces: stage/unstage clears the marker, so an orphaned marker without staged_at is
+ *  audit residue that must never fire).
+ *
+ *  Execution: ONE full-set dispatchTaskQuestions call — NEVER split per home (Codex design-gate
+ *  round 3 P1: the upstream frontier is computed from the WHOLE affected set; per-home singleton
+ *  calls would mint a DAG-downstream home directly against stale inputs instead of leaving it to
+ *  the scheduler cascade). Nested defers (3 cause classes) keep their markers and converge over
+ *  subsequent ticks (≤2 redispatch rounds — CAUSE_PRIORITY is a total order).
+ *
+ *  Failure: DESIGNER_DEFERRABLE_CONFLICTS (the ONE shared retryable set — in-flight /
+ *  target-changed / designer-not-ready) → keep the markers, retry next tick (idempotent; ticks
+ *  fire on every node-run completion). Any other ConflictError is NON-recoverable (terminal task /
+ *  unparseable snapshot / unsafe frontier / multi-target / unsealed): clear ALL selected markers +
+ *  WARN — back to the manual board track (the board shows the same real error on the next manual
+ *  dispatch attempt). The full-set-vs-per-home coupling makes this a deliberate connect-and-clear:
+ *  "rather back to manual than a wrong frontier" (design §3.2). Non-Conflict errors rethrow.
+ *
+ *  Runs OUTSIDE lock B (dispatchTaskQuestions acquires it internally — non-reentrant). Callers:
+ *  the runTask tick top (scheduler.ts), pre-deriveFrontier, so a freshly-released home (its
+ *  in-flight rerun just completed) redispatches on the very tick that completion triggers. */
+export async function autoDispatchDeferredQuestions(db: DbClient, taskId: string): Promise<void> {
+  const deferred = await db
+    .select({ id: taskQuestions.id })
+    .from(taskQuestions)
+    .where(
+      and(
+        eq(taskQuestions.taskId, taskId),
+        isNotNull(taskQuestions.autoDispatchDeferredAt),
+        isNull(taskQuestions.dispatchedAt),
+        isNotNull(taskQuestions.stagedAt),
+      ),
+    )
+  if (deferred.length === 0) return
+  const ids = deferred.map((d) => d.id)
+  try {
+    const res = await dispatchTaskQuestions(db, taskId, ids, SYSTEM_DISPATCH_ACTOR)
+    log.info('auto-redispatched deferred task questions', {
+      taskId,
+      requestedCount: ids.length,
+      dispatchedEntryCount: res.dispatchedEntryIds.length,
+      stillDeferredCount: res.deferred.length,
+      rerunCount: res.reruns.length,
+    })
+  } catch (err) {
+    if (err instanceof ConflictError && DESIGNER_DEFERRABLE_CONFLICTS.has(err.code)) {
+      log.debug('deferred auto-redispatch retryable — waiting for the next tick', {
+        taskId,
+        reason: err.code,
+        entryCount: ids.length,
+      })
+      return
+    }
+    if (err instanceof ConflictError) {
+      await db
+        .update(taskQuestions)
+        .set({ autoDispatchDeferredAt: null, updatedAt: Date.now() })
+        .where(and(inArray(taskQuestions.id, ids), isNull(taskQuestions.dispatchedAt)))
+      log.warn(
+        'deferred auto-redispatch hit a NON-recoverable conflict — markers cleared, back to the manual board track',
+        { taskId, reason: err.code, entryCount: ids.length },
+      )
+      return
+    }
+    throw err
+  }
+}
+
+/** RFC-140 W2 — the audit actor for scheduler-initiated redispatch ('__system__' precedent:
+ *  daemon-token callers, task.ts). Audit-only; never enters an agent prompt (RFC-099). */
+const SYSTEM_DISPATCH_ACTOR = { userId: '__system__', role: 'admin' } as const

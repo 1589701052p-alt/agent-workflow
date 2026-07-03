@@ -262,7 +262,24 @@ export async function dispatchTaskQuestions(
   actor: DispatchTaskQuestionsActor,
 ): Promise<DispatchTaskQuestionsResult> {
   if (entryIds.length === 0) return EMPTY_RESULT
+  // RFC-140 W2 (Codex design-gate rounds 3-4): the QUESTION-WRITE lock (B) is acquired HERE —
+  // around the WHOLE read→plan→stamp pipeline — not just the stamp+mint tx. The auto-dispatch
+  // deferred marker is stamped from the pre-tx `deferredEntries` plan; with the lock only on the
+  // tx, a stage/unstage could interleave between the plan read and the stamp and resurrect a
+  // withdrawn dispatch intent (a millisecond-timestamp CAS was rejected as the guard — same-ms
+  // unstage+re-stage collides). Lock discipline: callers MUST NOT hold lock B when calling this
+  // (the semaphore is non-reentrant); stageTaskQuestion takes the same lock (RFC-140).
+  return await getTaskQuestionWriteSem(taskId).run(() =>
+    dispatchTaskQuestionsLocked(db, taskId, entryIds, actor),
+  )
+}
 
+async function dispatchTaskQuestionsLocked(
+  db: DbClient,
+  taskId: string,
+  entryIds: string[],
+  actor: DispatchTaskQuestionsActor,
+): Promise<DispatchTaskQuestionsResult> {
   // 0. RFC-132 PR-B (universal deferred model): every task dispatches through this ONE path now
   //    (the route routes ALL clarify answers to autoDispatchClarifyRound → dispatchTaskQuestions).
   //    The legacy immediate-mint path is route-unreachable, so there is no double-mint risk to gate
@@ -535,13 +552,14 @@ export async function dispatchTaskQuestions(
   // RFC-134: 本批物化的回执计划（tx 内赋值、commit 后 log 用）。
   let echoPlans: EchoPlan[] = []
   try {
-    // RFC-128 §5.2.14 final-gate (user-authorized): hold the per-task QUESTION-WRITE lock (B) across
-    // the stamp+mint tx so a clarify/cross-clarify SUBMIT's {precheck→rollback→tx} cannot interleave
-    // with this dispatch — closing the submit-side stale-precheck/rollback-clobber + double-mint
-    // window. B only (dispatch never touches the worktree / never runs an agent → no worktree write
-    // lock A needed). Lock order: dispatch takes B alone; the submit takes A ≻ B; no B→A here → no
-    // deadlock, and B is short (this tx is fast). See taskWriteLocks.ts.
-    await getTaskQuestionWriteSem(taskId).run(async () => {
+    // RFC-128 §5.2.14 final-gate (user-authorized): the per-task QUESTION-WRITE lock (B) protects
+    // this stamp+mint tx from a clarify/cross-clarify SUBMIT's {precheck→rollback→tx} interleave —
+    // closing the submit-side stale-precheck/rollback-clobber + double-mint window. B only
+    // (dispatch never touches the worktree / never runs an agent → no worktree write lock A
+    // needed). Lock order: dispatch takes B alone; the submit takes A ≻ B; no B→A here → no
+    // deadlock. RFC-140 W2: the lock is now acquired at the dispatchTaskQuestions ENTRY (whole
+    // read→plan→stamp pipeline) — see the wrapper above; this block runs lock-held.
+    {
       dbTxSync(db, (tx) => {
         // (Codex re-gate H2): the terminal pre-check (assertTaskAcceptsQuestions, above) is a
         // TOCTOU window — the scheduler can trySetTaskStatus(done/canceled) between it and this
@@ -661,6 +679,26 @@ export async function dispatchTaskQuestions(
             ),
           )
           .run()
+        // RFC-140 W2 — stamp the auto-serial redispatch marker on the auto-split-DEFERRED entries
+        // (same tx = atomic with the batch's dispatched_at stamp; lock B is held across the whole
+        // read→plan→stamp pipeline, so the plan cannot be stale vs a concurrent stage/unstage).
+        // The user expressed dispatch intent for the WHOLE batch; the scheduler tick auto-
+        // dispatches these once their home's in-flight rerun finishes. dispatched_at IS NULL
+        // keeps a concurrently-claimed row inert (its marker would be inert anyway).
+        if (deferredEntries.length > 0) {
+          tx.update(taskQuestions)
+            .set({ autoDispatchDeferredAt: now, updatedAt: now })
+            .where(
+              and(
+                inArray(
+                  taskQuestions.id,
+                  deferredEntries.map((d) => d.entryId),
+                ),
+                isNull(taskQuestions.dispatchedAt),
+              ),
+            )
+            .run()
+        }
         for (const p of mintPlans) {
           // RFC-098 WP-10 forbids direct node_runs inserts outside the mint factory. This
           // site is SAFE: (1) the row's fields come from buildMintNodeRunValues — the SAME
@@ -758,7 +796,7 @@ export async function dispatchTaskQuestions(
         }
         committed = true
       })
-    })
+    }
   } catch (e) {
     if (e instanceof ConcurrentClaim) return EMPTY_RESULT
     if (e instanceof NodeDispatchInFlight) {

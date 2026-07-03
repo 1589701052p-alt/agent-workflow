@@ -86,6 +86,7 @@ import {
 import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondition'
 import { loadUndispatchedParkTargets } from '@/services/taskQuestions'
 import { resolveBorrowForNode } from '@/services/taskQuestionDispatch'
+import { autoDispatchDeferredQuestions } from '@/services/clarifyAutoDispatch'
 import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
 import {
   frozenRuntimeOfSession,
@@ -817,6 +818,15 @@ async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeRe
       return { kind: 'canceled', detail: { summary: 'task canceled', message: 'signal aborted' } }
     }
 
+    // RFC-140 W2 — auto-redispatch the auto-split-DEFERRED task questions (marker set at batch
+    // dispatch + still undispatched + still staged) BEFORE deriving the frontier. The tick re-
+    // enters after EVERY node-run completion, so the home whose in-flight rerun just finished
+    // redispatches its deferred cause batch on this very tick (the in-flight gate inside
+    // dispatchTaskQuestions releases on done, incl. done-no-output — RFC-133/139). Retryable
+    // conflicts keep the marker for the next tick; non-recoverable ones clear it (WARN, back to
+    // the manual board). Runs OUTSIDE lock B (dispatch acquires it internally). A successful
+    // redispatch mints pending rows that the deriveFrontier below picks up in the same tick.
+    await autoDispatchDeferredQuestions(db, taskId)
     const rows = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
     const openClarify = await loadOpenClarify(db, taskId)
     // RFC-132 PR-B (universal deferred model): the park gate applies to ALL tasks now — a

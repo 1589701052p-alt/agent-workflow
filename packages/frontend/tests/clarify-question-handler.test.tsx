@@ -29,6 +29,7 @@ const designerEntry = (over: Partial<TaskQuestionEntry> = {}): TaskQuestionEntry
   phase: 'processing',
   confirmation: 'open',
   staged: false,
+  autoDispatchDeferred: false,
   sealed: false,
   answerSummary: null,
   ...over,

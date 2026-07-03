@@ -19,6 +19,7 @@
 
 import { and, eq, inArray, isNotNull, isNull, ne, notInArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
+import { getTaskQuestionWriteSem } from '@/services/taskWriteLocks'
 
 import type { DbClient } from '@/db/client'
 import {
@@ -75,6 +76,10 @@ export interface TaskQuestionDTO {
   confirmedBy: string | null
   /** staged into 待下发 but not yet dispatched. */
   staged: boolean
+  /** RFC-140 W2 — queued for the scheduler's auto-serial redispatch: the user's batch dispatch
+   *  auto-split-deferred this entry (marker set, still undispatched, still staged). The board
+   *  shows a "自动下发排队中" badge so the deferral is visible without a manual re-click. */
+  autoDispatchDeferred: boolean
   /** RFC-128 §10 — this (question × role) entry's answer is sealed/locked. Derived from
    *  `sealed_at != null` OR the whole round being answered (a pre-RFC-128 answered round
    *  needs no backfill). Manual questions are always sealed (the instruction IS the
@@ -433,6 +438,8 @@ export async function listTaskQuestions(
         confirmation: e.confirmation,
         confirmedBy: e.confirmedBy,
         staged: e.stagedAt !== null,
+        autoDispatchDeferred:
+          e.autoDispatchDeferredAt !== null && e.dispatchedAt === null && e.stagedAt !== null,
         // Manual questions are always sealed — the human-authored instruction IS the
         // answer/content; there is no separate human-answer step to seal.
         sealed: true,
@@ -476,6 +483,8 @@ export async function listTaskQuestions(
       confirmation: e.confirmation,
       confirmedBy: e.confirmedBy,
       staged: e.stagedAt !== null,
+      autoDispatchDeferred:
+        e.autoDispatchDeferredAt !== null && e.dispatchedAt === null && e.stagedAt !== null,
       sealed,
       reopenCount: e.reopenCount,
       answerSummary: summarizeAnswer(round, e.questionId, sealed),
@@ -959,8 +968,13 @@ export async function confirmTaskQuestion(
 
 /** RFC-138 — what a reassign actually did: 'override' = the regular re-target write;
  *  'collapsed-to-questioner' = a cross designer entry re-targeted to its round's ASKING
- *  node degenerated into scope='questioner' (entry deleted, scope flipped — see below). */
-export type ReassignTaskQuestionAction = 'override' | 'collapsed-to-questioner'
+ *  node degenerated into scope='questioner' (entry deleted, scope flipped — see below).
+ *  RFC-140 W1 — 'collapsed-to-designer' = the MIRROR: a cross questioner entry re-targeted
+ *  to its round's DESIGNER (targetConsumerNodeId) degenerated into scope='designer'. */
+export type ReassignTaskQuestionAction =
+  | 'override'
+  | 'collapsed-to-questioner'
+  | 'collapsed-to-designer'
 
 /** Re-target (改派) an entry's handler to a workflow agent node. RFC-127 T4: ANY role
  *  (self/questioner via 借壳顶替, designer/manual via the original swap) is reassignable;
@@ -1017,6 +1031,33 @@ export async function reassignTaskQuestion(
     )[0]
     if (round !== undefined && round.kind === 'cross' && targetNodeId === round.askingNodeId) {
       return collapseDesignerEntryToQuestioner(db, entry, round, actor)
+    }
+  }
+  // RFC-140 W1 — the MIRROR collapse: a cross questioner entry re-targeted to its round's
+  // DESIGNER (targetConsumerNodeId). Writing an override here would leave the question with TWO
+  // rows on ONE node carrying mutually-exclusive causes (questioner-rerun + designer-answer) —
+  // the auto-split then forces two serial reruns processing the SAME Q&A twice (QMGP5 2026-07-03
+  // 16:21, deferredEntryCount=5), and the questioner-rerun's inline-resume semantics don't even
+  // apply to the designer node. Semantically this reassign IS "flip the question's scope to
+  // 'designer' after the fact": the designer row (which already targets the designer) becomes the
+  // question's ONLY handler; the asking node keeps visibility via an echo receipt (RFC-134 — the
+  // asymmetry vs RFC-138: there the SURVIVOR itself points at the asking node, here it doesn't).
+  // round missing / kind≠cross / target≠designer ⇒ fall through to the regular override path.
+  if (entry.sourceKind === 'cross' && entry.roleKind === 'questioner') {
+    const round = (
+      await db
+        .select()
+        .from(clarifyRounds)
+        .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
+        .limit(1)
+    )[0]
+    if (
+      round !== undefined &&
+      round.kind === 'cross' &&
+      round.targetConsumerNodeId !== null &&
+      targetNodeId === round.targetConsumerNodeId
+    ) {
+      return collapseQuestionerEntryToDesigner(db, entry, round, actor)
     }
   }
   // RFC-120 §18 (model A, corrected): once dispatched (`dispatched_at` set), the
@@ -1167,6 +1208,190 @@ function collapseDesignerEntryToQuestioner(
   return 'collapsed-to-questioner'
 }
 
+/** RFC-140 W1 — the MIRROR collapse tx (see collapseDesignerEntryToQuestioner above for the
+ *  shared discipline: dispatched_at CAS, tx-inner scope re-read + merge, lockstep dual-write).
+ *  Differences forced by the direction:
+ *   - The SURVIVOR is the designer row (may not exist — a question whose scope was 'questioner'
+ *     never reconciled one) → insert-if-missing + seal normalization + staged_at inheritance
+ *     (the user's staging intent transfers with the question).
+ *   - Survivor three-branch (Codex design-gate P2, two rounds): an EXISTING designer row that is
+ *     already DISPATCHED is committed work — if its effective target IS the designer, collapse
+ *     proceeds with the survivor untouched (RFC-138 D6 mirror: the revision is already on the
+ *     right track, zero new mint); if it points at a THIRD node, the user's "give it to the
+ *     designer" intent cannot be met without retargeting committed work → 409 (reopen's job).
+ *     An existing UNDISPATCHED survivor with a stale third-node override is normalized back to
+ *     the designer (override cleared + reassign audit stamp).
+ *   - ECHO materialization (the RFC-134 invariant, the key asymmetry vs RFC-138): the survivor
+ *     does NOT point at the asking node, so the asking node would lose this question's Q&A
+ *     delivery entirely — insert an 'echo' receipt row (dispatched immediately, zero-mint,
+ *     idempotent on the (origin, question, role) unique key). Rendering reads the round's
+ *     answers_json at inject time, so a pre-answer collapse is safe (the asking node gets no
+ *     new rerun before the answers dispatch anyway). */
+function collapseQuestionerEntryToDesigner(
+  db: DbClient,
+  entry: TaskQuestionRow,
+  round: ClarifyRoundRow,
+  actor: TaskQuestionActor,
+): ReassignTaskQuestionAction {
+  const designerNodeId = round.targetConsumerNodeId
+  if (designerNodeId === null) return 'override' // caller guards; defensive
+  let collapsed = false
+  let dispatchedElsewhere: string | null = null
+  dbTxSync(db, (tx) => {
+    const stillOpen = tx
+      .select({ id: taskQuestions.id })
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
+      .all()
+    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
+    // Survivor three-branch: read the question's existing designer row FIRST — a dispatched
+    // survivor pointing away from the designer aborts the whole collapse (no partial write).
+    const existingDesigner = tx
+      .select()
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          eq(taskQuestions.roleKind, 'designer'),
+        ),
+      )
+      .all()[0]
+    if (existingDesigner !== undefined && existingDesigner.dispatchedAt !== null) {
+      const effective =
+        existingDesigner.overrideTargetNodeId ?? existingDesigner.defaultTargetNodeId
+      if (effective !== designerNodeId) {
+        dispatchedElsewhere = effective
+        return // dispatched to a third node — committed work, cannot retarget here
+      }
+      // dispatched AND already on the designer → collapse proceeds, survivor untouched (D6 mirror).
+    }
+    const cur = tx
+      .select({ questionScopesJson: clarifyRounds.questionScopesJson })
+      .from(clarifyRounds)
+      .where(eq(clarifyRounds.id, round.id))
+      .all()[0]
+    const merged = { ...parseScopes(cur?.questionScopesJson ?? null) }
+    merged[entry.questionId] = 'designer'
+    const scopesJson = JSON.stringify(merged)
+    tx.update(clarifyRounds)
+      .set({ questionScopesJson: scopesJson })
+      .where(eq(clarifyRounds.id, round.id))
+      .run()
+    // RFC-058 dual-write — the cross round's legacy session row shares the SAME id.
+    tx.update(crossClarifySessions)
+      .set({ questionScopesJson: scopesJson })
+      .where(eq(crossClarifySessions.id, round.id))
+      .run()
+    tx.delete(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          eq(taskQuestions.roleKind, 'questioner'),
+          isNull(taskQuestions.dispatchedAt),
+        ),
+      )
+      .run()
+    const now = Date.now()
+    const survivorSealedAt = entry.sealedAt ?? now
+    if (existingDesigner === undefined) {
+      // insert-if-missing (scope was 'questioner' → reconcile never built a designer row);
+      // staged_at inherited so the user's staging intent survives the flip.
+      tx.insert(taskQuestions)
+        .values({
+          id: ulid(),
+          taskId: entry.taskId,
+          originNodeRunId: entry.originNodeRunId,
+          questionId: entry.questionId,
+          questionTitle: entry.questionTitle,
+          sourceKind: 'cross',
+          roleKind: 'designer',
+          iteration: entry.iteration,
+          loopIter: entry.loopIter,
+          defaultTargetNodeId: designerNodeId,
+          sealedAt: survivorSealedAt,
+          stagedAt: entry.stagedAt,
+          stagedBy: entry.stagedBy,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({
+          target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
+        })
+        .run()
+    } else if (existingDesigner.dispatchedAt === null) {
+      // Normalize the undispatched survivor: clear a stale third-node override (Codex P2) +
+      // reassign audit stamp; inherit seal / staged only where the survivor lacks them.
+      tx.update(taskQuestions)
+        .set({
+          ...(existingDesigner.overrideTargetNodeId !== null
+            ? {
+                overrideTargetNodeId: null,
+                lastReassignedBy: actor.userId,
+                lastReassignedAt: now,
+              }
+            : {}),
+          ...(existingDesigner.sealedAt === null ? { sealedAt: survivorSealedAt } : {}),
+          ...(existingDesigner.stagedAt === null && entry.stagedAt !== null
+            ? { stagedAt: entry.stagedAt, stagedBy: entry.stagedBy }
+            : {}),
+          updatedAt: now,
+        })
+        .where(eq(taskQuestions.id, existingDesigner.id))
+        .run()
+    }
+    // Echo receipt for the asking node (RFC-134 shape, mirrored from the dispatch-tx echo
+    // materialization: dispatched immediately, zero-mint, unique-key idempotent).
+    tx.insert(taskQuestions)
+      .values({
+        id: ulid(),
+        taskId: entry.taskId,
+        originNodeRunId: entry.originNodeRunId,
+        questionId: entry.questionId,
+        questionTitle: entry.questionTitle,
+        sourceKind: 'cross',
+        roleKind: 'echo',
+        iteration: entry.iteration,
+        loopIter: entry.loopIter,
+        defaultTargetNodeId: round.askingNodeId,
+        overrideTargetNodeId: null,
+        dispatchedAt: now,
+        dispatchedBy: actor.userId,
+        sealedAt: survivorSealedAt,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing({
+        target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
+      })
+      .run()
+    collapsed = true
+  })
+  if (dispatchedElsewhere !== null) {
+    throw new ConflictError(
+      'task-question-already-dispatched',
+      `cannot collapse: this question's designer entry is already dispatched to '${dispatchedElsewhere}' — retargeting committed work is reopen's job`,
+    )
+  }
+  if (!collapsed) {
+    throw new ConflictError(
+      'task-question-already-dispatched',
+      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
+    )
+  }
+  log.info('questioner entry collapsed to designer scope', {
+    taskId: entry.taskId,
+    entryId: entry.id,
+    originNodeRunId: entry.originNodeRunId,
+    questionId: entry.questionId,
+    designerNodeId,
+    askingNodeId: round.askingNodeId,
+    actorUserId: actor.userId,
+  })
+  return 'collapsed-to-designer'
+}
+
 /** RFC-128 §11 (D5) — is this entry's answer sealed? The SAME predicate the DTO's
  *  `sealed` field uses (see {@link listTaskQuestions}), so the board's per-question
  *  `hasStage` and this server-side stage gate agree:
@@ -1188,7 +1413,13 @@ async function isEntrySealed(db: DbClient, entry: TaskQuestionRow): Promise<bool
   return round?.status === 'answered'
 }
 
-/** Stage / unstage (拖入·拖出「待下发」). Approves an entry for batch dispatch. */
+/** Stage / unstage (拖入·拖出「待下发」). Approves an entry for batch dispatch.
+ *  RFC-140 W2: runs under the per-task QUESTION-WRITE lock (B) — dispatchTaskQuestions holds the
+ *  same lock across its whole read→plan→stamp pipeline, so a stage/unstage can never interleave
+ *  with a dispatch's deferred-marker planning (the resurrect-withdrawn-intent race). Both stage
+ *  directions clear `auto_dispatch_deferred_at`: the marker's lifecycle invariant is "born only
+ *  from a user-clicked batch dispatch's auto-split defer; ANY staging change kills it" — a
+ *  re-staged entry is back in the暂存 state and must be batch-dispatched again. */
 export async function stageTaskQuestion(
   db: DbClient,
   entryId: string,
@@ -1206,43 +1437,50 @@ export async function stageTaskQuestion(
       `task question ${entryId} is not yet sealed; answer (seal) it before staging it for dispatch`,
     )
   }
-  if (staged) {
-    // RFC-134 D10（Codex R2-F4 + R3-F7 + 实现 gate fold）——已下发行不可 stage：dispatch 后
-    // 条目已「提交执行」，stage 只会留下脏戳（生来已下发的 echo 回执同理）。守卫是**单条条件
-    // 更新**（语句级原子）+ 受影响行数判定——没有任何先查后改窗口：并发 dispatch 在同列上
-    // stamp `dispatched_at`，输掉 CAS 的一方恰得 0 行 → Conflict、零脏写。changes 非数字按 0
-    // 处理（fail-closed：误报冲突可重试，静默脏戳不可挽回；驱动实际恒返 ChangeStats，同
-    // auth/sessionStore.ts 成例）。
-    const result = await db
-      .update(taskQuestions)
-      .set({ stagedAt: Date.now(), stagedBy: actor.userId, updatedAt: Date.now() })
-      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
-    const changes = (result as unknown as { changes?: number }).changes
-    if (typeof changes !== 'number' || changes !== 1) {
-      throw new ConflictError(
-        'task-question-already-dispatched',
-        `cannot stage a dispatched question (dispatched_at is set) — it is already committed for execution`,
-      )
+  await getTaskQuestionWriteSem(entry.taskId).run(async () => {
+    if (staged) {
+      // RFC-134 D10（Codex R2-F4 + R3-F7 + 实现 gate fold）——已下发行不可 stage：dispatch 后
+      // 条目已「提交执行」，stage 只会留下脏戳（生来已下发的 echo 回执同理）。守卫是**单条条件
+      // 更新**（语句级原子）+ 受影响行数判定——没有任何先查后改窗口：并发 dispatch 在同列上
+      // stamp `dispatched_at`，输掉 CAS 的一方恰得 0 行 → Conflict、零脏写。changes 非数字按 0
+      // 处理（fail-closed：误报冲突可重试，静默脏戳不可挽回；驱动实际恒返 ChangeStats，同
+      // auth/sessionStore.ts 成例）。
+      const result = await db
+        .update(taskQuestions)
+        .set({
+          stagedAt: Date.now(),
+          stagedBy: actor.userId,
+          autoDispatchDeferredAt: null,
+          updatedAt: Date.now(),
+        })
+        .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
+      const changes = (result as unknown as { changes?: number }).changes
+      if (typeof changes !== 'number' || changes !== 1) {
+        throw new ConflictError(
+          'task-question-already-dispatched',
+          `cannot stage a dispatched question (dispatched_at is set) — it is already committed for execution`,
+        )
+      }
+      return
     }
-    return
-  }
-  // RFC-136（用户 2026-07-02「回答问题的按键又没了」）——unstage 按「题」级联：同
-  // (originNodeRunId, questionId) 的全部未下发行一起移出待下发。用户在看板操作的心智单位
-  // 是问题，而一个 cross 题有 questioner+designer 两行两张卡——只移一张会留下「半 staged」
-  // 题：重答守卫（sealRoundQuestions reseal 判定）与答题池（groupAnswerableQuestions
-  // pastPending 排除）都要求整题回到待指派，半 staged 让问题从面板消失且无法重答。已下发
-  // 行不动（staged_at 留作审计，echo 生来已下发天然豁免）；stage 方向保持逐行（gate 逐行
-  // CAS，且正常路径 autoStage 本就全行同进）。
-  await db
-    .update(taskQuestions)
-    .set({ stagedAt: null, stagedBy: null, updatedAt: Date.now() })
-    .where(
-      and(
-        eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
-        eq(taskQuestions.questionId, entry.questionId),
-        isNull(taskQuestions.dispatchedAt),
-      ),
-    )
+    // RFC-136（用户 2026-07-02「回答问题的按键又没了」）——unstage 按「题」级联：同
+    // (originNodeRunId, questionId) 的全部未下发行一起移出待下发。用户在看板操作的心智单位
+    // 是问题，而一个 cross 题有 questioner+designer 两行两张卡——只移一张会留下「半 staged」
+    // 题：重答守卫（sealRoundQuestions reseal 判定）与答题池（groupAnswerableQuestions
+    // pastPending 排除）都要求整题回到待指派，半 staged 让问题从面板消失且无法重答。已下发
+    // 行不动（staged_at 留作审计，echo 生来已下发天然豁免）；stage 方向保持逐行（gate 逐行
+    // CAS，且正常路径 autoStage 本就全行同进）。
+    await db
+      .update(taskQuestions)
+      .set({ stagedAt: null, stagedBy: null, autoDispatchDeferredAt: null, updatedAt: Date.now() })
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          isNull(taskQuestions.dispatchedAt),
+        ),
+      )
+  })
 }
 
 /** Max lengths for a manual question (title mirrors ClarifyQuestion.title ≤ 512). */

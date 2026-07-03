@@ -22,7 +22,9 @@ import { resolveNodeNameFromSnapshot } from '@/lib/node-names'
  *  消失）需要区别于常规 override 给出反馈——条目没了，控件会自行消失，留一行知会文案。 */
 interface ReassignResponse {
   ok: boolean
-  action?: 'override' | 'collapsed-to-questioner'
+  /** RFC-140: + 'collapsed-to-designer' (questioner→designer collapse) — this control only
+   *  reassigns DESIGNER rows so it never receives that value; typed for API completeness. */
+  action?: 'override' | 'collapsed-to-questioner' | 'collapsed-to-designer'
 }
 
 export interface ClarifyQuestionHandlerProps {

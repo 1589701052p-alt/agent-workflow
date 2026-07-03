@@ -512,6 +512,13 @@
       "when": 1784800000000,
       "tag": "0073_rfc132_drop_consumed_by_and_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1784900000000,
+      "tag": "0074_rfc140_auto_dispatch_deferred",
+      "breakpoints": true
     }
   ]
 }

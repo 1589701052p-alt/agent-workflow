@@ -2437,6 +2437,8 @@ export interface Resources {
     source: string
     target: string
     collapsedToQuestioner: string
+    collapsedToDesigner: string
+    autoDispatchQueued: string
     noTarget: string
     reassign: string
     confirm: string
@@ -5081,6 +5083,8 @@ export const zhCN: Resources = {
     noTarget: '未指定',
     reassign: '改派处理节点',
     collapsedToQuestioner: '该题已改由提问节点承接（反问者），不再单独安排设计者处理。',
+    collapsedToDesigner: '该题已改由设计节点统一承接，提问节点将收到回执知会，不再单独续跑。',
+    autoDispatchQueued: '自动下发排队中',
     confirm: '确认',
     stage: '加入待下发',
     unstage: '移出待下发',
