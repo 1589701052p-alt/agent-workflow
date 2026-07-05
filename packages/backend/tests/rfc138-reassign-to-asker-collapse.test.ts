@@ -289,6 +289,91 @@ describe('RFC-138 collapse 正路径（AC-1 + dual-write 锁）', () => {
     expect(JSON.parse(scopes.round ?? '{}')).toEqual({ q1: 'questioner' })
   })
 
+  // RFC-140 遗留修复（用户 2026-07-05 裁决）— 幸存 questioner 行三分支（镜像 RFC-140 W1）：
+  // 塌缩语义「该题让提问节点自己消化」要求幸存行真的指回提问节点，旧第三节点 override 不得残留。
+  test('RFC-140 遗留：幸存 questioner 行带旧第三节点 override（未下发）→ 塌缩后归一化清空 + 审计戳', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { origin } = await seedCrossRound(db, taskId, [mkQ('q1')])
+    const questionerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: ASKER,
+      overrideTargetNodeId: OTHER, // 旧改派残留
+    })
+    const designerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: DESIGNER,
+    })
+    expect(await reassignTaskQuestion(db, designerId, ASKER, actor)).toBe('collapsed-to-questioner')
+    const survivor = (await allEntries(db, taskId)).find((e) => e.id === questionerId)!
+    expect(survivor.overrideTargetNodeId).toBeNull() // effective 回落提问节点
+    expect(survivor.lastReassignedBy).toBe(actor.userId)
+    expect(survivor.lastReassignedAt).not.toBeNull()
+  })
+
+  test('RFC-140 遗留：幸存 questioner 行已下发且 effective==提问节点 → 塌缩照做、幸存行零改动', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { roundId, origin } = await seedCrossRound(db, taskId, [mkQ('q1')])
+    const dispatchedAt = Date.now() - 1000
+    const questionerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: ASKER,
+      dispatchedAt,
+    })
+    const designerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: DESIGNER,
+    })
+    const before = (await allEntries(db, taskId)).find((e) => e.id === questionerId)!
+    expect(await reassignTaskQuestion(db, designerId, ASKER, actor)).toBe('collapsed-to-questioner')
+    const survivor = (await allEntries(db, taskId)).find((e) => e.id === questionerId)!
+    expect(survivor).toEqual(before) // 零改动（义务已在正轨——D6 镜像）
+    expect(JSON.parse((await scopesOf(db, roundId)).round ?? '{}')).toEqual({ q1: 'questioner' })
+  })
+
+  test('RFC-140 遗留：幸存 questioner 行已下发且 effective==第三节点 → 409 拒塌缩、designer 行与 scope 均不动', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { roundId, origin } = await seedCrossRound(db, taskId, [mkQ('q1')])
+    await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'questioner',
+      defaultTargetNodeId: ASKER,
+      overrideTargetNodeId: OTHER,
+      dispatchedAt: Date.now(), // 已在第三节点上执行
+    })
+    const designerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: DESIGNER,
+    })
+    let caught: unknown
+    try {
+      await reassignTaskQuestion(db, designerId, ASKER, actor)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ConflictError)
+    expect((caught as ConflictError).code).toBe('task-question-already-dispatched')
+    const after = await allEntries(db, taskId)
+    expect(after.find((e) => e.id === designerId)).toBeDefined() // 未删
+    expect((await scopesOf(db, roundId)).round).toBeNull() // scope 未翻转（零部分写）
+  })
+
   // Codex impl-gate P2 — legacy answered 轮懒建行（sealed_at NULL）：designer 行是原 park 锚，
   // 删除后幸存 questioner 行若仍 NULL 会被 self/q park 源（sealed_at IS NOT NULL）滤掉 →
   // 调度不再驻留、该题续跑永不 mint。collapse 同事务补 seal 行戳（镜像 RFC-134 §3.1）。

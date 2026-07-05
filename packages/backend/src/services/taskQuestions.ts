@@ -1111,6 +1111,7 @@ function collapseDesignerEntryToQuestioner(
   actor: TaskQuestionActor,
 ): ReassignTaskQuestionAction {
   let collapsed = false
+  let dispatchedElsewhere: string | null = null
   dbTxSync(db, (tx) => {
     // Re-read the entry INSIDE the tx (Codex impl-gate round-2 P2): a sealRoundQuestions commit
     // between the caller's loadEntry and this tx stamps the questioner row's sealed_at — deciding
@@ -1123,6 +1124,33 @@ function collapseDesignerEntryToQuestioner(
       .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
       .all()[0]
     if (curEntry === undefined) return // dispatched concurrently (or already) → no write
+    // RFC-140 遗留修复（用户 2026-07-05 裁决）— 幸存 questioner 行三分支（镜像 RFC-140 W1 的
+    // survivor 处理）：既存行可能带旧第三节点 override（曾被改派到 X）。塌缩语义是「该题让提
+    // 问节点自己消化」，幸存行必须真的指回提问节点：
+    //   - 已下发且 effective ≠ 提问节点（在 X 上执行）→ 409 拒塌缩（已提交执行不可改目标，
+    //     reopen 的职责）；
+    //   - 已下发且 effective == 提问节点 → 塌缩照做、幸存行零改动（义务已在正轨）；
+    //   - 未下发带旧 override → 归一化清 override + 改派审计戳（effective 回落提问节点）。
+    const existingQuestioner = tx
+      .select()
+      .from(taskQuestions)
+      .where(
+        and(
+          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+          eq(taskQuestions.questionId, entry.questionId),
+          eq(taskQuestions.roleKind, 'questioner'),
+        ),
+      )
+      .all()[0]
+    if (existingQuestioner !== undefined && existingQuestioner.dispatchedAt !== null) {
+      const effective =
+        existingQuestioner.overrideTargetNodeId ?? existingQuestioner.defaultTargetNodeId
+      if (effective !== round.askingNodeId) {
+        dispatchedElsewhere = effective
+        return // survivor already dispatched to a third node — committed work, reopen's job
+      }
+      // dispatched AND already on the asking node → collapse proceeds, survivor untouched.
+    }
     const cur = tx
       .select({
         questionScopesJson: clarifyRounds.questionScopesJson,
@@ -1197,8 +1225,31 @@ function collapseDesignerEntryToQuestioner(
         ),
       )
       .run()
+    // RFC-140 遗留修复 — 未下发幸存行的旧 override 归一化（CAS 在 dispatched_at 同列，与
+    // dispatch 竞争时输者零写；已下发同目标的分支在上方判定为零改动，不会到达这里的写）。
+    if (
+      existingQuestioner !== undefined &&
+      existingQuestioner.dispatchedAt === null &&
+      existingQuestioner.overrideTargetNodeId !== null
+    ) {
+      tx.update(taskQuestions)
+        .set({
+          overrideTargetNodeId: null,
+          lastReassignedBy: actor.userId,
+          lastReassignedAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(taskQuestions.id, existingQuestioner.id), isNull(taskQuestions.dispatchedAt)))
+        .run()
+    }
     collapsed = true
   })
+  if (dispatchedElsewhere !== null) {
+    throw new ConflictError(
+      'task-question-already-dispatched',
+      `cannot collapse: this question's questioner entry is already dispatched to '${dispatchedElsewhere}' — retargeting committed work is reopen's job`,
+    )
+  }
   if (!collapsed) {
     throw new ConflictError(
       'task-question-already-dispatched',
