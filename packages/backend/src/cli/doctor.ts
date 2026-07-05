@@ -5,7 +5,8 @@ import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { loadConfig } from '@/config'
 import { countEmbeddedSqlMigrations, IS_EMBEDDED } from '@/embed'
-import { compareSemver, extractVersion, MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
+import { capabilitiesFromVersion, MIN_GIT_VERSION, parseGitVersion } from '@/services/gitVersion'
+import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
 
 export interface CheckResult {
@@ -141,6 +142,30 @@ function checkLifecycleHealth(): CheckResult {
   }
 }
 
+/**
+ * Pure decision half of the git check — exported for tests. RFC-130 D7 raised
+ * the platform floor from 2.5.0 (worktree era) to 2.38.0: every node run
+ * merge-backs via `git merge-tree --write-tree`, which pre-2.38 git rejects.
+ */
+export function evaluateGitCheck(rawVersionOutput: string): CheckResult {
+  const v = parseGitVersion(rawVersionOutput)
+  if (v === null) {
+    return {
+      name: 'git',
+      ok: false,
+      message: `unparseable git output: ${rawVersionOutput.trim()}`,
+    }
+  }
+  if (!capabilitiesFromVersion(v).supportsMergeTreeWriteTree) {
+    return {
+      name: 'git version',
+      ok: false,
+      message: `${v.raw} is older than required ${MIN_GIT_VERSION} (isolated merge-back needs \`git merge-tree --write-tree\`, RFC-130 D7)`,
+    }
+  }
+  return { name: 'git version', ok: true, message: `${v.raw} (>=${MIN_GIT_VERSION})` }
+}
+
 async function checkGit(): Promise<CheckResult> {
   try {
     const proc = Bun.spawn({ cmd: ['git', '--version'], stdout: 'pipe', stderr: 'pipe' })
@@ -148,13 +173,7 @@ async function checkGit(): Promise<CheckResult> {
     if (exitCode !== 0) {
       return { name: 'git', ok: false, message: 'git --version failed' }
     }
-    const v = extractVersion(out)
-    if (v === null)
-      return { name: 'git', ok: false, message: `unparseable git output: ${out.trim()}` }
-    if (compareSemver(v, '2.5.0') < 0) {
-      return { name: 'git version', ok: false, message: `${v} is older than required 2.5.0` }
-    }
-    return { name: 'git version', ok: true, message: `${v} (>=2.5.0)` }
+    return evaluateGitCheck(out)
   } catch (err) {
     return { name: 'git', ok: false, message: `git not executable: ${(err as Error).message}` }
   }

@@ -20,6 +20,7 @@ import { startWorktreeGc } from '@/services/gc'
 import { startLifecycleInvariantsLoop } from '@/services/lifecycleInvariants'
 import { startStuckTaskDetectorLoop } from '@/services/stuckTaskDetector'
 import { startBatchImportGc } from '@/services/repoBatchImport'
+import { detectGitCapabilities, mergeTreeGateError, MIN_GIT_VERSION } from '@/services/gitVersion'
 import {
   setMemoryDistillLangProvider,
   startMemoryDistillLoop,
@@ -100,6 +101,29 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     process.exit(1)
   }
   log.info('opencode probe ok', { version: probe.version, binary: probe.binary })
+
+  // 4b. git version probe — RFC-130 D7: every node run merge-backs via
+  // `git merge-tree --write-tree` (git >= 2.38). On older git the daemon boots
+  // fine and every task dies at merge-back (AFTER its agent already ran) with a
+  // cryptic `merge-back-failed: git merge-tree: usage: ...` — refuse at boot
+  // instead, same hard-gate policy as the opencode probe above. Side effect:
+  // populates the RFC-034 capability cache read by resolveSubmoduleParams
+  // (submodule --jobs / worktree guards), which was never probed at boot before.
+  const gitCaps = await detectGitCapabilities()
+  const gitGateError = mergeTreeGateError(gitCaps)
+  if (gitGateError !== null) {
+    log.error('git incompatible', {
+      found: gitCaps.version?.raw ?? null,
+      requiredMinimum: MIN_GIT_VERSION,
+    })
+    console.error(
+      `agent-workflow: ${gitGateError}\n` +
+        `  upgrade git to >= ${MIN_GIT_VERSION} and restart; the daemon's PATH must resolve the upgraded binary.`,
+    )
+    lock.release()
+    process.exit(1)
+  }
+  log.info('git probe ok', { version: gitCaps.version?.raw ?? null })
 
   // RFC-111 D10: claude-code is an OPTIONAL second runtime — probe it SOFT
   // (warn only, NEVER refuse to start). A missing/old claude only fails nodes

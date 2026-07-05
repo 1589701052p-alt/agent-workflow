@@ -61,11 +61,40 @@ export function capabilitiesFromVersion(v: GitSemver | null): GitCapabilities {
   }
 }
 
+/**
+ * Display floor for user-facing refusal messages. MUST stay in lockstep with
+ * the `gitVersionAtLeast(v, 2, 38)` tuple behind `supportsMergeTreeWriteTree`.
+ */
+export const MIN_GIT_VERSION = '2.38.0'
+
+/**
+ * RFC-130 D7 boot gate: `null` when the local git can run
+ * `git merge-tree --write-tree` (the in-memory merge-back EVERY node run needs);
+ * otherwise the human-readable refusal reason. Pre-2.38 `merge-tree` has no
+ * option parsing at all, so on an old host the daemon would boot fine and every
+ * task would die AFTER its agent already ran, with the cryptic
+ * `merge-back-failed: git merge-tree: usage: git merge-tree <base-tree> ...`.
+ */
+export function mergeTreeGateError(caps: GitCapabilities): string | null {
+  if (caps.supportsMergeTreeWriteTree) return null
+  const found = caps.version?.raw ?? 'git not found or `git --version` failed'
+  return (
+    `git >= ${MIN_GIT_VERSION} is required — isolated merge-back runs ` +
+    `\`git merge-tree --write-tree\` (RFC-130 D7); found: ${found}`
+  )
+}
+
 /** Run `git --version`, parse, cache. Idempotent — call multiple times safely. */
 export async function detectGitCapabilities(): Promise<GitCapabilities> {
-  // runGit(cwd, ['--version']) is fine — git ignores -C for --version
-  const r = await runGit(process.cwd(), ['--version'])
-  const v = r.exitCode === 0 ? parseGitVersion(r.stdout) : null
+  let v: GitSemver | null = null
+  try {
+    // runGit(cwd, ['--version']) is fine — git ignores -C for --version
+    const r = await runGit(process.cwd(), ['--version'])
+    v = r.exitCode === 0 ? parseGitVersion(r.stdout) : null
+  } catch {
+    // git missing entirely (spawn failure): same "no capabilities" shape — the
+    // boot gate turns it into a clear refusal instead of an unhandled throw.
+  }
   cached = capabilitiesFromVersion(v)
   return cached
 }
