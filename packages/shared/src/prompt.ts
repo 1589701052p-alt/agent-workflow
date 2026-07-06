@@ -4,6 +4,9 @@
 
 import type { AgentOutputKindsMap } from './schemas/agent'
 import {
+  ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE,
+  ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE,
+  ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT,
   PRIOR_OUTPUT_BLOCK_TITLE,
   UPDATE_DIRECTIVE_BLOCK_TITLE,
   UPDATE_DIRECTIVE_TEXT,
@@ -183,12 +186,13 @@ export interface CrossClarifyPromptContext {
 }
 
 /**
- * RFC-119: generalized prior-output context for NON-cross-clarify reruns
- * (review reject/iterate, manual retry, cascade, resume, self-clarify). The
- * scheduler populates `block` (via `composePriorOutputBlock` → the shared
- * `buildPriorOutputBlock`) from the freshest prior run that captured output;
- * `renderUserPrompt` then emits the same `## Prior Output (to update or
- * regenerate)` + `## Update Directive` sections cross-clarify uses.
+ * RFC-119 / RFC-141: generalized prior-output context for NON-cross-clarify
+ * reruns (review reject/iterate, manual retry, cascade, resume, clarify-answer,
+ * ask-back rounds, override handoffs). The scheduler populates `block` (via
+ * `composePriorOutputBlock` → the shared `buildPriorOutputBlock`) from the
+ * freshest prior run that captured output; `renderUserPrompt` then emits the
+ * `## Prior Output` + directive section pair — the update variant on an output
+ * round, the ask-back variant (RFC-141) when mandatory ask-back is active.
  *
  * Mutually exclusive with `crossClarifyContext.priorOutputBlock` — the scheduler
  * sets at most one, and `renderUserPrompt` suppresses this when cross-clarify is
@@ -261,15 +265,18 @@ export interface RenderPromptInput {
    * ask-back preamble + clarify-only format and NO `<workflow-output>` format,
    * so the agent must ask back and cannot finalize. When undefined / false
    * (stop round, or no clarify channel), the single-envelope output protocol
-   * block is emitted unchanged.
+   * block is emitted unchanged. RFC-141: the same signal also selects the
+   * prior-output directive variant (ask-back wording vs update wording), so
+   * the directive can never contradict the trailing protocol.
    */
   hasClarifyChannel?: boolean
   /**
-   * RFC-119: prior-output context for a NON-cross-clarify rerun. When set (and
-   * cross-clarify is not already owning the prior-output block), renderUserPrompt
-   * appends the `## Prior Output (to update or regenerate)` + `## Update
-   * Directive` sections. Absent for first-time runs and any run with no prior
-   * captured output.
+   * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun. When
+   * set (and cross-clarify is not already owning the prior-output block, and
+   * this is not an inline session resume), renderUserPrompt appends the
+   * `## Prior Output` + directive pair — update variant on output rounds,
+   * ask-back variant when mandatory ask-back is active (RFC-141). Absent for
+   * first-time runs and any run with no prior captured output.
    */
   priorOutputUpdate?: PriorOutputUpdateContext
   /**
@@ -567,28 +574,32 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     }
   }
 
-  // RFC-119: generalized rerun prior-output for NON-cross-clarify reruns (review
-  // reject/iterate, manual retry, cascade, resume, self-clarify). Emits the same
-  // `## Prior Output` + `## Update Directive` pair cross-clarify uses, but ONLY
-  // when:
+  // RFC-119 / RFC-141: generalized rerun prior-output. Emits ONLY when:
   //   - the scheduler set priorOutputUpdate.block (a prior run captured output), AND
   //   - cross-clarify is NOT already rendering its own prior output (mutual
   //     exclusion — never inject two prior-output blocks in one prompt), AND
   //   - NOT an inline session resume (the resumed session already holds the prior
-  //     output — re-injecting wastes tokens and re-anchors on stale text), AND
-  //   - mandatory ask-back is OFF (a clarify-only round must ask back, not output;
-  //     "update your output" would contradict it — defense in depth, the scheduler
-  //     already gates on effectiveHasClarifyChannel).
+  //     output — re-injecting wastes tokens and re-anchors on stale text).
+  // RFC-141: a mandatory ask-back round now ALSO renders it — with the
+  // clarify-flavored title + directive pair (frame your QUESTIONS around revising
+  // the draft) instead of the update pair (which demands a <workflow-output>
+  // this very round and would contradict the clarify-only protocol). The variant
+  // is selected off the SAME hasClarifyChannel signal that picks the trailing
+  // protocol below, so wording and protocol can never disagree.
   const pou = input.priorOutputUpdate
   if (
     pou?.block !== undefined &&
     pou.block.trim().length > 0 &&
     !(xcc?.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) &&
-    !inlineMode &&
-    input.hasClarifyChannel !== true
+    !inlineMode
   ) {
-    sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
-    sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
+    if (input.hasClarifyChannel === true) {
+      sections += `\n\n${ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
+      sections += `\n\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE}\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT}`
+    } else {
+      sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
+      sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
+    }
   }
 
   // RFC-122: per-(task, asking-node) STOP override on a run that has no prior

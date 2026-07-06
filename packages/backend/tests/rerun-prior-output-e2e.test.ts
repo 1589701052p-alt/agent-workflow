@@ -22,6 +22,18 @@
 // If this goes red, RFC-119's scheduler wiring (freshestPriorRunWithOutput →
 // composePriorOutputBlock → priorOutputUpdate → renderUserPrompt) regressed on
 // the real review-iterate path.
+//
+// RFC-141 (ask-back rounds now inject the draft too) has NO runTask-level case
+// here: driving "node produced output, then re-enters mandatory ask-back"
+// end-to-end needs a multi-round clarify harness (answer → re-open directive →
+// retry) this stub setup doesn't have. Coverage is layered instead:
+//   - variant render: shared/tests/rerun-prior-output.test.ts (ask-back pair,
+//     golden lock, placement);
+//   - composePriorOutputBlock → renderUserPrompt shape:
+//     rerun-prior-output-injection.test.ts (RFC-141 ask-back case);
+//   - scheduler gate: rerun-prior-output-source-guards.test.ts negative locks
+//     (!effectiveHasClarifyChannel / !suppressPriorOutput must stay gone), and
+//     the hasClarifyChannel threading is locked by clarify-prompt-wire-up.test.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'

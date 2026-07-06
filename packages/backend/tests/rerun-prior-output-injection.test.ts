@@ -11,8 +11,10 @@
 //   - composePriorOutputBlock: declared-output ordering, empty-port drop, and the
 //     RFC-119 D10 `onlyPorts` restriction (review-iterate → iterate-target only).
 //
-// Plus an end-to-end shape check: a canceled (superseded) prior run's outputs are
-// readable and render through renderUserPrompt as the `## Prior Output` block.
+// Plus end-to-end shape checks: a canceled (superseded) prior run's outputs are
+// readable and render through renderUserPrompt as the `## Prior Output` block,
+// and (RFC-141) an ask-back round renders the draft with the ask-back directive
+// variant instead of the update pair.
 
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -21,7 +23,12 @@ import { monotonicFactory } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunOutputs, nodeRuns, tasks, workflows } from '../src/db/schema'
 import { composePriorOutputBlock, freshestPriorRunWithOutput } from '../src/services/scheduler'
-import { PRIOR_OUTPUT_BLOCK_TITLE, renderUserPrompt } from '@agent-workflow/shared'
+import {
+  ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE,
+  ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE,
+  PRIOR_OUTPUT_BLOCK_TITLE,
+  renderUserPrompt,
+} from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const seedUlid = monotonicFactory()
@@ -367,5 +374,45 @@ describe('RFC-119 — end-to-end: canceled prior outputs render into the prompt'
     expect(prompt).toContain(PRIOR_OUTPUT_BLOCK_TITLE)
     expect(prompt).toContain('# the prior draft body')
     expect(prompt).toContain('## Review Rejection')
+  })
+
+  test('RFC-141: an ask-back round renders the draft with the ask-back directive variant', async () => {
+    // Evidence case: QMGP5 agent_m7p3n1 retry 17 — the node had 4 docpath
+    // generations, a cross-clarify answer re-triggered it with mandatory
+    // ask-back active, and RFC-119 D6 dropped the draft from the prompt.
+    // RFC-141 (user ruling) injects it with the clarify-flavored pair instead.
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedTask(db)
+    const prior = await seedRun(db, taskId, 'agent')
+    await seedOutput(db, prior, 'docpath', 'docs/snake-game-design.md')
+    const currentId = seedUlid()
+
+    const found = await freshestPriorRunWithOutput(db, {
+      taskId,
+      nodeId: 'agent',
+      iteration: 0,
+      shardKey: null,
+      id: currentId,
+    })
+    expect(found?.id).toBe(prior)
+
+    const block = await composePriorOutputBlock(db, found!.id, ['docpath'])
+    const prompt = renderUserPrompt({
+      promptTemplate: 'Body.',
+      inputs: {},
+      meta: { repoPath: '', baseBranch: '', taskId },
+      agentOutputs: ['docpath'],
+      hasClarifyChannel: true,
+      clarifyContext: { flatBlock: '## Clarify Q&A\n- Q1 → yes' },
+      priorOutputUpdate: { block },
+    })
+    // draft present, ask-back variant pair, clarify-only protocol intact
+    expect(prompt).toContain(ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE)
+    expect(prompt).toContain('docs/snake-game-design.md')
+    expect(prompt).toContain(ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE)
+    expect(prompt).toContain('MANDATORY ASK-BACK')
+    // the update pair must not leak into the ask-back round
+    expect(prompt).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
+    expect(prompt).not.toContain('## Update Directive')
   })
 })

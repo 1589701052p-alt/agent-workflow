@@ -2609,8 +2609,8 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // cross-clarify-specific designer working-draft fetch + its dedicated prior-output block are
         // gone). A designer responding to feedback now surfaces its working draft through the SAME
         // generalized RFC-119 prior-output path every other rerun uses (`freshestPriorRunWithOutput`
-        // below), gated by `suppressPriorOutput` so a pure-override handoff still processes the
-        // reassigned question instead of rewriting its own artifact (RFC-120 §18).
+        // below). RFC-141 removed the RFC-120 §18 pure-override handoff suppression that used to
+        // gate it — an override target now sees its own draft too.
 
         // RFC-132 (PR-C): the standing continue/stop directive is read SOLELY from the per-(task,
         // asking-node) clarify state (design §7) — the per-round directive concept is gone. The flat
@@ -2650,11 +2650,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           dispatchedRunId: nodeRunId,
           iteration,
         })
-        // RFC-120 §18 preserved: a pure-override DESIGNER handoff suppresses the RFC-119 prior-output
-        // "update your draft" directive below — the override target PROCESSES the reassigned question,
-        // it does not rewrite its own old artifact. A graph designer / self / questioner queue keeps
-        // prior output (suppressPriorOutput=false, matching the pre-PR-C graphOwned/runScoped gate).
-        const suppressPriorOutput = clarifyQueue?.suppressPriorOutput === true
+        // RFC-141: the RFC-120 §18 pure-override handoff suppression (`suppressPriorOutput`) is
+        // GONE by user ruling — the reassigned Q&A rides the flat block below, and the prior-output
+        // sections render alongside it as the node's own background.
         const clarifyContext =
           clarifyQueue === undefined
             ? undefined
@@ -2737,26 +2735,26 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         const clarifyModeFlip =
           followupDecision.followup && priorAttemptClarifyActive !== effectiveHasClarifyChannel
         priorAttemptClarifyActive = effectiveHasClarifyChannel
-        // RFC-119 / RFC-132 (PR-C): generalized prior-output for ANY rerun — review reject/iterate
-        // (supersede→canceled), manual retry, cascade, resume, self-clarify, AND now the cross-clarify
-        // designer (whose dedicated cross-clarify prior-output path was removed — a designer
-        // responding to feedback surfaces its working draft through THIS single path). Skipped
-        // when:
-        //   - this is a pure-override DESIGNER handoff (suppressPriorOutput — RFC-120 §18: process the
-        //     reassigned question, don't rewrite your own artifact),
-        //   - inline session resume (the resumed session already holds the prior output),
-        //   - mandatory ask-back is active (a clarify-only round must ask back, not produce output —
-        //     "update your output" would contradict it).
+        // RFC-119 / RFC-132 (PR-C) / RFC-141: generalized prior-output for ANY rerun — review
+        // reject/iterate (supersede→canceled), manual retry, cascade, resume, clarify-answer,
+        // mandatory ask-back rounds, override handoffs, AND the cross-clarify designer (whose
+        // dedicated prior-output path was removed — a designer responding to feedback surfaces
+        // its working draft through THIS single path). RFC-141 (user ruling) removed two former
+        // gates:
+        //   - RFC-119 D6 "mandatory ask-back suppresses" — its "nearly impossible" premise was
+        //     disproved (a node with a done draft re-enters ask-back on every new answer batch;
+        //     evidence: QMGP5 agent_m7p3n1 retry 17). renderUserPrompt now picks the ask-back
+        //     directive variant off the same hasClarifyChannel signal that picks the trailing
+        //     protocol, so the wording cannot contradict the clarify-only round.
+        //   - RFC-120 §18 "pure-override handoff suppresses" — the override target now sees its
+        //     own draft as background; the reassigned Q&A rides `## Clarify Q&A`.
+        // Still skipped on inline session resume (the resumed session already holds the prior
+        // output — re-injecting wastes tokens and re-anchors on stale text).
         // D10: on a review-ITERATE, RFC-014's `## Sibling Outputs` already carries the sibling ports;
         // restrict to the iterate-target port so the two don't duplicate. review-reject / non-review
         // reruns → all ports (onlyPorts undef).
         let priorOutputUpdate: { block: string } | undefined
-        if (
-          currentRunRow !== undefined &&
-          !suppressPriorOutput &&
-          !resumeDecision.inlineMode &&
-          !effectiveHasClarifyChannel
-        ) {
+        if (currentRunRow !== undefined && !resumeDecision.inlineMode) {
           const priorRun = await freshestPriorRunWithOutput(db, {
             taskId,
             nodeId: node.id,

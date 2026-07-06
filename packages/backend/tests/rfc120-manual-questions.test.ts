@@ -698,8 +698,8 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
     })
     expect(ctx?.block).toContain('CLARIFY-Q-MARKER?')
     expect(ctx?.block).not.toContain('Manual instruction') // no manual contamination
-    // genuine graph designer round (default target == consumer) → not a pure-override handoff.
-    expect(ctx?.suppressPriorOutput).toBe(false)
+    // RFC-141: the RFC-120 §18 suppress member is gone from the context entirely.
+    expect(Object.keys(ctx!)).not.toContain('suppressPriorOutput')
   })
 })
 

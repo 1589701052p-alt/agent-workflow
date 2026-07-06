@@ -1122,7 +1122,7 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     expect(minted.length).toBe(0)
   })
 
-  test('M1: the run-scoped override context is flagged runScoped (drives Update-Directive suppression)', async () => {
+  test('M1: the override handoff mints the rerun ON the target (RFC-141: no Update-Directive suppression anymore)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
@@ -1142,22 +1142,20 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
     })
     const entry = (await designerEntries(db, taskId))[0]!
     await reassignTaskQuestion(db, entry.id, OTHER, actor)
-    // RFC-131 T4 去借壳: the rerun is minted ON the target OTHER, so the run-scoped context is read on
-    // OTHER — still flagged runScoped (drives Update-Directive suppression on the reassigned handoff).
+    // RFC-131 T4 去借壳: the rerun is minted ON the target OTHER. (RFC-141 removed the run-scoped
+    // Update-Directive suppression this used to drive — OTHER now also sees its own prior output.)
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     expect(result.reruns[0]?.targetNodeId).toBe(OTHER)
-    // The graph path (no claiming entries) is NOT flagged run-scoped → the generic
-    // priorOutputUpdate stays available there (golden-lock).
   })
 
-  test('M1: scheduler suppresses the generic priorOutputUpdate for a run-scoped override handoff (source lock)', () => {
+  test('M1→RFC-141: the generic priorOutputUpdate is NO LONGER suppressed for an override handoff (source lock)', () => {
     // The giant runOneNode prompt assembly can't be unit-run (it spawns opencode);
-    // lock the suppression at the source so a refactor that drops it goes red.
-    // RFC-132 (PR-C): the run-scoped designer signal is now `suppressPriorOutput` on the unified flat
-    // queue (a pure-override handoff), which gates the RFC-119 prior-output update (RFC-120 §18).
+    // lock at the source so a revert that re-adds the RFC-120 §18 gate goes red.
+    // RFC-141 (user ruling): an override target sees its own prior output as background — the
+    // reassigned Q&A rides `## Clarify Q&A`, and the directive's "feedback above" points at it.
     const src = readFileSync(join(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
-    expect(src).toContain('clarifyQueue?.suppressPriorOutput === true')
-    expect(src).toContain('!suppressPriorOutput')
+    expect(src).not.toContain('clarifyQueue?.suppressPriorOutput')
+    expect(src).not.toContain('!suppressPriorOutput')
   })
 
   test('H2: full HTTP path — deferred submit parks, POST .../questions/dispatch stamps + mints + releases the gate', async () => {
@@ -2207,15 +2205,15 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
 })
 
 // ---------------------------------------------------------------------------
-// H — RFC-120 §18 ownership-gated prior output (Codex ship-gate). The cross-clarify
-// `priorOutputBlock` (RFC-119 Prior Output + Update Directive) is TOPOLOGY-gated in the
-// scheduler (hasExternalFeedbackChannel). For a deferred per-node queue that's not an
-// ownership signal: a pure-override target that ALSO has its own __external_feedback__ edge
-// + prior output would be told to rewrite its OWN artifact instead of processing the
-// reassigned question. So buildNodeQueueExternalFeedback exposes `graphOwned`, and the
-// scheduler attaches the prior-output block ONLY when graphOwned is true (deferred).
+// H — prior output on override handoffs. HISTORY: RFC-120 §18 ownership-gated the
+// prior-output directive (graphOwned → suppressPriorOutput on the RFC-132 flat queue) so a
+// pure-override target would process the reassigned question instead of rewriting its own
+// artifact. RFC-141 (user ruling) REMOVED that suppression: the override target now sees its
+// own prior output as background, and the reassigned Q&A rides `## Clarify Q&A`. These tests
+// lock the new shape: the flat queue context builds for both handoff forms and carries NO
+// suppress signal. (The xcc render pair below is the legacy cross-clarify path — unchanged.)
 // ---------------------------------------------------------------------------
-describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
+describe('RFC-120 §18 → RFC-141 — prior output on override handoffs (deferred)', () => {
   const actor = { userId: 'u1', role: 'owner' as const }
 
   async function designerEntries(db: DbClient, taskId: string) {
@@ -2225,11 +2223,11 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
   }
 
-  test('graphOwned=FALSE for a reassigned handoff (RFC-131 T4 去借壳: the override MOVES the run to the target, which does not own the graph designer artifact) — no Prior Output update', async () => {
-    // RFC-131 T4 去借壳 (REVERSES RFC-127 D3, back to pre-127 graphOwned=false): a reassign MOVES the
-    // rerun to the target OTHER (running its OWN agent). OTHER does NOT own DESIGNER's artifact →
-    // graphOwned=false → the scheduler does NOT tell OTHER to update DESIGNER's old artifact; it
-    // PROCESSES the feedback. (Pre-127 the override moved the home → graphOwned=false; T4 restores that.)
+  test('RFC-141: a reassigned handoff builds the flat queue context WITHOUT any suppress signal (prior output injects)', async () => {
+    // HISTORY: RFC-131 T4 去借壳 moved the rerun to the target OTHER, and RFC-120 §18 flagged this
+    // shape suppressPriorOutput=true (OTHER must not be told to update its own artifact). RFC-141
+    // removed the flag — OTHER now gets its own prior output as background; this test locks that
+    // the context still builds and the suppress member is gone at runtime.
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await db.insert(nodeRuns).values({
@@ -2252,8 +2250,7 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     expect(result.reruns[0]?.targetNodeId).toBe(OTHER) // 去借壳: run minted ON the target OTHER
     // Production dispatches a SEALED designer entry (stage gate) — reflect that so the unified queue
-    // injector selects it. OTHER is a pure-override handoff → suppressPriorOutput (no "update your
-    // draft" directive: OTHER processes the feedback, it does not own DESIGNER's artifact).
+    // injector selects it.
     await db
       .update(taskQuestions)
       .set({ sealedAt: Date.now() })
@@ -2266,10 +2263,14 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       dispatchedRunId: result.reruns[0]!.nodeRunId,
       iteration: 0,
     })
-    expect(ctx?.suppressPriorOutput).toBe(true)
+    // the reassigned Q&A still injects…
+    expect(ctx).toBeDefined()
+    expect(ctx!.block.length).toBeGreaterThan(0)
+    // …and the RFC-120 §18 suppress member is gone (runtime lock backing the type-level removal).
+    expect(Object.keys(ctx!)).not.toContain('suppressPriorOutput')
   })
 
-  test('graphOwned=true for a genuine graph-designer round (default target == this node) — RFC-119 update mode preserved', async () => {
+  test('RFC-141: a genuine graph-designer round builds the same suppress-free context (both handoff shapes uniform)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: true })
     await sealRoundQuestions({
@@ -2280,9 +2281,8 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
     })
     const entry = (await designerEntries(db, taskId))[0]!
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
-    // Production dispatches a SEALED designer entry (stage gate). A genuine graph designer (default
-    // target == this node) is NOT a pure-override handoff → suppressPriorOutput=false (RFC-119
-    // update mode preserved: it updates its own artifact).
+    // Production dispatches a SEALED designer entry (stage gate). A genuine graph designer used to
+    // be the suppressPriorOutput=false shape; RFC-141 removed the member for BOTH shapes.
     await db
       .update(taskQuestions)
       .set({ sealedAt: Date.now() })
@@ -2295,7 +2295,9 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
       dispatchedRunId: result.reruns[0]!.nodeRunId,
       iteration: 0,
     })
-    expect(ctx?.suppressPriorOutput).toBe(false)
+    expect(ctx).toBeDefined()
+    expect(ctx!.block.length).toBeGreaterThan(0)
+    expect(Object.keys(ctx!)).not.toContain('suppressPriorOutput')
   })
 
   test('render: graphOwned=false context (no priorOutputBlock attached) → External Feedback but NO Prior Output / Update Directive', () => {
@@ -2337,12 +2339,12 @@ describe('RFC-120 §18 — ownership-gated prior output (deferred)', () => {
     expect(out).toContain('## External Feedback')
   })
 
-  test('source lock: the scheduler gates prior-output on the flat queue suppressPriorOutput for override handoffs (RFC-132 PR-C)', () => {
+  test('source lock: the scheduler no longer gates prior-output on ANY ownership signal (RFC-141)', () => {
     const src = readFileSync(join(import.meta.dir, '..', 'src', 'services', 'scheduler.ts'), 'utf8')
-    // RFC-132 (PR-C): the cross-clarify-specific graphOwned attach gate is replaced by the flat
-    // queue's suppressPriorOutput — a pure-override designer handoff (no graph-owned entry) suppresses
-    // the RFC-119 prior-output "update your draft" directive; a graph designer keeps it (RFC-120 §18).
+    // RFC-132 (PR-C) replaced the cross-clarify graphOwned attach gate with the flat queue's
+    // suppressPriorOutput; RFC-141 removed that too. Negative locks so neither gate re-grows.
     expect(src).not.toContain('crossClarifyContext?.graphOwned')
-    expect(src).toContain('suppressPriorOutput')
+    expect(src).not.toContain('clarifyQueue?.suppressPriorOutput')
+    expect(src).not.toContain('!suppressPriorOutput')
   })
 })

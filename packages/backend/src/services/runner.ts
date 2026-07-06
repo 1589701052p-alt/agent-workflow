@@ -170,10 +170,12 @@ export interface RunNodeOptions {
    */
   crossClarifyContext?: CrossClarifyPromptContext
   /**
-   * RFC-119: prior-output context for a NON-cross-clarify rerun (review
-   * reject/iterate, manual retry, cascade, resume, self-clarify). The scheduler
-   * sets it from the freshest prior run that captured output; threaded straight
-   * into renderUserPrompt. Absent on first runs / followups / cross-clarify.
+   * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun
+   * (review reject/iterate, manual retry, cascade, resume, clarify-answer,
+   * ask-back rounds, override handoffs). The scheduler sets it from the
+   * freshest prior run that captured output; threaded straight into
+   * renderUserPrompt, which picks the update vs ask-back directive variant off
+   * hasClarifyChannel. Absent on first runs / followups / cross-clarify.
    */
   priorOutputUpdate?: PriorOutputUpdateContext
   /**

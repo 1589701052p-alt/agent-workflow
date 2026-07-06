@@ -424,6 +424,26 @@ export const UPDATE_DIRECTIVE_TEXT = [
   'read that file for its contents.',
 ].join(' ')
 
+/** RFC-141: ask-back variant of the prior-output section. A mandatory ask-back
+ *  round (clarify-only protocol) with a prior captured output now ALSO gets the
+ *  agent's own draft injected — RFC-119 D6 suppressed it on the premise that the
+ *  combination was "nearly impossible", which cross-clarify multi-round flows
+ *  disproved (a node with a done draft re-enters ask-back on every new answer
+ *  batch). The title deliberately does NOT say "update or regenerate": this
+ *  round must not produce output — the directive tells the agent to frame its
+ *  QUESTIONS around revising the draft instead. */
+export const ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE =
+  "## Prior Output (your previous run's output)" as const
+export const ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE = '## Prior Output Directive' as const
+export const ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT = [
+  'The "Prior Output" section above is what you produced on your previous run of',
+  'this node. This round is still a clarify-only round — you MUST reply with a',
+  'single <workflow-clarify> envelope and NO <workflow-output>. Frame your',
+  'questions around how this prior output should be REVISED — do not re-litigate',
+  'decisions the user has already settled in the Clarify Q&A. When a Prior Output',
+  'port is a file path, read that file for its contents before asking.',
+].join(' ')
+
 /**
  * RFC-056: parse the JSON body of a `<workflow-clarify>` envelope produced by a
  * questioner agent wired through a cross-clarify node. Reuses the RFC-023

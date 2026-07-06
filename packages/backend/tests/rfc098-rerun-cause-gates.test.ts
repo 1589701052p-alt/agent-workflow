@@ -116,10 +116,11 @@ describe('RFC-098 WP-10 — scheduler gate wiring', () => {
   // GONE and the flat wiring is in place.
   test('gate-3 (update-mode working draft) → generalized RFC-119 prior-output path (RFC-132 PR-C)', () => {
     // The cross-clarify-specific update-mode gate is gone; a designer surfaces its draft via the same
-    // freshestPriorRunWithOutput path every rerun uses, gated by suppressPriorOutput (RFC-120 §18).
+    // freshestPriorRunWithOutput path every rerun uses. RFC-141 then removed the RFC-120 §18
+    // suppressPriorOutput gate from that path too (negative lock below).
     expect(SCHEDULER_SRC).not.toContain('isCrossClarifyTriggeredRerun')
     expect(SCHEDULER_SRC).toContain('freshestPriorRunWithOutput')
-    expect(SCHEDULER_SRC).toContain('!suppressPriorOutput')
+    expect(SCHEDULER_SRC).not.toContain('!suppressPriorOutput')
   })
 
   test('gate-4 (clarify injection) → one unified query, no per-role SELECT fork (RFC-132 PR-C)', () => {

@@ -55,10 +55,10 @@ export interface AgentQueueEntry {
   // 角色透传（含 RFC-134 echo）——本模块对角色**无特判**，选取/绑定/老化全角色同路径。
   roleKind: TaskQuestionRoleKind
   sourceKind: 'self' | 'cross' | 'manual'
-  /** default_target_node_id — the RFC-120 §18 graphOwned gate: default==consumer ⟹ this node
-   *  OWNS the graph round (not a pure-override handoff). Drives buildClarifyQueueContext's
-   *  suppressPriorOutput (an override target processes the reassigned question, it does NOT rewrite
-   *  its own old artifact). */
+  /** default_target_node_id — default==consumer ⟹ this node OWNS the graph round (not a
+   *  pure-override handoff). RFC-141 removed the RFC-120 §18 suppressPriorOutput gate this used
+   *  to drive (an override target now sees its own prior output too); kept surfaced for tests
+   *  and future consumers that need the graph-owned distinction. */
   defaultTargetNodeId: string | null
   /** origin clarify round's node_run id (a §15 manual entry carries a synthetic origin) — surfaced
    *  as buildClarifyQueueContext's audit-only sourceRunIds. */
@@ -263,16 +263,10 @@ export interface ClarifyQueueContext {
   /** The distinct origin clarify-round runs whose Q&A this block draws from (audit only — not read
    *  by any behavior gate). */
   sourceRunIds: string[]
-  /**
-   * RFC-120 §18 preserved: true iff the queue is a pure-override DESIGNER handoff — it holds ≥1
-   * designer-role entry AND NONE of them is graph-owned by this node (no designer entry whose
-   * default target == consumerNodeId). The scheduler then suppresses the RFC-119 prior-output
-   * "update your draft" directive: an override target must PROCESS the reassigned question, not
-   * rewrite its own old artifact. A graph designer (its own round) keeps prior output; a
-   * self/questioner-only queue is never suppressed (matches the pre-PR-C runScoped gate, which was
-   * only set by the designer per-node-queue injector).
-   */
-  suppressPriorOutput: boolean
+  // RFC-141: the RFC-120 §18 `suppressPriorOutput` member is GONE (user ruling) — a pure-override
+  // DESIGNER handoff now gets its own prior output injected like every other rerun; the reassigned
+  // question rides the flat `## Clarify Q&A` block, and the prior-output directive's "see the
+  // feedback above" points at it.
 }
 
 export interface BuildClarifyQueueContextArgs {
@@ -326,14 +320,9 @@ export async function buildClarifyQueueContext(
     entries.map((e) => e.id),
     dispatchedRunId,
   )
-  const hasDesigner = entries.some((e) => e.roleKind === 'designer')
-  const graphOwnedDesigner = entries.some(
-    (e) => e.roleKind === 'designer' && e.defaultTargetNodeId === consumerNodeId,
-  )
   return {
     block,
     sourceRunIds: [...new Set(entries.map((e) => e.originNodeRunId))],
-    suppressPriorOutput: hasDesigner && !graphOwnedDesigner,
   }
 }
 
