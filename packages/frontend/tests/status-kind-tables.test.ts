@@ -86,6 +86,15 @@ describe('legacy 色名 producer 全量清零（styles.css 别名块已删，出
       if (/status-chip--(green|red|blue|gray|amber|warning)\b/.test(src)) {
         offenders.push(`chip:${file}`)
       }
+      // Codex 实现门 P2 的形态：动态拼接（'status-chip--' + (cond ? 'blue' : …) /
+      // `status-chip--${…'blue'…}`）字面量前缀后置，逃过上面的相邻正则——
+      // clarify.detail 的 readonly scope chip 就曾这样漏网渲染成无样式 chip。
+      if (
+        /status-chip--' *\+[^\n]{0,200}'(green|red|blue|gray|amber|warning)'/.test(src) ||
+        /status-chip--\$\{[^}]{0,200}'(green|red|blue|gray|amber|warning)'/.test(src)
+      ) {
+        offenders.push(`chip-dynamic:${file}`)
+      }
       if (/status-dot--(green|red|blue|gray|amber)\b/.test(src)) {
         offenders.push(`dot:${file}`)
       }

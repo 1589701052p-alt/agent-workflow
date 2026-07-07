@@ -893,7 +893,9 @@ export function ClarifyDetailPage() {
                   {readonly ? (
                     <span
                       className={
-                        'status-chip status-chip--' + (scope === 'questioner' ? 'blue' : 'neutral')
+                        // flag-audit W0 Codex 实现门 P2：legacy 别名块已删，'blue'
+                        // 动态拼接会落到不存在的 class——改语义 kind。
+                        'status-chip status-chip--' + (scope === 'questioner' ? 'info' : 'neutral')
                       }
                       data-testid={`clarify-scope-chip-${q.id}`}
                     >
