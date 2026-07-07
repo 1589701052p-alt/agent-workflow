@@ -89,6 +89,46 @@ describe('claude parseEvent (RFC-111 PR-B)', () => {
     expect(parseEvent('null')).toBeNull()
     expect(parseEvent('0')).toBeNull()
   })
+
+  // Transcript JSONL lines (subagent capture) carry an ISO `timestamp`; surfacing
+  // it keeps captured rows on the real event timeline instead of the (much later)
+  // capture-walk wall clock — the SessionTab bucket sort is (ts, id).
+  it('ISO timestamp is surfaced in ms; absent/garbage → undefined', () => {
+    const withTs = parseEvent(
+      JSON.stringify({
+        type: 'user',
+        session_id: 's1',
+        timestamp: '2026-07-07T04:50:52.174Z',
+        message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+      }),
+    )
+    expect(withTs?.timestamp).toBe(Date.parse('2026-07-07T04:50:52.174Z'))
+
+    const numeric = parseEvent(
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 's1',
+        timestamp: 1751864000000,
+        message: { content: [] },
+      }),
+    )
+    expect(numeric?.timestamp).toBe(1751864000000)
+
+    const without = parseEvent(
+      JSON.stringify({ type: 'assistant', session_id: 's1', message: { content: [] } }),
+    )
+    expect(without?.timestamp).toBeUndefined()
+
+    const garbage = parseEvent(
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 's1',
+        timestamp: 'not-a-date',
+        message: { content: [] },
+      }),
+    )
+    expect(garbage?.timestamp).toBeUndefined()
+  })
 })
 
 describe('claude parseResultError (RFC-111 PR-B)', () => {

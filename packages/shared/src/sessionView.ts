@@ -8,6 +8,23 @@
 // parent_session_id by the runner + sessionCapture), output is one
 // SessionTree per root session. The frontend SessionTab consumes the
 // tree directly; the backend `/session` endpoint serializes it.
+//
+// Payload dialects (per event row, sniffed by shape — a run's rows are
+// homogeneous but the parser doesn't need to know which runtime wrote them):
+//  - opencode NDJSON: `{type, sessionID, part: {type: 'text'|'reasoning'|'tool', …}}`
+//    — the original RFC-027 format, handled by the `part`-based branches.
+//  - Claude Code (RFC-111): raw `--output-format stream-json` stdout lines and
+//    subagent transcript JSONL lines, both persisted verbatim. Shape:
+//    `{type: 'assistant'|'user', message: {id, content: [block]|string},
+//      parent_tool_use_id?, session_id|sessionId, …}` plus `system` linkage
+//    events (`task_started`/`task_notification`). Verified hands-on against
+//    claude 2.1.202 (2026-07-07): assistant events arrive one-per-content-block
+//    (same message.id repeated), subagent turns are inlined into the root
+//    stream tagged `parent_tool_use_id`, and the post-run transcript capture
+//    re-persists the same turns under sessionId `agent-<taskId>` — the claude
+//    pre-pass re-buckets the inline rows to that same key and dedups by
+//    (message.id, block type, content) so live and captured rows fold into
+//    one child tree. See `buildClaudeLinkage` below.
 
 export type SessionMessageKind =
   | 'user'
@@ -150,8 +167,20 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
 
   const rootKey = input.rootSessionId ?? deriveRootBucketKey(input.events)
 
+  // Parse every payload once up front: the claude dialect needs a cross-event
+  // linkage pre-pass (subagent re-bucketing), and build() reuses these parses
+  // instead of JSON.parsing each payload a second time.
+  const parsedByEvt = new Map<ParseSessionInputEvent, unknown>()
   for (const evt of input.events) {
-    const key = evt.sessionId ?? rootKey
+    parsedByEvt.set(evt, safeJsonParse(evt.payload))
+  }
+  const claude = buildClaudeLinkage(input.events, parsedByEvt, rootKey)
+
+  for (const evt of input.events) {
+    // Claude inline subagent rows share the root session_id on the wire; the
+    // linkage pre-pass re-homes them to their child bucket (`agent-<taskId>`)
+    // so they merge with the post-run transcript capture rows.
+    const key = claude.bucketOf.get(evt) ?? evt.sessionId ?? rootKey
     let bucket = buckets.get(key)
     if (bucket === undefined) {
       bucket = []
@@ -167,6 +196,13 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
       const target = readCaptureFailedTarget(evt.payload) ?? key
       captureFailed.add(target)
     }
+  }
+
+  // Claude child buckets hang off the bucket that owns their spawning
+  // `tool_use` block (arbitrary nesting depth), overriding both the pump's
+  // parent_session_id=null and the transcript capture's flat parent=root.
+  for (const [childKey, parentKey] of claude.parentOverride) {
+    parentOf.set(childKey, parentKey)
   }
 
   // Make sure each bucket is in stable (ts, id) order so downstream
@@ -188,12 +224,144 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
     const tools = new Map<string, SessionToolCall | SessionSubagentCall>()
     const textsByMessageId = new Map<string, SessionAssistantText>()
     const reasoningByMessageId = new Map<string, SessionAssistantReasoning>()
+    // Claude dialect: exact-duplicate guard for user-message text. The same
+    // subagent prompt line can arrive from both the live stream and the
+    // captured transcript (and is re-synthesized from task_started.prompt).
+    const claudeUserSeen = new Set<string>()
+
+    /**
+     * Claude Code row handler (payloads without opencode's `part`). Ignores
+     * the persisted row `kind` entirely — the pump/capture kinds are per-turn
+     * approximations (e.g. a transcript's initial user-prompt line lands as
+     * kind=tool_use) while the verbatim payload is authoritative.
+     */
+    const handleClaudeRow = (
+      evt: ParseSessionInputEvent,
+      parsed: Record<string, unknown>,
+    ): void => {
+      const turn = claudeTurnOf(parsed)
+      if (turn === null) return // system/result/rate_limit/attachment/… rows render nothing
+
+      if (turn.type === 'assistant') {
+        const msgKeyBase = turn.messageId ?? `__anon__:${evt.id}`
+        for (const block of claudeContentBlocks(turn.message)) {
+          const blockType = typeof block.type === 'string' ? block.type : null
+          if (blockType === 'thinking') {
+            const text = typeof block.thinking === 'string' ? block.thinking : ''
+            if (text === '') continue
+            // Key includes the text so a captured-transcript duplicate of a
+            // streamed block folds away (claude never re-emits a block with
+            // different text under the same message id).
+            const key = `c:${msgKeyBase}:reasoning:${text}`
+            if (reasoningByMessageId.has(key)) continue
+            const blockMsg: SessionAssistantReasoning = {
+              kind: 'assistant-reasoning',
+              text,
+              ts: evt.ts,
+              messageId: turn.messageId,
+            }
+            reasoningByMessageId.set(key, blockMsg)
+            messages.push(blockMsg)
+          } else if (blockType === 'text') {
+            const text = typeof block.text === 'string' ? block.text : ''
+            if (text === '') continue
+            const key = `c:${msgKeyBase}:text:${text}`
+            if (textsByMessageId.has(key)) continue
+            const blockMsg: SessionAssistantText = {
+              kind: 'assistant-text',
+              text,
+              ts: evt.ts,
+              messageId: turn.messageId,
+            }
+            textsByMessageId.set(key, blockMsg)
+            messages.push(blockMsg)
+          } else if (blockType === 'tool_use') {
+            const callId = typeof block.id === 'string' ? block.id : `__anon_call__:${evt.id}`
+            // First writer wins: claude blocks are complete (not deltas), so a
+            // later duplicate row (captured transcript) must not reset the
+            // status/output a tool_result already folded in.
+            if (tools.has(callId)) continue
+            const toolName = typeof block.name === 'string' ? block.name : 'unknown'
+            const inputVal = block.input ?? null
+            if (toolName === 'Task' || toolName === 'Agent') {
+              const childKey = claude.childKeyOf(callId)
+              const blockMsg: SessionSubagentCall = {
+                kind: 'subagent-call',
+                toolName,
+                callId,
+                status: 'running',
+                input: inputVal,
+                output: null,
+                ts: evt.ts,
+                messageId: turn.messageId,
+                childSessionId: buckets.has(childKey) ? childKey : null,
+                child: null,
+                childOutputFallback: null,
+                childAgentName: pickSubagentAgentName(inputVal),
+              }
+              messages.push(blockMsg)
+              tools.set(callId, blockMsg)
+            } else {
+              const blockMsg: SessionToolCall = {
+                kind: 'tool-call',
+                toolName,
+                callId,
+                status: 'running',
+                input: inputVal,
+                output: null,
+                ts: evt.ts,
+                messageId: turn.messageId,
+              }
+              messages.push(blockMsg)
+              tools.set(callId, blockMsg)
+            }
+          }
+          // Unknown block types (image, server_tool_use, …) are skipped.
+        }
+        return
+      }
+
+      // turn.type === 'user': tool results, or the subagent transcript's
+      // initial prompt line (message.content is a plain string).
+      const pushUser = (text: string): void => {
+        if (text === '' || claudeUserSeen.has(text)) return
+        claudeUserSeen.add(text)
+        messages.push({ kind: 'user', text, ts: evt.ts })
+      }
+      const rawContent = turn.message.content
+      if (typeof rawContent === 'string') {
+        pushUser(rawContent)
+        return
+      }
+      for (const block of claudeContentBlocks(turn.message)) {
+        const blockType = typeof block.type === 'string' ? block.type : null
+        if (blockType === 'tool_result') {
+          const callId = typeof block.tool_use_id === 'string' ? block.tool_use_id : null
+          if (callId === null) continue
+          const target = tools.get(callId)
+          if (target === undefined) continue
+          // Async Agent launches ack immediately with placeholder metadata
+          // ("Async agent launched successfully…"); the real completion comes
+          // via the system task_notification event (folded in the post-pass
+          // below). Keep the call running and drop the placeholder text.
+          if (target.kind === 'subagent-call' && turn.toolUseResult?.isAsync === true) continue
+          target.status = block.is_error === true ? 'error' : 'completed'
+          target.output = flattenClaudeToolResultContent(block.content)
+          if (target.kind === 'subagent-call') target.childOutputFallback = target.output
+        } else if (blockType === 'text') {
+          pushUser(typeof block.text === 'string' ? block.text : '')
+        }
+      }
+    }
 
     for (const evt of bucket) {
-      const parsed = safeJsonParse(evt.payload)
-      if (parsed === null) continue
-      const part = (parsed as { part?: unknown }).part
-      if (!isRecord(part)) continue
+      const parsed = parsedByEvt.get(evt) ?? null
+      if (parsed === null || !isRecord(parsed)) continue
+      const part = parsed.part
+      if (!isRecord(part)) {
+        handleClaudeRow(evt, parsed)
+        continue
+      }
       const partType = typeof part.type === 'string' ? part.type : null
 
       if (partType === 'text' && evt.kind === 'text') {
@@ -311,6 +479,36 @@ export function parseSessionTree(input: ParseSessionInput): SessionTree {
           tools.set(callId, block)
         }
       }
+    }
+
+    // Claude: fold system task_notification results into their subagent-call
+    // blocks. Async Agent launches complete through this lane (their
+    // tool_result is only a launch ack, skipped above); sync calls already
+    // completed via tool_result and only pick up a missing summary here.
+    for (const blk of tools.values()) {
+      if (blk.kind !== 'subagent-call') continue
+      const link = claude.links.get(blk.callId)
+      if (link === undefined) continue
+      if (link.notifyStatus === 'completed' && blk.status !== 'error') {
+        blk.status = 'completed'
+      } else if (link.notifyStatus === 'failed' || link.notifyStatus === 'error') {
+        blk.status = 'error'
+      }
+      if (link.notifySummary !== null && (blk.output === null || blk.output === '')) {
+        blk.output = link.notifySummary
+        blk.childOutputFallback = link.notifySummary
+      }
+    }
+
+    // Claude: a child bucket built purely from inline stream rows has no
+    // user-prompt line (the transcript capture is the only source of that
+    // line, and it lands post-run). Synthesize it from task_started.prompt so
+    // the live view reads as a complete conversation. The transcript's real
+    // prompt line, when present, wins (claudeUserSeen also dedups the exact
+    // same text arriving later).
+    const childPrompt = claude.childPrompt.get(sessionId)
+    if (childPrompt !== undefined && !messages.some((m) => m.kind === 'user')) {
+      messages.unshift({ kind: 'user', text: childPrompt.text, ts: childPrompt.ts })
     }
 
     // RFC-048: surface orphan child sessions while the parent's `task`
@@ -515,4 +713,214 @@ function readCaptureFailedTarget(payload: string): string | null {
   if (typeof parsed['sessionID'] === 'string') return parsed['sessionID'] as string
   if (typeof parsed['sessionId'] === 'string') return parsed['sessionId'] as string
   return null
+}
+
+// -----------------------------------------------------------------------------
+// Claude Code dialect helpers (RFC-111 SessionTab parity)
+// -----------------------------------------------------------------------------
+
+/** One assistant/user turn row in either claude sub-dialect (stream / transcript). */
+interface ClaudeTurn {
+  type: 'assistant' | 'user'
+  message: Record<string, unknown>
+  messageId: string | null
+  /** Non-null on inline subagent rows in the root stream. */
+  parentToolUseId: string | null
+  /** Rich result metadata: `tool_use_result` (stream) / `toolUseResult` (transcript). */
+  toolUseResult: Record<string, unknown> | null
+}
+
+/**
+ * Shape-sniff one parsed payload as a claude assistant/user turn. Returns null
+ * for opencode rows (they carry `part`) and for claude rows that render
+ * nothing (`system` / `result` / `rate_limit_event` / `attachment` / …).
+ */
+function claudeTurnOf(parsed: Record<string, unknown>): ClaudeTurn | null {
+  if (isRecord(parsed.part)) return null
+  const type = parsed.type
+  if (type !== 'assistant' && type !== 'user') return null
+  const message = parsed.message
+  if (!isRecord(message)) return null
+  const tur = parsed['tool_use_result'] ?? parsed['toolUseResult']
+  return {
+    type,
+    message,
+    messageId: typeof message.id === 'string' ? message.id : null,
+    parentToolUseId:
+      typeof parsed['parent_tool_use_id'] === 'string'
+        ? (parsed['parent_tool_use_id'] as string)
+        : null,
+    toolUseResult: isRecord(tur) ? tur : null,
+  }
+}
+
+/** `message.content` blocks (array form); [] for the plain-string prompt form. */
+function claudeContentBlocks(message: Record<string, unknown>): Array<Record<string, unknown>> {
+  const content = message.content
+  if (!Array.isArray(content)) return []
+  return content.filter(isRecord)
+}
+
+/** tool_result.content is either a plain string or [{type:'text', text}, …]. */
+function flattenClaudeToolResultContent(content: unknown): string | null {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  const texts: string[] = []
+  for (const item of content) {
+    if (isRecord(item) && item.type === 'text' && typeof item.text === 'string') {
+      texts.push(item.text)
+    }
+  }
+  return texts.length > 0 ? texts.join('\n') : null
+}
+
+/** Cross-event facts about one claude subagent spawn, keyed by tool_use id. */
+interface ClaudeSubagentLink {
+  /** claude task/agent id → transcript bucket key `agent-<id>`. */
+  agentId: string | null
+  /** task_started.prompt — synthesized as the child's user message when the transcript line is absent. */
+  prompt: string | null
+  promptTs: number | null
+  /** task_notification status/summary (async Agent completion lane). */
+  notifyStatus: string | null
+  notifySummary: string | null
+}
+
+interface ClaudeLinkage {
+  /** toolUseId → link facts (task_started / task_notification / tool_use_result.agentId). */
+  links: Map<string, ClaudeSubagentLink>
+  /** Rows that move out of their wire bucket (inline subagent rows) → child bucket key. */
+  bucketOf: Map<ParseSessionInputEvent, string>
+  /** Child bucket key → bucket owning the spawning tool_use block. */
+  parentOverride: Map<string, string>
+  /** Child bucket key → synthetic user prompt (from task_started). */
+  childPrompt: Map<string, { text: string; ts: number }>
+  childKeyOf: (toolUseId: string) => string
+}
+
+/**
+ * Pre-pass over all events building the claude subagent linkage:
+ *
+ *  1. Collect per-tool_use facts — `system/task_started` gives task_id
+ *     (= transcript agent id) + prompt, `system/task_notification` gives the
+ *     async completion status/summary, and user rows' `tool_use_result` /
+ *     `toolUseResult` carry `agentId` for the sync lane.
+ *  2. Compute each row's final bucket: rows tagged `parent_tool_use_id` move
+ *     to their child bucket. The key is `agent-<agentId>` when known — the
+ *     exact sessionId the post-run transcript capture writes — so live and
+ *     captured rows merge; otherwise a `__claude_task__:<toolUseId>` synthetic.
+ *  3. Record which bucket owns each tool_use block, so a child bucket's parent
+ *     resolves to the session that actually spawned it (depth ≥ 2 safe). A
+ *     row's own bucket depends only on its own `parent_tool_use_id`, so one
+ *     pass suffices before parent resolution.
+ *
+ * Pure opencode inputs produce empty maps — zero behavior change.
+ */
+function buildClaudeLinkage(
+  events: ParseSessionInputEvent[],
+  parsedByEvt: Map<ParseSessionInputEvent, unknown>,
+  rootKey: string,
+): ClaudeLinkage {
+  const links = new Map<string, ClaudeSubagentLink>()
+  const ensureLink = (toolUseId: string): ClaudeSubagentLink => {
+    let link = links.get(toolUseId)
+    if (link === undefined) {
+      link = {
+        agentId: null,
+        prompt: null,
+        promptTs: null,
+        notifyStatus: null,
+        notifySummary: null,
+      }
+      links.set(toolUseId, link)
+    }
+    return link
+  }
+
+  const childToolUseIds = new Set<string>()
+
+  // Pass 1 — linkage facts.
+  for (const evt of events) {
+    const parsed = parsedByEvt.get(evt)
+    if (!isRecord(parsed) || isRecord(parsed.part)) continue
+    if (parsed.type === 'system') {
+      const subtype = parsed.subtype
+      const toolUseId = typeof parsed['tool_use_id'] === 'string' ? parsed['tool_use_id'] : null
+      if (toolUseId === null) continue
+      if (subtype === 'task_started') {
+        const link = ensureLink(toolUseId)
+        if (link.agentId === null && typeof parsed['task_id'] === 'string') {
+          link.agentId = parsed['task_id']
+        }
+        if (link.prompt === null && typeof parsed['prompt'] === 'string') {
+          link.prompt = parsed['prompt']
+          link.promptTs = evt.ts
+        }
+      } else if (subtype === 'task_notification') {
+        const link = ensureLink(toolUseId)
+        if (typeof parsed['status'] === 'string') link.notifyStatus = parsed['status']
+        if (typeof parsed['summary'] === 'string') link.notifySummary = parsed['summary']
+        if (link.agentId === null && typeof parsed['task_id'] === 'string') {
+          link.agentId = parsed['task_id']
+        }
+      }
+      continue
+    }
+    const turn = claudeTurnOf(parsed)
+    if (turn === null) continue
+    if (turn.parentToolUseId !== null) childToolUseIds.add(turn.parentToolUseId)
+    if (turn.type !== 'user' || turn.toolUseResult === null) continue
+    const agentId =
+      typeof turn.toolUseResult['agentId'] === 'string' ? turn.toolUseResult['agentId'] : null
+    if (agentId === null) continue
+    // The rich result object sits on the row, not the block — only bind it
+    // when the row carries exactly one tool_result (the observed shape).
+    const resultIds = claudeContentBlocks(turn.message)
+      .filter((b) => b.type === 'tool_result' && typeof b.tool_use_id === 'string')
+      .map((b) => b.tool_use_id as string)
+    if (resultIds.length === 1) {
+      const link = ensureLink(resultIds[0]!)
+      if (link.agentId === null) link.agentId = agentId
+    }
+  }
+
+  const childKeyOf = (toolUseId: string): string => {
+    const agentId = links.get(toolUseId)?.agentId ?? null
+    return agentId !== null ? `agent-${agentId}` : `__claude_task__:${toolUseId}`
+  }
+
+  // Pass 2 — final bucket per moved row + tool_use block ownership.
+  const bucketOf = new Map<ParseSessionInputEvent, string>()
+  const ownerBucketOfToolUse = new Map<string, string>()
+  for (const evt of events) {
+    const parsed = parsedByEvt.get(evt)
+    if (!isRecord(parsed)) continue
+    const turn = claudeTurnOf(parsed)
+    if (turn === null) continue
+    const home =
+      turn.parentToolUseId !== null ? childKeyOf(turn.parentToolUseId) : (evt.sessionId ?? rootKey)
+    if (turn.parentToolUseId !== null) bucketOf.set(evt, home)
+    if (turn.type === 'assistant') {
+      for (const block of claudeContentBlocks(turn.message)) {
+        if (block.type === 'tool_use' && typeof block.id === 'string') {
+          ownerBucketOfToolUse.set(block.id, home)
+        }
+      }
+    }
+  }
+
+  // Pass 3 — child parent overrides + synthetic prompts.
+  for (const toolUseId of links.keys()) childToolUseIds.add(toolUseId)
+  const parentOverride = new Map<string, string>()
+  const childPrompt = new Map<string, { text: string; ts: number }>()
+  for (const toolUseId of childToolUseIds) {
+    const childKey = childKeyOf(toolUseId)
+    parentOverride.set(childKey, ownerBucketOfToolUse.get(toolUseId) ?? rootKey)
+    const link = links.get(toolUseId)
+    if (link !== undefined && link.prompt !== null) {
+      childPrompt.set(childKey, { text: link.prompt, ts: link.promptTs ?? 0 })
+    }
+  }
+
+  return { links, bucketOf, parentOverride, childPrompt, childKeyOf }
 }

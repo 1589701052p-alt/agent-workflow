@@ -1,20 +1,31 @@
 // RFC-111 PR-B — Claude Code stream-json stdout parsing → NormalizedEvent.
 //
-// Event shapes verified hands-on against claude 2.1.193 (design §6.1, §0.3):
-//   {type:'system', subtype:'init', session_id, model, apiKeySource, ...}
-//   {type:'assistant', message:{content:[{type:'text'|'thinking'|'tool_use',...}],
+// Event shapes verified hands-on against claude 2.1.193 (design §6.1, §0.3),
+// re-verified against 2.1.202 (2026-07-07 probe):
+//   {type:'system', subtype:'init'|'status'|'thinking_tokens'|'task_started'|
+//                   'task_notification'|'hook_*', session_id, ...}
+//   {type:'assistant', message:{id, content:[{type:'text'|'thinking'|'tool_use',...}],
 //                               usage:{input_tokens,output_tokens,
 //                                      cache_read_input_tokens,cache_creation_input_tokens}},
-//          session_id}
-//   {type:'user',   message:{content:[{type:'tool_result',...}]}, session_id}
+//          parent_tool_use_id, session_id}
+//   {type:'user',   message:{content:[{type:'tool_result',...}]|string},
+//                   tool_use_result?, timestamp?, session_id}
 //   {type:'result', subtype:'success', is_error, result, session_id,
 //                   total_cost_usd, usage:{...}, num_turns}
 //
-// Unlike opencode (one event per part), claude emits one event per message TURN
-// whose `message.content[]` mixes text / thinking / tool_use. We concat the text
-// parts for the `<workflow-output>` envelope buffer, derive a single display
-// kind, and take the token total from the (single, cumulative) `result` event so
-// it is never double-counted across the per-turn `assistant` events.
+// On 2.1.193 claude emitted one event per message TURN with a mixed
+// `message.content[]`; on 2.1.202 assistant events arrive one per content
+// block (same message.id repeated). Both shapes flow through here: we concat
+// whatever text parts an event carries into the `<workflow-output>` envelope
+// buffer, derive a single display kind, and take the token total from the
+// (cumulative) `result` event so it is never double-counted across the
+// per-turn `assistant` events. Subagent transcript JSONL lines (read by
+// sessionCapture.ts) reuse this parser too — they carry an ISO `timestamp`
+// we surface so captured rows keep the real event time instead of the
+// capture-walk time. The conversation-tree rendering itself re-parses the
+// verbatim payload in @agent-workflow/shared parseSessionTree (which handles
+// the claude dialect since the RFC-111 SessionTab-parity fix); the kind we
+// emit here is only a coarse per-row display/filter hint.
 //
 // Leaf module: imports ONLY runtime types → no module-init cycle.
 
@@ -40,11 +51,21 @@ export function parseEvent(line: string): NormalizedEvent | null {
     kind: inferKind(type, contentParts),
     text,
     sessionId,
-    // claude stream-json has no top-level event timestamp; pump falls back to now.
-    timestamp: undefined,
+    // Transcript JSONL lines (and stream user rows) carry an ISO `timestamp`;
+    // assistant stream events don't — the pump falls back to now for those.
+    timestamp: extractTimestamp(evt),
     tokens: extractTokenDelta(type, evt) ?? undefined,
     rawLine: line,
   }
+}
+
+/** ISO-8601 `timestamp` → ms epoch; undefined when absent/unparseable. */
+function extractTimestamp(evt: Record<string, unknown>): number | undefined {
+  const raw = evt.timestamp
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw !== 'string') return undefined
+  const ms = Date.parse(raw)
+  return Number.isFinite(ms) ? ms : undefined
 }
 
 /** Pull `message.content[]` (array of `{type, text?, thinking?, ...}`). */

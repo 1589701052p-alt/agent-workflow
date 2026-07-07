@@ -60,11 +60,13 @@ describe('captureClaudeSessions (RFC-111 PR-D)', () => {
       JSON.stringify({
         type: 'assistant',
         sessionId: 'sub-1',
+        timestamp: '2026-07-07T04:50:52.174Z',
         message: { content: [{ type: 'text', text: 'sub thinking out loud' }] },
       }),
       JSON.stringify({
         type: 'assistant',
         sessionId: 'sub-1',
+        timestamp: '2026-07-07T04:50:53.500Z',
         message: { content: [{ type: 'tool_use', name: 'Read' }] },
       }),
       '', // blank line tolerated
@@ -88,6 +90,13 @@ describe('captureClaudeSessions (RFC-111 PR-D)', () => {
     expect(rows.every((r) => r.parentSessionId === rootSession)).toBe(true)
     expect(rows.some((r) => r.kind === 'text')).toBe(true)
     expect(rows.some((r) => r.kind === 'tool_use')).toBe(true)
+    // rows keep the transcript's real ISO timestamps (not the capture-walk time),
+    // so the SessionTab (ts, id) sort interleaves them correctly with live rows
+    const tss = rows.map((r) => r.ts).sort((a, b) => a - b)
+    expect(tss).toEqual([
+      Date.parse('2026-07-07T04:50:52.174Z'),
+      Date.parse('2026-07-07T04:50:53.500Z'),
+    ])
     rmSync(root, { recursive: true, force: true })
   })
 
