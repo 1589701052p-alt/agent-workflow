@@ -19,6 +19,7 @@
 // uses it (PR-D) to promote inner outputs to the wrapper row's
 // `node_run_outputs`.
 
+import { DEFAULT_OUTPUT_KIND } from './outputKinds/registry'
 import type { Agent } from './schemas/agent'
 import type { WorkflowDefinition, WorkflowNode } from './schemas/workflow'
 
@@ -118,14 +119,14 @@ export function deriveWrapperFanoutOutputs(
 ): DerivedWrapperFanoutOutput[] {
   const found = findFanoutAggregator(defn, wrapperId, agents)
   if (found === null) {
-    return [{ name: '__done__', kind: 'signal' }]
+    return [{ name: FANOUT_DONE_PORT_NAME, kind: 'signal' }]
   }
   const { agent } = found
   const renames = agent.outputWrapperPortNames ?? {}
   const kinds = agent.outputKinds ?? {}
   return agent.outputs.map((port) => ({
     name: renames[port] ?? port,
-    kind: kinds[port] ?? 'string',
+    kind: kinds[port] ?? DEFAULT_OUTPUT_KIND,
   }))
 }
 

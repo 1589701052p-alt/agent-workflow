@@ -13,6 +13,7 @@
 // registry as a convenience.
 
 import type { AgentOutputKind } from '../schemas/review'
+import { DEFAULT_OUTPUT_KIND } from './registry'
 import stringHandler from './string'
 import markdownHandler from './markdown'
 import markdownFileHandler from './markdownFile'
@@ -60,7 +61,7 @@ export function groupPortsByKind(
   const byKind = new Map<AgentOutputKind, string[]>()
   const orderedKinds: AgentOutputKind[] = []
   for (const port of declaredOutputs) {
-    const k = (agentOutputKinds?.[port] ?? 'string') as AgentOutputKind
+    const k = (agentOutputKinds?.[port] ?? DEFAULT_OUTPUT_KIND) as AgentOutputKind
     if (!byKind.has(k)) {
       byKind.set(k, [])
       orderedKinds.push(k)

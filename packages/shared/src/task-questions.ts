@@ -26,7 +26,7 @@
 
 import type { ClarifyQuestion, ClarifyQuestionScope } from './schemas/clarify'
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from './schemas/clarify'
-import type { NodeRunStatus } from './schemas/task'
+import type { NodeRunStatus, RerunCause } from './schemas/task'
 
 /** 承接角色：self=同节点反问的提问节点；questioner=跨节点反问者；designer=跨节点设计者；
  *  echo=改派回执（RFC-134）——目标恒为提问节点的只读知会条目，生来已下发、排队等提问节点
@@ -230,12 +230,13 @@ export function isOverrideTarget(
 /** RFC-120 Codex F1：「新一轮反问触发的承接 rerun」的 cause 集合——用作 lineage
  *  窗口上界。一个条目的承接 lineage = 它的 trigger run + 其 process-retry/级联子代，
  *  止于**下一条**带这些 cause 的更新 rerun（那属于另一条目/另一轮的承接）。
- *  必须与 backend `RerunCause` 枚举对应值保持一致（drift 由 T3 集成测试用真 cause 兜）。 */
+ *  flag-audit W0：与 `RerunCause` 的一致性从 test-forced 升级为 compile-forced
+ *  （satisfies；T3 集成测试继续兜真 cause 的运行时行为）。 */
 export const NEW_CLARIFY_TRIGGER_CAUSES = [
   'clarify-answer', // self 反问回答 → 提问节点续跑
   'cross-clarify-answer', // cross 设计者重跑
   'cross-clarify-questioner-rerun', // cross 反问者续跑
-] as const
+] as const satisfies readonly RerunCause[]
 
 /** 一条 node_run 在 lineage 解析时需要的最小视图（service 从 node_runs 投影）。 */
 export interface RunLineageView {

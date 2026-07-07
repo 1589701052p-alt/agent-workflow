@@ -15,7 +15,7 @@ import type {
   TaskNodeRuns,
   WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { redactGitUrl } from '@agent-workflow/shared'
+import { COMMIT_PUSH_NODE_PREFIX, redactGitUrl } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
@@ -825,8 +825,9 @@ export function canvasStatus(s: NodeRun['status']): CanvasNodeData['status'] {
 // RFC-075: synthetic commit&push node id prefix. Container rows carry
 // `commitPush` metadata; the message/repair session children share the nodeId
 // but have `commitPush == null` (hidden from the table — reachable via the
-// container row's "view session" dialog).
-const COMMIT_PUSH_PREFIX = '__commit_push__'
+// container row's "view session" dialog). flag-audit W0：改用 shared 常量
+// （原为与 backend 各写一份的裸字面量）。
+const COMMIT_PUSH_PREFIX = COMMIT_PUSH_NODE_PREFIX
 
 function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSnapshot: unknown }) {
   const { t } = useTranslation()

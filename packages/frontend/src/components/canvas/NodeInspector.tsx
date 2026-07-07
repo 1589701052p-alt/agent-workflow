@@ -22,6 +22,7 @@ import {
   deriveWrapperFanoutOutputs,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
+  resolveClarifySessionMode,
   tryParseKind,
 } from '@agent-workflow/shared'
 import { useEffect, useState } from 'react'
@@ -1037,7 +1038,12 @@ function EditForm({ node, agents, definition, onPatch, onCommitDef }: EditProps)
               data-testid="clarify-session-mode"
             >
               {(['isolated', 'inline'] as const).map((mode) => {
-                const active = (rec.sessionMode ?? 'isolated') === mode
+                // flag-audit W0：缺省归一走 shared 单源（其 docstring 明言就是为了
+                // 阻止 `?? 'isolated'` 在各消费点 sprinkle）。
+                const active =
+                  resolveClarifySessionMode(
+                    node as Parameters<typeof resolveClarifySessionMode>[0],
+                  ) === mode
                 return (
                   <button
                     key={mode}

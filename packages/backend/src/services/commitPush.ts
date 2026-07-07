@@ -10,9 +10,12 @@
 import type { DetectedEnvelopeKind } from '@/services/envelope'
 import { extractLastEnvelope, parseEnvelope } from '@/services/envelope'
 import type { Agent, NodeRunStatus } from '@agent-workflow/shared'
+import { COMMIT_PUSH_NODE_PREFIX } from '@agent-workflow/shared'
 
-/** Synthetic node_id prefix marking a framework commit&push node_run. */
-export const COMMIT_PUSH_NODE_PREFIX = '__commit_push__'
+/** Synthetic node_id prefix marking a framework commit&push node_run.
+ *  flag-audit W0: canonical home moved to shared/lifecycle.ts（前端过滤同用）；
+ *  re-export 保持既有 backend 导入路径。 */
+export { COMMIT_PUSH_NODE_PREFIX }
 /** The single output port the built-in commit agent declares. */
 export const COMMIT_MESSAGE_PORT = 'commit_message'
 /** Name of the framework-internal commit agent (never a user-editable row). */

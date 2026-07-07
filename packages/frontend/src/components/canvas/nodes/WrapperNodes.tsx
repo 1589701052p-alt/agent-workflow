@@ -20,6 +20,7 @@
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
+import { FANOUT_DONE_PORT_NAME } from '@agent-workflow/shared'
 import { PortHandles } from './PortHandles'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
 
@@ -188,7 +189,7 @@ export function GroupWrapperNode({ data, selected }: Props) {
       {kind === 'fanout' && data.outputPorts.length > 0 ? (
         <div className="canvas-node__port-rows canvas-node__port-rows--right canvas-node__port-rows--wrapper-fanout">
           {data.outputPorts.map((p) => {
-            const isSignal = p === '__done__'
+            const isSignal = p === FANOUT_DONE_PORT_NAME
             return (
               /* RFC-060 §3 — symmetric boundary row on the right edge.
                * Layout straddles the wrapper's right border:
@@ -244,7 +245,7 @@ export function GroupWrapperNode({ data, selected }: Props) {
       {kind !== 'fanout' && data.outputPorts.length > 0 ? (
         <div className="canvas-node__bottom-ports">
           {data.outputPorts.map((p) => {
-            const isSignal = p === '__done__'
+            const isSignal = p === FANOUT_DONE_PORT_NAME
             return (
               <div
                 key={p}

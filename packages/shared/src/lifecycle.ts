@@ -211,6 +211,11 @@ export function isTerminalTaskStatus(s: TaskStatus): boolean {
   return (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(s)
 }
 
+/** RFC-075 — synthetic node_id prefix marking a framework commit&push node_run.
+ *  flag-audit W0: was two independent literals（backend services/commitPush.ts
+ *  写、frontend tasks.detail.tsx 过滤），现在双端共用一处。 */
+export const COMMIT_PUSH_NODE_PREFIX = '__commit_push__'
+
 /** flag-audit W0（§4.3）— the `tasks.error_summary` marker orphan reaping stamps
  *  on daemon-restart interruptions. MACHINE-READ CONTRACT: autoResume's boot
  *  pass selects candidates by exact equality on this value, so a wording tweak
