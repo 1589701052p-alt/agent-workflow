@@ -4,6 +4,7 @@
 // selected the claude runtime; opencode-only installs are unaffected.
 
 import { createLogger } from '@/util/log'
+import { killProcessTree } from '@/util/platform'
 import type { ProbeOpts } from '@/util/opencode'
 
 const log = createLogger('claude-code')
@@ -58,11 +59,9 @@ export async function probeClaudeCode(
       opts.timeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true
-            try {
-              process.kill(-proc.pid, 'SIGKILL')
-            } catch {
-              proc.kill('SIGKILL')
-            }
+            // RFC-144 PR-1: delegate to platform.killProcessTree (POSIX group-kill
+            // byte-for-byte; Windows taskkill /T /F).
+            if (typeof proc.pid === 'number') killProcessTree(proc.pid, 'SIGKILL')
           }, opts.timeoutMs)
         : undefined
     try {
@@ -92,11 +91,8 @@ export async function probeClaudeCode(
         // Unconditional group reap once the probe is over — a wrapper that
         // forked then exited before the timer would otherwise leak its
         // descendants (see util/opencode.ts, same shape).
-        try {
-          process.kill(-proc.pid, 'SIGKILL')
-        } catch {
-          /* group already gone */
-        }
+        // RFC-144 PR-1: delegated to platform.killProcessTree (cross-platform).
+        if (typeof proc.pid === 'number') killProcessTree(proc.pid, 'SIGKILL')
       }
     }
   } catch (err) {

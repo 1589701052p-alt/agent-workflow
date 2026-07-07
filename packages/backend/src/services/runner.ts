@@ -42,6 +42,7 @@ import { dirname, join } from 'node:path'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns } from '@/db/schema'
 import { createLogger, type Logger } from '@/util/log'
+import { killProcessTree } from '@/util/platform'
 import {
   CLARIFY_FORBIDDEN_PREFIX,
   CLARIFY_REQUIRED_PREFIX,
@@ -1864,16 +1865,18 @@ const FINAL_REAP_MARGIN_MS = 5_000
  * reaches grandchildren too (verified on bun 1.3.13 / darwin: group SIGTERM
  * kills a bash child's forked sleep). Falls back to the single-process
  * safeKill when the group signal fails (ESRCH after exit / EPERM).
+ *
+ * RFC-144 PR-1: the group-kill / tree-kill mechanism is delegated to
+ * util/platform.ts `killProcessTree` — POSIX still does `process.kill(-pid)`
+ * (byte-for-byte) with a single-pid fallback; Windows uses `taskkill /T /F`
+ * (no process groups on Windows). `safeKill` remains the last-ditch fallback
+ * for when even the platform kill reports failure (pid already gone but the
+ * child handle still needs closing).
  */
 function killTree(child: Bun.Subprocess, signal: 'SIGTERM' | 'SIGKILL'): void {
   const pid = child.pid
   if (typeof pid === 'number' && pid > 0) {
-    try {
-      process.kill(-pid, signal)
-      return
-    } catch {
-      // fall back to the single-process kill below
-    }
+    if (killProcessTree(pid, signal)) return
   }
   safeKill(child, signal)
 }

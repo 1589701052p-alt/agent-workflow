@@ -59,6 +59,15 @@ export interface AppDeps {
    * can omit it; the OIDC routes refuse to mount without it.
    */
   secretBox?: SecretBox
+  /**
+   * RFC-144 PR-1 — graceful shutdown trigger for the `POST /api/shutdown`
+   * route. Windows has no SIGTERM delivery from another process, so
+   * `agent-workflow stop` POSTs this endpoint (token-gated via the normal
+   * /api/* auth) instead of `process.kill(pid, 'SIGTERM')`. start.ts wires
+   * this to its `shutdown()` closure. Optional so tests that don't exercise
+   * shutdown can omit it (the route returns 503).
+   */
+  shutdown?: () => void
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -97,6 +106,22 @@ export function createApp(deps: AppDeps): Hono {
       },
       source: actor.source,
     })
+  })
+
+  // RFC-144 PR-1 — graceful shutdown over HTTP. Mounted AFTER the /api/*
+  // multiAuth gate so the daemon token (or any authorised actor) is required;
+  // no permission gate (token holders could already SIGTERM the daemon on
+  // POSIX, so the HTTP equivalent is the same trust level). Windows has no
+  // SIGTERM delivery from another process, so `agent-workflow stop` calls this.
+  app.post('/api/shutdown', (c) => {
+    if (typeof deps.shutdown !== 'function') {
+      return c.json({ ok: false, code: 'shutdown-not-wired', message: 'shutdown not wired' }, 503)
+    }
+    // Fire-and-forget: the daemon unlinks its lock + info file and exits
+    // asynchronously; respond first so the caller sees 200 before the socket
+    // closes.
+    deps.shutdown()
+    return c.json({ ok: true, message: 'shutting down' })
   })
 
   // RFC-036 permission gates. Mounted BEFORE the route handlers so a non-

@@ -29,6 +29,7 @@ import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
+import { isWindows } from '@/util/platform'
 import { MIN_CLAUDE_CODE_VERSION, probeClaudeCode } from '@/services/runtime/claudeCode/probe'
 import { Paths } from '@/util/paths'
 import { buildWebSocketAdapter } from '@/ws/server'
@@ -301,6 +302,10 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   log.info('secret box ready', { keyFile: Paths.secretKeyFile })
 
   // 7. HTTP server.
+  // RFC-144 PR-1: the `POST /api/shutdown` route calls deps.shutdown(); the
+  // real closure is defined later (after `server` + tickers exist), so we wire
+  // it through a mutable holder assigned once `shutdown()` is in scope.
+  const shutdownTrigger: { fn: (() => void) | undefined } = { fn: undefined }
   const app = createApp({
     token,
     configPath: Paths.config,
@@ -308,6 +313,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     dbVersion,
     db,
     secretBox,
+    shutdown: () => shutdownTrigger.fn?.(),
   })
 
   const bindHost = opts.host ?? config.bindHost
@@ -522,6 +528,25 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     removeDaemonInfo()
     void shutdown('SIGINT')
   })
+  // RFC-144 PR-1: Windows has no SIGTERM delivery from another process
+  // (`process.kill(pid, 'SIGTERM')` on Windows is a hard TerminateProcess that
+  // bypasses JS signal handlers). SIGBREAK is the Windows console-ctrl signal
+  // (Ctrl-Break) that DOES reach a handler, so a Ctrl-Break in the daemon's
+  // console still shuts down gracefully. `agent-workflow stop` on Windows goes
+  // through the HTTP /api/shutdown route instead (cli/stop.ts). Registered only
+  // on Windows; on POSIX SIGBREAK never fires so it's a no-op, but we keep it
+  // POSIX-byte-for-byte by not registering it there.
+  if (isWindows()) {
+    process.on('SIGBREAK', () => {
+      removeDaemonInfo()
+      void shutdown('SIGBREAK')
+    })
+  }
+  // Wire the HTTP /api/shutdown trigger now that `shutdown` is in scope.
+  shutdownTrigger.fn = (): void => {
+    removeDaemonInfo()
+    void shutdown('HTTP')
+  }
   // Belt-and-suspenders for paths the signal handlers can't reach (uncaught
   // exception, explicit process.exit elsewhere). on('exit') is synchronous
   // and runs on every normal termination path.

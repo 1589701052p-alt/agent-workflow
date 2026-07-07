@@ -4,6 +4,7 @@
 // Bumping requires re-validating the 4 isolation experiments.
 
 import { createLogger } from './log'
+import { killProcessTree } from './platform'
 
 const log = createLogger('opencode')
 
@@ -94,11 +95,11 @@ export async function probeOpencode(
       opts.timeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true
-            try {
-              process.kill(-proc.pid, 'SIGKILL')
-            } catch {
-              proc.kill('SIGKILL')
-            }
+            // RFC-144 PR-1: delegate to platform.killProcessTree — POSIX still
+            // group-kills via `process.kill(-pid)` (byte-for-byte), Windows uses
+            // `taskkill /T /F`. The previous `proc.kill` fallback is handled
+            // inside killProcessTree's single-pid branch.
+            if (typeof proc.pid === 'number') killProcessTree(proc.pid, 'SIGKILL')
           }, opts.timeoutMs)
         : undefined
     try {
@@ -129,12 +130,9 @@ export async function probeOpencode(
         // The probe is over — anything still alive in the detached group is a
         // leaked descendant of a misbehaving wrapper (e.g. it forked then
         // exited non-zero BEFORE the timer fired, so the timeout never reaped
-        // the group). Kill unconditionally; ESRCH on an empty group is fine.
-        try {
-          process.kill(-proc.pid, 'SIGKILL')
-        } catch {
-          /* group already gone */
-        }
+        // the group). Kill unconditionally; an already-gone group is a no-op.
+        // RFC-144 PR-1: delegated to platform.killProcessTree (cross-platform).
+        if (typeof proc.pid === 'number') killProcessTree(proc.pid, 'SIGKILL')
       }
     }
   } catch (err) {

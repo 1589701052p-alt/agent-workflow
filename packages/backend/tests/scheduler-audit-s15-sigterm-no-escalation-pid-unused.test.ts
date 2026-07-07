@@ -38,6 +38,7 @@ const ORPHANS = resolve(BACKEND_SRC, 'services', 'orphans.ts')
 const STUCK = resolve(BACKEND_SRC, 'services', 'stuckTaskDetector.ts')
 const TASK = resolve(BACKEND_SRC, 'services', 'task.ts')
 const PROCESS_UTIL = resolve(BACKEND_SRC, 'util', 'process.ts')
+const PLATFORM_UTIL = resolve(BACKEND_SRC, 'util', 'platform.ts')
 const LOCK_UTIL = resolve(BACKEND_SRC, 'util', 'lock.ts')
 
 function isCommentLine(line: string): boolean {
@@ -66,8 +67,12 @@ describe('S-15 guard: SIGTERM→SIGKILL escalation + group kill (runner.ts)', ()
     // precondition for `-pid` group signals reaching grandchildren.
     expect(countNonCommentMatches(runnerSrc, /detached: true/g)).toBe(1)
 
-    // killTree = process.kill(-pid, sig) with single-process fallback.
-    expect(countNonCommentMatches(runnerSrc, /process\.kill\(-pid, signal\)/g)).toBe(1)
+    // RFC-144 PR-1: killTree delegates to util/platform.ts `killProcessTree`
+    // (POSIX `process.kill(-pid)` byte-for-byte; Windows `taskkill /T /F`),
+    // with the single-process `safeKill` as the last-ditch fallback. The
+    // `process.kill(-pid, signal)` literal now lives in platform.ts (asserted
+    // in the platform guard test) — here we only lock the wiring.
+    expect(countNonCommentMatches(runnerSrc, /killProcessTree\(pid, signal\)/g)).toBe(1)
     expect(countNonCommentMatches(runnerSrc, /safeKill\(child, signal\)/g)).toBe(1)
   })
 
@@ -102,16 +107,29 @@ describe('S-15 guard: SIGTERM→SIGKILL escalation + group kill (runner.ts)', ()
 })
 
 describe('S-15 guard: nodeRuns.pid is consumed by process governance', () => {
-  test('util/process.ts owns the liveness + kill-tree vocabulary; lock.ts re-exports', () => {
+  test('util/platform.ts owns the liveness + kill-tree vocabulary; process.ts re-exports + owns the orchestrator; lock.ts re-exports', () => {
+    // RFC-144 PR-1: the OS-specific primitives (isProcessAlive / killProcessTree
+    // / pidCommandLine) moved to util/platform.ts — the single source of
+    // platform branching. util/process.ts re-exports them (callers keep their
+    // `@/util/process` import path) and still owns the platform-agnostic
+    // killStaleRunProcessTree orchestrator + the 48h startedAt window. The
+    // `ps -o command=` POSIX literal moved with pidCommandLine into platform.ts.
+    const platformSrc = readFileSync(PLATFORM_UTIL, 'utf8')
+    expect(countNonCommentMatches(platformSrc, /export function isProcessAlive/g)).toBe(1)
+    expect(countNonCommentMatches(platformSrc, /export function killProcessTree/g)).toBe(1)
+    expect(countNonCommentMatches(platformSrc, /export function pidCommandLine/g)).toBe(1)
+    // POSIX PID-reuse fingerprint literal lives in platform.ts now.
+    expect(platformSrc).toContain("'-o', 'command='")
+
     const processSrc = readFileSync(PROCESS_UTIL, 'utf8')
-    expect(countNonCommentMatches(processSrc, /export function isProcessAlive/g)).toBe(1)
-    expect(countNonCommentMatches(processSrc, /export function killProcessTree/g)).toBe(1)
     expect(
       countNonCommentMatches(processSrc, /export async function killStaleRunProcessTree/g),
     ).toBe(1)
     // Both PID-reuse noise gates live in the shared helper.
     expect(processSrc).toContain('STALE_RUN_PID_MAX_AGE_MS')
-    expect(processSrc).toContain("'-o', 'command='")
+    // Re-exports the platform primitives so callers' import path is stable.
+    expect(countNonCommentMatches(processSrc, /export \{/g)).toBeGreaterThanOrEqual(1)
+    expect(processSrc).toContain("from './platform'")
 
     const lockSrc = readFileSync(LOCK_UTIL, 'utf8')
     expect(countNonCommentMatches(lockSrc, /export \{ isProcessAlive \}/g)).toBe(1)

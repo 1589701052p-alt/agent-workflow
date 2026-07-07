@@ -35,6 +35,15 @@ import { runNode } from '../src/services/runner'
 import { resumeTask } from '../src/services/task'
 import { STALE_RUN_PID_MAX_AGE_MS } from '../src/util/process'
 
+// RFC-144 PR-1: this file locks POSIX-specific SIGTERM-trapping + process-group
+// kill behaviour (the stubborn-opencode fixture traps SIGTERM; the grandchild
+// is only reaped because `process.kill(-pid)` reaches it across the group).
+// Windows has neither SIGTERM delivery nor process groups — kill escalation
+// there is an immediate hard tree-kill via `taskkill /T /F` (POSIX escalation
+// is a no-op map onto the same hard kill), covered in tests/platform.test.ts.
+// Skipping on Windows is a platform-conditional guard, not a masked red.
+const describePosix = process.platform === 'win32' ? describe.skip : describe
+
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const STUBBORN = resolve(import.meta.dir, 'fixtures', 'stubborn-opencode.ts')
 
@@ -225,7 +234,7 @@ function spawnStubborn(pidFile: string): Bun.Subprocess {
 // 1+2. runner escalation paths
 // ---------------------------------------------------------------------------
 
-describe('RFC-098 WP-8 — runner escalation against a stubborn child', () => {
+describePosix('RFC-098 WP-8 — runner escalation against a stubborn child', () => {
   let h: Harness
   afterEach(() => h?.cleanup())
 
@@ -314,7 +323,7 @@ describe('RFC-098 WP-8 — runner escalation against a stubborn child', () => {
 // 3. orphan reaping
 // ---------------------------------------------------------------------------
 
-describe('RFC-098 WP-8 — reapOrphanRuns kills live orphans before flipping', () => {
+describePosix('RFC-098 WP-8 — reapOrphanRuns kills live orphans before flipping', () => {
   let h: Harness
   afterEach(() => h?.cleanup())
 
@@ -367,7 +376,7 @@ describe('RFC-098 WP-8 — reapOrphanRuns kills live orphans before flipping', (
 // 4. resumeTask kill-then-proceed
 // ---------------------------------------------------------------------------
 
-describe('RFC-098 WP-8 — resumeTask kills the target row’s live child before rollback', () => {
+describePosix('RFC-098 WP-8 — resumeTask kills the target row’s live child before rollback', () => {
   let h: Harness
   afterEach(() => h?.cleanup())
 

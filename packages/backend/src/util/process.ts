@@ -1,48 +1,26 @@
 // RFC-098 WP-8 (scheduler audit S-15) — process-tree governance primitives.
-//
-// `isProcessAlive` moved here from util/lock.ts (still re-exported there for
-// the daemon single-instance lock callers) so service-level pid governance —
-// orphan reaping (services/orphans.ts), resume/retry pre-rollback kills
-// (services/task.ts) and the runner's kill escalation (services/runner.ts) —
-// shares one liveness / kill vocabulary without importing the lock module.
+// RFC-144 PR-1 — platform branching moved to util/platform.ts (single source);
+// this module keeps its public API stable (callers in services/* import from
+// here) and delegates the primitives that differ by OS. POSIX behaviour is
+// byte-for-byte identical to the pre-RFC-144 implementation.
 
-export type KillTreeSignal = 'SIGTERM' | 'SIGKILL'
-
-/** True iff `pid` is a live process this user can signal (or at least exists). */
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException
-    // EPERM means the process exists but we don't have permission to signal it.
-    return e.code === 'EPERM'
-  }
-}
-
-/**
- * Best-effort kill of `pid`'s WHOLE process group. The runner spawns opencode
- * with `detached: true` (POSIX `setsid()` → the child is its own group
- * leader), so `process.kill(-pid, sig)` reaches grandchildren too — the
- * docker-MCP / shell-tool descendants that a single-pid SIGKILL would orphan.
- * Falls back to a single-pid kill when the group signal fails (ESRCH after
- * exit, EPERM, or a pre-RFC-098 pid that is not a group leader). Returns
- * false when no signal could be delivered at all.
- */
-export function killProcessTree(pid: number, signal: KillTreeSignal): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(-pid, signal)
-    return true
-  } catch {
-    try {
-      process.kill(pid, signal)
-      return true
-    } catch {
-      return false
-    }
-  }
-}
+// Re-export the platform primitives so existing callers keep their import path
+// (`@/util/process`). The implementations live in util/platform.ts.
+export {
+  isProcessAlive,
+  killProcessTree,
+  pidCommandLooksLikeAgentChild,
+  pidCommandContainsBinary,
+  pidCommandLine,
+  isWindows,
+} from './platform'
+export type { KillTreeSignal } from './platform'
+import {
+  isProcessAlive,
+  killProcessTree,
+  pidCommandLooksLikeAgentChild,
+  pidCommandContainsBinary,
+} from './platform'
 
 /**
  * PID-reuse noise gate 1: node_runs rows whose `startedAt` is older than this
@@ -50,39 +28,6 @@ export function killProcessTree(pid: number, signal: KillTreeSignal): boolean {
  * onto an unrelated process.
  */
 export const STALE_RUN_PID_MAX_AGE_MS = 48 * 3_600_000
-
-/**
- * PID-reuse noise gate 2: `ps -p <pid> -o command=` must look like one of our
- * children (the real `opencode` binary, or `bun` running a test fixture /
- * source checkout). Anything else ⟹ the pid was recycled; leave it alone.
- */
-export function pidCommandLooksLikeAgentChild(pid: number): boolean {
-  try {
-    const res = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'command='])
-    if (res.exitCode !== 0) return false
-    return /opencode|bun/i.test(res.stdout.toString())
-  } catch {
-    return false
-  }
-}
-
-/**
- * RFC-108 T9 (AR-14): the SPECIFIC variant — does the live pid's `ps` command
- * contain the EXACT binary path we spawned for this run? This distinguishes
- * "our child is still alive" from "the pid was recycled onto an unrelated
- * process" far more reliably than the fuzzy `/opencode|bun/` regex (which a
- * recycled pid running any `bun`/`opencode` would also match). Substring match
- * keeps it portable across macOS/Linux `ps`.
- */
-export function pidCommandContainsBinary(pid: number, binaryPath: string): boolean {
-  try {
-    const res = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'command='])
-    if (res.exitCode !== 0) return false
-    return res.stdout.toString().includes(binaryPath)
-  } catch {
-    return false
-  }
-}
 
 export type StaleRunKillOutcome =
   | 'no-pid'
@@ -104,9 +49,13 @@ export interface StaleRunKillOpts {
  * when the row's recorded child process is still alive, group-kill it
  * (SIGTERM → bounded wait → SIGKILL) so a survivor from a previous daemon
  * cannot keep writing into a worktree we are about to roll back / hand to a
- * fresh attempt. Both PID-reuse noise gates (startedAt window + `ps` command
+ * fresh attempt. Both PID-reuse noise gates (startedAt window + command
  * shape) must pass before any signal is sent. Best-effort by contract — the
  * caller proceeds with its rollback / status flip regardless of the outcome.
+ *
+ * RFC-144: the per-platform kill mechanism (POSIX group-kill / Windows
+ * taskkill tree) and the command-fingerprint lookup (ps / wmic) are delegated
+ * to util/platform.ts; this orchestrator is platform-agnostic.
  */
 export async function killStaleRunProcessTree(
   run: { pid: number | null; startedAt: number | null; spawnBinaryPath?: string | null },
