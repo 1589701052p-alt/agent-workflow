@@ -263,8 +263,6 @@ export interface RunNodeOptions {
    * dispatch in services/scheduler.ts populates this for inner shard dispatches.
    */
   inputPortKinds?: Record<string, string>
-  /** Default true. */
-  dangerouslySkipPermissions?: boolean
   /** Wall-clock timeout in ms. Undefined = no limit. */
   timeoutMs?: number
   /**
@@ -866,7 +864,6 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       opencodeCmd: pickRuntimeHead(opts.runtimeBinary, opts.opencodeCmd),
       agentName: opts.agent.name,
       prompt,
-      dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
       resumeSessionId: opts.resumeSessionId,
       worktreePath: opts.worktreePath,
       runDir,

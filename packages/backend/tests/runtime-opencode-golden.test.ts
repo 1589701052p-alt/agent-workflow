@@ -31,11 +31,13 @@ describe('buildOpencodeSpawn — argv golden (RFC-111 A2)', () => {
     ])
   })
 
-  it('honors opencodeCmd head + --session, and drops --dangerously when false', () => {
+  it('honors opencodeCmd head + --session; --dangerously-skip-permissions is UNCONDITIONAL', () => {
+    // flag-audit W0（§3 假旋钮）：`dangerouslySkipPermissions?: boolean` 参数已删——
+    // 生产端从未有人传值，且 CLI 模式没有 permission 应答通道，非跳过运行会在第一个
+    // tool 提示上挂死（假旋钮）。flag 现在无条件出现。
     const { cmd } = buildOpencodeSpawn({
       ...BASE,
       opencodeCmd: ['bun', 'run', '/mock.ts'],
-      dangerouslySkipPermissions: false,
       resumeSessionId: 'opc_9',
     })
     expect(cmd).toEqual([
@@ -49,6 +51,7 @@ describe('buildOpencodeSpawn — argv golden (RFC-111 A2)', () => {
       '--format',
       'json',
       '--thinking',
+      '--dangerously-skip-permissions',
       '--session',
       'opc_9',
     ])

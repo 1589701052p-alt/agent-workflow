@@ -14,8 +14,6 @@ export interface OpencodeCommandOptions {
   /** Override `['opencode']` (tests pass `['bun','run',mock]`). */
   opencodeCmd?: string[]
   agent: { name: string }
-  /** Default true. */
-  dangerouslySkipPermissions?: boolean
   /** RFC-026 clarify-inline rerun: resume the prior opencode session. */
   resumeSessionId?: string
 }
@@ -25,8 +23,22 @@ export function buildCommand(opts: OpencodeCommandOptions, prompt: string): stri
   // `--thinking` makes opencode emit `reasoning` events to stdout in
   // `--format json` mode; without it `cli/cmd/run.ts:671` filters them
   // out and the SessionTab can never show the model's thinking blocks.
-  const cmd = [...head, 'run', prompt, '--agent', opts.agent.name, '--format', 'json', '--thinking']
-  if (opts.dangerouslySkipPermissions ?? true) cmd.push('--dangerously-skip-permissions')
+  //
+  // `--dangerously-skip-permissions` is UNCONDITIONAL: the CLI run has no
+  // permission-answer channel, so a non-skip run would hang on the first
+  // tool prompt. flag-audit W0（§3 假旋钮）删掉了从未有生产调用方传值的
+  // `dangerouslySkipPermissions?: boolean` 参数——想恢复可配置需先解决应答通道。
+  const cmd = [
+    ...head,
+    'run',
+    prompt,
+    '--agent',
+    opts.agent.name,
+    '--format',
+    'json',
+    '--thinking',
+    '--dangerously-skip-permissions',
+  ]
   // RFC-026: clarify-inline rerun — resume the prior opencode session so the
   // agent has its full prior transcript + state. Only ever populated by the
   // scheduler on the clarify-driven path (review / retry / loop paths leave
@@ -91,7 +103,6 @@ export interface OpencodeSpawnContext extends OpencodeEnvContext {
   opencodeCmd?: string[]
   agentName: string
   prompt: string
-  dangerouslySkipPermissions?: boolean
   resumeSessionId?: string
 }
 
@@ -104,7 +115,6 @@ export function buildOpencodeSpawn(ctx: OpencodeSpawnContext): {
     {
       opencodeCmd: ctx.opencodeCmd,
       agent: { name: ctx.agentName },
-      dangerouslySkipPermissions: ctx.dangerouslySkipPermissions,
       resumeSessionId: ctx.resumeSessionId,
     },
     ctx.prompt,
