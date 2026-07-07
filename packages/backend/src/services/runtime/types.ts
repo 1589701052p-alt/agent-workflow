@@ -18,9 +18,16 @@
 
 import type { DbClient } from '@/db/client'
 import type { Logger } from '@/util/log'
-import type { Config } from '@agent-workflow/shared'
 
 export type RuntimeKind = 'opencode' | 'claude-code'
+
+/** The config subset `defaultBinary` reads — the per-runtime binary path keys.
+ *  Narrow (not the full Config) so runtimeRegistry / routes can pass their own
+ *  slim config shapes without a Config dependency in this type module. */
+export interface RuntimeBinaryConfig {
+  opencodePath?: string | null
+  claudeCodePath?: string | null
+}
 
 /** Running per-run token totals (mirrors RunResult['tokenUsage']). */
 export interface RuntimeTokenUsage {
@@ -216,7 +223,7 @@ export interface RuntimeDriver {
    * config path (config.opencodePath / claudeCodePath) else the built-in name.
    * Custom-fork override (RFC-112 binaryPath) is applied by the caller, not here.
    */
-  defaultBinary(config: Config): string[]
+  defaultBinary(config: RuntimeBinaryConfig): string[]
   /** RFC-143 — version probe (was probeOpencode / probeClaudeCode free fns). */
   probe(binary: string, opts?: ProbeOpts): Promise<RuntimeProbe>
   /** RFC-143 — model list (was listOpencodeModels / listClaudeModels free fns). */

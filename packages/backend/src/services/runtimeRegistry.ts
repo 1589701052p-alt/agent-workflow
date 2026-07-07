@@ -231,20 +231,10 @@ export async function resolveInternalAgentRuntime(
   return resolveAgentRuntime(db, null, opts.defaultRuntime)
 }
 
-/**
- * The argv head for a resolved runtime: the custom binary if set, else the
- * protocol's default (RFC-111 behavior — opencode: config.opencodePath/PATH,
- * claude: config.claudeCodePath/PATH).
- */
-export function runtimeHead(
-  resolved: ResolvedRuntime,
-  config: { opencodePath?: string | null; claudeCodePath?: string | null },
-): string[] {
-  if (resolved.binaryPath !== null && resolved.binaryPath.length > 0) return [resolved.binaryPath]
-  if (resolved.protocol === 'opencode')
-    return config.opencodePath ? [config.opencodePath] : ['opencode']
-  return config.claudeCodePath ? [config.claudeCodePath] : ['claude']
-}
+// RFC-143: `runtimeHead` (RFC-112 PR-A) was a second copy of the per-protocol
+// config-key binary pick with ZERO production callers (dispatch uses runner's
+// pickRuntimeHead; the routes use resolveRuntimeBinary → driver.defaultBinary).
+// Deleted — driver.defaultBinary is the single source.
 
 // --- guards ----------------------------------------------------------------
 

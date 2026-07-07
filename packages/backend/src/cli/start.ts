@@ -28,8 +28,7 @@ import {
 import { acquireLock, DaemonLockHeldError, type Lock } from '@/util/lock'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { configureLogger, createLogger, type LogLevel } from '@/util/log'
-import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
-import { MIN_CLAUDE_CODE_VERSION, probeClaudeCode } from '@/services/runtime/claudeCode/probe'
+import { getRuntimeDriver } from '@/services/runtime'
 import { Paths } from '@/util/paths'
 import { buildWebSocketAdapter } from '@/ws/server'
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -74,12 +73,15 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   log.info('config loaded', { path: Paths.config, language: config.language, theme: config.theme })
 
   // 4. opencode version probe — daemon refuses to start on incompatible version.
-  const probe = await probeOpencode(config.opencodePath)
+  // RFC-143: opencode is the hard-required boot runtime — probe it via its
+  // driver (the exit-on-incompatible gate stays here, a boot-policy call).
+  const ocDriver = getRuntimeDriver('opencode')
+  const probe = await ocDriver.probe(ocDriver.defaultBinary(config)[0]!)
   if (probe.version === null) {
     log.error('opencode binary not found or unreadable', { binary: probe.binary })
     console.error(
       `agent-workflow: cannot execute "${probe.binary}".\n` +
-        `  install opencode (>=${MIN_OPENCODE_VERSION}) and ensure it is on PATH,\n` +
+        `  install opencode (>=${ocDriver.minVersion}) and ensure it is on PATH,\n` +
         `  or set 'opencodePath' in ${Paths.config}.`,
     )
     lock.release()
@@ -88,14 +90,14 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   if (!probe.compatible) {
     log.error('opencode incompatible', {
       found: probe.version,
-      requiredMinimum: MIN_OPENCODE_VERSION,
+      requiredMinimum: ocDriver.minVersion,
       reason: probe.incompatibleReason,
     })
     console.error(
       `agent-workflow: opencode ${probe.version} is incompatible.\n` +
-        `  required: version >= ${MIN_OPENCODE_VERSION}\n` +
+        `  required: version >= ${ocDriver.minVersion}\n` +
         `  reason: ${probe.incompatibleReason ?? 'unknown'}\n` +
-        `  to recover: \`npm install -g opencode-ai@latest\` (or any version >= ${MIN_OPENCODE_VERSION}) or set 'opencodePath' in ${Paths.config}.`,
+        `  to recover: \`npm install -g opencode-ai@latest\` (or any version >= ${ocDriver.minVersion}) or set 'opencodePath' in ${Paths.config}.`,
     )
     lock.release()
     process.exit(1)
@@ -132,12 +134,13 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // signal available before the DB opens); per-agent claude selection surfaces
   // as a clear spawn-time failure on the node itself.
   if (config.defaultRuntime === 'claude-code') {
-    const claudeProbe = await probeClaudeCode(config.claudeCodePath)
+    const ccDriver = getRuntimeDriver('claude-code')
+    const claudeProbe = await ccDriver.probe(ccDriver.defaultBinary(config)[0]!)
     if (!claudeProbe.compatible) {
       log.warn('claude-code default runtime unavailable (nodes selecting it will fail)', {
         binary: claudeProbe.binary,
         found: claudeProbe.version,
-        requiredMinimum: MIN_CLAUDE_CODE_VERSION,
+        requiredMinimum: ccDriver.minVersion,
         reason: claudeProbe.incompatibleReason ?? 'not found',
       })
     } else {

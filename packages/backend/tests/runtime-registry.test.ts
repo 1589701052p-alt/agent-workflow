@@ -17,7 +17,6 @@ import {
   listRuntimes,
   resolveAgentRuntime,
   resolveRuntimeByName,
-  runtimeHead,
   seedBuiltinRuntimes,
   setRuntimeEnabled,
   updateRuntime,
@@ -231,92 +230,6 @@ describe('resolution: name → (protocol, binary) (RFC-112 PR-A)', () => {
     expect((await resolveAgentRuntime(db, 'my-claude', 'opencode')).name).toBe('my-claude')
     expect((await resolveAgentRuntime(db, null, 'my-claude')).name).toBe('my-claude')
     expect((await resolveAgentRuntime(db, null, null)).name).toBe('opencode')
-  })
-})
-
-describe('runtimeHead (RFC-112 PR-A)', () => {
-  test('custom binary → that binary', () => {
-    expect(
-      runtimeHead(
-        {
-          name: 'my-oc',
-          protocol: 'opencode',
-          binaryPath: '/a/my-oc',
-          model: null,
-          variant: null,
-          temperature: null,
-          steps: null,
-          maxSteps: null,
-        },
-        {},
-      ),
-    ).toEqual(['/a/my-oc'])
-  })
-
-  test('built-in opencode → config.opencodePath ?? PATH', () => {
-    expect(
-      runtimeHead(
-        {
-          name: 'opencode',
-          protocol: 'opencode',
-          binaryPath: null,
-          model: null,
-          variant: null,
-          temperature: null,
-          steps: null,
-          maxSteps: null,
-        },
-        {},
-      ),
-    ).toEqual(['opencode'])
-    expect(
-      runtimeHead(
-        {
-          name: 'opencode',
-          protocol: 'opencode',
-          binaryPath: null,
-          model: null,
-          variant: null,
-          temperature: null,
-          steps: null,
-          maxSteps: null,
-        },
-        { opencodePath: '/p/oc' },
-      ),
-    ).toEqual(['/p/oc'])
-  })
-
-  test('built-in claude → config.claudeCodePath ?? PATH', () => {
-    expect(
-      runtimeHead(
-        {
-          name: 'claude-code',
-          protocol: 'claude-code',
-          binaryPath: null,
-          model: null,
-          variant: null,
-          temperature: null,
-          steps: null,
-          maxSteps: null,
-        },
-        {},
-      ),
-    ).toEqual(['claude'])
-    expect(
-      runtimeHead(
-        {
-          name: 'claude-code',
-          protocol: 'claude-code',
-          binaryPath: null,
-          model: null,
-          variant: null,
-          temperature: null,
-          steps: null,
-          maxSteps: null,
-        },
-        { claudeCodePath: '/p/cc' },
-      ),
-    ).toEqual(['/p/cc'])
   })
 })
 

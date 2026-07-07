@@ -8,6 +8,7 @@
 import type {
   NormalizedEvent,
   ProbeOpts,
+  RuntimeBinaryConfig,
   RuntimeDriver,
   RuntimeModelList,
   RuntimeProbe,
@@ -16,7 +17,6 @@ import type {
   SystemAgentSpawnContext,
   ListModelsOpts,
 } from '../types'
-import type { Config } from '@agent-workflow/shared'
 import { parseEvent } from './events'
 import { buildOpencodeSpawn } from './spawn'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
@@ -31,7 +31,7 @@ export const opencodeDriver: RuntimeDriver = {
   },
   // RFC-143 — capability methods. PR-1 delegates to the existing free functions
   // (byte-for-byte behavior); later PRs move call sites onto these.
-  defaultBinary(config: Config): string[] {
+  defaultBinary(config: RuntimeBinaryConfig): string[] {
     return config.opencodePath ? [config.opencodePath] : ['opencode']
   },
   probe(binary: string, opts?: ProbeOpts): Promise<RuntimeProbe> {
