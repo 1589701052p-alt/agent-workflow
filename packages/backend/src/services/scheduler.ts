@@ -3589,9 +3589,7 @@ async function runLoopWrapperNode(
     if (evaluateExitCondition(cond, portContent)) {
       for (const b of bindings) {
         const v = await readPortAtIteration(db, taskId, b.bind.nodeId, b.bind.portName, i)
-        await db
-          .insert(nodeRunOutputs)
-          .values({ nodeRunId: wrapperRunId, portName: b.name, content: v })
+        await upsertWrapperOutput(db, wrapperRunId, b.name, v)
       }
       // RFC-130 T12: merge the loop's total (all-iterations) delta back into the
       // task canonical as one unit when it exits.
@@ -3839,9 +3837,7 @@ async function runFanoutWrapperNode(
     : splitListItems(rawContent)
   if (items.length === 0) {
     for (const port of derivedOutputs) {
-      await db
-        .insert(nodeRunOutputs)
-        .values({ nodeRunId: wrapperRunId, portName: port.name, content: '' })
+      await upsertWrapperOutput(db, wrapperRunId, port.name, '')
     }
     await markWrapperTerminal(db, wrapperRunId, 'done')
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'done')
@@ -4075,19 +4071,13 @@ async function runFanoutWrapperNode(
     for (const port of aggInfo.agent.outputs) {
       const outletName = renames[port] ?? port
       const content = aggRes.outputs[port] ?? ''
-      await db
-        .insert(nodeRunOutputs)
-        .values({ nodeRunId: wrapperRunId, portName: outletName, content })
+      await upsertWrapperOutput(db, wrapperRunId, outletName, content)
     }
   } else {
     // No aggregator: emit the implicit __done__ signal outlet. Empty content;
     // downstream can chain on it but must NOT reference it inside {{...}} —
     // assertNoPromptSignalRefs (D.T7) catches that at prompt-render time.
-    await db.insert(nodeRunOutputs).values({
-      nodeRunId: wrapperRunId,
-      portName: FANOUT_DONE_PORT_NAME,
-      content: '',
-    })
+    await upsertWrapperOutput(db, wrapperRunId, FANOUT_DONE_PORT_NAME, '')
   }
 
   await markWrapperTerminal(db, wrapperRunId, 'done')
@@ -5018,6 +5008,30 @@ async function captureGitPreDirty(
  * changes — so it must NOT be recreated). A non-git task worktree (mock harness)
  * yields a passthrough handle (the wrapper runs directly on the task canonical).
  */
+/**
+ * RFC-144 (PR-5 review P2) — wrapper outputs are written onto the wrapper's
+ * OWN row, and wrapper rows are multi-generation (same-row revival after a
+ * merged/conflict-human prior generation). The prior generation may have
+ * already written its output rows before its merge-back crashed/parked, so a
+ * plain INSERT would violate the (node_run_id, port_name) PK on the rerun.
+ * Upsert: the new generation's content REPLACES the stale one (mirrors the
+ * runner's same-session envelope upsert, runner.ts).
+ */
+async function upsertWrapperOutput(
+  db: DbClient,
+  wrapperRunId: string,
+  portName: string,
+  content: string,
+): Promise<void> {
+  await db
+    .insert(nodeRunOutputs)
+    .values({ nodeRunId: wrapperRunId, portName, content })
+    .onConflictDoUpdate({
+      target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
+      set: { content },
+    })
+}
+
 export async function createOrRebuildWrapperIso(
   state: SchedulerState,
   wrapperRunId: string,
@@ -5044,21 +5058,22 @@ export async function createOrRebuildWrapperIso(
   )[0]
   let effectiveExisting = existing
   if (cur !== undefined && (cur.mergeState === 'merged' || cur.mergeState === 'conflict-human')) {
-    await transitionMergeState({
-      db,
-      nodeRunId: wrapperRunId,
-      event: { kind: 'reenter-isolation' },
-    })
     if (cur.mergeState === 'merged') {
       // Impl-gate P2 second half: the prior generation's delta is ALREADY in
       // canonical — the new generation must branch from the CURRENT canonical,
       // NOT the stale gen-1 base. A three-way merge against the old base would
       // treat gen-1 files (now in canon) as `ours` additions and resurrect
-      // content the new generation deleted. Discard the stale iso (tolerant —
-      // may already be gone) and force the fresh-create path below;
-      // persistIsoBase re-stamps via the begin-isolation isolating self-edge.
-      // conflict-human re-entry keeps the rebuild path: its delta never reached
-      // canonical (D27), so the old base is still the correct merge base.
+      // content the new generation deleted. Discard the stale iso FIRST
+      // (tolerant — may already be gone; crash before the reenter below just
+      // repeats this), then flip merged→isolating while ATOMICALLY clearing
+      // the base columns + wrapperProgressJson (impl-gate P2 third half /
+      // durability): a crash after the flip leaves an isolating row with NULL
+      // base/progress, which the next resume reads as "generation start
+      // needed" — it can never be mistaken for a mid-generation row carrying
+      // the old baseline. persistIsoBase then re-stamps fresh columns via the
+      // begin-isolation isolating self-edge. conflict-human re-entry keeps
+      // base + progress: its delta never reached canonical (D27), so the old
+      // base/baseline stay the correct merge/diff anchors.
       if (existing !== null) {
         const staleBases: Record<string, string> = {}
         if (task.repoCount === 1) {
@@ -5084,7 +5099,24 @@ export async function createOrRebuildWrapperIso(
           await discardNodeIso(staleHandle, state.log)
         }
       }
+      await transitionMergeState({
+        db,
+        nodeRunId: wrapperRunId,
+        event: { kind: 'reenter-isolation' },
+        extra: {
+          isoWorktreePath: null,
+          isoBaseSnapshot: null,
+          isoBaseSnapshotReposJson: null,
+          wrapperProgressJson: null,
+        },
+      })
       effectiveExisting = null
+    } else {
+      await transitionMergeState({
+        db,
+        nodeRunId: wrapperRunId,
+        event: { kind: 'reenter-isolation' },
+      })
     }
   }
   if (effectiveExisting !== null) {
@@ -5232,7 +5264,18 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   // persisted progress, recapture + re-persist on the new wrapper-canonical
   // below. (conflict-human / mid-run revival keep the S-4 never-recapture
   // rule — their iso and its inner writes are preserved.)
-  const freshGeneration = existing !== null && existing.mergeState === 'merged'
+  // Crash durability (PR-5 review P2): the re-entry flip clears base cols +
+  // progress ATOMICALLY, so a crash inside the re-entry window leaves an
+  // isolating row with NULL base columns — the second disjunct re-detects it
+  // as a generation start on the next resume (a genuine mid-generation row
+  // always carries the base columns persistIsoBase stamped before any inner
+  // work; passthrough rows have NULL merge_state and never match).
+  const freshGeneration =
+    existing !== null &&
+    (existing.mergeState === 'merged' ||
+      (existing.mergeState === 'isolating' &&
+        existing.isoBaseSnapshot === null &&
+        existing.isoBaseSnapshotReposJson === null))
   if (existing !== null) {
     const progress = decodeWrapperProgress(existing.wrapperProgressJson, (msg) => log.warn(msg))
     wrapperRunId = existing.id
@@ -5428,9 +5471,7 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
     broadcastNodeStatus(taskId, wrapperRunId, node.id, 'failed')
     return { kind: 'failed', summary: `git diff failed: ${msg}`, message: 'git-diff-failed' }
   }
-  await db
-    .insert(nodeRunOutputs)
-    .values({ nodeRunId: wrapperRunId, portName: 'git_diff', content: paths.join('\n') })
+  await upsertWrapperOutput(db, wrapperRunId, 'git_diff', paths.join('\n'))
   // RFC-130 T11: merge the wrapper's total delta (its wrapper-canonical) back into
   // the TASK canonical as ONE unit — the wrapper is isolated like a node. Clean →
   // materialized + merge_state='merged' (D15 lets downstream consume the git_diff);

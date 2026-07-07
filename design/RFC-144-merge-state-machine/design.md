@@ -454,6 +454,16 @@ WHERE merge_state IN ('isolating', 'pending-merge', 'conflict-human')
   resume 读到新基线）。S-4「resume 绝不重捕」规则仅限同代复活（旧 iso 及内部写入还在）——
   conflict-human/中途复活不受影响。e2e 锁：merged 再入代 inner 零写入 → `git_diff` 不含
   旧代文件（修复前红：gen1.txt 泄漏）。
+  **D13 第四半（PR-5 复核 2 P2）——崩溃耐久 + 输出 upsert**：①reenter 的 CAS **原子清空**
+  base 三列 + `wrapperProgressJson`（extra 白名单加一列）——崩溃于再入窗口只会留下
+  「isolating + 基列空」的行，freshGeneration 检测加第二支
+  `isolating ∧ isoBaseSnapshot/ReposJson 双空`（真·同代行必有 persistIsoBase 先盖的基列；
+  passthrough 行 merge_state NULL 不命中），旧基线在任何崩溃序列下都不可能复漏；弃旧 iso
+  移到 reenter **之前**（崩在其间只是重复 tolerant discard）。②wrapper 输出（loop 出口
+  bindings / fanout 空捷径 / aggregator 出口 / `__done__` / git_diff 共 5 写点）从裸 insert
+  收敛为 `upsertWrapperOutput`（onConflictDoUpdate on (node_run_id, port_name)）——真实崩溃
+  现场旧代输出行已落库（输出先写、merge-back 后崩），再入代重写撞主键；e2e fixture 补预置
+  旧 git_diff 行 + 断言内容被本代覆写为空。
 
 ## 13. 测试策略（test-with-every-change 清单）
 

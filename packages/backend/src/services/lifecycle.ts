@@ -371,9 +371,13 @@ import {
 } from '@agent-workflow/shared'
 import type { DbTxSync } from '@/db/txSync'
 
-/** Companion columns that may ride along a merge_state transition — only the
- *  iso snapshot quintet (begin-isolation pins the base, mark-pending-merge
- *  pins the result tree). `mergeState` itself cannot be smuggled through. */
+/** Companion columns that may ride along a merge_state transition — the iso
+ *  snapshot quintet (begin-isolation pins the base, mark-pending-merge pins
+ *  the result tree) plus wrapperProgressJson (reenter-isolation clears the
+ *  prior generation's baseline ATOMICALLY with the merged→isolating flip, so
+ *  a crash inside the re-entry window cannot leave a stale-baseline row that
+ *  the next resume mistakes for a mid-generation one — RFC-144 D13).
+ *  `mergeState` itself cannot be smuggled through. */
 export type MergeStateUpdateExtra = Partial<
   Pick<
     typeof nodeRuns.$inferInsert,
@@ -382,6 +386,7 @@ export type MergeStateUpdateExtra = Partial<
     | 'isoBaseSnapshotReposJson'
     | 'isoNodeTree'
     | 'isoNodeTreeReposJson'
+    | 'wrapperProgressJson'
   >
 >
 

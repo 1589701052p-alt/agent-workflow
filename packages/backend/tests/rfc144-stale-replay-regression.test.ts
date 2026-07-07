@@ -369,6 +369,18 @@ describe('RFC-144 wrapper 同行复活的 iso 基（实现门 P2 第二半）', 
       event: { kind: 'mark-pending-merge' },
     })
     await transitionMergeState({ db: h.db, nodeRunId: runId, event: { kind: 'mark-merged' } })
+    // 旧代 git progress（PR-5 复核：必须随 reenter 原子清空，防崩溃窗口漏检）。
+    await h.db
+      .update(nodeRuns)
+      .set({
+        wrapperProgressJson: JSON.stringify({
+          kind: 'git',
+          baseline: gen1Base,
+          preDirty: {},
+          phase: 'inner-running',
+        }),
+      })
+      .where(eq(nodeRuns.id, runId))
     // canonical 前进（gen-1 的 delta 已并入 canon 的等价物）。
     writeFileSync(join(h.worktreePath, 'gen1-output.txt'), 'merged into canon\n')
     await runGit(h.worktreePath, ['add', '.'])
@@ -381,6 +393,7 @@ describe('RFC-144 wrapper 同行复活的 iso 基（实现门 P2 第二半）', 
     const after = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, runId)))[0]!
     expect(after.mergeState).toBe('isolating') // reenter-isolation 生效
     expect(after.isoBaseSnapshot).not.toBe(gen1Base) // base 列已重盖为新一代
+    expect(after.wrapperProgressJson).toBeNull() // 旧代 baseline 随 reenter 原子清空
     expect(handle.passthrough).toBe(false)
     expect(handle.repos[0]!.baseSnapshot).toBe(after.isoBaseSnapshot!) // handle 与列同源
     // 新 base 含 canon 现态（gen-1 输出在新 iso 里可见 = 三路合并不会再把它当 ours 新增）。
@@ -491,6 +504,13 @@ describe('RFC-144 git wrapper merged 再入的 baseline（PR-4 复核 P2）', ()
       }),
       startedAt: Date.now() - 1000,
     })
+    // PR-5 复核 P2：真实崩溃现场里旧代的 git_diff 输出行已落库（输出先写、
+    // merge-back 后崩）——新代重写必须走 upsert，裸 insert 撞 (runId, port) 主键。
+    await h.db.insert(nodeRunOutputs).values({
+      nodeRunId: mkId(1),
+      portName: 'git_diff',
+      content: 'gen1.txt',
+    })
     // inner agent 什么都不写——新代 git_diff 应为空。
     const mockPath = writeMockAgent(h, `emit(envelope)`)
     await runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', mockPath] })
@@ -510,8 +530,10 @@ describe('RFC-144 git wrapper merged 再入的 baseline（PR-4 复核 P2）', ()
       .where(eq(nodeRunOutputs.nodeRunId, mkId(1)))
     const gitDiff = outs.find((o) => o.portName === 'git_diff')
     expect(gitDiff).toBeDefined()
-    // 核心断言（修复前红）：旧代已合并的 gen1.txt 不得出现在新代 git_diff 里。
+    // 核心断言（修复前红）：旧代已合并的 gen1.txt 不得出现在新代 git_diff 里——
+    // 旧输出行被 upsert 覆写为本代内容（inner 零写入 → 空）。
     expect(gitDiff!.content).not.toContain('gen1.txt')
+    expect(gitDiff!.content).toBe('')
   }, 30000)
 })
 
