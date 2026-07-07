@@ -11506,6 +11506,10 @@ mark.comment-anchor[data-active='true'] {
   display: flex;
   gap: var(--space-1);
   flex-wrap: wrap;
+  /* 2026-07-07 长节点名截断（Codex 实现门 finding）：filter 自身也要有收缩预算，
+     否则其 flex 自动最小宽度停在长 chip 的 max-content 上，chip 的 max-width:100%
+     便相对一个已被撑宽的父级解析——窄视口实测仍溢出工具栏 106px。 */
+  min-width: 0;
 }
 .task-questions__actions {
   display: flex;

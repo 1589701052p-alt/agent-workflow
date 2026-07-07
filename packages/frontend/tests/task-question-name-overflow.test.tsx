@@ -150,6 +150,14 @@ describe('styles.css — truncation rules that keep long names inside the card (
   test('filter chip truncates its label but never its count', async () => {
     const css = await fs.readFile(STYLES_SRC, 'utf8')
 
+    // Codex 实现门 finding: without a shrink budget on the filter GROUP, its flex
+    // automatic minimum size sticks at the long chip's max-content width and the
+    // chip's max-width:100% resolves against an already-overflowed parent
+    // (measured +106px past the toolbar at a 520px viewport).
+    const filter = css.match(/\.task-questions__filter\s*\{([^}]*)\}/)
+    expect(filter).not.toBeNull()
+    expect(filter![1]).toMatch(/min-width:\s*0/)
+
     const chip = css.match(/\.task-questions__filter-chip\s*\{([^}]*)\}/)
     expect(chip).not.toBeNull()
     expect(chip![1]).toMatch(/display:\s*inline-flex/)
