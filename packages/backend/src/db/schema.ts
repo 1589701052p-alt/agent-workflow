@@ -767,10 +767,21 @@ export const nodeRuns = sqliteTable(
      *   (single / multi-repo) of the iso final state — pinned so a crash between
      *   agent-success and merge-back can REPLAY the merge without re-running the
      *   agent (D15). Distinct pin ref from base (D26).
-     * - merge_state: NULL (not reached / non-isolated) | 'pending-merge' (agent ok,
-     *   outputs+node_tree persisted, NOT yet merged — status stays non-done, D15) |
-     *   'merged' | 'conflict-resolving' | 'conflict-human'. Downstream readiness +
-     *   resume replay gate on this.
+     * - merge_state: the RFC-130 iso lifecycle, state-machined by RFC-144
+     *   (value universe = shared/lifecycle.ts MERGE_STATES; the ONLY sanctioned
+     *   writers are transitionMergeState / abandonSupersededMergeStates in
+     *   services/lifecycle.ts — the rfc144 blind-write inventory guard enforces
+     *   this). NULL (never isolated: passthrough/legacy; every mint is born
+     *   NULL) | 'isolating' (iso created, agent not finished) | 'pending-merge'
+     *   (agent ok, outputs+node_tree pinned, NOT yet merged, D15) | 'merged'
+     *   (delta reached canonical) | 'conflict-human' (merge agent could not
+     *   resolve; parked for a human, resolve-iso kept) | 'merge-failed'
+     *   (merge-back threw; hard failure) | 'abandoned' (RFC-144: superseded by
+     *   a fresher generation — its delta will never merge; abandoned ⇔
+     *   superseded). Downstream readiness + resume replay gate on this.
+     *   (The pre-RFC-144 doc listed a 'conflict-resolving' value that was never
+     *   written and omitted 'isolating'/'merge-failed' — classic blind-write
+     *   drift; the transition table is now the single source.)
      */
     isoWorktreePath: text('iso_worktree_path'),
     isoBaseSnapshot: text('iso_base_snapshot'),

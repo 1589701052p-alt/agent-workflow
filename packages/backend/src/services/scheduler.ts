@@ -18,6 +18,8 @@ import type {
   ClarifyCrossAgentNode,
   ClarifyNode,
   Mcp,
+  MergeState,
+  MergeStateOrNull,
   NodeKind,
   Plugin,
   WorkflowDefinition,
@@ -38,6 +40,7 @@ import {
   findQuestionerNodeForCrossClarify,
   isClarifyChannelEdge,
   isInlineMarkdownItemKind,
+  isMergeStateSettled,
   isWrapperKind,
   resolveClarifySessionMode,
   resolveCrossClarifySessionMode,
@@ -88,7 +91,13 @@ import { evaluateExitCondition, parseExitCondition } from '@/services/exitCondit
 import { loadUndispatchedParkTargets } from '@/services/taskQuestions'
 import { resolveBorrowForNode } from '@/services/taskQuestionDispatch'
 import { autoDispatchDeferredQuestions } from '@/services/clarifyAutoDispatch'
-import { trySetTaskStatus, setNodeRunStatus, transitionNodeRunStatus } from '@/services/lifecycle'
+import {
+  trySetTaskStatus,
+  setNodeRunStatus,
+  transitionNodeRunStatus,
+  transitionMergeState,
+  tryTransitionMergeState,
+} from '@/services/lifecycle'
 import {
   frozenRuntimeOfSession,
   isClarifyRerunCause,
@@ -1349,10 +1358,11 @@ export function deriveFrontier(
     if (
       r.status === 'done' &&
       isNodeRunFresh(r, freshestDone) &&
-      // Normalize undefined (plain test rows) → null (real DB column) so only the
-      // in-flight iso merge states ('pending-merge' / 'isolating' / 'conflict-*' /
-      // 'merge-failed') are gated out; null/'merged' pass (legacy golden-lock).
-      ((r.mergeState ?? null) === null || r.mergeState === 'merged')
+      // RFC-144: the settled set {NULL, merged} now derives from the shared
+      // transition table (SETTLED_MERGE_STATES) — in-flight iso states
+      // ('isolating' / 'pending-merge' / 'conflict-human' / 'merge-failed' /
+      // 'abandoned') are gated out; null/'merged' pass (legacy golden-lock).
+      isMergeStateSettled(r.mergeState)
     ) {
       completed.add(nodeId)
     }
@@ -1553,24 +1563,45 @@ export function deriveFrontier(
               reason: 'skipped-has-no-dispatch-semantics',
             })
             break
-          case 'done':
-            // RFC-130 §6.3: a done row whose merge-back could not be resolved by the
-            // merge agent is parked for a human (merge_state='conflict-human') → the
-            // scope bubbles awaiting_human (decideScopeOutcome). merge_state=
-            // 'merge-failed' is a hard merge failure → the scope fails. Everything
-            // else is the pre-RFC-130 stale-done in-invocation dedup artifact.
-            if (latest?.mergeState === 'conflict-human') {
-              awaitingHuman.push(n.id)
-            } else if (latest?.mergeState === 'merge-failed') {
-              failed.push(n.id)
-            } else {
-              blocked.push({
-                nodeId: n.id,
-                status: st,
-                reason: 'stale-done-in-invocation-dedup',
-              })
+          case 'done': {
+            // RFC-130 §6.3 / RFC-144: exhaustive over MergeStateOrNull — a done row
+            // parked at 'conflict-human' bubbles awaiting_human (decideScopeOutcome);
+            // 'merge-failed' is a hard merge failure → the scope fails; 'abandoned'
+            // (superseded generation, RFC-144) joins the stale-done dedup bucket like
+            // every other stale row; a NEW merge state added to the union without a
+            // bucket here is a compile error.
+            const ms = (latest?.mergeState ?? null) as MergeStateOrNull
+            switch (ms) {
+              case 'conflict-human':
+                awaitingHuman.push(n.id)
+                break
+              case 'merge-failed':
+                failed.push(n.id)
+                break
+              case null:
+              case 'isolating':
+              case 'pending-merge':
+              case 'merged':
+              case 'abandoned':
+                blocked.push({
+                  nodeId: n.id,
+                  status: st,
+                  reason: 'stale-done-in-invocation-dedup',
+                })
+                break
+              default: {
+                const _exhaustive: never = ms
+                void _exhaustive
+                // Runtime-unknown legacy value — same dedup bucket as before.
+                blocked.push({
+                  nodeId: n.id,
+                  status: st,
+                  reason: 'stale-done-in-invocation-dedup',
+                })
+              }
             }
             break
+          }
           case 'interrupted':
             blocked.push({
               nodeId: n.id,
@@ -1621,6 +1652,8 @@ interface OneNodeArgs {
  * RFC-130: persist the iso base columns after createNodeIso (single vs multi-repo,
  * design.md §3.2). merge_state='isolating' marks the row as an isolated run whose
  * agent has not yet finished — deriveFrontier treats it as not-yet-complete.
+ * RFC-144: the write goes through the merge_state CAS (NULL → isolating); the
+ * iso base columns ride along atomically as transition extras.
  */
 async function persistIsoBase(
   db: DbClient,
@@ -1630,49 +1663,51 @@ async function persistIsoBase(
 ): Promise<void> {
   if (handle.passthrough) return // in-place run — leave iso columns NULL (golden-lock)
   if (repoCount === 1) {
-    await db
-      .update(nodeRuns)
-      .set({
+    await transitionMergeState({
+      db,
+      nodeRunId,
+      event: { kind: 'begin-isolation' },
+      extra: {
         isoWorktreePath: handle.containerPath,
         isoBaseSnapshot: handle.repos[0]?.baseSnapshot ?? null,
         isoBaseSnapshotReposJson: null,
-        mergeState: 'isolating',
-      })
-      .where(eq(nodeRuns.id, nodeRunId))
+      },
+    })
     return
   }
   const map: Record<string, string> = {}
   for (const r of handle.repos) map[r.worktreeDirName] = r.baseSnapshot
-  await db
-    .update(nodeRuns)
-    .set({
+  await transitionMergeState({
+    db,
+    nodeRunId,
+    event: { kind: 'begin-isolation' },
+    extra: {
       isoWorktreePath: handle.containerPath,
       isoBaseSnapshot: null,
       isoBaseSnapshotReposJson: JSON.stringify(map),
-      mergeState: 'isolating',
-    })
-    .where(eq(nodeRuns.id, nodeRunId))
+    },
+  })
 }
 
-/** RFC-130: persist the iso node_tree columns + merge_state on agent success (D15). */
+/** RFC-130: persist the iso node_tree columns + merge_state on agent success (D15).
+ *  RFC-144: isolating → pending-merge via the merge_state CAS; the former
+ *  `mergeState: string` parameter was a dead knob (all 4 callers passed the
+ *  literal 'pending-merge') — the event now fixes the target. */
 async function persistIsoNodeTree(
   db: DbClient,
   nodeRunId: string,
   repoCount: number,
   nodeTrees: Record<string, string>,
-  mergeState: string,
 ): Promise<void> {
-  if (repoCount === 1) {
-    await db
-      .update(nodeRuns)
-      .set({ isoNodeTree: nodeTrees[''] ?? null, isoNodeTreeReposJson: null, mergeState })
-      .where(eq(nodeRuns.id, nodeRunId))
-    return
-  }
-  await db
-    .update(nodeRuns)
-    .set({ isoNodeTree: null, isoNodeTreeReposJson: JSON.stringify(nodeTrees), mergeState })
-    .where(eq(nodeRuns.id, nodeRunId))
+  await transitionMergeState({
+    db,
+    nodeRunId,
+    event: { kind: 'mark-pending-merge' },
+    extra:
+      repoCount === 1
+        ? { isoNodeTree: nodeTrees[''] ?? null, isoNodeTreeReposJson: null }
+        : { isoNodeTree: null, isoNodeTreeReposJson: JSON.stringify(nodeTrees) },
+  })
 }
 
 function parseIsoJsonMap(s: string | null): Record<string, string> {
@@ -1701,7 +1736,12 @@ async function replayPendingMerges(state: SchedulerState, log: Logger): Promise<
   const rows = await db
     .select()
     .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.mergeState, 'pending-merge')))
+    .where(
+      and(
+        eq(nodeRuns.taskId, taskId),
+        eq(nodeRuns.mergeState, 'pending-merge' satisfies MergeState),
+      ),
+    )
   if (rows.length === 0) return
   const taskBaseHeads: Record<string, string> = {}
   for (const repo of state.repos) {
@@ -1748,10 +1788,18 @@ async function replayPendingMerges(state: SchedulerState, log: Logger): Promise<
         : { kind: 'conflict-human' as const, detail: res.detail }
     })
     if (merge.kind === 'merged') {
-      await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, r.id))
+      await transitionMergeState({
+        db,
+        nodeRunId: r.id,
+        event: { kind: 'mark-merged', via: 'replay' },
+      })
       log.info('pending-merge replay merged', { nodeRunId: r.id })
     } else {
-      await db.update(nodeRuns).set({ mergeState: 'conflict-human' }).where(eq(nodeRuns.id, r.id))
+      await transitionMergeState({
+        db,
+        nodeRunId: r.id,
+        event: { kind: 'park-conflict-human', via: 'replay' },
+      })
       log.warn('pending-merge replay conflict → conflict-human (merge agent could not resolve)', {
         nodeRunId: r.id,
         detail: merge.detail,
@@ -1773,7 +1821,12 @@ async function replayConflictHumanResolutions(state: SchedulerState, log: Logger
   const rows = await db
     .select()
     .from(nodeRuns)
-    .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.mergeState, 'conflict-human')))
+    .where(
+      and(
+        eq(nodeRuns.taskId, taskId),
+        eq(nodeRuns.mergeState, 'conflict-human' satisfies MergeState),
+      ),
+    )
   if (rows.length === 0) return
   const taskBaseHeads: Record<string, string> = {}
   for (const repo of state.repos) {
@@ -1802,7 +1855,11 @@ async function replayConflictHumanResolutions(state: SchedulerState, log: Logger
       completeHumanResolvedConflict(handle, nodeTrees, log),
     )
     if (outcome.allResolved) {
-      await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, r.id))
+      await transitionMergeState({
+        db,
+        nodeRunId: r.id,
+        event: { kind: 'complete-human-resolution' },
+      })
       log.info('conflict-human resume: human resolution merged back', { nodeRunId: r.id })
     } else {
       log.info('conflict-human resume: still unresolved — staying parked', {
@@ -2983,7 +3040,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     } else if (!isoHandle.passthrough && lastResult !== null && lastResult.status === 'done') {
       try {
         const nodeTrees = await snapshotNodeIsoFinal(isoHandle, log)
-        await persistIsoNodeTree(db, nodeRunId, task.repoCount, nodeTrees, 'pending-merge')
+        await persistIsoNodeTree(db, nodeRunId, task.repoCount, nodeTrees)
         const merge = await writeSem.run(async () => {
           const mergeRes = await mergeBackNodeIso(isoHandle, nodeTrees, log)
           if (mergeRes.clean) return { kind: 'merged' as const }
@@ -3006,15 +3063,16 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
             : { kind: 'conflict-human' as const, detail: res.detail }
         })
         if (merge.kind === 'merged') {
-          await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, nodeRunId))
+          await transitionMergeState({ db, nodeRunId, event: { kind: 'mark-merged', via: 'live' } })
         } else {
           // §6.3 — merge agent could not resolve → park human. Conflict is NEVER
           // silently lost; canonical stays clean for siblings; the resolve-iso(s)
           // are kept (keepIso) so the human finishes there and resume re-merges (#4).
-          await db
-            .update(nodeRuns)
-            .set({ mergeState: 'conflict-human' })
-            .where(eq(nodeRuns.id, nodeRunId))
+          await transitionMergeState({
+            db,
+            nodeRunId,
+            event: { kind: 'park-conflict-human', via: 'live' },
+          })
           log.warn('merge-back conflict unresolved by merge agent → awaiting_human', {
             nodeId: node.id,
             detail: merge.detail,
@@ -3033,10 +3091,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // downstream gated (D15); the failed result fails the task.
         const msg = err instanceof Error ? err.message : String(err)
         log.warn('merge-back failed', { nodeId: node.id, error: msg })
-        await db
-          .update(nodeRuns)
-          .set({ mergeState: 'merge-failed' })
-          .where(eq(nodeRuns.id, nodeRunId))
+        // try-variant: this catch must surface the ORIGINAL merge error via the
+        // failed result — a CAS/illegal throw here would mask it (RFC-144 §5).
+        const flipped = await tryTransitionMergeState({
+          db,
+          nodeRunId,
+          event: { kind: 'mark-merge-failed', reason: msg },
+        })
+        if (!flipped) log.warn('merge_state flip to merge-failed lost/illegal', { nodeRunId })
         lastResult = { ...lastResult, status: 'failed', errorMessage: `merge-back-failed: ${msg}` }
       }
     }
@@ -3535,7 +3597,8 @@ async function runLoopWrapperNode(
       // task canonical as one unit when it exits.
       if (!wrapperIso.passthrough) {
         const mb = await mergeBackWrapperIso(state, wrapperIso, wrapperRunId, node, i, log)
-        if (mb.kind === 'awaiting_human') {
+        if (mb.kind === 'conflict-human') {
+          // row parked conflict-human → the scope outcome is awaiting_human.
           return {
             kind: 'awaiting_human',
             summary: `loop merge conflict: ${mb.detail}`,
@@ -4171,7 +4234,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
   // the rerun succeeds (AC-6). Branch 1 (reuse) returns before the iso is built.
   let priorShardUndo: { base: Record<string, string>; node: Record<string, string> } | null = null
   const doneMergedCandidates = candidates.filter(
-    (c) => c.status === 'done' && c.mergeState === 'merged',
+    (c) => c.status === 'done' && c.mergeState === ('merged' satisfies MergeState),
   )
   if (doneMergedCandidates.length === 1) {
     const priorMergedRow = doneMergedCandidates[0]!
@@ -4425,7 +4488,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
     if (!shardIso.passthrough) {
       try {
         const nodeTrees = await snapshotNodeIsoFinal(shardIso, log)
-        await persistIsoNodeTree(db, shardRunId, task.repoCount, nodeTrees, 'pending-merge')
+        await persistIsoNodeTree(db, shardRunId, task.repoCount, nodeTrees)
         const merge = await state.writeSem.run(async () => {
           const mergeRes = await mergeBackNodeIso(shardIso, nodeTrees, log)
           if (mergeRes.clean) return { kind: 'merged' as const }
@@ -4445,16 +4508,21 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
             : { kind: 'conflict-human' as const, detail: res.detail }
         })
         if (merge.kind === 'merged') {
-          await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, shardRunId))
+          await transitionMergeState({
+            db,
+            nodeRunId: shardRunId,
+            event: { kind: 'mark-merged', via: 'live' },
+          })
         } else {
           // §6.3 — unresolved shard conflict: mark conflict-human + fail loudly so the
           // conflict is surfaced (never silently lost) and canonical stays clean.
           // Per-shard awaiting_human bubbling through the fanout aggregation is a
           // follow-up (#4/PR-E); today an unresolvable shard conflict fails the task.
-          await db
-            .update(nodeRuns)
-            .set({ mergeState: 'conflict-human' })
-            .where(eq(nodeRuns.id, shardRunId))
+          await transitionMergeState({
+            db,
+            nodeRunId: shardRunId,
+            event: { kind: 'park-conflict-human', via: 'live' },
+          })
           return {
             kind: 'failed',
             shardKey,
@@ -4464,10 +4532,14 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        await db
-          .update(nodeRuns)
-          .set({ mergeState: 'merge-failed' })
-          .where(eq(nodeRuns.id, shardRunId))
+        const flipped = await tryTransitionMergeState({
+          db,
+          nodeRunId: shardRunId,
+          event: { kind: 'mark-merge-failed', reason: msg },
+        })
+        if (!flipped) {
+          log.warn('merge_state flip to merge-failed lost/illegal', { nodeRunId: shardRunId })
+        }
         return { kind: 'failed', shardKey, outputs: {}, message: `merge-back-failed: ${msg}` }
       }
     }
@@ -4786,7 +4858,7 @@ async function dispatchFanoutAggregator(
     if (!aggIso.passthrough) {
       try {
         const nodeTrees = await snapshotNodeIsoFinal(aggIso, log)
-        await persistIsoNodeTree(db, aggRunId, task.repoCount, nodeTrees, 'pending-merge')
+        await persistIsoNodeTree(db, aggRunId, task.repoCount, nodeTrees)
         const merge = await state.writeSem.run(async () => {
           const mergeRes = await mergeBackNodeIso(aggIso, nodeTrees, log)
           if (mergeRes.clean) return { kind: 'merged' as const }
@@ -4804,14 +4876,19 @@ async function dispatchFanoutAggregator(
             : { kind: 'conflict-human' as const, detail: res.detail }
         })
         if (merge.kind === 'merged') {
-          await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, aggRunId))
+          await transitionMergeState({
+            db,
+            nodeRunId: aggRunId,
+            event: { kind: 'mark-merged', via: 'live' },
+          })
         } else {
           // §6.3 — unresolved: conflict-human + fail loudly (per-node awaiting_human
           // bubbling for fanout is a follow-up, #4/PR-E); conflict never lost.
-          await db
-            .update(nodeRuns)
-            .set({ mergeState: 'conflict-human' })
-            .where(eq(nodeRuns.id, aggRunId))
+          await transitionMergeState({
+            db,
+            nodeRunId: aggRunId,
+            event: { kind: 'park-conflict-human', via: 'live' },
+          })
           return {
             kind: 'failed',
             summary: 'aggregator merge conflict',
@@ -4821,10 +4898,14 @@ async function dispatchFanoutAggregator(
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        await db
-          .update(nodeRuns)
-          .set({ mergeState: 'merge-failed' })
-          .where(eq(nodeRuns.id, aggRunId))
+        const flipped = await tryTransitionMergeState({
+          db,
+          nodeRunId: aggRunId,
+          event: { kind: 'mark-merge-failed', reason: msg },
+        })
+        if (!flipped) {
+          log.warn('merge_state flip to merge-failed lost/illegal', { nodeRunId: aggRunId })
+        }
         return {
           kind: 'failed',
           summary: 'aggregator merge failed',
@@ -4999,14 +5080,18 @@ async function mergeBackWrapperIso(
   iteration: number,
   log: Logger,
 ): Promise<
+  // RFC-144 naming收敛: the parked-conflict variant is 'conflict-human' — same
+  // vocabulary as the merge_state column and the node-path union above (the
+  // old 'awaiting_human' kind said what the TASK would do, not what the row
+  // is; callers translate conflict-human → awaiting_human scope outcome).
   | { kind: 'merged' }
-  | { kind: 'awaiting_human'; detail: string }
+  | { kind: 'conflict-human'; detail: string }
   | { kind: 'merge-failed'; msg: string }
 > {
   const { db, task, taskId } = state
   try {
     const nodeTrees = await snapshotNodeIsoFinal(wrapperIso, log)
-    await persistIsoNodeTree(db, wrapperRunId, task.repoCount, nodeTrees, 'pending-merge')
+    await persistIsoNodeTree(db, wrapperRunId, task.repoCount, nodeTrees)
     const merge = await state.writeSem.run(async () => {
       const mr = await mergeBackNodeIso(wrapperIso, nodeTrees, log)
       if (mr.clean) return { kind: 'merged' as const }
@@ -5022,23 +5107,35 @@ async function mergeBackWrapperIso(
         : { kind: 'conflict-human' as const, detail: res.detail }
     })
     if (merge.kind !== 'merged') {
-      await db
-        .update(nodeRuns)
-        .set({ mergeState: 'conflict-human' })
-        .where(eq(nodeRuns.id, wrapperRunId))
+      await transitionMergeState({
+        db,
+        nodeRunId: wrapperRunId,
+        event: { kind: 'park-conflict-human', via: 'live' },
+      })
+      // D10: merge_state and status are two orthogonal machines — two CAS
+      // writes, not one cross-machine tx; the frontier's done-branch bridges
+      // the (rare) crash window between them.
       await transitionNodeRunStatus({ db, nodeRunId: wrapperRunId, event: { kind: 'park-human' } })
       broadcastNodeStatus(taskId, wrapperRunId, node.id, 'awaiting_human')
-      return { kind: 'awaiting_human', detail: merge.detail }
+      return { kind: 'conflict-human', detail: merge.detail }
     }
-    await db.update(nodeRuns).set({ mergeState: 'merged' }).where(eq(nodeRuns.id, wrapperRunId))
+    await transitionMergeState({
+      db,
+      nodeRunId: wrapperRunId,
+      event: { kind: 'mark-merged', via: 'live' },
+    })
     await discardNodeIso(wrapperIso, log)
     return { kind: 'merged' }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    await db
-      .update(nodeRuns)
-      .set({ mergeState: 'merge-failed' })
-      .where(eq(nodeRuns.id, wrapperRunId))
+    const flipped = await tryTransitionMergeState({
+      db,
+      nodeRunId: wrapperRunId,
+      event: { kind: 'mark-merge-failed', reason: msg },
+    })
+    if (!flipped) {
+      log.warn('merge_state flip to merge-failed lost/illegal', { nodeRunId: wrapperRunId })
+    }
     return { kind: 'merge-failed', msg }
   }
 }
@@ -5266,7 +5363,8 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   // wrappers already ran on the task canonical (nothing to merge, merge_state NULL).
   if (!wrapperIso.passthrough) {
     const mb = await mergeBackWrapperIso(state, wrapperIso, wrapperRunId, node, iteration, log)
-    if (mb.kind === 'awaiting_human') {
+    if (mb.kind === 'conflict-human') {
+      // row parked conflict-human → the scope outcome is awaiting_human.
       return {
         kind: 'awaiting_human',
         summary: `wrapper merge conflict: ${mb.detail}`,
