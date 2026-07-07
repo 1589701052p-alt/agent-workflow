@@ -445,6 +445,15 @@ WHERE merge_state IN ('isolating', 'pending-merge', 'conflict-human')
   `persistIsoBase` 经 begin-isolation 自环重盖基列。`conflict-human` 再入保持 rebuild 旧基
   ——其 delta 从未进 canon（D27），旧基仍是正确合并基。行为测试：merged 再入后新 iso 内可见
   canon 现态文件 + 基列重盖；conflict-human 再入基列不动。
+  **D13 第三半（PR-4 复核 P2）——git wrapper 的 progress baseline 同随新代重捕**：
+  `runGitWrapperNode` 在调 `createOrRebuildWrapperIso` 之前就从 `wrapperProgressJson` 读
+  baseline/preDirty；merged 再入换了新 wrapper-canonical 后，沿用旧代 baseline 会让结尾
+  `gitChangedFiles(新 canon, 旧基线)` 把旧代已合并文件再次报进本代 `git_diff`。修法：
+  `freshGeneration = existing.mergeState === 'merged'` 时跳过持久化 progress、在新
+  wrapper-canonical 上按 fresh-mint 语义重捕 baseline+preDirty 并覆写 progress（后续同代
+  resume 读到新基线）。S-4「resume 绝不重捕」规则仅限同代复活（旧 iso 及内部写入还在）——
+  conflict-human/中途复活不受影响。e2e 锁：merged 再入代 inner 零写入 → `git_diff` 不含
+  旧代文件（修复前红：gen1.txt 泄漏）。
 
 ## 13. 测试策略（test-with-every-change 清单）
 

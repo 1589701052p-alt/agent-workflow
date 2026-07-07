@@ -414,6 +414,107 @@ describe('RFC-144 wrapper 同行复活的 iso 基（实现门 P2 第二半）', 
   }, 30000)
 })
 
+describe('RFC-144 git wrapper merged 再入的 baseline（PR-4 复核 P2）', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildGitHarness()
+  })
+  afterEach(() => h.cleanup())
+
+  test('再入代的 git_diff 不得把旧代已合并文件再报一遍（baseline 必须随新 iso 重捕）', async () => {
+    // 旧代 baseline = gen1.txt 落 canon 之前的 HEAD。
+    const oldBaseline = (await runGit(h.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim()
+    // 旧代 delta 已合并进 canonical 的等价物。
+    writeFileSync(join(h.worktreePath, 'gen1.txt'), 'merged by prior generation\n')
+    await runGit(h.worktreePath, ['add', '.'])
+    await runGit(h.worktreePath, ['commit', '-q', '-m', 'gen1 merged'])
+
+    // 工作流：git wrapper 包一个 agent；伪造「崩溃于 merge-back 内、入口 replay 已
+    // 推成 merged、行被收割成 interrupted」后的复活现场。
+    await h.db.insert(agents).values({
+      id: ulid(),
+      name: 'a',
+      description: '',
+      outputs: JSON.stringify(['summary']),
+      permission: '{}',
+      skills: '[]',
+      frontmatterExtra: '{}',
+      bodyMd: '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    const def: WorkflowDefinition = {
+      $schema_version: 3,
+      inputs: [],
+      nodes: [
+        { id: 'gw', kind: 'wrapper-git', nodeIds: ['A'] },
+        { id: 'A', kind: 'agent-single', agentName: 'a' },
+      ],
+      edges: [],
+    } as unknown as WorkflowDefinition
+    const workflowId = ulid()
+    const taskId = ulid()
+    await h.db.insert(workflows).values({
+      id: workflowId,
+      name: 'wf',
+      definition: JSON.stringify(def),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    await h.db.insert(tasks).values({
+      id: taskId,
+      name: 'fixture',
+      workflowId,
+      workflowSnapshot: JSON.stringify(def),
+      repoPath: h.worktreePath,
+      worktreePath: h.worktreePath,
+      baseBranch: 'main',
+      branch: `agent-workflow/${taskId}`,
+      status: 'pending',
+      inputs: '{}',
+      startedAt: Date.now(),
+    })
+    await h.db.insert(nodeRuns).values({
+      id: mkId(1),
+      taskId,
+      nodeId: 'gw',
+      iteration: 0,
+      retryIndex: 0,
+      status: 'interrupted', // 收割后的可复活行（findResumableWrapperRun 同行续跑）
+      mergeState: 'merged', // 入口 replay 已把旧代 pending-merge 推成 merged
+      isoBaseSnapshot: oldBaseline, // 旧代 iso 基（merged 再入必须弃用）
+      wrapperProgressJson: JSON.stringify({
+        kind: 'git',
+        baseline: oldBaseline, // 旧代 baseline —— 泄漏进新代即报旧文件
+        preDirty: {},
+        phase: 'inner-running',
+      }),
+      startedAt: Date.now() - 1000,
+    })
+    // inner agent 什么都不写——新代 git_diff 应为空。
+    const mockPath = writeMockAgent(h, `emit(envelope)`)
+    await runTask({ taskId, db: h.db, appHome: h.appHome, opencodeCmd: ['bun', 'run', mockPath] })
+
+    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!
+    expect(t.status).toBe('done')
+    const gwRow = (
+      await h.db
+        .select()
+        .from(nodeRuns)
+        .where(eq(nodeRuns.id, mkId(1)))
+    )[0]!
+    expect(gwRow.mergeState).toBe('merged') // 新代走完整链回到 merged
+    const outs = await h.db
+      .select()
+      .from(nodeRunOutputs)
+      .where(eq(nodeRunOutputs.nodeRunId, mkId(1)))
+    const gitDiff = outs.find((o) => o.portName === 'git_diff')
+    expect(gitDiff).toBeDefined()
+    // 核心断言（修复前红）：旧代已合并的 gen1.txt 不得出现在新代 git_diff 里。
+    expect(gitDiff!.content).not.toContain('gen1.txt')
+  }, 30000)
+})
+
 describe('RFC-144 merge-failed 行为补齐（RFC-130 缺口 + isolating→merge-failed 新边）', () => {
   let h: Harness
   beforeEach(async () => {

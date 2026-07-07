@@ -5223,10 +5223,20 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   // the WRAPPER-canonical (below), NOT the task canonical.
   let baseline: string | undefined
   let preDirty: Record<string, string> = {}
+  // RFC-144 D13 second half (PR-4 review P2): a revived row whose prior
+  // generation is 'merged' gets a FRESH wrapper-canonical from the CURRENT
+  // task canonical (createOrRebuildWrapperIso replaces the iso). The persisted
+  // baseline/preDirty belong to the OLD generation's canon — reusing them
+  // would make the final gitChangedFiles report gen-1's already-merged files
+  // in this generation's git_diff. Treat it as a fresh generation: skip the
+  // persisted progress, recapture + re-persist on the new wrapper-canonical
+  // below. (conflict-human / mid-run revival keep the S-4 never-recapture
+  // rule — their iso and its inner writes are preserved.)
+  const freshGeneration = existing !== null && existing.mergeState === 'merged'
   if (existing !== null) {
     const progress = decodeWrapperProgress(existing.wrapperProgressJson, (msg) => log.warn(msg))
     wrapperRunId = existing.id
-    if (progress?.kind === 'git' && typeof progress.baseline === 'string') {
+    if (!freshGeneration && progress?.kind === 'git' && typeof progress.baseline === 'string') {
       baseline = progress.baseline
       // S-4: resume reads the persisted pre-set; NEVER re-capture — the inner scope's
       // own writes are already in the (wrapper-)worktree.
@@ -5309,7 +5319,11 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   // (which the loop hasn't merged into yet) would leave preDirty empty and wrongly
   // report the cumulative union. RFC-098 B1 (S-24): captured under the write lock.
   if (baseline === undefined) {
-    const isFresh = existing === null
+    // freshGeneration (merged re-entry) captures like a fresh mint: the new
+    // wrapper-canonical's dirty-at-entry set is the pre-set to subtract, and
+    // the progress row is OVERWRITTEN so a later resume of THIS generation
+    // reads the new baseline (not the stale gen-1 one).
+    const isFresh = existing === null || freshGeneration
     const entry = await state.writeSem.run(async () => {
       const base = await captureHead(wrapperCanonPath)
       const pre = isFresh ? await captureGitPreDirty(wrapperCanonPath, base, log) : {}
