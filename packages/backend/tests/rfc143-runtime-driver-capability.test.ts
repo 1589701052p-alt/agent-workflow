@@ -11,7 +11,8 @@
 //      在 PR-4 补齐后此骨架扩为完整的零调用点改动集成证明。
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import {
   getRuntimeDriver,
@@ -264,5 +265,55 @@ describe('RFC-143 (D) PR-4 业务/smoke spawn 收口 + 旁路清零终锁', () =
       delete process.env.AGENT_WORKFLOW_OPENCODE_BIN
       expect(getRuntimeDriver('opencode').buildSpawn({ ...CTX }).cmd[0]).toBe('opencode')
     })
+  })
+})
+
+describe('RFC-143 (E) PR-5 dedup 收尾（resolveOpencodeCmd 单份 + semver 单份）', () => {
+  it('resolveOpencodeCmd 单份：5 个 route 文件不再各自定义（dedup-audit 逐字 5 拷贝）', () => {
+    for (const f of ['tasks', 'clarify', 'taskQuestions', 'reviews', 'fusions']) {
+      const src = SRC(`routes/${f}.ts`)
+      expect(src).not.toContain('function resolveOpencodeCmd')
+      expect(src).toContain("resolveOpencodeCmd } from '@/util/opencode'")
+    }
+    expect(SRC('util/opencode.ts')).toContain('export function resolveOpencodeCmd')
+  })
+
+  it('resolveOpencodeCmd 行为：configPath 空/不可读 → undefined；opencodePath 设值 → [path]', async () => {
+    const { resolveOpencodeCmd } = await import('../src/util/opencode')
+    expect(resolveOpencodeCmd('')).toBeUndefined()
+    expect(resolveOpencodeCmd('/definitely/not/a/config.json')).toBeUndefined()
+    const dir = mkdtempSync(join(tmpdir(), 'aw-rfc143-cfg-'))
+    try {
+      const p = join(dir, 'config.json')
+      writeFileSync(p, JSON.stringify({ opencodePath: '/opt/custom-oc' }))
+      expect(resolveOpencodeCmd(p)).toEqual(['/opt/custom-oc'])
+      writeFileSync(p, JSON.stringify({}))
+      expect(resolveOpencodeCmd(p)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('semver 单份：extractVersion/compareSemver 只定义在 util/semver.ts（claude probe 曾有逐字拷贝）', () => {
+    const semverSrc = SRC('util/semver.ts')
+    expect(semverSrc).toContain('export function extractVersion')
+    expect(semverSrc).toContain('export function compareSemver')
+    // 两个 probe 模块不再各自定义（import 使用不受限）。
+    for (const f of ['util/opencode.ts', 'services/runtime/claudeCode/probe.ts']) {
+      const src = SRC(f)
+      expect(src).not.toContain('export function extractVersion')
+      expect(src).not.toContain('export function compareSemver(')
+    }
+    // util/opencode 对既有 import 面保持 re-export（opencode-version.test.ts 锚定行为）。
+    expect(SRC('util/opencode.ts')).toContain("compareSemver, extractVersion } from './semver'")
+  })
+
+  it('resolveInternalAgentRuntime legacyModel 是显式 opencode-only 活转移段（PR-5 审计结论文档锁）', () => {
+    // design §5 预案二选一：无活数据删 / 有活数据显式标注。审计结论 = 有活数据
+    // （commitPushModel / mergeAgentModel / memoryDistillModel 三字段仍在
+    // ConfigSchema 并线上传入），故分支保留 + 注释固化删除条件。
+    const src = SRC('services/runtimeRegistry.ts')
+    expect(src).toContain('RFC-143 PR-5 audit')
+    expect(src).toContain('explicitly opencode-only')
   })
 })

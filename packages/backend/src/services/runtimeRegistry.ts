@@ -198,13 +198,22 @@ export async function resolveAgentRuntime(
  * than an agents-table row. Priority:
  *   1. the per-feature runtime profile NAME (e.g. `config.memoryDistillRuntime`);
  *   2. the DEPRECATED per-feature model (`config.memoryDistillModel` /
- *      `commitPushModel`) — a transition fallback that keeps the prior behavior
- *      (opencode + that model) until the admin selects a profile; physical
- *      removal of the model field is a follow-up cleanup (RFC-113→115 two-phase);
+ *      `commitPushModel` / `mergeAgentModel`) — a transition fallback that keeps
+ *      the prior behavior (**explicitly opencode-only**: these fields predate
+ *      multi-runtime, so a bare model can only mean an opencode model) until the
+ *      admin selects a profile; physical removal of the model fields is a
+ *      follow-up cleanup (RFC-113→115 two-phase);
  *   3. the global `defaultRuntime` (then opencode).
  * Like `resolveAgentRuntime` (and unlike the fail-loud `validateRuntimeReference`
  * on agent save), this is fall-safe — a dangling name can't brick a background
  * job / a commit.
+ *
+ * RFC-143 PR-5 audit: the legacyModel branch is NOT dead code — all three
+ * deprecated config fields still exist in ConfigSchema and thread here live
+ * (services/launchRuntimeConfig.ts + cli/start.ts batch-import + the scheduler's
+ * commit/merge dispatch). `assertConfigDefaultsMigrated` below only forces the
+ * SIX generation-default keys, not these. Delete the branch only together with
+ * those config fields.
  */
 export async function resolveInternalAgentRuntime(
   db: DbClient,
