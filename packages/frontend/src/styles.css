@@ -11447,13 +11447,24 @@ mark.comment-anchor[data-active='true'] {
   align-items: center;
   gap: var(--space-1);
   white-space: nowrap;
+  /* 2026-07-07 长节点名截断：pair 可收缩进泳道卡片行宽，名字 ellipsis 而非顶出卡片边界 */
+  min-width: 0;
+  max-width: 100%;
 }
 .task-questions__meta-k {
   color: var(--muted);
+  flex-shrink: 0; /* 「来源/目标」标签不参与截断 */
 }
 .task-questions__meta-v {
   color: var(--text);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis; /* nowrap 继承自 meta-pair */
+}
+/* 改派 Select 与只读名共用同一截断预算：允许在 pair 内收缩（flex min-size），
+   由 .select__value 自带的 ellipsis 完成截断。 */
+.task-questions__meta-pair .select {
+  min-width: 0;
 }
 .task-questions__meta-flow {
   color: var(--muted);
@@ -11466,6 +11477,7 @@ mark.comment-anchor[data-active='true'] {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: var(--space-2) var(--space-3);
   line-height: 1.5;
+  overflow-wrap: anywhere; /* 同 card__title：长无空格 token 换行，不顶出卡片 */
 }
 /* RFC-120 D12 — clarify-page per-question handler echo + picker. */
 .clarify-handler {
@@ -11512,6 +11524,18 @@ mark.comment-anchor[data-active='true'] {
   line-height: 1.3;
   cursor: pointer;
   white-space: nowrap;
+  /* 2026-07-07 长节点名截断：label 单独 ellipsis、计数 span 恒可见，chip 不再溢出工具栏 */
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+}
+.task-questions__filter-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-questions__filter-chip-count {
+  flex-shrink: 0;
 }
 .task-questions__filter-chip:hover {
   border-color: var(--border-strong);

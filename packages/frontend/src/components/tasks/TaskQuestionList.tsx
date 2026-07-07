@@ -317,6 +317,8 @@ export function TaskQuestionList({
           >
             {t('taskQuestions.allNodes')} ({entries.length})
           </button>
+          {/* 2026-07-07 长节点名截断：label/count 拆成两个 span——label 单独 ellipsis，
+              计数在任何截断下恒可见；title 让全名 hover 可达。 */}
           {[...counts.entries()].map(([nodeId, n]) => (
             <button
               key={nodeId}
@@ -327,8 +329,10 @@ export function TaskQuestionList({
               }
               onClick={() => setTargetFilter(nodeId)}
               data-testid={`tq-node-filter-${nodeId}`}
+              title={labelFor(nodeId)}
             >
-              {labelFor(nodeId)} ({n})
+              <span className="task-questions__filter-chip-label">{labelFor(nodeId)}</span>
+              <span className="task-questions__filter-chip-count">({n})</span>
             </button>
           ))}
         </div>
@@ -413,6 +417,12 @@ export function TaskQuestionList({
                 const hasStage =
                   (e.phase === 'pending' || e.phase === 'staged') && (e.staged || e.sealed)
                 const hasActions = hasConfirm || hasStage
+                // 2026-07-07 长节点名截断：meta 值 CSS ellipsis 后全名靠 title hover 可达。
+                const sourceLabel =
+                  e.sourceNodeId !== null
+                    ? labelFor(e.sourceNodeId)
+                    : t('taskQuestions.manualSource')
+                const targetLabel = labelFor(e.effectiveTargetNodeId)
                 return (
                   <Card
                     key={e.id}
@@ -476,10 +486,8 @@ export function TaskQuestionList({
                         <span className="task-questions__meta-k">{t('taskQuestions.source')}</span>
                         {/* §15 — a manual question has no source node: show "手动".
                             用户 2026-07-02: 显示节点名（labelFor 经 nodeOptions 解析，查无回退原 id）。 */}
-                        <span className="task-questions__meta-v">
-                          {e.sourceNodeId !== null
-                            ? labelFor(e.sourceNodeId)
-                            : t('taskQuestions.manualSource')}
+                        <span className="task-questions__meta-v" title={sourceLabel}>
+                          {sourceLabel}
                         </span>
                       </span>
                       <span className="task-questions__meta-flow" aria-hidden="true">
@@ -495,8 +503,8 @@ export function TaskQuestionList({
                             options={nodeOptions.map((n) => ({ value: n.id, label: n.label }))}
                           />
                         ) : (
-                          <span className="task-questions__meta-v">
-                            {labelFor(e.effectiveTargetNodeId)}
+                          <span className="task-questions__meta-v" title={targetLabel}>
+                            {targetLabel}
                           </span>
                         )}
                       </span>
