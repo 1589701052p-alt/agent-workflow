@@ -87,37 +87,37 @@ export function TaskFeedbackList({ taskId }: TaskFeedbackListProps) {
       </header>
 
       <div className="task-feedback__form">
-          <textarea
-            className="task-feedback__textarea"
-            placeholder={t('taskFeedback.placeholder')}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={4000}
-            rows={3}
-            data-testid="task-feedback-textarea"
-          />
-          <div className="task-feedback__form-footer">
-            <span className="task-feedback__secret-hint muted">{t('taskFeedback.secretHint')}</span>
-            <button
-              type="button"
-              className="btn btn--sm btn--primary"
-              disabled={submitDisabled}
-              onClick={handleSubmit}
-              data-testid="task-feedback-submit"
-            >
-              {create.isPending ? t('taskFeedback.submitting') : t('taskFeedback.submit')}
-            </button>
+        <textarea
+          className="task-feedback__textarea"
+          placeholder={t('taskFeedback.placeholder')}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          maxLength={4000}
+          rows={3}
+          data-testid="task-feedback-textarea"
+        />
+        <div className="task-feedback__form-footer">
+          <span className="task-feedback__secret-hint muted">{t('taskFeedback.secretHint')}</span>
+          <button
+            type="button"
+            className="btn btn--sm btn--primary"
+            disabled={submitDisabled}
+            onClick={handleSubmit}
+            data-testid="task-feedback-submit"
+          >
+            {create.isPending ? t('taskFeedback.submitting') : t('taskFeedback.submit')}
+          </button>
+        </div>
+        {rateLimited && (
+          <div className="info-box info-box--muted" data-testid="task-feedback-rate-limit">
+            {t('taskFeedback.rateLimit')}
           </div>
-          {rateLimited && (
-            <div className="info-box info-box--muted" data-testid="task-feedback-rate-limit">
-              {t('taskFeedback.rateLimit')}
-            </div>
-          )}
-          {create.error !== null && create.error !== undefined && (
-            <div className="error-box" data-testid="task-feedback-error">
-              {t('taskFeedback.submitError')}: {describeApiError(create.error)}
-            </div>
-          )}
+        )}
+        {create.error !== null && create.error !== undefined && (
+          <div className="error-box" data-testid="task-feedback-error">
+            {t('taskFeedback.submitError')}: {describeApiError(create.error)}
+          </div>
+        )}
       </div>
 
       {list.isLoading ? (

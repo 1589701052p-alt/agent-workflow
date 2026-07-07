@@ -177,7 +177,9 @@ function AttemptPicker({
     const inline = g.attempts.length > 1
     return (
       <span className={`session-attempts__row ${inline ? 'is-inline' : ''}`}>
-        <span className={`session-attempts__dot status-dot--${nodeRunStatusToKind(latest.status)}`} />
+        <span
+          className={`session-attempts__dot status-dot--${nodeRunStatusToKind(latest.status)}`}
+        />
         <span className="session-attempts__iter">{opt.label}</span>
         {!inline && latest.shardKey !== null && latest.shardKey !== '' && (
           <span className="session-attempts__shard">{latest.shardKey}</span>

@@ -1031,7 +1031,6 @@ export function shouldShowClarifyJump(status: NodeRun['status']): boolean {
   return status === 'awaiting_human'
 }
 
-
 /**
  * Class list for the task-detail canvas grid. The `--with-drawer`
  * modifier reserves a 480px (shrinkable to 320) inspector track — we

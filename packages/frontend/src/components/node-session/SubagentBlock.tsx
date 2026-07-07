@@ -56,4 +56,3 @@ export function SubagentBlock({ call }: Props) {
     </article>
   )
 }
-
