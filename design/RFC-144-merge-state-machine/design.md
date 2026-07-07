@@ -47,20 +47,25 @@ abandoned       终态·废弃（本 RFC 新增）：行已被更新一代取代
               conflict-human ──── abandon ───────────┘
 ```
 
-终态集 `TERMINAL_MERGE_STATES = ['merged', 'merge-failed', 'abandoned']`。
+终态集 `TERMINAL_MERGE_STATES = ['merge-failed', 'abandoned']`（落地勘误 D13：merged 是
+「代终点」非「行终点」——同行 wrapper 复活经 `reenter-isolation` 回到 isolating 开新一代；
+merged 上其余事件全拒、且不入 abandon from 集）。
 NULL 只有一条出边（begin-isolation）；passthrough 行因 `persistIsoBase` 的
 `handle.passthrough` 早退（scheduler.ts:1631）永不离开 NULL——golden-lock 不变。
+`begin-isolation` 含 `isolating→isolating` 自环（D13：fanout shard/agg 子行原地续跑时
+persistIsoBase 重盖新 iso 基列）。
 
 ### 1.3 事件 ADT 与转移表（7 事件）
 
 | 事件 kind | from | to | payload | 现有写点 |
 |---|---|---|---|---|
-| `begin-isolation` | NULL | isolating | — | W1/W2 |
+| `begin-isolation` | NULL \| isolating | isolating | — | W1/W2（自环 = 同行子行续跑重盖章，D13） |
 | `mark-pending-merge` | isolating | pending-merge | — | W3/W4 |
 | `mark-merged` | pending-merge | merged | `via?: 'live' \| 'replay'`（纯审计） | W5, W8, W11, W14, W18 |
 | `park-conflict-human` | pending-merge | conflict-human | `via?: 'live' \| 'replay'` | W6, W9, W12, W15, W17 |
 | `mark-merge-failed` | isolating \| pending-merge | merge-failed | `reason?: string` | W10, W13, W16, W19 |
 | `complete-human-resolution` | conflict-human | merged | — | W7 |
+| `reenter-isolation` | merged \| conflict-human | isolating | — | 新增（D13：`createOrRebuildWrapperIso` 单点，wrapper 同行复活开新一代） |
 | `abandon` | isolating \| pending-merge \| conflict-human | abandoned | `reason: string` | 新增（§6） |
 
 live 与 resume-replay 是**同一条边**的两个入口语境（调研结论：E3≡E6、E4≡E7），用 `via`
@@ -422,6 +427,17 @@ WHERE merge_state IN ('isolating', 'pending-merge', 'conflict-human')
   `db.transaction` 包 abandon+insert 两步；`abandonSupersededMergeStates` 做成同步函数
   （接受 db 或 tx）以进入 bun:sqlite 同步事务回调。分两条独立语句会在语句间崩溃时留下
   「新行在 + 旧行仍可重放」——被修的 bug 换形态存活。
+- **D13 同行复用的 resume 路径入表**（Codex 实现门 P2 产物）：仓内存在两类**同行多代**复用——
+  ①fanout shard/aggregator 的 interrupted 子行被 reset 成 pending 原地重跑
+  （`fanout-shard-resume`/`fanout-aggregator-resume`，setNodeRunStatus allowTerminal），此时行
+  可能带着上一代的 `isolating`；②wrapper 行经 `findResumableWrapperRun` 同行复活续跑，若崩溃
+  发生在 `mergeBackWrapperIso` 内部，入口 replay 已把它推成 `merged`（或 cancel-while-parked
+  留下 `conflict-human`）。严格单 from 的机器会把这两类合法恢复打成
+  `IllegalMergeStateTransition`。修法（建模而非绕过）：`begin-isolation` 增自环
+  `isolating→isolating`（重盖新 iso 基列）；新增事件 `reenter-isolation`：
+  `{merged, conflict-human} → isolating`（单点挂 `createOrRebuildWrapperIso`）；**merged 移出
+  TERMINAL_MERGE_STATES**（它是「代终点」非「行终点」，出边唯一 = reenter-isolation；abandon
+  from 集仍不含 merged——fanout undo 依赖 merged 历史、且 merged 行永不为僵尸）。
 
 ## 13. 测试策略（test-with-every-change 清单）
 

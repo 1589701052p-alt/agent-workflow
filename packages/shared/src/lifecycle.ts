@@ -376,9 +376,15 @@ export type MergeStateOrNull = MergeState | null
 /** Terminal merge states: once reached, no out-transition is legal.
  *  `abandoned` (RFC-144) means "this row was superseded by a fresher run;
  *  its delta will never reach canonical" — the invariant is
- *  abandoned ⇔ a fresher sibling generation exists. */
+ *  abandoned ⇔ a fresher sibling generation exists.
+ *  `merged` is deliberately NOT terminal (Codex impl-gate P2): wrapper rows
+ *  are multi-generation — a crash inside mergeBackWrapperIso gets its
+ *  pending-merge replayed to 'merged' at the next entry, then the SAME row is
+ *  revived (findResumableWrapperRun) and isolates again via
+ *  `reenter-isolation`. merged is a per-generation settled point, guarded by
+ *  every other event's from-set (only reenter-isolation may leave it), and it
+ *  is NOT in the abandon from-set (fanout undo needs merged history intact). */
 export const TERMINAL_MERGE_STATES = [
-  'merged',
   'merge-failed',
   'abandoned',
 ] as const satisfies readonly MergeState[]
@@ -404,14 +410,16 @@ export function isMergeStateSettled(s: string | null | undefined): boolean {
  *  diagnostic passthrough — payloads never affect the computed target. */
 export type MergeStateTransitionEvent =
   // iso lifecycle (§段① / §段②)
-  | { kind: 'begin-isolation' } // NULL → isolating (persistIsoBase)
+  | { kind: 'begin-isolation' } // NULL|isolating → isolating (persistIsoBase; self-edge = same-row shard/agg re-dispatch re-stamps a FRESH iso)
   | { kind: 'mark-pending-merge' } // isolating → pending-merge (persistIsoNodeTree)
   // merge-back outcomes (§段③, live + resume replay)
   | { kind: 'mark-merged'; via?: 'live' | 'replay' } // pending-merge → merged
   | { kind: 'park-conflict-human'; via?: 'live' | 'replay' } // pending-merge → conflict-human
-  | { kind: 'mark-merge-failed'; reason?: string } // pending-merge → merge-failed
+  | { kind: 'mark-merge-failed'; reason?: string } // isolating|pending-merge → merge-failed
   // human conflict resolution completes on resume (§6.3)
   | { kind: 'complete-human-resolution' } // conflict-human → merged
+  // same-row wrapper revival opens a NEW isolation generation (Codex impl-gate P2)
+  | { kind: 'reenter-isolation' } // merged|conflict-human → isolating (createOrRebuildWrapperIso on a revived wrapper row)
   // supersede (RFC-144): a fresher generation replaces this row
   | { kind: 'abandon'; reason: string } // isolating|pending-merge|conflict-human → abandoned
 
@@ -432,6 +440,7 @@ export class IllegalMergeStateTransition extends Error {
 export function targetForMergeEvent(ev: MergeStateTransitionEvent): MergeState {
   switch (ev.kind) {
     case 'begin-isolation':
+    case 'reenter-isolation':
       return 'isolating'
     case 'mark-pending-merge':
       return 'pending-merge'
@@ -472,9 +481,13 @@ export function nextMergeState(cur: MergeStateOrNull, ev: MergeStateTransitionEv
   }
   switch (ev.kind) {
     case 'begin-isolation':
-      // Only freshly-minted (NULL) rows enter isolation; passthrough rows stay
+      // Freshly-minted (NULL) rows enter isolation; passthrough rows stay
       // NULL forever (persistIsoBase early-returns before ever emitting this).
-      return ok([null])
+      // The isolating self-edge is the same-row re-dispatch (fanout-shard /
+      // fanout-aggregator resume resets an interrupted child to pending and
+      // re-runs it in place): persistIsoBase re-stamps the row with the FRESH
+      // iso's base columns — refusing it would fail valid crash recovery.
+      return ok([null, 'isolating'])
     case 'mark-pending-merge':
       return ok(['isolating'])
     case 'mark-merged':
@@ -489,6 +502,14 @@ export function nextMergeState(cur: MergeStateOrNull, ev: MergeStateTransitionEv
       return ok(['isolating', 'pending-merge'])
     case 'complete-human-resolution':
       return ok(['conflict-human'])
+    case 'reenter-isolation':
+      // Same-row wrapper revival (Codex impl-gate P2): a wrapper row whose
+      // prior generation already settled (crash inside mergeBackWrapperIso →
+      // entry replay flipped it 'merged'; or canceled while parked
+      // 'conflict-human') is revived in place (findResumableWrapperRun) and
+      // must isolate AGAIN for its next generation. Fired only from
+      // createOrRebuildWrapperIso; isolating/NULL rows never emit it.
+      return ok(['merged', 'conflict-human'])
     case 'abandon':
       // Every in-flight state may be superseded. NULL is deliberately NOT
       // abandonable: a non-isolated row has no delta to orphan, and keeping

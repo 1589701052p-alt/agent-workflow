@@ -40,12 +40,15 @@ const EVENTS: MergeStateTransitionEvent[] = [
   { kind: 'park-conflict-human' },
   { kind: 'mark-merge-failed' },
   { kind: 'complete-human-resolution' },
+  { kind: 'reenter-isolation' },
   { kind: 'abandon', reason: 'test' },
 ]
 
 /** 全部合法转移（from, event kind, to）——与 design.md §1.2 状态图一一对应。 */
 const LEGAL: ReadonlyArray<[MergeStateOrNull, MergeStateTransitionEvent, string]> = [
   [null, { kind: 'begin-isolation' }, 'isolating'],
+  // 同行 shard/agg 子行原地续跑：persistIsoBase 对复用行重盖新 iso 基（自环）。
+  ['isolating', { kind: 'begin-isolation' }, 'isolating'],
   ['isolating', { kind: 'mark-pending-merge' }, 'pending-merge'],
   ['pending-merge', { kind: 'mark-merged' }, 'merged'],
   ['pending-merge', { kind: 'mark-merged', via: 'replay' }, 'merged'],
@@ -56,6 +59,9 @@ const LEGAL: ReadonlyArray<[MergeStateOrNull, MergeStateTransitionEvent, string]
   // 必须能落 merge-failed，否则 done+isolating 行会卡 blocked 桶而非 fail-loud。
   ['isolating', { kind: 'mark-merge-failed', reason: 'snapshot threw' }, 'merge-failed'],
   ['conflict-human', { kind: 'complete-human-resolution' }, 'merged'],
+  // 同行 wrapper 复活开启新一代隔离（Codex 实现门 P2）：merged 是「代终点」非「行终点」。
+  ['merged', { kind: 'reenter-isolation' }, 'isolating'],
+  ['conflict-human', { kind: 'reenter-isolation' }, 'isolating'],
   ['isolating', { kind: 'abandon', reason: 'retry-node' }, 'abandoned'],
   ['pending-merge', { kind: 'abandon', reason: 'retry-node' }, 'abandoned'],
   ['conflict-human', { kind: 'abandon', reason: 'review-reject' }, 'abandoned'],
@@ -81,7 +87,7 @@ describe('RFC-144 nextMergeState — 转移表 oracle', () => {
     }
   })
 
-  test('终态 × 全事件笛卡尔积全拒（终态无出边、无逃生门）', () => {
+  test('终态 × 全事件笛卡尔积全拒（merge-failed / abandoned 无出边、无逃生门）', () => {
     for (const terminal of TERMINAL_MERGE_STATES) {
       for (const event of EVENTS) {
         expect(() => nextMergeState(terminal, event)).toThrow(IllegalMergeStateTransition)
@@ -101,6 +107,11 @@ describe('RFC-144 nextMergeState — 转移表 oracle', () => {
   })
 
   test('NULL 语义：唯一出边 begin-isolation；abandon 不吃 NULL（golden-lock）', () => {
+    // merged 非终态但出边唯一（reenter-isolation）——其余事件在 merged 上全拒。
+    for (const event of EVENTS) {
+      if (event.kind === 'reenter-isolation') continue
+      expect(() => nextMergeState('merged', event)).toThrow(IllegalMergeStateTransition)
+    }
     expect(nextMergeState(null, { kind: 'begin-isolation' })).toBe('isolating')
     for (const event of EVENTS) {
       if (event.kind === 'begin-isolation') continue
@@ -114,7 +125,7 @@ describe('RFC-144 nextMergeState — 转移表 oracle', () => {
   })
 
   test('allowedFrom 派生集逐事件锁定意图', () => {
-    expect(allowedFromForMergeEvent({ kind: 'begin-isolation' })).toEqual([null])
+    expect(allowedFromForMergeEvent({ kind: 'begin-isolation' })).toEqual([null, 'isolating'])
     expect(allowedFromForMergeEvent({ kind: 'mark-pending-merge' })).toEqual(['isolating'])
     expect(allowedFromForMergeEvent({ kind: 'mark-merged' })).toEqual(['pending-merge'])
     expect(allowedFromForMergeEvent({ kind: 'park-conflict-human' })).toEqual(['pending-merge'])
@@ -123,6 +134,10 @@ describe('RFC-144 nextMergeState — 转移表 oracle', () => {
       'pending-merge',
     ])
     expect(allowedFromForMergeEvent({ kind: 'complete-human-resolution' })).toEqual([
+      'conflict-human',
+    ])
+    expect(allowedFromForMergeEvent({ kind: 'reenter-isolation' })).toEqual([
+      'merged',
       'conflict-human',
     ])
   })
@@ -154,13 +169,13 @@ describe('RFC-144 集合常量与谓词 ground truth', () => {
     ])
   })
 
-  test('终态集 = merged / merge-failed / abandoned；谓词对 NULL 恒 false', () => {
-    expect([...TERMINAL_MERGE_STATES].sort()).toEqual(['abandoned', 'merge-failed', 'merged'])
+  test('终态集 = merge-failed / abandoned；merged 是代终点非行终点（同行 wrapper 多代）', () => {
+    expect([...TERMINAL_MERGE_STATES].sort()).toEqual(['abandoned', 'merge-failed'])
     expect(isTerminalMergeState(null)).toBe(false)
     expect(isTerminalMergeState('isolating')).toBe(false)
     expect(isTerminalMergeState('pending-merge')).toBe(false)
     expect(isTerminalMergeState('conflict-human')).toBe(false)
-    expect(isTerminalMergeState('merged')).toBe(true)
+    expect(isTerminalMergeState('merged')).toBe(false) // reenter-isolation 唯一出边
     expect(isTerminalMergeState('merge-failed')).toBe(true)
     expect(isTerminalMergeState('abandoned')).toBe(true)
   })

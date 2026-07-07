@@ -5027,6 +5027,28 @@ async function createOrRebuildWrapperIso(
   } | null,
 ): Promise<IsoHandle> {
   const { db, task, taskId } = state
+  // RFC-144 (Codex impl-gate P2) — same-row wrapper revival: a revived wrapper
+  // row may arrive with a SETTLED prior generation ('merged': crash inside
+  // mergeBackWrapperIso got its pending-merge replayed at entry;
+  // 'conflict-human': canceled while parked). This run opens a NEW isolation
+  // generation on the same row — re-enter 'isolating' so the strict machine's
+  // mark-pending-merge (from=isolating) holds at the wrapper's merge-back.
+  // isolating (mid-run revival, the common case) and NULL (fresh row /
+  // passthrough) rows never emit this.
+  const cur = (
+    await db
+      .select({ mergeState: nodeRuns.mergeState })
+      .from(nodeRuns)
+      .where(eq(nodeRuns.id, wrapperRunId))
+      .limit(1)
+  )[0]
+  if (cur !== undefined && (cur.mergeState === 'merged' || cur.mergeState === 'conflict-human')) {
+    await transitionMergeState({
+      db,
+      nodeRunId: wrapperRunId,
+      event: { kind: 'reenter-isolation' },
+    })
+  }
   if (existing !== null) {
     const baseSnapshots: Record<string, string> = {}
     if (task.repoCount === 1) {

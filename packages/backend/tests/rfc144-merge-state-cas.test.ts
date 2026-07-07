@@ -202,6 +202,53 @@ describe('RFC-144 transitionMergeState — happy path', () => {
     expect(await mergeStateOf(h.db, idTerminal)).toBe('merged')
   })
 
+  test('begin-isolation 自环：同行 shard/agg 续跑重盖新 iso 基（isolating 原地、伴随列换新）', async () => {
+    const id = await seedRun(h, { mergeState: null, status: 'running' })
+    await transitionMergeState({
+      db: h.db,
+      nodeRunId: id,
+      event: { kind: 'begin-isolation' },
+      extra: { isoWorktreePath: '/iso/old', isoBaseSnapshot: 'sha-old' },
+    })
+    // 复用行第二次派发：persistIsoBase 重盖 FRESH iso 的基列。
+    const r = await transitionMergeState({
+      db: h.db,
+      nodeRunId: id,
+      event: { kind: 'begin-isolation' },
+      extra: { isoWorktreePath: '/iso/new', isoBaseSnapshot: 'sha-new' },
+    })
+    expect(r).toEqual({ from: 'isolating', to: 'isolating' })
+    const after = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, id)))[0]!
+    expect(after.isoWorktreePath).toBe('/iso/new')
+    expect(after.isoBaseSnapshot).toBe('sha-new')
+  })
+
+  test('reenter-isolation：同行 wrapper 复活开新一代（merged→isolating / conflict-human→isolating）', async () => {
+    const idMerged = await seedRun(h, { mergeState: 'merged' })
+    const r1 = await transitionMergeState({
+      db: h.db,
+      nodeRunId: idMerged,
+      event: { kind: 'reenter-isolation' },
+    })
+    expect(r1).toEqual({ from: 'merged', to: 'isolating' })
+    // 新一代照常走完整链：isolating → pending-merge → merged。
+    await transitionMergeState({
+      db: h.db,
+      nodeRunId: idMerged,
+      event: { kind: 'mark-pending-merge' },
+    })
+    await transitionMergeState({ db: h.db, nodeRunId: idMerged, event: { kind: 'mark-merged' } })
+    expect(await mergeStateOf(h.db, idMerged)).toBe('merged')
+
+    const idParked = await seedRun(h, { mergeState: 'conflict-human' })
+    const r2 = await transitionMergeState({
+      db: h.db,
+      nodeRunId: idParked,
+      event: { kind: 'reenter-isolation' },
+    })
+    expect(r2).toEqual({ from: 'conflict-human', to: 'isolating' })
+  })
+
   test('行不存在抛 NotFoundError', async () => {
     await expect(
       transitionMergeState({
