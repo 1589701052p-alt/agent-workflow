@@ -14,19 +14,23 @@ import type { DbClient } from '@/db/client'
 import { agents, runtimes } from '@/db/schema'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import type { RuntimeKind } from '@/services/runtime'
+import { RUNTIME_KINDS } from '@/services/runtime'
 import { createLogger } from '@/util/log'
 import { evictOpencodeModelsCache } from '@/util/opencode-models'
 
 const log = createLogger('runtimeRegistry')
 
-export const RUNTIME_PROTOCOLS = ['opencode', 'claude-code'] as const
-export type RuntimeProtocol = (typeof RUNTIME_PROTOCOLS)[number]
+// RFC-143: protocol IS the runtime kind — derived from the DRIVERS registry
+// (single source) rather than a re-hardcoded literal set. `RuntimeProtocol`
+// stays as a runtimeRegistry-local alias of RuntimeKind for call-site continuity.
+export const RUNTIME_PROTOCOLS: readonly RuntimeKind[] = RUNTIME_KINDS
+export type RuntimeProtocol = RuntimeKind
 
-/** The two framework built-ins — reserved names + seeded read-only rows. */
-export const BUILTIN_RUNTIMES: ReadonlyArray<{ name: string; protocol: RuntimeProtocol }> = [
-  { name: 'opencode', protocol: 'opencode' },
-  { name: 'claude-code', protocol: 'claude-code' },
-]
+/** The framework built-ins — reserved names + seeded read-only rows. RFC-143:
+ *  one built-in per registered kind (name === protocol === kind), derived from
+ *  the DRIVERS registry so a new runtime seeds its built-in automatically. */
+export const BUILTIN_RUNTIMES: ReadonlyArray<{ name: string; protocol: RuntimeProtocol }> =
+  RUNTIME_KINDS.map((k) => ({ name: k, protocol: k }))
 const BUILTIN_NAMES = new Set(BUILTIN_RUNTIMES.map((b) => b.name))
 
 /** RFC-112 Codex P3: runtime names are lowercase, URL-safe (used in /:name routes). */
@@ -163,13 +167,14 @@ export async function resolveRuntimeByName(
         binaryPath: row.binaryPath,
         ...runtimeProfileOf(row),
       }
-    // RFC-112: the two built-in NAMES resolve to their protocol (default binary)
-    // even when the registry row isn't seeded — so RFC-111 'opencode' /
-    // 'claude-code' values keep working in any context (tests, a dispatch that
-    // races startup seeding). Only CUSTOM names require a registered row. RFC-113:
-    // no row → no profile params (NULL = the binary's own default).
-    if (n === 'opencode' || n === 'claude-code') {
-      return { name: n, protocol: n, binaryPath: null, ...NULL_PROFILE }
+    // RFC-112: a built-in NAME resolves to its protocol (default binary) even
+    // when the registry row isn't seeded — so RFC-111 built-in values keep
+    // working in any context (tests, a dispatch that races startup seeding).
+    // Only CUSTOM names require a registered row. RFC-113: no row → no profile
+    // params (NULL = the binary's own default). RFC-143: use BUILTIN_NAMES
+    // (derived from DRIVERS) instead of the hand-copied kind literals.
+    if (BUILTIN_NAMES.has(n)) {
+      return { name: n, protocol: n as RuntimeProtocol, binaryPath: null, ...NULL_PROFILE }
     }
     log.warn('runtime-name-unknown-fallback-opencode', { name: n })
   }

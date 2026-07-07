@@ -9,6 +9,16 @@
 //
 // The interface grows across PR-A slices: A1 adds `parseEvent`; a later slice
 // adds `buildSpawn`; PR-B adds `probe` / `listModels` / `captureSession`.
+//
+// RFC-143 (capability consolidation) fills in the PR-B promise: probe /
+// listModels / captureSessions / defaultBinary become first-class driver
+// methods (this PR-1), `buildBusinessSpawn` + optional readInventory? /
+// startLiveCapture? land in later PRs. Type-only imports below keep this a
+// compile-time module (no runtime edge into db/log/shared).
+
+import type { DbClient } from '@/db/client'
+import type { Logger } from '@/util/log'
+import type { Config } from '@agent-workflow/shared'
 
 export type RuntimeKind = 'opencode' | 'claude-code'
 
@@ -84,12 +94,26 @@ export interface SpawnPlan {
   cleanup?: () => void
 }
 
-/** Version probe result for a runtime binary (PR-B fills this in per runtime). */
+/** Version probe result for a runtime binary. RFC-143: the union superset of
+ *  OpencodeProbe (adds `ran`) and ClaudeProbe (adds `ran` + `apiKeySource`), so
+ *  both drivers' probe results assign to it. */
 export interface RuntimeProbe {
   binary: string
   version: string | null
   compatible: boolean
   incompatibleReason?: string
+  /** RFC-135: true iff `--version` exited 0 (availability sans version gating). */
+  ran?: boolean
+  /** claude only: auth source as Claude Code reports it (`none` ≠ unauthed). */
+  apiKeySource?: string
+}
+
+/** Options for a version probe (mirrors util/opencode ProbeOpts). */
+export interface ProbeOpts {
+  /** Kill the probe after this many ms (SIGKILL; result reads as failed). */
+  timeoutMs?: number
+  /** Suppress per-probe warn logs (the status endpoint owns its own surfacing). */
+  quiet?: boolean
 }
 
 /** One selectable model surfaced to the agent/settings model pickers. */
@@ -98,6 +122,39 @@ export interface RuntimeModel {
   provider?: string
   modelID?: string
   name?: string
+}
+
+/** `listModels` result — unified across CLI-backed (opencode, cached) and
+ *  static-table (claude, always `cached:true`) runtimes. */
+export interface RuntimeModelList {
+  binary: string
+  models: RuntimeModel[]
+  cached: boolean
+}
+
+/** Options for `listModels`. `refresh` bypasses the per-binary cache (opencode
+ *  CLI path); claude's static table ignores both. */
+export interface ListModelsOpts {
+  refresh?: boolean
+  timeoutMs?: number
+}
+
+/** run-after subagent session capture inputs (union; each driver takes what it
+ *  needs — opencode: SQLite BFS + partId dedupe; claude: JSONL under runRoot). */
+export interface SessionCaptureContext {
+  rootSessionId: string
+  nodeRunId: string
+  taskId: string
+  db: DbClient
+  log: Logger
+  /** Subprocess cwd (worktree) — claude's `/`→`-` slug is the projects subdir. */
+  worktreePath: string
+  /** Per-run config dir root (`<runRoot>/.claude` is claude's CLAUDE_CONFIG_DIR). */
+  runRoot: string
+  /** opencode: partId-level dedupe from the live poller (skip already-written rows). */
+  alreadyInsertedPartIds?: Map<string, Set<string>>
+  /** opencode: override SQLite path (tests). */
+  opencodeDbPath?: string
 }
 
 /**
@@ -133,11 +190,15 @@ export interface SystemAgentSpawnContext {
 }
 
 /**
- * A pluggable agent runtime. `kind` + `parseEvent` + `buildSpawn` are populated;
- * `probe`/`listModels`/`captureSession` may be added later.
+ * A pluggable agent runtime. RFC-143: a complete capability object — new runtime
+ * = register a driver in DRIVERS + implement this interface, zero call-site edits.
+ * `buildBusinessSpawn` + optional `readInventory?`/`startLiveCapture?` land in
+ * later RFC-143 PRs; this interface reflects PR-1's surface.
  */
 export interface RuntimeDriver {
   readonly kind: RuntimeKind
+  /** Minimum compatible binary version (probe gate). */
+  readonly minVersion: string
   /**
    * Parse one stdout line into a normalized event, or `null` when the line is
    * not a structured event (unparseable / falsy JSON) and should fall through
@@ -147,7 +208,20 @@ export interface RuntimeDriver {
   /**
    * RFC-117 — assemble the spawn plan for a framework system agent (distiller /
    * commit / fusion). The business-node spawn path (runner.ts) does NOT route
-   * through this — it keeps its own skills/mcp/inventory assembly + golden lock.
+   * through this yet — RFC-143 PR-4 adds `buildBusinessSpawn` for that.
    */
   buildSpawn(ctx: SystemAgentSpawnContext): SpawnPlan
+  /**
+   * RFC-143 — the argv head this runtime spawns by default: its per-runtime
+   * config path (config.opencodePath / claudeCodePath) else the built-in name.
+   * Custom-fork override (RFC-112 binaryPath) is applied by the caller, not here.
+   */
+  defaultBinary(config: Config): string[]
+  /** RFC-143 — version probe (was probeOpencode / probeClaudeCode free fns). */
+  probe(binary: string, opts?: ProbeOpts): Promise<RuntimeProbe>
+  /** RFC-143 — model list (was listOpencodeModels / listClaudeModels free fns). */
+  listModels(binary: string, opts?: ListModelsOpts): Promise<RuntimeModelList>
+  /** RFC-143 — run-after subagent session capture (was captureChildSessions /
+   *  captureClaudeSessions free fns). */
+  captureSessions(ctx: SessionCaptureContext): Promise<void>
 }

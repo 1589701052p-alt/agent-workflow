@@ -27,6 +27,7 @@ import type { NodeRunStatus, RerunCause } from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { nodeRuns } from '@/db/schema'
 import type { RuntimeKind } from '@/services/runtime'
+import { isKnownRuntimeKind } from '@/services/runtime'
 import { resolveAgentRuntime, type RuntimeProfile } from '@/services/runtimeRegistry'
 import { createLogger } from '@/util/log'
 
@@ -304,7 +305,7 @@ export async function resolveFrozenRuntime(
       .where(eq(nodeRuns.id, nodeRunId))
       .limit(1)
   )[0]
-  if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') {
+  if (row != null && isKnownRuntimeKind(row.runtime)) {
     // already frozen — return the self-contained snapshot, registry-independent.
     return {
       protocol: row.runtime,
@@ -370,7 +371,7 @@ export async function frozenRuntimeOfSession(
       .where(eq(nodeRuns.opencodeSessionId, sessionId))
       .limit(1)
   )[0]
-  if (row?.runtime === 'opencode' || row?.runtime === 'claude-code') {
+  if (row != null && isKnownRuntimeKind(row.runtime)) {
     return {
       protocol: row.runtime,
       binary: row.runtimeBinary ?? null,

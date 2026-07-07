@@ -17,15 +17,19 @@ import {
   deleteRuntime,
   getRuntime,
   listRuntimes,
+  RUNTIME_PROTOCOLS,
   runtimeRowToView,
   setRuntimeEnabled,
   updateRuntime,
 } from '@/services/runtimeRegistry'
+import type { RuntimeKind } from '@/services/runtime'
 import { smokeRuntime, type SmokeResult } from '@/services/runtimeSmoke'
 import { probeOpencode } from '@/util/opencode'
 import { probeClaudeCode } from '@/services/runtime/claudeCode/probe'
 
-const ProtocolSchema = z.enum(['opencode', 'claude-code'])
+// RFC-143: derived from the DRIVERS registry (via RUNTIME_PROTOCOLS) rather than
+// a re-hardcoded literal enum — a new runtime kind is accepted automatically.
+const ProtocolSchema = z.enum(RUNTIME_PROTOCOLS as [RuntimeKind, ...RuntimeKind[]])
 
 const ProbeBody = z.object({
   protocol: ProtocolSchema,
