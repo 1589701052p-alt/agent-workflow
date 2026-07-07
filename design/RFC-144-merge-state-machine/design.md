@@ -59,12 +59,18 @@ NULL 只有一条出边（begin-isolation）；passthrough 行因 `persistIsoBas
 | `mark-pending-merge` | isolating | pending-merge | — | W3/W4 |
 | `mark-merged` | pending-merge | merged | `via?: 'live' \| 'replay'`（纯审计） | W5, W8, W11, W14, W18 |
 | `park-conflict-human` | pending-merge | conflict-human | `via?: 'live' \| 'replay'` | W6, W9, W12, W15, W17 |
-| `mark-merge-failed` | pending-merge | merge-failed | `reason?: string` | W10, W13, W16, W19 |
+| `mark-merge-failed` | isolating \| pending-merge | merge-failed | `reason?: string` | W10, W13, W16, W19 |
 | `complete-human-resolution` | conflict-human | merged | — | W7 |
 | `abandon` | isolating \| pending-merge \| conflict-human | abandoned | `reason: string` | 新增（§6） |
 
 live 与 resume-replay 是**同一条边**的两个入口语境（调研结论：E3≡E6、E4≡E7），用 `via`
 payload 区分日志，不拆事件。payload 一律不参与状态计算（与 status 机一致）。
+
+**落地勘误（isolating → merge-failed 边）**：merge-back 的 try 块覆盖两段——snapshot-pin
+（`snapshotNodeIsoFinal` + `persistIsoNodeTree`，此段行还在 `isolating`）与三路合并
+（`pending-merge` 后）。snapshot 阶段抛错时旧裸写会无条件盖 merge-failed 保证 fail-loud；
+严格表若只收 pending-merge，done+isolating 行会落 frontier 的 blocked 桶把任务卡住。故
+`mark-merge-failed` 的 from 集为 `{isolating, pending-merge}`（W10/13/16/19 的 catch 两相皆达）。
 
 ## 2. shared 层（`packages/shared/src/lifecycle.ts` 追加）
 
@@ -143,8 +149,9 @@ export async function transitionMergeState(args: {
 实现与 `transitionNodeRunStatus`（lifecycle.ts:90-137）逐层同构：
 
 1. SELECT `mergeState` by id（无行 → `NotFoundError`）；
-2. `to = nextMergeState(from, event)`（非法 → `IllegalMergeStateTransition` 直抛，由
-   `transitionMergeState` 包成 `ConflictError` 409，同 status 机的错误面）；
+2. `to = nextMergeState(from, event)`（非法 → `IllegalMergeStateTransition` **直抛不包壳**——
+   与 `transitionNodeRunStatus` 放行 `IllegalNodeRunTransition` 完全同形；该列无 HTTP 写入口，
+   异常只会到 runTask catch-all 失败任务）；
 3. CAS UPDATE：
    ```ts
    // rfc144-allow-direct-merge-state-write -- single allowlisted writer
@@ -179,8 +186,11 @@ export function abandonSupersededMergeStates(args: {
   iteration: number
   /** 新一代行的 ULID；只废弃严格更旧（id <）的行。 */
   supersededByRunId: string
-  reason: string   // 对齐取代行的 rerunCause（'retry-node' / 'review-iterate' / …），进日志
 }): number  // 返回废弃行数（=0 是常态：首次派发无前代）
+// 落地勘误：不带 reason 入参——废弃原因由取代行自身的 rerun_cause 列承载
+// （'retry-node' / 'review-iterate' / …），helper 无 logger、重复入参只会漂移。
+// from 集不硬编码：从 allowedFromForMergeEvent({kind:'abandon'}) 派生，转移表
+// 增改 abandon 行时 WHERE 自动跟随。
 ```
 
 ```sql

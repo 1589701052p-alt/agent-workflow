@@ -99,6 +99,7 @@
 node_runs.merge_state（RFC-130：NULL/isolating/pending-merge/merged/conflict-human/merge-failed）驱动第二正交生命周期（settled 判定 `scheduler.ts:1356`、frontier 分桶 `:1563-1565`、重放 `:1705/:1777`、fanout `:4175`），但 **~19 处写点全部 `db.update(nodeRuns).set({ mergeState })` 裸直写**（scheduler.ts:1640-5041 间 19 处）。对比：status 列有转移表+CAS+ESLint ratchet+s14 源码守卫**四层防护**，merge_state **零层**——转移合法性（isolating→pending-merge→merged|conflict-human…）全靠隐式约定，并发 merge-back 与冲突决议可互相覆盖。
 
 **重构方向（RFC-G2）**：照抄 RFC-053 三件套——`transitionMergeState(db, nodeRunId, event)` + 转移表 + 源码守卫测试；frontier 分桶从表派生。工作量 M、风险中（RFC-130 测试群现成）。
+**✅ 已由 [RFC-144](RFC-144-merge-state-machine/proposal.md) 落地（2026-07-08）**：五件套全落 + 第 7 值 `abandoned`（abandoned ⇔ 被取代，mint 收口点单事务废弃前代）+ 顺手修出并坐实一个真 bug——**stale replay**（入口 replay 只按 (taskId,mergeState) 捞行，被 retry/review 取代的旧行重放会把过期 delta 物化进主树；先红后绿 + migration 0076 清洗存量）。勘误：本节所称「ESLint ratchet」实为 grep-guard 单测（services/lifecycle.ts:18 注释陈旧）；「dispatchFrontier 分桶」实在 scheduler.ts deriveFrontier（dispatchFrontier.ts 不读 merge_state）。
 
 ### 4.5 「channel/系统端口」判定 6 处分叉、3 种语义家族
 
