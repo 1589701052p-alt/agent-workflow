@@ -76,11 +76,9 @@ const EMPTY_RUNTIME_PROFILE: RuntimeProfile = {
 import { buildOpencodeSpawn } from './runtime/opencode/spawn'
 import { buildClaudeSpawn } from './runtime/claudeCode/spawn'
 import { toClaudeAgents, toClaudeMcpConfig } from './runtime/claudeCode/inject'
-import { captureChildSessions } from './sessionCapture'
-import { captureClaudeSessions } from './runtime/claudeCode/sessionCapture'
-import { startLiveSubagentCapture } from './subagentLiveCapture'
+import { NOOP_HANDLE } from './subagentLiveCapture'
 import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
-import { isAgentRunKind, readSnapshotFromRunDir } from './inventory'
+import { isAgentRunKind } from './inventory'
 import {
   injectMemoryForRun,
   loadInjectedSnapshotFromFirstAttempt,
@@ -1117,33 +1115,37 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   const livePollMs = opts.subagentLiveCapture?.pollMs ?? 1500
   const liveFailureLimit = opts.subagentLiveCapture?.consecutiveFailureLimit ?? 5
   const liveCtrl = new AbortController()
-  const livePoller = startLiveSubagentCapture({
-    nodeRunId: opts.nodeRunId,
-    taskId: opts.taskId,
-    nodeId: opts.nodeId,
-    getRootSessionId: () => sessionId ?? null,
-    db: opts.db,
-    log: log.child('subagent-live-poll'),
-    pollMs: livePollMs,
-    consecutiveFailureLimit: liveFailureLimit,
-    signal: liveCtrl.signal,
-    onInsert: (info) => {
-      // Reuse the existing `node.status: running` broadcast lane so the
-      // frontend `useTaskSync` invalidates `['tasks', taskId, 'node-runs']`
-      // without an additional WS schema entry. The status hasn't actually
-      // changed — we're piggybacking the cheap idempotent ping that already
-      // triggers the right invalidation. Empty ticks don't reach this
-      // callback so we never spam empty broadcasts.
-      void info
-      taskBroadcaster.broadcast(TASK_CHANNEL(opts.taskId), {
-        id: -1,
-        type: 'node.status',
-        nodeRunId: opts.nodeRunId,
-        nodeId: opts.nodeId,
-        status: 'running',
-      })
-    },
-  })
+  // RFC-143: live subagent capture is an opencode-only capability. claude's
+  // driver omits `startLiveCapture` → NOOP_HANDLE (was an UNCONDITIONAL start
+  // that spun uselessly against opencode's SQLite on every claude run).
+  const livePoller =
+    driver.startLiveCapture?.({
+      nodeRunId: opts.nodeRunId,
+      taskId: opts.taskId,
+      nodeId: opts.nodeId,
+      getRootSessionId: () => sessionId ?? null,
+      db: opts.db,
+      log: log.child('subagent-live-poll'),
+      pollMs: livePollMs,
+      consecutiveFailureLimit: liveFailureLimit,
+      signal: liveCtrl.signal,
+      onInsert: (info) => {
+        // Reuse the existing `node.status: running` broadcast lane so the
+        // frontend `useTaskSync` invalidates `['tasks', taskId, 'node-runs']`
+        // without an additional WS schema entry. The status hasn't actually
+        // changed — we're piggybacking the cheap idempotent ping that already
+        // triggers the right invalidation. Empty ticks don't reach this
+        // callback so we never spam empty broadcasts.
+        void info
+        taskBroadcaster.broadcast(TASK_CHANNEL(opts.taskId), {
+          id: -1,
+          type: 'node.status',
+          nodeRunId: opts.nodeRunId,
+          nodeId: opts.nodeId,
+          status: 'running',
+        })
+      },
+    }) ?? NOOP_HANDLE
 
   const stderrPump = pumpLines(child.stderr, async (line) => {
     await opts.db.insert(nodeRunEvents).values({
@@ -1454,29 +1456,19 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // call falls back to RFC-027 byte-for-byte behavior.
   if (sessionId !== undefined) {
     try {
-      if (runtime === 'claude-code') {
-        // RFC-111 PR-D: claude persists subagent transcripts as JSONL files
-        // under the per-run CLAUDE_CONFIG_DIR's projects dir (parent turns are
-        // already captured live by the stdout pump). Mirrors RFC-027 for claude.
-        await captureClaudeSessions({
-          rootSessionId: sessionId,
-          nodeRunId: opts.nodeRunId,
-          taskId: opts.taskId,
-          db: opts.db,
-          log,
-          configDir: join(runRoot, '.claude'),
-          worktreePath: opts.worktreePath,
-        })
-      } else {
-        await captureChildSessions({
-          rootSessionId: sessionId,
-          nodeRunId: opts.nodeRunId,
-          taskId: opts.taskId,
-          db: opts.db,
-          log,
-          alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
-        })
-      }
+      // RFC-143: each driver captures its own subagent transcripts (opencode:
+      // SQLite BFS + the live poller's partId dedupe; claude: JSONL files under
+      // <runRoot>/.claude/projects). The union ctx carries both runtimes' inputs.
+      await driver.captureSessions({
+        rootSessionId: sessionId,
+        nodeRunId: opts.nodeRunId,
+        taskId: opts.taskId,
+        db: opts.db,
+        log,
+        worktreePath: opts.worktreePath,
+        runRoot,
+        alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
+      })
     } catch (err) {
       log.warn('subagent-capture-unhandled', {
         nodeRunId: opts.nodeRunId,
@@ -1497,18 +1489,19 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // legitimate snapshot. Leave the column at its prior value by skipping the
   // read entirely.
   let inventoryJson: string | null = null
-  if (
-    isAgentRunKind(inventoryNodeKind) &&
-    opts.envelopeFollowup !== true &&
-    runtime === 'opencode'
-  ) {
+  // RFC-143: inventory read is an opencode-only capability. The agent-kind +
+  // non-followup gates are business conditions (kept here); the runtime gate is
+  // expressed by `readInventory` being present — claude's driver omits it →
+  // `?.` short-circuits and the column stays null.
+  if (isAgentRunKind(inventoryNodeKind) && opts.envelopeFollowup !== true) {
     try {
-      const snapshot = await readSnapshotFromRunDir({
-        runDir: runRoot,
+      const snapshot = await driver.readInventory?.({
+        runRoot,
         nodeKind: inventoryNodeKind,
-        pureMode: process.env.OPENCODE_PURE === '1' || process.env.OPENCODE_PURE === 'true',
       })
-      inventoryJson = JSON.stringify(snapshot)
+      if (snapshot !== undefined && snapshot !== null) {
+        inventoryJson = JSON.stringify(snapshot)
+      }
     } catch (err) {
       log.warn('inventory-read-unhandled', {
         nodeRunId: opts.nodeRunId,

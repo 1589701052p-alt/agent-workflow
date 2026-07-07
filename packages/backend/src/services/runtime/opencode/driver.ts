@@ -6,6 +6,7 @@
 // extracted logic stays byte-identical to the pre-RFC-111 runner.ts.
 
 import type {
+  InventoryReadContext,
   NormalizedEvent,
   ProbeOpts,
   RuntimeBinaryConfig,
@@ -17,11 +18,15 @@ import type {
   SystemAgentSpawnContext,
   ListModelsOpts,
 } from '../types'
+import type { InventorySnapshot } from '@agent-workflow/shared'
+import type { LivePollOptions, LivePollerHandle } from '@/services/subagentLiveCapture'
 import { parseEvent } from './events'
 import { buildOpencodeSpawn } from './spawn'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { listOpencodeModels } from '@/util/opencode-models'
 import { captureChildSessions } from '@/services/sessionCapture'
+import { readSnapshotFromRunDir } from '@/services/inventory'
+import { startLiveSubagentCapture } from '@/services/subagentLiveCapture'
 
 export const opencodeDriver: RuntimeDriver = {
   kind: 'opencode',
@@ -81,5 +86,16 @@ export const opencodeDriver: RuntimeDriver = {
       gitUserEmail: ctx.gitUserEmail ?? null,
     })
     return { cmd, env, stdin: { mode: 'ignore' } }
+  },
+  // —— optional capabilities (opencode implements; claude omits) ——
+  async readInventory(ctx: InventoryReadContext): Promise<InventorySnapshot | null> {
+    return readSnapshotFromRunDir({
+      runDir: ctx.runRoot,
+      nodeKind: ctx.nodeKind,
+      pureMode: process.env.OPENCODE_PURE === '1' || process.env.OPENCODE_PURE === 'true',
+    })
+  },
+  startLiveCapture(ctx: LivePollOptions): LivePollerHandle {
+    return startLiveSubagentCapture(ctx)
   },
 }

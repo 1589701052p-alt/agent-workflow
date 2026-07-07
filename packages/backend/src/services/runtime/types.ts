@@ -18,6 +18,8 @@
 
 import type { DbClient } from '@/db/client'
 import type { Logger } from '@/util/log'
+import type { InventorySnapshot } from '@agent-workflow/shared'
+import type { LivePollOptions, LivePollerHandle } from '@/services/subagentLiveCapture'
 
 export type RuntimeKind = 'opencode' | 'claude-code'
 
@@ -231,4 +233,25 @@ export interface RuntimeDriver {
   /** RFC-143 — run-after subagent session capture (was captureChildSessions /
    *  captureClaudeSessions free fns). */
   captureSessions(ctx: SessionCaptureContext): Promise<void>
+
+  // —— optional capabilities (null-object: a runtime that lacks the capability
+  //    omits the method, and runner skips the whole step — RFC-143 PR-3) ——
+
+  /** opencode only — read the inventory snapshot the dump plugin wrote into
+   *  `runRoot` (was `runtime === 'opencode'` gate on readSnapshotFromRunDir).
+   *  claude omits this → runner leaves the inventory column null. */
+  readInventory?(ctx: InventoryReadContext): Promise<InventorySnapshot | null>
+
+  /** opencode only — spin up the live subagent SQLite poller alongside the run
+   *  (was an UNCONDITIONAL start, spinning uselessly on claude runs — the
+   *  RFC-143 空转 bug). claude omits this → runner uses NOOP_HANDLE. */
+  startLiveCapture?(ctx: LivePollOptions): LivePollerHandle
+}
+
+/** Inputs for `readInventory` — the per-run config dir + the node kind (the
+ *  snapshot reader gates its shape on agent-vs-non-agent). pureMode is read from
+ *  env inside the opencode driver. */
+export interface InventoryReadContext {
+  runRoot: string
+  nodeKind: string
 }

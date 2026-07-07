@@ -111,3 +111,35 @@ describe('RFC-143 (B) 能力接口', () => {
     expect(typeof mockDriver.captureSessions).toBe('function')
   })
 })
+
+describe('RFC-143 (C) PR-3 optional 能力 + live poller 空转 bug 修复', () => {
+  it('claude driver 省略 startLiveCapture（空转 bug：live poll 是 opencode 专属）', () => {
+    // 修复前：runner 无条件 startLiveSubagentCapture → claude run 每 1.5s 空开
+    // opencode SQLite、恒 0 命中。修复后：claude driver 无此方法 → runner 落
+    // NOOP_HANDLE，poller 根本不启动。
+    expect(getRuntimeDriver('claude-code').startLiveCapture).toBeUndefined()
+    expect(typeof getRuntimeDriver('opencode').startLiveCapture).toBe('function')
+  })
+
+  it('claude driver 省略 readInventory（inventory 插件是 opencode 专属）', () => {
+    expect(getRuntimeDriver('claude-code').readInventory).toBeUndefined()
+    expect(typeof getRuntimeDriver('opencode').readInventory).toBe('function')
+  })
+
+  it('runner live poller 走 driver.startLiveCapture? + NOOP fallback（不再无条件启动）', () => {
+    const src = SRC('services/runner.ts')
+    expect(src).toContain('driver.startLiveCapture?.(')
+    expect(src).toContain('?? NOOP_HANDLE')
+    // 无条件启动的旧形态不得复活。
+    expect(src).not.toMatch(/const livePoller = startLiveSubagentCapture\(/)
+  })
+
+  it('runner 会话捕获 / inventory 回读走 driver（消 capture 的 runtime 分支）', () => {
+    const src = SRC('services/runner.ts')
+    expect(src).toContain('driver.captureSessions(')
+    expect(src).toContain('driver.readInventory?.(')
+    // capture 不再按 runtime 二选一 captureClaudeSessions/captureChildSessions。
+    expect(src).not.toContain('captureClaudeSessions(')
+    expect(src).not.toContain('captureChildSessions(')
+  })
+})
