@@ -58,7 +58,7 @@ export function mountAuthRoutes(app: Hono, deps: AppDeps): void {
         role: row.role,
         status: row.status,
       },
-      mustChangePassword: row.forcePasswordChange === 1,
+      mustChangePassword: row.forcePasswordChange,
     })
   })
 
@@ -99,7 +99,7 @@ export function mountAuthRoutes(app: Hono, deps: AppDeps): void {
     const row = rows[0]
     if (!row) throw new NotFoundError('user-not-found', 'user not found')
 
-    if (row.forcePasswordChange !== 1) {
+    if (!row.forcePasswordChange) {
       if (!parsed.data.oldPassword) {
         throw new ValidationError('old-password-required', 'oldPassword is required')
       }
@@ -110,7 +110,7 @@ export function mountAuthRoutes(app: Hono, deps: AppDeps): void {
     const newHash = await hashPassword(parsed.data.newPassword)
     await deps.db
       .update(users)
-      .set({ passwordHash: newHash, forcePasswordChange: 0, updatedAt: Date.now() })
+      .set({ passwordHash: newHash, forcePasswordChange: false, updatedAt: Date.now() })
       .where(eq(users.id, actor.user.id))
 
     // Revoke every other session for this user; keep the current one.

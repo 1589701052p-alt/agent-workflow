@@ -28,6 +28,7 @@ import { canViewTask, getTaskMembers, updateTaskMembers } from '@/services/taskC
 import { canViewResource } from '@/services/resourceAcl'
 import { assertNotBuiltin } from '@/services/systemResources'
 import { ForbiddenError } from '@/util/errors'
+import { parseBoolQuery } from '@/util/http'
 import {
   SyncWorkflowBodySchema,
   UpdateTaskMembersBodySchema,
@@ -551,8 +552,9 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
 
   app.post('/api/tasks/:id/nodes/:nodeRunId/retry', async (c) => {
     await assertTaskWorkflowNotBuiltin(deps, c.req.param('id')) // RFC-104: no manual exec of built-ins
-    const cascadeRaw = c.req.query('cascade')
-    const cascade = cascadeRaw === undefined ? true : cascadeRaw !== 'false'
+    // flag-audit W0：统一布尔解析（此前 `!== 'false'` 双重否定——任何拼错值静默当
+    // true）。产品语义保留默认级联。
+    const cascade = parseBoolQuery(c, 'cascade', { default: true })
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
     const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
     const task = await retryNode(deps.db, c.req.param('id'), c.req.param('nodeRunId'), {

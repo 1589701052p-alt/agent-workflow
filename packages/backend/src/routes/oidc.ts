@@ -6,6 +6,7 @@ import { requirePermission } from '@/auth/permissions'
 import { createOidcProvidersService, redactedProvider } from '@/services/oidcProviders'
 import type { AppDeps } from '@/server'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { parseBoolQuery } from '@/util/http'
 
 export function mountOidcRoutes(app: Hono, deps: AppDeps): void {
   if (!deps.secretBox) {
@@ -49,7 +50,9 @@ export function mountOidcRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.delete('/api/oidc/providers/:id', requirePermission('oidc:configure'), async (c) => {
-    const force = c.req.query('force') === 'true'
+    // flag-audit W0：统一布尔解析（此前仅认 'true'——`?force=1` 在相邻 API 生效、
+    // 在这里静默变 false）。
+    const force = parseBoolQuery(c, 'force', { default: false })
     await svc.remove(c.req.param('id'), force)
     return c.body(null, 204)
   })

@@ -110,7 +110,7 @@ function materializePublicAdminView(row: {
   displayName: string
   role: string
   status: string
-  forcePasswordChange: number
+  forcePasswordChange: boolean
   createdBy: string | null
   createdAt: number
   updatedAt: number
@@ -123,7 +123,7 @@ function materializePublicAdminView(row: {
     displayName: row.displayName,
     role: row.role,
     status: row.status,
-    forcePasswordChange: row.forcePasswordChange === 1,
+    forcePasswordChange: row.forcePasswordChange,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

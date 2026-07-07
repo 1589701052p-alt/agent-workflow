@@ -21,6 +21,7 @@ import {
 } from '@/services/gitRepoCache'
 import { getBatchSnapshot, retryBatchRow, startBatchImport } from '@/services/repoBatchImport'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { parseBoolQuery } from '@/util/http'
 
 export function mountCachedRepoRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/cached-repos', async (c) => {
@@ -36,8 +37,7 @@ export function mountCachedRepoRoutes(app: Hono, deps: AppDeps): void {
 
   app.delete('/api/cached-repos/:id', async (c) => {
     const id = c.req.param('id')
-    const force = c.req.query('force')
-    const isForce = force === '1' || force === 'true'
+    const isForce = parseBoolQuery(c, 'force', { default: false })
     try {
       const r = await deleteCachedRepo({ db: deps.db }, id, { force: isForce })
       return c.json({ ok: true, deletedLocalPath: r.deletedLocalPath })

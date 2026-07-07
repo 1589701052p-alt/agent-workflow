@@ -104,7 +104,7 @@ describe('OidcProvidersService', () => {
       passwordHash: null,
       role: 'admin',
       status: 'active',
-      forcePasswordChange: 0,
+      forcePasswordChange: false,
       createdBy: null,
       createdAt: 0,
       updatedAt: 0,

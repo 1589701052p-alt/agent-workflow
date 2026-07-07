@@ -9,6 +9,7 @@ import type { Hono } from 'hono'
 import { loadConfig } from '@/config'
 import type { AppDeps } from '@/server'
 import { listOpencodeModels } from '@/util/opencode-models'
+import { parseBoolQuery } from '@/util/http'
 import { listClaudeModels } from '@/services/runtime/claudeCode/models'
 import { resolveRuntimeByName } from '@/services/runtimeRegistry'
 import { redactSensitiveString } from '@/util/redact'
@@ -50,8 +51,7 @@ export function mountRuntimeRoutes(app: Hono, deps: AppDeps): void {
         cached: true,
       })
     }
-    const refreshParam = c.req.query('refresh')
-    const refresh = refreshParam === '1' || refreshParam === 'true'
+    const refresh = parseBoolQuery(c, 'refresh', { default: false })
     const binary = resolvedBinary ?? cfg.opencodePath ?? 'opencode'
     try {
       const result = await listOpencodeModels(binary, { refresh })

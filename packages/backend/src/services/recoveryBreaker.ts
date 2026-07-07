@@ -26,7 +26,7 @@ export async function isAutoRecoverySuspended(db: DbClient, taskId: string): Pro
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .limit(1)
-  return (rows[0]?.s ?? 0) === 1
+  return rows[0]?.s ?? false
 }
 
 /**
@@ -52,7 +52,7 @@ export async function recordAutoRecoveryAttempt(
     .limit(1)
   const row = rows[0]
   if (row === undefined) return { suspended: false, attempts: 0 }
-  if (row.suspended === 1) return { suspended: true, attempts: row.attempts }
+  if (row.suspended) return { suspended: true, attempts: row.attempts }
 
   let windowStart = row.windowStart
   let attempts: number
@@ -68,7 +68,7 @@ export async function recordAutoRecoveryAttempt(
     .set({
       autoRecoveryAttempts: attempts,
       autoRecoveryWindowStartedAt: windowStart,
-      autoRecoverySuspended: suspended ? 1 : 0,
+      autoRecoverySuspended: suspended,
     })
     .where(eq(tasks.id, taskId))
   if (suspended) {
@@ -88,7 +88,7 @@ export async function clearAutoRecoverySuspension(db: DbClient, taskId: string):
   await db
     .update(tasks)
     .set({
-      autoRecoverySuspended: 0,
+      autoRecoverySuspended: false,
       autoRecoveryAttempts: 0,
       autoRecoveryWindowStartedAt: null,
     })

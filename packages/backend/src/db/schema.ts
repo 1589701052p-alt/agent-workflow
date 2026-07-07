@@ -491,7 +491,11 @@ export const tasks = sqliteTable(
     failedNodeId: text('failed_node_id'),
     // RFC-108 T11 (AR-09): circuit-breaker / quarantine accounting.
     autoRecoveryAttempts: integer('auto_recovery_attempts').notNull().default(0),
-    autoRecoverySuspended: integer('auto_recovery_suspended').notNull().default(0),
+    // flag-audit W0：三根裸 0/1 列统一 mode:'boolean'（存储格式不变、零迁移），
+    // 消费点告别手写 === 1 / ? 1 : 0 样板。
+    autoRecoverySuspended: integer('auto_recovery_suspended', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     autoRecoveryWindowStartedAt: integer('auto_recovery_window_started_at'),
     // optional expiry (soft delete after expires_at)
     expiresAt: integer('expires_at'),
@@ -1288,7 +1292,9 @@ export const users = sqliteTable(
     status: text('status', { enum: ['active', 'disabled', 'invited'] })
       .notNull()
       .default('active'),
-    forcePasswordChange: integer('force_password_change').notNull().default(0),
+    forcePasswordChange: integer('force_password_change', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     createdBy: text('created_by'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
@@ -1369,7 +1375,7 @@ export const oidcProviders = sqliteTable(
       .default('invite'),
     allowedEmailDomainsJson: text('allowed_email_domains_json').notNull().default('[]'),
     iconUrl: text('icon_url'),
-    enabled: integer('enabled').notNull().default(1),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     schemaVersion: integer('schema_version').notNull().default(1),

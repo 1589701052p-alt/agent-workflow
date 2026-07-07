@@ -38,6 +38,7 @@ import {
   type MemoryScopeRef,
 } from '@/services/memory'
 import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { parseBoolQuery } from '@/util/http'
 
 /**
  * RFC-099 (D12) — load + gate one memory row for a management operation:
@@ -202,8 +203,7 @@ export function mountMemoryRoutes(app: Hono, deps: AppDeps): void {
   app.delete('/api/memories/:id', requirePermission('memory:delete'), async (c) => {
     const id = c.req.param('id')
     await loadManagedMemory(deps, c, id)
-    const confirm = c.req.query('confirm')
-    if (confirm !== 'true' && confirm !== '1') {
+    if (!parseBoolQuery(c, 'confirm', { default: false })) {
       throw new ValidationError(
         'confirm-required',
         'hard delete requires ?confirm=true to acknowledge irreversibility',

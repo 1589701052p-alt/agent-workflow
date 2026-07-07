@@ -26,7 +26,7 @@ async function seedActiveUser(db: DbClient, id = '01HQUSER'): Promise<string> {
     passwordHash: null,
     role: 'user',
     status: 'active',
-    forcePasswordChange: 0,
+    forcePasswordChange: false,
     createdBy: null,
     createdAt: 0,
     updatedAt: 0,

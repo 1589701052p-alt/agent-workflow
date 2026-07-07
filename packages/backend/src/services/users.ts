@@ -66,7 +66,7 @@ export async function createUser(db: DbClient, input: CreateUserInput): Promise<
     passwordHash,
     role: input.role,
     status,
-    forcePasswordChange: 0,
+    forcePasswordChange: false,
     createdBy: input.createdBy ?? null,
     createdAt: now,
     updatedAt: now,
@@ -99,7 +99,7 @@ export async function resetPassword(
     .update(users)
     .set({
       passwordHash,
-      forcePasswordChange: input.force ? 1 : 0,
+      forcePasswordChange: input.force ?? false,
       status: 'active',
       updatedAt: now,
     })
@@ -232,7 +232,7 @@ export async function patchUser(
   if (patch.role !== undefined) updates.role = patch.role
   if (patch.status !== undefined) updates.status = patch.status
   if (patch.forcePasswordChange !== undefined) {
-    updates.forcePasswordChange = patch.forcePasswordChange ? 1 : 0
+    updates.forcePasswordChange = patch.forcePasswordChange
   }
   await db.update(users).set(updates).where(eq(users.id, id))
   return (await findById(db, id))!

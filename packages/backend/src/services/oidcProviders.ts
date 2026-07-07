@@ -49,7 +49,7 @@ export function createOidcProvidersService(deps: {
       provisioning: row.provisioning,
       allowedEmailDomains: safeJson<string[]>(row.allowedEmailDomainsJson) ?? [],
       iconUrl: row.iconUrl,
-      enabled: row.enabled === 1,
+      enabled: row.enabled,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     })
@@ -61,7 +61,7 @@ export function createOidcProvidersService(deps: {
       return rows.map(materialize)
     },
     async listPublic() {
-      const rows = await db.select().from(oidcProviders).where(eq(oidcProviders.enabled, 1))
+      const rows = await db.select().from(oidcProviders).where(eq(oidcProviders.enabled, true))
       return rows.map((r) => ({ slug: r.slug, displayName: r.displayName, iconUrl: r.iconUrl }))
     },
     async findById(id) {
@@ -98,7 +98,7 @@ export function createOidcProvidersService(deps: {
         provisioning: body.provisioning,
         allowedEmailDomainsJson: JSON.stringify(body.allowedEmailDomains ?? []),
         iconUrl: body.iconUrl,
-        enabled: body.enabled ? 1 : 0,
+        enabled: body.enabled,
         createdAt: now,
         updatedAt: now,
         schemaVersion: 1,
@@ -123,7 +123,7 @@ export function createOidcProvidersService(deps: {
         updates.allowedEmailDomainsJson = JSON.stringify(body.allowedEmailDomains)
       }
       if (body.iconUrl !== undefined) updates.iconUrl = body.iconUrl
-      if (body.enabled !== undefined) updates.enabled = body.enabled ? 1 : 0
+      if (body.enabled !== undefined) updates.enabled = body.enabled
       // Empty clientSecret in PATCH = keep existing; non-empty = re-seal.
       if (typeof body.clientSecret === 'string' && body.clientSecret.length > 0) {
         updates.clientSecretEnc = secretBox.seal(body.clientSecret)
