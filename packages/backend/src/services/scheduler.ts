@@ -5360,31 +5360,42 @@ async function runGitWrapperNode(state: SchedulerState, args: OneNodeArgs): Prom
   // (which the loop hasn't merged into yet) would leave preDirty empty and wrongly
   // report the cumulative union. RFC-098 B1 (S-24): captured under the write lock.
   if (baseline === undefined) {
-    // Establishing this generation's baseline — ALWAYS generation-start
-    // semantics (impl-gate P2 round 5): `persistWrapperProgress` runs strictly
-    // BEFORE runScope, so a row with no persisted git baseline means no inner
-    // work has happened in this generation yet — whether it's a fresh mint, a
-    // merged re-entry, or a crash after the re-entry cleared progress (even
-    // one landing after persistIsoBase re-stamped the base columns). Capturing
-    // preDirty here is therefore always correct and REQUIRED: a git wrapper
-    // nested in a loop branches from the loop's dirty wrapper-canonical, and
-    // skipping the pre-set would leak those entry-dirty files into git_diff.
-    // Persisting immediately makes the baseline durable for same-generation
-    // resumes. (The pre-RFC-144 malformed-progress corner inherits these
-    // fresh semantics — it was an unspecified guess either way.)
+    // Establishing this generation's baseline. Two states land here, split by
+    // a DURABLE discriminator (impl-gate P2 rounds 5-6):
+    //
+    // ① Generation start — fresh mint / merged re-entry / a crash after the
+    //   re-entry cleared progress (even one landing after persistIsoBase
+    //   re-stamped the base columns). Invariant: persistWrapperProgress runs
+    //   strictly BEFORE runScope, and the ONLY writer that nulls it is the
+    //   re-entry CAS — so `wrapperProgressJson IS NULL` ⟹ zero inner work in
+    //   this generation. Capture preDirty (a git wrapper nested in a loop
+    //   branches from the loop's DIRTY wrapper-canonical; skipping the pre-set
+    //   would leak those entry-dirty files into git_diff) and persist
+    //   immediately (durable for same-generation resumes).
+    //
+    // ② Malformed NON-NULL progress — mid-generation corruption; inner work
+    //   may already sit in the wrapper worktree. Capturing preDirty here would
+    //   hash-match those real inner changes and SWALLOW them from git_diff
+    //   (under-report breaks downstream consumers). Keep the documented
+    //   pre-RFC-144 fallback: empty pre-set (over-report, never drop) and no
+    //   progress overwrite.
+    const generationStart =
+      existing === null || freshGeneration || existing.wrapperProgressJson === null
     const entry = await state.writeSem.run(async () => {
       const base = await captureHead(wrapperCanonPath)
-      const pre = await captureGitPreDirty(wrapperCanonPath, base, log)
+      const pre = generationStart ? await captureGitPreDirty(wrapperCanonPath, base, log) : {}
       return { base, pre }
     })
     baseline = entry.base
     preDirty = entry.pre
-    await persistWrapperProgress(db, wrapperRunId, {
-      kind: 'git',
-      baseline,
-      preDirty,
-      phase: 'inner-running',
-    })
+    if (generationStart) {
+      await persistWrapperProgress(db, wrapperRunId, {
+        kind: 'git',
+        baseline,
+        preDirty,
+        phase: 'inner-running',
+      })
+    }
   }
 
   const subRes = await runScope(innerState, {

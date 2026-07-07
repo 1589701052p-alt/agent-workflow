@@ -469,10 +469,13 @@ WHERE merge_state IN ('isolating', 'pending-merge', 'conflict-human')
   的**无列值容忍清理**（discardNodeIso 只需派生路径+refs，snapshot 值不参与删除——
   rebuildIsoHandle 空 map 即可），复活行到达 create 时统一预清理，任何崩溃残留目录都不再让
   `git worktree add` wedge 任务。②基线建立**恒为代起点语义**：progress 持久化严格先于
-  runScope，「无持久化基线 ⟺ 本代零内部工作」——建立基线时无条件捕 preDirty（loop 内嵌 git
-  wrapper 的入场脏集必须被减掉，否则漏进 git_diff）并立即持久化（同代 resume 耐久）；
-  malformed-progress 角落继承 fresh 语义（原本就是未定义行为的猜测）。崩溃矩阵测试：
-  「reenter 清列后崩溃 + 旧目录残留」→ 容忍清理 + 重建不 wedge；源码顺序锁：CAS 先于 discard。
+  runScope，且唯一置 NULL 的写者是 reenter CAS——「progress **SQL NULL** ⟺ 本代零内部工作」：
+  此态捕 preDirty（loop 内嵌 git wrapper 的入场脏集必须被减掉，否则漏进 git_diff）并立即持久化
+  （同代 resume 耐久）。**第六轮勘误**：「非 NULL 但解析失败」是代中损坏、内部产物可能已在
+  worktree——此态若捕 preDirty 会把真实变更 hash 相等地**吞掉**（欠报断下游 fanout），保留
+  RFC-144 前的空 pre-set 兜底（多报不吞、不覆写 progress）。两态由 SQL-NULL 判别子分流。
+  崩溃矩阵测试：「reenter 清列后崩溃 + 旧目录残留」→ 容忍清理 + 重建不 wedge；源码顺序锁：
+  CAS 先于 discard。
 
 ## 13. 测试策略（test-with-every-change 清单）
 
