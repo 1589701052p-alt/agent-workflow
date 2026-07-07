@@ -1,16 +1,15 @@
 // Right-side drawer that opens when the user picks a node on the task
-// status canvas (P-2-13). M2 ships 4 tabs:
+// status canvas (P-2-13). Tabs:
 //
-//   - Prompt — promptText captured by the runner (read-only).
-//   - Events — latest 500 events with kind filter chips; refetches on
+//   - Session — full conversation flow for the picked run (took over the
+//               old read-only Prompt tab; prompt text lives in the flow).
+//   - Events  — latest 500 events with kind filter chips; refetches on
 //               /ws/tasks/:id node.event invalidations.
-//   - Output — port → value cards (copyable).
-//   - Stats  — start/finish/duration, exit code, token usage.
-//
-// Retries history + sub-process listing for fan-out children land in M3.
+//   - Output  — port → value cards (copyable).
+//   - Stats   — start/finish/duration, exit code, token usage.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { NodeRun, NodeRunEventsResponse, NodeRunOutput, Task } from '@agent-workflow/shared'
 import { NODE_EVENT_KIND } from '@agent-workflow/shared'
@@ -18,13 +17,6 @@ import { useNavigate } from '@tanstack/react-router'
 import { NodeDependencyTreeSection } from './agents/NodeDependencyTreeSection'
 import { SessionTab } from './node-session/SessionTab'
 import { api, ApiError } from '@/api/client'
-import { Select } from '@/components/Select'
-import {
-  formatAttemptLabel,
-  isFanoutParentRun,
-  isPromptCapableKind,
-  sortNodeRunsForPromptHistory,
-} from '@/lib/node-prompt'
 import { clarifyRoundForRun, formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
 import { classifyCanceled, displayNoderunStatusKey, supersededDecision } from '@/lib/noderun-status'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
@@ -38,18 +30,18 @@ interface Props {
   nodeRunId: string | null
   /**
    * RFC-011: the workflow node id this drawer is currently anchored at.
-   * Needed so the Prompt tab can list every historical node_run for the
+   * Needed so the Session tab can list every historical node_run for the
    * same node (retries, iterations, fan-out shards, review re-runs).
    * Derived from `runs.find(r.id === nodeRunId).nodeId` upstream but passed
    * explicitly to keep the helper / drawer separation crisp.
    */
   nodeId: string | null
   /**
-   * RFC-011: the workflow definition kind (agent-single / agent-multi /
-   * input / output / wrapper-* / review). Used to decide whether the Prompt
-   * tab shows the attempts switcher or an "N/A — this node kind has no
-   * opencode prompt" placeholder. Looked up against the task's
-   * workflowSnapshot in tasks.detail.tsx.
+   * RFC-011: the workflow definition kind (agent-single / input / output /
+   * wrapper-* / review …). The Session tab uses it to decide whether this
+   * node kind has an own opencode session (attempts switcher) or renders
+   * the "N/A" placeholder. Looked up against the task's workflowSnapshot
+   * in tasks.detail.tsx.
    */
   workflowNodeKind: string | null
   /**
@@ -65,7 +57,7 @@ interface Props {
   onSelectRun?: (nodeRunId: string) => void
 }
 
-type Tab = 'session' | 'prompt' | 'events' | 'output' | 'stats'
+type Tab = 'session' | 'events' | 'output' | 'stats'
 
 export function NodeDetailDrawer({
   taskId,
@@ -184,14 +176,6 @@ export function NodeDetailDrawer({
             workflowNodeKind={workflowNodeKind}
           />
         )}
-        {tab === 'prompt' && (
-          <PromptTab
-            runs={runs}
-            nodeId={nodeId}
-            selectedRunId={nodeRunId}
-            workflowNodeKind={workflowNodeKind}
-          />
-        )}
         {tab === 'events' && <EventsTab taskId={taskId} nodeRunId={nodeRunId} />}
         {tab === 'output' && <OutputTab outputs={nodeOutputs} />}
         {tab === 'stats' && (
@@ -260,74 +244,6 @@ function noderunTone(s: NodeRun['status']): string {
 }
 
 // ---------------------------------------------------------------------------
-
-function PromptTab({
-  runs,
-  nodeId,
-  selectedRunId,
-  workflowNodeKind,
-}: {
-  runs: NodeRun[]
-  nodeId: string | null
-  selectedRunId: string
-  workflowNodeKind: string | null
-}) {
-  const { t } = useTranslation()
-
-  const attempts = useMemo(
-    () =>
-      nodeId === null ? [] : sortNodeRunsForPromptHistory(runs.filter((r) => r.nodeId === nodeId)),
-    [runs, nodeId],
-  )
-  const [pickedId, setPickedId] = useState<string>(selectedRunId)
-
-  // When the canvas selection changes (a new selectedRunId arrives), re-anchor
-  // the picker to that run. Otherwise the user's last manual pick is kept.
-  useEffect(() => {
-    setPickedId(selectedRunId)
-  }, [selectedRunId])
-
-  if (attempts.length === 0) {
-    return <div className="muted">{t('nodeDrawer.promptPending')}</div>
-  }
-
-  const picked = attempts.find((a) => a.id === pickedId) ?? attempts[attempts.length - 1]!
-  const fanoutParent = isFanoutParentRun(picked, attempts)
-  // RFC-060 PR-E: wrapper-fanout containers aren't prompt-capable themselves
-  // (no prompt) but they ARE fan-out parents — let the picker surface to
-  // route into inner-shard prompts. Other non-prompt kinds still gate out.
-  if (!isPromptCapableKind(workflowNodeKind) && !fanoutParent) {
-    return <div className="muted">{t('nodeDrawer.promptNotApplicable')}</div>
-  }
-
-  return (
-    <div className="prompt-history">
-      <div className="prompt-history__picker">
-        <span className="muted">{t('nodeDrawer.promptAttemptLabel')}</span>
-        <Select<string>
-          className="prompt-history__select"
-          ariaLabel={t('nodeDrawer.promptAttemptLabel')}
-          value={picked.id}
-          onChange={(id) => setPickedId(id)}
-          options={attempts.map((a) => ({
-            value: a.id,
-            label: formatAttemptLabel(a, {
-              fanoutParent: isFanoutParentRun(a, attempts),
-              t,
-            }),
-          }))}
-        />
-      </div>
-      {fanoutParent ? (
-        <div className="muted">{t('nodeDrawer.promptFanoutParent')}</div>
-      ) : picked.promptText === null || picked.promptText === '' ? (
-        <div className="muted">{t('nodeDrawer.promptEmpty')}</div>
-      ) : (
-        <pre className="readonly-pre">{picked.promptText}</pre>
-      )}
-    </div>
-  )
-}
 
 function OutputTab({ outputs }: { outputs: NodeRunOutput[] }) {
   const { t } = useTranslation()

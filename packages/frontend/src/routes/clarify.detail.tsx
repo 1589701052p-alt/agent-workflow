@@ -556,12 +556,6 @@ export function ClarifyDetailPage() {
   // the milder iteration-scoped copy.
   const [stopModalOpen, setStopModalOpen] = useState(false)
 
-  // RFC-023 iter #2: the per-question `recommended` flag was deprecated when
-  // "recommended" moved to the option level. All questions are now optional
-  // to answer (the submit button is always enabled in awaiting_human mode).
-  // Keep the variable so the JSX hint can simply not render.
-  const requiredMissing = false
-
   // ----------------------------------------------------------------------
   // Keyboard navigation between questions. The reviewer ergonomics flow:
   //   1. On mount (after draft / sealed answers loaded), focus the first
@@ -1028,7 +1022,7 @@ export function ClarifyDetailPage() {
             ref={submitContinueRef}
             type="button"
             className="btn btn--primary"
-            disabled={readonly || submitMut.isPending || requiredMissing || allLocked}
+            disabled={readonly || submitMut.isPending || allLocked}
             onClick={() => submitMut.mutate('continue')}
             data-testid="clarify-submit-continue"
             data-directive="continue"
@@ -1044,7 +1038,7 @@ export function ClarifyDetailPage() {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={readonly || submitMut.isPending || requiredMissing || allLocked}
+            disabled={readonly || submitMut.isPending || allLocked}
             onClick={() => setStopModalOpen(true)}
             data-testid="clarify-submit-stop"
             data-directive="stop"
@@ -1052,11 +1046,6 @@ export function ClarifyDetailPage() {
             {t('clarify.detail.submitStop')}
           </button>
         </div>
-        {requiredMissing && (
-          <span className="error-box" data-testid="clarify-required-missing">
-            {t('clarify.detail.submitDisabledRequired')}
-          </span>
-        )}
         {submitMut.error !== null && submitMut.error !== undefined && (
           <div className="error-box">{(submitMut.error as Error).message}</div>
         )}

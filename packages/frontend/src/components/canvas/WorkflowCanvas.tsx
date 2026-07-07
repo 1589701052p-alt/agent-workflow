@@ -86,15 +86,6 @@ import { deserialize, makeNode, PALETTE_MIME } from './nodePalette'
 import { OutputNode } from './nodes/OutputNode'
 import { ReviewNode } from './nodes/ReviewNode'
 import { INBOUND_HANDLE_ID, type CanvasNodeData, type CanvasSelection } from './nodes/types'
-import {
-  MULTI_SOURCE_PORT_HANDLE_ID,
-  applySourcePortConnection,
-  buildSourcePortDisplayEdges,
-  clearSourcePortOnNodeRemoved,
-  clearSourcePortsForSyntheticIds,
-  isValidSourcePortConnection,
-  parseSyntheticSourcePortEdgeId,
-} from './fanoutSourceSync'
 import { syncInputDefs } from './syncInputDefs'
 import { GroupWrapperNode } from './nodes/WrapperNodes'
 import {
@@ -329,10 +320,9 @@ function CanvasInner({
       ),
     ),
   )
-  const [edges, setEdges] = useState<Edge[]>(() => [
-    ...toFlowEdges(definition.edges, buildControlFlowEdgeIds(definition, agentByName)),
-    ...buildSourcePortDisplayEdges(definition),
-  ])
+  const [edges, setEdges] = useState<Edge[]>(() =>
+    toFlowEdges(definition.edges, buildControlFlowEdgeIds(definition, agentByName)),
+  )
   const externalDefRef = useRef(definition)
   const externalStatusesRef = useRef(nodeStatuses)
   // RFC-120 D13: mirror of `nodeStatuses`' externalStatusesRef guard — lets the
@@ -417,13 +407,12 @@ function CanvasInner({
       // above) — without the agentsChanged arm a signal edge stays drawn as a
       // data edge until the next definition edit.
       if (defChanged || agentsChanged)
-        setEdges([
-          ...applySelection(
+        setEdges(
+          applySelection(
             toFlowEdges(definition.edges, buildControlFlowEdgeIds(definition, agentByName)),
             sel.edges,
           ),
-          ...buildSourcePortDisplayEdges(definition),
-        ])
+        )
     }
   }, [
     definition,
@@ -453,18 +442,11 @@ function CanvasInner({
               (e) => stillReferenced.has(e.source) && stillReferenced.has(e.target),
             )
             if (liveEdges.length !== edges.length) setEdges(liveEdges)
-            // RFC-015: when a node is removed, any agent-multi node whose
-            // sourcePort referenced it must be cleared — the field isn't an
-            // edge, so xyflow's automatic edge cleanup wouldn't catch it.
             const removedIds: string[] = []
             for (const c of changes) {
               if (c.type === 'remove') removedIds.push(c.id)
             }
-            let nextDef = toDefinition(definition, next, liveEdges)
-            if (removedIds.length > 0) {
-              nextDef = clearSourcePortOnNodeRemoved(nextDef, removedIds)
-            }
-            commitChange(nextDef)
+            commitChange(toDefinition(definition, next, liveEdges))
             // Delete key path: xyflow's built-in `deleteKeyCode` removes the
             // selected node before our `deleteSelected` callback ever fires
             // (deleteSelected is wired only to the right-click menu). Without
@@ -503,18 +485,11 @@ function CanvasInner({
         // Only the structural mutations need to round-trip into the
         // persisted WorkflowDefinition; selection-only ticks stay local.
         if (onChange !== undefined && affectsEdgeDefinition(changes)) {
-          // RFC-015: deleting a synthetic sourcePort line must also clear
-          // the corresponding fanout node's sourcePort field — otherwise
-          // the def-sync rebuild immediately puts the line back.
           const removedIds: string[] = []
           for (const c of changes) {
             if (c.type === 'remove') removedIds.push(c.id)
           }
-          let nextDef = toDefinition(definition, nodes, next)
-          if (removedIds.length > 0) {
-            nextDef = clearSourcePortsForSyntheticIds(nextDef, removedIds)
-          }
-          commitChange(nextDef)
+          commitChange(toDefinition(definition, nodes, next))
           // Same parent-selection clear as handleNodesChange: xyflow's
           // built-in Delete-key path also removes the selected edge here,
           // not via deleteSelected. Without this, the parent route's
@@ -556,14 +531,6 @@ function CanvasInner({
       // RFC-106: xyflow fired onConnect ⇒ it snapped to a real handle; the
       // body-drop fallback in onConnectEnd must NOT also fire.
       connectHandledRef.current = true
-      // RFC-015 fast-path: a drop on the agent-multi node's top handle
-      // writes node.sourcePort directly and produces NO edge. Must be
-      // checked before translateInboundConnection rewrites targetHandle.
-      if (conn.targetHandle === MULTI_SOURCE_PORT_HANDLE_ID) {
-        const next = applySourcePortConnection(definition, conn)
-        if (next !== definition) commitChange(next)
-        return
-      }
       // RFC-023 clarify-channel drops (both directions). The pure classifier
       // recognises:
       //   - reverse drag: drag FROM clarify.questions input handle TO an
@@ -857,18 +824,14 @@ function CanvasInner({
    */
   const isValidConnection = useCallback(
     (conn: Connection | Edge) => {
-      // RFC-015: top-handle drops on agent-multi must reject self-loops and
-      // unknown source/target before xyflow commits. Non-top-handle drops
-      // pass through (the helper returns true), so RFC-007 paths are not
-      // affected. xyflow types `Edge.targetHandle` as `string | undefined`,
-      // so normalise to `string | null` before passing in.
+      // xyflow types `Edge.targetHandle` as `string | undefined`, so
+      // normalise to `string | null` before passing to the classifiers.
       const guardConn = {
         source: conn.source ?? null,
         target: conn.target ?? null,
         sourceHandle: conn.sourceHandle ?? null,
         targetHandle: conn.targetHandle ?? null,
       }
-      if (!isValidSourcePortConnection(definition, guardConn)) return false
       // RFC-023: clarify-channel pre-flight for both reverse + forward
       // drags. Fail fast on self-loops, non-agent counterparts, or an
       // agent that already has another clarify wired. xyflow respects the
@@ -1006,10 +969,6 @@ function CanvasInner({
         !removedEdges.has(e.id) && stillIds.has(e.source.nodeId) && stillIds.has(e.target.nodeId),
     )
     let nextDef: WorkflowDefinition = { ...definition, nodes: keptNodes, edges: keptEdges }
-    // RFC-015: synthetic sourcePort edge ids never appear in definition.edges,
-    // so the filter above is a no-op for them — bridge delete to the field
-    // clear here too so the keyboard Delete path works.
-    nextDef = clearSourcePortsForSyntheticIds(nextDef, selection.edges)
     // RFC-023: deleting an agent or clarify node cascade-removes both edges
     // of its clarify channel so the canvas doesn't render dangling arrows.
     // (Above filter already drops edges whose endpoint nodes were removed,
@@ -1349,17 +1308,6 @@ function CanvasInner({
           // + panOnDrag interplay), so we wire onEdgeClick directly to
           // open the EdgeInspector. Dedupe via lastEmittedSelectionSig so
           // we don't loop when both this and onSelectionChange fire.
-          // RFC-015: synthetic sourcePort lines have no inspector form to
-          // show (the field lives on the fanout node, not on a real
-          // edge). Update internal selection so the keyboard Delete
-          // shortcut still works on the line, but don't emit onSelect —
-          // the right-side drawer would just render an empty shell and
-          // confuse the user. The visual `selected: true` ring on the
-          // edge still appears via xyflow's internal state.
-          if (parseSyntheticSourcePortEdgeId(edge.id) !== null) {
-            setSelection({ nodes: [], edges: [edge.id] })
-            return
-          }
           const sig = `edge:${edge.id}`
           if (sig === lastEmittedSelectionSig.current) return
           lastEmittedSelectionSig.current = sig

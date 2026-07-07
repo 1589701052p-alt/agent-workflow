@@ -2,30 +2,39 @@
 // regressions, but jsdom doesn't run layout and the i18n provider can
 // race on first paint — so we also lock the contract at the file level
 // (per the feedback_post_commit_ci_check convention).
+//
+// 2026-07-07 flag-audit W0 update: the drawer's dead 'prompt' tab (unreachable
+// since SessionTab took over — the tab button was never rendered) was deleted.
+// The "attempts switcher + capability gate" contract this file locks lives in
+// SessionTab.tsx now, so the source assertions point there; the drawer gets a
+// deletion lock instead so the dead tab can't silently come back.
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 
 const DRAWER = join(__dirname, '..', 'src', 'components', 'NodeDetailDrawer.tsx')
+const SESSION_TAB = join(__dirname, '..', 'src', 'components', 'node-session', 'SessionTab.tsx')
 const HELPER = join(__dirname, '..', 'src', 'lib', 'node-prompt.ts')
 
-describe('RFC-011 NodeDetailDrawer source contract', () => {
-  test('drawer no longer reads run.promptText directly in the old null-guard form', () => {
+describe('RFC-011 prompt/attempts source contract (now hosted by SessionTab)', () => {
+  test('drawer no longer hosts the dead prompt tab (flag-audit W0 deletion lock)', () => {
     const src = readFileSync(DRAWER, 'utf8')
-    // The old PromptTab body said `if (run.promptText === null)`. New code
-    // routes through the attempts helper and reads `picked.promptText`.
-    expect(src).not.toMatch(/if\s*\(\s*run\.promptText\s*===\s*null\s*\)/)
+    expect(src).not.toContain("'prompt'")
+    expect(src).not.toContain('PromptTab')
+    // The old PromptTab body said `if (run.promptText === null)`; nothing in
+    // the drawer should read promptText directly any more.
+    expect(src).not.toMatch(/promptText/)
   })
 
-  test('drawer renders the attempts switcher class + uses the capability gate', () => {
-    const src = readFileSync(DRAWER, 'utf8')
-    expect(src).toContain('prompt-history__select')
+  test('SessionTab renders the attempts switcher + uses the capability gate', () => {
+    const src = readFileSync(SESSION_TAB, 'utf8')
     expect(src).toContain('isPromptCapableKind(')
     expect(src).toContain('sortNodeRunsForPromptHistory')
+    expect(src).toContain('isFanoutParentRun')
   })
 
-  test('helper module exports the four pure functions the drawer relies on', () => {
+  test('helper module exports the four pure functions the session tab relies on', () => {
     const src = readFileSync(HELPER, 'utf8')
     expect(src).toMatch(/export function sortNodeRunsForPromptHistory/)
     expect(src).toMatch(/export function isPromptCapableKind/)

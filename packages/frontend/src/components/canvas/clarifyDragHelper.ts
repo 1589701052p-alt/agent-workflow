@@ -18,9 +18,9 @@
 // the canvas does NOT break answer injection (asserted by
 // `clarify-reverse-drag-two-edges.test.ts` via grep against scheduler.ts).
 //
-// All exports are pure functions. Mirrors fanoutSourceSync / connectionSync
-// conventions so WorkflowCanvas.handleConnect can chain them with the
-// existing review/output drag branches.
+// All exports are pure functions. Mirrors connectionSync conventions so
+// WorkflowCanvas.handleConnect can chain them with the existing
+// review/output drag branches.
 
 import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from '@agent-workflow/shared'
 import {

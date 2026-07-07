@@ -118,10 +118,6 @@ export function TaskQuestionList({
   nodeOptions = [],
   focusTargetNode = null,
 }: TaskQuestionListProps) {
-  // RFC-132 PR-F: the deferred_question_dispatch flag is gone — the unified model makes
-  // EVERY task deferred-dispatch, so the manual-question tools + control-channel buttons
-  // (previously gated on the per-task prop) are always available.
-  const deferred = true
   const { t } = useTranslation()
   const qc = useQueryClient()
   const key = ['task-questions', taskId]
@@ -234,10 +230,10 @@ export function TaskQuestionList({
   const entries = query.data ?? []
 
   // RFC-120 §15 — the "+ 新增问题" toolbar + author form are available even when the board
-  // is empty (so the first manual question can be added), but ONLY on a deferred-dispatch
-  // task (a manual question is undispatchable otherwise — H2). The form is a portal Dialog
-  // (no-op chrome while closed). Non-deferred ⇒ null toolbar/form (golden-lock).
-  const addBtn = deferred ? (
+  // is empty (so the first manual question can be added). The form is a portal Dialog
+  // (no-op chrome while closed). RFC-132 made every task deferred-dispatch, so the former
+  // per-task gate is gone.
+  const addBtn = (
     <button
       type="button"
       className="btn btn--sm"
@@ -246,25 +242,23 @@ export function TaskQuestionList({
     >
       {t('taskQuestions.addQuestion')}
     </button>
-  ) : null
-  const authorForm = deferred ? (
+  )
+  const authorForm = (
     <QuestionAuthorForm
       open={authorOpen}
       onClose={() => setAuthorOpen(false)}
       taskId={taskId}
       nodeOptions={nodeOptions}
     />
-  ) : null
+  )
 
   if (entries.length === 0) {
     return (
       <div className="task-questions-wrap">
-        {addBtn !== null && (
-          <div className="task-questions__toolbar">
-            <div className="task-questions__filter" />
-            <div className="task-questions__actions">{addBtn}</div>
-          </div>
-        )}
+        <div className="task-questions__toolbar">
+          <div className="task-questions__filter" />
+          <div className="task-questions__actions">{addBtn}</div>
+        </div>
         {collapseNotice !== null && (
           <p className="muted" data-testid="tq-collapse-notice">
             {t(
@@ -361,10 +355,8 @@ export function TaskQuestionList({
           {/* RFC-128 P4 §10.1 — entry to the centralized answer pane. Shown only when the pane
               would have work — the SAME oracle the pane uses (Codex P1-2), so button-shown ⟺
               pane-non-empty. RFC-136: the pool now includes SEALED 待指派 questions (re-answers,
-              e.g. moved back out of 待下发), so the button shows for them too. The control
-              channel (defer=true → 待指派 → dispatch) is deferred-gated, so the button follows
-              the same `deferred` gate as the manual-question tools. */}
-          {deferred && groupAnswerableQuestions(entries).length > 0 && (
+              e.g. moved back out of 待下发), so the button shows for them too. */}
+          {groupAnswerableQuestions(entries).length > 0 && (
             <button
               type="button"
               className="btn btn--sm btn--primary"

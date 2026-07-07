@@ -9,7 +9,6 @@ export type GroupKey = 'agents' | 'workflows' | 'tasks' | 'memory'
 export interface SubNavItem {
   to: string
   i18nKey: string
-  variant?: 'capability'
 }
 
 export interface NavGroupEntry {
@@ -31,10 +30,10 @@ export const NAV_GROUPS: NavGroupEntry[] = [
     key: 'agents',
     i18nKey: 'nav.group.agents',
     subnav: [
-      { to: '/agents', i18nKey: 'nav.agents', variant: 'capability' },
-      { to: '/skills', i18nKey: 'nav.skills', variant: 'capability' },
-      { to: '/mcps', i18nKey: 'nav.mcps', variant: 'capability' },
-      { to: '/plugins', i18nKey: 'nav.plugins', variant: 'capability' },
+      { to: '/agents', i18nKey: 'nav.agents' },
+      { to: '/skills', i18nKey: 'nav.skills' },
+      { to: '/mcps', i18nKey: 'nav.mcps' },
+      { to: '/plugins', i18nKey: 'nav.plugins' },
     ],
   },
   {

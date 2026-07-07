@@ -32,13 +32,11 @@ interface CreateResponse {
 
 export interface TaskFeedbackListProps {
   taskId: string
-  /** Caller may pass false to hide the textarea (e.g. read-only viewer). */
-  canSubmit?: boolean
 }
 
 const RATE_LIMIT_MS = 3000
 
-export function TaskFeedbackList({ taskId, canSubmit = true }: TaskFeedbackListProps) {
+export function TaskFeedbackList({ taskId }: TaskFeedbackListProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [draft, setDraft] = useState('')
@@ -68,7 +66,7 @@ export function TaskFeedbackList({ taskId, canSubmit = true }: TaskFeedbackListP
   }, [rateLimited])
 
   const trimmed = draft.trim()
-  const submitDisabled = !canSubmit || trimmed.length === 0 || create.isPending || rateLimited
+  const submitDisabled = trimmed.length === 0 || create.isPending || rateLimited
 
   const handleSubmit = () => {
     if (submitDisabled) return
@@ -88,8 +86,7 @@ export function TaskFeedbackList({ taskId, canSubmit = true }: TaskFeedbackListP
         <p className="task-feedback__hint muted">{t('taskFeedback.hint')}</p>
       </header>
 
-      {canSubmit && (
-        <div className="task-feedback__form">
+      <div className="task-feedback__form">
           <textarea
             className="task-feedback__textarea"
             placeholder={t('taskFeedback.placeholder')}
@@ -121,8 +118,7 @@ export function TaskFeedbackList({ taskId, canSubmit = true }: TaskFeedbackListP
               {t('taskFeedback.submitError')}: {describeApiError(create.error)}
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {list.isLoading ? (
         <LoadingState size="compact" />
