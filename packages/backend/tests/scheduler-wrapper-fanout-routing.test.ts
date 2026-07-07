@@ -33,7 +33,12 @@ const runnerSrc = readFileSync(
 
 describe('D.T2 — scheduler accepts wrapper-fanout kind', () => {
   test("validate-node-kinds whitelist includes 'wrapper-fanout'", () => {
-    expect(schedulerSrc).toMatch(/node\.kind !== 'wrapper-fanout'/)
+    // flag-audit W0-4: the hand-written `node.kind !== 'wrapper-*'` triple in the
+    // kind whitelist was replaced by the shared single-source predicate. The
+    // contract (fanout passes the whitelist) now rests on !isWrapperKind(...) +
+    // the shared WRAPPER_NODE_KINDS membership lock in
+    // packages/shared/tests/wrapper-kind-single-source.test.ts.
+    expect(schedulerSrc).toMatch(/!isWrapperKind\(node\.kind\)/)
   })
 
   test("runOneNode dispatches to runFanoutWrapperNode on kind === 'wrapper-fanout'", () => {
@@ -47,16 +52,15 @@ describe('D.T2 — scheduler accepts wrapper-fanout kind', () => {
   })
 
   test('buildContainerMap walks wrapper-fanout (so inner nodeIds get containment)', () => {
-    // wrapper-fanout joins the kinds filter alongside wrapper-git / wrapper-loop.
-    // We assert all three appear and the filter scans `kind === 'wrapper-fanout'`.
-    expect(schedulerSrc).toMatch(/n\.kind === 'wrapper-fanout'/)
+    // flag-audit W0-4: the container walk now filters via the shared
+    // isWrapperKind predicate instead of enumerating the three kinds inline —
+    // fanout membership is locked by shared WRAPPER_NODE_KINDS (see
+    // packages/shared/tests/wrapper-kind-single-source.test.ts).
     const containerMapFn = schedulerSrc.slice(
       schedulerSrc.indexOf('function buildContainerMap'),
       schedulerSrc.indexOf('function buildContainerMap') + 2_000,
     )
-    expect(containerMapFn).toContain("'wrapper-git'")
-    expect(containerMapFn).toContain("'wrapper-loop'")
-    expect(containerMapFn).toContain("'wrapper-fanout'")
+    expect(containerMapFn).toContain('isWrapperKind(n.kind)')
   })
 
   test('opts.fanoutMaxShardTotal field exists on RunTaskOptions', () => {
