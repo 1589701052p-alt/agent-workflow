@@ -5018,7 +5018,7 @@ async function captureGitPreDirty(
  * changes — so it must NOT be recreated). A non-git task worktree (mock harness)
  * yields a passthrough handle (the wrapper runs directly on the task canonical).
  */
-async function createOrRebuildWrapperIso(
+export async function createOrRebuildWrapperIso(
   state: SchedulerState,
   wrapperRunId: string,
   existing: {
@@ -5042,19 +5042,59 @@ async function createOrRebuildWrapperIso(
       .where(eq(nodeRuns.id, wrapperRunId))
       .limit(1)
   )[0]
+  let effectiveExisting = existing
   if (cur !== undefined && (cur.mergeState === 'merged' || cur.mergeState === 'conflict-human')) {
     await transitionMergeState({
       db,
       nodeRunId: wrapperRunId,
       event: { kind: 'reenter-isolation' },
     })
+    if (cur.mergeState === 'merged') {
+      // Impl-gate P2 second half: the prior generation's delta is ALREADY in
+      // canonical — the new generation must branch from the CURRENT canonical,
+      // NOT the stale gen-1 base. A three-way merge against the old base would
+      // treat gen-1 files (now in canon) as `ours` additions and resurrect
+      // content the new generation deleted. Discard the stale iso (tolerant —
+      // may already be gone) and force the fresh-create path below;
+      // persistIsoBase re-stamps via the begin-isolation isolating self-edge.
+      // conflict-human re-entry keeps the rebuild path: its delta never reached
+      // canonical (D27), so the old base is still the correct merge base.
+      if (existing !== null) {
+        const staleBases: Record<string, string> = {}
+        if (task.repoCount === 1) {
+          if (existing.isoBaseSnapshot !== null) staleBases[''] = existing.isoBaseSnapshot
+        } else {
+          Object.assign(staleBases, parseIsoJsonMap(existing.isoBaseSnapshotReposJson))
+        }
+        if (Object.keys(staleBases).length > 0) {
+          const taskBaseHeads: Record<string, string> = {}
+          for (const repo of state.repos) {
+            taskBaseHeads[repo.worktreeDirName] = (
+              await runGit(repo.worktreePath, ['rev-parse', 'HEAD'])
+            ).stdout.trim()
+          }
+          const staleHandle = rebuildIsoHandle({
+            appHome: state.opts.appHome,
+            taskId,
+            nodeRunId: wrapperRunId,
+            canonRepos: state.repos,
+            baseSnapshots: staleBases,
+            taskBaseHeads,
+          })
+          await discardNodeIso(staleHandle, state.log)
+        }
+      }
+      effectiveExisting = null
+    }
   }
-  if (existing !== null) {
+  if (effectiveExisting !== null) {
     const baseSnapshots: Record<string, string> = {}
     if (task.repoCount === 1) {
-      if (existing.isoBaseSnapshot !== null) baseSnapshots[''] = existing.isoBaseSnapshot
+      if (effectiveExisting.isoBaseSnapshot !== null) {
+        baseSnapshots[''] = effectiveExisting.isoBaseSnapshot
+      }
     } else {
-      Object.assign(baseSnapshots, parseIsoJsonMap(existing.isoBaseSnapshotReposJson))
+      Object.assign(baseSnapshots, parseIsoJsonMap(effectiveExisting.isoBaseSnapshotReposJson))
     }
     if (Object.keys(baseSnapshots).length > 0) {
       const taskBaseHeads: Record<string, string> = {}

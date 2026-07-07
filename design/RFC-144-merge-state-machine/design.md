@@ -438,6 +438,13 @@ WHERE merge_state IN ('isolating', 'pending-merge', 'conflict-human')
   `{merged, conflict-human} → isolating`（单点挂 `createOrRebuildWrapperIso`）；**merged 移出
   TERMINAL_MERGE_STATES**（它是「代终点」非「行终点」，出边唯一 = reenter-isolation；abandon
   from 集仍不含 merged——fanout undo 依赖 merged 历史、且 merged 行永不为僵尸）。
+  **D13 第二半（PR-3 复核 P2）——merged 再入必须换新 iso 基**：merged 意味着上一代 delta 已在
+  canonical，若沿用旧 `isoBaseSnapshot` rebuild，wrapper 结尾三路合并（base=旧基、ours=含旧代
+  delta 的 canon、theirs=新代树）会把 canon 里的旧代文件当 `ours` 新增——新一代删除的内容复活。
+  故 merged 再入：弃旧 iso（tolerant）→ 强制 create 路径从当前 canonical 重快照 →
+  `persistIsoBase` 经 begin-isolation 自环重盖基列。`conflict-human` 再入保持 rebuild 旧基
+  ——其 delta 从未进 canon（D27），旧基仍是正确合并基。行为测试：merged 再入后新 iso 内可见
+  canon 现态文件 + 基列重盖；conflict-human 再入基列不动。
 
 ## 13. 测试策略（test-with-every-change 清单）
 

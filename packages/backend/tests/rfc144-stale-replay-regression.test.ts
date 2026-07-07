@@ -37,8 +37,10 @@ import {
   type CanonRepo,
 } from '../src/services/nodeIsolation'
 import { mintNodeRun } from '../src/services/nodeRunMint'
-import { deriveFrontier, runTask } from '../src/services/scheduler'
+import { createOrRebuildWrapperIso, deriveFrontier, runTask } from '../src/services/scheduler'
+import { transitionMergeState } from '../src/services/lifecycle'
 import { retryNode } from '../src/services/task'
+import { createLogger } from '../src/util/log'
 import { runGit } from '../src/util/git'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -311,6 +313,105 @@ describe('RFC-144 mint 收口 — mintNodeRun 原子废弃前代行及其子行'
       rmSync(isoDir, { recursive: true, force: true })
     }
   })
+})
+
+describe('RFC-144 wrapper 同行复活的 iso 基（实现门 P2 第二半）', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildGitHarness()
+  })
+  afterEach(() => h.cleanup())
+
+  function fakeSchedulerState(taskId: string): Parameters<typeof createOrRebuildWrapperIso>[0] {
+    return {
+      db: h.db,
+      taskId,
+      task: { repoCount: 1 },
+      repos: [
+        {
+          repoPath: h.worktreePath,
+          worktreePath: h.worktreePath,
+          worktreeDirName: '',
+          baseBranch: 'main',
+        },
+      ],
+      opts: { appHome: h.appHome },
+      log: createLogger('rfc144-test'),
+    } as unknown as Parameters<typeof createOrRebuildWrapperIso>[0]
+  }
+
+  async function seedWrapperTaskRow(): Promise<{ taskId: string; runId: string }> {
+    const { taskId } = await seedAgentWorkflowTask(h, 'pending')
+    const runId = mkId(1)
+    await h.db.insert(nodeRuns).values({
+      id: runId,
+      taskId,
+      nodeId: 'lw',
+      iteration: 0,
+      retryIndex: 0,
+      status: 'running',
+      startedAt: Date.now(),
+    })
+    return { taskId, runId }
+  }
+
+  test('merged 再入：弃旧 iso、从当前 canonical 重建全新 base（旧 base 合并会复活被删文件）', async () => {
+    const { taskId, runId } = await seedWrapperTaskRow()
+    const state = fakeSchedulerState(taskId)
+    // gen-1：创建 iso（NULL→isolating + 盖 base 列），随后走完整代到 merged。
+    await createOrRebuildWrapperIso(state, runId, null)
+    const gen1 = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, runId)))[0]!
+    expect(gen1.mergeState).toBe('isolating')
+    const gen1Base = gen1.isoBaseSnapshot!
+    await transitionMergeState({
+      db: h.db,
+      nodeRunId: runId,
+      event: { kind: 'mark-pending-merge' },
+    })
+    await transitionMergeState({ db: h.db, nodeRunId: runId, event: { kind: 'mark-merged' } })
+    // canonical 前进（gen-1 的 delta 已并入 canon 的等价物）。
+    writeFileSync(join(h.worktreePath, 'gen1-output.txt'), 'merged into canon\n')
+    await runGit(h.worktreePath, ['add', '.'])
+    await runGit(h.worktreePath, ['commit', '-q', '-m', 'gen1 merged'])
+    // 同行复活：merged 再入必须换新 base。
+    const handle = await createOrRebuildWrapperIso(state, runId, {
+      isoBaseSnapshot: gen1Base,
+      isoBaseSnapshotReposJson: null,
+    })
+    const after = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, runId)))[0]!
+    expect(after.mergeState).toBe('isolating') // reenter-isolation 生效
+    expect(after.isoBaseSnapshot).not.toBe(gen1Base) // base 列已重盖为新一代
+    expect(handle.passthrough).toBe(false)
+    expect(handle.repos[0]!.baseSnapshot).toBe(after.isoBaseSnapshot!) // handle 与列同源
+    // 新 base 含 canon 现态（gen-1 输出在新 iso 里可见 = 三路合并不会再把它当 ours 新增）。
+    expect(existsSync(join(handle.repos[0]!.isoWorktreePath, 'gen1-output.txt'))).toBe(true)
+  }, 30000)
+
+  test('conflict-human 再入：delta 未进 canon，保持旧 base rebuild（列不动）', async () => {
+    const { taskId, runId } = await seedWrapperTaskRow()
+    const state = fakeSchedulerState(taskId)
+    await createOrRebuildWrapperIso(state, runId, null)
+    const gen1 = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, runId)))[0]!
+    const gen1Base = gen1.isoBaseSnapshot!
+    await transitionMergeState({
+      db: h.db,
+      nodeRunId: runId,
+      event: { kind: 'mark-pending-merge' },
+    })
+    await transitionMergeState({
+      db: h.db,
+      nodeRunId: runId,
+      event: { kind: 'park-conflict-human' },
+    })
+    const handle = await createOrRebuildWrapperIso(state, runId, {
+      isoBaseSnapshot: gen1Base,
+      isoBaseSnapshotReposJson: null,
+    })
+    const after = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, runId)))[0]!
+    expect(after.mergeState).toBe('isolating') // reenter-isolation 生效
+    expect(after.isoBaseSnapshot).toBe(gen1Base) // 旧 base 保持（rebuild 不写列）
+    expect(handle.repos[0]!.baseSnapshot).toBe(gen1Base)
+  }, 30000)
 })
 
 describe('RFC-144 merge-failed 行为补齐（RFC-130 缺口 + isolating→merge-failed 新边）', () => {
