@@ -8,7 +8,7 @@
 // wrappers (their outputs flow through their own outputBindings rather than
 // surfacing a port directly).
 
-import { isWrapperKind } from '@agent-workflow/shared'
+import { isWrapperKind, reviewApprovedPortName } from '@agent-workflow/shared'
 import type { WorkflowNode } from '@agent-workflow/shared'
 
 export interface LoopMemberCandidate {
@@ -23,6 +23,10 @@ interface AgentSummary {
   name: string
   /** Declared agent outputs. When missing or empty, treat as ['out']. */
   outputs?: string[]
+  /** Per-port declared kinds — used to resolve a review node's input kind
+   *  (multi-doc vs single-doc) exactly like WorkflowCanvas.computePorts.
+   *  Callers pass full Agent objects, which carry this field. */
+  outputKinds?: Record<string, string>
 }
 
 /** Look up an inner node's display title using whatever fields the node kind
@@ -35,7 +39,9 @@ function deriveTitle(node: WorkflowNode, agents: AgentSummary[]): string {
     if (agentName.length > 0) return agentName
   }
   if (node.kind === 'review') {
-    const src = (rec.source as { portName?: unknown } | undefined)?.portName
+    // flag-audit W0（§3-4）：schema 字段是 inputSource（shared/schemas/review.ts），
+    // 旧代码读不存在的 rec.source，此分支曾永不可达。
+    const src = (rec.inputSource as { portName?: unknown } | undefined)?.portName
     if (typeof src === 'string' && src.length > 0) return `review:${src}`
   }
   // unused but kept for future kinds — agents lookup may inform fallback titles.
@@ -43,7 +49,31 @@ function deriveTitle(node: WorkflowNode, agents: AgentSummary[]): string {
   return ''
 }
 
-function deriveOutputPorts(node: WorkflowNode, agents: AgentSummary[]): string[] {
+/** Resolve a review node's input KIND the same way the authoritative
+ *  WorkflowCanvas.computePorts does: inputSource → source agent node →
+ *  agent.outputKinds[portName]. Undefined when any link is missing —
+ *  reviewApprovedPortName treats that as single-document. */
+function resolveReviewInputKind(
+  node: WorkflowNode,
+  allNodes: WorkflowNode[],
+  agents: AgentSummary[],
+): string | undefined {
+  const src = (node as Record<string, unknown>).inputSource as
+    | { nodeId?: unknown; portName?: unknown }
+    | undefined
+  if (typeof src?.nodeId !== 'string' || typeof src.portName !== 'string') return undefined
+  const sourceNode = allNodes.find((n) => n.id === src.nodeId)
+  if (sourceNode === undefined || sourceNode.kind !== 'agent-single') return undefined
+  const agentName = (sourceNode as Record<string, unknown>).agentName
+  if (typeof agentName !== 'string') return undefined
+  return agents.find((a) => a.name === agentName)?.outputKinds?.[src.portName]
+}
+
+function deriveOutputPorts(
+  node: WorkflowNode,
+  agents: AgentSummary[],
+  allNodes: WorkflowNode[],
+): string[] {
   if (node.kind === 'agent-single') {
     const rec = node as Record<string, unknown>
     const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
@@ -53,7 +83,10 @@ function deriveOutputPorts(node: WorkflowNode, agents: AgentSummary[]): string[]
     return outputs.filter((n) => typeof n === 'string' && n.length > 0)
   }
   if (node.kind === 'review') {
-    return ['output']
+    // flag-audit W0（§3-3）：旧代码返回不存在的 ['output']（loop Inspector 的
+    // exitCondition / outputBindings 下拉出现假端口）。与 computePorts 同源：
+    // shared 的 reviewApprovedPortName oracle + 恒定的 approval_meta。
+    return [reviewApprovedPortName(resolveReviewInputKind(node, allNodes, agents)), 'approval_meta']
   }
   return []
 }
@@ -72,7 +105,7 @@ export function loopMemberCandidates(
   for (const n of allNodes) {
     if (!idSet.has(n.id)) continue
     if (isWrapperKind(n.kind)) continue
-    const outputPorts = deriveOutputPorts(n, agents)
+    const outputPorts = deriveOutputPorts(n, agents, allNodes)
     result.push({
       nodeId: n.id,
       title: deriveTitle(n, agents),
