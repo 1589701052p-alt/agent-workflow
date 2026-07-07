@@ -140,6 +140,30 @@ export interface BusinessNodeSpawnContext {
 
 `runtimeSmoke.ts:99-128` 的 `buildSmokePlan` 是同一反模式的第二现场（自己搭 spawn，却已持 driver 只用 parseEvent）。收口方案：smoke 复用 `driver.buildSpawn`（system-agent 路径，smoke 本就是一个最小 persona 的 system-agent），或新增 `buildSmokeSpawn`。**倾向复用 buildSpawn**——smoke 的 persona/agent 名可组成 `SystemAgentSpawnContext`，避免新增方法。若 smoke 有 buildSpawn 容纳不了的特殊性（如 aw-smoke inline agent），再评估。
 
+### 4.6 PR-4 实现笔记（2026-07-07 深读发现，fresh session 接手要点）
+
+PR-1/2/3 落地后深读 runner 业务 spawn，暴露 §4.2「分支体整块下移」比初稿描述的更大——固化如下，避免 fresh session 重新踩坑：
+
+**A. `buildInlineConfig` 生态必须 move，不能留 runner 让 driver import（否则模块环）**
+- `buildInlineConfig`（`runner.ts:1682`）+ 三个 helper：`AW_GLOBAL_PERMISSION`（`runner.ts:1627`）、`buildInlineAgentEntry`（`runner.ts:1654`）、`buildInlineMcpEntry`（`runner.ts:1765`）+ 常量 `EMPTY_RUNTIME_PROFILE`（`runner.ts` 内，`:501` 引用）。
+- driver import runner 会成环：`runner → runtime/index(getRuntimeDriver) → opencode/driver → runner`。所以这套 inline-config 组装要 **move 到 driver 能 import 的新文件**，建议 `runtime/opencode/inlineConfig.ts`（它不 import runtime/index，无环）。
+- **外部消费者 ~11 个要改 import 路径**（现从 `@/services/runner` 引 buildInlineConfig/helpers）：`services/memoryInject.ts`、`runtime/opencode/spawn.ts`，以及 8+ 测试：`runner-build-inline-config-multi` / `runner-mcp-inject` / `runner-permission-inject(-e2e)` / `runner-plugin-inject` / `mcp-end-to-end` / `migration-0014-plugins` / `migration-0011-mcps` / `rfc099-prompt-isolation` / `fixtures/mock-opencode.ts`。这些测试**直接把 buildInlineConfig 当纯函数锁**——move 后行为必须逐字不变（它们是 move 的保护网）。
+
+**B. `buildBusinessSpawn` 必须 async**
+- inventory 注入是 async（`materializeInventoryPlugin`，`runner.ts:548`）→ opencode 的 buildBusinessSpawn 内部 await → 接口签名 `buildBusinessSpawn(ctx): Promise<SpawnPlan>`（claude 内部无 async 但签名对齐 async）。这与 §4.2/§4.3 的同步草案不同，以此为准。
+
+**C. `paramsByAgent` 的 async resolve 留 runner（第二个环规避）**
+- `runner.ts:500-512` 为每个 dependent 调 `resolveAgentRuntime(db, dep.runtime)`（async DB）构建 `paramsByAgent: Map<name, RuntimeProfile>`。若搬进 driver，driver→runtimeRegistry→runtime/index→driver 又一个环。
+- **解法**：runner 保留这段 async resolve，把 `resolvedParamsByAgent` 作为 `BusinessNodeSpawnContext` 的字段传给 driver（同步消费）。§4.3 的 ctx 要**加 `resolvedParamsByAgent: ReadonlyMap<string, RuntimeProfile>`**。opencode driver 用它调 `buildInlineConfig(agent, resolvedParamsByAgent, dependents, mcps, plugins)`；claude driver 忽略（只用 root 的 `runtimeParams.model`）。
+
+**D. memory 织入**（`runner.ts:576-600`）：`injectMemoryForRun` 两 runtime 共用（留 runner，产出 `injectedMemoryBlock` + `injectedSnapshot`——后者要回 runner 落 `injected_memories_json` 列，见 RFC-046）；**织入方式**搬进各 driver——opencode append 到 `inlineConfig.agent[name].prompt`（`:593`）、claude weave 进 system-prompt-file（`:831`）。ctx 传 `injectedMemoryBlock`。
+
+**E. 收口后 runner 业务 spawn 段**（约 `:481-905`）：保留 `prepareSkills` + async `resolvedParamsByAgent` + `injectMemoryForRun`（拿 block/snapshot）；删掉 inlineConfig 构建（:491-520）、inventory 注入（:534-561）、memory 织入 mutate（:593）、spawn if/else（:830-876）；改为一次 `const plan = await driver.buildBusinessSpawn(ctx)`。诊断日志（:882-905）改读 `plan.diagnostics`（§4.4）。inventory 回读（PR-3 已收）保持 `driver.readInventory?`。
+
+**F. 已完成现状（PR-1/2/3，接手前 git log 确认）**：driver 已有 `minVersion`/`probe`/`listModels`/`captureSessions`/`defaultBinary`（必需）+ `readInventory?`/`startLiveCapture?`（optional）；`RUNTIME_KINDS`/`isKnownRuntimeKind` 已从 DRIVERS 派生；`resolveRuntime`/`runtimeHead` 半死代码已删。runner 只剩 **2 处** runtime 判别：业务 spawn（`:830`）+ inventory 注入（`:~539`，随 buildBusinessSpawn 搬迁）。`rfc143-runtime-driver-capability.test.ts` 已有派生锁 + 能力锁 + 空转锁 + mock driver 骨架——PR-4 完成后把 mock 骨架扩成「注册进 DRIVERS + 跑通 buildBusinessSpawn，零调用点改动」的完整集成证明（proposal 验收标准 4），并加旁路清零源码锁（T19）。
+
+**G. golden 保护（验收硬约束）**：`runtime-opencode-golden.test.ts` 锁 `buildOpencodeSpawn` 输出。opencode driver.buildBusinessSpawn 内部调 buildOpencodeSpawn 时，传入的 `{opencodeCmd, agentName, prompt, resumeSessionId, worktreePath, runDir, inlineConfigSerialized, inventoryOutPath, gitUserName, gitUserEmail}` 必须与收口前 runner:861 完全一致 → 输出 byte-for-byte 不变。先跑基线绿，收口后逐字对拍。`runtime-buildspawn.test.ts`（system-agent）+ `memory-distiller.test.ts:633` 源码文本锁（getRuntimeDriver+buildSpawn）按需同步。
+
 ## 5. 派生清理（dedup + 半死代码）
 
 | 项 | 现状 | 收口 |
