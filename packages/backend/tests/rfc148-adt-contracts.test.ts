@@ -86,6 +86,16 @@ describe('RFC-148 — 存量模板兼容（实现门 high 采纳）', () => {
     expect(out).toContain('A[]B[]C')
   })
 
+  test('退役 token 与同名 input 撞名仍渲染空串（复审 high：不得落 input 查找）', () => {
+    const out = renderUserPrompt({
+      ...BASE,
+      promptTemplate: 'X[{{__clarify_answers__}}]Y',
+      inputs: { __clarify_answers__: 'UPSTREAM-CONTENT-MUST-NOT-LEAK' },
+    })
+    expect(out).toContain('X[]Y')
+    expect(out).not.toContain('UPSTREAM-CONTENT-MUST-NOT-LEAK')
+  })
+
   test('legacy 死 token 只降级为 deprecation warning，不阻断启动', async () => {
     const { validateWorkflowDef } = await import('../src/services/workflow.validator')
     const def = {

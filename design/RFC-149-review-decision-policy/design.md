@@ -5,25 +5,27 @@
 ## 1. 策略表（backend services/review.ts 局部）
 
 ```ts
-interface ReviewDecisionPolicy {
-  /** 维2+维10：reviewIteration 是否 +1（approved 不 bump；广播实参同源化）。 */
-  bumpsIteration: boolean
-  /** 维8：node_run 生命周期事件。 */
-  lifecycleEvent: 'approve-review' | 'reject-review' | 'iterate-review'
-  /** 维9：decisionReason 归档派生。 */
-  decisionReason: 'reject-reason' | 'render-comments' | 'none'
-  /** 维3/4：reject/iterate 才有的重跑配置（approved 稀疏 ⇒ undefined）。 */
-  rerun?: {
-    rerunnableKey: 'rerunnableOnReject' | 'rerunnableOnIterate'
-    rollbackKey: 'rollbackFilesOnReject' | 'rollbackFilesOnIterate'
-    rollbackDefault: boolean            // reject→true / iterate→false（不对称显式化）
-    supersededByReview: 'rejected' | 'iterated'   // 维5（列值；marker 由此派生）
-    mintCause: 'review-reject' | 'review-iterate' // 维6
-    cascade: 'always' | 'sibling-sync-conditional' // 维7
-  }
+// 设计门 high 修订：判别式表型——rerun 槽对 approved 禁止、对
+// rejected/iterated 必填全量（可选槽会让表漏字段也能编译，静默丢掉
+// reject/iterate 的重跑/回滚/级联差异）。
+interface ReviewRerunPolicy {
+  rerunnableKey: 'rerunnableOnReject' | 'rerunnableOnIterate'
+  rollbackKey: 'rollbackFilesOnReject' | 'rollbackFilesOnIterate'
+  rollbackDefault: boolean            // reject→true / iterate→false（不对称显式化）
+  supersededByReview: 'rejected' | 'iterated'   // 维5（列值；marker 由此派生）
+  mintCause: 'review-reject' | 'review-iterate' // 维6
+  cascade: 'always' | 'sibling-sync-conditional' // 维7
 }
+interface ReviewDecisionPolicyBase {
+  bumpsIteration: boolean   // 维2+维10（approved 不 bump；广播实参同源化）
+  lifecycleEvent: 'approve-review' | 'reject-review' | 'iterate-review' // 维8
+  decisionReason: 'reject-reason' | 'render-comments' | 'none'          // 维9
+}
+type ReviewDecisionPolicyOf<K extends ReviewDecisionKind> = ReviewDecisionPolicyBase &
+  (K extends 'approved' ? { rerun?: never } : { rerun: ReviewRerunPolicy })
 const REVIEW_DECISION_POLICY = { approved: {...}, rejected: {...}, iterated: {...} }
-  as const satisfies Record<ReviewDecisionKind, ReviewDecisionPolicy>
+  as const satisfies { [K in ReviewDecisionKind]: ReviewDecisionPolicyOf<K> }
+// 表值锁测试额外钉死 rollbackDefault: reject=true / iterate=false。
 ```
 
 - 消费点改造：submitReviewDecision 的 :1853-1861（decisionReason）/:1876（广播）/
@@ -101,7 +103,9 @@ export function isSystemDecision(decidedBy: string | null | undefined): boolean
 - **D3** 轮模式只收 decision 侧（dispatch 侧是生产者；跨侧真源统一需把 kind 落列，
   列非目标）。
 - **D4** decidedBy 不上枚举列（wire 兼容 + 产品无新决策者类型需求；谓词化止血）。
-- **D5** 前端 PR 与 backend PR 完全独立（调研证实零源码耦合，交叉面全在 shared 枚举）。
+- **D5（设计门 medium 修订）** PR-2 **显式依赖 PR-1**：前端读点要引 PR-1 落在
+  shared 的 SYSTEM_DECIDER/isSystemDecision——「零耦合」仅指行为面（可并行开发），
+  合入顺序必须 PR-1 → PR-2（plan.md 同步标注）。
 
 ## 7. 测试策略
 

@@ -409,6 +409,13 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return String((input.meta.repos ?? []).length)
       }
     }
+    // RFC-148: retired tokens render '' unconditionally — historically their
+    // substitution cases returned empty (zero producers), and they must NOT
+    // fall through to the input lookup: a saved workflow with an inbound
+    // port that happens to share the retired name (validator only warns)
+    // would otherwise render upstream content where years of prompts had
+    // an empty string (impl-gate re-review high).
+    if (DEPRECATED_PROMPT_TOKENS.has(name)) return ''
     // RFC-026: drop input port values from inline-mode reruns (see comment
     // above the inlineMode declaration).
     if (inlineMode) return ''

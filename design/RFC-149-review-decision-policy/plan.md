@@ -1,6 +1,8 @@
 # RFC-149 · review 决策策略表 + 前端历史视图收敛（plan）
 
-> 2 PR（backend / frontend 零耦合，调研证实可独立落）。授权语境：G3-G10 批量授权。
+> 2 PR；**PR-2 依赖 PR-1**（前端引 PR-1 落在 shared 的 SYSTEM_DECIDER/
+> isSystemDecision——设计门 medium 修订，行为面可并行、合入必须有序）。
+> 授权语境：G3-G10 批量授权。
 
 ## RFC-149-T1 backend 策略表（PR-1）
 
