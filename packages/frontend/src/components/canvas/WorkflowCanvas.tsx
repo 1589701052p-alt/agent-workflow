@@ -35,11 +35,13 @@ import {
   useRef,
   useState,
 } from 'react'
+import type { ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import type {
   Agent,
   ClarifyDirective,
+  NodeKind,
   WorkflowDefinition,
   WorkflowEdge,
   WorkflowNode,
@@ -97,6 +99,9 @@ import {
 import { DEFAULT_NODE_SIZE_BY_KIND, fitWrapperToInner } from './wrapperFit'
 import { clearWrapperSize, deleteWrapperWithChildren } from './wrapperOps'
 
+// RFC-146: `satisfies Record<NodeKind, …>` makes a NodeKind without a canvas
+// renderer a compile error — same registry shape as KIND_INSPECTORS
+// (NodeInspector.tsx) and the palette descriptor table.
 const NODE_TYPES = {
   // RFC-060 PR-E: agent-multi removed; agent-single is the only agent kind.
   'agent-single': AgentNode,
@@ -109,7 +114,7 @@ const NODE_TYPES = {
   review: ReviewNode,
   clarify: ClarifyNode,
   'clarify-cross-agent': CrossClarifyNode,
-}
+} satisfies Record<NodeKind, ComponentType<never>>
 
 export interface WorkflowCanvasProps {
   definition: WorkflowDefinition
