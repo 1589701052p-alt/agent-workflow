@@ -641,7 +641,20 @@ export const nodeRuns = sqliteTable(
      */
     spawnBinaryPath: text('spawn_binary_path'),
     exitCode: integer('exit_code'),
+    /** Human-readable failure breadcrumbs ONLY (RFC-145): machine consumers
+     *  read `failure_code` / `superseded_by_review` / `rolled_back` instead —
+     *  a source guard forbids startsWith/includes/=== reads of this column in
+     *  production code. */
     errorMessage: text('error_message'),
+    /**
+     * RFC-145 (migration 0077): machine-readable failure taxonomy — one of
+     * shared FAILURE_CODES (7 values) or NULL (= no machine-readable failure
+     * shape; the common case). Declared by the runner at each stamp point;
+     * `decideEnvelopeFollowup` looks it up via FOLLOWUP_POLICY instead of
+     * parsing errorMessage prefixes. Plain TEXT — enum enforced at the TS
+     * boundary (rerun_cause precedent). Backend-internal (not in the DTO).
+     */
+    failureCode: text('failure_code'),
     promptText: text('prompt_text'), // actual user prompt sent to opencode
     // token usage
     tokInput: integer('tok_input'),
@@ -820,6 +833,24 @@ export const nodeRuns = sqliteTable(
      * the TypeScript boundary so new causes never need a migration.
      */
     rerunCause: text('rerun_cause'),
+    /**
+     * RFC-145 (migration 0077): review-supersede lineage, structured. When a
+     * review reject/iterate retires this row (review.ts supersede path), the
+     * user decision lands here ('iterated' | 'rejected' — shared
+     * SUPERSEDE_DECISIONS; 'approved' never supersedes). NULL = not a review
+     * supersede. `isReviewSupersededRow` (LOAD-BEARING dispatch contract,
+     * RFC-095) now reads THIS column — the old errorMessage prefix marker
+     * remains as human breadcrumbs only. Serialized to the frontend (the
+     * noderun-status decode consumes it).
+     */
+    supersededByReview: text('superseded_by_review'),
+    /**
+     * RFC-145: whether the supersede actually rolled the worktree(s) back
+     * (review.ts `rolledBack` — attempted with zero failures). Orthogonal to
+     * the decision value; drives the frontend canceled-row classification
+     * (rollback vs superseded vs manual). NULL ⇔ false.
+     */
+    rolledBack: integer('rolled_back', { mode: 'boolean' }),
     /**
      * RFC-127 借壳: borrowed agent name for reassignment. When a clarify rerun
      * (self/questioner/designer) is reassigned to another workflow node's agent

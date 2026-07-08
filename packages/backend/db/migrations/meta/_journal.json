@@ -533,6 +533,13 @@
       "when": 1785100000000,
       "tag": "0076_rfc144_abandon_superseded_merge_state",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "6",
+      "when": 1785200000000,
+      "tag": "0077_rfc145_failure_code",
+      "breakpoints": true
     }
   ]
 }
