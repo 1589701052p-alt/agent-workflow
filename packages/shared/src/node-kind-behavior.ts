@@ -194,7 +194,10 @@ export function isProcessNodeKind(kind: NodeKind): boolean {
 export function isAgentNodeKind(kind: NodeKind | string | null | undefined): boolean {
   // Raw-surface tolerant (isWrapperKind idiom): rows carry plain strings and
   // callers pass nullable kinds — unknown/absent kinds are simply not agents.
-  return kind != null && kind in NODE_KIND_BEHAVIORS
+  // Object.hasOwn (not `in`): raw kind strings come from DB rows / wire
+  // payloads; inherited keys ('constructor', 'toString') must not index
+  // the table. RFC-146 impl-gate fix.
+  return kind != null && Object.hasOwn(NODE_KIND_BEHAVIORS, kind)
     ? NODE_KIND_BEHAVIORS[kind as NodeKind].isAgent
     : false
 }
@@ -205,7 +208,7 @@ export function isAgentNodeKind(kind: NodeKind | string | null | undefined): boo
  * SETTLES_WITHOUT_ROW set from this.
  */
 export function nodeKindSettlesWithoutRow(kind: NodeKind | string | null | undefined): boolean {
-  return kind != null && kind in NODE_KIND_BEHAVIORS
+  return kind != null && Object.hasOwn(NODE_KIND_BEHAVIORS, kind)
     ? NODE_KIND_BEHAVIORS[kind as NodeKind].settlesWithoutRow
     : false
 }

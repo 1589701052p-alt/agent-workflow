@@ -39,7 +39,7 @@ describe('D.T2 — scheduler accepts wrapper-fanout kind', () => {
     // passes the whitelist) now rests on the table lock: wrapper-fanout is a
     // NODE_KIND_BEHAVIORS key (packages/backend/tests/
     // node-kind-behavior-table.test.ts asserts key-set === NODE_KIND).
-    expect(schedulerSrc).toMatch(/!\(node\.kind in NODE_KIND_BEHAVIORS\)/)
+    expect(schedulerSrc).toMatch(/!Object\.hasOwn\(NODE_KIND_BEHAVIORS, node\.kind\)/)
   })
 
   test("runOneNode dispatches to runFanoutWrapperNode on kind === 'wrapper-fanout'", () => {

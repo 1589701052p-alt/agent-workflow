@@ -80,7 +80,7 @@ describe('RFC-146: scheduler 三处表接线形态锁', () => {
   )
 
   test('runTask kind 白名单 = 行为表正向成员判定（负枚举不得回潮）', () => {
-    expect(schedulerSrc).toMatch(/!\(node\.kind in NODE_KIND_BEHAVIORS\)/)
+    expect(schedulerSrc).toMatch(/!Object\.hasOwn\(NODE_KIND_BEHAVIORS, node\.kind\)/)
     // 负枚举的指纹：白名单里对具体 kind 的 !== 长链。
     expect(schedulerSrc).not.toMatch(
       /node\.kind !== 'input' &&\s*\n\s*node\.kind !== 'agent-single'/,

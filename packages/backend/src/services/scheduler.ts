@@ -383,7 +383,8 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
   // construction, and runOneNode's fall-through guard catches kinds the
   // dispatch switch doesn't actually handle yet.)
   for (const node of definition.nodes) {
-    if (!(node.kind in NODE_KIND_BEHAVIORS)) {
+    // Object.hasOwn (not `in`) — inherited keys must not pass the whitelist.
+    if (!Object.hasOwn(NODE_KIND_BEHAVIORS, node.kind)) {
       await failTask(
         db,
         taskId,

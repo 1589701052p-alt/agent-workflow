@@ -177,7 +177,11 @@ export function deserialize(raw: string): PaletteItem | null {
     const v = JSON.parse(raw) as unknown
     if (typeof v !== 'object' || v === null) return null
     const rec = v as Record<string, unknown>
-    if (typeof rec.kind !== 'string' || !(rec.kind in PALETTE_DESCRIPTORS)) return null
+    // Object.hasOwn (not `in`): dataTransfer payloads are untrusted text —
+    // `'constructor' in PALETTE_DESCRIPTORS` is true via the prototype
+    // chain, and indexing the table with such a key hands makeNode a
+    // non-descriptor value (editor crash). RFC-146 impl-gate fix.
+    if (typeof rec.kind !== 'string' || !Object.hasOwn(PALETTE_DESCRIPTORS, rec.kind)) return null
     if (rec.kind === 'agent-single') {
       return typeof rec.agentName === 'string'
         ? ({ kind: rec.kind, agentName: rec.agentName } as PaletteItem)

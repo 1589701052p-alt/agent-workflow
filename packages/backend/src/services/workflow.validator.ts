@@ -350,6 +350,26 @@ export function validateWorkflowDef(
         message: `edge '${edge.id}': wrapper '${tgt.id}' does not accept inbound edges in v1`,
         pointer: edge.id,
       })
+    } else if (tgt.kind === 'wrapper-fanout' && edge.boundary === undefined) {
+      // RFC-146 impl-gate fix (Codex high): a PLAIN inbound edge into a
+      // wrapper-fanout must land on a declared input port. Before the
+      // declared-ports consolidation the validator had no fanout inputPorts
+      // at all, so a typo'd target (fan.docz vs declared fan.docs) sailed
+      // through — at runtime resolveUpstreamInputs finds nothing under the
+      // shardSource name, rawContent is '', and the wrapper takes the
+      // empty-source shortcut: the task goes green on garbage. Boundary
+      // edges are exempt: 'wrapper-input' re-uses the wrapper as SOURCE
+      // (checked by boundary-input rules) and 'wrapper-output' re-uses the
+      // wrapper as TARGET with an OUTPUT port name (checked by
+      // boundary-output rules).
+      const ins = inputPorts.get(tgt.id) ?? new Set()
+      if (!ins.has(edge.target.portName)) {
+        issues.push({
+          code: 'edge-target-port-missing',
+          message: `edge '${edge.id}': wrapper-fanout '${tgt.id}' has no declared input port '${edge.target.portName}'`,
+          pointer: edge.id,
+        })
+      }
     }
 
     // RFC-094 (audit S-5) — per-shard inner chain inside a wrapper-fanout.

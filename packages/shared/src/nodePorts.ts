@@ -217,12 +217,12 @@ export function declaredPorts(
   defn: WorkflowDefinition,
   agents: PortAgentLookup,
 ): DeclaredPorts {
-  const derive = PORT_DERIVERS[node.kind as NodeKind] as
-    | ((ctx: DeriverCtx) => DeclaredPorts)
-    | undefined
+  // Object.hasOwn (not a bare index): an inherited key like 'constructor'
+  // would otherwise resolve to a Function and be invoked as a deriver.
   // Unknown kind (corrupt/stale snapshot) ⇒ no declared ports; the caller's
   // edge-derived fallbacks still render/route whatever edges exist.
-  if (derive === undefined) return NO_PORTS
+  if (!Object.hasOwn(PORT_DERIVERS, node.kind)) return NO_PORTS
+  const derive = PORT_DERIVERS[node.kind as NodeKind] as (ctx: DeriverCtx) => DeclaredPorts
   return derive({ node, defn, agents })
 }
 
