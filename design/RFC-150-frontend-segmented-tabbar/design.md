@@ -76,7 +76,10 @@ interface TabBarProps<K extends string> {
   受影响锁：tabs-retrofit-grep 改「渲染 <TabBar variant>」断言、
   rfc128-question-tab-badge 改 badge prop 锚、repo-source-tabs 双锁随迁。
 - **遗留清单**（非目标，design 留档）：roving 文件树 tab ×2、InboxDrawer、
-  auth-tabs、diff-mode-segmented、LanguageSwitch。
+  auth-tabs、diff-mode-segmented、LanguageSwitch、**clarify.detail 分片切换器**
+  （设计门 high 补录：TanStack Link 导航 tab——路由语义与 button tab 不同形态，
+  TabBar v1 不做 as/link 透传；grep 守卫排除表显式列名，TabBar 验收计数修正
+  为 11/13）。
 
 ## 4. 决策记录
 
