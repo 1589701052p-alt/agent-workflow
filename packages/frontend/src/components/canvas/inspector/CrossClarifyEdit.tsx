@@ -14,6 +14,7 @@ import {
 } from '@agent-workflow/shared'
 import { useTranslation } from 'react-i18next'
 import { Field, TextArea } from '@/components/Form'
+import { Segmented } from '@/components/Segmented'
 import { NodeTitleField } from './NodeTitleField'
 import type { EditProps } from './types'
 
@@ -112,31 +113,19 @@ export function CrossClarifyEdit({ node, definition, onPatch }: EditProps) {
         hint={t('crossClarify.inspector.sessionModeHint')}
         group
       >
-        <div
-          className="segmented"
-          role="radiogroup"
-          aria-label={t('crossClarify.inspector.sessionModeForQuestioner')}
-          data-testid="cross-clarify-session-mode-questioner"
-        >
-          {(['isolated', 'inline'] as const).map((mode) => {
-            const active = sessionModeForQuestioner === mode
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                className={'segmented__option' + (active ? ' segmented__option--active' : '')}
-                data-testid={`cross-clarify-session-mode-questioner-${mode}`}
-                onClick={() => patchCrossClarify({ sessionModeForQuestioner: mode })}
-              >
-                {mode === 'isolated'
-                  ? t('crossClarify.inspector.sessionModeIsolated')
-                  : t('crossClarify.inspector.sessionModeInline')}
-              </button>
-            )
-          })}
-        </div>
+        <Segmented<'isolated' | 'inline'>
+          value={sessionModeForQuestioner}
+          onChange={(mode) => patchCrossClarify({ sessionModeForQuestioner: mode })}
+          options={(['isolated', 'inline'] as const).map((mode) => ({
+            value: mode,
+            label:
+              mode === 'isolated'
+                ? t('crossClarify.inspector.sessionModeIsolated')
+                : t('crossClarify.inspector.sessionModeInline'),
+          }))}
+          ariaLabel={t('crossClarify.inspector.sessionModeForQuestioner')}
+          testidPrefix="cross-clarify-session-mode-questioner"
+        />
       </Field>
     </div>
   )

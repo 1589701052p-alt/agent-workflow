@@ -53,6 +53,7 @@ const CallChainEntry = createContext<((root: { ref: string; label: string }) => 
 const GRAPH_CALLABLE = new Set<string>(['method', 'function', 'constructor'])
 import { badgeSymbol } from '@/lib/structureView'
 import { refFromMemberId } from '@/lib/callChain'
+import { Segmented } from '@/components/Segmented'
 
 const EDGE_KEYS: EdgeKind[] = ['inherits', 'references', 'calls']
 const EDGE_LABEL: Record<EdgeKind, string> = {
@@ -406,26 +407,19 @@ export function StructuralGraph({
   return (
     <div className="structure-graph-wrap">
       <div className="structure-graph__controls">
-        <div
-          className="segmented structure-graph__level"
-          role="radiogroup"
-          aria-label={t('tasks.structGraphLevelLabel')}
-        >
-          {(['package', 'class'] as const).map((lv) => (
-            <button
-              key={lv}
-              type="button"
-              role="radio"
-              aria-checked={level === lv}
-              className={`segmented__option ${level === lv ? 'segmented__option--active' : ''}`}
-              onClick={() => setLevel(lv)}
-            >
-              {lv === 'package'
+        <Segmented<'package' | 'class'>
+          value={level}
+          onChange={setLevel}
+          options={(['package', 'class'] as const).map((lv) => ({
+            value: lv,
+            label:
+              lv === 'package'
                 ? t('tasks.structGraphLevelPackage')
-                : t('tasks.structGraphLevelClass')}
-            </button>
-          ))}
-        </div>
+                : t('tasks.structGraphLevelClass'),
+          }))}
+          ariaLabel={t('tasks.structGraphLevelLabel')}
+          className="structure-graph__level"
+        />
         <span className="structure-graph__legend-sep" aria-hidden="true" />
         {EDGE_KEYS.map((k) => (
           <label key={k} className="structure-graph__edge-toggle">

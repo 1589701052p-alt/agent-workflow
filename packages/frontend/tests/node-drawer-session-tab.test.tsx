@@ -97,8 +97,10 @@ describe('RFC-027 NodeDetailDrawer Session tab', () => {
   test('tab list contains "Session" (renamed from "Prompt") as the first tab', () => {
     const r = run({ id: 'r1', promptText: 'hi' })
     renderDrawer({ nodeRunId: r.id, nodeId: r.nodeId, workflowNodeKind: 'agent-single', runs: [r] })
-    const tabButtons = screen.getAllByRole('button').map((b) => b.textContent ?? '')
-    expect(tabButtons.find((s) => s === 'Session')).toBeDefined()
+    // RFC-150 PR-3: the drawer tab strip is the shared <TabBar>, whose tabs
+    // carry role="tab" (a11y upgrade) — query by tab role, not bare button.
+    const tabButtons = screen.getAllByRole('tab').map((b) => b.textContent ?? '')
+    expect(tabButtons[0]).toBe('Session')
     expect(tabButtons.find((s) => s === 'Prompt')).toBeUndefined()
   })
 

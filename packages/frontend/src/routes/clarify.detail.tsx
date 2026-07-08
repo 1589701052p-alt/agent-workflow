@@ -32,6 +32,7 @@ import type {
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
+import { Segmented } from '@/components/Segmented'
 import { StatusChip } from '@/components/StatusChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
@@ -903,48 +904,28 @@ export function ClarifyDetailPage() {
                         : t('crossClarify.questionScope.designer')}
                     </StatusChip>
                   ) : (
-                    <div
-                      className="segmented"
-                      role="radiogroup"
-                      aria-label={t('crossClarify.questionScope.label')}
-                      data-testid={`clarify-scope-segmented-${q.id}`}
-                    >
-                      {(['designer', 'questioner'] as const).map((mode) => {
-                        const active = scope === mode
-                        return (
-                          <button
-                            key={mode}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            className={
-                              'segmented__option' + (active ? ' segmented__option--active' : '')
-                            }
-                            data-testid={`clarify-scope-${q.id}-${mode}`}
-                            disabled={submitMut.isPending || locked}
-                            title={t(
-                              mode === 'designer'
-                                ? 'crossClarify.questionScope.designerTooltip'
-                                : 'crossClarify.questionScope.questionerTooltip',
-                            )}
-                            onClick={() => {
-                              setScopes((prev) => ({ ...prev, [q.id]: mode }))
-                            }}
-                          >
-                            {mode === 'designer'
-                              ? t('crossClarify.questionScope.designer')
-                              : t('crossClarify.questionScope.questioner')}
-                            <kbd
-                              className="kbd-shortcut segmented__shortcut"
-                              aria-hidden="true"
-                              data-testid={`clarify-scope-${q.id}-${mode}-kbd`}
-                            >
-                              {mode === 'designer' ? 'Q' : 'W'}
-                            </kbd>
-                          </button>
-                        )
-                      })}
-                    </div>
+                    <Segmented<ClarifyQuestionScope>
+                      value={scope}
+                      onChange={(mode) => setScopes((prev) => ({ ...prev, [q.id]: mode }))}
+                      options={(['designer', 'questioner'] as const).map((mode) => ({
+                        value: mode,
+                        label:
+                          mode === 'designer'
+                            ? t('crossClarify.questionScope.designer')
+                            : t('crossClarify.questionScope.questioner'),
+                        title: t(
+                          mode === 'designer'
+                            ? 'crossClarify.questionScope.designerTooltip'
+                            : 'crossClarify.questionScope.questionerTooltip',
+                        ),
+                        shortcut: mode === 'designer' ? 'Q' : 'W',
+                        testid: `clarify-scope-${q.id}-${mode}`,
+                        shortcutTestid: `clarify-scope-${q.id}-${mode}-kbd`,
+                      }))}
+                      ariaLabel={t('crossClarify.questionScope.label')}
+                      rootTestid={`clarify-scope-segmented-${q.id}`}
+                      disabled={submitMut.isPending || locked}
+                    />
                   )}
                 </div>
               )}

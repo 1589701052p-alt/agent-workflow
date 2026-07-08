@@ -30,7 +30,9 @@ import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
+import { Segmented } from '@/components/Segmented'
 import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
 import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
@@ -335,26 +337,19 @@ function TaskDetailPage() {
           live-polled while the task is active (same idiom as the task/node-runs queries). */}
       <RecoverySection taskId={id} status={tk.status} />
 
-      <nav role="tablist" className="task-detail__tab-bar tabs">
-        {tabs.map((k) => (
-          <button
-            type="button"
-            key={k}
-            role="tab"
-            aria-selected={tab === k}
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {tabLabel(t, k)}
-            {/* RFC-128: 「问题」tab carries a non-terminal pending-question count badge. */}
-            {k === 'task-questions' && pendingQuestionCount > 0 && (
-              <span className="tabs__tab-badge" data-testid="tq-tab-badge">
-                {pendingQuestionCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </nav>
+      <TabBar<TaskDetailTab>
+        className="task-detail__tab-bar"
+        tabs={tabs.map((k) => ({
+          key: k,
+          label: tabLabel(t, k),
+          // RFC-128: 「问题」tab carries a non-terminal pending-question count badge.
+          badge:
+            k === 'task-questions' && pendingQuestionCount > 0 ? pendingQuestionCount : undefined,
+          badgeTestid: k === 'task-questions' ? 'tq-tab-badge' : undefined,
+        }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
       <div className="task-detail__panes">
         {/* workflow-status: always mounted so xyflow viewport survives tab switches. */}
@@ -558,26 +553,18 @@ function TaskDetailPage() {
                   ]}
                 />
                 <span className="structure-pane__scope-label">{t('tasks.structEngineLabel')}</span>
-                <div
-                  className="segmented"
-                  role="radiogroup"
-                  aria-label={t('tasks.structEngineLabel')}
-                >
-                  {(['baseline', 'deep'] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      role="radio"
-                      aria-checked={engineMode === m}
-                      className={`segmented__option ${engineMode === m ? 'segmented__option--active' : ''}`}
-                      onClick={() => setEngineMode(m)}
-                    >
-                      {m === 'baseline'
+                <Segmented<'baseline' | 'deep'>
+                  value={engineMode}
+                  onChange={setEngineMode}
+                  options={(['baseline', 'deep'] as const).map((m) => ({
+                    value: m,
+                    label:
+                      m === 'baseline'
                         ? t('tasks.structEngineBaseline')
-                        : t('tasks.structEngineDeep')}
-                    </button>
-                  ))}
-                </div>
+                        : t('tasks.structEngineDeep'),
+                  }))}
+                  ariaLabel={t('tasks.structEngineLabel')}
+                />
               </div>
               {structuralDiff.isLoading ? (
                 <div className="muted">{t('tasks.loadingDiff')}</div>

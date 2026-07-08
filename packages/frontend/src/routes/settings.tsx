@@ -19,6 +19,7 @@ import { Dialog } from '@/components/Dialog'
 import { Field, NumberInput, Switch, TextInput } from '@/components/Form'
 import { RuntimeSelect } from '@/components/RuntimeSelect'
 import { Select } from '@/components/Select'
+import { TabBar } from '@/components/TabBar'
 import { RuntimeList } from '@/components/RuntimeList'
 import { describeApiError, setLanguage, type SupportedLanguage } from '@/i18n'
 import { isSupportedLanguage } from '@/hooks/useLanguage'
@@ -75,8 +76,8 @@ function SettingsPage() {
         </p>
       </header>
 
-      <div className="tabs">
-        {(
+      <TabBar<Tab>
+        tabs={(
           [
             ['runtime', t('settings.tabRuntime')],
             ['limits', t('settings.tabLimits')],
@@ -88,17 +89,10 @@ function SettingsPage() {
             ['rendering', t('settings.tabRendering')],
             ['authentication', t('settings.tabAuthentication')],
           ] as Array<[Tab, string]>
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+        ).map(([k, label]) => ({ key: k, label }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
       {config.isLoading && <div className="muted">{t('settings.loading')}</div>}
       {config.error !== null && config.error !== undefined && (

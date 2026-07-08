@@ -17,6 +17,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { NodeDependencyTreeSection } from './agents/NodeDependencyTreeSection'
 import { SessionTab } from './node-session/SessionTab'
 import { StatusChip } from './StatusChip'
+import { TabBar, type TabDef } from './TabBar'
 import { api, ApiError } from '@/api/client'
 import { clarifyRoundForRun, formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
 import {
@@ -110,11 +111,11 @@ export function NodeDetailDrawer({
   // collapsed the previous two-section layout into one.
   const history = nodeRunHistory(run, runs)
 
-  const tabs: Array<[Tab, string]> = [
-    ['session', t('nodeDrawer.tabSession')],
-    ['events', t('nodeDrawer.tabEvents')],
-    ['output', t('nodeDrawer.tabOutput')],
-    ['stats', t('nodeDrawer.tabStats')],
+  const tabs: Array<TabDef<Tab>> = [
+    { key: 'session', label: t('nodeDrawer.tabSession') },
+    { key: 'events', label: t('nodeDrawer.tabEvents') },
+    { key: 'output', label: t('nodeDrawer.tabOutput') },
+    { key: 'stats', label: t('nodeDrawer.tabStats') },
   ]
 
   return (
@@ -135,18 +136,7 @@ export function NodeDetailDrawer({
           ×
         </button>
       </header>
-      <div className="tabs tabs--inspector">
-        {tabs.map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabBar<Tab> variant="inspector" tabs={tabs} active={tab} onSelect={setTab} />
       {retryable && (
         <div className="inspector__action-row">
           <button

@@ -16,6 +16,7 @@ import type { Agent, NodeKind, WorkflowDefinition, WorkflowNode } from '@agent-w
 import { useEffect, useState } from 'react'
 import type { FC } from 'react'
 import { useTranslation } from 'react-i18next'
+import { TabBar, type TabDef } from '@/components/TabBar'
 import { computePorts } from './WorkflowCanvas'
 import { PromptPreview } from './PromptPreview'
 import { AgentSingleEdit } from './inspector/AgentSingleEdit'
@@ -105,24 +106,18 @@ export function NodeInspector({ definition, selectedNodeId, agents, onChange, on
           ×
         </button>
       </header>
-      <div className="tabs tabs--inspector">
-        <button
-          type="button"
-          className={`tabs__tab ${activeTab === 'edit' ? 'tabs__tab--active' : ''}`}
-          onClick={() => setTab('edit')}
-        >
-          {t('inspector.tabEdit')}
-        </button>
-        {hasPreview && (
-          <button
-            type="button"
-            className={`tabs__tab ${activeTab === 'preview' ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab('preview')}
-          >
-            {t('inspector.tabPreview')}
-          </button>
-        )}
-      </div>
+      <TabBar<Tab>
+        variant="inspector"
+        tabs={[
+          { key: 'edit', label: t('inspector.tabEdit') },
+          // The preview tab exists only for agent kinds (see hasPreview above).
+          ...(hasPreview
+            ? [{ key: 'preview', label: t('inspector.tabPreview') } as TabDef<Tab>]
+            : []),
+        ]}
+        active={activeTab}
+        onSelect={setTab}
+      />
       <div className="inspector__body">
         {activeTab === 'edit' ? (
           <EditForm

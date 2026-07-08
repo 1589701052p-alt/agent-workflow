@@ -25,11 +25,19 @@ describe('clarify ↔ reviews list — aligned page shell', () => {
     expect(reviews).toMatch(/<p className="page__hint">\{t\('reviews\.hint'\)\}<\/p>/)
   })
 
-  test('both pages use an accessible tablist with aria-selected', () => {
+  test('both pages use the shared <TabBar> for the filter tablist', () => {
+    // RFC-150 PR-2: both filter strips migrated from the hand-rolled
+    // `<div className="tabs" role="tablist">` to the shared <TabBar>
+    // primitive — role=tablist/tab + aria-selected now come from the
+    // component (locked in tab-bar.test.tsx). The alignment contract is
+    // that BOTH pages render the same primitive off their FILTERS array.
     for (const src of [clarify, reviews]) {
-      expect(src).toMatch(/<div className="tabs" role="tablist">/)
-      expect(src).toMatch(/role="tab"/)
-      expect(src).toMatch(/aria-selected=\{filter === k\}/)
+      expect(src).toMatch(/<TabBar\b/)
+      expect(src).toMatch(/tabs=\{FILTERS\.map\(/)
+      expect(src).toMatch(/active=\{filter\}/)
+      expect(src).toMatch(/onSelect=\{setFilter\}/)
+      // No hand-rolled tab strip may come back.
+      expect(src).not.toMatch(/role="tablist"/)
     }
   })
 

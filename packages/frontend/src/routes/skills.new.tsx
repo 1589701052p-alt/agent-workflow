@@ -12,6 +12,7 @@ import { api } from '@/api/client'
 import { Field, TextArea, TextInput } from '@/components/Form'
 import { describeApiError } from '@/i18n'
 import { ImportZipPanel } from '@/components/skills/ImportZipPanel'
+import { TabBar } from '@/components/TabBar'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -87,37 +88,16 @@ function SkillCreatePage() {
         </p>
       </header>
 
-      <div className="tabs">
-        <button
-          type="button"
-          className={`tabs__tab ${tab === 'managed' ? 'tabs__tab--active' : ''}`}
-          onClick={() => setTab('managed')}
-        >
-          {t('skills.tabManaged')}
-        </button>
-        <button
-          type="button"
-          className={`tabs__tab ${tab === 'external' ? 'tabs__tab--active' : ''}`}
-          onClick={() => setTab('external')}
-        >
-          {t('skills.tabExternal')}
-        </button>
-        <button
-          type="button"
-          className={`tabs__tab ${tab === 'folder' ? 'tabs__tab--active' : ''}`}
-          onClick={() => setTab('folder')}
-        >
-          {t('skills.tabFolder')}
-        </button>
-        <button
-          type="button"
-          className={`tabs__tab ${tab === 'zip' ? 'tabs__tab--active' : ''}`}
-          onClick={() => setTab('zip')}
-          data-testid="skills-tab-zip"
-        >
-          {t('skills.tabZip')}
-        </button>
-      </div>
+      <TabBar<Tab>
+        tabs={[
+          { key: 'managed', label: t('skills.tabManaged') },
+          { key: 'external', label: t('skills.tabExternal') },
+          { key: 'folder', label: t('skills.tabFolder') },
+          { key: 'zip', label: t('skills.tabZip'), testid: 'skills-tab-zip' },
+        ]}
+        active={tab}
+        onSelect={setTab}
+      />
 
       {tab === 'zip' ? (
         <ImportZipPanel />

@@ -15,8 +15,12 @@ const SRC = readFileSync(resolve(__dirname, '..', 'src', 'routes', 'tasks.detail
 
 describe('RFC-128 question tab badge (source-level lock)', () => {
   test('「问题」tab renders a count badge gated to the task-questions tab + positive count', () => {
-    expect(SRC).toContain('tabs__tab-badge')
-    expect(SRC).toContain("k === 'task-questions' && pendingQuestionCount > 0")
+    // RFC-150 PR-3: the badge <span class="tabs__tab-badge"> markup moved into
+    // the shared <TabBar> badge slot; tasks.detail.tsx now wires it through
+    // the TabDef `badge` prop (same gating expression) with the stable
+    // `tq-tab-badge` testid landing on the badge span via `badgeTestid`.
+    expect(SRC).toMatch(/badge:\s+k === 'task-questions' && pendingQuestionCount > 0/)
+    expect(SRC).toContain("badgeTestid: k === 'task-questions' ? 'tq-tab-badge' : undefined")
   })
 
   test('badge count = 待指派(pending) + 待下发(staged) only (needs-action), incl. manual', () => {

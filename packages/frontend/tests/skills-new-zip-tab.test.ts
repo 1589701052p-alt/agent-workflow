@@ -23,7 +23,10 @@ describe('/skills/new — Upload ZIP tab wiring', () => {
   })
 
   test('tab button has stable testid skills-tab-zip', () => {
+    // RFC-150 PR-2: the tab strip is the shared <TabBar>; the stable testid
+    // now flows through the TabDef `testid` prop (renders the same
+    // data-testid="skills-tab-zip" attribute on the tab button).
     const src = readFileSync(ROUTE_PATH, 'utf-8')
-    expect(src).toContain('data-testid="skills-tab-zip"')
+    expect(src).toContain("testid: 'skills-tab-zip'")
   })
 })

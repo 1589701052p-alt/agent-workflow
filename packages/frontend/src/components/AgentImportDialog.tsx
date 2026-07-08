@@ -13,6 +13,7 @@ import { parseAgentMarkdown } from '@agent-workflow/shared'
 import { emptyAgent } from './AgentForm'
 import { fieldsOverwrittenByImport } from '@/lib/agent-import-merge'
 import { Dialog } from './Dialog'
+import { TabBar } from './TabBar'
 
 export interface AgentImportDialogProps {
   open: boolean
@@ -154,26 +155,15 @@ export function AgentImportDialog({
       }
     >
       <div>
-        <div className="tabs tabs--inline" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'upload'}
-            className={`tabs__tab${tab === 'upload' ? ' tabs__tab--active' : ''}`}
-            onClick={() => setTab('upload')}
-          >
-            {t('agentForm.importDialog.tabUpload')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'paste'}
-            className={`tabs__tab${tab === 'paste' ? ' tabs__tab--active' : ''}`}
-            onClick={() => setTab('paste')}
-          >
-            {t('agentForm.importDialog.tabPaste')}
-          </button>
-        </div>
+        <TabBar<Tab>
+          variant="inline"
+          tabs={[
+            { key: 'upload', label: t('agentForm.importDialog.tabUpload') },
+            { key: 'paste', label: t('agentForm.importDialog.tabPaste') },
+          ]}
+          active={tab}
+          onSelect={setTab}
+        />
 
         {tab === 'upload' ? (
           <div className="agent-import__upload">

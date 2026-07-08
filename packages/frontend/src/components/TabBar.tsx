@@ -24,6 +24,11 @@ export interface TabDef<K extends string> {
    */
   badge?: ReactNode
   testid?: string
+  /**
+   * Explicit data-testid for the badge <span> itself (tasks.detail's
+   * `tq-tab-badge`). Only rendered when the badge renders.
+   */
+  badgeTestid?: string
 }
 
 interface TabBarProps<K extends string> {
@@ -35,6 +40,8 @@ interface TabBarProps<K extends string> {
   ariaLabel?: string
   /** Extra class names appended after the standard `tabs` chain. */
   className?: string
+  /** Explicit container data-testid (memory.tsx's `memory-tab-bar`). */
+  rootTestid?: string
 }
 
 export function TabBar<K extends string>({
@@ -44,13 +51,14 @@ export function TabBar<K extends string>({
   variant,
   ariaLabel,
   className,
+  rootTestid,
 }: TabBarProps<K>) {
   const classes =
     'tabs' +
     (variant !== undefined && variant !== 'default' ? ' tabs--' + variant : '') +
     (className !== undefined && className !== '' ? ' ' + className : '')
   return (
-    <div className={classes} role="tablist" aria-label={ariaLabel}>
+    <div className={classes} role="tablist" aria-label={ariaLabel} data-testid={rootTestid}>
       {tabs.map((tab) => {
         const isActive = tab.key === active
         return (
@@ -65,7 +73,9 @@ export function TabBar<K extends string>({
           >
             {tab.label}
             {tab.badge !== undefined && tab.badge !== null && tab.badge !== false && (
-              <span className="tabs__tab-badge">{tab.badge}</span>
+              <span className="tabs__tab-badge" data-testid={tab.badgeTestid}>
+                {tab.badge}
+              </span>
             )}
           </button>
         )

@@ -22,6 +22,7 @@ import { describeApiError } from '@/i18n'
 import { decisionChipKind } from '@/lib/review/decisionChip'
 import { EmptyState } from '@/components/EmptyState'
 import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { LoadingState } from '@/components/LoadingState'
 import { Route as RootRoute } from './__root'
 
@@ -80,21 +81,15 @@ export function ReviewsListPage() {
         <h1>{t('reviews.title')}</h1>
         <p className="page__hint">{t('reviews.hint')}</p>
       </header>
-      <div className="tabs" role="tablist">
-        {FILTERS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={filter === k}
-            className={`tabs__tab ${filter === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setFilter(k)}
-            data-testid={`reviews-filter-${k}`}
-          >
-            {t(`reviews.filter${k.charAt(0).toUpperCase()}${k.slice(1)}` as const)}
-          </button>
-        ))}
-      </div>
+      <TabBar<Filter>
+        tabs={FILTERS.map((k) => ({
+          key: k,
+          label: t(`reviews.filter${k.charAt(0).toUpperCase()}${k.slice(1)}` as const),
+          testid: `reviews-filter-${k}`,
+        }))}
+        active={filter}
+        onSelect={setFilter}
+      />
       {list.isLoading && <LoadingState data-testid="reviews-loading" />}
       {list.error !== null && list.error !== undefined && (
         <div className="error-box">{describeApiError(list.error)}</div>

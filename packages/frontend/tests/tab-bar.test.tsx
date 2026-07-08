@@ -133,4 +133,32 @@ describe('<TabBar> — badge slot + testids', () => {
     expect(screen.getByTestId('drawer-tab-edit')).toBe(screen.getByRole('tab', { name: 'Edit' }))
     expect(screen.getByRole('tab', { name: 'Preview' }).hasAttribute('data-testid')).toBe(false)
   })
+
+  test('badgeTestid lands on the badge span itself (tasks.detail tq-tab-badge)', () => {
+    render(
+      <TabBar
+        tabs={[
+          { key: 'edit', label: 'Edit', badgeTestid: 'never-rendered' },
+          { key: 'preview', label: 'Questions', badge: 5, badgeTestid: 'tq-tab-badge' },
+        ]}
+        active="edit"
+        onSelect={() => {}}
+      />,
+    )
+    const badge = screen.getByTestId('tq-tab-badge')
+    expect(badge.className).toBe('tabs__tab-badge')
+    expect(badge.textContent).toBe('5')
+    // No badge → the badgeTestid is inert (span not rendered at all).
+    expect(screen.queryByTestId('never-rendered')).toBeNull()
+  })
+
+  test('rootTestid lands on the tablist container; absent by default', () => {
+    const { unmount } = render(
+      <TabBar tabs={TABS} active="edit" onSelect={() => {}} rootTestid="memory-tab-bar" />,
+    )
+    expect(screen.getByTestId('memory-tab-bar')).toBe(screen.getByRole('tablist'))
+    unmount()
+    render(<TabBar tabs={TABS} active="edit" onSelect={() => {}} />)
+    expect(screen.getByRole('tablist').hasAttribute('data-testid')).toBe(false)
+  })
 })
