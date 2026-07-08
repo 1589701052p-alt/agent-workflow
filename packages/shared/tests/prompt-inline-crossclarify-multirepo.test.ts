@@ -35,9 +35,14 @@ describe('renderUserPrompt — RFC-026 inline mode × RFC-066 multi-repo tokens 
     },
     agentOutputs: ['result'],
     // RFC-100: an inline rerun only happens for a clarify channel; mark it
-    // active (continue round) so the trailer is the inline reminder, not the
-    // stop-round output block (hasClarifyChannel-first routing in renderUserPrompt).
-    hasClarifyChannel: true,
+    // active (continue round — RFC-148: directive 'mandatory') so the trailer
+    // is the inline reminder, not the stop-round output block
+    // (mandatory-ask-back-first routing in renderUserPrompt).
+    clarifyChannel: {
+      kind: 'self' as const,
+      directive: 'mandatory' as const,
+      injectStopNotice: false,
+    },
     clarifyContext: { mode: 'inline' as const },
   }
 

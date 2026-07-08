@@ -55,7 +55,7 @@ import { deriveFrontier } from '../src/services/scheduler'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 import { runStuckTaskDetector } from '../src/services/stuckTaskDetector'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
-import { } from '@agent-workflow/shared'
+import {} from '@agent-workflow/shared'
 import type {
   ClarifyQuestion,
   NodeKind,

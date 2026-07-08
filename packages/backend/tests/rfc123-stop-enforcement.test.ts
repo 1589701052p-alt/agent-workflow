@@ -10,12 +10,15 @@
 // 本文件锁定（对称于现有 clarify-required 的 output 拒绝）：
 //   A. decideEnvelopeFollowup：`clarify-forbidden:` 前缀 → 同会话 followup、
 //      reason='envelope-missing'（renderer 在 hasClarify=false 时渲染 output 协议）。
-//   B. runner 强制：runNode(clarifyStopped=true, hasClarifyChannel=false) + agent 发
-//      clarify → status='failed'、errorMessage 以 'clarify-forbidden' 开头、无 clarify
+//   B. runner 强制：runNode(clarifyChannel.directive='stopped'——RFC-148 ADT，历史
+//      clarifyStopped=true + hasClarifyChannel=false 对) + agent 发 clarify →
+//      status='failed'、errorMessage 以 'clarify-forbidden' 开头、无 clarify
 //      结果（不建会话）。
-//   C. scope golden-lock：clarifyStopped 缺省（review 重跑 / 非显式停止）+ 发 clarify →
-//      仍**接受**（status='done'、clarify 有值）——review 重跑不被误伤。
-//   D. 源码 wiring 守卫：scheduler 算 clarifyStopped（仅显式 stop）+ 透传；runner 拒。
+//   C. scope golden-lock：directive='suppressed'（review 重跑 / 非显式停止——历史
+//      clarifyStopped 缺省）+ 发 clarify → 仍**接受**（status='done'、clarify 有值）
+//      ——review 重跑不被误伤。
+//   D. 源码 wiring 守卫：scheduler 算 clarifyStopped（仅显式 stop）+ 折进
+//      clarifyChannel.directive；runner 拒。
 
 import type { Agent } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -154,7 +157,7 @@ const CLARIFY_BODY = JSON.stringify({
   ],
 })
 
-function runStoppedNode(h: Harness, nodeRunId: string, opts: { clarifyStopped?: true }) {
+function runStoppedNode(h: Harness, nodeRunId: string, opts: { stopped?: true }) {
   return withEnv({ MOCK_OPENCODE_CLARIFY_BODY: CLARIFY_BODY }, () =>
     runNode({
       taskId: h.taskId,
@@ -168,9 +171,15 @@ function runStoppedNode(h: Harness, nodeRunId: string, opts: { clarifyStopped?: 
       appHome: h.appHome,
       opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
       db: h.db,
-      // stop mode: ask-back is OFF (effectiveHasClarifyChannel=false).
-      hasClarifyChannel: false,
-      ...(opts.clarifyStopped === true ? { clarifyStopped: true as const } : {}),
+      // RFC-148: both variants keep ask-back OFF (directive !== 'mandatory' —
+      // the historical effectiveHasClarifyChannel=false). B = explicit stop
+      // ('stopped'; was clarifyStopped=true); C = review-rerun suppression
+      // ('suppressed'; was clarifyStopped omitted).
+      clarifyChannel: {
+        kind: 'self',
+        directive: opts.stopped === true ? 'stopped' : 'suppressed',
+        injectStopNotice: false,
+      },
     }),
   )
 }
@@ -182,15 +191,15 @@ describe('RFC-123 B/C: runner rejects disobedient clarify only when explicitly s
   })
   afterEach(() => h.cleanup())
 
-  test('B: clarifyStopped=true + agent emits clarify → failed clarify-forbidden, no clarify result', async () => {
+  test("B: directive='stopped' + agent emits clarify → failed clarify-forbidden, no clarify result", async () => {
     const nodeRunId = await insertPendingNodeRun(h.db, h.taskId)
-    const result = await runStoppedNode(h, nodeRunId, { clarifyStopped: true })
+    const result = await runStoppedNode(h, nodeRunId, { stopped: true })
     expect(result.status).toBe('failed')
     expect(result.errorMessage ?? '').toMatch(/^clarify-forbidden/)
     expect(result.clarify).toBeUndefined()
   })
 
-  test('C (scope golden-lock): clarifyStopped omitted + agent emits clarify → still accepted (review-rerun not harmed)', async () => {
+  test("C (scope golden-lock): directive='suppressed' + agent emits clarify → still accepted (review-rerun not harmed)", async () => {
     const nodeRunId = await insertPendingNodeRun(h.db, h.taskId)
     const result = await runStoppedNode(h, nodeRunId, {})
     expect(result.status).toBe('done')
@@ -212,7 +221,7 @@ describe('RFC-123 D: stop-enforcement wiring guards', () => {
   )
   const norm = (s: string) => s.replace(/\s+/g, ' ')
 
-  test('scheduler computes clarifyStopped from EXPLICIT stop only + threads it', () => {
+  test('scheduler computes clarifyStopped from EXPLICIT stop only + folds it into the channel directive', () => {
     // RFC-132 (PR-C §7): a 'stop' answer writes the per-node clarify state (setNodeClarifyDirective),
     // so nodeStopOverride ALONE captures both the canvas toggle AND a latest answered 'stop' — the
     // former `|| clarifyContext?.directive === 'stop'` disjunct is gone (the flat context carries no
@@ -220,7 +229,12 @@ describe('RFC-123 D: stop-enforcement wiring guards', () => {
     expect(norm(schedulerSrc)).toContain(
       'const clarifyStopped = hasClarifyChannel && nodeStopOverride',
     )
-    expect(norm(schedulerSrc)).toContain('clarifyStopped ? { clarifyStopped: true as const } : {}')
+    // RFC-148: the threading is no longer a scattered `clarifyStopped: true`
+    // opt — the explicit stop lands as the ClarifyChannel ADT's 'stopped'
+    // directive (mandatory / suppressed being the other two arms).
+    expect(norm(schedulerSrc)).toContain(
+      "directive: clarifyStopped ? ('stopped' as const) : effectiveHasClarifyChannel ? ('mandatory' as const) : ('suppressed' as const)",
+    )
   })
 
   test('followup mapping: clarify-forbidden → re-demand output（RFC-145 查表格）', () => {
@@ -234,7 +248,13 @@ describe('RFC-123 D: stop-enforcement wiring guards', () => {
   })
 
   test('runner rejects clarify when explicitly stopped（且置 clarify-forbidden 码）', () => {
-    expect(norm(runnerSrc)).toContain("opts.clarifyStopped === true && kind === 'clarify'")
+    // RFC-148: the guard reads the single clarifyStoppedDirective projection
+    // of the ClarifyChannel ADT (directive === 'stopped'), not a scattered
+    // opts.clarifyStopped boolean.
+    expect(norm(runnerSrc)).toContain(
+      "const clarifyStoppedDirective = clarifyWired && channel.directive === 'stopped'",
+    )
+    expect(norm(runnerSrc)).toContain("clarifyStoppedDirective && kind === 'clarify'")
     expect(norm(runnerSrc)).toContain('CLARIFY_FORBIDDEN_PREFIX')
     expect(norm(runnerSrc)).toContain("failureCode = 'clarify-forbidden'")
   })

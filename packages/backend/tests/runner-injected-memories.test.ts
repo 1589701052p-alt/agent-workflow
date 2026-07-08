@@ -268,9 +268,11 @@ describe('RFC-046 — runner persists injected_memories_json', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          envelopeFollowup: true,
-          resumeSessionId: 'sess_resume',
-          envelopeFollowupReason: 'envelope-missing',
+          promptMode: {
+            kind: 'followup',
+            resumeSessionId: 'sess_resume',
+            reason: 'envelope-missing',
+          },
         }),
     )
     const raw = readJson(h.db, followupId)
@@ -315,9 +317,11 @@ describe('RFC-046 — runner persists injected_memories_json', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          envelopeFollowup: true,
-          resumeSessionId: 'sess_resume_null',
-          envelopeFollowupReason: 'envelope-missing',
+          promptMode: {
+            kind: 'followup',
+            resumeSessionId: 'sess_resume_null',
+            reason: 'envelope-missing',
+          },
         }),
     )
     expect(readJson(h.db, followupId)).toBeNull()

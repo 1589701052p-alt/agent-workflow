@@ -98,14 +98,14 @@ describe('RFC-023/132 prompt token substitution', () => {
   // whenever inputs looked plausible. Do not weaken these assertions without
   // re-confirming the regression (agent biased toward output instead of
   // asking back, even when the user wired a clarify channel).
-  describe('bi-modal trailing block when hasClarifyChannel=true', () => {
+  describe('bi-modal trailing block when the clarify channel is mandatory', () => {
     test('renderer emits the mandatory ask-back preamble and NO output format', () => {
       const out = renderUserPrompt({
         promptTemplate: 'do the thing',
         inputs: {},
         meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
         agentOutputs: ['design'],
-        hasClarifyChannel: true,
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       })
       expect(out).toContain('MANDATORY ASK-BACK')
       expect(out).toContain('The user wired a clarify channel')
@@ -118,7 +118,7 @@ describe('RFC-023/132 prompt token substitution', () => {
       expect(out.indexOf('MANDATORY ASK-BACK')).toBeLessThan(out.indexOf('Clarify format.'))
     })
 
-    test('legacy single-envelope wording is preserved when hasClarifyChannel is omitted', () => {
+    test('legacy single-envelope wording is preserved when clarifyChannel is omitted', () => {
       const out = renderUserPrompt({
         promptTemplate: 'do the thing',
         inputs: {},
@@ -174,7 +174,7 @@ describe('RFC-039 bi-modal preamble default-asks (B) and lists ask-back triggers
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
     })
     // Anchor 1 — declares mandatory ask-back mode.
     expect(out).toContain('MANDATORY ASK-BACK')
@@ -197,14 +197,14 @@ describe('RFC-039 bi-modal preamble default-asks (B) and lists ask-back triggers
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
     })
     expect(out).not.toContain('Both envelopes are equally first-class')
     expect(out).not.toContain('Do NOT default to (A) just because')
   })
 
   test('non-clarify-channel path stays on the legacy single-envelope wording', () => {
-    // RFC-039 only sharpens the hasClarifyChannel=true branch. Channels that
+    // RFC-039 only sharpens the mandatory-clarify-channel branch. Channels that
     // never wired clarify must still see the original "MUST end your reply
     // with <workflow-output>" wording — otherwise non-clarify workflows would
     // suddenly see a phantom (B) option they have no way to honour.

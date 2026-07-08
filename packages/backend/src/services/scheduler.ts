@@ -2709,9 +2709,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 remaining: computeRemaining(definition, node.id, clarifyGeneration),
                 // Inline session resume still suppresses input re-injection + swaps the trailing
                 // reminder; the flat block itself is round-agnostic (RFC-131 aging keeps it small).
-                ...(resumeDecision.inlineMode
-                  ? { mode: 'inline' as const, currentRoundOnly: true }
-                  : {}),
+                ...(resumeDecision.inlineMode ? { mode: 'inline' as const } : {}),
               }
         // effectiveHasClarifyChannel is the "mandatory ask-back is ACTIVE" signal
         // threaded to the runner + renderUserPrompt (RFC-100). It is TRUE only
@@ -2932,37 +2930,51 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           // clarifyContext.flatBlock.
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
           ...(priorOutputUpdate !== undefined ? { priorOutputUpdate } : {}),
-          ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
           ...(effectiveResumeSessionId !== undefined
             ? { resumeSessionId: effectiveResumeSessionId }
             : {}),
-          // RFC-122: a same-session follow-up is bypassed when the STOP toggle
-          // flipped this attempt's clarify-vs-output mode (clarifyModeFlip) — the
-          // resumed session never emitted the now-needed protocol, so the runner
-          // takes the FULL renderUserPrompt path instead (clarifyStopNotice + the
-          // complete output protocol, or the mandatory ask-back block).
-          ...(followupDecision.followup && !clarifyModeFlip
+          // RFC-148: the followup quartet is ONE PromptMode value now. The
+          // followup arm carries the session id (unrepresentable without one
+          // — decideEnvelopeFollowup only fires when the prior attempt
+          // captured a session). RFC-122: a same-session follow-up is
+          // bypassed when the STOP toggle flipped this attempt's
+          // clarify-vs-output mode (clarifyModeFlip) — the resumed session
+          // never emitted the now-needed protocol, so the runner takes the
+          // FULL renderUserPrompt path instead.
+          ...(followupDecision.followup &&
+          !clarifyModeFlip &&
+          effectiveResumeSessionId !== undefined
             ? {
-                envelopeFollowup: true as const,
-                envelopeFollowupReason: followupDecision.reason,
-                ...(followupClarifyDirective !== undefined
-                  ? { envelopeFollowupClarifyDirective: followupClarifyDirective }
-                  : {}),
-                // RFC-049: thread the structured failures through to the
-                // runner so it can render the per-kind repair block via
-                // composePerKindRepairBlocks. Empty array (degraded mode)
-                // is fine — the followup still fires; the runner just
-                // omits the per-port section.
-                ...(followupDecision.reason === 'port-validation'
-                  ? { envelopeFollowupPortValidations: followupDecision.failures }
-                  : {}),
+                promptMode: {
+                  kind: 'followup' as const,
+                  resumeSessionId: effectiveResumeSessionId,
+                  reason: followupDecision.reason,
+                  ...(followupClarifyDirective !== undefined
+                    ? { clarifyDirective: followupClarifyDirective }
+                    : {}),
+                  // RFC-049: thread the structured failures through so the
+                  // runner renders the per-kind repair block. Empty array
+                  // (degraded mode) is fine — the followup still fires.
+                  ...(followupDecision.reason === 'port-validation'
+                    ? { portValidations: followupDecision.failures }
+                    : {}),
+                },
               }
             : {}),
-          hasClarifyChannel: effectiveHasClarifyChannel,
-          ...(clarifyStopped ? { clarifyStopped: true as const } : {}),
-          // RFC-122: inject STOP CLARIFYING on a first-run / pre-clarify retry
-          // override (when no answersBlock carries it). Omitted otherwise.
-          ...(clarifyStopNotice ? { clarifyStopNotice: true as const } : {}),
+          // RFC-148: the clarify quartet is ONE ClarifyChannel value now —
+          // wiring family (parser cap) × this-run directive (enforcement)
+          // × stop-notice injection.
+          clarifyChannel: !hasClarifyChannel
+            ? { kind: 'none' as const }
+            : {
+                kind: clarifyMode,
+                directive: clarifyStopped
+                  ? ('stopped' as const)
+                  : effectiveHasClarifyChannel
+                    ? ('mandatory' as const)
+                    : ('suppressed' as const),
+                injectStopNotice: clarifyStopNotice,
+              },
           skills: resolvedSkills,
           dependents,
           mcps,
@@ -4437,7 +4449,8 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-      hasClarifyChannel: false, // PR-D2: per-shard clarify
+      // PR-D2: per-shard clarify stays off — RFC-148 ADT form.
+      clarifyChannel: { kind: 'none' as const },
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
       mcps: injection.mcps,
@@ -4814,7 +4827,7 @@ async function dispatchFanoutAggregator(
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
       // RFC-119 multi-process: prior aggregated output on re-run (see above).
       ...(aggPriorOutputUpdate !== undefined ? { priorOutputUpdate: aggPriorOutputUpdate } : {}),
-      hasClarifyChannel: false, // PR-D2
+      clarifyChannel: { kind: 'none' as const }, // PR-D2
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
       mcps: injection.mcps,

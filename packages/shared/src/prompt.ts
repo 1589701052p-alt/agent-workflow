@@ -121,6 +121,60 @@ export interface PriorOutputUpdateContext {
   block?: string
 }
 
+/**
+ * RFC-148 — clarify-channel state for one dispatch, as ONE discriminated
+ * value instead of four scattered booleans (hasClarifyChannel /
+ * clarifyStopped / clarifyStopNotice / clarifyMode). The axes are
+ * deliberately orthogonal:
+ *   - `kind` is the WIRING family — it alone drives the envelope parser's
+ *     question cap (cross lifts the RFC-023 max), independent of whether
+ *     ask-back is mandatory this run (a review rerun keeps `kind:'cross'`
+ *     with `directive:'suppressed'`).
+ *   - `directive` is this run's enforcement:
+ *       'mandatory'  — genuine clarify round; the ONLY valid reply is
+ *                      `<workflow-clarify>` (RFC-100 gate);
+ *       'suppressed' — channel wired but not enforced (review reject /
+ *                      iterate re-production; voluntary clarify accepted);
+ *       'stopped'    — user ended clarification; a disobedient
+ *                      `<workflow-clarify>` is rejected (RFC-123).
+ *   - `injectStopNotice` — inject the standalone `### User directive:
+ *     STOP CLARIFYING` trailer (RFC-122; stop rounds with no prior clarify
+ *     content to carry it).
+ * Illegal states (stopped/suppressed with no wiring) are unrepresentable.
+ */
+export type ClarifyChannel =
+  | { kind: 'none' }
+  | {
+      kind: 'self' | 'cross'
+      directive: 'mandatory' | 'suppressed' | 'stopped'
+      injectStopNotice: boolean
+    }
+
+/** RFC-049 structured port-validation failure (followup payload item). */
+export interface PortValidationFailure {
+  port: string
+  kind: string
+  subReason: string
+  detail?: string
+}
+
+/**
+ * RFC-148 — how the runner renders this dispatch's user prompt, as ONE
+ * discriminated value instead of the four scattered envelopeFollowup*
+ * fields. The `followup` arm carries `resumeSessionId` (D2): a follow-up
+ * nudge is only meaningful inside the resumed session that already holds
+ * the original prompt — "followup without a session" is unrepresentable.
+ */
+export type PromptMode =
+  | { kind: 'initial' }
+  | {
+      kind: 'followup'
+      resumeSessionId: string
+      reason: EnvelopeFollowupReason
+      clarifyDirective?: 'continue' | 'stop'
+      portValidations?: ReadonlyArray<PortValidationFailure>
+    }
+
 export interface RenderPromptInput {
   /** Node-level prompt template. May be undefined or empty. */
   promptTemplate?: string
@@ -175,17 +229,18 @@ export interface RenderPromptInput {
    *  where the agent's clarify channel is wired but it hasn't yet asked. */
   clarifyContext?: ClarifyPromptContext
   /**
-   * RFC-023 / RFC-039 / RFC-100: the scheduler's effectiveHasClarifyChannel —
-   * true ⟺ a clarify channel is wired AND the user has not clicked "Stop
-   * clarifying". When true, renderUserPrompt emits the RFC-100 mandatory
-   * ask-back preamble + clarify-only format and NO `<workflow-output>` format,
-   * so the agent must ask back and cannot finalize. When undefined / false
-   * (stop round, or no clarify channel), the single-envelope output protocol
-   * block is emitted unchanged. RFC-141: the same signal also selects the
-   * prior-output directive variant (ask-back wording vs update wording), so
-   * the directive can never contradict the trailing protocol.
+   * RFC-148: the clarify-channel state for this dispatch (one discriminated
+   * value; see `ClarifyChannel`). The renderer consumes two projections:
+   *   - `directive === 'mandatory'` ⟺ the historical
+   *     effectiveHasClarifyChannel — emits the RFC-100 mandatory ask-back
+   *     preamble + clarify-only format (no `<workflow-output>` format) and
+   *     selects the RFC-141 ask-back prior-output wording;
+   *   - `injectStopNotice` — the RFC-122 standalone STOP CLARIFYING trailer.
+   * Absent / kind:'none' / 'suppressed' / 'stopped' all render the single-
+   * envelope output protocol unchanged (the enforcement differences live in
+   * the runner's parse layer, not in prompt bytes).
    */
-  hasClarifyChannel?: boolean
+  clarifyChannel?: ClarifyChannel
   /**
    * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun. When
    * set (and cross-clarify is not already owning the prior-output block, and
@@ -195,19 +250,6 @@ export interface RenderPromptInput {
    * first-time runs and any run with no prior captured output.
    */
   priorOutputUpdate?: PriorOutputUpdateContext
-  /**
-   * RFC-122: the scheduler set the per-(task, asking-node) clarify directive to
-   * `stop` for THIS dispatch AND no prior-rounds clarify content already carries
-   * the trailer (i.e. a first run / a run with no answered clarify round).
-   * When true the renderer injects the
-   * `### User directive: STOP CLARIFYING` trailer right before the trailing
-   * output protocol so the agent is told to proceed without asking even on its
-   * very first run. `hasClarifyChannel` is already false by construction (the
-   * scheduler forced ask-back off), so the output protocol is what trails.
-   * Undefined / false (the override is absent or `continue`, or the trailer is
-   * already carried by the flat clarify block) ⇒ byte-for-byte unchanged.
-   */
-  clarifyStopNotice?: boolean
 }
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
@@ -281,6 +323,15 @@ export const BUILTIN_VARS = new Set([
  *      its `<workflow-output>` reply.
  */
 export function renderUserPrompt(input: RenderPromptInput): string {
+  // RFC-148 projections of the clarify-channel ADT (see ClarifyChannel):
+  // mandatory ask-back drives preamble/trailing/prior-output wording; the
+  // stop notice is the standalone RFC-122 trailer. Every other directive
+  // renders identically to "no channel" — enforcement lives in the runner.
+  const channel = input.clarifyChannel
+  const mandatoryAskBack =
+    channel !== undefined && channel.kind !== 'none' && channel.directive === 'mandatory'
+  const stopNotice =
+    channel !== undefined && channel.kind !== 'none' && channel.injectStopNotice === true
   const tpl = input.promptTemplate ?? ''
   const referenced = new Set<string>()
   const rc = input.reviewContext
@@ -423,7 +474,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // protocol below, so wording and protocol can never disagree.
   const pou = input.priorOutputUpdate
   if (pou?.block !== undefined && pou.block.trim().length > 0 && !inlineMode) {
-    if (input.hasClarifyChannel === true) {
+    if (mandatoryAskBack) {
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE}\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT}`
     } else {
@@ -441,13 +492,13 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // the trailer through the flat clarify block instead and leaves this flag
   // false — never
   // both, so the STOP CLARIFYING trailer appears exactly once.
-  if (input.clarifyStopNotice === true && input.hasClarifyChannel !== true) {
+  if (stopNotice && !mandatoryAskBack) {
     sections += `\n\n${renderClarifyDirectiveTrailer('stop')}`
   }
 
   // Trailing protocol selection (RFC-100 — mandatory ask-back).
   //
-  // `input.hasClarifyChannel` here is the scheduler's effectiveHasClarifyChannel:
+  // `mandatoryAskBack` here is the scheduler's historical effectiveHasClarifyChannel:
   // true ⟺ a clarify channel is wired AND the user has not clicked "Stop
   // clarifying" (directive !== 'stop'). Call that state clarifyActive.
   //
@@ -463,7 +514,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   //     is the first time it must be emitted. Routing inline-stop to the
   //     reminder (as pre-RFC-100 did) would leave the agent with no port list.
   let trailing: string
-  if (input.hasClarifyChannel === true) {
+  if (mandatoryAskBack) {
     trailing = inlineMode
       ? buildClarifyInlineReminder()
       : buildMandatoryClarifyPreamble() + buildClarifyProtocolBlock()

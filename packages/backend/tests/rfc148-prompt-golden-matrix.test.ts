@@ -17,6 +17,10 @@
 // 期望值由生成脚本对当前实现求值后内嵌（仓库无 snapshot 惯例，D3）。若你有意
 // 改变 prompt 字节（新增段落/措辞调整），请整行重新生成并在 commit message 里
 // 说明字节变化的产品意图。
+//
+// T3 note: fixture 形状已随 RFC-148 判别联合迁移（hasClarifyChannel/
+// clarifyStopNotice → clarifyChannel ADT；currentRoundOnly 已删）——期望字节
+// 全程一字未动，正是「重构不改字节」的机器证明。
 
 import { renderEnvelopeFollowupPrompt, renderUserPrompt } from '@agent-workflow/shared'
 import { describe, expect, test } from 'bun:test'
@@ -36,33 +40,43 @@ const FLAT = {
 }
 const RENDER_ROWS: Record<string, Record<string, unknown>> = {
   bare: { ...BASE },
-  'clarify-channel': { ...BASE, hasClarifyChannel: true },
-  'flat-isolated': { ...BASE, hasClarifyChannel: true, clarifyContext: { ...FLAT } },
+  'clarify-channel': {
+    ...BASE,
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+  },
+  'flat-isolated': {
+    ...BASE,
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+    clarifyContext: { ...FLAT },
+  },
   'flat-inline': {
     ...BASE,
-    hasClarifyChannel: true,
-    clarifyContext: { ...FLAT, mode: 'inline', currentRoundOnly: true },
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+    clarifyContext: { ...FLAT, mode: 'inline' },
   },
   'inline-no-channel': {
     ...BASE,
-    hasClarifyChannel: false,
-    clarifyContext: { ...FLAT, mode: 'inline', currentRoundOnly: true },
+    clarifyChannel: { kind: 'none' },
+    clarifyContext: { ...FLAT, mode: 'inline' },
   },
-  'stop-notice': { ...BASE, hasClarifyChannel: false, clarifyStopNotice: true },
+  'stop-notice': {
+    ...BASE,
+    clarifyChannel: { kind: 'self', directive: 'stopped', injectStopNotice: true },
+  },
   'prior-output-askback': {
     ...BASE,
-    hasClarifyChannel: true,
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
     priorOutputUpdate: { block: '### PRIOR\nold-output' },
   },
   'prior-output-update': {
     ...BASE,
-    hasClarifyChannel: false,
+    clarifyChannel: { kind: 'none' },
     priorOutputUpdate: { block: '### PRIOR\nold-output' },
   },
   'prior-output-inline-suppressed': {
     ...BASE,
-    hasClarifyChannel: true,
-    clarifyContext: { ...FLAT, mode: 'inline', currentRoundOnly: true },
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+    clarifyContext: { ...FLAT, mode: 'inline' },
     priorOutputUpdate: { block: '### PRIOR\nold-output' },
   },
   'review-reject': {
