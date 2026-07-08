@@ -272,11 +272,6 @@ function LaunchPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('launch.title', { name: workflow.data.name })}</h1>
-          <p className="page__hint">
-            {t('launch.hintBefore')}
-            <code>{t('launch.hintCode')}</code>
-            {t('launch.hintAfter')}
-          </p>
         </div>
         <Link to="/workflows/$id" params={{ id }} className="btn btn--sm">
           {t('launch.backToEditor')}

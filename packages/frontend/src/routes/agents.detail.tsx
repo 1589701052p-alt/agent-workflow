@@ -75,7 +75,6 @@ function AgentDetailPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{name}</h1>
-          <p className="page__hint">{t('agents.detailHint')}</p>
         </div>
         <div className="page__actions">
           <AclDialogButton
@@ -138,5 +137,13 @@ export function agentToDraft(a: Agent): CreateAgent {
   // RFC-113 startup migration pinned every user agent, so this mis-displayed all of
   // them (and masked that switching the global default no longer moved them).
   if (a.runtime !== undefined) out.runtime = a.runtime
+  // RFC-155 (same shape as the runtime fix above): role + outputWrapperPortNames
+  // are real GET fields (RFC-060 PR-B, projected back to top level by rowToAgent)
+  // but were never copied into the draft — editing an aggregator showed
+  // role=normal and an empty rename map, and the Advanced section would not
+  // auto-open for it. Data was never lost (updateAgent keeps the stored role
+  // when the patch omits it); the form just lied.
+  if (a.role !== undefined) out.role = a.role
+  if (a.outputWrapperPortNames !== undefined) out.outputWrapperPortNames = a.outputWrapperPortNames
   return out
 }

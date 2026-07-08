@@ -106,7 +106,6 @@ export interface Resources {
   }
   mcps: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -119,8 +118,6 @@ export interface Resources {
     deleteConfirm: string
     deleteReferenced: string
     newTitle: string
-    newHint: string
-    detailHint: string
     fieldName: string
     fieldNameHint: string
     fieldDescription: string
@@ -211,7 +208,6 @@ export interface Resources {
   }
   plugins: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -222,8 +218,6 @@ export interface Resources {
     formTitleNew: string
     formTitleEdit: string
     newTitle: string
-    newHint: string
-    detailHint: string
     fieldName: string
     fieldSpec: string
     fieldSpecHint: string
@@ -254,7 +248,6 @@ export interface Resources {
   }
   reviews: {
     title: string
-    hint: string
     emptyList: string
     filterPending: string
     filterAll: string
@@ -419,7 +412,6 @@ export interface Resources {
   // RFC-036 — /account self-service page.
   account: {
     title: string
-    subtitle: string
     profile: string
     username: string
     displayName: string
@@ -496,7 +488,6 @@ export interface Resources {
   // RFC-036 — /users admin page.
   users: {
     title: string
-    hint: string
     new: string
     username: string
     displayName: string
@@ -524,7 +515,6 @@ export interface Resources {
   }
   repos: {
     title: string
-    hint: string
     loading: string
     empty: string
     colUrl: string
@@ -572,9 +562,6 @@ export interface Resources {
   }
   settings: {
     title: string
-    hintBacked: string
-    hintPatched: string
-    hintRestart: string
     tabRuntime: string
     tabLimits: string
     tabRecovery: string
@@ -788,7 +775,6 @@ export interface Resources {
   }
   agents: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -797,21 +783,12 @@ export interface Resources {
     colRuntime: string
     runtimeDefaultTag: string
     loadingAgent: string
-    detailHint: string
     saveButton: string
     newTitle: string
-    newHint: string
     createButton: string
   }
   skills: {
     title: string
-    hintBefore: string
-    hintManaged: string
-    hintMid: string
-    hintManagedPath: string
-    hintBetween: string
-    hintExternal: string
-    hintAfter: string
     newButton: string
     emptyList: string
     colName: string
@@ -819,11 +796,6 @@ export interface Resources {
     colDescription: string
     colPath: string
     newTitle: string
-    newHintBefore: string
-    newHintManaged: string
-    newHintMid: string
-    newHintExternal: string
-    newHintAfter: string
     tabManaged: string
     tabExternal: string
     fieldName: string
@@ -971,7 +943,6 @@ export interface Resources {
   }
   workflows: {
     title: string
-    hint: string
     newButton: string
     importButton: string
     emptyList: string
@@ -985,7 +956,6 @@ export interface Resources {
   }
   tasks: {
     title: string
-    hint: string
     filterAll: string
     emptyList: string
     colId: string
@@ -1279,7 +1249,6 @@ export interface Resources {
   }
   editor: {
     newTitle: string
-    newHint: string
     create: string
     creating: string
     fieldName: string
@@ -1338,9 +1307,6 @@ export interface Resources {
   }
   launch: {
     title: string
-    hintBefore: string
-    hintCode: string
-    hintAfter: string
     backToEditor: string
     fieldTaskName: string
     fieldTaskNameHint: string
@@ -1583,6 +1549,13 @@ export interface Resources {
     signalHint: string
   }
   agentForm: {
+    /** RFC-155 — form-section titles (visible + collapsible groups). */
+    sectionBasics: string
+    sectionPrompt: string
+    sectionOutputs: string
+    sectionDependencyGraph: string
+    sectionResources: string
+    sectionAdvanced: string
     fieldName: string
     fieldNameHint: string
     fieldNamePlaceholder: string
@@ -1624,7 +1597,6 @@ export interface Resources {
     pluginsPickerLoading: string
     pluginsPickerEmpty: string
     pluginsPickerLoadFailed: string
-    fieldDependencyTree: string
     fieldSyncOutputsOnIterate: string
     fieldSyncOutputsOnIterateHint: string
     /** RFC-060 PR-B — agent role flavor selector (normal / aggregator). */
@@ -1647,7 +1619,6 @@ export interface Resources {
     fieldFrontmatterExtraHint: string
     fieldBody: string
     bodyPlaceholder: string
-    rawBodySummary: string
     importButton: string
     autodetect: {
       button: string
@@ -1967,7 +1938,6 @@ export interface Resources {
     nav: { label: string; badgeTitle: string }
     list: {
       title: string
-      hint: string
       filter: { awaiting: string; answered: string; all: string }
       empty: string
       colTask: string
@@ -2111,7 +2081,6 @@ export interface Resources {
   // RFC-041 PR4: platform memory UI surface.
   memory: {
     title: string
-    hint: string
     adminOnly: string
     empty: string
     confirmDelete: string
@@ -2621,7 +2590,6 @@ export const zhCN: Resources = {
   },
   reviews: {
     title: '评审',
-    hint: '人工评审节点产出的设计文档；选词写意见，三个按钮决定下一步。',
     emptyList: '没有评审项。',
     filterPending: '待评审',
     filterAll: '全部',
@@ -2781,7 +2749,6 @@ export const zhCN: Resources = {
   },
   account: {
     title: '我的账户',
-    subtitle: '管理你的密码、会话与个人访问令牌。',
     profile: '基本信息',
     username: '用户名',
     displayName: '显示名',
@@ -2870,7 +2837,6 @@ export const zhCN: Resources = {
   },
   users: {
     title: '用户',
-    hint: '管理用户列表 —— 仅管理员可见。',
     new: '新建用户',
     username: '用户名',
     displayName: '显示名',
@@ -2898,7 +2864,6 @@ export const zhCN: Resources = {
   },
   repos: {
     title: '远端仓缓存',
-    hint: '所有通过 Git URL 启动任务时克隆下来的远端仓库；可手动 Refresh 拉新或 Delete 释放磁盘。',
     loading: '加载中…',
     empty: '还没有任何缓存的远端仓库。在 launcher 的"远端 URL"模式启动一次任务即可建立缓存。',
     colUrl: '远端 URL',
@@ -2947,9 +2912,6 @@ export const zhCN: Resources = {
   },
   settings: {
     title: '设置',
-    hintBacked: '基于 ',
-    hintPatched: '。补丁通过 ',
-    hintRestart: '。标注 restart 的字段需重启守护进程才生效。',
     tabRuntime: '运行时',
     tabLimits: '限额',
     tabRecovery: '恢复',
@@ -3176,7 +3138,6 @@ export const zhCN: Resources = {
   },
   agents: {
     title: '代理',
-    hint: '虚拟代理；通过 OPENCODE_CONFIG_CONTENT 在 per-run 注入。',
     newButton: '+ 新建代理',
     emptyList: '还没有代理。创建一个开始吧。',
     colName: '名称',
@@ -3185,21 +3146,12 @@ export const zhCN: Resources = {
     colRuntime: '运行时',
     runtimeDefaultTag: '默认',
     loadingAgent: '加载代理中…',
-    detailHint: '代理定义；保存会写入数据库。',
     saveButton: '保存修改',
     newTitle: '新建代理',
-    newHint: '数据库是唯一真值源；这不是文件路径。',
     createButton: '创建代理',
   },
   skills: {
     title: '技能',
-    hintBefore: '文件系统是真值源。',
-    hintManaged: 'managed',
-    hintMid: ' 类型存放于 ',
-    hintManagedPath: '~/.agent-workflow/skills/',
-    hintBetween: '；',
-    hintExternal: 'external',
-    hintAfter: ' 类型按 task 运行时 symlink 进来。',
     newButton: '+ 新建技能',
     emptyList: '还没有技能。',
     colName: '名称',
@@ -3207,11 +3159,6 @@ export const zhCN: Resources = {
     colDescription: '描述',
     colPath: '路径',
     newTitle: '新建技能',
-    newHintBefore: '选 ',
-    newHintManaged: 'managed',
-    newHintMid: ' 让框架完整托管，或选 ',
-    newHintExternal: 'external',
-    newHintAfter: ' 注册一个已存在的技能目录。',
     tabManaged: '托管',
     tabExternal: '外部',
     fieldName: '名称',
@@ -3359,7 +3306,6 @@ export const zhCN: Resources = {
   },
   mcps: {
     title: 'MCP 服务器',
-    hint: '注册可供 agent 引用的 MCP 服务器。运行时 runner 按 agent 依赖闭包合并注入 OPENCODE_CONFIG_CONTENT.mcp，opencode 子进程启动后建立连接。',
     newButton: '+ 新建 MCP',
     emptyList: '还没有登记的 MCP 服务器。',
     colName: '名称',
@@ -3372,8 +3318,6 @@ export const zhCN: Resources = {
     deleteConfirm: '删除该 MCP？',
     deleteReferenced: '无法删除：以下 agent 仍在引用，请先解除引用：',
     newTitle: '新建 MCP 服务器',
-    newHint: '注册可被 agent 引用的 MCP 服务器；运行时按依赖闭包合并注入到 opencode 子进程。',
-    detailHint: '编辑该 MCP 的配置；保存后所有引用它的 agent 下一次启动时生效。',
     fieldName: '名称',
     fieldNameHint:
       '小写字母 / 数字 / `-` / `_`，需以字母数字开头。同时是工具命名前缀（详见下方说明）。',
@@ -3467,7 +3411,6 @@ export const zhCN: Resources = {
   },
   plugins: {
     title: '插件',
-    hint: '注册 opencode 插件后，可在任意代理的 frontmatter.plugins 中按名称引用。保存即在 ~/.agent-workflow/plugins/ 下急安装，运行时框架以 file://<已缓存路径> 注入到 OPENCODE_CONFIG_CONTENT.plugin，spawn 阶段零联网。',
     newButton: '+ 新建插件',
     emptyList: '尚未登记任何插件。',
     colName: '名称',
@@ -3478,10 +3421,6 @@ export const zhCN: Resources = {
     formTitleNew: '新建插件',
     formTitleEdit: '编辑插件',
     newTitle: '新建插件',
-    newHint:
-      '注册一个 opencode 插件后，代理可在 frontmatter.plugins 中按名引用。保存即执行 `npm install --prefix ~/.agent-workflow/plugins/{id}/` 急安装；运行时框架以 file://<cachedPath> 注入，spawn 阶段不联网。',
-    detailHint:
-      '编辑插件的 spec / options 等字段。改动会在引用该插件的任意 agent 下次启动时生效；正在执行的 task 仍使用旧 cachedPath。',
     fieldName: '名称',
     fieldSpec: 'Spec',
     fieldSpecHint:
@@ -3514,7 +3453,6 @@ export const zhCN: Resources = {
   },
   workflows: {
     title: '工作流',
-    hint: '由 agents 与 wrapper 构成的 DAG。每次启动 task 会快照当前 definition。',
     newButton: '+ 新建工作流',
     importButton: '导入 YAML',
     emptyList: '还没有工作流。',
@@ -3528,7 +3466,6 @@ export const zhCN: Resources = {
   },
   tasks: {
     title: '任务',
-    hint: '任务在隔离的 git worktree 中运行。点击行查看节点状态与 worktree diff。',
     filterAll: '全部',
     emptyList: '没有匹配当前过滤的任务。',
     colId: 'ID',
@@ -3821,7 +3758,6 @@ export const zhCN: Resources = {
   },
   editor: {
     newTitle: '新建工作流',
-    newHint: '从左侧面板拖拽节点到画布即可创建。',
     create: '创建',
     creating: '创建中…',
     fieldName: '名称',
@@ -3879,9 +3815,6 @@ export const zhCN: Resources = {
   },
   launch: {
     title: '启动：{{name}}',
-    hintBefore: '选好仓库 + 分支，填好工作流 inputs，然后提交。提交时会在 ',
-    hintCode: '~/.agent-workflow/worktrees/<repo>/<taskId>',
-    hintAfter: ' 处创建一个 worktree。',
     backToEditor: '← 返回编辑器',
     fieldTaskName: '任务名称',
     fieldTaskNameHint: '用于在列表和收件箱里区分本次任务，最多 255 字符（首尾空格会被裁剪）。',
@@ -4118,6 +4051,12 @@ export const zhCN: Resources = {
     signalHint: '仅控制流——不携带数据',
   },
   agentForm: {
+    sectionBasics: '基本信息',
+    sectionPrompt: '提示词（正文）',
+    sectionOutputs: '输出',
+    sectionDependencyGraph: '闭包依赖（预览）',
+    sectionResources: '资源与依赖引用',
+    sectionAdvanced: '高级设置',
     fieldName: '名称',
     fieldNameHint: 'kebab-case；用于 /agents/:name URL。',
     fieldNamePlaceholder: '例如 code-fixer',
@@ -4162,7 +4101,6 @@ export const zhCN: Resources = {
     pluginsPickerLoading: '加载中…',
     pluginsPickerEmpty: '暂无可选插件（已全部添加 / 仓库为空）',
     pluginsPickerLoadFailed: '加载插件列表失败；仍可在下方手动输入。',
-    fieldDependencyTree: '闭包依赖（预览）',
     fieldSyncOutputsOnIterate: '文档迭代期间是否同步刷新本代理生成的其他文档',
     fieldSyncOutputsOnIterateHint:
       '仅当本代理 outputs 含 ≥ 2 个 markdown / markdown_file 时实际生效；关闭则在用户点"返回修改"时只重生被评审的那一份，其他文档沿用上一版本。',
@@ -4187,7 +4125,6 @@ export const zhCN: Resources = {
     fieldFrontmatterExtraHint: '除 name/description/outputs/permission/skills 之外的其它键。',
     fieldBody: '正文 (Markdown)',
     bodyPlaceholder: 'Agent 系统提示词；Markdown。',
-    rawBodySummary: '裸 markdown（无预览）',
     importButton: '从 agent.md 导入',
     autodetect: {
       button: '自动识别依赖',
@@ -4516,7 +4453,6 @@ export const zhCN: Resources = {
     },
     list: {
       title: '反问',
-      hint: 'Agent 发起的反问澄清；回答后流程会继续往下走。',
       filter: { awaiting: '待回答', answered: '已回答', all: '全部' },
       empty: '没有反问项。',
       colTask: '任务',
@@ -4688,7 +4624,6 @@ export const zhCN: Resources = {
   },
   memory: {
     title: '平台长期记忆',
-    hint: '从过往反问、评审与反馈中沉淀的长期上下文，注入到每次同维度的 agent 运行。',
     adminOnly: '仅管理员可审批',
     empty: '暂无沉淀',
     confirmDelete: '永久删除这条记忆？不可恢复。',

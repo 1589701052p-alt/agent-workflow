@@ -78,13 +78,6 @@ function SkillCreatePage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('skills.newTitle')}</h1>
-        <p className="page__hint">
-          {t('skills.newHintBefore')}
-          <code>{t('skills.newHintManaged')}</code>
-          {t('skills.newHintMid')}
-          <code>{t('skills.newHintExternal')}</code>
-          {t('skills.newHintAfter')}
-        </p>
       </header>
 
       <div className="tabs">

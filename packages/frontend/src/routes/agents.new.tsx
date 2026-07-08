@@ -70,7 +70,6 @@ function AgentCreatePage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('agents.newTitle')}</h1>
-        <p className="page__hint">{t('agents.newHint')}</p>
       </header>
       <div className="agent-new-toolbar">
         <button

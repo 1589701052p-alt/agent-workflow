@@ -117,7 +117,6 @@ function WorkflowNewPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('editor.newTitle')}</h1>
-          <p className="page__hint">{t('editor.newHint')}</p>
         </div>
         <button
           type="button"

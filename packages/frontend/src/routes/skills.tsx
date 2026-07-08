@@ -47,15 +47,6 @@ function SkillsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('skills.title')}</h1>
-          <p className="page__hint">
-            {t('skills.hintBefore')}
-            <code>{t('skills.hintManaged')}</code>
-            {t('skills.hintMid')}
-            <code>{t('skills.hintManagedPath')}</code>
-            {t('skills.hintBetween')}
-            <code>{t('skills.hintExternal')}</code>
-            {t('skills.hintAfter')}
-          </p>
         </div>
         <Link to="/skills/new" className="btn btn--primary">
           {t('skills.newButton')}

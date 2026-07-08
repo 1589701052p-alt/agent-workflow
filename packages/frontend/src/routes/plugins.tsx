@@ -72,7 +72,6 @@ function PluginsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('plugins.title')}</h1>
-          <p className="page__hint">{t('plugins.hint')}</p>
         </div>
         <Link to="/plugins/new" className="btn btn--primary">
           {t('plugins.newButton')}

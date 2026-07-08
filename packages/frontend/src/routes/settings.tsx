@@ -66,13 +66,6 @@ function SettingsPage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('settings.title')}</h1>
-        <p className="page__hint">
-          {t('settings.hintBacked')}
-          <code>~/.agent-workflow/config.json</code>
-          {t('settings.hintPatched')}
-          <code>PUT /api/config</code>
-          {t('settings.hintRestart')}
-        </p>
       </header>
 
       <div className="tabs">

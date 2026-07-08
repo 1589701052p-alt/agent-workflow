@@ -106,11 +106,8 @@ describe('RFC-031 /plugins wiring', () => {
     const zh = read('i18n/zh-CN.ts')
     const KEYS = [
       'title',
-      'hint',
       'newButton',
       'newTitle',
-      'newHint',
-      'detailHint',
       'colName',
       'colSpec',
       'colSource',

@@ -48,7 +48,6 @@ function McpCreatePage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('mcps.newTitle')}</h1>
-        <p className="page__hint">{t('mcps.newHint')}</p>
       </header>
 
       <McpFields value={form} onChange={setForm} errors={errors} />

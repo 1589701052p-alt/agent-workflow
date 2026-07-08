@@ -32,9 +32,6 @@ function AccountPage() {
     <div className="page account-page">
       <header className="page__header">
         <h1>{t('account.title', { defaultValue: 'My account' })}</h1>
-        <p className="page__hint">
-          {t('account.subtitle', { defaultValue: 'Manage your password, sessions, and tokens.' })}
-        </p>
       </header>
       <div className="account-page__grid">
         <ProfileSection me={data} />

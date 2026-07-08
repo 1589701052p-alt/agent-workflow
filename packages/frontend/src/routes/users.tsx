@@ -94,9 +94,6 @@ export function UsersPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('users.title', { defaultValue: 'Users' })}</h1>
-          <p className="page__hint">
-            {t('users.hint', { defaultValue: 'Manage users — only admins land here.' })}
-          </p>
         </div>
         <button className="btn btn--primary" onClick={() => setShowCreate(true)}>
           {t('users.new', { defaultValue: 'New user' })}

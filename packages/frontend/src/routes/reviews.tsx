@@ -77,7 +77,6 @@ export function ReviewsListPage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('reviews.title')}</h1>
-        <p className="page__hint">{t('reviews.hint')}</p>
       </header>
       <div className="tabs" role="tablist">
         {FILTERS.map((k) => (

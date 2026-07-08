@@ -1,13 +1,14 @@
 // Locks the alignment between /clarify and /reviews list pages.
 //
 // User asked to "拉齐评审、反问两个页签的样式" — both inbox pages should share
-// the same overall structure: `.page__hint` paragraph under the title,
-// `<div className="tabs" role="tablist">` with role="tab" + aria-selected
-// buttons, a `.reviews-group` per task, a `.data-table` body with a
-// status-chip column and a per-row "Open" button. Source-text assertions
-// only — the routes are awkward to mount under JSDOM (TanStack Router
-// context) and the visual contract is in JSX shape + CSS, both of which
-// flip back loudly if regressed.
+// the same overall structure: `<div className="tabs" role="tablist">` with
+// role="tab" + aria-selected buttons, a `.reviews-group` per task, a
+// `.data-table` body with a status-chip column and a per-row "Open" button.
+// (RFC-155 removed the static `.page__hint` header paragraph from BOTH pages
+// — the alignment now includes its absence.) Source-text assertions only —
+// the routes are awkward to mount under JSDOM (TanStack Router context) and
+// the visual contract is in JSX shape + CSS, both of which flip back loudly
+// if regressed.
 
 import { describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -20,9 +21,9 @@ describe('clarify ↔ reviews list — aligned page shell', () => {
   const clarify = readFileSync(CLARIFY_TSX, 'utf8')
   const reviews = readFileSync(REVIEWS_TSX, 'utf8')
 
-  test('both pages render a .page__hint paragraph under the h1', () => {
-    expect(clarify).toMatch(/<p className="page__hint">\{t\('clarify\.list\.hint'\)\}<\/p>/)
-    expect(reviews).toMatch(/<p className="page__hint">\{t\('reviews\.hint'\)\}<\/p>/)
+  test('neither page renders a static .page__hint paragraph under the h1 (RFC-155)', () => {
+    expect(clarify).not.toMatch(/page__hint/)
+    expect(reviews).not.toMatch(/page__hint/)
   })
 
   test('both pages use an accessible tablist with aria-selected', () => {

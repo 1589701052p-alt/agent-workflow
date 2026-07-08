@@ -46,7 +46,6 @@ function PluginCreatePage() {
     <div className="page">
       <header className="page__header">
         <h1>{t('plugins.newTitle')}</h1>
-        <p className="page__hint">{t('plugins.newHint')}</p>
       </header>
 
       <PluginFields value={form} onChange={setForm} errors={errors} />

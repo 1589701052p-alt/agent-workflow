@@ -50,7 +50,6 @@ function TasksPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('tasks.title')}</h1>
-          <p className="page__hint">{t('tasks.hint')}</p>
         </div>
       </header>
 

@@ -67,7 +67,6 @@ function McpsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('mcps.title')}</h1>
-          <p className="page__hint">{t('mcps.hint')}</p>
         </div>
         <Link to="/mcps/new" className="btn btn--primary">
           {t('mcps.newButton')}

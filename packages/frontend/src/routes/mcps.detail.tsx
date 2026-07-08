@@ -79,7 +79,6 @@ function McpDetailPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{name}</h1>
-          <p className="page__hint">{t('mcps.detailHint')}</p>
         </div>
         <div className="page__actions">
           <AclDialogButton

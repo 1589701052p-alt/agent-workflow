@@ -90,7 +90,6 @@ function PluginDetailPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{displayName}</h1>
-          <p className="page__hint">{t('plugins.detailHint')}</p>
         </div>
         <div className="page__actions">
           <AclDialogButton

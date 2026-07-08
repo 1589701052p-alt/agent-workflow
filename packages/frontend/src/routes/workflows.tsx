@@ -70,7 +70,6 @@ function WorkflowsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('workflows.title')}</h1>
-          <p className="page__hint">{t('workflows.hint')}</p>
         </div>
         <div className="page__actions">
           <input

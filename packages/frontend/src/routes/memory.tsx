@@ -56,7 +56,6 @@ function MemoryPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('memory.title')}</h1>
-          <p className="muted">{t('memory.hint')}</p>
         </div>
         {/* RFC-099: resource owners may create memories for their own
             agents/workflows — show the button to everyone; the backend

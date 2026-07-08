@@ -5,7 +5,7 @@
 // page. Polling every 10s mirrors the Reviews inbox so the badge count and
 // the list stay rough-time-in-sync without a WS dep here.
 //
-// Layout mirrors /reviews: same `.page__hint`, accessible `.tabs` tab bar,
+// Layout mirrors /reviews: same accessible `.tabs` tab bar,
 // per-task `.reviews-group` section with a `.data-table` body and a
 // per-row "Open" button + status chip. The two inbox pages stay visually
 // uniform so users don't context-switch between them.
@@ -167,7 +167,6 @@ export function ClarifyListPage() {
     <div className="page" data-testid="clarify-list-page">
       <header className="page__header">
         <h1>{t('clarify.list.title')}</h1>
-        <p className="page__hint">{t('clarify.list.hint')}</p>
       </header>
       <div className="tabs" role="tablist">
         {FILTERS.map((k) => (

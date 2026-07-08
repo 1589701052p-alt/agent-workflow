@@ -50,7 +50,6 @@ function AgentsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('agents.title')}</h1>
-          <p className="page__hint">{t('agents.hint')}</p>
         </div>
         <Link to="/agents/new" className="btn btn--primary">
           {t('agents.newButton')}

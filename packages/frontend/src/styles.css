@@ -3179,6 +3179,50 @@ code {
   color: var(--muted);
 }
 
+/* ---- Form section (RFC-155) ---- */
+
+.form-section {
+  margin-top: 24px;
+}
+
+.form-section:first-child {
+  margin-top: 0;
+}
+
+.form-section__title {
+  font-size: 16px;
+  margin: 0;
+}
+
+section.form-section > .form-section__title {
+  margin-bottom: 12px;
+}
+
+.form-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+details.form-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+}
+
+details.form-section > summary {
+  cursor: pointer;
+}
+
+details.form-section > summary .form-section__title {
+  display: inline;
+  vertical-align: middle;
+}
+
+details.form-section[open] > summary {
+  margin-bottom: 12px;
+}
+
 /* ---- Chips input ---- */
 
 .chips-input__row {

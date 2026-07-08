@@ -87,8 +87,6 @@ describe('RFC-028 /mcps wiring', () => {
       'title',
       'newButton',
       'newTitle',
-      'newHint',
-      'detailHint',
       'emptyList',
       'typeLocal',
       'typeRemote',

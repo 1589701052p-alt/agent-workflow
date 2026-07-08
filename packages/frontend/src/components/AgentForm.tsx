@@ -1,7 +1,13 @@
 // Shared frontmatter + body form for /agents/new and /agents/$name.
 // Lifts the entire CreateAgent payload to local state; submission is the
 // parent's concern.
+//
+// RFC-155 — the flat form-grid became six FormSections: Basics / Prompt /
+// Outputs / Dependency tree stay visible; Resources & references and
+// Advanced collapse by default and auto-open when they hold content (initial
+// value or a later rising edge — async detail load, YAML import merge).
 
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -13,7 +19,8 @@ import { AgentDependsPicker } from './AgentDependsPicker'
 import { DependencyAutodetectButton } from './agents/DependencyAutodetectButton'
 import { DependencyTreePreview } from './agents/DependencyTreePreview'
 import { mergeAgentDeps } from '@/lib/agent-dep-detect'
-import { Field, Switch, TextArea, TextInput } from './Form'
+import { Field, Switch, TextInput } from './Form'
+import { FormSection } from './FormSection'
 import { JsonField } from './JsonField'
 import { MarkdownEditor } from './MarkdownEditor'
 import { McpsPicker } from './McpsPicker'
@@ -47,6 +54,22 @@ export function emptyAgent(): CreateAgent {
   return structuredClone(DEFAULT)
 }
 
+/** RFC-155 — the "Resources & references" section holds content worth showing. */
+export function hasResourceContent(v: CreateAgent): boolean {
+  return [v.skills, v.mcp, v.plugins, v.dependsOn].some((a) => (a ?? []).length > 0)
+}
+
+/** RFC-155 — the "Advanced" section holds a non-default value. */
+export function hasAdvancedContent(v: CreateAgent): boolean {
+  return (
+    v.syncOutputsOnIterate === false ||
+    (v.role !== undefined && v.role !== 'normal') ||
+    Object.keys(v.outputWrapperPortNames ?? {}).length > 0 ||
+    Object.keys(v.permission ?? {}).length > 0 ||
+    Object.keys(v.frontmatterExtra ?? {}).length > 0
+  )
+}
+
 export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -56,6 +79,24 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
   function patch<K extends keyof CreateAgent>(key: K, next: CreateAgent[K]) {
     onChange({ ...value, [key]: next })
   }
+
+  // RFC-155 — collapsed-section state. Initial value opens a section whose
+  // draft already holds content; the rising-edge effect below opens it when
+  // content arrives LATER (async /agents/$name load, import merge). Only the
+  // false→true edge forces open, so a user's manual collapse is never fought
+  // by same-value renders.
+  const [resourcesOpen, setResourcesOpen] = useState(() => hasResourceContent(value))
+  const [advancedOpen, setAdvancedOpen] = useState(() => hasAdvancedContent(value))
+  const prevResources = useRef(hasResourceContent(value))
+  const prevAdvanced = useRef(hasAdvancedContent(value))
+  useEffect(() => {
+    const resources = hasResourceContent(value)
+    if (resources && !prevResources.current) setResourcesOpen(true)
+    prevResources.current = resources
+    const advanced = hasAdvancedContent(value)
+    if (advanced && !prevAdvanced.current) setAdvancedOpen(true)
+    prevAdvanced.current = advanced
+  }, [value])
 
   // RFC-112: registered runtimes (GET /api/runtimes — open to all users) drive
   // the picker options + each runtime's protocol. flag-audit §8 决策：claude
@@ -85,7 +126,7 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
 
   return (
     <div className="agent-form">
-      <div className="form-grid">
+      <FormSection title={t('agentForm.sectionBasics')}>
         <Field label={t('agentForm.fieldName')} required hint={t('agentForm.fieldNameHint')}>
           <TextInput
             value={value.name}
@@ -105,6 +146,47 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           />
         </Field>
 
+        {/* RFC-111: per-agent runtime override. Empty = inherit the global
+            default. Hidden only when claude is explicitly disabled in config
+            (and the agent doesn't already pin a runtime). */}
+        {showRuntime && (
+          <Field label={t('agentForm.fieldRuntime')} hint={t('agentForm.fieldRuntimeHint')}>
+            {/* RFC-112: options are the registered runtimes (built-ins + custom
+                forks) by name, plus the inherit-default sentinel. */}
+            <Select<string>
+              value={value.runtime ?? ''}
+              ariaLabel={t('agentForm.fieldRuntime')}
+              onChange={(v) => patch('runtime', v === '' ? undefined : v)}
+              options={[
+                { value: '', label: t('agentForm.runtimeInherit') },
+                // Loaded registry wins; while it's empty (query in flight) fall back
+                // to the built-in name(s) — both when claude is on, opencode-only
+                // when it's off (mirrors the claude-protocol filter above).
+                ...(selectableRuntimes.length > 0
+                  ? selectableRuntimes.map((r) => ({ value: r.name, label: r.name }))
+                  : claudeEnabled
+                    ? [
+                        { value: 'opencode', label: t('agentForm.runtimeOpencode') },
+                        { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
+                      ]
+                    : [{ value: 'opencode', label: t('agentForm.runtimeOpencode') }]),
+              ]}
+            />
+          </Field>
+        )}
+      </FormSection>
+
+      <FormSection title={t('agentForm.sectionPrompt')}>
+        <Field label={t('agentForm.fieldBody')}>
+          <MarkdownEditor
+            value={value.bodyMd ?? ''}
+            onChange={(v) => patch('bodyMd', v)}
+            placeholder={t('agentForm.bodyPlaceholder')}
+          />
+        </Field>
+      </FormSection>
+
+      <FormSection title={t('agentForm.sectionOutputs')}>
         <Field label={t('agentForm.fieldOutputs')} hint={t('agentForm.fieldOutputsHint')}>
           <OutputsEditor
             outputs={value.outputs ?? []}
@@ -113,7 +195,23 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             placeholder={t('agentForm.fieldOutputsPlaceholder')}
           />
         </Field>
+      </FormSection>
 
+      <FormSection title={t('agentForm.sectionDependencyGraph')}>
+        <DependencyTreePreview
+          name={value.name}
+          dependsOn={value.dependsOn ?? []}
+          onNodeClick={(n) => navigate({ to: '/agents/$name', params: { name: n } })}
+        />
+      </FormSection>
+
+      <FormSection
+        title={t('agentForm.sectionResources')}
+        collapsible
+        open={resourcesOpen}
+        onToggle={setResourcesOpen}
+        data-testid="agent-form-section-resources"
+      >
         <Field label={t('agentForm.fieldSkills')} hint={t('agentForm.fieldSkillsHint')}>
           <SkillsPicker
             value={value.skills ?? []}
@@ -153,15 +251,15 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           selfName={value.name}
           onApply={(selection) => onChange(mergeAgentDeps(value, selection))}
         />
+      </FormSection>
 
-        <Field label={t('agentForm.fieldDependencyTree')}>
-          <DependencyTreePreview
-            name={value.name}
-            dependsOn={value.dependsOn ?? []}
-            onNodeClick={(n) => navigate({ to: '/agents/$name', params: { name: n } })}
-          />
-        </Field>
-
+      <FormSection
+        title={t('agentForm.sectionAdvanced')}
+        collapsible
+        open={advancedOpen}
+        onToggle={setAdvancedOpen}
+        data-testid="agent-form-section-advanced"
+      >
         <Switch
           checked={value.syncOutputsOnIterate !== false}
           onChange={(v) => patch('syncOutputsOnIterate', v)}
@@ -201,38 +299,9 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
           </Field>
         ) : null}
 
-        {/* RFC-111: per-agent runtime override. Empty = inherit the global
-            default. Hidden only when claude is explicitly disabled in config
-            (and the agent doesn't already pin a runtime). */}
-        {showRuntime && (
-          <Field label={t('agentForm.fieldRuntime')} hint={t('agentForm.fieldRuntimeHint')}>
-            {/* RFC-112: options are the registered runtimes (built-ins + custom
-                forks) by name, plus the inherit-default sentinel. */}
-            <Select<string>
-              value={value.runtime ?? ''}
-              ariaLabel={t('agentForm.fieldRuntime')}
-              onChange={(v) => patch('runtime', v === '' ? undefined : v)}
-              options={[
-                { value: '', label: t('agentForm.runtimeInherit') },
-                // Loaded registry wins; while it's empty (query in flight) fall back
-                // to the built-in name(s) — both when claude is on, opencode-only
-                // when it's off (mirrors the claude-protocol filter above).
-                ...(selectableRuntimes.length > 0
-                  ? selectableRuntimes.map((r) => ({ value: r.name, label: r.name }))
-                  : claudeEnabled
-                    ? [
-                        { value: 'opencode', label: t('agentForm.runtimeOpencode') },
-                        { value: 'claude-code', label: t('agentForm.runtimeClaudeCode') },
-                      ]
-                    : [{ value: 'opencode', label: t('agentForm.runtimeOpencode') }]),
-              ]}
-            />
-          </Field>
-        )}
-
         {/* RFC-113: model / variant / temperature / steps / maxSteps moved to the
-            RUNTIME (Settings → Runtimes). The agent only SELECTS a runtime above;
-            the chosen runtime decides the model + generation params. */}
+            RUNTIME (Settings → Runtimes). The agent only SELECTS a runtime in
+            Basics; the chosen runtime decides the model + generation params. */}
 
         <Field label={t('agentForm.fieldPermission')} hint={t('agentForm.fieldPermissionHint')}>
           <JsonField
@@ -254,26 +323,7 @@ export function AgentForm({ value, onChange, nameLocked }: AgentFormProps) {
             rows={4}
           />
         </Field>
-
-        <Field label={t('agentForm.fieldBody')}>
-          <MarkdownEditor
-            value={value.bodyMd ?? ''}
-            onChange={(v) => patch('bodyMd', v)}
-            placeholder={t('agentForm.bodyPlaceholder')}
-          />
-        </Field>
-
-        {/* Quick raw-body fallback for users who don't want preview. */}
-        <details className="form-details">
-          <summary>{t('agentForm.rawBodySummary')}</summary>
-          <TextArea
-            value={value.bodyMd ?? ''}
-            onChange={(v) => patch('bodyMd', v)}
-            rows={6}
-            monospace
-          />
-        </details>
-      </div>
+      </FormSection>
     </div>
   )
 }
