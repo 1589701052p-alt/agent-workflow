@@ -671,7 +671,6 @@ export interface Resources {
       enabledHint: string
       testOk: string
       testFail: string
-      testSaveFirst: string
       testDetailIssuer: string
       testDetailToken: string
       testDetailJwks: string
@@ -3046,7 +3045,6 @@ export const zhCN: Resources = {
       enabledHint: '开启后会出现在登录页；关闭则隐藏。',
       testOk: '连接成功',
       testFail: '连接失败',
-      testSaveFirst: '请先保存，再运行测试',
       testDetailIssuer: 'issuer：',
       testDetailToken: 'token：',
       testDetailJwks: 'jwks：',

@@ -854,6 +854,10 @@ interface OidcProviderRow {
   updatedAt: number
 }
 
+type OidcTestResult =
+  | { ok: true; issuer: string; tokenEndpoint: string; jwksUri: string }
+  | { ok: false; error: string }
+
 function OidcProviderDialog(props: {
   mode: 'create' | 'edit'
   initial?: OidcProviderRow
@@ -875,12 +879,42 @@ function OidcProviderDialog(props: {
     (initial?.allowedEmailDomains ?? []).join(', '),
   )
   const [enabled, setEnabled] = useState(initial?.enabled ?? true)
-  const [testResult, setTestResult] = useState<
-    | null
-    | { ok: true; issuer: string; tokenEndpoint: string; jwksUri: string }
-    | { ok: false; error: string }
-  >(null)
+  const [testResult, setTestResult] = useState<null | OidcTestResult>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // RFC-151 PR-4 — the seven scattered per-mode branches collapsed into one
+  // local strategy lookup (this ternary is the only mode check left) so
+  // create/edit differences can't drift independently.
+  // `testConnection: null` is the SINGLE source that disables
+  // the test affordance in create mode (no saved row id to probe yet):
+  // previously the footer's render gate and a throw inside the mutation
+  // encoded that rule twice.
+  const strategy =
+    props.mode === 'create'
+      ? {
+          title: t('settings.auth.addTitle', { defaultValue: 'Add OIDC provider' }),
+          submit: (body: Record<string, unknown>) => api.post('/api/oidc/providers', body),
+          // A new row always needs a secret field on the wire ('' when blank).
+          clientSecretBody: (secret: string): Record<string, unknown> => ({
+            clientSecret: secret,
+          }),
+          clientSecretRequired: true,
+          clientSecretPlaceholder: '',
+          testConnection: null,
+        }
+      : {
+          title: t('settings.auth.editTitle', { defaultValue: 'Edit OIDC provider' }),
+          submit: (body: Record<string, unknown>) =>
+            api.patch(`/api/oidc/providers/${initial!.id}`, body),
+          // Blank means "keep the sealed secret" → omit the field entirely.
+          clientSecretBody: (secret: string): Record<string, unknown> =>
+            secret ? { clientSecret: secret } : {},
+          clientSecretRequired: false,
+          clientSecretPlaceholder: t('settings.auth.clientSecretEditHint', {
+            defaultValue: 'leave blank to keep current',
+          }),
+          testConnection: () => api.post<OidcTestResult>(`/api/oidc/providers/${initial!.id}/test`),
+        }
 
   const save = useMutation({
     mutationFn: () => {
@@ -889,7 +923,7 @@ function OidcProviderDialog(props: {
         displayName,
         issuerUrl,
         clientId,
-        ...(clientSecret ? { clientSecret } : props.mode === 'create' ? { clientSecret: '' } : {}),
+        ...strategy.clientSecretBody(clientSecret),
         scopes,
         provisioning,
         allowedEmailDomains: allowedDomains
@@ -899,10 +933,7 @@ function OidcProviderDialog(props: {
         iconUrl: null,
         enabled,
       }
-      if (props.mode === 'create') {
-        return api.post('/api/oidc/providers', body)
-      }
-      return api.patch(`/api/oidc/providers/${initial!.id}`, body)
+      return strategy.submit(body)
     },
     onSuccess: () => props.onSaved(),
     onError: (e: unknown) => setError(e instanceof ApiError ? e.message : (e as Error).message),
@@ -910,18 +941,13 @@ function OidcProviderDialog(props: {
 
   const testConnection = useMutation({
     mutationFn: async () => {
-      // For new providers we don't have an id yet — use the issuer URL directly.
-      // For edit we hit the per-id /test endpoint so the daemon resolves the row.
-      if (props.mode === 'edit' && initial) {
-        return api.post<
-          | { ok: true; issuer: string; tokenEndpoint: string; jwksUri: string }
-          | { ok: false; error: string }
-        >(`/api/oidc/providers/${initial.id}/test`)
+      // Type-narrowing invariant only — the footer button that fires this
+      // mutation renders from the same strategy field, so a null here is
+      // unreachable through the UI.
+      if (strategy.testConnection === null) {
+        throw new Error('test connection is not available before the provider is saved')
       }
-      // Mode='create' — ask the daemon to probe the URL by saving a temp,
-      // but the simpler path is just letting the user save first. Until
-      // then test is unavailable for new providers.
-      throw new Error(t('settings.auth.testSaveFirst'))
+      return strategy.testConnection()
     },
     onSuccess: (r) => setTestResult(r),
     onError: (e: unknown) =>
@@ -932,15 +958,11 @@ function OidcProviderDialog(props: {
     <Dialog
       open
       onClose={props.onClose}
-      title={
-        props.mode === 'create'
-          ? t('settings.auth.addTitle', { defaultValue: 'Add OIDC provider' })
-          : t('settings.auth.editTitle', { defaultValue: 'Edit OIDC provider' })
-      }
+      title={strategy.title}
       size="lg"
       footer={
         <>
-          {props.mode === 'edit' && (
+          {strategy.testConnection !== null && (
             <button
               type="button"
               className="btn btn--ghost"
@@ -1064,14 +1086,8 @@ function OidcProviderDialog(props: {
                 type="password"
                 value={clientSecret}
                 onChange={(e) => setClientSecret(e.target.value)}
-                required={props.mode === 'create'}
-                placeholder={
-                  props.mode === 'edit'
-                    ? t('settings.auth.clientSecretEditHint', {
-                        defaultValue: 'leave blank to keep current',
-                      })
-                    : ''
-                }
+                required={strategy.clientSecretRequired}
+                placeholder={strategy.clientSecretPlaceholder}
               />
             </label>
           </div>

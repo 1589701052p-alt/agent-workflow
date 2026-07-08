@@ -10,21 +10,16 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Plugin, UpdatePlugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { AclDialogButton } from '@/components/AclPanel'
-import { ConfirmButton } from '@/components/ConfirmButton'
+import { useDraftFromQuery } from '@/hooks/useDraftFromQuery'
+import { DetailHeaderActions } from '@/components/DetailHeaderActions'
 import { LoadingState } from '@/components/LoadingState'
 import { PluginFields } from '@/components/PluginFields'
 import { describeApiError } from '@/i18n'
-import {
-  buildUpdatePayload,
-  EMPTY_PLUGIN_FORM,
-  pluginToForm,
-  type PluginFormState,
-} from '@/lib/plugin-form'
+import { buildUpdatePayload, EMPTY_PLUGIN_FORM, pluginToForm } from '@/lib/plugin-form'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -38,8 +33,6 @@ function PluginDetailPage() {
   const { id } = Route.useParams()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [form, setForm] = useState<PluginFormState>(EMPTY_PLUGIN_FORM)
-  const [loaded, setLoaded] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const query = useQuery<Plugin>({
@@ -47,12 +40,9 @@ function PluginDetailPage() {
     queryFn: ({ signal }) => api.get(`/api/plugins/${encodeURIComponent(id)}`, undefined, signal),
   })
 
-  useEffect(() => {
-    if (!loaded && query.data !== undefined) {
-      setForm(pluginToForm(query.data))
-      setLoaded(true)
-    }
-  }, [loaded, query.data])
+  // RFC-151 PR-4 — hydrate-once draft (see useDraftFromQuery's stale-race
+  // contract: save.onSuccess below eagerly setQueryData's the fresh row).
+  const { draft: form, setDraft: setForm, loaded } = useDraftFromQuery(query.data, pluginToForm)
 
   const save = useMutation({
     mutationFn: (patch: UpdatePlugin): Promise<Plugin> =>
@@ -67,9 +57,10 @@ function PluginDetailPage() {
   // RFC-151 PR-1 — validate before mutate; an invalid form sets inline field
   // errors only (previously a thrown validation sentinel leaked into the
   // form-actions banner as a raw untranslated string). The save button is
-  // disabled until `loaded`, so `query.data` is always present here.
+  // disabled until `loaded`, so `query.data` and the draft are always
+  // present here.
   function submitSave() {
-    if (query.data === undefined) return
+    if (query.data === undefined || form === undefined) return
     const built = buildUpdatePayload(form, query.data)
     if (!built.ok) {
       setErrors(built.errors)
@@ -101,47 +92,36 @@ function PluginDetailPage() {
 
   return (
     <div className="page">
-      <header className="page__header page__header--row">
+      <DetailHeaderActions
+        acl={{
+          resourceBaseUrl: `/api/plugins/${encodeURIComponent(id)}`,
+          invalidateKey: ['plugins'],
+        }}
+        save={{
+          label: save.isPending ? t('plugins.saving') : t('plugins.saveButton'),
+          onClick: submitSave,
+          disabled: save.isPending || !loaded,
+          testid: 'plugin-save-button',
+        }}
+        del={{
+          label: t('common.delete'),
+          onConfirm: () => del.mutateAsync(),
+          disabled: del.isPending,
+        }}
+        errors={[save.error, del.error]}
+      >
         <div>
           <h1>{displayName}</h1>
           <p className="page__hint">{t('plugins.detailHint')}</p>
         </div>
-        <div className="page__actions">
-          <AclDialogButton
-            resourceBaseUrl={`/api/plugins/${encodeURIComponent(id)}`}
-            invalidateKey={['plugins']}
-          />
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={save.isPending || !loaded}
-            onClick={submitSave}
-            data-testid="plugin-save-button"
-          >
-            {save.isPending ? t('plugins.saving') : t('plugins.saveButton')}
-          </button>
-          <ConfirmButton
-            label={t('common.delete')}
-            onConfirm={() => del.mutateAsync()}
-            variant="danger"
-            disabled={del.isPending}
-          />
-        </div>
-      </header>
+      </DetailHeaderActions>
 
-      {(save.error !== null && save.error !== undefined) ||
-      (del.error !== null && del.error !== undefined) ? (
-        <div className="form-actions">
-          {save.error !== null && save.error !== undefined && (
-            <span className="form-actions__error">{describeApiError(save.error)}</span>
-          )}
-          {del.error !== null && del.error !== undefined && (
-            <span className="form-actions__error">{describeApiError(del.error)}</span>
-          )}
-        </div>
-      ) : null}
-
-      <PluginFields value={form} onChange={setForm} nameLocked errors={errors} />
+      <PluginFields
+        value={form ?? EMPTY_PLUGIN_FORM}
+        onChange={setForm}
+        nameLocked
+        errors={errors}
+      />
     </div>
   )
 }

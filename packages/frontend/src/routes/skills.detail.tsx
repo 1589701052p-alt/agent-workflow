@@ -2,18 +2,19 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Skill, SkillContent } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
-import { AclDialogButton } from '@/components/AclPanel'
-import { ConfirmButton } from '@/components/ConfirmButton'
+import { api } from '@/api/client'
+import { useDraftFromQuery } from '@/hooks/useDraftFromQuery'
+import { DetailHeaderActions } from '@/components/DetailHeaderActions'
 import { Field, TextInput } from '@/components/Form'
 import { FuseDialog } from '@/components/fusion/FuseDialog'
 import { LoadingState } from '@/components/LoadingState'
 import { MarkdownEditor } from '@/components/MarkdownEditor'
 import { SkillFileTree } from '@/components/SkillFileTree'
 import { SkillVersionHistory } from '@/components/skill/SkillVersionHistory'
+import { describeApiError } from '@/i18n'
 import { skillCapabilities } from '@/lib/skill-capabilities'
 import { Route as RootRoute } from './__root'
 
@@ -39,18 +40,22 @@ function SkillDetailPage() {
       api.get(`/api/skills/${encodeURIComponent(name)}/content`, undefined, signal),
   })
 
-  const [description, setDescription] = useState('')
-  const [bodyMd, setBodyMd] = useState('')
-  const [loaded, setLoaded] = useState(false)
   const [fuseOpen, setFuseOpen] = useState(false)
 
-  useEffect(() => {
-    if (!loaded && meta.data !== undefined && content.data !== undefined) {
-      setDescription(meta.data.description)
-      setBodyMd(content.data.bodyMd)
-      setLoaded(true)
-    }
-  }, [loaded, meta.data, content.data])
+  // RFC-151 PR-4 — hydrate-once draft over TWO sources: seed only when the
+  // content query has also settled (`ready`), with `map` closing over it.
+  // Stale-race contract: both save mutations below eagerly setQueryData
+  // their fresh responses (see useDraftFromQuery docstring).
+  const { draft, setDraft, loaded } = useDraftFromQuery(
+    meta.data,
+    (m) => ({ description: m.description, bodyMd: content.data?.bodyMd ?? '' }),
+    { ready: content.data !== undefined },
+  )
+  const description = draft?.description ?? ''
+  const bodyMd = draft?.bodyMd ?? ''
+  const setDescription = (v: string) =>
+    setDraft((d) => (d === undefined ? d : { ...d, description: v }))
+  const setBodyMd = (v: string) => setDraft((d) => (d === undefined ? d : { ...d, bodyMd: v }))
 
   // RFC-151 PR-1 — read named capability bits instead of re-deriving
   // `sourceKind === 'managed'` at every consumption site. While the query is
@@ -89,15 +94,49 @@ function SkillDetailPage() {
         <LoadingState />
       </div>
     )
+  // RFC-151 PR-4: aligned to the shared describeApiError (the other detail
+  // pages already used it). Delta vs the old local describeError: ApiErrors
+  // with an untranslated code now render "<errors.fallback>: <message>"
+  // instead of "<code>: <message>" — localized codes gain a proper message.
   if (meta.error !== null && meta.error !== undefined)
-    return <div className="page error-box">{describeError(meta.error)}</div>
+    return <div className="page error-box">{describeApiError(meta.error)}</div>
   if (content.error !== null && content.error !== undefined)
-    return <div className="page error-box">{describeError(content.error)}</div>
+    return <div className="page error-box">{describeApiError(content.error)}</div>
   if (meta.data === undefined) return null
 
   return (
     <div className="page page--wide">
-      <header className="page__header page__header--row">
+      <DetailHeaderActions
+        acl={{
+          resourceBaseUrl: `/api/skills/${encodeURIComponent(name)}`,
+          invalidateKey: ['skills'],
+        }}
+        save={{
+          // Dual-mutation pending/label composition stays caller-owned.
+          label:
+            saveMeta.isPending || saveContent.isPending ? t('common.saving') : t('common.save'),
+          onClick: () => {
+            saveMeta.mutate()
+            if (caps.canEditContent) saveContent.mutate()
+          },
+          disabled: saveMeta.isPending || saveContent.isPending || !loaded,
+        }}
+        del={{
+          label: t('common.delete'),
+          onConfirm: () => del.mutateAsync(),
+          disabled: del.isPending,
+        }}
+        extra={
+          caps.canFuse && (
+            <button type="button" className="btn" onClick={() => setFuseOpen(true)}>
+              {t('fusion.launchFromSkillButton')}
+            </button>
+          )
+        }
+        // Three independent channels — a failed meta save must not mask a
+        // failed content save (and vice versa); del failures now surface too.
+        errors={[saveMeta.error, saveContent.error, del.error]}
+      >
         <div>
           <h1>{name}</h1>
           <p className="page__hint">
@@ -107,46 +146,7 @@ function SkillDetailPage() {
             <code>{meta.data.managedPath ?? meta.data.externalPath ?? ''}</code>
           </p>
         </div>
-        <div className="page__actions">
-          {caps.canFuse && (
-            <button type="button" className="btn" onClick={() => setFuseOpen(true)}>
-              {t('fusion.launchFromSkillButton')}
-            </button>
-          )}
-          <AclDialogButton
-            resourceBaseUrl={`/api/skills/${encodeURIComponent(name)}`}
-            invalidateKey={['skills']}
-          />
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={saveMeta.isPending || saveContent.isPending || !loaded}
-            onClick={() => {
-              saveMeta.mutate()
-              if (caps.canEditContent) saveContent.mutate()
-            }}
-          >
-            {saveMeta.isPending || saveContent.isPending ? t('common.saving') : t('common.save')}
-          </button>
-          <ConfirmButton
-            label={t('common.delete')}
-            onConfirm={() => del.mutateAsync()}
-            variant="danger"
-            disabled={del.isPending}
-          />
-        </div>
-      </header>
-      {(saveMeta.error !== null && saveMeta.error !== undefined) ||
-      (saveContent.error !== null && saveContent.error !== undefined) ? (
-        <div className="form-actions">
-          {saveMeta.error !== null && saveMeta.error !== undefined && (
-            <span className="form-actions__error">{describeError(saveMeta.error)}</span>
-          )}
-          {saveContent.error !== null && saveContent.error !== undefined && (
-            <span className="form-actions__error">{describeError(saveContent.error)}</span>
-          )}
-        </div>
-      ) : null}
+      </DetailHeaderActions>
 
       <section className="form-grid">
         <Field
@@ -182,10 +182,4 @@ function SkillDetailPage() {
       />
     </div>
   )
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof ApiError) return `${e.code}: ${e.message}`
-  if (e instanceof Error) return e.message
-  return String(e)
 }

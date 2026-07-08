@@ -553,7 +553,6 @@ export const enUS: Resources = {
       enabledHint: 'Visible on the login page when on; hidden when off.',
       testOk: 'Connection successful',
       testFail: 'Connection failed',
-      testSaveFirst: 'save first, then run test',
       testDetailIssuer: 'issuer:',
       testDetailToken: 'token:',
       testDetailJwks: 'jwks:',
