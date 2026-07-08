@@ -16,7 +16,6 @@ interface ChannelSpec<P, M> {
   /** (b) per-frame 过滤（tasks-list/workflows/memories）。 */
   frameGate?: (ctx: { db; actor; cache }, msg: M) => Promise<boolean>
   adminShortCircuit?: boolean
-  cacheBustOn?: (msg: M) => string[]                    // workflows acl.updated
   /** task ?since 回放等 open 附加动作。 */
   onOpenExtra?: (ws, p: P) => Promise<void>
 }
@@ -25,7 +24,17 @@ const WS_CHANNELS = { task: {...}, 'tasks-list': {...}, ... } as const
 ```
 
 - `gatedSubscribe(ws, spec, parsed)`：统一订阅注册 + hello + per-frame 管线
-  （admin 短路→cache→frameGate→出错丢帧——handleOpen :314-447 三段复制块单源）。
+  （admin 短路→frameGate→出错丢帧——handleOpen :314-447 三段复制块单源）。
+- **设计门 high 修订（workflows 双向序）**：acl.updated 需**先 bust 后 gate**
+  （同连接刚获授权要收到帧），deleted 需**先读旧缓存后 bust**（此前可见者要
+  收到删除帧）——单一 cacheBustOn 槽表达不了相反顺序，**槽删除**，workflows
+  的 frameGate 自持完整缓存生命周期（D1「不拍平」的延伸）。回归两格：
+  同连接授权后收 acl.updated+update；此前可见者在行删后收 deleted。
+- **设计门 medium 修订（memories 逐变体）**：frameGate 契约逐 MemoryWsMessage
+  变体指明——candidate.created=帧内 scope；带 memoryId 的六变体=回表；
+  **memory.superseded（oldId/newId 无 memoryId）= 保留现行 non-admin 丢帧**
+  （迁移零行为变更；「stranger 前端可能 stale」登记已知现状，改良另议）。
+  supersede 前置测试：admin 收帧 / scoped user 丢帧 / stranger 丢帧三格。
 - server.ts 降为：正则表迭代 parse → upgradeGate → data 构造 → open 时
   `gatedSubscribe` + `onOpenExtra`；safeSend 联合与 ConnectionData 判别从
   spec 类型派生。
@@ -38,9 +47,15 @@ const WS_CHANNELS = { task: {...}, 'tasks-list': {...}, ... } as const
   常量（双端 path 手写清零；后端 pathRe 与其同源派生或互锁测试）。
 - `hooks/useWsInvalidation.ts`：`useWsInvalidation(path, rules, ctx?)`；
   `rules: Record<string, (msg, ctx) => readonly QueryKey[] | void>`。
-- 6 hook 改薄包装（导出名兼容）：useTaskSync/useClarifyWs 合并为同 socket 的
-  规则叠加（消 reviews.detail 双挂——MultiDocReviewView 的 useTaskSync 去重
-  由 hook 内 refcount 或调用点去挂，取调用点去挂+注释）。
+- 6 hook 改薄包装（导出名兼容）+ **BatchImportDialog 的直调 useWebSocket**
+  （repo-import 消费点，设计门 medium 补录——非 hook 形态，改走
+  WS_PATHS.repoImport + 订阅测试）。
+- **D5 修订（设计门 high）**：多文档路由不经 ReviewDetailPage——
+  MultiDocReviewView 的 useTaskSync 是多文档页**唯一活订阅**，调用点去挂会
+  杀掉全部 review.\*/task 失效。改为 **hook 层 socket 共享**：useWsInvalidation
+  同 (path) 单 socket 多规则集 refcount（useTaskSync 与 useClarifyWs 天然
+  合流；reviews.detail 双挂由共享自然消除）；回归=单双文档路由各自失效面
+  不回退 + 同 task 仅一条连接。
 - 版本门控（useWorkflowSync onRemoteUpdate）与 draft 回调（useClarifyWs
   onDraftUpdated）是规则表之外的副作用槽——rules 值允许 void（副作用型）。
 
@@ -50,7 +65,8 @@ const WS_CHANNELS = { task: {...}, 'tasks-list': {...}, ... } as const
 - **D2** task 生产者 18 点 broadcast 调用面零改动（注册表只收订阅/分发侧）。
 - **D3** P0 admin 门禁语义先行独立修复（682de313），入表时 upgradeGate 承接。
 - **D4** repo-import batch 归属校验登记遗留（非本 RFC）。
-- **D5** 双挂消除取调用点去挂（refcount 复杂度不值当前两处场景）。
+- **D5（设计门修订翻转）** 双挂消除走 hook 层 socket 共享（refcount）——
+  调用点去挂方案被证伪（多文档订阅是唯一活源）。
 
 ## 4. 测试策略
 
