@@ -47,12 +47,13 @@ describe('ReviewDocPane — cross-heading selection hint', () => {
     expect(s).toMatch(/setCrossHeadingHint\(null\)/)
   })
 
-  test("hint element renders with the i18n key and is gated behind mode !== 'historical'", () => {
+  test("hint element renders with the i18n key and is gated behind mode === 'awaiting'", () => {
     const s = src(PANE_TSX)
-    // RFC-149: the pane's `readonly` boolean became the three-state
-    // `mode: ReviewPaneMode`; the hint hides only on the historical view.
+    // RFC-149 impl-gate: the hint belongs to the NEW-comment creation chain
+    // (awaiting-only) — a decided round must not advertise a write affordance
+    // the server would reject.
     expect(s).toMatch(
-      /\{\s*mode !== 'historical'\s*&&\s*crossHeadingHint\s*!==\s*null\s*&&[\s\S]*?reviews\.crossHeadingHint/,
+      /\{\s*mode === 'awaiting'\s*&&\s*crossHeadingHint\s*!==\s*null\s*&&[\s\S]*?reviews\.crossHeadingHint/,
     )
     expect(s).toMatch(/review-cross-heading-hint/)
   })

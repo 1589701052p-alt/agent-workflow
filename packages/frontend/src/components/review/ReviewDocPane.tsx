@@ -293,7 +293,11 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
   })
 
   const onMouseUpInDoc = useCallback(async () => {
-    if (mode === 'historical') return
+    // RFC-149 impl-gate: NEW comment creation is an awaiting-only affordance —
+    // a decided round would only get a server-side review-not-awaiting
+    // rejection (edit/delete of EXISTING comments keeps its render-visible /
+    // disabled treatment below).
+    if (mode !== 'awaiting') return
     if (markdownRef.current === null) return
     const sel = window.getSelection()
     if (sel === null || sel.isCollapsed) return
@@ -518,7 +522,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
           <div
             className="review-detail__body"
             ref={markdownRef}
-            onMouseUp={mode === 'historical' ? undefined : () => void onMouseUpInDoc()}
+            onMouseUp={mode === 'awaiting' ? () => void onMouseUpInDoc() : undefined}
           >
             <Prose
               body={body}
@@ -745,7 +749,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
         )}
       </div>
 
-      {mode !== 'historical' && crossHeadingHint !== null && (
+      {mode === 'awaiting' && crossHeadingHint !== null && (
         <div
           key={crossHeadingHint.key}
           className="review-cross-heading-hint"
@@ -757,7 +761,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
         </div>
       )}
 
-      {mode !== 'historical' && popover !== null && (
+      {mode === 'awaiting' && popover !== null && (
         <div
           className="comment-popover"
           style={{ position: 'absolute', left: popover.rect.left, top: popover.rect.top }}

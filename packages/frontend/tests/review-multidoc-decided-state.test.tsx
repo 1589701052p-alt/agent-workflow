@@ -191,4 +191,16 @@ describe('MultiDocReviewView — decided current round (mode="decided")', () => 
     expect(screen.getByTestId('review-decision-info')).toBeTruthy()
     expect(screen.getByText('approved')).toBeTruthy()
   })
+  test('decided 轮选中正文不得弹出加评论 popover（实现门 medium 回归）', async () => {
+    // 新评论创建是 awaiting 专属写入口——decided 轮只能拿到服务端
+    // review-not-awaiting 拒绝，前端必须整链不暴露（onMouseUp 不挂 /
+    // popover 不渲染）。
+    const { container } = wrap(<MultiDocReviewView nodeRunId="run" />)
+    await screen.findByText('Case A')
+    const docEl = container.querySelector('.review-detail__body')
+    expect(docEl).not.toBeNull()
+    fireEvent.mouseUp(docEl!)
+    await Promise.resolve()
+    expect(container.querySelector('[class*="popover"]')).toBeNull()
+  })
 })

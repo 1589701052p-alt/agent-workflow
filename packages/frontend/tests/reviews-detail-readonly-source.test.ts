@@ -102,7 +102,9 @@ describe('RFC-013/RFC-149 reviews.detail.tsx — readonly historical view', () =
     expect(s).toMatch(/\{\s*mode !== 'historical'\s*&&\s*decisionDialog\s*!==\s*null\s*&&/)
     // RFC-082: the selection→comment popover moved to <ReviewDocPane>; its
     // historical gate lives there now.
-    expect(pane()).toMatch(/\{\s*mode !== 'historical'\s*&&\s*popover\s*!==\s*null\s*&&/)
+    // RFC-149 impl-gate: NEW comment creation is awaiting-only (a decided
+    // round would only get a server-side rejection).
+    expect(pane()).toMatch(/\{\s*mode === 'awaiting'\s*&&\s*popover\s*!==\s*null\s*&&/)
   })
 
   test('comment-bubble write actions render unless historical; edit/delete disabled unless awaiting (pane)', () => {
@@ -127,11 +129,11 @@ describe('RFC-013/RFC-149 reviews.detail.tsx — readonly historical view', () =
     )
   })
 
-  test('onMouseUpInDoc bails out early when historical (pane)', () => {
-    // RFC-082: onMouseUpInDoc moved into <ReviewDocPane>.
-    expect(pane()).toMatch(
-      /onMouseUpInDoc\s*=\s*useCallback\(\s*async\s*\(\)\s*=>\s*\{\s*if\s*\(\s*mode\s*===\s*'historical'\s*\)\s*return/,
-    )
+  test('onMouseUpInDoc bails out unless awaiting (pane)', () => {
+    // RFC-082: onMouseUpInDoc moved into <ReviewDocPane>. RFC-149 impl-gate:
+    // the bail widened from historical-only to non-awaiting (decided rounds
+    // must not open the add-comment popover either).
+    expect(pane()).toMatch(/if\s*\(\s*mode\s*!==\s*'awaiting'\s*\)\s*return/)
   })
 
   test('historical body / comments come from a separate query keyed by vid', () => {
