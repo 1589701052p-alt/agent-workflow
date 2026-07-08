@@ -9,32 +9,24 @@
 // Trust boundary (Codex P2-1): ONLY the credentials file is bridged — never the
 // user's settings / agents / plugins / hooks / ~/.claude.json.
 
-import {
-  chmodSync,
-  copyFileSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Logger } from '@/util/log'
+import { stageSkills, type StagedSkill } from '../stageSkills'
 
 /** Minimal skill shape (structurally matches runner.ts ResolvedSkill; no import → no cycle). */
-export interface ClaudeSkillInjection {
-  name: string
-  sourceKind: 'managed' | 'external' | 'project'
-  sourcePath?: string
-}
+export type ClaudeSkillInjection = StagedSkill
 
 /**
- * Prepare `<configDir>` (= CLAUDE_CONFIG_DIR) for one claude run: inject managed
- * (copied) / external (symlinked) skills under `skills/` (project skills are
- * left for claude to self-discover from the repo), then bridge the subscription
- * credential file when needed. Best-effort: a bridge failure is logged, not
- * fatal — claude surfaces a clear "Not logged in" if auth is truly missing.
+ * Prepare `<configDir>` (= claude's config-dir env target) for one claude run:
+ * inject managed (copied) / external (symlinked) skills under `skills/` (project
+ * skills are left for claude to self-discover from the repo), then bridge the
+ * subscription credential file when needed. Best-effort throughout (RFC-154:
+ * the staging loop is the shared stageSkills in bestEffort mode — a broken
+ * skill logs + the run continues, claude's historical semantics): a bridge
+ * failure is logged, not fatal — claude surfaces a clear "Not logged in" if
+ * auth is truly missing.
  */
 export function prepareClaudeConfigDir(
   configDir: string,
@@ -43,29 +35,7 @@ export function prepareClaudeConfigDir(
   bridgeCredentials: boolean,
 ): void {
   mkdirSync(configDir, { recursive: true })
-  const skillsDir = join(configDir, 'skills')
-  mkdirSync(skillsDir, { recursive: true })
-  for (const skill of skills) {
-    if (skill.sourceKind === 'project') continue
-    if (skill.sourcePath === undefined) {
-      log.warn('claude skill missing sourcePath; skipping injection', { name: skill.name })
-      continue
-    }
-    const dst = join(skillsDir, skill.name)
-    mkdirSync(dirname(dst), { recursive: true })
-    try {
-      if (skill.sourceKind === 'managed') {
-        cpSync(skill.sourcePath, dst, { recursive: true })
-      } else {
-        symlinkSync(skill.sourcePath, dst, 'dir')
-      }
-    } catch (err) {
-      log.warn('claude skill injection failed', {
-        name: skill.name,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
+  stageSkills(configDir, skills, log, { bestEffort: true })
   if (bridgeCredentials) bridgeClaudeCredentials(configDir, log)
 }
 

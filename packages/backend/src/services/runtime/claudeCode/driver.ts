@@ -19,6 +19,7 @@ import type {
   ListModelsOpts,
 } from '../types'
 import { join } from 'node:path'
+import { DEFAULT_CONFIG_DIR_PROFILE } from '@agent-workflow/shared'
 import { parseEvent } from './events'
 import { buildClaudeSpawn } from './spawn'
 import { toClaudeAgents, toClaudeMcpConfig } from './inject'
@@ -62,7 +63,12 @@ export const claudeCodeDriver: RuntimeDriver = {
       taskId: ctx.taskId,
       db: ctx.db,
       log: ctx.log,
-      configDir: join(ctx.runRoot, '.claude'),
+      // RFC-154: the transcript lives under the FROZEN leaf (runner threads it);
+      // omitted (tests / non-runner callers) → protocol default.
+      configDir: join(
+        ctx.runRoot,
+        ctx.configDirName ?? DEFAULT_CONFIG_DIR_PROFILE['claude-code'].name,
+      ),
       worktreePath: ctx.worktreePath,
     })
   },
@@ -116,6 +122,9 @@ export const claudeCodeDriver: RuntimeDriver = {
       model: rootParams?.model ?? undefined,
       resumeSessionId: ctx.resumeSessionId,
       attemptDir: ctx.runRoot,
+      // RFC-154: frozen config-dir profile (env-var name + leaf) for custom forks.
+      configDirEnv: ctx.configDir.env,
+      configDirName: ctx.configDir.name,
       worktreePath: ctx.worktreePath,
       gitUserName: ctx.gitUserName,
       gitUserEmail: ctx.gitUserEmail,

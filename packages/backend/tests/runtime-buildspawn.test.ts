@@ -174,12 +174,14 @@ describe('claudeCodeDriver.buildSpawn (RFC-117 system agent)', () => {
   // Source-level bottom line for the branch CI cannot execute (uid 0): the
   // helper must be spread AFTER the static env keys, so a root daemon's
   // injected '1' overrides an inherited IS_SANDBOX=0 instead of losing to it.
-  test('source: claudeSandboxEnv spread after CLAUDE_CONFIG_DIR (override precedence)', () => {
+  // (RFC-154: the config-dir env key became computed — the anchor tracks the
+  // new form `[ctx.configDirEnv ?? ...]: configDir` instead of the old literal.)
+  test('source: claudeSandboxEnv spread after the config-dir env key (override precedence)', () => {
     const src = readFileSync(
       join(import.meta.dir, '../src/services/runtime/claudeCode/spawn.ts'),
       'utf-8',
     )
-    const anchor = src.indexOf('CLAUDE_CONFIG_DIR: configDir')
+    const anchor = src.indexOf(']: configDir')
     const spread = src.indexOf('...claudeSandboxEnv(process.getuid?.())')
     expect(anchor).toBeGreaterThan(-1)
     expect(spread).toBeGreaterThan(anchor)

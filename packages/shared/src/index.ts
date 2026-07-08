@@ -64,3 +64,6 @@ export * from './listWire'
 // the barrel never drags a registry-coupled module into a module-init cycle
 // (same discipline as listWire; see structuralDiffGraph.ts header).
 export * from './structuralDiffGraph'
+// RFC-154 — per-runtime config-dir injection profile (protocol defaults +
+// reserved spawn env keys). Dependency-free leaf.
+export * from './runtimeConfigDir'

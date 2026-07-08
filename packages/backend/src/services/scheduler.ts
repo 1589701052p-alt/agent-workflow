@@ -1092,6 +1092,7 @@ async function maybeRunCommitPush(
             steps: rt.steps,
             maxSteps: rt.maxSteps,
           },
+          configDir: rt.configDir, // RFC-154: frozen with the rest of the snapshot
         })
         const result = await runNode({
           taskId: task.id,
@@ -1101,6 +1102,7 @@ async function maybeRunCommitPush(
           runtime: frozen.protocol,
           runtimeBinary: frozen.binary,
           runtimeParams: frozen.params,
+          runtimeConfigDir: frozen.configDir, // RFC-154: frozen config-dir profile
           inputs: {},
           worktreePath: repo.worktreePath,
           promptTemplate: prompt,
@@ -1894,6 +1896,7 @@ async function resolveMergeConflicts(
         steps: rt.steps,
         maxSteps: rt.maxSteps,
       },
+      configDir: rt.configDir, // RFC-154: frozen with the rest of the snapshot
     })
     // DIRECT runNode — bypasses globalSem on purpose (§7 deadlock avoidance).
     await runNode({
@@ -1904,6 +1907,7 @@ async function resolveMergeConflicts(
       runtime: frozen.protocol,
       runtimeBinary: frozen.binary,
       runtimeParams: frozen.params,
+      runtimeConfigDir: frozen.configDir, // RFC-154: frozen config-dir profile
       inputs: {},
       worktreePath: cwd,
       promptTemplate: prompt,
@@ -2891,6 +2895,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           runtime: frozenRuntime.protocol,
           runtimeBinary: frozenRuntime.binary,
           runtimeParams: frozenRuntime.params,
+          runtimeConfigDir: frozenRuntime.configDir, // RFC-154: frozen config-dir profile
           inputs: upstreamInputs,
           // RFC-130 D16: the opencode cwd + ALL path-bearing template tokens point
           // at the ISOLATED worktree, not the canonical one — otherwise the agent
@@ -4408,6 +4413,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       runtime: shardRuntime.protocol,
       runtimeBinary: shardRuntime.binary,
       runtimeParams: shardRuntime.params,
+      runtimeConfigDir: shardRuntime.configDir, // RFC-154: frozen config-dir profile
       inputs,
       // RFC-130 D16: cwd + path tokens → the shard's isolated worktree.
       worktreePath: shardIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
@@ -4784,6 +4790,7 @@ async function dispatchFanoutAggregator(
       runtime: aggRuntime.protocol,
       runtimeBinary: aggRuntime.binary,
       runtimeParams: aggRuntime.params,
+      runtimeConfigDir: aggRuntime.configDir, // RFC-154: frozen config-dir profile
       inputs: aggInputs,
       worktreePath: aggIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.

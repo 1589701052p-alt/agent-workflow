@@ -38,8 +38,8 @@ import {
   assertNoPromptSignalRefs,
 } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
-import { cpSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns } from '@/db/schema'
 import { createLogger, type Logger } from '@/util/log'
@@ -65,7 +65,12 @@ import { renderUserPrompt } from './protocol'
 // the inline-config surface are re-exported at the bottom so existing importers
 // (tests, memoryDistiller) keep resolving from './runner'.
 import { getRuntimeDriver, type RuntimeKind } from './runtime'
-import { resolveAgentRuntime, type RuntimeProfile } from '@/services/runtimeRegistry'
+import {
+  defaultConfigDirProfile,
+  resolveAgentRuntime,
+  type RuntimeProfile,
+} from '@/services/runtimeRegistry'
+import type { RuntimeConfigDirProfile } from '@agent-workflow/shared'
 import type { ResolvedSkill, SpawnPlan } from './runtime/types'
 import { EMPTY_RUNTIME_PROFILE } from './runtime/opencode/inlineConfig'
 import { NOOP_HANDLE } from './subagentLiveCapture'
@@ -303,6 +308,14 @@ export interface RunNodeOptions {
    * (config.claudeCodePath migrated into it), surfacing as `runtimeBinary`.
    */
   runtimeParams?: RuntimeProfile
+  /**
+   * RFC-154: the FROZEN config-dir injection profile (env var name + leaf dir
+   * name), resolved at dispatch from the runtime row and frozen inside
+   * `node_runs.runtime_params_json.__configDir`. Omitted → the protocol default
+   * (OPENCODE_CONFIG_DIR/.opencode, CLAUDE_CONFIG_DIR/.claude) — byte-identical
+   * legacy behavior, so direct-construction tests need no change.
+   */
+  runtimeConfigDir?: RuntimeConfigDirProfile
   db: DbClient
   log?: Logger
   /** When aborted, runner SIGTERMs the child and returns status='canceled'. */
@@ -451,7 +464,6 @@ export { pickRuntimeHead } from './runtime/head'
 export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   const log = opts.log ?? createLogger('runner')
   const runRoot = join(opts.appHome, 'runs', opts.taskId, opts.nodeRunId)
-  const runDir = join(runRoot, '.opencode')
 
   // RFC-111 D15: the runtime is frozen by the dispatcher into node_runs.runtime
   // and threaded here. opencode is the default and its spawn/pump path is
@@ -460,8 +472,12 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   const runtime: RuntimeKind = opts.runtime ?? 'opencode'
   const driver = getRuntimeDriver(runtime)
 
-  // 1. Prepare per-run config dir and inject skills.
-  prepareSkills(runDir, opts.skills, log)
+  // 1. RFC-154: resolve the config-dir injection profile (frozen at dispatch;
+  // omitted → protocol default). Skill staging moved INTO each driver's
+  // buildBusinessSpawn so it lands in the directory that runtime actually reads
+  // — the old runtime-blind preamble staged into `.opencode` even for claude
+  // runs (dead copy the claude binary never read).
+  const configDir = opts.runtimeConfigDir ?? defaultConfigDirProfile(runtime)
 
   // 2. Resolve the per-agent runtime profiles (RFC-113): the root agent uses its
   // FROZEN profile (opts.runtimeParams); each dependent subagent uses ITS OWN
@@ -762,6 +778,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       resumeSessionId: opts.resumeSessionId,
       worktreePath: opts.worktreePath,
       runRoot,
+      configDir,
       gitUserName: opts.gitUserName,
       gitUserEmail: opts.gitUserEmail,
       runtimeBinary: opts.runtimeBinary,
@@ -1393,6 +1410,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
         log,
         worktreePath: opts.worktreePath,
         runRoot,
+        configDirName: configDir.name, // RFC-154: claude's transcript lives under it
         alreadyInsertedPartIds: livePoller.stats().insertedPartIdsBySession,
       })
     } catch (err) {
@@ -1499,26 +1517,9 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
 // helpers
 // -----------------------------------------------------------------------------
 
-function prepareSkills(runDir: string, skills: ResolvedSkill[], log: Logger): void {
-  const skillsDir = join(runDir, 'skills')
-  mkdirSync(skillsDir, { recursive: true })
-  for (const skill of skills) {
-    if (skill.sourceKind === 'project') continue
-    if (skill.sourcePath === undefined) {
-      log.warn('skill missing sourcePath; skipping injection', { name: skill.name })
-      continue
-    }
-    const dst = join(skillsDir, skill.name)
-    // Ensure parent exists (skillsDir already does, but defensive).
-    mkdirSync(dirname(dst), { recursive: true })
-    if (skill.sourceKind === 'managed') {
-      cpSync(skill.sourcePath, dst, { recursive: true })
-    } else {
-      // external -> symlink for IO economy
-      symlinkSync(skill.sourcePath, dst, 'dir')
-    }
-  }
-}
+// RFC-154: `prepareSkills` (the opencode-blind skill-staging preamble) moved to
+// ./runtime/stageSkills.ts — each driver now stages into ITS OWN config dir
+// inside buildBusinessSpawn (opencode strict, claude best-effort).
 
 /**
  * RFC-031 — substring-scan a stderr line for opencode plugin-load error

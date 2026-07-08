@@ -6,6 +6,9 @@ import type { ChangeEvent, ReactNode } from 'react'
 interface FieldProps {
   label: string
   hint?: string
+  /** RFC-154: inline validation error rendered under the control (replaces the
+   *  hint while present — the error explains what to fix, the hint would repeat). */
+  error?: string
   required?: boolean
   children: ReactNode
   // When the field wraps a group of controls (e.g. a segmented radiogroup
@@ -16,7 +19,7 @@ interface FieldProps {
   group?: boolean
 }
 
-export function Field({ label, hint, required, children, group }: FieldProps) {
+export function Field({ label, hint, error, required, children, group }: FieldProps) {
   const inner = (
     <>
       <span className="form-field__label">
@@ -24,7 +27,13 @@ export function Field({ label, hint, required, children, group }: FieldProps) {
         {required === true && <span className="form-field__required"> *</span>}
       </span>
       {children}
-      {hint !== undefined && <span className="form-field__hint">{hint}</span>}
+      {error !== undefined && error !== '' ? (
+        <span className="form-field__error" role="alert">
+          {error}
+        </span>
+      ) : (
+        hint !== undefined && <span className="form-field__hint">{hint}</span>
+      )}
     </>
   )
   if (group === true) {

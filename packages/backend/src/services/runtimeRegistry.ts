@@ -11,6 +11,12 @@
 import { readFileSync } from 'node:fs'
 import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
+import {
+  configDirEnvProblem,
+  configDirNameProblem,
+  DEFAULT_CONFIG_DIR_PROFILE,
+  type RuntimeConfigDirProfile,
+} from '@agent-workflow/shared'
 import type { DbClient } from '@/db/client'
 import { agents, runtimes } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
@@ -59,6 +65,9 @@ export interface RuntimeRow extends RuntimeProfile {
   binaryPath: string | null
   /** RFC-118: false = disabled (hidden from agent/default pickers, kept in list). */
   enabled: boolean
+  /** RFC-154: config-dir injection overrides — NULL = protocol default. */
+  configDirEnv: string | null
+  configDirName: string | null
   lastProbeJson: string | null
   createdBy: string | null
   createdAt: number
@@ -69,6 +78,8 @@ export interface ResolvedRuntime extends RuntimeProfile {
   name: string
   protocol: RuntimeKind
   binaryPath: string | null
+  /** RFC-154: resolved config-dir profile (row overrides folded over the protocol default). */
+  configDir: RuntimeConfigDirProfile
 }
 
 const NULL_PROFILE: RuntimeProfile = {
@@ -79,6 +90,30 @@ const NULL_PROFILE: RuntimeProfile = {
   maxSteps: null,
 }
 
+/**
+ * RFC-154: the protocol's default config-dir profile. Indexing the shared map by
+ * RuntimeKind is the completeness guard — registering a new driver kind without
+ * a default entry in DEFAULT_CONFIG_DIR_PROFILE fails typecheck here.
+ */
+export function defaultConfigDirProfile(kind: RuntimeKind): RuntimeConfigDirProfile {
+  return DEFAULT_CONFIG_DIR_PROFILE[kind]
+}
+
+/** Fold a row's nullable overrides over the protocol default (empty = unset). */
+function resolveConfigDirProfile(
+  protocol: RuntimeKind,
+  configDirEnv: string | null,
+  configDirName: string | null,
+): RuntimeConfigDirProfile {
+  const dft = defaultConfigDirProfile(protocol)
+  const nonEmpty = (v: string | null): string | null =>
+    v !== null && v.trim().length > 0 ? v.trim() : null
+  return {
+    env: nonEmpty(configDirEnv) ?? dft.env,
+    name: nonEmpty(configDirName) ?? dft.name,
+  }
+}
+
 export interface RuntimeView extends RuntimeProfile {
   name: string
   protocol: RuntimeProtocol
@@ -87,6 +122,9 @@ export interface RuntimeView extends RuntimeProfile {
   enabled: boolean
   /** RFC-113: this row is the global default (name === config.defaultRuntime). */
   isDefault: boolean
+  /** RFC-154: raw config-dir overrides (NULL = protocol default) — edit-form prefill. */
+  configDirEnv: string | null
+  configDirName: string | null
   lastProbe: unknown
   createdAt: number
   updatedAt: number
@@ -128,6 +166,8 @@ export function runtimeRowToView(
     binaryPath: row.binaryPath,
     enabled: row.enabled,
     isDefault: row.name === (defaultRuntimeName ?? 'opencode'),
+    configDirEnv: row.configDirEnv,
+    configDirName: row.configDirName,
     ...runtimeProfileOf(row),
     lastProbe,
     createdAt: row.createdAt,
@@ -165,6 +205,8 @@ export async function resolveRuntimeByName(
         name: row.name,
         protocol: row.protocol,
         binaryPath: row.binaryPath,
+        // RFC-154: fold the row's config-dir overrides over the protocol default.
+        configDir: resolveConfigDirProfile(row.protocol, row.configDirEnv, row.configDirName),
         ...runtimeProfileOf(row),
       }
     // RFC-112: a built-in NAME resolves to its protocol (default binary) even
@@ -174,11 +216,23 @@ export async function resolveRuntimeByName(
     // params (NULL = the binary's own default). RFC-143: use BUILTIN_NAMES
     // (derived from DRIVERS) instead of the hand-copied kind literals.
     if (BUILTIN_NAMES.has(n)) {
-      return { name: n, protocol: n as RuntimeProtocol, binaryPath: null, ...NULL_PROFILE }
+      return {
+        name: n,
+        protocol: n as RuntimeProtocol,
+        binaryPath: null,
+        configDir: defaultConfigDirProfile(n as RuntimeProtocol),
+        ...NULL_PROFILE,
+      }
     }
     log.warn('runtime-name-unknown-fallback-opencode', { name: n })
   }
-  return { name: 'opencode', protocol: 'opencode', binaryPath: null, ...NULL_PROFILE }
+  return {
+    name: 'opencode',
+    protocol: 'opencode',
+    binaryPath: null,
+    configDir: defaultConfigDirProfile('opencode'),
+    ...NULL_PROFILE,
+  }
 }
 
 /** agent.runtime ?? config.defaultRuntime ?? 'opencode', resolved to a row. */
@@ -233,6 +287,7 @@ export async function resolveInternalAgentRuntime(
       name: 'opencode',
       protocol: 'opencode',
       binaryPath: null,
+      configDir: defaultConfigDirProfile('opencode'),
       ...NULL_PROFILE,
       model: legacyModel,
     }
@@ -274,6 +329,53 @@ function validateBinaryPath(binaryPath: string | null | undefined): string | nul
   if (/[\n\r]/.test(p))
     throw new ValidationError('runtime-binary-invalid', 'binaryPath must be a single path')
   return p
+}
+
+/**
+ * RFC-154: `config_dir_name` is joined under the per-run root and mkdir'd, so it
+ * must be a SINGLE leaf directory name — no separators / traversal ('..' escapes
+ * the run root; '.' collapses onto it, mixing skills/ + transcript + credentials
+ * into the run-root top level — Codex design-gate P3). Empty/blank = unset (NULL
+ * → protocol default). Exported for direct unit coverage.
+ */
+export function validateConfigDirName(v: string | null | undefined): string | null {
+  if (v === null || v === undefined) return null
+  const s = v.trim()
+  if (s.length === 0) return null
+  // Rule lives in the shared predicate (Codex impl-gate P3: the frontend form
+  // consumes the same one, so the two layers can't drift).
+  if (configDirNameProblem(s) !== null)
+    throw new ValidationError(
+      'runtime-config-dir-name-invalid',
+      'config_dir_name must be a single directory name (no separators, "." or "..")',
+    )
+  return s
+}
+
+/**
+ * RFC-154: `config_dir_env` becomes an env KEY on every business spawn — it must
+ * be a legal env var name and must not collide with the keys the platform itself
+ * writes (RESERVED_SPAWN_ENV — colliding with e.g. OPENCODE_CONFIG_CONTENT would
+ * make the config-dir channel clobber the agent-definition channel, Codex
+ * design-gate P1). Empty/blank = unset. Exported for direct unit coverage.
+ */
+export function validateConfigDirEnv(v: string | null | undefined): string | null {
+  if (v === null || v === undefined) return null
+  const s = v.trim()
+  if (s.length === 0) return null
+  // Rule lives in the shared predicate (Codex impl-gate P3, same as above).
+  const problem = configDirEnvProblem(s)
+  if (problem === 'invalid-name')
+    throw new ValidationError(
+      'runtime-config-dir-env-invalid',
+      'config_dir_env must be a legal environment variable name ([A-Za-z_][A-Za-z0-9_]*)',
+    )
+  if (problem === 'reserved')
+    throw new ValidationError(
+      'runtime-config-dir-env-reserved',
+      `config_dir_env must not be the platform-reserved variable '${s}'`,
+    )
+  return s
 }
 
 /**
@@ -331,6 +433,9 @@ export interface CreateRuntimeInput extends RuntimeProfileInput {
   name: string
   protocol: string
   binaryPath?: string | null
+  /** RFC-154: config-dir injection overrides (validated; empty → NULL = default). */
+  configDirEnv?: string | null
+  configDirName?: string | null
   lastProbeJson?: string | null
   createdBy?: string | null
 }
@@ -339,6 +444,8 @@ export async function createRuntime(db: DbClient, input: CreateRuntimeInput): Pr
   validateName(input.name)
   validateProtocol(input.protocol)
   const binaryPath = validateBinaryPath(input.binaryPath)
+  const configDirEnv = validateConfigDirEnv(input.configDirEnv)
+  const configDirName = validateConfigDirName(input.configDirName)
   const existing = await getRuntime(db, input.name)
   if (existing !== null)
     throw new ConflictError('runtime-exists', `runtime '${input.name}' already exists`)
@@ -347,6 +454,8 @@ export async function createRuntime(db: DbClient, input: CreateRuntimeInput): Pr
     name: input.name,
     protocol: input.protocol as RuntimeProtocol,
     binaryPath,
+    configDirEnv,
+    configDirName,
     lastProbeJson: input.lastProbeJson ?? null,
     createdBy: input.createdBy ?? null,
     ...profilePatch(input),
@@ -358,6 +467,9 @@ export async function createRuntime(db: DbClient, input: CreateRuntimeInput): Pr
 
 export interface UpdateRuntimeInput extends RuntimeProfileInput {
   binaryPath?: string | null
+  /** RFC-154: config-dir injection overrides (validated; empty → NULL = default). */
+  configDirEnv?: string | null
+  configDirName?: string | null
   lastProbeJson?: string | null
 }
 
@@ -376,6 +488,10 @@ export async function updateRuntime(
   if (row === null) throw new NotFoundError('runtime-not-found', `runtime '${name}' not found`)
   const patch: Record<string, unknown> = { updatedAt: Date.now(), ...profilePatch(input) }
   if (input.binaryPath !== undefined) patch.binaryPath = validateBinaryPath(input.binaryPath)
+  if (input.configDirEnv !== undefined)
+    patch.configDirEnv = validateConfigDirEnv(input.configDirEnv)
+  if (input.configDirName !== undefined)
+    patch.configDirName = validateConfigDirName(input.configDirName)
   if (input.lastProbeJson !== undefined) patch.lastProbeJson = input.lastProbeJson
   await db.update(runtimes).set(patch).where(eq(runtimes.name, name))
   const updated = await getRuntime(db, name)

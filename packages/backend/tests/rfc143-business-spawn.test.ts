@@ -12,7 +12,12 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Agent, Mcp, Plugin } from '@agent-workflow/shared'
+import {
+  DEFAULT_CONFIG_DIR_PROFILE,
+  type Agent,
+  type Mcp,
+  type Plugin,
+} from '@agent-workflow/shared'
 import { getRuntimeDriver } from '../src/services/runtime'
 import type { BusinessNodeSpawnContext } from '../src/services/runtime/types'
 import { buildOpencodeSpawn } from '../src/services/runtime/opencode/spawn'
@@ -99,6 +104,8 @@ function mkCtx(runRoot: string, overrides: Partial<BusinessNodeSpawnContext> = {
     resumeSessionId: 'ses_42',
     worktreePath: '/wt',
     runRoot,
+    // RFC-154: the runner always supplies the frozen/default profile.
+    configDir: DEFAULT_CONFIG_DIR_PROFILE.opencode,
     gitUserName: 'Ada',
     gitUserEmail: 'ada@x.io',
     wantsInventory: false,
@@ -111,71 +118,79 @@ function mkCtx(runRoot: string, overrides: Partial<BusinessNodeSpawnContext> = {
 
 describe('RFC-143 PR-4 — opencode buildBusinessSpawn 对拍（收口前 runner 公式）', () => {
   test('全量原材料：driver 输出与收口前公式（buildInlineConfig+织入+序列化+buildOpencodeSpawn）逐字一致', async () => {
-    const runRoot = '/runs/t1/n1'
-    const ctx = mkCtx(runRoot, { opencodeCmd: ['bun', 'run', '/mock-opencode.ts'] })
-    const plan = await getRuntimeDriver('opencode').buildBusinessSpawn(ctx)
+    // RFC-154: buildBusinessSpawn 现在真的建 config dir + stage skills，
+    // runRoot 必须是真实可写目录（收口前 driver 不碰 FS、假路径能混过）。
+    const runRoot = mkdtempSync(join(tmpdir(), 'aw-rfc143-oc-'))
+    try {
+      const ctx = mkCtx(runRoot, { opencodeCmd: ['bun', 'run', '/mock-opencode.ts'] })
+      const plan = await getRuntimeDriver('opencode').buildBusinessSpawn(ctx)
 
-    // 收口前 runner 的公式，手拍出期望 plan：
-    const inline = buildInlineConfig(
-      ctx.agent,
-      ctx.resolvedParamsByAgent,
-      ctx.dependents,
-      ctx.mcps,
-      ctx.plugins,
-    )
-    const primary = inline.agent[ctx.agent.name]
-    if (primary !== undefined && typeof primary.prompt === 'string') {
-      primary.prompt = `${primary.prompt}\n\n${ctx.injectedMemoryBlock}`
+      // 收口前 runner 的公式，手拍出期望 plan：
+      const inline = buildInlineConfig(
+        ctx.agent,
+        ctx.resolvedParamsByAgent,
+        ctx.dependents,
+        ctx.mcps,
+        ctx.plugins,
+      )
+      const primary = inline.agent[ctx.agent.name]
+      if (primary !== undefined && typeof primary.prompt === 'string') {
+        primary.prompt = `${primary.prompt}\n\n${ctx.injectedMemoryBlock}`
+      }
+      const expected = buildOpencodeSpawn({
+        opencodeCmd: ['bun', 'run', '/mock-opencode.ts'],
+        agentName: ctx.agent.name,
+        prompt: ctx.prompt,
+        resumeSessionId: ctx.resumeSessionId,
+        worktreePath: ctx.worktreePath,
+        runDir: join(runRoot, '.opencode'),
+        inlineConfigSerialized: JSON.stringify(inline),
+        gitUserName: ctx.gitUserName,
+        gitUserEmail: ctx.gitUserEmail,
+      })
+
+      expect(plan.cmd).toEqual(expected.cmd)
+      expect(plan.env).toEqual(expected.env)
+      // 关键 env 面显式锚定（对拍失效时也能一眼看出哪半边坏了）。
+      expect(plan.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, '.opencode'))
+      expect(plan.env.OPENCODE_AW_INVENTORY_OUT).toBeUndefined()
+      expect(plan.env.GIT_AUTHOR_NAME).toBe('Ada')
+      const cfg = JSON.parse(plan.env.OPENCODE_CONFIG_CONTENT ?? '{}') as {
+        agent: Record<string, Record<string, unknown>>
+        mcp?: Record<string, unknown>
+        plugin?: unknown[]
+        permission?: Record<string, string>
+      }
+      // 织入结果：primary prompt 尾接 memory block；dependent 不织入。
+      expect(cfg.agent['root-agent']?.prompt).toBe(
+        '## body of root-agent\n\n## Injected memory\n- fact A',
+      )
+      expect(cfg.agent['helper-agent']?.prompt).toBe('## body of helper-agent')
+      // RFC-113 参数按 agent 各取各的。
+      expect(cfg.agent['root-agent']?.model).toBe('opus')
+      expect(cfg.agent['helper-agent']?.model).toBe('mini')
+      // enabled 过滤。
+      expect(Object.keys(cfg.mcp ?? {})).toEqual(['search'])
+      expect(cfg.plugin).toEqual([
+        ['file:///tmp/aw-plugins/tracer/node_modules/tracer', { key: 'v-tracer' }],
+      ] as never)
+      expect(cfg.permission).toEqual({ '*': 'allow', question: 'deny' })
+
+      // §4.4 诊断回传 = 收口前 runner 从 inline config 派生的同一组字段。
+      expect(plan.diagnostics).toEqual({
+        inlineModel: 'opus',
+        inlineVariant: 'v1',
+        inlineTemperature: 0.3,
+        mcpCount: 1,
+        mcpKeys: ['search'],
+        pluginCount: 1,
+        pluginNames: ['tracer'],
+      })
+      // RFC-154: skills 落点目录随 spawn 装配建出（空列表也建 — opencode 启动前置）。
+      expect(existsSync(join(runRoot, '.opencode', 'skills'))).toBe(true)
+    } finally {
+      rmSync(runRoot, { recursive: true, force: true })
     }
-    const expected = buildOpencodeSpawn({
-      opencodeCmd: ['bun', 'run', '/mock-opencode.ts'],
-      agentName: ctx.agent.name,
-      prompt: ctx.prompt,
-      resumeSessionId: ctx.resumeSessionId,
-      worktreePath: ctx.worktreePath,
-      runDir: join(runRoot, '.opencode'),
-      inlineConfigSerialized: JSON.stringify(inline),
-      gitUserName: ctx.gitUserName,
-      gitUserEmail: ctx.gitUserEmail,
-    })
-
-    expect(plan.cmd).toEqual(expected.cmd)
-    expect(plan.env).toEqual(expected.env)
-    // 关键 env 面显式锚定（对拍失效时也能一眼看出哪半边坏了）。
-    expect(plan.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, '.opencode'))
-    expect(plan.env.OPENCODE_AW_INVENTORY_OUT).toBeUndefined()
-    expect(plan.env.GIT_AUTHOR_NAME).toBe('Ada')
-    const cfg = JSON.parse(plan.env.OPENCODE_CONFIG_CONTENT ?? '{}') as {
-      agent: Record<string, Record<string, unknown>>
-      mcp?: Record<string, unknown>
-      plugin?: unknown[]
-      permission?: Record<string, string>
-    }
-    // 织入结果：primary prompt 尾接 memory block；dependent 不织入。
-    expect(cfg.agent['root-agent']?.prompt).toBe(
-      '## body of root-agent\n\n## Injected memory\n- fact A',
-    )
-    expect(cfg.agent['helper-agent']?.prompt).toBe('## body of helper-agent')
-    // RFC-113 参数按 agent 各取各的。
-    expect(cfg.agent['root-agent']?.model).toBe('opus')
-    expect(cfg.agent['helper-agent']?.model).toBe('mini')
-    // enabled 过滤。
-    expect(Object.keys(cfg.mcp ?? {})).toEqual(['search'])
-    expect(cfg.plugin).toEqual([
-      ['file:///tmp/aw-plugins/tracer/node_modules/tracer', { key: 'v-tracer' }],
-    ] as never)
-    expect(cfg.permission).toEqual({ '*': 'allow', question: 'deny' })
-
-    // §4.4 诊断回传 = 收口前 runner 从 inline config 派生的同一组字段。
-    expect(plan.diagnostics).toEqual({
-      inlineModel: 'opus',
-      inlineVariant: 'v1',
-      inlineTemperature: 0.3,
-      mcpCount: 1,
-      mcpKeys: ['search'],
-      pluginCount: 1,
-      pluginNames: ['tracer'],
-    })
   })
 
   test('wantsInventory=true：materialize dump plugin + OPENCODE_AW_INVENTORY_OUT（RFC-029 原位搬迁）', async () => {
@@ -196,12 +211,17 @@ describe('RFC-143 PR-4 — opencode buildBusinessSpawn 对拍（收口前 runner
   })
 
   test('runtimeBinary（custom fork）覆盖 opencodeCmd 头（pickRuntimeHead 语义原位）', async () => {
-    const ctx = mkCtx('/runs/t1/n2', {
-      opencodeCmd: ['bun', 'run', '/mock.ts'],
-      runtimeBinary: '/opt/fork-oc',
-    })
-    const plan = await getRuntimeDriver('opencode').buildBusinessSpawn(ctx)
-    expect(plan.cmd[0]).toBe('/opt/fork-oc')
+    const runRoot = mkdtempSync(join(tmpdir(), 'aw-rfc143-oc3-'))
+    try {
+      const ctx = mkCtx(runRoot, {
+        opencodeCmd: ['bun', 'run', '/mock.ts'],
+        runtimeBinary: '/opt/fork-oc',
+      })
+      const plan = await getRuntimeDriver('opencode').buildBusinessSpawn(ctx)
+      expect(plan.cmd[0]).toBe('/opt/fork-oc')
+    } finally {
+      rmSync(runRoot, { recursive: true, force: true })
+    }
   })
 })
 
@@ -211,7 +231,10 @@ describe('RFC-143 PR-4 — claude buildBusinessSpawn 对拍（收口前 runner c
     try {
       // runtimeCmd（test 头）在场 ⇒ 凭据桥关闭（CI 不碰 keychain），同收口前
       // `bridgeCredentials: opts.runtimeCmd === undefined` 的语义。
-      const ctx = mkCtx(runRoot, { runtimeCmd: ['bun', 'run', '/mock-claude.ts'] })
+      const ctx = mkCtx(runRoot, {
+        runtimeCmd: ['bun', 'run', '/mock-claude.ts'],
+        configDir: DEFAULT_CONFIG_DIR_PROFILE['claude-code'],
+      })
       const plan = await getRuntimeDriver('claude-code').buildBusinessSpawn(ctx)
 
       // head = test 头（claude 绝不吃 opencodeCmd —— Codex P1-1）。
@@ -258,6 +281,7 @@ describe('RFC-143 PR-4 — claude buildBusinessSpawn 对拍（收口前 runner c
     try {
       const ctx = mkCtx(runRoot, {
         runtimeCmd: ['bun', 'run', '/mock-claude.ts'],
+        configDir: DEFAULT_CONFIG_DIR_PROFILE['claude-code'],
         injectedMemoryBlock: null,
         dependents: [],
         mcps: [],
@@ -291,6 +315,7 @@ describe('RFC-143 PR-4 — claude buildBusinessSpawn 对拍（收口前 runner c
     try {
       const ctx = mkCtx(runRoot, {
         runtimeCmd: ['bun', 'run', '/mock-claude.ts'],
+        configDir: DEFAULT_CONFIG_DIR_PROFILE['claude-code'],
         runtimeBinary: '/opt/fork-claude',
       })
       const plan = await getRuntimeDriver('claude-code').buildBusinessSpawn(ctx)

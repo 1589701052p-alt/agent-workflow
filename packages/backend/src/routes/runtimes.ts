@@ -44,6 +44,14 @@ const ProfileFields = {
   maxSteps: z.number().int().positive().nullable().optional(),
 }
 
+// RFC-154: config-dir injection overrides. Shape-only here — the semantic
+// validation (leaf-name / legal non-reserved env name) lives in the registry
+// (validateConfigDirName / validateConfigDirEnv), single source for CLI + route.
+const ConfigDirFields = {
+  configDirEnv: z.string().nullable().optional(),
+  configDirName: z.string().nullable().optional(),
+}
+
 const CreateBody = z.object({
   name: z.string().min(1),
   protocol: ProtocolSchema,
@@ -51,11 +59,13 @@ const CreateBody = z.object({
   /** run the deep-smoke probe before saving (default true when a path is given). */
   probe: z.boolean().optional(),
   ...ProfileFields,
+  ...ConfigDirFields,
 })
 
 const UpdateBody = z.object({
   binaryPath: z.string().nullable().optional(),
   ...ProfileFields,
+  ...ConfigDirFields,
 })
 
 // RFC-118: enable/disable toggle body.
@@ -178,6 +188,8 @@ export function mountRuntimesRoutes(app: Hono, deps: AppDeps): void {
       name: body.name,
       protocol: body.protocol,
       binaryPath: body.binaryPath ?? null,
+      configDirEnv: body.configDirEnv,
+      configDirName: body.configDirName,
       lastProbeJson: smoke !== undefined ? JSON.stringify(smoke) : null,
       createdBy: actor.user.id,
       model: body.model,
@@ -200,6 +212,8 @@ export function mountRuntimesRoutes(app: Hono, deps: AppDeps): void {
     const body = parseBody(UpdateBody, await c.req.json().catch(() => ({})))
     const row = await updateRuntime(deps.db, name, {
       ...(body.binaryPath !== undefined ? { binaryPath: body.binaryPath } : {}),
+      ...(body.configDirEnv !== undefined ? { configDirEnv: body.configDirEnv } : {}),
+      ...(body.configDirName !== undefined ? { configDirName: body.configDirName } : {}),
       model: body.model,
       variant: body.variant,
       temperature: body.temperature,

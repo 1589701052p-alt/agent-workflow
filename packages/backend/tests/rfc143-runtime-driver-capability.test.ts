@@ -130,6 +130,7 @@ describe('RFC-143 (B) 能力接口', () => {
       skills: [],
       worktreePath: '/wt',
       runRoot: '/runs/t/n',
+      configDir: { env: 'MOCK_CONFIG_DIR', name: '.mock' }, // RFC-154
       wantsInventory: false,
       nodeRunId: 'nr1',
       log: { warn: () => {}, info: () => {} } as never,

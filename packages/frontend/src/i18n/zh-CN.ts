@@ -755,6 +755,13 @@ export interface Resources {
     fieldProtocolHint: string
     fieldBinary: string
     fieldBinaryHint: string
+    fieldConfigDirEnv: string
+    fieldConfigDirEnvHint: string
+    fieldConfigDirName: string
+    fieldConfigDirNameHint: string
+    configDirEnvInvalid: string
+    configDirEnvReserved: string
+    configDirNameInvalid: string
     fieldModel: string
     fieldModelHint: string
     fieldVariant: string
@@ -3136,6 +3143,13 @@ export const zhCN: Resources = {
     fieldProtocolHint: '该二进制遵循哪种运行时协议——opencode 或 Claude Code。',
     fieldBinary: '二进制路径',
     fieldBinaryHint: '可执行文件的绝对路径。留空则用该协议的默认二进制（PATH）。',
+    fieldConfigDirEnv: '配置目录环境变量',
+    fieldConfigDirEnvHint: '自定义二进制读取配置目录路径所用的环境变量名。留空则用协议默认。',
+    fieldConfigDirName: '配置目录名',
+    fieldConfigDirNameHint: '每次运行根目录下的配置目录叶子名（单层目录名）。留空则用协议默认。',
+    configDirEnvInvalid: '必须是合法的环境变量名（字母、数字、下划线，不以数字开头）。',
+    configDirEnvReserved: '该变量名被平台保留（会与注入机制冲突），请换一个。',
+    configDirNameInvalid: '必须是单层目录名：不能含路径分隔符，也不能是 "." 或 ".."。',
     fieldModel: '模型',
     fieldModelHint: '该运行时上的 agent 启动时所用模型。留空则用二进制自身默认。',
     fieldVariant: '变体',

@@ -118,6 +118,15 @@ export const runtimes = sqliteTable('runtimes', {
   temperature: real('temperature'),
   steps: integer('steps'),
   maxSteps: integer('max_steps'),
+  // RFC-154: config-dir injection overrides for custom forks that renamed the
+  // env var / leaf dir they discover their config dir through. NULL = protocol
+  // default (shared DEFAULT_CONFIG_DIR_PROFILE: OPENCODE_CONFIG_DIR/.opencode,
+  // CLAUDE_CONFIG_DIR/.claude). Business-node spawns only (system agents /
+  // smoke / probe stay on protocol defaults — RFC-154 §2.3). Frozen per node_run
+  // inside runtime_params_json.__configDir so resume/retry never re-reads these
+  // mutable columns.
+  configDirEnv: text('config_dir_env'),
+  configDirName: text('config_dir_name'),
   // RFC-112: cached deep-smoke SmokeResult (JSON) from the last probe; NULL =
   // never probed. Display-only — conformance is advisory (an admin may save an
   // auth-unverified custom runtime).

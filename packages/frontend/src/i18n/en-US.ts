@@ -647,6 +647,17 @@ export const enUS: Resources = {
     fieldBinary: 'Binary path',
     fieldBinaryHint:
       'Absolute path to the executable. Leave empty for the protocol default (PATH).',
+    fieldConfigDirEnv: 'Config dir env var',
+    fieldConfigDirEnvHint:
+      'Env var name a custom binary reads its config dir path from. Empty = protocol default.',
+    fieldConfigDirName: 'Config dir name',
+    fieldConfigDirNameHint:
+      'Leaf directory name under each run root (single path segment). Empty = protocol default.',
+    configDirEnvInvalid:
+      'Must be a legal env var name (letters, digits, underscores; not starting with a digit).',
+    configDirEnvReserved: 'This variable name is reserved by the platform — pick another.',
+    configDirNameInvalid:
+      'Must be a single directory name: no path separators, and not "." or "..".',
     fieldModel: 'Model',
     fieldModelHint:
       'The model agents on this runtime spawn with. Empty = the binary’s own default.',

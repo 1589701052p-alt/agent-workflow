@@ -19,6 +19,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DEFAULT_CONFIG_DIR_PROFILE } from '@agent-workflow/shared'
 import { createLogger, type Logger } from '@/util/log'
 import type { SpawnPlan } from '../types'
 import { type ClaudeSkillInjection, prepareClaudeConfigDir } from './config'
@@ -34,8 +35,16 @@ export interface ClaudeSpawnContext {
   model?: string
   /** RFC-026 clarify-inline rerun → --resume <id> (PR-C wires this). */
   resumeSessionId?: string
-  /** Per-attempt config-dir root; `.claude/` is created under it. */
+  /** Per-attempt config-dir root; `<configDirName>/` is created under it. */
   attemptDir: string
+  /**
+   * RFC-154: config-dir overrides for custom forks. Omitted → protocol default
+   * (`CLAUDE_CONFIG_DIR` / `.claude`, shared DEFAULT_CONFIG_DIR_PROFILE) —
+   * byte-identical for every pre-RFC-154 caller (incl. the system-agent path,
+   * which stays on the defaults by design — RFC-154 §2.3).
+   */
+  configDirEnv?: string
+  configDirName?: string
   /** Subprocess cwd = task worktree. */
   worktreePath: string
   /** RFC-067 per-task git identity (both non-empty to inject). */
@@ -71,7 +80,11 @@ export function claudeSandboxEnv(uid: number | undefined): { IS_SANDBOX?: '1' } 
 
 export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
   const log: Logger = ctx.log ?? createLogger('claude-code')
-  const configDir = join(ctx.attemptDir, '.claude')
+  // RFC-154: leaf name is configurable (custom forks); default = .claude.
+  const configDir = join(
+    ctx.attemptDir,
+    ctx.configDirName ?? DEFAULT_CONFIG_DIR_PROFILE['claude-code'].name,
+  )
   mkdirSync(ctx.attemptDir, { recursive: true })
   // RFC-111 PR-C: prepare CLAUDE_CONFIG_DIR — inject skills + (real runs only)
   // bridge the subscription credential so the relocated dir can still auth.
@@ -107,6 +120,7 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
     cmd.push('--resume', ctx.resumeSessionId)
   }
 
+  const configDirEnv = ctx.configDirEnv ?? DEFAULT_CONFIG_DIR_PROFILE['claude-code'].env
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     // opencode needed PWD=cwd; Claude Code resolves the project slug from cwd too,
@@ -115,10 +129,18 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
     // D16: relocate the config root per attempt → transcript + skills isolation.
     // (Subscription auth bridge + skills land in PR-C; API-key auth flows via the
     // inherited env and is orthogonal to this dir.)
-    CLAUDE_CONFIG_DIR: configDir,
+    // RFC-154: key is configurable (custom forks); default = CLAUDE_CONFIG_DIR.
+    [configDirEnv]: configDir,
     // Spread LAST so a root daemon's injected IS_SANDBOX=1 also wins over an
     // inherited IS_SANDBOX=0 (claude's gate wants the exact string '1').
     ...claudeSandboxEnv(process.getuid?.()),
+  }
+  // RFC-154 (Codex impl-gate P2): with a CUSTOM key, scrub the protocol default
+  // inherited from the daemon's own environment — otherwise the child carries
+  // BOTH keys and a fork that still consults the default one lands in a stale
+  // dir. Default-key spawns are untouched (we just wrote it ourselves).
+  if (configDirEnv !== DEFAULT_CONFIG_DIR_PROFILE['claude-code'].env) {
+    delete env[DEFAULT_CONFIG_DIR_PROFILE['claude-code'].env]
   }
   const gitName = typeof ctx.gitUserName === 'string' ? ctx.gitUserName : ''
   const gitEmail = typeof ctx.gitUserEmail === 'string' ? ctx.gitUserEmail : ''
