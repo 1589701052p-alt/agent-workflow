@@ -9,11 +9,13 @@
 //
 // Reconnects with exponential-backoff up to 30s while at least one
 // subscriber is mounted. Token + baseUrl are read from the auth store on
-// each (re)connect so re-login refreshes the connection. Messages are routed
-// to the listeners after JSON-parse; non-JSON frames are silently dropped.
+// each (re)connect, and any auth-store change (re-login, remote-daemon
+// switch) force-rotates every pooled socket so no subscriber — existing or
+// later-mounted — keeps riding stale credentials. Messages are routed to the
+// listeners after JSON-parse; non-JSON frames are silently dropped.
 
 import { useEffect, useRef } from 'react'
-import { getBaseUrl, getToken } from '@/stores/auth'
+import { getBaseUrl, getToken, subscribeAuth } from '@/stores/auth'
 
 type Listener = (msg: unknown) => void
 
@@ -44,6 +46,29 @@ interface SharedConn {
 }
 
 const sharedConns = new Map<string, SharedConn>()
+
+// The pool is keyed by path only, so a live socket would otherwise pin the
+// token/baseUrl it was created with — after a re-login or a remote-daemon
+// switch, later subscribers would ride the stale connection (the pre-share
+// hook at least gave every new mount a fresh socket). Rotate the whole pool
+// whenever the auth store changes: physical sockets reconnect with current
+// credentials while listener registrations stay untouched.
+subscribeAuth(() => {
+  for (const conn of sharedConns.values()) forceReconnect(conn)
+})
+
+function forceReconnect(conn: SharedConn): void {
+  if (conn.stopped) return
+  if (conn.reconnectTimer !== null) {
+    clearTimeout(conn.reconnectTimer)
+    conn.reconnectTimer = null
+  }
+  const old = conn.socket
+  conn.socket = null // detach BEFORE closing — old's close handler must not reschedule
+  closeSocket(old)
+  conn.backoff = BASE_BACKOFF_MS
+  connect(conn)
+}
 
 /**
  * Register `listener` on the shared connection for `path`, creating the
@@ -120,7 +145,11 @@ function connect(conn: SharedConn): void {
     conn.backoff = BASE_BACKOFF_MS
   })
   ws.addEventListener('close', () => {
-    if (conn.socket === ws) conn.socket = null
+    // A socket superseded by forceReconnect (or detached on release) is no
+    // longer the conn's current socket — its close must not reschedule, or
+    // an auth rotation would end up with TWO live sockets on the path.
+    if (conn.socket !== ws) return
+    conn.socket = null
     scheduleReconnect(conn)
   })
   ws.addEventListener('error', () => {

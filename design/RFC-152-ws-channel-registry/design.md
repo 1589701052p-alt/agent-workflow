@@ -50,6 +50,13 @@ const WS_CHANNELS = { task: {...}, 'tasks-list': {...}, ... } as const
 - 6 hook 改薄包装（导出名兼容）+ **BatchImportDialog 的直调 useWebSocket**
   （repo-import 消费点，设计门 medium 补录——非 hook 形态，改走
   WS_PATHS.repoImport + 订阅测试）。
+- **实现门修订（high）**：共享池只按 path 键控会让 socket 钉死创建时的
+  token/baseUrl——re-login / 切换远端 daemon 后，后挂载订阅者搭旧凭据老连接
+  （pre-share 每次新挂载至少拿新 socket）。修法：管理器 `subscribeAuth` 全池
+  强制轮换（存量 socket 也随凭据重连，监听注册原位保留）+ close 处理器加
+  「被取代 socket 不再调度」守卫防双连。回归四格：token 轮换换 socket 且帧
+  仍达/baseUrl 重指向/轮换后晚挂载共享新 socket/退避窗内无幽灵第三连接
+  （rfc152-ws-auth-rotation.test.tsx）。
 - **D5 修订（设计门 high）**：多文档路由不经 ReviewDetailPage——
   MultiDocReviewView 的 useTaskSync 是多文档页**唯一活订阅**，调用点去挂会
   杀掉全部 review.\*/task 失效。改为 **hook 层 socket 共享**：useWsInvalidation
