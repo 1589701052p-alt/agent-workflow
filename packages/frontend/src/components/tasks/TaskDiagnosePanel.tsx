@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 
 import { api } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
+import { StatusChip } from '@/components/StatusChip'
 import { describeApiError } from '@/i18n'
 import { RepairChoiceDialog } from '@/components/tasks/RepairChoiceDialog'
 import type { LifecycleAlertRule, LifecycleAlertSeverity } from '@/types/lifecycle'
@@ -168,11 +169,9 @@ function DiagnoseTable({ response, onRepair }: DiagnoseTableProps): ReactElement
               </div>
             </td>
             <td>
-              <span
-                className={`status-chip status-chip--${a.severity === 'error' ? 'danger' : 'warn'}`}
-              >
+              <StatusChip kind={a.severity === 'error' ? 'danger' : 'warn'}>
                 {t(`tasks.diagnose.severity.${a.severity}`)}
-              </span>
+              </StatusChip>
             </td>
             <td>{new Date(a.detectedAt).toLocaleString()}</td>
             <td>

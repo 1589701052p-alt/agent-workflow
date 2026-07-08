@@ -21,6 +21,7 @@ import { api } from '@/api/client'
 import { describeApiError } from '@/i18n'
 import { decisionChipKind } from '@/lib/review/decisionChip'
 import { EmptyState } from '@/components/EmptyState'
+import { StatusChip } from '@/components/StatusChip'
 import { LoadingState } from '@/components/LoadingState'
 import { Route as RootRoute } from './__root'
 
@@ -168,15 +169,11 @@ export function ReviewsListPage() {
                         )}
                       </td>
                       <td>
-                        <span
-                          className={`status-chip status-chip--${
-                            r.awaitingReview ? 'warn' : decisionChipKind(r.decision)
-                          }`}
-                        >
+                        <StatusChip kind={r.awaitingReview ? 'warn' : decisionChipKind(r.decision)}>
                           {r.awaitingReview
                             ? t('reviews.statusAwaiting')
                             : t(`reviews.decision.${r.decision}`)}
-                        </span>
+                        </StatusChip>
                       </td>
                       <td>v{r.currentVersionIndex}</td>
                       <td className="muted">{formatTimestamp(r.createdAt)}</td>
@@ -274,9 +271,9 @@ export function HistoryRows({
           return (
             <li key={v.id} className="reviews-version-list__item">
               <span className="reviews-version-list__label">v{v.versionIndex}</span>
-              <span className={`status-chip status-chip--${decisionChipKind(v.decision)}`}>
+              <StatusChip kind={decisionChipKind(v.decision)}>
                 {t(`reviews.decision.${v.decision}`)}
-              </span>
+              </StatusChip>
               {isCurrent && (
                 <span className="reviews-version-list__current-pill">
                   {t('reviews.currentTag')}
@@ -343,9 +340,9 @@ export function RoundRows({ nodeRunId }: { nodeRunId: string }) {
             <span className="reviews-version-list__label">
               {t('reviews.roundLabel', { n: i + 1 })}
             </span>
-            <span className={`status-chip status-chip--${decisionChipKind(r.decision)}`}>
+            <StatusChip kind={decisionChipKind(r.decision)}>
               {t(`reviews.decision.${r.decision}`)}
-            </span>
+            </StatusChip>
             {r.isCurrent && (
               <span className="reviews-version-list__current-pill">{t('reviews.currentTag')}</span>
             )}

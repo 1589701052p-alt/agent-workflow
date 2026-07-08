@@ -32,6 +32,7 @@ import type {
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
+import { StatusChip } from '@/components/StatusChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
@@ -821,13 +822,13 @@ export function ClarifyDetailPage() {
           but its parent task failed before the designer consumed the
           feedback. The CR-1 invariant flipped status='abandoned'. */}
       {isCross && s.status === 'abandoned' && (
-        <div
-          className="status-chip status-chip--danger"
+        <StatusChip
+          kind="danger"
           data-testid="cross-clarify-abandoned-chip"
           title={t('crossClarify.abandonedTooltip')}
         >
           {t('crossClarify.abandonedChip')}
-        </div>
+        </StatusChip>
       )}
 
       {!readonly && (
@@ -891,18 +892,16 @@ export function ClarifyDetailPage() {
                 <div className="clarify-question-scope" data-testid={`clarify-scope-${q.id}`}>
                   <span className="muted">{t('crossClarify.questionScope.label')}:</span>
                   {readonly ? (
-                    <span
-                      className={
-                        // flag-audit W0 Codex 实现门 P2：legacy 别名块已删，'blue'
-                        // 动态拼接会落到不存在的 class——改语义 kind。
-                        'status-chip status-chip--' + (scope === 'questioner' ? 'info' : 'neutral')
-                      }
+                    <StatusChip
+                      // flag-audit W0 Codex 实现门 P2：legacy 别名（'blue'）已删，
+                      // 语义 kind 走统一原语。
+                      kind={scope === 'questioner' ? 'info' : 'neutral'}
                       data-testid={`clarify-scope-chip-${q.id}`}
                     >
                       {scope === 'questioner'
                         ? t('crossClarify.questionScope.questioner')
                         : t('crossClarify.questionScope.designer')}
-                    </span>
+                    </StatusChip>
                   ) : (
                     <div
                       className="segmented"

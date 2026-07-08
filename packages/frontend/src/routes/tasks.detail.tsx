@@ -30,6 +30,7 @@ import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
+import { StatusChip } from '@/components/StatusChip'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
 import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
@@ -269,7 +270,7 @@ function TaskDetailPage() {
             <ConfirmButton
               label={t('tasks.cancelButton')}
               onConfirm={() => cancel.mutateAsync()}
-              danger
+              variant="danger"
               disabled={cancel.isPending}
             />
           )}
@@ -875,9 +876,9 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
                 {r.shardKey !== null && <span className="muted"> · {r.shardKey}</span>}
               </td>
               <td>
-                <span className={`status-chip status-chip--${nodeRunStatusToKind(r.status)}`}>
+                <StatusChip kind={nodeRunStatusToKind(r.status)}>
                   {t(displayNoderunStatusKey(r))}
-                </span>
+                </StatusChip>
                 {shouldShowReviewJump(r.status) && (
                   <>
                     {' '}
@@ -960,12 +961,9 @@ function CommitRunRow({ run, allRuns }: { run: NodeRun; allRuns: NodeRun[] }) {
         <code className="data-table__muted">{cp.repoBranch}</code>
       </td>
       <td>
-        <span
-          className={`status-chip status-chip--${nodeRunStatusToKind(run.status)}`}
-          data-testid="commit-push-outcome"
-        >
+        <StatusChip kind={nodeRunStatusToKind(run.status)} data-testid="commit-push-outcome">
           {t(commitOutcomeKey(cp.pushOutcome))}
-        </span>{' '}
+        </StatusChip>{' '}
         {sessionRuns.length > 0 && latestChild !== undefined && (
           <button
             type="button"

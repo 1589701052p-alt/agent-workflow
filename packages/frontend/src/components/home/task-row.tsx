@@ -2,16 +2,20 @@
 // homepage sections.
 //
 // Rendered as a button so keyboard users can tab into it; routes to
-// `/tasks/$id` on click. The status chip reuses the i18n `home.taskRow.*`
-// labels so visual semantics line up across both sections.
+// `/tasks/$id` on click.
 //
 // RFC-035: the inline `task-row__status*` span is replaced with the unified
 // <StatusChip>. The TaskStatus → kind map lives in lib/task-status.ts so
 // /tasks list + /tasks/$id header + homepage row use the exact same map.
+//
+// RFC-150 PR-1 (flag-audit §4.6 W0 补做): the row label reads the same
+// `tasks.status.*` i18n family as <TaskStatusChip> — the parallel
+// `home.taskRow.status*` key family (a second source of truth for the same
+// enum, with drifted wording) is deleted.
 
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import type { TaskStatus, TaskSummary } from '@agent-workflow/shared'
+import type { TaskSummary } from '@agent-workflow/shared'
 import { StatusChip } from '@/components/StatusChip'
 import { TASK_STATUS_KIND } from '@/lib/task-status'
 import { formatRelativeTime } from '@/lib/homepage'
@@ -27,7 +31,7 @@ export function TaskRow({ task, nowMs }: TaskRowProps) {
   const navigate = useNavigate()
   const ts = task.finishedAt ?? task.startedAt
   const rel = formatRelativeTime(nowMs, ts)
-  const statusLabel = describeStatus(t, task.status)
+  const statusLabel = t(`tasks.status.${task.status}`)
   return (
     <button
       type="button"
@@ -53,30 +57,4 @@ export function TaskRow({ task, nowMs }: TaskRowProps) {
       <span className="task-row__time muted">{t(`home.taskRow.${rel.key}`, rel.opts)}</span>
     </button>
   )
-}
-
-function describeStatus(
-  t: (key: string, opts?: Record<string, unknown>) => string,
-  status: TaskStatus,
-): string {
-  switch (status) {
-    case 'running':
-      return t('home.taskRow.statusRunning')
-    case 'awaiting_human':
-      return t('home.taskRow.statusAwaitingHuman')
-    case 'awaiting_review':
-      return t('home.taskRow.statusAwaitingReview')
-    case 'done':
-      return t('home.taskRow.statusDone')
-    case 'failed':
-      return t('home.taskRow.statusFailed')
-    case 'canceled':
-      return t('home.taskRow.statusCanceled')
-    case 'interrupted':
-      return t('home.taskRow.statusInterrupted')
-    case 'pending':
-      return t('home.taskRow.statusPending')
-    default:
-      return status
-  }
 }

@@ -113,7 +113,7 @@ function FusionDetailPage() {
               label={t('fusion.cancel')}
               confirmLabel={t('fusion.cancelConfirm')}
               onConfirm={() => cancel.mutateAsync()}
-              danger
+              variant="danger"
               disabled={cancel.isPending}
             />
           )}

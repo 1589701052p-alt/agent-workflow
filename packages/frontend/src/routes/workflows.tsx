@@ -139,7 +139,7 @@ function WorkflowsPage() {
                   <ConfirmButton
                     label={t('common.delete')}
                     onConfirm={() => del.mutateAsync(w.id)}
-                    danger
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

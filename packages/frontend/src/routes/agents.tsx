@@ -126,7 +126,7 @@ function AgentsPage() {
                   <ConfirmButton
                     label={t('common.delete')}
                     onConfirm={() => del.mutateAsync(a.name)}
-                    danger
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

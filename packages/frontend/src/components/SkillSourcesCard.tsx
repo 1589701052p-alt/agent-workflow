@@ -173,7 +173,7 @@ export function SkillSourcesCard() {
                 label={t('skills.sourceRemove')}
                 confirmLabel={t('skills.sourceRemoveConfirmTitle', { label: s.label })}
                 onConfirm={() => remove.mutate(s.id)}
-                danger
+                variant="danger"
                 disabled={remove.isPending}
                 size="sm"
               />

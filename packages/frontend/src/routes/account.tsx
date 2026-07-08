@@ -7,6 +7,7 @@ import { createRoute } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
+import { StatusChip } from '@/components/StatusChip'
 import { ACTOR_QUERY_KEY, useActor, type MeResponse } from '@/hooks/useActor'
 import { Route as RootRoute } from './__root'
 
@@ -558,13 +559,11 @@ function PatSection() {
                   </div>
                 </td>
                 <td>
-                  <span
-                    className={`status-chip status-chip--${p.revokedAt ? 'danger' : 'success'}`}
-                  >
+                  <StatusChip kind={p.revokedAt ? 'danger' : 'success'}>
                     {p.revokedAt
                       ? t('account.patStatusRevoked', { defaultValue: 'revoked' })
                       : t('account.patStatusActive', { defaultValue: 'active' })}
-                  </span>
+                  </StatusChip>
                 </td>
                 <td>
                   {!p.revokedAt && (

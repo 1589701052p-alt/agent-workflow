@@ -188,7 +188,7 @@ export function SkillFileTree({ skillName, readonly = false }: Props) {
                   <ConfirmButton
                     label={t('skills.fileDeleteButton')}
                     onConfirm={() => del.mutateAsync(selected)}
-                    danger
+                    variant="danger"
                     disabled={del.isPending}
                   />
                 )}

@@ -146,7 +146,7 @@ function SkillsPage() {
                   <ConfirmButton
                     label={t('common.delete')}
                     onConfirm={() => del.mutateAsync(s.name)}
-                    danger
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

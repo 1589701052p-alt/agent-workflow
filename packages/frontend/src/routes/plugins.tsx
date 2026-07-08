@@ -170,7 +170,7 @@ function PluginsPage() {
                     <ConfirmButton
                       label={t('common.delete')}
                       onConfirm={() => del.mutateAsync(p.id)}
-                      danger
+                      variant="danger"
                       disabled={del.isPending}
                       size="sm"
                     />

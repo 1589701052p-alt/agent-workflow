@@ -45,8 +45,9 @@ describe('clarify ↔ reviews list — aligned page shell', () => {
   test('clarify rows carry a status-chip column driven by the shared status table', () => {
     // flag-audit W0: the inline `awaiting_human ? 'amber' : 'green'` ternary
     // (which rendered a CANCELED round as green "Answered") was replaced by the
-    // CLARIFY_ROUND_STATUS_CHIP table in lib/clarify-status.ts.
-    expect(clarify).toMatch(/status-chip status-chip--\$\{clarifyRoundStatusChip\(/)
+    // CLARIFY_ROUND_STATUS_CHIP table in lib/clarify-status.ts. RFC-150 PR-1:
+    // the bare span was folded into the <StatusChip> primitive on top of it.
+    expect(clarify).toMatch(/<StatusChip kind=\{clarifyRoundStatusChip\(/)
     expect(clarify).not.toMatch(/\? 'amber' : 'green'/)
   })
 

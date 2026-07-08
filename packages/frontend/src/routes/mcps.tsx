@@ -196,7 +196,7 @@ function McpRow(props: McpRowProps) {
           <ConfirmButton
             label={t('mcps.deleteButton')}
             onConfirm={props.onDelete}
-            danger
+            variant="danger"
             disabled={props.deleteDisabled}
             size="sm"
           />
