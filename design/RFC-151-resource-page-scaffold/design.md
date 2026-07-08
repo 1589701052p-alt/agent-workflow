@@ -4,16 +4,16 @@
 
 ## 1. PR-1 快赢批接线
 
-| 项                            | 现场                                                                           | 改法                                                                                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| McpFields chip-radio ×2       | McpFields.tsx:43-62（type local/remote）/:119-138（oauthMode）                 | `<Segmented>`（value/options/ariaLabel；nameLocked 场景 disabled 透传）；segmented 采用锁补入                                                                                               |
-| form-invalid sentinel ×4+1    | mcps.detail:51/mcps.new:36/plugins.detail:62/plugins.new:34 + mcps.new:68 消费 | buildCreatePayload/buildUpdatePayload 返回判别联合 `{ok:true,payload}                                                                                                                       | {ok:false}`，mutate 前分支；throw+message 比对删除                          |
-| skills.detail isManaged ×7    | :53/:101/:116/:144/:152/:161/:164                                              | `skillCapabilities(sourceKind): {canFuse,canEditContent,canBrowseFiles,...}` 能力对象（lib/skill-capabilities.ts），7 处改读能力位                                                          |
-| AgentImportDialog 前缀协议    | :63/:217/:231 `yaml-parse-failed:` startsWith                                  | warnings 升级 `{code:string, message:string, blocking:boolean}[]`（后端 API 若返回 string[] 则前端解析层归一——查 wire 后定：wire 不动则前端 lift；wire 可改则双端同步，倾向前端 lift 保守） |
-| FuseDialog 隐式模式           | :29-30 双 undefined-prop；:59/:70/:138/:155 四消费                             | `entry: {kind:'from-skill'; skillName:string}                                                                                                                                               | {kind:'from-memories'; memoryIds:string[]}` 判别联合 prop；两调用点显式构造 |
-| OutputsEditor 重写 ChipsInput | :32-55 键盘/去重/校验                                                          | 复用 ChipsInput（validate prop 承载 pattern 校验；溢出样式测试零改动为判据）                                                                                                                |
-| inline common.loading ~28 处  | 25 文件                                                                        | 分层收敛：三态壳（isLoading→<LoadingState>）机械替换；语义特殊处（按钮内 loading 文案等）保留并注释豁免；新增 grep 禁令（豁免清单显式）                                                     |
-| 文档修正                      | dedup-audit §4.7 / flag-audit §5.3 的 ResourceList 行                          | 标注「已删除（§8 决策④），.data-table 为事实标准」                                                                                                                                          |
+| 项                            | 现场                                                                           | 改法                                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| McpFields chip-radio ×2       | McpFields.tsx:43-62（type local/remote）/:119-138（oauthMode）                 | `<Segmented>`（value/options/ariaLabel；nameLocked 场景 disabled 透传）；segmented 采用锁补入                                                                                                                                                                                                           |
+| form-invalid sentinel ×4+1    | mcps.detail:51/mcps.new:36/plugins.detail:62/plugins.new:34 + mcps.new:68 消费 | buildCreatePayload/buildUpdatePayload 返回判别联合 `{ok:true,payload}                                                                                                                                                                                                                                   | {ok:false}`，mutate 前分支；throw+message 比对删除                          |
+| skills.detail isManaged ×7    | :53/:101/:116/:144/:152/:161/:164                                              | `skillCapabilities(sourceKind): {canFuse,canEditContent,canBrowseFiles,...}` 能力对象（lib/skill-capabilities.ts），7 处改读能力位                                                                                                                                                                      |
+| AgentImportDialog 前缀协议    | :63/:217/:231 `yaml-parse-failed:` startsWith                                  | warnings 升级 `{code:string, message:string, blocking:boolean}[]`（后端 API 若返回 string[] 则前端解析层归一——查 wire 后定：wire 不动则前端 lift；wire 可改则双端同步，倾向前端 lift 保守）                                                                                                             |
+| FuseDialog 隐式模式           | :29-30 双 undefined-prop；:59/:70/:138/:155 四消费                             | `entry: {kind:'from-skill'; skillName:string}                                                                                                                                                                                                                                                           | {kind:'from-memories'; memoryIds:string[]}` 判别联合 prop；两调用点显式构造 |
+| OutputsEditor 重写 ChipsInput | :32-55 键盘/去重/校验                                                          | **设计门 high 修订**：OutputsEditor 行式带 KindSelect 并同步 outputKinds（非纯 chips，整体替换会丢 per-output kind）——改抽 token-commit 核心（Enter/逗号/Backspace/dedup/validate）为共享 hook，ChipsInput 与 OutputsEditor 共用、渲染各自保留；回归=outputKinds roundtrip（选 kind/删除联动/往返不丢） |
+| inline common.loading ~28 处  | 25 文件                                                                        | 分层收敛：三态壳（isLoading→<LoadingState>）机械替换；语义特殊处（按钮内 loading 文案等）保留并注释豁免；新增 grep 禁令（豁免清单显式）                                                                                                                                                                 |
+| 文档修正                      | dedup-audit §4.7 / flag-audit §5.3 的 ResourceList 行                          | 标注「已删除（§8 决策④），.data-table 为事实标准」                                                                                                                                                                                                                                                      |
 
 ## 2. PR-2 ResourcePicker<T>
 
@@ -48,10 +48,12 @@ interface ResourcePickerProps<T> {
 
 ## 4. PR-4 detail 壳 + idiom
 
-- `<DetailHeaderActions>`：props {acl:{resourceBaseUrl,invalidateKey}, save:{onClick,
-  disabled,testid?}, del:{onConfirm,label}, extra?:ReactNode（skills Fuse 按钮）}；
-  form-actions 错误块（save.error/del.error 双 span）并入。skills 双 mutation 以
-  save.disabled 组合式传入（不强塞 hook——调研告警）。
+- `<DetailHeaderActions>`（**设计门 medium 修订**）：save 按钮态**完全
+  caller-owned**（{label?, onClick, disabled, testid?} 由调用方组合——skills 的
+  双 mutation pending/label 切换自持）；错误槽改 `errors: ReadonlyArray<unknown>`
+  （skills 传 [saveMeta.error, saveContent.error, del.error] 三通道独立渲染，
+  单 save.error 罩不住双失败通道）；acl/del/extra 槽不变。测试要求：meta 失败、
+  content 失败、external skill 跳过 content 三场景。
 - `useDraftFromQuery(query, map, opts?)`：hydrate-once 单源（loaded/setDraft/seed
   effect）；**stale-race 语义**：文档化「配套 mutation onSuccess 必须 setQueryData
   急写」的契约（hook 不吞 MemoryEditDialog 的 :127-135 急写——保留在调用点，hook
