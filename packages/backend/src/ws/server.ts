@@ -214,6 +214,22 @@ export function buildWebSocketAdapter(deps: WebSocketAdapterDeps): WebSocketAdap
         )
       }
     }
+    // RFC-152 P0（漏鉴权修复）：/ws/memory-distill-jobs 一直被声明为
+    // admin-only（shared/schemas/ws.ts、broadcaster.ts、两个前端 hook 的
+    // 注释 + HTTP 侧 routes/memoryDistillJobs.ts 全 requireAdmin），但
+    // upgrade/open 路径从未 enforce——任何有效 token 都能订阅蒸馏队列帧。
+    // 与 HTTP 侧同门禁：非 admin 升级直接 403。
+    if (channel.kind === 'memory-distill-jobs' && actor.user.role !== 'admin') {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'admin-required',
+            message: 'memory-distill-jobs channel is admin-only',
+          },
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
     const data: ConnectionData = {
       channel,
       actor,
