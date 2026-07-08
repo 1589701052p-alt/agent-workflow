@@ -9,18 +9,12 @@
 // Trust boundary (Codex P2-1): ONLY the credentials file is bridged — never the
 // user's settings / agents / plugins / hooks / ~/.claude.json.
 
-import {
-  chmodSync,
-  copyFileSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Logger } from '@/util/log'
+import { linkSkillDir } from '@/util/platform'
+import { secureFile } from '@/util/fs-perms'
 
 /** Minimal skill shape (structurally matches runner.ts ResolvedSkill; no import → no cycle). */
 export interface ClaudeSkillInjection {
@@ -57,7 +51,7 @@ export function prepareClaudeConfigDir(
       if (skill.sourceKind === 'managed') {
         cpSync(skill.sourcePath, dst, { recursive: true })
       } else {
-        symlinkSync(skill.sourcePath, dst, 'dir')
+        linkSkillDir(skill.sourcePath, dst)
       }
     } catch (err) {
       log.warn('claude skill injection failed', {
@@ -96,13 +90,19 @@ function bridgeClaudeCredentials(configDir: string, log: Logger): void {
       ])
       if (out.exitCode === 0) {
         const json = out.stdout.toString().trim()
-        if (json.length > 0) writeFileSync(dest, json + '\n', { mode: 0o600 })
+        if (json.length > 0) {
+          writeFileSync(dest, json + '\n', { mode: 0o600 })
+          // RFC-144 PR-2 T9: the bridged credentials file is sensitive —
+          // restrict to current user (POSIX chmod already done via mode flag;
+          // Windows needs icacls since chmod is a no-op there).
+          secureFile(dest)
+        }
       }
     } else {
       const src = join(homedir(), '.claude', '.credentials.json')
       if (existsSync(src)) {
         copyFileSync(src, dest)
-        chmodSync(dest, 0o600)
+        secureFile(dest)
       }
     }
   } catch (err) {

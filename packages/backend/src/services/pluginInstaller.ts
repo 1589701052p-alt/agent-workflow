@@ -26,6 +26,8 @@ import type { PluginSourceKind } from '@agent-workflow/shared'
 import { redactSensitiveString } from '@/util/redact'
 import { createLogger } from '@/util/log'
 import { Paths } from '@/util/paths'
+import { secureDir } from '@/util/fs-perms'
+import { fromFileUrl } from '@/util/platform'
 
 const log = createLogger('plugin-installer')
 
@@ -178,7 +180,11 @@ async function installPluginInner(
   }
   const root = opts.pluginsDir ?? Paths.pluginsDir
   const pluginDir = join(root, pluginId)
-  await mkdir(pluginDir, { recursive: true, mode: 0o700 })
+  await mkdir(pluginDir, { recursive: true })
+  // RFC-144 PR-2 T9: restrict the plugin install root to the current user.
+  // POSIX: chmod 0o700 (was the mkdir `mode`, which some umasks ignore);
+  // Windows: icacls (chmod is a no-op there).
+  secureDir(pluginDir)
   // Seed a minimal host package so `npm install` writes node_modules/ here
   // rather than walking up to the user's repo.
   const hostPkg = join(pluginDir, 'package.json')
@@ -226,8 +232,10 @@ async function installPluginInner(
 }
 
 async function installFilePlugin(spec: string): Promise<InstallResult> {
-  // Strip file:// prefix if present; everything else is a host path.
-  const raw = spec.startsWith('file://') ? new URL(spec).pathname : spec
+  // RFC-144 PR-2 T7: resolve a file:// spec to a host path cross-platform.
+  // `new URL(spec).pathname` returned `/C:/x/y` on Windows; fromFileUrl uses
+  // node:url.fileURLToPath which maps `file:///C:/x/y` → `C:\x\y` correctly.
+  const raw = fromFileUrl(spec)
   let resolved: string
   try {
     resolved = await realpath(raw)

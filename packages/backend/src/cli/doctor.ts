@@ -8,6 +8,7 @@ import { countEmbeddedSqlMigrations, IS_EMBEDDED } from '@/embed'
 import { capabilitiesFromVersion, MIN_GIT_VERSION, parseGitVersion } from '@/services/gitVersion'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { Paths } from '@/util/paths'
+import { isWindows } from '@/util/platform'
 
 export interface CheckResult {
   name: string
@@ -62,13 +63,20 @@ export async function doctorCommand(): Promise<DoctorResult> {
   // 4. config loads
   checks.push(checkConfig())
 
-  // 5. token file (if present) has mode 0600
+  // 5. token file (if present) is restricted to the current user.
+  // POSIX: mode 0600; Windows: icacls ACL has no Everyone/Users group.
   checks.push(checkTokenFileMode())
 
   // 6. migrations present
   checks.push(checkMigrations())
 
-  // 7. RFC-108 T16 (AR-20): lifecycle health — surface recoverable/parked tasks
+  // 7. RFC-144 PR-2 T10: Windows long-path support (informational — the
+  // daemon uses the `\\?\` prefix fallback via util/platform.toLongPath when
+  // LongPathsEnabled is off, so this never fails doctor, only surfaces the
+  // registry state). POSIX skips (no MAX_PATH limit).
+  checks.push(checkLongPaths())
+
+  // 8. RFC-108 T16 (AR-20): lifecycle health — surface recoverable/parked tasks
   // + open alerts so an operator running `doctor` sees a stuck fleet without
   // opening the UI. Informational (never fails doctor — these are recoverable
   // runtime states, not setup errors).
@@ -216,6 +224,12 @@ function checkTokenFileMode(): CheckResult {
     return { name: 'token file', ok: true, message: '(will be created on first daemon start)' }
   }
   try {
+    if (isWindows()) {
+      // RFC-144 PR-2 T9: Windows has no unix mode — verify via icacls that
+      // no broad group (Everyone / BUILTIN\Users / Authenticated Users) has
+      // access. The daemon's secureFile() restricts to the current user only.
+      return evaluateWindowsAclCheck(Paths.tokenFile, 'token file')
+    }
     const mode = statSync(Paths.tokenFile).mode & 0o777
     if (mode !== 0o600) {
       return {
@@ -227,6 +241,85 @@ function checkTokenFileMode(): CheckResult {
     return { name: 'token file mode', ok: true, message: 'mode 600 ✓' }
   } catch (err) {
     return { name: 'token file', ok: false, message: (err as Error).message }
+  }
+}
+
+/**
+ * Windows ACL decision: parse `icacls <path>` output and assert no broad
+ * group is present. Pure decision half so tests cover the verdict without
+ * spawning icacls. Exported for the PR-2 ACL oracle.
+ */
+export function evaluateWindowsAclDecision(icaclsOutput: string, label: string): CheckResult {
+  // Broad principals that would grant access beyond the current user. Each
+  // carries a readable label for the doctor message (regex `.source` would
+  // leak backslash escapes into the user-facing string).
+  const BROAD: ReadonlyArray<{ re: RegExp; name: string }> = [
+    { re: /BUILTIN\\Users/i, name: 'BUILTIN\\Users' },
+    { re: /\bEveryone\b/i, name: 'Everyone' },
+    { re: /Authenticated Users/i, name: 'Authenticated Users' },
+    { re: /\bINTERACTIVE\b/i, name: 'INTERACTIVE' },
+  ]
+  const hit = BROAD.find((b) => b.re.test(icaclsOutput))
+  if (hit !== undefined) {
+    return {
+      name: `${label} acl`,
+      ok: false,
+      message: `${label} grants access to ${hit.name} (expected current-user only)`,
+    }
+  }
+  return { name: `${label} acl`, ok: true, message: 'restricted to current user ✓' }
+}
+
+/** Windows: run `icacls <path>` and evaluate. POSIX: never called. */
+function evaluateWindowsAclCheck(path: string, label: string): CheckResult {
+  try {
+    const res = Bun.spawnSync(['icacls', path])
+    if (res.exitCode !== 0) {
+      return {
+        name: `${label} acl`,
+        ok: false,
+        message: `icacls failed: ${res.stderr.toString().trim()}`,
+      }
+    }
+    return evaluateWindowsAclDecision(res.stdout.toString(), label)
+  } catch (err) {
+    return { name: `${label} acl`, ok: false, message: (err as Error).message }
+  }
+}
+
+/**
+ * Windows long-path check: reads the `LongPathsEnabled` registry value.
+ * Informational — `ok: true` regardless (the daemon falls back to the `\\?\`
+ * prefix via util/platform.toLongPath when this is off). POSIX skips.
+ */
+export function checkLongPaths(): CheckResult {
+  if (!isWindows()) {
+    return { name: 'long paths', ok: true, message: '(POSIX: no MAX_PATH limit)' }
+  }
+  try {
+    const res = Bun.spawnSync([
+      'reg',
+      'query',
+      'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem',
+      '/v',
+      'LongPathsEnabled',
+    ])
+    const out = res.stdout.toString()
+    const m = out.match(/LongPathsEnabled\s+REG_DWORD\s+0x([0-9a-fA-F]+)/)
+    const enabled = m !== null && parseInt(m[1]!, 16) === 1
+    return {
+      name: 'long paths',
+      ok: true,
+      message: enabled
+        ? 'LongPathsEnabled=1 (deep worktrees OK)'
+        : 'LongPathsEnabled=0 (using \\\\?\\ prefix fallback; deep worktrees OK but enabling is recommended)',
+    }
+  } catch {
+    return {
+      name: 'long paths',
+      ok: true,
+      message: '(registry probe unavailable; using \\\\?\\ fallback)',
+    }
   }
 }
 

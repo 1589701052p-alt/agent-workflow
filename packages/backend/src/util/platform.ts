@@ -11,9 +11,109 @@
 // realise the same semantics via Job-Object-equivalent / wmic / taskkill
 // mechanisms — see design/RFC-144-windows-adaptation/design.md §3.
 
+import { cpSync, lstatSync, symlinkSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
 /** True iff the daemon is running under Windows. */
 export function isWindows(): boolean {
   return process.platform === 'win32'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// External-skill linking (RFC-144 PR-2 T8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Link an external skill's source dir into the per-run skills dir.
+ *
+ * - POSIX: `symlinkSync(target, dst, 'dir')` (byte-for-byte original) — IO
+ *   economy, the per-run dir just holds a pointer to the source tree.
+ * - Windows: directory **junction** (`symlinkSync(target, dst, 'junction')`)
+ *   — junctions do NOT require Developer Mode or admin privileges the way dir
+ *   symlinks do. File targets (rare for skills, which are dirs) fall back to a
+ *   recursive copy, same as a managed skill.
+ */
+export function linkSkillDir(target: string, dst: string): void {
+  if (isWindows()) {
+    try {
+      const st = lstatSync(target)
+      if (st.isDirectory()) {
+        symlinkSync(target, dst, 'junction')
+        return
+      }
+    } catch {
+      // target missing — fall through to copy, which throws a clear ENOENT.
+    }
+    cpSync(target, dst, { recursive: true })
+    return
+  }
+  symlinkSync(target, dst, 'dir')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// file:// plugin spec (RFC-144 PR-2 T7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a `file://` URL from an absolute filesystem path.
+ *
+ * Cross-platform correct via `node:url.pathToFileURL`: POSIX `/x/y` →
+ * `file:///x/y`; Windows `C:\x\y` → `file:///C:/x/y`. Replaces the pre-RFC
+ * string concat `` `file://${path}` `` which produced a malformed
+ * `file://C:\…` on Windows. On POSIX the output is identical to the concat for
+ * absolute paths, so opencode's `OPENCODE_CONFIG_CONTENT` golden lock stays
+ * byte-for-byte green.
+ */
+export function toFileUrl(path: string): string {
+  return pathToFileURL(path).href
+}
+
+/**
+ * Resolve a `file://` URL (or pass through a plain path) to a filesystem path.
+ *
+ * `node:url.fileURLToPath` handles the Windows `file:///C:/x/y` → `C:\x\y`
+ * mapping that `new URL(spec).pathname` got wrong (`/C:/x/y`). Specs that don't
+ * start with `file:` are returned verbatim.
+ *
+ * Never throws: `fileURLToPath` requires a platform-valid absolute path, so it
+ * throws on Windows for a `file:///aw/x` spec with no drive (which appears in
+ * test fixtures and in opencode log lines echoing a non-Windows-path spec).
+ * When that happens we fall back to the pre-RFC pure-string strip
+ * (`spec.replace(/^file:\/\//, '')`) — cross-platform, lossy but sufficient
+ * for the suffix-match the caller (detectPluginLoadFailure) does.
+ */
+export function fromFileUrl(spec: string): string {
+  if (!spec.startsWith('file:')) return spec
+  try {
+    return fileURLToPath(spec)
+  } catch {
+    return spec.replace(/^file:\/\//, '')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Long paths (RFC-144 PR-2 T10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Prefix a Windows path with `\\?\` to bypass the 260-char MAX_PATH limit.
+ *
+ * Only applies on Windows; on POSIX the path is returned unchanged. Already-
+ * prefixed paths and UNC paths are handled. Callers should use this when
+ * constructing deep worktree / run dirs. Note: the daemon manifest should also
+ * declare `longPathAware` (PR-5) so the loader respects long paths without the
+ * prefix; this helper is the belt-and-suspenders for paths the daemon passes to
+ * child processes / native APIs.
+ */
+export function toLongPath(p: string): string {
+  if (!isWindows()) return p
+  if (p.startsWith('\\\\?\\')) return p
+  const norm = p.replace(/\//g, '\\')
+  // Drive path: C:\… → \\?\C:\…
+  if (/^[A-Za-z]:\\/.test(norm)) return `\\\\?\\${norm}`
+  // UNC: \\server\share\… → \\?\UNC\server\share\…
+  if (norm.startsWith('\\\\')) return `\\\\?\\UNC\\${norm.slice(2)}`
+  return p
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

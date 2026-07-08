@@ -5,8 +5,9 @@
 // in design.md §5.7.
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { secureFile } from '@/util/fs-perms'
 
 const ALGO = 'aes-256-gcm'
 const KEY_BYTES = 32
@@ -18,10 +19,10 @@ export interface SecretBox {
   unseal(packed: string): string
 }
 
-/** Read or create the daemon's secret.key file. Side-effects: chmod 600. */
+/** Read or create the daemon's secret.key file. Side-effects: secureFile (chmod 600 / icacls). */
 export function ensureSecretKey(keyPath: string): Buffer {
   if (existsSync(keyPath)) {
-    chmodSync(keyPath, 0o600)
+    secureFile(keyPath)
     const buf = readFileSync(keyPath)
     if (buf.length !== KEY_BYTES) {
       throw new Error(`secret.key wrong size (${buf.length}); expected ${KEY_BYTES}`)
@@ -31,7 +32,7 @@ export function ensureSecretKey(keyPath: string): Buffer {
   mkdirSync(dirname(keyPath), { recursive: true })
   const key = randomBytes(KEY_BYTES)
   writeFileSync(keyPath, key, { mode: 0o600 })
-  chmodSync(keyPath, 0o600)
+  secureFile(keyPath)
   return key
 }
 

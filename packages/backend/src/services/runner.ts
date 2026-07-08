@@ -37,12 +37,12 @@ import {
   assertNoPromptSignalRefs,
 } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
-import { cpSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { cpSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { DbClient } from '@/db/client'
 import { nodeRunEvents, nodeRunOutputs, nodeRuns } from '@/db/schema'
 import { createLogger, type Logger } from '@/util/log'
-import { killProcessTree } from '@/util/platform'
+import { killProcessTree, linkSkillDir, toFileUrl, fromFileUrl } from '@/util/platform'
 import {
   CLARIFY_FORBIDDEN_PREFIX,
   CLARIFY_REQUIRED_PREFIX,
@@ -547,7 +547,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       // surrounding `runNode` is already async so awaiting here doesn't
       // change the call-graph.
       const pluginPath = await materializeInventoryPlugin(runRoot)
-      const fileSpec: string | [string, Record<string, unknown>] = `file://${pluginPath}`
+      const fileSpec: string | [string, Record<string, unknown>] = toFileUrl(pluginPath)
       inlineConfig.plugin = [...(inlineConfig.plugin ?? []), fileSpec]
       inventoryOutPath = join(runRoot, 'inventory.json')
     } catch (err) {
@@ -1593,8 +1593,8 @@ function prepareSkills(runDir: string, skills: ResolvedSkill[], log: Logger): vo
     if (skill.sourceKind === 'managed') {
       cpSync(skill.sourcePath, dst, { recursive: true })
     } else {
-      // external -> symlink for IO economy
-      symlinkSync(skill.sourcePath, dst, 'dir')
+      // external -> link for IO economy (POSIX symlink / Windows junction).
+      linkSkillDir(skill.sourcePath, dst)
     }
   }
 }
@@ -1750,7 +1750,7 @@ export function buildInlineConfig(
     if (p.enabled === false) continue
     if (pluginSeen.has(p.name)) continue
     pluginSeen.add(p.name)
-    const pathSpec = p.cachedPath.startsWith('file://') ? p.cachedPath : `file://${p.cachedPath}`
+    const pathSpec = p.cachedPath.startsWith('file://') ? p.cachedPath : toFileUrl(p.cachedPath)
     const opts = p.options && Object.keys(p.options).length > 0 ? p.options : undefined
     pluginArr.push(opts === undefined ? pathSpec : [pathSpec, opts])
   }
@@ -1823,9 +1823,9 @@ export function detectPluginLoadFailure(
   // Try to map a file:// spec back to a plugin record by suffix.
   let pluginName = ''
   if (spec.startsWith('file://')) {
-    const path = spec.replace(/^file:\/\//, '')
+    const path = fromFileUrl(spec)
     for (const p of plugins) {
-      const cached = p.cachedPath.replace(/^file:\/\//, '')
+      const cached = fromFileUrl(p.cachedPath)
       if (path === cached || path.endsWith(cached) || cached.endsWith(path)) {
         pluginName = p.name
         break

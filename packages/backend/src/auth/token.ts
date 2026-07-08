@@ -9,10 +9,11 @@
 // stdout or settings page).
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { MiddlewareHandler } from 'hono'
 import { UnauthorizedError } from '@/util/errors'
+import { secureFile } from '@/util/fs-perms'
 
 const TOKEN_BYTES = 32 // 32 bytes hex = 64-char string
 
@@ -22,11 +23,13 @@ export function generateToken(): string {
 
 /**
  * Read the existing token file, or generate a new one if missing.
- * Always ensures mode 0o600 (some filesystems / umasks ignore the open flag).
+ * Always ensures the file is restricted to the current user (POSIX 0o600 /
+ * Windows icacls — some filesystems / umasks ignore the open flag, and chmod is
+ * a no-op on Windows).
  */
 export function ensureTokenFile(tokenPath: string): string {
   if (existsSync(tokenPath)) {
-    chmodSync(tokenPath, 0o600)
+    secureFile(tokenPath)
     return readFileSync(tokenPath, 'utf-8').trim()
   }
   return rotateTokenFile(tokenPath)
@@ -37,7 +40,7 @@ export function rotateTokenFile(tokenPath: string): string {
   const token = generateToken()
   mkdirSync(dirname(tokenPath), { recursive: true })
   writeFileSync(tokenPath, token, { mode: 0o600 })
-  chmodSync(tokenPath, 0o600)
+  secureFile(tokenPath)
   return token
 }
 
