@@ -55,7 +55,7 @@ import { deriveFrontier } from '../src/services/scheduler'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 import { runStuckTaskDetector } from '../src/services/stuckTaskDetector'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
-import { renderUserPrompt } from '@agent-workflow/shared'
+import { } from '@agent-workflow/shared'
 import type {
   ClarifyQuestion,
   NodeKind,
@@ -2300,43 +2300,17 @@ describe('RFC-120 §18 → RFC-141 — prior output on override handoffs (deferr
     expect(Object.keys(ctx!)).not.toContain('suppressPriorOutput')
   })
 
-  test('render: graphOwned=false context (no priorOutputBlock attached) → External Feedback but NO Prior Output / Update Directive', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'process the reassigned question',
-      inputs: {},
-      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
-      agentOutputs: ['design'],
-      // The scheduler's ownership gate did NOT attach priorOutputBlock (graphOwned=false).
-      crossClarifyContext: {
-        block: "### From 'q'\nQ: reassigned?\nA: do X",
-        iteration: '1',
-        sourcesCsv: 'q',
-      },
-    })
-    expect(out).toContain('## External Feedback')
-    expect(out).toContain('do X')
-    expect(out).not.toContain('## Prior Output')
-    expect(out).not.toContain('## Update Directive')
-  })
-
-  test('render: graphOwned=true context (priorOutputBlock attached) STILL renders Prior Output + Update Directive (graph update mode)', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'update your design',
-      inputs: {},
-      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
-      agentOutputs: ['design'],
-      // The scheduler's ownership gate DID attach priorOutputBlock (graphOwned=true).
-      crossClarifyContext: {
-        block: "### From 'q'\nQ&A",
-        iteration: '1',
-        sourcesCsv: 'q',
-        priorOutputBlock: '### design\n<prior artifact>',
-      },
-    })
-    expect(out).toContain('## Prior Output')
-    expect(out).toContain('<prior artifact>')
-    expect(out).toContain('## Update Directive')
-    expect(out).toContain('## External Feedback')
+  // RFC-148 (RFC-132 收尾): the crossClarifyContext render path is DELETED —
+  // designer Q&A rides the flat clarify block; prior output rides
+  // priorOutputUpdate. The two render cases that exercised the dead path are
+  // replaced by a negative lock: the dead surface must not come back.
+  test('render: the External Feedback dead path stays dead (RFC-148)', () => {
+    const promptSrc = readFileSync(
+      join(import.meta.dir, '..', '..', 'shared', 'src', 'prompt.ts'),
+      'utf8',
+    )
+    expect(promptSrc).not.toContain('crossClarifyContext')
+    expect(promptSrc).not.toContain('## External Feedback')
   })
 
   test('source lock: the scheduler no longer gates prior-output on ANY ownership signal (RFC-141)', () => {

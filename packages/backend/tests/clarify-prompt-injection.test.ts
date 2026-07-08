@@ -14,50 +14,53 @@ import { buildClarifyProtocolBlock, renderUserPrompt } from '@agent-workflow/sha
 
 const PROMPT_TS_PATH = resolve(__dirname, '../../shared/src/prompt.ts')
 
-describe('RFC-023 prompt token substitution', () => {
-  test('replaces all four __clarify_*__ tokens when context is set', () => {
+describe('RFC-023/132 prompt token substitution', () => {
+  // RFC-148 (RFC-132 收尾): __clarify_questions__/__clarify_answers__ tokens
+  // and the round-grouped auto-append sections are GONE — the flat
+  // `## Clarify Q&A` block is the single injection surface. The two live
+  // tokens keep substituting.
+  test('replaces the two live __clarify_*__ tokens when context is set', () => {
     const out = renderUserPrompt({
-      promptTemplate:
-        'iter={{__clarify_iteration__}} remaining={{__clarify_remaining__}}\nQ:\n{{__clarify_questions__}}\nA:\n{{__clarify_answers__}}',
+      promptTemplate: 'iter={{__clarify_iteration__}} remaining={{__clarify_remaining__}}',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
       clarifyContext: {
-        questionsBlock: '### Q1: which db?',
-        answersBlock: '### Q1\nSelected: "Postgres"',
+        flatBlock: '## Clarify Q&A\n\n1. [q1] which db?\n   Answer: Postgres',
         iteration: '1',
         remaining: '4',
       },
     })
     expect(out).toContain('iter=1 remaining=4')
-    expect(out).toContain('### Q1: which db?')
-    expect(out).toContain('Selected: "Postgres"')
+    expect(out).toContain('1. [q1] which db?')
   })
 
-  test('auto-appends `## Clarify Q&A` sections when tokens are not referenced in the template', () => {
+  test('appends the flat block verbatim (owns its own heading)', () => {
     const out = renderUserPrompt({
       promptTemplate: 'Please continue based on prior clarifications.',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
       clarifyContext: {
-        questionsBlock: '### Q1: which db?',
-        answersBlock: '### Q1\nSynthesis: User chose: "Postgres"',
+        flatBlock: '## Clarify Q&A\n\n1. [q1] which db?\n   Answer: Postgres',
         iteration: '1',
         remaining: '',
       },
     })
-    expect(out).toContain('## Clarify Q&A — Prior Rounds (Questions)')
-    expect(out).toContain('## Clarify Q&A — Prior Rounds (Answers)')
+    expect(out).toContain('## Clarify Q&A')
+    expect(out).toContain('Answer: Postgres')
+    // legacy round-grouped headings must never come back
+    expect(out).not.toContain('Prior Rounds (Questions)')
+    expect(out).not.toContain('Prior Rounds (Answers)')
   })
 
-  test('omits auto-append sections when blocks are empty', () => {
+  test('omits clarify sections when flat block is empty', () => {
     const out = renderUserPrompt({
       promptTemplate: 'plain run',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      clarifyContext: { questionsBlock: '', answersBlock: '', iteration: '0', remaining: '' },
+      clarifyContext: { flatBlock: '', iteration: '0', remaining: '' },
     })
     expect(out).not.toContain('## Clarify Q&A')
   })
@@ -139,17 +142,21 @@ describe('RFC-023 prompt.ts source-code-text grep guard', () => {
   // These are stable, externally visible token names per the RFC. Renaming any
   // of them silently is a contract break (frontend / backend / agent prompts
   // all reference the same strings). The guard makes any rename loud.
-  const required = [
-    '__clarify_questions__',
-    '__clarify_answers__',
-    '__clarify_iteration__',
-    '__clarify_remaining__',
-  ]
+  // RFC-148: the questions/answers tokens are deleted with the legacy
+  // round-grouped path — the guard now locks BOTH directions: the two live
+  // tokens stay, the two dead ones must never reappear.
+  const required = ['__clarify_iteration__', '__clarify_remaining__']
+  const banned = ['__clarify_questions__', '__clarify_answers__']
   const src = readFileSync(PROMPT_TS_PATH, 'utf8')
 
   for (const token of required) {
     test(`prompt.ts mentions ${token}`, () => {
       expect(src).toContain(token)
+    })
+  }
+  for (const token of banned) {
+    test(`prompt.ts no longer mentions ${token}`, () => {
+      expect(src).not.toContain(token)
     })
   }
 })

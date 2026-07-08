@@ -18,10 +18,17 @@ describe('RFC-103 T5 — BUILTIN_VARS 单一事实源含曾被校验器漏掉的
     expect(BUILTIN_VARS.has('__repo_names__')).toBe(true)
     expect(BUILTIN_VARS.has('__repo_count__')).toBe(true)
   })
-  test('RFC-056 cross-clarify 变量在集中', () => {
-    expect(BUILTIN_VARS.has('__external_feedback__')).toBe(true)
-    expect(BUILTIN_VARS.has('__external_feedback_iteration__')).toBe(true)
-    expect(BUILTIN_VARS.has('__external_feedback_sources__')).toBe(true)
+  test('RFC-148: 死 token 已出集（cross-clarify 三件 + 轮次分组两件）', () => {
+    // RFC-132 收尾——这些 token 的渲染路径零生产者，随 RFC-148 删除；
+    // 模板校验器不应再把它们当合法内建变量放行。
+    expect(BUILTIN_VARS.has('__external_feedback__')).toBe(false)
+    expect(BUILTIN_VARS.has('__external_feedback_iteration__')).toBe(false)
+    expect(BUILTIN_VARS.has('__external_feedback_sources__')).toBe(false)
+    expect(BUILTIN_VARS.has('__clarify_questions__')).toBe(false)
+    expect(BUILTIN_VARS.has('__clarify_answers__')).toBe(false)
+    // 活 token 仍在。
+    expect(BUILTIN_VARS.has('__clarify_iteration__')).toBe(true)
+    expect(BUILTIN_VARS.has('__clarify_remaining__')).toBe(true)
   })
   test('基础变量仍在', () => {
     expect(BUILTIN_VARS.has('__repo_path__')).toBe(true)

@@ -19,8 +19,6 @@
 //      the input map contains an entry for it.
 //   3. Non-system ports in the input map (e.g. `requirement`) still get the
 //      `## requirement` auto-append section.
-//   4. The dedicated `## External Feedback` block STILL renders when a
-//      `crossClarifyContext` is provided (the real content path).
 
 import { describe, expect, test } from 'bun:test'
 
@@ -55,30 +53,6 @@ describe('shared/prompt — system port auto-append filter', () => {
     })
     expect(out).not.toMatch(/^## __clarify_response__\b/m)
     expect(out).toContain('## topic')
-  })
-
-  test('the dedicated `## External Feedback` block STILL renders when crossClarifyContext is provided', () => {
-    // The whole point of the filter is to let the dedicated block (further
-    // down) be the SINGLE place where cross-clarify Q&A surfaces — without
-    // a spurious empty header confusing the human reader.
-    const out = renderUserPrompt({
-      promptTemplate: 'Body.',
-      inputs: {
-        __external_feedback__: '', // system port — auto-append filter skips
-      },
-      meta: { repoPath: '', baseBranch: '', taskId: 't1' },
-      agentOutputs: ['design'],
-      crossClarifyContext: {
-        block: "### From 'auditor' (round 1)\n\n#### Q1: foo\n- bar",
-        iteration: '1',
-        sourcesCsv: 'auditor',
-      },
-    })
-    // No empty `## __external_feedback__` header.
-    expect(out).not.toMatch(/^## __external_feedback__\b/m)
-    // Dedicated section renders with actual content.
-    expect(out).toContain('## External Feedback')
-    expect(out).toContain("### From 'auditor' (round 1)")
   })
 
   test('non-system `__` prefixed ports (none currently, but contract-safe) would still render', () => {

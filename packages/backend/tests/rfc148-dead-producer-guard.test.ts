@@ -10,8 +10,8 @@
 //   2. ClarifyPromptContext 的 questionsBlock/answersBlock 在生产代码零赋值
 //      （scheduler 组装 clarifyContext 恒只含 flatBlock/iteration/remaining/
 //       mode/currentRoundOnly）。
-// T2 收紧项（见 rfc148 plan）：crossClarifyContext 全族（字段+透传管道）删除后
-// 加入零再现清单。
+// T2 已收紧：crossClarifyContext 全族（字段+透传管道）已删，标识符加入零再现
+// 清单（backend+shared src 剥注释扫描）。
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
@@ -64,6 +64,29 @@ describe('RFC-148 ratchet — 死渲染函数生产零调用', () => {
             if (!line.includes(`${fn}(`)) continue
             violations.push(
               `${root.name}/${relative(root.dir, file).split(sep).join('/')}:${i + 1}  [${fn}]  ${line.trim()}`,
+            )
+          }
+        })
+      }
+    }
+    expect(violations).toEqual([])
+  })
+})
+
+describe('RFC-148 ratchet — crossClarifyContext 全族零再现（T2 收紧）', () => {
+  test('backend + shared src：标识符零出现', () => {
+    const violations: string[] = []
+    for (const root of ROOTS) {
+      for (const file of walk(root.dir)) {
+        const lines = stripComments(readFileSync(file, 'utf8')).split('\n')
+        lines.forEach((line, i) => {
+          if (
+            /\b(crossClarifyContext|CrossClarifyPromptContext|CrossClarifySourceContext)\b/.test(
+              line,
+            )
+          ) {
+            violations.push(
+              `${root.name}/${relative(root.dir, file).split(sep).join('/')}:${i + 1}  ${line.trim()}`,
             )
           }
         })

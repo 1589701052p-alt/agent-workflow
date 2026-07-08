@@ -20,7 +20,6 @@
 //   - both directive wordings + both heading pairs, and that neither variant
 //     leaks into the other's rounds;
 //   - emit only when block is non-empty;
-//   - mutual exclusion with cross-clarify (never two prior-output blocks);
 //   - suppression on inline-session resume (RFC-119 D5, kept by RFC-141);
 //   - placement after review/clarify feedback, before the trailing protocol.
 //
@@ -123,28 +122,6 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
     expect(none).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
   })
 
-  test('mutual exclusion with cross-clarify: xcc owns prior output, generalized suppressed (no duplicate)', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'Body.',
-      inputs: {},
-      meta: META,
-      agentOutputs: ['design'],
-      crossClarifyContext: {
-        block: 'external feedback body',
-        iteration: '1',
-        sourcesCsv: 'auditor',
-        priorOutputBlock: '### design\n\nXCC_DRAFT',
-      },
-      priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
-    })
-    // cross-clarify's block renders...
-    expect(out).toContain('XCC_DRAFT')
-    // ...and the generalized one does NOT (suppressed to avoid two prior-output blocks).
-    expect(out).not.toContain('GEN_DRAFT')
-    // exactly one Prior Output heading.
-    expect(out.split(PRIOR_OUTPUT_BLOCK_TITLE).length - 1).toBe(1)
-  })
-
   test('suppressed on inline session resume (clarifyContext.mode=inline)', () => {
     const out = renderUserPrompt({
       promptTemplate: 'Body.',
@@ -153,8 +130,6 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
       agentOutputs: ['design'],
       clarifyContext: {
         mode: 'inline',
-        answersBlock: 'Q1: yes',
-        directive: 'continue',
       },
       priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
     })

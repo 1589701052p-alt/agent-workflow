@@ -22,7 +22,6 @@ import type {
   ClarifyPromptContext,
   ClarifyQuestion,
   ClarifyTruncationWarning,
-  CrossClarifyPromptContext,
   Mcp,
   Plugin,
   PriorOutputUpdateContext,
@@ -147,17 +146,6 @@ export interface RunNodeOptions {
    * first runs and on runs whose agent never asked back.
    */
   clarifyContext?: ClarifyPromptContext
-  /**
-   * RFC-056: External Feedback context for designers being rerun by a
-   * cross-clarify node. Built by services/crossClarify.buildExternalFeedbackContext.
-   * Substitutes {{__external_feedback__}} / {{__external_feedback_iteration__}} /
-   * {{__external_feedback_sources__}} and auto-appends the
-   * `## External Feedback` section at the user prompt tail (between the
-   * RFC-023 `## Self Clarify Q&A` section and the RFC-039 protocol block).
-   * Absent on first runs and on runs whose designer never received
-   * cross-agent feedback.
-   */
-  crossClarifyContext?: CrossClarifyPromptContext
   /**
    * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun
    * (review reject/iterate, manual retry, cascade, resume, clarify-answer,
@@ -722,9 +710,6 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
             : {}),
           ...(opts.reviewContext !== undefined ? { reviewContext: opts.reviewContext } : {}),
           ...(opts.clarifyContext !== undefined ? { clarifyContext: opts.clarifyContext } : {}),
-          ...(opts.crossClarifyContext !== undefined
-            ? { crossClarifyContext: opts.crossClarifyContext }
-            : {}),
           // RFC-119: generalized prior-output for non-cross-clarify reruns.
           ...(opts.priorOutputUpdate !== undefined
             ? { priorOutputUpdate: opts.priorOutputUpdate }

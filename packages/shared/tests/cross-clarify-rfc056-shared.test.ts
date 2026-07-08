@@ -121,10 +121,9 @@ describe("RFC-056 NODE_KIND_BEHAVIORS['clarify-cross-agent']", () => {
   test('matches the documented behavior values exactly', () => {
     expect(NODE_KIND_BEHAVIORS['clarify-cross-agent']).toEqual({
       retryCascade: 'skip',
-      limits: 'opt-out',
-      orphanReap: 'leave-alone',
-      gc: 'gc-with-task',
-      shutdown: 'no-op',
+      isProcess: false,
+      isAgent: false,
+      settlesWithoutRow: true,
     })
   })
 })

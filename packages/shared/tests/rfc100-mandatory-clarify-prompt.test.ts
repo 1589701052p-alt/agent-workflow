@@ -71,9 +71,9 @@ describe('RFC-100 mandatory ask-back — stop round restores the output format',
       meta: META,
       agentOutputs: ['design'],
       hasClarifyChannel: false,
-      // a real stop round still carries the answers block (directive=stop is
-      // applied upstream by the scheduler when flipping effectiveHasClarifyChannel).
-      clarifyContext: { answersBlock: 'A', iteration: '2', directive: 'stop' },
+      // a real stop round still carries clarify context (the stop trailer rides
+      // the flat block upstream when the scheduler flips effectiveHasClarifyChannel).
+      clarifyContext: { iteration: '2' },
     })
     expect(stop).toContain('You MUST end your reply with a `<workflow-output>` block')
     expect(stop).toContain('<port name="design">')

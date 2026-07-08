@@ -67,33 +67,23 @@ export interface ReviewPromptContext {
  * shared/clarify.ts so this module stays a pure substitution engine.
  *
  * Builtin tokens populated from this context:
- *   {{__clarify_questions__}}  ← questionsBlock (markdown listing of what the agent asked)
- *   {{__clarify_answers__}}    ← answersBlock   (markdown listing of user answers + synthesis)
  *   {{__clarify_iteration__}}  ← iteration      (string form of the clarify generation)
  *   {{__clarify_remaining__}}  ← remaining      (string; "max - current" when inside a
  *                                                wrapper-loop with a cap, "" otherwise)
  *
- * Templates that don't reference these tokens get framework-auto-appended
- * sections at the tail of the user prompt — same auto-append pattern as the
- * RFC-005 review context.
+ * RFC-148 (RFC-132 收尾): the legacy round-grouped fields
+ * (questionsBlock / answersBlock / directive / currentRoundOnly) are GONE —
+ * the flat `## Clarify Q&A` block is the only injection surface, exactly what
+ * the scheduler has produced since RFC-132 PR-C.
  */
 export interface ClarifyPromptContext {
   /**
    * RFC-132 (PR-C): the single flat `## Clarify Q&A` block (built by
-   * `renderFlatClarifyQueue` via `buildClarifyQueueContext`). When SET,
-   * `renderUserPrompt` emits it VERBATIM and SKIPS the legacy round-grouped
-   * `questionsBlock` / `answersBlock` auto-append sections (and, since the
-   * scheduler no longer passes a `crossClarifyContext` in the flat path, the
-   * designer's Q&A rides this same block — §5 ②b). ADDITIVE: when UNSET, the
-   * renderer's behavior is byte-for-byte the legacy round-grouped path (the
-   * frontend preview + prompt-injection tests stay green). The block already
-   * carries its own `## Clarify Q&A` heading, so it is appended raw.
+   * `renderFlatClarifyQueue` via `buildClarifyQueueContext`). Emitted
+   * VERBATIM — the block already carries its own heading. The designer's
+   * cross-clarify Q&A rides this same block (§5 ②b).
    */
   flatBlock?: string
-  /** Markdown listing of the last-round questions. */
-  questionsBlock?: string
-  /** Markdown listing of user answers (incl. deterministic synthesis line per question). */
-  answersBlock?: string
   /** Current clarifyIteration as string. '0' means first asking-back; '1' means
    *  first answers-received run; '2' means second ask-then-answer, etc. */
   iteration?: string
@@ -101,90 +91,17 @@ export interface ClarifyPromptContext {
    *  String(max_iterations - current iteration). Agent reads this to know how
    *  many ask-back rounds it has left before the framework exhausts the loop. */
   remaining?: string
-  /** RFC-023 directive iteration: 'stop' means the runner MUST NOT append the
-   *  `<workflow-clarify>` protocol block for this rerun, regardless of the
-   *  agent node's clarify channel wiring. Not consumed by `renderUserPrompt`
-   *  directly — it is read by the scheduler to override `hasClarifyChannel`
-   *  before calling the runner. `undefined` (default) preserves legacy
-   *  behaviour: the channel is gated purely on the workflow definition. */
-  directive?: 'continue' | 'stop'
   /**
    * RFC-026: which clarify session mode emitted this context. Defaults to
    * `'isolated'` (treats missing / undefined the same as RFC-023 behavior).
    *
    * When `'inline'`, the runner has spawned opencode with `--session <id>`
    * and the prior rounds' Q&A + protocol blocks already live in opencode's
-   * session memory. `renderUserPrompt` then:
-   *   1. Skips the prior-rounds questions / answers auto-append sections
-   *      (replaced by a single "User Answers (Current Round)" section,
-   *      because `answersBlock` carries only the freshly submitted answers).
-   *   2. Replaces the trailing protocol block(s) with a short inline
-   *      reminder via `buildClarifyInlineReminder()` — re-emitting the
-   *      full bi-modal preamble + format block would just burn tokens
-   *      duplicating context the session already has.
+   * session memory. `renderUserPrompt` then skips port-content substitution
+   * and auto-append sections and swaps the trailing protocol block for a
+   * short inline reminder (`buildClarifyInlineReminder()`).
    */
   mode?: 'isolated' | 'inline'
-  /**
-   * RFC-026: when `true` (always true under `mode === 'inline'`), the
-   * `answersBlock` represents ONLY the most-recent round, NOT the
-   * cumulative multi-round dump. The renderer uses this flag to pick the
-   * correct section title ("User Answers (Current Round)" vs the legacy
-   * "Prior Rounds (Answers)"). Kept as a separate boolean — rather than
-   * implied from `mode === 'inline'` — so future modes can mix-and-match
-   * without conflating semantics.
-   */
-  currentRoundOnly?: boolean
-}
-
-/**
- * RFC-056 cross-clarify-driven re-run context (designer side).
- *
- * Filled when an agent is being re-spawned because the cross-clarify scheduler
- * has aggregated submitted answers from one or more downstream questioner
- * nodes and is now triggering the designer rerun. All fields are pre-rendered
- * strings — the structured-to-markdown serialization lives in
- * shared/clarify-cross.ts so this module stays a pure substitution engine.
- *
- * Builtin tokens populated from this context:
- *   {{__external_feedback__}}            ← block (markdown body produced by
- *                                          buildExternalFeedbackBlock)
- *   {{__external_feedback_iteration__}}  ← iteration (string form of
- *                                          designer's clarifyIteration when
- *                                          triggered by external feedback)
- *   {{__external_feedback_sources__}}    ← sourcesCsv (comma-separated source
- *                                          questioner node ids, dictionary order)
- *
- * Templates that don't reference these tokens get framework-auto-appended
- * sections at the tail of the user prompt — same auto-append pattern as the
- * RFC-005 review context and RFC-023 clarify context.
- */
-export interface CrossClarifyPromptContext {
-  /** Pre-rendered markdown body listing every source's Q&A for this batch
-   *  (dictionary-sorted by source questioner nodeId — see
-   *  `buildExternalFeedbackBlock`). */
-  block?: string
-  /** Designer's current `clarifyIteration` as string (when triggered by an
-   *  external feedback round — runtime API unchanged after RFC-064). '0' means
-   *  the designer has never been triggered by external feedback; '1' is the
-   *  first answers-received rerun; '2' is the second, etc. */
-  iteration?: string
-  /** Comma-separated list of source questioner nodeIds the current batch
-   *  drew Q&A from. Lets agent templates reference "you are being reviewed
-   *  by {{__external_feedback_sources__}} this round". */
-  sourcesCsv?: string
-  /**
-   * RFC-056 §6 update mode (2026-05-22 amendment): pre-rendered markdown body
-   * of the designer's last done output (one `### <port_name>` section per
-   * declared output port). When present, `shared/prompt.ts` emits a
-   * `## Prior Output (to update or regenerate)` section AND a `## Update Directive`
-   * section so the agent knows to update the prior draft rather than
-   * regenerate. The scheduler populates this only when the rerun was
-   * triggered by a cross-clarify submit (NOT for fresh first-time runs).
-   *
-   * Empty string OR undefined means "no prior output to update" — emit
-   * neither section (legacy regenerate-from-inputs behaviour).
-   */
-  priorOutputBlock?: string
 }
 
 /**
@@ -196,9 +113,9 @@ export interface CrossClarifyPromptContext {
  * `## Prior Output` + directive section pair — the update variant on an output
  * round, the ask-back variant (RFC-141) when mandatory ask-back is active.
  *
- * Mutually exclusive with `crossClarifyContext.priorOutputBlock` — the scheduler
- * sets at most one, and `renderUserPrompt` suppresses this when cross-clarify is
- * already rendering its prior output. Empty / undefined `block` ⇒ no sections.
+ * Empty / undefined `block` ⇒ no sections. (RFC-148: the historical mutual
+ * exclusion with the dead RFC-056 designer-context prior output is gone —
+ * this is the only prior-output surface.)
  */
 export interface PriorOutputUpdateContext {
   block?: string
@@ -257,9 +174,6 @@ export interface RenderPromptInput {
   /** RFC-023 clarify-driven re-run context. Absent for first runs and runs
    *  where the agent's clarify channel is wired but it hasn't yet asked. */
   clarifyContext?: ClarifyPromptContext
-  /** RFC-056 cross-clarify-driven designer re-run context. Absent for first
-   *  runs and runs that were not triggered by a cross-clarify submit batch. */
-  crossClarifyContext?: CrossClarifyPromptContext
   /**
    * RFC-023 / RFC-039 / RFC-100: the scheduler's effectiveHasClarifyChannel —
    * true ⟺ a clarify channel is wired AND the user has not clicked "Stop
@@ -283,15 +197,15 @@ export interface RenderPromptInput {
   priorOutputUpdate?: PriorOutputUpdateContext
   /**
    * RFC-122: the scheduler set the per-(task, asking-node) clarify directive to
-   * `stop` for THIS dispatch AND there is no prior-rounds `clarifyContext` whose
-   * `answersBlock` already carries the trailer (i.e. a first run / a run with no
-   * answered clarify round). When true the renderer injects the
+   * `stop` for THIS dispatch AND no prior-rounds clarify content already carries
+   * the trailer (i.e. a first run / a run with no answered clarify round).
+   * When true the renderer injects the
    * `### User directive: STOP CLARIFYING` trailer right before the trailing
    * output protocol so the agent is told to proceed without asking even on its
    * very first run. `hasClarifyChannel` is already false by construction (the
    * scheduler forced ask-back off), so the output protocol is what trails.
    * Undefined / false (the override is absent or `continue`, or the trailer is
-   * already inside `clarifyContext.answersBlock`) ⇒ byte-for-byte unchanged.
+   * already carried by the flat clarify block) ⇒ byte-for-byte unchanged.
    */
   clarifyStopNotice?: boolean
 }
@@ -326,8 +240,6 @@ export const BUILTIN_VARS = new Set([
   // RFC-023 clarify context tokens. Stable names; renaming is a contract
   // break — see packages/backend/tests/clarify-prompt-injection.test.ts
   // for the source-code-text grep regression guard.
-  '__clarify_questions__',
-  '__clarify_answers__',
   '__clarify_iteration__',
   '__clarify_remaining__',
   // RFC-056 cross-clarify context tokens. Stable names; renaming is a
@@ -335,9 +247,6 @@ export const BUILTIN_VARS = new Set([
   // for the grep guard on `CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE` +
   // packages/backend/tests/cross-clarify-prompt-injection-rfc056.test.ts
   // for the per-token presence guard.
-  '__external_feedback__',
-  '__external_feedback_iteration__',
-  '__external_feedback_sources__',
   // RFC-066 multi-repo placeholders. Single-repo runs render
   // `__repo_names__` as the empty string (length-1 array, worktreeDirName='');
   // `__repos__` becomes the single worktreePath; `__repo_count__` is '1'.
@@ -354,8 +263,8 @@ export const BUILTIN_VARS = new Set([
  * `definition.edges` as system-channel targets (RFC-023 clarify channel /
  * RFC-056 cross-clarify channel) so the canvas can render handles + the
  * scheduler can track wiring, but the actual prompt content arrives via the
- * `## Clarify Q&A — Prior Rounds` / `## External Feedback` blocks rendered
- * below. Skipping these here keeps the auto-append from emitting empty,
+ * flat `## Clarify Q&A` block rendered below (RFC-132/148). Skipping these
+ * here keeps the auto-append from emitting empty,
  * misleading `## __port_name__` headers that make the human reader (and
  * the agent) think the cross-channel content is missing.
  */
@@ -376,7 +285,6 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   const referenced = new Set<string>()
   const rc = input.reviewContext
   const cc = input.clarifyContext
-  const xcc = input.crossClarifyContext
   // RFC-026: inline-mode clarify reruns send opencode a SECOND message in an
   // already-loaded session. The original first-round user prompt — template
   // body + every input port value — is already in opencode's transcript and
@@ -420,20 +328,10 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return rc?.iterateTargetPort ?? ''
         case '__sibling_outputs__':
           return rc?.siblingOutputs ?? ''
-        case '__clarify_questions__':
-          return cc?.questionsBlock ?? ''
-        case '__clarify_answers__':
-          return cc?.answersBlock ?? ''
         case '__clarify_iteration__':
           return cc?.iteration ?? ''
         case '__clarify_remaining__':
           return cc?.remaining ?? ''
-        case '__external_feedback__':
-          return xcc?.block ?? ''
-        case '__external_feedback_iteration__':
-          return xcc?.iteration ?? ''
-        case '__external_feedback_sources__':
-          return xcc?.sourcesCsv ?? ''
         case '__repos__':
           return (input.meta.repos ?? []).map((r) => r.worktreePath).join('\n')
         case '__repo_names__':
@@ -456,9 +354,8 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     // reason input substitution above drops to ''.
     if (inlineMode) continue
     // System ports (`__clarify_response__`, `__external_feedback__`, etc.)
-    // are framework-injected via dedicated prompt blocks below
-    // (`## Clarify Q&A — Prior Rounds (Answers)` / `## External Feedback`),
-    // not via real edge dataflow. Rendering them as `## __port_name__`
+    // are framework-injected via the flat `## Clarify Q&A` block below
+    // (RFC-132/148), not via real edge dataflow. Rendering them as `## __port_name__`
     // sections produces empty / misleading headers that imply the
     // cross-clarify or self-clarify content is missing when it's actually
     // present further down. Skip the auto-append entry for them.
@@ -501,84 +398,21 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     }
   }
 
-  // RFC-023 / RFC-026: auto-append the clarify Q&A sections at the prompt
-  // tail when the author's template did not explicitly reference the tokens.
-  //
-  // Inline mode (RFC-026): opencode session memory already holds prior
-  // rounds. Skip the "Prior Rounds (Questions)" section; emit a single
-  // "User Answers (Current Round)" carrying just the freshly submitted
-  // answers. The questions block is suppressed entirely in inline mode —
-  // re-rendering questions the agent already saw burns tokens and re-anchors
-  // it to the prior wording. (Authors who explicitly reference
-  // `{{__clarify_questions__}}` still get substitution above — that path is
-  // a deliberate template choice.)
+  // RFC-023/026/132 clarify injection — the flat `## Clarify Q&A` block is
+  // the single surface (RFC-148 removed the legacy round-grouped sections;
+  // inline mode needs no special title because the block is round-agnostic).
   if (cc?.flatBlock !== undefined && cc.flatBlock.trim().length > 0) {
-    // RFC-132 (PR-C): the unified flat `## Clarify Q&A` block supersedes the
-    // round-grouped questions/answers sections below (self / questioner /
-    // designer all render as equal peers inside it — §5). Emit it verbatim (it
-    // owns its own heading) and SKIP the legacy sections. The block is
-    // round-agnostic, so inline mode needs no separate "current round" title.
+    // RFC-132 (PR-C): the unified flat `## Clarify Q&A` block — self /
+    // questioner / designer all render as equal peers inside it (§5). Emit
+    // it verbatim (it owns its own heading). The block is round-agnostic, so
+    // inline mode needs no separate "current round" title. RFC-148: the
+    // legacy round-grouped else-branch that used to follow is deleted — the
+    // scheduler has produced flatBlock-only contexts since RFC-132 PR-C.
     sections += `\n\n${cc.flatBlock}`
-  } else if (cc !== undefined) {
-    if (
-      !inlineMode &&
-      cc.questionsBlock !== undefined &&
-      cc.questionsBlock.trim().length > 0 &&
-      !referenced.has('__clarify_questions__')
-    ) {
-      sections += `\n\n## Clarify Q&A — Prior Rounds (Questions)\n${cc.questionsBlock}`
-    }
-    if (
-      cc.answersBlock !== undefined &&
-      cc.answersBlock.trim().length > 0 &&
-      !referenced.has('__clarify_answers__')
-    ) {
-      const heading =
-        inlineMode || cc.currentRoundOnly === true
-          ? 'Clarify Q&A — User Answers (Current Round)'
-          : 'Clarify Q&A — Prior Rounds (Answers)'
-      sections += `\n\n## ${heading}\n${cc.answersBlock}`
-    }
-  }
-
-  // RFC-056: auto-append the External Feedback section when the designer's
-  // template didn't reference `{{__external_feedback__}}` directly. Placed
-  // after RFC-023 self-clarify auto-append so a designer that has BOTH
-  // sources of feedback in the same rerun shows them in stable order:
-  //   ## Self Clarify Q&A (RFC-023, if any)
-  //   ## Prior Output (to update or regenerate) (RFC-056 update mode, if any)
-  //   ## External Feedback (RFC-056, if any)
-  //   ## Update Directive (RFC-056 update mode, if any)
-  // A single `clarifyIteration` counter covers both self-clarify and
-  // cross-clarify rounds via RFC-064 unification (the `kind` column on
-  // `clarify_rounds` is the only "self vs cross" discriminator the runtime
-  // needs); see RFC-064 design.md §3 + RFC-056 design.md §6.3.
-  if (xcc !== undefined) {
-    // §6 update-mode prior-output section (renders BEFORE External Feedback
-    // so the agent reads "here's the draft you're updating" → "here's what
-    // the user wants changed" in that order).
-    if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${xcc.priorOutputBlock}`
-    }
-    if (
-      xcc.block !== undefined &&
-      xcc.block.trim().length > 0 &&
-      !referenced.has('__external_feedback__')
-    ) {
-      sections += `\n\n## External Feedback\n${xcc.block}`
-    }
-    // §6 update-mode directive (renders AFTER External Feedback so it's the
-    // last instruction before the protocol block — primes the agent's
-    // "what do I do this round" mental model on update-mode terms).
-    if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
-    }
   }
 
   // RFC-119 / RFC-141: generalized rerun prior-output. Emits ONLY when:
   //   - the scheduler set priorOutputUpdate.block (a prior run captured output), AND
-  //   - cross-clarify is NOT already rendering its own prior output (mutual
-  //     exclusion — never inject two prior-output blocks in one prompt), AND
   //   - NOT an inline session resume (the resumed session already holds the prior
   //     output — re-injecting wastes tokens and re-anchors on stale text).
   // RFC-141: a mandatory ask-back round now ALSO renders it — with the
@@ -588,12 +422,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // is selected off the SAME hasClarifyChannel signal that picks the trailing
   // protocol below, so wording and protocol can never disagree.
   const pou = input.priorOutputUpdate
-  if (
-    pou?.block !== undefined &&
-    pou.block.trim().length > 0 &&
-    !(xcc?.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) &&
-    !inlineMode
-  ) {
+  if (pou?.block !== undefined && pou.block.trim().length > 0 && !inlineMode) {
     if (input.hasClarifyChannel === true) {
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE}\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT}`
@@ -609,8 +438,8 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // ask-back off), so the agent gets the output protocol below; this section
   // makes the user's "stop clarifying" decision explicit so the agent doesn't
   // re-ask out of its own bias. When a prior round exists the scheduler routes
-  // the trailer through `clarifyContext.answersBlock` instead (via
-  // buildPromptContext's directiveOverride) and leaves this flag false — never
+  // the trailer through the flat clarify block instead and leaves this flag
+  // false — never
   // both, so the STOP CLARIFYING trailer appears exactly once.
   if (input.clarifyStopNotice === true && input.hasClarifyChannel !== true) {
     sections += `\n\n${renderClarifyDirectiveTrailer('stop')}`
