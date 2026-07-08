@@ -2,99 +2,99 @@
 // task / node-runs / diff queries on relevant events. The diff query is
 // only invalidated on task.status or task.done because per-event diff
 // recomputes would be expensive; tracked separately for future tuning.
+//
+// RFC-152 — thin wrapper over the useWsInvalidation rules table; the socket
+// is shared per path (D5), so mounting this next to useClarifyWs on the
+// same task keeps a single physical connection.
 
-import { useQueryClient } from '@tanstack/react-query'
+import type { QueryKey } from '@tanstack/react-query'
 import type { TaskWsMessage } from '@agent-workflow/shared'
-import { useWebSocket } from './useWebSocket'
+import { WS_PATHS } from '@agent-workflow/shared'
+import { useWsInvalidation, type WsInvalidationRules } from './useWsInvalidation'
 
 export function useTaskSync(taskId: string | null): void {
-  const qc = useQueryClient()
-  useWebSocket({
-    path: taskId === null ? '' : `/ws/tasks/${encodeURIComponent(taskId)}`,
-    enabled: taskId !== null,
-    onMessage: (raw) => {
-      if (taskId === null) return
-      const msg = raw as TaskWsMessage
-      if (msg.type === 'task.status' || msg.type === 'task.done') {
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'diff'] })
-        // Also re-fetch node-runs/outputs on terminal transitions: the
-        // per-node status/output events may interleave with task.done in
-        // either order (or drop on slower runners), so without this the
-        // panel can stay stuck on "pending…" after the task heading shows
-        // "done". Caught by the macOS Playwright e2e at main.spec.ts:243.
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-      }
-      if (msg.type === 'node.status') {
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-        // RFC-120: the question board's phases derive from node_runs (handler
-        // pending→running→done) — refresh it on every node status change.
-        void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
-        // RFC-122: reconcile the per-node clarify directive toggles on any node
-        // activity (another tab's flip lands here; the acting tab is already
-        // optimistic + invalidated).
-        void qc.invalidateQueries({ queryKey: ['task-clarify-directives', taskId] })
-      }
-      if (msg.type === 'node.event') {
-        // Future: render directly on a node-events feed instead of going
-        // through react-query. For now we just keep the node-runs row's
-        // token usage etc. up to date.
-        void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-      }
-      // RFC-005: review.* events. Invalidate the per-review detail (if
-      // any tab has that page open) + the list + pending-count so the
-      // sidebar badge updates without waiting for the 15s poll.
-      if (
-        msg.type === 'review.created' ||
-        msg.type === 'review.decision_made' ||
-        msg.type === 'review.comment_added' ||
-        msg.type === 'review.comment_deleted' ||
-        // RFC-079: a multi-document item's accepted/not_accepted choice changed
-        // in another tab — refresh the detail so the left-rail chips + the
-        // approve gate stay in sync.
-        msg.type === 'review.selection_changed'
-      ) {
-        void qc.invalidateQueries({ queryKey: ['reviews', 'detail', msg.nodeRunId] })
-        void qc.invalidateQueries({ queryKey: ['reviews', 'list'] })
-        void qc.invalidateQueries({ queryKey: ['reviews', 'pending-count'] })
-        // RFC-142: a decision / fresh round also changes the round history
-        // (list expand + multi-doc historical view both key off it).
-        void qc.invalidateQueries({ queryKey: ['reviews', 'rounds', msg.nodeRunId] })
-        // The decision flip also moves the host task between statuses
-        // (awaiting_review ↔ running ↔ done), so refresh that too.
-        if (msg.type === 'review.decision_made') {
-          void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
-          void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-        }
-      }
-      // RFC-023: clarify.* events. Same shape as the review block — the
-      // task-detail page may have the per-session detail open; the
-      // /clarify list + the sidebar badge both want a refetch when a new
-      // session is created or sealed.
-      if (msg.type === 'clarify.created' || msg.type === 'clarify.answered') {
-        void qc.invalidateQueries({ queryKey: ['clarify', 'detail', msg.nodeRunId] })
-        void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
-        void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
-        // RFC-120: a new/answered clarify round lazily collects new question
-        // entries and moves their phase — refresh the board.
-        void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
-        if (msg.type === 'clarify.answered') {
-          void qc.invalidateQueries({ queryKey: ['tasks', taskId] })
-          void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
-          // RFC-123: a 'stop' answer writes the per-(task, asking-node) clarify
-          // directive (the canvas toggle's single source of truth). Refresh the
-          // toggles so an already-mounted canvas reflects 停止反问 immediately, not
-          // only after the follow-up node.status from the rerun.
-          void qc.invalidateQueries({ queryKey: ['task-clarify-directives', taskId] })
-        }
-      }
-      // RFC-123: cross-clarify answer/reject likewise writes the questioner node's
-      // clarify directive on 'stop' — refresh the canvas toggles. (Cross events are
-      // otherwise not threaded through this hook; this is the directive facet the
-      // single-source toggle needs.)
-      if (msg.type === 'cross-clarify.answered' || msg.type === 'cross-clarify.rejected') {
-        void qc.invalidateQueries({ queryKey: ['task-clarify-directives', taskId] })
-      }
-    },
-  })
+  // task.status / task.done also re-fetch node-runs/outputs on terminal
+  // transitions: the per-node status/output events may interleave with
+  // task.done in either order (or drop on slower runners), so without this
+  // the panel can stay stuck on "pending…" after the task heading shows
+  // "done". Caught by the macOS Playwright e2e at main.spec.ts:243.
+  const taskTerminal = (): QueryKey[] => [
+    ['tasks', taskId],
+    ['tasks', taskId, 'diff'],
+    ['tasks', taskId, 'node-runs'],
+  ]
+  // RFC-005: review.* events invalidate the per-review detail (if any tab
+  // has that page open) + the list + pending-count so the sidebar badge
+  // updates without waiting for the 15s poll. RFC-142: a decision / fresh
+  // round also changes the round history (list expand + multi-doc
+  // historical view both key off it).
+  const reviewKeys = (nodeRunId: string): QueryKey[] => [
+    ['reviews', 'detail', nodeRunId],
+    ['reviews', 'list'],
+    ['reviews', 'pending-count'],
+    ['reviews', 'rounds', nodeRunId],
+  ]
+  // RFC-023: clarify.* events — the task-detail page may have the
+  // per-session detail open; the /clarify list + the sidebar badge both
+  // want a refetch when a new session is created or sealed. RFC-120: a
+  // new/answered clarify round lazily collects new question entries and
+  // moves their phase — refresh the board.
+  const clarifyKeys = (nodeRunId: string): QueryKey[] => [
+    ['clarify', 'detail', nodeRunId],
+    ['clarify', 'list'],
+    ['clarify', 'pending-count'],
+    ['task-questions', taskId],
+  ]
+
+  const rules: WsInvalidationRules<TaskWsMessage> = {
+    'task.status': () => taskTerminal(),
+    'task.done': () => taskTerminal(),
+    // RFC-120: the question board's phases derive from node_runs (handler
+    // pending→running→done) — refresh it on every node status change.
+    // RFC-122: reconcile the per-node clarify directive toggles on any node
+    // activity (another tab's flip lands here; the acting tab is already
+    // optimistic + invalidated).
+    'node.status': () => [
+      ['tasks', taskId, 'node-runs'],
+      ['task-questions', taskId],
+      ['task-clarify-directives', taskId],
+    ],
+    // Future: render directly on a node-events feed instead of going
+    // through react-query. For now we just keep the node-runs row's
+    // token usage etc. up to date.
+    'node.event': () => [['tasks', taskId, 'node-runs']],
+    'review.created': (msg) => reviewKeys(msg.nodeRunId),
+    // The decision flip also moves the host task between statuses
+    // (awaiting_review ↔ running ↔ done), so refresh that too.
+    'review.decision_made': (msg) => [
+      ...reviewKeys(msg.nodeRunId),
+      ['tasks', taskId],
+      ['tasks', taskId, 'node-runs'],
+    ],
+    'review.comment_added': (msg) => reviewKeys(msg.nodeRunId),
+    'review.comment_deleted': (msg) => reviewKeys(msg.nodeRunId),
+    // RFC-079: a multi-document item's accepted/not_accepted choice changed
+    // in another tab — refresh the detail so the left-rail chips + the
+    // approve gate stay in sync.
+    'review.selection_changed': (msg) => reviewKeys(msg.nodeRunId),
+    'clarify.created': (msg) => clarifyKeys(msg.nodeRunId),
+    // RFC-123: a 'stop' answer writes the per-(task, asking-node) clarify
+    // directive (the canvas toggle's single source of truth). Refresh the
+    // toggles so an already-mounted canvas reflects 停止反问 immediately, not
+    // only after the follow-up node.status from the rerun.
+    'clarify.answered': (msg) => [
+      ...clarifyKeys(msg.nodeRunId),
+      ['tasks', taskId],
+      ['tasks', taskId, 'node-runs'],
+      ['task-clarify-directives', taskId],
+    ],
+    // RFC-123: cross-clarify answer/reject likewise writes the questioner
+    // node's clarify directive on 'stop' — refresh the canvas toggles.
+    // (Cross events are otherwise not threaded through this hook; this is
+    // the directive facet the single-source toggle needs.)
+    'cross-clarify.answered': () => [['task-clarify-directives', taskId]],
+    'cross-clarify.rejected': () => [['task-clarify-directives', taskId]],
+  }
+
+  useWsInvalidation<TaskWsMessage>(taskId === null ? null : WS_PATHS.task(taskId), rules)
 }

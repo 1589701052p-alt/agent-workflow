@@ -10,10 +10,16 @@
 // subscribe; the backend WS upgrade enforces the broader admin gate on
 // /ws/memory-distill-jobs but the /ws/memories channel is broadcast to all
 // logged-in clients (regular users still see "Memories" sub-tabs).
+//
+// RFC-152 — thin wrapper over the useWsInvalidation rules table. The old
+// `type.startsWith('memory.')` guard becomes an exhaustive per-variant
+// table over MemoryWsMessage; unknown/foreign types are ignored by the
+// table lookup itself.
 
-import { useQueryClient } from '@tanstack/react-query'
+import type { QueryKey } from '@tanstack/react-query'
 import type { MemoryWsMessage } from '@agent-workflow/shared'
-import { useWebSocket } from './useWebSocket'
+import { WS_PATHS } from '@agent-workflow/shared'
+import { useWsInvalidation, type WsInvalidationRules } from './useWsInvalidation'
 
 export interface UseMemoryWsOpts {
   /** When false the connection is torn down. Default true. */
@@ -29,33 +35,36 @@ export const MEMORY_QUERY_KEYS = {
     ['memories', 'scoped', scopeType, scopeId] as const,
 }
 
+// Invalidate the broad surface — react-query coalesces refetches so
+// multiple invalidates in a single message are cheap.
+function broadSurface(): QueryKey[] {
+  return [
+    MEMORY_QUERY_KEYS.pendingCount,
+    MEMORY_QUERY_KEYS.candidates,
+    MEMORY_QUERY_KEYS.all,
+    ['memories', 'scoped'],
+  ]
+}
+
+/** Broad surface + the detail key when the message carries a single id. */
+function withDetail(memoryId: string): QueryKey[] {
+  return [...broadSurface(), MEMORY_QUERY_KEYS.detail(memoryId)]
+}
+
+const RULES: WsInvalidationRules<MemoryWsMessage> = {
+  'memory.candidate.created': (msg) => withDetail(msg.memory.id),
+  'memory.candidate.promoted': (msg) => withDetail(msg.memoryId),
+  'memory.archived': (msg) => withDetail(msg.memoryId),
+  'memory.unarchived': (msg) => withDetail(msg.memoryId),
+  'memory.deleted': (msg) => withDetail(msg.memoryId),
+  // RFC-045 in-place edit — useMemoryWs routes any memory event to the full
+  // surface; changedFields granularity is a UI concern, not an invalidation
+  // concern.
+  'memory.updated': (msg) => withDetail(msg.memoryId),
+  // superseded carries oldId/newId (no memoryId) → broad surface only.
+  'memory.superseded': () => broadSurface(),
+}
+
 export function useMemoryWs({ enabled = true }: UseMemoryWsOpts = {}): void {
-  const qc = useQueryClient()
-  useWebSocket({
-    path: '/ws/memories',
-    enabled,
-    onMessage: (raw) => {
-      // Treat as MemoryWsMessage; defensive check on `type` so a future
-      // server-side rename doesn't crash this hook's invalidation pass.
-      if (typeof raw !== 'object' || raw === null) return
-      const msg = raw as MemoryWsMessage & { type?: string }
-      if (typeof msg.type !== 'string' || !msg.type.startsWith('memory.')) return
-      // Invalidate the broad surface — react-query coalesces refetches so
-      // multiple invalidates in a single message are cheap.
-      void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.pendingCount })
-      void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.candidates })
-      void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.all })
-      void qc.invalidateQueries({ queryKey: ['memories', 'scoped'] })
-      // Detail invalidation when the message carries a single id.
-      const maybeId =
-        msg.type === 'memory.candidate.created'
-          ? msg.memory.id
-          : 'memoryId' in msg
-            ? msg.memoryId
-            : null
-      if (typeof maybeId === 'string') {
-        void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.detail(maybeId) })
-      }
-    },
-  })
+  useWsInvalidation<MemoryWsMessage>(enabled ? WS_PATHS.memories : null, RULES)
 }
