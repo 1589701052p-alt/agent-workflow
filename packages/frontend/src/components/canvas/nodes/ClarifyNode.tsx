@@ -17,6 +17,7 @@
 // with the rest of the canvas (Chinese under zh-CN, English under en-US).
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { CLARIFY_INPUT_PORT_NAME, CLARIFY_OUTPUT_PORT_NAME } from '@agent-workflow/shared'
 import { QuestionBadge } from './QuestionBadge'
@@ -44,7 +45,7 @@ export function ClarifyNode({ data, selected }: Props) {
   // to the standard data.status (e.g. node-run-coloring on the task detail
   // canvas may pass through 'done' for the answered case).
   const status: ClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? `⚡ ${t('clarifyNode.label')}`
+  const labelText = data.kindLabel ?? `${NODE_GLYPHS.clarify} ${t('clarifyNode.label')}`
   return (
     <div
       className={

@@ -19,6 +19,7 @@
 // "output" semantically belongs to the whole group, not a side row.
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { FANOUT_DONE_PORT_NAME } from '@agent-workflow/shared'
 import { PortHandles } from './PortHandles'
@@ -71,7 +72,12 @@ export function GroupWrapperNode({ data, selected }: Props) {
       : kind === 'fanout'
         ? t('wrapperNode.labelFanout')
         : t('wrapperNode.labelGit')
-  const icon = kind === 'loop' ? '⟳' : kind === 'fanout' ? '⫶' : '⎈'
+  const icon =
+    kind === 'loop'
+      ? NODE_GLYPHS['wrapper-loop']
+      : kind === 'fanout'
+        ? NODE_GLYPHS['wrapper-fanout']
+        : NODE_GLYPHS['wrapper-git']
   return (
     <div
       className={[

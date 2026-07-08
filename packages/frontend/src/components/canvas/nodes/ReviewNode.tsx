@@ -13,6 +13,7 @@
 // (see review.ts ReviewNodeSchema.inputSource) is preserved.
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { REVIEW_INPUT_HANDLE_ID } from '../connectionSync'
@@ -40,7 +41,9 @@ export function ReviewNode({ data, selected }: Props) {
         aria-label="review-input"
       />
       <div className="canvas-node__header">
-        <span className="canvas-node__kind">⚖ {t('reviewNode.label')}</span>
+        <span className="canvas-node__kind">
+          {NODE_GLYPHS.review} {t('reviewNode.label')}
+        </span>
         <span className="canvas-node__title">{data.title || data.nodeId}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>

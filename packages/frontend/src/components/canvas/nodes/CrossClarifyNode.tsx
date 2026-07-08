@@ -18,6 +18,7 @@
 // The kind pill defaults to '⚡ cross-clarify'.
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import {
   CROSS_CLARIFY_INPUT_PORT_NAME,
@@ -42,7 +43,8 @@ interface Props extends NodeProps {
 export function CrossClarifyNode({ data, selected }: Props) {
   const { t } = useTranslation()
   const status: CrossClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? `⚡ ${t('crossClarifyNode.label')}`
+  const labelText =
+    data.kindLabel ?? `${NODE_GLYPHS['clarify-cross-agent']} ${t('crossClarifyNode.label')}`
   const toQuestionerLabel = t('crossClarify.canvas.handleLabel.toQuestioner')
   const toDesignerLabel = t('crossClarify.canvas.handleLabel.toDesigner')
   return (
