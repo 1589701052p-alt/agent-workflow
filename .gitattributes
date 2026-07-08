@@ -1,0 +1,27 @@
+# RFC-144 PR-5 — normalise line endings to LF on checkout so `format:check`
+# (prettier, endOfLine: lf) is meaningful on Windows CI runners. Without this,
+# a Windows checkout with `core.autocrlf=true` stores LF but checks out CRLF,
+# red-ing prettier on every file. `eol=lf` forces LF in the working tree on
+# all platforms; CI gets a clean LF tree, local Windows dev trees stay LF too.
+* text=auto eol=lf
+
+# Binary assets — never normalise (CRLF conversion corrupts them).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.wasm binary
+*.sqlite binary
+*.db binary
+*.zip binary
+*.tar.gz binary
+*.gz binary

@@ -17,8 +17,9 @@
 // Notes:
 //   - This intentionally does no cross-compilation. Run it on each target OS.
 //     CI invokes it per matrix entry.
-//   - The binary name follows the design.md convention: macos / linux + arm64
-//     / x86_64. (`process.arch` returns 'x64' for x86_64; we rename it.)
+//   - The binary name follows the design.md convention: macos / linux / windows
+//     + arm64 / x86_64. (`process.arch` returns 'x64' for x86_64; we rename it.
+//     Windows binaries carry a `.exe` extension; POSIX binaries have none.)
 
 import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
@@ -75,9 +76,19 @@ export const GRAMMAR_FILES: Record<string, string> = {}
 `
 
 function platformSuffix(): string {
-  const platform = process.platform === 'darwin' ? 'macos' : process.platform
+  const platform =
+    process.platform === 'darwin'
+      ? 'macos'
+      : process.platform === 'win32'
+        ? 'windows'
+        : process.platform
   const arch = process.arch === 'x64' ? 'x86_64' : process.arch
   return `${platform}-${arch}`
+}
+
+/** Windows binaries carry the `.exe` extension; POSIX binaries have none. */
+function binaryExtension(): string {
+  return process.platform === 'win32' ? '.exe' : ''
 }
 
 function walkFiles(root: string): string[] {
@@ -268,7 +279,7 @@ async function main(): Promise<void> {
   )
 
   // 3. bun build --compile.
-  const outfile = join(outDir, `agent-workflow-${platformSuffix()}`)
+  const outfile = join(outDir, `agent-workflow-${platformSuffix()}${binaryExtension()}`)
   try {
     await run(
       ['bun', 'build', mainEntry, '--compile', '--target=bun', '--minify', `--outfile=${outfile}`],

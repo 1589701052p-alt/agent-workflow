@@ -214,17 +214,25 @@ network, appearance, memory, connection, rendering, and authentication tabs.
 
 ## Requirements
 
-| Tool         | Supported version                          | Why                                    |
-| ------------ | ------------------------------------------ | -------------------------------------- |
-| **opencode** | ≥ 1.14.0 and < 1.17.0 (verified to 1.15.5) | Spawned as the agent subprocess        |
-| **git**      | 2.5+                                       | `git worktree`, snapshots, stash, diff |
-| **OS**       | macOS or Linux                             | Windows is not supported in v1         |
+| Tool         | Supported version                            | Why                                    |
+| ------------ | -------------------------------------------- | -------------------------------------- |
+| **opencode** | ≥ 1.14.0 and < 1.17.0 (verified to 1.15.5)   | Spawned as the agent subprocess        |
+| **git**      | 2.5+                                         | `git worktree`, snapshots, stash, diff |
+| **OS**       | macOS, Linux, or Windows 10/11 / Server 2022 | Windows needs WSL2 — see below         |
 
 The daemon enforces a supported **range**: it refuses to start if opencode is
 below `1.14.0` _or_ at/above the `1.17.0` ceiling (every `1.14.x`, `1.15.x`, and
 `1.16.x` is accepted). `opencode` must be on `PATH`, or set `opencodePath` in
 `config.json`. The same range is reported by `agent-workflow doctor` and the
 **Settings → Runtime** tab.
+
+> **Windows note (RFC-144).** The daemon runs natively on Windows 10/11 and
+> Windows Server 2022, but `opencode` itself is not native-Windows-ready — the
+> daemon spawns it inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/)
+> via a runtime driver. The `wsl-opencode` driver is landing in PR-3 of the
+> Windows-adaptation RFC; until then the daemon builds and runs on Windows but
+> cannot launch agent tasks. `agent-workflow doctor` checks WSL2 + opencode-in-WSL
+> presence and reports any missing piece.
 
 ---
 
@@ -251,9 +259,38 @@ curl -L -o agent-workflow \
 chmod +x agent-workflow
 ```
 
+```powershell
+# Windows (x86_64) — PowerShell
+Invoke-WebRequest `
+  https://github.com/wangbinquan/agent-workflow/releases/latest/download/agent-workflow-windows-x86_64.exe `
+  -OutFile agent-workflow.exe
+```
+
 The binary is one self-contained executable (≈ 78 MiB on macOS, ≈ 107 MiB on
 Linux) that bundles the Bun runtime, the backend, the SPA, and the database
 migrations.
+
+### Windows setup
+
+The Windows binary runs the daemon natively, but agent tasks spawn `opencode`
+inside WSL2 (opencode is not native-Windows-ready — see RFC-144). One-time
+setup:
+
+```powershell
+# 1. Install WSL2 + a Linux distro (Ubuntu shown).
+wsl --install -d Ubuntu
+
+# 2. Inside WSL, install opencode (≥ 1.14.0, < 1.17.0) + git.
+wsl -d Ubuntu -- bash -lc 'npm install -g opencode-ai@1.15.5 && sudo apt-get update && sudo apt-get install -y git'
+
+# 3. Verify the daemon can see WSL + opencode.
+.\agent-workflow.exe doctor
+```
+
+`doctor` checks WSL2 status, opencode-in-WSL version, git, long-path support,
+and the ACL on the daemon token file. The daemon also recommends enabling
+`LongPathsEnabled` for deep worktree paths (`reg query HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled`); even without it, the daemon
+falls back to the `\\?\` prefix for long paths.
 
 ---
 
