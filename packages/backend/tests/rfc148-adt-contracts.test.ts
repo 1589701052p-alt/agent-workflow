@@ -77,6 +77,58 @@ describe('RFC-148 — clarifyChannel 渲染投影格', () => {
   })
 })
 
+describe('RFC-148 — 存量模板兼容（实现门 high 采纳）', () => {
+  test('legacy 死 token 渲染空串（default 分支——与历史字节相同）', () => {
+    const out = renderUserPrompt({
+      ...BASE,
+      promptTemplate: 'A[{{__clarify_questions__}}]B[{{__external_feedback__}}]C',
+    })
+    expect(out).toContain('A[]B[]C')
+  })
+
+  test('legacy 死 token 只降级为 deprecation warning，不阻断启动', async () => {
+    const { validateWorkflowDef } = await import('../src/services/workflow.validator')
+    const def = {
+      $schema_version: 4,
+      inputs: [],
+      nodes: [
+        {
+          id: 'a',
+          kind: 'agent-single',
+          agentName: 'w',
+          promptTemplate: 'do {{__clarify_answers__}} and {{__external_feedback_sources__}}',
+        },
+      ],
+      edges: [],
+    }
+    const agents = [
+      {
+        id: 'w',
+        name: 'w',
+        description: '',
+        outputs: ['out'],
+        syncOutputsOnIterate: true,
+        permission: {},
+        skills: [],
+        dependsOn: [],
+        mcp: [],
+        plugins: [],
+        frontmatterExtra: {},
+        bodyMd: '',
+        schemaVersion: 1,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]
+    const res = validateWorkflowDef(def as never, { agents, skills: [] } as never)
+    const deprecated = res.issues.filter((i) => i.code === 'prompt-template-deprecated-token')
+    expect(deprecated.length).toBe(2)
+    expect(deprecated.every((i) => i.severity === 'warning')).toBe(true)
+    expect(res.issues.filter((i) => i.code === 'prompt-template-unresolved')).toEqual([])
+    expect(res.ok).toBe(true)
+  })
+})
+
 describe('RFC-148 — runner 源码形态锁（cap 随接线族、门随 directive）', () => {
   const runnerSrc = readFileSync(
     resolve(import.meta.dir, '..', 'src', 'services', 'runner.ts'),

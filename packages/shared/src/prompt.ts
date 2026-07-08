@@ -300,6 +300,24 @@ export const BUILTIN_VARS = new Set([
 ])
 
 /**
+ * RFC-148 — retired clarify/cross-clarify tokens. Their render paths were
+ * deleted with the RFC-132 finish (zero producers), and substitution now
+ * falls through to the default branch which renders '' — byte-identical to
+ * what these tokens produced for years. They are OUT of BUILTIN_VARS (new
+ * templates should not use them) but the validator recognizes them as a
+ * DEPRECATION WARNING instead of a `prompt-template-unresolved` error, so
+ * a saved workflow whose template still references one keeps launching
+ * (impl-gate high: consumer compatibility is not the producer's deadness).
+ */
+export const DEPRECATED_PROMPT_TOKENS: ReadonlySet<string> = new Set([
+  '__clarify_questions__',
+  '__clarify_answers__',
+  '__external_feedback__',
+  '__external_feedback_iteration__',
+  '__external_feedback_sources__',
+])
+
+/**
  * System ports the framework injects via DEDICATED prompt sections instead of
  * the generic `## ${port_name}` auto-append loop. They appear in
  * `definition.edges` as system-channel targets (RFC-023 clarify channel /

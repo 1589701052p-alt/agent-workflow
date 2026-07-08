@@ -28,6 +28,7 @@ import type {
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
 import {
+  DEPRECATED_PROMPT_TOKENS,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CLARIFY_RESPONSE_TARGET_PORT_NAME,
@@ -1498,6 +1499,19 @@ export function validateWorkflowDef(
     // standard inbound-port set captures the reference correctly.
     for (const ref of refs) {
       if (BUILTIN_VARS.has(ref)) continue
+      // RFC-148: retired clarify/cross-clarify tokens render '' (default
+      // substitution branch) — a saved template referencing one keeps
+      // launching, but the author gets a deprecation nudge instead of a
+      // false "missing inbound port" error.
+      if (DEPRECATED_PROMPT_TOKENS.has(ref)) {
+        issues.push({
+          code: 'prompt-template-deprecated-token',
+          message: `node '${node.id}' prompt references retired token {{${ref}}} — it renders an empty string (RFC-148 removed its injection path); remove it from the template`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+        continue
+      }
       if (!inboundPorts.has(ref)) {
         issues.push({
           code: 'prompt-template-unresolved',
