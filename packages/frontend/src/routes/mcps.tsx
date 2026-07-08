@@ -9,18 +9,17 @@
 // list); per-mcp re-probe goes through `useProbeMcpMutation` so its onSuccess
 // invalidates both query keys at once.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Mcp, McpProbe } from '@agent-workflow/shared'
-import { api } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import { useResourceList } from '@/hooks/useResourceList'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
 import { McpProbeStatusChip, type McpProbeUiStatus } from '@/components/McpProbeStatusChip'
+import { ResourceNameCell, type OwnerLookup } from '@/components/ResourceNameCell'
 import { useMcpProbes, useProbeMcpMutation } from '@/lib/mcp-probe-query'
 import { Route as RootRoute } from './__root'
 
@@ -35,25 +34,18 @@ const MAX_INLINE_TOOL_CHIPS = 12
 
 function McpsPage() {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Mcp[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  const { data, isLoading, error, del, owners } = useResourceList<Mcp>({
     queryKey: ['mcps'],
-    queryFn: ({ signal }) => api.get('/api/mcps', undefined, signal),
+    endpoint: '/api/mcps',
+    deleteBy: 'name',
   })
-
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
   const probesQ = useMcpProbes()
 
   // Local-only expand state — keyed by mcp.name, session-scoped (no IDB).
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const toggleExpanded = (name: string): void =>
     setExpanded((s) => ({ ...s, [name]: !(s[name] ?? false) }))
-
-  const del = useMutation({
-    mutationFn: (name: string) => api.delete(`/api/mcps/${encodeURIComponent(name)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcps'] }),
-  })
 
   // Index probes by mcpName so each row can look its own state up in O(1).
   const probesByName = useMemo<Record<string, McpProbe>>(() => {
@@ -108,11 +100,9 @@ function McpsPage() {
                   probe={probe}
                   isExpanded={isExpanded}
                   onToggleExpanded={() => toggleExpanded(m.name)}
-                  onDelete={() => del.mutateAsync(m.name)}
+                  onDelete={() => del.mutateAsync(m)}
                   deleteDisabled={del.isPending}
-                  ownerName={
-                    m.ownerUserId != null ? owners.get(m.ownerUserId)?.displayName : undefined
-                  }
+                  owners={owners}
                 />
               )
             })}
@@ -130,8 +120,8 @@ interface McpRowProps {
   onToggleExpanded: () => void
   onDelete: () => Promise<unknown>
   deleteDisabled: boolean
-  /** RFC-099 — resolved owner display name (page-level batch lookup). */
-  ownerName?: string | undefined
+  /** RFC-099 — page-level batch owner lookup (rendered by ResourceNameCell). */
+  owners: OwnerLookup
 }
 
 function McpRow(props: McpRowProps) {
@@ -157,19 +147,14 @@ function McpRow(props: McpRowProps) {
             {props.isExpanded ? '▼' : '▶'}
           </button>
         </td>
-        <td className="data-table__nowrap">
-          <Link to="/mcps/$name" params={{ name: props.mcp.name }} className="data-table__link">
-            {props.mcp.name}
-          </Link>
-          {props.mcp.visibility === 'private' && (
-            <span className="chip chip--tight">{t('acl.privateChip')}</span>
-          )}
-          {props.ownerName !== undefined && (
-            <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
-              {props.ownerName}
-            </span>
-          )}
-        </td>
+        <ResourceNameCell
+          to="/mcps/$name"
+          params={{ name: props.mcp.name }}
+          name={props.mcp.name}
+          visibility={props.mcp.visibility}
+          ownerUserId={props.mcp.ownerUserId}
+          owners={props.owners}
+        />
         <td className="data-table__nowrap">
           <span className="chip chip--tight">
             {props.mcp.type === 'local' ? t('mcps.typeLocal') : t('mcps.typeRemote')}
