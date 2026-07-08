@@ -1,18 +1,19 @@
 // RFC-112 PR-A — runtime registry: named runtime instances {name, protocol,
-// binaryPath} backed by the `runtimes` table. The two built-ins (opencode,
-// claude-code) are framework-seeded (builtin=1, read-only). agents.runtime /
-// config.defaultRuntime reference a row by name; this module resolves a name to
-// a (protocol, binary) for dispatch and owns CRUD + the read-only / in-use /
-// name guards. Admin-managed (the route layer enforces requireAdmin); there is
+// binaryPath} backed by the `runtimes` table. opencode / claude-code are
+// framework-seeded on first startup only (empty table, RFC-153) as ORDINARY
+// editable + deletable rows. agents.runtime / config.defaultRuntime reference a
+// row by name; this module resolves a name to a (protocol, binary) for dispatch
+// and owns CRUD + the in-use / name guards. Admin-managed (the route layer
+// enforces requireAdmin); there is
 // no per-user ACL — a runtime is machine-level config including a local binary
 // path (RFC-112 D3).
 
 import { readFileSync } from 'node:fs'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, runtimes } from '@/db/schema'
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import type { RuntimeKind } from '@/services/runtime'
 import { RUNTIME_KINDS } from '@/services/runtime'
 import { createLogger } from '@/util/log'
@@ -54,7 +55,6 @@ export interface RuntimeRow extends RuntimeProfile {
   name: string
   protocol: RuntimeProtocol
   binaryPath: string | null
-  builtin: boolean
   /** RFC-118: false = disabled (hidden from agent/default pickers, kept in list). */
   enabled: boolean
   lastProbeJson: string | null
@@ -81,7 +81,6 @@ export interface RuntimeView extends RuntimeProfile {
   name: string
   protocol: RuntimeProtocol
   binaryPath: string | null
-  builtin: boolean
   /** RFC-118: false = disabled (filtered from agent/default pickers, kept in list). */
   enabled: boolean
   /** RFC-113: this row is the global default (name === config.defaultRuntime). */
@@ -125,7 +124,6 @@ export function runtimeRowToView(
     name: row.name,
     protocol: row.protocol,
     binaryPath: row.binaryPath,
-    builtin: row.builtin,
     enabled: row.enabled,
     isDefault: row.name === (defaultRuntimeName ?? 'opencode'),
     ...runtimeProfileOf(row),
@@ -247,26 +245,15 @@ export async function resolveInternalAgentRuntime(
 
 // --- guards ----------------------------------------------------------------
 
-export function assertNotBuiltinRuntime(row: Pick<RuntimeRow, 'builtin' | 'name'>): void {
-  if (row.builtin) {
-    throw new ForbiddenError(
-      'runtime-builtin-readonly',
-      `runtime '${row.name}' is a built-in framework runtime and is read-only`,
-    )
-  }
-}
-
 function validateName(name: string): void {
   if (!RUNTIME_NAME_RE.test(name))
     throw new ValidationError(
       'runtime-name-invalid',
       'runtime name must be lowercase URL-safe (^[a-z0-9][a-z0-9-]{0,30}$)',
     )
-  if (BUILTIN_NAMES.has(name))
-    throw new ConflictError(
-      'runtime-name-reserved',
-      `'${name}' is a reserved built-in runtime name`,
-    )
+  // RFC-153: opencode / claude-code are no longer reserved — they are ordinary
+  // rows now, so a deleted preseeded name may be recreated (name uniqueness in
+  // createRuntime still blocks a duplicate while a preseeded row exists).
 }
 
 function validateProtocol(protocol: string): asserts protocol is RuntimeProtocol {
@@ -297,7 +284,12 @@ export async function findRuntimeReferences(
     .select({ name: agents.name })
     .from(agents)
     .where(eq(agents.runtime, name))) as { name: string }[]
-  return { agentNames: refAgents.map((a) => a.name), isDefault: defaultRuntimeName === name }
+  return {
+    agentNames: refAgents.map((a) => a.name),
+    // RFC-153 F1: fold an unset config default → 'opencode' (the effective default
+    // that dispatch + resolveRuntimeByName fall back to) so it can't be deleted.
+    isDefault: (defaultRuntimeName ?? 'opencode') === name,
+  }
 }
 
 // --- CRUD ------------------------------------------------------------------
@@ -354,7 +346,6 @@ export async function createRuntime(db: DbClient, input: CreateRuntimeInput): Pr
     name: input.name,
     protocol: input.protocol as RuntimeProtocol,
     binaryPath,
-    builtin: false,
     lastProbeJson: input.lastProbeJson ?? null,
     createdBy: input.createdBy ?? null,
     ...profilePatch(input),
@@ -450,7 +441,6 @@ export async function deleteRuntime(
 ): Promise<void> {
   const row = await getRuntime(db, name)
   if (row === null) throw new NotFoundError('runtime-not-found', `runtime '${name}' not found`)
-  assertNotBuiltinRuntime(row)
   const refs = await findRuntimeReferences(db, name, defaultRuntimeName)
   if (refs.isDefault || refs.agentNames.length > 0) {
     const by = [
@@ -470,43 +460,35 @@ export async function deleteRuntime(
 // --- seed ------------------------------------------------------------------
 
 /**
- * Ensure the two built-in rows exist with the canonical IDENTITY (protocol +
- * builtin=1). RFC-112 Codex P2 reset them fully; RFC-113 D8 narrows the reset to
- * IDENTITY ONLY — `binary_path` + the profile params (model/variant/...) are now
- * admin-editable + carry migrated config values (§3), so they must be PRESERVED
- * across restarts. Only a wrong protocol / non-builtin flag (corruption, or a
- * user who acquired the reserved name) is corrected. A row not present is created
- * with NULL binary/params (the config→builtin migration fills them next).
+ * RFC-153: seed opencode / claude-code ONLY on a fresh (empty) runtimes table.
+ * They are ordinary editable + deletable rows now — the built-in read-only flag
+ * is gone. Once the table has ANY row (including the case where an admin deleted a
+ * preseeded row and kept a custom one) we never re-insert, so a deletion sticks
+ * across restarts. Fresh install → both rows created with NULL binary/params (the
+ * config binary backfill fills binary next; model stays NULL = opencode's own
+ * default). Idempotent via the empty-table guard.
  */
 export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
+  const existing = await db.select({ id: runtimes.id }).from(runtimes).limit(1)
+  if (existing.length > 0) return
   for (const b of BUILTIN_RUNTIMES) {
-    const row = await getRuntime(db, b.name)
-    if (row === null) {
-      await db
-        .insert(runtimes)
-        .values({ id: ulid(), name: b.name, protocol: b.protocol, binaryPath: null, builtin: true })
-    } else if (row.protocol !== b.protocol || !row.builtin) {
-      // identity drift only — preserve binary_path + profile params.
-      log.warn('runtime-builtin-identity-reset', {
-        name: b.name,
-        was: { protocol: row.protocol, builtin: row.builtin },
-      })
-      await db
-        .update(runtimes)
-        .set({ protocol: b.protocol, builtin: true, updatedAt: Date.now() })
-        .where(eq(runtimes.name, b.name))
-    }
+    await db
+      .insert(runtimes)
+      .values({ id: ulid(), name: b.name, protocol: b.protocol, binaryPath: null })
   }
 }
 
 // --- RFC-113 one-time startup migrations ------------------------------------
 
-/** RFC-113 §3.1 / RFC-115: backfill the built-in runtimes' binary paths from
+/** RFC-113 §3.1 / RFC-115: backfill the preseeded runtimes' binary paths from
  *  config — NULL `binary_path` ONLY, so it's idempotent + never clobbers an
- *  admin-edited built-in. RFC-115 dropped the dead generation-param backfill
+ *  admin-edited row. RFC-115 dropped the dead generation-param backfill
  *  (defaultModel / variant / temperature / steps / maxSteps / defaultClaudeModel
  *  are gone from config); generation params now live solely on the runtime
- *  profile rows, edited via the Settings runtime list. */
+ *  profile rows, edited via the Settings runtime list. RFC-153 F2: names are
+ *  reusable now, so match on PROTOCOL too — never write a config binary path into
+ *  a user row that merely reused 'opencode' / 'claude-code' under a mismatched
+ *  protocol. */
 export async function migrateConfigIntoBuiltins(
   db: DbClient,
   config: {
@@ -514,16 +496,21 @@ export async function migrateConfigIntoBuiltins(
     claudeCodePath?: string | null
   },
 ): Promise<void> {
-  const backfillBinary = async (name: string, binaryPath: string | null | undefined) => {
+  const backfillBinary = async (
+    name: string,
+    protocol: RuntimeProtocol,
+    binaryPath: string | null | undefined,
+  ) => {
     const row = await getRuntime(db, name)
-    if (row === null || row.binaryPath !== null || binaryPath == null) return
+    if (row === null || row.protocol !== protocol || row.binaryPath !== null || binaryPath == null)
+      return
     await db
       .update(runtimes)
       .set({ binaryPath, updatedAt: Date.now() })
       .where(eq(runtimes.name, name))
   }
-  await backfillBinary('opencode', config.opencodePath)
-  await backfillBinary('claude-code', config.claudeCodePath)
+  await backfillBinary('opencode', 'opencode', config.opencodePath)
+  await backfillBinary('claude-code', 'claude-code', config.claudeCodePath)
 }
 
 /**
@@ -561,17 +548,26 @@ export async function assertConfigDefaultsMigrated(
   ] as const
   const present = LEGACY.filter((k) => raw[k] !== undefined && raw[k] !== null)
   if (present.length === 0) return
-  const builtins = await db
-    .select({
-      model: runtimes.model,
-      variant: runtimes.variant,
-      temperature: runtimes.temperature,
-      steps: runtimes.steps,
-      maxSteps: runtimes.maxSteps,
-    })
-    .from(runtimes)
-    .where(eq(runtimes.builtin, true))
-  const anyProfileSet = builtins.some(
+  // RFC-153 F3: `builtin` is gone + names are reusable, so only the CANONICAL
+  // protocol-default rows (name === protocol, protocol immutable) prove the
+  // RFC-113 backfill ran — a user row that merely reused 'opencode' must not
+  // count. (In the pre-RFC-113 first-upgrade case this guard serves, the table is
+  // freshly seeded this boot, so there is no user row to confuse it with.)
+  const preseeded = (
+    await db
+      .select({
+        name: runtimes.name,
+        protocol: runtimes.protocol,
+        model: runtimes.model,
+        variant: runtimes.variant,
+        temperature: runtimes.temperature,
+        steps: runtimes.steps,
+        maxSteps: runtimes.maxSteps,
+      })
+      .from(runtimes)
+      .where(inArray(runtimes.name, [...BUILTIN_NAMES]))
+  ).filter((r) => r.protocol === r.name)
+  const anyProfileSet = preseeded.some(
     (r) =>
       r.model !== null ||
       r.variant !== null ||
