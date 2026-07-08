@@ -286,9 +286,11 @@ describe('RFC-047 runner eager-writes injected_memories_json before opencode spa
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          envelopeFollowup: true,
-          resumeSessionId: 'sess_resume',
-          envelopeFollowupReason: 'envelope-missing',
+          promptMode: {
+            kind: 'followup',
+            resumeSessionId: 'sess_resume',
+            reason: 'envelope-missing',
+          },
         }),
     )
     const runningEvents = received.filter(

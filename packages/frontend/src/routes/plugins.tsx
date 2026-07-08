@@ -9,17 +9,18 @@
 // Both stay here because they're per-row operations that don't require
 // opening the detail page.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Plugin } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import { useResourceList } from '@/hooks/useResourceList'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { ResourceNameCell } from '@/components/ResourceNameCell'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -31,17 +32,12 @@ export const Route = createRoute({
 function PluginsPage() {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Plugin[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  // The per-row check-update / upgrade mutations below stay page-specific.
+  const { data, isLoading, error, del, owners } = useResourceList<Plugin>({
     queryKey: ['plugins'],
-    queryFn: ({ signal }) => api.get('/api/plugins', undefined, signal),
-  })
-
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
-
-  const del = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/plugins/${encodeURIComponent(id)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['plugins'] }),
+    endpoint: '/api/plugins',
+    deleteBy: 'id',
   })
 
   const [updateInfo, setUpdateInfo] = useState<Record<string, { latest: string | null }>>({})
@@ -113,19 +109,14 @@ function PluginsPage() {
                 upd !== undefined && upd.latest !== null && upd.latest !== p.resolvedVersion
               return (
                 <tr key={p.id} data-testid={`plugin-row-${p.name}`}>
-                  <td className="data-table__nowrap">
-                    <Link to="/plugins/$id" params={{ id: p.id }} className="data-table__link">
-                      {p.name}
-                    </Link>
-                    {p.visibility === 'private' && (
-                      <span className="chip chip--tight">{t('acl.privateChip')}</span>
-                    )}
-                    {p.ownerUserId != null && owners.get(p.ownerUserId) !== undefined && (
-                      <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
-                        {owners.get(p.ownerUserId)?.displayName}
-                      </span>
-                    )}
-                  </td>
+                  <ResourceNameCell
+                    to="/plugins/$id"
+                    params={{ id: p.id }}
+                    name={p.name}
+                    visibility={p.visibility}
+                    ownerUserId={p.ownerUserId}
+                    owners={owners}
+                  />
                   <td className="data-table__truncate" title={p.spec}>
                     <code className="muted">{p.spec}</code>
                   </td>
@@ -168,8 +159,8 @@ function PluginsPage() {
                     </Link>
                     <ConfirmButton
                       label={t('common.delete')}
-                      onConfirm={() => del.mutateAsync(p.id)}
-                      danger
+                      onConfirm={() => del.mutateAsync(p)}
+                      variant="danger"
                       disabled={del.isPending}
                       size="sm"
                     />

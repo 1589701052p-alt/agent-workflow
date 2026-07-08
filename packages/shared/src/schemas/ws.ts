@@ -352,3 +352,27 @@ export const WsControlMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
 ])
 export type WsControlMessage = z.infer<typeof WsControlMessageSchema>
+
+// -----------------------------------------------------------------------------
+// RFC-152 — double-ended WS path constants. The single source for every WS
+// endpoint path: frontend hooks / components build their subscription URLs
+// from these (no hand-written `/ws/...` strings), and the backend registry's
+// pathRes are interlock-tested against them
+// (packages/backend/tests/rfc152-ws-paths-interlock.test.ts), so the two
+// sides cannot drift apart silently.
+// -----------------------------------------------------------------------------
+
+export const WS_PATHS = {
+  /** Per-task detail stream (`?since=N` replays node_run_events). */
+  task: (taskId: string): string => `/ws/tasks/${encodeURIComponent(taskId)}`,
+  /** Global task list stream (per-frame RBAC-filtered). */
+  tasksList: '/ws/tasks',
+  /** Workflow list + editor multi-tab sync (per-frame ACL-filtered). */
+  workflows: '/ws/workflows',
+  /** RFC-033 — per-batch repo import progress. */
+  repoImport: (batchId: string): string => `/ws/repo-imports/${encodeURIComponent(batchId)}`,
+  /** RFC-041 — platform memory candidate / promotion stream (per-frame scope-filtered). */
+  memories: '/ws/memories',
+  /** RFC-041 — distill queue monitor (admin-only upgrade gate). */
+  memoryDistillJobs: '/ws/memory-distill-jobs',
+} as const

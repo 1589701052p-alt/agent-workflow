@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import type { SessionSubagentCall } from '@agent-workflow/shared'
 import { ConversationFlow, RoleBadge } from './ConversationFlow'
 import { toolStatusKind, toolStatusLabel } from './toolStatus'
+import { StatusChip } from '../StatusChip'
 
 interface Props {
   call: SessionSubagentCall
@@ -35,9 +36,9 @@ export function SubagentBlock({ call }: Props) {
         </button>
         <RoleBadge variant="subagent" icon="🪆" label={t('session.subagent')} />
         <code className="session-block__tool-name">{subtitle}</code>
-        <span className={`status-chip status-chip--${toolStatusKind(call.status)}`}>
+        <StatusChip kind={toolStatusKind(call.status)}>
           {toolStatusLabel(call.status, t)}
-        </span>
+        </StatusChip>
         {captureMissing && (
           <span className="session-capture-warning">{t('session.captureMissing')}</span>
         )}

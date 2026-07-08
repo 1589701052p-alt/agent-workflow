@@ -1,17 +1,18 @@
 // Workflows list. Each row links into the xyflow editor at /workflows/$id.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workflow } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import { ApiError } from '@/api/client'
+import { useResourceList } from '@/hooks/useResourceList'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { ResourceNameCell } from '@/components/ResourceNameCell'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -23,18 +24,13 @@ export const Route = createRoute({
 function WorkflowsPage() {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Workflow[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  // The YAML import flow below stays page-specific.
+  const { data, isLoading, error, del, owners } = useResourceList<Workflow>({
     queryKey: ['workflows'],
-    queryFn: ({ signal }) => api.get('/api/workflows', undefined, signal),
+    endpoint: '/api/workflows',
+    deleteBy: 'id',
   })
-
-  const del = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/workflows/${encodeURIComponent(id)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
-  })
-
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
 
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
@@ -114,19 +110,17 @@ function WorkflowsPage() {
           <tbody>
             {data.map((w) => (
               <tr key={w.id}>
-                <td>
-                  <Link to="/workflows/$id" params={{ id: w.id }} className="data-table__link">
-                    {w.name}
-                  </Link>
-                  {w.visibility === 'private' && (
-                    <span className="chip chip--tight">{t('acl.privateChip')}</span>
-                  )}
-                  {w.ownerUserId != null && owners.get(w.ownerUserId) !== undefined && (
-                    <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
-                      {owners.get(w.ownerUserId)?.displayName}
-                    </span>
-                  )}
-                </td>
+                {/* RFC-151 PR-3: the shared cell adds data-table__nowrap (the
+                    other resource lists already had it) — long workflow names
+                    now stay single-line like every sibling list. */}
+                <ResourceNameCell
+                  to="/workflows/$id"
+                  params={{ id: w.id }}
+                  name={w.name}
+                  visibility={w.visibility}
+                  ownerUserId={w.ownerUserId}
+                  owners={owners}
+                />
                 <td className="data-table__muted">v{w.version}</td>
                 <td className="data-table__muted">
                   <code>{w.id}</code>
@@ -137,8 +131,8 @@ function WorkflowsPage() {
                   </Link>
                   <ConfirmButton
                     label={t('common.delete')}
-                    onConfirm={() => del.mutateAsync(w.id)}
-                    danger
+                    onConfirm={() => del.mutateAsync(w)}
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

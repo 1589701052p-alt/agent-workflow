@@ -18,11 +18,12 @@
 // in 'pending' state before calling runNode().
 
 import type {
+  ClarifyChannel,
+  PromptMode,
   Agent,
   ClarifyPromptContext,
   ClarifyQuestion,
   ClarifyTruncationWarning,
-  CrossClarifyPromptContext,
   Mcp,
   Plugin,
   PriorOutputUpdateContext,
@@ -148,17 +149,6 @@ export interface RunNodeOptions {
    */
   clarifyContext?: ClarifyPromptContext
   /**
-   * RFC-056: External Feedback context for designers being rerun by a
-   * cross-clarify node. Built by services/crossClarify.buildExternalFeedbackContext.
-   * Substitutes {{__external_feedback__}} / {{__external_feedback_iteration__}} /
-   * {{__external_feedback_sources__}} and auto-appends the
-   * `## External Feedback` section at the user prompt tail (between the
-   * RFC-023 `## Self Clarify Q&A` section and the RFC-039 protocol block).
-   * Absent on first runs and on runs whose designer never received
-   * cross-agent feedback.
-   */
-  crossClarifyContext?: CrossClarifyPromptContext
-  /**
    * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun
    * (review reject/iterate, manual retry, cascade, resume, clarify-answer,
    * ask-back rounds, override handoffs). The scheduler sets it from the
@@ -168,45 +158,17 @@ export interface RunNodeOptions {
    */
   priorOutputUpdate?: PriorOutputUpdateContext
   /**
-   * RFC-122: the per-(task, asking-node) clarify directive is 'stop' for this
-   * dispatch AND there is no prior-rounds clarifyContext carrying the trailer
-   * (first run / pre-clarify error-retry). Threaded straight into
-   * renderUserPrompt, which injects the `### User directive: STOP CLARIFYING`
-   * trailer before the output protocol. `hasClarifyChannel` is already false by
-   * construction. Absent ⇒ unchanged.
+   * RFC-148: this dispatch's clarify-channel state as ONE discriminated
+   * value (shared `ClarifyChannel`) — replaces the historical
+   * hasClarifyChannel / clarifyStopped / clarifyStopNotice / clarifyMode
+   * quartet. `kind` alone drives the envelope parser's question cap
+   * (cross lifts the RFC-023 max — independent of enforcement, so a
+   * suppressed cross rerun still parses with the lifted cap);
+   * `directive` drives the RFC-100 clarify-required gate ('mandatory'),
+   * the RFC-123 clarify-forbidden rejection ('stopped'), and the render
+   * projections. Absent ⇒ { kind: 'none' } semantics.
    */
-  clarifyStopNotice?: boolean
-  /**
-   * RFC-023 + RFC-039: when true (scheduler computed
-   * `agentHasClarifyChannel(definition, agentNodeId)` from the workflow
-   * definition), the renderer emits a bi-modal trailing block. RFC-039
-   * sharpened the basetone so `<workflow-clarify>` is the default reply and
-   * `<workflow-output>` is only allowed when every decision has been pinned
-   * down — agents biased toward output even when the user wired a clarify
-   * channel. Off by default keeps the non-clarify wire format identical to
-   * pre-RFC-023.
-   */
-  hasClarifyChannel?: boolean
-  /**
-   * RFC-123 follow-up: the node is EXPLICITLY stopped (canvas toggle='stop' OR a
-   * latest answered 'stop' directive), as opposed to merely review-rerun ask-back
-   * suppression. When true, a disobedient `<workflow-clarify>` is REJECTED (no
-   * clarify session is created) — symmetric to the `hasClarifyChannel` output
-   * rejection. The scheduler computes it; absent ⇒ unchanged (review reruns keep
-   * emitting clarify).
-   */
-  clarifyStopped?: boolean
-  /**
-   * RFC-056: when this agent's `__clarify__` source port is wired to a
-   * `clarify-cross-agent` node (rather than the RFC-023 self-clarify node),
-   * the runner's envelope parser must NOT truncate at the RFC-023 default
-   * (`CLARIFY_MAX_QUESTIONS=5`) — cross-clarify deliberately lifts that cap
-   * (questions can be 1..N). The scheduler computes this by looking at the
-   * workflow definition (`findCrossClarifyNodeForQuestioner`) and threads it
-   * here so the runner doesn't need the definition. Default `'self'` keeps
-   * RFC-023 byte-for-byte semantics.
-   */
-  clarifyMode?: 'self' | 'cross'
+  clarifyChannel?: ClarifyChannel
   /** Skills used by this agent. */
   skills: ResolvedSkill[]
   /**
@@ -346,47 +308,16 @@ export interface RunNodeOptions {
    */
   nodeKind?: string
   /**
-   * RFC-042: same-session envelope follow-up. When the scheduler's
-   * `decideEnvelopeFollowup` determined the previous attempt failed for a
-   * recognized envelope-format reason AND opencode itself exited cleanly
-   * with a captured session id, the next retry attempt is run with this set
-   * to `true`. The runner then:
-   *   - Renders the user prompt via `renderEnvelopeFollowupPrompt` (a short
-   *     directive — no inputs, no template body, no auto-appended port
-   *     sections, no full RFC-039 / RFC-023 protocol blocks). The original
-   *     prompt is still in opencode's session memory thanks to
-   *     `resumeSessionId` being set alongside this flag.
-   *   - Skips materializing the RFC-029 inventory plugin (the first attempt
-   *     already wrote a snapshot; followup is only nudging for an envelope).
-   *
-   * Always passed together with `resumeSessionId`. `envelopeFollowupReason`
-   * drives the opening line and `envelopeFollowupClarifyDirective` controls
-   * whether the RFC-039 "Keep clarifying" trailer is appended. Defaults
-   * `false` / `undefined` preserve legacy callers.
+   * RFC-148: how to render this dispatch's user prompt, as ONE discriminated
+   * value (shared `PromptMode`) — replaces the historical envelopeFollowup /
+   * envelopeFollowupReason / envelopeFollowupClarifyDirective /
+   * envelopeFollowupPortValidations quartet. The followup arm carries the
+   * MANDATORY `resumeSessionId` (a follow-up nudge is only meaningful inside
+   * the resumed session that already holds the original prompt — the
+   * "followup without a session" state is unrepresentable). Absent ⇒
+   * { kind: 'initial' } semantics.
    */
-  envelopeFollowup?: boolean
-  envelopeFollowupReason?:
-    | 'envelope-missing'
-    | 'both-present'
-    | 'clarify-malformed'
-    | 'port-validation'
-    | 'clarify-required'
-    | 'envelope-port-malformed'
-  envelopeFollowupClarifyDirective?: 'continue' | 'stop'
-  /**
-   * RFC-049: structured failures persisted into the previous attempt's
-   * `port_validation_failures_json` column. Scheduler reads + zod-parses the
-   * column, threads the array through here when scheduling a
-   * `reason='port-validation'` followup; runner forwards it to the shared
-   * renderer (via composePerKindRepairBlocks) so the agent gets per-port
-   * repair instructions in this session.
-   */
-  envelopeFollowupPortValidations?: ReadonlyArray<{
-    port: string
-    kind: string
-    subReason: string
-    detail?: string
-  }>
+  promptMode?: PromptMode
   /**
    * RFC-041 PR3: per-scope token budget for memory inject. Optional —
    * scheduler/daemon reads `config.memoryInjectionBudget` and passes it
@@ -512,7 +443,14 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // produce an inventory is the driver's capability (claude simply lacks it);
   // the materialization itself lives in opencode's buildBusinessSpawn.
   const inventoryNodeKind = opts.nodeKind ?? 'agent-single'
-  const wantsInventory = isAgentNodeKind(inventoryNodeKind) && opts.envelopeFollowup !== true
+  // RFC-148 canonical projections of the two dispatch ADTs (single
+  // derivation; every historical scattered-boolean guard reads these).
+  const followupMode = opts.promptMode?.kind === 'followup' ? opts.promptMode : undefined
+  const channel = opts.clarifyChannel ?? { kind: 'none' as const }
+  const clarifyWired = channel.kind !== 'none'
+  const clarifyMandatory = clarifyWired && channel.directive === 'mandatory'
+  const clarifyStoppedDirective = clarifyWired && channel.directive === 'stopped'
+  const wantsInventory = isAgentNodeKind(inventoryNodeKind) && followupMode === undefined
 
   // RFC-041 PR3: silent inject of approved memories into the primary agent's
   // inline prompt. Best-effort — a broken memory table degrades to "no
@@ -531,7 +469,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // driver's job (opencode appends it to the inline agent prompt inside
   // buildBusinessSpawn; claude weaves it into the system-prompt-file).
   let injectedMemoryBlock: string | null = null
-  if (opts.envelopeFollowup !== true) {
+  if (followupMode === undefined) {
     try {
       const { block: memoryBlock, snapshot } = await injectMemoryForRun({
         db: opts.db,
@@ -643,16 +581,16 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // (shared, pure JS) so the prompt assembler stays a string-splicer with
   // no per-kind branching of its own.
   const followupRepairBlocks =
-    opts.envelopeFollowup === true &&
-    opts.envelopeFollowupReason === 'port-validation' &&
-    opts.envelopeFollowupPortValidations &&
-    opts.envelopeFollowupPortValidations.length > 0
+    followupMode !== undefined &&
+    followupMode.reason === 'port-validation' &&
+    followupMode.portValidations !== undefined &&
+    followupMode.portValidations.length > 0
       ? // RFC-080: route per-kind repair through the parametric registry —
         // path<ext> / list<T> / signal failures now render their repair block
         // instead of being dropped by the legacy 3-key Record. No more
         // `as 'string' | 'markdown' | 'markdown_file'` narrowing cast.
         composePerParsedKindRepairBlocks(
-          opts.envelopeFollowupPortValidations.map((f) => ({
+          followupMode.portValidations.map((f) => ({
             port: f.port,
             kind: f.kind,
             subReason: f.subReason,
@@ -665,7 +603,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // RFC-060 D.T7: enforce signal-port-not-in-prompt at the runner edge before
   // any render / spawn. When inputPortKinds is omitted (legacy callers /
   // non-fanout dispatch paths), the check no-ops.
-  if (opts.inputPortKinds !== undefined && opts.envelopeFollowup !== true) {
+  if (opts.inputPortKinds !== undefined && followupMode === undefined) {
     try {
       assertNoPromptSignalRefs(opts.promptTemplate, opts.inputPortKinds)
     } catch (err) {
@@ -696,12 +634,15 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   }
 
   const prompt =
-    opts.envelopeFollowup === true
+    followupMode !== undefined
       ? renderEnvelopeFollowupPrompt({
-          hasClarifyChannel: opts.hasClarifyChannel === true,
-          reason: opts.envelopeFollowupReason ?? 'envelope-missing',
-          ...(opts.envelopeFollowupClarifyDirective !== undefined
-            ? { clarifyDirective: opts.envelopeFollowupClarifyDirective }
+          hasClarifyChannel: clarifyMandatory,
+          // RFC-148: reason is mandatory on the followup arm — the historical
+          // envelope-missing coalescing fallback (a patch over the unpacked
+          // flag) is gone with the packing.
+          reason: followupMode.reason,
+          ...(followupMode.clarifyDirective !== undefined
+            ? { clarifyDirective: followupMode.clarifyDirective }
             : {}),
           ...(followupRepairBlocks !== undefined
             ? { perKindRepairBlocks: followupRepairBlocks }
@@ -722,17 +663,14 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
             : {}),
           ...(opts.reviewContext !== undefined ? { reviewContext: opts.reviewContext } : {}),
           ...(opts.clarifyContext !== undefined ? { clarifyContext: opts.clarifyContext } : {}),
-          ...(opts.crossClarifyContext !== undefined
-            ? { crossClarifyContext: opts.crossClarifyContext }
-            : {}),
           // RFC-119: generalized prior-output for non-cross-clarify reruns.
           ...(opts.priorOutputUpdate !== undefined
             ? { priorOutputUpdate: opts.priorOutputUpdate }
             : {}),
-          ...(opts.hasClarifyChannel === true ? { hasClarifyChannel: true } : {}),
-          // RFC-122: first-run / pre-clarify STOP override → inject the
-          // STOP CLARIFYING trailer (the answersBlock carries it otherwise).
-          ...(opts.clarifyStopNotice === true ? { clarifyStopNotice: true } : {}),
+          // RFC-148: the clarify-channel ADT rides through whole — the
+          // renderer projects mandatory-ask-back and the RFC-122 stop notice
+          // from it.
+          ...(opts.clarifyChannel !== undefined ? { clarifyChannel: opts.clarifyChannel } : {}),
         })
 
   // Write promptText FIRST (no status change). RFC-053: the status flip
@@ -775,7 +713,13 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
       plugins: opts.plugins ?? [],
       resolvedParamsByAgent,
       skills: opts.skills,
-      resumeSessionId: opts.resumeSessionId,
+      // RFC-148: a followup dispatch carries its session INSIDE the arm
+      // (unrepresentable without one); inline clarify resume keeps the
+      // top-level field. Exactly one is set per dispatch by the scheduler.
+      resumeSessionId:
+        opts.promptMode?.kind === 'followup'
+          ? opts.promptMode.resumeSessionId
+          : opts.resumeSessionId,
       worktreePath: opts.worktreePath,
       runRoot,
       configDir,
@@ -1195,17 +1139,17 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   if (status === 'done') {
     const accumulatedText = agentText.join('\n')
     const kind = detectEnvelopeKind(accumulatedText)
-    // RFC-100: while a clarify channel is ACTIVE (wired AND the user has not
-    // clicked "Stop clarifying" — the scheduler passes that state as
-    // opts.hasClarifyChannel = effectiveHasClarifyChannel), the ONLY valid
-    // reply is a `<workflow-clarify>` envelope. Any `<workflow-output>` / both /
-    // neither is a violation: fail with a `clarify-required-*` errorMessage so
+    // RFC-100: while mandatory ask-back is ACTIVE (channel wired AND the user
+    // has not clicked "Stop clarifying" — RFC-148: directive === 'mandatory'
+    // on the clarify-channel ADT), the ONLY valid reply is a
+    // `<workflow-clarify>` envelope. Any `<workflow-output>` / both / neither
+    // is a violation: fail with a `clarify-required-*` errorMessage so
     // `decideEnvelopeFollowup` drives a same-session follow-up that re-demands
     // the clarify envelope (and the node hard-fails after retries — there is no
-    // output escape hatch). On the stop round the scheduler passes
-    // hasClarifyChannel=false, so this guard is skipped and the agent finalizes
-    // through the normal `<workflow-output>` path below.
-    const clarifyActive = opts.hasClarifyChannel === true
+    // output escape hatch). On the stop / suppressed rounds this guard is
+    // skipped and the agent finalizes through the normal `<workflow-output>`
+    // path below.
+    const clarifyActive = clarifyMandatory
     if (clarifyActive && kind !== 'clarify') {
       status = 'failed'
       failureCode = 'clarify-required'
@@ -1215,7 +1159,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
           : kind === 'both'
             ? `${CLARIFY_REQUIRED_PREFIX}-both-present: node is in mandatory ask-back mode; emit only <workflow-clarify>, no <workflow-output>`
             : `${CLARIFY_REQUIRED_PREFIX}-missing: node is in mandatory ask-back mode; reply must be a <workflow-clarify> envelope`
-    } else if (opts.clarifyStopped === true && kind === 'clarify') {
+    } else if (clarifyStoppedDirective && kind === 'clarify') {
       // RFC-123 follow-up (user「强制停止」): the node is EXPLICITLY stopped (canvas
       // toggle='stop' OR a latest answered 'stop' directive — NOT review-rerun ask-back
       // suppression) so it was told STOP CLARIFYING. The agent disobeyed and emitted a
@@ -1236,8 +1180,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     } else if (kind === 'clarify') {
       const body = extractClarifyEnvelopeBody(accumulatedText)
       // RFC-056: cross-clarify path disables the RFC-023 5-question cap.
-      const parseOpts =
-        opts.clarifyMode === 'cross' ? { maxQuestions: Number.POSITIVE_INFINITY } : {}
+      // RFC-148 (设计门 high 采纳): the cap follows the WIRING family alone —
+      // a suppressed cross rerun (review reject/iterate) that voluntarily
+      // emits <workflow-clarify> still parses with the lifted cap.
+      const parseOpts = channel.kind === 'cross' ? { maxQuestions: Number.POSITIVE_INFINITY } : {}
       const parsed = body !== null ? parseClarifyEnvelopeBody(body, parseOpts) : null
       if (parsed === null || parsed.body === null) {
         const firstErr = parsed?.errors[0]

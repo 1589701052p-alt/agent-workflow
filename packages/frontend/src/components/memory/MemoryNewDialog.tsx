@@ -6,27 +6,19 @@
 //   memory.candidate.created for free).
 // After a successful create the dialog closes and the caller switches
 // the visible tab to Approval Queue.
+//
+// RFC-151 PR-4: chrome (Dialog + footer + scope-option queries + validation
+// gate) lives in the shared <MemoryDialogShell>; this file keeps only the
+// create-side specifics — empty form seed, POST payload, invalidations.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { Agent, Memory, Workflow } from '@agent-workflow/shared'
+import type { Memory } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import type { ApiError } from '@/api/client'
-import { Dialog } from '@/components/Dialog'
 import { describeApiError } from '@/i18n'
-import {
-  MemoryFormFields,
-  useMemoryFormState,
-  validateMemoryForm,
-  type MemoryFormState,
-  type ScopeOption,
-} from './MemoryFormFields'
-
-interface CachedRepoListEntry {
-  id: string
-  url: string
-  localPath: string
-}
+import { MemoryDialogShell } from './MemoryDialogShell'
+import { useMemoryFormState, type MemoryFormState } from './MemoryFormFields'
 
 export interface MemoryNewDialogProps {
   open: boolean
@@ -46,28 +38,6 @@ export function MemoryNewDialog(props: MemoryNewDialogProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const f = useMemoryFormState()
-  const errors = validateMemoryForm(
-    f.state,
-    t as (k: string, o?: Record<string, unknown>) => string,
-  )
-  const isInvalid = Object.keys(errors).length > 0
-
-  const agents = useQuery<Agent[]>({
-    queryKey: ['agents'],
-    queryFn: ({ signal }) => api.get<Agent[]>('/api/agents', undefined, signal),
-    enabled: props.open,
-  })
-  const workflows = useQuery<Workflow[]>({
-    queryKey: ['workflows'],
-    queryFn: ({ signal }) => api.get<Workflow[]>('/api/workflows', undefined, signal),
-    enabled: props.open,
-  })
-  const repos = useQuery<{ items: CachedRepoListEntry[] }>({
-    queryKey: ['cached-repos'],
-    queryFn: ({ signal }) =>
-      api.get<{ items: CachedRepoListEntry[] }>('/api/cached-repos', undefined, signal),
-    enabled: props.open,
-  })
 
   const create = useMutation<Memory, ApiError, CreatePayload>({
     mutationFn: async (payload) => {
@@ -84,7 +54,6 @@ export function MemoryNewDialog(props: MemoryNewDialogProps) {
   })
 
   const handleSubmit = () => {
-    if (isInvalid || create.isPending) return
     const payload: CreatePayload = {
       scopeType: f.state.scopeType,
       scopeId: f.state.scopeType === 'global' ? null : f.state.scopeId,
@@ -96,71 +65,17 @@ export function MemoryNewDialog(props: MemoryNewDialogProps) {
   }
 
   return (
-    <Dialog
+    <MemoryDialogShell
       open={props.open}
-      onClose={() => {
-        if (create.isPending) return
-        props.onClose()
-      }}
+      onClose={props.onClose}
       title={t('memory.newDialogTitle')}
-      size="md"
-      data-testid="memory-new-dialog"
-      footer={
-        <>
-          <button
-            type="button"
-            className="btn btn--sm"
-            onClick={props.onClose}
-            disabled={create.isPending}
-            data-testid="memory-new-dialog-cancel"
-          >
-            {t('memory.formCancel')}
-          </button>
-          <button
-            type="button"
-            className="btn btn--sm btn--primary"
-            onClick={handleSubmit}
-            disabled={isInvalid || create.isPending}
-            data-testid="memory-new-dialog-save"
-          >
-            {t('memory.formSave')}
-          </button>
-        </>
+      testid="memory-new-dialog"
+      form={f}
+      pending={create.isPending}
+      errorText={
+        create.error !== null && create.error !== undefined ? describeApiError(create.error) : null
       }
-    >
-      {create.error !== null && create.error !== undefined && (
-        <div className="error-box" data-testid="memory-new-dialog-error">
-          {describeApiError(create.error)}
-        </div>
-      )}
-      <MemoryFormFields
-        state={f.state}
-        errors={errors}
-        onScopeType={f.setScopeType}
-        onScopeId={f.setScopeId}
-        onTitle={f.setTitle}
-        onBodyMd={f.setBodyMd}
-        onTags={f.setTags}
-        agents={agentsToOptions(agents.data)}
-        workflows={workflowsToOptions(workflows.data)}
-        repos={reposToOptions(repos.data?.items)}
-        disabled={create.isPending}
-      />
-    </Dialog>
+      onSubmit={handleSubmit}
+    />
   )
-}
-
-function agentsToOptions(agents?: Agent[]): ScopeOption[] {
-  if (!agents) return []
-  return agents.map((a) => ({ id: a.id, label: a.name }))
-}
-
-function workflowsToOptions(workflows?: Workflow[]): ScopeOption[] {
-  if (!workflows) return []
-  return workflows.map((w) => ({ id: w.id, label: w.name }))
-}
-
-function reposToOptions(repos?: CachedRepoListEntry[]): ScopeOption[] {
-  if (!repos) return []
-  return repos.map((r) => ({ id: r.id, label: r.url }))
 }

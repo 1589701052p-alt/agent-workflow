@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import type { SessionMessage, SessionTree } from '@agent-workflow/shared'
 import { SubagentBlock } from './SubagentBlock'
 import { toolStatusKind, toolStatusLabel } from './toolStatus'
+import { StatusChip } from '../StatusChip'
 
 interface Props {
   tree: SessionTree
@@ -79,9 +80,9 @@ function MessageBlock({ message }: { message: SessionMessage }) {
           <header className="session-block__head">
             <RoleBadge variant="tool" icon="🔧" label={t('session.toolCall')} />
             <code className="session-block__tool-name">{message.toolName}</code>
-            <span className={`status-chip status-chip--${toolStatusKind(message.status)}`}>
+            <StatusChip kind={toolStatusKind(message.status)}>
               {toolStatusLabel(message.status, t)}
-            </span>
+            </StatusChip>
             <Ts ts={message.ts} />
           </header>
           {message.input !== undefined && message.input !== null ? (

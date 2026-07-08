@@ -3,6 +3,10 @@
 // also dropping the file from this list, the test fires; that catches
 // "someone removed the variant on a button and the visual fell back to the
 // default rectangle" silently.
+//
+// RFC-150 PR-1 (D4) adds the ConfirmButton callsite lock: the `danger`
+// boolean prop became `variant="danger"` (aligned with the .btn--* enum);
+// the old prop must never reappear at a callsite.
 
 import { describe, expect, test } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -52,5 +56,28 @@ describe('RFC-035 btn variants — callsite inventory', () => {
     // (UploadPicker) using both = 8 distinct source files. Lower bound 7
     // tolerates a single audit drift before the guard fires.
     expect(union.size).toBeGreaterThanOrEqual(7)
+  })
+})
+
+describe('RFC-150 ConfirmButton callsites — `danger` prop stays deleted', () => {
+  test('no <ConfirmButton …> open tag carries a `danger` prop (only variant="danger")', () => {
+    const offenders: string[] = []
+    for (const file of allFiles) {
+      const body = readFileSync(file, 'utf8')
+      let idx = body.indexOf('<ConfirmButton')
+      while (idx !== -1) {
+        // All callsites are self-closing; the open tag runs to the next `/>`
+        // (a plain `>` would false-stop inside `onConfirm={() => …}`).
+        const end = body.indexOf('/>', idx)
+        const tag = end === -1 ? body.slice(idx) : body.slice(idx, end)
+        // `variant="danger"` is the sanctioned spelling — blank the quoted
+        // string value, then any residual `danger` token is the legacy prop.
+        if (/\bdanger\b/.test(tag.replaceAll('"danger"', '""'))) {
+          offenders.push(`${path.relative(SRC, file)}:${body.slice(0, idx).split('\n').length}`)
+        }
+        idx = body.indexOf('<ConfirmButton', idx + 1)
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
   })
 })

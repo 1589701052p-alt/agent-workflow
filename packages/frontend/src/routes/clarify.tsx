@@ -16,6 +16,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ClarifyRoundSummary } from '@agent-workflow/shared'
 import { api } from '@/api/client'
+import { LoadingState } from '@/components/LoadingState'
+import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { clarifyRoundStatusChip } from '@/lib/clarify-status'
 import { Route as RootRoute } from './__root'
 
@@ -80,9 +83,9 @@ function renderRow(entry: ClarifyRoundSummary, t: (key: string) => string): Reac
           </code>
         </td>
         <td>
-          <span className={`status-chip status-chip--${clarifyRoundStatusChip(s.status).kind}`}>
+          <StatusChip kind={clarifyRoundStatusChip(s.status).kind}>
             {t(clarifyRoundStatusChip(s.status).labelKey)}
-          </span>
+          </StatusChip>
         </td>
         <td>{s.iteration}</td>
         <td>{s.questionCount}</td>
@@ -121,9 +124,9 @@ function renderRow(entry: ClarifyRoundSummary, t: (key: string) => string): Reac
         </code>
       </td>
       <td>
-        <span className={`status-chip status-chip--${clarifyRoundStatusChip(cross.status).kind}`}>
+        <StatusChip kind={clarifyRoundStatusChip(cross.status).kind}>
           {t(clarifyRoundStatusChip(cross.status).labelKey)}
-        </span>
+        </StatusChip>
       </td>
       <td>{cross.iteration}</td>
       <td>{cross.questionCount}</td>
@@ -168,22 +171,16 @@ export function ClarifyListPage() {
       <header className="page__header">
         <h1>{t('clarify.list.title')}</h1>
       </header>
-      <div className="tabs" role="tablist">
-        {FILTERS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={filter === k}
-            className={`tabs__tab ${filter === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setFilter(k)}
-            data-testid={`clarify-filter-${k}`}
-          >
-            {t(`clarify.list.filter.${k}`)}
-          </button>
-        ))}
-      </div>
-      {list.isLoading && <div className="muted">{t('common.loading')}</div>}
+      <TabBar<FilterKey>
+        tabs={FILTERS.map((k) => ({
+          key: k,
+          label: t(`clarify.list.filter.${k}`),
+          testid: `clarify-filter-${k}`,
+        }))}
+        active={filter}
+        onSelect={setFilter}
+      />
+      {list.isLoading && <LoadingState />}
       {list.error !== null && list.error !== undefined && (
         <div className="error-box">{(list.error as Error).message}</div>
       )}

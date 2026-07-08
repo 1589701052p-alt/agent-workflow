@@ -757,9 +757,11 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
   // RFC-035 PR2: `.inspector__tabs` was a sibling-class wart on `.tabs`;
   // it is now expressed as the `.tabs--inspector` modifier on the same
   // primitive.
+  // RFC-150: the drawer tab bar is the shared <TabBar> primitive now — tabs
+  // carry role="tab" (a11y upgrade), not role="button".
   const tabBar = page.locator('.tabs--inspector')
-  await expect(tabBar.getByRole('button', { name: 'Session', exact: true })).toBeVisible()
-  await expect(tabBar.getByRole('button', { name: 'Prompt', exact: true })).toHaveCount(0)
+  await expect(tabBar.getByRole('tab', { name: 'Session', exact: true })).toBeVisible()
+  await expect(tabBar.getByRole('tab', { name: 'Prompt', exact: true })).toHaveCount(0)
 
   // The attempts picker is the Select-based combobox (replaced the
   // earlier chip-row, which itself replaced a native <select>). The

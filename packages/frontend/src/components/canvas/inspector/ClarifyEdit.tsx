@@ -9,6 +9,7 @@ import type { WorkflowNode } from '@agent-workflow/shared'
 import { CLARIFY_SOURCE_PORT_NAME, resolveClarifySessionMode } from '@agent-workflow/shared'
 import { useTranslation } from 'react-i18next'
 import { Field, TextArea } from '@/components/Form'
+import { Segmented } from '@/components/Segmented'
 import { NodeTitleField } from './NodeTitleField'
 import type { EditProps } from './types'
 
@@ -85,40 +86,25 @@ export function ClarifyEdit({ node, definition, onPatch }: EditProps) {
         hint={t('inspector.clarifySessionModeHint')}
         group
       >
-        <div
-          className="segmented"
-          role="radiogroup"
-          aria-label={t('inspector.fieldClarifySessionMode')}
-          data-testid="clarify-session-mode"
-        >
-          {(['isolated', 'inline'] as const).map((mode) => {
-            // flag-audit W0：缺省归一走 shared 单源（其 docstring 明言就是为了
-            // 阻止 `?? 'isolated'` 在各消费点 sprinkle）。
-            const active =
-              resolveClarifySessionMode(node as Parameters<typeof resolveClarifySessionMode>[0]) ===
-              mode
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                className={'segmented__option' + (active ? ' segmented__option--active' : '')}
-                data-testid={`clarify-session-mode-${mode}`}
-                onClick={() => {
-                  // Explicit field write keeps roundtripping deterministic:
-                  // even 'isolated' is stored when the user clicks it, so
-                  // the workflow.definition surfaces the user's choice.
-                  patchClarify({ sessionMode: mode })
-                }}
-              >
-                {mode === 'isolated'
-                  ? t('inspector.clarifySessionModeIsolated')
-                  : t('inspector.clarifySessionModeInline')}
-              </button>
-            )
-          })}
-        </div>
+        <Segmented<'isolated' | 'inline'>
+          // flag-audit W0：缺省归一走 shared 单源（其 docstring 明言就是为了
+          // 阻止 `?? 'isolated'` 在各消费点 sprinkle）。
+          value={resolveClarifySessionMode(node as Parameters<typeof resolveClarifySessionMode>[0])}
+          // Explicit field write keeps roundtripping deterministic: even
+          // 'isolated' is stored when the user picks it (from 'inline'), so
+          // the workflow.definition surfaces the user's choice.
+          onChange={(mode) => patchClarify({ sessionMode: mode })}
+          allowActiveReselect
+          options={(['isolated', 'inline'] as const).map((mode) => ({
+            value: mode,
+            label:
+              mode === 'isolated'
+                ? t('inspector.clarifySessionModeIsolated')
+                : t('inspector.clarifySessionModeInline'),
+          }))}
+          ariaLabel={t('inspector.fieldClarifySessionMode')}
+          testidPrefix="clarify-session-mode"
+        />
       </Field>
     </div>
   )

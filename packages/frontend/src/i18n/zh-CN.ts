@@ -90,14 +90,8 @@ export interface Resources {
       }
     }
     taskRow: {
-      statusRunning: string
-      statusAwaitingHuman: string
-      statusAwaitingReview: string
-      statusDone: string
-      statusFailed: string
-      statusCanceled: string
-      statusInterrupted: string
-      statusPending: string
+      // RFC-150 PR-1 (W0 补做): status* 键族已并入 tasks.status.*（与
+      // <TaskStatusChip> 同源），此处只剩相对时间文案。
       relativeJustNow: string
       relativeMinAgo: string
       relativeHourAgo: string
@@ -664,7 +658,6 @@ export interface Resources {
       enabledHint: string
       testOk: string
       testFail: string
-      testSaveFirst: string
       testDetailIssuer: string
       testDetailToken: string
       testDetailJwks: string
@@ -2574,14 +2567,6 @@ export const zhCN: Resources = {
       },
     },
     taskRow: {
-      statusRunning: '运行中',
-      statusAwaitingHuman: '等待回答',
-      statusAwaitingReview: '等待评审',
-      statusDone: '已完成',
-      statusFailed: '失败',
-      statusCanceled: '已取消',
-      statusInterrupted: '已中断',
-      statusPending: '排队中',
       relativeJustNow: '刚刚',
       relativeMinAgo: '{{n}} 分钟前',
       relativeHourAgo: '{{n}} 小时前',
@@ -3022,7 +3007,6 @@ export const zhCN: Resources = {
       enabledHint: '开启后会出现在登录页；关闭则隐藏。',
       testOk: '连接成功',
       testFail: '连接失败',
-      testSaveFirst: '请先保存，再运行测试',
       testDetailIssuer: 'issuer：',
       testDetailToken: 'token：',
       testDetailJwks: 'jwks：',

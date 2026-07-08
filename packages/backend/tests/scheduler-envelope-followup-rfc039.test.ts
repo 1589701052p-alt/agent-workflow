@@ -2,8 +2,9 @@
 // to the same-session follow-up prompt.
 //
 // The scheduler reads `clarifyContext?.directive` and threads it into runNode
-// as `envelopeFollowupClarifyDirective`; the runner forwards it to
-// `renderEnvelopeFollowupPrompt`. When the user clicked "Keep clarifying"
+// inside the `promptMode` followup arm (`clarifyDirective` — RFC-148; the
+// historical envelopeFollowupClarifyDirective field); the runner forwards it
+// to `renderEnvelopeFollowupPrompt`. When the user clicked "Keep clarifying"
 // (directive='continue'), the follow-up prompt must carry the RFC-039 strong
 // bias short sentence; on stop (or absent directive), it must not.
 //
@@ -110,7 +111,7 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
   })
   afterEach(() => h.cleanup())
 
-  test('hasClarifyChannel=true + directive=continue → followup prompt carries "Keep clarifying"', async () => {
+  test('mandatory clarify channel + directive=continue → followup prompt carries "Keep clarifying"', async () => {
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'OK' }) }, () =>
       runNode({
@@ -126,11 +127,13 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        envelopeFollowup: true,
-        envelopeFollowupReason: 'envelope-missing',
-        envelopeFollowupClarifyDirective: 'continue',
-        hasClarifyChannel: true,
-        resumeSessionId: 'opc_continue',
+        promptMode: {
+          kind: 'followup',
+          resumeSessionId: 'opc_continue',
+          reason: 'envelope-missing',
+          clarifyDirective: 'continue',
+        },
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       }),
     )
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]
@@ -139,7 +142,7 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
     expect(prompt).toContain('MUST be another `<workflow-clarify>` envelope')
   })
 
-  test('hasClarifyChannel=true + directive=stop → followup prompt does NOT contain "Keep clarifying"', async () => {
+  test('mandatory clarify channel + directive=stop → followup prompt does NOT contain "Keep clarifying"', async () => {
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'OK' }) }, () =>
       runNode({
@@ -155,11 +158,13 @@ describe('RFC-042 follow-up + RFC-039 directive bias passthrough', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        envelopeFollowup: true,
-        envelopeFollowupReason: 'envelope-missing',
-        envelopeFollowupClarifyDirective: 'stop',
-        hasClarifyChannel: true,
-        resumeSessionId: 'opc_stop',
+        promptMode: {
+          kind: 'followup',
+          resumeSessionId: 'opc_stop',
+          reason: 'envelope-missing',
+          clarifyDirective: 'stop',
+        },
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       }),
     )
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]

@@ -197,70 +197,9 @@ export function parseClarifyEnvelopeBody(
 // prompt rendering (markdown)
 // -----------------------------------------------------------------------------
 
-/** Render the agent-facing markdown block listing the questions the agent
- *  asked last round. Used for `{{__clarify_questions__}}`. Option-level
- *  Recommended + description + recommendationReason are surfaced inline so
- *  the agent has the same context the user saw. */
-export function renderClarifyQuestionsBlock(questions: ClarifyQuestion[]): string {
-  const lines: string[] = []
-  questions.forEach((q, idx) => {
-    const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
-    lines.push(`### Q${idx + 1}: ${q.title}`)
-    lines.push(`- Type: ${kindLabel}`)
-    lines.push(`- Candidate options:`)
-    q.options.forEach((opt, i) => {
-      const recMark = opt.recommended ? ' [recommended]' : ''
-      lines.push(`  ${i + 1}. ${opt.label}${recMark}`)
-      if (opt.description.length > 0) {
-        lines.push(`     description: ${opt.description}`)
-      }
-      if (opt.recommended && opt.recommendationReason.length > 0) {
-        lines.push(`     reason: ${opt.recommendationReason}`)
-      }
-    })
-    lines.push('')
-  })
-  return lines.join('\n').trimEnd()
-}
-
-/** Render the user-answered Q&A block. One line per question summarising
- *  what the user picked. Used for `{{__clarify_answers__}}`.
- *
- *  Previous versions emitted four fields per question (Type / Selected /
- *  Custom note / Synthesis); the structured fields were redundant with the
- *  natural-language synthesis (and Type just repeated what the questions
- *  block above already showed). The synthesis sentence covers every case —
- *  empty answer, multi with custom, custom-only, etc — see
- *  {@link summariseClarifyAnswer}. Keeping only the synthesis halves the
- *  token cost of this block and removes a "why are these the same thing"
- *  trap for both the agent and any human reviewing the prompt. */
-export function buildClarifyPromptBlock(
-  questions: ClarifyQuestion[],
-  answers: ClarifyAnswer[],
-  directive?: ClarifyDirective,
-): string {
-  const byId = new Map(answers.map((a) => [a.questionId, a]))
-  const lines: string[] = []
-  questions.forEach((q, idx) => {
-    const a = byId.get(q.id)
-    lines.push(`### Q${idx + 1}: ${q.title}`)
-    if (!a) {
-      lines.push(`- User did not answer this question.`)
-    } else {
-      lines.push(`- ${summariseClarifyAnswer(q, a)}`)
-    }
-    lines.push('')
-  })
-  const trailer = renderClarifyDirectiveTrailer(directive)
-  if (trailer.length > 0) {
-    lines.push(trailer)
-  }
-  return lines.join('\n').trimEnd()
-}
-
 /** Render the trailing English instruction that converts the user's
  *  continue-or-stop directive into a sentence the asking agent can read in
- *  its next-round prompt. Emitted at the end of `buildClarifyPromptBlock`
+ *  its next-round prompt. Emitted at the tail of clarify prompt content
  *  so the directive sits right where the agent finishes consuming the
  *  user's answers.
  *
@@ -455,78 +394,13 @@ export function parseCrossClarifyEnvelopeBody(jsonText: string): ParseClarifyEnv
   return parseClarifyEnvelopeBody(jsonText, { maxQuestions: Number.POSITIVE_INFINITY })
 }
 
-/** One source's contribution to the designer's External Feedback batch. */
-export interface CrossClarifySourceContext {
-  sourceQuestionerNodeId: string
-  crossClarifyNodeId: string
-  iteration: number
-  questions: ClarifyQuestion[]
-  answers: ClarifyAnswer[]
-}
-
-/**
- * Render the designer-facing `## External Feedback` body. Sources sort by
- * questioner nodeId (dictionary order); each source becomes a
- * `### From '{nodeId}' (round {iteration})` sub-section with the full question
- * detail (via {@link renderClarifyQuestionsBlock}) shifted from `### Q` to
- * `#### Q` so the markdown outline stays coherent.
- */
-export function buildExternalFeedbackBlock(sources: CrossClarifySourceContext[]): string {
-  if (sources.length === 0) return ''
-  const sorted = [...sources].sort((a, b) =>
-    a.sourceQuestionerNodeId.localeCompare(b.sourceQuestionerNodeId),
-  )
-  const lines: string[] = []
-  for (const src of sorted) {
-    lines.push(`### From '${src.sourceQuestionerNodeId}' (round ${src.iteration})`)
-    lines.push('')
-    const questionsBlock = renderClarifyQuestionsBlock(src.questions)
-    lines.push(questionsBlock.replace(/^### Q/gm, '#### Q'))
-    lines.push('')
-    const byId = new Map(src.answers.map((a) => [a.questionId, a]))
-    lines.push('Answers:')
-    src.questions.forEach((q, idx) => {
-      const a = byId.get(q.id)
-      lines.push(
-        `- Q${idx + 1} (${q.title}): ${a === undefined ? 'User did not answer this question.' : summariseClarifyAnswer(q, a)}`,
-      )
-    })
-    lines.push('')
-  }
-  return lines.join('\n').trimEnd()
-}
-
-/** Render a single source's contribution. */
-export function renderCrossClarifySource(src: CrossClarifySourceContext): string {
-  return buildExternalFeedbackBlock([src])
-}
-
-/**
- * RFC-120 §15 — render ONE manual question's contribution to the `## External Feedback`
- * body. A manual question carries a human-authored instruction (no questioner Q&A), so it
- * renders as a `### Manual instruction: {title}` sub-section (same `###` level as a cross-
- * clarify source's `### From '...'`) followed by the body verbatim. This is the manual side
- * of the §15.4 "注入面归一": the per-node queue resolves each entry's content — cross from
- * the session Q&A (buildExternalFeedbackBlock), manual from manual_body (here) — and the two
- * concatenate into one block. Returns '' when both title and body are empty (skip the entry).
- */
-export function renderManualFeedbackSection(title: string | null, body: string | null): string {
-  const t = (title ?? '').trim()
-  const b = (body ?? '').trim()
-  if (t.length === 0 && b.length === 0) return ''
-  const lines: string[] = []
-  lines.push(`### Manual instruction: ${t.length > 0 ? t : '(untitled)'}`)
-  lines.push('')
-  if (b.length > 0) lines.push(b)
-  return lines.join('\n').trimEnd()
-}
-
 // =============================================================================
 // RFC-132 — unified FLAT clarify queue render (PR-1 / T1).
 //
 // The single, flat `## Clarify Q&A` block that supersedes BOTH the round-grouped
-// `buildClarifyPromptBlock` loop (self / questioner) AND the designer-only
-// `buildExternalFeedbackBlock`. Every answered question renders as an EQUAL peer:
+// round-grouped loop (self / questioner) AND the designer-only External
+// Feedback renderer — both deleted by RFC-148 (RFC-132 收尾). Every answered
+// question renders as an EQUAL peer:
 //   - NO `### Round N` grouping, NO history-vs-current-round split,
 //   - NO sibling scope block, NO per-question directive trailer,
 //   - ZERO attribution (RFC-099 — never render who asked / who answered).
@@ -535,8 +409,9 @@ export function renderManualFeedbackSection(title: string | null, body: string |
 // so a caller structurally cannot group or attribute). Only a manual instruction
 // (§15, no Q&A) differs in shape, rendered as a peer bullet of its body.
 //
-// PR-1 lands this UNWIRED next to the legacy renderers; PR-2 / PR-4 route the
-// injectors through it and delete the round-grouped / External-Feedback blocks.
+// RFC-132 PR-1 landed this UNWIRED next to the legacy renderers; the injector
+// routing shipped with PR-C, and RFC-148 finished the ledger by deleting the
+// round-grouped / External-Feedback renderers — this is the only surface.
 // =============================================================================
 
 /** The stable heading of the flat clarify queue block. Exported so the golden

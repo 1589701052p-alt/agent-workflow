@@ -23,6 +23,7 @@ import { LoadingState } from '@/components/LoadingState'
 import { describeApiError } from '@/i18n'
 import { sortByRecency } from '@/lib/memory'
 import { FuseDialog } from '@/components/fusion/FuseDialog'
+import { TabBar } from '@/components/TabBar'
 import { MemoryEditDialog } from './MemoryEditDialog'
 import { MemoryRow } from './MemoryRow'
 
@@ -102,21 +103,19 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
 
   return (
     <div className="memory-all" data-testid="memory-all">
-      <div role="tablist" className="tabs tabs--pills memory-all__filter">
-        {(['approved', 'archived'] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={view === v}
-            className={`tabs__tab ${view === v ? 'tabs__tab--active' : ''}`}
-            onClick={() => setView(v)}
-            data-testid={`memory-all-filter-${v}`}
-          >
-            {t(`memory.status.${v}`)}
-          </button>
-        ))}
-      </div>
+      {/* RFC-150: the old `tabs--pills` modifier had NO CSS definition (ghost
+          class — visually identical without it), so the shared TabBar renders
+          the default variant; the `memory-all__filter` namespace hook stays. */}
+      <TabBar<View>
+        className="memory-all__filter"
+        tabs={(['approved', 'archived'] as const).map((v) => ({
+          key: v,
+          label: t(`memory.status.${v}`),
+          testid: `memory-all-filter-${v}`,
+        }))}
+        active={view}
+        onSelect={setView}
+      />
 
       {view === 'approved' && selected.size > 0 && (
         <div className="memory-all__bulk page__actions">
@@ -150,7 +149,7 @@ export function MemoryAllList({ isAdmin }: MemoryAllListProps) {
       <FuseDialog
         open={fuseOpen}
         onClose={() => setFuseOpen(false)}
-        presetMemoryIds={Array.from(selected)}
+        entry={{ kind: 'from-memories', memoryIds: Array.from(selected) }}
       />
 
       {editingId !== null && editingMemory.data?.memory !== undefined && (

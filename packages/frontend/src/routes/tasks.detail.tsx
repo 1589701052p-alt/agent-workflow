@@ -17,6 +17,7 @@ import type {
 } from '@agent-workflow/shared'
 import { COMMIT_PUSH_NODE_PREFIX, redactGitUrl } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { LoadingState } from '@/components/LoadingState'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -30,6 +31,9 @@ import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
+import { Segmented } from '@/components/Segmented'
+import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
 import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
@@ -269,7 +273,7 @@ function TaskDetailPage() {
             <ConfirmButton
               label={t('tasks.cancelButton')}
               onConfirm={() => cancel.mutateAsync()}
-              danger
+              variant="danger"
               disabled={cancel.isPending}
             />
           )}
@@ -334,26 +338,19 @@ function TaskDetailPage() {
           live-polled while the task is active (same idiom as the task/node-runs queries). */}
       <RecoverySection taskId={id} status={tk.status} />
 
-      <nav role="tablist" className="task-detail__tab-bar tabs">
-        {tabs.map((k) => (
-          <button
-            type="button"
-            key={k}
-            role="tab"
-            aria-selected={tab === k}
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {tabLabel(t, k)}
-            {/* RFC-128: 「问题」tab carries a non-terminal pending-question count badge. */}
-            {k === 'task-questions' && pendingQuestionCount > 0 && (
-              <span className="tabs__tab-badge" data-testid="tq-tab-badge">
-                {pendingQuestionCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </nav>
+      <TabBar<TaskDetailTab>
+        className="task-detail__tab-bar"
+        tabs={tabs.map((k) => ({
+          key: k,
+          label: tabLabel(t, k),
+          // RFC-128: 「问题」tab carries a non-terminal pending-question count badge.
+          badge:
+            k === 'task-questions' && pendingQuestionCount > 0 ? pendingQuestionCount : undefined,
+          badgeTestid: k === 'task-questions' ? 'tq-tab-badge' : undefined,
+        }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
       <div className="task-detail__panes">
         {/* workflow-status: always mounted so xyflow viewport survives tab switches. */}
@@ -390,7 +387,7 @@ function TaskDetailPage() {
         </div>
 
         <div className="task-detail__pane" hidden={tab !== 'node-runs'}>
-          {nodeRuns.isLoading && <div className="muted">{t('common.loading')}</div>}
+          {nodeRuns.isLoading && <LoadingState size="compact" />}
           {nodeRuns.error !== null && nodeRuns.error !== undefined && (
             <div className="error-box">{describeError(nodeRuns.error)}</div>
           )}
@@ -557,26 +554,18 @@ function TaskDetailPage() {
                   ]}
                 />
                 <span className="structure-pane__scope-label">{t('tasks.structEngineLabel')}</span>
-                <div
-                  className="segmented"
-                  role="radiogroup"
-                  aria-label={t('tasks.structEngineLabel')}
-                >
-                  {(['baseline', 'deep'] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      role="radio"
-                      aria-checked={engineMode === m}
-                      className={`segmented__option ${engineMode === m ? 'segmented__option--active' : ''}`}
-                      onClick={() => setEngineMode(m)}
-                    >
-                      {m === 'baseline'
+                <Segmented<'baseline' | 'deep'>
+                  value={engineMode}
+                  onChange={setEngineMode}
+                  options={(['baseline', 'deep'] as const).map((m) => ({
+                    value: m,
+                    label:
+                      m === 'baseline'
                         ? t('tasks.structEngineBaseline')
-                        : t('tasks.structEngineDeep')}
-                    </button>
-                  ))}
-                </div>
+                        : t('tasks.structEngineDeep'),
+                  }))}
+                  ariaLabel={t('tasks.structEngineLabel')}
+                />
               </div>
               {structuralDiff.isLoading ? (
                 <div className="muted">{t('tasks.loadingDiff')}</div>
@@ -875,9 +864,9 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
                 {r.shardKey !== null && <span className="muted"> · {r.shardKey}</span>}
               </td>
               <td>
-                <span className={`status-chip status-chip--${nodeRunStatusToKind(r.status)}`}>
+                <StatusChip kind={nodeRunStatusToKind(r.status)}>
                   {t(displayNoderunStatusKey(r))}
-                </span>
+                </StatusChip>
                 {shouldShowReviewJump(r.status) && (
                   <>
                     {' '}
@@ -960,12 +949,9 @@ function CommitRunRow({ run, allRuns }: { run: NodeRun; allRuns: NodeRun[] }) {
         <code className="data-table__muted">{cp.repoBranch}</code>
       </td>
       <td>
-        <span
-          className={`status-chip status-chip--${nodeRunStatusToKind(run.status)}`}
-          data-testid="commit-push-outcome"
-        >
+        <StatusChip kind={nodeRunStatusToKind(run.status)} data-testid="commit-push-outcome">
           {t(commitOutcomeKey(cp.pushOutcome))}
-        </span>{' '}
+        </StatusChip>{' '}
         {sessionRuns.length > 0 && latestChild !== undefined && (
           <button
             type="button"

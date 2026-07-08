@@ -1,19 +1,22 @@
-// RFC-042 T3 — runner envelopeFollowup wiring.
+// RFC-042 T3 — runner envelope-followup wiring (RFC-148: the scattered
+// envelopeFollowup* fields are now the `promptMode` followup arm).
 //
 // Locks in:
-//   1. envelopeFollowup=true + resumeSessionId='opc_xxx' threads `--session
-//      opc_xxx` through to the subprocess (RFC-026 transport reused).
+//   1. promptMode { kind:'followup', resumeSessionId:'opc_xxx' } threads
+//      `--session opc_xxx` through to the subprocess (RFC-026 transport
+//      reused) — the session rides INSIDE the followup arm.
 //   2. The promptText persisted to node_runs is the short
 //      renderEnvelopeFollowupPrompt body — NOT the full renderUserPrompt with
 //      inputs / template body / RFC-039 protocol block. (Same-session resume
 //      already has all of that in opencode's session memory.)
-//   3. envelopeFollowup=true skips RFC-029 inventory plugin materialization
+//   3. A followup dispatch skips RFC-029 inventory plugin materialization
 //      (the first attempt already wrote the snapshot; the follow-up is
 //      strictly about getting an envelope out).
-//   4. envelopeFollowup=true with resumeSessionId=undefined still runs
-//      cleanly (the runner does not blow up; argv simply lacks --session).
-//      Defensive — production schedulers always pair the two, but the
-//      runner must not crash on the misuse.
+//   4. RFC-148 设计门 D2: "followup without a session" is unrepresentable —
+//      the followup arm's `resumeSessionId` is mandatory, so constructing a
+//      followup dispatch ALWAYS puts `--session` on argv (the historical
+//      defensive "argv simply lacks --session" misuse test is replaced by
+//      the positive assertion).
 
 import type { Agent } from '@agent-workflow/shared'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -118,14 +121,14 @@ function withEnv<T>(env: Record<string, string>, body: () => Promise<T>): Promis
   })
 }
 
-describe('RFC-042 runner envelopeFollowup', () => {
+describe('RFC-042 runner envelope followup (promptMode followup arm)', () => {
   let h: Harness
   beforeEach(async () => {
     h = await buildHarness()
   })
   afterEach(() => h.cleanup())
 
-  test('threads --session <id> through when envelopeFollowup=true', async () => {
+  test('threads --session <id> through when promptMode is the followup arm', async () => {
     const agent = makeAgent()
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     await withEnv(
@@ -147,9 +150,11 @@ describe('RFC-042 runner envelopeFollowup', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          envelopeFollowup: true,
-          envelopeFollowupReason: 'envelope-missing',
-          resumeSessionId: 'opc_followup_test_01',
+          promptMode: {
+            kind: 'followup',
+            resumeSessionId: 'opc_followup_test_01',
+            reason: 'envelope-missing',
+          },
         }),
     )
     const argvLines = readFileSync(h.argvLog, 'utf8').trim().split('\n').filter(Boolean)
@@ -177,9 +182,11 @@ describe('RFC-042 runner envelopeFollowup', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        envelopeFollowup: true,
-        envelopeFollowupReason: 'envelope-missing',
-        resumeSessionId: 'opc_followup_test_02',
+        promptMode: {
+          kind: 'followup',
+          resumeSessionId: 'opc_followup_test_02',
+          reason: 'envelope-missing',
+        },
       }),
     )
     const row = (await h.db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)))[0]
@@ -194,7 +201,7 @@ describe('RFC-042 runner envelopeFollowup', () => {
     expect(prompt).not.toContain('You MUST end your reply with a `<workflow-output>` block listing')
   })
 
-  test('envelopeFollowup=true skips inventory-plugin materialization', async () => {
+  test('followup promptMode skips inventory-plugin materialization', async () => {
     const agent = makeAgent()
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     // The runner caches the materialized plugin under runs/<task>/<run>/aw-inventory-dump.mjs.
@@ -213,9 +220,11 @@ describe('RFC-042 runner envelopeFollowup', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        envelopeFollowup: true,
-        envelopeFollowupReason: 'envelope-missing',
-        resumeSessionId: 'opc_followup_test_03',
+        promptMode: {
+          kind: 'followup',
+          resumeSessionId: 'opc_followup_test_03',
+          reason: 'envelope-missing',
+        },
         nodeKind: 'agent-single',
       }),
     )
@@ -226,9 +235,14 @@ describe('RFC-042 runner envelopeFollowup', () => {
     expect(row?.inventorySnapshotJson ?? null).toBeNull()
   })
 
-  test('envelopeFollowup=true without resumeSessionId still runs (argv lacks --session)', async () => {
-    // Defensive: scheduler always pairs the two, but the runner must not blow
-    // up on the (incorrect) misuse.
+  test('D2: a followup dispatch always carries --session, sourced from the followup arm', async () => {
+    // RFC-148 设计门 D2 修订：这条用例历史上锁的是「envelopeFollowup=true 而无
+    // resumeSessionId 也能跑（argv 缺 --session）」的防御行为。该状态已随
+    // promptMode 判别联合变为不可表示（followup 臂的 resumeSessionId 必填——
+    // 编译期锁见 rfc148-adt-contracts.test.ts），因此改为正向断言：构造
+    // followup 臂必然携带 session，argv 必然带 --session；且 runner 从
+    // followup 臂取 session——即便遗留的顶层 resumeSessionId（inline-resume
+    // 专用字段）同时在场，臂内值仍是权威来源。
     const agent = makeAgent()
     const nodeRunId = await insertNodeRun(h.db, h.taskId)
     await withEnv(
@@ -250,13 +264,20 @@ describe('RFC-042 runner envelopeFollowup', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          envelopeFollowup: true,
-          envelopeFollowupReason: 'envelope-missing',
+          promptMode: {
+            kind: 'followup',
+            resumeSessionId: 'opc_followup_arm_session',
+            reason: 'envelope-missing',
+          },
+          // Stale top-level inline-resume field — must NOT win over the arm.
+          resumeSessionId: 'opc_stale_toplevel',
         }),
     )
     const argvLines = readFileSync(h.argvLog, 'utf8').trim().split('\n').filter(Boolean)
     expect(argvLines.length).toBe(1)
     const argv = JSON.parse(argvLines[0]!).argv as string[]
-    expect(argv).not.toContain('--session')
+    const idx = argv.indexOf('--session')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(argv[idx + 1]).toBe('opc_followup_arm_session')
   })
 })

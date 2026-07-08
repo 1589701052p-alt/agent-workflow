@@ -159,6 +159,26 @@ export const DOC_VERSION_DECISION = [
 export const DocVersionDecisionSchema = z.enum(DOC_VERSION_DECISION)
 export type DocVersionDecision = z.infer<typeof DocVersionDecisionSchema>
 
+// -----------------------------------------------------------------------------
+// RFC-149: decidedBy sentinel governance (minimal — D4: no decided_by_kind
+// column, wire shape unchanged).
+//
+// `doc_versions.decided_by` is a four-state magic string — an audit column
+// doubling as a flow discriminant: NULL (undecided), 'local' (v1 single-user
+// local actor), 'system' (framework-made decisions: upstream-refresh
+// supersede, sibling-cascade invalidation), or a user id (RFC-099). The
+// constants + predicate below are the single spelling of the two sentinels;
+// writer sites and the "skip system rows" reads (buildReviewPromptContext)
+// reference them instead of scattered literals.
+// -----------------------------------------------------------------------------
+export const SYSTEM_DECIDER = 'system' as const
+export const LOCAL_DECIDER = 'local' as const
+
+/** True iff a decidedBy audit value records a FRAMEWORK decision (not a human's). */
+export function isSystemDecision(decidedBy: string | null | undefined): boolean {
+  return decidedBy === SYSTEM_DECIDER
+}
+
 export const DocVersionSchema = z.object({
   id: z.string(),
   taskId: z.string(),

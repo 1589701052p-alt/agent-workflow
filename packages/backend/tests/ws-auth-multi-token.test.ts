@@ -63,14 +63,14 @@ async function buildHarness(): Promise<Harness> {
   }
 }
 
-async function seedUser(db: DbClient): Promise<string> {
+async function seedUser(db: DbClient, role: 'admin' | 'user' = 'admin'): Promise<string> {
   const id = ulid()
   await db.insert(users).values({
     id,
     username: `u-${id.slice(-6)}`,
     displayName: 'Test User',
     passwordHash: null,
-    role: 'admin',
+    role,
     status: 'active',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -178,5 +178,41 @@ describe('WS upgrade — RFC-036 multi-token auth', () => {
   test('missing token is rejected', async () => {
     const out = await probeUpgrade(`${h.baseUrl}/ws/tasks`)
     expect(out.outcome).toBe('closed')
+  })
+})
+
+// RFC-152 P0 —— /ws/memory-distill-jobs admin 门禁回归。
+//
+// 为什么这条测试存在：该频道自 RFC-041 起被 4 处注释声明 admin-only
+// （shared/schemas/ws.ts、broadcaster.ts、两个前端 hook），HTTP 侧
+// routes/memoryDistillJobs.ts 全部 requireAdmin——但 WS upgrade 路径
+// 从未 enforce，普通用户持有效 token 即可订阅蒸馏队列帧。锁定：
+// 非 admin session 升级被 403 拒（close-before-open）、admin 正常升级。
+describe('RFC-152 P0 — /ws/memory-distill-jobs admin-only upgrade gate', () => {
+  let h: Harness
+  beforeEach(async () => {
+    h = await buildHarness()
+  })
+  afterEach(async () => {
+    await h.cleanup()
+  })
+
+  test('non-admin session token is rejected (close-before-open)', async () => {
+    const userId = await seedUser(h.db, 'user')
+    const { token } = await createSession({ db: h.db, userId })
+    const r = await probeUpgrade(`${h.baseUrl}/ws/memory-distill-jobs?token=${token}`)
+    expect(r.outcome).toBe('closed')
+  })
+
+  test('admin session token upgrades cleanly', async () => {
+    const userId = await seedUser(h.db, 'admin')
+    const { token } = await createSession({ db: h.db, userId })
+    const r = await probeUpgrade(`${h.baseUrl}/ws/memory-distill-jobs?token=${token}`)
+    expect(r.outcome).toBe('open')
+  })
+
+  test('daemon token（admin 语义）upgrades cleanly', async () => {
+    const r = await probeUpgrade(`${h.baseUrl}/ws/memory-distill-jobs?token=${DAEMON_TOKEN}`)
+    expect(r.outcome).toBe('open')
   })
 })

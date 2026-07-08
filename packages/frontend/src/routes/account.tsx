@@ -7,6 +7,8 @@ import { createRoute } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
+import { LoadingState } from '@/components/LoadingState'
+import { StatusChip } from '@/components/StatusChip'
 import { ACTOR_QUERY_KEY, useActor, type MeResponse } from '@/hooks/useActor'
 import { Route as RootRoute } from './__root'
 
@@ -19,7 +21,12 @@ export const Route = createRoute({
 function AccountPage() {
   const { t } = useTranslation()
   const { data, isLoading } = useActor()
-  if (isLoading) return <div className="page account-page">{t('common.loading')}</div>
+  if (isLoading)
+    return (
+      <div className="page account-page">
+        <LoadingState />
+      </div>
+    )
   if (!data) {
     return (
       <div className="page account-page">
@@ -555,13 +562,11 @@ function PatSection() {
                   </div>
                 </td>
                 <td>
-                  <span
-                    className={`status-chip status-chip--${p.revokedAt ? 'danger' : 'success'}`}
-                  >
+                  <StatusChip kind={p.revokedAt ? 'danger' : 'success'}>
                     {p.revokedAt
                       ? t('account.patStatusRevoked', { defaultValue: 'revoked' })
                       : t('account.patStatusActive', { defaultValue: 'active' })}
-                  </span>
+                  </StatusChip>
                 </td>
                 <td>
                   {!p.revokedAt && (

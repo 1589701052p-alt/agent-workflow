@@ -32,6 +32,9 @@ import type {
 import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
+import { LoadingState } from '@/components/LoadingState'
+import { Segmented } from '@/components/Segmented'
+import { StatusChip } from '@/components/StatusChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
 import type { TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
@@ -655,7 +658,11 @@ export function ClarifyDetailPage() {
   // ----------------------------------------------------------------------
 
   if (session.isLoading) {
-    return <div className="page muted">{t('common.loading')}</div>
+    return (
+      <div className="page">
+        <LoadingState />
+      </div>
+    )
   }
   if (session.error !== null && session.error !== undefined) {
     return <div className="page error-box">{(session.error as Error).message}</div>
@@ -821,13 +828,13 @@ export function ClarifyDetailPage() {
           but its parent task failed before the designer consumed the
           feedback. The CR-1 invariant flipped status='abandoned'. */}
       {isCross && s.status === 'abandoned' && (
-        <div
-          className="status-chip status-chip--danger"
+        <StatusChip
+          kind="danger"
           data-testid="cross-clarify-abandoned-chip"
           title={t('crossClarify.abandonedTooltip')}
         >
           {t('crossClarify.abandonedChip')}
-        </div>
+        </StatusChip>
       )}
 
       {!readonly && (
@@ -891,61 +898,39 @@ export function ClarifyDetailPage() {
                 <div className="clarify-question-scope" data-testid={`clarify-scope-${q.id}`}>
                   <span className="muted">{t('crossClarify.questionScope.label')}:</span>
                   {readonly ? (
-                    <span
-                      className={
-                        // flag-audit W0 Codex 实现门 P2：legacy 别名块已删，'blue'
-                        // 动态拼接会落到不存在的 class——改语义 kind。
-                        'status-chip status-chip--' + (scope === 'questioner' ? 'info' : 'neutral')
-                      }
+                    <StatusChip
+                      // flag-audit W0 Codex 实现门 P2：legacy 别名（'blue'）已删，
+                      // 语义 kind 走统一原语。
+                      kind={scope === 'questioner' ? 'info' : 'neutral'}
                       data-testid={`clarify-scope-chip-${q.id}`}
                     >
                       {scope === 'questioner'
                         ? t('crossClarify.questionScope.questioner')
                         : t('crossClarify.questionScope.designer')}
-                    </span>
+                    </StatusChip>
                   ) : (
-                    <div
-                      className="segmented"
-                      role="radiogroup"
-                      aria-label={t('crossClarify.questionScope.label')}
-                      data-testid={`clarify-scope-segmented-${q.id}`}
-                    >
-                      {(['designer', 'questioner'] as const).map((mode) => {
-                        const active = scope === mode
-                        return (
-                          <button
-                            key={mode}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            className={
-                              'segmented__option' + (active ? ' segmented__option--active' : '')
-                            }
-                            data-testid={`clarify-scope-${q.id}-${mode}`}
-                            disabled={submitMut.isPending || locked}
-                            title={t(
-                              mode === 'designer'
-                                ? 'crossClarify.questionScope.designerTooltip'
-                                : 'crossClarify.questionScope.questionerTooltip',
-                            )}
-                            onClick={() => {
-                              setScopes((prev) => ({ ...prev, [q.id]: mode }))
-                            }}
-                          >
-                            {mode === 'designer'
-                              ? t('crossClarify.questionScope.designer')
-                              : t('crossClarify.questionScope.questioner')}
-                            <kbd
-                              className="kbd-shortcut segmented__shortcut"
-                              aria-hidden="true"
-                              data-testid={`clarify-scope-${q.id}-${mode}-kbd`}
-                            >
-                              {mode === 'designer' ? 'Q' : 'W'}
-                            </kbd>
-                          </button>
-                        )
-                      })}
-                    </div>
+                    <Segmented<ClarifyQuestionScope>
+                      value={scope}
+                      onChange={(mode) => setScopes((prev) => ({ ...prev, [q.id]: mode }))}
+                      options={(['designer', 'questioner'] as const).map((mode) => ({
+                        value: mode,
+                        label:
+                          mode === 'designer'
+                            ? t('crossClarify.questionScope.designer')
+                            : t('crossClarify.questionScope.questioner'),
+                        title: t(
+                          mode === 'designer'
+                            ? 'crossClarify.questionScope.designerTooltip'
+                            : 'crossClarify.questionScope.questionerTooltip',
+                        ),
+                        shortcut: mode === 'designer' ? 'Q' : 'W',
+                        testid: `clarify-scope-${q.id}-${mode}`,
+                        shortcutTestid: `clarify-scope-${q.id}-${mode}-kbd`,
+                      }))}
+                      ariaLabel={t('crossClarify.questionScope.label')}
+                      rootTestid={`clarify-scope-segmented-${q.id}`}
+                      disabled={submitMut.isPending || locked}
+                    />
                   )}
                 </div>
               )}

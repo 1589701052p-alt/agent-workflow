@@ -15,6 +15,7 @@ import type { CachedRepo, RecentRepo, RepoRefsResponse } from '@agent-workflow/s
 import { api } from '@/api/client'
 import { Field, Switch, TextInput } from '@/components/Form'
 import { Select } from '@/components/Select'
+import { TabBar } from '@/components/TabBar'
 import { validateRepoUrl, type RepoSource } from '@/lib/launch-repo-source'
 
 // RFC-068: persist the user's "fetch before launch" preference so it survives
@@ -101,28 +102,24 @@ export function RepoSourceRow({
   return (
     <div className="repo-source-row" data-testid={`repo-source-row${idxSuffix}`}>
       <div className="repo-source-row__header">
-        <div className="tabs tabs--segment" role="tablist" aria-label={t('launch.repoSource.bar')}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={source.kind === 'path'}
-            data-testid={`repo-source-tab-path${idxSuffix}`}
-            className={`tabs__tab ${source.kind === 'path' ? 'tabs__tab--active' : ''}`}
-            onClick={() => switchTo('path')}
-          >
-            {t('launch.repoSource.path')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={source.kind === 'url'}
-            data-testid={`repo-source-tab-url${idxSuffix}`}
-            className={`tabs__tab ${source.kind === 'url' ? 'tabs__tab--active' : ''}`}
-            onClick={() => switchTo('url')}
-          >
-            {t('launch.repoSource.url')}
-          </button>
-        </div>
+        <TabBar<'path' | 'url'>
+          variant="segment"
+          ariaLabel={t('launch.repoSource.bar')}
+          tabs={[
+            {
+              key: 'path',
+              label: t('launch.repoSource.path'),
+              testid: `repo-source-tab-path${idxSuffix}`,
+            },
+            {
+              key: 'url',
+              label: t('launch.repoSource.url'),
+              testid: `repo-source-tab-url${idxSuffix}`,
+            },
+          ]}
+          active={source.kind}
+          onSelect={switchTo}
+        />
         {showRemove === true && (
           <button
             type="button"

@@ -21,6 +21,8 @@ import { api } from '@/api/client'
 import { describeApiError } from '@/i18n'
 import { decisionChipKind } from '@/lib/review/decisionChip'
 import { EmptyState } from '@/components/EmptyState'
+import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { LoadingState } from '@/components/LoadingState'
 import { Route as RootRoute } from './__root'
 
@@ -78,21 +80,15 @@ export function ReviewsListPage() {
       <header className="page__header">
         <h1>{t('reviews.title')}</h1>
       </header>
-      <div className="tabs" role="tablist">
-        {FILTERS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={filter === k}
-            className={`tabs__tab ${filter === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setFilter(k)}
-            data-testid={`reviews-filter-${k}`}
-          >
-            {t(`reviews.filter${k.charAt(0).toUpperCase()}${k.slice(1)}` as const)}
-          </button>
-        ))}
-      </div>
+      <TabBar<Filter>
+        tabs={FILTERS.map((k) => ({
+          key: k,
+          label: t(`reviews.filter${k.charAt(0).toUpperCase()}${k.slice(1)}` as const),
+          testid: `reviews-filter-${k}`,
+        }))}
+        active={filter}
+        onSelect={setFilter}
+      />
       {list.isLoading && <LoadingState data-testid="reviews-loading" />}
       {list.error !== null && list.error !== undefined && (
         <div className="error-box">{describeApiError(list.error)}</div>
@@ -167,15 +163,11 @@ export function ReviewsListPage() {
                         )}
                       </td>
                       <td>
-                        <span
-                          className={`status-chip status-chip--${
-                            r.awaitingReview ? 'warn' : decisionChipKind(r.decision)
-                          }`}
-                        >
+                        <StatusChip kind={r.awaitingReview ? 'warn' : decisionChipKind(r.decision)}>
                           {r.awaitingReview
                             ? t('reviews.statusAwaiting')
                             : t(`reviews.decision.${r.decision}`)}
-                        </span>
+                        </StatusChip>
                       </td>
                       <td>v{r.currentVersionIndex}</td>
                       <td className="muted">{formatTimestamp(r.createdAt)}</td>
@@ -241,7 +233,11 @@ export function HistoryRows({
     queryFn: ({ signal }) => api.get(`/api/reviews/${nodeRunId}/versions`, undefined, signal),
   })
   if (q.isLoading) {
-    return <div className="muted reviews-version-loading">{t('common.loading')}</div>
+    return (
+      <div className="reviews-version-loading">
+        <LoadingState size="compact" />
+      </div>
+    )
   }
   if (q.error !== null && q.error !== undefined) {
     return (
@@ -273,9 +269,9 @@ export function HistoryRows({
           return (
             <li key={v.id} className="reviews-version-list__item">
               <span className="reviews-version-list__label">v{v.versionIndex}</span>
-              <span className={`status-chip status-chip--${decisionChipKind(v.decision)}`}>
+              <StatusChip kind={decisionChipKind(v.decision)}>
                 {t(`reviews.decision.${v.decision}`)}
-              </span>
+              </StatusChip>
               {isCurrent && (
                 <span className="reviews-version-list__current-pill">
                   {t('reviews.currentTag')}
@@ -312,7 +308,11 @@ export function RoundRows({ nodeRunId }: { nodeRunId: string }) {
     queryFn: ({ signal }) => api.get(`/api/reviews/${nodeRunId}/rounds`, undefined, signal),
   })
   if (q.isLoading) {
-    return <div className="muted reviews-version-loading">{t('common.loading')}</div>
+    return (
+      <div className="reviews-version-loading">
+        <LoadingState size="compact" />
+      </div>
+    )
   }
   if (q.error !== null && q.error !== undefined) {
     return (
@@ -342,9 +342,9 @@ export function RoundRows({ nodeRunId }: { nodeRunId: string }) {
             <span className="reviews-version-list__label">
               {t('reviews.roundLabel', { n: i + 1 })}
             </span>
-            <span className={`status-chip status-chip--${decisionChipKind(r.decision)}`}>
+            <StatusChip kind={decisionChipKind(r.decision)}>
               {t(`reviews.decision.${r.decision}`)}
-            </span>
+            </StatusChip>
             {r.isCurrent && (
               <span className="reviews-version-list__current-pill">{t('reviews.currentTag')}</span>
             )}

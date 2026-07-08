@@ -15,6 +15,7 @@ import type {
   ImpactItem,
 } from '@agent-workflow/shared'
 import { EmptyState } from '@/components/EmptyState'
+import { Segmented } from '@/components/Segmented'
 import {
   summaryRows,
   groupFileChanges,
@@ -158,24 +159,13 @@ export function StructuralDiffView({
       )}
       {availableViews.length > 0 && (
         <div className="structure__detail">
-          <div
-            className="segmented structure__view-toggle"
-            role="radiogroup"
-            aria-label={t('tasks.structViewLabel')}
-          >
-            {availableViews.map((v) => (
-              <button
-                key={v.key}
-                type="button"
-                role="radio"
-                aria-checked={activeView === v.key}
-                className={`segmented__option ${activeView === v.key ? 'segmented__option--active' : ''}`}
-                onClick={() => setView(v.key)}
-              >
-                {t(v.labelKey)}
-              </button>
-            ))}
-          </div>
+          <Segmented<ViewKey>
+            value={activeView}
+            onChange={setView}
+            options={availableViews.map((v) => ({ value: v.key, label: t(v.labelKey) }))}
+            ariaLabel={t('tasks.structViewLabel')}
+            className="structure__view-toggle"
+          />
           {activeView === 'tree' ? (
             <>
               <StructureTreeToolbar
@@ -271,24 +261,16 @@ function StructureTreeToolbar({
   return (
     <div className="structure__toolbar">
       <span className="structure__toolbar-label">{t('tasks.structSortLabel')}</span>
-      <div
-        className="segmented structure__sort"
-        role="radiogroup"
-        aria-label={t('tasks.structSortLabel')}
-      >
-        {(['severity', 'name'] as const).map((s) => (
-          <button
-            key={s}
-            type="button"
-            role="radio"
-            aria-checked={sortBy === s}
-            className={`segmented__option ${sortBy === s ? 'segmented__option--active' : ''}`}
-            onClick={() => setSortBy(s)}
-          >
-            {t(s === 'severity' ? 'tasks.structSortSeverity' : 'tasks.structSortName')}
-          </button>
-        ))}
-      </div>
+      <Segmented<SortBy>
+        value={sortBy}
+        onChange={setSortBy}
+        options={(['severity', 'name'] as const).map((s) => ({
+          value: s,
+          label: t(s === 'severity' ? 'tasks.structSortSeverity' : 'tasks.structSortName'),
+        }))}
+        ariaLabel={t('tasks.structSortLabel')}
+        className="structure__sort"
+      />
       <span className="structure__toolbar-label">{t('tasks.structFilterLabel')}</span>
       {ALL_SEVERITIES.map((s) => (
         <label key={s} className="structure__sev-toggle">

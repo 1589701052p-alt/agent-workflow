@@ -39,7 +39,7 @@ import {
   type NodeKind,
 } from './schemas/workflow'
 import { deriveWrapperFanoutOutputs, lookupAgent, type AgentLookup } from './wrapperFanout'
-import { reviewApprovedPortName } from './reviewMultiDoc'
+import { REVIEW_APPROVAL_META_PORT, reviewApprovedPortName } from './reviewMultiDoc'
 
 /**
  * The structural slice of `Agent` that port declaration actually reads.
@@ -204,7 +204,7 @@ const PORT_DERIVERS = {
     // (multi-doc list<markdownish> ⇒ 'accepted', else 'approved_doc').
     dataOutputs: [
       { name: reviewApprovedPortName(resolveReviewInputKind(node, defn, agents)) },
-      { name: 'approval_meta' },
+      { name: REVIEW_APPROVAL_META_PORT },
     ],
   }),
   clarify: (): DeclaredPorts => ({
