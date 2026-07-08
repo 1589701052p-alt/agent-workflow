@@ -314,14 +314,10 @@ jobs:
         # The smoke test invokes `agent-workflow version`, which does not touch
         # opencode — but the start path does, and we want the binary to be
         # ready to run an end-to-end smoke locally if anyone reuses this job.
-        # RFC-144 PR-5: skipped on Windows — the daemon spawns opencode via the
-        # wsl-opencode driver (PR-3, not yet landed), and a native Windows
-        # opencode install isn't wired here. `version`/`doctor` smoke below
-        # don't need opencode.
-        if: matrix.os != 'windows-latest'
+        # RFC-144 PR-3 (strategy D): opencode runs natively on Windows too —
+        # install it on all legs so `doctor` is fully green.
         run: |
           bun install -g opencode-ai@${{ env.OPENCODE_VERSION }}
-          export PATH="$HOME/.bun/bin:$PATH"
           opencode --version
 
       - name: Install dependencies
@@ -350,16 +346,16 @@ jobs:
         # `find` instead of `ls | head` to satisfy actionlint's embedded
         # shellcheck (SC2012) — robust under names with whitespace even
         # though the canonical asset names here never contain any.
-        # RFC-144 PR-5: on Windows the binary is `agent-workflow-windows-x86_64.exe`;
+        # RFC-144 PR-3: on Windows the binary is `agent-workflow-windows-x86_64.exe`;
         # `chmod +x` is a no-op there (Windows doesn't use the +x bit) and the
-        # `.exe` is directly executable from bash. `doctor` may warn about
-        # opencode absence (expected — wsl-opencode driver is PR-3).
+        # `.exe` is directly executable from bash. opencode is installed on all
+        # legs now (strategy D — native), so `doctor` should be fully green.
         run: |
           set -euxo pipefail
           bin=$(find dist -maxdepth 1 -type f -name 'agent-workflow-*' | head -n 1)
           chmod +x "$bin" 2>/dev/null || true
           "$bin" version
-          "$bin" doctor || true
+          "$bin" doctor
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6

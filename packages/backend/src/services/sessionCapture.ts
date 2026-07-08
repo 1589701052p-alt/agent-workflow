@@ -98,7 +98,9 @@ function defaultXdgDataDir(home: string): string {
   // RFC-043 captureDistillJobSession) to silently write
   // `subagent_capture_failed` / `rfc043/distill-capture-failed` marker
   // rows with reason `opencode-db-not-found`.
-  // Windows is out of scope for v1 per RFC-027 design.md §8.
+  // RFC-144 PR-3 (2026-07-08): verified on Windows too — opencode-ai 1.15.5
+  // stores its SQLite at `C:\Users\<u>\.local\share\opencode\opencode.db`,
+  // same `~/.local/share` resolution. No platform branch needed.
   return join(home, '.local', 'share')
 }
 
