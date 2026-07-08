@@ -47,10 +47,12 @@ describe('ReviewDocPane — cross-heading selection hint', () => {
     expect(s).toMatch(/setCrossHeadingHint\(null\)/)
   })
 
-  test('hint element renders with the i18n key and is gated behind !readonly', () => {
+  test("hint element renders with the i18n key and is gated behind mode !== 'historical'", () => {
     const s = src(PANE_TSX)
+    // RFC-149: the pane's `readonly` boolean became the three-state
+    // `mode: ReviewPaneMode`; the hint hides only on the historical view.
     expect(s).toMatch(
-      /\{\s*!readonly\s*&&\s*crossHeadingHint\s*!==\s*null\s*&&[\s\S]*?reviews\.crossHeadingHint/,
+      /\{\s*mode !== 'historical'\s*&&\s*crossHeadingHint\s*!==\s*null\s*&&[\s\S]*?reviews\.crossHeadingHint/,
     )
     expect(s).toMatch(/review-cross-heading-hint/)
   })

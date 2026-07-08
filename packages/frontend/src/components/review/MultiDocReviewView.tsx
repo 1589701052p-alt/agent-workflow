@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next'
 import type {
   DocVersionWithBodyAndComments,
   ReviewComment,
+  ReviewDecisionKind,
   ReviewDetail,
   ReviewRoundSummary,
 } from '@agent-workflow/shared'
@@ -39,6 +40,11 @@ import { StatusChip, type StatusChipKind } from '@/components/StatusChip'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { useUserLookup } from '@/hooks/useUserLookup'
 import { multiDocHotkeyAction, nextDocIndex } from '@/lib/review/multiDocHotkeys'
+import {
+  pickViewedRoundDecision,
+  resolveRoundView,
+  type ReviewPaneMode,
+} from '@/lib/review/readonly'
 
 type Selection = 'unselected' | 'accepted' | 'not_accepted'
 
@@ -80,27 +86,19 @@ export function MultiDocReviewView({
     queryFn: ({ signal }) => api.get(`/api/reviews/${nodeRunId}/rounds`, undefined, signal),
     enabled: historicalRoundKey !== undefined,
   })
-  const requestedRound = useMemo(
-    () =>
-      historicalRoundKey !== undefined
-        ? rounds.data?.find((r) => r.roundKey === historicalRoundKey)
-        : undefined,
-    [historicalRoundKey, rounds.data],
-  )
-  // `?round=` pointing at the CURRENT round is equivalent to no param — the
-  // interactive view renders (list rows send empty search for it anyway).
-  const historicalRound =
-    requestedRound !== undefined && !requestedRound.isCurrent ? requestedRound : undefined
-  const historicalRoundIndex =
-    historicalRound !== undefined && rounds.data !== undefined
-      ? rounds.data.findIndex((r) => r.roundKey === historicalRound.roundKey)
-      : -1
+  // RFC-149: `resolveRoundView` replaces the requestedRound / historicalRound /
+  // historicalRoundIndex / unknownRound sentinel chain (undefined / -1 / null
+  // encodings). While the rounds list is in flight the view is OPTIMISTICALLY
+  // historical — the read-only shell renders with placeholder labels instead
+  // of blocking on a full-page spinner (deliberate single-doc alignment).
+  // `?round=` pointing at the CURRENT round still folds to `current` (the
+  // interactive view; list rows send empty search for it anyway).
+  const view = resolveRoundView(historicalRoundKey, rounds.data)
+  const historicalMode = view.mode === 'historical'
+  const historicalRound = historicalMode ? view.round : undefined
   // Unknown round key → one-shot warning + replace back to the current view,
   // mirroring RFC-013's unknown-version handling on the single-doc page.
-  const unknownRound =
-    historicalRoundKey !== undefined && rounds.data !== undefined && requestedRound === undefined
-      ? historicalRoundKey
-      : null
+  const unknownRound = view.mode === 'invalid' ? view.requested : null
   useEffect(() => {
     if (unknownRound === null) return
     window.alert(t('reviews.unknownRound', { id: unknownRound }))
@@ -108,21 +106,19 @@ export function MultiDocReviewView({
   }, [unknownRound, navigate, nodeRunId, t])
 
   const documents = useMemo(
-    () =>
-      historicalRound !== undefined ? historicalRound.members : (detail.data?.documents ?? []),
-    [historicalRound, detail.data],
+    () => (historicalMode ? (historicalRound?.members ?? []) : (detail.data?.documents ?? [])),
+    [historicalMode, historicalRound, detail.data],
   )
-  const firstDocId =
-    historicalRound !== undefined
-      ? (historicalRound.members[0]?.docVersionId ?? '')
-      : (detail.data?.currentVersion.id ?? '')
+  const firstDocId = historicalMode
+    ? (historicalRound?.members[0]?.docVersionId ?? '')
+    : (detail.data?.currentVersion.id ?? '')
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
   const [paneCapturing, setPaneCapturing] = useState(false)
   const listRef = useRef<HTMLUListElement>(null)
   const activeDocId = selectedDocId ?? firstDocId
   // Historical members never ride the detail payload — every doc goes through
   // the versions endpoint (decided rows return the FROZEN comment snapshot).
-  const isFirst = historicalRound === undefined && activeDocId === firstDocId
+  const isFirst = !historicalMode && activeDocId === firstDocId
 
   // RFC-142: switching rounds resets the manual doc selection so the new
   // round opens on its own first member.
@@ -144,29 +140,21 @@ export function MultiDocReviewView({
     [isFirst, detail.data, selectedDoc.data],
   )
 
-  // RFC-142: a historical round is never awaiting — this single flag also
-  // hides the round decision buttons + per-doc accept bar + Q/W hotkeys and
-  // flips ReviewDocPane readonly.
-  const awaiting = historicalRound === undefined && (detail.data?.summary.awaitingReview ?? false)
+  // RFC-149: three-state mode — 'historical' hides the round decision buttons
+  // + per-doc accept bar + Q/W hotkeys and flips ReviewDocPane read-only;
+  // 'decided' (current round already decided) keeps the buttons VISIBLE but
+  // disabled (single-doc parity — the old `awaiting` boolean collapsed this
+  // state into the hidden shape); 'awaiting' is fully interactive.
+  const mode: ReviewPaneMode = historicalMode
+    ? 'historical'
+    : (detail.data?.summary.awaitingReview ?? false)
+      ? 'awaiting'
+      : 'decided'
 
-  // RFC-142: decision info for the viewed round (historical) or the current
-  // version's round (already-decided current view).
-  const decisionSource =
-    historicalRound !== undefined
-      ? {
-          decision: historicalRound.decision,
-          decisionReason: historicalRound.decisionReason,
-          decidedAt: historicalRound.decidedAt,
-          decidedBy: historicalRound.decidedBy,
-          decidedByRole: historicalRound.decidedByRole,
-        }
-      : {
-          decision: detail.data?.currentVersion.decision,
-          decisionReason: detail.data?.currentVersion.decisionReason ?? null,
-          decidedAt: detail.data?.currentVersion.decidedAt ?? null,
-          decidedBy: detail.data?.currentVersion.decidedBy ?? null,
-          decidedByRole: detail.data?.currentVersion.decidedByRole ?? null,
-        }
+  // RFC-142/RFC-149: decision info for the viewed round (historical) or the
+  // current version's round (already-decided current view) — one picker call
+  // instead of five per-field ternaries.
+  const decisionSource = pickViewedRoundDecision(view, detail.data?.currentVersion)
   const deciderLookup = useUserLookup([decisionSource.decidedBy])
   const decidedCount = documents.filter((d) => d.selection !== 'unselected').length
   const allDecided = documents.length > 0 && decidedCount === documents.length
@@ -187,7 +175,7 @@ export function MultiDocReviewView({
 
   const submitDecision = useMutation({
     mutationFn: async (input: {
-      decision: 'approved' | 'rejected' | 'iterated'
+      decision: ReviewDecisionKind
       rejectReason?: string
       reviewIteration: number
     }) => {
@@ -255,9 +243,9 @@ export function MultiDocReviewView({
         return
       }
       // accept / not_accept — only when the round is awaiting review and the
-      // active document is known (mirrors the per-doc buttons' visibility).
+      // active document is known (mirrors the per-doc buttons' enable state).
       const cur = idx >= 0 ? documents[idx] : undefined
-      if (!awaiting || cur === undefined || selectionMut.isPending) return
+      if (mode !== 'awaiting' || cur === undefined || selectionMut.isPending) return
       e.preventDefault()
       selectionMut.mutate({
         docVersionId: activeDocId,
@@ -266,7 +254,7 @@ export function MultiDocReviewView({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [paneCapturing, dialog, documents, activeDocId, awaiting, selectionMut])
+  }, [paneCapturing, dialog, documents, activeDocId, mode, selectionMut])
 
   // RFC-090: keep the keyboard-selected document visible in the navigator.
   // block:'nearest' is a no-op when the item is already on screen, so mouse
@@ -280,10 +268,10 @@ export function MultiDocReviewView({
 
   if (detail.isLoading) return <LoadingState label={t('common.loading')} />
   if (detail.isError || detail.data === undefined) return <ErrorBanner error={detail.error} />
-  // RFC-142: historical mode blocks on the rounds list (it IS the data source).
-  if (historicalRoundKey !== undefined && rounds.isLoading) {
-    return <LoadingState label={t('common.loading')} />
-  }
+  // RFC-149: while the rounds list loads, the historical view renders
+  // OPTIMISTICALLY (read-only shell + placeholder labels + pane loading state)
+  // instead of the old full-page spinner — single-doc parity. Only a rounds
+  // ERROR still blocks (the list IS the historical data source).
   if (historicalRoundKey !== undefined && rounds.isError) {
     return <ErrorBanner error={rounds.error} />
   }
@@ -312,9 +300,11 @@ export function MultiDocReviewView({
             {detail.data.summary.title || detail.data.summary.reviewNodeId}
           </h1>
           <div className="muted">
-            {historicalRound !== undefined && (
+            {view.mode === 'historical' && (
               <>
-                {t('reviews.roundLabel', { n: historicalRoundIndex + 1 })}
+                {t('reviews.roundLabel', {
+                  n: view.roundIndex !== undefined ? view.roundIndex + 1 : '?',
+                })}
                 {' · '}
               </>
             )}
@@ -335,13 +325,15 @@ export function MultiDocReviewView({
             }
           />
         </div>
-        {awaiting && (
+        {/* RFC-149: decided current round keeps the buttons visible but
+            disabled (single-doc parity); only the historical view hides them. */}
+        {mode !== 'historical' && (
           <div className="page__actions">
             <button
               type="button"
               className="btn btn--sm btn--primary"
               data-testid="multidoc-approve"
-              disabled={!allDecided || submitDecision.isPending}
+              disabled={mode !== 'awaiting' || !allDecided || submitDecision.isPending}
               title={
                 allDecided
                   ? undefined
@@ -357,7 +349,7 @@ export function MultiDocReviewView({
             <button
               type="button"
               className="btn btn--sm"
-              disabled={submitDecision.isPending}
+              disabled={mode !== 'awaiting' || submitDecision.isPending}
               onClick={() => setDialog({ kind: 'iterate' })}
             >
               {t('reviews.iterateButton')}
@@ -365,7 +357,7 @@ export function MultiDocReviewView({
             <button
               type="button"
               className="btn btn--sm btn--danger"
-              disabled={submitDecision.isPending}
+              disabled={mode !== 'awaiting' || submitDecision.isPending}
               onClick={() => setDialog({ kind: 'reject', reason: '', reasonError: false })}
             >
               {t('reviews.rejectButton')}
@@ -374,12 +366,12 @@ export function MultiDocReviewView({
         )}
       </header>
 
-      {historicalRound !== undefined && (
+      {view.mode === 'historical' && (
         <div className="readonly-banner" role="status">
           <span>
             {t('reviews.historicalRoundBanner', {
-              n: historicalRoundIndex + 1,
-              decision: t(`reviews.decision.${historicalRound.decision}` as const),
+              n: view.roundIndex !== undefined ? view.roundIndex + 1 : '?',
+              decision: t(`reviews.decision.${view.round?.decision ?? 'pending'}` as const),
             })}
           </span>
           <Link
@@ -450,7 +442,7 @@ export function MultiDocReviewView({
             shared <ReviewDocPane>, which renders the active doc's markdown +
             anchored comment sidebar exactly like the single-document page. */}
         <div className="review-multidoc__pane">
-          {awaiting && current !== undefined && (
+          {mode !== 'historical' && current !== undefined && (
             <div className="review-multidoc__doc-actions">
               <button
                 type="button"
@@ -459,7 +451,7 @@ export function MultiDocReviewView({
                 className={
                   'btn btn--sm' + (current.selection === 'accepted' ? ' btn--primary' : '')
                 }
-                disabled={selectionMut.isPending}
+                disabled={mode !== 'awaiting' || selectionMut.isPending}
                 onClick={() =>
                   selectionMut.mutate({ docVersionId: activeDocId, selection: 'accepted' })
                 }
@@ -476,7 +468,7 @@ export function MultiDocReviewView({
                 className={
                   'btn btn--sm' + (current.selection === 'not_accepted' ? ' btn--danger' : '')
                 }
-                disabled={selectionMut.isPending}
+                disabled={mode !== 'awaiting' || selectionMut.isPending}
                 onClick={() =>
                   selectionMut.mutate({ docVersionId: activeDocId, selection: 'not_accepted' })
                 }
@@ -504,8 +496,7 @@ export function MultiDocReviewView({
               docVersionId={activeDocId}
               body={activeBody}
               comments={activeComments}
-              readonly={!awaiting}
-              awaiting={awaiting}
+              mode={mode}
               onInvalidate={invalidate}
               onShortcutCaptureChange={setPaneCapturing}
             />

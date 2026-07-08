@@ -37,6 +37,7 @@ import { anchorKey, computeAnchorFromSelection, selectionCrossesHeading } from '
 import { BUBBLE_GAP_PX, computeBubbleLayout } from '@/lib/review/bubbleLayout'
 import { deleteDraft, getDraft, setDraft } from '@/lib/review/draftStore'
 import { computeLineRange } from '@/lib/review/lineRange'
+import type { ReviewPaneMode } from '@/lib/review/readonly'
 
 // RFC-009-T2: sidebar width persistence + bounds. Shared with the single-doc
 // page's original keys so the user's last width / collapsed preference survives
@@ -66,10 +67,17 @@ export interface ReviewDocPaneProps {
   /** Already-resolved markdown body. Host owns fetching/loading. */
   body: string
   comments: ReviewComment[]
-  /** Historical / not-writable view: omit every comment write affordance + popover. */
-  readonly: boolean
-  /** Within a writable view, gate edit/delete (current-but-decided → shown yet disabled). */
-  awaiting: boolean
+  /**
+   * RFC-149: single three-state writability mode (replaces the `readonly` +
+   * `awaiting` boolean pair, whose (readonly=true, awaiting=true) combination
+   * was unrepresentable nonsense):
+   *   - 'awaiting'   — fully writable: popover + edit + delete.
+   *   - 'decided'    — current-but-decided: write affordances render, but
+   *                    edit / delete are disabled (comments froze at the
+   *                    decision boundary).
+   *   - 'historical' — read-only history view: every write affordance hidden.
+   */
+  mode: ReviewPaneMode
   /** Called after any comment create/edit/delete so the host refetches. */
   onInvalidate: () => Promise<void>
   /**
@@ -174,8 +182,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
     docVersionId,
     body,
     comments,
-    readonly,
-    awaiting,
+    mode,
     onInvalidate,
     diffMode,
     bodySlot,
@@ -286,7 +293,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
   })
 
   const onMouseUpInDoc = useCallback(async () => {
-    if (readonly) return
+    if (mode === 'historical') return
     if (markdownRef.current === null) return
     const sel = window.getSelection()
     if (sel === null || sel.isCollapsed) return
@@ -311,7 +318,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
       draft,
       rect: { left: rect.left + window.scrollX, top: rect.bottom + window.scrollY },
     })
-  }, [readonly, body, taskId, nodeRunId, docVersionId])
+  }, [mode, body, taskId, nodeRunId, docVersionId])
 
   // Persist popover draft on every keystroke.
   useEffect(() => {
@@ -468,7 +475,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
   // Pane-local keyboard: J/K jump + Esc closes popover. Host owns A/R/I etc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (readonly) return
+      if (mode === 'historical') return
       if (popover !== null) {
         if (e.key === 'Escape') setPopover(null)
         return
@@ -486,7 +493,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popover, editingId, readonly, jumpComment])
+  }, [popover, editingId, mode, jumpComment])
 
   const submitPopover = useCallback(async () => {
     if (popover === null) return
@@ -511,7 +518,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
           <div
             className="review-detail__body"
             ref={markdownRef}
-            onMouseUp={readonly ? undefined : () => void onMouseUpInDoc()}
+            onMouseUp={mode === 'historical' ? undefined : () => void onMouseUpInDoc()}
           >
             <Prose
               body={body}
@@ -588,7 +595,9 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
             </header>
             {sortedComments.length === 0 ? (
               <div className="review-detail__bubbles-empty muted">
-                {readonly ? t('reviews.sidebarEmptyReadonly') : t('reviews.sidebarEmpty')}
+                {mode === 'historical'
+                  ? t('reviews.sidebarEmptyReadonly')
+                  : t('reviews.sidebarEmpty')}
               </div>
             ) : (
               sortedComments.map((c) => {
@@ -620,7 +629,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
                     style={top !== undefined ? { top: `${top}px` } : undefined}
                     onClick={() => onBubbleClick(c.id)}
                   >
-                    {!readonly && !isEditing && (
+                    {mode !== 'historical' && !isEditing && (
                       <div className="comment-bubble__actions">
                         <button
                           type="button"
@@ -631,7 +640,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
                             e.stopPropagation()
                             onStartEdit(c)
                           }}
-                          disabled={!awaiting}
+                          disabled={mode !== 'awaiting'}
                         >
                           ✎
                         </button>
@@ -657,7 +666,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
                             e.stopPropagation()
                             deleteComment.mutate(c.id)
                           }}
-                          disabled={!awaiting}
+                          disabled={mode !== 'awaiting'}
                         >
                           ×
                         </button>
@@ -736,7 +745,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
         )}
       </div>
 
-      {!readonly && crossHeadingHint !== null && (
+      {mode !== 'historical' && crossHeadingHint !== null && (
         <div
           key={crossHeadingHint.key}
           className="review-cross-heading-hint"
@@ -748,7 +757,7 @@ export function ReviewDocPane(props: ReviewDocPaneProps) {
         </div>
       )}
 
-      {!readonly && popover !== null && (
+      {mode !== 'historical' && popover !== null && (
         <div
           className="comment-popover"
           style={{ position: 'absolute', left: popover.rect.left, top: popover.rect.top }}

@@ -7,11 +7,13 @@
 // caller renders its own fallback.
 
 import { useQuery } from '@tanstack/react-query'
-import type { UserPublic } from '@agent-workflow/shared'
+import { LOCAL_DECIDER, SYSTEM_DECIDER, type UserPublic } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 
-/** ids that are sentinels, never real users — skipped client-side. */
-const SENTINELS = new Set(['local', 'system', '__system__', ''])
+/** ids that are sentinels, never real users — skipped client-side. The two
+ *  decider sentinels spell through the RFC-149 shared constants; '__system__'
+ *  is the legacy clarify/task actor marker with no shared constant (yet). */
+const SENTINELS = new Set<string>([LOCAL_DECIDER, SYSTEM_DECIDER, '__system__', ''])
 
 export function useUserLookup(ids: ReadonlyArray<string | null | undefined>) {
   const wanted = [
