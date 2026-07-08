@@ -308,6 +308,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const app = createApp({
     token,
     configPath: Paths.config,
+    daemonInfoPath: Paths.daemonInfo,
     opencodeVersion: probe.version,
     dbVersion,
     db,

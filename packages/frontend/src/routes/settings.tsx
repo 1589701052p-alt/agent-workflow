@@ -484,9 +484,29 @@ function BackupCard() {
   )
 }
 
-function NetworkTab({ config }: TabProps) {
+// GET /api/daemon payload — the daemon's *effective* runtime binding, read from
+// the run-info file. Distinct from the persisted bindHost/bindPort in config.
+interface DaemonInfo {
+  pid: number
+  host: string
+  port: number
+  url: string
+  startedAt: string
+}
+
+export function NetworkTab({ config }: TabProps) {
   const { t } = useTranslation()
   const { state, setState, save, restartRequired } = useTabState(config, ['bindHost', 'bindPort'])
+  // The two editable fields below are the PERSISTED config — applied only on the
+  // next restart, and silently overridden when the daemon was launched with
+  // --host/--port. This read-only readout is the address the daemon is ACTUALLY
+  // bound to right now (notably the concrete port when bindPort was left blank /
+  // ephemeral), so the tab reflects the live binding rather than only the stored
+  // one. null (run-info absent) → the readout is hidden.
+  const daemon = useQuery<DaemonInfo | null>({
+    queryKey: ['daemon-info'],
+    queryFn: ({ signal }) => api.get('/api/daemon', undefined, signal),
+  })
   return (
     <SectionForm
       onSave={save.mutate}
@@ -495,6 +515,19 @@ function NetworkTab({ config }: TabProps) {
       success={save.isSuccess && save.error === null ? 'saved' : null}
       restartRequired={restartRequired}
     >
+      {daemon.data != null && (
+        <Field
+          label={t('settingsForm.effectiveBindLabel')}
+          hint={t('settingsForm.effectiveBindHint')}
+        >
+          <TextInput
+            value={`${daemon.data.host}:${daemon.data.port}`}
+            disabled
+            data-testid="settings-effective-bind"
+            onChange={() => {}}
+          />
+        </Field>
+      )}
       <Field label={t('settingsForm.bindHost')} required hint={t('settingsForm.bindHostHint')}>
         <TextInput
           value={state.bindHost ?? '127.0.0.1'}

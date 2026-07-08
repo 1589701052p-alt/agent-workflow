@@ -16,6 +16,7 @@ import { mountAuthRoutes } from '@/routes/auth'
 import { mountBackupRoutes } from '@/routes/backup'
 import { mountCachedRepoRoutes } from '@/routes/cached-repos'
 import { mountConfigRoutes } from '@/routes/config'
+import { mountDaemonRoutes } from '@/routes/daemon'
 import { mountHealthRoutes } from '@/routes/health'
 import { mountMcpRoutes } from '@/routes/mcps'
 import { mountMemoryRoutes } from '@/routes/memories'
@@ -47,6 +48,12 @@ export interface AppDeps {
   token: string
   /** Absolute path to config.json (lets tests use a temp file). */
   configPath: string
+  /**
+   * Absolute path to the daemon run-info file (host/port/url the daemon is
+   * actually bound to). Optional — defaults to `Paths.daemonInfo` in the route;
+   * tests inject a temp file. Read by GET /api/daemon.
+   */
+  daemonInfoPath?: string
   /** Opencode version detected at startup; null if probe failed. */
   opencodeVersion: string | null
   /** DB schema version (count of applied migrations). */
@@ -145,6 +152,7 @@ export function createApp(deps: AppDeps): Hono {
   app.use('/api/runtime/*', requirePermission('runtime:read'))
 
   mountConfigRoutes(app, deps)
+  mountDaemonRoutes(app, deps)
   mountPlantumlRoutes(app, deps)
   mountRuntimeRoutes(app, deps)
   mountRuntimesRoutes(app, deps)
