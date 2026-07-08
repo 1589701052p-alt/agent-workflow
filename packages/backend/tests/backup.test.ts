@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
 import { createBackup } from '../src/services/backup'
@@ -28,8 +28,17 @@ function buildHarness(): Harness {
   }
 }
 
+// RFC-144 PR-4 T20: tar helpers run with `cwd` + a RELATIVE path so GNU tar
+// (MSYS / Git-for-Windows) doesn't parse a `C:\…` drive path as a remote
+// `host:path` ("Cannot connect to C: resolve failed"). `--force-local` is
+// GNU-only (bsdtar rejects it), so the relative-path form is the portable fix.
+
 async function listTarMembers(tarPath: string): Promise<string[]> {
-  const proc = Bun.spawn(['tar', '-tzf', tarPath], { stdout: 'pipe', stderr: 'pipe' })
+  const proc = Bun.spawn(['tar', '-tzf', basename(tarPath)], {
+    cwd: dirname(tarPath),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   const text = await new Response(proc.stdout).text()
   await proc.exited
   return text
@@ -40,7 +49,12 @@ async function listTarMembers(tarPath: string): Promise<string[]> {
 
 async function extractTar(tarPath: string, dest: string): Promise<void> {
   mkdirSync(dest, { recursive: true })
-  const proc = Bun.spawn(['tar', '-xzf', tarPath, '-C', dest], { stdout: 'pipe', stderr: 'pipe' })
+  const rel = relative(dest, tarPath)
+  const proc = Bun.spawn(['tar', '-xzf', rel], {
+    cwd: dest,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   const code = await proc.exited
   if (code !== 0) {
     throw new Error(`tar -xzf failed with ${code}: ${await new Response(proc.stderr).text()}`)

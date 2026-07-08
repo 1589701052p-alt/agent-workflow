@@ -25,7 +25,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import type { DbClient } from '@/db/client'
 import { exportWorkflowYaml } from '@/services/workflow.yaml'
 import { listWorkflows } from '@/services/workflow'
@@ -67,6 +67,7 @@ export async function createBackup(opts: BackupOptions): Promise<BackupResult> {
   const ts = stampForFilename(opts.now ?? Date.now())
   const stagingDir = join(backupsDir, `.staging-${ts}`)
   const outPath = join(backupsDir, `agent-workflow-${ts}.tar.gz`)
+  let actualOutPath: string = outPath
   if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true })
   mkdirSync(stagingDir, { recursive: true })
 
@@ -113,10 +114,10 @@ export async function createBackup(opts: BackupOptions): Promise<BackupResult> {
       contents.workflows += 1
     }
 
-    // 5. tarball.
-    await tarGz(stagingDir, outPath)
+    // 5. tarball (or zip fallback on Windows without bsdtar).
+    actualOutPath = await tarGz(stagingDir, outPath)
     log.info('backup created', {
-      path: outPath,
+      path: actualOutPath,
       workflows: contents.workflows,
       skills: contents.skills,
     })
@@ -124,8 +125,8 @@ export async function createBackup(opts: BackupOptions): Promise<BackupResult> {
     if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true })
   }
 
-  const sizeBytes = statSync(outPath).size
-  return { path: outPath, sizeBytes, contents }
+  const sizeBytes = statSync(actualOutPath).size
+  return { path: actualOutPath, sizeBytes, contents }
 }
 
 function stampForFilename(now: number): string {
@@ -148,14 +149,72 @@ function countDirEntries(dir: string): number {
   return n
 }
 
-async function tarGz(stagingDir: string, outPath: string): Promise<void> {
-  const proc = Bun.spawn(['tar', '-czf', outPath, '-C', stagingDir, '.'], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const exit = await proc.exited
-  if (exit !== 0) {
-    const stderr = await new Response(proc.stderr).text()
-    throw new Error(`tar exited with code ${exit}: ${stderr.trim()}`)
+/**
+ * Produce the backup archive from the staging dir.
+ *
+ * RFC-144 PR-4 T20: prefers the system `tar` (produces `.tar.gz`; present on
+ * all POSIX + Windows 10 1803+ which ships bsdtar on PATH). When `tar` is
+ * absent (old Windows / stripped Server Core), falls back to PowerShell
+ * `Compress-Archive` producing a `.zip` — the backup is a one-way export with
+ * no `.tar.gz`-assuming restore side, so the format divergence is acceptable
+ * and the result path reflects the actual extension. Throws if neither tool
+ * is available.
+ *
+ * Returns the actual archive path (differs from `proposedOutPath` when the
+ * zip fallback fires).
+ */
+async function tarGz(stagingDir: string, proposedOutPath: string): Promise<string> {
+  if (await hasTar()) {
+    // RFC-144 PR-4 T20: GNU tar (MSYS / Git-for-Windows) parses a `C:\…` drive
+    // path as a remote `host:path` ("Cannot connect to C: resolve failed"),
+    // and bsdtar (Win10 native) does not. `--force-local` is GNU-only, so the
+    // portable fix is to run tar with `cwd = stagingDir` and a RELATIVE out
+    // path (`../<basename>`, no drive colon) — both tar flavours treat it as a
+    // local file. `.` is the staging contents.
+    const relOut = relative(stagingDir, proposedOutPath)
+    const proc = Bun.spawn(['tar', '-czf', relOut, '.'], {
+      cwd: stagingDir,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const exit = await proc.exited
+    if (exit !== 0) {
+      const stderr = await new Response(proc.stderr).text()
+      throw new Error(`tar exited with code ${exit}: ${stderr.trim()}`)
+    }
+    return proposedOutPath
   }
+
+  // Fallback: PowerShell Compress-Archive → .zip (same basename, .zip ext).
+  const zipPath = proposedOutPath.replace(/\.tar\.gz$/, '.zip')
+  const res = Bun.spawnSync([
+    'powershell',
+    '-NoProfile',
+    '-Command',
+    `Compress-Archive -Path ${psQuote(join(stagingDir, '*'))} -DestinationPath ${psQuote(zipPath)} -Force`,
+  ])
+  if (res.exitCode !== 0) {
+    const stderr = res.stderr.toString().trim()
+    throw new Error(
+      `backup: neither tar nor Compress-Archive succeeded (tar not on PATH; Compress-Archive: ${stderr || `exit ${res.exitCode}`}). Install bsdtar (Windows 10 1803+ ships it) or PowerShell.`,
+    )
+  }
+  log.warn('backup: tar not found; produced .zip via Compress-Archive fallback', { zipPath })
+  return zipPath
+}
+
+/** True iff `tar --version` exits cleanly (system tar present on PATH). */
+async function hasTar(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(['tar', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+    const exit = await proc.exited
+    return exit === 0
+  } catch {
+    return false
+  }
+}
+
+/** Single-quote a path for a PowerShell -Command argument (escape ' as ''). */
+function psQuote(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`
 }

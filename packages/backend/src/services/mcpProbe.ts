@@ -45,6 +45,7 @@ import type {
 import { ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import { redactSensitiveString } from '@/util/redact'
+import { isWindows } from '@/util/platform'
 
 const log = createLogger('mcpProbe')
 
@@ -363,8 +364,35 @@ function extractHttpStatus(err: unknown): number | null {
 // integration tests (T7) exercise this with a real fixture server.
 // -----------------------------------------------------------------------------
 
-/** Minimal environment passed to stdio MCP children — never inherit daemon creds. */
-const MINIMAL_INHERITED_ENV_KEYS = ['PATH', 'HOME', 'LANG']
+/**
+ * Minimal environment passed to stdio MCP children — never inherit daemon creds.
+ *
+ * RFC-144 PR-4 T19: Windows stdio children (npx / uvx `.cmd` shims, node
+ * scripts) need more than PATH/HOME/LANG — Windows has no HOME (it's
+ * USERPROFILE), and the PATHEXT / SystemRoot / ComSpec keys are required for
+ * `.cmd` shim resolution + sub-process spawning. The POSIX-only set would
+ * leave a Windows MCP child unable to find its own shim or resolve HOME. The
+ * extra keys are absent from a POSIX `process.env` so they're no-ops there
+ * (byte-for-byte unchanged); on Windows they're inherited.
+ */
+const MINIMAL_INHERITED_ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'LANG',
+  // Windows-specific (no-op on POSIX — absent from process.env there):
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'PATHEXT',
+  'SystemRoot',
+  'ComSpec',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'ProgramFiles',
+  'ProgramData',
+  'TMP',
+  'TEMP',
+]
 
 /** Build the env map for a stdio child: minimal inherited + mcp.config.env. */
 export function buildStdioEnv(
@@ -375,6 +403,15 @@ export function buildStdioEnv(
   for (const k of MINIMAL_INHERITED_ENV_KEYS) {
     const v = source[k]
     if (typeof v === 'string') out[k] = v
+  }
+  // RFC-144 PR-4 T19: Windows has no HOME env var (it's USERPROFILE). MCP
+  // servers / node tools that read HOME (e.g. for ~/.config) would break
+  // without it; inject HOME=USERPROFILE when HOME is absent. No-op on POSIX
+  // (HOME is always in the inherited set there) and when the daemon's own env
+  // already sets HOME (explicit configEnv HOME still wins below).
+  if (isWindows() && out.HOME === undefined) {
+    const up = source.USERPROFILE
+    if (typeof up === 'string' && up.length > 0) out.HOME = up
   }
   if (configEnv !== undefined) {
     for (const [k, v] of Object.entries(configEnv)) {
