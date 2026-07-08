@@ -13,6 +13,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { agents, runtimes } from '@/db/schema'
+import { dbTxSync } from '@/db/txSync'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 import type { RuntimeKind } from '@/services/runtime'
 import { RUNTIME_KINDS } from '@/services/runtime'
@@ -276,38 +277,20 @@ function validateBinaryPath(binaryPath: string | null | undefined): string | nul
 }
 
 /**
- * Config fields that hold a runtime NAME. RFC-153 impl-gate: besides
- * `agents.runtime`, the config references runtimes in `defaultRuntime` (effective,
- * unset → opencode) AND the three per-feature internal-agent fields, all resolved
- * via `resolveInternalAgentRuntime`. A delete-reference check must cover them or a
- * deleted row silently downgrades that job to the protocol-name fallback.
+ * Config fields that hold a runtime NAME (all checked before delete). RFC-153
+ * impl-gate: besides `agents.runtime`, the config references runtimes in
+ * `defaultRuntime` AND the three per-feature internal-agent fields (memoryDistill /
+ * commitPush / mergeAgent, resolved via `resolveInternalAgentRuntime`). A deleted
+ * row any of these point at would silently downgrade that job to the protocol-name
+ * fallback (NULL profile). `deleteRuntime` checks all four INSIDE its transaction
+ * (2nd-pass impl-gate: reference/count/delete must be atomic, so there is no
+ * separate async reference pass).
  */
 export interface RuntimeRefConfig {
   defaultRuntime?: string | null
   memoryDistillRuntime?: string | null
   commitPushRuntime?: string | null
   mergeAgentRuntime?: string | null
-}
-
-/** Everything referencing a runtime name (block delete to avoid dangling refs). */
-export async function findRuntimeReferences(
-  db: DbClient,
-  name: string,
-  refs: RuntimeRefConfig,
-): Promise<{ agentNames: string[]; configFields: string[] }> {
-  const refAgents = (await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(eq(agents.runtime, name))) as { name: string }[]
-  const configFields: string[] = []
-  // F1: fold an unset default → 'opencode' (the effective default dispatch +
-  // resolveRuntimeByName fall back to) so the fallback default can't be deleted.
-  if ((refs.defaultRuntime ?? 'opencode') === name) configFields.push('config.defaultRuntime')
-  // impl-gate: the per-feature internal-agent runtime NAMEs (resolveInternalAgentRuntime).
-  if (refs.memoryDistillRuntime === name) configFields.push('config.memoryDistillRuntime')
-  if (refs.commitPushRuntime === name) configFields.push('config.commitPushRuntime')
-  if (refs.mergeAgentRuntime === name) configFields.push('config.mergeAgentRuntime')
-  return { agentNames: refAgents.map((a) => a.name), configFields }
 }
 
 // --- CRUD ------------------------------------------------------------------
@@ -457,32 +440,63 @@ export async function deleteRuntime(
   name: string,
   refs: RuntimeRefConfig,
 ): Promise<void> {
-  const row = await getRuntime(db, name)
-  if (row === null) throw new NotFoundError('runtime-not-found', `runtime '${name}' not found`)
-  // RFC-153 impl-gate: never delete the LAST runtime. seed only runs on an EMPTY
-  // table (deleted rows aren't re-seeded), so an all-delete would both leave
-  // dispatch with no registry target AND let the next boot resurrect the preseeded
-  // rows — contradicting "deleted rows stay deleted". Keeping ≥1 row closes both;
-  // the effective-default guard below already blocks it in the common case, this is
-  // the backstop when config.defaultRuntime dangles.
-  const total = (await db.select({ id: runtimes.id }).from(runtimes)) as { id: string }[]
-  if (total.length <= 1) {
-    throw new ConflictError(
-      'runtime-last',
-      `runtime '${name}' is the only remaining runtime and cannot be deleted`,
-    )
-  }
-  const found = await findRuntimeReferences(db, name, refs)
-  if (found.configFields.length > 0 || found.agentNames.length > 0) {
-    const by = [...found.configFields, ...found.agentNames.map((a) => `agent '${a}'`)]
-    throw new ConflictError(
-      'runtime-in-use',
-      `runtime '${name}' is in use by ${by.join(', ')}; re-point them first`,
-    )
-  }
-  await db.delete(runtimes).where(eq(runtimes.name, name))
-  // RFC-114 P3-6: drop this binary's cached model list.
-  if (row.binaryPath !== null) evictOpencodeModelsCache(row.binaryPath)
+  // RFC-153 impl-gate (2nd pass): the existence check, last-row count, reference
+  // checks and delete MUST be ONE synchronous transaction. Split across awaited
+  // statements, two concurrent DELETEs of different unreferenced rows both observe
+  // count===2, both pass, and empty the table — which the next boot's empty-table
+  // seed would then resurrect. bun:sqlite async sequences aren't transactional (cf.
+  // RFC-144 dbTxSync guidance); the sync tx serializes them.
+  let binaryPath: string | null = null
+  dbTxSync(db, (tx) => {
+    const all = tx
+      .select({ name: runtimes.name, binaryPath: runtimes.binaryPath })
+      .from(runtimes)
+      .all() as { name: string; binaryPath: string | null }[]
+    const row = all.find((r) => r.name === name)
+    if (row === undefined) {
+      throw new NotFoundError('runtime-not-found', `runtime '${name}' not found`)
+    }
+    // Never delete the LAST runtime — keeps dispatch with a live target AND keeps
+    // the empty-table seed gate from resurrecting "deleted" preseeded rows.
+    if (all.length <= 1) {
+      throw new ConflictError(
+        'runtime-last',
+        `runtime '${name}' is the only remaining runtime and cannot be deleted`,
+      )
+    }
+    // Effective default computed EXACTLY like dispatch (resolveRuntimeByName): a
+    // configured default is the effective default if it resolves to a real row OR is
+    // a built-in protocol name — a MISSING built-in name resolves to its OWN protocol
+    // fallback (e.g. missing 'claude-code' → claude-code, NOT opencode; 3rd-pass
+    // impl-gate). Only a truly unknown / unset name falls back to 'opencode', so a
+    // stale / dangling default still protects the opencode row it would resolve to.
+    const cfg = refs.defaultRuntime
+    const cfgResolves =
+      cfg != null && cfg.length > 0 && (all.some((r) => r.name === cfg) || BUILTIN_NAMES.has(cfg))
+    const effectiveDefault = cfgResolves ? cfg : 'opencode'
+    const configFields: string[] = []
+    if (effectiveDefault === name) configFields.push('config.defaultRuntime')
+    if (refs.memoryDistillRuntime === name) configFields.push('config.memoryDistillRuntime')
+    if (refs.commitPushRuntime === name) configFields.push('config.commitPushRuntime')
+    if (refs.mergeAgentRuntime === name) configFields.push('config.mergeAgentRuntime')
+    const refAgents = tx
+      .select({ name: agents.name })
+      .from(agents)
+      .where(eq(agents.runtime, name))
+      .all() as { name: string }[]
+    if (configFields.length > 0 || refAgents.length > 0) {
+      const by = [...configFields, ...refAgents.map((a) => `agent '${a.name}'`)]
+      throw new ConflictError(
+        'runtime-in-use',
+        `runtime '${name}' is in use by ${by.join(', ')}; re-point them first`,
+      )
+    }
+    tx.delete(runtimes).where(eq(runtimes.name, name)).run()
+    binaryPath = row.binaryPath
+  })
+  // RFC-114 P3-6: drop this binary's cached model list (outside the tx — the cache
+  // is process-local, not DB state).
+  if (binaryPath !== null) evictOpencodeModelsCache(binaryPath)
 }
 
 // --- seed ------------------------------------------------------------------
