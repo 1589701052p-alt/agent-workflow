@@ -1963,10 +1963,8 @@ export const enUS: Resources = {
     bindHost: 'Bind host',
     bindHostHint: 'Restart required. Default 127.0.0.1 keeps the daemon local-only.',
     bindPort: 'Bind port',
-    bindPortHint: 'Restart required. Leave 0 to pick a free port at start time.',
-    effectiveBindLabel: 'Currently listening on',
-    effectiveBindHint:
-      'The address the daemon is actually bound to right now (including an auto-picked port, or an override from the --host/--port launch flags). The fields below take effect only after a restart.',
+    bindPortHint:
+      'Restart required. Leave blank / 0 to pick a free port at start time (this field is backfilled with the current actual port).',
     modelLoadFailed: 'Failed to load model list — falling back to text input.',
     modelLoading: 'Loading models…',
     modelRefresh: 'Refresh',

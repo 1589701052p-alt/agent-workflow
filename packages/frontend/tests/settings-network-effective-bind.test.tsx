@@ -1,9 +1,11 @@
-// The Network settings tab renders a read-only "current actual binding" readout
-// sourced from GET /api/daemon, so the tab reflects the address the daemon is
-// really listening on — not just the persisted (and possibly blank / ephemeral)
-// bindHost/bindPort. Regression guard for "why doesn't the Network tab echo the
-// current config": the effective bind must appear, be read-only, and gracefully
-// disappear when the daemon run-info is unavailable.
+// The Network settings tab echoes the daemon's EFFECTIVE binding (GET
+// /api/daemon) into the editable bind fields the persisted config left unset —
+// so the tab shows the address the daemon is really on (notably the concrete
+// port when bindPort was blank / ephemeral) instead of an empty box. Regression
+// guard for "why doesn't the Network tab reflect the current config": the
+// effective port must backfill the *editable* (saveable) port field, must NOT
+// overwrite a value the config already pins, and must leave the field blank when
+// the daemon run-info is unavailable.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -59,6 +61,14 @@ function newQc() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
+const DAEMON = {
+  pid: 4321,
+  host: '127.0.0.1',
+  port: 52341,
+  url: 'http://127.0.0.1:52341/',
+  startedAt: '2026-07-08T00:00:00.000Z',
+}
+
 beforeEach(() => {
   setBaseUrl('http://daemon.test')
   setToken('tok')
@@ -71,40 +81,33 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('NetworkTab effective-bind readout', () => {
-  test('shows the daemon effective host:port as a read-only field', async () => {
-    mockDaemon({
-      pid: 4321,
-      host: '127.0.0.1',
-      port: 52341,
-      url: 'http://127.0.0.1:52341/',
-      startedAt: '2026-07-08T00:00:00.000Z',
-    })
+describe('NetworkTab echoes the effective binding into the editable fields', () => {
+  test('backfills the effective port into the editable bindPort field when config leaves it unset', async () => {
+    mockDaemon(DAEMON)
     render(<NetworkTab config={mkConfig()} />, { wrapper: wrap(newQc()) })
-    const readout = (await screen.findByTestId('settings-effective-bind')) as HTMLInputElement
-    expect(readout.value).toBe('127.0.0.1:52341')
-    // Read-only: it must never be an editable field.
-    expect(readout.disabled).toBe(true)
-  })
-
-  test('hides the readout when the daemon run-info is unavailable (null)', async () => {
-    mockDaemon(null)
-    render(<NetworkTab config={mkConfig()} />, { wrapper: wrap(newQc()) })
-    // The editable bindHost field always renders; wait for a paint, then assert
-    // the effective-bind readout is absent rather than showing "null".
-    await waitFor(() => {
-      expect(screen.getByText(i18n.t('settingsForm.bindHost'))).toBeTruthy()
-    })
-    await new Promise((r) => setTimeout(r, 30))
+    const port = (await screen.findByTestId('settings-bind-port')) as HTMLInputElement
+    await waitFor(() => expect(port.value).toBe('52341'))
+    // It is the real, editable field — not a read-only readout.
+    expect(port.disabled).toBe(false)
+    // The earlier separate read-only readout no longer exists.
     expect(screen.queryByTestId('settings-effective-bind')).toBeNull()
   })
 
-  test('i18n keys for the readout label/hint resolve in both locales', () => {
-    void i18n.changeLanguage('zh-CN')
-    expect(i18n.t('settingsForm.effectiveBindLabel')).toBe('当前实际监听')
-    expect(i18n.t('settingsForm.effectiveBindHint')).not.toBe('settingsForm.effectiveBindHint')
-    void i18n.changeLanguage('en-US')
-    expect(i18n.t('settingsForm.effectiveBindLabel')).toBe('Currently listening on')
-    expect(i18n.t('settingsForm.effectiveBindHint')).not.toBe('settingsForm.effectiveBindHint')
+  test('does NOT overwrite a port the config already pins', async () => {
+    mockDaemon(DAEMON) // effective 52341
+    render(<NetworkTab config={mkConfig({ bindPort: 8080 })} />, { wrapper: wrap(newQc()) })
+    const port = (await screen.findByTestId('settings-bind-port')) as HTMLInputElement
+    expect(port.value).toBe('8080')
+    // Give the backfill effect a tick to (not) fire, then re-assert.
+    await new Promise((r) => setTimeout(r, 30))
+    expect(port.value).toBe('8080')
+  })
+
+  test('leaves the port field blank when the daemon run-info is unavailable (null)', async () => {
+    mockDaemon(null)
+    render(<NetworkTab config={mkConfig()} />, { wrapper: wrap(newQc()) })
+    const port = (await screen.findByTestId('settings-bind-port')) as HTMLInputElement
+    await new Promise((r) => setTimeout(r, 30))
+    expect(port.value).toBe('')
   })
 })

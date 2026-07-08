@@ -1858,8 +1858,6 @@ export interface Resources {
     bindHostHint: string
     bindPort: string
     bindPortHint: string
-    effectiveBindLabel: string
-    effectiveBindHint: string
     modelLoadFailed: string
     modelLoading: string
     modelRefresh: string
@@ -4360,10 +4358,7 @@ export const zhCN: Resources = {
     bindHost: '监听 host',
     bindHostHint: '需要重启。默认 127.0.0.1 使 daemon 仅本机可达。',
     bindPort: '监听 port',
-    bindPortHint: '需要重启。0 让启动时自动挑空闲端口。',
-    effectiveBindLabel: '当前实际监听',
-    effectiveBindHint:
-      '守护进程此刻真实绑定的地址（含端口自动挑选、或 --host/--port 启动参数覆盖的结果）。下方改动需重启后才生效。',
+    bindPortHint: '需要重启。留空 / 0 让启动时自动挑空闲端口（此处会回填当前实际端口）。',
     modelLoadFailed: '模型列表加载失败 — 已降级为手动输入。',
     modelLoading: '加载模型列表…',
     modelRefresh: '刷新',

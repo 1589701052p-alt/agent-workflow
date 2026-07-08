@@ -497,16 +497,41 @@ interface DaemonInfo {
 export function NetworkTab({ config }: TabProps) {
   const { t } = useTranslation()
   const { state, setState, save, restartRequired } = useTabState(config, ['bindHost', 'bindPort'])
-  // The two editable fields below are the PERSISTED config — applied only on the
-  // next restart, and silently overridden when the daemon was launched with
-  // --host/--port. This read-only readout is the address the daemon is ACTUALLY
-  // bound to right now (notably the concrete port when bindPort was left blank /
-  // ephemeral), so the tab reflects the live binding rather than only the stored
-  // one. null (run-info absent) → the readout is hidden.
+  // Read the daemon's EFFECTIVE binding (GET /api/daemon, from the run-info
+  // file) and echo it straight into the editable fields the persisted config
+  // left blank — so the tab shows the address the daemon is actually on now
+  // (notably the concrete port when bindPort was left unset / ephemeral) rather
+  // than an empty box. These are the *saveable* fields: saving a backfilled
+  // value persists it (which pins an otherwise auto-picked port — the accepted
+  // trade-off of echoing live values here). We only ever fill a genuinely-unset
+  // field, so a saved config value and any user edit are never clobbered.
+  // bindHost is always set by the config default, so in practice only bindPort
+  // gets backfilled; the host field already shows the config value, which equals
+  // the effective host unless the daemon was launched with --host.
   const daemon = useQuery<DaemonInfo | null>({
     queryKey: ['daemon-info'],
     queryFn: ({ signal }) => api.get('/api/daemon', undefined, signal),
   })
+  const effective = daemon.data
+  useEffect(() => {
+    if (effective == null) return
+    setState((prev) => {
+      const next = { ...prev }
+      let changed = false
+      if (prev.bindPort == null) {
+        next.bindPort = effective.port
+        changed = true
+      }
+      if ((prev.bindHost ?? '') === '') {
+        next.bindHost = effective.host
+        changed = true
+      }
+      return changed ? next : prev
+    })
+    // Backfill once, when the effective binding first resolves. Deliberately not
+    // re-run on later config re-seeds so clearing a field stays cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effective])
   return (
     <SectionForm
       onSave={save.mutate}
@@ -515,19 +540,6 @@ export function NetworkTab({ config }: TabProps) {
       success={save.isSuccess && save.error === null ? 'saved' : null}
       restartRequired={restartRequired}
     >
-      {daemon.data != null && (
-        <Field
-          label={t('settingsForm.effectiveBindLabel')}
-          hint={t('settingsForm.effectiveBindHint')}
-        >
-          <TextInput
-            value={`${daemon.data.host}:${daemon.data.port}`}
-            disabled
-            data-testid="settings-effective-bind"
-            onChange={() => {}}
-          />
-        </Field>
-      )}
       <Field label={t('settingsForm.bindHost')} required hint={t('settingsForm.bindHostHint')}>
         <TextInput
           value={state.bindHost ?? '127.0.0.1'}
@@ -538,6 +550,7 @@ export function NetworkTab({ config }: TabProps) {
         <NumberInput
           value={state.bindPort}
           onChange={(v) => setState({ ...state, bindPort: v })}
+          data-testid="settings-bind-port"
           min={0}
           max={65535}
         />
