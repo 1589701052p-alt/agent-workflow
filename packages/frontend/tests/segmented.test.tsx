@@ -293,4 +293,38 @@ describe('<Segmented> — stopPointerPropagation (canvas contract)', () => {
     expect(outerClick).toHaveBeenCalled()
     expect(outerMouseDown).toHaveBeenCalled()
   })
+  test('allowActiveReselect：点击已 active 值仍触发 onChange（session-mode 显式落库场景）', () => {
+    const onChange = vi.fn()
+    render(
+      <Segmented
+        value="isolated"
+        onChange={onChange}
+        ariaLabel="mode"
+        allowActiveReselect
+        options={[
+          { value: 'isolated', label: 'Isolated' },
+          { value: 'inline', label: 'Inline' },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('radio', { name: 'Isolated' }))
+    expect(onChange).toHaveBeenCalledWith('isolated')
+  })
+
+  test('缺省（无 allowActiveReselect）：active 点击保持 no-op', () => {
+    const onChange = vi.fn()
+    render(
+      <Segmented
+        value="a"
+        onChange={onChange}
+        ariaLabel="m"
+        options={[
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('radio', { name: 'A' }))
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })

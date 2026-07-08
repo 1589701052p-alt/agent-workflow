@@ -94,6 +94,7 @@ export function ClarifyEdit({ node, definition, onPatch }: EditProps) {
           // 'isolated' is stored when the user picks it (from 'inline'), so
           // the workflow.definition surfaces the user's choice.
           onChange={(mode) => patchClarify({ sessionMode: mode })}
+          allowActiveReselect
           options={(['isolated', 'inline'] as const).map((mode) => ({
             value: mode,
             label:

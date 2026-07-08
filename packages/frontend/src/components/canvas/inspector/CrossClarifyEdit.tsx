@@ -116,6 +116,7 @@ export function CrossClarifyEdit({ node, definition, onPatch }: EditProps) {
         <Segmented<'isolated' | 'inline'>
           value={sessionModeForQuestioner}
           onChange={(mode) => patchCrossClarify({ sessionModeForQuestioner: mode })}
+          allowActiveReselect
           options={(['isolated', 'inline'] as const).map((mode) => ({
             value: mode,
             label:

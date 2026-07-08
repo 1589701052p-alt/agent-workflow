@@ -45,6 +45,14 @@ export interface SegmentedOption<V extends string> {
 interface SegmentedProps<V extends string> {
   value: V
   onChange: (v: V) => void
+  /**
+   * RFC-150 impl-gate: opt-in escape from the radio active-click no-op.
+   * Session-mode controls (ClarifyEdit / CrossClarifyEdit) must persist an
+   * EXPLICIT choice even when the clicked value equals the resolved default
+   * — the workflow JSON materializes the field only on patch. Default false
+   * keeps radio semantics (ClarifyDirectiveToggle's behavior lock).
+   */
+  allowActiveReselect?: boolean
   options: ReadonlyArray<SegmentedOption<V>>
   ariaLabel: string
   /** Extra class names appended after the standard `segmented` class. */
@@ -70,6 +78,7 @@ interface SegmentedProps<V extends string> {
 export function Segmented<V extends string>({
   value,
   onChange,
+  allowActiveReselect,
   options,
   ariaLabel,
   className,
@@ -110,7 +119,7 @@ export function Segmented<V extends string>({
             }
             onClick={(e) => {
               stop?.(e)
-              if (!active) onChange(opt.value)
+              if (!active || allowActiveReselect === true) onChange(opt.value)
             }}
           >
             {opt.label}
