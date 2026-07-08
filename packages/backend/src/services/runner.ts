@@ -29,6 +29,7 @@ import type {
   ReviewPromptContext,
 } from '@agent-workflow/shared'
 import {
+  isAgentNodeKind,
   composePerParsedKindRepairBlocks,
   normalizeKindString,
   parseClarifyEnvelopeBody,
@@ -69,7 +70,6 @@ import type { ResolvedSkill, SpawnPlan } from './runtime/types'
 import { EMPTY_RUNTIME_PROFILE } from './runtime/opencode/inlineConfig'
 import { NOOP_HANDLE } from './subagentLiveCapture'
 import { setNodeRunStatus, transitionNodeRunStatus } from './lifecycle'
-import { isAgentRunKind } from './inventory'
 import {
   injectMemoryForRun,
   loadInjectedSnapshotFromFirstAttempt,
@@ -496,7 +496,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   // produce an inventory is the driver's capability (claude simply lacks it);
   // the materialization itself lives in opencode's buildBusinessSpawn.
   const inventoryNodeKind = opts.nodeKind ?? 'agent-single'
-  const wantsInventory = isAgentRunKind(inventoryNodeKind) && opts.envelopeFollowup !== true
+  const wantsInventory = isAgentNodeKind(inventoryNodeKind) && opts.envelopeFollowup !== true
 
   // RFC-041 PR3: silent inject of approved memories into the primary agent's
   // inline prompt. Best-effort — a broken memory table degrades to "no

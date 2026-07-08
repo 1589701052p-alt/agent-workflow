@@ -7,7 +7,6 @@ import type { NodeRun } from '@agent-workflow/shared'
 import {
   formatAttemptLabel,
   isFanoutParentRun,
-  isPromptCapableKind,
   sortNodeRunsForPromptHistory,
 } from '../src/lib/node-prompt'
 
@@ -73,30 +72,9 @@ describe('RFC-011 sortNodeRunsForPromptHistory', () => {
   })
 })
 
-describe('RFC-011 isPromptCapableKind', () => {
-  test('only agent-single is capable (RFC-060 PR-E removed agent-multi)', () => {
-    expect(isPromptCapableKind('agent-single')).toBe(true)
-  })
-
-  test('input / output / wrappers / review are NOT capable', () => {
-    for (const k of [
-      'input',
-      'output',
-      'wrapper-git',
-      'wrapper-loop',
-      'wrapper-fanout',
-      'review',
-    ]) {
-      expect(isPromptCapableKind(k)).toBe(false)
-    }
-  })
-
-  test('null / undefined / unknown kind → false', () => {
-    expect(isPromptCapableKind(null)).toBe(false)
-    expect(isPromptCapableKind(undefined)).toBe(false)
-    expect(isPromptCapableKind('mystery')).toBe(false)
-  })
-})
+// RFC-146: isPromptCapableKind was replaced by shared `isAgentNodeKind`;
+// its value/tolerance locks live in packages/backend/tests
+// (node-kind-behavior-table.test.ts + inventory-service.test.ts).
 
 describe('RFC-011 isFanoutParentRun', () => {
   test('a row with shard children → true', () => {

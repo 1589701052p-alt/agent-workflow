@@ -32,6 +32,8 @@ import type {
 import {
   FANOUT_DONE_PORT_NAME,
   FOLLOWUP_POLICY,
+  NODE_KIND,
+  NODE_KIND_BEHAVIORS,
   WorkflowDefinitionSchema,
   agentHasClarifyChannel,
   buildPriorOutputBlock,
@@ -374,17 +376,14 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
   }
   await emitStatus(db, taskId)
 
-  // 4. Validate node kinds.
+  // 4. Validate node kinds. RFC-146: positive membership in the behavior
+  // table — a kind the scheduler knows is exactly a kind with a behavior row.
+  // (The historical negative enum listed 6 `!==` clauses and silently
+  // admitted nothing new; now adding a NodeKind admits it here by
+  // construction, and runOneNode's fall-through guard catches kinds the
+  // dispatch switch doesn't actually handle yet.)
   for (const node of definition.nodes) {
-    if (
-      node.kind !== 'input' &&
-      node.kind !== 'agent-single' &&
-      node.kind !== 'output' &&
-      !isWrapperKind(node.kind) &&
-      node.kind !== 'review' && // RFC-005
-      node.kind !== 'clarify' && // RFC-023
-      node.kind !== 'clarify-cross-agent' // RFC-056
-    ) {
+    if (!(node.kind in NODE_KIND_BEHAVIORS)) {
       await failTask(
         db,
         taskId,
@@ -1242,9 +1241,13 @@ export interface Frontier {
   allSettled: boolean
 }
 
-// clarify / cross-clarify graph-visit no-ops write NO node_run row (C1); they
-// settle without one once upstreams are done and no session is open (N6).
-const SETTLES_WITHOUT_ROW_KINDS = new Set<NodeKind>(['clarify', 'clarify-cross-agent'])
+// Graph-visit no-op kinds write NO node_run row (C1); they settle without one
+// once upstreams are done and no session is open (N6). RFC-146: derived from
+// the behavior table (today: clarify / clarify-cross-agent) instead of a
+// hand-maintained literal twin.
+const SETTLES_WITHOUT_ROW_KINDS = new Set<NodeKind>(
+  NODE_KIND.filter((k) => NODE_KIND_BEHAVIORS[k].settlesWithoutRow),
+)
 
 function isLiveStatus(status: string): boolean {
   return (
@@ -2141,6 +2144,20 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     await db.insert(nodeRunOutputs).values({ nodeRunId: nrId, portName: inputKey, content: value })
     broadcastNodeStatus(taskId, nrId, node.id, 'done')
     return { kind: 'ok', summary: '', message: '' }
+  }
+
+  // RFC-146: exhaustiveness guard. Every kind above returned inside its own
+  // branch; only agent-single may fall through into the agent dispatch path
+  // below. A NodeKind admitted by the behavior table but not yet given a
+  // runOneNode branch fails loud here instead of being silently driven as an
+  // agent. (Dispatch stays an if-chain by design — the handlers close over
+  // SchedulerState; see RFC-146 design D2.)
+  if (node.kind !== 'agent-single') {
+    return {
+      kind: 'failed',
+      summary: `runOneNode has no dispatch branch for node kind ${node.kind}`,
+      message: 'unhandled-node-kind',
+    }
   }
 
   const agentName = pickString(node, 'agentName')
