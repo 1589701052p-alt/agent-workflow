@@ -625,6 +625,11 @@ export const NodeRunSchema = z.object({
   pid: z.number().int().nullable(),
   exitCode: z.number().int().nullable(),
   errorMessage: z.string().nullable(),
+  /** RFC-145: structured review-supersede lineage — the frontend canceled-row
+   *  classification (rollback vs superseded vs manual) reads these instead of
+   *  parsing errorMessage prefixes. */
+  supersededByReview: z.enum(['iterated', 'rejected']).nullable().default(null),
+  rolledBack: z.boolean().nullable().default(null),
   /** User prompt sent to opencode (populated after runner builds it). */
   promptText: z.string().nullable(),
   tokInput: z.number().int().nullable(),

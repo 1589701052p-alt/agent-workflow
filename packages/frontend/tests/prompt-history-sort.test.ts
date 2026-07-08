@@ -27,6 +27,8 @@ function makeRun(partial: Partial<NodeRun> & { id: string }): NodeRun {
     pid: partial.pid ?? null,
     exitCode: partial.exitCode ?? null,
     errorMessage: partial.errorMessage ?? null,
+    supersededByReview: partial.supersededByReview ?? null,
+    rolledBack: partial.rolledBack ?? null,
     promptText: partial.promptText ?? null,
     tokInput: partial.tokInput ?? null,
     tokOutput: partial.tokOutput ?? null,
@@ -146,15 +148,14 @@ describe('RFC-011 formatAttemptLabel', () => {
   })
 
   // The next two cases lock in the friendly status label for canceled
-  // rows that the review iterate / reject path produced. A row marked with
-  // the plain `superseded-by-review-*` prefix means the worktree was kept;
-  // the dropdown should label it "Superseded" rather than "Canceled". A row
-  // with the `-rollback` suffix had its files reset, so the user-facing
-  // label stays "Canceled" — matching the Stats tab chip.
+  // rows that the review iterate / reject path produced（RFC-145：字段驱动——
+  // supersededByReview 非空且未回滚 = worktree 保留，标 "Superseded"；
+  // rolledBack=true = 文件已重置，保持 "Canceled"，与 Stats tab chip 一致）。
   test('superseded canceled row renders noderunStatus.superseded label', () => {
     const run = makeRun({
       id: 'sup',
       status: 'canceled',
+      supersededByReview: 'iterated',
       errorMessage:
         'superseded-by-review-iterated: Replaced by retry_index 1 due to review iterated of rev_1',
     })
@@ -166,6 +167,8 @@ describe('RFC-011 formatAttemptLabel', () => {
     const run = makeRun({
       id: 'rb',
       status: 'canceled',
+      supersededByReview: 'rejected',
+      rolledBack: true,
       errorMessage:
         'superseded-by-review-rejected-rollback: Replaced by retry_index 1 due to review rejected of rev_1',
     })

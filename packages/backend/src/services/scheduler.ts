@@ -17,6 +17,8 @@ import type {
   Agent,
   ClarifyCrossAgentNode,
   ClarifyNode,
+  EnvelopeFollowupReason,
+  FailureCode,
   Mcp,
   MergeState,
   MergeStateOrNull,
@@ -29,6 +31,7 @@ import type {
 } from '@agent-workflow/shared'
 import {
   FANOUT_DONE_PORT_NAME,
+  FOLLOWUP_POLICY,
   WorkflowDefinitionSchema,
   agentHasClarifyChannel,
   buildPriorOutputBlock,
@@ -128,12 +131,7 @@ import {
   wrapperRevivalEvidence,
 } from '@/services/dispatchFrontier'
 import { runNode, type ResolvedSkill, type RunResult } from '@/services/runner'
-import {
-  CLARIFY_FORBIDDEN_PREFIX,
-  CLARIFY_REQUIRED_PREFIX,
-  ENVELOPE_PORT_MALFORMED_PREFIX,
-  parsePortValidationFailuresJson,
-} from '@/services/envelope'
+import { parsePortValidationFailuresJson } from '@/services/envelope'
 import { runCommitPush } from '@/services/commitPushRunner'
 import {
   buildCommitAgent,
@@ -624,7 +622,14 @@ export { isFresherNodeRun } from '@/services/freshness'
 export interface PreviousAttemptShape {
   status: 'done' | 'failed' | 'canceled' | null
   exitCode: number | null
-  errorMessage: string | null
+  /**
+   * RFC-145: the machine-readable failure taxonomy the runner declared at its
+   * stamp point (persisted on `node_runs.failure_code`). Replaces the old
+   * errorMessage-prefix parsing — errorMessage is human breadcrumbs only and
+   * is deliberately NOT part of this shape anymore. NULL = no follow-up-able
+   * failure (legacy rows were backfilled by migration 0077).
+   */
+  failureCode: FailureCode | null
   sessionId: string | null
   /** Count of `kind='text'` rows the runner persisted for the previous run. */
   agentTextCount: number
@@ -633,12 +638,11 @@ export interface PreviousAttemptShape {
    * runner persisted to `node_runs.port_validation_failures_json`. Defaults
    * to undefined; callers that have the JSON-parsed array can thread it
    * through here so the scheduler can route per-kind repair text via
-   * `composePerKindRepairBlocks`. When the errorMessage carries the
-   * `port-validation-` prefix but this field is missing (e.g. legacy rows
-   * pre-RFC-049 / malformed JSON degraded by parsePortValidationFailuresJson),
-   * the followup still fires but `failures` in the decision is an empty
-   * array — degraded mode: prompt still nudges the agent, just without
-   * per-port specifics.
+   * `composePerKindRepairBlocks`. When failureCode is 'port-validation-failed'
+   * but this field is missing (e.g. legacy rows pre-RFC-049 / malformed JSON
+   * degraded by parsePortValidationFailuresJson), the followup still fires but
+   * `failures` in the decision is an empty array — degraded mode: prompt still
+   * nudges the agent, just without per-port specifics.
    */
   portValidationFailures?: ReadonlyArray<{
     port: string
@@ -651,13 +655,8 @@ export interface PreviousAttemptShape {
 export type EnvelopeFollowupDecision =
   | {
       followup: true
-      reason:
-        | 'envelope-missing'
-        | 'both-present'
-        | 'clarify-malformed'
-        | 'port-validation'
-        | 'clarify-required'
-        | 'envelope-port-malformed'
+      /** RFC-145: 6-value render domain, single-sourced in shared/prompt.ts. */
+      reason: EnvelopeFollowupReason
       /**
        * Failures payload to thread into the runner / shared renderer when
        * reason is 'port-validation'. Empty array for the other reasons (and
@@ -672,61 +671,29 @@ export type EnvelopeFollowupDecision =
     }
   | { followup: false }
 
-export const PORT_VALIDATION_PREFIX = 'port-validation-'
-
+/**
+ * RFC-145: table lookup replaces the old 7-branch order-sensitive
+ * errorMessage-startsWith chain. The runner declares `failureCode` at the
+ * same stamp that writes errorMessage; FOLLOWUP_POLICY (shared/prompt.ts)
+ * projects the 7-value producer domain onto the 6-value render reason —
+ * including the previously implicit clarify-forbidden → envelope-missing
+ * downgrade, now an explicit table row. Order sensitivity is gone: the
+ * runner distinguishes malformed-port vs port-validation at the source
+ * (parse layer vs validation layer — mutually exclusive by construction).
+ */
 export function decideEnvelopeFollowup(prev: PreviousAttemptShape): EnvelopeFollowupDecision {
   if (prev.status !== 'failed') return { followup: false }
   if (prev.exitCode !== 0) return { followup: false }
   if (prev.sessionId === null || prev.sessionId === '') return { followup: false }
   if (prev.agentTextCount <= 0) return { followup: false }
-  const m = prev.errorMessage ?? ''
-  if (m.startsWith('no <workflow-output> envelope found in stdout')) {
-    return { followup: true, reason: 'envelope-missing', failures: [] }
+  if (prev.failureCode === null) return { followup: false }
+  const policy = FOLLOWUP_POLICY[prev.failureCode]
+  return {
+    followup: true,
+    reason: policy.reason,
+    failures:
+      prev.failureCode === 'port-validation-failed' ? (prev.portValidationFailures ?? []) : [],
   }
-  if (m.startsWith('clarify-and-output-both-present')) {
-    return { followup: true, reason: 'both-present', failures: [] }
-  }
-  if (m.startsWith('clarify-questions-')) {
-    return { followup: true, reason: 'clarify-malformed', failures: [] }
-  }
-  // RFC-100: `clarify-required-*` — the agent was in mandatory ask-back mode but
-  // replied with `<workflow-output>` / both / neither. Same-session follow-up
-  // re-demands the clarify envelope (the follow-up renderer still sees
-  // hasClarifyChannel=true this round, so it emits the mandatory-ask-back
-  // wording). Hard-fails after retries — no output escape hatch.
-  if (m.startsWith(CLARIFY_REQUIRED_PREFIX)) {
-    return { followup: true, reason: 'clarify-required', failures: [] }
-  }
-  // RFC-123 follow-up: `clarify-forbidden` — an EXPLICITLY-stopped node emitted a
-  // `<workflow-clarify>` despite STOP CLARIFYING. Re-demand `<workflow-output>`: the
-  // follow-up renderer coerces the reason to 'envelope-missing' while hasClarify=false
-  // (the stopped node) → output-oriented wording. Hard-fails after retries (enforces
-  // the stop; a disobedient agent never re-opens a clarify session).
-  if (m.startsWith(CLARIFY_FORBIDDEN_PREFIX)) {
-    return { followup: true, reason: 'envelope-missing', failures: [] }
-  }
-  // The agent emitted a `<workflow-output>` envelope but a `<port>` was opened
-  // without a parseable `</port>` close (corrupted / truncated close tag — e.g.
-  // `</|DSML|port>`). Same-session follow-up re-demands a clean envelope with
-  // every port properly closed; hard-fails after retries (no silent escape to a
-  // blank port). Checked before PORT_VALIDATION_PREFIX so an unclosed port that
-  // would ALSO have failed RFC-049 (it never reached validation) routes to the
-  // malformed repair text, not the per-kind one.
-  if (m.startsWith(ENVELOPE_PORT_MALFORMED_PREFIX)) {
-    return { followup: true, reason: 'envelope-port-malformed', failures: [] }
-  }
-  // RFC-049: any `port-validation-<kind>-<sub>` prefix → same-session
-  // followup. The `<kind>` segment routing happens later in
-  // composePerKindRepairBlocks; here we only need the outermost prefix to
-  // make the on/off decision.
-  if (m.startsWith(PORT_VALIDATION_PREFIX)) {
-    return {
-      followup: true,
-      reason: 'port-validation',
-      failures: prev.portValidationFailures ?? [],
-    }
-  }
-  return { followup: false }
 }
 
 async function runScope(state: SchedulerState, args: ScopeArgs): Promise<ScopeResult> {
@@ -2426,7 +2393,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         followupDecision = decideEnvelopeFollowup({
           status: lastResult.status,
           exitCode: lastResult.exitCode,
-          errorMessage: lastResult.errorMessage ?? null,
+          failureCode: lastResult.failureCode ?? null,
           sessionId: lastResult.sessionId ?? null,
           agentTextCount: Number(textCountRow[0]?.c ?? 0),
           ...(priorFailures !== null ? { portValidationFailures: priorFailures } : {}),

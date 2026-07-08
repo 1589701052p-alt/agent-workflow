@@ -93,6 +93,7 @@
 - **`errorSummary === 'daemon-restart'`**：写 `orphans.ts:65`、读 `autoResume.ts:62` 精确匹配选 boot auto-resume 候选——两个独立裸字面量，orphans 改一个字即静默瘫痪 autoResume。
 
 **重构方向（RFC-G3）**：正解是 node_runs 加 `failure_code` 枚举列（errorMessage 回归纯人读），`decideEnvelopeFollowup` 变 `Record<code, {reason, followup}>` 查表、prompt 渲染同表取值（`FOLLOWUP_REASONS` 表）；supersede 加 `superseded_by_review` + `rolled_back` 列。过渡方案（不动 schema）：有序前缀注册表数组、双端 import 同一常量。`daemon-restart` 最小修是 shared 常量。与 scheduler-audit **WP-10（rerun_cause 持久化）同族**，建议排期相邻或合并。
+**✅ 已由 [RFC-145](RFC-145-failure-code-structuring/proposal.md) 落地（2026-07-08，走正解非过渡）**：failure_code 7 值生产域 + FOLLOWUP_POLICY 7→6 投影表（clarify-forbidden 隐式降级显式化）、runner 11 stamp 点正向声明、7 连 startsWith 链删除；supersede 三事实列化（isReviewSupersededRow 改 IS-NOT-NULL、双 fork 字面量 + parity 锁退役、前端 decode 字段化）；migration 0077 三列 + 11 条 backfill；errorMessage 机器读源码守卫禁令。daemon-restart 已由 W0-5 先行治理确认。
 
 ### 4.4 merge_state 五值状态列全裸直写 —— 与本仓自建的状态机范式直接冲突
 
