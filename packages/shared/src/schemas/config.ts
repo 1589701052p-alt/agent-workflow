@@ -92,6 +92,10 @@ export const ConfigSchema = z.object({
     .int()
     .nonnegative()
     .default(10 * 60 * 1000),
+  /** RFC-159: master switch for the scheduled-task background loop. false → the daemon never fires schedules. */
+  scheduledTasksEnabled: z.boolean().default(true),
+  /** RFC-159: consecutive fire failures before a schedule auto-disables. */
+  scheduledTasksMaxFailures: z.number().int().positive().default(10),
 
   // --- GC ---
   worktreeAutoGc: WorktreeGcSchema,
@@ -360,6 +364,8 @@ export const DEFAULT_CONFIG: Config = {
   maxAutoRecoveriesPerWindow: 3,
   autoRecoveryWindowMs: 60 * 60 * 1000,
   periodicOrphanReconcileMs: 10 * 60 * 1000,
+  scheduledTasksEnabled: true,
+  scheduledTasksMaxFailures: 10,
   worktreeAutoGc: { enabled: false },
   eventsArchiveThresholds: {
     perNodeRunRows: 50_000,

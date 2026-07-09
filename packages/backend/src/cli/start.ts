@@ -13,7 +13,9 @@ import { autoResumeInterruptedTasks } from '@/services/autoResume'
 import { startAutoRepairLoop } from '@/services/autoRepair'
 import { startHeartbeatKillLoop } from '@/services/autoKill'
 import { startOrphanReconcileLoop } from '@/services/orphanReconcile'
-import { resumeTask } from '@/services/task'
+import { resumeTask, startTask } from '@/services/task'
+import { buildStartTaskDeps } from '@/services/startTaskDeps'
+import { startScheduledTaskLoop } from '@/services/scheduledTaskScheduler'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
@@ -435,6 +437,19 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // RFC-108 T17 (AR-10) — periodic post-boot orphan reconciler (reap-to-
   // interrupted is the safe-on default; auto-resume stays behind T18's opt-in).
   const orphanReconcileTicker = startOrphanReconcileLoop({ db, configPath: Paths.config })
+  // RFC-159 — scheduled-task background loop. Fires each due schedule as its owner,
+  // building deps live (buildStartTaskDeps) so scheduled launches match manual ones.
+  const scheduledTaskTicker = startScheduledTaskLoop({
+    db,
+    loadConfig: () => loadConfig(Paths.config),
+    buildLaunch: (ownerUserId, scheduledTaskId) => async (body) => {
+      const task = await startTask(body, {
+        ...buildStartTaskDeps(db, Paths.config, ownerUserId),
+        scheduledTaskId,
+      })
+      return { id: task.id }
+    },
+  })
 
   // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes
   // the daemon-restart loop: every task `reapOrphanRuns` just flipped to
@@ -504,6 +519,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     autoRepairTicker.stop()
     heartbeatKillTicker.stop()
     orphanReconcileTicker.stop()
+    scheduledTaskTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {

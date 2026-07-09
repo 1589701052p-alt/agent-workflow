@@ -88,7 +88,9 @@ async function get(app: Hono, token: string, path: string): Promise<Response> {
 }
 
 async function listIds(app: Hono, token: string): Promise<string[]> {
-  const rows = (await (await get(app, token, '/api/scheduled-tasks')).json()) as Array<{ id: string }>
+  const rows = (await (await get(app, token, '/api/scheduled-tasks')).json()) as Array<{
+    id: string
+  }>
   return rows.map((r) => r.id)
 }
 
