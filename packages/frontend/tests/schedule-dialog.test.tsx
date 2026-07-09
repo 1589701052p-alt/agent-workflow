@@ -98,4 +98,53 @@ describe('ScheduleDialog', () => {
     expect(r.queryByTestId('schedule-every')).not.toBeNull()
     expect(r.queryByTestId('schedule-at')).toBeNull()
   })
+
+  // RFC-159 — edit mode (user feedback 2026-07-10: the trigger period had no edit entry).
+  test('edit mode: pre-fills from the existing schedule + PUTs {name, scheduleSpec} to /:id', async () => {
+    const calls = installFetch()
+    const r = wrap(
+      <ScheduleDialog
+        open
+        onClose={() => {}}
+        edit={{
+          id: 's1',
+          name: 'nightly',
+          scheduleSpec: { kind: 'daily', at: '08:30', timezone: 'UTC' },
+        }}
+      />,
+    )
+    // Pre-filled from the existing spec (no buildLaunchPayload needed).
+    expect((r.getByTestId('schedule-name') as HTMLInputElement).value).toBe('nightly')
+    expect((r.getByTestId('schedule-at') as HTMLInputElement).value).toBe('08:30')
+
+    fireEvent.change(r.getByTestId('schedule-at'), { target: { value: '10:15' } })
+    fireEvent.click(r.getByTestId('schedule-save'))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0))
+
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put).toBeDefined()
+    expect(put!.url).toContain('/api/scheduled-tasks/s1')
+    const body = put!.body as Record<string, unknown>
+    expect(body.name).toBe('nightly')
+    expect(body.scheduleSpec).toMatchObject({ kind: 'daily', at: '10:15' })
+    // Edit never touches the task config, and never POSTs a new schedule.
+    expect(body.launchPayload).toBeUndefined()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  test('edit mode: an interval spec pre-fills every/unit (no time field)', () => {
+    const r = wrap(
+      <ScheduleDialog
+        open
+        onClose={() => {}}
+        edit={{
+          id: 's2',
+          name: 'poll',
+          scheduleSpec: { kind: 'interval', every: 15, unit: 'minutes' },
+        }}
+      />,
+    )
+    expect((r.getByTestId('schedule-every') as HTMLInputElement).value).toBe('15')
+    expect(r.queryByTestId('schedule-at')).toBeNull()
+  })
 })

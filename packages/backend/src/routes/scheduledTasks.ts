@@ -14,11 +14,13 @@ import type { Hono } from 'hono'
 
 import { actorOf, SYSTEM_USER_ID, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
+import { buildScheduleLaunch } from '@/services/scheduleLaunch'
 import {
   createScheduledTask,
   deleteScheduledTask,
   getScheduledTask,
   listScheduledTasks,
+  runScheduleNow,
   updateScheduledTask,
 } from '@/services/scheduledTasks'
 import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
@@ -97,5 +99,17 @@ export function mountScheduledTaskRoutes(app: Hono, deps: AppDeps): void {
     requireWriteAccess(actor, existing)
     await deleteScheduledTask(deps.db, existing.id)
     return c.body(null, 204)
+  })
+
+  // T7 — manual "run now": fire immediately, independent of the schedule cadence
+  // (does NOT touch next_run_at / last_* / streak). Owner/admin only. Works even on
+  // a disabled schedule (manual override). Launch failures surface as HTTP errors.
+  app.post('/api/scheduled-tasks/:id/run-now', async (c) => {
+    const actor = actorOf(c)
+    const existing = await loadVisible(deps, actor, c.req.param('id'))
+    requireWriteAccess(actor, existing)
+    const launch = deps.buildScheduleLaunch ?? buildScheduleLaunch(deps.db, deps.configPath)
+    const result = await runScheduleNow(deps.db, existing.id, launch)
+    return c.json(result, 201)
   })
 }

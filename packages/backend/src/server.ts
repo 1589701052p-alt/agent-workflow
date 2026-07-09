@@ -9,6 +9,7 @@ import { requirePermission, resourcePermissionGate } from '@/auth/permissions'
 import type { SecretBox } from '@/auth/secretBox'
 import { multiAuth } from '@/auth/session'
 import type { DbClient } from '@/db/client'
+import type { BuildScheduleLaunch } from '@/services/scheduledTasks'
 import { ForbiddenError } from '@/util/errors'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
@@ -67,6 +68,12 @@ export interface AppDeps {
    * can omit it; the OIDC routes refuse to mount without it.
    */
   secretBox?: SecretBox
+  /**
+   * RFC-159 — override the scheduled-task run-now launch closure. Production
+   * omits it (the route builds the real one from db + configPath); tests inject
+   * a stub so POST /:id/run-now doesn't spawn a real opencode task.
+   */
+  buildScheduleLaunch?: BuildScheduleLaunch
 }
 
 export function createApp(deps: AppDeps): Hono {

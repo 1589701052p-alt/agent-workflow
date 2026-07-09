@@ -2,13 +2,16 @@
 import type { ScheduledTask, TaskSummary } from '@agent-workflow/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, Link, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { api, type ApiError } from '@/api/client'
 import { ConfirmButton } from '@/components/ConfirmButton'
-import { DetailLayout } from '@/components/DetailLayout'
+import { ErrorBanner } from '@/components/ErrorBanner'
+import { ScheduleDialog } from '@/components/ScheduleDialog'
 import { LoadingState } from '@/components/LoadingState'
 import { StatusChip } from '@/components/StatusChip'
+import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { useScheduledTaskWs } from '@/hooks/useScheduledTaskWs'
 import { describeApiError } from '@/i18n'
 import { scheduleSummary } from '@/lib/schedule-view'
@@ -26,6 +29,7 @@ function ScheduledDetailPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const lang = i18n.language.startsWith('zh') ? 'zh' : 'en'
+  const [editOpen, setEditOpen] = useState(false)
   useScheduledTaskWs()
 
   const detailQ = useQuery<ScheduledTask, ApiError>({
@@ -52,30 +56,90 @@ function ScheduledDetailPage() {
       void navigate({ to: '/scheduled' })
     },
   })
+  const runNow = useMutation<{ taskId: string }, ApiError>({
+    mutationFn: () => api.post(`/api/scheduled-tasks/${encodeURIComponent(id)}/run-now`, {}),
+    onSuccess: ({ taskId }) => {
+      invalidate()
+      void navigate({ to: '/tasks/$id', params: { id: taskId } })
+    },
+  })
 
   if (detailQ.isLoading) return <LoadingState />
-  if (detailQ.error !== null && detailQ.error !== undefined) {
+  if (detailQ.error != null) {
     return (
       <div className="page">
-        <div className="error-box">{describeApiError(detailQ.error)}</div>
+        <ErrorBanner error={detailQ.error} />
       </div>
     )
   }
   const s = detailQ.data
   if (s === undefined) return null
 
-  const main = (
-    <div className="page">
+  return (
+    <div className="page" data-testid="scheduled-detail">
       <header className="page__header page__header--row">
         <div>
           <h1>{s.name}</h1>
-          <p className="muted">{scheduleSummary(s.scheduleSpec, lang)}</p>
+          <p className="page__hint">{scheduleSummary(s.scheduleSpec, lang)}</p>
+        </div>
+        <div className="page__actions">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setEditOpen(true)}
+            data-testid="scheduled-edit"
+          >
+            {t('scheduled.edit')}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={toggle.isPending}
+            onClick={() => toggle.mutate(!s.enabled)}
+            data-testid="scheduled-toggle"
+          >
+            {s.enabled ? t('scheduled.disable') : t('scheduled.enable')}
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={runNow.isPending}
+            onClick={() => runNow.mutate()}
+            data-testid="scheduled-run-now"
+          >
+            {t('scheduled.runNow')}
+          </button>
+          <ConfirmButton
+            label={t('scheduled.delete')}
+            confirmLabel={t('scheduled.deleteConfirm')}
+            onConfirm={() => del.mutateAsync()}
+            variant="danger"
+            disabled={del.isPending}
+          />
         </div>
       </header>
 
+      {/* Mutation errors render on their own row below the header — never squeezed
+          into the top-right action cluster (mirrors DetailHeaderActions). */}
+      {(runNow.error != null || toggle.error != null || del.error != null) && (
+        <div className="form-actions">
+          {runNow.error != null && (
+            <span className="form-actions__error" data-testid="scheduled-run-now-error">
+              {describeApiError(runNow.error)}
+            </span>
+          )}
+          {toggle.error != null && (
+            <span className="form-actions__error">{describeApiError(toggle.error)}</span>
+          )}
+          {del.error != null && (
+            <span className="form-actions__error">{describeApiError(del.error)}</span>
+          )}
+        </div>
+      )}
+
       <section className="page__section">
         <dl className="detail-grid">
-          <dt>{t('scheduled.fieldEnabled')}</dt>
+          <dt>{t('scheduled.colEnabled')}</dt>
           <dd>{s.enabled ? t('scheduled.enabledYes') : t('scheduled.enabledNo')}</dd>
           <dt>{t('scheduled.colNext')}</dt>
           <dd>{s.enabled && s.nextRunAt != null ? new Date(s.nextRunAt).toLocaleString() : '—'}</dd>
@@ -106,58 +170,44 @@ function ScheduledDetailPage() {
           <p className="muted">{t('scheduled.noRuns')}</p>
         ) : (
           <table className="data-table" data-testid="scheduled-history">
+            <thead>
+              <tr>
+                <th>{t('tasks.colName')}</th>
+                <th>{t('tasks.colStatus')}</th>
+                <th>{t('tasks.colStarted')}</th>
+              </tr>
+            </thead>
             <tbody>
               {historyQ.data.map((task) => (
                 <tr key={task.id}>
                   <td>
-                    <Link to="/tasks/$id" params={{ id: task.id }}>
+                    <Link to="/tasks/$id" params={{ id: task.id }} className="data-table__link">
                       {task.name}
                     </Link>
                   </td>
                   <td>
-                    <StatusChip
-                      kind={
-                        task.status === 'failed'
-                          ? 'danger'
-                          : task.status === 'done'
-                            ? 'success'
-                            : 'info'
-                      }
-                    >
-                      {task.status}
-                    </StatusChip>
+                    <TaskStatusChip status={task.status} />
                   </td>
-                  <td>{new Date(task.startedAt).toLocaleString()}</td>
+                  <td>
+                    {new Date(task.startedAt).toLocaleString(undefined, {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    })}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </section>
+
+      {editOpen && (
+        <ScheduleDialog
+          open
+          onClose={() => setEditOpen(false)}
+          edit={{ id: s.id, name: s.name, scheduleSpec: s.scheduleSpec }}
+        />
+      )}
     </div>
   )
-
-  const aside = (
-    <div className="detail-actions">
-      <button
-        type="button"
-        className="btn btn--sm"
-        disabled={toggle.isPending}
-        onClick={() => toggle.mutate(!s.enabled)}
-        data-testid="scheduled-toggle"
-      >
-        {s.enabled ? t('scheduled.disable') : t('scheduled.enable')}
-      </button>
-      <ConfirmButton
-        label={t('scheduled.delete')}
-        confirmLabel={t('scheduled.deleteConfirm')}
-        onConfirm={() => del.mutateAsync()}
-        variant="danger"
-        disabled={del.isPending}
-        size="sm"
-      />
-    </div>
-  )
-
-  return <DetailLayout main={main} aside={aside} data-testid="scheduled-detail" />
 }

@@ -23,9 +23,51 @@ const CREATOR_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 interface ScheduleDialogProps {
   open: boolean
   onClose: () => void
-  /** Called on save — returns the current launch form's StartTask body (opaque JSON; backend validates). */
-  buildLaunchPayload: () => unknown
+  /**
+   * Create mode — returns the current launch form's StartTask body (opaque JSON;
+   * backend validates). Ignored (and unnecessary) in edit mode.
+   */
+  buildLaunchPayload?: () => unknown
   defaultName?: string
+  /**
+   * Edit mode — pre-fill from an existing schedule and PUT { name, scheduleSpec }
+   * instead of POST. `launchPayload` (the task config) is left untouched here; it
+   * is edited from the launch form. Render this dialog conditionally (mount on open)
+   * so the form re-initializes from the latest values each time.
+   */
+  edit?: { id: string; name: string; scheduleSpec: ScheduleSpec }
+}
+
+interface FormState {
+  kind: Kind
+  every: number | undefined
+  unit: Unit
+  at: string
+  daysOfWeek: number[]
+  dayOfMonth: number | undefined
+}
+
+const DEFAULT_STATE: FormState = {
+  kind: 'daily',
+  every: 6,
+  unit: 'hours',
+  at: '09:00',
+  daysOfWeek: [1],
+  dayOfMonth: 1,
+}
+
+/** Existing ScheduleSpec → dialog form fields (inverse of buildSpec). */
+function specToState(spec: ScheduleSpec): FormState {
+  switch (spec.kind) {
+    case 'interval':
+      return { ...DEFAULT_STATE, kind: 'interval', every: spec.every, unit: spec.unit }
+    case 'daily':
+      return { ...DEFAULT_STATE, kind: 'daily', at: spec.at }
+    case 'weekly':
+      return { ...DEFAULT_STATE, kind: 'weekly', at: spec.at, daysOfWeek: spec.daysOfWeek }
+    case 'monthly':
+      return { ...DEFAULT_STATE, kind: 'monthly', at: spec.at, dayOfMonth: spec.dayOfMonth }
+  }
 }
 
 function buildSpec(
@@ -51,18 +93,20 @@ export function ScheduleDialog({
   onClose,
   buildLaunchPayload,
   defaultName,
+  edit,
 }: ScheduleDialogProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const qc = useQueryClient()
 
-  const [name, setName] = useState(defaultName ?? '')
-  const [kind, setKind] = useState<Kind>('daily')
-  const [every, setEvery] = useState<number | undefined>(6)
-  const [unit, setUnit] = useState<Unit>('hours')
-  const [at, setAt] = useState('09:00')
-  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([1])
-  const [dayOfMonth, setDayOfMonth] = useState<number | undefined>(1)
+  const init = edit ? specToState(edit.scheduleSpec) : DEFAULT_STATE
+  const [name, setName] = useState(edit?.name ?? defaultName ?? '')
+  const [kind, setKind] = useState<Kind>(init.kind)
+  const [every, setEvery] = useState<number | undefined>(init.every)
+  const [unit, setUnit] = useState<Unit>(init.unit)
+  const [at, setAt] = useState(init.at)
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>(init.daysOfWeek)
+  const [dayOfMonth, setDayOfMonth] = useState<number | undefined>(init.dayOfMonth)
 
   const spec = useMemo<ScheduleSpec | null>(() => {
     try {
@@ -87,16 +131,22 @@ export function ScheduleDialog({
 
   const save = useMutation<{ id: string }, ApiError>({
     mutationFn: () =>
-      api.post('/api/scheduled-tasks', {
-        name: name.trim(),
-        launchPayload: buildLaunchPayload(),
-        scheduleSpec: spec,
-        enabled: true,
-      }),
+      edit
+        ? api.put(`/api/scheduled-tasks/${encodeURIComponent(edit.id)}`, {
+            name: name.trim(),
+            scheduleSpec: spec,
+          })
+        : api.post('/api/scheduled-tasks', {
+            name: name.trim(),
+            launchPayload: buildLaunchPayload?.(),
+            scheduleSpec: spec,
+            enabled: true,
+          }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['scheduled-tasks'] })
       onClose()
-      void navigate({ to: '/scheduled' })
+      // Create lands on the list; edit stays on the detail page it was opened from.
+      if (edit === undefined) void navigate({ to: '/scheduled' })
     },
   })
 
@@ -110,7 +160,7 @@ export function ScheduleDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title={t('scheduled.dialogTitle')}
+      title={t(edit ? 'scheduled.editTitle' : 'scheduled.dialogTitle')}
       size="md"
       data-testid="schedule-dialog"
       footer={

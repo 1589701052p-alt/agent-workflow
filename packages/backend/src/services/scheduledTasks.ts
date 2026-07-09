@@ -85,6 +85,12 @@ export async function getScheduledTask(db: DbClient, id: string): Promise<Schedu
   return rows[0] ? rowToScheduledTask(rows[0]) : null
 }
 
+/** Raw DB row (unparsed JSON columns) — `fireSchedule` / run-now need it. */
+export async function getScheduledTaskRow(db: DbClient, id: string): Promise<Row | null> {
+  const rows = await db.select().from(scheduledTasks).where(eq(scheduledTasks.id, id)).limit(1)
+  return rows[0] ?? null
+}
+
 export async function createScheduledTask(
   db: DbClient,
   input: CreateScheduledTask,
@@ -229,4 +235,31 @@ export async function fireSchedule(
   const launch = buildLaunch(row.ownerUserId, row.id)
   const task = await launch(bodyWithName)
   return { taskId: task.id }
+}
+
+/**
+ * Manual "run now" (RFC-159 T7): fire immediately via the SAME `fireSchedule` path
+ * (owner actor + launchability re-check), but deliberately leave the schedule row's
+ * automated-cadence state untouched — `next_run_at` / `last_*` / `consecutive_failures`
+ * stay reserved for real scheduled fires, so a manual test-run never advances the clock
+ * nor auto-disables the schedule. The launched task is stamped `scheduled_task_id`
+ * (shows in run history); a `scheduled.fired` broadcast refreshes history for all
+ * viewers. Throws (→ HTTP error) on any launch failure, exactly like `fireSchedule`.
+ */
+export async function runScheduleNow(
+  db: DbClient,
+  id: string,
+  buildLaunch: BuildScheduleLaunch,
+): Promise<{ taskId: string }> {
+  const row = await getScheduledTaskRow(db, id)
+  if (row === null) {
+    throw new NotFoundError('scheduled-task-not-found', `scheduled task '${id}' not found`)
+  }
+  const result = await fireSchedule(db, row, buildLaunch, Date.now())
+  scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+    type: 'scheduled.fired',
+    id: row.id,
+    ownerUserId: row.ownerUserId,
+  })
+  return result
 }

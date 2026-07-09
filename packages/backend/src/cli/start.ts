@@ -13,8 +13,8 @@ import { autoResumeInterruptedTasks } from '@/services/autoResume'
 import { startAutoRepairLoop } from '@/services/autoRepair'
 import { startHeartbeatKillLoop } from '@/services/autoKill'
 import { startOrphanReconcileLoop } from '@/services/orphanReconcile'
-import { resumeTask, startTask } from '@/services/task'
-import { buildStartTaskDeps } from '@/services/startTaskDeps'
+import { resumeTask } from '@/services/task'
+import { buildScheduleLaunch } from '@/services/scheduleLaunch'
 import { startScheduledTaskLoop } from '@/services/scheduledTaskScheduler'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
@@ -442,13 +442,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const scheduledTaskTicker = startScheduledTaskLoop({
     db,
     loadConfig: () => loadConfig(Paths.config),
-    buildLaunch: (ownerUserId, scheduledTaskId) => async (body) => {
-      const task = await startTask(body, {
-        ...buildStartTaskDeps(db, Paths.config, ownerUserId),
-        scheduledTaskId,
-      })
-      return { id: task.id }
-    },
+    buildLaunch: buildScheduleLaunch(db, Paths.config),
   })
 
   // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes

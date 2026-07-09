@@ -1008,6 +1008,9 @@ export interface Resources {
     runHistory: string
     noRuns: string
     autoDisabled: string
+    runNow: string
+    edit: string
+    editTitle: string
     enable: string
     disable: string
     delete: string
@@ -3586,6 +3589,9 @@ export const zhCN: Resources = {
     runHistory: '触发历史',
     noRuns: '还没有触发记录。',
     autoDisabled: '连续启动失败已自动停用。重新启用可恢复。',
+    runNow: '立即运行一次',
+    edit: '编辑',
+    editTitle: '编辑定时任务',
     enable: '启用',
     disable: '停用',
     delete: '删除',

@@ -277,6 +277,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/scheduled-tasks' },
   { method: 'PUT', path: '/api/scheduled-tasks/:id' },
   { method: 'DELETE', path: '/api/scheduled-tasks/:id' },
+  { method: 'POST', path: '/api/scheduled-tasks/:id/run-now' },
   { method: 'GET', path: '/api/tasks/:id/structural-diff' },
   { method: 'GET', path: '/api/tasks/:id/call-targets' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
