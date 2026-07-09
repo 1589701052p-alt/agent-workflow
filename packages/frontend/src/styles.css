@@ -11622,3 +11622,55 @@ mark.comment-anchor[data-active='true'] {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+/* RFC-159 — scheduled tasks */
+.data-table__row {
+  cursor: pointer;
+}
+.data-table__row:hover {
+  background: var(--panel);
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+.detail-grid dt {
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+.detail-grid dd {
+  margin: 0;
+}
+.detail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+.schedule-dialog__row {
+  display: flex;
+  gap: 1rem;
+}
+.schedule-dialog__row > * {
+  flex: 1;
+}
+.schedule-dialog__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.schedule-dialog__preview {
+  margin-top: 0.75rem;
+  font-size: var(--font-sm);
+}
+.schedule-dialog__preview-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+.schedule-dialog__preview ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}

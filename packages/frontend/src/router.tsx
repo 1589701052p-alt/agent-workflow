@@ -21,6 +21,8 @@ import { Route as skillsRoute } from '@/routes/skills'
 import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
 import { Route as tasksRoute } from '@/routes/tasks'
+import { Route as scheduledRoute } from '@/routes/scheduled'
+import { Route as scheduledDetailRoute } from '@/routes/scheduled.$id'
 import { Route as taskDetailRoute } from '@/routes/tasks.detail'
 import { Route as taskPreviewRoute } from '@/routes/tasks.preview'
 import { Route as reviewsRoute } from '@/routes/reviews'
@@ -64,6 +66,9 @@ const routeTree = rootRoute.addChildren([
   taskPreviewRoute,
   taskDetailRoute,
   tasksRoute,
+  // RFC-159: '/scheduled/$id' literal must precede '/scheduled'.
+  scheduledDetailRoute,
+  scheduledRoute,
   // '/reviews/$nodeRunId' must come before '/reviews' so the literal wins.
   reviewDetailRoute,
   reviewsRoute,

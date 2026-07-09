@@ -13,6 +13,7 @@ export interface Resources {
     plugins: string
     workflows: string
     tasks: string
+    scheduled: string
     reviews: string
     clarify: string
     repos: string
@@ -966,6 +967,52 @@ export interface Resources {
     colName: string
     colVersion: string
     colId: string
+  }
+  scheduled: {
+    title: string
+    empty: string
+    new: string
+    colName: string
+    colSchedule: string
+    colNext: string
+    colStatus: string
+    colEnabled: string
+    enabledYes: string
+    enabledNo: string
+    lastNever: string
+    last_launched: string
+    last_failed: string
+    saveAsScheduled: string
+    dialogTitle: string
+    fieldName: string
+    fieldMode: string
+    fieldEvery: string
+    fieldUnit: string
+    fieldAt: string
+    fieldDays: string
+    fieldDayOfMonth: string
+    dayOfMonthHint: string
+    tzNote: string
+    modeInterval: string
+    modeDaily: string
+    modeWeekly: string
+    modeMonthly: string
+    unitMinutes: string
+    unitHours: string
+    unitDays: string
+    dow: { 0: string; 1: string; 2: string; 3: string; 4: string; 5: string; 6: string }
+    preview: string
+    save: string
+    saving: string
+    cancel: string
+    runHistory: string
+    noRuns: string
+    autoDisabled: string
+    enable: string
+    disable: string
+    delete: string
+    deleteConfirm: string
+    uploadUnsupported: string
   }
   tasks: {
     title: string
@@ -2520,6 +2567,7 @@ export const zhCN: Resources = {
     plugins: '插件',
     workflows: '工作流',
     tasks: '任务',
+    scheduled: '定时任务',
     reviews: '评审',
     clarify: '反问',
     repos: '远端仓',
@@ -3497,6 +3545,52 @@ export const zhCN: Resources = {
     colName: '名称',
     colVersion: '版本',
     colId: 'ID',
+  },
+  scheduled: {
+    title: '定时任务',
+    empty: '还没有定时任务。在工作流启动页配好参数后选择「存为定时任务」。',
+    new: '新建',
+    colName: '名称',
+    colSchedule: '周期',
+    colNext: '下次触发',
+    colStatus: '最近触发',
+    colEnabled: '启用',
+    enabledYes: '开',
+    enabledNo: '关',
+    lastNever: '未触发',
+    last_launched: '已启动',
+    last_failed: '失败',
+    saveAsScheduled: '存为定时任务',
+    dialogTitle: '存为定时任务',
+    fieldName: '定时任务名称',
+    fieldMode: '重复',
+    fieldEvery: '每隔',
+    fieldUnit: '单位',
+    fieldAt: '时刻',
+    fieldDays: '星期',
+    fieldDayOfMonth: '每月几号',
+    dayOfMonthHint: '没有该日期的月份将跳过。',
+    tzNote: '按你的时区：{{tz}}',
+    modeInterval: '间隔',
+    modeDaily: '每天',
+    modeWeekly: '每周',
+    modeMonthly: '每月',
+    unitMinutes: '分钟',
+    unitHours: '小时',
+    unitDays: '天',
+    dow: { 0: '周日', 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六' },
+    preview: '下次 3 次触发',
+    save: '保存',
+    saving: '保存中…',
+    cancel: '取消',
+    runHistory: '触发历史',
+    noRuns: '还没有触发记录。',
+    autoDisabled: '连续启动失败已自动停用。重新启用可恢复。',
+    enable: '启用',
+    disable: '停用',
+    delete: '删除',
+    deleteConfirm: '确认删除？',
+    uploadUnsupported: '需要文件上传的工作流不支持定时。',
   },
   tasks: {
     title: '任务',

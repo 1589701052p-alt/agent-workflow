@@ -38,6 +38,7 @@ import {
   validateRepoUrl,
   type RepoSource,
 } from '@/lib/launch-repo-source'
+import { ScheduleDialog } from '@/components/ScheduleDialog'
 import { Route as RootRoute } from './__root'
 
 export const LaunchRoute = createRoute({
@@ -140,6 +141,27 @@ function LaunchPage() {
   const effectiveRepoPath = resolveUrlRepoPath(primarySource, cachedRepos.data?.items ?? [])
 
   const hasUploads = Object.values(uploads).some((arr) => arr.length > 0)
+  // RFC-159: scheduled tasks replay a JSON body, so workflows with any upload input
+  // (whose files can't be persisted) can't be scheduled.
+  const [saveScheduledOpen, setSaveScheduledOpen] = useState(false)
+  const scheduleUnsupported =
+    hasUploads || (workflow.data?.definition.inputs ?? []).some((i) => i.kind === 'upload')
+  const buildScheduledLaunchBody = (): unknown => {
+    const launchCommon = {
+      workflowId: id,
+      name: taskName.trim(),
+      inputs,
+      ...(collaborators.length > 0 ? { collaboratorUserIds: collaborators.map((u) => u.id) } : {}),
+      ...(gitUserName.trim() !== '' && gitUserEmail.trim() !== ''
+        ? { gitUserName: gitUserName.trim(), gitUserEmail: gitUserEmail.trim() }
+        : {}),
+      ...(workingBranch.trim() !== '' ? { workingBranch: workingBranch.trim() } : {}),
+      ...(autoCommitPush ? { autoCommitPush: true } : {}),
+    }
+    return repos.length > 1
+      ? buildLaunchBodyMultiRepo(repos, launchCommon)
+      : buildLaunchBody(primarySource, launchCommon)
+  }
   const start = useMutation({
     mutationFn: () => {
       // RFC-020: any kind:'upload' input declared on the workflow drives a
@@ -419,10 +441,26 @@ function LaunchPage() {
         >
           {start.isPending ? t('launch.starting') : t('launch.start')}
         </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setSaveScheduledOpen(true)}
+          disabled={!canSubmit || scheduleUnsupported}
+          title={scheduleUnsupported ? t('scheduled.uploadUnsupported') : undefined}
+          data-testid="save-as-scheduled"
+        >
+          {t('scheduled.saveAsScheduled')}
+        </button>
         {start.error !== null && start.error !== undefined && (
           <span className="form-actions__error">{describeError(start.error)}</span>
         )}
       </div>
+      <ScheduleDialog
+        open={saveScheduledOpen}
+        onClose={() => setSaveScheduledOpen(false)}
+        buildLaunchPayload={buildScheduledLaunchBody}
+        defaultName={taskName.trim()}
+      />
     </div>
   )
 }

@@ -46,6 +46,7 @@ export const NAV_GROUPS: NavGroupEntry[] = [
     i18nKey: 'nav.group.tasks',
     subnav: [
       { to: '/tasks', i18nKey: 'nav.tasks' },
+      { to: '/scheduled', i18nKey: 'nav.scheduled' },
       { to: '/repos', i18nKey: 'nav.repos' },
     ],
   },
