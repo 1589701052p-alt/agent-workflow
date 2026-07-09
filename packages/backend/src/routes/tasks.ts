@@ -72,6 +72,8 @@ import { getInventorySnapshot } from '@/services/inventory'
 import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
+import { buildStartTaskDeps, resolveSubagentLiveCapture } from '@/services/startTaskDeps'
+import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
 import { listRecoveryEventsForTask } from '@/services/recovery'
 import { clearAutoRecoverySuspension, isAutoRecoverySuspended } from '@/services/recoveryBreaker'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
@@ -98,23 +100,10 @@ function resolveStructuralDeepConfig(configPath: string): ResolvedDeepConfig {
   }
 }
 
-/**
- * RFC-048: forward the configured subagent live-capture cadence to the
- * scheduler/runner. Reading the config here (instead of inside the runner)
- * keeps the runner pure and lets the operator flip `pollMs = 0` to disable
- * live polling without restarting the daemon — the next task pulls the
- * updated value.
- */
-function resolveSubagentLiveCapture(
-  configPath: string,
-): { pollMs: number; consecutiveFailureLimit: number } | undefined {
-  try {
-    const cfg = loadConfig(configPath)
-    return cfg.subagentLiveCapture
-  } catch {
-    return undefined
-  }
-}
+// RFC-159: `resolveSubagentLiveCapture` + the StartTaskDeps assembly
+// (`buildStartTaskDeps`) live in @/services/startTaskDeps, shared with the
+// scheduled-task scheduler so scheduled fires build deps identically to manual
+// launches (live config, per-call). Imported below.
 
 // RFC-103 T2 + RFC-108 T4: `resolveLaunchRuntimeConfig` (commit&push +
 // maxConcurrentNodes + per-node timeout floor) lives in
@@ -229,31 +218,15 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       })
     }
     const actor = actorOf(c)
-    // RFC-099 (D3): launching requires the WORKFLOW to be usable by the
-    // launcher; the referenced agent/skill/mcp/plugin closure is implicitly
-    // authorized. Invisible and missing produce the identical 404.
-    {
-      const wf = await getWorkflow(deps.db, parsed.data.workflowId)
-      if (wf === null || !(await canViewResource(deps.db, actor, 'workflow', wf))) {
-        throw new NotFoundError(
-          'workflow-not-found',
-          `workflow '${parsed.data.workflowId}' not found`,
-        )
-      }
-      // RFC-104: built-in workflows cannot be launched manually — only the
-      // fusion engine drives aw-skill-fusion, via the service layer (which is
-      // intentionally not guarded). 403 here, not 404 (the row IS visible).
-      assertNotBuiltin('workflow', wf)
-    }
-    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
-    const task = await startTask(parsed.data, {
-      db: deps.db,
-      actorUserId: actor.user.id,
-      ...(opencodeCmd ? { opencodeCmd } : {}),
-      ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
-      // RFC-103 T2: commit&push + maxConcurrentNodes from settings (all entries).
-      ...resolveLaunchRuntimeConfig(deps.configPath),
-    })
+    // RFC-099 (D3) + RFC-104: the launcher must be able to use the WORKFLOW; the
+    // referenced agent/skill/mcp/plugin closure is implicitly authorized. Invisible
+    // and missing produce the identical 404; built-in → 403. Shared gate — the
+    // multipart path and scheduled-task fires enforce the exact same policy.
+    await assertWorkflowLaunchable(deps.db, actor, parsed.data.workflowId)
+    const task = await startTask(
+      parsed.data,
+      buildStartTaskDeps(deps.db, deps.configPath, actor.user.id, opencodeCmd),
+    )
     return c.json(task, 201)
   })
 
@@ -787,12 +760,7 @@ async function handleMultipartTaskStart(
 
   // 2. Resolve workflow → extract upload input declarations. RFC-099 (D3):
   // the launcher must be able to use the workflow; invisible == missing.
-  const workflow = await getWorkflow(deps.db, startInput.workflowId)
-  if (workflow === null || !(await canViewResource(deps.db, actor, 'workflow', workflow))) {
-    throw new NotFoundError('workflow-not-found', `workflow '${startInput.workflowId}' not found`)
-  }
-  // RFC-104: built-in workflows cannot be launched manually (multipart path).
-  assertNotBuiltin('workflow', workflow)
+  const workflow = await assertWorkflowLaunchable(deps.db, actor, startInput.workflowId)
   const uploadDefs = collectUploadInputDefs(workflow.definition.inputs)
 
   // 3. Walk multipart fields, bind each file blob to its inputKey.

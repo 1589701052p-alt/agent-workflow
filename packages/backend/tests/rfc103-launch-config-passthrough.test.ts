@@ -93,14 +93,16 @@ describe('RFC-103 T2 源码层接线断言（防再漂）', () => {
   const routesSrc = readFileSync(join(import.meta.dir, '../src/routes/tasks.ts'), 'utf8')
   const taskSrc = readFileSync(join(import.meta.dir, '../src/services/task.ts'), 'utf8')
 
-  test('routes/tasks.ts 的 8 个入口都调用 resolveLaunchRuntimeConfig', () => {
+  test('routes/tasks.ts + startTaskDeps 的 8 个入口都线程 resolveLaunchRuntimeConfig', () => {
     const calls = routesSrc.match(/resolveLaunchRuntimeConfig\(deps\.configPath\)/g) ?? []
-    // RFC-103 (5): JSON start / multipart-start(fail) / multipart-start(success) / resume / retry
-    // RFC-108 T4 (+2, Codex design gate P2): repair-options + repair — a repair
-    // option may resumeAfterApply → resumeTask(deps), which must carry the
-    // timeout floor + commit&push + concurrency just like the launch entries.
-    // RFC-109 (+1): sync-workflow → syncTaskWorkflow(deps), same runtime config.
-    expect(calls.length).toBe(8)
+    // RFC-159 T2: JSON 启动改走 buildStartTaskDeps（工厂内 thread resolveLaunchRuntimeConfig），
+    // tasks.ts 直调点 8 → 7；第 8 个入口（JSON）经工厂覆盖。剩 7：multipart-start(fail)/
+    // multipart-start(success) / resume / retry / repair-options / repair / sync-workflow。
+    expect(calls.length).toBe(7)
+    // 第 8 个入口的运行时配置由 buildStartTaskDeps 携带（数据路径不变）。
+    const depsSrc = readFileSync(join(import.meta.dir, '../src/services/startTaskDeps.ts'), 'utf8')
+    expect(depsSrc).toContain('resolveLaunchRuntimeConfig(configPath)')
+    expect(routesSrc).toContain('buildStartTaskDeps(deps.db, deps.configPath')
   })
 
   test('routes 不再保留旧的「只 start 传 commitPush」单点写法', () => {
