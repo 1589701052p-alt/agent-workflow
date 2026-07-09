@@ -388,6 +388,85 @@ describe('RFC-128 P5-D — quick-channel seal + autodispatch (fast-path → auto
     expect(rerun?.rerunCause).toBe('cross-clarify-questioner-rerun')
   })
 
+  // RFC-162 (Codex impl-gate P1) — a CROSS round whose question gained a coexisting undispatched
+  // designer (a pre-submit reassign) parks BOTH: step 4 excludes the questioner (designer sibling),
+  // step 7 excludes the designer (questioner sibling). Both ride the board's unified dispatch;
+  // neither is quick-auto-dispatched out of order.
+  test('RFC-162: CROSS round with a coexisting undispatched designer → questioner AND designer both PARK', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [mkQ('q1', 't')])
+    await insertEntry(db, taskId, {
+      originNodeRunId: crossNodeRunId,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: D,
+      sealed: false,
+    })
+
+    const res = await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
+
+    expect(res.roundFullySealed).toBe(true)
+    const entries = await entriesByOrigin(db, crossNodeRunId)
+    expect(entries.find((e) => e.roleKind === 'questioner')?.dispatchedAt).toBeNull()
+    expect(entries.find((e) => e.roleKind === 'designer')?.dispatchedAt).toBeNull()
+    expect(res.dispatch.reruns).toHaveLength(0)
+  })
+
+  // RFC-162 (Codex re-review P2) — multi-source: a target designer with a BLOCKED sibling (its asker
+  // still undispatched) is skipped WHOLE. Dispatching only the UNBLOCKED sibling would mint the
+  // designer on a PARTIAL batch (assertDesignerReady passing WITHOUT the blocked round's feedback),
+  // then a second rerun later — instead of one aggregated batch.
+  test('RFC-162: multi-source designer with a blocked sibling → whole target skipped (no partial batch)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    // Round B (the answered round): its questioner will be parked; its designer targets D.
+    // Unsealed — autoDispatch's step-3 seal stamps it (sealRoundQuestions stamps ALL roles of the
+    // sealed question); a pre-set seal would instead mark q1 already-sealed → empty-seal error.
+    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [mkQ('q1', 't')])
+    await insertEntry(db, taskId, {
+      originNodeRunId: crossNodeRunId,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: D,
+      sealed: false,
+    })
+    // Round A (a sibling for the SAME target D): its questioner is already DISPATCHED (not blocked),
+    // and it has a sealed designer for D.
+    await insertEntry(db, taskId, {
+      originNodeRunId: 'A-origin',
+      questionId: 'qA',
+      roleKind: 'questioner',
+      defaultTargetNodeId: Q,
+      dispatchedAt: Date.now(),
+    })
+    const aDesignerId = await insertEntry(db, taskId, {
+      originNodeRunId: 'A-origin',
+      questionId: 'qA',
+      roleKind: 'designer',
+      defaultTargetNodeId: D,
+      sealed: true,
+    })
+
+    await autoDispatchClarifyRound({
+      db,
+      originNodeRunId: crossNodeRunId,
+      answers: [ans('q1')],
+      actor,
+    })
+
+    // Round A's designer (unblocked) is ALSO left undispatched — the whole target D was skipped, so
+    // no partial multi-source batch was minted without round B's feedback.
+    expect((await entryRow(db, aDesignerId))[0]?.dispatchedAt).toBeNull()
+  })
+
   test('CROSS stop round → questioner stop rerun via dispatch + canvas directive persisted (RFC-123)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`

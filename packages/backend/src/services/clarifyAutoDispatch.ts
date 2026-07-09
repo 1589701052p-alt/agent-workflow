@@ -446,6 +446,13 @@ export async function autoDispatchClarifyRound(
   //    (questioner) reruns do NOT roll back — submitCrossClarifyAnswers has no rollback — so this is
   //    self-only. resolveSelfRollbackRun returns the asking run iff a rollback is due (self + isolated
   //    + a snapshot + a worktree), else null.
+  //    RFC-162 (Codex re-review P2, accepted limitation): when EVERY self entry of the round was
+  //    parked above (all reassigned to a designer) `entryIds` is empty ⇒ no quick self continuation
+  //    runs now ⇒ no rollback now (resetting the tree before the parked designer runs would be
+  //    wrong). Such a reassigned self is board-dispatched, which by design does NOT roll back — for
+  //    the primary UPSTREAM-designer case that is CORRECT (the asker must see the designer's
+  //    revision, not reset to pre-question); the DOWNSTREAM-designer case loses the (usually no-op,
+  //    RFC-023) rollback, consistent with every other board-dispatched self continuation.
   const selfRollbackRun =
     round.kind === 'self' && entryIds.length > 0 && taskRow.worktreePath !== ''
       ? await resolveSelfRollbackRun(
@@ -635,11 +642,22 @@ export async function autoDispatchClarifyRound(
             )
         ).map((a) => `${a.originNodeRunId}:${a.questionId}`),
       )
-      const designerEntryIds = allDesigner
-        .filter((e) =>
-          targetDesignerNodes.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
-        )
-        .filter((e) => !undispatchedAskerKeys.has(`${e.originNodeRunId}:${e.questionId}`))
+      const designerCandidates = allDesigner.filter((e) =>
+        targetDesignerNodes.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
+      )
+      // RFC-162 (Codex re-review P2) — skip the WHOLE target designer node if ANY of its sibling
+      // rounds is blocked (its asker still undispatched, parked in step 4). Filtering per-row and
+      // dispatching only the UNBLOCKED siblings would let assertDesignerReady pass on a PARTIAL
+      // multi-source batch → mint the designer WITHOUT the parked round's feedback, then a second
+      // rerun later — instead of the intended single aggregated batch. Park the whole target; the
+      // board's UNIFIED dispatch mints it once, with every sibling's feedback, when all are ready.
+      const blockedTargets = new Set(
+        designerCandidates
+          .filter((e) => undispatchedAskerKeys.has(`${e.originNodeRunId}:${e.questionId}`))
+          .map((e) => e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
+      )
+      const designerEntryIds = designerCandidates
+        .filter((e) => !blockedTargets.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''))
         .map((e) => e.id)
       if (designerEntryIds.length > 0) {
         try {

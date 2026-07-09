@@ -1,22 +1,22 @@
 #!/bin/sh
-# Stub opencode for RFC-056 cross-clarify e2e.
+# Stub opencode for RFC-056 cross-clarify e2e (agent-driven; updated for RFC-162).
 #
-# Drives a 5-round spawn sequence for the A1 happy path:
+# The stub keys purely on (agent, invocation-count) — it does NOT force a fixed
+# round order, so it works unchanged under RFC-162's questioner-rerun sequence.
+# Under RFC-162 (cross-clarify reruns the QUESTIONER asker, not the designer):
 #
-#   Round 1 — designer.first invocation:
-#     emit <workflow-output> "initial design".
-#   Round 2 — questioner.first invocation:
-#     emit <workflow-clarify> with a single question to the user.
-#   *** task pauses awaiting_human; user POSTs answers ***
-#   Round 3 — designer.second invocation (cross-clarify rerun):
-#     prompt should now contain the flat `## Clarify Q&A` block (RFC-132 PR-C:
-#     the runner injects the user's submitted Q&A as a single flat block; the
-#     designer's cross-clarify Q&A rides it rather than a separate `## External
-#     Feedback` section). Stub logs the received prompt to
-#     $CROSS_CLARIFY_PROMPT_LOG so the spec can grep.
-#   Round 4 — questioner.second invocation (post designer rerun):
-#     emit <workflow-output> "all good, no more questions".
-#   Round 5 — final aggregation / output writing — no more agent spawns.
+#   designer round 1:   emit <workflow-output> "design v1"  (runs ONCE — no
+#                       designer-by-default rerun after the cross submit).
+#   questioner round 1: emit <workflow-clarify> with a single question.
+#   *** task pauses awaiting_human; user POSTs answers (continue) ***
+#   questioner round 2: RFC-100 mandatory ask-back — emit <workflow-clarify>
+#                       AGAIN. The prompt now carries the flat `## Clarify Q&A`
+#                       block (RFC-132 PR-C: the runner injects the user's Q&A as
+#                       a single flat block into the ASKER's rerun). Stub logs the
+#                       received prompt to $CROSS_CLARIFY_PROMPT_LOG so the spec
+#                       can grep `questioner round 2`.
+#   *** pauses; user POSTs answers (stop) ***
+#   questioner round 3: emit <workflow-output> "questioner v3" — final output.
 #
 # Required env:
 #   CROSS_CLARIFY_STUB_STATE   directory the runner can read+write counter files in.
