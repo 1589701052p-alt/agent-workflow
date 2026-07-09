@@ -34,11 +34,36 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The upstream "designer" is now an explicit human reassign: take the answered
+// round's questioner card, reassign it to the graph designer node (ADDS a roleKind='designer'
+// row targeting it via defaultTargetNodeId), then dispatch that designer entry — which mints the
+// designer rerun via the SAME buildFrontierMintPlan retry_index bump this file locks. This helper
+// preserves the exact designer-rerun-mint coverage through the new path.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -198,13 +223,14 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       questions: [makeQ('q1')],
     })
 
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       actor,
     })
-    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const disp = await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     const designerRows = await db
       .select()
@@ -246,6 +272,7 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       answers: [makeAns('q1')],
       actor,
     })
+    await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
 
     const designerRows = await db
       .select()
@@ -294,6 +321,7 @@ describe('RFC-056 patch 2026-05-23 — designer rerun retry_index bump', () => {
       answers: [makeAns('q1')],
       actor,
     })
+    await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
 
     const designerRows = await db
       .select()

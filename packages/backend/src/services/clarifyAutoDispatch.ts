@@ -47,7 +47,6 @@ import { hasOpenDispatchedEntryOnHome } from '@/services/clarifyRerunLedger'
 import { sealRoundQuestions } from '@/services/clarifySeal'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
-import { validateQuestionScopes } from '@/services/crossClarify'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import {
   dispatchDeferredTaskQuestions,
@@ -63,7 +62,6 @@ import {
   type ClarifyAnswer,
   type ClarifyDirective,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
 } from '@agent-workflow/shared'
 
 const log = createLogger('clarify-auto-dispatch')
@@ -170,9 +168,7 @@ async function selfHomeHasOpenLedger(
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
-        // RFC-134 D4：白名单**有意**不含 'echo'——回执是 cause 序列化的显式豁免项（不 mint、
-        // 无 rerun_cause，queued 回执绝不阻塞任何后续下发）。不得「顺手」把 echo 加进来
-        //（源码文本锁：rfc134 测试断言本数组恒为三角色）。
+        // RFC-162: 'echo' role deleted; self/questioner/designer are the whole deferred set.
         inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
         isNotNull(taskQuestions.dispatchedAt),
       ),
@@ -209,8 +205,6 @@ export interface AutoDispatchClarifyRoundArgs {
    *  the quick path's stop semantics (a 'stop' cross round mints a questioner-stop rerun via
    *  dispatch + persists the canvas directive). */
   directive?: ClarifyDirective
-  /** Per-question scope (cross rounds only); merged by the seal. */
-  scopes?: Record<string, ClarifyQuestionScope>
   /** RFC-023 optimistic lock — the round iteration the client believes it is answering. When set
    *  and != the round's current iteration, reject (clarify-iteration-mismatch), mirroring the
    *  immediate path (submitClarifyAnswers / submitCrossClarifyAnswers); the /clarify page always
@@ -320,21 +314,6 @@ export async function autoDispatchClarifyRound(
     throw new NotFoundError('task-not-found', `task ${round.taskId} not found`)
   }
 
-  // 2b. RFC-059 questionScopes validation (BEFORE any write) — the legacy submitCrossClarifyAnswers
-  //     validated the scope map against the round's questions (reject an unknown questionId / bad enum
-  //     → ValidationError 'cross-clarify-question-scopes-malformed'); RFC-132 PR-B preserves that on
-  //     the unified quick channel. Pure (args + questions); a malformed map never reaches the DB.
-  if (args.scopes !== undefined) {
-    const roundQuestions = ((): ClarifyQuestion[] => {
-      try {
-        return JSON.parse(round.questionsJson) as ClarifyQuestion[]
-      } catch {
-        return []
-      }
-    })()
-    validateQuestionScopes(args.scopes, roundQuestions)
-  }
-
   // 3. Seal the round (control channel) as a WHOLE-ROUND FINALIZE. The quick channel finalizes the
   //    ENTIRE round (the immediate path flips the whole round answered even when some answers are
   //    blank — "User did not answer this question."); the deferred path must match (golden-lock) AND
@@ -358,25 +337,11 @@ export async function autoDispatchClarifyRound(
           customText: '',
         },
     )
-  // Codex impl-gate (high): forward scope ONLY for the not-yet-locked questions sealed by THIS call.
-  // sealRoundQuestions merges EVERY provided scope key (it does not itself filter locked questions), so
-  // passing the whole quick-submit scope map would let a stale defer=false submit OVERWRITE an
-  // already-sealed (control-channel) question's scope — e.g. control-seal q1 as 'designer', then a
-  // stale quick finalize carrying q1:'questioner' would flip q1 → questioner, deleting q1's staged
-  // designer entry (reconcile drops the designer row). Mirror the immediate path
-  // (submitCrossClarifyAnswers, which skips lockedIds when merging scopes): drop locked-question scopes.
-  const unlockedScopes =
-    args.scopes !== undefined
-      ? Object.fromEntries(Object.entries(args.scopes).filter(([qid]) => !lockedIds.has(qid)))
-      : undefined
   const sealResult = await sealRoundQuestions({
     db,
     originNodeRunId,
     answers: sealAnswers,
     ...(args.directive !== undefined ? { directive: args.directive } : {}),
-    ...(unlockedScopes !== undefined && Object.keys(unlockedScopes).length > 0
-      ? { scopes: unlockedScopes }
-      : {}),
     sealedBy: args.actor.userId,
     ...(args.now !== undefined ? { now: args.now } : {}),
   })

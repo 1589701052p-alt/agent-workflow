@@ -260,10 +260,7 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
         // quick-path stop semantics (no designer entries + directive persisted; 'continue'
         // also satisfies the §18 designer park). Schema defaults it to 'continue'.
         directive: parsed.data.directive,
-        // Per-question scope is chosen when a (cross) question is answered; harmless for
-        // self rounds (reconcile never derives a designer entry from scope there). Mirror
-        // the quick channel — forward questionScopes only when the client sent it.
-        ...(parsed.data.questionScopes !== undefined ? { scopes: parsed.data.questionScopes } : {}),
+        // RFC-162: per-question scope removed.
         // RFC-099: audit-only setter id — NEVER enters an agent prompt.
         sealedBy: actor.user.id,
       })
@@ -358,9 +355,6 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
           originNodeRunId: nodeRunId,
           answers: parsed.data.answers,
           directive: parsed.data.directive,
-          ...(parsed.data.questionScopes !== undefined
-            ? { scopes: parsed.data.questionScopes }
-            : {}),
           // RFC-023 optimistic lock — same If-Match the immediate path honors (/clarify page sends it).
           ...(ifMatch !== undefined ? { ifMatchIteration: ifMatch } : {}),
           actor: { userId: actor.user.id, role },

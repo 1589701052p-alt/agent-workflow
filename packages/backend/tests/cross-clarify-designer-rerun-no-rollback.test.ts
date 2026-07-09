@@ -31,12 +31,35 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { gitStashSnapshot, runGit } from '../src/util/git'
 import type { ClarifyAnswer, ClarifyQuestion, WorkflowDefinition } from '@agent-workflow/shared'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The designer rerun (whose no-rollback worktree behavior this file locks) is now
+// minted by reassigning the answered round's questioner card to the graph designer node +
+// dispatching that designer entry (dispatchTaskQuestions frontier mint) — the SAME live path.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 interface Repo {
   path: string
@@ -177,8 +200,8 @@ describe('RFC-056 patch 2026-06-22: cross-clarify designer rerun does not roll b
     const taskId = 'task_norollback'
     await seedTaskAndDesigner(db, taskId, repo.path, sha)
 
-    // Seed an awaiting cross round (designer-scoped by default) and answer it — the
-    // designer rerun comes out of the unified dispatch (res.dispatch.reruns).
+    // Seed an awaiting cross round, answer it, then reassign to the designer + dispatch — the
+    // designer rerun comes out of the unified dispatch (RFC-162: via reassign, not scope).
     const { crossClarifyNodeRunId } = await createCrossClarifySession({
       db,
       taskId,
@@ -189,15 +212,16 @@ describe('RFC-056 patch 2026-06-22: cross-clarify designer rerun does not roll b
       loopIter: 0,
       questions: [makeQ('q1')],
     })
-    const res = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       actor,
     })
+    const disp = await reassignThenDispatchDesigner(db, taskId, crossClarifyNodeRunId)
 
     // The answer ran to completion: a fresh pending designer row was minted.
-    const designerRerun = res.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    const designerRerun = disp.reruns.find((r) => r.targetNodeId === 'designer')
     expect(designerRerun).toBeDefined()
     const fresh = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, designerRerun!.nodeRunId))

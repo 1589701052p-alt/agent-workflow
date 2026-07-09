@@ -155,7 +155,9 @@ describe('RFC-098 WP-10 — producers mint the cause the gates consume', () => {
     expect(src).toContain(
       "if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'",
     )
-    expect(src).toContain("return 'cross-clarify-answer' // designer (incl. manual)")
+    expect(src).toContain(
+      "return 'cross-clarify-answer' // designer (incl. manual, incl. reassign-added upstream reviser)",
+    )
   })
 
   test('dispatchTaskQuestions mints via causeClassForEntry (no hardcoded per-path cause forks)', () => {

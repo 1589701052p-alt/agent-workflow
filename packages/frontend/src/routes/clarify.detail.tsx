@@ -22,18 +22,15 @@ import { useTranslation } from 'react-i18next'
 import type {
   ClarifyAnswer,
   ClarifyDirective,
-  ClarifyQuestionScope,
   ClarifyRound,
   ClarifyRoundSummary,
   SubmitClarifyAnswers,
   SubmitClarifyAnswersResponse,
   WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { CLARIFY_QUESTION_SCOPE_DEFAULT } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
 import { AttributionChip } from '@/components/AttributionChip'
 import { LoadingState } from '@/components/LoadingState'
-import { Segmented } from '@/components/Segmented'
 import { StatusChip } from '@/components/StatusChip'
 import { QuestionForm, type QuestionFormHandle } from '@/components/clarify/QuestionForm'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
@@ -158,11 +155,7 @@ export function ClarifyDetailPage() {
   // ----------------------------------------------------------------------
 
   const [answers, setAnswers] = useState<Record<string, ClarifyAnswer>>({})
-  // RFC-059: per-question scope decisions for cross-clarify sessions. Map
-  // questionId → 'designer' | 'questioner'. Empty for self-clarify (the
-  // asking agent is itself the consumer, so there's no designer/questioner
-  // split; the submit body does NOT include this field on the self path).
-  const [scopes, setScopes] = useState<Record<string, ClarifyQuestionScope>>({})
+  // RFC-162: per-question scope (designer ↔ questioner) removed — cross unified with self.
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftSaving, setDraftSaving] = useState(false)
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -207,7 +200,6 @@ export function ClarifyDetailPage() {
   // same taskId on every clarify swap, which is wasteful and racy.
   useEffect(() => {
     setAnswers({})
-    setScopes({})
     setDraftLoaded(false)
     initialFocusedRef.current = false
     serverDraftRef.current = {}
@@ -218,25 +210,6 @@ export function ClarifyDetailPage() {
       draftTimerRef.current = null
     }
   }, [nodeRunId])
-
-  // RFC-059: seed `scopes` from the session (kind='cross' only).
-  //   - awaiting_human + no persisted scopes → every question defaults to
-  //     'designer' (preserves RFC-056 byte-level behaviour).
-  //   - sealed (answered/abandoned) with persisted scopes → restore them so
-  //     the readonly chip shows what the user actually selected.
-  //   - sealed with NULL scopes (rows from before RFC-059) → fall back to
-  //     'designer' so the chip says "designer" — matches the runtime path.
-  //   - self-clarify → never seed; `scopes` stays `{}` and the UI does not
-  //     render any scope control.
-  useEffect(() => {
-    const s = session.data
-    if (s === undefined || s.kind !== 'cross') return
-    const initial: Record<string, ClarifyQuestionScope> = {}
-    for (const q of s.questions) {
-      initial[q.id] = s.questionScopes?.[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
-    }
-    setScopes(initial)
-  }, [session.data])
 
   useEffect(() => {
     const s = session.data
@@ -490,21 +463,7 @@ export function ClarifyDetailPage() {
         ifMatchIteration: s.iteration,
         directive,
       }
-      // RFC-059: only send questionScopes on cross-clarify (self-clarify submit ignores the
-      // field). When some questions are locked, restrict the scope map to the unlocked subset
-      // (the backend keeps a locked question's stored scope); no locked ⇒ send the full map
-      // (byte-for-byte the pre-RFC-128 whole-round submit, golden lock).
-      if (s.kind === 'cross') {
-        body.questionScopes =
-          lockedQuestionIds.size > 0
-            ? Object.fromEntries(
-                arr.map((a) => [
-                  a.questionId,
-                  scopes[a.questionId] ?? CLARIFY_QUESTION_SCOPE_DEFAULT,
-                ]),
-              )
-            : scopes
-      }
+      // RFC-162: no questionScopes — cross unified with self.
       const resp = await api.post<SubmitClarifyAnswersResponse>(
         `/api/clarify/${s.intermediaryNodeRunId}/answers`,
         body,
@@ -608,50 +567,7 @@ export function ClarifyDetailPage() {
     })
   }, [answers, draftLoaded, session.data])
 
-  // Cross-clarify only: Q / W shortcut for the per-question scope picker.
-  // Q → questioner, W → designer. The shortcut targets the question that
-  // currently owns keyboard focus (walk up from `document.activeElement`
-  // to a `[data-question-wrapper-id]` wrapper). When focus is outside any
-  // question (e.g. after a stray click), fall back to the first question
-  // so the keypress is never a silent no-op. Does NOT advance to the next
-  // question — the reviewer may want to toggle the same question's scope
-  // twice while comparing tooltips, and per spec this only sets scope.
-  useEffect(() => {
-    const s = session.data
-    if (s === undefined) return
-    if (s.kind !== 'cross') return
-    if (s.status !== 'awaiting_human') return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      const target = e.target as HTMLElement | null
-      if (target !== null) {
-        const tag = target.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
-      }
-      const k = e.key.toLowerCase()
-      let mode: ClarifyQuestionScope | null = null
-      // Q / W mirror the visual order of the segmented control (Designer
-      // is rendered left, Questioner right) so the keyboard row matches
-      // page order.
-      if (k === 'q') mode = 'designer'
-      else if (k === 'w') mode = 'questioner'
-      if (mode === null) return
-      if (submitMut.isPending) return
-      const active = document.activeElement
-      const wrapper =
-        active instanceof HTMLElement ? active.closest('[data-question-wrapper-id]') : null
-      const qid =
-        wrapper instanceof HTMLElement
-          ? wrapper.getAttribute('data-question-wrapper-id')
-          : (s.questions[0]?.id ?? null)
-      if (qid === null || qid === undefined || qid.length === 0) return
-      e.preventDefault()
-      const nextMode = mode
-      setScopes((prev) => ({ ...prev, [qid]: nextMode }))
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [session.data, submitMut.isPending])
+  // RFC-162: the Q/W per-question scope shortcut is removed (scope deleted).
 
   // ----------------------------------------------------------------------
   // render
@@ -840,7 +756,6 @@ export function ClarifyDetailPage() {
       {!readonly && (
         <p className="muted clarify-detail__keyboard-hint" data-testid="clarify-keyboard-hint">
           {t('clarify.detail.keyboardHint')}
-          {isCross && <> · {t('crossClarify.questionScope.shortcutHint')}</>}
         </p>
       )}
       {draftHint !== null && (
@@ -863,7 +778,6 @@ export function ClarifyDetailPage() {
         {s.questions.map((q, idx) => {
           const a = answers[q.id]
           if (a === undefined) return null
-          const scope: ClarifyQuestionScope = scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
           // RFC-128 P4 (T10): this question was already sealed/dispatched via another
           // channel (the centralized pane / board) → read-only here + excluded from submit.
           const locked = lockedQuestionIds.has(q.id)
@@ -890,50 +804,7 @@ export function ClarifyDetailPage() {
                   {t('clarify.detail.lockedNote')}
                 </p>
               )}
-              {/* RFC-059: per-question scope picker. Only rendered for
-                  cross-clarify nodes (self-clarify has no scope split).
-                  In awaiting_human → editable Segmented; in sealed states
-                  (answered/abandoned) → readonly chip. */}
-              {isCross && (
-                <div className="clarify-question-scope" data-testid={`clarify-scope-${q.id}`}>
-                  <span className="muted">{t('crossClarify.questionScope.label')}:</span>
-                  {readonly ? (
-                    <StatusChip
-                      // flag-audit W0 Codex 实现门 P2：legacy 别名（'blue'）已删，
-                      // 语义 kind 走统一原语。
-                      kind={scope === 'questioner' ? 'info' : 'neutral'}
-                      data-testid={`clarify-scope-chip-${q.id}`}
-                    >
-                      {scope === 'questioner'
-                        ? t('crossClarify.questionScope.questioner')
-                        : t('crossClarify.questionScope.designer')}
-                    </StatusChip>
-                  ) : (
-                    <Segmented<ClarifyQuestionScope>
-                      value={scope}
-                      onChange={(mode) => setScopes((prev) => ({ ...prev, [q.id]: mode }))}
-                      options={(['designer', 'questioner'] as const).map((mode) => ({
-                        value: mode,
-                        label:
-                          mode === 'designer'
-                            ? t('crossClarify.questionScope.designer')
-                            : t('crossClarify.questionScope.questioner'),
-                        title: t(
-                          mode === 'designer'
-                            ? 'crossClarify.questionScope.designerTooltip'
-                            : 'crossClarify.questionScope.questionerTooltip',
-                        ),
-                        shortcut: mode === 'designer' ? 'Q' : 'W',
-                        testid: `clarify-scope-${q.id}-${mode}`,
-                        shortcutTestid: `clarify-scope-${q.id}-${mode}-kbd`,
-                      }))}
-                      ariaLabel={t('crossClarify.questionScope.label')}
-                      rootTestid={`clarify-scope-segmented-${q.id}`}
-                      disabled={submitMut.isPending || locked}
-                    />
-                  )}
-                </div>
-              )}
+              {/* RFC-162: per-question scope picker removed (scope deleted). */}
               <QuestionForm
                 ref={(h) => {
                   if (h === null) questionRefs.current.delete(q.id)
@@ -974,36 +845,7 @@ export function ClarifyDetailPage() {
         <span className="muted" data-testid="clarify-draft-indicator">
           {draftSaving ? t('clarify.detail.draftSaving') : t('clarify.detail.draftSaved')}
         </span>
-        {/* RFC-059: scope-distribution hint right above the submit row, only
-            for cross-clarify in awaiting_human. Three variants
-            (allDesigner / allQuestioner / mixed) make the routing decision
-            visible BEFORE the user hits submit. */}
-        {isCross &&
-          !readonly &&
-          (() => {
-            const total = s.questions.length
-            const designerCount = s.questions.filter(
-              (q) => (scopes[q.id] ?? CLARIFY_QUESTION_SCOPE_DEFAULT) === 'designer',
-            ).length
-            const questionerCount = total - designerCount
-            let hintKey: string
-            let hintData: Record<string, number>
-            if (designerCount === 0) {
-              hintKey = 'crossClarify.submitHint.allQuestioner'
-              hintData = { n: questionerCount }
-            } else if (questionerCount === 0) {
-              hintKey = 'crossClarify.submitHint.allDesigner'
-              hintData = { n: designerCount }
-            } else {
-              hintKey = 'crossClarify.submitHint.mixed'
-              hintData = { d: designerCount, q: questionerCount, total }
-            }
-            return (
-              <p className="muted" data-testid="cross-clarify-submit-hint" data-hint-kind={hintKey}>
-                {t(hintKey, hintData)}
-              </p>
-            )
-          })()}
+        {/* RFC-162: scope-distribution submit hint removed (scope deleted). */}
         <div className="clarify-detail__submit-group" data-testid="clarify-submit-group">
           <button
             ref={submitContinueRef}

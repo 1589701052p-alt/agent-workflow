@@ -69,17 +69,28 @@ handler 无新键承载）——Codex 复评 R4/R5 的分阶段铁律。结构/d
   （[feedback_shared_index_commit_race] / [feedback_dont_delete_others_code_for_ci]）；`STATE.md` /
   `design/plan.md` 只增本 RFC 行。
 
+## 实现落点（2026-07-10 校正——精简路径取代 8-PR 原方案）
+
+原 plan 的 T3/T4/T5 三相切键（影子列 `handler_node_id` → 碰撞矩阵 → 原子换唯一键）**未采用**；实测发现**保留 `role_kind` 作身份键**（唯一索引 `(origin_node_run_id, question_id, role_kind)` 不变）即可承载归一模型，且无建表/无三相切键铁律 → 显著低风险、同样满足 AC-1~7：
+
+- reconcile 归一为「一问一 asker 条目」（self→`self`、cross→`questioner`，删 designer-by-default）；
+- `reassignTaskQuestion` 改语义：clarify 条目不 move，而是「**增派/移除一条 `designer` handler 行、恒保 asker 条目**」（target≠提问节点→加/改 designer；target=提问节点→删 designer；manual 仍走 override move）——asker 恒重跑拿 Q&A → 无 strand → **无需 echo**；
+- 删 echo（物化/角色/confirm 豁免）+ 两 collapse + scope；`evaluateDesignerRerunReadiness`/`assertDesignerReady` 保留为相关性 barrier；
+- migration **0081**（journal 80→81）删存量 echo 行 + 未下发**非 manual** designer 行。
+
+**核验期抓修一个真实数据丢失 bug**：手工问题以 `role_kind='designer'`+`source_kind='manual'` 存储、正文（`manual_title`/`manual_body`）挂 `task_questions` 行上、创建即 staged（`dispatched_at IS NULL`，见 `createManualQuestion`），初版迁移谓词 `designer AND dispatched_at IS NULL` 会静默删掉**待下发手工问题** → 违反 AC-6；修为增 `AND source_kind <> 'manual'`（与 reassign 按 `source_kind` 分流一致），补 `packages/backend/tests/rfc162-migration-0081.test.ts` 行选择逐格锁（红→绿）。
+
 ## 验收清单
 
-- [ ] AC-1 self 与 default-cross 逐字同构（同代码路径）
-- [ ] AC-2 增派上游 → 从上游起跑 + 级联重跑提问节点 + 两处各注入自己那份 + 提问节点产出
-- [ ] AC-3 改派下游 → 提问节点仍起跑 + 级联下游
-- [ ] AC-4 起跑前沿实时计算；并行多起跑无 strand/无漏注入
-- [ ] AC-5 全仓无 scope/role 控流、无 echo/collapse（**相关性就绪 barrier 保留、不删**）
-- [ ] AC-6 迁移无损：存量不丢问题/答案/不误触发
-- [ ] AC-7 门禁四项 + binary smoke + 前端 vitest + 各 PR 实现门
-- [ ] Codex 设计门（本 RFC 落档后）
-- [ ] `STATE.md` / `design/plan.md` 更新 + RFC-160 标 Superseded
+- [x] AC-1 self 与 default-cross 逐字同构（同代码路径）——前端同形单卡、reconcile 同分支，测试绿
+- [x] AC-2 增派上游 → 从上游起跑 + 级联重跑提问节点 + 两处各注入自己那份 + 提问节点产出（reassign 加 designer 行、`computeUpstreamFrontier` 级联、asker 条目恒保）
+- [x] AC-3 改派下游 → 提问节点仍起跑 + 级联下游（asker 条目 never touched）
+- [x] AC-4 起跑前沿实时计算；并行多起跑无 strand/无漏注入（asker 条目保留 → 无 strand）
+- [x] AC-5 全仓无 scope/role 控流、无 echo/collapse（**相关性就绪 barrier 保留**——grep 核验：`planEchoEntries`/`EchoPlan`/两 collapse 全 0 残留、scope 符号仅墓碑注释、`question_scopes_json` 零读写、`evaluateDesignerRerunReadiness`/`assertDesignerReady` 仍在）
+- [x] AC-6 迁移无损：存量不丢问题/答案/不误触发（答案在 `clarify_sessions`/`cross_clarify_sessions`，非 `task_questions`；**手工问题数据丢失 bug 已修 + 回归锁**）
+- [x] AC-7 门禁四项 + binary smoke + 前端 vitest（typecheck×3/lint 0/format/后端 4842-0/前端 3248-0/binary smoke 全绿）
+- [x] Codex 设计门（本 RFC 落档后——6 轮 12 findings 全折）
+- [x] `STATE.md` / `design/plan.md` 更新 + RFC-160 标 Superseded
 
 ## 风险与回滚
 

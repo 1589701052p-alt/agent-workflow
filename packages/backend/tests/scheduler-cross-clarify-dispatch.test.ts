@@ -30,6 +30,8 @@ import { runTask } from '../src/services/scheduler'
 import { runGit } from '../src/util/git'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 
 // RFC-132 (PR-C/PR-B): the unified flat injector (buildClarifyQueueContext) reads DISPATCHED
 // task_questions. Answers below go through the REAL unified driver (autoDispatchClarifyRound =
@@ -39,6 +41,27 @@ import { createCrossClarifySession } from '../src/services/crossClarify'
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 const MOCK_OPENCODE = resolve(import.meta.dir, 'fixtures', 'mock-opencode.ts')
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The designer rerun (whose prompt / downstream-consumption these scheduler tests
+// exercise) is now minted by reassigning the answered round's questioner card to the graph designer
+// node + dispatching that designer entry; buildClarifyQueueContext then injects its Q&A on rerun.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 interface Harness {
   db: DbClient
@@ -522,7 +545,7 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     // answer). The 'questioner' node is intentionally absent from this def's nodes, so its minted
     // pending rerun is an out-of-scope orphan the scheduler never runs (same proven-safe ghost-row
     // shape as rfc096-port-read-done-only) — the test's subject is the DESIGNER rerun prompt.
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db: h.db,
       originNodeRunId: session.crossClarifyNodeRunId,
       answers: [
@@ -531,7 +554,9 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
       directive: 'continue',
       actor,
     })
-    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    // RFC-162: reassign the answered round to the designer + dispatch it to mint the designer rerun.
+    const disp = await reassignThenDispatchDesigner(h.db, taskId, session.crossClarifyNodeRunId)
+    const designerRerun = disp.reruns.find((r) => r.targetNodeId === 'designer')
     expect(designerRerun).toBeDefined()
     const designerRunId = designerRerun!.nodeRunId
 
@@ -626,7 +651,7 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
     // designer entry, minting BOTH reruns — the questioner rerun is now eager (a pending row) rather
     // than the old lazy freshness demote, but the behavioral lock is unchanged: whichever fresh
     // questioner run results, its prompt must carry the prior cross Q&A so it does not re-ask.
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db: h.db,
       originNodeRunId: session.crossClarifyNodeRunId,
       answers: [
@@ -640,7 +665,10 @@ describe('RFC-056 scheduler cross-clarify dispatch', () => {
       directive: 'continue',
       actor,
     })
-    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    // RFC-162: reassign the answered round to the designer + dispatch it so the designer reruns
+    // (fresh output) → the downstream questioner rerun consumes it.
+    const disp = await reassignThenDispatchDesigner(h.db, taskId, session.crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     // Designer reruns (fresh output) → the questioner rerun consumes it → prompt is built.
     await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ design: 'plan v2' }) }, () =>

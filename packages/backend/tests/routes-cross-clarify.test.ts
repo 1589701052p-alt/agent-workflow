@@ -259,12 +259,13 @@ describe('GET /api/clarify/:nodeRunId — branches by node kind', () => {
 })
 
 describe('POST /api/clarify/:nodeRunId/answers — cross-clarify directive branch', () => {
-  // RFC-132 PR-B (universal deferred model): the quick channel now AUTO-DISPATCHES for EVERY task via
-  // autoDispatchClarifyRound. A cross round's questioner entry always re-runs; a designer-scope
-  // 'continue' round ALSO auto-dispatches the designer (RFC-132 §6, replacing the legacy immediate
-  // designer mint). The response is the autodispatch shape; the reruns are asserted via the
-  // minted node_runs.
-  test('directive=continue (designer-scope default) auto-dispatches the designer rerun', async () => {
+  // RFC-132 PR-B (universal deferred model): the quick channel AUTO-DISPATCHES for EVERY task via
+  // autoDispatchClarifyRound. RFC-162 (designer-by-default deleted): a cross round produces ONE
+  // questioner entry, and the quick channel auto-dispatches self/questioner ONLY (designers are
+  // never auto-dispatched). So a 'continue' answer reruns the QUESTIONER
+  // (cross-clarify-questioner-rerun) and mints NO designer — "let the upstream revise" is now an
+  // explicit board reassign, not an implicit designer-scope. The response is the autodispatch shape.
+  test('directive=continue auto-dispatches the questioner rerun (no designer)', async () => {
     const { db, app } = buildApp()
     const { taskId, crossClarifyNodeRunId } = await seedCrossClarifySession(db)
     const res = await req(app, `/api/clarify/${crossClarifyNodeRunId}/answers`, {
@@ -286,11 +287,16 @@ describe('POST /api/clarify/:nodeRunId/answers — cross-clarify directive branc
     const body = (await res.json()) as { ok: boolean; kind: string; roundKind: string }
     expect(body.kind).toBe('autodispatch')
     expect(body.roundKind).toBe('cross')
-    // single-source designer readiness satisfied → the designer rerun (cross-clarify-answer) mints.
     const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+    // The asker (questioner) re-runs; RFC-162 creates no designer entry → no designer rerun.
+    expect(
+      runs.some(
+        (r) => r.nodeId === 'questioner' && r.rerunCause === 'cross-clarify-questioner-rerun',
+      ),
+    ).toBe(true)
     expect(
       runs.some((r) => r.nodeId === 'designer' && r.rerunCause === 'cross-clarify-answer'),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test('directive=stop auto-dispatches the questioner stop rerun (no designer)', async () => {
@@ -362,125 +368,8 @@ describe('POST /api/clarify/:nodeRunId/answers — cross-clarify directive branc
   })
 })
 
-describe('POST /api/clarify/:nodeRunId/answers — RFC-059 questionScopes', () => {
-  test('omitting questionScopes → 200 (RFC-056 byte-compat) + questionScopes:null in detail', async () => {
-    const { db, app } = buildApp()
-    const { crossClarifyNodeRunId } = await seedCrossClarifySession(db)
-    const submit = await req(app, `/api/clarify/${crossClarifyNodeRunId}/answers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        answers: [
-          {
-            questionId: 'q1',
-            selectedOptionIndices: [0],
-            selectedOptionLabels: [],
-            customText: '',
-          },
-        ],
-        directive: 'continue',
-      }),
-    })
-    expect(submit.status).toBe(200)
-    const detail = await req(app, `/api/clarify/${crossClarifyNodeRunId}`)
-    expect(detail.status).toBe(200)
-    const body = (await detail.json()) as { questionScopes: unknown }
-    expect(body.questionScopes).toBeNull()
-  })
-
-  test('valid questionScopes → 200 + persisted on detail', async () => {
-    const { db, app } = buildApp()
-    const { taskId, crossClarifyNodeRunId } = await seedCrossClarifySession(db)
-    const submit = await req(app, `/api/clarify/${crossClarifyNodeRunId}/answers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        answers: [
-          {
-            questionId: 'q1',
-            selectedOptionIndices: [0],
-            selectedOptionLabels: [],
-            customText: '',
-          },
-        ],
-        directive: 'continue',
-        questionScopes: { q1: 'questioner' },
-      }),
-    })
-    expect(submit.status).toBe(200)
-    const submitBody = (await submit.json()) as { kind: string; roundKind: string }
-    // RFC-132 PR-B: autodispatch shape. Single question, all-questioner scope → only the questioner
-    // re-runs (no designer entry created for a questioner-scope question).
-    expect(submitBody.kind).toBe('autodispatch')
-    expect(submitBody.roundKind).toBe('cross')
-    const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    expect(
-      runs.some(
-        (r) => r.nodeId === 'questioner' && r.rerunCause === 'cross-clarify-questioner-rerun',
-      ),
-    ).toBe(true)
-    expect(
-      runs.some((r) => r.nodeId === 'designer' && r.rerunCause === 'cross-clarify-answer'),
-    ).toBe(false)
-    const detail = await req(app, `/api/clarify/${crossClarifyNodeRunId}`)
-    const body = (await detail.json()) as { questionScopes: Record<string, string> | null }
-    expect(body.questionScopes).toEqual({ q1: 'questioner' })
-  })
-
-  test('malformed questionScopes (unknown questionId) → 422 cross-clarify-question-scopes-malformed', async () => {
-    const { db, app } = buildApp()
-    const { crossClarifyNodeRunId } = await seedCrossClarifySession(db)
-    const res = await req(app, `/api/clarify/${crossClarifyNodeRunId}/answers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        answers: [
-          {
-            questionId: 'q1',
-            selectedOptionIndices: [0],
-            selectedOptionLabels: [],
-            customText: '',
-          },
-        ],
-        directive: 'continue',
-        questionScopes: { unknown_id: 'designer' },
-      }),
-    })
-    expect(res.status).toBe(422)
-    const body = (await res.json()) as { code: string }
-    expect(body.code).toBe('cross-clarify-question-scopes-malformed')
-  })
-
-  test('malformed questionScopes (bad enum value) → 4xx with cross-clarify-question-scopes-malformed', async () => {
-    // The shared SubmitClarifyAnswersSchema parser rejects non-enum values at
-    // the input-validation layer (`clarify-answers-invalid` ValidationError),
-    // BEFORE the service layer's `validateQuestionScopes` runs. Either
-    // failure mode is acceptable here — both are 4xx and both surface a
-    // schema-level "invalid" code; this case primarily guards that the
-    // route does NOT silently accept the bad value.
-    const { db, app } = buildApp()
-    const { crossClarifyNodeRunId } = await seedCrossClarifySession(db)
-    const res = await req(app, `/api/clarify/${crossClarifyNodeRunId}/answers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        answers: [
-          {
-            questionId: 'q1',
-            selectedOptionIndices: [0],
-            selectedOptionLabels: [],
-            customText: '',
-          },
-        ],
-        directive: 'continue',
-        questionScopes: { q1: 'both' },
-      }),
-    })
-    expect(res.status).toBeGreaterThanOrEqual(400)
-    expect(res.status).toBeLessThan(500)
-    const body = (await res.json()) as { code: string }
-    expect(['cross-clarify-question-scopes-malformed', 'clarify-answers-invalid']).toContain(
-      body.code,
-    )
-  })
-})
+// RFC-162: retired — per-question `questionScopes` deleted (cross unified with self). The clarify
+// submit schema no longer accepts `questionScopes` (extra keys are stripped, not an error), the
+// detail response no longer surfaces `questionScopes`, and there is no more
+// `cross-clarify-question-scopes-malformed` 422. The surviving directive coverage (a 'continue'
+// cross answer reruns the questioner, no designer) lives in the directive-branch block above.

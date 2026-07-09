@@ -316,7 +316,7 @@ describe('RFC-128 P5-D — quick-channel seal + autodispatch (fast-path → auto
     expect(rerun?.rerunCause).toBe('clarify-answer')
   })
 
-  test('CROSS all-questioner-scope round → auto-dispatches the questioner entries → cross-clarify-questioner-rerun on Q (no designer entry)', async () => {
+  test('CROSS round → auto-dispatches the questioner entry → cross-clarify-questioner-rerun on Q (no designer entry)', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = `t_${ulid()}`
     await seedTask(db, taskId)
@@ -326,13 +326,13 @@ describe('RFC-128 P5-D — quick-channel seal + autodispatch (fast-path → auto
       db,
       originNodeRunId: crossNodeRunId,
       answers: [ans('q1')],
-      scopes: { q1: 'questioner' },
       actor,
     })
 
     expect(res.roundFullySealed).toBe(true)
     const entries = await entriesByOrigin(db, crossNodeRunId)
-    // questioner-scope → NO designer entry (golden-lock cascade case).
+    // RFC-162: a cross round produces only the questioner (asker) entry — NEVER a designer entry
+    // (scope deleted; designer handlers come only from a human reassign).
     expect(entries.some((e) => e.roleKind === 'designer')).toBe(false)
     const qEntry = entries.find((e) => e.roleKind === 'questioner')
     expect(qEntry?.dispatchedAt).not.toBeNull()
@@ -605,82 +605,13 @@ describe('RFC-128 P5-D single-path (auto + manual never double-dispatch; RFC-125
 // ===========================================================================
 // designer entries 不进 autodispatch（§18 manual 留存）+ P5-0 guard 关系
 // ===========================================================================
-describe('RFC-128 P5-D designer-scope + P5-0 guard relationship', () => {
-  // RFC-132 PR-B (§6 designer 切自动下发): a single-source designer-scope round now AUTO-dispatches
-  // BOTH the questioner AND the designer (multi-source readiness is met — one source, answered), so
-  // the designer no longer waits for a manual board dispatch.
-  test('cross designer-scope round → questioner AND designer auto-dispatched (single-source readiness met)', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [mkQ('q1', 't')])
-    const res = await autoDispatchClarifyRound({
-      db,
-      originNodeRunId: crossNodeRunId,
-      answers: [ans('q1')],
-      scopes: { q1: 'designer' },
-      actor,
-    })
-    const entries = await entriesByOrigin(db, crossNodeRunId)
-    const qEntry = entries.find((e) => e.roleKind === 'questioner')
-    const dEntry = entries.find((e) => e.roleKind === 'designer')
-    // BOTH the questioner and the designer entry are auto-dispatched now.
-    expect(qEntry?.dispatchedAt).not.toBeNull()
-    expect(dEntry).toBeDefined()
-    expect(dEntry?.sealedAt).not.toBeNull()
-    expect(dEntry?.dispatchedAt).not.toBeNull()
-    // reruns include both the questioner (Q) and the designer (D).
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === Q)).toBe(true)
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === D)).toBe(true)
-  })
-
-  // Codex re-review (high) — a stale quick submit must NOT overwrite an already-sealed (control
-  // channel) question's SCOPE. sealRoundQuestions merges every provided scope key (it does not filter
-  // locked questions), so autodispatch must forward scope ONLY for the not-yet-locked questions
-  // (mirroring the legacy immediate cross submit). Otherwise: control-seal q1 designer → stale quick finalize
-  // carrying q1:'questioner' would flip q1 → questioner and DELETE q1's staged designer entry.
-  test('locked-scope guard — control-seal q1 as designer, then quick-finalize carrying q1:questioner → q1 stays designer, its designer entry preserved', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = `t_${ulid()}`
-    await seedTask(db, taskId)
-    const { crossNodeRunId } = await seedSealableCrossRound(db, taskId, [
-      mkQ('q1', 't'),
-      mkQ('q2', 't'),
-    ])
-    // Control channel: partially seal q1 as DESIGNER (round stays awaiting_human).
-    const partial = await sealRoundQuestions({
-      db,
-      originNodeRunId: crossNodeRunId,
-      answers: [ans('q1')],
-      scopes: { q1: 'designer' },
-    })
-    expect(partial.roundFullySealed).toBe(false)
-    const q1DesignerBefore = (await entriesByOrigin(db, crossNodeRunId)).find(
-      (e) => e.roleKind === 'designer' && e.questionId === 'q1',
-    )
-    expect(q1DesignerBefore).toBeDefined() // q1 designer entry staged
-
-    // Stale quick finalize that tries to FLIP q1 → questioner (conflicting locked scope) + seals q2.
-    await autoDispatchClarifyRound({
-      db,
-      originNodeRunId: crossNodeRunId,
-      answers: [ans('q1'), ans('q2')],
-      scopes: { q1: 'questioner', q2: 'designer' },
-      actor,
-    })
-    // q1's stored scope is STILL designer (the locked scope was not overwritten).
-    const round = (await roundByOrigin(db, crossNodeRunId))[0]
-    const storedScopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(storedScopes.q1).toBe('designer')
-    // q1's designer entry is PRESERVED (not deleted by a hijacked questioner re-scope). RFC-132 PR-B:
-    // the designer now auto-dispatches (single-source ready), so it is dispatched (not left parked) —
-    // the KEY guarantee is that q1's scope stayed designer + its designer entry survived.
-    const q1DesignerAfter = (await entriesByOrigin(db, crossNodeRunId)).find(
-      (e) => e.roleKind === 'designer' && e.questionId === 'q1',
-    )
-    expect(q1DesignerAfter).toBeDefined()
-    expect(q1DesignerAfter?.dispatchedAt).not.toBeNull()
-  })
+describe('RFC-128 P5-D P5-0 guard relationship', () => {
+  // RFC-162: retired — per-question scope (designer↔questioner) deleted. The two retired tests
+  // ("cross designer-scope round → questioner AND designer auto-dispatched" and the "locked-scope
+  // guard — stale quick finalize must not flip a locked question's scope") both asserted a
+  // designer entry MINTED-BY-SCOPE and the question_scopes_json lock — neither exists anymore. A
+  // cross seal produces only the questioner (asker) entry (covered above); designer handlers now
+  // come solely from a human reassign (rfc120-task-questions-service.test.ts covers that path).
 
   test('RFC-132 PR-B — the P5-0 guard is LIFTED universally (full self seal succeeds on ANY task)', async () => {
     // Deferred: full self seal ALLOWED.
@@ -924,7 +855,6 @@ describe('RFC-128 P5-D self-clarify isolated rollback (RFC-098 B1, Codex round-4
         db,
         originNodeRunId: crossNodeRunId,
         answers: [ans('q1')],
-        scopes: { q1: 'questioner' },
         actor,
       })
       // The worktree is UNCHANGED (cross/questioner path never rolls back).

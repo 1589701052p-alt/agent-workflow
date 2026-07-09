@@ -30,12 +30,7 @@ export function causeClassForEntry(
 ): CauseClass {
   if (e.roleKind === 'self') return 'clarify-answer'
   if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'
-  // RFC-134 D4: 'echo' 是 cause 序列化的显式豁免项——守卫入口的三角色白名单已把它排除，
-  // 此映射**不作任何守卫判据**，仅为全函数性防御：按来源对齐提问节点的续跑类别。
-  if (e.roleKind === 'echo') {
-    return e.sourceKind === 'self' ? 'clarify-answer' : 'cross-clarify-questioner-rerun'
-  }
-  return 'cross-clarify-answer' // designer (incl. manual)
+  return 'cross-clarify-answer' // designer (incl. manual, incl. reassign-added upstream reviser)
 }
 
 /** RFC-128 P5-BC — the two OPEN semantics the shared oracle serves. RFC-139: they agree on every

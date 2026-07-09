@@ -664,7 +664,12 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
       loopIter: 0,
       questions: [mkQ('q1', 'CLARIFY-Q-MARKER?')],
     })
-    const res = await autoDispatchClarifyRound({
+    // RFC-162 (designer-by-default deleted): the quick channel seals the round + AUTO-dispatches the
+    // QUESTIONER only. To exercise a DESIGNER per-node queue, reassign the questioner entry → DESIGNER
+    // (ADDS a designer handler) then dispatch it through the SAME board flow — dispatch backfills
+    // sealed_at (round answered) so the queue injector (selectAgentQueue requires sealed_at || manual)
+    // selects it without manual stamping.
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [
@@ -678,8 +683,20 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
       directive: 'continue',
       actor,
     })
-    // The unified driver seals + AUTO-dispatches the designer entry (RFC-132 §6), so the queue
-    // injector (selectAgentQueue requires sealed_at || manual) selects it without manual stamping.
+    const questioner = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'questioner')))
+    )[0]!
+    await reassignTaskQuestion(db, questioner.id, DESIGNER, actor)
+    const designerEntryId = (
+      await db
+        .select()
+        .from(taskQuestions)
+        .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
+    ).find((e) => e.sourceKind === 'cross')!.id
+    const disp = await dispatchTaskQuestions(db, taskId, [designerEntryId], actor)
     const designer = (
       await db
         .select()
@@ -693,7 +710,7 @@ describe('RFC-120 §15 — golden-lock (no manual rows ⇒ clarify unchanged)', 
       definition: liveDef(),
       taskId,
       consumerNodeId: DESIGNER,
-      dispatchedRunId: res.dispatch.reruns.find((r) => r.targetNodeId === DESIGNER)!.nodeRunId,
+      dispatchedRunId: disp.reruns.find((r) => r.targetNodeId === DESIGNER)!.nodeRunId,
       iteration: 0,
     })
     expect(ctx?.block).toContain('CLARIFY-Q-MARKER?')

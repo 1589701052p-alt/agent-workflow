@@ -167,16 +167,21 @@ describe('TaskQuestionList board', () => {
     )
   })
 
-  // RFC-138 — 看板改派给提问节点 ⇒ 后端 collapse（designer 卡删除）。响应 action 驱动一行
-  // 知会文案（tq-collapse-notice），否则卡片凭空消失会被误读成丢数据。
-  test('RFC-138: reassign to the asking node → collapse notice shows after success', async () => {
+  // RFC-162: retired — collapse (and its `tq-collapse-notice` knowledge text) plus the
+  // 'collapsed-to-questioner' / 'collapsed-to-designer' reassign actions were DELETED. Reassign
+  // 归一 no longer MOVES the asker's card: it ADDS / REMOVES a designer handler (action is now
+  // added-designer / removed-designer / moved-manual) and the board simply invalidates +
+  // re-renders — NO notice. The old RFC-138 / RFC-140 collapse-notice cases are gone; the
+  // surviving 「改派下拉 → POST /reassign {targetNodeId}」behaviour is locked below instead,
+  // together with a regression lock that the deleted notice never reappears.
+  test('改派下拉 → POST /reassign {targetNodeId}；改派后不再出现 collapse 知会文案（RFC-162）', async () => {
     const post = vi
       .spyOn(api, 'post')
-      .mockResolvedValue({ ok: true, action: 'collapsed-to-questioner' } as never)
-    // invalidate 后 refetch：collapse 只删 designer 行，该题的 questioner 卡仍在（真实形态）。
+      .mockResolvedValue({ ok: true, action: 'removed-designer' } as never)
+    // reassign 成功 → invalidate → refetch：返回更新后的题池（该 designer 卡回退成单卡）。
     const get = vi.spyOn(api, 'get').mockResolvedValue([
       entry({
-        id: 'e2',
+        id: 'e1',
         phase: 'pending',
         sourceKind: 'cross',
         roleKind: 'questioner',
@@ -214,50 +219,8 @@ describe('TaskQuestionList board', () => {
         targetNodeId: 'asker',
       }),
     )
-    await waitFor(() => expect(screen.getByTestId('tq-collapse-notice')).toBeTruthy())
-    void get
-  })
-
-  // RFC-140 W1 — 对称塌缩：questioner 卡改派到该轮设计节点 ⇒ 后端 collapsed-to-designer
-  // （questioner 卡删除、echo 回执补给提问节点）。方向化知会文案区别于 RFC-138。
-  test('RFC-140: reassign the questioner card to the designer → directional collapse notice', async () => {
-    const post = vi
-      .spyOn(api, 'post')
-      .mockResolvedValue({ ok: true, action: 'collapsed-to-designer' } as never)
-    const get = vi.spyOn(api, 'get').mockResolvedValue([] as never)
-    await wrap(
-      [
-        entry({
-          id: 'e1',
-          phase: 'pending',
-          sourceKind: 'cross',
-          roleKind: 'questioner',
-          sourceNodeId: 'asker',
-          defaultTargetNodeId: 'asker',
-          effectiveTargetNodeId: 'asker',
-        }),
-      ],
-      [
-        { id: 'asker', label: 'asker' },
-        { id: 'designer', label: 'designer' },
-      ],
-    )
-    const card = screen.getByTestId('tq-card-e1')
-    fireEvent.click(within(card).getAllByRole('combobox')[0]!)
-    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
-      (li.textContent ?? '').includes('designer'),
-    )
-    expect(opt).toBeDefined()
-    fireEvent.mouseDown(opt!)
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/reassign', {
-        targetNodeId: 'designer',
-      }),
-    )
-    const notice = await waitFor(() => screen.getByTestId('tq-collapse-notice'))
-    // Directional copy (test env renders en-US): the RFC-140 designer-collapse text, NOT the
-    // RFC-138 questioner-collapse one.
-    expect(notice.textContent).toContain('designer node only')
+    // RFC-162: collapse UI deleted — no knowledge notice ever renders after a reassign.
+    expect(screen.queryByTestId('tq-collapse-notice')).toBeNull()
     void get
   })
 
@@ -607,7 +570,6 @@ async function wrapDeferred(entries: TaskQuestionEntry[]) {
       sessionMode: null,
       designerRunTriggeredAt: null,
       abandonedAt: null,
-      questionScopes: null,
       createdAt: 0,
       answeredAt: null,
       answeredBy: null,

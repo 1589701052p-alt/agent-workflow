@@ -99,7 +99,6 @@ function round(over: Partial<ClarifyRound> & { intermediaryNodeRunId: string }):
     sessionMode: null,
     designerRunTriggeredAt: null,
     abandonedAt: null,
-    questionScopes: null,
     createdAt: 0,
     answeredAt: null,
     answeredBy: null,
@@ -417,9 +416,6 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
               customText: '',
             },
           ],
-          // 即便轮上已有持久化 scope（历史 questioner 题），面板也不再展示它——D6 的
-          // 锁定语义完全在服务端；详情页 sealed 只读 chips 是它唯一的展示面。
-          questionScopes: { q1: 'questioner' },
         }),
       ],
     )
@@ -453,7 +449,6 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
               customText: '',
             },
           ],
-          questionScopes: { q1: 'designer' },
         }),
       ],
     )

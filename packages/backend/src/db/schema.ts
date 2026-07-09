@@ -1209,11 +1209,8 @@ export const crossClarifySessions = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
     answeredAt: integer('answered_at'),
     abandonedAt: integer('abandoned_at'),
-    // RFC-059: JSON object `Record<questionId, 'designer'|'questioner'>`.
-    // NULL when (a) row predates RFC-059 / (b) client did not send
-    // questionScopes on submit. Runtime treats NULL as "every question is
-    // 'designer'" via `resolveQuestionScope` (preserves RFC-056/058 behavior).
-    // Dual-write target: mirrors `clarifyRounds.questionScopesJson`.
+    // RFC-059 per-question scope column. RFC-162 DELETED scope — this column is now DORMANT
+    // (never read or written; kept to avoid a 12-step table rebuild for no functional gain).
     questionScopesJson: text('question_scopes_json'),
     // (RFC-132 PR-F: the RFC-070 consumption-stamp columns were dropped — derived aging
     // via isTargetNodeConsumed replaced them; migration 0073.)
@@ -1310,9 +1307,7 @@ export const clarifyRounds = sqliteTable(
     submittedByRole: text('submitted_by_role'),
     answerAttributionsJson: text('answer_attributions_json'),
     draftAnswersJson: text('draft_answers_json'),
-    // RFC-059: same payload as crossClarifySessions.questionScopesJson; written
-    // by the submit handler dual-write. Always NULL for kind='self' rows;
-    // may be NULL for kind='cross' rows when client did not send the map.
+    // RFC-059 per-question scope column. RFC-162 DELETED scope — DORMANT (never read/written).
     questionScopesJson: text('question_scopes_json'),
     // (RFC-132 PR-F: the RFC-070 consumption-stamp columns were dropped — derived aging
     // via isTargetNodeConsumed replaced them; migration 0073.)
@@ -1835,9 +1830,9 @@ export const taskQuestions = sqliteTable(
     questionId: text('question_id').notNull(), // round-local question id (manual: fresh ULID)
     questionTitle: text('question_title').notNull(), // snapshot (title is stable across reopen)
     sourceKind: text('source_kind', { enum: ['self', 'cross', 'manual'] }).notNull(),
-    // RFC-134: + 'echo' — 改派回执（只读知会，目标=提问节点，生来已下发、排队等自然重跑）。
-    // drizzle enum 纯类型层、无 CHECK 约束 → 扩宽零 migration（0060 DDL 佐证）。
-    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer', 'echo'] }).notNull(),
+    // RFC-162: 'echo' 已删（归一后提问节点恒在处理组、恒有自己那份 Q&A，无需回执补投）。
+    // drizzle enum 纯类型层、无 CHECK 约束 → 收窄零 DDL（迁移 0081 只删存量 echo 行）。
+    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer'] }).notNull(),
     // Round iteration / loop_iter snapshot — used by resolveHandlerRun to frame
     // the exact handler lineage (Codex F1).
     iteration: integer('iteration').notNull().default(0),

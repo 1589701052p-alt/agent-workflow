@@ -473,13 +473,12 @@ describe('RFC-133 quick-channel mint guards — same-cause queued entry no longe
       defaultTargetNodeId: DOWN,
       dispatchedAt: Date.now() - 1000,
     })
-    // questioner-scoped answer + continue → mints the questioner cascade rerun on DOWN.
+    // cross answer + continue → mints the questioner cascade rerun on DOWN (RFC-162: scope deleted).
     const ret = await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
-      scopes: { q1: 'questioner' },
       actor,
     })
     expect(ret).toBeDefined()

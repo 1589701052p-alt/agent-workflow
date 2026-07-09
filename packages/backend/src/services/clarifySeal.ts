@@ -34,7 +34,7 @@
 // 直接覆盖，无 prior_answer_snapshot_json / reopen_count — those stay dormant for the
 // future RFC-120 AC-11 打回 flow). Any staged/dispatched entry keeps the 409.
 
-import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNull } from 'drizzle-orm'
 
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
@@ -55,7 +55,6 @@ import {
   type ClarifyAnswer,
   type ClarifyDirective,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
 } from '@agent-workflow/shared'
 
 export interface SealRoundQuestionsArgs {
@@ -67,10 +66,6 @@ export interface SealRoundQuestionsArgs {
    *  them). Sealed + merged into the round's answers_json; only known question ids are
    *  honored (unknowns dropped, matching sealAnswersServerSide). */
   answers: ClarifyAnswer[]
-  /** Optional per-question scope choice (cross rounds only — chosen at answer time).
-   *  Merged into the round's question_scopes_json so the reconcile designer gate can
-   *  see it. Ignored for self rounds (no designer). */
-  scopes?: Record<string, ClarifyQuestionScope>
   /** Audit-only setter id (RFC-099 — NEVER enters an agent prompt). Stamped on the
    *  sealed entries' sealed_by and, when the round flips, on the round's answered_by. */
   sealedBy?: string
@@ -130,16 +125,6 @@ function parseQuestions(json: string): ClarifyQuestion[] {
     return Array.isArray(v) ? (v as ClarifyQuestion[]) : []
   } catch {
     return []
-  }
-}
-
-function parseScopes(json: string | null): Record<string, ClarifyQuestionScope> {
-  if (!json) return {}
-  try {
-    const v = JSON.parse(json)
-    return v && typeof v === 'object' ? (v as Record<string, ClarifyQuestionScope>) : {}
-  } catch {
-    return {}
   }
 }
 
@@ -236,7 +221,7 @@ export async function sealRoundQuestions(
       const resealSet = new Set<string>()
       for (const id of sealingSet) {
         if (!alreadySealed.has(id)) continue
-        const rows = existingEntries.filter((e) => e.questionId === id && e.roleKind !== 'echo')
+        const rows = existingEntries.filter((e) => e.questionId === id)
         const resealable =
           declaredReseal.has(id) &&
           rows.length > 0 &&
@@ -257,24 +242,8 @@ export async function sealRoundQuestions(
       const merged = mergeSealedAnswers(parseAnswersArray(round.answersJson), sealedSubset)
       const mergedJson = JSON.stringify(merged)
 
-      // (2) Merge any per-question scope choice into the round's question_scopes_json
-      // (P2-3: never drop a previously-stored scope). RFC-136 (D6): a RESEAL keeps its
-      // originally-committed scope — a scope flip would make reconcile grow/drop
-      // designer/questioner entries on a mere answer edit, so client-sent scopes for
-      // reseal ids are ignored here (defense; the pane doesn't send them).
-      const mergedScopes = { ...parseScopes(round.questionScopesJson) }
-      if (args.scopes) {
-        for (const [qid, scope] of Object.entries(args.scopes)) {
-          if (
-            (scope === 'designer' || scope === 'questioner') &&
-            questionIds.has(qid) &&
-            !resealSet.has(qid)
-          ) {
-            mergedScopes[qid] = scope
-          }
-        }
-      }
-      const scopesJson = Object.keys(mergedScopes).length > 0 ? JSON.stringify(mergedScopes) : null
+      // RFC-162: step (2) per-question scope merge DELETED (scope removed). The round's
+      // `question_scopes_json` column is no longer written (stays whatever it was, unread).
 
       // (5) Flip the round → answered ONLY when EVERY question is now sealed. RFC-136:
       // `flipNow` gates every flip side effect (status/answeredAt/directive persist, legacy
@@ -332,7 +301,6 @@ export async function sealRoundQuestions(
       tx.update(clarifyRounds)
         .set({
           answersJson: mergedJson,
-          questionScopesJson: scopesJson,
           ...directiveSet,
           ...(flipNow
             ? {
@@ -352,7 +320,6 @@ export async function sealRoundQuestions(
       // assert. Directive is gated on fullySealed for the stop-detection reason above.
       const legacySet = {
         answersJson: mergedJson,
-        questionScopesJson: scopesJson,
         ...(flipNow ? { status: 'answered' as const, answeredAt: ts, ...directiveSet } : {}),
       }
       if (round.kind === 'self') {
@@ -386,27 +353,17 @@ export async function sealRoundQuestions(
           .run()
       }
 
-      // (3) Reconcile against the EFFECTIVE round (status + directive reflect the writes
-      // above). RFC-128 P3: the reconcile designer gate is per-question — pass THIS call's
-      // sealing subset as `additionalSealedQuestionIds` because the `sealed_at` stamp (4) runs
-      // AFTER this reconcile in the same tx, so a just-sealed designer-scope question's entry
-      // must be created HERE (before it can be stamped). A partial seal of a designer-scope
-      // question now emits its designer entry (P3 放开 P2-4a); a full seal marks every question
-      // sealed (golden lock). A 'stop' round still emits no designer entries. Done on the SAME
-      // tx (dbTxSync can't nest).
-      reconcileRoundEntriesTx(
-        tx,
-        {
-          ...round,
-          status: fullySealed ? 'answered' : round.status,
-          directive: effectiveDirective,
-          answersJson: mergedJson,
-          questionScopesJson: scopesJson,
-          // RFC-136: keep the committed answeredAt on a re-answer (flipNow only).
-          answeredAt: flipNow ? ts : round.answeredAt,
-        },
-        { additionalSealedQuestionIds: sealingSet },
-      )
+      // (3) Reconcile against the EFFECTIVE round (status reflects the writes above). RFC-162:
+      // reconcile emits only the ONE asker (self/questioner) entry per question — no designer
+      // gate, no seal/scope/directive inputs. The questioner/self rows are unconditional; their
+      // `sealed_at` is stamped in step (4) below. Done on the SAME tx (dbTxSync can't nest).
+      reconcileRoundEntriesTx(tx, {
+        ...round,
+        status: fullySealed ? 'answered' : round.status,
+        answersJson: mergedJson,
+        // RFC-136: keep the committed answeredAt on a re-answer (flipNow only).
+        answeredAt: flipNow ? ts : round.answeredAt,
+      })
 
       // (4) Stamp sealed_at on the (question × role) entries sealed by THIS call that are
       // not yet stamped. Idempotent via IS NULL. (Designer entries created above for a
@@ -422,11 +379,9 @@ export async function sealRoundQuestions(
         )
         .run()
 
-      // (4a) RFC-136 — RE-seal stamp: a re-answered question's non-echo entries get their
+      // (4a) RFC-136 — RE-seal stamp: a re-answered question's entries get their
       // sealed_at/sealed_by moved to THIS call (unconditional — they are already stamped, the
-      // IS-NULL write above skips them). echo entries stay untouched (born-dispatched receipt
-      // cards read the injection face; their D11 seal stamp is answered-round audit evidence,
-      // not this edit's).
+      // IS-NULL write above skips them). (RFC-162: the echo exemption is gone — echo deleted.)
       if (resealSet.size > 0) {
         tx.update(taskQuestions)
           .set({ sealedAt: ts, sealedBy: args.sealedBy ?? null, updatedAt: ts })
@@ -434,7 +389,6 @@ export async function sealRoundQuestions(
             and(
               eq(taskQuestions.originNodeRunId, args.originNodeRunId),
               inArray(taskQuestions.questionId, [...resealSet]),
-              ne(taskQuestions.roleKind, 'echo'),
             ),
           )
           .run()

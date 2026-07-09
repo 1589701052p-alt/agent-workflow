@@ -32,11 +32,35 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, tasks, workflows } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The "let the designer revise" is now a human reassign of the answered round's
+// questioner card to the graph designer node (ADDS a roleKind='designer' row); dispatching that
+// designer entry mints the designer rerun. The RFC-074 no-eager-cascade contract this file locks
+// is unchanged — the dispatch still mints ONLY the frontier designer rerun, never downstream rows.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -192,13 +216,14 @@ describe('RFC-074 — designer rerun no longer eagerly cascades downstream', () 
       questions: [makeQ('q1')],
     })
 
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       actor,
     })
-    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const disp = await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     // Designer's new pending row carries clarifyIteration=1.
     const designerRows = await db

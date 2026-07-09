@@ -39,9 +39,8 @@ export interface TaskQuestionEntry {
    *  for a manual question (RFC-120 §15): it has no clarify round / answer page. */
   originNodeRunId: string | null
   sourceKind: 'self' | 'cross' | 'manual'
-  /** RFC-134: + 'echo' — 改派回执（只读知会卡：目标=提问节点、生来已下发；无改派/stage，
-   *  confirm 任意相位可关，D3）。 */
-  roleKind: 'self' | 'questioner' | 'designer' | 'echo'
+  /** RFC-162: 'echo' 已删。default self/questioner；designer = 人工增派的修订 handler。 */
+  roleKind: 'self' | 'questioner' | 'designer'
   /** The node that ASKED the question. NULL for a manual question (board shows "手动"). */
   sourceNodeId: string | null
   defaultTargetNodeId: string | null
@@ -136,26 +135,16 @@ export function TaskQuestionList({
       api.post(`/api/tasks/${taskId}/questions/${v.id}/stage`, { staged: v.staged }),
     onSuccess: invalidate,
   })
-  // RFC-138 + RFC-140: collapse（改派给提问节点 ⇒ 退化为反问者 scope、designer 卡消失；
-  // 改派给设计节点 ⇒ 退化为设计者 scope、questioner 卡消失 + echo 回执补给提问节点）
-  // 留一行方向化知会文案——卡片凭空消失会被误读成丢数据。常规 override 改派则清掉。
-  const [collapseNotice, setCollapseNotice] = useState<'questioner' | 'designer' | null>(null)
+  // RFC-162: reassign 改派语义归一——不再移动提问者条目，而是「增派/移除一条 designer 处理
+  // 节点」（改派给上游/下游 ⇒ 该问题多一张 designer 卡；改派回提问节点 ⇒ 移除 designer 卡回到
+  // 单卡）。collapse/scope/echo 全删，看板只需 invalidate 后重渲染。
   const reassignM = useMutation({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
       api.post<{
         ok: boolean
-        action?: 'override' | 'collapsed-to-questioner' | 'collapsed-to-designer'
+        action?: 'added-designer' | 'removed-designer' | 'moved-manual'
       }>(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
-    onSuccess: (data) => {
-      setCollapseNotice(
-        data?.action === 'collapsed-to-questioner'
-          ? 'questioner'
-          : data?.action === 'collapsed-to-designer'
-            ? 'designer'
-            : null,
-      )
-      invalidate()
-    },
+    onSuccess: () => invalidate(),
   })
   // 用户 2026-07-02 拍板（推翻 RFC-133 §4 逐卡勾选、恢复 RFC-128 §11.1 语义）：
   // 「进待下发=已确定，批量下发=全下」——一键下发当前视图（尊重节点 filter）的**全部**
@@ -259,15 +248,6 @@ export function TaskQuestionList({
           <div className="task-questions__filter" />
           <div className="task-questions__actions">{addBtn}</div>
         </div>
-        {collapseNotice !== null && (
-          <p className="muted" data-testid="tq-collapse-notice">
-            {t(
-              collapseNotice === 'questioner'
-                ? 'taskQuestions.collapsedToQuestioner'
-                : 'taskQuestions.collapsedToDesigner',
-            )}
-          </p>
-        )}
         <EmptyState title={t('taskQuestions.empty')} />
         {authorForm}
       </div>
@@ -374,15 +354,6 @@ export function TaskQuestionList({
         </div>
       </div>
       {dispatchError !== null && <ErrorBanner error={dispatchError} />}
-      {collapseNotice !== null && (
-        <p className="muted" data-testid="tq-collapse-notice">
-          {t(
-            collapseNotice === 'questioner'
-              ? 'taskQuestions.collapsedToQuestioner'
-              : 'taskQuestions.collapsedToDesigner',
-          )}
-        </p>
-      )}
       <div className="task-questions" data-testid="task-questions-board">
         {PHASE_ORDER.map((phase) => {
           const col = shown.filter((e) => e.phase === phase)
@@ -395,17 +366,11 @@ export function TaskQuestionList({
                 <span className="task-questions__count">{col.length}</span>
               </div>
               {col.map((e) => {
-                // RFC-127 T4: 改派下拉对**任意角色**（self/questioner/designer）开放——
-                // self/questioner 走借壳顶替，不再 deadlock。仍仅在「未下发态」(待指派
-                // pending / 待下发 staged)：已下发的 processing/awaiting_confirm/done 后端
-                // reassignTaskQuestion 以 `dispatched_at IS NULL` + 非终态拒改派（下发后换
-                // handler 是 reopen 的职责），前端把入口收敛到未下发态与之对齐。
-                // RFC-134：echo 生来已下发 → 相位永不落 pending/staged，reassignable/hasStage
-                // 对它天然为 false（与后端 CAS/D10 守卫对齐，无需角色特判）。
+                // RFC-162: 改派下拉在「未下发态」(待指派 pending / 待下发 staged) 开放——它编辑
+                // 该问题的 designer 处理组（增派上游/下游 or 移除回单卡）；已下发的
+                // processing/awaiting_confirm/done 由后端以 `dispatched_at IS NULL` 拒改派。
                 const reassignable = e.phase === 'pending' || e.phase === 'staged'
-                // RFC-134 D3：回执任意相位可 confirm（「已知悉」收卡；confirm 不撤销投递）。
-                const hasConfirm =
-                  e.phase === 'awaiting_confirm' || (e.roleKind === 'echo' && e.phase !== 'done')
+                const hasConfirm = e.phase === 'awaiting_confirm'
                 // RFC-128 §11 (D5, 用户 2026-07-01) — 「加入待下发」only makes sense once the
                 // answer is sealed: the server stage gate rejects staging an unsealed entry
                 // (ConflictError 'task-question-not-sealed', services/taskQuestions.ts
@@ -463,12 +428,6 @@ export function TaskQuestionList({
                         批量下发恒为全下，卡片不再有选择控件。 */}
                     <div className="card__title">
                       {e.questionTitle}
-                      {/* RFC-134 — 回执标签：与承接卡区分（知会提问节点，非承接义务）。 */}
-                      {e.roleKind === 'echo' && (
-                        <StatusChip kind="neutral" data-testid={`tq-echo-chip-${e.id}`}>
-                          {t('taskQuestions.roleEcho')}
-                        </StatusChip>
-                      )}
                       {/* RFC-140 W2 — auto-split defer 徽标：已点过批量下发、等 home 当前续跑
                           结束后由系统自动补发（无需人工回来重点）。 */}
                       {e.autoDispatchDeferred && (

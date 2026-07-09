@@ -30,7 +30,11 @@ import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { crossClarifySessions, nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
-import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
+import {
+  listTaskQuestions,
+  loadUndispatchedSelfQuestionerTargets,
+  reassignTaskQuestion,
+} from '../src/services/taskQuestions'
 import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import {
@@ -79,6 +83,29 @@ function makeAns(qid: string, idx = 0): ClarifyAnswer {
     selectedOptionLabels: [],
     customText: '',
   }
+}
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry from a per-question scope. "Let the designer revise" is now an explicit human
+// reassign of the answered round's questioner card to the graph designer node (ADDS a
+// roleKind='designer' handler row targeting it), then a dispatch of that designer entry — which
+// mints the designer rerun through the SAME multi-source readiness gate + frontier mint.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const helperActor = { userId: 'u1', role: 'owner' as const }
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', helperActor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], helperActor)
 }
 
 function defaultDef(): WorkflowDefinition {
@@ -484,15 +511,17 @@ describe('RFC-056 evaluateDesignerRerunReadiness — multi-source aggregation', 
       actor: { userId: 'u1', role: 'owner' },
     })
     // Now answer ux — only remaining sibling, sec is stopped (resolved without
-    // feeding). Readiness passes and the designer rerun mints carrying ONLY
-    // ux's designer entry (the legacy sources=[ux only] / sourceCount=1).
-    const ret = await autoDispatchClarifyRound({
+    // feeding). RFC-162: reassign ux's answered round to the designer + dispatch it. Readiness
+    // passes (sec answered-stop = resolved, not pending) and the designer rerun mints carrying
+    // ONLY ux's designer entry (the legacy sources=[ux only] / sourceCount=1).
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: ux.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       actor: { userId: 'u1', role: 'owner' },
     })
-    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    const disp = await reassignThenDispatchDesigner(db, taskId, ux.crossClarifyNodeRunId)
+    const designerRerun = disp.reruns.find((r) => r.targetNodeId === 'designer')
     expect(designerRerun).toBeDefined()
     expect(designerRerun!.entryIds).toHaveLength(1)
   })
@@ -685,12 +714,12 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       loopIter: 0,
       questions: [makeQ('q1', 't'), makeQ('q2', 't')],
     })
-    // All-questioner-scope → the questioner continuation mints; its entries are consumed.
+    // RFC-162: cross rounds unify with self — the questioner continuation is the default (scope
+    // deleted); its entries are materialized, sealed and consumed by the unified dispatch.
     await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1'), makeAns('q2')],
-      scopes: { q1: 'questioner', q2: 'questioner' },
       actor,
     })
     // The round's questioner entries were materialized, sealed and DISPATCHED (consumed).
@@ -742,14 +771,12 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
         db,
         originNodeRunId: crossClarifyNodeRunId,
         answers: [makeAns('q1')],
-        scopes: { q1: 'questioner' },
         actor,
       }),
       autoDispatchClarifyRound({
         db,
         originNodeRunId: crossClarifyNodeRunId,
         answers: [makeAns('q1')],
-        scopes: { q1: 'questioner' },
         actor,
       }),
     ])
@@ -761,53 +788,11 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
     expect(reruns.length).toBe(1)
   })
 
-  // §5.2.14 final-gate (2nd round) finding 1 (regression ①): a DESIGNER-scope continuation
-  // MATERIALIZES the round's designer task_questions in the seal tx together with the
-  // answered flip — after the answer returns, the answered session AND the designer row are
-  // BOTH committed. RFC-132 (§6 designer 切自动下发): with a single ready source the designer
-  // entry is then AUTO-dispatched in the same call (the legacy 'designer-deferred' park is
-  // reserved for a not-ready multi-source sibling set).
-  test('finding 1 — designer-scope continuation materializes the designer entry with the flip and auto-dispatches it', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId } = await seedTask(db, { deferred: true })
-    const qRunId = await seedQuestionerRun(db, taskId)
-    await seedDesignerRun(db, taskId) // the designer rerun's prior run to inherit
-    const { crossClarifyNodeRunId } = await createCrossClarifySession({
-      db,
-      taskId,
-      crossClarifyNodeId: 'cross1',
-      sourceQuestionerNodeId: 'questioner',
-      sourceQuestionerNodeRunId: qRunId,
-      targetDesignerNodeId: 'designer',
-      loopIter: 0,
-      questions: [makeQ('q1', 't')],
-    })
-    const res = await autoDispatchClarifyRound({
-      db,
-      originNodeRunId: crossClarifyNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'designer' },
-      actor,
-    })
-    // the session is answered AND the designer task_question row exists — both committed
-    // by the seal tx; the single-source designer batch then dispatched (rerun minted).
-    const sess = (
-      await db
-        .select()
-        .from(crossClarifySessions)
-        .where(eq(crossClarifySessions.crossClarifyNodeRunId, crossClarifyNodeRunId))
-    )[0]
-    expect(sess?.status).toBe('answered')
-    const designerRows = (
-      await db
-        .select()
-        .from(taskQuestions)
-        .where(eq(taskQuestions.originNodeRunId, crossClarifyNodeRunId))
-    ).filter((e) => e.roleKind === 'designer' && e.questionId === 'q1')
-    expect(designerRows.length).toBe(1)
-    expect(designerRows[0]!.dispatchedAt).not.toBeNull()
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
-  })
+  // RFC-162: retired — "designer-scope continuation materializes the designer entry" tested
+  // designer-by-default auto-creation from a per-question scope, which is DELETED. A designer
+  // handler row is now created only by an explicit human reassign; the reassign→dispatch→rerun
+  // path (single ready source auto-dispatches) is covered by
+  // cross-clarify-designer-retry-index.test.ts + cross-clarify-dual-write-consistency.test.ts.
 
   // 2nd-gate finding 2 (reciprocal in-flight check): a concurrent dispatch of another entry
   // to the same questioner home already committed a pending cross-clarify-questioner-rerun
@@ -865,7 +850,6 @@ describe('RFC-128 P5-BC §5.2.14 questioner mixed-path write-flow', () => {
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAns('q1')],
-      scopes: { q1: 'questioner' },
       actor,
     })
     // The answer is saved + parked; the mint was DEFERRED by the in-flight gate.

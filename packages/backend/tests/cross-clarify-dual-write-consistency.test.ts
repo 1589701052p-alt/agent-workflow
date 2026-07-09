@@ -5,8 +5,10 @@
 //   Like self-clarify, the cross-clarify write path dual-writes the legacy
 //   `cross_clarify_sessions` row AND a `clarify_rounds` (kind='cross') mirror
 //   keyed on the SAME id — at create (createCrossClarifySession) and at answer
-//   time (RFC-132: sealRoundQuestions mirrors answers/scopes/directive/status/
-//   answeredAt onto the legacy table on full seal). The deferred T17 migration
+//   time (RFC-132: sealRoundQuestions mirrors answers/directive/status/
+//   answeredAt onto the legacy table on full seal; RFC-162 deleted per-question
+//   scope, so `question_scopes_json` now stays NULL in lockstep on BOTH stores).
+//   The deferred T17 migration
 //   that drops the legacy table never shipped, so the two stores must stay in
 //   lockstep across both mutation sites.
 //
@@ -39,11 +41,35 @@ import {
 } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. To exercise the designer continuation (the "continue → designer dispatched"
+// half of the dual-write oracle) we reassign the answered round's questioner card to the graph
+// designer node + dispatch that designer entry. The session ↔ clarify_rounds mirror is unaffected
+// by the reassign (it only writes task_questions + mints a designer node_run).
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -250,16 +276,17 @@ describe('cross-clarify dual-write consistency (cross_clarify_sessions ↔ clari
       questions: [makeQ('q1')],
     })
 
-    const res = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('q1')],
       actor,
     })
-    // Confirm we exercised the designer continuation. RFC-132: the unified path does
-    // NOT stamp designer_run_triggered_at (legacy bookkeeping) — the consumed marker
-    // is dispatched_at on the round's designer entries.
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    // Confirm we exercised the designer continuation (RFC-162: via reassign+dispatch). The
+    // unified path does NOT stamp designer_run_triggered_at (legacy bookkeeping) — the consumed
+    // marker is dispatched_at on the round's designer entries.
+    const disp = await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
     const designerEntries = (
       await db
         .select()

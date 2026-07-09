@@ -174,17 +174,18 @@ describe('RFC-120 T3 listTaskQuestions', () => {
     expect(list[0]!.answerSummary).toBe('A')
   })
 
-  test('cross answered designer-scoped → questioner + designer entries', async () => {
+  // RFC-162: a cross answered round is a SINGLE questioner card by default — NO designer entry
+  // (scope / designer-by-default deleted). "Let the upstream revise" is a reassign (see below).
+  test('RFC-162: cross answered → questioner single card, NO designer entry', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const taskId = await seedTask(db)
     await seedRound(db, taskId, {
       id: 'x1',
       kind: 'cross',
       askingNodeId: 'auditor', // questioner
-      targetConsumerNodeId: 'coder', // designer
+      targetConsumerNodeId: 'coder', // graph designer (NOT auto-added anymore)
       intermediaryNodeRunId: 'x1-int',
       questionsJson: JSON.stringify([Q('q1')]),
-      questionScopesJson: JSON.stringify({ q1: 'designer' }),
       status: 'answered',
       answersJson: JSON.stringify([
         {
@@ -197,31 +198,10 @@ describe('RFC-120 T3 listTaskQuestions', () => {
     })
 
     const list = await listTaskQuestions(db, taskId)
-    const roles = list.map((e) => e.roleKind).sort()
-    expect(roles).toEqual(['designer', 'questioner'])
-    const designer = list.find((e) => e.roleKind === 'designer')!
-    expect(designer.defaultTargetNodeId).toBe('coder')
-    expect(designer.effectiveTargetNodeId).toBe('coder')
-    const questioner = list.find((e) => e.roleKind === 'questioner')!
+    expect(list.map((e) => e.roleKind)).toEqual(['questioner'])
+    const questioner = list[0]!
     expect(questioner.defaultTargetNodeId).toBe('auditor')
     expect(questioner.answerSummary).toBe('fix it')
-  })
-
-  test('cross answered questioner-scoped → questioner only', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const taskId = await seedTask(db)
-    await seedRound(db, taskId, {
-      id: 'x2',
-      kind: 'cross',
-      askingNodeId: 'auditor',
-      targetConsumerNodeId: 'coder',
-      intermediaryNodeRunId: 'x2-int',
-      questionsJson: JSON.stringify([Q('q1')]),
-      questionScopesJson: JSON.stringify({ q1: 'questioner' }),
-      status: 'answered',
-    })
-    const list = await listTaskQuestions(db, taskId)
-    expect(list.map((e) => e.roleKind)).toEqual(['questioner'])
   })
 
   test('cross UNanswered → questioner only, pending (no designer entry)', async () => {
@@ -343,54 +323,94 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     await expect(confirmTaskQuestion(db, entry!.id, ACTOR)).rejects.toThrow()
   })
 
-  test('reassign: designer entry → agent node overrides effective target', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
+  /** Seed an answered cross round (single questioner card) and return its taskId. */
+  async function seedAnsweredCross(db: DbClient, id = 'x1') {
     const taskId = await seedTask(db)
     await seedRound(db, taskId, {
-      id: 'x1',
+      id,
       kind: 'cross',
-      askingNodeId: 'auditor',
-      targetConsumerNodeId: 'coder',
-      intermediaryNodeRunId: 'x1-int',
+      askingNodeId: 'auditor', // questioner
+      targetConsumerNodeId: 'coder', // graph designer (not auto-added)
+      intermediaryNodeRunId: `${id}-int`,
       questionsJson: JSON.stringify([Q('q1')]),
-      questionScopesJson: JSON.stringify({ q1: 'designer' }),
       status: 'answered',
+      answersJson: JSON.stringify([
+        { questionId: 'q1', selectedOptionIndices: [], selectedOptionLabels: [], customText: 'x' },
+      ]),
     })
-    const designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
+    return taskId
+  }
+
+  // RFC-162 AC-2 — reassign a cross question to an UPSTREAM node ADDS a designer handler row
+  // targeting it, and KEEPS the asker's questioner entry (no strand → no echo needed).
+  test('RFC-162: reassign-to-upstream adds a designer handler and keeps the asker', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const before = await listTaskQuestions(db, taskId)
+    expect(before.map((e) => e.roleKind)).toEqual(['questioner'])
+    const questioner = before[0]!
+
+    const action = await reassignTaskQuestion(db, questioner.id, 'coder', ACTOR)
+    expect(action).toBe('added-designer')
+
+    const after = await listTaskQuestions(db, taskId)
+    // The asker (questioner) entry is UNTOUCHED — the asker always reruns + gets the Q&A.
+    const askerAfter = after.find((e) => e.roleKind === 'questioner')!
+    expect(askerAfter.id).toBe(questioner.id)
+    expect(askerAfter.effectiveTargetNodeId).toBe('auditor')
+    // A designer handler now targets the upstream node.
+    const designer = after.find((e) => e.roleKind === 'designer')!
+    expect(designer.defaultTargetNodeId).toBe('coder')
     expect(designer.effectiveTargetNodeId).toBe('coder')
-    await reassignTaskQuestion(db, designer.id, 'fixer', ACTOR)
-    const after = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
-    expect(after.overrideTargetNodeId).toBe('fixer')
-    expect(after.effectiveTargetNodeId).toBe('fixer')
+    expect(after.map((e) => e.roleKind).sort()).toEqual(['designer', 'questioner'])
   })
 
-  // RFC-127 T4: questioner (and self) entries are NOW re-targetable — borrow-the-shell lets
-  // the questioner node continue under agent X. Only a NON-agent target is still rejected.
-  // (Reverses the RFC-120 "questioner not re-targetable / 阻塞-产出型" assertion that lived here.)
-  test('reassign: ANY role to an agent node succeeds; non-agent target still rejected', async () => {
+  // RFC-162 — reassign creates NO echo row (echo deleted; the asker keeps its own entry).
+  test('RFC-162: reassign never materializes an echo row', async () => {
     const db = createInMemoryDb(MIGRATIONS)
-    const taskId = await seedTask(db)
-    await seedRound(db, taskId, {
-      id: 'x2',
-      kind: 'cross',
-      askingNodeId: 'auditor',
-      targetConsumerNodeId: 'coder',
-      intermediaryNodeRunId: 'x2-int',
-      questionsJson: JSON.stringify([Q('q1')]),
-      questionScopesJson: JSON.stringify({ q1: 'designer' }),
-      status: 'answered',
-    })
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    const rows = await db.select().from(taskQuestions)
+    expect(rows.some((r) => (r.roleKind as string) === 'echo')).toBe(false)
+  })
+
+  // RFC-162 — re-targeting the added designer to another agent updates its handler node in place.
+  test('RFC-162: re-targeting an added designer moves the designer handler', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    const designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
+    await reassignTaskQuestion(db, designer.id, 'fixer', ACTOR)
     const list = await listTaskQuestions(db, taskId)
-    const questioner = list.find((e) => e.roleKind === 'questioner')!
-    const designer = list.find((e) => e.roleKind === 'designer')!
-    // questioner → agent node 'fixer' now SUCCEEDS (借壳顶替).
-    await reassignTaskQuestion(db, questioner.id, 'fixer', ACTOR)
-    const afterQ = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'questioner')!
-    expect(afterQ.overrideTargetNodeId).toBe('fixer')
-    expect(afterQ.effectiveTargetNodeId).toBe('fixer')
-    // 'c1' is a clarify node, not an agent node → still rejected for any role.
-    await expect(reassignTaskQuestion(db, designer.id, 'c1', ACTOR)).rejects.toThrow()
-    await expect(reassignTaskQuestion(db, questioner.id, 'c1', ACTOR)).rejects.toThrow()
+    // Still exactly one designer, now on 'fixer'; the asker is still present (single group).
+    expect(list.filter((e) => e.roleKind === 'designer')).toHaveLength(1)
+    const after = list.find((e) => e.roleKind === 'designer')!
+    expect(after.effectiveTargetNodeId).toBe('fixer')
+    expect(list.some((e) => e.roleKind === 'questioner')).toBe(true)
+  })
+
+  // RFC-162 — reassigning back to the ASKING node removes the designer (back to single card).
+  test('RFC-162: reassign to the asking node removes the designer (single card)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    expect((await listTaskQuestions(db, taskId)).some((e) => e.roleKind === 'designer')).toBe(true)
+    // Target == the asking node (auditor) → remove the designer handler.
+    const action = await reassignTaskQuestion(db, questioner!.id, 'auditor', ACTOR)
+    expect(action).toBe('removed-designer')
+    const list = await listTaskQuestions(db, taskId)
+    expect(list.map((e) => e.roleKind)).toEqual(['questioner'])
+  })
+
+  // A non-agent target (a clarify node) is still rejected for any reassign.
+  test('reassign: non-agent target rejected', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await expect(reassignTaskQuestion(db, questioner!.id, 'c1', ACTOR)).rejects.toThrow()
   })
 
   test('stage / unstage toggles the 待下发 phase', async () => {
@@ -463,12 +483,13 @@ describe('RFC-120 Codex impl-gate regressions (F1/F2/F3)', () => {
       targetConsumerNodeId: 'coder',
       intermediaryNodeRunId: 'x1-int',
       questionsJson: JSON.stringify([Q('q1')]),
-      questionScopesJson: JSON.stringify({ q1: 'designer' }),
       status: 'answered',
     })
-    // RFC-132 步骤1 (T8 flag 停读): a designer entry's phase reads its OWN dispatched_at +
-    // trigger_run_id (§18 per-node queue), not the round consumed_by stamp. Dispatch + bind the
-    // designer entry to the done+output handler run 'h' so it reaches awaiting_confirm.
+    // RFC-162: a designer handler is created by a reassign (adds a designer row targeting the
+    // upstream node), not by scope. Add one, then dispatch + bind it to the done+output handler
+    // run 'h' so it reaches awaiting_confirm, confirm it (→ done), and lock the terminal reject.
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
     let designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
     await db
       .update(taskQuestions)
