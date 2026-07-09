@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
 import { StatusChip } from '@/components/StatusChip'
+import { useScheduledTaskWs } from '@/hooks/useScheduledTaskWs'
 import { scheduleSummary } from '@/lib/schedule-view'
 import { Route as RootRoute } from './__root'
 
@@ -22,6 +23,7 @@ function ScheduledPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const lang = i18n.language.startsWith('zh') ? 'zh' : 'en'
+  useScheduledTaskWs()
 
   const { data, isLoading, error } = useQuery<ScheduledTask[]>({
     queryKey: ['scheduled-tasks', 'list'],

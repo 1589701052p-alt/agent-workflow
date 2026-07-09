@@ -343,6 +343,16 @@ export const MemoryDistillJobWsMessageSchema = z.discriminatedUnion('type', [
 ])
 export type MemoryDistillJobWsMessage = z.infer<typeof MemoryDistillJobWsMessageSchema>
 
+// RFC-159 — scheduled-task list stream. `ownerUserId` rides on every frame so the
+// per-frame gate can filter to owner + tasks:read:all admins without a DB lookup.
+export const ScheduledTaskWsMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('scheduled.created'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.updated'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.deleted'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.fired'), id: z.string(), ownerUserId: z.string() }),
+])
+export type ScheduledTaskWsMessage = z.infer<typeof ScheduledTaskWsMessageSchema>
+
 // -----------------------------------------------------------------------------
 // Server → client control frames common to every channel.
 // -----------------------------------------------------------------------------
@@ -375,4 +385,6 @@ export const WS_PATHS = {
   memories: '/ws/memories',
   /** RFC-041 — distill queue monitor (admin-only upgrade gate). */
   memoryDistillJobs: '/ws/memory-distill-jobs',
+  /** RFC-159 — scheduled-task list stream (per-frame owner/admin filtered). */
+  scheduledTasks: '/ws/scheduled-tasks',
 } as const

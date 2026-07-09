@@ -14,9 +14,18 @@ import { parseWsChannel, WS_CHANNELS, type WsChannelKind } from '../src/ws/regis
 const parse = (path: string) => parseWsChannel(new URL(path, 'http://daemon.test'))
 
 describe('RFC-152 — WS_PATHS ↔ registry pathRe interlock', () => {
-  test('WS_PATHS key set is exactly the six channels (bijection lock)', () => {
+  test('WS_PATHS key set is exactly the seven channels (bijection lock)', () => {
     expect(Object.keys(WS_PATHS).sort()).toEqual(
-      ['task', 'tasksList', 'workflows', 'repoImport', 'memories', 'memoryDistillJobs'].sort(),
+      // RFC-159 added `scheduledTasks`.
+      [
+        'task',
+        'tasksList',
+        'workflows',
+        'repoImport',
+        'memories',
+        'memoryDistillJobs',
+        'scheduledTasks',
+      ].sort(),
     )
   })
 

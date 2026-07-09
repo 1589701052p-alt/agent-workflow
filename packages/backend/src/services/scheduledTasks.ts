@@ -26,6 +26,7 @@ import type { DbClient } from '@/db/client'
 import { scheduledTasks, users } from '@/db/schema'
 import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { SCHEDULED_TASK_CHANNEL, scheduledTaskBroadcaster } from '@/ws/broadcaster'
 
 /** Injected launch — `(body) => startTask(body, deps)`, closed over owner + scheduledTaskId. */
 export type ScheduleLaunch = (payload: StartTask) => Promise<{ id: string }>
@@ -111,6 +112,11 @@ export async function createScheduledTask(
   })
   const created = await getScheduledTask(db, id)
   if (created === null) throw new Error('scheduled task disappeared right after insert')
+  scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+    type: 'scheduled.created',
+    id: created.id,
+    ownerUserId: created.ownerUserId,
+  })
   return created
 }
 
@@ -157,6 +163,11 @@ export async function updateScheduledTask(
   await db.update(scheduledTasks).set(set).where(eq(scheduledTasks.id, id))
   const updated = await getScheduledTask(db, id)
   if (updated === null) throw new Error('scheduled task disappeared right after update')
+  scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+    type: 'scheduled.updated',
+    id: updated.id,
+    ownerUserId: updated.ownerUserId,
+  })
   return updated
 }
 
@@ -166,6 +177,11 @@ export async function deleteScheduledTask(db: DbClient, id: string): Promise<voi
     throw new NotFoundError('scheduled-task-not-found', `scheduled task '${id}' not found`)
   }
   await db.delete(scheduledTasks).where(eq(scheduledTasks.id, id))
+  scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+    type: 'scheduled.deleted',
+    id,
+    ownerUserId: existing.ownerUserId,
+  })
 }
 
 /** `${base} · <fire time>` — disambiguates the many tasks a recurring schedule spawns. ≤255. */

@@ -9,6 +9,7 @@ import { ConfirmButton } from '@/components/ConfirmButton'
 import { DetailLayout } from '@/components/DetailLayout'
 import { LoadingState } from '@/components/LoadingState'
 import { StatusChip } from '@/components/StatusChip'
+import { useScheduledTaskWs } from '@/hooks/useScheduledTaskWs'
 import { describeApiError } from '@/i18n'
 import { scheduleSummary } from '@/lib/schedule-view'
 import { Route as RootRoute } from './__root'
@@ -25,6 +26,7 @@ function ScheduledDetailPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const lang = i18n.language.startsWith('zh') ? 'zh' : 'en'
+  useScheduledTaskWs()
 
   const detailQ = useQuery<ScheduledTask, ApiError>({
     queryKey: ['scheduled-tasks', 'detail', id],

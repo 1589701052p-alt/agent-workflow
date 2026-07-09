@@ -15,6 +15,7 @@ import { scheduledTasks } from '@/db/schema'
 import { fireSchedule, type BuildScheduleLaunch } from '@/services/scheduledTasks'
 import { createLogger } from '@/util/log'
 import { Semaphore } from '@/util/semaphore'
+import { SCHEDULED_TASK_CHANNEL, scheduledTaskBroadcaster } from '@/ws/broadcaster'
 
 const log = createLogger('scheduled-tasks')
 
@@ -166,8 +167,19 @@ async function fireClaimed(
   try {
     const { taskId } = await fireSchedule(db, row, buildLaunch, Date.now())
     await recordSuccess(db, row.id, taskId, firedAt)
+    scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+      type: 'scheduled.fired',
+      id: row.id,
+      ownerUserId: row.ownerUserId,
+    })
   } catch (err) {
     await recordFailure(db, row.id, msgOf(err), firedAt, maxFailures, onAutoDisable)
+    // A failure changed last_status (and possibly auto-disabled) — refresh the UI.
+    scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {
+      type: 'scheduled.updated',
+      id: row.id,
+      ownerUserId: row.ownerUserId,
+    })
   }
 }
 

@@ -38,6 +38,7 @@ import type { ServerWebSocket } from 'bun'
 import { and, asc, eq, gt } from 'drizzle-orm'
 import type {
   MemoryDistillJobWsMessage,
+  ScheduledTaskWsMessage,
   MemoryWsMessage,
   RepoImportWsMessage,
   TaskWsMessage,
@@ -55,6 +56,8 @@ import { createLogger } from '@/util/log'
 import {
   MEMORY_CHANNEL,
   MEMORY_DISTILL_JOB_CHANNEL,
+  SCHEDULED_TASK_CHANNEL,
+  scheduledTaskBroadcaster,
   REPO_IMPORT_CHANNEL,
   TASK_CHANNEL,
   TASKS_LIST_CHANNEL,
@@ -82,6 +85,7 @@ export interface ChannelParamsByKind {
   'repo-import': { kind: 'repo-import'; batchId: string }
   memories: { kind: 'memories' }
   'memory-distill-jobs': { kind: 'memory-distill-jobs' }
+  'scheduled-tasks': { kind: 'scheduled-tasks' }
 }
 
 export interface ChannelMessageByKind {
@@ -91,6 +95,7 @@ export interface ChannelMessageByKind {
   'repo-import': RepoImportWsMessage
   memories: MemoryWsMessage
   'memory-distill-jobs': MemoryDistillJobWsMessage
+  'scheduled-tasks': ScheduledTaskWsMessage
 }
 
 export type WsChannelKind = keyof ChannelParamsByKind
@@ -434,6 +439,19 @@ export const WS_CHANNELS: WsChannelRegistry = {
       actor.user.role === 'admin'
         ? true
         : { code: 'admin-required', message: 'memory-distill-jobs channel is admin-only' },
+  },
+  'scheduled-tasks': {
+    kind: 'scheduled-tasks',
+    helloName: () => 'scheduled-tasks',
+    pathRe: /^\/ws\/scheduled-tasks$/,
+    parse: () => ({ kind: 'scheduled-tasks' }),
+    broadcaster: scheduledTaskBroadcaster,
+    channelKeyOf: () => SCHEDULED_TASK_CHANNEL,
+    // RFC-159 — per-frame owner filter. Every frame carries `ownerUserId`; the
+    // owner + `tasks:read:all` admins receive it, everyone else drops. No DB
+    // lookup (unlike tasks-list) since the owner rides on the message.
+    frameGate: async (ctx, msg) =>
+      ctx.actor.permissions.has('tasks:read:all') || msg.ownerUserId === ctx.actor.user.id,
   },
 }
 

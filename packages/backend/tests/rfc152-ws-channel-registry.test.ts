@@ -78,10 +78,11 @@ const ALL_KINDS: WsChannelKind[] = [
   'repo-import',
   'memories',
   'memory-distill-jobs',
+  'scheduled-tasks', // RFC-159
 ]
 
 describe('RFC-152 — WS_CHANNELS exhaustion lock', () => {
-  test('registry keys are exactly the six channels (and WS_CHANNEL_KINDS mirrors them)', () => {
+  test('registry keys are exactly the seven channels (and WS_CHANNEL_KINDS mirrors them)', () => {
     expect(Object.keys(WS_CHANNELS).sort()).toEqual([...ALL_KINDS].sort())
     expect([...WS_CHANNEL_KINDS].sort()).toEqual([...ALL_KINDS].sort())
     for (const kind of ALL_KINDS) {
