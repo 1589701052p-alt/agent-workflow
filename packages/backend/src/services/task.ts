@@ -40,6 +40,7 @@ import { basename, join } from 'node:path'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import {
+  clarifyRounds,
   docVersions,
   lifecycleAlerts,
   nodeRunEvents,
@@ -82,6 +83,7 @@ import { parseInjectedSnapshotJson } from './memoryInject'
 import { parsePortValidationFailuresJson } from './envelope'
 import { compareNodeRunsForTimeline, deriveReviewRoundTiming } from './reviewRoundStart'
 import { isHumanReviewConclusion, selectCurrentReviewRound } from '@agent-workflow/shared'
+import { clarifyNavKindForRoundStatus, type ClarifyRoundStatus } from '@agent-workflow/shared'
 
 const log = createLogger('task')
 
@@ -200,6 +202,12 @@ export interface StartTaskDeps {
    * token callers can leave it unset or pass '__system__' explicitly.
    */
   actorUserId?: string
+  /**
+   * RFC-159 — when the scheduled-task background loop fires a task it passes the
+   * originating `scheduled_tasks.id` here; `startTask` stamps it onto the task row
+   * (`tasks.scheduled_task_id`) atomically. Omitted for manual launches.
+   */
+  scheduledTaskId?: string
 }
 
 /**
@@ -891,6 +899,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     errorMessage: earlyError,
     // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
     ownerUserId: deps.actorUserId ?? null,
+    // RFC-159: the scheduled_tasks row that auto-launched this task (NULL =
+    // manual). Stamped atomically with the row so the schedule's run history is
+    // durable regardless of any later bookkeeping write.
+    scheduledTaskId: deps.scheduledTaskId ?? null,
   })
 
   // RFC-066: persist per-repo metadata. Single-repo tasks land one row at
@@ -2095,6 +2107,8 @@ export interface ListTasksFilters {
   status?: Task['status']
   workflowId?: string
   repoPath?: string
+  /** RFC-159: filter to tasks launched by a given `scheduled_tasks` id (run history). */
+  scheduledTaskId?: string
   limit?: number
   /**
    * RFC-036 visibility filter. When set, the SQL also requires either
@@ -2117,6 +2131,8 @@ export async function listTasks(
   if (filters.status !== undefined) conditions.push(eq(tasks.status, filters.status))
   if (filters.workflowId !== undefined) conditions.push(eq(tasks.workflowId, filters.workflowId))
   if (filters.repoPath !== undefined) conditions.push(eq(tasks.repoPath, filters.repoPath))
+  if (filters.scheduledTaskId !== undefined)
+    conditions.push(eq(tasks.scheduledTaskId, filters.scheduledTaskId))
   if (filters.visibility) {
     const { actorUserId, scope } = filters.visibility
     const ownerEq = eq(tasks.ownerUserId, actorUserId)
@@ -2230,6 +2246,39 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
     else list.push(dv)
   }
 
+  // RFC-161: task-detail canvas click target for clarify / cross-clarify node_runs.
+  // Load the task's clarify_rounds and keep, per intermediary node_run, the
+  // createdAt-max round's status — the SAME selection getClarifyRoundDetail renders
+  // with (orderBy(desc(createdAt)).limit(1)). RFC-161's only safety requirement is
+  // "clarifyNavKind != null ⟹ the run has a round ⟹ getClarifyRoundDetail won't 404";
+  // it does not depend on which round wins a same-createdAt tie (a same-createdAt
+  // duplicate only arises from concurrent idempotent replay of one un-answered emission,
+  // whose rounds are equivalent — a pre-existing clarify-subsystem property RFC-161 does
+  // not touch; see design §4.5). One extra query; no N+1.
+  const crRows = await db
+    .select({
+      intermediaryNodeRunId: clarifyRounds.intermediaryNodeRunId,
+      status: clarifyRounds.status,
+      createdAt: clarifyRounds.createdAt,
+    })
+    .from(clarifyRounds)
+    .where(eq(clarifyRounds.taskId, taskId))
+  const latestRoundByRun = new Map<string, { status: ClarifyRoundStatus; createdAt: number }>()
+  for (const cr of crRows) {
+    const prev = latestRoundByRun.get(cr.intermediaryNodeRunId)
+    if (prev === undefined || cr.createdAt > prev.createdAt) {
+      latestRoundByRun.set(cr.intermediaryNodeRunId, {
+        status: cr.status as ClarifyRoundStatus,
+        createdAt: cr.createdAt,
+      })
+    }
+  }
+  // Orphaned awaiting suppression: cancelTaskRow/failTask only flip the task row and
+  // leave the clarify round + node_run awaiting_human behind (scheduler.ts:541-543 /
+  // :5596-5611), so a canceled/failed task must not advertise its clarify as answerable.
+  // 'answered' is NOT gated — viewing history on any task is fine.
+  const clarifyTaskDead = task.status === 'canceled' || task.status === 'failed'
+
   const runs: NodeRun[] = runRows.map((r) => {
     const dvForRun = dvRowsByRun.get(r.id) ?? []
     const reviewTiming = deriveReviewRoundTiming(r, dvForRun)
@@ -2254,6 +2303,11 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
         reviewNavKind = 'decided'
       }
     }
+    // RFC-161: clarify / cross-clarify canvas nav. null for non-clarify runs (no
+    // round in the map) and canceled/abandoned rounds; 'awaiting' suppressed on a
+    // dead task (orphaned awaiting).
+    let clarifyNavKind = clarifyNavKindForRoundStatus(latestRoundByRun.get(r.id)?.status)
+    if (clarifyNavKind === 'awaiting' && clarifyTaskDead) clarifyNavKind = null
     return {
       id: r.id,
       taskId: r.taskId,
@@ -2302,6 +2356,8 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
       reviewDecidedAt: reviewTiming?.decidedAt ?? null,
       // RFC-158: task-detail canvas click target (see schemas/task.ts).
       reviewNavKind,
+      // RFC-161: clarify / cross-clarify canvas click target (see schemas/task.ts).
+      clarifyNavKind,
     }
   })
 
@@ -2619,6 +2675,8 @@ function rowToTask(
     // denormalized column on `tasks` (cheap for list queries); `repos[]` is
     // hydrated by the caller from `task_repos` ordered by `repo_index`.
     repoCount: row.repoCount,
+    // RFC-159: link back to the scheduled_tasks row that launched this (NULL = manual).
+    scheduledTaskId: row.scheduledTaskId ?? null,
     repos,
   }
 }
@@ -2638,6 +2696,8 @@ function rowToSummary(row: typeof tasks.$inferSelect, workflowName: string | nul
     // RFC-066: source-of-truth `tasks.repo_count`. Migration 0034 defaulted
     // every existing row to 1; multi-repo launches set it explicitly.
     repoCount: row.repoCount,
+    // RFC-159: link back to the scheduled_tasks row that launched this (NULL = manual).
+    scheduledTaskId: row.scheduledTaskId ?? null,
   }
 }
 

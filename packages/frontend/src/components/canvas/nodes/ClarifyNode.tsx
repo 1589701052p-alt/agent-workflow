@@ -54,6 +54,7 @@ export function ClarifyNode({ data, selected }: Props) {
         ` canvas-node--clarify-${status}`
       }
       data-status={status}
+      data-clarify-nav={data.clarifyNav}
     >
       <QuestionBadge data={data} />
       <Handle
@@ -70,6 +71,15 @@ export function ClarifyNode({ data, selected }: Props) {
       <div className="canvas-node__id">{data.nodeId}</div>
       {data.description !== undefined && data.description.length > 0 && (
         <div className="canvas-node__description muted">{data.description}</div>
+      )}
+      {/* RFC-161: task-detail canvas marks the click target; clicking routes to the
+          clarify page. Absent on the editor canvas + non-clickable clarify nodes. */}
+      {data.clarifyNav !== undefined && (
+        <div className="canvas-node__clarify-nav muted">
+          {data.clarifyNav === 'awaiting'
+            ? t('clarifyNode.navAwaiting')
+            : t('clarifyNode.navAnswered')}
+        </div>
       )}
       <Handle
         type="source"

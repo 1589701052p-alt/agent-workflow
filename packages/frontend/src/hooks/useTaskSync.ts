@@ -88,12 +88,28 @@ export function useTaskSync(taskId: string | null): void {
       ['tasks', taskId, 'node-runs'],
       ['task-clarify-directives', taskId],
     ],
-    // RFC-123: cross-clarify answer/reject likewise writes the questioner
-    // node's clarify directive on 'stop' — refresh the canvas toggles.
-    // (Cross events are otherwise not threaded through this hook; this is
-    // the directive facet the single-source toggle needs.)
-    'cross-clarify.answered': () => [['task-clarify-directives', taskId]],
-    'cross-clarify.rejected': () => [['task-clarify-directives', taskId]],
+    // RFC-161: cross-clarify events also invalidate node-runs so the task-detail
+    // canvas's clarify-node click target (clarifyNavKind, stamped in
+    // getTaskNodeRuns) stays fresh — cross-clarify parity with the self
+    // `clarify.created`/`clarify.answered` refresh above. Keeps the RFC-123
+    // directive invalidation (the single-source canvas toggle still needs it on
+    // 'stop'). All three carry the intermediary node_run id (ws.ts).
+    'cross-clarify.created': (msg) => [
+      ...clarifyKeys(msg.nodeRunId),
+      ['tasks', taskId, 'node-runs'],
+    ],
+    'cross-clarify.answered': (msg) => [
+      ...clarifyKeys(msg.nodeRunId),
+      ['tasks', taskId],
+      ['tasks', taskId, 'node-runs'],
+      ['task-clarify-directives', taskId],
+    ],
+    'cross-clarify.rejected': (msg) => [
+      ...clarifyKeys(msg.nodeRunId),
+      ['tasks', taskId],
+      ['tasks', taskId, 'node-runs'],
+      ['task-clarify-directives', taskId],
+    ],
   }
 
   useWsInvalidation<TaskWsMessage>(taskId === null ? null : WS_PATHS.task(taskId), rules)

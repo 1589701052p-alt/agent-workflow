@@ -273,6 +273,12 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
       void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
+      // RFC-161: a full seal here flips the clarify node_run awaiting_human → done, so
+      // the task-detail canvas's clarify-node click target (clarifyNavKind) changes.
+      // The defer control channel emits no answered WS event for THIS client, so
+      // invalidate node-runs locally (the backend also broadcasts node.status for other
+      // open clients — routes/clarify.ts).
+      void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
       for (const g of groups) {
         void qc.invalidateQueries({ queryKey: ['clarify', 'detail', g.originNodeRunId] })
       }

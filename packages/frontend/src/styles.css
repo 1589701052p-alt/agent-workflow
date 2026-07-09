@@ -4597,6 +4597,17 @@ details.form-section[open] > summary {
   margin-top: 4px;
   font-size: 11px;
 }
+/* RFC-161 — a clarify / cross-clarify node the task-detail canvas marked clickable
+ * (opens the clarify page). The `data-clarify-nav` attribute is only present on
+ * clickable clarify nodes; the pointer cursor + hint line advertise the click. */
+.canvas-node--clarify[data-clarify-nav],
+.canvas-node--clarify-cross-agent[data-clarify-nav] {
+  cursor: pointer;
+}
+.canvas-node__clarify-nav {
+  margin-top: 4px;
+  font-size: 11px;
+}
 
 /* Clarify (反问) node — mirrors the review palette so the two human-in-the-loop
  * kinds read as the same family on the canvas. Status-specific borders are

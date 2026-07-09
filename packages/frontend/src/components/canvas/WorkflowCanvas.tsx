@@ -182,6 +182,14 @@ export interface WorkflowCanvasProps {
    * node data the same way `nodeStatuses` / `questionCounts` do.
    */
   reviewNavs?: Record<string, 'awaiting' | 'decided'>
+  /**
+   * RFC-161: per clarify/cross-clarify-node click target ('awaiting' | 'answered'),
+   * keyed by workflow node id. When DEFINED (task-detail canvas) a clarify node with
+   * an entry renders a click-to-open hint + pointer cursor; nodes absent from the map
+   * are not clickable. Undefined (editor canvas) ⇒ no hints, byte-for-byte unchanged
+   * (golden-lock). Changing this map rebuilds node data like `reviewNavs` does.
+   */
+  clarifyNavs?: Record<string, 'awaiting' | 'answered'>
 }
 
 /**
@@ -219,6 +227,7 @@ function CanvasInner({
   clarifyDirectives,
   onNodeClarifyDirectiveToggle,
   reviewNavs,
+  clarifyNavs,
   handleRef,
 }: WorkflowCanvasProps & {
   handleRef?: React.ForwardedRef<WorkflowCanvasHandle>
@@ -329,6 +338,7 @@ function CanvasInner({
         clarifyDirectives,
         handleClarifyDirectiveToggle,
         reviewNavs,
+        clarifyNavs,
       ),
     ),
   )
@@ -347,6 +357,9 @@ function CanvasInner({
   // RFC-158: mirror of the same ref-guard so a reviewNavs-only change (node-runs
   // query resolves / a review advances, definition unchanged) repaints hints.
   const externalReviewNavsRef = useRef(reviewNavs)
+  // RFC-161: mirror of the same ref-guard so a clarifyNavs-only change (node-runs
+  // query resolves / a clarify advances, definition unchanged) repaints hints.
+  const externalClarifyNavsRef = useRef(clarifyNavs)
   // Track the last agentByName ref we rebuilt against. The canvas is often
   // mounted on the task-detail page before the `useQuery(['agents'])` call
   // resolves; on first render `agents` is `[]`, so agent-node `outputPorts`
@@ -387,13 +400,16 @@ function CanvasInner({
     const directivesChanged = clarifyDirectives !== externalClarifyDirectivesRef.current
     // RFC-158: reviewNavs map change repaints review-node hints (same shape).
     const reviewNavsChanged = reviewNavs !== externalReviewNavsRef.current
+    // RFC-161: clarifyNavs map change repaints clarify-node hints (same shape).
+    const clarifyNavsChanged = clarifyNavs !== externalClarifyNavsRef.current
     if (
       defChanged ||
       statusChanged ||
       agentsChanged ||
       questionsChanged ||
       directivesChanged ||
-      reviewNavsChanged
+      reviewNavsChanged ||
+      clarifyNavsChanged
     ) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
@@ -401,6 +417,7 @@ function CanvasInner({
       externalQuestionCountsRef.current = questionCounts
       externalClarifyDirectivesRef.current = clarifyDirectives
       externalReviewNavsRef.current = reviewNavs
+      externalClarifyNavsRef.current = clarifyNavs
       // Preserve `selected: true` across the rebuild. Without this, an
       // inspector edit (which mints a new `definition` reference) wipes
       // the selected flag, xyflow sees a phantom deselect and fires
@@ -421,6 +438,7 @@ function CanvasInner({
               clarifyDirectives,
               handleClarifyDirectiveToggle,
               reviewNavs,
+              clarifyNavs,
             ),
             measured,
           ),
@@ -449,6 +467,7 @@ function CanvasInner({
     clarifyDirectives,
     handleClarifyDirectiveToggle,
     reviewNavs,
+    clarifyNavs,
   ])
 
   const handleNodesChange = useCallback(
@@ -1595,6 +1614,9 @@ function toFlowNodes(
   // (editor canvas) no review node gets a `reviewNav` (golden-lock — data
   // byte-for-byte identical to before).
   reviewNavs?: Record<string, 'awaiting' | 'decided'>,
+  // RFC-161: per clarify/cross-clarify-node click target. When `clarifyNavs` is
+  // undefined (editor canvas) no clarify node gets a `clarifyNav` (golden-lock).
+  clarifyNavs?: Record<string, 'awaiting' | 'answered'>,
 ): Node[] {
   const loopBodyIds = new Set<string>()
   for (const n of definition.nodes) {
@@ -1644,6 +1666,14 @@ function toFlowNodes(
     if (reviewNavs !== undefined && n.kind === 'review') {
       const nav = reviewNavs[n.id]
       if (nav !== undefined) data.reviewNav = nav
+    }
+    // RFC-161: mark a clarify / cross-clarify node's click target so the node can
+    // render the "click to answer / view answers" hint + pointer cursor. Only the
+    // two clarify kinds present in `clarifyNavs` get it; absent ⇒ not clickable.
+    // Undefined map (editor canvas) ⇒ no clarify node ever gets it (golden-lock).
+    if (clarifyNavs !== undefined && (n.kind === 'clarify' || n.kind === 'clarify-cross-agent')) {
+      const nav = clarifyNavs[n.id]
+      if (nav !== undefined) data.clarifyNav = nav
     }
     if (loopBodyIds.has(n.id)) data.loopBody = true
     if (isWrapperKind(n.kind)) {
@@ -2079,6 +2109,8 @@ export const __testToFlowNodes = (
   // RFC-158: review-node click targets, so the reviewNav-threading is testable
   // the same way questionCounts / clarifyDirectives are.
   reviewNavs?: Record<string, 'awaiting' | 'decided'>,
+  // RFC-161: clarify-node click targets, so clarifyNav-threading is testable too.
+  clarifyNavs?: Record<string, 'awaiting' | 'answered'>,
 ): Node[] => {
   const def: WorkflowDefinition = {
     $schema_version: 1,
@@ -2097,6 +2129,7 @@ export const __testToFlowNodes = (
     clarifyDirectives,
     onClarifyDirectiveToggle,
     reviewNavs,
+    clarifyNavs,
   )
 }
 export const __testToFlowEdges = toFlowEdges

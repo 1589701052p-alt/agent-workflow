@@ -2042,6 +2042,8 @@ export const enUS: Resources = {
   },
   clarifyNode: {
     label: 'clarify',
+    navAwaiting: 'Click to answer',
+    navAnswered: 'Click to view answers',
   },
   crossClarifyNode: {
     label: 'cross-clarify',

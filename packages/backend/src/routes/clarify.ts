@@ -43,6 +43,7 @@ import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { Paths } from '@/util/paths'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import { createLogger } from '@/util/log'
+import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
 const log = createLogger('clarify-route')
 
@@ -268,6 +269,38 @@ export function mountClarifyRoutes(app: Hono, deps: AppDeps): void {
       })
       // NB: no resumeTask — the whole point of defer is to NOT advance execution; the
       // user dispatches later from the board (P3 designer 借壳 / P5 self·questioner rerun).
+      // RFC-161: the defer control channel emits no answered WS event (unlike the quick
+      // channel's emitAutoAnswered). On a FULL seal the intermediary clarify/cross-clarify
+      // node_run flips awaiting_human → done (clarifySeal.ts) — broadcast node.status so
+      // open task canvases refresh node-runs (the RFC-161 clarifyNavKind click target) +
+      // the board, via useTaskSync's existing node.status rule. Best-effort: a broadcast
+      // failure must not affect the seal outcome. Partial seals keep the round
+      // awaiting_human → no event (canvas nav stays 'awaiting').
+      if (sealResult.roundFullySealed) {
+        try {
+          const nrRow = (
+            await deps.db
+              .select({ taskId: nodeRuns.taskId, nodeId: nodeRuns.nodeId })
+              .from(nodeRuns)
+              .where(eq(nodeRuns.id, nodeRunId))
+              .limit(1)
+          )[0]
+          if (nrRow !== undefined) {
+            taskBroadcaster.broadcast(TASK_CHANNEL(nrRow.taskId), {
+              id: -1,
+              type: 'node.status',
+              nodeRunId,
+              nodeId: nrRow.nodeId,
+              status: 'done',
+            })
+          }
+        } catch (err) {
+          log.warn('clarify defer full-seal node.status broadcast threw', {
+            nodeRunId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
       return c.json({ ok: true, kind: 'seal' as const, ...sealResult })
     }
 

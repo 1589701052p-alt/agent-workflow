@@ -367,6 +367,33 @@ export const ClarifyRoundStatusSchema = z.enum([
 ])
 export type ClarifyRoundStatus = z.infer<typeof ClarifyRoundStatusSchema>
 
+/**
+ * RFC-161: the task-detail canvas click target kind for a clarify / cross-clarify
+ * node_run. `getTaskNodeRuns` stamps `NodeRunSchema.clarifyNavKind` from the run's
+ * latest clarify_round status via this pure mapping (read-time derived, no migration).
+ */
+export type ClarifyNodeNavKind = 'awaiting' | 'answered'
+
+/**
+ * RFC-161: project a clarify_round status onto the canvas click semantics.
+ *   - awaiting_human → 'awaiting' (open the interactive answer page)
+ *   - answered       → 'answered' (open the read-only echo of the submitted answers)
+ *   - canceled / abandoned / undefined (no round) → null (not clickable; a
+ *     canceled/abandoned round is a non-conclusion, and a run with no round would
+ *     404 — either way the canvas leaves the node un-clickable).
+ * The single source of truth for clarify nav classification; the backend gates the
+ * 'awaiting' result further on the task not being dead (canceled/failed) — see
+ * getTaskNodeRuns — because cancelTaskRow/failTask leave orphaned awaiting_human
+ * rounds behind.
+ */
+export function clarifyNavKindForRoundStatus(
+  status: ClarifyRoundStatus | undefined | null,
+): ClarifyNodeNavKind | null {
+  if (status === 'awaiting_human') return 'awaiting'
+  if (status === 'answered') return 'answered'
+  return null
+}
+
 /** RFC-058: a single clarify round (Q&A turn). Replaces both
  *  {@link ClarifySession} and {@link CrossClarifySession}. The `kind`
  *  discriminator decides which fields are populated:

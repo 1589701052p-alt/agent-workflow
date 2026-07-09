@@ -1945,6 +1945,10 @@ export interface Resources {
    *  when the renderer is invoked without an explicit `data.kindLabel`. */
   clarifyNode: {
     label: string
+    /** RFC-161: task-detail canvas click hints when the clarify node is clickable
+     *  (shared by clarify + cross-clarify renderers; both jump to /clarify). */
+    navAwaiting: string
+    navAnswered: string
   }
   crossClarifyNode: {
     label: string
@@ -4457,6 +4461,8 @@ export const zhCN: Resources = {
   },
   clarifyNode: {
     label: '反问',
+    navAwaiting: '点击回答反问',
+    navAnswered: '点击查看反问记录',
   },
   crossClarifyNode: {
     label: '跨代理反问',

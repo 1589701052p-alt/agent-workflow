@@ -46,6 +46,7 @@ import {
 } from '@/lib/noderun-status'
 import { agentNodeOptionsFromSnapshot, resolveNodeNameFromSnapshot } from '@/lib/node-names'
 import { deriveReviewNodeNav, type ReviewNodeNavKind } from '@/lib/review-node-nav'
+import { deriveClarifyNodeNav, type ClarifyNodeNavKind } from '@/lib/clarify-node-nav'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
 import {
   availableTabs,
@@ -779,6 +780,28 @@ function TaskStatusCanvas({
     return out
   }, [reviewNavByNode])
 
+  // RFC-161: clarify / cross-clarify nodes open the clarify page instead of the
+  // (near-empty) drawer — the sister of the review three-piece above.
+  const clarifyNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const n of definition?.nodes ?? [])
+      if (n.kind === 'clarify' || n.kind === 'clarify-cross-agent') ids.add(n.id)
+    return ids
+  }, [definition])
+  const clarifyNavByNode = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof deriveClarifyNodeNav>>()
+    for (const nodeId of clarifyNodeIds) {
+      const nav = deriveClarifyNodeNav(runs, nodeId)
+      if (nav !== null) m.set(nodeId, nav)
+    }
+    return m
+  }, [clarifyNodeIds, runs])
+  const clarifyNavs = useMemo(() => {
+    const out: Record<string, ClarifyNodeNavKind> = {}
+    for (const [nodeId, nav] of clarifyNavByNode) if (nav !== null) out[nodeId] = nav.kind
+    return out
+  }, [clarifyNavByNode])
+
   if (definition === null) {
     return <div className="muted">{t('tasks.noWorkflowSnapshot')}</div>
   }
@@ -797,6 +820,7 @@ function TaskStatusCanvas({
           setDirective.mutate({ nodeId, directive: next })
         }
         reviewNavs={reviewNavs}
+        clarifyNavs={clarifyNavs}
         onSelect={(sel) => {
           if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)
@@ -816,6 +840,21 @@ function TaskStatusCanvas({
                 to: '/reviews/$nodeRunId',
                 params: { nodeRunId: nav.nodeRunId },
                 search: {},
+              })
+            }
+            return
+          }
+          // RFC-161: clarify / cross-clarify nodes never open the drawer — they
+          // route to the clarify page (same wedge-guard as the review branch; the
+          // clarify route needs no search param — cf. the node-runs table jump link).
+          if (clarifyNodeIds.has(sel.id)) {
+            canvasRef?.current?.clearSelection()
+            onSelectNodeRun(null)
+            const nav = clarifyNavByNode.get(sel.id)
+            if (nav != null) {
+              void navigate({
+                to: '/clarify/$nodeRunId',
+                params: { nodeRunId: nav.nodeRunId },
               })
             }
             return

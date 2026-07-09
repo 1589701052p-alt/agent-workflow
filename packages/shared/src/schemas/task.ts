@@ -220,6 +220,14 @@ export const TaskSchema = z.object({
   repoCount: z.number().int().positive().default(1),
   /** RFC-066: per-repo detail, length == repoCount, sorted by repoIndex asc. */
   repos: z.array(TaskRepoSchema).default([]),
+  /**
+   * RFC-159: the `scheduled_tasks` id that auto-launched this task (null =
+   * manually launched). Lets the UI link a task back to its schedule; a
+   * schedule's run history is `GET /api/tasks?scheduledTaskId=`. Optional (like
+   * `openAlertCount`) so fixtures predating RFC-159 keep parsing; the backend
+   * mapper always populates it (null = manual).
+   */
+  scheduledTaskId: z.string().nullable().optional(),
 })
 export type Task = z.infer<typeof TaskSchema>
 
@@ -251,6 +259,8 @@ export const TaskSummarySchema = z.object({
    * undefined as 0.
    */
   openAlertCount: z.number().int().nonnegative().optional(),
+  /** RFC-159: `scheduled_tasks` id that launched this task (null = manual). */
+  scheduledTaskId: z.string().nullable().optional(),
 })
 export type TaskSummary = z.infer<typeof TaskSummarySchema>
 
@@ -719,6 +729,19 @@ export const NodeRunSchema = z.object({
    *                   so it strictly implies getReviewDetail can render.
    */
   reviewNavKind: z.enum(['awaiting', 'decided']).nullable().optional(),
+  /**
+   * RFC-161: for clarify / cross-clarify node_runs, the task-detail canvas click
+   * target — read-time derived in getTaskNodeRuns from the run's latest
+   * clarify_round status (NOT persisted, no migration; see
+   * clarifyNavKindForRoundStatus):
+   *   - 'awaiting'  — latest round is awaiting_human AND the task is not dead
+   *                   (canceled/failed) → open the interactive answer page.
+   *   - 'answered'  — latest round is answered → open the read-only echo.
+   *   - null/absent — no round (would 404), a canceled/abandoned round, an
+   *                   orphaned awaiting on a canceled/failed task, or a
+   *                   non-clarify run. The canvas leaves the node un-clickable.
+   */
+  clarifyNavKind: z.enum(['awaiting', 'answered']).nullable().optional(),
 })
 export type NodeRun = z.infer<typeof NodeRunSchema>
 

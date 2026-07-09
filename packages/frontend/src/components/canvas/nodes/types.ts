@@ -118,4 +118,13 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * clickable (golden-lock — editor canvas byte-for-byte unchanged).
    */
   reviewNav?: 'awaiting' | 'decided'
+  /**
+   * RFC-161: clarify-node click target — only set on `clarify` / `clarify-cross-agent`
+   * kind nodes on the task-detail canvas (from the backend-stamped `clarifyNavKind`).
+   * 'awaiting' → an open clarify round; 'answered' → the submitted answers to replay.
+   * Presence makes Clarify/CrossClarifyNode render a click hint + pointer cursor;
+   * absence (editor canvas, or a clarify with no clickable round) ⇒ no hint, not
+   * clickable (golden-lock — editor canvas byte-for-byte unchanged).
+   */
+  clarifyNav?: 'awaiting' | 'answered'
 }
