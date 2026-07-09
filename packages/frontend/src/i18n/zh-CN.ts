@@ -1016,6 +1016,10 @@ export interface Resources {
     delete: string
     deleteConfirm: string
     uploadUnsupported: string
+    editConfig: string
+    editConfigTitle: string
+    saveConfig: string
+    backToSchedule: string
   }
   tasks: {
     title: string
@@ -3597,6 +3601,10 @@ export const zhCN: Resources = {
     delete: '删除',
     deleteConfirm: '确认删除？',
     uploadUnsupported: '需要文件上传的工作流不支持定时。',
+    editConfig: '编辑任务配置',
+    editConfigTitle: '编辑任务配置：{{name}}',
+    saveConfig: '保存任务配置',
+    backToSchedule: '← 返回定时任务',
   },
   tasks: {
     title: '任务',

@@ -1085,6 +1085,10 @@ export const enUS: Resources = {
     delete: 'Delete',
     deleteConfirm: 'Delete?',
     uploadUnsupported: 'Workflows requiring a file upload cannot be scheduled.',
+    editConfig: 'Edit task config',
+    editConfigTitle: 'Edit task config: {{name}}',
+    saveConfig: 'Save task config',
+    backToSchedule: '← Back to schedule',
   },
   tasks: {
     title: 'Tasks',

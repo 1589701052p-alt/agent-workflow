@@ -199,6 +199,66 @@ export function defaultRepoSource(): RepoSource {
 }
 
 /**
+ * RFC-159 (edit-config) — inverse of `buildLaunchBody` / `buildLaunchBodyMultiRepo`:
+ * reconstruct the launcher's `RepoSource[]` from an already-built (or persisted)
+ * StartTask launch body so the schedule edit-config form can pre-fill the repo
+ * picker.
+ *
+ * The body is read defensively (opaque `Record<string, unknown>`) because it may
+ * arrive straight off the wire (a scheduled task's stored `launchPayload`). Rules,
+ * mirroring the forward builders:
+ *   - `repos: [...]`   → one source per entry (url wins the mutex; else path).
+ *   - legacy `repoUrl` → single url source (`ref` defaults to '').
+ *   - legacy `repoPath`→ single path source (`baseBranch` defaults to '').
+ *   - nothing usable   → a single default empty path row (same as a fresh form).
+ *
+ * `fetchBeforeLaunch` is a TOP-LEVEL flag in the forward body (set when ANY
+ * path-mode row opted in), so on the way back it is re-applied to every path row —
+ * url rows never carry it. This keeps a body → sources → body round-trip stable.
+ */
+export function bodyToRepoSources(body: Record<string, unknown>): RepoSource[] {
+  const fetchBeforeLaunch = body.fetchBeforeLaunch === true
+  const repos = body.repos
+  if (Array.isArray(repos) && repos.length > 0) {
+    return repos.map((r) =>
+      repoEntryToSource(
+        (typeof r === 'object' && r !== null ? r : {}) as Record<string, unknown>,
+        fetchBeforeLaunch,
+      ),
+    )
+  }
+  if (typeof body.repoUrl === 'string' && body.repoUrl.length > 0) {
+    return [
+      { kind: 'url', repoUrl: body.repoUrl, ref: typeof body.ref === 'string' ? body.ref : '' },
+    ]
+  }
+  if (typeof body.repoPath === 'string' && body.repoPath.length > 0) {
+    const src: RepoSource = {
+      kind: 'path',
+      repoPath: body.repoPath,
+      baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : '',
+    }
+    if (fetchBeforeLaunch) src.fetchBeforeLaunch = true
+    return [src]
+  }
+  return [defaultRepoSource()]
+}
+
+/** Map one `StartTask.repos[i]` entry back to a `RepoSource` (url wins the mutex). */
+function repoEntryToSource(r: Record<string, unknown>, fetchBeforeLaunch: boolean): RepoSource {
+  if (typeof r.repoUrl === 'string' && r.repoUrl.length > 0) {
+    return { kind: 'url', repoUrl: r.repoUrl, ref: typeof r.ref === 'string' ? r.ref : '' }
+  }
+  const src: RepoSource = {
+    kind: 'path',
+    repoPath: typeof r.repoPath === 'string' ? r.repoPath : '',
+    baseBranch: typeof r.baseBranch === 'string' ? r.baseBranch : '',
+  }
+  if (fetchBeforeLaunch) src.fetchBeforeLaunch = true
+  return src
+}
+
+/**
  * RFC-066 PR-C — derive the sub-worktree basename each row will land on,
  * applying `-2` / `-3` collision suffixes the same way the backend does
  * in `services/task.ts` `resolveMultiRepoDirName`. Lets the UI show a

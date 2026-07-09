@@ -4,9 +4,9 @@
 // (via /api/repos/refs) + auto-generated text inputs for each workflow.inputs
 // entry. Multi-file / git-object / enum pickers ship later.
 
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createRoute, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type {
@@ -14,6 +14,7 @@ import type {
   UserPublic,
   RecentRepo,
   RepoRefsResponse,
+  ScheduledTask,
   Task,
   Workflow,
   WorkflowInput,
@@ -21,6 +22,7 @@ import type {
 import { isLooseValidBranchName } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
 import { useActor } from '@/hooks/useActor'
+import { useUserLookup } from '@/hooks/useUserLookup'
 import { UserPicker } from '@/components/UserPicker'
 import { EnumPicker } from '@/components/launch/EnumPicker'
 import { FilesPicker } from '@/components/launch/FilesPicker'
@@ -30,6 +32,7 @@ import { buildLaunchFormData } from '@/components/launch/buildLaunchFormData'
 import { RepoSourceList, type MultiRepoBlockedReason } from '@/components/launch/RepoSourceList'
 import { Field, Switch, TextInput } from '@/components/Form'
 import {
+  bodyToRepoSources,
   buildLaunchBody,
   buildLaunchBodyMultiRepo,
   buildLaunchFormDataV2,
@@ -41,16 +44,35 @@ import {
 import { ScheduleDialog } from '@/components/ScheduleDialog'
 import { Route as RootRoute } from './__root'
 
+/**
+ * RFC-159 (edit-config) — optional search param. When `editScheduled` is the id
+ * of a scheduled task, the launch form loads that schedule's stored launchPayload,
+ * seeds every field from it, and PUTs the rebuilt payload back (edit mode) instead
+ * of POSTing a new task (create mode). Absent → the form is the plain launcher.
+ */
+interface LaunchSearch {
+  editScheduled?: string
+}
+
 export const LaunchRoute = createRoute({
   getParentRoute: () => RootRoute,
   path: '/workflows/$id/launch',
   component: LaunchPage,
+  validateSearch: (raw: Record<string, unknown>): LaunchSearch => {
+    const v = raw.editScheduled
+    return typeof v === 'string' && v.length > 0 ? { editScheduled: v } : {}
+  },
 })
 
 function LaunchPage() {
   const { t } = useTranslation()
   const { id } = LaunchRoute.useParams()
+  const { editScheduled } = LaunchRoute.useSearch()
+  // RFC-159 (edit-config): edit mode edits an existing scheduled task's config
+  // rather than launching a new task.
+  const isEdit = editScheduled !== undefined
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const workflow = useQuery<Workflow>({
     queryKey: ['workflows', id],
     queryFn: ({ signal }) => api.get(`/api/workflows/${encodeURIComponent(id)}`, undefined, signal),
@@ -59,6 +81,17 @@ function LaunchPage() {
     queryKey: ['repos', 'recent'],
     queryFn: ({ signal }) => api.get('/api/repos/recent', undefined, signal),
   })
+  // RFC-159 (edit-config): load the schedule being edited so we can seed the form
+  // from its stored launchPayload. Shares the detail page's queryKey.
+  const scheduleQ = useQuery<ScheduledTask>({
+    queryKey: ['scheduled-tasks', 'detail', editScheduled],
+    queryFn: ({ signal }) =>
+      api.get(`/api/scheduled-tasks/${encodeURIComponent(editScheduled ?? '')}`, undefined, signal),
+    enabled: isEdit,
+  })
+  // RFC-159 (edit-config): resolve the stored collaborator ids back to UserPublic
+  // rows so they seed the UserPicker as chips (deleted users just drop out).
+  const collabLookup = useUserLookup(scheduleQ.data?.launchPayload.collaboratorUserIds ?? [])
 
   // RFC-037: user-supplied display name for this task. Required for submit.
   const [taskName, setTaskName] = useState('')
@@ -86,6 +119,11 @@ function LaunchPage() {
   // RFC-020: parallel state for `kind: 'upload'` inputs; key → picked Files.
   const [uploads, setUploads] = useState<Record<string, File[]>>({})
 
+  // RFC-159 (edit-config): one-shot guards so async refetches don't clobber the
+  // user's in-progress edits after the initial seed.
+  const seededRef = useRef(false)
+  const collabSeededRef = useRef(false)
+
   // Seed inputs map when workflow loads.
   useEffect(() => {
     if (workflow.data === undefined) return
@@ -96,8 +134,10 @@ function LaunchPage() {
     setInputs(seeded)
     // Auto-pick the most recent repo as default for the FIRST row only —
     // multi-repo mode (length > 1) leaves any added blank rows alone so
-    // the user isn't surprised by recent-repo prefill.
+    // the user isn't surprised by recent-repo prefill. RFC-159: skipped in
+    // edit mode, where the repo rows are seeded from the schedule's payload.
     if (
+      editScheduled === undefined &&
       repos.length === 1 &&
       repos[0]!.kind === 'path' &&
       repos[0]!.repoPath === '' &&
@@ -114,6 +154,50 @@ function LaunchPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.data, recent.data])
+
+  // RFC-159 (edit-config): seed every non-collaborator field from the stored
+  // launchPayload, once, when BOTH the workflow (for the declared input keys) and
+  // the schedule have loaded — so the inputs merge is authoritative no matter which
+  // query resolves first. `seededRef` makes it fire exactly once.
+  useEffect(() => {
+    if (!isEdit) return
+    if (workflow.data === undefined || scheduleQ.data === undefined) return
+    if (seededRef.current) return
+    seededRef.current = true
+    const p = scheduleQ.data.launchPayload
+    setTaskName(p.name)
+    setRepos(bodyToRepoSources(p))
+    setWorkingBranch(p.workingBranch ?? '')
+    setAutoCommitPush(p.autoCommitPush === true)
+    setGitUserName(p.gitUserName ?? '')
+    setGitUserEmail(p.gitUserEmail ?? '')
+    // Merge the stored inputs over the workflow's declared keys: keys the workflow
+    // no longer declares drop out, newly-added keys start blank.
+    const merged: Record<string, string> = {}
+    for (const def of workflow.data.definition.inputs ?? []) {
+      merged[def.key] = p.inputs[def.key] ?? ''
+    }
+    setInputs(merged)
+  }, [isEdit, workflow.data, scheduleQ.data])
+
+  // RFC-159 (edit-config): collaborators need a second async hop (ids →
+  // UserPublic), so they seed separately once that lookup resolves.
+  useEffect(() => {
+    if (!isEdit) return
+    if (scheduleQ.data === undefined) return
+    if (collabSeededRef.current) return
+    const ids = scheduleQ.data.launchPayload.collaboratorUserIds ?? []
+    if (ids.length === 0) {
+      collabSeededRef.current = true
+      return
+    }
+    if (collabLookup.isLoading) return
+    setCollaborators(
+      ids.map((cid) => collabLookup.get(cid)).filter((u): u is UserPublic => u !== undefined),
+    )
+    collabSeededRef.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit, scheduleQ.data, collabLookup.isLoading])
 
   const refs = useQuery<RepoRefsResponse>({
     queryKey: ['repos', 'refs', primarySource.kind === 'path' ? primarySource.repoPath : ''],
@@ -224,11 +308,29 @@ function LaunchPage() {
     },
     onSuccess: (t) => navigate({ to: '/tasks/$id', params: { id: t.id } }),
   })
+  // RFC-159 (edit-config): PUT the rebuilt launchPayload back onto the schedule.
+  // Reuses buildScheduledLaunchBody (the same body helper the save-as-scheduled
+  // dialog uses) so the wire shape matches a freshly-created schedule's payload.
+  const saveConfig = useMutation({
+    mutationFn: () =>
+      api.put(`/api/scheduled-tasks/${encodeURIComponent(editScheduled ?? '')}`, {
+        launchPayload: buildScheduledLaunchBody(),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['scheduled-tasks'] })
+      void navigate({ to: '/scheduled/$id', params: { id: editScheduled ?? '' } })
+    },
+  })
 
   if (workflow.isLoading) return <div className="page muted">{t('editor.loadingWorkflow')}</div>
   if (workflow.error !== null && workflow.error !== undefined)
     return <div className="page error-box">{describeError(workflow.error)}</div>
   if (workflow.data === undefined) return null
+  // RFC-159 (edit-config): block the form until the schedule loads so fields don't
+  // flash empty then re-seed; surface a load error inline.
+  if (isEdit && scheduleQ.isLoading) return <div className="page muted">{t('common.loading')}</div>
+  if (isEdit && scheduleQ.error !== null && scheduleQ.error !== undefined)
+    return <div className="page error-box">{describeError(scheduleQ.error)}</div>
 
   const inputDefs = workflow.data.definition.inputs ?? []
   const missingRequired = inputDefs.some((def) => {
@@ -278,6 +380,9 @@ function LaunchPage() {
   const workingBranchTrim = workingBranch.trim()
   const workingBranchError = workingBranchTrim !== '' && !isLooseValidBranchName(workingBranchTrim)
   const workingBranchOk = !workingBranchError
+  // RFC-159 (edit-config): the primary button is Save (PUT) in edit mode, Start
+  // (POST) otherwise; gate on whichever mutation is in flight.
+  const submitPending = isEdit ? saveConfig.isPending : start.isPending
   const canSubmit =
     nameReady &&
     sourceReady &&
@@ -287,17 +392,32 @@ function LaunchPage() {
     workingBranchOk &&
     // RFC-066: multi-repo + wrapper-git / upload → Start disabled.
     multiRepoBlockedReason === null &&
-    !start.isPending
+    !submitPending
 
   return (
     <div className="page">
       <header className="page__header page__header--row">
         <div>
-          <h1>{t('launch.title', { name: workflow.data.name })}</h1>
+          <h1>
+            {isEdit
+              ? t('scheduled.editConfigTitle', { name: workflow.data.name })
+              : t('launch.title', { name: workflow.data.name })}
+          </h1>
         </div>
-        <Link to="/workflows/$id" params={{ id }} className="btn btn--sm">
-          {t('launch.backToEditor')}
-        </Link>
+        {isEdit ? (
+          <Link
+            to="/scheduled/$id"
+            params={{ id: editScheduled ?? '' }}
+            className="btn btn--sm"
+            data-testid="launch-back-to-schedule"
+          >
+            {t('scheduled.backToSchedule')}
+          </Link>
+        ) : (
+          <Link to="/workflows/$id" params={{ id }} className="btn btn--sm">
+            {t('launch.backToEditor')}
+          </Link>
+        )}
       </header>
 
       {repoIssue === 'no-commits' && <div className="error-box">{t('launch.repoNoCommits')}</div>}
@@ -436,31 +556,49 @@ function LaunchPage() {
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => start.mutate()}
+          onClick={() => (isEdit ? saveConfig.mutate() : start.mutate())}
           disabled={!canSubmit}
+          data-testid="launch-submit"
         >
-          {start.isPending ? t('launch.starting') : t('launch.start')}
+          {isEdit
+            ? saveConfig.isPending
+              ? t('scheduled.saving')
+              : t('scheduled.saveConfig')
+            : start.isPending
+              ? t('launch.starting')
+              : t('launch.start')}
         </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => setSaveScheduledOpen(true)}
-          disabled={!canSubmit || scheduleUnsupported}
-          title={scheduleUnsupported ? t('scheduled.uploadUnsupported') : undefined}
-          data-testid="save-as-scheduled"
-        >
-          {t('scheduled.saveAsScheduled')}
-        </button>
+        {/* RFC-159: "save as scheduled" only makes sense when creating a new task —
+            in edit mode you're already editing an existing schedule. */}
+        {!isEdit && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setSaveScheduledOpen(true)}
+            disabled={!canSubmit || scheduleUnsupported}
+            title={scheduleUnsupported ? t('scheduled.uploadUnsupported') : undefined}
+            data-testid="save-as-scheduled"
+          >
+            {t('scheduled.saveAsScheduled')}
+          </button>
+        )}
         {start.error !== null && start.error !== undefined && (
           <span className="form-actions__error">{describeError(start.error)}</span>
         )}
+        {saveConfig.error !== null && saveConfig.error !== undefined && (
+          <span className="form-actions__error" data-testid="launch-save-config-error">
+            {describeError(saveConfig.error)}
+          </span>
+        )}
       </div>
-      <ScheduleDialog
-        open={saveScheduledOpen}
-        onClose={() => setSaveScheduledOpen(false)}
-        buildLaunchPayload={buildScheduledLaunchBody}
-        defaultName={taskName.trim()}
-      />
+      {!isEdit && (
+        <ScheduleDialog
+          open={saveScheduledOpen}
+          onClose={() => setSaveScheduledOpen(false)}
+          buildLaunchPayload={buildScheduledLaunchBody}
+          defaultName={taskName.trim()}
+        />
+      )}
     </div>
   )
 }

@@ -91,6 +91,17 @@ function ScheduledDetailPage() {
           >
             {t('scheduled.edit')}
           </button>
+          {/* RFC-159 (edit-config): edit the FULL task config (repo/branch/inputs/
+              collaborators/git-identity/…) by reusing the launch form in edit mode. */}
+          <Link
+            to="/workflows/$id/launch"
+            params={{ id: s.launchPayload.workflowId }}
+            search={{ editScheduled: s.id }}
+            className="btn"
+            data-testid="scheduled-edit-config"
+          >
+            {t('scheduled.editConfig')}
+          </Link>
           <button
             type="button"
             className="btn"
