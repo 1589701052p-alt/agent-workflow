@@ -1020,6 +1020,7 @@ export interface Resources {
     editConfigTitle: string
     saveConfig: string
     backToSchedule: string
+    collabLoadError: string
   }
   tasks: {
     title: string
@@ -3605,6 +3606,7 @@ export const zhCN: Resources = {
     editConfigTitle: '编辑任务配置：{{name}}',
     saveConfig: '保存任务配置',
     backToSchedule: '← 返回定时任务',
+    collabLoadError: '无法加载协作者，请重试后再保存（避免误删已有协作者）。',
   },
   tasks: {
     title: '任务',

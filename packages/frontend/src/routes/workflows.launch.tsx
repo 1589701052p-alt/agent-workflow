@@ -31,6 +31,7 @@ import { UploadPicker } from '@/components/launch/UploadPicker'
 import { buildLaunchFormData } from '@/components/launch/buildLaunchFormData'
 import { RepoSourceList, type MultiRepoBlockedReason } from '@/components/launch/RepoSourceList'
 import { Field, Switch, TextInput } from '@/components/Form'
+import { LoadingState } from '@/components/LoadingState'
 import {
   bodyToRepoSources,
   buildLaunchBody,
@@ -312,10 +313,20 @@ function LaunchPage() {
   // Reuses buildScheduledLaunchBody (the same body helper the save-as-scheduled
   // dialog uses) so the wire shape matches a freshly-created schedule's payload.
   const saveConfig = useMutation({
-    mutationFn: () =>
-      api.put(`/api/scheduled-tasks/${encodeURIComponent(editScheduled ?? '')}`, {
-        launchPayload: buildScheduledLaunchBody(),
-      }),
+    mutationFn: () => {
+      const rebuilt = buildScheduledLaunchBody() as Record<string, unknown>
+      // RFC-159 (edit-config, Codex P2): carry through StartTask fields the launch
+      // form does NOT model (currently the per-task runtime / token caps) so editing
+      // repo/inputs never silently clears an API-set limit. Keep the list in sync
+      // with StartTaskSchema (packages/shared/src/schemas/task.ts).
+      const original = (scheduleQ.data?.launchPayload ?? {}) as Record<string, unknown>
+      for (const k of ['maxDurationMs', 'maxTotalTokens'] as const) {
+        if (rebuilt[k] === undefined && original[k] !== undefined) rebuilt[k] = original[k]
+      }
+      return api.put(`/api/scheduled-tasks/${encodeURIComponent(editScheduled ?? '')}`, {
+        launchPayload: rebuilt,
+      })
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['scheduled-tasks'] })
       void navigate({ to: '/scheduled/$id', params: { id: editScheduled ?? '' } })
@@ -328,7 +339,7 @@ function LaunchPage() {
   if (workflow.data === undefined) return null
   // RFC-159 (edit-config): block the form until the schedule loads so fields don't
   // flash empty then re-seed; surface a load error inline.
-  if (isEdit && scheduleQ.isLoading) return <div className="page muted">{t('common.loading')}</div>
+  if (isEdit && scheduleQ.isLoading) return <LoadingState />
   if (isEdit && scheduleQ.error !== null && scheduleQ.error !== undefined)
     return <div className="page error-box">{describeError(scheduleQ.error)}</div>
 
@@ -383,6 +394,13 @@ function LaunchPage() {
   // RFC-159 (edit-config): the primary button is Save (PUT) in edit mode, Start
   // (POST) otherwise; gate on whichever mutation is in flight.
   const submitPending = isEdit ? saveConfig.isPending : start.isPending
+  // RFC-159 (edit-config, Codex P2): when editing a schedule that has collaborators,
+  // block Save until their id→UserPublic lookup SUCCEEDS. Otherwise a save fired
+  // while the lookup is still pending (or after it failed) would rebuild the body
+  // with an empty collaborator set and silently drop every collaborator. No ids →
+  // nothing to wait for.
+  const collabIds = scheduleQ.data?.launchPayload.collaboratorUserIds ?? []
+  const collabReady = !isEdit || collabIds.length === 0 || collabLookup.isSuccess
   const canSubmit =
     nameReady &&
     sourceReady &&
@@ -392,6 +410,7 @@ function LaunchPage() {
     workingBranchOk &&
     // RFC-066: multi-repo + wrapper-git / upload → Start disabled.
     multiRepoBlockedReason === null &&
+    collabReady &&
     !submitPending
 
   return (
@@ -588,6 +607,13 @@ function LaunchPage() {
         {saveConfig.error !== null && saveConfig.error !== undefined && (
           <span className="form-actions__error" data-testid="launch-save-config-error">
             {describeError(saveConfig.error)}
+          </span>
+        )}
+        {/* RFC-159 (edit-config, Codex P2): the collaborator lookup failed → Save is
+            gated (collabReady=false) so we never drop collaborators; tell the user why. */}
+        {isEdit && collabLookup.isError && (
+          <span className="form-actions__error" data-testid="launch-collab-load-error">
+            {t('scheduled.collabLoadError')}
           </span>
         )}
       </div>

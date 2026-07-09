@@ -30,5 +30,10 @@ export function useUserLookup(ids: ReadonlyArray<string | null | undefined>) {
     /** Resolve one id to its public row, or undefined while loading / unknown. */
     get: (id: string | null | undefined): UserPublic | undefined => (id ? byId.get(id) : undefined),
     isLoading: query.isLoading,
+    /** The lookup resolved with data (or was empty/disabled → false). */
+    isSuccess: query.isSuccess,
+    /** The lookup request failed — callers that seed from it must not treat the
+     *  (empty) result as authoritative (RFC-159 edit-config collaborator gate). */
+    isError: query.isError,
   }
 }

@@ -96,7 +96,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function installFetch(opts: { recent?: unknown[] } = {}): FetchCall[] {
+function installFetch(
+  opts: { recent?: unknown[]; schedule?: unknown; failCollabLookup?: boolean } = {},
+): FetchCall[] {
   const calls: FetchCall[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -119,8 +121,9 @@ function installFetch(opts: { recent?: unknown[] } = {}): FetchCall[] {
       // Order matters: match the most specific paths first.
       if (url.includes('/api/scheduled-tasks/sched-1') && method === 'PUT')
         return json({ ...SCHEDULE, updatedAt: 2 })
-      if (url.includes('/api/scheduled-tasks/sched-1')) return json(SCHEDULE)
-      if (url.includes('/api/users/lookup')) return json([BOB])
+      if (url.includes('/api/scheduled-tasks/sched-1')) return json(opts.schedule ?? SCHEDULE)
+      if (url.includes('/api/users/lookup'))
+        return opts.failCollabLookup ? json({ error: { code: 'boom' } }, 500) : json([BOB])
       if (url.includes('/api/repos/refs')) return json(REFS)
       if (url.includes('/api/repos/recent')) return json(opts.recent ?? [])
       if (url.includes('/api/cached-repos')) return json({ items: [] })
@@ -220,6 +223,39 @@ describe('RFC-159 — launch form edit-config mode (?editScheduled)', () => {
     await renderLaunch('/workflows/wf-1/launch?editScheduled=sched-1')
     await screen.findByDisplayValue('nightly')
     expect(screen.queryByTestId('save-as-scheduled')).toBeNull()
+  })
+
+  // Codex P2: the edit path must not silently clear StartTask fields the launch
+  // form doesn't model (per-task runtime / token caps).
+  test('preserves unmodeled launchPayload fields (maxDurationMs/maxTotalTokens) on save', async () => {
+    const schedule = {
+      ...SCHEDULE,
+      launchPayload: { ...SCHEDULE.launchPayload, maxDurationMs: 123456, maxTotalTokens: 7777 },
+    }
+    const calls = installFetch({ schedule })
+    await renderLaunch('/workflows/wf-1/launch?editScheduled=sched-1')
+    await screen.findByText('Bob') // collaborators resolved → Save enabled
+
+    fireEvent.click(screen.getByTestId('launch-submit'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+
+    const put = calls.find((c) => c.method === 'PUT')!
+    const payload = (put.body as { launchPayload: Record<string, unknown> }).launchPayload
+    expect(payload.maxDurationMs).toBe(123456)
+    expect(payload.maxTotalTokens).toBe(7777)
+  })
+
+  // Codex P2: never save while the collaborator lookup is unresolved/failed — that
+  // would rebuild the body with an empty collaborator set and drop everyone.
+  test('blocks Save + surfaces an error when the collaborator lookup fails', async () => {
+    installFetch({ failCollabLookup: true })
+    await renderLaunch('/workflows/wf-1/launch?editScheduled=sched-1')
+    await screen.findByDisplayValue('nightly') // the rest of the form still seeds
+
+    await waitFor(() => {
+      expect(screen.getByTestId('launch-collab-load-error')).toBeTruthy()
+    })
+    expect((screen.getByTestId('launch-submit') as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
