@@ -62,20 +62,34 @@
 - self/cross 走同一分支：`kind` 仅用于「默认组解析」（self 的 asking = cross 的 questioner = 提问
   节点），不再产生结构差异。
 
-## dispatch：最前节点起跑 + 级联（本 RFC 的新机制）
+## dispatch：复用现有 RFC-120 §18「上游前沿 mint + 级联」（**非新机制**）
 
-**取代** 现「逐个处理节点直接 mint」+ 多源就绪 gating。新算法：
+**⚠️ 校正（用户「先对齐 design」逮到的大问题）**：frontier + 级联 + readiness-预门 **早已是现状**——
+`dispatchTaskQuestions`（`taskQuestionDispatch.ts`）自 **RFC-120 §18「model A, corrected」**起就是
+「只 mint 上游前沿 + RFC-074 级联兜下游」，RFC-132 后**所有任务走这一条**。**不存在「逐个 mint」可
+换血**（先前 design 的「现状=逐个 mint」认知错误，源于调研误判）。现成件（RFC-162 **直接复用、不
+重造**）：
 
-1. 收集这批被下发问题的处理组条目及其 `effectiveTarget` 节点。
-2. **相关性就绪 barrier = 预-stamp 门（Codex 复评 H-2）**：过滤掉相关源未就绪的 handler（N:1
-   designer 等其兄弟反问者答齐前）。**未就绪 handler 一律不 stamp `dispatched_at`、保持 queue-不可
-   见**——否则即使不进前沿，上游级联触达它时 `selectAgentQueue`（只认 dispatched+sealed）仍会**提前
-   注入、绕过 barrier**。只有过 barrier 的就绪 handler 集 R 才 stamp。
-3. 对 R 标 `dispatched_at`（使 `selectAgentQueue` 可见）；收集 R 的 `effectiveTarget` 集合 S。
-4. `computeDispatchFrontier(S, graph)` 取**最前沿子集** F（无被 S 中其它节点作祖先者，可多起跑点）。
-5. **仅对 F mint 重跑**；F 的下游**就绪** handler 由 RFC-074 级联重跑（未就绪的没 stamp、不会被误
-   注入，待其源就绪的后续下发再纳入）。
-6. 每个重跑的 handler 经 `selectAgentQueue` 领到 target==自己的 Q&A。
+1. 按 `(effectiveTarget, cause)` 分组请求条目（`byHomeCause`，`:437`）+ 同 home 多 cause auto-split。
+2. `affected = 各 home（effectiveTarget）`；**`computeUpstreamFrontier(definition, affected)`**
+   （`:229`——自建 upstreams、内部剔除 clarify 通道边 `isClarifyChannelEdge`）取上游前沿 F。
+3. **readiness 在 stamp `dispatched_at` 之前**：`assertDesignerReady`（`:1396` →
+   `evaluateDesignerRerunReadiness`）对每个 affected graph-designer 跑——注释原文「BEFORE stamping
+   any dispatched_at (Codex H2 re-gate)」，**我 design 门 H-2「重新发现」的正是这条已有行为**；不
+   ready 整批 reject、什么都不 stamp。
+4. `buildFrontierMintPlan`（`:562`）预算 F 的 mint 值 → **一个 `dbTxSync`**：CAS-stamp 请求条目
+   `dispatched_at` + insert F 的 frontier reruns（原子，崩溃回滚无孤儿）。
+5. F 的下游由调度级联重跑，各自经 `selectAgentQueue`（已不分角色）领到 target==自己的 Q&A。
+
+**RFC-162 对 dispatch 的实际改动 = 把这条现成流水线从「designer-scoped」推广到「handler-set」**，
+机制本身不动：
+
+- 条目查询/分组从 `roleKind='designer'`（`:406`）等角色假设 → handler 行（`handler_node_id`）。
+- cause 从 `causeClassForEntry(roleKind)` → role-free oracle（§重跑 cause 归一）。
+- `assertDesignerReady`（designer 专属）→ 推广为 handler 层的**相关性就绪 barrier**（语义保留，见下）。
+- **`computeUpstreamFrontier` / `buildFrontierMintPlan` / 级联 / `dbTxSync` stamp+mint 原样复用。**
+  ⚠️ **先前实现的 T1 `computeDispatchFrontier`（shared）与 `computeUpstreamFrontier` 重复，应删除、
+  复用后者**（若需 shared 化则把 `computeUpstreamFrontier` 上移，而非另造一份）。
 
 好处：
 - **提问节点必然重跑**：它要么 ∈ F（默认组仅它时，它就是起跑点），要么在某上游处理节点下游（增派

@@ -5,23 +5,25 @@
 
 ## 子任务 / PR 拆分
 
-- **RFC-162-T1（shared：起跑前沿 oracle）**：`computeDispatchFrontier(handlerNodeSet, graph) →
-  startNodes` 纯函数 + 矩阵单测（上游/下游/并行/多起跑/环防护）。零行为接线。依赖：无。
-- **RFC-162-T2（backend：dispatch 改「最前起跑 + 级联」）**：dispatch **先过相关性就绪 barrier、
-  只对就绪 handler stamp `dispatched_at`**（未就绪不 stamp、不给 queue 看见——Codex 复评 H-2，否则
-  级联触达时 `selectAgentQueue` 会绕过 barrier 提前注入），收集就绪 handler 集、`computeDispatchFrontier`
-  取 F、仅 mint F、级联兜就绪下游。**先与旧「逐个 mint」行为
-  对拍**（default 组仅提问节点时逐字不变=黄金锁），再放开增派上游走级联。**保留
-  `evaluateDesignerRerunReadiness` 并 reframe 为「相关性就绪 barrier」**（Codex high-3：级联只看
-  dataflow、看不见 `to_designer` 相关性边，N:1 多源不能靠级联）——barrier 过滤后的 handler 集才喂
-  `computeDispatchFrontier`。依赖：T1。
+- **RFC-162-T1（❌ 退役——重复已有件）**：原计划新造 shared `computeDispatchFrontier` 前沿 oracle
+  ——**校正后发现它与现有 `taskQuestionDispatch.ts:229 computeUpstreamFrontier` 语义重复**（frontier
+  + 级联自 RFC-120 §18 就有、RFC-132 后全任务走它）。**T1 应删除**（已在 `3f2c9640` 误提交，需
+  follow-up 撤回 `computeDispatchFrontier` + 其测试），dispatch 直接复用 `computeUpstreamFrontier`；
+  如需 shared 化则**上移它、不另造一份**。
+- **RFC-162-T2（backend：把现有 frontier dispatch 从 designer-scoped 推广到 handler-set）**——
+  **非换血**（frontier + 级联 + readiness-预门早已是现状，见 design §dispatch 校正）。实际改动：
+  条目查询/分组从 `roleKind='designer'`（`:406`）→ handler 行；cause 从 `causeClassForEntry(roleKind)`
+  → role-free oracle；`assertDesignerReady` → handler 层相关性就绪 barrier（语义保留）；
+  `computeUpstreamFrontier` / `buildFrontierMintPlan` / 级联 / `dbTxSync` stamp+mint **原样复用**。
+  **先与旧行为对拍黄金锁**（default 组=提问节点时逐字不变）。因依赖 handler 条目模型，本项**在 T4
+  切键后、随 T5 归一相一并落地**（不再是独立前置大件）。依赖：T4/T5。
 - **RFC-162-T3（准备相：影子键，行为逐字不变）**：加**非唯一影子列** `handler_node_id` 并 populate
   （= 有效承接 `override ?? default`）；reconcile/dispatch 分组/前端**读** `handler_node_id`。
   **旧 `role_kind` 唯一键、role-based 发射、以及 `causeClassForEntry(roleKind, sourceKind)` 的 cause
   派生全部照旧不动**（Codex 复评 R6：cause oracle 若在此相替换，存量**被改派**的 questioner/self 行
   会从 role 派生 cause 切成 handler 派生 cause，改掉 inline-resume/ledger 上界/auto-split，黄金锁不
   成立）；`role_kind` 不收敛、不发多 handler、不删任何东西——本相纯准备、行为逐字不变（黄金锁）。
-  依赖：T2。
+  依赖：无（准备相独立；T1/T2 校正后不再是其前置）。
 - **RFC-162-T4（切换相：迁移 + 原子换唯一键）**：backfill `handler_node_id`；**碰撞矩阵**解决/park
   存量同节点多行（Codex 复评 R3-H/R4：questioner override=B + designer default=B 异 cause/trigger 塞
   不进一行——仅「至多一行已下发/已绑定」或「同 trigger + 兼容态」才合并，否则暂留归档 / park + 补救，
@@ -48,7 +50,8 @@
 
 ## 依赖序
 
-T1 → T2 →（对拍绿）→ **T3 准备相**（加影子列 `handler_node_id`、行为不变）→ **T4 切换相**（碰撞
+（T1 退役=与 `computeUpstreamFrontier` 重复；T2 缩水=非换血、并入 T5 归一相）→ **T3 准备相**（加影
+子列 `handler_node_id`、行为不变）→ **T4 切换相**（碰撞
 矩阵 + echo 转 handler + 原子切唯一键到新键、`role_kind` 出键）→ **T5 归一相**（reconcile 处理组
 发射 + role 收敛 + 删 echo/collapse/scope）→（并行）T6、T7(可选) → T8。**三相严格串行、切键
 （T4）居中**：准备相绝不收敛 role_kind / 不发多 handler（否则撞旧键）；归一相绝不早于切键（否则多
