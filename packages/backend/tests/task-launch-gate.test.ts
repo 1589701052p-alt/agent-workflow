@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { resolve } from 'node:path'
 
+import type { CreateWorkflow } from '@agent-workflow/shared'
+
 import { buildActor, type Actor } from '../src/auth/actor'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { workflows } from '../src/db/schema'
@@ -17,7 +19,9 @@ import { createWorkflow } from '../src/services/workflow'
 import { ForbiddenError, NotFoundError } from '../src/util/errors'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
-const DEF = { $schema_version: 1, inputs: [], nodes: [], edges: [] }
+// Annotated (not a bare const) so `$schema_version`/`inputs` don't widen to
+// number/never[] — matches the contextual typing inline literals get.
+const DEF: CreateWorkflow['definition'] = { $schema_version: 1, inputs: [], nodes: [], edges: [] }
 
 function actor(id: string, role: 'admin' | 'user' = 'user'): Actor {
   return buildActor({
