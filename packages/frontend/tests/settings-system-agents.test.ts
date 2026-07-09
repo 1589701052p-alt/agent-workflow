@@ -36,6 +36,7 @@ describe('RFC-156 — SystemAgentsTab slice + D6 model clearing', () => {
       'commitPushModel',
       'commitPushMaxRepairRetries',
       'commitPushDiffMaxBytes',
+      'commitPushLang', // RFC-157
       'memoryDistillRuntime',
       'memoryDistillModel',
       'memoryDistillLang',

@@ -253,6 +253,17 @@ export const ConfigSchema = z.object({
    * included separately). 0 disables the body block. Default 16384 (~4K tok).
    */
   commitPushDiffMaxBytes: z.number().int().min(0).max(262144).optional(),
+  /**
+   * RFC-157: language the built-in commit agent writes the commit-message
+   * summary + body in (initial message AND push-repair message). Mirrors
+   * `memoryDistillLang`: `undefined` is treated as 'en-US' at runtime, i.e.
+   * unset and explicit 'en-US' are equivalent (English). The Conventional-Commits
+   * `<type>(<scope>):` prefix ALWAYS stays lowercase ASCII (only the human
+   * summary/body flips). Independent from the frontend UI `language`. Resolved
+   * per scheduler kick (start/resume/retry) from live config like the other
+   * commit-push knobs — NOT a distiller-style per-job freeze.
+   */
+  commitPushLang: LanguageSchema.optional(),
 
   // --- RFC-130 built-in merge-conflict resolver agent ---
   /**
@@ -379,6 +390,14 @@ export const ConfigPatchSchema = ConfigSchema.partial()
   // (resolveInternalAgentRuntime falls runtimeName → deprecatedModel → defaultRuntime;
   // deleting only the runtime would otherwise fall THROUGH to the legacy model).
   // The base ConfigSchema is unchanged (still min(1)); null is patch-only = delete.
+  //
+  // RFC-157: the two internal-agent output-language fields also accept null in
+  // the PATCH so the "System agents" tab's language <Select> can CLEAR a saved
+  // value back to Default (mergePatch deletes the key → runtime falls back to
+  // 'en-US'). JSON.stringify drops undefined, so the UI must send null to
+  // actually remove a stored language — undefined would be treated as "no change"
+  // and the pick could never revert zh-CN to Default. The base ConfigSchema keeps
+  // them `LanguageSchema.optional()` (no null); null is patch-only = delete.
   .extend({
     memoryDistillRuntime: z.string().min(1).nullable().optional(),
     commitPushRuntime: z.string().min(1).nullable().optional(),
@@ -386,6 +405,8 @@ export const ConfigPatchSchema = ConfigSchema.partial()
     memoryDistillModel: z.string().min(1).nullable().optional(),
     commitPushModel: z.string().min(1).nullable().optional(),
     mergeAgentModel: z.string().min(1).nullable().optional(),
+    memoryDistillLang: LanguageSchema.nullable().optional(),
+    commitPushLang: LanguageSchema.nullable().optional(),
   })
 export type ConfigPatch = z.infer<typeof ConfigPatchSchema>
 

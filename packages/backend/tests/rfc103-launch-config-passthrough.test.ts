@@ -15,15 +15,27 @@ describe('RFC-103 T2 runtimeConfigOpts — 单一事实源摊配置', () => {
   test('commitPush 全字段 + maxConcurrentNodes 摊成 flat RunTaskOptions 键', () => {
     expect(
       runtimeConfigOpts({
-        commitPush: { model: 'gpt', maxRepairRetries: 2, diffMaxBytes: 9 },
+        // RFC-157: `lang` joins the funnel — this stays a true "all fields" lock.
+        commitPush: { model: 'gpt', maxRepairRetries: 2, diffMaxBytes: 9, lang: 'zh-CN' },
         maxConcurrentNodes: 7,
       }),
     ).toEqual({
       commitPushModel: 'gpt',
       commitPushMaxRepairRetries: 2,
       commitPushDiffMaxBytes: 9,
+      commitPushLang: 'zh-CN',
       maxConcurrentNodes: 7,
     })
+  })
+
+  // RFC-157: commit-message output language threads through the same funnel;
+  // absent lang must NOT synthesize a commitPushLang key (undefined ≡ en-US
+  // downstream, so the on-the-wire RunTaskOptions stays minimal).
+  test('RFC-157: commitPush.lang 摊成 commitPushLang；缺省不合成键', () => {
+    expect(runtimeConfigOpts({ commitPush: { lang: 'en-US' } })).toEqual({
+      commitPushLang: 'en-US',
+    })
+    expect(runtimeConfigOpts({ commitPush: { model: 'm' } })).not.toHaveProperty('commitPushLang')
   })
 
   test('空 deps → 空对象（不污染 RunTaskOptions）', () => {

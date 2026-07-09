@@ -26,6 +26,7 @@ import {
 } from '@agent-workflow/shared'
 import type {
   CommitPushMeta,
+  Language,
   NodeRunStatus,
   NodeRunSyncSummary,
   TaskTransitionEvent,
@@ -139,6 +140,7 @@ export interface StartTaskDeps {
     runtime?: string
     maxRepairRetries?: number
     diffMaxBytes?: number
+    lang?: Language
   }
   /**
    * RFC-130 §6.1: built-in merge-conflict resolver runtime (config.mergeAgentRuntime
@@ -533,6 +535,8 @@ export function runtimeConfigOpts(
     ...(deps.commitPush?.diffMaxBytes !== undefined
       ? { commitPushDiffMaxBytes: deps.commitPush.diffMaxBytes }
       : {}),
+    // RFC-157: commit-message output language (undefined ≡ en-US downstream).
+    ...(deps.commitPush?.lang !== undefined ? { commitPushLang: deps.commitPush.lang } : {}),
     ...(deps.maxConcurrentNodes !== undefined
       ? { maxConcurrentNodes: deps.maxConcurrentNodes }
       : {}),

@@ -9,7 +9,7 @@
 
 import type { DetectedEnvelopeKind } from '@/services/envelope'
 import { extractLastEnvelope, parseEnvelope } from '@/services/envelope'
-import type { Agent, NodeRunStatus } from '@agent-workflow/shared'
+import type { Agent, Language, NodeRunStatus } from '@agent-workflow/shared'
 import { COMMIT_PUSH_NODE_PREFIX } from '@agent-workflow/shared'
 
 /** Synthetic node_id prefix marking a framework commit&push node_run.
@@ -176,14 +176,34 @@ export function buildFallbackMessage(opts: {
   return `chore(agent-workflow): ${opts.agentName} changes (${opts.filesChanged} files, +${opts.insertions}/-${opts.deletions}) [task ${id8}]`
 }
 
+/**
+ * RFC-157: a short trailer appended at the END of the commit-message / repair
+ * prompt to steer the OUTPUT language of the human summary + body. Mirrors the
+ * distiller's DISTILLER_OUTPUT_LANG_DIRECTIVE (memoryDistiller.ts): only the
+ * visible summary/body language flips; the Conventional-Commits
+ * `<type>(<scope>):` prefix ALWAYS stays lowercase ASCII (locked by test). The
+ * en-US string is appended even on the default/unset path (unset ≡ 'en-US'),
+ * so it explicitly documents the ASCII-prefix rule in both modes — this
+ * deliberately does NOT preserve the pre-RFC-157 prompt byte-for-byte (that
+ * would conflict with mirroring the distiller); commit messages stay English.
+ */
+export const COMMIT_PUSH_OUTPUT_LANG_DIRECTIVE: Readonly<Record<Language, string>> = {
+  'en-US':
+    'Write the commit message summary and body in English. Keep the Conventional-Commits `<type>(<scope>):` prefix in lowercase ASCII (e.g. feat(auth):).',
+  'zh-CN':
+    '提交信息的摘要与正文用简体中文书写。Conventional-Commits 的 `<type>(<scope>):` 前缀保持小写 ASCII（如 feat(auth):），不要翻译类型词与范围词。',
+} as const
+
 /** Prompt for the built-in commit agent: summarize the staged diff into a
- *  Conventional-Commits-style message. */
+ *  Conventional-Commits-style message. `lang` steers only the summary/body
+ *  language (default en-US ≡ unset; the ASCII prefix is preserved either way). */
 export function buildCommitMessagePrompt(opts: {
   repoName: string
   branch: string
   baseRef: string
   stat: string
   diffTruncated: string
+  lang?: Language
 }): string {
   return [
     `You are generating a git commit message for changes an AI agent just made in repository "${opts.repoName}" (branch ${opts.branch}, based on ${opts.baseRef}).`,
@@ -203,6 +223,9 @@ export function buildCommitMessagePrompt(opts: {
     '',
     `Return ONLY the message inside the output envelope, e.g.:`,
     `<workflow-output><port name="${COMMIT_MESSAGE_PORT}">feat(auth): extract token middleware</port></workflow-output>`,
+    // RFC-157: language directive last so the model reads it most recently.
+    '',
+    COMMIT_PUSH_OUTPUT_LANG_DIRECTIVE[opts.lang ?? 'en-US'],
   ].join('\n')
 }
 
@@ -214,6 +237,7 @@ export function buildRepairPrompt(opts: {
   currentMessage: string
   stat: string
   priorAttempts: number
+  lang?: Language
 }): string {
   return [
     `A "git push" of branch ${opts.branch} was REJECTED by the remote. This is repair attempt ${opts.priorAttempts + 1}.`,
@@ -236,6 +260,12 @@ export function buildRepairPrompt(opts: {
     '',
     `Produce a corrected commit message that satisfies the remote's policy. Return ONLY:`,
     `<workflow-output><port name="${COMMIT_MESSAGE_PORT}">...corrected message...</port></workflow-output>`,
+    // RFC-157: repair message uses the same configured language as the initial
+    // one (initial + repair are one agent, one commit-message surface). The
+    // remote's structural policy (Change-Id / ticket key) stays ASCII, so the
+    // language directive never conflicts with it.
+    '',
+    COMMIT_PUSH_OUTPUT_LANG_DIRECTIVE[opts.lang ?? 'en-US'],
   ].join('\n')
 }
 

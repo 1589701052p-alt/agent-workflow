@@ -584,6 +584,11 @@ export interface Resources {
     languageHint: string
     languageZhCN: string
     languageEnUS: string
+    commitPushLangLabel: string
+    commitPushLangHint: string
+    commitPushLangDefault: string
+    commitPushLangZhCN: string
+    commitPushLangEnUS: string
     memoryDistillLangLabel: string
     memoryDistillLangHint: string
     memoryDistillLangDefault: string
@@ -2943,6 +2948,12 @@ export const zhCN: Resources = {
     languageHint: '切换中文 / 英文，保存即生效，无需刷新页面。',
     languageZhCN: '简体中文',
     languageEnUS: 'English',
+    commitPushLangLabel: '提交信息输出语言',
+    commitPushLangHint:
+      '控制内置提交 agent 生成的 commit message 摘要 / 正文用哪种语言（初始提交信息与被拒后的修复信息）；Conventional-Commits 的 `<type>(<scope>):` 前缀始终保持小写英文。与界面语言独立，缺省 = English。仅对后续新生成的提交生效。',
+    commitPushLangDefault: '跟随默认（English）',
+    commitPushLangZhCN: '简体中文',
+    commitPushLangEnUS: 'English',
     memoryDistillLangLabel: '记忆提炼输出语言',
     memoryDistillLangHint:
       '控制记忆提炼任务生成的候选记忆 title / bodyMd 用哪种语言；[category:xxx] 前缀始终保持小写英文。与界面语言独立，缺省 = English (RFC-041 默认)。仅对后续新批次生效，不回填已有记忆。',

@@ -1,14 +1,16 @@
-// RFC-050 — the distill-output-language <select> PATCHes `memoryDistillLang` on
-// save. RFC-156 relocated it from the (removed) Memory tab into the memory
-// distiller card of the "System agents" tab (SystemAgentsTab); this test now
-// mounts that tab. Locks:
-//   1. The tab renders the select with the right testid + three options
-//      (Default / English / 简体中文) and reflects config.memoryDistillLang.
-//   2. Picking 'Default' (empty value) sends `memoryDistillLang: undefined`
-//      so the backend serialises it back to JSON omitted == null.
-//   3. Picking 'zh-CN' fires PUT /api/config with the new value.
+// RFC-157 — the commit-message output-language <select> in the "System agents"
+// tab's commit-push card PATCHes `commitPushLang` on save. Mirrors
+// settings-memory-distill-lang.test.tsx. Locks:
+//   1. The card renders the select with the right testid + three options
+//      (Default / English / 简体中文) and reflects config.commitPushLang.
+//   2. Picking 'zh-CN' fires PUT /api/config with commitPushLang: 'zh-CN'.
+//   3. Picking 'Default' sends commitPushLang: null (NOT undefined) so
+//      mergePatch actually CLEARS a saved value — undefined would be dropped by
+//      JSON.stringify and treated as "no change" (Codex design-gate P2-1). This
+//      is the load-bearing difference from the pre-RFC-157 memoryDistillLang
+//      select, which had the latent "Default can't clear zh-CN" bug.
 // The other SystemAgentsTab slice keys are unset here → JSON.stringify drops
-// them, so the PUT body still carries only memoryDistillLang.
+// them, so the PUT body carries only commitPushLang.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -81,12 +83,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// The distill-language picker is now the shared <Select> (RFC-036): a
-// role=combobox trigger (carrying the testid) + a portaled role=listbox. Open
-// it and click the option whose rendered label matches the given i18n key.
+// The lang picker is the shared <Select> (RFC-036): a role=combobox trigger
+// (carrying the testid) + a portaled role=listbox. Open it and click the option
+// whose rendered label matches the given i18n key.
 function pickLang(labelKey: string) {
   act(() => {
-    fireEvent.click(screen.getByTestId('settings-memory-distill-lang-select'))
+    fireEvent.click(screen.getByTestId('settings-commit-push-lang-select'))
   })
   const listbox = screen.getByRole('listbox')
   act(() => {
@@ -94,88 +96,83 @@ function pickLang(labelKey: string) {
   })
 }
 
-describe('RFC-050/156 SystemAgentsTab — distill output language select', () => {
+function clickSave() {
+  const saveBtn = screen
+    .getAllByRole('button')
+    .find((b) => b.textContent && /保存|Save/.test(b.textContent))
+  expect(saveBtn).toBeTruthy()
+  act(() => {
+    fireEvent.click(saveBtn!)
+  })
+}
+
+describe('RFC-157 SystemAgentsTab — commit-push output language select', () => {
   test('renders three options and reflects current config value', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<SystemAgentsTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, {
+    render(<SystemAgentsTab config={mkConfig({ commitPushLang: 'zh-CN' })} />, {
       wrapper: wrap(qc),
     })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select')
-    // Trigger reflects the current value's label (was <select>.value).
-    expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangZhCN'))
-    // Open and verify the three options (Default / English / 简体中文).
+    const sel = screen.getByTestId('settings-commit-push-lang-select')
+    expect(sel.textContent).toContain(i18n.t('settings.commitPushLangZhCN'))
     act(() => {
       fireEvent.click(sel)
     })
     const listbox = screen.getByRole('listbox')
     expect(within(listbox).getAllByRole('option')).toHaveLength(3)
-    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangDefault'))).toBeTruthy()
-    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangEnUS'))).toBeTruthy()
-    expect(within(listbox).getByText(i18n.t('settings.memoryDistillLangZhCN'))).toBeTruthy()
+    expect(within(listbox).getByText(i18n.t('settings.commitPushLangDefault'))).toBeTruthy()
+    expect(within(listbox).getByText(i18n.t('settings.commitPushLangEnUS'))).toBeTruthy()
+    expect(within(listbox).getByText(i18n.t('settings.commitPushLangZhCN'))).toBeTruthy()
   })
 
   test('unset config (undefined) defaults the select to empty (Default)', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<SystemAgentsTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    const sel = screen.getByTestId('settings-memory-distill-lang-select')
-    expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangDefault'))
+    const sel = screen.getByTestId('settings-commit-push-lang-select')
+    expect(sel.textContent).toContain(i18n.t('settings.commitPushLangDefault'))
   })
 
   test('picking zh-CN and saving fires PUT /api/config with the new value', async () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<SystemAgentsTab config={mkConfig()} />, { wrapper: wrap(qc) })
-    pickLang('settings.memoryDistillLangZhCN')
-    expect(screen.getByTestId('settings-memory-distill-lang-select').textContent).toContain(
-      i18n.t('settings.memoryDistillLangZhCN'),
+    pickLang('settings.commitPushLangZhCN')
+    expect(screen.getByTestId('settings-commit-push-lang-select').textContent).toContain(
+      i18n.t('settings.commitPushLangZhCN'),
     )
-    const saveBtn = screen
-      .getAllByRole('button')
-      .find((b) => b.textContent && /保存|Save/.test(b.textContent))
-    expect(saveBtn).toBeTruthy()
-    act(() => {
-      fireEvent.click(saveBtn!)
-    })
+    clickSave()
     await waitFor(() => {
       expect(calls).toHaveLength(1)
     })
-    const body = calls[0]?.body as { memoryDistillLang?: string }
-    expect(body.memoryDistillLang).toBe('zh-CN')
+    const body = calls[0]?.body as { commitPushLang?: string }
+    expect(body.commitPushLang).toBe('zh-CN')
   })
 
-  test('picking Default sends memoryDistillLang: null (clears a saved language)', async () => {
+  test('picking Default sends commitPushLang: null (clears a saved language)', async () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<SystemAgentsTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, {
+    render(<SystemAgentsTab config={mkConfig({ commitPushLang: 'zh-CN' })} />, {
       wrapper: wrap(qc),
     })
-    pickLang('settings.memoryDistillLangDefault')
-    const saveBtn = screen
-      .getAllByRole('button')
-      .find((b) => b.textContent && /保存|Save/.test(b.textContent))
-    act(() => {
-      fireEvent.click(saveBtn!)
-    })
+    pickLang('settings.commitPushLangDefault')
+    clickSave()
     await waitFor(() => {
       expect(calls).toHaveLength(1)
     })
-    // RFC-157: the select now sends null (NOT undefined) for Default, so
-    // mergePatch DELETES a saved language → runtime falls back to en-US. Before,
-    // undefined was dropped by JSON.stringify and treated as "no change", so a
-    // saved zh-CN could never revert to Default. Kept identical to
-    // commitPushLang (settings-commit-push-lang.test.tsx).
+    // STRICT: must be null on the wire (not undefined/absent). mergePatch only
+    // DELETES on null; undefined is treated as "no change" and would leave the
+    // stored zh-CN in place — the exact bug RFC-157 fixes (P2-1).
     const body = calls[0]?.body as Record<string, unknown>
-    expect(body.memoryDistillLang).toBeNull()
+    expect(body.commitPushLang).toBeNull()
   })
 
-  test('i18n keys for memoryDistillLang label / options reachable in both locales', () => {
+  test('i18n keys for commitPushLang label / options reachable in both locales', () => {
     void i18n.changeLanguage('zh-CN')
-    expect(i18n.t('settings.memoryDistillLangLabel')).toBe('记忆提炼输出语言')
-    expect(i18n.t('settings.memoryDistillLangDefault')).toContain('English')
+    expect(i18n.t('settings.commitPushLangLabel')).toBe('提交信息输出语言')
+    expect(i18n.t('settings.commitPushLangDefault')).toContain('English')
     void i18n.changeLanguage('en-US')
-    expect(i18n.t('settings.memoryDistillLangLabel')).toBe('Memory distill output language')
-    expect(i18n.t('settings.memoryDistillLangDefault')).toBe('Default (English)')
+    expect(i18n.t('settings.commitPushLangLabel')).toBe('Commit message output language')
+    expect(i18n.t('settings.commitPushLangDefault')).toBe('Default (English)')
   })
 })

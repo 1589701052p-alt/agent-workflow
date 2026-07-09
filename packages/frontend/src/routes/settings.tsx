@@ -590,6 +590,7 @@ const SYSTEM_AGENT_CONFIG_KEYS = [
   'commitPushModel',
   'commitPushMaxRepairRetries',
   'commitPushDiffMaxBytes',
+  'commitPushLang',
   'memoryDistillRuntime',
   'memoryDistillModel',
   'memoryDistillLang',
@@ -748,6 +749,23 @@ export function SystemAgentsTab({ config }: TabProps) {
               />
             </Field>
           </div>
+          <Field label={t('settings.commitPushLangLabel')} hint={t('settings.commitPushLangHint')}>
+            <Select<'' | NonNullable<Config['commitPushLang']>>
+              data-testid="settings-commit-push-lang-select"
+              ariaLabel={t('settings.commitPushLangLabel')}
+              value={state.commitPushLang ?? ''}
+              // Default sends null (not undefined) → mergePatch deletes the key
+              // → runtime falls back to en-US. undefined would be dropped by
+              // JSON.stringify and read as "no change", so a saved zh-CN could
+              // never revert to Default (RFC-157; same fix on memoryDistillLang).
+              onChange={(v) => setState({ ...state, commitPushLang: v === '' ? null : v })}
+              options={[
+                { value: '', label: t('settings.commitPushLangDefault') },
+                { value: 'en-US', label: t('settings.commitPushLangEnUS') },
+                { value: 'zh-CN', label: t('settings.commitPushLangZhCN') },
+              ]}
+            />
+          </Field>
         </AgentCard>
 
         <AgentCard
@@ -774,7 +792,10 @@ export function SystemAgentsTab({ config }: TabProps) {
               data-testid="settings-memory-distill-lang-select"
               ariaLabel={t('settings.memoryDistillLangLabel')}
               value={state.memoryDistillLang ?? ''}
-              onChange={(v) => setState({ ...state, memoryDistillLang: v === '' ? undefined : v })}
+              // RFC-157: Default sends null (not undefined) so mergePatch actually
+              // clears a saved language — undefined is dropped by JSON.stringify
+              // and treated as "no change". Kept identical to commitPushLang.
+              onChange={(v) => setState({ ...state, memoryDistillLang: v === '' ? null : v })}
               options={[
                 { value: '', label: t('settings.memoryDistillLangDefault') },
                 { value: 'en-US', label: t('settings.memoryDistillLangEnUS') },

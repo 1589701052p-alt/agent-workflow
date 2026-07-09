@@ -19,6 +19,7 @@ import type {
   ClarifyNode,
   EnvelopeFollowupReason,
   FailureCode,
+  Language,
   Mcp,
   MergeState,
   MergeStateOrNull,
@@ -232,6 +233,8 @@ export interface RunTaskOptions {
   commitPushMaxRepairRetries?: number
   /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
   commitPushDiffMaxBytes?: number
+  /** RFC-157: commit-message output language (initial + repair); undefined ≡ en-US. */
+  commitPushLang?: Language
   /**
    * RFC-111 D1/D15 + RFC-112: global default runtime NAME (from
    * config.defaultRuntime). At the agent-dispatch site each node's runtime is
@@ -1168,6 +1171,8 @@ async function maybeRunCommitPush(
               baseRef,
               stat: mctx.stat,
               diffTruncated: mctx.diffTruncated,
+              // RFC-157: undefined ≡ en-US. Initial + repair share one language.
+              lang: state.opts.commitPushLang ?? 'en-US',
             }),
             mctx,
           ),
@@ -1179,6 +1184,7 @@ async function maybeRunCommitPush(
               currentMessage: rctx.currentMessage,
               stat: rctx.stat,
               priorAttempts: rctx.priorAttempts,
+              lang: state.opts.commitPushLang ?? 'en-US',
             }),
             rctx,
           ),

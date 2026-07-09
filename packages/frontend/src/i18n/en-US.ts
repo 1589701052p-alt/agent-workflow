@@ -463,6 +463,12 @@ export const enUS: Resources = {
       'Switch between Chinese and English. The saved value applies instantly — no page refresh required.',
     languageZhCN: '简体中文',
     languageEnUS: 'English',
+    commitPushLangLabel: 'Commit message output language',
+    commitPushLangHint:
+      'Language the built-in commit agent writes the commit-message summary / body in (initial message and push-repair message); the Conventional-Commits `<type>(<scope>):` prefix stays lowercase ASCII. Independent from the UI language; defaults to English. Applies to newly generated commits only.',
+    commitPushLangDefault: 'Default (English)',
+    commitPushLangZhCN: '简体中文',
+    commitPushLangEnUS: 'English',
     memoryDistillLangLabel: 'Memory distill output language',
     memoryDistillLangHint:
       "Language the distiller emits each candidate's title / bodyMd in; the [category:xxx] prefix stays lowercase ASCII. Independent from the UI language; defaults to English (RFC-041 baseline). Applies to new batches only — existing memories are not back-translated.",
