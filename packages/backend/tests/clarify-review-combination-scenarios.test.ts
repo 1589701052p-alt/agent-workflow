@@ -110,6 +110,16 @@ function freshCtx(): Ctx {
   writeFileSync(join(repoPath, 'README.md'), '# r\n')
   execSync(`git -C "${repoPath}" add . && git -C "${repoPath}" commit -m init`, { stdio: 'ignore' })
   const db = createInMemoryDb(MIGRATIONS)
+  // RFC-W001: save the env vars these tests mutate (writePlan sets them) and
+  // RESTORE them in cleanup instead of `delete`-ing. Deleting AGENT_WORKFLOW_HOME
+  // mid-suite makes every later daemon-starting test fall back to the real
+  // ~/.agent-workflow home -> on a dev box with real MCP servers configured,
+  // each later test burns ~30s per mcpProbe (initialize timeout), which alone
+  // pushes the full `bun test` past its 30min ceiling. Restoring preserves the
+  // caller's env (tests that set a temp AGENT_WORKFLOW_HOME keep it).
+  const savedPlan = process.env.SCENARIO_PLAN_FILE
+  const savedState = process.env.SCENARIO_STATE_DIR
+  const savedHome = process.env.AGENT_WORKFLOW_HOME
   return {
     db,
     appHome,
@@ -118,9 +128,12 @@ function freshCtx(): Ctx {
     planFile,
     cleanup: () => {
       rimrafDir(tmp)
-      delete process.env.SCENARIO_PLAN_FILE
-      delete process.env.SCENARIO_STATE_DIR
-      delete process.env.AGENT_WORKFLOW_HOME
+      if (savedPlan === undefined) delete process.env.SCENARIO_PLAN_FILE
+      else process.env.SCENARIO_PLAN_FILE = savedPlan
+      if (savedState === undefined) delete process.env.SCENARIO_STATE_DIR
+      else process.env.SCENARIO_STATE_DIR = savedState
+      if (savedHome === undefined) delete process.env.AGENT_WORKFLOW_HOME
+      else process.env.AGENT_WORKFLOW_HOME = savedHome
     },
   }
 }
