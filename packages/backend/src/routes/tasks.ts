@@ -129,6 +129,10 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     if (workflowId !== undefined && workflowId !== '') filters.workflowId = workflowId
     const repoPath = c.req.query('repo_path') ?? c.req.query('repoPath')
     if (repoPath !== undefined && repoPath !== '') filters.repoPath = repoPath
+    // RFC-159: a scheduled task's run history = its launched tasks.
+    const scheduledTaskId = c.req.query('scheduled_task_id') ?? c.req.query('scheduledTaskId')
+    if (scheduledTaskId !== undefined && scheduledTaskId !== '')
+      filters.scheduledTaskId = scheduledTaskId
     const limit = c.req.query('limit')
     if (limit !== undefined) {
       const n = Number(limit)

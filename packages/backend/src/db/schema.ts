@@ -540,6 +540,11 @@ export const tasks = sqliteTable(
      * migration 0034).
      */
     repoCount: integer('repo_count').notNull().default(1),
+    // RFC-159: the scheduled_tasks row that auto-launched this task via the
+    // background scheduler. NULL = manually launched. Durable link — a schedule's
+    // run history + count derive from this column (stamped atomically inside the
+    // task INSERT), so a failed post-launch bookkeeping write can't orphan the task.
+    scheduledTaskId: text('scheduled_task_id'),
     // （RFC-120 的 deferred_question_dispatch 列已由 RFC-132 T8 + migration 0073 物理删除——
     // universal deferred model 下所有任务同路径，无 per-task 开关。）
   },
@@ -547,6 +552,41 @@ export const tasks = sqliteTable(
     statusIdx: index('idx_tasks_status').on(t.status, t.startedAt),
     workflowIdx: index('idx_tasks_workflow').on(t.workflowId, t.startedAt),
     ownerIdx: index('idx_tasks_owner').on(t.ownerUserId),
+    schedTaskIdx: index('idx_tasks_scheduled_task').on(t.scheduledTaskId), // RFC-159
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// scheduled_tasks — RFC-159. A saved task-launcher the daemon re-fires on a
+// schedule (interval or friendly preset). Stores the FULL StartTask launch body
+// (JSON) so fires replay identical parameters. Member-based-private like tasks
+// (owner_user_id + tasks:read:all admin bypass), NOT the RFC-099 five-type ACL.
+// -----------------------------------------------------------------------------
+export const scheduledTasks = sqliteTable(
+  'scheduled_tasks',
+  {
+    id: text('id').primaryKey(), // ULID
+    name: text('name').notNull(), // management display name (≠ launch body.name)
+    ownerUserId: text('owner_user_id').notNull(), // creator; fires launch as this user
+    launchPayload: text('launch_payload').notNull(), // JSON: full StartTask body
+    scheduleSpec: text('schedule_spec').notNull(), // JSON: ScheduleSpec (kind + creator tz)
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    nextRunAt: integer('next_run_at'), // epoch ms of next fire; NULL when disabled (skips poll)
+    lastRunAt: integer('last_run_at'), // slot time of the last recorded outcome (firedAt guard)
+    lastStatus: text('last_status', { enum: ['launched', 'failed'] }),
+    lastError: text('last_error'), // reason a fire produced NO task (ACL/owner/etc.)
+    lastTaskId: text('last_task_id'), // best-effort pointer to the most recent launched task
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    dueIdx: index('idx_scheduled_tasks_due').on(t.enabled, t.nextRunAt), // poll scan surface
+    ownerIdx: index('idx_scheduled_tasks_owner').on(t.ownerUserId),
   }),
 )
 
