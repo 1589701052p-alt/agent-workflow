@@ -1186,10 +1186,19 @@ function collapseDesignerEntryToQuestioner(
     //   (b) seal 行戳归一化（镜像 RFC-134 §3.1）：legacy answered 轮懒建行无逐行 sealed_at，
     //       而 self/questioner park 源 (fetchSelfQuestionerParkEntries) 以 `sealed_at IS NOT
     //       NULL` 过滤——designer 行（原 park 锚点）删除后，未补戳的 questioner 行会被滤掉
-    //       → 调度不再驻留、该题续跑永不 mint（投递丢失）。继承被删行的戳，无则取 now；
-    //       sealed_by 保持 NULL（「answered 轮证据落戳」审计语义，非人工 seal）；已有戳不改写。
+    //       → 调度不再驻留、该题续跑永不 mint（投递丢失）。继承被删行的戳（curEntry：tx 内重读，
+    //       防并发 seal 竞态）；无戳时**仅 answered 轮**才回落 now；sealed_by 保持 NULL
+    //       （「answered 轮证据落戳」审计语义，非人工 seal）；已有戳不改写。
+    //   (b2) 未答轮绝不伪造 seal（用户 2026-07-09 repro，对称 RFC-140 collapseQuestionerEntryToDesigner
+    //       的 P1 守卫）：designer 行本应 reconcile 于 seal 之后，但 RFC-140 反向 collapse 会为未答
+    //       问题 insert 一张未 seal 的 designer 行——它再被改派回提问节点走到这里时，无条件 `?? now`
+    //       会把未答问题标 sealed，前端遂在无答案的卡上错误显示「加入待下发」、stage gate 也会注入无
+    //       answers_json 的条目。故只有 answered 轮才回落 now，否则原样继承（NULL 即让幸存行保持未
+    //       seal；真正 seal 时 sealRoundQuestions step 4 按 (origin, questionId)+IS NULL 无角色过滤，
+    //       一次给该题所有行补戳）。
     const now = Date.now()
-    const survivorSealedAt = entry.sealedAt ?? now
+    const survivorSealedAt =
+      cur?.status === 'answered' ? (curEntry.sealedAt ?? now) : curEntry.sealedAt
     tx.insert(taskQuestions)
       .values({
         id: ulid(),

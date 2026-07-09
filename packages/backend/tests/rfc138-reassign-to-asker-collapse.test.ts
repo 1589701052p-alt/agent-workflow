@@ -16,6 +16,11 @@
 //      cross-clarify-questioner-rerun、注入渲染该题恰一次、全程零 cross-clarify-answer mint。
 //   6. 不复活（AC-6）：collapse 后 lazy reconcile（listTaskQuestions）不再生成 designer 行，
 //      scope 保持 'questioner'。
+//   7. 未答轮不伪造 seal（用户 2026-07-09 repro：改派处理节点后未答问题错误显示「加入待下发」）：
+//      一张 UNANSWERED 轮的未 seal designer 行（RFC-140 反向 collapse 的遗留形态）再被改派回
+//      提问节点时，幸存 questioner 行必须保持未 seal——旧无条件 `entry.sealedAt ?? now` 会把未答
+//      问题标 sealed → 前端 hasStage 门放行「加入待下发」。修复镜像 RFC-140
+//      collapseQuestionerEntryToDesigner 的 `status==='answered'` 守卫。
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
@@ -154,13 +159,15 @@ async function seedCrossRound(
   db: DbClient,
   taskId: string,
   questions: ClarifyQuestion[],
-  opts: { scopesJson?: string | null } = {},
+  opts: { scopesJson?: string | null; status?: 'answered' | 'awaiting_human' } = {},
 ): Promise<{ roundId: string; origin: string }> {
   const askingRunId = await seedRun(db, taskId, ASKER, { status: 'done' })
   const intRunId = await seedRun(db, taskId, CC, { status: 'done' })
   const roundId = ulid()
   const questionsJson = JSON.stringify(questions)
   const answersJson = JSON.stringify(questions.map((q) => ans(q.id)))
+  const status = opts.status ?? 'answered'
+  const answeredAt = status === 'answered' ? Date.now() : null
   await db.insert(clarifyRounds).values({
     id: roundId,
     taskId,
@@ -175,8 +182,8 @@ async function seedCrossRound(
     answersJson,
     questionScopesJson: opts.scopesJson ?? null,
     directive: 'continue',
-    status: 'answered',
-    answeredAt: Date.now(),
+    status,
+    answeredAt,
   })
   await db.insert(crossClarifySessions).values({
     id: roundId,
@@ -189,8 +196,8 @@ async function seedCrossRound(
     questionsJson,
     answersJson,
     questionScopesJson: opts.scopesJson ?? null,
-    status: 'answered',
-    answeredAt: Date.now(),
+    status,
+    answeredAt,
   })
   return { roundId, origin: intRunId }
 }
@@ -702,5 +709,44 @@ describe('RFC-138 不复活（AC-6）', () => {
       .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'designer')))
     expect(rows.length).toBe(0)
     expect(JSON.parse((await scopesOf(db, roundId)).round ?? '{}')).toEqual({ q1: 'questioner' })
+  })
+})
+
+describe('RFC-138 未答轮不伪造 seal（用户 2026-07-09 repro）', () => {
+  // 根因：collapseDesignerEntryToQuestioner 的 seal 归一化旧为无条件 `entry.sealedAt ?? now`。
+  // designer 行本应 reconcile 于 seal 之后，但 RFC-140 反向 collapse 会为**未答**问题
+  // insert 一张未 seal 的 designer 行——它再被改派回提问节点走到这里时，`?? now` 会把未答问题
+  // 标 sealed，DTO sealed=true → 前端 hasStage 门（(pending|staged) && (staged||sealed)）放行
+  // 「加入待下发」。修复：只有 answered 轮才回落 now（镜像 RFC-140
+  // collapseQuestionerEntryToDesigner 的守卫），否则原样继承（NULL 让幸存行保持未 seal）。
+  test('未答轮的未 seal designer 行 collapse 回提问节点 → 幸存 questioner 行保持未 seal（不显示加入待下发）', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = `t_${ulid()}`
+    await seedTask(db, taskId)
+    const { origin } = await seedCrossRound(db, taskId, [mkQ('q1')], {
+      status: 'awaiting_human',
+    })
+    // RFC-140 反向 collapse 遗留：未答问题被改派 questioner→designer 后留下的未 seal designer 行。
+    const designerId = await insertEntry(db, taskId, {
+      originNodeRunId: origin,
+      questionId: 'q1',
+      roleKind: 'designer',
+      defaultTargetNodeId: DESIGNER,
+      sealed: false,
+    })
+
+    const action = await reassignTaskQuestion(db, designerId, ASKER, actor)
+
+    expect(action).toBe('collapsed-to-questioner')
+    // 核心断言：未答轮绝不伪造 seal → 幸存 questioner 行 sealedAt 保持 NULL。
+    const questioner = (await allEntries(db, taskId)).find((e) => e.roleKind === 'questioner')!
+    expect(questioner).toBeDefined()
+    expect(questioner.sealedAt).toBeNull()
+    // DTO 层：sealed=false → 前端 hasStage 门不显示「加入待下发」。
+    const dtos = await listTaskQuestions(db, taskId)
+    const q1 = dtos.filter((d) => d.questionId === 'q1')
+    expect(q1.length).toBe(1)
+    expect(q1[0]!.roleKind).toBe('questioner')
+    expect(q1[0]!.sealed).toBe(false)
   })
 })
