@@ -371,14 +371,15 @@ jobs:
           if-no-files-found: error
 
   check-windows:
-    # RFC-windows PR-5 — Windows platform-layer gate. The full `bun test` suite is
-    # NOT green on Windows yet: opencode is spawned via the wsl-opencode driver
-    # (PR-3, not landed), and a number of pre-existing tests assume POSIX
-    # SIGTERM / chmod-mode / mock-opencode-shim behaviour. Until PR-3 lands,
-    # this job gates the Windows-only layer that DOES work: typecheck + lint +
-    # format:check + the RFC-windows platform/backup/fs-prms/shutdown tests. Full
-    # suite + e2e on Windows waits for PR-3.
-    name: Windows platform-layer gate
+    # RFC-windows PR-5 + RFC-W001 - Windows full-suite gate. RFC-windows PR-3
+    # pivoted to native opencode on Windows (no WSL driver), and RFC-W001 made
+    # the entire bun test suite green on Windows (cross-platform stub helpers,
+    # platform-branched chmod/symlink/pgrep/long-path assertions, four production
+    # Windows bugs fixed - see design/RFC-W001-windows-test-compat/). Runs the
+    # full backend+shared suite (same as ubuntu/macOS legs, minus RUN_GIT_NETWORK).
+    # Fresh CI runner has no ~/.agent-workflow/config.json -> defaults -> no
+    # mcpProbe 30s timeouts.
+    name: Windows full-suite gate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -407,10 +408,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: RFC-windows platform-layer tests
-        working-directory: packages/backend
-        run: |
-          bun test tests/platform.test.ts tests/platform-fs.test.ts tests/platform-pr4.test.ts tests/lock.test.ts tests/shutdown-route.test.ts tests/backup.test.ts tests/structural-diff-indexer-discovery.test.ts
+      - name: Test (backend + shared, bun:test, Windows - full suite)
+        # RFC-W001: full `bun test` is green on Windows. A fresh CI runner has
+        # no ~/.agent-workflow/config.json, so loadConfig writes defaults (no
+        # MCP servers) - no mcpProbe 30s timeouts. RUN_GIT_NETWORK stays off
+        # (real-git-clone + external-MCP-spawn integration suites stay gated,
+        # matching a local `bun test`).
+        run: bun test
 
   e2e:
     # Playwright happy-path against the single binary that `build-binary`

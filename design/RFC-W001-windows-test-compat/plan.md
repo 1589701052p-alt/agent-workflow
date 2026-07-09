@@ -115,4 +115,4 @@ T1 → T2 + T4 + T5 + T6 + T7（可并行）→ T3（依赖 T1）→ T8 → T9
 
 ### 遗留
 
-- T9（CI `check-windows` 改跑全量 `bun test`）：本地全绿后可推进；需确认 CI windows-latest 上 temp home / MCP probe 隔离策略（本机用 temp `AGENT_WORKFLOW_HOME` 绕开用户真实 MCP server 的 30s probe 超时）。
+- ~~T9（CI `check-windows` 改跑全量 `bun test`）~~：已完成（`.github/workflows/ci.yml` `check-windows` job 由平台层子集改为全量 `bun test`，注释更新；CI windows-latest 无 `~/.agent-workflow/config.json` -> loadConfig 写默认 -> 无 mcpProbe 30s 超时）。待首次 CI 实跑确认。
