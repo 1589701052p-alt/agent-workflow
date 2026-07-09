@@ -1089,7 +1089,8 @@ export const enUS: Resources = {
     editConfigTitle: 'Edit task config: {{name}}',
     saveConfig: 'Save task config',
     backToSchedule: '← Back to schedule',
-    collabLoadError: "Couldn't load collaborators — retry before saving (avoids dropping existing ones).",
+    collabLoadError:
+      "Couldn't load collaborators — retry before saving (avoids dropping existing ones).",
   },
   tasks: {
     title: 'Tasks',
