@@ -50,7 +50,7 @@ export type TaskQuestionPhase =
   | 'pending' // 待指派：未下发、未批准（handler 可能未定 / 待答）
   | 'staged' // 待下发：已批准·未下发（拖入「准许执行/待下发」、等批量下发）
   | 'processing' // 处理中：已下发（承接 run 存在，含 queued/running/failed；失败仍处理中 D3）
-  | 'awaiting_confirm' // 已处理待确认：承接 run done 且有产出
+  | 'awaiting_confirm' // 已处理待确认：承接 run done（答案已被消费，有无产出均可——clarify-ask 续问收尾亦 done）
   | 'done' // 完成：人工确认关闭
 // RFC-126: 'closed' 相位移除。来源轮取消/放弃不再产生终态条目（CR-1 退役 + migration
 // un-abandon 历史行；canceled 轮在 reconcile 被跳过、不建条目）——问题永远停在自然相位。
@@ -172,7 +172,15 @@ export function deriveQuestionPhase(input: DeriveQuestionPhaseInput): TaskQuesti
   const run = input.handlerRun
   // 已有权威承接 run → 处理中 / 已处理待确认。queued(pending)/running/failed 均处理中。
   if (run !== null) {
-    if (run.status === 'done' && run.hasOutput) {
+    // done = 答案已被承接 run 消费 → 已处理待确认，无论有无 <workflow-output> 产出。
+    // clarify-answer rerun 若「答完这批、又抛下一轮反问」会以 done 收尾却**无产出**
+    // （runner kind==='clarify' 恒 done 无 <workflow-output>）；该 run 已终结、ledger 视其
+    // 为 consumed（isDispatchedEntryConsumed：done=consumed，RFC-139），且它的 lineage 窗口
+    // 被下一条 clarify-answer rerun 封顶——后续产出 run 永不进窗。旧 `done && hasOutput` 门
+    // 会把这些「答完但下一轮继续问」的中间问题永久卡在处理中（实测 incident
+    // 01KWDKBS9K22KB6HH4KNR3XMX6：5 条 self 问题绑在 done-无产出的 clarify-answer run 上）。
+    // done 一律进 awaiting_confirm，与 ledger 的 done=consumed 同口径。
+    if (run.status === 'done') {
       return 'awaiting_confirm'
     }
     return 'processing'
