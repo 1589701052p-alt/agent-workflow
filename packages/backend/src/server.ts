@@ -38,6 +38,7 @@ import { mountTaskClarifyDirectiveRoutes } from '@/routes/taskClarifyDirective'
 import { mountFusionRoutes } from '@/routes/fusions'
 import { mountReviewRoutes } from '@/routes/reviews'
 import { mountTaskRoutes } from '@/routes/tasks'
+import { mountScheduledTaskRoutes } from '@/routes/scheduledTasks'
 import { mountWorkflowRoutes } from '@/routes/workflows'
 import { mountWorktreeFilesRoutes } from '@/routes/worktree-files'
 import { errorHandler } from '@/util/errors'
@@ -170,6 +171,7 @@ export function createApp(deps: AppDeps): Hono {
   mountCachedRepoRoutes(app, deps)
   mountWorkflowRoutes(app, deps)
   mountTaskRoutes(app, deps)
+  mountScheduledTaskRoutes(app, deps) // RFC-159
   mountBackupRoutes(app, deps)
   mountWorktreeFilesRoutes(app, deps)
   mountReviewRoutes(app, deps)

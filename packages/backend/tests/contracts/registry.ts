@@ -271,6 +271,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/alerts/:alertId/repair-options' },
   { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },
   { method: 'GET', path: '/api/tasks/:id/diff' },
+  // ---- scheduled tasks (RFC-159) ----
+  { method: 'GET', path: '/api/scheduled-tasks' },
+  { method: 'GET', path: '/api/scheduled-tasks/:id' },
+  { method: 'POST', path: '/api/scheduled-tasks' },
+  { method: 'PUT', path: '/api/scheduled-tasks/:id' },
+  { method: 'DELETE', path: '/api/scheduled-tasks/:id' },
   { method: 'GET', path: '/api/tasks/:id/structural-diff' },
   { method: 'GET', path: '/api/tasks/:id/call-targets' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
