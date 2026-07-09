@@ -22,6 +22,7 @@ export * from './schemas/repoBatchImport'
 export * from './schemas/skill'
 export * from './schemas/skillVersion'
 export * from './schemas/task'
+export * from './schemas/scheduledTask' // RFC-159
 export * from './schemas/taskCollab'
 export * from './schemas/taskFeedback'
 export * from './schemas/user'
@@ -52,6 +53,7 @@ export * from './signalPromptGuard'
 export * from './wrapperFanout'
 export * from './nodePorts'
 export * from './systemChannelPorts'
+export * from './scheduleTime' // RFC-159
 export * from './worktree-files'
 // RFC-079 — review multi-document mode pure helpers.
 export * from './reviewMultiDoc'
