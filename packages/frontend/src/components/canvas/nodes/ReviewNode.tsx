@@ -28,10 +28,14 @@ export function ReviewNode({ data, selected }: Props) {
   const inputSource =
     (data as CanvasNodeData & { inputSource?: { nodeId: string; portName: string } }).inputSource ??
     null
+  // RFC-158: task-detail canvas marks the click target; clicking routes to the
+  // review page. Absent on the editor canvas and on non-clickable reviews.
+  const reviewNav = data.reviewNav
   return (
     <div
       className={'canvas-node canvas-node--review' + (selected ? ' canvas-node--selected' : '')}
       data-status={data.status ?? 'default'}
+      data-review-nav={reviewNav}
     >
       <Handle
         type="target"
@@ -56,6 +60,11 @@ export function ReviewNode({ data, selected }: Props) {
           </div>
         )}
       <PortHandles side="right" ports={data.outputPorts} />
+      {reviewNav !== undefined && (
+        <div className="canvas-node__review-nav muted">
+          {reviewNav === 'awaiting' ? t('reviewNode.navAwaiting') : t('reviewNode.navDecided')}
+        </div>
+      )}
     </div>
   )
 }

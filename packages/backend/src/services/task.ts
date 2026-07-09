@@ -80,12 +80,8 @@ import { Paths } from '@/util/paths'
 import { createLogger } from '@/util/log'
 import { parseInjectedSnapshotJson } from './memoryInject'
 import { parsePortValidationFailuresJson } from './envelope'
-import {
-  compareNodeRunsForTimeline,
-  deriveReviewRoundTiming,
-  type ReviewVersionFacts,
-} from './reviewRoundStart'
-import type { DocVersionDecision } from '@agent-workflow/shared'
+import { compareNodeRunsForTimeline, deriveReviewRoundTiming } from './reviewRoundStart'
+import { isHumanReviewConclusion, selectCurrentReviewRound } from '@agent-workflow/shared'
 
 const log = createLogger('task')
 
@@ -2207,6 +2203,12 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
   // each review row's content-anchored "this round started" timestamp instead
   // of surfacing its pinned (slot-first-open) started_at. One extra query; no
   // N+1. Non-review runs simply have no doc_versions → timing derives to null.
+  // RFC-158: project the extra columns selectCurrentReviewRound needs
+  // (decidedBy for the human-vs-system check; itemIndex / roundGeneration /
+  // reviewIteration for the multi-doc round pick — reviewIteration here is the
+  // PER-DOC value, distinct from node_run.review_iteration). The raw rows
+  // structurally satisfy both ReviewVersionFacts (RFC-078 timing) and
+  // CurrentReviewRoundRow (RFC-158 nav), so one grouping feeds both.
   const dvRows = await db
     .select({
       reviewNodeRunId: docVersions.reviewNodeRunId,
@@ -2214,24 +2216,44 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
       versionIndex: docVersions.versionIndex,
       decision: docVersions.decision,
       decidedAt: docVersions.decidedAt,
+      decidedBy: docVersions.decidedBy,
+      itemIndex: docVersions.itemIndex,
+      roundGeneration: docVersions.roundGeneration,
+      reviewIteration: docVersions.reviewIteration,
     })
     .from(docVersions)
     .where(eq(docVersions.taskId, taskId))
-  const versionsByRun = new Map<string, ReviewVersionFacts[]>()
+  const dvRowsByRun = new Map<string, (typeof dvRows)[number][]>()
   for (const dv of dvRows) {
-    const list = versionsByRun.get(dv.reviewNodeRunId)
-    const fact: ReviewVersionFacts = {
-      createdAt: dv.createdAt,
-      versionIndex: dv.versionIndex,
-      decision: dv.decision as DocVersionDecision,
-      decidedAt: dv.decidedAt,
-    }
-    if (list === undefined) versionsByRun.set(dv.reviewNodeRunId, [fact])
-    else list.push(fact)
+    const list = dvRowsByRun.get(dv.reviewNodeRunId)
+    if (list === undefined) dvRowsByRun.set(dv.reviewNodeRunId, [dv])
+    else list.push(dv)
   }
 
   const runs: NodeRun[] = runRows.map((r) => {
-    const reviewTiming = deriveReviewRoundTiming(r, versionsByRun.get(r.id) ?? [])
+    const dvForRun = dvRowsByRun.get(r.id) ?? []
+    const reviewTiming = deriveReviewRoundTiming(r, dvForRun)
+    // RFC-158: canvas click target for this review run. Gated on a renderable
+    // current round (round !== null ⟺ has a doc_version ⟺ getReviewDetail won't
+    // 404), then awaiting (live) vs decided (human conclusion). null for
+    // non-review rows, empty-list reviews (zero doc_version), pending/system
+    // current rounds. Same selectCurrentReviewRound getReviewDetail renders with.
+    //
+    // 'awaiting' additionally requires the current representative to be PENDING:
+    // an awaiting_review run whose current round is an EMPTY list (dispatch
+    // parks awaiting WITHOUT minting a new doc_version, review.ts:688-700) has
+    // only OLD decided rows as its representative — clicking would open that
+    // stale round, not the empty live one, so it must be null instead (impl-gate
+    // reopened-empty regression; mirrors the first-round R5 zero-doc case).
+    const round = selectCurrentReviewRound(dvForRun)
+    let reviewNavKind: 'awaiting' | 'decided' | null = null
+    if (round !== null) {
+      if (r.status === 'awaiting_review') {
+        if (round.representative.decision === 'pending') reviewNavKind = 'awaiting'
+      } else if (isHumanReviewConclusion(round.representative)) {
+        reviewNavKind = 'decided'
+      }
+    }
     return {
       id: r.id,
       taskId: r.taskId,
@@ -2278,6 +2300,8 @@ export async function getTaskNodeRuns(db: DbClient, taskId: string): Promise<Tas
       // non-review rows; the UI falls back to startedAt when null.
       reviewRoundStartedAt: reviewTiming?.roundStartedAt ?? null,
       reviewDecidedAt: reviewTiming?.decidedAt ?? null,
+      // RFC-158: task-detail canvas click target (see schemas/task.ts).
+      reviewNavKind,
     }
   })
 

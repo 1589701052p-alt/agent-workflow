@@ -4587,6 +4587,16 @@ details.form-section[open] > summary {
   color: #b45309;
   font-weight: 600;
 }
+/* RFC-158 — a review node the task-detail canvas marked clickable (opens the
+ * review page). The `data-review-nav` attribute is only present on clickable
+ * reviews; the pointer cursor + hint line advertise the click. */
+.canvas-node--review[data-review-nav] {
+  cursor: pointer;
+}
+.canvas-node__review-nav {
+  margin-top: 4px;
+  font-size: 11px;
+}
 
 /* Clarify (反问) node — mirrors the review palette so the two human-in-the-loop
  * kinds read as the same family on the canvas. Status-specific borders are

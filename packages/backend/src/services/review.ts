@@ -40,7 +40,11 @@ import type {
   WorkflowDefinition,
   WorkflowNode,
 } from '@agent-workflow/shared'
-import { isMultiMarkdownUpstream, SIBLING_OUTPUTS_INSTRUCTION } from '@agent-workflow/shared'
+import {
+  isMultiMarkdownUpstream,
+  selectCurrentReviewRound,
+  SIBLING_OUTPUTS_INSTRUCTION,
+} from '@agent-workflow/shared'
 import {
   acceptedSubsetPaths,
   allDocumentsDecided,
@@ -1005,6 +1009,70 @@ export interface ListReviewSummariesFilter {
   limit?: number
 }
 
+/**
+ * RFC-158: parse one task's `workflowSnapshot` for its review nodes'
+ * editor-set title/description. Corrupt JSON → empty map (callers fall back to
+ * nodeId / empty). Extracted so listReviewSummaries and getReviewDetail share
+ * one parse.
+ */
+function parseReviewNodeMeta(
+  workflowSnapshot: string,
+): Map<string, { title: string; description: string }> {
+  const meta = new Map<string, { title: string; description: string }>()
+  try {
+    const def = JSON.parse(workflowSnapshot) as WorkflowDefinition
+    for (const node of def.nodes ?? []) {
+      if ((node as { kind?: string }).kind !== 'review') continue
+      const n = node as Record<string, unknown>
+      const title = typeof n.title === 'string' ? n.title : ''
+      const description = typeof n.description === 'string' ? n.description : ''
+      meta.set(node.id, { title, description })
+    }
+  } catch {
+    // corrupt snapshot — leave meta empty.
+  }
+  return meta
+}
+
+/**
+ * RFC-158: assemble ONE ReviewSummary from an already-selected latest-per-port
+ * doc_version + its run / task / workflow / node meta. Extracted so
+ * getReviewDetail can build a summary directly by nodeRunId instead of scanning
+ * the global `listReviewSummaries(limit)` (which silently 404'd a review whose
+ * versions fell out of the newest-500 window — the pre-RFC-158 latent bug).
+ */
+function assembleReviewSummary(
+  dv: typeof docVersions.$inferSelect,
+  run: typeof nodeRuns.$inferSelect,
+  task: typeof tasks.$inferSelect,
+  wf: typeof workflows.$inferSelect,
+  nodeMeta: { title: string; description: string } | undefined,
+): ReviewSummary {
+  const awaitingReview = run.status === 'awaiting_review' && dv.decision === 'pending'
+  const titleTrimmed = nodeMeta?.title.trim() ?? ''
+  return {
+    nodeRunId: dv.reviewNodeRunId,
+    taskId: dv.taskId,
+    // RFC-037: required taskName from tasks.name.
+    taskName: task.name,
+    workflowId: task.workflowId,
+    workflowName: wf.name,
+    reviewNodeId: dv.reviewNodeId,
+    title: titleTrimmed !== '' ? nodeMeta!.title : dv.reviewNodeId,
+    description: nodeMeta?.description ?? '',
+    currentVersionIndex: dv.versionIndex,
+    reviewIteration: run.reviewIteration,
+    decision: dv.decision as DocVersionDecision,
+    awaitingReview,
+    shardKey: run.shardKey,
+    // RFC-079: a non-NULL item_index marks this review as a multi-document
+    // round (the inbox tags it + routes into the document-list view).
+    isMultiDoc: resolveReviewRoundMode([dv]) !== 'single',
+    createdAt: dv.createdAt,
+    decidedAt: dv.decidedAt,
+  }
+}
+
 export async function listReviewSummaries(
   db: DbClient,
   filter: ListReviewSummariesFilter = {},
@@ -1040,20 +1108,7 @@ export async function listReviewSummaries(
     Map<string, { title: string; description: string }>
   >()
   for (const task of taskById.values()) {
-    const meta = new Map<string, { title: string; description: string }>()
-    try {
-      const def = JSON.parse(task.workflowSnapshot) as WorkflowDefinition
-      for (const node of def.nodes ?? []) {
-        if ((node as { kind?: string }).kind !== 'review') continue
-        const n = node as Record<string, unknown>
-        const title = typeof n.title === 'string' ? n.title : ''
-        const description = typeof n.description === 'string' ? n.description : ''
-        meta.set(node.id, { title, description })
-      }
-    } catch {
-      // corrupt snapshot — leave meta empty, callers fall back to nodeId.
-    }
-    reviewNodeMetaByTask.set(task.id, meta)
+    reviewNodeMetaByTask.set(task.id, parseReviewNodeMeta(task.workflowSnapshot))
   }
 
   // Pick only the latest doc_version per (reviewNodeRunId, sourcePortName);
@@ -1084,28 +1139,7 @@ export async function listReviewSummaries(
     if (filter.taskId !== undefined && filter.taskId !== task.id) continue
     if (filter.workflowId !== undefined && filter.workflowId !== task.workflowId) continue
     const nodeMeta = reviewNodeMetaByTask.get(task.id)?.get(dv.reviewNodeId)
-    const titleTrimmed = nodeMeta?.title.trim() ?? ''
-    out.push({
-      nodeRunId: dv.reviewNodeRunId,
-      taskId: dv.taskId,
-      // RFC-037: required taskName from tasks.name.
-      taskName: task.name,
-      workflowId: task.workflowId,
-      workflowName: wf.name,
-      reviewNodeId: dv.reviewNodeId,
-      title: titleTrimmed !== '' ? nodeMeta!.title : dv.reviewNodeId,
-      description: nodeMeta?.description ?? '',
-      currentVersionIndex: dv.versionIndex,
-      reviewIteration: run.reviewIteration,
-      decision: dv.decision as DocVersionDecision,
-      awaitingReview,
-      shardKey: run.shardKey,
-      // RFC-079: a non-NULL item_index marks this review as a multi-document
-      // round (the inbox tags it + routes into the document-list view).
-      isMultiDoc: resolveReviewRoundMode([dv]) !== 'single',
-      createdAt: dv.createdAt,
-      decidedAt: dv.decidedAt,
-    })
+    out.push(assembleReviewSummary(dv, run, task, wf, nodeMeta))
   }
   return out
 }
@@ -1120,12 +1154,6 @@ export async function getReviewDetail(
   appHome: string,
   nodeRunId: string,
 ): Promise<ReviewDetail> {
-  const summary = (await listReviewSummaries(db, { limit: 500 })).find(
-    (s) => s.nodeRunId === nodeRunId,
-  )
-  if (summary === undefined) {
-    throw new NotFoundError('review-not-found', `review for nodeRun ${nodeRunId} not found`)
-  }
   const allRows = await db
     .select()
     .from(docVersions)
@@ -1133,47 +1161,74 @@ export async function getReviewDetail(
   if (allRows.length === 0) {
     throw new NotFoundError('review-not-found', `no doc_versions for ${nodeRunId}`)
   }
+  // RFC-158: build the summary DIRECTLY by nodeRunId (run → task → workflow →
+  // node meta), not by scanning `listReviewSummaries(limit: 500)` — the global
+  // newest-500 window silently 404'd any review whose doc_versions aged out of
+  // it. Latest-per-port row (max versionIndex) drives the summary, matching the
+  // list's `latestPerRun` selection.
+  const summaryRunRows = await db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+  const summaryRun = summaryRunRows[0]
+  if (summaryRun === undefined) {
+    throw new NotFoundError('review-not-found', `node run ${nodeRunId} not found`)
+  }
+  const summaryTaskRows = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, summaryRun.taskId))
+    .limit(1)
+  const summaryTask = summaryTaskRows[0]
+  if (summaryTask === undefined) {
+    throw new NotFoundError('review-not-found', `task ${summaryRun.taskId} not found`)
+  }
+  const summaryWfRows = await db
+    .select()
+    .from(workflows)
+    .where(eq(workflows.id, summaryTask.workflowId))
+    .limit(1)
+  const summaryWf = summaryWfRows[0]
+  if (summaryWf === undefined) {
+    throw new NotFoundError('review-not-found', `workflow ${summaryTask.workflowId} not found`)
+  }
+  const summaryDv = allRows.slice().sort((a, b) => b.versionIndex - a.versionIndex)[0]!
+  const summaryNodeMeta = parseReviewNodeMeta(summaryTask.workflowSnapshot).get(
+    summaryDv.reviewNodeId,
+  )
+  const summary = assembleReviewSummary(
+    summaryDv,
+    summaryRun,
+    summaryTask,
+    summaryWf,
+    summaryNodeMeta,
+  )
   // RFC-079: multi-document mode (any member carries item_index). Build the
   // document list and default the rendered "current" document to the first
   // item; the frontend lazy-loads other items via the versions endpoint.
+  // RFC-158: ONE current-round selector, shared with the task-detail canvas nav
+  // oracle (getTaskNodeRuns), so "the node is clickable" and "the bare route
+  // renders this version" can never diverge. `allRows.length > 0` was just
+  // asserted, so the selector is non-null.
   const isMulti = resolveReviewRoundMode(allRows) !== 'single'
-  let dv: DocVersion
+  const round = selectCurrentReviewRound(allRows)!
+  const dv: DocVersion = rowToDocVersion(round.representative)
+  // RFC-158 (R6): tolerate a missing/pruned body file on BOTH branches (the
+  // multi-doc path already did) — otherwise a single-doc review with a GC'd
+  // body file throws `doc-version-body-missing`, breaking the nav oracle's
+  // "has doc_version ⟹ renders" invariant.
   let body: string
+  try {
+    body = readDocVersionBody(appHome, dv)
+  } catch {
+    body = ''
+  }
   let documents: ReviewDocumentSummary[] | undefined
   if (isMulti) {
-    // Current round = pending members (awaiting); if decided, the members of
-    // the newest round at the highest reviewIteration. RFC-142 (G4): "newest
-    // round" must respect RFC-129 round_generation — an upstream refresh
-    // leaves two generations at the SAME reviewIteration (superseded old gen
-    // + fresh gen), and iteration-only filtering mixed both generations into
-    // the document list (duplicate itemIndex entries). Legacy iterations
-    // whose rows all predate migration 0070 (NULL generation) keep the
-    // whole-iteration behavior unchanged.
-    const itemRows = allRows.filter((r) => r.itemIndex !== null)
-    let members = itemRows.filter((r) => r.decision === 'pending')
-    if (members.length === 0) {
-      const maxIter = Math.max(...itemRows.map((r) => r.reviewIteration))
-      const atIter = itemRows.filter((r) => r.reviewIteration === maxIter)
-      const gens = atIter.map((r) => r.roundGeneration).filter((g): g is number => g !== null)
-      members =
-        gens.length > 0 ? atIter.filter((r) => r.roundGeneration === Math.max(...gens)) : atIter
-    }
-    members.sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0))
+    // RFC-142 (G4): "newest round" respects RFC-129 round_generation (a refresh
+    // leaves two generations at one reviewIteration). selectCurrentReviewRound
+    // encapsulates that pending-first-else-newest-gen selection.
     documents = []
-    for (const m of members) {
+    for (const m of round.members) {
       documents.push((await buildRoundMember(db, appHome, m)).summary)
     }
-    dv = rowToDocVersion(members[0]!)
-    try {
-      body = readDocVersionBody(appHome, dv)
-    } catch {
-      body = ''
-    }
-  } else {
-    // Single-document: latest version (behavior unchanged).
-    const latest = allRows.slice().sort((a, b) => b.versionIndex - a.versionIndex)[0]!
-    dv = rowToDocVersion(latest)
-    body = readDocVersionBody(appHome, dv)
   }
   // RFC-142 (Codex impl-gate P2): decided versions must read the FROZEN
   // comment snapshot — the live rows are deleted at decision time, so the old

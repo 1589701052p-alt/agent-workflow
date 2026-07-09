@@ -2037,6 +2037,8 @@ export const enUS: Resources = {
   },
   reviewNode: {
     label: 'review',
+    navAwaiting: 'Click to open review',
+    navDecided: 'Click to view latest review decision',
   },
   clarifyNode: {
     label: 'clarify',

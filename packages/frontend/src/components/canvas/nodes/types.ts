@@ -109,4 +109,13 @@ export interface CanvasNodeData extends Record<string, unknown> {
    * new directive + optimistically update. Undefined on the editor canvas.
    */
   onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void
+  /**
+   * RFC-158: review-node click target — only set on `review` kind nodes on the
+   * task-detail canvas (from the backend-stamped `reviewNavKind`). 'awaiting' →
+   * an open review round; 'decided' → a human conclusion to replay. Presence
+   * makes ReviewNode render a click hint + pointer cursor; absence (editor
+   * canvas, or a review with no renderable/clickable round) ⇒ no hint, not
+   * clickable (golden-lock — editor canvas byte-for-byte unchanged).
+   */
+  reviewNav?: 'awaiting' | 'decided'
 }

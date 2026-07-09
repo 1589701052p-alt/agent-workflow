@@ -3,7 +3,7 @@
 // doesn't stall the node-run progress feed.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoute, Link } from '@tanstack/react-router'
+import { createRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type {
   Agent,
@@ -45,6 +45,7 @@ import {
   nodeRunStatusToKind,
 } from '@/lib/noderun-status'
 import { agentNodeOptionsFromSnapshot, resolveNodeNameFromSnapshot } from '@/lib/node-names'
+import { deriveReviewNodeNav, type ReviewNodeNavKind } from '@/lib/review-node-nav'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
 import {
   availableTabs,
@@ -635,7 +636,9 @@ function TaskStatusCanvas({
   onSelectNodeRun,
   onJumpToQuestions,
 }: {
-  canvasRef?: React.Ref<WorkflowCanvasHandle>
+  // RFC-158: RefObject (not the broader React.Ref) — the onSelect review branch
+  // reads `.current` to clearSelection before routing to the review page.
+  canvasRef?: React.RefObject<WorkflowCanvasHandle | null>
   task: Task
   runs: NodeRun[]
   onSelectNodeRun: (id: string | null) => void
@@ -643,6 +646,7 @@ function TaskStatusCanvas({
   onJumpToQuestions: (nodeId: string) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const definition = useMemo<WorkflowDefinition | null>(() => {
     const snap = task.workflowSnapshot
     if (typeof snap !== 'object' || snap === null) return null
@@ -752,6 +756,29 @@ function TaskStatusCanvas({
     return idMap
   }, [runs])
 
+  // RFC-158: review nodes on the canvas open the review page instead of the
+  // (near-empty) drawer. `reviewNodeIds` gates the onSelect branch; `reviewNavByNode`
+  // holds the click target (or absent when not clickable); `reviewNavs` projects
+  // the kinds to WorkflowCanvas so ReviewNode paints the click hint + cursor.
+  const reviewNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const n of definition?.nodes ?? []) if (n.kind === 'review') ids.add(n.id)
+    return ids
+  }, [definition])
+  const reviewNavByNode = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof deriveReviewNodeNav>>()
+    for (const nodeId of reviewNodeIds) {
+      const nav = deriveReviewNodeNav(runs, nodeId)
+      if (nav !== null) m.set(nodeId, nav)
+    }
+    return m
+  }, [reviewNodeIds, runs])
+  const reviewNavs = useMemo(() => {
+    const out: Record<string, ReviewNodeNavKind> = {}
+    for (const [nodeId, nav] of reviewNavByNode) if (nav !== null) out[nodeId] = nav.kind
+    return out
+  }, [reviewNavByNode])
+
   if (definition === null) {
     return <div className="muted">{t('tasks.noWorkflowSnapshot')}</div>
   }
@@ -769,9 +796,28 @@ function TaskStatusCanvas({
         onNodeClarifyDirectiveToggle={(nodeId, next) =>
           setDirective.mutate({ nodeId, directive: next })
         }
+        reviewNavs={reviewNavs}
         onSelect={(sel) => {
           if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)
+            return
+          }
+          // RFC-158: review nodes never open the drawer — they route to the
+          // review page. clearSelection() FIRST releases xyflow's selection
+          // (and resets lastEmittedSelectionSig) so a re-click on the same node
+          // isn't swallowed (the wedge locked by tasks-detail-drawer-close-reclick);
+          // then close any open drawer; then navigate iff the node is clickable.
+          if (reviewNodeIds.has(sel.id)) {
+            canvasRef?.current?.clearSelection()
+            onSelectNodeRun(null)
+            const nav = reviewNavByNode.get(sel.id)
+            if (nav != null) {
+              void navigate({
+                to: '/reviews/$nodeRunId',
+                params: { nodeRunId: nav.nodeRunId },
+                search: {},
+              })
+            }
             return
           }
           const runId = latestRunByNode.get(sel.id)

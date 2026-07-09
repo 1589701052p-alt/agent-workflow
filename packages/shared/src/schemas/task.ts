@@ -702,6 +702,23 @@ export const NodeRunSchema = z.object({
    * time instead of (finishedAt − pinned startedAt).
    */
   reviewDecidedAt: z.number().int().nullable().optional(),
+  /**
+   * RFC-158: for REVIEW node_runs, the task-detail canvas click target — read-time
+   * derived in getTaskNodeRuns from the run's doc_versions (NOT persisted, no
+   * migration):
+   *   - 'awaiting'  — has a renderable current round AND status='awaiting_review'
+   *                   (open the live review界面).
+   *   - 'decided'   — has a renderable current round whose representative version
+   *                   is a HUMAN conclusion (approve/reject/iterate, non-system);
+   *                   the bare /reviews/{run} route replays it.
+   *   - null/absent — no renderable round (no doc_version — incl. an empty
+   *                   `list<md>` review — or the current round is pending / a
+   *                   system-made supersede), OR a non-review run. The canvas
+   *                   leaves the node un-clickable so it never routes to a 404 /
+   *                   empty decided view. Gated on selectCurrentReviewRound !== null
+   *                   so it strictly implies getReviewDetail can render.
+   */
+  reviewNavKind: z.enum(['awaiting', 'decided']).nullable().optional(),
 })
 export type NodeRun = z.infer<typeof NodeRunSchema>
 

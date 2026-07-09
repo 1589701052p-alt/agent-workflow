@@ -179,6 +179,89 @@ export function isSystemDecision(decidedBy: string | null | undefined): boolean 
   return decidedBy === SYSTEM_DECIDER
 }
 
+// -----------------------------------------------------------------------------
+// RFC-158 — "current review round" selection, shared by getReviewDetail (which
+// renders it) and the task-detail canvas nav oracle (which decides whether a
+// review node is clickable). Keeping ONE selector guarantees the canvas never
+// advertises a click that the bare `/reviews/{run}` route can't render.
+// -----------------------------------------------------------------------------
+
+/** Minimal projection of a doc_versions row the selector needs. Generic `T` so
+ *  callers pass their full rows and get the SAME row objects back (id / bodyPath
+ *  / … preserved for getReviewDetail to render). */
+export interface CurrentReviewRoundRow {
+  versionIndex: number
+  decision: DocVersionDecision
+  decidedBy: string | null
+  itemIndex: number | null | undefined
+  roundGeneration: number | null | undefined
+  reviewIteration: number
+}
+
+export interface CurrentReviewRound<T> {
+  /** The single row the bare route renders as `currentVersion` (single-doc) or
+   *  the round's first document (multi-doc). */
+  representative: T
+  /** The rows of the current round. Single-doc: `[representative]`. Multi-doc:
+   *  the current round's members (getReviewDetail builds `documents[]` from these). */
+  members: T[]
+}
+
+/**
+ * Pick the review round the bare `/reviews/{run}` route renders, MIRRORING
+ * `getReviewDetail` (review.ts:1140-1177) so the two never diverge:
+ *   - single-doc (no row carries item_index): representative = the highest
+ *     `versionIndex` row — INCLUDING superseded (getReviewDetail sorts all rows
+ *     by versionIndex desc; do NOT reuse deriveReviewRoundTiming, which excludes
+ *     superseded and would disagree in the superseded-top window). members = [it].
+ *   - multi-doc: pending members if any (the live round); otherwise the members
+ *     of the newest round — highest reviewIteration, then highest roundGeneration
+ *     (RFC-129: an upstream refresh leaves two generations at one iteration).
+ *     representative = members sorted by itemIndex ascending, first.
+ * Empty input → null (the run has no doc_version; the bare route would 404).
+ */
+export function selectCurrentReviewRound<T extends CurrentReviewRoundRow>(
+  rows: readonly T[],
+): CurrentReviewRound<T> | null {
+  if (rows.length === 0) return null
+  const isMulti = rows.some((r) => r.itemIndex !== null && r.itemIndex !== undefined)
+  if (!isMulti) {
+    // Highest versionIndex, superseded included — matches getReviewDetail's
+    // `allRows.sort((a, b) => b.versionIndex - a.versionIndex)[0]`.
+    let rep = rows[0]!
+    for (const r of rows) if (r.versionIndex > rep.versionIndex) rep = r
+    return { representative: rep, members: [rep] }
+  }
+  const itemRows = rows.filter((r) => r.itemIndex !== null && r.itemIndex !== undefined)
+  let members = itemRows.filter((r) => r.decision === 'pending')
+  if (members.length === 0) {
+    const maxIter = Math.max(...itemRows.map((r) => r.reviewIteration))
+    const atIter = itemRows.filter((r) => r.reviewIteration === maxIter)
+    const gens = atIter
+      .map((r) => r.roundGeneration)
+      .filter((g): g is number => g !== null && g !== undefined)
+    members =
+      gens.length > 0 ? atIter.filter((r) => r.roundGeneration === Math.max(...gens)) : atIter
+  }
+  members = members.slice().sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0))
+  return { representative: members[0]!, members }
+}
+
+/**
+ * Does the current review round represent a HUMAN conclusion (approve / reject /
+ * iterate by a non-system decider)? `null` / pending / superseded / system-made
+ * (upstream-refresh supersede, sibling-cascade invalidation) → false. Fed the
+ * representative of `selectCurrentReviewRound`.
+ */
+export function isHumanReviewConclusion(
+  representative: { decision: DocVersionDecision; decidedBy: string | null } | null | undefined,
+): boolean {
+  if (representative === null || representative === undefined) return false
+  const { decision } = representative
+  if (decision !== 'approved' && decision !== 'rejected' && decision !== 'iterated') return false
+  return !isSystemDecision(representative.decidedBy)
+}
+
 export const DocVersionSchema = z.object({
   id: z.string(),
   taskId: z.string(),

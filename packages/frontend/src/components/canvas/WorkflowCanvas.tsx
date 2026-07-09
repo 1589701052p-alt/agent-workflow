@@ -173,6 +173,15 @@ export interface WorkflowCanvasProps {
    * is flipped. The task-detail page POSTs the new directive + invalidates.
    */
   onNodeClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void
+  /**
+   * RFC-158: per review-node click target ('awaiting' | 'decided'), keyed by
+   * workflow node id. When DEFINED (task-detail canvas) a review node with an
+   * entry renders a click-to-open hint + pointer cursor; nodes absent from the
+   * map are not clickable. Undefined (editor canvas) ⇒ no hints and a
+   * byte-for-byte unchanged canvas (golden-lock). Changing this map rebuilds
+   * node data the same way `nodeStatuses` / `questionCounts` do.
+   */
+  reviewNavs?: Record<string, 'awaiting' | 'decided'>
 }
 
 /**
@@ -209,6 +218,7 @@ function CanvasInner({
   onNodeQuestionBadgeClick,
   clarifyDirectives,
   onNodeClarifyDirectiveToggle,
+  reviewNavs,
   handleRef,
 }: WorkflowCanvasProps & {
   handleRef?: React.ForwardedRef<WorkflowCanvasHandle>
@@ -318,6 +328,7 @@ function CanvasInner({
         handleQuestionBadgeClick,
         clarifyDirectives,
         handleClarifyDirectiveToggle,
+        reviewNavs,
       ),
     ),
   )
@@ -333,6 +344,9 @@ function CanvasInner({
   // RFC-122: mirror of the questionCounts ref-guard so a directives-only change
   // (toggle POST resolves, definition unchanged) repaints the toggles.
   const externalClarifyDirectivesRef = useRef(clarifyDirectives)
+  // RFC-158: mirror of the same ref-guard so a reviewNavs-only change (node-runs
+  // query resolves / a review advances, definition unchanged) repaints hints.
+  const externalReviewNavsRef = useRef(reviewNavs)
   // Track the last agentByName ref we rebuilt against. The canvas is often
   // mounted on the task-detail page before the `useQuery(['agents'])` call
   // resolves; on first render `agents` is `[]`, so agent-node `outputPorts`
@@ -371,12 +385,22 @@ function CanvasInner({
     const questionsChanged = questionCounts !== externalQuestionCountsRef.current
     // RFC-122: directive map change repaints the toggles (same ref-guard shape).
     const directivesChanged = clarifyDirectives !== externalClarifyDirectivesRef.current
-    if (defChanged || statusChanged || agentsChanged || questionsChanged || directivesChanged) {
+    // RFC-158: reviewNavs map change repaints review-node hints (same shape).
+    const reviewNavsChanged = reviewNavs !== externalReviewNavsRef.current
+    if (
+      defChanged ||
+      statusChanged ||
+      agentsChanged ||
+      questionsChanged ||
+      directivesChanged ||
+      reviewNavsChanged
+    ) {
       externalDefRef.current = definition
       externalStatusesRef.current = nodeStatuses
       externalAgentsRef.current = agentByName
       externalQuestionCountsRef.current = questionCounts
       externalClarifyDirectivesRef.current = clarifyDirectives
+      externalReviewNavsRef.current = reviewNavs
       // Preserve `selected: true` across the rebuild. Without this, an
       // inspector edit (which mints a new `definition` reference) wipes
       // the selected flag, xyflow sees a phantom deselect and fires
@@ -396,6 +420,7 @@ function CanvasInner({
               handleQuestionBadgeClick,
               clarifyDirectives,
               handleClarifyDirectiveToggle,
+              reviewNavs,
             ),
             measured,
           ),
@@ -423,6 +448,7 @@ function CanvasInner({
     handleQuestionBadgeClick,
     clarifyDirectives,
     handleClarifyDirectiveToggle,
+    reviewNavs,
   ])
 
   const handleNodesChange = useCallback(
@@ -1565,6 +1591,10 @@ function toFlowNodes(
   // `clarifyDirective` (golden-lock — data byte-for-byte identical to before).
   clarifyDirectives?: Record<string, ClarifyDirective>,
   onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void,
+  // RFC-158: per review-node click target. When `reviewNavs` is undefined
+  // (editor canvas) no review node gets a `reviewNav` (golden-lock — data
+  // byte-for-byte identical to before).
+  reviewNavs?: Record<string, 'awaiting' | 'decided'>,
 ): Node[] {
   const loopBodyIds = new Set<string>()
   for (const n of definition.nodes) {
@@ -1606,6 +1636,14 @@ function toFlowNodes(
       if (onClarifyDirectiveToggle !== undefined) {
         data.onClarifyDirectiveToggle = onClarifyDirectiveToggle
       }
+    }
+    // RFC-158: mark a review node's click target so ReviewNode can render the
+    // "click to open review / view latest conclusion" hint + pointer cursor.
+    // Only review nodes present in `reviewNavs` get it; absent ⇒ not clickable.
+    // Undefined map (editor canvas) ⇒ no review node ever gets it (golden-lock).
+    if (reviewNavs !== undefined && n.kind === 'review') {
+      const nav = reviewNavs[n.id]
+      if (nav !== undefined) data.reviewNav = nav
     }
     if (loopBodyIds.has(n.id)) data.loopBody = true
     if (isWrapperKind(n.kind)) {
@@ -2038,6 +2076,9 @@ export const __testToFlowNodes = (
   // the same way the question badge is.
   clarifyDirectives?: Record<string, ClarifyDirective>,
   onClarifyDirectiveToggle?: (nodeId: string, next: ClarifyDirective) => void,
+  // RFC-158: review-node click targets, so the reviewNav-threading is testable
+  // the same way questionCounts / clarifyDirectives are.
+  reviewNavs?: Record<string, 'awaiting' | 'decided'>,
 ): Node[] => {
   const def: WorkflowDefinition = {
     $schema_version: 1,
@@ -2055,6 +2096,7 @@ export const __testToFlowNodes = (
     onQuestionBadgeClick,
     clarifyDirectives,
     onClarifyDirectiveToggle,
+    reviewNavs,
   )
 }
 export const __testToFlowEdges = toFlowEdges

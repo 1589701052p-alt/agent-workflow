@@ -1937,6 +1937,9 @@ export interface Resources {
   /** Canvas chip label for review nodes (⚖ icon). */
   reviewNode: {
     label: string
+    /** RFC-158: task-detail canvas click hints when the review node is clickable. */
+    navAwaiting: string
+    navDecided: string
   }
   /** Canvas chip label fallback for clarify / cross-clarify nodes — used
    *  when the renderer is invoked without an explicit `data.kindLabel`. */
@@ -4449,6 +4452,8 @@ export const zhCN: Resources = {
   },
   reviewNode: {
     label: '评审',
+    navAwaiting: '点击打开评审',
+    navDecided: '点击查看最近评审结论',
   },
   clarifyNode: {
     label: '反问',

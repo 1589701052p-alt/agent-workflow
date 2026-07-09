@@ -49,8 +49,9 @@ describe('tasks.detail wires NodeDetailDrawer close through WorkflowCanvas.clear
 
   test('TaskStatusCanvas accepts canvasRef and forwards it to WorkflowCanvas', async () => {
     const src = await fs.readFile(SRC, 'utf8')
-    // Prop on the inner component...
-    expect(src).toMatch(/canvasRef\?: React\.Ref<WorkflowCanvasHandle>/)
+    // Prop on the inner component. RFC-158 narrowed React.Ref → RefObject so the
+    // onSelect review branch can read canvasRef.current?.clearSelection().
+    expect(src).toMatch(/canvasRef\?: React\.RefObject<WorkflowCanvasHandle \| null>/)
     // ...threaded into WorkflowCanvas.
     expect(src).toMatch(/<WorkflowCanvas\s+ref=\{canvasRef\}/)
   })
