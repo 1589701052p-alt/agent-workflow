@@ -52,9 +52,7 @@ import {
   workflows,
 } from '@/db/schema'
 import { getWorkflow } from '@/services/workflow'
-import { listAgents } from '@/services/agent'
-import { listSkills } from '@/services/skill'
-import { validateWorkflowDef } from '@/services/workflow.validator'
+import { buildWorkflowValidationContext, validateWorkflowDef } from '@/services/workflow.validator'
 import { materializingSpaces } from '@/services/gc'
 import { rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import { WRAPPER_KINDS } from '@/services/dispatchFrontier'
@@ -963,10 +961,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   // Static validation gate (proposal.md §静态校验): "校验失败不阻止保存，但阻止启动 task".
   // Run the same 5-rule check the editor uses, against the live agent/skill set,
   // and refuse to launch if it surfaces any error-severity issues. Warnings pass.
-  const validation = validateWorkflowDef(workflow.definition, {
-    agents: await listAgents(deps.db),
-    skills: await listSkills(deps.db),
-  })
+  const validation = validateWorkflowDef(
+    workflow.definition,
+    await buildWorkflowValidationContext(deps.db),
+  )
   if (!validation.ok) {
     const errors = validation.issues.filter((i) => (i.severity ?? 'error') === 'error')
     throw new ValidationError(
@@ -1087,6 +1085,10 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const headBaseCommit = head?.baseCommit ?? baseCommit
 
   const now = Date.now()
+  // Codex P1 (rollback scope): the catch below may only roll back rows THIS
+  // launch inserted — if the insert itself failed (e.g. a handed-off taskId
+  // already exists), deleting by taskId would destroy the pre-existing task.
+  let taskRowInserted = false
   try {
     await deps.db.insert(tasks).values({
       id: taskId,
@@ -1145,6 +1147,7 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       // never CAS it back to pending against a missing directory.
       workspacePrunedAt: earlyError !== null && worktreePath === '' ? now : null,
     })
+    taskRowInserted = true
 
     // RFC-066: persist per-repo metadata. Single-repo tasks land one row at
     // repo_index=0 mirroring the legacy columns above; multi-repo tasks land
@@ -1211,11 +1214,13 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
     // ownerless with no workspace/tombstone/scheduler. Best-effort delete;
     // a row that never landed (insert itself threw) makes this a no-op, and
     // recordLaunchContext's own rollback just makes it idempotent.
-    try {
-      await deps.db.delete(taskRepos).where(eq(taskRepos.taskId, taskId))
-      await deps.db.delete(tasks).where(eq(tasks.id, taskId))
-    } catch {
-      /* best-effort */
+    if (taskRowInserted) {
+      try {
+        await deps.db.delete(taskRepos).where(eq(taskRepos.taskId, taskId))
+        await deps.db.delete(tasks).where(eq(tasks.id, taskId))
+      } catch {
+        /* best-effort */
+      }
     }
     // RFC-165 (F9): a scratch dir whose row failed to commit (insert error or
     // collaborator rollback above) is unreachable from any task row — the
@@ -1850,10 +1855,10 @@ export async function syncTaskWorkflow(
     )
   }
   // Same static validation gate as launch — never sync an invalid definition in.
-  const validation = validateWorkflowDef(workflow.definition, {
-    agents: await listAgents(db),
-    skills: await listSkills(db),
-  })
+  const validation = validateWorkflowDef(
+    workflow.definition,
+    await buildWorkflowValidationContext(db),
+  )
   if (!validation.ok) {
     const errors = validation.issues.filter((i) => (i.severity ?? 'error') === 'error')
     throw new ValidationError(
@@ -2001,10 +2006,7 @@ export async function computeWorkflowSyncPreview(
   }
 
   const diff = diffWorkflowForSync(oldDef, newDef, buildSyncRunSummary(runs, producedPortsByNode))
-  const validation = validateWorkflowDef(newDef, {
-    agents: await listAgents(db),
-    skills: await listSkills(db),
-  })
+  const validation = validateWorkflowDef(newDef, await buildWorkflowValidationContext(db))
   const invalidIssues = validation.ok
     ? []
     : validation.issues

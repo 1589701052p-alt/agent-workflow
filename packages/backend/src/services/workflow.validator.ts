@@ -58,6 +58,22 @@ import { NotFoundError } from '@/util/errors'
 // Entry points
 // -----------------------------------------------------------------------------
 
+/**
+ * RFC-165 (F14/R3-3): THE production validation context — agents + skills +
+ * plugins, all live from the DB. Every launch-path / sync-path caller MUST
+ * build its ctx through this helper: hand-rolled `{agents, skills}` objects
+ * silently skipped the plugin checks (ctx.plugins undefined ⇒ no-op), so a
+ * workflow referencing a missing/disabled plugin validated at launch and
+ * died at spawn. A consistency lock test pins every caller to this helper.
+ */
+export async function buildWorkflowValidationContext(db: DbClient): Promise<ValidatorContext> {
+  return {
+    agents: await listAgents(db),
+    skills: await listSkills(db),
+    plugins: await listPlugins(db),
+  }
+}
+
 export async function validateWorkflowById(
   db: DbClient,
   id: string,
@@ -66,11 +82,7 @@ export async function validateWorkflowById(
   if (wf === null) {
     throw new NotFoundError('workflow-not-found', `workflow '${id}' not found`)
   }
-  return validateWorkflowDef(wf.definition, {
-    agents: await listAgents(db),
-    skills: await listSkills(db),
-    plugins: await listPlugins(db),
-  })
+  return validateWorkflowDef(wf.definition, await buildWorkflowValidationContext(db))
 }
 
 export interface ValidatorContext {

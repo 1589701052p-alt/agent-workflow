@@ -152,6 +152,42 @@ describe('runCommitPush', () => {
     expect(author.stdout.trim()).toBe('agent-workflow <agent-workflow@localhost>')
   })
 
+  test('inherited GIT_AUTHOR_*/GIT_COMMITTER_* env cannot leak into framework commits', async () => {
+    // Codex P2: git gives GIT_AUTHOR_*/GIT_COMMITTER_* env precedence over
+    // `-c user.*`, and runGit passes process.env through — a daemon started
+    // from a shell exporting those would stamp (or break) every framework
+    // commit. The runner must inject its own identity env on commit-class
+    // operations, outranking whatever it inherited.
+    f = await build()
+    writeFileSync(join(f.repo, 'b.txt'), 'x\n')
+    const prev = { ...process.env }
+    process.env.GIT_AUTHOR_NAME = 'Evil Ambient'
+    process.env.GIT_AUTHOR_EMAIL = 'evil@ambient'
+    process.env.GIT_COMMITTER_NAME = 'Evil Ambient'
+    process.env.GIT_COMMITTER_EMAIL = 'evil@ambient'
+    try {
+      const { meta } = await runCommitPush(
+        baseParams(f, { gitUserName: null, gitUserEmail: null }),
+        { db: f.db },
+      )
+      expect(meta.pushOutcome).toBe('pushed')
+      const author = await runGit(f.repo, ['log', '-1', '--format=%an <%ae> %cn <%ce>'])
+      expect(author.stdout.trim()).toBe(
+        'agent-workflow <agent-workflow@localhost> agent-workflow <agent-workflow@localhost>',
+      )
+    } finally {
+      for (const k of [
+        'GIT_AUTHOR_NAME',
+        'GIT_AUTHOR_EMAIL',
+        'GIT_COMMITTER_NAME',
+        'GIT_COMMITTER_EMAIL',
+      ]) {
+        if (prev[k] === undefined) delete process.env[k]
+        else process.env[k] = prev[k]
+      }
+    }
+  })
+
   test('no changes → skipped-empty, no commit', async () => {
     f = await build()
     const { meta } = await runCommitPush(baseParams(f), { db: f.db })

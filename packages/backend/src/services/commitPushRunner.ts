@@ -117,8 +117,13 @@ export async function runCommitPush(
   const log = deps.log ?? createLogger('commit-push')
   const W = params.worktreePath
   const remote = params.pushRemote ?? 'origin'
-  const idArgs = identityArgs(params.gitUserName, params.gitUserEmail)
+  const idEnv = identityEnv(params.gitUserName, params.gitUserEmail)
   const g = (args: string[]) => runGit(W, args)
+  // Commit-class operations (commit / amend / merge) carry the identity as
+  // GIT_AUTHOR_*/GIT_COMMITTER_* env — git gives those precedence over any
+  // `-c user.*`, so inherited daemon env (a user shell exporting GIT_AUTHOR_*)
+  // can never leak into, or break, framework commits.
+  const gc = (args: string[]) => runGit(W, args, { env: idEnv })
 
   const nodeId = commitPushNodeId(params.agentNodeId, params.repoSlug)
   const startedAt = Date.now()
@@ -236,7 +241,7 @@ export async function runCommitPush(
   }
 
   // 4. Commit locally with the task identity.
-  const commit = await g([...idArgs, 'commit', '-m', message])
+  const commit = await gc(['commit', '-m', message])
   if (commit.exitCode !== 0) {
     // A failed commit is unusual (e.g. unknown identity, hook). Surface it as a
     // failed node but keep the staged changes for the user.
@@ -311,7 +316,7 @@ export async function runCommitPush(
           pushError: redactPushError(fetch.stderr),
         })
       }
-      const merge = await g([...idArgs, 'merge', '--no-edit', 'FETCH_HEAD'])
+      const merge = await gc(['merge', '--no-edit', 'FETCH_HEAD'])
       if (merge.exitCode !== 0) {
         await g(['merge', '--abort'])
         return finalize('commit-local-failed', {
@@ -345,7 +350,7 @@ export async function runCommitPush(
       if (rep.message != null && rep.message.trim() !== '') {
         message = rep.message.trim()
         messageSource = 'llm-repair'
-        await g([...idArgs, 'commit', '--amend', '-m', message])
+        await gc(['commit', '--amend', '-m', message])
       }
     } catch (err) {
       log.warn('push repair generation failed', {
@@ -358,22 +363,26 @@ export async function runCommitPush(
   }
 }
 
-function identityArgs(name: string | null, email: string | null): string[] {
+function identityEnv(name: string | null, email: string | null): Record<string, string> {
   const n = name?.trim()
   const e = email?.trim()
-  if (n && e) return ['-c', `user.name=${n}`, '-c', `user.email=${e}`]
-  // RFC-165: no task identity → fall back to the fixed platform identity.
-  // The framework's auto-commit used to inherit the ambient git config via
-  // the path-mode parent repo's local user.* — a URL/scratch worktree's
-  // parent is the cache clone, which carries none, so on hosts without a
-  // global gitconfig (CI runners, fresh servers) `git commit` refused and
-  // every autoCommitPush task degraded to commit-local-failed.
-  return [
-    '-c',
-    `user.name=${AW_INTERNAL_GIT_IDENTITY['GIT_AUTHOR_NAME']}`,
-    '-c',
-    `user.email=${AW_INTERNAL_GIT_IDENTITY['GIT_AUTHOR_EMAIL']}`,
-  ]
+  // RFC-165: task identity when the launch supplied one, else the fixed
+  // platform identity. The framework's auto-commit used to inherit the
+  // ambient git config via the path-mode parent repo's local user.* — a
+  // URL/scratch worktree's parent is the cache clone, which carries none,
+  // so on hosts without a global gitconfig (CI runners, fresh servers)
+  // `git commit` refused and every autoCommitPush task degraded to
+  // commit-local-failed. Env (not `-c`) because GIT_AUTHOR_*/GIT_COMMITTER_*
+  // outrank config-level identity — this also SHIELDS framework commits from
+  // whatever identity env the daemon process happened to inherit.
+  const an = n && e ? n : AW_INTERNAL_GIT_IDENTITY['GIT_AUTHOR_NAME']!
+  const ae = n && e ? e : AW_INTERNAL_GIT_IDENTITY['GIT_AUTHOR_EMAIL']!
+  return {
+    GIT_AUTHOR_NAME: an,
+    GIT_AUTHOR_EMAIL: ae,
+    GIT_COMMITTER_NAME: an,
+    GIT_COMMITTER_EMAIL: ae,
+  }
 }
 
 function basenameOf(p: string): string {

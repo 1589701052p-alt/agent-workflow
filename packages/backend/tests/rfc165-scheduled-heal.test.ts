@@ -314,6 +314,49 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     rmSync(tmp, { recursive: true, force: true })
   })
 
+  test('H11 repoPath inside a worktree subdir → healed URL points at the repo ROOT', async () => {
+    // Codex P2: `rev-parse` succeeds in a subdir, but `git clone
+    // file:///repo/subdir` fails (not a repo root) — the healed row would sit
+    // enabled yet unable to fire.
+    const repo = await seedRepo('r11')
+    const sub = join(repo, 'packages', 'web')
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(sub, { recursive: true })
+    const id = await seedRow({
+      workflowId: 'wf1',
+      name: 't',
+      inputs: {},
+      repoPath: sub,
+      baseBranch: 'main',
+    })
+    const r = await healScheduledLaunchPayloads(db)
+    expect(r.converted).toBe(1)
+    const p = await rawPayload(id)
+    expect(p['repoUrl']).toBe(pathToFileURL(realpathSync(repo)).href)
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test('H12 a LOCAL branch literally named origin/topic is NOT disabled (ref verified per repo)', async () => {
+    // Codex P2: spelling alone misclassified refs/heads/origin/topic as
+    // remote-tracking and disabled a runnable schedule at boot.
+    const repo = await seedRepo('r12')
+    await runGit(repo, ['branch', 'origin/topic'])
+    const id = await seedRow({
+      workflowId: 'wf1',
+      name: 't',
+      inputs: {},
+      repoPath: repo,
+      baseBranch: 'origin/topic',
+    })
+    const r = await healScheduledLaunchPayloads(db)
+    expect(r.disabled).toBe(0)
+    expect(r.converted).toBe(1)
+    const p = await rawPayload(id)
+    expect(p['ref']).toBe('origin/topic')
+    expect((await rawRow(id)).enabled).toBe(true)
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
   test('H10 degraded row: rename + disable pass WITHOUT repair (guard narrowed)', async () => {
     // Implementation-gate P2: only operations that CONSUME the degraded field
     // (the result being enabled) force a full repair — a corrupt schedule must

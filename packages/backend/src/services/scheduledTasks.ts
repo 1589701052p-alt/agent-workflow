@@ -384,22 +384,51 @@ export async function healScheduledLaunchPayloads(
       .where(eq(scheduledTasks.id, row.id))
     disabled += 1
   }
-  // Bare repos / worktree subdirs have no `.git` child — probe with git
-  // itself (P2 review fix; the old `.git`-child check disabled runnable rows).
-  const isGitDir = async (p: string): Promise<boolean> => {
-    if (!existsSync(p)) return false
+  // Resolve a legacy path to the CLONABLE git root (P2 review fixes ×2):
+  //   * a `.git`-child check missed bare repos / worktree subdirs → probe with
+  //     git itself;
+  //   * a subdir inside a worktree passes `rev-parse` but `git clone
+  //     file:///repo/subdir` fails (not a repo root) → canonicalize to
+  //     `--show-toplevel`, falling back to the absolute git dir for bare
+  //     repos (which have no worktree).
+  // Returns null when the path isn't inside any git repo.
+  const resolveGitRoot = async (p: string): Promise<string | null> => {
+    if (!existsSync(p)) return null
     try {
-      return (await runGit(p, ['rev-parse', '--git-dir'])).exitCode === 0
+      const top = await runGit(p, ['rev-parse', '--show-toplevel'])
+      if (top.exitCode === 0 && top.stdout.trim() !== '') return top.stdout.trim()
+      const bare = await runGit(p, ['rev-parse', '--is-bare-repository'])
+      if (bare.exitCode === 0 && bare.stdout.trim() === 'true') {
+        const gd = await runGit(p, ['rev-parse', '--absolute-git-dir'])
+        if (gd.exitCode === 0 && gd.stdout.trim() !== '') return gd.stdout.trim()
+      }
+      return null
     } catch {
-      return false
+      return null
     }
   }
   const toFileUrl = (p: string): string => pathToFileURL(realpathSync(p)).href
   // A remote-tracking ref cannot be carried into the file clone faithfully —
   // the clone's `origin/x` points at the SOURCE's local x, not the source's
   // own refs/remotes/origin/x (P1 review fix: disable instead of drifting).
-  const isRemoteTrackingRef = (ref: string): boolean =>
-    ref.startsWith('origin/') || ref.startsWith('refs/remotes/') || ref.startsWith('remotes/')
+  // Spelling alone is NOT enough (P2 review fix): a real local branch or tag
+  // literally named `origin/topic` is legitimate — verify against the source
+  // repo and only treat the ref as remote-tracking when no local ref claims
+  // that exact name.
+  const isRemoteTrackingRef = async (root: string, ref: string): Promise<boolean> => {
+    const spelledRemote =
+      ref.startsWith('origin/') || ref.startsWith('refs/remotes/') || ref.startsWith('remotes/')
+    if (!spelledRemote) return false
+    try {
+      const local = await runGit(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${ref}`])
+      if (local.exitCode === 0) return false
+      const tag = await runGit(root, ['rev-parse', '--verify', '--quiet', `refs/tags/${ref}`])
+      if (tag.exitCode === 0) return false
+    } catch {
+      /* fall through to remote-tracking */
+    }
+    return true
+  }
 
   for (const row of rows) {
     if (!row.enabled && (row.lastError ?? '').startsWith('rfc165-')) continue
@@ -421,17 +450,28 @@ export async function healScheduledLaunchPayloads(
       continue
     }
 
-    const paths: string[] = []
-    if (typeof body['repoPath'] === 'string') paths.push(body['repoPath'] as string)
+    // Pair each legacy path with the baseBranch that would ride into `ref`,
+    // so both the root canonicalization and the remote-tracking check run
+    // against the RIGHT source repo.
+    const pairs: Array<{ path: string; ref: string | undefined }> = []
+    if (typeof body['repoPath'] === 'string') {
+      pairs.push({
+        path: body['repoPath'] as string,
+        ref: typeof body['baseBranch'] === 'string' ? (body['baseBranch'] as string) : undefined,
+      })
+    }
     const repos = Array.isArray(body['repos'])
       ? (body['repos'] as Array<Record<string, unknown>>)
       : []
     for (const r of repos) {
       if (r !== null && typeof r === 'object' && typeof r['repoPath'] === 'string') {
-        paths.push(r['repoPath'] as string)
+        pairs.push({
+          path: r['repoPath'] as string,
+          ref: typeof r['baseBranch'] === 'string' ? (r['baseBranch'] as string) : undefined,
+        })
       }
     }
-    if (paths.length === 0) {
+    if (pairs.length === 0) {
       // Retired keys present but no path value (e.g. stray baseBranch) — just
       // strip them so the payload becomes v2-clean.
       delete body['baseBranch']
@@ -443,27 +483,27 @@ export async function healScheduledLaunchPayloads(
       converted += 1
       continue
     }
+    const rootByPath = new Map<string, string>()
     let missing: string | undefined
-    for (const p of paths) {
-      if (!(await isGitDir(p))) {
-        missing = p
+    for (const { path } of pairs) {
+      const root = await resolveGitRoot(path)
+      if (root === null) {
+        missing = path
         break
       }
+      rootByPath.set(path, root)
     }
     if (missing !== undefined) {
       await disable(row, `rfc165-local-path-retired: ${missing}`)
       continue
     }
-    // Collect every baseBranch the rewrite would carry into `ref` — a
-    // remote-tracking form cannot survive the clone faithfully.
-    const refs: string[] = []
-    if (typeof body['baseBranch'] === 'string') refs.push(body['baseBranch'] as string)
-    for (const r of repos) {
-      if (r !== null && typeof r === 'object' && typeof r['baseBranch'] === 'string') {
-        refs.push(r['baseBranch'] as string)
+    let remoteRef: string | undefined
+    for (const { path, ref } of pairs) {
+      if (ref !== undefined && (await isRemoteTrackingRef(rootByPath.get(path)!, ref))) {
+        remoteRef = ref
+        break
       }
     }
-    const remoteRef = refs.find((r) => isRemoteTrackingRef(r))
     if (remoteRef !== undefined) {
       await disable(
         row,
@@ -473,7 +513,7 @@ export async function healScheduledLaunchPayloads(
     }
 
     if (typeof body['repoPath'] === 'string') {
-      body['repoUrl'] = toFileUrl(body['repoPath'] as string)
+      body['repoUrl'] = toFileUrl(rootByPath.get(body['repoPath'] as string)!)
       if (typeof body['baseBranch'] === 'string') body['ref'] = body['baseBranch']
       delete body['repoPath']
       delete body['baseBranch']
@@ -481,7 +521,7 @@ export async function healScheduledLaunchPayloads(
     for (const r of repos) {
       if (r === null || typeof r !== 'object') continue
       if (typeof r['repoPath'] === 'string') {
-        r['repoUrl'] = toFileUrl(r['repoPath'] as string)
+        r['repoUrl'] = toFileUrl(rootByPath.get(r['repoPath'] as string)!)
         if (typeof r['baseBranch'] === 'string') r['ref'] = r['baseBranch']
         delete r['repoPath']
         delete r['baseBranch']

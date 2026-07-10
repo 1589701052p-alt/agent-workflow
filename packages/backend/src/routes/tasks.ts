@@ -78,9 +78,7 @@ import { clearAutoRecoverySuspension, isAutoRecoverySuspended } from '@/services
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
-import { validateWorkflowDef } from '@/services/workflow.validator'
-import { listAgents } from '@/services/agent'
-import { listSkills } from '@/services/skill'
+import { buildWorkflowValidationContext, validateWorkflowDef } from '@/services/workflow.validator'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { Paths } from '@/util/paths'
 import { NotFoundError, ValidationError } from '@/util/errors'
@@ -855,10 +853,10 @@ async function handleMultipartTaskStart(
   // triggers a clone. startTask validates again; validateWorkflowDef is a pure,
   // side-effect-free function so the double check is cheap.
   {
-    const validation = validateWorkflowDef(workflow.definition, {
-      agents: await listAgents(deps.db),
-      skills: await listSkills(deps.db),
-    })
+    const validation = validateWorkflowDef(
+      workflow.definition,
+      await buildWorkflowValidationContext(deps.db),
+    )
     if (!validation.ok) {
       const errors = validation.issues.filter((i) => (i.severity ?? 'error') === 'error')
       throw new ValidationError(
