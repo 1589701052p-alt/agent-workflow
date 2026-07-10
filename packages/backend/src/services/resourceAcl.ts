@@ -34,6 +34,7 @@ import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
 import {
   agents,
+  dynamicWorkflowSpaces,
   mcps,
   plugins,
   resourceGrants,
@@ -68,6 +69,7 @@ export const ACL_TABLES = {
   plugin: plugins,
   workflow: workflows,
   workgroup: workgroups, // RFC-164
+  dynamic_workflow_space: dynamicWorkflowSpaces, // RFC-167
 } as const
 
 export function isAdminActor(actor: Actor): boolean {
