@@ -16,6 +16,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   AgentInputPortSchema,
+  AgentInputPortsSchema,
   AgentSchema,
   type CapabilitySource,
   CreateAgentSchema,
@@ -64,6 +65,27 @@ describe('AgentInputPortSchema', () => {
 
   test('rejects an over-long name (>128)', () => {
     expect(() => AgentInputPortSchema.parse({ name: 'a'.repeat(129) })).toThrow()
+  })
+})
+
+describe('AgentInputPortsSchema — name uniqueness (Codex PR-1 P2)', () => {
+  test('accepts distinct port names', () => {
+    expect(
+      AgentInputPortsSchema.parse([{ name: 'diff' }, { name: 'spec', kind: 'markdown' }]),
+    ).toEqual([
+      { name: 'diff', kind: 'string' },
+      { name: 'spec', kind: 'markdown' },
+    ])
+  })
+
+  test('rejects duplicate port names (identity key — capability/orchestration)', () => {
+    expect(() =>
+      AgentInputPortsSchema.parse([{ name: 'spec' }, { name: 'spec', kind: 'markdown' }]),
+    ).toThrow()
+  })
+
+  test('accepts empty array', () => {
+    expect(AgentInputPortsSchema.parse([])).toEqual([])
   })
 })
 
@@ -118,6 +140,21 @@ describe('AgentSchema / CreateAgentSchema — RFC-166 inputs', () => {
   test('AgentSchema rejects an input with a bad kind', () => {
     expect(() =>
       AgentSchema.parse({ ...BASE_AGENT_FIELDS, inputs: [{ name: 'x', kind: 'nope' }] }),
+    ).toThrow()
+  })
+
+  test('AgentSchema rejects duplicate input port names', () => {
+    expect(() =>
+      AgentSchema.parse({
+        ...BASE_AGENT_FIELDS,
+        inputs: [{ name: 'spec' }, { name: 'spec', kind: 'markdown' }],
+      }),
+    ).toThrow()
+  })
+
+  test('CreateAgentSchema rejects duplicate input port names', () => {
+    expect(() =>
+      CreateAgentSchema.parse({ name: 'a', inputs: [{ name: 'diff' }, { name: 'diff' }] }),
     ).toThrow()
   })
 })

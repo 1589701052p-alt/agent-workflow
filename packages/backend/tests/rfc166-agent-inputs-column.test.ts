@@ -143,4 +143,21 @@ describe('RFC-166 — agents.inputs column round-trip', () => {
     const fetched = await getAgent(db, 'a')
     expect(fetched?.inputs).toEqual([])
   })
+
+  test('serializeInputs rejects duplicate port names on write (Codex PR-1 P2)', async () => {
+    // Persistence-layer guard: even a service caller that bypassed the route's
+    // CreateAgentSchema validation cannot persist duplicate input port names.
+    await expect(
+      createAgent(db, {
+        ...basePayload('a'),
+        inputs: [
+          { name: 'spec' },
+          { name: 'spec', kind: 'markdown' },
+        ] as unknown as CreateAgentInputs,
+      }),
+    ).rejects.toThrow()
+    // nothing was written (create threw before/at the insert)
+    const rows = await db.select().from(agentsTable).where(eq(agentsTable.name, 'a'))
+    expect(rows.length).toBe(0)
+  })
 })

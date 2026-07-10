@@ -10,7 +10,7 @@ import type {
   RenameAgent,
   UpdateAgent,
 } from '@agent-workflow/shared'
-import { AgentInputPortSchema } from '@agent-workflow/shared'
+import { AgentInputPortSchema, AgentInputPortsSchema } from '@agent-workflow/shared'
 import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -473,10 +473,13 @@ function parseInputsColumn(value: string | null | undefined): AgentInputPort[] {
 }
 
 /** RFC-166 — canonicalize declared input ports for the agents.inputs column:
- *  apply the `kind` default and strip unknown keys, so the stored JSON is
- *  identical whether or not the caller pre-parsed through CreateAgentSchema. */
+ *  apply the `kind` default, strip unknown keys, and REJECT duplicate port
+ *  names (persistence guard mirroring the DTO — port name is an identity key),
+ *  so the stored JSON is identical whether or not the caller pre-parsed through
+ *  CreateAgentSchema. Throws a ZodError on a dupe from a service-layer caller
+ *  that bypassed the route's CreateAgentSchema validation. */
 function serializeInputs(inputs: AgentInputPort[] | undefined): string {
-  return JSON.stringify(AgentInputPortSchema.array().parse(inputs ?? []))
+  return JSON.stringify(AgentInputPortsSchema.parse(inputs ?? []))
 }
 
 function rowToAgent(row: AgentRow): Agent {

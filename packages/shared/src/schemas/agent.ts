@@ -43,6 +43,23 @@ export const AgentInputPortSchema = z.object({
 export type AgentInputPort = z.infer<typeof AgentInputPortSchema>
 
 /**
+ * RFC-166 — the declared-input-ports array. Port `name` is an identity key:
+ * the capability card renders one row per name and the RFC-167 orchestrator
+ * matches upstream→downstream by name, so duplicate names make the contract
+ * ambiguous. Reject repeats at the schema boundary (mirrors the workgroup
+ * member displayName uniqueness refine). serializeInputs re-parses through
+ * this same schema so the persistence path rejects dupes too; the READ path
+ * (parseInputsColumn) stays lenient by design.
+ */
+export const AgentInputPortsSchema = z.array(AgentInputPortSchema).superRefine((ports, ctx) => {
+  const names = ports.map((p) => p.name)
+  if (new Set(names).size !== names.length) {
+    ctx.addIssue({ code: 'custom', message: 'input port name must be unique' })
+  }
+})
+export type AgentInputPorts = z.infer<typeof AgentInputPortsSchema>
+
+/**
  * RFC-060 PR-B — agent role flag. Default `'normal'` for all agents that
  * existed before RFC-060; `'aggregator'` marks an agent designed to sit at
  * the convergence point of a wrapper-fanout (runs once per wrapper, sees
@@ -102,8 +119,9 @@ export const AgentSchema = z.object({
   /** RFC-166 — declarative input ports. OPTIONAL on the DTO (same as
    *  outputKinds/role, RFC-060 precedent): existing fixtures/built-in agents
    *  need not spell it. rowToAgent always populates `[]` so real responses
-   *  carry a value; consumers read `agent.inputs ?? []`. */
-  inputs: z.array(AgentInputPortSchema).optional(),
+   *  carry a value; consumers read `agent.inputs ?? []`. Duplicate port names
+   *  are rejected (AgentInputPortsSchema — name is an identity key). */
+  inputs: AgentInputPortsSchema.optional(),
   /**
    * RFC-060 PR-B — wrapper-fanout output rename sidecar. Only meaningful
    * when `role === 'aggregator'`; absent otherwise.
@@ -182,9 +200,9 @@ export const CreateAgentSchema = z.object({
   outputs: z.array(z.string()).default([]),
   outputKinds: AgentOutputKindsMapSchema.optional(),
   /** RFC-166 — declarative input ports; OPTIONAL on create bodies (server
-   *  fills []). The DTO (AgentSchema) keeps it default-[] so responses are
-   *  symmetrical with outputs; existing callers/fixtures need not spell it. */
-  inputs: z.array(AgentInputPortSchema).optional(),
+   *  fills []). Duplicate port names rejected (AgentInputPortsSchema); existing
+   *  callers/fixtures need not spell it. */
+  inputs: AgentInputPortsSchema.optional(),
   /** RFC-060 PR-B — wrapper-fanout output rename sidecar (aggregator only). */
   outputWrapperPortNames: AgentOutputWrapperPortNamesSchema.optional(),
   /** RFC-060 PR-B — agent role flag; optional, treat absent as 'normal'. */
