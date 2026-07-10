@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -114,13 +115,6 @@ async function setupViaApi(d: DaemonHandle, repoPath: string): Promise<CreatedFi
   expectOk(workflowRes, 'create workflow')
   const workflow = (await workflowRes.json()) as { id: string }
 
-  const recentRes = await fetch(`${d.baseUrl}/api/repos/recent`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ path: repoPath }),
-  })
-  expectOk(recentRes, 'register recent repo')
-
   return { workflowId: workflow.id, workflowName, agentName, repoPath }
 }
 
@@ -197,10 +191,6 @@ test('happy path: agents → workflow → launch → task done → outputs visib
     page.getByRole('heading', { name: `Launch: ${fixtures.workflowName}` }),
   ).toBeVisible()
 
-  // The auto-pick effect should have seeded repoPath + baseBranch from the
-  // recent-repo we registered (main detected via `git init -b main`). The
-  // Field label rendered for the input includes the asterisk for required
-  // fields, so match with a regex instead of exact.
   const topicInput = page
     .locator('label.form-field', { hasText: 'Topic (topic)' })
     .locator('input.form-input')
@@ -210,18 +200,10 @@ test('happy path: agents → workflow → launch → task done → outputs visib
   // RFC-037: task name is now a required field — fill it before submit.
   await page.fill('[data-testid="launch-task-name"]', 'e2e-launch-task')
 
-  // baseBranch picker swaps in once /api/repos/refs resolves. RFC-036: it now
-  // renders as the shared <Select> — a role=combobox trigger + portaled
-  // listbox — so open it and pick 'main' rather than selectOption() on a
-  // native <select> (which no longer exists).
-  // Scope to role=combobox so we wait for the <Select> that swaps in once refs
-  // resolve — NOT the TextInput that carries the same testid before then.
-  const branchSelect = page.locator('[data-testid^="repo-source-base-branch"][role="combobox"]')
-  await expect(branchSelect).toBeVisible({ timeout: 10_000 })
-  await branchSelect.click()
-  // Select rows commit on mousedown (then the listbox unmounts), so dispatch
-  // mousedown directly rather than a full click whose mouseup could miss.
-  await page.getByRole('option', { name: 'main', exact: true }).dispatchEvent('mousedown')
+  // RFC-165: the repo row is URL-only — feed the fixture repo as a file://
+  // URL (the retired recent-repo auto-pick / branch Select are gone).
+  await page.fill('[data-testid="repo-source-url-0"]', pathToFileURL(fixtures.repoPath).href)
+  await page.fill('[data-testid="repo-source-ref-0"]', 'main')
 
   await page.getByRole('button', { name: 'Start task', exact: true }).click()
 
@@ -505,11 +487,7 @@ test('RFC-024: launch task from git URL clones into cache and renders redacted U
   await primeAuthLocalStorage(page, daemon)
   await page.goto(`${daemon.baseUrl}/workflows/${wf.id}/launch`)
 
-  // Switch to Remote URL tab + fill URL.
-  // RFC-066 PR-C: launch route now renders RepoSourceList; the path/url
-  // tab buttons are stamped with a per-row index suffix (`-0` for the
-  // first row, which is the only row in single-repo launches).
-  await page.getByTestId('repo-source-tab-url-0').click()
+  // RFC-165: the row is URL-only — no tab to switch; fill the URL field.
   const urlInput = page
     .locator('label.form-field', { hasText: /Git URL/i })
     .locator('input.form-input')
@@ -734,8 +712,8 @@ test('RFC-027: NodeDetailDrawer Session tab renders the agent conversation', asy
       workflowId: fixtures.workflowId,
       name: 'e2e-fixture-task',
       inputs: { topic: 'rfc-027' },
-      repoPath: fixtures.repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(fixtures.repoPath).href,
+      ref: 'main',
     }),
   })
   expectOk(startRes, 'start task for rfc-027')
@@ -802,8 +780,8 @@ test('RFC-029: Runtime Inventory section renders on the Session tab', async ({ p
       workflowId: fixtures.workflowId,
       name: 'e2e-fixture-task',
       inputs: { topic: 'rfc-029' },
-      repoPath: fixtures.repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(fixtures.repoPath).href,
+      ref: 'main',
     }),
   })
   expectOk(startRes, 'start task for rfc-029')

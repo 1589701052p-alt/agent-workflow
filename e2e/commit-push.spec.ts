@@ -14,6 +14,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -125,14 +126,14 @@ test.describe('RFC-075 — auto commit&push (real daemon + bare remote)', () => 
     expect(wfRes.ok).toBe(true)
     const wf = (await wfRes.json()) as { id: string }
 
-    // Launch with auto commit&push ON, path mode against our repo.
+    // Launch with auto commit&push ON, file:// URL against our repo (RFC-165).
     const taskRes = await api('/api/tasks', {
       method: 'POST',
       body: JSON.stringify({
         name: 'cp-task',
         workflowId: wf.id,
-        repoPath: repo,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(repo).href,
+        ref: 'main',
         autoCommitPush: true,
         inputs: { t: 'go' },
       }),

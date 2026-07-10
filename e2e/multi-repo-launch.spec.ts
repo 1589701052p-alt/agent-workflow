@@ -200,51 +200,6 @@ async function seedWrapperGitWorkflow(daemon: DaemonHandle): Promise<string> {
   return ((await wfRes.json()) as { id: string }).id
 }
 
-/**
- * Pick the baseBranch for repo source row `rowIndex`. The field is
- * `<TextInput>` until `/api/repos/refs` resolves, then swaps to a
- * `<select>`. The previous "probe tagName, then act" pattern (e6271f3)
- * had a race window: between the probe and the action the element
- * could swap, blowing up with "Element is not an <input>". This helper
- * uses Playwright's auto-retrying expect on TWO distinct locators (one
- * scoped to `select[data-testid=...]`, one to `input[data-testid=...]`)
- * so the locator query itself absorbs the swap — whichever element
- * exists at action time is what we act on. The fixture repos always
- * have the requested branch (`main`) so the select path is the
- * dominant happy path; the input fallback only triggers if refs fails
- * to resolve within the budget.
- */
-async function pickBaseBranch(page: Page, rowIndex: number, branch: string): Promise<void> {
-  const tid = `repo-source-base-branch-${rowIndex}`
-  // RFC-036: once /api/repos/refs resolves the branch picker renders as the
-  // shared <Select> (a `button[role=combobox]` + portaled listbox); before
-  // that it's a plain `<input>` TextInput. Both carry the same data-testid.
-  // Use TWO shape-specific locators (NOT one testid locator + a role probe):
-  // probe-then-act on a single locator races — the element can swap between
-  // the read and the action, so `.fill()` lands on the just-arrived button
-  // ("Element is not an <input>"). Auto-retrying waitFor on the combobox
-  // locator instead waits out the swap; the fixture always has the branch so
-  // that's the dominant path, with the input fallback only if refs stall.
-  const branchCombo = page.locator(`button[role="combobox"][data-testid="${tid}"]`)
-  const branchInput = page.locator(`input[data-testid="${tid}"]`)
-  try {
-    await branchCombo.waitFor({ state: 'visible', timeout: 5_000 })
-    await branchCombo.click()
-    // Scope the option to THIS Select's listbox (aria-controls) so a sibling
-    // row's still-closing listbox can't make the option query ambiguous.
-    const listId = await branchCombo.getAttribute('aria-controls')
-    // Select rows commit on mousedown (then the listbox unmounts), so dispatch
-    // mousedown directly rather than a full click whose mouseup could miss.
-    await page
-      .locator(`[id="${listId}"]`)
-      .getByRole('option', { name: branch, exact: true })
-      .dispatchEvent('mousedown')
-  } catch {
-    await branchInput.waitFor({ state: 'visible', timeout: 2_000 })
-    await branchInput.fill(branch)
-  }
-}
-
 test.describe('RFC-066 PR-C — multi-repo launch', () => {
   let daemon: DaemonHandle | undefined
   const repos: RepoFixture[] = []
@@ -263,14 +218,6 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     const repoB = makeFixtureRepo('B')
     repos.push(repoA, repoB)
 
-    // Pre-register the two repos via /api/repos/recent so the launcher
-    // dropdown is populated. NOTE: recent_repos auto-fills row 0 only; the
-    // user types row 1's path manually below.
-    await fetch(`${d.baseUrl}/api/repos/recent`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${d.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: repoA.repoDir }),
-    })
     const wfId = await seedLinearWorkflow(d)
 
     await primeAuthLocalStorage(page, d)
@@ -289,15 +236,11 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     await expect(page.getByTestId('repo-source-remove-0')).toBeVisible()
     await expect(page.getByTestId('repo-source-remove-1')).toBeVisible()
 
-    // Fill row 1 path manually (recent-repo auto-fill only seeds row 0).
-    // The path TextInput sits as the second child of the row's Repo Field;
-    // we target it by index.
-    const row1 = page.getByTestId('repo-source-row-1')
-    await row1
-      .locator('input.form-input[placeholder*="paste"], input.form-input')
-      .first()
-      .fill(repoB.repoDir)
-    await pickBaseBranch(page, 1, 'main')
+    // RFC-165: rows are URL-only — feed both fixture repos as file:// URLs.
+    await page.fill('[data-testid="repo-source-url-0"]', pathToFileURL(repoA.repoDir).href)
+    await page.fill('[data-testid="repo-source-ref-0"]', 'main')
+    await page.fill('[data-testid="repo-source-url-1"]', pathToFileURL(repoB.repoDir).href)
+    await page.fill('[data-testid="repo-source-ref-1"]', 'main')
 
     // Topic input.
     await page
@@ -330,11 +273,6 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     const repoA = makeFixtureRepo('wg-A')
     const repoB = makeFixtureRepo('wg-B')
     repos.push(repoA, repoB)
-    await fetch(`${d.baseUrl}/api/repos/recent`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${d.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: repoA.repoDir }),
-    })
     const wfId = await seedWrapperGitWorkflow(d)
 
     await primeAuthLocalStorage(page, d)
@@ -346,9 +284,8 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     // Add a second repo → banner should fire + Start disabled.
     await page.getByTestId('repo-source-add').click()
     await expect(page.getByTestId('repo-source-row-1')).toBeVisible()
-    const row1 = page.getByTestId('repo-source-row-1')
-    await row1.locator('input.form-input').first().fill(repoB.repoDir)
-    await pickBaseBranch(page, 1, 'main')
+    await page.fill('[data-testid="repo-source-url-0"]', pathToFileURL(repoA.repoDir).href)
+    await page.fill('[data-testid="repo-source-url-1"]', pathToFileURL(repoB.repoDir).href)
 
     // Banner is visible.
     const banner = page.getByTestId('repo-source-multi-banner')

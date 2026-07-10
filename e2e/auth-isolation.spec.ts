@@ -208,8 +208,8 @@ async function launchTaskAs(
       workflowId,
       name,
       inputs: { topic: 'auth-isolation' },
-      repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(repoPath).href,
+      ref: 'main',
     }),
   })
   if (!res.ok) {

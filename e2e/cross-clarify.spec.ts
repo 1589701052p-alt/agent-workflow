@@ -260,15 +260,6 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     expectOk(wfRes, 'create workflow')
     const workflow = (await wfRes.json()) as { id: string }
 
-    expectOk(
-      await fetch(`${daemon.baseUrl}/api/repos/recent`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ path: repoDir }),
-      }),
-      'register recent repo',
-    )
-
     fixtures = { workflowId: workflow.id, repoPath: repoDir }
   })
 
@@ -295,8 +286,8 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
       body: JSON.stringify({
         workflowId: fixtures.workflowId,
         name: 'e2e-cross-clarify-task',
-        repoPath: fixtures.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(fixtures.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'cache eviction strategy' },
       }),
     })
@@ -415,6 +406,8 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     const questionerRuns = runs.runs.filter(
       (r) => r.nodeId === 'questioner' && r.parentNodeRunId === null,
     )
-    expect(questionerRuns.length, 'questioner reran (>= 2 top-level runs)').toBeGreaterThanOrEqual(2)
+    expect(questionerRuns.length, 'questioner reran (>= 2 top-level runs)').toBeGreaterThanOrEqual(
+      2,
+    )
   })
 })

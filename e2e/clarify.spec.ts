@@ -261,15 +261,6 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
     expectOk(wfRes, 'create workflow')
     const workflow = (await wfRes.json()) as { id: string }
 
-    expectOk(
-      await fetch(`${daemon.baseUrl}/api/repos/recent`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ path: repoDir }),
-      }),
-      'register recent repo',
-    )
-
     fixtures = {
       workflowId: workflow.id,
       repoPath: repoDir,
@@ -301,8 +292,8 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
       body: JSON.stringify({
         workflowId: fixtures.workflowId,
         name: 'e2e-fixture-task',
-        repoPath: fixtures.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(fixtures.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'order_status enum' },
       }),
     })
@@ -311,7 +302,12 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
     const taskId = launched.id
 
     // 2. Task should pause awaiting_human after designer's first envelope.
-    const awaiting = await pollTaskStatus(daemon, taskId, (t) => t.status === 'awaiting_human', 30_000)
+    const awaiting = await pollTaskStatus(
+      daemon,
+      taskId,
+      (t) => t.status === 'awaiting_human',
+      30_000,
+    )
     expect(awaiting.status).toBe('awaiting_human')
 
     // 3. The clarify list endpoint should surface exactly one session for this task.
@@ -325,9 +321,12 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
     expect(session.questionCount).toBe(2)
 
     // 4. Detail endpoint returns both questions with options + recommended flag.
-    const detailRes = await fetch(`${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}`, {
-      headers: { Authorization: `Bearer ${daemon.token}` },
-    })
+    const detailRes = await fetch(
+      `${daemon.baseUrl}/api/clarify/${session.intermediaryNodeRunId}`,
+      {
+        headers: { Authorization: `Bearer ${daemon.token}` },
+      },
+    )
     expectOk(detailRes, 'GET clarify detail')
     const detail = (await detailRes.json()) as {
       questions: Array<{
@@ -455,7 +454,8 @@ test.describe('RFC-023 clarify e2e — agent-single happy path', () => {
 // exist on the wrapper-fanout container, but the runner-side per-shard
 // clarify mint isn't wired yet. Revive (rewrite for wrapper-fanout +
 // agent-single inner) when PR-D2 lands per-shard clarify (RFC-060 D.T5).
-test.describe.skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred to RFC-060 PR-D2 per-shard clarify)', () => {
+test.describe
+  .skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred to RFC-060 PR-D2 per-shard clarify)', () => {
   let daemon: DaemonHandle
   let repoDir: string
   let stubState: string
@@ -571,15 +571,6 @@ test.describe.skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred t
     expectOk(wfRes, 'create workflow')
     const workflow = (await wfRes.json()) as { id: string }
 
-    expectOk(
-      await fetch(`${daemon.baseUrl}/api/repos/recent`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ path: repoDir }),
-      }),
-      'register recent repo',
-    )
-
     fixtures = {
       workflowId: workflow.id,
       repoPath: repoDir,
@@ -616,8 +607,8 @@ test.describe.skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred t
       body: JSON.stringify({
         workflowId: fixtures.workflowId,
         name: 'e2e-fixture-task',
-        repoPath: fixtures.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(fixtures.repoPath).href,
+        ref: 'main',
         inputs: { diff: syntheticDiff },
       }),
     })
@@ -626,7 +617,12 @@ test.describe.skip('RFC-023 clarify e2e — agent-multi shard fanout (deferred t
     const taskId = launched.id
 
     // 2. Task should pause awaiting_human (1 shard asked back; others finish).
-    const awaiting = await pollTaskStatus(daemon, taskId, (t) => t.status === 'awaiting_human', 60_000)
+    const awaiting = await pollTaskStatus(
+      daemon,
+      taskId,
+      (t) => t.status === 'awaiting_human',
+      60_000,
+    )
     expect(awaiting.status).toBe('awaiting_human')
 
     // 3. The clarify list should show exactly ONE session — only the b/x.md shard.
@@ -817,8 +813,8 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
       body: JSON.stringify({
         workflowId: fixtures.workflowId,
         name: 'e2e-fixture-task',
-        repoPath: fixtures.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(fixtures.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'order_status enum' },
       }),
     })
@@ -858,7 +854,10 @@ test.describe('RFC-026 clarify e2e — inline session resume', () => {
 
     // 5. Assertion A: the stub captured TWO argv lines; the second one contains
     //    `--session opc_e2e_e2e-rfc026-designer`. The first one MUST NOT.
-    const log = readFileSync(argvLog, 'utf-8').trim().split('\n').filter((l) => l.length > 0)
+    const log = readFileSync(argvLog, 'utf-8')
+      .trim()
+      .split('\n')
+      .filter((l) => l.length > 0)
     expect(log.length).toBeGreaterThanOrEqual(2)
     expect(log[0]).not.toContain('--session')
     const round1 = log[log.length - 1]!

@@ -24,6 +24,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -142,13 +143,6 @@ async function setupViaApi(d: DaemonHandle, repoPath: string): Promise<CreatedFi
   expectOk(workflowRes, 'create workflow')
   const workflow = (await workflowRes.json()) as { id: string }
 
-  const recentRes = await fetch(`${d.baseUrl}/api/repos/recent`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ path: repoPath }),
-  })
-  expectOk(recentRes, 'register recent repo')
-
   return { workflowId: workflow.id, workflowName, agentName, repoPath }
 }
 
@@ -258,8 +252,8 @@ test('review cycle: awaiting → reject → awaiting → iterate → awaiting �
     body: JSON.stringify({
       workflowId: fixtures.workflowId,
       name: 'e2e-fixture-task',
-      repoPath: fixtures.repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(fixtures.repoPath).href,
+      ref: 'main',
       inputs: { topic: 'order_status enum' },
     }),
   })

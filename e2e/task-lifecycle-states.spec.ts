@@ -324,8 +324,8 @@ async function launchTask(
       workflowId,
       name,
       inputs: { topic: 'lifecycle-test' },
-      repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(repoPath).href,
+      ref: 'main',
     }),
   })
   if (!res.ok) {
