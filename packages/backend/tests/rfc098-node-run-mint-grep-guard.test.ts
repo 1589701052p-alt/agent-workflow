@@ -62,7 +62,10 @@ function findDirectNodeRunInserts(): Match[] {
       const preceding = lines.slice(lookbackStart, i + 1).join('\n')
       if (ALLOW_MARKER.test(preceding)) continue
       matches.push({
-        file: file.split(sep).join('/').replace(`${BACKEND_SRC.split(sep).join('/')}/`, ''),
+        file: file
+          .split(sep)
+          .join('/')
+          .replace(`${BACKEND_SRC.split(sep).join('/')}/`, ''),
         line: i + 1,
         preview: `  ${i + 1}: ${line}`,
       })

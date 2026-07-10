@@ -235,7 +235,7 @@ describe('smokeRuntime (RFC-112 PR-B)', () => {
     'a non-protocol binary emits no parseable events → stream-nonconforming',
     async () => {
       // On Windows use cmd.exe (always present); on POSIX use /bin/echo.
-      const nonProtocolBin = isWindows ? process.env.ComSpec ?? 'cmd.exe' : '/bin/echo'
+      const nonProtocolBin = isWindows ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/echo'
       const r = await smokeRuntime({
         protocol: 'claude-code',
         binaryPath: nonProtocolBin,

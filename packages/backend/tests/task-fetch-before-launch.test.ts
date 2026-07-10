@@ -123,7 +123,12 @@ describe('startTask RFC-068 path-mode opt-in fetch', () => {
           fetchBeforeLaunch: true,
           inputs: { topic: 't' },
         },
-        { db: h.db, appHome: h.appHome, opencodeCmd: stubCmd(h.stubOpencode), awaitScheduler: true },
+        {
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: stubCmd(h.stubOpencode),
+          awaitScheduler: true,
+        },
       )
       expect(task.status === 'done' || task.status === 'running').toBe(true)
 
@@ -161,7 +166,12 @@ describe('startTask RFC-068 path-mode opt-in fetch', () => {
           // fetchBeforeLaunch omitted — should preserve legacy behavior.
           inputs: { topic: 't' },
         },
-        { db: h.db, appHome: h.appHome, opencodeCmd: stubCmd(h.stubOpencode), awaitScheduler: true },
+        {
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: stubCmd(h.stubOpencode),
+          awaitScheduler: true,
+        },
       )
       expect(task.status === 'done' || task.status === 'running').toBe(true)
 
@@ -193,7 +203,12 @@ describe('startTask RFC-068 path-mode opt-in fetch', () => {
           fetchBeforeLaunch: true,
           inputs: { topic: 't' },
         },
-        { db: h.db, appHome: h.appHome, opencodeCmd: stubCmd(h.stubOpencode), awaitScheduler: true },
+        {
+          db: h.db,
+          appHome: h.appHome,
+          opencodeCmd: stubCmd(h.stubOpencode),
+          awaitScheduler: true,
+        },
       )
       // Task still launches (not failed because of fetch).
       expect(task.status === 'done' || task.status === 'running').toBe(true)

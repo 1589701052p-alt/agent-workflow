@@ -308,7 +308,10 @@ describe('RFC-135 GET /api/runtimes/status', () => {
       const childScript = join(h.tmp, 'fork-child.js')
       writeFileSync(childScript, `// ${marker}\nsetInterval(() => {}, 60000)\n`)
       const jsPath = binBase + '.js'
-      writeFileSync(jsPath, `// fork-and-die stub\nimport { spawn } from 'node:child_process'\nconst child = spawn('bun', ['run', ${JSON.stringify(childScript)}], { detached: true, stdio: 'ignore' })\nchild.unref()\nprocess.exit(7)\n`)
+      writeFileSync(
+        jsPath,
+        `// fork-and-die stub\nimport { spawn } from 'node:child_process'\nconst child = spawn('bun', ['run', ${JSON.stringify(childScript)}], { detached: true, stdio: 'ignore' })\nchild.unref()\nprocess.exit(7)\n`,
+      )
       const cmdPath = binBase + '.cmd'
       writeFileSync(cmdPath, `@echo off\nbun run "${jsPath}" %*\n`)
       bin = cmdPath

@@ -48,7 +48,12 @@ export function stubCmd(stubPath: string): string[] {
  * Windows: writes .js (Node.js script)
  * Returns the path to the script file.
  */
-export function writeStubScript(dir: string, name: string, posixScript: string, jsScript: string): string {
+export function writeStubScript(
+  dir: string,
+  name: string,
+  posixScript: string,
+  jsScript: string,
+): string {
   if (isWindows) {
     const jsPath = join(dir, name.replace(/\.sh$/, '.js'))
     writeFileSync(jsPath, jsScript)
@@ -159,11 +164,7 @@ function writeStubOpencodeJs(
 
   // Fail mode
   if (opts.fail) {
-    lines.push(
-      ``,
-      `process.stderr.write('stub-opencode: simulated failure\\n')`,
-      `process.exit(1)`,
-    )
+    lines.push(``, `process.stderr.write('stub-opencode: simulated failure\\n')`, `process.exit(1)`)
     writeFileSync(jsPath, lines.join('\n'))
     return jsPath
   }
@@ -609,7 +610,11 @@ exit 0
 
 // ─── Symlink helper ────────────────────────────────────────────────────
 
-export function tryCreateSymlink(target: string, linkPath: string, type: 'file' | 'dir' = 'file'): boolean {
+export function tryCreateSymlink(
+  target: string,
+  linkPath: string,
+  type: 'file' | 'dir' = 'file',
+): boolean {
   try {
     if (isWindows) {
       if (type === 'dir') {
@@ -646,7 +651,15 @@ export function isProcessRunningByCmd(marker: string): boolean {
   if (isWindows) {
     try {
       const result = Bun.spawnSync({
-        cmd: ['wmic', 'process', 'where', `CommandLine like '%${marker}%'`, 'get', 'ProcessId', '/format:list'],
+        cmd: [
+          'wmic',
+          'process',
+          'where',
+          `CommandLine like '%${marker}%'`,
+          'get',
+          'ProcessId',
+          '/format:list',
+        ],
         stdout: 'pipe',
         stderr: 'pipe',
       })

@@ -22,9 +22,7 @@ export function buildCommand(opts: OpencodeCommandOptions, prompt: string): stri
   const rawHead = opts.opencodeCmd ?? ['opencode']
   // On Windows, .js files cannot be spawned directly — prefix with ['bun', 'run'].
   const isWindows = process.platform === 'win32'
-  const head = isWindows && rawHead[0]?.endsWith('.js')
-    ? ['bun', 'run', ...rawHead]
-    : rawHead
+  const head = isWindows && rawHead[0]?.endsWith('.js') ? ['bun', 'run', ...rawHead] : rawHead
   // `--thinking` makes opencode emit `reasoning` events to stdout in
   // `--format json` mode; without it `cli/cmd/run.ts:671` filters them
   // out and the SessionTab can never show the model's thinking blocks.

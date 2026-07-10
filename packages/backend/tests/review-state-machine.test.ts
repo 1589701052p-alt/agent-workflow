@@ -10,7 +10,15 @@ import { rimrafDir } from './helpers/cleanup'
 // kind=markdown 'design' port) → reviewDesign (review node) → output.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+  existsSync,
+  readFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execSync } from 'node:child_process'

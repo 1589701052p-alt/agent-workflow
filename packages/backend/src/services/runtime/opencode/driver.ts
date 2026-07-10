@@ -105,7 +105,9 @@ export const opencodeDriver: RuntimeDriver = {
       cmd,
       env,
       // Windows: prompt is piped via stdin (Bun truncates argv at '\n').
-      ...(process.platform === 'win32' ? { stdin: { mode: 'pipe' as const, data: ctx.prompt } } : { stdin: { mode: 'ignore' as const } }),
+      ...(process.platform === 'win32'
+        ? { stdin: { mode: 'pipe' as const, data: ctx.prompt } }
+        : { stdin: { mode: 'ignore' as const } }),
     }
   },
   // RFC-143 PR-4 — business-node spawn: the ENTIRE opencode assembly the runner
@@ -191,7 +193,9 @@ export const opencodeDriver: RuntimeDriver = {
       cmd,
       env,
       // Windows: prompt is piped via stdin (Bun truncates argv at '\n').
-      ...(process.platform === 'win32' ? { stdin: { mode: 'pipe' as const, data: ctx.prompt } } : {}),
+      ...(process.platform === 'win32'
+        ? { stdin: { mode: 'pipe' as const, data: ctx.prompt } }
+        : {}),
       diagnostics: {
         inlineModel: primaryInline?.model ?? null,
         inlineVariant: primaryInline?.variant ?? null,

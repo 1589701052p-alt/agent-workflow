@@ -84,9 +84,7 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
   const rawHead = ctx.claudeCmd ?? ['claude']
   // On Windows, .js files cannot be spawned directly - prefix with ['bun', 'run'].
   const isWindows = process.platform === 'win32'
-  const head = isWindows && rawHead[0]?.endsWith('.js')
-    ? ['bun', 'run', ...rawHead]
-    : rawHead
+  const head = isWindows && rawHead[0]?.endsWith('.js') ? ['bun', 'run', ...rawHead] : rawHead
   const cmd = [
     ...head,
     '-p',

@@ -38,7 +38,11 @@ const canSymlink = isWindows
  * Create a symlink, using junction for directories on Windows (no developer mode needed).
  * For file symlinks on Windows, falls back to copy if symlinks are unavailable.
  */
-async function createSymlink(target: string, linkPath: string, type: 'file' | 'dir' = 'file'): Promise<void> {
+async function createSymlink(
+  target: string,
+  linkPath: string,
+  type: 'file' | 'dir' = 'file',
+): Promise<void> {
   if (isWindows) {
     if (type === 'dir') {
       // Junctions don't need developer mode on Windows

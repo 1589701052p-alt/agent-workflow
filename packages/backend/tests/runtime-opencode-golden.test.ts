@@ -23,8 +23,27 @@ describe('buildOpencodeSpawn — argv golden (RFC-111 A2)', () => {
     // Windows: prompt is piped via stdin (Bun truncates argv at '\n'), absent from cmd.
     expect(cmd).toEqual(
       isWindows
-        ? ['opencode', 'run', '--agent', 'my-agent', '--format', 'json', '--thinking', '--dangerously-skip-permissions']
-        : ['opencode', 'run', 'THE PROMPT', '--agent', 'my-agent', '--format', 'json', '--thinking', '--dangerously-skip-permissions'],
+        ? [
+            'opencode',
+            'run',
+            '--agent',
+            'my-agent',
+            '--format',
+            'json',
+            '--thinking',
+            '--dangerously-skip-permissions',
+          ]
+        : [
+            'opencode',
+            'run',
+            'THE PROMPT',
+            '--agent',
+            'my-agent',
+            '--format',
+            'json',
+            '--thinking',
+            '--dangerously-skip-permissions',
+          ],
     )
   })
 
@@ -39,8 +58,35 @@ describe('buildOpencodeSpawn — argv golden (RFC-111 A2)', () => {
     })
     expect(cmd).toEqual(
       isWindows
-        ? ['bun', 'run', '/mock.ts', 'run', '--agent', 'my-agent', '--format', 'json', '--thinking', '--dangerously-skip-permissions', '--session', 'opc_9']
-        : ['bun', 'run', '/mock.ts', 'run', 'THE PROMPT', '--agent', 'my-agent', '--format', 'json', '--thinking', '--dangerously-skip-permissions', '--session', 'opc_9'],
+        ? [
+            'bun',
+            'run',
+            '/mock.ts',
+            'run',
+            '--agent',
+            'my-agent',
+            '--format',
+            'json',
+            '--thinking',
+            '--dangerously-skip-permissions',
+            '--session',
+            'opc_9',
+          ]
+        : [
+            'bun',
+            'run',
+            '/mock.ts',
+            'run',
+            'THE PROMPT',
+            '--agent',
+            'my-agent',
+            '--format',
+            'json',
+            '--thinking',
+            '--dangerously-skip-permissions',
+            '--session',
+            'opc_9',
+          ],
     )
   })
 

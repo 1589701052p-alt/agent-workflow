@@ -90,7 +90,10 @@ function findDirectStatusWrites(): Match[] {
             continue
           }
           matches.push({
-            file: file.split(sep).join("/").replace(`${BACKEND_SRC.split(sep).join("/")}/`, ""),
+            file: file
+              .split(sep)
+              .join('/')
+              .replace(`${BACKEND_SRC.split(sep).join('/')}/`, ''),
             line: i + 1,
             preview: lines
               .slice(Math.max(0, upstreamLine), Math.min(lines.length, i + 2))
@@ -119,11 +122,20 @@ function findDirectStatusWrites(): Match[] {
         // captured at this line.
         if (
           !matches.some(
-            (m) => m.file.endsWith(file.split(sep).join("/").replace(`${BACKEND_SRC.split(sep).join("/")}/`, "")) && m.line === i + 1,
+            (m) =>
+              m.file.endsWith(
+                file
+                  .split(sep)
+                  .join('/')
+                  .replace(`${BACKEND_SRC.split(sep).join('/')}/`, ''),
+              ) && m.line === i + 1,
           )
         ) {
           matches.push({
-            file: file.split(sep).join("/").replace(`${BACKEND_SRC.split(sep).join("/")}/`, ""),
+            file: file
+              .split(sep)
+              .join('/')
+              .replace(`${BACKEND_SRC.split(sep).join('/')}/`, ''),
             line: i + 1,
             preview: `  ${i + 1}: ${line}`,
           })
