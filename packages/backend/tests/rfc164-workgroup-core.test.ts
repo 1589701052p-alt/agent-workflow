@@ -10,10 +10,7 @@ import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { tasks, workflows, workgroupAssignments, workgroupMemberCursors } from '../src/db/schema'
-import {
-  advanceMemberCursor,
-  casAssignmentStatus,
-} from '../src/services/workgroupLifecycle'
+import { advanceMemberCursor, casAssignmentStatus } from '../src/services/workgroupLifecycle'
 import {
   normalizeWgTaskTitle,
   parseWgAssignmentsPort,
