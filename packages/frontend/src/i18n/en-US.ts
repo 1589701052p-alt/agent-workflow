@@ -1224,6 +1224,7 @@ export const enUS: Resources = {
     },
   },
   scheduled: {
+    repairBadge: 'Needs repair',
     title: 'Scheduled Tasks',
     empty: 'No scheduled tasks yet. Configure a workflow launch and choose "Save as scheduled".',
     new: 'New',

@@ -1154,6 +1154,7 @@ export interface Resources {
     }
   }
   scheduled: {
+    repairBadge: string
     title: string
     empty: string
     new: string
@@ -3969,6 +3970,7 @@ export const zhCN: Resources = {
     },
   },
   scheduled: {
+    repairBadge: '需修复',
     title: '定时任务',
     empty: '还没有定时任务。在工作流启动页配好参数后选择「存为定时任务」。',
     new: '新建',

@@ -73,7 +73,20 @@ function ScheduledPage() {
                 onClick={() => void navigate({ to: '/scheduled/$id', params: { id: row.id } })}
                 data-testid={`scheduled-row-${row.id}`}
               >
-                <td>{row.name}</td>
+                <td>
+                  {row.name}
+                  {/* RFC-165 T14: legacy/degraded rows (healer-disabled path
+                      payloads, unparsable JSON) carry a repair badge — the
+                      wizard's editScheduled mode is the repair path. */}
+                  {(row.migrationNeeded ||
+                    row.lastError != null ||
+                    row.launchPayload === null ||
+                    row.scheduleSpec === null) && (
+                    <StatusChip kind="warn" size="sm" data-testid={`scheduled-repair-${row.id}`}>
+                      {t('scheduled.repairBadge')}
+                    </StatusChip>
+                  )}
+                </td>
                 <td>{scheduleSummary(row.scheduleSpec, lang)}</td>
                 <td>
                   {row.enabled && row.nextRunAt != null
