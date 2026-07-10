@@ -13,6 +13,7 @@
 
 import {
   CreateWorkgroupSchema,
+  rejectRetiredStartTaskKeys,
   RenameWorkgroupSchema,
   StartWorkgroupTaskSchema,
   UpdateWorkgroupSchema,
@@ -123,10 +124,16 @@ export function mountWorkgroupRoutes(app: Hono, deps: AppDeps): void {
   app.post('/api/workgroups/:name/tasks', async (c) => {
     const name = c.req.param('name')
     const body = await safeJson(c.req.raw)
-    // NOTE: workgroup launch is a NEW endpoint whose StartWorkgroupTaskSchema
-    // only ever declared modern space fields (repoUrl/ref/repos/scratch) — it
-    // never accepted RFC-165's retired path-mode keys, so no raw-key gate is
-    // needed here (unlike the legacy StartTaskSchema entrances).
+    // RFC-165 实现门 P2 修复：即便本 schema 从未声明退役键，非 strict parse
+    // 仍会把 {scratch:true, repoPath} 静默剥键降级成 scratch 启动（F1
+    // silent-degrade 同型）——四个 launch 入口一致挂 raw-key 拒收。
+    const retired = rejectRetiredStartTaskKeys(body)
+    if (retired !== null) {
+      throw new ValidationError(
+        'start-task-path-retired',
+        `field '${retired}' was retired by RFC-165 — launch with repoUrl/repos (file:// for local repos) or scratch`,
+      )
+    }
     const parsed = StartWorkgroupTaskSchema.safeParse(body)
     if (!parsed.success) {
       throw new ValidationError('workgroup-launch-invalid', 'invalid workgroup launch payload', {

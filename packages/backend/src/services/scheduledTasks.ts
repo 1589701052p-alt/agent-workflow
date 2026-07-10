@@ -31,6 +31,7 @@ import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
 import { canViewResource } from '@/services/resourceAcl'
 import { assertNotBuiltin } from '@/services/systemResources'
 import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
+import { dbTxSync } from '@/db/txSync'
 import { runGit } from '@/util/git'
 import { SCHEDULED_TASK_CHANNEL, scheduledTaskBroadcaster } from '@/ws/broadcaster'
 
@@ -276,10 +277,22 @@ export async function updateScheduledTask(
       `launchKind is immutable (existing '${existing.launchKind}'); delete and recreate to change the subject`,
     )
   }
-  const patchedPayload =
-    patch.launchPayload !== undefined
-      ? scheduledPayloadSchemaFor(existing.launchKind).parse(patch.launchPayload)
-      : existing.launchPayload
+  // 实现门 P1 修复：Update 的封套校验只能在服务层（kind 来自 existing 行）
+  // ——safeParse + ValidationError，绝不让裸 ZodError 逃逸成 500。
+  let patchedPayload: typeof existing.launchPayload
+  if (patch.launchPayload !== undefined) {
+    const parsedPayload = scheduledPayloadSchemaFor(existing.launchKind).safeParse(
+      patch.launchPayload,
+    )
+    if (!parsedPayload.success) {
+      throw new ValidationError('scheduled-task-invalid', 'invalid launchPayload for this kind', {
+        issues: parsedPayload.error.issues,
+      })
+    }
+    patchedPayload = parsedPayload.data
+  } else {
+    patchedPayload = existing.launchPayload
+  }
   const patchedSpec =
     patch.scheduleSpec !== undefined
       ? ScheduleSpecSchema.parse(patch.scheduleSpec)
@@ -306,11 +319,14 @@ export async function updateScheduledTask(
   // the cadence WHILE enabled (a narrow PAT turning a monthly schedule into
   // every-minute is the same delegation escalation as launching). Plain
   // rename / disable / disabled-state spec edits stay open.
-  const armsLaunch =
+  // Preliminary arming check off the pre-read snapshot: fail obviously-
+  // unauthorized requests BEFORE the (async) target validation below. The
+  // AUTHORITATIVE check re-runs inside the transaction against a fresh row.
+  const armsLaunchAgainst = (rowEnabled: boolean): boolean =>
     patch.launchPayload !== undefined ||
-    (patch.enabled === true && !existing.enabled) ||
-    (patch.scheduleSpec !== undefined && enabled)
-  if (armsLaunch && !opts.actor.permissions.has('tasks:launch')) {
+    (patch.enabled === true && !rowEnabled) ||
+    (patch.scheduleSpec !== undefined && (patch.enabled ?? rowEnabled))
+  if (armsLaunchAgainst(existing.enabled) && !opts.actor.permissions.has('tasks:launch')) {
     throw new ForbiddenError('forbidden', 'missing permission: tasks:launch', {
       requiredPermission: 'tasks:launch',
     })
@@ -329,26 +345,47 @@ export async function updateScheduledTask(
   }
 
   const now = Date.now()
-  const set: Partial<typeof scheduledTasks.$inferInsert> = { updatedAt: now }
-  if (patch.name !== undefined) set.name = patch.name
-  if (patch.launchPayload !== undefined && patchedPayload !== null) {
-    set.launchPayload = JSON.stringify(patchedPayload)
-    // A successful full repair also clears the RFC-165 migration lastError
-    // breadcrumb (best-effort UX; harmless when it was never set).
-    if (existing.launchPayload === null || existing.migrationNeeded) set.lastError = null
-  }
-  if (patch.scheduleSpec !== undefined && patchedSpec !== null) {
-    set.scheduleSpec = JSON.stringify(patchedSpec)
-  }
-  if (patch.enabled !== undefined) set.enabled = enabled
-  if (!enabled) {
-    set.nextRunAt = null
-  } else if (patch.scheduleSpec !== undefined || (enabled && !existing.enabled)) {
-    // enabled ⇒ patchedSpec non-null (guarded above).
-    set.nextRunAt = computeNextRunAt(patchedSpec as ScheduleSpec, now, now)
-    set.consecutiveFailures = 0
-  }
-  await db.update(scheduledTasks).set(set).where(eq(scheduledTasks.id, id))
+  // 实现门 P1 修复（arming TOCTOU）：权限判定若基于 stale 的 existing.enabled，
+  // 与写入之间的窗口里另一请求可以先把行 enable——窄 PAT 的 spec-only 更新就
+  // 顺着旧快照绕过了 tasks:launch。判定 + 组 set + 写入收进 dbTxSync：对
+  // FRESH 行重算 arming，越权即回滚整个更新。
+  dbTxSync(db, (tx) => {
+    const fresh = tx
+      .select({ enabled: scheduledTasks.enabled })
+      .from(scheduledTasks)
+      .where(eq(scheduledTasks.id, id))
+      .get()
+    if (fresh === undefined) {
+      throw new NotFoundError('scheduled-task-not-found', `scheduled task '${id}' not found`)
+    }
+    if (armsLaunchAgainst(fresh.enabled) && !opts.actor.permissions.has('tasks:launch')) {
+      throw new ForbiddenError('forbidden', 'missing permission: tasks:launch', {
+        requiredPermission: 'tasks:launch',
+      })
+    }
+    const resultEnabled = patch.enabled !== undefined ? patch.enabled : fresh.enabled
+    const set: Partial<typeof scheduledTasks.$inferInsert> = { updatedAt: now }
+    if (patch.name !== undefined) set.name = patch.name
+    if (patch.launchPayload !== undefined && patchedPayload !== null) {
+      set.launchPayload = JSON.stringify(patchedPayload)
+      // A successful full repair also clears the RFC-165 migration lastError
+      // breadcrumb (best-effort UX; harmless when it was never set).
+      if (existing.launchPayload === null || existing.migrationNeeded) set.lastError = null
+    }
+    if (patch.scheduleSpec !== undefined && patchedSpec !== null) {
+      set.scheduleSpec = JSON.stringify(patchedSpec)
+    }
+    if (patch.enabled !== undefined) set.enabled = resultEnabled
+    if (!resultEnabled) {
+      set.nextRunAt = null
+    } else if (patch.scheduleSpec !== undefined || (resultEnabled && !fresh.enabled)) {
+      // resultEnabled ⇒ patchedSpec non-null (guarded above via `enabled`;
+      // a fresh row can only have flipped enabled, not nulled the spec).
+      set.nextRunAt = computeNextRunAt(patchedSpec as ScheduleSpec, now, now)
+      set.consecutiveFailures = 0
+    }
+    tx.update(scheduledTasks).set(set).where(eq(scheduledTasks.id, id)).run()
+  })
   const updated = await getScheduledTask(db, id)
   if (updated === null) throw new Error('scheduled task disappeared right after update')
   scheduledTaskBroadcaster.broadcast(SCHEDULED_TASK_CHANNEL, {

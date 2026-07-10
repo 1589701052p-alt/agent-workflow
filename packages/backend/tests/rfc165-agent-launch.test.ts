@@ -30,7 +30,7 @@
 //       launch; agents:write WITHOUT tasks:launch may NOT.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
@@ -425,6 +425,43 @@ describe('RFC-165 — HTTP surface: launch + lifecycle guards (A6/A9)', () => {
     }
   })
 
+  test('A10 raw-key gate: {scratch, repoPath} agent launch → 422 start-task-path-retired', async () => {
+    // Implementation-gate P2: without the gate the retired key silently
+    // strips and the body degrades to a scratch launch (F1 shape).
+    const res = await req('/api/agents/solo/tasks', adminToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 't',
+        description: 'd',
+        scratch: true,
+        repoPath: '/tmp/x',
+      }),
+    })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe('start-task-path-retired')
+
+    const { ensureWorkgroupHostWorkflow } = await import('../src/services/workgroupLaunch')
+    await ensureWorkgroupHostWorkflow(db)
+    const { createWorkgroup } = await import('../src/services/workgroups')
+    await createWorkgroup(db, {
+      name: 'squad',
+      description: '',
+      instructions: '',
+      mode: 'leader_worker',
+      leaderDisplayName: 'lead',
+      switches: { shareOutputs: true, directMessages: false, blackboard: false },
+      maxRounds: 5,
+      completionGate: false,
+      members: [{ memberType: 'agent', agentName: 'a1', displayName: 'lead', roleDesc: '' }],
+    })
+    const wg = await req('/api/workgroups/squad/tasks', adminToken, {
+      method: 'POST',
+      body: JSON.stringify({ name: 't', goal: 'g', scratch: true, repoPath: '/tmp/x' }),
+    })
+    expect(wg.status).toBe(422)
+    expect(((await wg.json()) as { code: string }).code).toBe('start-task-path-retired')
+  })
+
   test('A9 F15 carve-out: tasks:launch suffices; agents:write alone does not', async () => {
     const bob = await createUser(db, {
       username: 'bob',
@@ -514,6 +551,34 @@ describe('RFC-165 — workgroup exclusions (A7)', () => {
     expect(resumedIds).toContain(plain)
     expect(resumedIds).not.toContain(wg)
     expect(result.resumed).toContain(plain)
+  })
+
+  test('A7c EXHAUSTIVE: every execution-reviving repair option carries revivesExecution', () => {
+    // Implementation-gate P2 (round 2): the workgroup refusal is only as good
+    // as the classification — an unstamped revive option (T2.resurrect was
+    // the caught case) walks straight into generic resumeTask. Judge each
+    // def by its SOURCE: resumeAfterApply, node-run minting, or a resurrect
+    // id all mean "revives execution" and MUST be stamped.
+    const dir = join(import.meta.dir, '..', 'src', 'services', 'lifecycleRepair')
+    for (const file of readdirSync(dir).filter((f: string) => f.startsWith('options-'))) {
+      const src = readFileSync(join(dir, file), 'utf8')
+      const heads = [...src.matchAll(/const \w+: RepairOptionDef = \{/g)]
+      for (let i = 0; i < heads.length; i++) {
+        const start = heads[i]!.index!
+        const end = i + 1 < heads.length ? heads[i + 1]!.index! : src.length
+        const block = src.slice(start, end)
+        const id = /id: '([^']+)'/.exec(block)?.[1] ?? '(unknown)'
+        const revives =
+          block.includes('resumeAfterApply') ||
+          block.includes('mintNodeRun') ||
+          id.includes('resurrect')
+        if (revives) {
+          expect(block.includes('revivesExecution: true'), `${file} ${id} must be stamped`).toBe(
+            true,
+          )
+        }
+      }
+    }
   })
 
   test('A7b repair list marks revive options unavailable + apply refuses (workgroup task)', async () => {

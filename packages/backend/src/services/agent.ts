@@ -14,7 +14,7 @@ import { AgentInputPortSchema, AgentInputPortsSchema } from '@agent-workflow/sha
 import { and, eq, inArray, like, notInArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { agents, mcps, plugins, tasks, workflows } from '@/db/schema'
+import { agents, mcps, plugins, scheduledTasks, tasks, workflows } from '@/db/schema'
 import { dbTxSync } from '@/db/txSync'
 import { TERMINAL_TASK_STATUSES } from '@agent-workflow/shared'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
@@ -287,6 +287,22 @@ export async function deleteAgent(db: DbClient, name: string): Promise<void> {
         { taskIds: live.map((t) => t.id) },
       )
     }
+    const schedRows = tx
+      .select({
+        id: scheduledTasks.id,
+        launchKind: scheduledTasks.launchKind,
+        launchPayload: scheduledTasks.launchPayload,
+      })
+      .from(scheduledTasks)
+      .all()
+    const schedRefs = scheduledRowsReferencingAgent(schedRows, name)
+    if (schedRefs.length > 0) {
+      throw new ConflictError(
+        'agent-scheduled-referenced',
+        `agent '${name}' is the target of ${schedRefs.length} scheduled task(s); delete or repoint them first`,
+        { scheduledTaskIds: schedRefs },
+      )
+    }
     tx.delete(agents).where(eq(agents.name, name)).run()
   })
 }
@@ -354,6 +370,23 @@ export async function renameAgent(
       )
     }
 
+    const schedRows = tx
+      .select({
+        id: scheduledTasks.id,
+        launchKind: scheduledTasks.launchKind,
+        launchPayload: scheduledTasks.launchPayload,
+      })
+      .from(scheduledTasks)
+      .all()
+    const schedRefs = scheduledRowsReferencingAgent(schedRows, oldName)
+    if (schedRefs.length > 0) {
+      throw new ConflictError(
+        'agent-scheduled-referenced',
+        `agent '${oldName}' is the target of ${schedRefs.length} scheduled task(s); repoint them before renaming`,
+        { scheduledTaskIds: schedRefs },
+      )
+    }
+
     const collision = tx
       .select({ name: agents.name })
       .from(agents)
@@ -378,6 +411,29 @@ export async function renameAgent(
  * Find every workflow whose definition.nodes[].agentName matches.
  * Stable identity for the "referenced by" check in delete/rename.
  */
+/**
+ * RFC-165 §9b（实现门 P1 修复）：agent 定时任务把目标冻结为可变的 NAME。
+ * rename/delete 时若还有引用行，先失败会静默累计（阈值禁用），而公共名被
+ * 复用后旧定时行会悄悄打到「另一个同名 agent」。与 workflows 引用守卫同
+ * 哲学：存在引用即 409，逼调用方先处理定时行。事务同步面运行。
+ */
+function scheduledRowsReferencingAgent(
+  rows: ReadonlyArray<{ id: string; launchKind: string; launchPayload: string }>,
+  agentName: string,
+): string[] {
+  const out: string[] = []
+  for (const row of rows) {
+    if (row.launchKind !== 'agent') continue
+    try {
+      const p = JSON.parse(row.launchPayload) as { agentName?: unknown }
+      if (p.agentName === agentName) out.push(row.id)
+    } catch {
+      /* degraded rows are repaired/deleted via their own flow */
+    }
+  }
+  return out
+}
+
 /** Pure core of the workflow-reference check — RFC-165 (F17-r3): the
  *  rename/delete guards run it on rows read INSIDE their dbTxSync
  *  transaction (the old async shell around it died with them). */

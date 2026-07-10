@@ -212,6 +212,85 @@ describe('RFC-165 §9b — create/update by kind (K1/K2/K3/K7)', () => {
     expect(renamed.name).toBe('renamed')
   })
 
+  test('K8 update with a kind-mismatched payload → 422 scheduled-task-invalid (no 500)', async () => {
+    // Implementation-gate P1: the service used to .parse() and let the raw
+    // ZodError escape to the errorHandler as HTTP 500.
+    await createAgent(db, { ...AGENT_FIELDS, name: 'solo' })
+    const created = await createScheduledTask(
+      db,
+      {
+        name: 'agent sched',
+        launchKind: 'agent',
+        launchPayload: { agentName: 'solo', name: 't', description: 'd', scratch: true },
+        scheduleSpec: SPEC,
+        enabled: false,
+      },
+      { actor: actorFor(ownerId) },
+    )
+    await expect(
+      updateScheduledTask(
+        db,
+        created.id,
+        { launchPayload: { workflowId: 'wf', name: 't', inputs: {} } },
+        { actor: actorFor(ownerId) },
+      ),
+    ).rejects.toMatchObject({ code: 'scheduled-task-invalid' })
+  })
+
+  test('K9 agent rename/delete refuse while a schedule targets the name (P1 identity fix)', async () => {
+    await createAgent(db, { ...AGENT_FIELDS, name: 'solo' })
+    await createScheduledTask(
+      db,
+      {
+        name: 'agent sched',
+        launchKind: 'agent',
+        launchPayload: { agentName: 'solo', name: 't', description: 'd', scratch: true },
+        scheduleSpec: SPEC,
+        enabled: false,
+      },
+      { actor: actorFor(ownerId) },
+    )
+    const { deleteAgent, renameAgent } = await import('../src/services/agent')
+    await expect(renameAgent(db, 'solo', { newName: 'solo2' })).rejects.toMatchObject({
+      code: 'agent-scheduled-referenced',
+    })
+    await expect(deleteAgent(db, 'solo')).rejects.toMatchObject({
+      code: 'agent-scheduled-referenced',
+    })
+  })
+
+  test('K10 workgroup rename/delete refuse while a schedule targets the name', async () => {
+    await createWorkgroup(db, {
+      name: 'squad',
+      description: '',
+      instructions: '',
+      mode: 'leader_worker',
+      leaderDisplayName: 'lead',
+      switches: { shareOutputs: true, directMessages: false, blackboard: false },
+      maxRounds: 5,
+      completionGate: false,
+      members: [{ memberType: 'agent', agentName: 'a1', displayName: 'lead', roleDesc: '' }],
+    })
+    await createScheduledTask(
+      db,
+      {
+        name: 'wg sched',
+        launchKind: 'workgroup',
+        launchPayload: { workgroupName: 'squad', name: 't', goal: 'g', scratch: true },
+        scheduleSpec: SPEC,
+        enabled: false,
+      },
+      { actor: actorFor(ownerId) },
+    )
+    const { deleteWorkgroup, renameWorkgroup } = await import('../src/services/workgroups')
+    await expect(renameWorkgroup(db, 'squad', 'squad2')).rejects.toMatchObject({
+      code: 'workgroup-scheduled-referenced',
+    })
+    await expect(deleteWorkgroup(db, 'squad')).rejects.toMatchObject({
+      code: 'workgroup-scheduled-referenced',
+    })
+  })
+
   test('K7 compat: create without launchKind defaults to workflow', async () => {
     const wf = await createWorkflow(db, {
       name: 'wf',

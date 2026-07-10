@@ -574,8 +574,7 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     trailing = inlineMode
       ? buildOptionalClarifyInlineReminder()
       : buildOptionalClarifyPreamble() +
-        buildClarifyProtocolBlock() +
-        buildProtocolBlock(input.agentOutputs, input.agentOutputKinds)
+        buildOptionalDualProtocolBlock(input.agentOutputs, input.agentOutputKinds)
   } else if (input.workgroupProtocolBlock !== undefined) {
     // RFC-164: workgroup runs replace (never extend) the agent-outputs block.
     trailing = input.workgroupProtocolBlock
@@ -694,13 +693,9 @@ export function buildMandatoryClarifyPreamble(): string {
  * has no way to finalize until the user stops clarifying. Returns a leading
  * `\n\n` so callers can concatenate without injecting their own separator.
  */
-export function buildClarifyProtocolBlock(): string {
-  return `
-
----
-**Clarify format.** Emit exactly one <workflow-clarify> block and nothing else — no <workflow-output> anywhere in the reply. Asking back is the expected outcome of this round.
-
-Format:
+/** RFC-023 — the clarify envelope format example (shared by the mandatory and
+ *  optional protocol blocks so the two renderings can never drift). */
+export const CLARIFY_FORMAT_EXAMPLE = `Format:
 <workflow-clarify>
 {
   "questions": [
@@ -719,15 +714,25 @@ Format:
     }
   ]
 }
-</workflow-clarify>
+</workflow-clarify>`
 
-Hard rules — violation is treated as a malformed reply and the node will fail / retry:
-- Your reply MUST contain exactly one <workflow-clarify> block and NO <workflow-output> — emitting <workflow-output> is rejected until the user stops clarifying. Defer all output ports to a later round; do not output partial data.
-- Limits: at most 5 questions, each question 2–4 options — any option beyond the 4th is silently dropped, so cap each question at 4. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
+/** RFC-023 — the structural clarify rules shared by both directive modes
+ *  (question/option caps, labels, legacy form, Q&A echo semantics). */
+export const CLARIFY_STRUCTURAL_RULES = `- Limits: at most 5 questions, each question 2–4 options — any option beyond the 4th is silently dropped, so cap each question at 4. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
 - Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
 - Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
 - Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.
 - Once the user submits answers, you will receive every question answered so far in the next prompt under "## Clarify Q&A" — a single flat list where each question is an equal peer with the user's answer (a deterministic synthesis line). Treat every listed answer as an already-resolved decision.`
+
+export function buildClarifyProtocolBlock(): string {
+  return (
+    `\n\n---\n` +
+    '**Clarify format.** Emit exactly one <workflow-clarify> block and nothing else — no <workflow-output> anywhere in the reply. Asking back is the expected outcome of this round.\n\n' +
+    CLARIFY_FORMAT_EXAMPLE +
+    '\n\nHard rules — violation is treated as a malformed reply and the node will fail / retry:\n' +
+    '- Your reply MUST contain exactly one <workflow-clarify> block and NO <workflow-output> — emitting <workflow-output> is rejected until the user stops clarifying. Defer all output ports to a later round; do not output partial data.\n' +
+    CLARIFY_STRUCTURAL_RULES
+  )
 }
 
 /**
@@ -772,6 +777,41 @@ export function buildOptionalClarifyPreamble(): string {
     '- Do not pad with low-stakes confirmations — if you ask, ask only the decisions that change the outcome.\n' +
     '- Ask in the same language as the inputs / the user.'
   )
+}
+
+/**
+ * RFC-165 (F12, implementation-gate P1 fix) — the OPTIONAL dual-envelope
+ * protocol block. The naive composition (mandatory clarify block + mandatory
+ * output block) issued CONTRADICTORY commands — "reply MUST be clarify, no
+ * output anywhere" followed by "you MUST end with output". This builder
+ * renders the two formats as an explicit either/or: Option A (ask) with the
+ * clarify format + its structural rules, Option B (finalize) with the port
+ * protocol re-headed for choice. Returns a leading `\n\n`.
+ */
+export function buildOptionalDualProtocolBlock(
+  agentOutputs: string[],
+  agentOutputKinds?: AgentOutputKindsMap,
+): string {
+  const optionA =
+    `\n\n---\n` +
+    '**Option A — ask the user (reply with ONE `<workflow-clarify>` block and nothing else).**\n\n' +
+    `FORMAT_PLACEHOLDER\n\n` +
+    'Rules if you choose Option A — violation is treated as a malformed reply:\n' +
+    '- The reply must contain exactly one <workflow-clarify> block and NO <workflow-output> — you finalize in a LATER round, after the user answers.\n' +
+    `RULES_PLACEHOLDER`
+
+  const MANDATORY_HEAD =
+    'You MUST end your reply with a `<workflow-output>` block listing these ports:'
+  const OPTIONAL_HEAD =
+    '**Option B — finalize (reply with ONE `<workflow-output>` block).** If you choose to finalize instead of asking, end your reply with a `<workflow-output>` block listing these ports:'
+  const outputBlock = buildProtocolBlock(agentOutputs, agentOutputKinds)
+  // The head swap is locked by tests; if the mandatory head ever changes,
+  // fall back to prefixing so the choice framing is never silently lost.
+  const optionB = outputBlock.includes(MANDATORY_HEAD)
+    ? outputBlock.replace(MANDATORY_HEAD, OPTIONAL_HEAD)
+    : `\n\n---\n${OPTIONAL_HEAD}${outputBlock}`
+
+  return optionA + optionB
 }
 
 /**
@@ -909,6 +949,13 @@ export interface EnvelopeFollowupInput {
    * this field even if a backend bug threads it through.
    */
   perKindRepairBlocks?: ReadonlyArray<string>
+  /**
+   * RFC-165 (F12, implementation-gate P2 fix): true when the clarify channel
+   * is OPTIONAL — the correction round must keep BOTH envelopes on the table
+   * (the mandatory-only bullets would forbid a perfectly valid output-only
+   * recovery). Only meaningful when `hasClarifyChannel` is true.
+   */
+  clarifyOptional?: boolean
 }
 
 export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): string {
@@ -973,8 +1020,14 @@ export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): stri
   // is always to re-emit `<workflow-output>` with the failing ports corrected.
   // It therefore uses the output-oriented bullets regardless of channel.
   // ---------------------------------------------------------------------------
+  const optional = hasClarify && input.clarifyOptional === true
   let bullets: string
-  if (isPortValidation || reason === 'envelope-port-malformed' || !hasClarify) {
+  if (optional && !isPortValidation && reason !== 'envelope-port-malformed') {
+    bullets =
+      '- This node has an OPTIONAL clarify channel: reply with EXACTLY ONE envelope — either a `<workflow-clarify>` block (if something material is still unclear) or a `<workflow-output>` block (if you are ready to finalize), using the formats previously specified in this session.\n' +
+      '- Never emit both, and do not emit anything after the closing tag of whichever envelope you pick.\n' +
+      '- If you were mid-investigation, finish it first, then pick one envelope.'
+  } else if (isPortValidation || reason === 'envelope-port-malformed' || !hasClarify) {
     bullets =
       '- If you have finished the requested work, end your NEXT reply with a `<workflow-output>` block using the EXACT format previously specified in this session (the same port list, the same `<port name="...">...</port>` shape). Do not summarize, do not omit the block.\n' +
       '- If you were not finished, complete the remaining work first, THEN emit the `<workflow-output>` block. The envelope is mandatory either way.\n' +
@@ -1003,8 +1056,9 @@ export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): stri
   // ---------------------------------------------------------------------------
   let trailer = ''
   if (hasClarify && input.clarifyDirective === 'continue') {
-    trailer =
-      '\n\nThe user clicked "Keep clarifying" — this node remains in mandatory ask-back mode, so your reply MUST be another `<workflow-clarify>` envelope. `<workflow-output>` is not an option until the user clicks "Stop clarifying".'
+    trailer = optional
+      ? '\n\nThe user answered your previous questions. This node remains in OPTIONAL ask-back mode — ask again with `<workflow-clarify>` if something material is still unclear, or finalize now with `<workflow-output>`.'
+      : '\n\nThe user clicked "Keep clarifying" — this node remains in mandatory ask-back mode, so your reply MUST be another `<workflow-clarify>` envelope. `<workflow-output>` is not an option until the user clicks "Stop clarifying".'
   }
 
   // ---------------------------------------------------------------------------

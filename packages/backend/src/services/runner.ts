@@ -645,6 +645,10 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     followupMode !== undefined
       ? renderEnvelopeFollowupPrompt({
           hasClarifyChannel: clarifyMandatory || clarifyOptional,
+          // RFC-165 (F12): keep the correction round dual-choice for optional
+          // nodes — the mandatory-only bullets would forbid a valid
+          // output-only recovery.
+          clarifyOptional,
           // RFC-148: reason is mandatory on the followup arm — the historical
           // envelope-missing coalescing fallback (a patch over the unpacked
           // flag) is gone with the packing.

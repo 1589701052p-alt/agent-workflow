@@ -163,14 +163,26 @@ export type ScheduledTask = z.infer<typeof ScheduledTaskSchema>
  * 服务层按 `launchKind` 经 `scheduledPayloadSchemaFor` 做封套全量校验（单一
  * 选择器，四入口共用）；raw-key 退役键拒收仍在路由层先行。
  */
-export const CreateScheduledTaskSchema = z.object({
-  name: ScheduledTaskNameSchema,
-  /** RFC-165 §9b：执行主体；缺省 workflow（向后兼容旧客户端）。 */
-  launchKind: ScheduledLaunchKindSchema.default('workflow'),
-  launchPayload: z.unknown(),
-  scheduleSpec: ScheduleSpecSchema,
-  enabled: z.boolean().default(true),
-})
+export const CreateScheduledTaskSchema = z
+  .object({
+    name: ScheduledTaskNameSchema,
+    /** RFC-165 §9b：执行主体；缺省 workflow（向后兼容旧客户端）。 */
+    launchKind: ScheduledLaunchKindSchema.default('workflow'),
+    launchPayload: z.unknown(),
+    scheduleSpec: ScheduleSpecSchema,
+    enabled: z.boolean().default(true),
+  })
+  .superRefine((v, ctx) => {
+    // 实现门 P1 修复：封套校验必须留在请求边界——launchPayload 若只是
+    // unknown，坏 payload 会穿透 schema、在服务层炸出裸 ZodError（HTTP
+    // 500）。kind 决定封套，issues 原样冒泡（路由 safeParse → 422）。
+    const r = scheduledPayloadSchemaFor(v.launchKind).safeParse(v.launchPayload)
+    if (!r.success) {
+      for (const issue of r.error.issues) {
+        ctx.addIssue({ ...issue, path: ['launchPayload', ...issue.path] })
+      }
+    }
+  })
 export type CreateScheduledTask = z.infer<typeof CreateScheduledTaskSchema>
 
 /** PUT /api/scheduled-tasks/:id body（strict partial）。`launchKind` 不可变——

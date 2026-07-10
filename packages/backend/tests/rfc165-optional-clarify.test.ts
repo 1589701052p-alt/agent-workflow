@@ -237,6 +237,19 @@ describe('RFC-165 O3 — renderUserPrompt dual-envelope protocol', () => {
     expect(p).toContain(buildOptionalClarifyPreamble().trim().split('\n')[1]!.slice(0, 40))
   })
 
+  test('P1 fix: optional dual block carries NO contradictory mandatory commands', () => {
+    const p = renderUserPrompt({
+      ...BASE,
+      clarifyChannel: { kind: 'self', directive: 'optional', injectStopNotice: false },
+    } as never)
+    // The mandatory-only commands must be absent…
+    expect(p).not.toContain('no <workflow-output> anywhere in the reply')
+    expect(p).not.toContain('You MUST end your reply with')
+    // …replaced by the explicit either/or framing.
+    expect(p).toContain('Option A — ask the user')
+    expect(p).toContain('Option B — finalize')
+  })
+
   test('mandatory rendering unaffected: clarify-only, still NO output format', () => {
     const p = renderUserPrompt({
       ...BASE,
@@ -259,6 +272,32 @@ describe('RFC-165 O3 — renderUserPrompt dual-envelope protocol', () => {
     } as never)
     expect(p).toContain('OPTIONAL ask-back mode')
     expect(p).toContain('exactly one of the two envelopes')
+  })
+})
+
+describe('RFC-165 O4b — followup renderer dual-choice for optional (P2 fix)', () => {
+  test('optional correction round offers BOTH envelopes; mandatory wording gone', async () => {
+    const { renderEnvelopeFollowupPrompt } = await import('@agent-workflow/shared')
+    const p = renderEnvelopeFollowupPrompt({
+      reason: 'envelope-missing',
+      hasClarifyChannel: true,
+      clarifyOptional: true,
+    } as never)
+    expect(p).toContain('OPTIONAL clarify channel')
+    expect(p).toContain('<workflow-output>')
+    expect(p).not.toContain('MANDATORY ask-back mode: your reply MUST be exactly one')
+  })
+
+  test('optional answered round trailer allows finalizing', async () => {
+    const { renderEnvelopeFollowupPrompt } = await import('@agent-workflow/shared')
+    const p = renderEnvelopeFollowupPrompt({
+      reason: 'clarify-malformed',
+      hasClarifyChannel: true,
+      clarifyOptional: true,
+      clarifyDirective: 'continue',
+    } as never)
+    expect(p).toContain('OPTIONAL ask-back mode')
+    expect(p).not.toContain('`<workflow-output>` is not an option')
   })
 })
 

@@ -139,6 +139,7 @@ const T1_RESURRECT_REVIEW_RUN: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.T1.resurrectReviewRun.desc',
   risk: 'medium',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: resurrects a DAG node run — refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     if (rc.task.status !== 'awaiting_review') {
       return {

@@ -8,6 +8,7 @@
 import {
   AgentNameSchema,
   CreateAgentSchema,
+  rejectRetiredStartTaskKeys,
   RenameAgentSchema,
   StartAgentTaskSchema,
   UpdateAgentSchema,
@@ -177,6 +178,15 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
       body = await c.req.raw.json()
     } catch {
       body = {}
+    }
+    // 实现门 P2 修复（F1 同型）：schema 非 strict，{scratch:true, repoPath}
+    // 会被静默剥键降级成 scratch 启动——退役键必须在 parse 前整体拒收。
+    const retired = rejectRetiredStartTaskKeys(body)
+    if (retired !== null) {
+      throw new ValidationError(
+        'start-task-path-retired',
+        `field '${retired}' was retired by RFC-165 — launch with repoUrl/repos (file:// for local repos) or scratch`,
+      )
     }
     const parsed = StartAgentTaskSchema.safeParse(body)
     if (!parsed.success) {

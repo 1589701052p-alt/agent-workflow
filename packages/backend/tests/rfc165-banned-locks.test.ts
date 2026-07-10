@@ -104,13 +104,18 @@ describe('RFC-165 — raw-key guard wiring (source lock)', () => {
     expect(countOf(src, 'rejectRetiredStartTaskKeys(')).toBeGreaterThanOrEqual(2)
   })
 
-  test('routes/workgroups.ts launch stays schema-only WITH the recorded exemption note', () => {
-    // F13 (design gate): StartWorkgroupTaskSchema never declared the retired
-    // keys, so its launch endpoint needs no raw-key gate — but that reasoning
-    // must stay written next to the parse. If the note vanishes (e.g. someone
-    // widens the schema), this test forces re-deciding the exemption.
+  test('routes/workgroups.ts launch gates raw keys too (exemption revoked)', () => {
+    // Implementation-gate P2 (PR-2 review): the original exemption reasoning
+    // ("schema never declared the keys") missed the F1 silent-degrade shape —
+    // a {scratch:true, repoPath} body strips to a scratch launch. All four
+    // launch entrances now carry the raw-key gate uniformly.
     const src = read('packages/backend/src/routes/workgroups.ts')
-    expect(src.includes('never accepted RFC-165')).toBe(true)
+    expect(countOf(src, 'rejectRetiredStartTaskKeys(')).toBeGreaterThanOrEqual(1)
+  })
+
+  test('routes/agents.ts launch gates raw keys (same F1 shape)', () => {
+    const src = read('packages/backend/src/routes/agents.ts')
+    expect(countOf(src, 'rejectRetiredStartTaskKeys(')).toBeGreaterThanOrEqual(1)
   })
 
   test('services/scheduledTasks.ts repair guard uses the shared reject helper', () => {

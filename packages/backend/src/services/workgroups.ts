@@ -32,7 +32,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
-import { users, workgroupMembers, workgroups } from '@/db/schema'
+import { scheduledTasks, users, workgroupMembers, workgroups } from '@/db/schema'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
 
 type WorkgroupRow = typeof workgroups.$inferSelect
@@ -161,14 +161,49 @@ export async function updateWorkgroup(
   return updated
 }
 
+/**
+ * RFC-165 §9b（实现门 P1 修复）：workgroup 定时任务把目标冻结为可变的 NAME
+ * （tasks 走 id + 快照，定时行不是）。rename/delete 遇引用行 → 409，防
+ * 「先静默失败、名字复用后打错组」。
+ */
+async function scheduledRowsReferencingWorkgroup(db: DbClient, name: string): Promise<string[]> {
+  const rows = await db
+    .select({
+      id: scheduledTasks.id,
+      launchKind: scheduledTasks.launchKind,
+      launchPayload: scheduledTasks.launchPayload,
+    })
+    .from(scheduledTasks)
+  const out: string[] = []
+  for (const row of rows) {
+    if (row.launchKind !== 'workgroup') continue
+    try {
+      const p = JSON.parse(row.launchPayload) as { workgroupName?: unknown }
+      if (p.workgroupName === name) out.push(row.id)
+    } catch {
+      /* degraded rows are repaired/deleted via their own flow */
+    }
+  }
+  return out
+}
+
 export async function deleteWorkgroup(db: DbClient, name: string): Promise<void> {
   const existing = await getWorkgroup(db, name)
   if (existing === null) {
     throw new NotFoundError('workgroup-not-found', `workgroup '${name}' not found`)
   }
-  // No still-referenced guard: tasks link by id + own a config snapshot, so
+  // No task-side guard: tasks link by id + own a config snapshot, so
   // historical/running tasks keep functioning after the resource is deleted
   // (same durable-soft-link philosophy as tasks.scheduled_task_id).
+  // Scheduled rows are the exception — they reference the mutable NAME.
+  const schedRefs = await scheduledRowsReferencingWorkgroup(db, name)
+  if (schedRefs.length > 0) {
+    throw new ConflictError(
+      'workgroup-scheduled-referenced',
+      `workgroup '${name}' is the target of ${schedRefs.length} scheduled task(s); delete or repoint them first`,
+      { scheduledTaskIds: schedRefs },
+    )
+  }
   await db.delete(workgroups).where(eq(workgroups.name, name))
 }
 
@@ -188,7 +223,16 @@ export async function renameWorkgroup(
       `workgroup '${newName}' already exists; pick a different name`,
     )
   }
-  // Nothing references workgroups by name (tasks link by id) — plain rename.
+  // Tasks link by id; scheduled rows reference the mutable NAME (RFC-165 §9b)
+  // — refuse the rename while any point at this group.
+  const schedRefs = await scheduledRowsReferencingWorkgroup(db, oldName)
+  if (schedRefs.length > 0) {
+    throw new ConflictError(
+      'workgroup-scheduled-referenced',
+      `workgroup '${oldName}' is the target of ${schedRefs.length} scheduled task(s); repoint them before renaming`,
+      { scheduledTaskIds: schedRefs },
+    )
+  }
   await db
     .update(workgroups)
     .set({ name: newName, updatedAt: Date.now() })
