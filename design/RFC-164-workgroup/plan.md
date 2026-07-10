@@ -24,8 +24,8 @@
 
 ## PR-2 协议与引擎内核（纯库，未接线）
 
-- **T7** migration B（journal +1）：`workgroup_assignments` + `workgroup_messages` 建表
-  （design §1.4/1.5）。测试：列锁 + 计数锁 bump。
+- **T7** migration B（journal +1）：`workgroup_assignments` + `workgroup_messages` +
+  `workgroup_member_cursors` 建表（design §1.4/1.5/1.6）。测试：列锁 + 计数锁 bump。
 - **T8** `services/workgroupLifecycle.ts`：assignment 状态机转移表 + CAS（照 lifecycle.ts 风格）。
   测试：全转移矩阵（非法转移抛错）。
 - **T9** shared envelope 端口：`wg_assignments`/`wg_messages`/`wg_decision`/`wg_result`/
@@ -33,8 +33,9 @@
 - **T10** `services/workgroupContext.ts` 注入器纯函数：`selectMemberSlices`（三开关 2³ × lw/fc
   矩阵）、`resolveVisibility`（fc 覆写）、花名册/章程/协议块渲染（leader/worker/fc 三版）、
   水位线增量切分、`normalizeTitle` 去重键。测试：矩阵逐格 + 协议块文案锚点（含禁转派）。
-- **T11** 唤醒/终止纯函数：`deriveWakeSet`（lw 批语义 / 人类单不阻塞 / fc 代领前置态）、
-  `decideWorkgroupOutcome`（done/收敛/触顶 failed/fc 死锁 failed）。测试：表驱动全分支。
+- **T11** 唤醒/终止纯函数：`deriveWakeSet`（lw 批语义 / 人类单不阻塞 / fc 代领前置态 /
+  **基于成员游标的 @ 消息唤醒判定**〔design §1.6/§6.3，幂等〕）、`decideWorkgroupOutcome`
+  （done/收敛/触顶 failed/fc 死锁 failed）。测试：表驱动全分支 + 游标幂等（同消息不二次唤醒）。
 - **T12** PR-2 门禁。
 
 ## PR-3 启动路径 + 回合引擎（leader_worker 后端闭环）
@@ -49,8 +50,9 @@
   ACL 拒绝 / 临时守卫）。
 - **T15** 回合引擎：`services/workgroupRunner.ts`（runTask 按 `workgroup_id` 分流；事件循环 /
   mint 借壳行〔agentOverrideName+shardKey+rerunCause 新枚举值〕/ runtime 冻结 / globalSem /
-  envelope 消费 → assignment+消息落库 / 派单即刻起跑 / leader 批唤醒 / session 续接+水位线 /
-  awaiting_human 泊与 resume 重入 / 触顶 failed / cancel 清理）。测试（fake runner 桩）：
+  envelope 消费 → assignment+消息落库 / 派单即刻起跑 / leader 批唤醒 / session 续接+游标增量
+  〔游标推进与 mint 同事务，design §1.6〕/ awaiting_human 泊与 resume 重入 / 触顶 failed /
+  cancel 清理）。测试（fake runner 桩）：
   回合闭环（派 2 单并行→结果注入→done）、mint 行逐格锁、malformed 重试、成员失败报 leader、
   触顶、resume 幂等（CAS 双驱动）、daemon 重启重建。
 - **T16** clarify 贯通 + 消息唤醒轮：成员 run 反问→round 建行→答后续跑；`direct_messages`
@@ -80,9 +82,12 @@
 - **T24** 人类单：deliver 端点（正文/结构化表单双形态归一 delivery 消息）+ 房间待办卡两入口 +
   收件箱第三源 `pending-count`（failure-soft）+ **撤 T14 临时守卫**。测试：双形态归一、
   下一轮消费注入、pending 计数、守卫撤除后启动含人组。
-- **T25** 确认门：`decision=done` × gate 开 ⇒ `awaiting_review` 泊 + confirm 端点
-  （approve→done / reject 必带 comment→系统消息+唤醒新一轮，不回滚 worktree）+ 房间确认卡。
-  测试：开/关 × approve/reject 四路 + 驳回意见注入。
+- **T25** 确认门（design §8.2 生命周期兼容版）：`decision=done` × gate 开 ⇒ **最终 leader run
+  （fc：mint `wg-gate` 门 run）泊 `awaiting_review`** + task `awaiting_review` + confirm 端点
+  （approve→门 run done+task done / reject 必带 comment→系统消息+唤醒新一轮，不回滚 worktree）
+  + 房间确认卡 + **stuckTaskDetector S1 与 S1 自动修复链对 `workgroup_id` 非空任务豁免（两
+  guard）**。测试：开/关 × approve/reject 四路 + 驳回意见注入 + lifecycleInvariants 兼容锁 +
+  stuck 零误报 + 修复链跳过（三测分立）。
 - **T26** 中途介入：`PUT config`（白名单字段 / 加成员不补历史〔尾窗起点锁〕/ 减成员单转置 /
   系统消息）。测试：全字段路径 + 两语义锁。
 - **T27** PR-5 门禁 + Codex 增量审查。
@@ -101,7 +106,10 @@
 
 T1→T2→…线性为主；PR 级依赖：PR-2 依赖 PR-1（schema），PR-3 依赖 PR-2（内核纯函数），
 PR-4 依赖 PR-3（引擎产生的数据），PR-5 依赖 PR-4（房间 UI 承载待办/确认卡），
-PR-6 依赖 PR-3（引擎）+ PR-4（面板）。PR-5 与 PR-6 可换序（互不依赖）。
+PR-6 依赖 PR-5（**硬顺序，设计门 Finding-4**：人类成员启动守卫〔T14〕必须先由 T24 撤除、
+人类外显能力全量就位后，free_collab 才可发布，杜绝「界面宣示多人协作、后端拒绝含人组启动」
+的失配中间态）。**接受的中间态（显式声明）**：PR-1 起组编辑器可添加人类成员，PR-5 前启动
+此类组被守卫拒绝——报错文案须明示「人类成员支持将在后续版本开放」。
 
 ## 验收清单（对照 proposal AC）
 
