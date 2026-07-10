@@ -124,16 +124,10 @@ export function mountWorkgroupRoutes(app: Hono, deps: AppDeps): void {
   app.post('/api/workgroups/:name/tasks', async (c) => {
     const name = c.req.param('name')
     const body = await safeJson(c.req.raw)
-    // RFC-165 (F1): raw-key gate — see routes/tasks.ts.
-    {
-      const retired = rejectRetiredStartTaskKeys(body)
-      if (retired !== null) {
-        throw new ValidationError(
-          'start-task-path-retired',
-          `RFC-165 retired path-mode launches; remove '${retired}' (use a file:// repoUrl for local repos)`,
-        )
-      }
-    }
+    // NOTE: workgroup launch is a NEW endpoint whose StartWorkgroupTaskSchema
+    // only ever declared modern space fields (repoUrl/ref/repos/scratch) — it
+    // never accepted RFC-165's retired path-mode keys, so no raw-key gate is
+    // needed here (unlike the legacy StartTaskSchema entrances).
     const parsed = StartWorkgroupTaskSchema.safeParse(body)
     if (!parsed.success) {
       throw new ValidationError('workgroup-launch-invalid', 'invalid workgroup launch payload', {
