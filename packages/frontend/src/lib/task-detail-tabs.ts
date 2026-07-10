@@ -17,6 +17,9 @@ export type TaskDetailTab =
   | 'feedback'
   // RFC-120: task question list / 任务中心 board.
   | 'task-questions'
+  // RFC-164 PR-4: workgroup task chat room (group tasks only — the room IS
+  // the primary view; the host-graph canvas is not an observation surface).
+  | 'chatroom'
 
 /** Canonical left-to-right tab order shown in the page tab bar.
  *  RFC-128 (用户 2026-06-29): the task-question board moves to SECOND (right after
@@ -41,13 +44,36 @@ export const TAB_ORDER: readonly TaskDetailTab[] = [
 ] as const
 
 /**
+ * RFC-164 PR-4 — the workgroup-task tab set (chat room first = default tab).
+ * The room replaces the workflow-status canvas (the builtin host graph is an
+ * implementation detail, not an observation surface) and `outputs` never
+ * applies (the host snapshot declares no output ports). Kept as its own
+ * constant — NOT a filter over TAB_ORDER — so the group set can't silently
+ * grow when a future RFC appends a workflow-task tab.
+ */
+export const WORKGROUP_TAB_ORDER: readonly TaskDetailTab[] = [
+  'chatroom',
+  'task-questions',
+  'worktree-structure',
+  'details',
+] as const
+
+/**
  * Filter `TAB_ORDER` to the tabs that should actually render. The
  * `outputs` tab is hidden when the workflow has no declared output
  * ports — showing an empty tab would just trick the user into clicking
  * it. Every other tab is always present (including `worktree-diff`,
  * which has its own "No base commit" / "No changes" fallbacks in-pane).
+ *
+ * RFC-164 PR-4: `isWorkgroup` (default false so pre-existing callers/tests
+ * stay untouched) switches to the fixed `WORKGROUP_TAB_ORDER` set — the
+ * chat room leads, canvas/outputs are hidden, and `hasOutputs` is ignored.
  */
-export function availableTabs(opts: { hasOutputs: boolean }): TaskDetailTab[] {
+export function availableTabs(opts: {
+  hasOutputs: boolean
+  isWorkgroup?: boolean
+}): TaskDetailTab[] {
+  if (opts.isWorkgroup === true) return [...WORKGROUP_TAB_ORDER]
   return TAB_ORDER.filter((t) => t !== 'outputs' || opts.hasOutputs)
 }
 

@@ -19,9 +19,11 @@
 // which is exactly the point — route-level launches cannot target it.
 
 import {
+  applySpaceFields,
   StartTaskSchema,
   workgroupLaunchReadiness,
   WorkgroupRuntimeConfigSchema,
+  type LaunchSpaceFields,
   type StartWorkgroupTask,
   type Task,
   type Workgroup,
@@ -146,17 +148,11 @@ export async function startWorkgroupTask(
     })
   }
 
-  // RFC-164 plan T14 TEMPORARY guard (removed by PR-5/T24): human-member
-  // delivery surfaces don't exist yet, so launching such a group would strand
-  // its human assignments. The error message must make the sequencing clear.
-  const humanMembers = group.members.filter((m) => m.memberType === 'human')
-  if (humanMembers.length > 0) {
-    throw new ValidationError(
-      'workgroup-human-members-unsupported',
-      'groups with human members cannot launch yet — human member support arrives in a later release',
-      { humanMemberCount: humanMembers.length },
-    )
-  }
+  // PR-5 (T24): human members are first-class — they auto-join the task as
+  // collaborators so the room/answer boundary includes them (proposal 目标 6).
+  const humanUserIds = group.members
+    .filter((m) => m.memberType === 'human' && m.userId !== null)
+    .map((m) => m.userId as string)
 
   await ensureWorkgroupHostWorkflow(db)
   const config = buildWorkgroupRuntimeConfig(group, input.goal)
@@ -164,28 +160,36 @@ export async function startWorkgroupTask(
 
   // Compose the full StartTask candidate and validate through StartTaskSchema
   // so repo-source cross-field rules stay single-sourced (schemas/task.ts).
-  const candidate = {
-    workflowId: WORKGROUP_HOST_WORKFLOW_ID,
-    name: input.name,
-    inputs: {},
-    ...(input.repoPath !== undefined ? { repoPath: input.repoPath } : {}),
-    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {}),
-    ...(input.ref !== undefined ? { ref: input.ref } : {}),
-    ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
-    ...(input.repos !== undefined ? { repos: input.repos } : {}),
-    ...(input.fetchBeforeLaunch !== undefined
-      ? { fetchBeforeLaunch: input.fetchBeforeLaunch }
-      : {}),
-    ...(input.collaboratorUserIds !== undefined
-      ? { collaboratorUserIds: input.collaboratorUserIds }
-      : {}),
-    ...(input.gitUserName !== undefined ? { gitUserName: input.gitUserName } : {}),
-    ...(input.gitUserEmail !== undefined ? { gitUserEmail: input.gitUserEmail } : {}),
-    ...(input.workingBranch !== undefined ? { workingBranch: input.workingBranch } : {}),
-    ...(input.autoCommitPush !== undefined ? { autoCommitPush: input.autoCommitPush } : {}),
-    ...(input.maxDurationMs !== undefined ? { maxDurationMs: input.maxDurationMs } : {}),
-    ...(input.maxTotalTokens !== undefined ? { maxTotalTokens: input.maxTotalTokens } : {}),
-  }
+  // RFC-165: the SPACE fields go through `applySpaceFields` — the shared
+  // assembly point — so a schema-only space change can never silently drop a
+  // field here again (design F2; RFC-125 lesson).
+  const candidate = applySpaceFields(
+    {
+      workflowId: WORKGROUP_HOST_WORKFLOW_ID,
+      name: input.name,
+      inputs: {},
+      ...(input.repoPath !== undefined ? { repoPath: input.repoPath } : {}),
+      ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
+      ...(input.fetchBeforeLaunch !== undefined
+        ? { fetchBeforeLaunch: input.fetchBeforeLaunch }
+        : {}),
+      ...(input.collaboratorUserIds !== undefined
+        ? { collaboratorUserIds: input.collaboratorUserIds }
+        : {}),
+      ...(input.gitUserName !== undefined ? { gitUserName: input.gitUserName } : {}),
+      ...(input.gitUserEmail !== undefined ? { gitUserEmail: input.gitUserEmail } : {}),
+      ...(input.workingBranch !== undefined ? { workingBranch: input.workingBranch } : {}),
+      ...(input.autoCommitPush !== undefined ? { autoCommitPush: input.autoCommitPush } : {}),
+      ...(input.maxDurationMs !== undefined ? { maxDurationMs: input.maxDurationMs } : {}),
+      ...(input.maxTotalTokens !== undefined ? { maxTotalTokens: input.maxTotalTokens } : {}),
+    },
+    {
+      scratch: input.scratch,
+      repoUrl: input.repoUrl,
+      ref: input.ref,
+      repos: input.repos as LaunchSpaceFields['repos'],
+    },
+  )
   const parsed = StartTaskSchema.safeParse(candidate)
   if (!parsed.success) {
     throw new ValidationError('workgroup-launch-invalid', 'invalid workgroup launch payload', {

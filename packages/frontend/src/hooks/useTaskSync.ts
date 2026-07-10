@@ -10,6 +10,7 @@
 import type { QueryKey } from '@tanstack/react-query'
 import type { TaskWsMessage } from '@agent-workflow/shared'
 import { WS_PATHS } from '@agent-workflow/shared'
+import { workgroupRoomKey } from '@/lib/workgroup-room'
 import { useWsInvalidation, type WsInvalidationRules } from './useWsInvalidation'
 
 export function useTaskSync(taskId: string | null): void {
@@ -49,6 +50,14 @@ export function useTaskSync(taskId: string | null): void {
   const rules: WsInvalidationRules<TaskWsMessage> = {
     'task.status': () => taskTerminal(),
     'task.done': () => taskTerminal(),
+    // RFC-164 PR-4 — workgroup room frames ride this same per-task channel
+    // (one physical connection). Payloads are id-only by design; the rule is
+    // simply "re-fetch the room aggregate" — messages, assignments and the
+    // gate all live in the single GET /api/workgroup-tasks/:id/room response,
+    // keyed by workgroupRoomKey (single source shared with WorkgroupRoom).
+    'wg.message.created': () => [workgroupRoomKey(taskId)],
+    'wg.assignment.updated': () => [workgroupRoomKey(taskId)],
+    'wg.gate.updated': () => [workgroupRoomKey(taskId)],
     // RFC-120: the question board's phases derive from node_runs (handler
     // pending→running→done) — refresh it on every node status change.
     // RFC-122: reconcile the per-node clarify directive toggles on any node

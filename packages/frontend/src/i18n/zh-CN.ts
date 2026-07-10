@@ -1041,6 +1041,68 @@ export interface Resources {
     fieldMaxRoundsHint: string
     fieldCompletionGate: string
     fieldCompletionGateHint: string
+    // RFC-164 PR-4 — detail-page launch entry + /workgroups/launch page.
+    launchButton: string
+    launch: {
+      title: string
+      backToGroup: string
+      missingGroup: string
+      fieldGoal: string
+      fieldGoalHint: string
+      advanced: string
+      maxDurationMin: string
+      maxDurationMinHint: string
+      maxTotalTokens: string
+      maxTotalTokensHint: string
+      start: string
+      notReady: string
+      humanMembersUnsupported: string
+      invalidPayload: string
+    }
+    // RFC-164 PR-4 — workgroup task chat room (tasks.detail default tab).
+    room: {
+      empty: string
+      roundDivider: string
+      authorSystem: string
+      assignedTo: string
+      resultSummary: string
+      viewRun: string
+      cancelCard: string
+      composerPlaceholder: string
+      send: string
+      sending: string
+      terminalNotice: string
+      mentionsAria: string
+      membersTitle: string
+      working: string
+      idle: string
+      gateTitle: string
+      gateAwaiting: string
+      gateConfirm: string
+      gateReject: string
+      gateActionsSoon: string
+      infoTitle: string
+      infoGoal: string
+      infoMode: string
+      infoMaxRounds: string
+      infoSwitches: string
+      assignmentStatus: {
+        open: string
+        dispatched: string
+        running: string
+        awaiting_human: string
+        delivered: string
+        done: string
+        failed: string
+        canceled: string
+      }
+      source: {
+        leader: string
+        human: string
+        self_claim: string
+        system: string
+      }
+    }
     errors: {
       nameRequired: string
       nameInvalid: string
@@ -1363,6 +1425,9 @@ export interface Resources {
     structWalkthroughMore: string
     tabFeedback: string
     tabQuestions: string
+    // RFC-164 PR-4: workgroup chat room tab + tasks-list workgroup badge.
+    tabChatroom: string
+    workgroupBadge: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
     worktreeFilesOversized: string
@@ -3696,6 +3761,66 @@ export const zhCN: Resources = {
     fieldMaxRoundsHint: '1–500，默认 20。',
     fieldCompletionGate: '完成门（人工确认）',
     fieldCompletionGateHint: 'Leader 宣布完成后任务停在待人工确认，而不是直接结束。',
+    launchButton: '启动任务',
+    launch: {
+      title: '启动工作组任务：{{name}}',
+      backToGroup: '← 返回工作组',
+      missingGroup: '缺少工作组名称——请从工作组详情页进入启动页。',
+      fieldGoal: '任务目标',
+      fieldGoalHint: '工作组这次要完成什么。每一轮都会注入给每个成员。',
+      advanced: '高级选项',
+      maxDurationMin: '最长运行时长（分钟）',
+      maxDurationMinHint: '可选。超时后任务被平台取消。',
+      maxTotalTokens: 'Token 总量上限',
+      maxTotalTokensHint: '可选。全任务累计 token 超限后被平台取消。',
+      start: '启动',
+      notReady: '工作组尚未就绪，无法启动：',
+      humanMembersUnsupported: '当前版本暂不支持含人类成员的工作组启动任务，后续版本将开放。',
+      invalidPayload: '启动参数无效，请检查表单后重试。',
+    },
+    room: {
+      empty: '还没有消息。发一条话启动讨论；@成员名 即直接派单。',
+      roundDivider: '第 {{n}} 回合',
+      authorSystem: '系统',
+      assignedTo: '派给',
+      resultSummary: '结果摘要',
+      viewRun: '查看执行现场',
+      cancelCard: '取消',
+      composerPlaceholder: '向房间发言；@成员名 直接给该成员派单',
+      send: '发送',
+      sending: '发送中…',
+      terminalNotice: '任务已结束，聊天室只读。',
+      mentionsAria: '成员补全',
+      membersTitle: '成员',
+      working: '忙碌',
+      idle: '空闲',
+      gateTitle: '完成门',
+      gateAwaiting: 'Leader 已宣布完成，等待人工确认。',
+      gateConfirm: '确认完成',
+      gateReject: '驳回',
+      gateActionsSoon: '确认 / 驳回操作将在后续版本开放。',
+      infoTitle: '工作组信息',
+      infoGoal: '目标',
+      infoMode: '模式',
+      infoMaxRounds: '最大轮数',
+      infoSwitches: '协作开关',
+      assignmentStatus: {
+        open: '待认领',
+        dispatched: '已派发',
+        running: '执行中',
+        awaiting_human: '等待人工',
+        delivered: '已交付',
+        done: '完成',
+        failed: '失败',
+        canceled: '已取消',
+      },
+      source: {
+        leader: 'Leader 派单',
+        human: '人工派单',
+        self_claim: '自领',
+        system: '系统',
+      },
+    },
     errors: {
       nameRequired: '名称必填。',
       nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
@@ -4017,6 +4142,8 @@ export const zhCN: Resources = {
     structWalkthroughMore: '还有 {{n}} 处',
     tabFeedback: '留言',
     tabQuestions: '问题',
+    tabChatroom: '聊天室',
+    workgroupBadge: '工作组',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',
     worktreeFilesOversized: '文件过大（{{size}}），超过 {{limit}} 阈值，未预览。',
@@ -4747,6 +4874,9 @@ export const zhCN: Resources = {
     'skill-source-path-in-use': '该父目录已登记。',
     'skill-source-children-referenced': '该父目录下的部分子技能仍被代理引用，请先解绑。',
     'skill-source-readonly': '此技能由父目录纳管，请在外部目录里编辑文件。',
+    // RFC-164 PR-4: workgroup room endpoints.
+    'workgroup-task-terminal': '任务已结束，无法再发送消息。',
+    'workgroup-assignment-not-cancelable': '该派单已开始执行或已结束，无法取消。',
     fallback: '请求失败',
   },
   clarify: {

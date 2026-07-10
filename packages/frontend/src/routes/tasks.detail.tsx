@@ -27,6 +27,7 @@ import { WorkflowSyncBanner } from '@/components/tasks/WorkflowSyncBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { TaskQuestionList, type TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
+import { WorkgroupRoom } from '@/components/workgroup/WorkgroupRoom'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
@@ -200,7 +201,10 @@ function TaskDetailPage() {
   // this must sit above the `if (task.isLoading) return ...` guards.
   const hasOutputs =
     task.data === undefined ? false : collectPorts(task.data.workflowSnapshot).length > 0
-  const tabs = availableTabs({ hasOutputs })
+  // RFC-164 PR-4: workgroup tasks swap the tab set (chat room first, canvas +
+  // outputs hidden — the builtin host graph is not an observation surface).
+  const isWorkgroup = task.data?.workgroupId != null
+  const tabs = availableTabs({ hasOutputs, isWorkgroup })
   // RFC-120: agent nodes of the frozen snapshot — reassign candidates for the
   // task question board (only agent nodes are valid handlers). Labels resolve to
   // the node's display name (title → agentName → id fallback, same oracle as the
@@ -211,10 +215,13 @@ function TaskDetailPage() {
   )
   // If the user was on the outputs tab and hasOutputs flips false (mostly
   // defensive — the snapshot is frozen at task start), fall back to the
-  // canvas. Always-mount strategy keeps panes in the DOM, but the tab
-  // bar must reflect what's actually selectable.
+  // set's FIRST tab. Always-mount strategy keeps panes in the DOM, but the
+  // tab bar must reflect what's actually selectable. RFC-164 PR-4: this is
+  // also how a workgroup task lands on its default tab — the initial
+  // 'workflow-status' state is not in WORKGROUP_TAB_ORDER, so once the task
+  // row loads the effect switches to tabs[0] === 'chatroom'.
   useEffect(() => {
-    if (!tabs.includes(tab)) setTab('workflow-status')
+    if (!tabs.includes(tab)) setTab(tabs[0] ?? 'workflow-status')
   }, [tabs, tab])
 
   if (task.isLoading) return <div className="page muted">{t('tasks.loadingTask')}</div>
@@ -355,37 +362,48 @@ function TaskDetailPage() {
       />
 
       <div className="task-detail__panes">
-        {/* workflow-status: always mounted so xyflow viewport survives tab switches. */}
+        {/* RFC-164 PR-4: workgroup chat room — the group task's primary view.
+            Content mounts only for workgroup tasks (the pane div always exists
+            so the hidden-pane structure stays uniform). */}
+        <div className="task-detail__pane" hidden={tab !== 'chatroom'}>
+          {isWorkgroup && <WorkgroupRoom taskId={id} taskStatus={tk.status} />}
+        </div>
+
+        {/* workflow-status: always mounted so xyflow viewport survives tab switches.
+            RFC-164 PR-4: except for workgroup tasks — their tab set never reaches
+            this pane and the builtin host graph must not render at all. */}
         <div className="task-detail__pane" hidden={tab !== 'workflow-status'}>
-          <div className={taskCanvasLayoutClass(selectedNodeRunId)}>
-            <TaskStatusCanvas
-              canvasRef={canvasRef}
-              task={tk}
-              runs={nodeRuns.data?.runs ?? []}
-              onSelectNodeRun={setSelectedNodeRunId}
-              onJumpToQuestions={jumpToQuestions}
-            />
-            {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
-              <NodeDetailDrawer
-                taskId={id}
-                taskStatus={tk.status}
-                nodeRunId={selectedNodeRunId}
-                nodeId={resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId)}
-                workflowNodeKind={resolveNodeKindFromSnapshot(
-                  tk.workflowSnapshot,
-                  resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
-                )}
-                agentName={resolveAgentNameFromSnapshot(
-                  tk.workflowSnapshot,
-                  resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
-                )}
-                runs={nodeRuns.data.runs}
-                outputs={nodeRuns.data.outputs}
-                onClose={closeNodeDrawer}
-                onSelectRun={setSelectedNodeRunId}
+          {!isWorkgroup && (
+            <div className={taskCanvasLayoutClass(selectedNodeRunId)}>
+              <TaskStatusCanvas
+                canvasRef={canvasRef}
+                task={tk}
+                runs={nodeRuns.data?.runs ?? []}
+                onSelectNodeRun={setSelectedNodeRunId}
+                onJumpToQuestions={jumpToQuestions}
               />
-            )}
-          </div>
+              {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
+                <NodeDetailDrawer
+                  taskId={id}
+                  taskStatus={tk.status}
+                  nodeRunId={selectedNodeRunId}
+                  nodeId={resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId)}
+                  workflowNodeKind={resolveNodeKindFromSnapshot(
+                    tk.workflowSnapshot,
+                    resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
+                  )}
+                  agentName={resolveAgentNameFromSnapshot(
+                    tk.workflowSnapshot,
+                    resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
+                  )}
+                  runs={nodeRuns.data.runs}
+                  outputs={nodeRuns.data.outputs}
+                  onClose={closeNodeDrawer}
+                  onSelectRun={setSelectedNodeRunId}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         <div className="task-detail__pane" hidden={tab !== 'node-runs'}>
@@ -627,6 +645,9 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabFeedback')
     case 'task-questions':
       return t('tasks.tabQuestions')
+    // RFC-164 PR-4: workgroup chat room.
+    case 'chatroom':
+      return t('tasks.tabChatroom')
   }
 }
 

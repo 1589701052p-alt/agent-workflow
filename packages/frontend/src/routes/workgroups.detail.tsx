@@ -10,7 +10,7 @@
 // Rename button + <Dialog> (POST …/rename — PUT cannot change the name).
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoute, useNavigate } from '@tanstack/react-router'
+import { Link, createRoute, useNavigate } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { UpdateWorkgroup, Workgroup } from '@agent-workflow/shared'
@@ -158,18 +158,32 @@ function WorkgroupDetailPage() {
           disabled: del.isPending,
         }}
         extra={
-          <button
-            type="button"
-            className="btn"
-            ref={renameTriggerRef}
-            onClick={() => {
-              setNewName(name)
-              setRenameOpen(true)
-            }}
-            data-testid="workgroup-rename-button"
-          >
-            {t('workgroups.renameButton')}
-          </button>
+          <>
+            {/* RFC-164 PR-4: launch entry — only when the shared readiness
+                oracle says the group can actually start a task. */}
+            {readiness !== null && readiness.ready && (
+              <Link
+                to="/workgroups/launch"
+                search={{ name }}
+                className="btn btn--primary"
+                data-testid="workgroup-launch-button"
+              >
+                {t('workgroups.launchButton')}
+              </Link>
+            )}
+            <button
+              type="button"
+              className="btn"
+              ref={renameTriggerRef}
+              onClick={() => {
+                setNewName(name)
+                setRenameOpen(true)
+              }}
+              data-testid="workgroup-rename-button"
+            >
+              {t('workgroups.renameButton')}
+            </button>
+          </>
         }
         errors={[save.error, del.error, rename.error, membersMut.error]}
       >

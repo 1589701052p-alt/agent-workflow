@@ -239,6 +239,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'DELETE', path: '/api/workgroups/:name' },
   { method: 'POST', path: '/api/workgroups/:name/rename' },
   { method: 'POST', path: '/api/workgroups/:name/tasks' },
+  { method: 'GET', path: '/api/workgroup-tasks/pending-count' },
+  { method: 'GET', path: '/api/workgroup-tasks/:taskId/room' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/messages' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/assignments/:id/cancel' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/assignments/:id/deliver' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/confirm' },
+  { method: 'PUT', path: '/api/workgroup-tasks/:taskId/config' },
 
   // ---- repos (path / refs / file system) ----
   { method: 'GET', path: '/api/repos/recent' },

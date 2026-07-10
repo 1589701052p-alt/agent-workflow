@@ -33,6 +33,26 @@ export const NodeEventKindSchema = z.enum([
 export type NodeEventKind = z.infer<typeof NodeEventKindSchema>
 
 export const TaskWsMessageSchema = z.discriminatedUnion('type', [
+  // RFC-164 PR-4 — workgroup room events ride the existing per-task channel
+  // (same visibility gate as every other task frame). Payloads are id-only:
+  // clients invalidate the room query instead of patching caches.
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.message.created'),
+    messageId: z.string(),
+    kind: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.assignment.updated'),
+    assignmentId: z.string(),
+    status: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.gate.updated'),
+    awaitingConfirmation: z.boolean(),
+  }),
   z.object({
     id: z.number().int(),
     type: z.literal('task.status'),

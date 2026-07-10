@@ -21,15 +21,18 @@
 // pass instead of re-minted.
 
 import {
+  normalizeWgTaskTitle,
   parseWgAssignmentsPort,
   parseWgDecisionPort,
   parseWgMessagesPort,
   parseWgResultPort,
+  parseWgTasksAddPort,
   resolveWorkgroupSwitches,
   WG_PORT_ASSIGNMENTS,
   WG_PORT_DECISION,
   WG_PORT_MESSAGES,
   WG_PORT_RESULT,
+  WG_PORT_TASKS_ADD,
   WorkgroupRuntimeConfigSchema,
   type Agent,
   type WgMessageItem,
@@ -70,6 +73,7 @@ import {
   type WakeItem,
 } from '@/services/workgroupWake'
 import { WG_LEADER_NODE_ID, WG_MEMBER_NODE_ID } from '@/services/workgroupLaunch'
+import { taskBroadcaster, TASK_CHANNEL } from '@/ws/broadcaster'
 import type { Logger } from '@/util/log'
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,8 @@ interface GateState {
   rejected: boolean
   rejectedComment?: string
   awaitingConfirmation: boolean
+  /** PR-5: human approved the completion gate — the engine may finish. */
+  approved: boolean
   summary?: string
 }
 
@@ -207,6 +213,7 @@ async function loadDbState(db: DbClient, taskId: string): Promise<EngineDbState 
     declaredDone: gateRaw.declaredDone === true,
     rejected: gateRaw.rejected === true,
     awaitingConfirmation: gateRaw.awaitingConfirmation === true,
+    approved: gateRaw.approved === true,
     ...(typeof gateRaw.rejectedComment === 'string'
       ? { rejectedComment: gateRaw.rejectedComment }
       : {}),
@@ -283,6 +290,12 @@ async function postMessage(db: DbClient, taskId: string, m: PostMessageArgs): Pr
     mentionsJson: JSON.stringify(m.mentionMemberIds ?? []),
     assignmentId: m.assignmentId ?? null,
     createdAt: Date.now(),
+  })
+  taskBroadcaster.broadcast(TASK_CHANNEL(taskId), {
+    id: -1,
+    type: 'wg.message.created',
+    messageId: id,
+    kind: m.kind,
   })
   return id
 }
@@ -509,12 +522,35 @@ export async function runWorkgroupEngine(
           log.warn('workgroup engine: running outcome with empty in-flight set', { taskId })
           return { kind: 'awaiting_human' }
         case 'done': {
+          if (state.config.mode === 'free_collab') {
+            const doneCards = state.assignments.filter((a) => a.status === 'done')
+            const lines = doneCards.map((a) => {
+              const result =
+                a.resultMessageId !== null
+                  ? state.messages.find((m) => m.id === a.resultMessageId)?.bodyMd
+                  : null
+              return `- ${a.title}${result ? `: ${result}` : ''}`
+            })
+            await postMessage(db, taskId, {
+              round: currentRound(state),
+              authorKind: 'system',
+              kind: 'decision',
+              bodyMd:
+                lines.length > 0
+                  ? `free-collab converged — ${doneCards.length} task(s) done:\n${lines.join('\n')}`
+                  : 'free-collab converged with no completed tasks',
+            })
+          }
           await cancelLeftovers(db, taskId, state)
           if (state.config.mode === 'leader_worker' && !state.gate.declaredDone) {
             // unreachable by construction (done implies declaredDone in lw)
             log.warn('workgroup engine: lw done without declaration', { taskId })
           }
-          if (state.config.completionGate && !state.gate.awaitingConfirmation) {
+          if (
+            state.config.completionGate &&
+            !state.gate.approved &&
+            !state.gate.awaitingConfirmation
+          ) {
             await openCompletionGate(args, state)
             return {
               kind: 'awaiting_review',
@@ -524,6 +560,7 @@ export async function runWorkgroupEngine(
           return { kind: 'ok' }
         }
         case 'awaiting_gate': {
+          if (state.gate.approved) return { kind: 'ok' } // PR-5 confirm approved
           if (!state.gate.awaitingConfirmation) {
             await openCompletionGate(args, state)
           }
@@ -646,6 +683,12 @@ async function openCompletionGate(args: WorkgroupEngineArgs, state: EngineDbStat
     ...state.gate,
     awaitingConfirmation: true,
     rejected: false,
+    approved: false,
+  })
+  taskBroadcaster.broadcast(TASK_CHANNEL(taskId), {
+    id: -1,
+    type: 'wg.gate.updated',
+    awaitingConfirmation: true,
   })
 }
 
@@ -891,7 +934,14 @@ async function driveLeaderTurn(
         })
       }
     }
-    // 3. decision.
+    // 3. deliveries the leader just consumed flip delivered→done (design
+    //    §1.4: delivered = 交付已落, done = 下一回合已消费).
+    for (const a of state.assignments) {
+      if (a.status === 'delivered') {
+        await casAssignmentStatus(db, a.id, 'delivered', 'done').catch(() => false)
+      }
+    }
+    // 4. decision.
     if (decision !== null && decision.ok) {
       if (decision.value.action === 'done') {
         await postMessage(db, taskId, {
@@ -980,7 +1030,10 @@ async function driveAssignmentTurn(
       nodeId: WG_MEMBER_NODE_ID,
       agent,
       promptTemplate: prompt,
-      workgroupProtocolBlock: renderWgProtocolBlock('worker', config),
+      workgroupProtocolBlock: renderWgProtocolBlock(
+        config.mode === 'free_collab' ? 'fc_member' : 'worker',
+        config,
+      ),
     })
     if (result.status === 'canceled') {
       await casAssignmentStatus(db, assignment.id, 'running', 'canceled').catch(() => false)
@@ -1000,9 +1053,15 @@ async function driveAssignmentTurn(
         assignmentId: assignment.id,
       })
       if (config.mode === 'free_collab') {
-        // bounded re-open happens on a later pass via lifecycle failed→open
-        // (retry budget enforced by counting prior runs on this shardKey).
-        const priorRuns = state.hostRuns.filter((r) => r.shardKey === assignment.id).length
+        // bounded re-open (retry budget) — count LIVE, not the turn-start
+        // snapshot, or every failure sees a stale low count and reopens
+        // past the cap.
+        const priorRuns = (
+          await db
+            .select({ id: nodeRuns.id })
+            .from(nodeRuns)
+            .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.shardKey, assignment.id)))
+        ).length
         if (priorRuns < 3) {
           await casAssignmentStatus(db, assignment.id, 'failed', 'open', {
             assigneeMemberId: null,
@@ -1050,6 +1109,7 @@ async function driveAssignmentTurn(
         allowBlackboard: switches.blackboard,
       })
     }
+    await consumeTasksAdd(db, taskId, state, memberId, result.outputs[WG_PORT_TASKS_ADD])
     const resultMessageId = await postMessage(db, taskId, {
       round: assignment.round,
       authorKind: 'member',
@@ -1141,7 +1201,115 @@ async function driveMessageTurn(
       })
     }
   }
-  // fc tasks_add consumption arrives with PR-6 (free_collab engine branch).
+  await consumeTasksAdd(db, taskId, state, memberId, result.outputs[WG_PORT_TASKS_ADD])
+}
+
+// Per-task serialization for tasks_add consumption: two member turns
+// finishing in the same tick would otherwise interleave their dedup read
+// and insert (TOCTOU). One engine instance per task is guaranteed by the
+// runTask CAS claim, so an in-process chain fully closes the race.
+const tasksAddChains = new Map<string, Promise<unknown>>()
+function serializeTasksAdd<T>(taskId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = tasksAddChains.get(taskId) ?? Promise.resolve()
+  const next = prev.then(fn, fn)
+  tasksAddChains.set(
+    taskId,
+    next.catch(() => undefined),
+  )
+  return next
+}
+
+/**
+ * PR-6 (design §7.3) — consume a member's wg_tasks_add: normalized-title
+ * dedup against every non-canceled card; dropped duplicates get a system
+ * note instead of failing the run. Returns how many landed. Serialized
+ * per task (see serializeTasksAdd).
+ */
+async function consumeTasksAdd(
+  db: DbClient,
+  taskId: string,
+  state: EngineDbState,
+  authorMemberId: string,
+  raw: string | undefined,
+): Promise<number> {
+  if (raw === undefined || state.config.mode !== 'free_collab') return 0
+  return serializeTasksAdd(taskId, () =>
+    consumeTasksAddInner(db, taskId, state, authorMemberId, raw),
+  )
+}
+
+async function consumeTasksAddInner(
+  db: DbClient,
+  taskId: string,
+  state: EngineDbState,
+  authorMemberId: string,
+  raw: string,
+): Promise<number> {
+  const parsed = parseWgTasksAddPort(raw)
+  if (!parsed.ok) {
+    await postMessage(db, taskId, {
+      round: currentRound(state),
+      authorKind: 'system',
+      kind: 'system',
+      bodyMd: `wg_tasks_add from @${memberDisplayName(state.config, authorMemberId)} rejected: ${parsed.errors.join('; ')}`,
+    })
+    return 0
+  }
+  // LIVE read (not the turn-start snapshot): concurrent initial turns must
+  // see each other's just-landed cards or the dedup guard is a no-op
+  // (fc-debug 2026-07-10: dup card claimed 4×). A same-instant insert race
+  // remains theoretically possible and is documented as v1 residual.
+  const liveRows = await db
+    .select({ dedupKey: workgroupAssignments.dedupKey, status: workgroupAssignments.status })
+    .from(workgroupAssignments)
+    .where(eq(workgroupAssignments.taskId, taskId))
+  const existing = new Set(
+    liveRows
+      .filter((a) => a.status !== 'canceled' && a.dedupKey !== null)
+      .map((a) => a.dedupKey as string),
+  )
+  let added = 0
+  let dropped = 0
+  for (const item of parsed.value) {
+    const key = normalizeWgTaskTitle(item.title)
+    if (existing.has(key)) {
+      dropped++
+      continue
+    }
+    existing.add(key)
+    const id = ulid()
+    await db.insert(workgroupAssignments).values({
+      id,
+      taskId,
+      round: currentRound(state),
+      source: 'self_claim',
+      assigneeMemberId: null,
+      title: item.title,
+      briefMd: item.brief,
+      status: 'open',
+      dedupKey: key,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    await postMessage(db, taskId, {
+      round: currentRound(state),
+      authorKind: 'member',
+      authorMemberId,
+      kind: 'dispatch',
+      bodyMd: `+ task: ${item.title}`,
+      assignmentId: id,
+    })
+    added++
+  }
+  if (dropped > 0) {
+    await postMessage(db, taskId, {
+      round: currentRound(state),
+      authorKind: 'system',
+      kind: 'system',
+      bodyMd: `${dropped} duplicate task(s) from @${memberDisplayName(state.config, authorMemberId)} dropped (title dedup)`,
+    })
+  }
+  return added
 }
 
 async function persistWgMessages(

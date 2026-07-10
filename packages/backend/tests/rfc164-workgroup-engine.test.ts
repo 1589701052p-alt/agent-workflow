@@ -286,7 +286,7 @@ describe('RFC-164 engine — launch path', () => {
     expect(body.details?.reasons).toEqual(['leader-missing'])
   })
 
-  test('human members → 422 temporary guard (plan T14; removed by PR-5)', async () => {
+  test('human-member groups launch past the gate (PR-5/T24 撤守卫回归锁)', async () => {
     const u = await createUser(db, {
       username: 'pm',
       displayName: 'pm',
@@ -311,10 +311,11 @@ describe('RFC-164 engine — launch path', () => {
       method: 'POST',
       body: JSON.stringify({ name: 't', goal: 'g', repoPath: '/tmp/x' }),
     })
-    expect(res.status).toBe(422)
-    expect(((await res.json()) as { code: string }).code).toBe(
-      'workgroup-human-members-unsupported',
-    )
+    // The old temporary guard must NOT fire; whatever the launch outcome is
+    // (here it proceeds into worktree materialization against a fake repo),
+    // it is not the human-members rejection.
+    const body = (await res.json()) as { code?: string }
+    expect(body.code).not.toBe('workgroup-human-members-unsupported')
   })
 
   test('invalid launch payload (no repo source) → 422 via StartTaskSchema single-sourcing', async () => {
@@ -633,5 +634,155 @@ describe('RFC-164 engine — buildWorkgroupRuntimeConfig', () => {
     expect(config.completionGate).toBe(true)
     expect(config.members).toHaveLength(2)
     expect(config.leaderMemberId).toBe(group.leaderMemberId)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR-6 — free_collab end to end (fake hooks)
+// ---------------------------------------------------------------------------
+
+describe('RFC-164 engine — free_collab orchestration', () => {
+  let db: DbClient
+  beforeEach(() => {
+    db = createInMemoryDb(MIGRATIONS)
+  })
+
+  const fcCfg = (): WorkgroupRuntimeConfig =>
+    cfg({
+      mode: 'free_collab',
+      leaderMemberId: null,
+      switches: { shareOutputs: false, directMessages: false, blackboard: false },
+      members: [
+        {
+          id: 'm-a',
+          memberType: 'agent',
+          agentName: 'wg-planner',
+          userId: null,
+          displayName: 'alpha',
+          roleDesc: '',
+        },
+        {
+          id: 'm-b',
+          memberType: 'agent',
+          agentName: 'wg-coder',
+          userId: null,
+          displayName: 'beta',
+          roleDesc: '',
+        },
+      ],
+    })
+
+  test('initial burst → tasks_add (dup dropped) → platform claims → results → converge + summary', async () => {
+    const { taskId } = await seedEngineTask(db, fcCfg())
+    // 两个成员的初始规划轮各加任务；beta 的第二条与 alpha 的重复（归一化撞 key）
+    const memberScript: WorkgroupHostRunResult[] = [
+      {
+        status: 'done',
+        outputs: {
+          wg_tasks_add: JSON.stringify([{ title: 'Fix Login-Flow!', brief: 'do a' }]),
+        },
+      },
+      {
+        status: 'done',
+        outputs: {
+          wg_tasks_add: JSON.stringify([
+            { title: 'fix login flow', brief: 'dup of a' },
+            { title: 'clean TODOs', brief: 'do b' },
+          ]),
+        },
+      },
+      // 认领执行两条任务
+      doneMember('login flow fixed'),
+      doneMember('todos cleaned'),
+    ]
+    const { hooks, requests } = scriptedHooks({ leader: [], member: memberScript })
+    const result = await runWorkgroupEngine({ db, taskId, log, hooks })
+    expect(result.kind).toBe('ok')
+
+    // 全部请求都在 member host 上（无 leader）
+    expect(requests.every((r) => r.nodeId === WG_MEMBER_NODE_ID)).toBe(true)
+    // 首轮两个成员 + 两次认领执行 = 4 次
+    expect(requests).toHaveLength(4)
+    // 首轮协议是 fc_member 版（含 tasks_add + 查重纪律）
+    expect(requests[0]?.workgroupProtocolBlock).toContain('wg_tasks_add')
+
+    const assignments = await db
+      .select()
+      .from(workgroupAssignments)
+      .where(eq(workgroupAssignments.taskId, taskId))
+    // 3 条提案 - 1 条重复 = 2 张卡，且全部 done
+    expect(assignments).toHaveLength(2)
+    expect(assignments.every((a) => a.status === 'done')).toBe(true)
+    expect(assignments.every((a) => a.source === 'self_claim')).toBe(true)
+
+    const messages = await db
+      .select()
+      .from(workgroupMessages)
+      .where(eq(workgroupMessages.taskId, taskId))
+    // 去重系统告警存在
+    expect(messages.some((m) => m.kind === 'system' && m.bodyMd.includes('duplicate'))).toBe(true)
+    // 收敛总结（decision 消息）存在且列出两条任务
+    const summary = messages.find((m) => m.kind === 'decision')
+    expect(summary?.bodyMd).toContain('free-collab converged')
+    expect(summary?.bodyMd).toContain('login flow fixed')
+    expect(summary?.bodyMd).toContain('todos cleaned')
+  })
+
+  test('fc gate: converge with completionGate on → awaiting_review + holder run', async () => {
+    const { taskId } = await seedEngineTask(db, { ...fcCfg(), completionGate: true })
+    const { hooks } = scriptedHooks({
+      leader: [],
+      member: [
+        {
+          status: 'done',
+          outputs: { wg_tasks_add: JSON.stringify([{ title: 't1', brief: 'b' }]) },
+        },
+        { status: 'done', outputs: {} }, // 第二个成员首轮无提案
+        doneMember('t1 done'),
+      ],
+    })
+    const result = await runWorkgroupEngine({ db, taskId, log, hooks })
+    expect(result.kind).toBe('awaiting_review')
+    const holders = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+      (r) => r.rerunCause === 'wg-gate',
+    )
+    expect(holders).toHaveLength(1)
+    expect(holders[0]?.status).toBe('awaiting_review')
+  })
+
+  test('fc approved gate on resume → ok (confirm 端点写入 approved 后重入)', async () => {
+    const config = { ...fcCfg(), completionGate: true }
+    const { taskId } = await seedEngineTask(db, config)
+    // 模拟 PR-5 confirm approve 之后的状态：清单已收敛 + gate approved
+    const aId = ulid()
+    await db.insert(workgroupAssignments).values({
+      id: aId,
+      taskId,
+      round: 1,
+      source: 'self_claim',
+      assigneeMemberId: 'm-a',
+      title: 't1',
+      briefMd: 'b',
+      status: 'done',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    await db
+      .update(tasks)
+      .set({
+        workgroupConfigJson: JSON.stringify({
+          ...config,
+          gate: {
+            declaredDone: true,
+            awaitingConfirmation: false,
+            rejected: false,
+            approved: true,
+          },
+        }),
+      })
+      .where(eq(tasks.id, taskId))
+    const { hooks } = scriptedHooks({ leader: [], member: [] })
+    const result = await runWorkgroupEngine({ db, taskId, log, hooks })
+    expect(result.kind).toBe('ok')
   })
 })

@@ -123,6 +123,20 @@ function TasksPage() {
                   >
                     {row.workflowName ?? row.workflowId}
                   </Link>
+                  {/* RFC-164 PR-4: workgroup tasks carry a badge next to the
+                      workflow cell (their workflowId is the builtin host). */}
+                  {row.workgroupId != null && (
+                    <>
+                      {' '}
+                      <StatusChip
+                        kind="info"
+                        size="sm"
+                        data-testid={`task-workgroup-badge-${row.id}`}
+                      >
+                        {t('tasks.workgroupBadge')}
+                      </StatusChip>
+                    </>
+                  )}
                 </td>
                 <td>
                   <TaskStatusChip status={row.status} />

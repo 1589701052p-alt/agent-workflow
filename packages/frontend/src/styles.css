@@ -11761,3 +11761,261 @@ mark.comment-anchor[data-active='true'] {
   gap: 8px;
   margin-top: 10px;
 }
+
+/* ============================================================
+   RFC-164 PR-4 — workgroup task chat room (.workgroup-room
+   namespace). Chrome-level pieces (cards / chips / buttons /
+   inputs / inspector drawer) all reuse the shared primitives;
+   only the room's grid, bubbles and roster get their own rules.
+   ============================================================ */
+
+.workgroup-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Third track materializes only while a run drawer is open — same gate
+   rationale as .task-canvas-layout--with-drawer. */
+.workgroup-room--with-drawer {
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 280px) minmax(320px, 440px);
+}
+
+.task-detail__pane > .workgroup-room {
+  height: 100%;
+  min-height: 0;
+}
+
+.workgroup-room__main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workgroup-room__log {
+  flex: 1;
+  min-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.workgroup-room__round {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workgroup-room__round::before,
+.workgroup-room__round::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.workgroup-room__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workgroup-room__msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.workgroup-room__author {
+  font-weight: 600;
+}
+
+.workgroup-room__time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workgroup-room__body {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* System rows are de-emphasized (round markers, cancellations, warnings). */
+.workgroup-room__msg--system .workgroup-room__msg-head,
+.workgroup-room__msg--system .workgroup-room__body {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workgroup-room__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.workgroup-room__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.workgroup-room__card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workgroup-room__card-title {
+  font-size: 13px;
+}
+
+.workgroup-room__card-assignee {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workgroup-room__card-result > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workgroup-room__card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.workgroup-room__composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.workgroup-room__input {
+  flex: 1;
+  resize: vertical;
+}
+
+.workgroup-room__mentions {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 4px;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.workgroup-room__mentions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.workgroup-room__mentions button:hover {
+  background: var(--bg);
+}
+
+.workgroup-room__side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workgroup-room__side-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workgroup-room__members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__members li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.workgroup-room__member-name {
+  font-weight: 600;
+}
+
+.workgroup-room__gate-state {
+  margin: 0;
+  font-size: 13px;
+}
+
+.workgroup-room__info {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+
+.workgroup-room__info dt {
+  color: var(--muted);
+}
+
+.workgroup-room__info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Long goals stay scannable — clip after a few lines, full text via title. */
+.workgroup-room__goal {
+  max-height: 6.5em;
+  overflow: hidden;
+}

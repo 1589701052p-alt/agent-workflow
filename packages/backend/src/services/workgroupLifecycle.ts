@@ -16,6 +16,7 @@ import type { WorkgroupAssignmentStatus } from '@agent-workflow/shared'
 import { and, eq, sql } from 'drizzle-orm'
 import type { DbClient } from '@/db/client'
 import { workgroupAssignments, workgroupMemberCursors } from '@/db/schema'
+import { taskBroadcaster, TASK_CHANNEL } from '@/ws/broadcaster'
 
 export const WORKGROUP_ASSIGNMENT_TRANSITIONS: Record<
   WorkgroupAssignmentStatus,
@@ -78,11 +79,23 @@ export async function casAssignmentStatus(
   set: Partial<typeof workgroupAssignments.$inferInsert> = {},
 ): Promise<boolean> {
   assertAssignmentTransition(from, to)
-  const res = await db
+  const rows = await db
     .update(workgroupAssignments)
     .set({ ...set, status: to, updatedAt: Date.now() })
     .where(and(eq(workgroupAssignments.id, assignmentId), eq(workgroupAssignments.status, from)))
-  return (res as unknown as { changes?: number }).changes !== 0
+    .returning({ taskId: workgroupAssignments.taskId })
+  const landed = rows.length > 0
+  if (landed && rows[0] !== undefined) {
+    // Single broadcast point for every assignment status flip (engine, room
+    // routes, PR-5 delivery/confirm all ride it) — room cards update live.
+    taskBroadcaster.broadcast(TASK_CHANNEL(rows[0].taskId), {
+      id: -1,
+      type: 'wg.assignment.updated',
+      assignmentId,
+      status: to,
+    })
+  }
+  return landed
 }
 
 /**

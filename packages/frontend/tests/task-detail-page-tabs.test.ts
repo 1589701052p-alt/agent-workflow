@@ -88,8 +88,10 @@ describe('TaskDetailPage tab structure', () => {
     // should appear exactly once and contain every `.task-detail__pane`.
     // RFC-065 added the worktree-files pane between outputs and worktree-diff.
     // RFC-120 added the task-questions pane (board) after feedback.
+    // RFC-164 PR-4 added the workgroup chatroom pane (first; content gated on
+    // isWorkgroup — see rfc164-workgroup-tabs.test.ts for its wiring locks).
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(9)
+    expect(paneCount).toBe(10)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })
