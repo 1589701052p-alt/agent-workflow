@@ -36,15 +36,18 @@ T1 → T2 → (T3, T4, T5 并行) → T6 → T7。
 
 ## 验收清单
 
-- [ ] AC-1 下发前同问题未下发条目收拢一张卡；改派＝卡内增/删一行、卡数不变
-- [ ] AC-2 下发后各处理节点各自单卡、可分别确认
-- [ ] AC-3 stage/批量下发组级；不可只下发提问节点遗漏共存上游
-- [ ] AC-4 manual / 单处理节点仍单卡
-- [ ] AC-5 filter/计数对齐（per-handler 计数不变、命中展示整组）
-- [ ] AC-6 门禁四项 + 前端 vitest
-- [ ] AC-7 复用公共原语、视觉对齐
-- [ ] Codex 设计门（落档后）+ 实现门
-- [ ] STATE.md / design/plan.md 索引更新
+- [x] AC-1 下发前同问题未下发条目收拢一张卡；改派＝卡内增/删一行、卡数不变（lib case-2 + 组件测试）
+- [x] AC-2 下发后各处理节点各自单卡、可分别确认（lib case-3 + 组件「下发后拆开」测试）
+- [x] AC-3 stage/批量下发组级；不可只下发提问节点遗漏共存上游（组级 stage 调用数 + 批量下发展开
+      整组〔含 off-filter 兄弟〕测试；P1 先分组后过滤）
+- [x] AC-4 manual / 单处理节点仍单卡（lib case-1/5）
+- [x] AC-5 filter/计数对齐（per-handler chip 计数不变；命中任一 handler ⇒ 整组保留）
+- [x] AC-6 门禁四项 + 前端 vitest（typecheck×3/lint 0/format/后端全量 0 fail/前端 3253-0/binary smoke）
+- [x] AC-7 复用公共原语（Card/StatusChip/Select/.btn；handlers 行贴 meta 语汇）、视觉明暗 repro 核验
+- [x] Codex 设计门（2 findings 修：P1 落地；P2 实现期勘误为降级不变式——初版守卫打红 19 存量测试撤销，
+      三枚反向回归锁）；实现门 Codex runtime 连续空响应（"Reviewer failed to output a response"×2），
+      以 19-测回归信号 + 全门禁 + CI 代偿，恢复后可补审
+- [x] STATE.md / design/plan.md 索引更新
 
 ## 风险与回滚
 
