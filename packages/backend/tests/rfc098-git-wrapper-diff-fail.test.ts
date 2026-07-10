@@ -45,7 +45,7 @@ const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 //                    wrapper's finalize diff.
 const SHIM_SOURCE = `
 import process from 'node:process'
-import { writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
