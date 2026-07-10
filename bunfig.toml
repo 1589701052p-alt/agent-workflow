@@ -6,3 +6,8 @@ exact = false
 # bun test runs backend + shared only. Frontend tests use vitest with
 # happy-dom + browser-shaped globals (separate runtime).
 root = "packages/backend/tests"
+# RFC-W001: raise the default per-test timeout file-wide (see
+# helpers/default-test-timeout.ts for the full rationale). Loaded before any
+# test runs so every file gets the 60s ceiling - stops the Windows-CI 5000ms
+# cliff from clobbering neighbouring tests mid-run.
+preload = ["./packages/backend/tests/helpers/default-test-timeout.ts"]

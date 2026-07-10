@@ -11,16 +11,7 @@ import { rimrafDir } from './helpers/cleanup'
 // `[KNOWN-INCIDENT]` are expected to expose the live bug from task
 // 01KSHVXCH6RQ5F5P64MZ4FZVN6 on current code.
 
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
-// RFC-W001: every scenario here drives the REAL scheduler (runTask) + spawns
-// mock-opencode subprocesses + git worktrees, so several individual scenarios
-// exceed bun:test's 5000ms default per-test timeout on the slower Windows CI
-// runner. bun then fires the timeout mid-runTask and starts the NEXT test's
-// beforeEach, clobbering this file's shared `c` + process.env.SCENARIO_PLAN_FILE
-// (the S-RFC074 mirage). Raise the file-wide default to 60s so no scenario
-// trips the cliff; individual scenarios that need even more (S-RFC074) keep
-// their explicit `}, 60_000)`.
-setDefaultTimeout(60_000)
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
