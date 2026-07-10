@@ -1038,6 +1038,13 @@ export async function reassignTaskQuestion(
         // fall back to the answered-round timestamp only when the asker row itself carries none.
         sealedAt:
           entry.sealedAt ?? (round.status === 'answered' ? (round.answeredAt ?? now) : null),
+        // Inherit the ASKER's staged state too (用户 2026-07-10 bug:在待下发里改派，新 designer
+        // 行生成即 pending → 组内混态 → RFC-163 分组卡被防御逻辑保守落回待指派、按钮却显示
+        // 「移出待下发」)。stage 是组级动作（RFC-163）——在待下发的问题增派处理节点，新成员
+        // 天然随组进待下发；asker.staged 必经 stage gate ⇒ 必 sealed ⇒ 上面的 sealedAt 继承
+        // 非空，二者自洽。pending asker ⇒ 继承 null，行为不变。
+        stagedAt: entry.stagedAt,
+        stagedBy: entry.stagedBy,
         lastReassignedBy: actor.userId,
         lastReassignedAt: now,
         createdAt: now,

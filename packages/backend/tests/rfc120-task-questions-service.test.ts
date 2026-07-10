@@ -447,6 +447,38 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     expect(rows.some((r) => r.roleKind === 'designer')).toBe(false)
   })
 
+  // 用户 2026-07-10 bug —「在待下发里修改问题节点，会生成在待指派里，且按钮是移出待下发」：
+  // 在 STAGED asker 上改派，新 designer 行必须继承 staged 态（stage 是 RFC-163 组级动作，新
+  // 成员随组进待下发），否则组内混 staged+pending → 分组卡被防御逻辑落回待指派、按钮却显
+  // 「移出待下发」。此测先红后绿。
+  test('RFC-163: reassign on a STAGED asker → designer inherits stagedAt/stagedBy (group stays 待下发)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    const stagedAt = Date.now() - 5_000
+    await db
+      .update(taskQuestions)
+      .set({ stagedAt, stagedBy: 'u9', sealedAt: stagedAt })
+      .where(eq(taskQuestions.id, questioner!.id))
+
+    const action = await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    expect(action).toBe('added-designer')
+    const designer = (await db.select().from(taskQuestions)).find((r) => r.roleKind === 'designer')!
+    expect(designer.stagedAt).toBe(stagedAt) // 随组进待下发
+    expect(designer.stagedBy).toBe('u9')
+    expect(designer.sealedAt).not.toBeNull()
+  })
+
+  // 对照：pending（未 staged）asker 改派 → designer 不带 staged（行为不变）。
+  test('RFC-163: reassign on a PENDING asker → designer has NO stagedAt', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    const designer = (await db.select().from(taskQuestions)).find((r) => r.roleKind === 'designer')!
+    expect(designer.stagedAt).toBeNull()
+  })
+
   // RFC-162 — reassign creates NO echo row (echo deleted; the asker keeps its own entry).
   test('RFC-162: reassign never materializes an echo row', async () => {
     const db = createInMemoryDb(MIGRATIONS)

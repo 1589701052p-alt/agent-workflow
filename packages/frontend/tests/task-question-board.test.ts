@@ -100,6 +100,25 @@ describe('RFC-163 groupBoardEntries', () => {
     expect(cards.map((c) => c.key)).toEqual(['e:m1', 'e:m2'])
   })
 
+  // 用户 2026-07-10 bug 的正向锁：在待下发里改派后（后端 designer 继承 staged），组内全 staged
+  // ⇒ 卡留在**待下发**列（不再落回待指派）。
+  test('全 staged 组 → 卡 phase=staged（在待下发改派后整卡留在待下发）', () => {
+    const cards = groupBoardEntries([
+      mk({ id: 's', roleKind: 'self', phase: 'staged', staged: true, sealed: true }),
+      mk({
+        id: 'd',
+        roleKind: 'designer',
+        effectiveTargetNodeId: 'reviewer',
+        phase: 'staged',
+        staged: true,
+        sealed: true,
+      }),
+    ])
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.phase).toBe('staged')
+    expect(cards[0]!.grouped).toBe(true)
+  })
+
   test('case 6 — 组内混 pending+staged（防御）→ 卡落 pending、不丢 handler', () => {
     const cards = groupBoardEntries([
       mk({ id: 's', roleKind: 'self', phase: 'staged', staged: true }),
